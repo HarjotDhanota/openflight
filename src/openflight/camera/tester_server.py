@@ -4414,6 +4414,8 @@ STATIC_EXPOSURE_FAILURES = frozenset(
         "ball_not_found",
         "ball_not_stable",
         "controls_not_applied",
+        # 13 Oct: no ball found in a box too dim to brighten further
+        "too_dark",
     }
 )
 

@@ -67,7 +67,7 @@ def test_a_missing_ball_is_rejected_even_when_the_frame_is_bright():
 @pytest.mark.parametrize(
     ("ball_dn", "background_dn", "reason"),
     [
-        (30.0, 20.0, "signal"),
+        # a dim ball is labelled, never rejected (13 Oct light audit B2)
         (255.0, 40.0, "clipped"),
     ],
 )
@@ -227,7 +227,8 @@ def test_a_clipped_ball_is_brought_down_below_clipping():
     search, requested = _run(scene, se.StaticExposureStep(2000, 12.0))
 
     assert search.status == "locked"
-    assert len(requested) <= 4
+    # a quarter at a time while clipped, then raised back to the target peak
+    assert len(requested) <= 5
     assert _lock_level(search, scene) < 250.0
     # never brighter than where it started
     assert all(step.exposure_us * step.gain <= 24000 for step in requested)
@@ -235,13 +236,15 @@ def test_a_clipped_ball_is_brought_down_below_clipping():
 
 def test_no_ball_in_a_lit_patch_ends_quickly_and_never_brightens():
     """harjot-indoor-test-1: each 'not found' walked the old search brighter, to 8 ms x 12."""
-    scene = Scene(ball_per_signal=0.0, patch_per_signal=0.02)
+    # a patch above DIM_PATCH_DN is lit: nothing is brightened (72 DN above black)
+    scene = Scene(ball_per_signal=0.0, patch_per_signal=0.03)
 
     search, requested = _run(scene, se.StaticExposureStep(300, 8.0))
 
     assert search.status == "ball_not_found"
     assert "box" in search.reason
-    assert requested == [se.StaticExposureStep(300, 8.0)]
+    # the swing start keeps its light at the still-ball split (13 Oct)
+    assert requested == [se.StaticExposureStep(2400, 1.0)]
     assert len(search.attempts) <= se.NOT_FOUND_LIMIT + 1
 
 
@@ -259,7 +262,7 @@ def test_a_dark_patch_is_brightened_by_its_own_pixels_then_the_ball_is_found():
 def test_ambiguity_never_changes_the_brightness_and_is_counted_apart_from_not_found():
     scene = Scene(ball_per_signal=0.01, patch_per_signal=0.02, status="ambiguous")
     search = se.BallBrightnessSearch(MAX_EXPOSURE_US, start=se.StaticExposureStep(300, 4.0))
-    lit_missing = Scene(ball_per_signal=0.0, patch_per_signal=0.02)
+    lit_missing = Scene(ball_per_signal=0.0, patch_per_signal=0.06)
 
     for index in range(se.IDENTIFY_LIMIT + 2):
         step = search.current_step
@@ -271,17 +274,13 @@ def test_ambiguity_never_changes_the_brightness_and_is_counted_apart_from_not_fo
 
     assert search.status == "ball_not_identified"
     assert "box" in search.reason
-    assert {attempt["exposure_us"] for attempt in search.attempts} == {300}
+    assert {attempt["exposure_us"] for attempt in search.attempts} == {1200}
 
 
 @pytest.mark.parametrize(
     ("scene", "start", "status"),
     [
-        (
-            Scene(0.0001, 0.00005, found_above_dn=1.0),
-            se.StaticExposureStep(8000, 12.0),
-            "lighting_required",
-        ),
+        # a found ball at the limit locks labelled (test below), never lighting_required
         (Scene(50.0, 10.0), se.StaticExposureStep(10, 1.0), "too_bright"),
     ],
 )
@@ -376,7 +375,112 @@ def test_lock_serializes_with_policy_identity_and_applied_controls(tmp_path):
 def test_the_policy_names_the_ball_targeted_loop():
     policy = se.static_exposure_policy()
 
-    assert policy["version"] == 6
+    assert policy["version"] == 7
     assert policy["search"]["method"] == "ball_targeted_brightness_steps"
     assert policy["search"]["not_found_is_never_darkness"] is True
     assert policy["gates"]["minimum_signal_above_floor_dn"] == 20.0
+
+
+# 13 Oct light audit (light-audit.md section 1 and recommendations A2, A3, A5, B1, B2):
+# the still ball is exposed for itself, a found ball is never failed on brightness,
+# and a dim patch is brightened once before the ball is called missing.
+
+
+def test_the_still_ball_split_takes_the_longest_exposure_then_the_lowest_gain():
+    """A3: at equal DN, 4x the exposure at a quarter of the gain is 2x the SNR."""
+    search = se.BallBrightnessSearch(MAX_EXPOSURE_US)
+
+    assert search.split(2000.0) == se.StaticExposureStep(2000, 1.0)
+    longest = search.split(14800.0)
+    assert longest.exposure_us == MAX_EXPOSURE_US
+    assert longest.gain == pytest.approx(14800.0 / MAX_EXPOSURE_US, abs=0.01)
+
+
+def test_the_swing_exposure_start_is_moved_to_the_still_ball_split_at_the_same_light():
+    """A4/B1: the setup started at 300 us x 12, the swing exposure, and stayed there."""
+    search = se.BallBrightnessSearch(MAX_EXPOSURE_US, start=se.StaticExposureStep(300, 12.0))
+
+    assert search.current_step == se.StaticExposureStep(3600, 1.0)
+
+
+def test_a_dim_ball_that_passes_is_raised_toward_the_target_peak_before_locking():
+    """A2: retest 1 locked at 300 us x 12 with the ball's peak at 0.145 of clip."""
+    # 26 DN above black at 300 us x 12, as at 2.14 m
+    scene = Scene(ball_per_signal=26.0 / 3600.0, patch_per_signal=12.0 / 3600.0)
+
+    search, requested = _run(scene, se.StaticExposureStep(300, 12.0))
+
+    assert search.status == "locked"
+    assert len(requested) <= 3
+    peak = search.lock.observation.ball_peak_fraction
+    assert 0.4 <= peak <= 0.75
+    assert search.lock.gain <= 4.0  # long exposure, low gain
+    assert search.lock.observation.light_label is None
+
+
+def test_a_found_dim_ball_at_the_sensors_limit_is_locked_and_labelled_not_failed():
+    """B2 (D15): a found, stable, unclipped ball is never failed on brightness."""
+    scene = Scene(0.0001, 0.00005, found_above_dn=1.0)
+
+    search, _requested = _run(scene, se.StaticExposureStep(8000, 12.0))
+
+    assert search.status == "locked"
+    assert search.lock.observation.light_label == se.DIM_LIGHT_LABEL
+    assert search.lock.observation.signal_above_floor_dn < 20.0
+
+
+def test_a_dim_ball_is_accepted_with_its_label_and_light_index():
+    observation = _assess(STEP, _frames(30.0, 20.0), _association())
+
+    assert observation.status == "accepted"
+    assert observation.light_label == se.DIM_LIGHT_LABEL
+    assert "signal" not in observation.failed_gates
+    assert observation.light_index_dn_per_us_gain == pytest.approx(15.0 / (1250 * 8.0))
+
+
+def test_a_bright_enough_ball_carries_no_light_label():
+    observation = _assess(STEP, _frames(160.0), _association())
+
+    assert observation.light_label is None
+    assert observation.light_index_dn_per_us_gain == pytest.approx(145.0 / (1250 * 8.0))
+
+
+class ContrastScene(Scene):
+    """The detector finds the ball only above the fixed 8 DN disk-contrast floor."""
+
+    def observe(self, step, *, applied=None):
+        product = step.exposure_us * step.gain
+        contrast = (self.ball - self.patch) * product
+        self.found_above = (self.ball * product) if contrast >= 8.0 else float("inf")
+        return super().observe(step, applied=applied)
+
+
+def test_a_lit_but_dim_patch_is_brightened_once_before_the_ball_is_called_missing():
+    """A5: at 2.14 m the ball's contrast was 14 DN against the 8 DN floor; half the
+    light ends at 'No ball in the box' though the patch read 25-31 DN above black."""
+    scene = ContrastScene(ball_per_signal=0.010, patch_per_signal=0.008)
+
+    search, requested = _run(scene, se.StaticExposureStep(1800, 2.0))
+
+    assert requested[0] == se.StaticExposureStep(3600, 1.0)
+    assert search.status == "locked"
+
+
+def test_a_ball_too_faint_to_see_at_the_sensors_limit_reads_too_dark_not_no_ball():
+    """A5: below the detector's contrast floor the ball is 'too dark', never 'no ball'."""
+    scene = ContrastScene(ball_per_signal=0.0000101, patch_per_signal=0.000008)
+
+    search, _requested = _run(scene, se.StaticExposureStep(8000, 12.0))
+
+    assert search.status == "too_dark"
+    assert "add light" in search.reason
+    assert "No ball" not in search.reason
+
+
+def test_the_dim_patch_step_is_taken_only_once():
+    scene = Scene(ball_per_signal=0.0, patch_per_signal=0.008)
+
+    search, requested = _run(scene, se.StaticExposureStep(3600, 1.0))
+
+    assert search.status == "ball_not_found"
+    assert len(requested) == 2

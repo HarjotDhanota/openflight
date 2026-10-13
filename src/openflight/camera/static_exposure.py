@@ -49,11 +49,27 @@ _CLIP_LEVEL_DN = 250.0
 # A seen ball's brightest part is brought to this share of the clip level: well
 # clear of clipping, and far above the 20 DN floor for a white ball.
 TARGET_PEAK_FRACTION = 0.6
+# A found ball that passes but whose brightest part sits below this share of the clip
+# level is raised to TARGET_PEAK_FRACTION before the lock (13 Oct light audit A2: both
+# indoor retests locked at a peak of 0.145 and 0.372 with no control change).
+BRIGHTEN_BELOW_PEAK_FRACTION = 0.4
+# A brightening move smaller than this is not worth a control change.
+MIN_BRIGHTEN_FACTOR = 1.2
+# A found, stable, unclipped ball under the 20 DN signal floor is locked, labelled
+# (D15: measure, label, don't block), never failed on brightness (light audit B2).
+DIM_LIGHT_LABEL = "dim_add_light"
+DIM_LIGHT_MESSAGE = "dim: add light"
 # A seen ball too dim for the floor is brought to twice it.
 TARGET_BALL_SIGNAL_DN = 2.0 * _MIN_SIGNAL_ABOVE_FLOOR_DN
 # A patch whose own pixels are dark is brought to this level above black before
 # the ball is looked for again; a patch this far up is clipped.
 TARGET_PATCH_DN = 60.0
+# A lit patch below this level with no ball in it is brightened once before the ball
+# is called missing: the detector's seed floor is a fixed 8 DN of disk contrast, so a
+# dim ball reads "not found" (light audit A5, the dim-ball trap). With the sensor at
+# its limit, such a patch reads "too dark", never "no ball".
+DIM_PATCH_DN = TARGET_PATCH_DN
+TOO_DARK_MESSAGE = "Too dark to see a ball in the box: add light on the hitting area."
 CLIPPED_PATCH_DN = 224.0
 # The most one step changes exposure x gain, either way, and the most steps.
 MAX_STEP_FACTOR = 16.0
@@ -69,10 +85,13 @@ def static_exposure_policy() -> dict[str, Any]:
     return {
         "name": "stationary_reference_ball_exposure",
         # version 6 (P8-2): a few steps aimed at the ball's own brightness replace
-        # the 44-step lattice search; "not found" never means dark
-        "version": 6,
+        # the 44-step lattice search; "not found" never means dark. Version 7 (13 Oct
+        # light audit): the still ball takes the longest exposure then the lowest gain,
+        # a passing dim ball is raised to the target peak, a found ball is never failed
+        # on brightness, and a dim patch is brightened once before "no ball"
+        "version": 7,
         "purpose": STATIC_EXPOSURE_PURPOSE,
-        "objective": "ball_peak_at_target_shortest_exposure_then_gain",
+        "objective": "ball_peak_at_target_longest_exposure_then_lowest_gain",
         "search": {
             "method": "ball_targeted_brightness_steps",
             "warm_start": "remembered_verified_lock_first_under_the_same_gates",
@@ -80,6 +99,11 @@ def static_exposure_policy() -> dict[str, Any]:
             "minimum_exposure_us": MIN_EXPOSURE_US,
             "gain_range": [MIN_GAIN, MAX_GAIN],
             "target_peak_fraction_of_clip": TARGET_PEAK_FRACTION,
+            "brighten_below_peak_fraction": BRIGHTEN_BELOW_PEAK_FRACTION,
+            "split": "longest_exposure_within_the_frame_then_lowest_gain",
+            "dim_patch_dn": DIM_PATCH_DN,
+            "dim_patch_brightening_steps": 1,
+            "faint_ball_at_the_limit": "too_dark_never_no_ball",
             "target_ball_signal_dn": TARGET_BALL_SIGNAL_DN,
             "target_patch_dn": TARGET_PATCH_DN,
             "clipped_patch_dn": CLIPPED_PATCH_DN,
@@ -100,7 +124,11 @@ def static_exposure_policy() -> dict[str, Any]:
             "minimum_signal_above_floor_dn": _MIN_SIGNAL_ABOVE_FLOOR_DN,
             "maximum_ball_clipped_pct": _MAX_BALL_CLIPPED_PCT,
             "black_floor_fallback_dn": SENSOR_BLACK_LEVEL_DN,
-            "recorded_not_gated": ["local_contrast_dn", "edge_gradient_dn"],
+            "recorded_not_gated": [
+                "local_contrast_dn",
+                "edge_gradient_dn",
+                "signal_below_floor_labelled_dim_add_light",
+            ],
             "edge_region_radius_fraction": [0.8, 1.2],
             "background_ring_radius_fraction": [1.25, 1.8],
             "required_stable_observations": _REQUIRED_STABLE_OBSERVATIONS,
@@ -155,6 +183,11 @@ class StaticExposureObservation:
     frame_signal_region: str | None = None
     # 95th-percentile ball brightness above black as a fraction of the clip level
     ball_peak_fraction: float | None = None
+    # "dim_add_light" when a found ball is under the signal floor: labelled, not failed
+    light_label: str | None = None
+    # the ball core's DN above black per microsecond x gain applied: the measured light
+    # the ladder and the light warning carry between exposures (light audit B1)
+    light_index_dn_per_us_gain: float | None = None
 
     @property
     def acceptable(self) -> bool:
@@ -300,17 +333,14 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
     gradient_y, gradient_x = np.gradient(image)
     edge = float(np.percentile(np.hypot(gradient_x, gradient_y)[edge_region], 75))
     clipped = float(np.mean(image[ball] >= _CLIP_LEVEL_DN) * 100.0)
-    black = float(black_floor_dn) if black_floor_dn is not None else 0.0
-    peak_fraction = (float(np.percentile(image[ball], 95)) - black) / (_CLIP_LEVEL_DN - black)
+    # the same black as the signal's (light audit A6: it fell back to 0 here)
+    peak_fraction = (float(np.percentile(image[ball], 95)) - floor) / (_CLIP_LEVEL_DN - floor)
     stable = int(association.get("stable_count", 0))
-    failed = [
-        name
-        for name, passed in (
-            ("signal", signal >= _MIN_SIGNAL_ABOVE_FLOOR_DN),
-            ("clipped", clipped <= _MAX_BALL_CLIPPED_PCT),
-        )
-        if not passed
-    ]
+    # a dim ball is labelled, never failed (light audit B2, D15); only clipping fails
+    failed = [] if clipped <= _MAX_BALL_CLIPPED_PCT else ["clipped"]
+    light_label = DIM_LIGHT_LABEL if signal < _MIN_SIGNAL_ABOVE_FLOOR_DN else None
+    applied_product = float(applied_exposure_us) * float(applied_gain)
+    light_index = signal / applied_product if applied_product > 0.0 else None
     if failed:
         status, reason = "rejected", "failed ball-pixel gates: " + ", ".join(failed)
     elif stable < _REQUIRED_STABLE_OBSERVATIONS:
@@ -331,6 +361,8 @@ def assess_static_exposure(  # pylint: disable=too-many-locals
         **applied,
         failed_gates=tuple(failed),
         ball_peak_fraction=round(peak_fraction, 4),
+        light_label=light_label,
+        light_index_dn_per_us_gain=(round(light_index, 8) if light_index is not None else None),
     )
 
 
@@ -350,8 +382,13 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
     * several ball-like things: looked at again at the same setting, never
       brighter; after ``IDENTIFY_LIMIT`` looks they cannot be told apart.
 
-    The shortest exposure is used for any exposure x gain, then gain. A
-    remembered lock (``warm_start``) is tried first under the same gates.
+    The ball is still, so the longest exposure the frame allows is used for any
+    exposure x gain, then the lowest gain: at equal DN, 4x the exposure at a quarter
+    of the gain collects 4x the electrons (light audit A3). A given start (the
+    swing's 300 us x 12 on 13 Oct) keeps its exposure x gain but takes this split.
+    A remembered lock (``warm_start``) is tried first, as it was, under the same gates.
+    A found ball is never failed on brightness: at the sensor's limit a dim ball is
+    locked and labelled ``dim_add_light`` (light audit B2).
     """
 
     def __init__(
@@ -363,9 +400,9 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
     ):
         self.max_exposure_us = max(MIN_EXPOSURE_US, int(max_exposure_us))
         self.warm_start = warm_start if warm_start is not None and self._valid(warm_start) else None
-        first = self.warm_start or start or DEFAULT_START
-        # the start is used as given when the sensor can take it; moves use split()
-        self._step = first if self._valid(first) else self.split(first.signal)
+        # a remembered lock is tried as it was; any other start keeps its light and
+        # takes the still-ball split (light audit A3, A4)
+        self._step = self.warm_start or self.split((start or DEFAULT_START).signal)
         self.stage = "warm_start" if self.warm_start else "targeting"
         self.status = "searching"
         self.reason: str | None = None
@@ -378,6 +415,7 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
         self._pose_retries = 0
         self._not_found = 0
         self._unidentified = 0
+        self._dim_patch_steps = 0
 
     def _valid(self, step: StaticExposureStep) -> bool:
         return (
@@ -386,12 +424,20 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
         )
 
     def split(self, product: float) -> StaticExposureStep:
-        """The shortest exposure for this exposure x gain, then the gain it needs."""
+        """The longest exposure for this exposure x gain, then the lowest gain it needs."""
         exposure = min(
-            max(MIN_EXPOSURE_US, math.ceil(float(product) / MAX_GAIN)), self.max_exposure_us
+            max(MIN_EXPOSURE_US, math.floor(float(product) / MIN_GAIN)), self.max_exposure_us
         )
         gain = min(MAX_GAIN, max(MIN_GAIN, float(product) / exposure))
         return StaticExposureStep(int(exposure), round(gain, 2))
+
+    def _can_brighten(self, observation: StaticExposureObservation, factor: float) -> bool:
+        """Whether a step up by ``factor`` is within the sensor and the step budget."""
+        if self._changes >= MAX_CONTROL_CHANGES:
+            return False
+        factor = min(MAX_STEP_FACTOR, factor)
+        wanted = self.split(self._applied_product(observation) * factor)
+        return wanted.signal >= MIN_BRIGHTEN_FACTOR * self._step.signal
 
     @property
     def current_step(self) -> StaticExposureStep | None:
@@ -435,10 +481,8 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
         brighter = factor > 1.0
         if wanted == self._step or self._changes >= MAX_CONTROL_CHANGES:
             if brighter:
-                self._finish(
-                    "lighting_required",
-                    "more light is needed on the ball: the brightest setting is still too dark",
-                )
+                # only a picture with no ball found is ever too dark (light audit B2)
+                self._finish("too_dark", TOO_DARK_MESSAGE)
             else:
                 self._finish(
                     "too_bright",
@@ -490,10 +534,26 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
                 factor = TARGET_PEAK_FRACTION / peak if peak and peak < 1.0 else 0.25
                 self._move(observation, min(factor, 0.5), "ball_clipped")
                 return
-            if "signal" in failed:
-                signal = max(float(observation.signal_above_floor_dn or 0.0), 1.0)
-                self._move(observation, TARGET_BALL_SIGNAL_DN / signal, "ball_too_dim")
-                return
+            signal = float(observation.signal_above_floor_dn or 0.0)
+            peak = observation.ball_peak_fraction
+            if signal < _MIN_SIGNAL_ABOVE_FLOOR_DN or (
+                peak is not None and peak < BRIGHTEN_BELOW_PEAK_FRACTION
+            ):
+                # raise the ball's brightest part to the target (light audit A2); at the
+                # sensor's limit it locks labelled dim instead of failing (B2)
+                factor = (
+                    TARGET_PEAK_FRACTION / peak
+                    if peak is not None and peak > 0.0
+                    else TARGET_BALL_SIGNAL_DN / max(signal, 1.0)
+                )
+                if self._can_brighten(observation, factor):
+                    why = (
+                        "ball_too_dim"
+                        if signal < _MIN_SIGNAL_ABOVE_FLOOR_DN
+                        else "ball_below_target_peak"
+                    )
+                    self._move(observation, factor, why)
+                    return
             if observation.status == "stabilizing":
                 self._stabilizing += 1
                 if self._stabilizing >= STABILIZE_LIMIT:
@@ -537,13 +597,31 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
             # the patch's own pixels are dark: brighten the patch, then look again
             self._move(observation, TARGET_PATCH_DN / max(patch, 1.0), "patch_dark")
             return
+        dim_patch = patch is not None and patch < DIM_PATCH_DN
+        if dim_patch and self._dim_patch_steps < 1:
+            # lit but dim: a ball under the detector's 8 DN contrast floor is not found,
+            # so brighten once before calling it missing (light audit A5)
+            factor = max(2.0, TARGET_PATCH_DN / max(patch, 1.0))
+            if self._can_brighten(observation, factor):
+                self._dim_patch_steps += 1
+                self._move(observation, factor, "patch_dim")
+                return
+            # the sensor is at its limit: whatever is in the box is too dark to see
+            self._dim_patch_steps += 1
         self._not_found += 1
         self._log(observation, "ball_not_in_patch")
         if self._not_found >= NOT_FOUND_LIMIT:
-            self._finish(
-                "ball_not_found",
-                "No ball in the box. Put the ball in the box.",
-            )
+            if dim_patch and self._changes_left_at_limit(observation):
+                self._finish("too_dark", TOO_DARK_MESSAGE)
+            else:
+                self._finish(
+                    "ball_not_found",
+                    "No ball in the box. Put the ball in the box.",
+                )
+
+    def _changes_left_at_limit(self, observation: StaticExposureObservation) -> bool:
+        """Whether the dim patch could not be brightened: the sensor is at its limit."""
+        return not self._can_brighten(observation, MAX_STEP_FACTOR)
 
     def to_dict(self) -> dict:
         """Durable search evidence, including every attempted step."""

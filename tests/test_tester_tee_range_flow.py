@@ -717,7 +717,8 @@ def _search_evidence(tmp_path, client, tester):
     ("ball_per_signal", "ambiguous", "status", "detector"),
     [
         (0.03, False, "locked", "selected"),
-        (0.0001, False, "lighting_required", "selected"),
+        # a found dim ball is locked and labelled, never failed (13 Oct light audit B2)
+        (0.0001, False, "locked", "selected"),
         (0.03, True, "ball_not_identified", "ambiguous"),
     ],
 )
@@ -745,10 +746,35 @@ def test_the_exposure_search_is_saved_to_disk_without_any_save(
     assert saved["policy_sha256"] == ts._static_exposure_policy_sha256()
 
 
-def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monkeypatch):
+def test_a_found_dim_ball_is_locked_labelled_dim_and_save_proceeds(tmp_path, inputs, monkeypatch):
+    """13 Oct light audit B2 (D15): a found, stable ball is never failed on brightness."""
     live = FakeLive()
     live.ball_per_signal = 0.0001
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    start_arm5(client, tester)
+    exposure = live.analyzer.status()
+
+    response = post(client, tester, "evaluate_camera_arm5", "dim-save")
+
+    assert exposure["status"] == "locked"
+    assert exposure["lock"]["observation"]["light_label"] == "dim_add_light"
+    assert response.status_code == 200, response.get_json()
+    assert phase(client, tester)["phase"] != "retryable_failure"
+
+
+def _too_dark_to_see(monkeypatch, live):
+    """A ball under the detector's contrast floor in a box too dark to brighten."""
+    live.background = 18.0  # 2 DN above black, whatever the controls
+    live.ball_per_signal = 0.0
+    nothing = ReferenceBallRangeResult("not_found", "withheld", None, (), {})
+    monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: nothing)
+
+
+def test_a_box_too_dark_to_see_a_ball_reads_too_dark_and_blocks_save(tmp_path, inputs, monkeypatch):
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    _too_dark_to_see(monkeypatch, live)
     client = app.test_client()
     start_arm5(client, tester)
 
@@ -756,16 +782,16 @@ def test_dark_scene_requires_light_and_blocks_camera_save(tmp_path, inputs, monk
     association = live.analyzer.snapshot()
 
     assert response.status_code == 409
-    assert "more light is needed on the ball" in response.get_json()["error"]
-    assert association["static_exposure"]["status"] == "lighting_required"
+    assert "add light" in response.get_json()["error"]
+    assert association["static_exposure"]["status"] == "too_dark"
     assert association["save_eligible"] is False
     assert phase(client, tester)["phase"] == "camera_arm5_capturing"
 
 
 def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, inputs, monkeypatch):
     live = FakeLive()
-    live.ball_per_signal = 0.0001
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    _too_dark_to_see(monkeypatch, live)
     client = app.test_client()
     start_arm5(client, tester)
 
@@ -873,9 +899,11 @@ def test_save_rechecks_the_ball_pixels_on_the_save_frames(tmp_path, inputs, monk
     client = app.test_client()
     start_arm5(client, tester)
     assert live.analyzer.status()["locked_and_passing"] is True
-    live.ball_per_signal = 0.0001
+    # the sun comes out between the lock and Save: the ball clips (a dim ball is
+    # labelled, never failed, 13 Oct)
+    live.ball_per_signal = 1.0
 
-    state = post(client, tester, "evaluate_camera_arm5", "dimmed-save").get_json()["state"]
+    state = post(client, tester, "evaluate_camera_arm5", "clipped-save").get_json()["state"]
 
     attempt = next(
         value for key, value in state["evidence"].items() if key.startswith("camera_arm5_attempt_")
@@ -904,13 +932,14 @@ def test_the_estimator_is_not_run_until_the_camera_applies_the_controls(
     assert calls == []
 
 
-def test_losing_light_after_the_lock_restarts_the_search(tmp_path, inputs, monkeypatch):
+def test_a_ball_that_clips_after_the_lock_restarts_the_search(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     client = app.test_client()
     start_arm5(client, tester)
     locked = live.analyzer.status()["lock"]
-    live.ball_per_signal = 0.0001
+    # the sun comes out; losing light only labels the ball dim (13 Oct light audit B2)
+    live.ball_per_signal = 1.0
 
     for _ in range(2):
         live.frame_sequence += 1
@@ -929,7 +958,7 @@ def test_losing_light_after_the_lock_restarts_the_search(tmp_path, inputs, monke
         exposure["current_step"]["exposure_us"],
         exposure["current_step"]["gain"],
     )
-    assert post(client, tester, "evaluate_camera_arm5", "dim-save").status_code == 409
+    assert post(client, tester, "evaluate_camera_arm5", "bright-save").status_code == 409
 
 
 def test_range_display_reports_the_pair_as_experimental_even_when_qualified(
@@ -3562,8 +3591,8 @@ def test_a_setup_without_a_usable_radar_range_saves_no_camera_range():
 
 def test_a_dark_box_with_no_radar_ball_saves_nothing_and_says_so(tmp_path, inputs, monkeypatch):
     live = FakeLive()
-    live.ball_per_signal = 0.0001
     app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, live_view=live)
+    _too_dark_to_see(monkeypatch, live)
     app.config["TEST_STATIC_MANAGER"].ball_return = 0.0
     client = app.test_client()
     start_arm5(client, tester)
