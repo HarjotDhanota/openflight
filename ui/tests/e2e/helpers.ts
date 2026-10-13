@@ -364,9 +364,11 @@ export function lensState(testerId = DEFAULT_TESTER, lensId: string | null = 'st
         label: 'Stock 2.8 mm',
         focal_mm: 2.8,
         f_number: 2.2,
+        // the listed spec: its strong barrel distortion, not the pinhole's 2·atan(1.92/2.8)
         hfov_deg: 118,
         intrinsics: 'nominal',
-        focal_px_by_arm: { arm5: 466.67, arm6: 233.33 },
+        // OV9281, 3 µm pixels: f_mm / 0.003 px at 1280×800, half that at 640×400
+        focal_px_by_arm: { arm5: 933.33, arm6: 466.67 },
         settings: settings([300, 200, 150, 100, 75, 50, 30, 20, 10], [300, 150, 75, 30, 15]),
       },
       {
@@ -374,9 +376,10 @@ export function lensState(testerId = DEFAULT_TESTER, lensId: string | null = 'st
         label: '6 mm',
         focal_mm: 6,
         f_number: 2.0,
-        hfov_deg: 52,
+        // pinhole 2·atan(1.92 mm / 6 mm)
+        hfov_deg: 35.5,
         intrinsics: 'nominal',
-        focal_px_by_arm: { arm5: 1000, arm6: 500 },
+        focal_px_by_arm: { arm5: 2000, arm6: 1000 },
         settings: settings([300, 150, 75], [300, 150]),
       },
       {
@@ -384,9 +387,10 @@ export function lensState(testerId = DEFAULT_TESTER, lensId: string | null = 'st
         label: '8 mm',
         focal_mm: 8,
         f_number: null,
-        hfov_deg: 40,
+        // pinhole 2·atan(1.92 mm / 8 mm)
+        hfov_deg: 27,
         intrinsics: 'nominal',
-        focal_px_by_arm: { arm5: 1333, arm6: 667 },
+        focal_px_by_arm: { arm5: 2666.67, arm6: 1333.33 },
         settings: settings([300, 150, 75], [300]),
       },
     ],
@@ -405,6 +409,16 @@ export async function mockLens(page: Page, lensId: string | null = 'stock-2.8mm'
       body: JSON.stringify(lensState(testerId, lensId)),
     });
   });
+}
+
+/** Where an element is drawn now, measured in one step (a live picture is replaced on every frame). */
+export async function rectOf(page: Page, selector: string) {
+  return page.evaluate((query) => {
+    const node = document.querySelector(query);
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    return rect.width && rect.height ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : null;
+  }, selector);
 }
 
 export { expect };

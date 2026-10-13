@@ -158,6 +158,12 @@ test('the lens is picked by touch, its settings shown, and a change warns before
   await expect(page.locator('#lens')).toHaveAttribute('data-ready', 'true');
   await expect(page.locator('#lens-settings')).toContainText('Modes: 1280×800 (default), 640×400');
   await expect(page.locator('#ladder-source')).toContainText('The settings the Stock 2.8 mm lens runs');
+  // the backend's own numbers, shown as they come: the page computes none of them
+  await expect(page.locator('#lens-settings')).toContainText(
+    'Focal length 933 px at 1280×800, 467 px at 640×400 (nominal)'
+  );
+  await expect(cards.nth(1)).toContainText('f/2 · 35.5° wide · nominal model');
+  await expect(cards.nth(2)).toContainText('27° wide · nominal model');
   await expect(page.locator('#lens-settings')).toContainText('1280×800 ladder: 300, 200, 150, 100, 75, 50, 30, 20, 10 µs');
   for (const card of await cards.all()) {
     expect((await card.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
@@ -178,6 +184,7 @@ test('the lens is picked by touch, its settings shown, and a change warns before
     'Lens set to 6 mm. Set again: the ball box, the aim point, the camera tilt.'
   );
   await expect(cards.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#lens-settings')).toContainText('Focal length 2000 px at 1280×800, 1000 px at 640×400');
   // the swing step's settings follow the lens
   await expect(page.locator('#ladder-choice input')).toHaveCount(5);
   await expect(page.locator('#ladder-source')).toContainText('The settings the 6 mm lens runs');
