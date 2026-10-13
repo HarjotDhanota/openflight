@@ -6866,6 +6866,10 @@ def create_app(
         inclinometer_zero_offset_deg=enclosure.zero_offset_deg,
     )
     runtime_client = study_ladder.KioskClient()
+    # the page's status poll asks the kiosk with a short timeout (13 Oct)
+    kiosk_probe = study_ladder.KioskClient()
+    if hasattr(kiosk_probe, "timeout_s"):
+        kiosk_probe.timeout_s = 1.0
     active_setup_tester: dict[str, str | None] = {"tester_id": None}
     active_runtime_dir: dict[str, Path | None] = {"path": None}
     admitted_setup: dict[str, dict] = {}
@@ -9373,7 +9377,8 @@ def create_app(
                 "url": url,
             }
         if running:
-            answered = runtime_client.ready_light() is not None
+            # a short probe: the page polls this, and a kiosk still starting never answers
+            answered = kiosk_probe.ready_light() is not None
             return {
                 "state": "running" if answered else "starting",
                 "progress_message": None if answered else "Starting the kiosk…",
@@ -9381,11 +9386,18 @@ def create_app(
             }
         return {"state": "stopped", "progress_message": None, "url": url}
 
-    def ball_at_address(tester_id: str) -> dict:
+    def ball_at_address(tester_id: str, kiosk: Mapping | None = None) -> dict:
         """The kiosk's per-shot re-location of the resting ball, for the ready light."""
         job = jobs.status()
         if not (job.get("state") == "running" and job.get("action") in {"ladder", "swings"}):
             return {"state": "unknown", "range_m": None, "updated_at": None, "reason": "no kiosk"}
+        if isinstance(kiosk, Mapping) and kiosk.get("state") != "running":
+            return {
+                "state": "unknown",
+                "range_m": None,
+                "updated_at": None,
+                "reason": f"the kiosk is {kiosk.get('state')}",
+            }
         if active_setup_tester["tester_id"] not in {None, tester_id}:
             return {
                 "state": "unknown",
@@ -9393,7 +9405,7 @@ def create_app(
                 "updated_at": None,
                 "reason": "other tester",
             }
-        found = runtime_client.ball_at_address()
+        found = kiosk_probe.ball_at_address()
         if not isinstance(found, Mapping):
             return {
                 "state": "unknown",
@@ -9424,6 +9436,7 @@ def create_app(
     def status():
         try:
             params = parameters()
+            kiosk = kiosk_block()
             return jsonify(
                 {
                     "available": True,
@@ -9437,8 +9450,8 @@ def create_app(
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                     # contract 13 Oct
                     "lens_id": lens_store.selected(),
-                    "kiosk": kiosk_block(),
-                    "ball_at_address": ball_at_address(params.tester_id),
+                    "kiosk": kiosk,
+                    "ball_at_address": ball_at_address(params.tester_id, kiosk),
                     "live_metrics": live_metrics(params.tester_id),
                 }
             )
