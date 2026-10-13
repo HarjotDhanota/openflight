@@ -42,8 +42,12 @@
 .metric-cell__label {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* a name like "Club speed (radar line)" takes two lines rather than an ellipsis */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.1em;

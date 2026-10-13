@@ -780,8 +780,15 @@
           display: none;
         }
       }
-      .step {
+      .step,
+      main [id] {
         scroll-margin-top: calc(var(--sticky-h) + 4px);
+      }
+      /* a step in progress is not an error: its gate reads blue until it is done */
+      #placement[data-ready='false'],
+      #aim[data-ready='false'],
+      #automatic-range[data-ready='false'] {
+        border-color: var(--accent);
       }
       @media (max-height: 520px) {
         :root {
@@ -2868,9 +2875,7 @@
             'Put the ball in the box where you will hit from and confirm it. A new spot means measuring the ' +
             'light again and starting the ball range over.';
         } else if (state === 'needs_confirmation') {
-          text =
-            'Put the ball in the yellow box. When the green check appears, press Confirm the ball in the box. ' +
-            'Drag the blue line to where the floor meets the net or screen.';
+          text = 'Drag the blue line to where the floor meets the net or screen, then confirm when the check is green.';
         } else {
           const when = placementState.reconfirmed_at_utc || placementState.confirmed_at_utc;
           const range = ball?.range_m ?? placementState.box?.distance_m;
@@ -4298,7 +4303,7 @@
         action.dataset.action = startOverRequired ? '' : (step?.action || 'start');
         el('automatic-range-summary').className = phase === 'retryable_failure' ? 'problem' : 'note';
         el('automatic-range-summary').textContent = teeRangeActionError || teeRangeFailureSummary(state) || (state
-          ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
+          ? `${startOverRequired ? state.reason : (step?.prompt || state.reason)} ${!startOverRequired && state.reason && state.reason !== step?.prompt && state.reason !== phase ? `(${state.reason.replaceAll('_', ' ')})` : ''}`
           : boxConfirmed()
             ? 'The camera and radar checks work from the ball box you confirmed in step 3. No tape measurement is required.'
             : 'Confirm the ball box in step 3 first: the camera and radar checks work from it.');

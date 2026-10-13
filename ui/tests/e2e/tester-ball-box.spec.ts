@@ -314,7 +314,7 @@ test('a camera that does not answer is the first camera check, said plainly', as
 
   await expect(page.locator('#placement-box')).toBeVisible();
   await expect(show).toBeHidden();
-  await expect(summary).toContainText('Put the ball in the yellow box');
+  await expect(summary).toContainText('Drag the blue line to where the floor meets the net or screen');
 });
 
 test('redoing the box later makes the light stale and starts the ball range over', async ({ page }) => {
