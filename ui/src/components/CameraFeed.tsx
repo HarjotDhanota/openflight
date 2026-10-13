@@ -36,12 +36,20 @@ interface ExposureQuality {
   auto_exposure?: CameraAutoExposureStatus;
 }
 
+// Why the controls are what they are (the swing exposure's status, 13 Oct 2026)
 const AUTO_EXPOSURE_LABELS: Record<CameraAutoExposureStatus['status'], string> = {
-  ready: 'Ready',
-  adjusting: 'Adjusting',
-  lighting_required: 'Lighting needed',
+  seeded: 'Waiting for the ball',
+  ball_driven: 'Ball-driven',
+  too_bright: 'Too bright',
+  too_dark: 'Too dark',
+  holding_no_ball: 'Holding: no ball',
   unavailable: 'Waiting',
+  manual: 'Manual',
 };
+
+function formatGain(gain: number | undefined): string {
+  return gain === undefined ? '—' : `${Math.round(gain * 100) / 100}`;
+}
 
 function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: CaptureSettingsPanelProps) {
   const verticalOffset = settings.vertical_offset_px ?? 0;
@@ -52,10 +60,12 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
   const viewUpOffset = viewTargets.up;
   const viewDownOffset = viewTargets.down;
   const autoExposure = exposureQuality?.auto_exposure ?? settings.auto_exposure;
-  const exposureObservation = autoExposure?.observation;
+  const reading = autoExposure?.reading;
+  const blurCeiling = autoExposure?.blur_ceiling_us ?? autoExposure?.envelope?.blur_ceiling_us;
+  const sensorMin = autoExposure?.sensor_limits?.exposure_min_us ?? autoExposure?.envelope?.sensor_min_us;
   const exposureStatus = autoExposure?.capture_deferred
     ? 'Capturing shot'
-    : AUTO_EXPOSURE_LABELS[autoExposure?.status ?? 'unavailable'];
+    : (AUTO_EXPOSURE_LABELS[autoExposure?.status ?? 'unavailable'] ?? autoExposure?.status);
 
   return (
     <aside className="camera-settings">
@@ -99,8 +109,8 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
 
         <section className="camera-settings__section">
           <div className="camera-settings__section-title">
-            <span>Automatic exposure</span>
-            <small>calibrates once at startup</small>
+            <span>Swing exposure</span>
+            <small>metered on the resting ball before every swing</small>
           </div>
           <div
             className={`camera-settings__auto-status camera-settings__auto-status--${autoExposure?.status ?? 'unavailable'}`}
@@ -118,17 +128,26 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
             </div>
             <div>
               <dt>Gain</dt>
-              <dd>{autoExposure?.gain ?? settings.gain ?? '—'}×</dd>
+              <dd>{formatGain(autoExposure?.gain ?? settings.gain)}×</dd>
             </div>
             <div>
-              <dt>Impact median</dt>
-              <dd>{exposureObservation?.median ?? '—'}</dd>
+              <dt>Blur ceiling</dt>
+              <dd>{blurCeiling ? `${blurCeiling} µs` : '—'}</dd>
             </div>
             <div>
-              <dt>Contrast</dt>
-              <dd>{exposureObservation?.contrast ?? exposureQuality?.contrast ?? '—'}</dd>
+              <dt>Ball</dt>
+              <dd>
+                {reading
+                  ? `${Math.round(reading.signal_dn)} DN · peak ${reading.peak_fraction.toFixed(2)}`
+                  : 'not seen'}
+              </dd>
             </div>
           </dl>
+          {autoExposure?.frame_label && (
+            <p className="camera-settings__frame-label">
+              Frames labelled: <strong>{autoExposure.frame_label}</strong>
+            </p>
+          )}
           <div
             className={`camera-settings__analysis-state ${autoExposure?.analysis_eligible ? 'camera-settings__analysis-state--ready' : ''}`}
           >
@@ -140,8 +159,9 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
             </span>
           </div>
           <p className="camera-settings__note">
-            Motion blur risk: <strong>{autoExposure?.motion_blur_risk ?? 'checking'}</strong>. Add or redirect light if
-            the camera reaches its limit.
+            Shortest exposure first, gain before exposure, never past the blur ceiling
+            {sensorMin ? ` (the sensor's shortest is ${sensorMin} µs)` : ''}. Too bright at the shortest: shade the ball
+            area or fit an ND filter. Too dark at the ceiling: add light. Clips are labelled, never blocked.
           </p>
         </section>
 

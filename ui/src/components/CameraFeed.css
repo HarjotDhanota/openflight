@@ -270,22 +270,30 @@
   line-height: 1.35;
 }
 
-.camera-settings__auto-status--ready {
+.camera-settings__auto-status--ball_driven {
   border-color: rgba(74, 222, 128, 0.32);
   background: rgba(74, 222, 128, 0.07);
 }
 
-.camera-settings__auto-status--ready strong {
+.camera-settings__auto-status--ball_driven strong {
   color: var(--color-success);
 }
 
-.camera-settings__auto-status--lighting_required {
+.camera-settings__auto-status--too_bright,
+.camera-settings__auto-status--too_dark {
   border-color: rgba(248, 113, 113, 0.36);
   background: rgba(248, 113, 113, 0.08);
 }
 
-.camera-settings__auto-status--lighting_required strong {
+.camera-settings__auto-status--too_bright strong,
+.camera-settings__auto-status--too_dark strong {
   color: var(--color-danger);
+}
+
+.camera-settings__frame-label {
+  margin: 6px 0 0;
+  color: var(--color-danger);
+  font-size: 0.65rem;
 }
 
 .camera-settings__auto-dot {

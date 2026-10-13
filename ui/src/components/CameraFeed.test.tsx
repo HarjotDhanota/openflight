@@ -29,18 +29,16 @@ const captureSettings: CameraCaptureSettings = {
   vertical_offset_step_px: 10,
   auto_exposure: {
     enabled: true,
-    status: 'ready',
+    status: 'ball_driven',
+    reason: 'resting_ball',
     analysis_eligible: true,
-    message: 'Impact-area exposure and contrast look good',
-    motion_blur_risk: 'low',
-    exposure_us: 500,
-    gain: 12,
-    observation: {
-      sample_available: true,
-      status: 'good',
-      median: 108,
-      contrast: 94,
-    },
+    message: "Ball-driven: Holding 294 us x gain 15.9375; the ball's peak is 0.49 of clip (target 0.55)",
+    frame_label: null,
+    exposure_us: 294,
+    gain: 15.9375,
+    blur_ceiling_us: 294,
+    sensor_limits: { exposure_min_us: 9, exposure_max_us: 8000, gain_min: 1, gain_max: 15.9375 },
+    reading: { signal_dn: 69.4, peak_fraction: 0.487, clipped_pct: 0, exposure_us: 294, gain: 15.9375 },
   },
 };
 
@@ -57,15 +55,20 @@ describe('CameraFeed', () => {
 
     expect(html).toContain('camera-feed__workspace');
     expect(html).toContain('Camera setup');
-    expect(html).toContain('Automatic exposure');
-    expect(html).toContain('calibrates once at startup');
-    expect(html).not.toContain('checks every 5 seconds');
+    expect(html).toContain('Swing exposure');
+    expect(html).toContain('metered on the resting ball before every swing');
+    expect(html).not.toContain('calibrates once at startup');
     expect(html).toContain('Auto exposure');
     expect(html).toContain('camera-feed__exposure-quality');
     expect(html).toContain('Camera analysis active');
-    expect(html).toContain('Impact median');
-    expect(html).toContain('Motion blur risk');
-    expect(html).toContain('500<!-- --> µs');
+    expect(html).toContain('Ball-driven');
+    expect(html).toContain('294<!-- --> µs');
+    expect(html).toContain('15.94<!-- -->×');
+    expect(html).toContain('Blur ceiling');
+    expect(html).toContain('294 µs');
+    expect(html).toContain('69 DN · peak 0.49');
+    expect(html).toContain('the sensor&#x27;s shortest is 9 µs');
+    expect(html).not.toContain('Motion blur risk');
     expect(html).not.toContain('Environment profile');
     expect(html).not.toContain('Darker');
     expect(html).not.toContain('Brighter');
@@ -82,16 +85,17 @@ describe('CameraFeed', () => {
     expect(html).toContain('Armed');
   });
 
-  it('explains lighting failure without disabling capture', () => {
+  it('labels a too-dark ball without disabling capture', () => {
     const html = renderToString(
       <CameraFeed
         captureSettings={{
           ...captureSettings,
           auto_exposure: {
             ...captureSettings.auto_exposure!,
-            status: 'lighting_required',
+            status: 'too_dark',
             analysis_eligible: false,
-            message: 'Camera lighting is insufficient; add or redirect light toward the ball',
+            frame_label: 'too dark: add light',
+            message: 'Too dark: the ball is 6 DN above black at the blur ceiling (294 us) and the gain cap',
           },
         }}
         captureSettingsError={null}
@@ -99,9 +103,36 @@ describe('CameraFeed', () => {
       />
     );
 
-    expect(html).toContain('Lighting needed');
+    expect(html).toContain('Too dark');
+    expect(html).toContain('too dark: add light');
     expect(html).toContain('Radar fallback active');
     expect(html).toContain('Preview and raw clips continue recording');
     expect(html).toContain('Armed');
+  });
+
+  it.each([
+    ['too_bright', 'Too bright', 'too bright: shade the ball area (or an ND filter)'],
+    ['holding_no_ball', 'Holding: no ball', null],
+    ['seeded', 'Waiting for the ball', null],
+  ] as const)('shows why the controls are what they are: %s', (status, label, frameLabel) => {
+    const html = renderToString(
+      <CameraFeed
+        captureSettings={{
+          ...captureSettings,
+          auto_exposure: {
+            ...captureSettings.auto_exposure!,
+            status,
+            frame_label: frameLabel,
+            reading: status === 'holding_no_ball' ? null : captureSettings.auto_exposure!.reading,
+          },
+        }}
+        captureSettingsError={null}
+        onUpdateCaptureSettings={vi.fn()}
+      />
+    );
+
+    expect(html).toContain(label);
+    if (frameLabel) expect(html).toContain(frameLabel);
+    if (status === 'holding_no_ball') expect(html).toContain('not seen');
   });
 });
