@@ -46,6 +46,7 @@ from openflight.clubs import ClubType
 from openflight.raw_radar_replay import load_session_events, locate_recorded_capture
 from openflight.review_metrics import mapping, review_replay
 from openflight.session_review import camera_outcome
+from openflight.shot_metrics import records as shot_metric_records
 
 try:
     from scripts.analysis import replay_raw_fusion as raw_replay
@@ -564,6 +565,9 @@ def _shot_rows(  # pylint: disable=too-many-arguments,too-many-locals
         )
     if ran_kiosk:
         table.append(check.face_angle_stage(live, rows))
+    if shot_event is not None:
+        # every metric the kiosk reported for this shot, under its label (V-wiring)
+        table.extend(check.kiosk_metric_stages(shot_metric_records(shot_event), rows))
     return {
         "shot_number": number,
         "stages": table,

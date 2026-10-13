@@ -20,6 +20,7 @@ from openflight.camera.paired_eligibility import NO_RADAR_SHOT
 from openflight.capture_facts import capture_facts
 from openflight.raw_radar_replay import load_session_events
 from openflight.review_metrics import STATUSES, finite, mapping, overlay, review_replay
+from openflight.shot_metrics import LABELS, METRICS, records as shot_metric_records
 
 SCHEMA = "openflight.session_review.v1"
 ANALYSIS_DIR = "analysis"
@@ -119,6 +120,21 @@ def _live_values(shot: Mapping[str, Any]) -> dict[str, Any]:
         "experimental_fused_status",
     )
     return {key: shot.get(key) for key in keys if key in shot}
+
+
+def kiosk_metrics(shot: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Every metric the kiosk reported for this shot, labelled (openflight.shot_metrics).
+
+    Read from the logged ``metrics`` block, or rebuilt from the record's fields for
+    a log written before the block existed. Empty when no shot was logged.
+    """
+    if shot is None:
+        return []
+    found = shot_metric_records(shot)
+    return [
+        {"key": spec.id, "label": spec.label, "group": spec.group, **found[spec.id]}
+        for spec in METRICS
+    ]
 
 
 def _diagnostic_outcomes(events: Iterable[Mapping[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -341,6 +357,7 @@ def _shot_attempt(
         "picture_verdict": run.verdicts.get(capture_name),
         "camera": capture_facts(capture_dir, camera_event, run.start),
         "live": live,
+        "kiosk_metrics": kiosk_metrics(shot),
         "identity": mapping((report or {}).get("source_identity")),
         "identity_evidence": mapping((report or {}).get("source_identity_evidence")),
         **reviewed,
@@ -392,6 +409,7 @@ def _stray_capture_attempt(run: _Run, name: str, folder: Path) -> dict[str, Any]
         "camera": capture_facts(folder, {}, run.start),
         "live_processing": None,
         "live": {},
+        "kiosk_metrics": [],
         "identity": {},
         "identity_evidence": {},
         "metrics": [],
@@ -470,18 +488,24 @@ def build_session_review(
         if path and path not in attached
     )
     counts: dict[str, Counter] = {}
+    labels: dict[str, Counter] = {spec.id: Counter() for spec in METRICS}
     for attempt in attempts:
         for metric in attempt["metrics"]:
             counts.setdefault(metric["key"], Counter())[metric["status"]] += 1
+        for metric in attempt.get("kiosk_metrics") or []:
+            labels[metric["key"]][metric["status"]] += 1
     return {
         "schema": SCHEMA,
         "tester_id": tester_id,
         "analysis": dict(analysis),
         "status_vocabulary": list(STATUSES),
+        # the kiosk's labels on every metric it reported (D38, D39, D17)
+        "label_vocabulary": list(LABELS),
         "runs": runs,
         "attempts": attempts,
         "unattached_impact_photos": unattached,
         "metric_status_counts": {key: dict(counter) for key, counter in sorted(counts.items())},
+        "kiosk_metric_label_counts": {key: dict(counter) for key, counter in labels.items()},
     }
 
 
@@ -510,6 +534,19 @@ def attempts_csv(review: Mapping[str, Any]) -> str:
                     "reason": metric["reason"],
                 }
             )
+        for metric in attempt.get("kiosk_metrics") or []:
+            writer.writerow(
+                {
+                    **base,
+                    "metric": f"kiosk.{metric['key']}",
+                    "status": metric["status"],
+                    "value": metric["value"],
+                    "unit": metric["unit"],
+                    "source": metric["source"],
+                    "confidence": None,
+                    "reason": metric["reason"] or metric.get("note"),
+                }
+            )
     return output.getvalue()
 
 
@@ -520,6 +557,32 @@ def _fmt(value: Any) -> str:
     return f"{number:.1f}" if abs(number) >= 10 else f"{number:.2f}"
 
 
+def _cell(text: Any) -> str:
+    return str(text or "").replace("|", "/")
+
+
+def _kiosk_metric_lines(metrics: list[Mapping[str, Any]]) -> list[str]:
+    """The kiosk's metrics for one shot, each with its label, range, source and reason."""
+    if not metrics:
+        return []
+    lines = [
+        "",
+        "Kiosk metrics (as the kiosk reported them):",
+        "",
+        "| Metric | Label | Value | Range | Source | Reason or note |",
+        "|---|---|---|---|---|---|",
+    ]
+    for metric in metrics:
+        value = f"{_fmt(metric['value'])} {metric['unit']}".rstrip()
+        span = metric.get("range")
+        shown_range = f"{_fmt(span[0])} to {_fmt(span[1])}" if span else ""
+        lines.append(
+            f"| {metric['label']} | {metric['status']} | {value} | {shown_range} "
+            f"| {_cell(metric.get('source'))} | {_cell(metric.get('reason') or metric.get('note'))} |"
+        )
+    return lines
+
+
 def report_markdown(review: Mapping[str, Any]) -> str:
     """A plain summary that reads without any viewer."""
     lines = [
@@ -527,6 +590,8 @@ def report_markdown(review: Mapping[str, Any]) -> str:
         "",
         "No value here is validated against a reference. Status vocabulary: "
         + ", ".join(review.get("status_vocabulary") or STATUSES)
+        + ". Kiosk label vocabulary: "
+        + ", ".join(review.get("label_vocabulary") or LABELS)
         + ".",
         "",
     ]
@@ -616,5 +681,6 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                         f"| {metric['label']} | {metric['status']} | {value} "
                         f"| {_fmt(metric['confidence'])} | {reason} |"
                     )
+            lines += _kiosk_metric_lines(attempt.get("kiosk_metrics") or [])
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"

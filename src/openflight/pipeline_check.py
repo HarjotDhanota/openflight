@@ -30,6 +30,7 @@ import math
 from typing import Any, Iterable, Mapping
 
 from openflight.review_metrics import QUALIFIED_TEE_SOURCES, finite, mapping
+from openflight.shot_metrics import LABELS, MEASURED, METRICS, NOT_MEASURED, SPECS
 
 SCHEMA = "openflight.pipeline_check.v1"
 PASS, FAIL, NOT_REACHED, NOT_REQUESTED = "pass", "fail", "not_reached", "not_requested"
@@ -61,6 +62,13 @@ GATES = {
     "iwr_club": "iwr6843/club.py: club track acceptance",
     "review_labels": "review_metrics.py: status labels",
     "face_angle": "server.py::_attach_collision_model",
+    "kiosk_metrics": "shot_metrics.py: the shot's metric records (label, source, reason)",
+    "full_speed": "full_speed.py / server.py::_attach_full_speeds (E3)",
+    "club_arc": "club_arc.py::club_delivery_payload (E1)",
+    "collision": "collision_model.py::evaluate / server.py::_attach_collision_model (E2)",
+    "flight": "flight.py::compute_flight (E4)",
+    "impact_location": "E5: impact location (not built)",
+    "dynamic_lie": "E6: dynamic lie (not built)",
 }
 
 STAGE_LABELS = {
@@ -1136,3 +1144,142 @@ def format_table(rows: Iterable[Mapping[str, Any]], width: int = 110) -> str:
         line = f"  {row['label'][:40]:<40} {verdict:<26} {value[:44]:<44} {detail}"
         lines.append(line if len(line) <= width + 80 else line[: width + 77] + "...")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- kiosk metrics
+
+# The stages each kiosk metric stands on; it is blocked only when every one failed.
+_KIOSK_UPSTREAM = {
+    "ball_speed": ("ops_shot",),
+    "ball_speed_full": ("ops_shot",),
+    "launch_vertical": ("lcmf", "camera_ball"),
+    "launch_horizontal": ("lcmf", "camera_ball"),
+    "spin_rate": ("ops_shot",),
+    "spin_axis": ("camera_club", "lcmf"),
+    "smash_factor": ("ops_shot",),
+    "smash_factor_full": ("ops_shot",),
+    "club_speed": ("ops_shot",),
+    "club_path": ("camera_club", "lcmf"),
+    "attack_angle": ("camera_club", "lcmf"),
+    "face_angle": ("camera_club", "lcmf"),
+    "face_to_path": ("camera_club", "lcmf"),
+    "dynamic_loft": ("camera_club", "lcmf"),
+    "spin_loft": ("camera_club", "lcmf"),
+    "d_plane_tilt": ("camera_club", "lcmf"),
+    "swing_plane": ("camera_club",),
+    "swing_direction": ("camera_club",),
+    "low_point_distance": ("camera_club",),
+    "low_point_height": ("camera_club",),
+    "low_point_side": ("camera_club",),
+    **{name: ("ops_shot",) for name in ("carry", "carry_side", "total", "total_side")},
+    **{name: ("ops_shot",) for name in ("apex", "landing_angle", "hang_time", "curve")},
+}
+# The gate that produces each kiosk metric.
+_KIOSK_GATE = {
+    "ball_speed": "ops_shot",
+    "club_speed": "ops_shot",
+    "spin_rate": "ops_shot",
+    "smash_factor": "ops_shot",
+    "ball_speed_full": "full_speed",
+    "club_speed_full": "full_speed",
+    "smash_factor_full": "full_speed",
+    "launch_vertical": "lcmf",
+    "launch_horizontal": "lcmf",
+    "gyro": "collision",
+    "impact_offset": "impact_location",
+    "impact_height": "impact_location",
+    "dynamic_lie": "dynamic_lie",
+    **{name: "club_arc" for name in ("club_path", "attack_angle", "swing_plane")},
+    **{name: "club_arc" for name in ("swing_direction", "low_point_distance")},
+    **{name: "club_arc" for name in ("low_point_height", "low_point_side")},
+    **{name: "collision" for name in ("face_angle", "face_to_path", "dynamic_loft")},
+    **{name: "collision" for name in ("spin_loft", "d_plane_tilt", "spin_axis")},
+    **{name: "flight" for name in ("carry", "carry_side", "total", "total_side")},
+    **{name: "flight" for name in ("apex", "landing_angle", "hang_time", "curve")},
+}
+# Not measured because a named dependency is not built yet, not for want of data.
+_KIOSK_PENDING = {
+    # server.CLUB_SPEED_NOT_FULL_REASON: the OPS club speed is not one reading (W6, W9, E1)
+    "club_speed_full": ("W6, W9", "OPS club speed"),
+    "smash_factor_full": ("W6, W9", "club speed is not a full speed"),
+    # collision_model.GYRO_REASON: the planar model has no gyro (E2, low priority)
+    "gyro": ("E2", "planar"),
+}
+
+
+def _kiosk_value(record: Mapping[str, Any], unit: str) -> str:
+    value = finite(record.get("value"))
+    shown = f"{value:.2f} {unit}".rstrip() if value is not None else "-"
+    return f"{shown} [{record.get('status')}]"
+
+
+def kiosk_metric_stage(
+    metric_id: str, record: Mapping[str, Any] | None, upstream: Mapping[str, dict]
+) -> dict:
+    """One kiosk metric as the shot reported it: its value under its label, or why not.
+
+    A labelled value (calculated, model geometry, estimated) is ``labelled``; a
+    measured one passes. Not measured is ``PENDING`` when the item that builds it
+    is not done (impact location E5, dynamic lie E6, the full club speed), blocked
+    when every stage it stands on failed, and ``DATA`` otherwise. A record that
+    breaks the label contract (an unknown label, a value under "not measured", no
+    value under a label, no reason) is ``CODE``.
+    """
+    spec = SPECS[metric_id]
+    stage_id = f"kiosk:{metric_id}"
+    label = f"{spec.label} (kiosk)"
+    gate = _KIOSK_GATE.get(metric_id)
+    if not isinstance(record, Mapping):
+        return stage(
+            stage_id,
+            FAIL,
+            label=label,
+            cause="CODE",
+            gate="kiosk_metrics",
+            evidence="the shot carries no record for this metric",
+        )
+    status = record.get("status")
+    value = finite(record.get("value"))
+    shown = _kiosk_value(record, spec.unit)
+    broken = None
+    if status not in LABELS:
+        broken = f"label {status!r} is not in the vocabulary {', '.join(LABELS)}"
+    elif (value is None) != (status == NOT_MEASURED):
+        broken = f"value {record.get('value')!r} under the label {status!r}"
+    elif value is None and not record.get("reason"):
+        broken = "not measured without a reason (D17)"
+    if broken:
+        return stage(
+            stage_id,
+            FAIL,
+            label=label,
+            value=shown,
+            cause="CODE",
+            gate="kiosk_metrics",
+            evidence=broken,
+        )
+    if value is not None:
+        detail = "; ".join(str(text) for text in (record.get("source"), record.get("note")) if text)
+        return stage(
+            stage_id,
+            PASS if status == MEASURED else LABELLED,
+            label=label,
+            value=shown,
+            evidence=detail or None,
+        )
+    reason = str(record["reason"])
+    pending = _KIOSK_PENDING.get(metric_id)
+    if spec.pending or (pending and pending[1] in reason):
+        return stage(
+            stage_id, FAIL, label=label, value=shown, cause="PENDING", gate=gate, evidence=reason
+        )
+    parents = [upstream[name] for name in _KIOSK_UPSTREAM.get(metric_id, ()) if name in upstream]
+    if parents and not any(passed(parent) for parent in parents):
+        return {**_blocked(stage_id, parents[0], gate=gate), "label": label, "value": shown}
+    return stage(stage_id, FAIL, label=label, value=shown, cause="DATA", gate=gate, evidence=reason)
+
+
+def kiosk_metric_stages(records: Mapping[str, Any], upstream: Mapping[str, dict]) -> list[dict]:
+    """One row per metric in the catalog (openflight.shot_metrics.METRICS), in order."""
+    records = mapping(records)
+    return [kiosk_metric_stage(spec.id, records.get(spec.id), upstream) for spec in METRICS]
