@@ -312,3 +312,102 @@ class TestAeroCoefficientSafeguards:
         assert 30.0 < traj.carry_yards < 90.0, (
             f"lob wedge carry {traj.carry_yards:.1f} yd is not plausible"
         )
+
+
+# --- W7 (E4): carry to the landing point; spin axis against the launch direction ---
+
+
+def _yawed(la_h, axis=0.0, spin=2700.0):
+    return simulate(_driver(spin_rpm=spin, axis=axis, la_h=la_h))
+
+
+class TestW7Coordinates:
+    """A launch rotated about the vertical must fly the same shot, rotated.
+
+    Carry is TrackMan's "straight-line distance between where the golf ball was
+    launched from and where it crosses a point that has the same elevation"
+    (metric_definitions.curve cites it), i.e. hypot(x, y), not the x component.
+    The spin axis is a tilt against the launch direction, so its vector turns
+    with the horizontal launch angle.
+    """
+
+    def test_carry_is_the_straight_line_distance_to_the_landing_point(self):
+        traj = _yawed(10.0)
+        landing = traj.points[-1]
+        assert traj.carry_yards == pytest.approx(math.hypot(landing.x, landing.y), abs=1e-6)
+        assert traj.downrange_yards == pytest.approx(landing.x, abs=1e-6)
+        assert traj.carry_side_yards == pytest.approx(landing.y, abs=1e-6)
+
+    @pytest.mark.parametrize("la_h", [5.0, 10.0, -30.0])
+    def test_a_yawed_pure_backspin_shot_carries_as_far_as_a_straight_one(self, la_h):
+        straight = _yawed(0.0)
+        yawed = _yawed(la_h)
+        assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
+        assert yawed.apex_yards == pytest.approx(straight.apex_yards, abs=0.01)
+        assert yawed.flight_time_s == pytest.approx(straight.flight_time_s, abs=1e-3)
+
+    def test_a_pure_backspin_shot_launched_right_does_not_curve(self):
+        yawed = _yawed(5.0)
+        # it lands on its launch line: side = carry * sin(5 deg), and nothing more
+        assert yawed.carry_side_yards == pytest.approx(
+            yawed.carry_yards * math.sin(math.radians(5.0)), abs=0.01
+        )
+        assert yawed.landing_heading_deg == pytest.approx(5.0, abs=0.01)
+
+    @pytest.mark.parametrize("axis", [-12.0, 10.0])
+    def test_a_tilted_axis_curves_the_same_whatever_the_launch_direction(self, axis):
+        straight = _yawed(0.0, axis=axis)
+        yawed = _yawed(5.0, axis=axis)
+        h = math.radians(5.0)
+        # the yawed landing point is the straight one rotated by the launch angle
+        x0, y0 = straight.downrange_yards, straight.carry_side_yards
+        assert yawed.downrange_yards == pytest.approx(x0 * math.cos(h) - y0 * math.sin(h), abs=0.01)
+        assert yawed.carry_side_yards == pytest.approx(
+            x0 * math.sin(h) + y0 * math.cos(h), abs=0.01
+        )
+        assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
+
+
+# --- E4: total distance from the USGA / R&A 2021 bounce-and-roll model ---
+
+
+class TestBounceModel:
+    """USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in
+    Evaluating Optimum Overall Distance", Eq. 1: d_bounce = 79.1 - 1.6 * alpha_f
+    (yards, alpha_f the terminal angle in degrees), from fairway data over
+    terminal angles of 10-50 degrees (its Table 1)."""
+
+    def test_the_papers_equation_at_its_reference_angle(self):
+        # The intercept was set so the model matches the 2003 model at the
+        # mean terminal angle of the 2020 ODS tests, 37.6 deg (§4, Figure 9).
+        from openflight.ballistics import bounce_and_roll_yards
+
+        assert bounce_and_roll_yards(37.6) == pytest.approx(79.1 - 1.6 * 37.6)
+        assert bounce_and_roll_yards(37.6) == pytest.approx(18.94, abs=1e-9)
+
+    def test_the_typical_39_degree_landing(self):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        assert bounce_and_roll_yards(39.0) == pytest.approx(16.7, abs=1e-9)
+
+    @pytest.mark.parametrize("angle", [9.9, 50.1, 70.0, -5.0])
+    def test_outside_the_models_data_range_there_is_no_total(self, angle):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        assert bounce_and_roll_yards(angle) is None
+
+    def test_an_unknown_surface_has_no_model(self):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        assert bounce_and_roll_yards(39.0, surface="green_fast") is None
+
+    def test_total_rolls_on_along_the_landing_heading(self):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        traj = _yawed(5.0, axis=8.0)
+        roll = bounce_and_roll_yards(traj.landing_angle_deg)
+        heading = math.radians(traj.landing_heading_deg)
+        rest_x = traj.downrange_yards + roll * math.cos(heading)
+        rest_y = traj.carry_side_yards + roll * math.sin(heading)
+        assert traj.total_yards == pytest.approx(math.hypot(rest_x, rest_y), abs=1e-6)
+        assert traj.total_side_yards == pytest.approx(rest_y, abs=1e-6)

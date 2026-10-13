@@ -99,6 +99,19 @@ references.
 | `DT_SECONDS` | 0.002 |
 | `MAX_FLIGHT_SECONDS` | 15.0 |
 | `SAMPLE_INTERVAL_S` | 0.05 |
+| `USGA_RA_2021_BOUNCE_MODEL` | roll = 79.1 − 1.6 × landing angle (yd), landing angle 10–50° |
+
+`src/openflight/flight.py` (flight outputs, raw and normalized):
+
+| Constant | Value |
+| --- | --- |
+| `AIR_DENSITY_NORMALIZED` | 1.1839 kg/m³ (101,325 Pa, 25 °C, dry air) |
+| `AIR_DENSITY_PLAUSIBLE_KG_M3` | (0.6, 1.6) |
+| `DEFAULT_INPUT_UNCERTAINTY` | ball speed 1 mph, launch 0.5° each, spin 10 %, spin axis 3° |
+| `RANGE_DT_SECONDS` | 0.02 |
+
+`CLUB_TYPICAL_SPIN_RPM` (`src/openflight/clubs/physics.py`) is the one
+club-typical spin table, for OPS-only estimates only.
 
 ## Thresholds
 

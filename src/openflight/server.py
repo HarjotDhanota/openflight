@@ -30,7 +30,6 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from . import collision_model, core_eligibility, pi_trace
-from .ballistics import resolve_launch, simulate
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -45,6 +44,7 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
+from .flight import compute_flight
 from .horizontal_frame import (
     MIXED,
     frame_for,
@@ -5854,15 +5854,21 @@ def _finalize_shot_detected(
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
-        conditions = resolve_launch(shot, substitutes=not fusion) if ballistics_enabled else None
-        if conditions is None and fusion:
+        # E4: every flight output, as measured (the shot's supplied air density, or
+        # ISA) and normalized, each labelled; carry below is the as-measured carry.
+        flight = compute_flight(shot, substitutes=not fusion, enabled=ballistics_enabled)
+        shot.flight = flight.to_dict()
+        conditions, trajectory = flight.conditions, flight.as_measured
+        if trajectory is None and fusion:
             # a fusion unit builds carry only from measured inputs (D17):
             # nothing already on the shot stands in for the simulator
             shot.carry_spin_adjusted = None
             shot.carry_status = CARRY_NOT_MEASURED
-            logger.info("[SERVER] Carry not measured: launch, spin or spin axis not measured")
-        elif conditions is not None:
-            trajectory = simulate(conditions)
+            logger.info(
+                "[SERVER] Carry not measured: %s",
+                shot.flight["as_measured"]["metrics"]["carry"]["reason"],
+            )
+        elif trajectory is not None:
             shot.carry_spin_adjusted = trajectory.carry_yards
             if not fusion:
                 shot.carry_status = CARRY_ESTIMATED
@@ -5897,7 +5903,11 @@ def _finalize_shot_detected(
             )
             shot.carry_status = CARRY_ESTIMATED
             carry_source = "table with spin"
-            reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
+            reason = (
+                "ballistics disabled"
+                if not ballistics_enabled
+                else ("no launch angle" if conditions is None else "supplied air density invalid")
+            )
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
                 reason,

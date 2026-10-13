@@ -216,6 +216,12 @@ class Shot:
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         carry_status: What the reported carry is (CARRY_* above); None until finalized
+        air_density_kg_m3: The shot's air density (kg/m^3) when a density source supplied
+            one before finalization: the owner's hook. None flies the as-measured
+            flight in ISA air, labelled "ISA default" (openflight.flight)
+        flight: Every flight output (carry, carry side, total, total side, apex,
+            landing angle, hang time, curve), as measured and normalized, each with
+            status, source, range and reason (openflight.flight); None until finalized
         smash_factor_status: What smash_factor is (SMASH_RADIAL_RATIO above), or None
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
@@ -293,6 +299,8 @@ class Shot:
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
     carry_status: Optional[str] = None
+    air_density_kg_m3: Optional[float] = None
+    flight: Optional[dict] = None
     smash_factor_status: Optional[str] = None
     mode: str = "rolling-buffer"
     profile_id: str = ""
@@ -640,6 +648,8 @@ class Shot:
             "spin_rejection_reason": self.spin_rejection_reason,
             "carry_spin_adjusted": self.carry_spin_adjusted,
             "carry_status": self.carry_status,
+            "air_density_kg_m3": self.air_density_kg_m3,
+            "flight": deepcopy(self.flight),
         }
 
 

@@ -108,11 +108,29 @@ def test_missing_club_path_falls_back_to_zero():
     assert r.provenance["club_path"] == "estimated"
 
 
-def test_carry_provenance_tracks_launch_angle():
-    measured = resolve_shot(_shot(launch_angle_vertical=12.0), PlayerState())
-    assert measured.provenance["carry"] == "measured"
+def test_an_ops_only_carry_is_always_estimated():
+    """E4 (trackman-comparison §5 item 4): an OPS-only carry flies a club-typical
+    spin or reads the ball-speed table, so it is an estimate even when the
+    launch angle was measured; it is never sent as measured."""
+    with_launch = resolve_shot(_shot(launch_angle_vertical=12.0), PlayerState())
+    assert with_launch.provenance["carry"] == "estimated"
     estimated = resolve_shot(_shot(), PlayerState())
     assert estimated.provenance["carry"] == "estimated"
+
+
+def test_a_fusion_carry_from_measured_inputs_is_sent_as_measured():
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.5,
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        carry_spin_adjusted=244.0,
+        carry_status="measured",
+    )
+    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    assert resolved.carry_yards == pytest.approx(244.0)
+    assert resolved.provenance["carry"] == "measured"
 
 
 def test_missing_ball_speed_raises():

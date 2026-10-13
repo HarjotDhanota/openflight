@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight import collision_model, server as server_module
+from openflight import collision_model, flight as flight_module, server as server_module
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
@@ -5856,7 +5856,7 @@ class TestCarryComputation:
             captured["conditions"] = conditions
             return real_simulate(conditions, *args, **kwargs)
 
-        monkeypatch.setattr(server_module, "simulate", spying_simulate)
+        monkeypatch.setattr(flight_module, "simulate", spying_simulate)
 
         shot = Shot(
             ball_speed_mph=165.0,
@@ -5882,12 +5882,12 @@ class TestCarryComputation:
         """When resolve_launch returns None, the table path should compute carry."""
         self._patch_environment(monkeypatch)
 
-        monkeypatch.setattr(server_module, "resolve_launch", lambda shot, **_kwargs: None)
+        monkeypatch.setattr(flight_module, "resolve_launch", lambda shot, **_kwargs: None)
 
         def fail_simulate(*args, **kwargs):
             raise AssertionError("simulate() must not be called when resolve_launch is None")
 
-        monkeypatch.setattr(server_module, "simulate", fail_simulate)
+        monkeypatch.setattr(flight_module, "simulate", fail_simulate)
 
         shot = Shot(
             ball_speed_mph=150.0,
@@ -5919,8 +5919,8 @@ class TestCarryComputation:
         def fail_simulate(*args, **kwargs):
             raise AssertionError("simulate() must not run when ballistics disabled")
 
-        monkeypatch.setattr(server_module, "resolve_launch", fail_resolve)
-        monkeypatch.setattr(server_module, "simulate", fail_simulate)
+        monkeypatch.setattr(flight_module, "resolve_launch", fail_resolve)
+        monkeypatch.setattr(flight_module, "simulate", fail_simulate)
 
         shot = Shot(
             ball_speed_mph=165.0,
@@ -6630,7 +6630,7 @@ class TestBallisticCarryPrecedence:
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
-        expected = server_module.simulate(server_module.resolve_launch(shot)).carry_yards
+        expected = flight_module.simulate(flight_module.resolve_launch(shot)).carry_yards
         assert shot.carry_spin_adjusted == pytest.approx(expected)
         assert shot.carry_spin_adjusted != pytest.approx(119.2)
         assert shot.carry_spin_adjusted > 135.0

@@ -17,8 +17,11 @@ class ClubPhysics:
     optimal_launch_deg and average_ball_speed_mph are the original TrackMan
     baseline launch angle and amateur ball speed. launch_deg_per_mph adjusts
     launch relative to that speed: slower shots launch higher, faster shots lower.
-    typical_spin_rpm holds the TrackMan PGA Tour spin averages used by ballistics
-    as a fallback when measured spin is missing or has low confidence.
+    typical_spin_rpm is the one club-typical spin table (CLUB_TYPICAL_SPIN_RPM
+    below): the OPS-only estimate path's spin when measured spin is missing or has
+    low confidence, for both the kiosk's ballistics and the simulator connectors.
+    It is never used on a fusion unit (D17, D31). Its provenance is in
+    CLUB_TYPICAL_SPIN_LABEL.
     optimal_smash is the optimal ball_speed / club_speed ratio for launch estimation.
     optimal_spin_multiplier scales the speed-dependent driver spin baseline for
     each club; irons and wedges need more spin. UNKNOWN keeps the baseline (1.0).
@@ -126,6 +129,27 @@ CLUB_SIMULATION_PROFILES: Mapping[ClubType, ClubSimulationProfile] = MappingProx
         ClubType.LW: ClubSimulationProfile(5, 1.18, 10200, 1000, 4.0),
         ClubType.UNKNOWN: ClubSimulationProfile(15, 1.35, 5000, 800, 3.0),
     }
+)
+
+
+# The one club-typical spin table (E4; trackman-comparison §5 item 5). The kiosk's
+# ballistics and the simulator connectors used to carry two tables that disagreed
+# (driver 2,700 vs 2,500 rpm); the simulator now reads this one. It serves the
+# OPS-only estimate path only: a fusion unit never flies or sends a club-typical
+# spin (D17, D31).
+#
+# Provenance: the values came into the code described as "TrackMan PGA Tour
+# averages". They are rounded and do not match TrackMan's current published
+# figures (7-iron: 6,500 rpm here; TrackMan's spin-rate page gives 7,124 rpm for the
+# 2023 PGA Tour, https://www.trackman.com/blog/spin-rate), and no published table
+# with these exact values was found on 12 Oct 2026, so they are labelled an
+# estimate rather than a published average.
+CLUB_TYPICAL_SPIN_RPM: Mapping[ClubType, float] = MappingProxyType(
+    {club: physics.typical_spin_rpm for club, physics in CLUB_PHYSICS.items()}
+)
+CLUB_TYPICAL_SPIN_LABEL = (
+    "club-typical estimate (source: OpenFlight club table, rounded values first described "
+    "as TrackMan PGA Tour averages; not a published table)"
 )
 
 
