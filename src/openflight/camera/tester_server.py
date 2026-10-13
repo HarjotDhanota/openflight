@@ -45,6 +45,7 @@ from openflight.camera import (
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
+    target_line,
     tester_ready_light,
     worker_lifetime,
 )
@@ -1130,11 +1131,17 @@ def tee_range_handoff(
     rig_geometry: Path | None = None,
     reference: tee_range_setup.TeeRangeEpochReference | None = None,
     camera_tilt_calibration: Mapping | None = None,
+    target_line_record: Mapping | None = None,
 ) -> tuple[list[str], dict]:
     """The swing server's tee-range arguments, and the record of what they hand over.
 
     ``camera_tilt_calibration`` is the unit's camera tilt (P8-5); a calibrated one
     is handed to the kiosk, which records it in session_start.
+
+    ``target_line_record`` is the aim point confirmed for this setup and patch
+    (D34): its yaw goes to both kiosk yaw flags as one value, and the record says
+    where it came from and how sure it is. Without one no yaw flag is passed, and
+    the record says the target line was not set.
 
     The record goes into arm.json, setup_admission.json and the run's tee_range.json,
     so the tester's files say what the kiosk ran with (wiring audit S3).
@@ -1231,6 +1238,20 @@ def tee_range_handoff(
             "--camera-vertical-offset-source",
             "unit_calibration",
         ]
+    # D34: the target line's yaw, one value for both flags (the rig file gives the
+    # camera and the IWR one boresight). A direction's parallax is bounded at the
+    # net's distance beyond the ball: the measured net, or the swing server's default.
+    net_m = net["net_range_m"] if measured_net else DEFAULT_NET_RANGE_M
+    line_args, line = target_line.handoff(
+        target_line_record,
+        target_distance_m=max(net_m - (tee_m or 0.0), 0.5),
+        distance_basis=(
+            "net_range_from_empty_static_capture_less_tee_range"
+            if measured_net
+            else "default_net_range_not_measured_less_tee_range"
+        ),
+    )
+    args += line_args
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
         "schema": HANDED_TO_SWINGS_SCHEMA,
@@ -1290,6 +1311,8 @@ def tee_range_handoff(
                 "composition",
             )
         },
+        # D34: the target line both yaw flags were set from, or why none was
+        "target_line": line,
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -3135,6 +3158,210 @@ def mode_placement_box(record: Mapping | None, arm: Arm) -> tuple[int, int, int,
     if factor == 1.0:
         return tuple(box)  # type: ignore[return-value]
     return reference_ball_range.scale_placement_box(box, factor)
+
+
+# D34: the target line. Right after the patch, the tester drags an aim point onto
+# the target in the same live 1280x800 view; the line from the patch centre towards
+# it sets the yaw zero for the camera and, through the rig file, the IWR
+# (target_line). It is stored beside the patch, bound to the same physical setup
+# confirmation and to the patch it starts from.
+TARGET_LINE_FILE = "target-line.json"
+# The aim step's preview: the whole frame sets its viewing brightness, since the
+# target stands far beyond the patch.
+AIM_POINT_PREVIEW_KIND = "aim_point"
+AIM_POINT_PATCH_REQUIRED = (
+    "confirm the patch first (step 1): the target line starts at the ball's patch"
+)
+TARGET_LINE_DISPLAY_KEYS = (
+    "source",
+    "frame_size_px",
+    "aim_px",
+    "floor_line_px",
+    "ball_lfu_m",
+    "method",
+    "method_reason",
+    "yaw_deg",
+    "direction_yaw_deg",
+    "floor_point",
+    "ball_offset_from_aim_ray_m",
+    "parallax_deg_at_m",
+    "kiosk_offset_deg",
+    "applies_to",
+    "uncertainty",
+    "warnings",
+    "sign_convention",
+    "confirmed_at_utc",
+)
+
+
+def read_last_target_line(root: Path) -> dict | None:
+    """The last aim point this tester confirmed, to start the next one from."""
+    try:
+        payload = json.loads((root / TARGET_LINE_FILE).read_text(encoding="utf-8"))
+        if payload.get("schema") != target_line.SCHEMA:
+            return None
+        [float(value) for value in payload["aim_px"]]  # pylint: disable=expression-not-assigned
+        float(payload["yaw_deg"])
+        return payload
+    except (OSError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def remember_target_line(root: Path, record: Mapping) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    atomic_write(
+        root / TARGET_LINE_FILE,
+        (json.dumps({**dict(record), "schema": target_line.SCHEMA}, indent=2) + "\n").encode(
+            "utf-8"
+        ),
+    )
+
+
+def _patch_centre(patch: Mapping | None) -> list[float] | None:
+    centre = ((patch or {}).get("patch") or {}).get("centre_lfu_m")
+    return [float(value) for value in centre] if centre is not None else None
+
+
+def target_line_reason(
+    record: Mapping | None, binding: Mapping, patch: Mapping | None
+) -> str | None:
+    """Why a stored target line is not this setup's: none, a new setup, or a moved patch."""
+    if record is None:
+        return "not_set"
+    if record.get("setup_binding") != dict(binding):
+        return "new_setup"
+    centre = _patch_centre(patch)
+    if centre is None:
+        return "needs_patch"
+    if target_line.target_line_moved(record, {**dict(record), "ball_lfu_m": centre}):
+        return "patch_moved"
+    return None
+
+
+def confirmed_target_line(root: Path, eligibility: Mapping, patch: Mapping | None) -> dict | None:
+    """The target line confirmed for this setup and from this patch, if any (D34)."""
+    record = read_last_target_line(root)
+    if target_line_reason(record, placement_box_binding(eligibility), patch) is not None:
+        return None
+    return record
+
+
+def confirm_target_line(
+    root: Path, record: Mapping, binding: Mapping, *, request_id: str | None = None
+) -> tuple[dict, str]:
+    """Save the tester's aim point, and say what changed (D34).
+
+    ``unchanged``: the same aim (within ``target_line.AIM_MOVE_TOLERANCE_PX``),
+    floor line and patch under the same setup; nothing is written. ``reconfirmed``:
+    the same aim under a new setup confirmation or patch position. ``first`` or
+    ``moved``: a new aim; what was handed to swings before it reads stale. Every
+    change is appended to the file's history.
+    """
+    last = read_last_target_line(root)
+    same_aim = last is not None and not target_line.target_line_moved(
+        {**last, "ball_lfu_m": record.get("ball_lfu_m")}, record
+    )
+    same_patch = {"patch": {"centre_lfu_m": record["ball_lfu_m"]}}
+    if same_aim and target_line_reason(last, binding, same_patch) is None:
+        return last, "unchanged"
+    now = str(record.get("confirmed_at_utc") or datetime.now(timezone.utc).isoformat())
+    history = list(last.get("history") or []) if last is not None else []
+    if same_aim:
+        change = "reconfirmed"
+    else:
+        change = "first" if last is None else "moved"
+    entry: dict = {}
+    if last is not None and change == "moved":
+        before, after = last.get("aim_px"), record.get("aim_px")
+        entry = {
+            "moved_from_aim_px": before,
+            "moved_px": math.hypot(
+                float(after[0]) - float(before[0]), float(after[1]) - float(before[1])
+            ),
+            "moved_from_yaw_deg": last.get("yaw_deg"),
+        }
+    saved = {
+        **dict(record),
+        "setup_binding": dict(binding),
+        "confirmed_at_utc": now,
+        "checks": list(last.get("checks") or []) if last is not None else [],
+        **entry,
+    }
+    history.append(
+        {
+            "change": change,
+            "at_utc": now,
+            "aim_px": saved.get("aim_px"),
+            "floor_line_px": saved.get("floor_line_px"),
+            "ball_lfu_m": saved.get("ball_lfu_m"),
+            "method": saved.get("method"),
+            "yaw_deg": saved.get("yaw_deg"),
+            "request_id": request_id,
+            **entry,
+        }
+    )
+    saved["change"] = change
+    saved["history"] = history
+    remember_target_line(root, saved)
+    return read_last_target_line(root) or saved, change
+
+
+def record_alignment_stick_check(
+    root: Path, *, stick_yaw_deg: float, stick_uncertainty_deg: float, source: str
+) -> dict:
+    """Part B's hook: compare the stored aim-point yaw with an alignment stick's.
+
+    The comparison is appended to the target line's ``checks``; nothing replaces
+    the aim point's yaw. The stick tool is not built yet; this records what it finds.
+    """
+    record = read_last_target_line(root)
+    if record is None:
+        raise ValueError("no aim point is confirmed to compare the stick with")
+    check = {
+        **target_line.compare_with_alignment_stick(
+            record,
+            stick_yaw_deg=stick_yaw_deg,
+            stick_uncertainty_deg=stick_uncertainty_deg,
+            source=source,
+        ),
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    record["checks"] = [*list(record.get("checks") or []), check]
+    remember_target_line(root, record)
+    return check
+
+
+def target_line_display(record: Mapping | None) -> dict | None:
+    if not isinstance(record, Mapping):
+        return None
+    return {key: record.get(key) for key in TARGET_LINE_DISPLAY_KEYS}
+
+
+def target_line_staleness(handed: Mapping | None, current: Mapping | None) -> dict:
+    """Whether a run's hand-off still describes the confirmed target line (D34).
+
+    As the light screens read stale once their box moves: a run handed a target
+    line the tester has since moved, or handed none before one was set, measured
+    its horizontal angles from another zero.
+    """
+    line = (handed or {}).get("target_line") if isinstance(handed, Mapping) else None
+    if not isinstance(handed, Mapping) or current is None:
+        return {"stale": False, "reason": None, "handed_yaw_deg": None}
+    if not isinstance(line, Mapping) or line.get("status") != "set":
+        return {
+            "stale": True,
+            "reason": "was started before the aim point was set: its horizontal angles are "
+            "from where the unit points, not the target line",
+            "handed_yaw_deg": None,
+        }
+    if target_line.target_line_moved(line, current):
+        return {
+            "stale": True,
+            "reason": f"used an aim point you have since moved (yaw {float(line['yaw_deg']):+.1f}°, "
+            f"now {float(current['yaw_deg']):+.1f}°)",
+            "handed_yaw_deg": line.get("yaw_deg"),
+        }
+    return {"stale": False, "reason": None, "handed_yaw_deg": line.get("yaw_deg")}
 
 
 # The box step's preview sets its own brightness, for viewing only (P7-15b): it
@@ -6629,10 +6856,14 @@ def create_app(
             "box": {key: proposed.get(key) for key in BOX_DISPLAY_KEYS},
         }
 
-    def start_box_preview(tester_id: str, *, take_over: bool = False) -> None:
+    def start_box_preview(
+        tester_id: str, *, take_over: bool = False, kind: str = "placement_box"
+    ) -> None:
         """Show the 1280x800 view so the tester can drag the box over the hitting spot.
 
-        A live view someone else opened is only replaced when the tester asks.
+        A live view someone else opened is only replaced when the tester asks. The
+        aim point's preview (``kind`` ``aim_point``, D34) sets its viewing brightness
+        over the whole frame: the target stands far beyond the patch.
         """
         busy = _range_resources_busy(live_yields=take_over)
         if busy:
@@ -6649,7 +6880,8 @@ def create_app(
         placed = read_last_placement_box(tester_root(sessions_root, tester_id))
         box = (
             placed["box_px"]
-            if placed is not None
+            if kind == "placement_box"
+            and placed is not None
             and list(placed.get("frame_size_px") or []) == [arm.width, arm.height]
             else None
         )
@@ -6660,7 +6892,7 @@ def create_app(
             guided_analyzer["value"] = None
             box_preview_exposure["value"] = brightness
             live_owner["guided"] = {
-                "kind": "placement_box",
+                "kind": kind,
                 "tester_id": tester_id,
                 "epoch_id": None,
                 "arm_id": PLACEMENT_BOX_ARM,
@@ -6680,14 +6912,10 @@ def create_app(
                 guided_analyzer["value"] = None
                 patch_preview_view["value"] = None
 
-    def stop_box_preview(tester_id: str) -> None:
+    def stop_box_preview(tester_id: str, kind: str = "placement_box") -> None:
         with live_owner_lock:
             owner = live_owner["guided"]
-            if (
-                owner
-                and owner.get("kind") == "placement_box"
-                and owner.get("tester_id") == tester_id
-            ):
+            if owner and owner.get("kind") == kind and owner.get("tester_id") == tester_id:
                 live.stop()
                 live_owner["guided"] = None
                 guided_analyzer["value"] = None
@@ -6799,6 +7027,159 @@ def create_app(
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         except (OSError, ValueError, TypeError, KeyError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    def current_target_line(tester_id: str, eligibility: Mapping) -> dict | None:
+        """The aim point confirmed for this setup and its patch (D34), or None."""
+        root = tester_root(sessions_root, tester_id)
+        return confirmed_target_line(root, eligibility, confirmed_placement_box(root, eligibility))
+
+    def target_line_runs(tester_id: str, current: Mapping | None) -> dict:
+        """Each mode's last hand-off, against the confirmed target line (D34)."""
+        return {
+            arm_id: target_line_staleness(
+                read_arm_state(sessions_root, tester_id, arm_id).get("handed_to_swings"), current
+            )
+            for arm_id in sorted(PLACEMENT_BOX_REQUIRED_ARMS)
+        }
+
+    def aim_point_status(tester_id: str, eligibility: Mapping) -> dict:
+        """The aim step: confirmed for this setup and patch, or where its drag starts (D34)."""
+        root = tester_root(sessions_root, tester_id)
+        owner = live_owner_snapshot()
+        patch = confirmed_placement_box(root, eligibility)
+        last = read_last_target_line(root)
+        confirmed = confirmed_target_line(root, eligibility, patch)
+        payload = {
+            "tester_id": tester_id,
+            "previewing": bool(
+                owner
+                and owner.get("kind") == AIM_POINT_PREVIEW_KIND
+                and owner.get("tester_id") == tester_id
+            ),
+            "setup_blockers": placement_box_setup_blockers(eligibility),
+            "runs": target_line_runs(tester_id, confirmed),
+            "policy": target_line.target_line_policy(),
+        }
+        if payload["setup_blockers"]:
+            return {**payload, "state": "setup_not_confirmed"}
+        if patch is None:
+            return {**payload, "state": "needs_patch"}
+        try:
+            camera, reading, _roll = patch_camera()
+            payload["projection"] = ground_patch.projection_parameters(camera)
+            payload["camera_tilt"] = camera_tilt_facts(reading, camera)
+            centre = _patch_centre(patch)
+            payload["patch"] = {
+                "centre_lfu_m": centre,
+                "centre_px": list(
+                    reference_ball_range.project_to_pixel(camera, (centre[0], centre[1], 0.0))
+                ),
+                "outline_px": patch.get("outline_px"),
+                "frame_size_px": patch.get("frame_size_px"),
+            }
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            return {**payload, "state": "unavailable", "reason": str(exc)}
+        if confirmed is not None:
+            return {
+                **payload,
+                "state": "confirmed",
+                "target_line": target_line_display(confirmed),
+                "confirmed_at_utc": confirmed.get("confirmed_at_utc"),
+                "change": confirmed.get("change"),
+            }
+        if last is not None:
+            aim = {
+                "aim_px": last.get("aim_px"),
+                "floor_line_px": last.get("floor_line_px"),
+                "source": "last_confirmed",
+            }
+        else:
+            aim = {
+                "aim_px": [round(value, 2) for value in target_line.default_aim_px(camera)],
+                "floor_line_px": None,
+                "source": "default_straight_ahead",
+            }
+        return {
+            **payload,
+            "state": "needs_confirmation",
+            "reason": target_line_reason(last, placement_box_binding(eligibility), patch),
+            "aim": aim,
+        }
+
+    def _confirm_aim(tester_id: str, eligibility: Mapping, request_id: str, payload) -> dict:
+        """Confirm the aim point: its target line, from the confirmed patch (D34)."""
+        root = tester_root(sessions_root, tester_id)
+        patch = confirmed_placement_box(root, eligibility)
+        if patch is None:
+            raise LookupError(AIM_POINT_PATCH_REQUIRED)
+        camera, reading, roll = patch_camera()
+        facts = camera_tilt_facts(reading, camera)
+        record = target_line.target_line_record(
+            camera,
+            _patch_centre(patch),
+            payload.get("aim_px"),
+            payload.get("floor_line_px"),
+            tilt_pad_deg=ground_patch.tilt_pads_deg(facts["calibrated"])[0],
+            roll_deg=roll,
+            camera_tilt=facts,
+        )
+        record["requested"] = {
+            key: payload.get(key) for key in ("aim_px", "floor_line_px") if key in payload
+        }
+        record["confirmed_at_utc"] = datetime.now(timezone.utc).isoformat()
+        saved, change = confirm_target_line(
+            root, record, placement_box_binding(eligibility), request_id=request_id
+        )
+        stop_box_preview(tester_id, AIM_POINT_PREVIEW_KIND)
+        if change == "moved":
+            logger.info(
+                "Aim point moved %.0f px: target line yaw %+.2f deg (was %+.2f)",
+                saved.get("moved_px") or 0.0,
+                float(saved["yaw_deg"]),
+                float(saved.get("moved_from_yaw_deg") or 0.0),
+            )
+        return {"change": change}
+
+    @app.route("/api/tester/aim-point", methods=["GET", "POST"])
+    def aim_point_route():
+        """The aim point after the patch: show the live view, and confirm the target line."""
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", "")).strip()
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        try:
+            with tee_range_lock:
+                eligibility = with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
+                if request.method == "GET":
+                    return jsonify(aim_point_status(tester_id, eligibility))
+                action = str(payload.get("action", ""))
+                if action not in {"show", "confirm"}:
+                    raise ValueError("unknown aim-point action")
+                refuse_while_analysing()
+                if placement_box_setup_blockers(eligibility):
+                    return jsonify(
+                        {"error": PLACEMENT_BOX_SETUP_REQUIRED, "setup_eligibility": eligibility}
+                    ), 409
+                root = tester_root(sessions_root, tester_id)
+                if confirmed_placement_box(root, eligibility) is None:
+                    return jsonify({"error": AIM_POINT_PATCH_REQUIRED}), 409
+                if action == "show":
+                    start_box_preview(tester_id, take_over=True, kind=AIM_POINT_PREVIEW_KIND)
+                    return jsonify(aim_point_status(tester_id, eligibility))
+                request_id = str(payload.get("request_id", "")).strip()
+                if not request_id or len(request_id) > 128:
+                    raise ValueError("request_id is required and must be at most 128 characters")
+                result = _confirm_aim(tester_id, eligibility, request_id, payload)
+                return jsonify({**aim_point_status(tester_id, eligibility), **result})
+        except LookupError as exc:
+            return jsonify({"error": str(exc.args[0] if exc.args else exc)}), 409
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except (OSError, ValueError, TypeError) as exc:
             return jsonify({"error": str(exc)}), 400
 
     def _range_state(tester_id: str, *, reconcile: bool = True):
@@ -8104,6 +8485,7 @@ def create_app(
                     rig_geometry=rig_geometry,
                     reference=reference,
                     camera_tilt_calibration=unit_camera_tilt(),
+                    target_line_record=current_target_line(params.tester_id, eligibility),
                 )[1]
                 if action == "swings"
                 else None
@@ -8252,7 +8634,7 @@ def create_app(
         try:
             params = TesterParameters.from_payload(request.get_json(silent=True))
             owner = live_owner_snapshot()
-            if owner is not None and owner.get("kind") == "placement_box":
+            if owner is not None and owner.get("kind") in {"placement_box", AIM_POINT_PREVIEW_KIND}:
                 # its exposure is set for viewing, not measured (P7-15b)
                 raise RuntimeError(
                     "the box preview is for placing the box; open the live view to record"
@@ -8398,7 +8780,11 @@ def create_app(
         owner = live_owner_snapshot()
         guided = owner is not None and owner.get("kind") == "guided_tee_range"
         previewing = owner is not None and owner.get("kind") == "patch_preview"
-        boxing = owner is not None and owner.get("kind") in {"placement_box", "patch_preview"}
+        boxing = owner is not None and owner.get("kind") in {
+            "placement_box",
+            "patch_preview",
+            AIM_POINT_PREVIEW_KIND,
+        }
         with live_owner_lock:
             analyzer = guided_analyzer["value"]
             brightness = box_preview_exposure["value"] if boxing else None
@@ -8575,6 +8961,7 @@ def create_app(
                 rig_geometry=rig_geometry,
                 reference=reference,
                 camera_tilt_calibration=unit_camera_tilt(),
+                target_line_record=current_target_line(tester_id, admitted_setup[tester_id]),
             )
             commands, log_path = action_commands(
                 "ladder",
