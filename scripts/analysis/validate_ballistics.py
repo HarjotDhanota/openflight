@@ -16,7 +16,7 @@ Two independent comparisons are produced:
    OpenFlight has no spin-axis measurement, so spin_axis = 0 is assumed.
 
 TrackMan's "Flat" carry is normalized to no-wind, 0 ft altitude, 77 °F.
-We pass ``air_density = 1.184 kg/m³`` (≈ 25 °C sea level) so the model
+We pass the kiosk's normalized reference density (25 °C, sea level) so the model
 runs in the same atmosphere TrackMan reports for — otherwise the default
 1.225 kg/m³ (15 °C ISA) would add a systematic ~2 yd model bias on
 driver-distance shots.
@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import statistics
 import sys
@@ -67,12 +66,13 @@ from openflight.ballistics import (  # noqa: E402
     simulate,
 )
 from openflight.clubs import ClubType  # noqa: E402
-from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH  # noqa: E402
+from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
 
-# TrackMan "Flat" normalization: no wind, 0 ft altitude, 77 °F.
-# ρ = P / (R_specific · T) with P = 101325 Pa, T = 298.15 K, R = 287.05 J/(kg·K)
-# → 1.1839 kg/m³. We round to 1.184 for the input.
-TM_FLAT_AIR_DENSITY = 1.184
+# TrackMan "Flat" normalization: no wind, 0 ft altitude, 77 °F. The model flies
+# the kiosk's own normalized reference (openflight.flight: 25 °C, 1013.25 hPa,
+# NORMALIZED_REFERENCE_RH_PCT), so this comparison is normalized against
+# normalized. It used to be a hand-typed dry-air 1.184 kg/m³.
+TM_FLAT_AIR_DENSITY = AIR_DENSITY_NORMALIZED
 
 # TrackMan reports apex ("Max Height - Height") in feet while its distance
 # columns are yards. The model returns apex in yards, so convert to compare.
@@ -118,13 +118,25 @@ def _normalize_club(raw: Optional[str]) -> str:
     if len(parts) == 2:
         a, b = parts
         if a.isdigit() and b in ("iron", "i", "wood", "w", "hybrid", "h"):
-            kind = {"iron": "iron", "i": "iron", "wood": "wood", "w": "wood",
-                    "hybrid": "hybrid", "h": "hybrid"}[b]
+            kind = {
+                "iron": "iron",
+                "i": "iron",
+                "wood": "wood",
+                "w": "wood",
+                "hybrid": "hybrid",
+                "h": "hybrid",
+            }[b]
             return f"{a}-{kind}"
         if b.isdigit() and a in ("iron", "wood", "hybrid"):
             return f"{b}-{a}"
-    aliases = {"drv": "driver", "1-wood": "driver", "pitching-wedge": "pw",
-               "sand-wedge": "sw", "gap-wedge": "gw", "lob-wedge": "lw"}
+    aliases = {
+        "drv": "driver",
+        "1-wood": "driver",
+        "pitching-wedge": "pw",
+        "sand-wedge": "sw",
+        "gap-wedge": "gw",
+        "lob-wedge": "lw",
+    }
     return aliases.get(s, s)
 
 
@@ -167,7 +179,7 @@ def _default_session_label(path: Path) -> str:
     stem = path.stem
     for prefix in ("OpenFlight-Test.", "comparison_", "session_"):
         if stem.startswith(prefix):
-            stem = stem[len(prefix):]
+            stem = stem[len(prefix) :]
             break
     return stem or path.name
 
@@ -198,19 +210,21 @@ def load_trackman(path: Path, session: Optional[str] = None) -> List[TMShot]:
             ):
                 continue
             idx += 1
-            shots.append(TMShot(
-                shot_index=idx,
-                club_raw=row.get("Club", "") or "",
-                ball_speed_mph=_to_float(row.get("Ball Speed")),
-                launch_v_deg=_to_float(row.get("Launch Angle")),
-                launch_h_deg=_to_float(row.get("Launch Direction")),
-                spin_rpm=_to_float(row.get("Spin Rate")),
-                spin_axis_deg=_to_float(row.get("Spin Axis")),
-                carry_yards=_to_float(row.get("Carry Flat - Length")),
-                timestamp=row.get("Date", "") or "",
-                session=session_label,
-                apex_feet=_to_float(row.get("Max Height - Height")),
-            ))
+            shots.append(
+                TMShot(
+                    shot_index=idx,
+                    club_raw=row.get("Club", "") or "",
+                    ball_speed_mph=_to_float(row.get("Ball Speed")),
+                    launch_v_deg=_to_float(row.get("Launch Angle")),
+                    launch_h_deg=_to_float(row.get("Launch Direction")),
+                    spin_rpm=_to_float(row.get("Spin Rate")),
+                    spin_axis_deg=_to_float(row.get("Spin Axis")),
+                    carry_yards=_to_float(row.get("Carry Flat - Length")),
+                    timestamp=row.get("Date", "") or "",
+                    session=session_label,
+                    apex_feet=_to_float(row.get("Max Height - Height")),
+                )
+            )
     return shots
 
 
@@ -243,23 +257,25 @@ def load_comparison(path: Path, session: Optional[str] = None) -> List[Compariso
     with open(path, "r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         for r in reader:
-            rows.append(ComparisonRow(
-                timestamp_of=r.get("timestamp_of", "") or "",
-                club_raw=r.get("club", "") or "",
-                match_quality=r.get("match_quality", "") or "",
-                ball_speed_of=_to_float(r.get("ball_speed_of")),
-                launch_v_of=_to_float(r.get("launch_v_of")),
-                launch_h_of=_to_float(r.get("launch_h_of")),
-                spin_of=_to_float(r.get("spin_of")),
-                carry_of=_to_float(r.get("carry_of")),
-                ball_speed_tm=_to_float(r.get("ball_speed_tm")),
-                launch_v_tm=_to_float(r.get("launch_v_tm")),
-                launch_h_tm=_to_float(r.get("launch_h_tm")),
-                spin_tm=_to_float(r.get("spin_tm")),
-                spin_axis_tm=_to_float(r.get("spin_axis_tm")),
-                carry_tm=_to_float(r.get("carry_tm")),
-                session=session_label,
-            ))
+            rows.append(
+                ComparisonRow(
+                    timestamp_of=r.get("timestamp_of", "") or "",
+                    club_raw=r.get("club", "") or "",
+                    match_quality=r.get("match_quality", "") or "",
+                    ball_speed_of=_to_float(r.get("ball_speed_of")),
+                    launch_v_of=_to_float(r.get("launch_v_of")),
+                    launch_h_of=_to_float(r.get("launch_h_of")),
+                    spin_of=_to_float(r.get("spin_of")),
+                    carry_of=_to_float(r.get("carry_of")),
+                    ball_speed_tm=_to_float(r.get("ball_speed_tm")),
+                    launch_v_tm=_to_float(r.get("launch_v_tm")),
+                    launch_h_tm=_to_float(r.get("launch_h_tm")),
+                    spin_tm=_to_float(r.get("spin_tm")),
+                    spin_axis_tm=_to_float(r.get("spin_axis_tm")),
+                    carry_tm=_to_float(r.get("carry_tm")),
+                    session=session_label,
+                )
+            )
     return rows
 
 
@@ -311,9 +327,7 @@ def validate_tm_inputs(
     """Run the model on each TrackMan shot and compare to TM's flat carry."""
     out: List[ValidationRow] = []
     for s in tm_shots:
-        if not _has_required_inputs(
-            s.ball_speed_mph, s.launch_v_deg, s.spin_rpm, s.carry_yards
-        ):
+        if not _has_required_inputs(s.ball_speed_mph, s.launch_v_deg, s.spin_rpm, s.carry_yards):
             continue
         spin_axis = s.spin_axis_deg if s.spin_axis_deg is not None else 0.0
         launch_h = s.launch_h_deg if s.launch_h_deg is not None else 0.0
@@ -329,26 +343,26 @@ def validate_tm_inputs(
         # apex_yards is a height in yards; TrackMan's column is feet.
         model_apex_feet = traj.apex_yards * YD_TO_FT
         session_tag = s.session or "default"
-        out.append(ValidationRow(
-            source="tm",
-            shot_label=f"tm#{s.shot_index}@{session_tag}",
-            club=_normalize_club(s.club_raw),
-            session=session_tag,
-            ball_speed_mph=s.ball_speed_mph,
-            launch_v_deg=s.launch_v_deg,
-            launch_h_deg=launch_h,
-            spin_rpm=s.spin_rpm,
-            spin_axis_deg=spin_axis,
-            spin_source="measured",
-            measured_carry_yards=s.carry_yards,
-            model_carry_yards=traj.carry_yards,
-            delta_yards=traj.carry_yards - s.carry_yards,
-            measured_apex_feet=s.apex_feet,
-            model_apex_feet=model_apex_feet,
-            delta_apex_feet=(
-                None if s.apex_feet is None else model_apex_feet - s.apex_feet
-            ),
-        ))
+        out.append(
+            ValidationRow(
+                source="tm",
+                shot_label=f"tm#{s.shot_index}@{session_tag}",
+                club=_normalize_club(s.club_raw),
+                session=session_tag,
+                ball_speed_mph=s.ball_speed_mph,
+                launch_v_deg=s.launch_v_deg,
+                launch_h_deg=launch_h,
+                spin_rpm=s.spin_rpm,
+                spin_axis_deg=spin_axis,
+                spin_source="measured",
+                measured_carry_yards=s.carry_yards,
+                model_carry_yards=traj.carry_yards,
+                delta_yards=traj.carry_yards - s.carry_yards,
+                measured_apex_feet=s.apex_feet,
+                model_apex_feet=model_apex_feet,
+                delta_apex_feet=(None if s.apex_feet is None else model_apex_feet - s.apex_feet),
+            )
+        )
     return out
 
 
@@ -377,9 +391,7 @@ def validate_of_inputs(
     for i, row in enumerate(comp_rows, start=1):
         if row.match_quality != "good":
             continue
-        if not _has_required_inputs(
-            row.ball_speed_of, row.launch_v_of, row.carry_tm
-        ):
+        if not _has_required_inputs(row.ball_speed_of, row.launch_v_of, row.carry_tm):
             continue
         club_enum = _club_type(row.club_raw)
         spin_rpm, spin_source = _resolve_of_spin(row, club_enum)
@@ -405,21 +417,23 @@ def validate_of_inputs(
         )
         traj = simulate(conditions, air_density=air_density)
         session_tag = row.session or "default"
-        out.append(ValidationRow(
-            source="of",
-            shot_label=f"of#{i}@{session_tag}@{row.timestamp_of[:19]}",
-            club=_normalize_club(row.club_raw),
-            session=session_tag,
-            ball_speed_mph=row.ball_speed_of,
-            launch_v_deg=row.launch_v_of,
-            launch_h_deg=launch_h,
-            spin_rpm=spin_rpm,
-            spin_axis_deg=spin_axis,
-            spin_source=spin_source,
-            measured_carry_yards=row.carry_tm,
-            model_carry_yards=traj.carry_yards,
-            delta_yards=traj.carry_yards - row.carry_tm,
-        ))
+        out.append(
+            ValidationRow(
+                source="of",
+                shot_label=f"of#{i}@{session_tag}@{row.timestamp_of[:19]}",
+                club=_normalize_club(row.club_raw),
+                session=session_tag,
+                ball_speed_mph=row.ball_speed_of,
+                launch_v_deg=row.launch_v_of,
+                launch_h_deg=launch_h,
+                spin_rpm=spin_rpm,
+                spin_axis_deg=spin_axis,
+                spin_source=spin_source,
+                measured_carry_yards=row.carry_tm,
+                model_carry_yards=traj.carry_yards,
+                delta_yards=traj.carry_yards - row.carry_tm,
+            )
+        )
     return out
 
 
@@ -427,31 +441,60 @@ def validate_of_inputs(
 # Output
 # ---------------------------------------------------------------------------
 
+
 def write_per_shot_csv(rows: List[ValidationRow], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "source", "session", "shot_label", "club",
-            "ball_speed_mph", "launch_v_deg", "launch_h_deg",
-            "spin_rpm", "spin_axis_deg", "spin_source",
-            "measured_carry_yards", "model_carry_yards",
-            "delta_yards", "abs_delta_yards",
-        ])
+        w.writerow(
+            [
+                "source",
+                "session",
+                "shot_label",
+                "club",
+                "ball_speed_mph",
+                "launch_v_deg",
+                "launch_h_deg",
+                "spin_rpm",
+                "spin_axis_deg",
+                "spin_source",
+                "measured_carry_yards",
+                "model_carry_yards",
+                "delta_yards",
+                "abs_delta_yards",
+            ]
+        )
         for r in rows:
-            w.writerow([
-                r.source, r.session, r.shot_label, r.club,
-                f"{r.ball_speed_mph:.2f}", f"{r.launch_v_deg:.2f}", f"{r.launch_h_deg:.2f}",
-                f"{r.spin_rpm:.0f}", f"{r.spin_axis_deg:.2f}", r.spin_source,
-                f"{r.measured_carry_yards:.2f}", f"{r.model_carry_yards:.2f}",
-                f"{r.delta_yards:.2f}", f"{abs(r.delta_yards):.2f}",
-            ])
+            w.writerow(
+                [
+                    r.source,
+                    r.session,
+                    r.shot_label,
+                    r.club,
+                    f"{r.ball_speed_mph:.2f}",
+                    f"{r.launch_v_deg:.2f}",
+                    f"{r.launch_h_deg:.2f}",
+                    f"{r.spin_rpm:.0f}",
+                    f"{r.spin_axis_deg:.2f}",
+                    r.spin_source,
+                    f"{r.measured_carry_yards:.2f}",
+                    f"{r.model_carry_yards:.2f}",
+                    f"{r.delta_yards:.2f}",
+                    f"{abs(r.delta_yards):.2f}",
+                ]
+            )
 
 
 def _stats(deltas: List[float]) -> Dict[str, float]:
     if not deltas:
-        return {"n": 0, "mean": float("nan"), "stdev": float("nan"),
-                "rmse": float("nan"), "mae": float("nan"), "max_abs": float("nan")}
+        return {
+            "n": 0,
+            "mean": float("nan"),
+            "stdev": float("nan"),
+            "rmse": float("nan"),
+            "mae": float("nan"),
+            "max_abs": float("nan"),
+        }
     mean = statistics.fmean(deltas)
     stdev = statistics.pstdev(deltas) if len(deltas) > 1 else 0.0
     rmse = math.sqrt(sum(d * d for d in deltas) / len(deltas))
@@ -480,8 +523,10 @@ def format_stats(label: str, rows: List[ValidationRow]) -> str:
     clubs = sorted({r.club for r in rows})
     lines.append("-" * 80)
     lines.append("By club:")
-    lines.append(f"  {'club':10s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
-                 f"{'mae':>6s}  {'max|d|':>7s}  {'measured_n':>4s}  {'fallback_n':>4s}")
+    lines.append(
+        f"  {'club':10s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
+        f"{'mae':>6s}  {'max|d|':>7s}  {'measured_n':>4s}  {'fallback_n':>4s}"
+    )
     for club in clubs:
         club_rows = [r for r in rows if r.club == club]
         s = _stats([r.delta_yards for r in club_rows])
@@ -496,8 +541,9 @@ def format_stats(label: str, rows: List[ValidationRow]) -> str:
     sessions = sorted({r.session for r in rows})
     if len(sessions) > 1:
         lines.append("By session:")
-        lines.append(f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
-                     f"{'mae':>6s}  {'max|d|':>7s}")
+        lines.append(
+            f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  {'mae':>6s}  {'max|d|':>7s}"
+        )
         for sess in sessions:
             sess_rows = [r for r in rows if r.session == sess]
             s = _stats([r.delta_yards for r in sess_rows])
@@ -522,8 +568,7 @@ def write_scatter(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
-        print(f"[warn] matplotlib not available — skipping {out_path.name}",
-              file=sys.stderr)
+        print(f"[warn] matplotlib not available — skipping {out_path.name}", file=sys.stderr)
         return
 
     if not rows:
@@ -545,8 +590,7 @@ def write_scatter(
             if not cr:
                 continue
             label = (
-                f"{club} (n={len(cr)})" if len(sessions) == 1
-                else f"{club}/{sess} (n={len(cr)})"
+                f"{club} (n={len(cr)})" if len(sessions) == 1 else f"{club}/{sess} (n={len(cr)})"
             )
             ax.scatter(
                 [r.measured_carry_yards for r in cr],
@@ -554,15 +598,19 @@ def write_scatter(
                 label=label,
                 color=color_for[club],
                 marker=marker_for[sess],
-                s=42, alpha=0.85, edgecolor="k", linewidth=0.5,
+                s=42,
+                alpha=0.85,
+                edgecolor="k",
+                linewidth=0.5,
             )
     all_x = [r.measured_carry_yards for r in rows]
     all_y = [r.model_carry_yards for r in rows]
     lo = min(min(all_x), min(all_y)) * 0.95
     hi = max(max(all_x), max(all_y)) * 1.05
     ax.plot([lo, hi], [lo, hi], "k--", lw=1, label="1:1")
-    ax.fill_between([lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5],
-                    color="grey", alpha=0.15, label="+/-5 yd")
+    ax.fill_between(
+        [lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5], color="grey", alpha=0.15, label="+/-5 yd"
+    )
 
     stats = _stats([r.delta_yards for r in rows])
     ax.set_title(
@@ -585,6 +633,7 @@ def write_scatter(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main(argv: Optional[List[str]] = None) -> int:
     # Allow non-ASCII (e.g. arrows, Greek letters) in printed stats on
     # Windows consoles whose default encoding is cp1252.
@@ -593,26 +642,49 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (AttributeError, ValueError):
         pass
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--trackman", required=True, type=Path, nargs="+",
-                        help="One or more TrackMan normalized CSVs (each "
-                             "contains Spin Axis column). Multiple files "
-                             "are concatenated; each shot is tagged with a "
-                             "session label derived from the filename "
-                             "(override with --session-label).")
-    parser.add_argument("--comparison", required=False, type=Path, nargs="+",
-                        help="Paired OF/TM CSV(s) from compare_trackman.py "
-                             "(used for OF-inputs validation). When passing "
-                             "multiple, count must match --trackman and "
-                             "files are paired by position so the spin-axis "
-                             "lookup uses the matching session's TM data.")
-    parser.add_argument("--session-label", required=False, type=str, nargs="+",
-                        help="Optional explicit labels (one per --trackman). "
-                             "Default = filename stem with prefixes trimmed.")
-    parser.add_argument("--output-dir", required=True, type=Path,
-                        help="Directory for per-shot CSVs, stats.txt, scatter PNGs.")
-    parser.add_argument("--air-density", type=float, default=TM_FLAT_AIR_DENSITY,
-                        help=f"Air density (kg/m³) for simulate(). Default "
-                             f"{TM_FLAT_AIR_DENSITY} matches TrackMan 'Flat' (77°F sea level).")
+    parser.add_argument(
+        "--trackman",
+        required=True,
+        type=Path,
+        nargs="+",
+        help="One or more TrackMan normalized CSVs (each "
+        "contains Spin Axis column). Multiple files "
+        "are concatenated; each shot is tagged with a "
+        "session label derived from the filename "
+        "(override with --session-label).",
+    )
+    parser.add_argument(
+        "--comparison",
+        required=False,
+        type=Path,
+        nargs="+",
+        help="Paired OF/TM CSV(s) from compare_trackman.py "
+        "(used for OF-inputs validation). When passing "
+        "multiple, count must match --trackman and "
+        "files are paired by position so the spin-axis "
+        "lookup uses the matching session's TM data.",
+    )
+    parser.add_argument(
+        "--session-label",
+        required=False,
+        type=str,
+        nargs="+",
+        help="Optional explicit labels (one per --trackman). "
+        "Default = filename stem with prefixes trimmed.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Directory for per-shot CSVs, stats.txt, scatter PNGs.",
+    )
+    parser.add_argument(
+        "--air-density",
+        type=float,
+        default=TM_FLAT_AIR_DENSITY,
+        help=f"Air density (kg/m³) for simulate(). Default "
+        f"{TM_FLAT_AIR_DENSITY} matches TrackMan 'Flat' (77°F sea level).",
+    )
     args = parser.parse_args(argv)
 
     # Resolve session labels.
@@ -660,10 +732,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"TM-inputs validation (rho={args.air_density:.3f} kg/m³)",
         args.output_dir / "scatter_tm_inputs.png",
     )
-    stats_text = [format_stats(
-        f"TM-inputs (model fed TrackMan measurements, rho={args.air_density:.3f})",
-        tm_rows,
-    )]
+    stats_text = [
+        format_stats(
+            f"TM-inputs (model fed TrackMan measurements, rho={args.air_density:.3f})",
+            tm_rows,
+        )
+    ]
 
     # --- OF inputs ---
     of_rows: List[ValidationRow] = []
@@ -675,9 +749,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Build axis lookup from this session's TM data — keeps the
             # mapping unambiguous when different sessions share ball speeds.
             axis_lookup = _spin_axis_lookup(tm_subset)
-            of_rows.extend(validate_of_inputs(
-                comp, axis_lookup, air_density=args.air_density,
-            ))
+            of_rows.extend(
+                validate_of_inputs(
+                    comp,
+                    axis_lookup,
+                    air_density=args.air_density,
+                )
+            )
             all_comp_rows.extend(comp)
         write_per_shot_csv(of_rows, args.output_dir / "validation_of_inputs.csv")
         write_scatter(
@@ -685,10 +763,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"OF-inputs end-to-end (rho={args.air_density:.3f} kg/m³)",
             args.output_dir / "scatter_of_inputs.png",
         )
-        stats_text.append(format_stats(
-            f"OF-inputs (OpenFlight measurements → model → TM carry, rho={args.air_density:.3f})",
-            of_rows,
-        ))
+        stats_text.append(
+            format_stats(
+                f"OF-inputs (OpenFlight measurements → model → TM carry, rho={args.air_density:.3f})",
+                of_rows,
+            )
+        )
 
     out_stats = args.output_dir / "stats.txt"
     out_stats.parent.mkdir(parents=True, exist_ok=True)

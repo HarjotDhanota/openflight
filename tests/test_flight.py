@@ -195,8 +195,9 @@ def test_raw_and_normalized_share_their_launch_and_differ_only_in_the_air():
     assert norm["metrics"]["carry"]["value"] > raw["metrics"]["carry"]["value"]
 
 
-def test_the_normalized_density_is_sea_level_25c_dry_air():
-    assert AIR_DENSITY_NORMALIZED == pytest.approx(101325.0 / (287.05 * 298.15), rel=1e-4)
+def test_the_normalized_density_is_sea_level_25c_at_the_reference_humidity():
+    # 50 % RH (V-formulas C7); dry air would be 101325 / (287.05 x 298.15) = 1.1839
+    assert AIR_DENSITY_NORMALIZED == pytest.approx(1.1769, abs=5e-5)
 
 
 def test_a_supplied_density_is_used_and_labelled():

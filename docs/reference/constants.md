@@ -105,7 +105,8 @@ references.
 
 | Constant | Value |
 | --- | --- |
-| `AIR_DENSITY_NORMALIZED` | 1.1839 kg/m³ (101,325 Pa, 25 °C, dry air) |
+| `AIR_DENSITY_NORMALIZED` | 1.1769 kg/m³ (computed: 101,325 Pa, 25 °C, RH 50 %, Buck 1981) |
+| `NORMALIZED_REFERENCE_RH_PCT` | 50 % (TrackMan publishes none) |
 | `AIR_DENSITY_PLAUSIBLE_KG_M3` | (0.6, 1.6) |
 | `DEFAULT_INPUT_UNCERTAINTY` | ball speed 1 mph, launch 0.5° each, spin 10 %, spin axis 3° |
 | `RANGE_DT_SECONDS` | 0.02 |

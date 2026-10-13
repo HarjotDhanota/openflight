@@ -502,3 +502,63 @@ def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
     message = str(refused.value)
     assert "spin" in refused.value.missing
     assert "estimated (horizontal launch is low-coherence (radar_low_coherence))" in message
+
+
+# ---- C7: the normalized reference is TrackMan's 77 F, sea level, with a named humidity ----
+
+
+def test_buck_1981_saturation_vapour_pressure():
+    import math
+
+    from openflight.flight import saturation_vapour_pressure_pa
+
+    # Buck 1981: e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C
+    assert saturation_vapour_pressure_pa(25.0) == pytest.approx(
+        611.21 * math.exp(17.502 * 25.0 / (240.97 + 25.0))
+    )
+    assert saturation_vapour_pressure_pa(25.0) == pytest.approx(3167.0, abs=5.0)
+
+
+def test_humid_air_density_from_temperature_pressure_and_humidity():
+    from openflight.flight import humid_air_density_kg_m3
+
+    # dry: the ideal gas, 287.05 J/(kg K)
+    assert humid_air_density_kg_m3(25.0, 101325.0, 0.0) == pytest.approx(
+        101325.0 / (287.05 * 298.15)
+    )
+    # 50 %: the owner's August value
+    assert humid_air_density_kg_m3(25.0, 101325.0, 50.0) == pytest.approx(1.1769, abs=5e-5)
+    # moist air is lighter
+    assert humid_air_density_kg_m3(25.0, 101325.0, 100.0) < humid_air_density_kg_m3(
+        25.0, 101325.0, 50.0
+    )
+
+
+def test_the_normalized_reference_is_named_and_computed_not_typed():
+    from openflight import flight
+
+    assert flight.NORMALIZED_TEMPERATURE_C == 25.0
+    assert flight.NORMALIZED_PRESSURE_PA == 101325.0
+    assert flight.NORMALIZED_REFERENCE_RH_PCT == 50.0
+    assert flight.AIR_DENSITY_NORMALIZED == flight.humid_air_density_kg_m3(25.0, 101325.0, 50.0)
+
+
+def test_every_normalized_output_names_its_reference():
+    payload = compute_flight(_fusion_shot(), substitutes=False).to_dict()
+    for name, metric in payload["normalized"]["metrics"].items():
+        if metric["value"] is None:
+            continue
+        for part in ("25.0 °C (77 °F)", "1013.25 hPa", "RH 50 %", "1.1769 kg/m3"):
+            assert part in metric["source"], (name, part)
+
+
+def test_the_trackman_export_regression_flies_the_normalized_reference():
+    import sys
+    from pathlib import Path
+
+    from openflight.flight import AIR_DENSITY_NORMALIZED
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "analysis"))
+    import validate_ballistics  # noqa: PLC0415
+
+    assert validate_ballistics.TM_FLAT_AIR_DENSITY == AIR_DENSITY_NORMALIZED

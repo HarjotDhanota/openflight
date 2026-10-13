@@ -87,12 +87,39 @@ exports the same split).
 | Flight | Air density | Label |
 | --- | --- | --- |
 | `as_measured` | `Shot.air_density_kg_m3` when supplied; otherwise ISA sea level, 1.225 kg/m³ | `supplied` or `ISA default` |
-| `normalized` | Sea level (101,325 Pa), 25 °C (77 °F), calm, dry air: 1.1839 kg/m³ | `normalized: …` |
+| `normalized` | 25 °C (77 °F), 1013.25 hPa (sea level), RH 50 %, calm: 1.1769 kg/m³ | `normalized: …` |
 
-The normalized conditions are the ones the owner's TrackMan export states: "Data
-are normalized to no wind conditions at 0 ft altitude, 77 °F". The export does
-not give humidity, so dry air is our stated assumption. The carry the kiosk
-shows (`carry_spin_adjusted`) is the as-measured carry.
+**The normalized reference is TrackMan's.** TrackMan's normalization page says
+"Default values are 77°F and sea level (0 feet altitude)", its help pages give
+"77°F (25°C) Sea level No wind", and the owner's export says "normalized to no
+wind conditions at 0 ft altitude, 77 °F". Sea level is taken as the standard
+atmosphere's 1013.25 hPa (29.92 inHg).
+
+**Humidity is not published.** No public TrackMan page gives the humidity it
+normalizes to, so it is a named assumption, `NORMALIZED_REFERENCE_RH_PCT` = 50 %
+(as the owner's August research took it). The density is computed, not typed:
+dry air and water vapour as ideal gases (287.05 and 461.495 J/(kg·K)), with the
+vapour pressure RH × e_s(T) from **Buck (1981)**, *J. Appl. Meteorol.* 20,
+1527–1532: e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa (his enhancement
+factor, about 1.004, is left out; it moves the density by under 0.003 %).
+
+| RH | Density | PGA driver carry | PGA 7-iron carry |
+| --- | --- | --- | --- |
+| 0 % (dry) | 1.1839 kg/m³ | 290.7 yd | 170.8 yd |
+| 50 % (used) | 1.1769 kg/m³ | 291.3 yd | 171.3 yd |
+| 100 % | 1.1699 kg/m³ | 291.9 yd | 171.8 yd |
+
+So the unknown humidity is worth about ±0.6 yd of driver carry and ±0.5 yd of
+7-iron carry, and under 0.2° of landing angle. Every normalized output's
+`source` records the reference (T, p, RH and ρ).
+
+The TrackMan-export regression (`tests/test_ballistics_trackman_regression.py`)
+flies the same reference, so it compares normalized with normalized. TrackMan's
+published Tour averages are **not** normalized (its older table: "the location
+(altitude) and weather conditions have not been taken into consideration"), so
+they are anchors only, not a calibration.
+
+The carry the kiosk shows (`carry_spin_adjusted`) is the as-measured carry.
 
 !!! note "The density hook"
 
@@ -294,7 +321,8 @@ ball themselves from speed, launch and spin.
 | `BALL_MASS_KG` | 0.04593 | USGA **maximum**-conforming ball, 45.93 g |
 | `BALL_RADIUS_M` | 0.02135 | 42.7 mm diameter |
 | `AIR_DENSITY_STD` | 1.225 kg/m³ | ISA sea level, 15 °C: the as-measured default |
-| `AIR_DENSITY_NORMALIZED` | 1.1839 kg/m³ | Sea level, 25 °C, dry: the normalized flight |
+| `AIR_DENSITY_NORMALIZED` | 1.1769 kg/m³ | Computed: 25 °C, 1013.25 hPa, RH 50 % (Buck 1981): the normalized flight |
+| `NORMALIZED_REFERENCE_RH_PCT` | 50 % | TrackMan publishes none: a named assumption |
 | `CD_POLY` | (0.1304, 0.9287, -0.8259) | $C_d$ polynomial $(a, b, c)$ |
 | `CL_POLY` | (0.0504, 1.2031, -1.1490) | $C_l$ polynomial $(d, e, f)$ |
 | `SP_FIT_MAX` | 0.75 | Top of the fitted $S_p$ range; curves held beyond it |

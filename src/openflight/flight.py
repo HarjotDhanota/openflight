@@ -25,8 +25,11 @@ Two flights from the same launch (TrackMan's "raw" and "normalized"):
 - ``as_measured``: in the shot's own air. The density is ``Shot.air_density_kg_m3``
   when supplied (the owner's density hook; this module never measures weather),
   else the ISA sea-level 1.225 kg/m3, labelled "ISA default".
-- ``normalized``: sea level, 25 C (77 F), calm, dry air, as in the owner's
-  TrackMan export note "normalized to no wind conditions at 0 ft altitude, 77 F".
+- ``normalized``: TrackMan's reference, 77 F (25 C) and sea level (1013.25 hPa),
+  calm ("normalized to no wind conditions at 0 ft altitude, 77 F", the owner's
+  export; "Default values are 77°F and sea level", TrackMan's normalization page),
+  with a relative humidity TrackMan does not publish, set here as
+  ``NORMALIZED_REFERENCE_RH_PCT`` (50 %). The density is computed from the three.
 
 The launch values (ball speed, launch angles, spin, spin axis) are identical in
 both; only the air differs.
@@ -102,14 +105,51 @@ FLIGHT_MODEL_LABEL = (
     "RK4 point mass, spin decay by the same paper's C_M = 0.01 S"
 )
 
-# Normalized air: sea level, 25 C (77 F), calm, dry. Ideal gas, dry-air specific
-# gas constant 287.05 J/(kg K). TrackMan's export note gives altitude and
-# temperature but not humidity; dry air is our stated assumption.
+# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
+# calm. TrackMan publishes no humidity (its normalization page and help articles
+# give altitude and temperature only), so the relative humidity is a named
+# assumption: 50 %, as the owner's August research took it (1.1769 kg/m3); dry air
+# (0 %) gives 1.1839 kg/m3 and saturated air (100 %) 1.1700.
+NORMALIZED_TEMPERATURE_C = 25.0
+NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
 NORMALIZED_PRESSURE_PA = 101325.0
-NORMALIZED_TEMPERATURE_K = 298.15
-DRY_AIR_GAS_CONSTANT = 287.05
-AIR_DENSITY_NORMALIZED = NORMALIZED_PRESSURE_PA / (DRY_AIR_GAS_CONSTANT * NORMALIZED_TEMPERATURE_K)
-NORMALIZED_AIR_LABEL = "normalized: sea level (101,325 Pa), 25 C (77 F), calm, dry air"
+NORMALIZED_REFERENCE_RH_PCT = 50.0
+DRY_AIR_GAS_CONSTANT = 287.05  # J/(kg K)
+WATER_VAPOUR_GAS_CONSTANT = 461.495  # J/(kg K)
+
+
+def saturation_vapour_pressure_pa(temperature_c: float) -> float:
+    """Saturation vapour pressure over water, Pa: Buck (1981).
+
+    A. L. Buck, "New equations for computing vapor pressure and enhancement
+    factor", J. Appl. Meteorol. 20, 1527-1532 (1981):
+    e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C. Buck's enhancement
+    factor for moist air (about 1.004 at sea level) is left out: it moves the
+    density by under 0.003 %.
+    """
+    return 611.21 * math.exp(17.502 * temperature_c / (240.97 + temperature_c))
+
+
+def humid_air_density_kg_m3(temperature_c: float, pressure_pa: float, rh_pct: float) -> float:
+    """Density of moist air: dry air and water vapour as ideal gases (Dalton's law).
+
+    rho = (p - e) / (R_d T) + e / (R_v T), with e = RH x e_s(T) (Buck 1981).
+    """
+    temperature_k = temperature_c + 273.15
+    vapour = rh_pct / 100.0 * saturation_vapour_pressure_pa(temperature_c)
+    return (pressure_pa - vapour) / (DRY_AIR_GAS_CONSTANT * temperature_k) + vapour / (
+        WATER_VAPOUR_GAS_CONSTANT * temperature_k
+    )
+
+
+AIR_DENSITY_NORMALIZED = humid_air_density_kg_m3(
+    NORMALIZED_TEMPERATURE_C, NORMALIZED_PRESSURE_PA, NORMALIZED_REFERENCE_RH_PCT
+)
+NORMALIZED_AIR_LABEL = (
+    f"normalized: {NORMALIZED_TEMPERATURE_C:.1f} °C (77 °F), "
+    f"{NORMALIZED_PRESSURE_PA / 100.0:.2f} hPa (sea level), "
+    f"RH {NORMALIZED_REFERENCE_RH_PCT:g} % (assumed: TrackMan publishes none), calm"
+)
 
 AIR_ISA_DEFAULT = "ISA default"
 AIR_SUPPLIED = "supplied"
