@@ -270,9 +270,12 @@ entire usable area of a compact sensor crop.
 
 When `--camera-capture` is enabled, the Camera tab keeps the preview visible
 beside an operator-control column. Exposure and analogue gain are selected
-automatically. The tab shows the current shutter, gain, impact-area brightness,
-contrast, motion-blur risk, and whether camera-assisted analysis is eligible.
-There is no manual exposure override in the UI.
+automatically from the resting ball (see *Automatic exposure* below). The tab
+shows the current shutter and gain, why they are what they are (**Ball-driven**,
+**Too bright**, **Too dark**, **Holding: no ball**, **Waiting for the ball**), the
+blur ceiling, the ball's signal and peak, the label too-bright or too-dark clips
+carry, and whether camera-assisted analysis is eligible. There is no manual
+exposure override in the UI.
 
 With the OpenFlight driver and the fixed `320x200` capture mode, **View up** and
 **View down** move the real sensor window in safe 10-pixel steps. Each move
@@ -288,31 +291,77 @@ camera restart and is intentionally not part of the live-control path.
 
 ## Automatic Exposure
 
-Lighting varies too much for one universal exposure. OpenFlight measures the
-center-lower impact region and selects from camera settings validated to fit
-inside the configured frame period.
+The rule (13 Oct 2026): **use the lowest exposure unless more is needed**, with
+the resting ball as the light meter. The policy is `camera/swing_exposure.py`; its
+inputs and their derivation are in `config/swing_exposure.json`.
 
-At startup, the controller begins with the last good setting saved for the same
-resolution and frame rate. If that setting is not usable, it can jump several
-steps and recheck after `300 ms`, rather than waiting through one five-second
-step at a time. It makes at most three fast startup adjustments before shot
-capture is armed. The selected manual exposure and gain are then locked for the
-life of that camera runtime, so every replay in the session uses the same image
-controls. There is no periodic exposure monitoring after startup.
+- **The sensor's limits are read, never assumed.** When the camera is configured
+  for a mode, the kiosk reads its shortest and longest exposure and its gain range
+  from picamera2's `camera_controls` (`ExposureTime`, `AnalogueGain`), logs them,
+  and records them per mode (with the lens) in
+  `~/.config/openflight/camera-sensor-limits.json`. The tester's live view records
+  them too. If a camera reports no exposure limits, the policy does not run and the
+  startup controls stand (status **unavailable**).
+- **The blur ceiling** is the longest exposure that keeps the club sharp: at most
+  4 mm of smear on approach and 1 mm near impact, over the measured club-edge
+  speed from behind the ball (13.6 m/s on approach, 3.3 m/s near contact):
+  `floor(min(4 / 13.6, 1 / 3.3) × 1000)` = **294 µs** in both modes. A millimetre
+  budget does not change with the lens or the binning. The frame period, the
+  sensor's own maximum and an armed profile can only lower it.
+- **The decision ladder** runs down from the ceiling in steps of about √2 (294,
+  208, 147, 104, 74, 52, 37, 26, 18, 13, 9 µs …) to the sensor's minimum. Gain runs
+  from the sensor's minimum (1) to its analogue cap (about 15.94 on the OV9281,
+  read from the controls). The old stepped list, with 650–1,250 µs steps and gains
+  of 18 and 20 that the sensor silently clamped, is retired.
+- **Choosing a setting.** The ball's brightest part (p95 of its core) is aimed at
+  **0.55 of clip** (between black, 16 DN, and clip, 250 DN). The policy picks the
+  **shortest** exposure on the ladder at which some gain within the cap gets there,
+  raising gain first and lengthening the exposure only when the gain is capped.
+  The ball must also clear the **20 DN** gate above black that every other judge
+  uses.
+  - *Too much light*: at the sensor's shortest exposure and gain 1 the ball still
+    clips. The setting stays there and clips are labelled **too bright: shade the
+    ball area (or an ND filter)**. An ND filter is new hardware.
+  - *Not enough light*: at the blur ceiling with the gain capped, the ball is still
+    under the gate. The setting stays there and clips are labelled **too dark: add
+    light**. The policy never goes past the ceiling.
+  - Neither label blocks anything (D15): the shot is analysed and labelled.
+- **Before every swing.** About once a second, between clips, the kiosk measures
+  the resting ball. It uses the ball the `--camera-ball-box` look found, or, without
+  a box, the setup's ball spot (`--camera-setup-ball`). It judges only frames taken
+  at the controls in force, and moves the controls for the next swing. There is no
+  startup lock. **Hysteresis:**
+  - a ball whose peak is between 0.40 and 0.75 of clip is left alone;
+  - a mild move waits for two looks in a row that agree;
+  - a clipped ball, or one under the gate, moves at once.
+- **No resting ball.** The last setting is kept, with the reason (for example
+  `no ball in the box`, or `the last look at the ball is 12 s old`). Every decision
+  is kept with its inputs (the reading, the light index, the envelope and the
+  hysteresis state): the last twenty are in `auto_exposure.recent_decisions` on
+  `/api/camera/exposure-quality`, and each clip's metadata carries the decision in
+  force at its trigger. A change, or a new status, is logged at INFO.
+- **Before the first ball.** `--camera-light-index` passes the setup's measured
+  light: the 1280×800 ball's DN above black per µs × gain. 640×400 doubles it
+  (measured 2.00×). Without it the kiosk uses the light it remembered from its last
+  ball-judged setting. Without either, it moves the startup
+  `--camera-capture-exposure-us` × `--camera-capture-gain` inside the limits,
+  keeping its brightness. The first ball look then decides.
 
-The last good setting is stored at:
+The last ball-judged setting and its light are stored at:
 
 ```text
 ~/.config/openflight/camera-exposure.json
 ```
 
-If the available lighting cannot produce a usable image, OpenFlight does not
-stop the camera. Preview and raw frame capture continue, but camera-assisted
-horizontal launch, Club Path, and Attack Angle are withheld for that shot.
-Horizontal launch falls back to the IWR6843 path. The Camera tab reports
-**Lighting needed** and **Radar fallback active** so the operator can add or
-redirect light. Restart OpenFlight after changing the lighting so startup
-calibration can select and lock a new setting.
+What it means in practice (6 mm lens):
+
+- **13 Oct room.** The ball read 26–53 DN at 300 µs × 12 at 2.14–1.32 m. The policy
+  goes to 294 µs × 15.94: the ball reads about 34–69 DN, above the gate but under
+  the 0.55 target. More light is the only way to shorter exposures.
+- **30 Sept full sun.** The ball locked at 7 µs × 1, so 1280×800 sits at the
+  sensor's shortest exposure. 640×400, twice as bright, clips there unless its
+  minimum is about 3 µs, so it is labelled too bright: shade the ball or fit an ND
+  filter.
 
 The standalone calibration sweep remains useful when diagnosing an unusual
 lighting installation:

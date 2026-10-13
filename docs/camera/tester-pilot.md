@@ -235,7 +235,13 @@ setup (step 2), put the ball in the box (step 3) and set or skip the aim point
 
    Above the button, ticks choose which of the lens's exposures run this time
    (the lens settings in step 1 say which exist; with every setting allowed that
-   is 300 to 10 µs at 1280×800 and 300, 150, 75, 30 and 15 µs at 640×400). All
+   is 300 to 5 µs at 1280×800 and 300, 150, 75, 30, 15, 10, 7, 5 and 3 µs at
+   640×400). The settings under 10 µs (13 Oct) are for full sun. Each runs only
+   if the camera reported it can go that short: a setting under a mode's recorded
+   shortest exposure, or under 10 µs before that has been read, is greyed out and
+   never run. A **kiosk** badge and the line under the light note show the setting
+   the kiosk's own automatic exposure would use in the setup's light, so its choice
+   can be judged against that setting's verdicts. All
    are ticked unless you changed them; the page remembers your choice. Unticked exposures are
    skipped and recorded as "not selected by the tester", not as a light
    failure. If no 640×400 box is ticked, the ladder ends after 1280×800 with no
@@ -769,6 +775,10 @@ every earlier frame and failure record for review.
 | `… — dim: add light` beside **Exposure locked** | The ball is found and steady but under the 20 DN brightness floor even at the brightest setting | Save still works and the label is recorded. Add light on the hitting area for better numbers |
 | `Too dark to see a ball in the box: add light` | No ball could be seen and the box is too dark to brighten further: a ball under the detector's 8 DN contrast floor | Add light on the hitting area, then retry; this is never reported as "no ball" |
 | `Light: Your light supports … Shorter settings need at least …x more light` | The setup's measured light predicts which ladder settings reach the 20 DN ball gate | Add light before swinging to run the shorter settings; otherwise they are recorded and will read too dark |
+| `kiosk would use: 1280×800 · 294 µs × gain 15.94 (nearest setting: …)`, and a **kiosk** badge on a setting | The setting the kiosk's own swing exposure would pick in the setup's light: the shortest exposure that, with gain up to the sensor's cap, brings the ball to about half of clip, never past the 294 µs blur ceiling | Nothing to fix: compare that setting's verdicts with the ones around it. `needs_sensor_minimum` means the camera has not reported this mode's shortest exposure yet; open the live view in that mode once |
+| Verdict card `Light: too bright: shade the ball area (or an ND filter)` | The ball clips. In sun this happens even at the sensor's shortest exposure and gain 1 | Shade the ball area (an umbrella or a board), or fit an ND filter over the lens. An ND filter is new hardware. The swing is kept and labelled |
+| Verdict card `Light: too dark: add light` | The ball is under the 20 DN gate, even at the blur ceiling with the gain at the sensor's cap | Add light on the hitting area. The swing is kept and labelled |
+| A setting such as `7 µs` or `3 µs` is greyed out and unticked | It is shorter than this camera mode can go, or this mode's shortest exposure has not been read yet (nothing under 10 µs is offered until it has) | Nothing to fix. Open the live view in that mode once to record its limits; the shortest settings the sensor allows then appear |
 | Verdict card `Ball distance: … m · camera estimate (coarse)` | That swing's radar did not measure its launch point; the setup camera's prior stood in | The swing's range-dependent numbers are labelled estimated. If it happens on every swing, check the OPS243 ball speed is reading and the ball flies down the radar's view |
 | `the setup changed while Save was searching; press Save again` | Something changed the setup (start over, a lens change) while Save was searching | Press **Save the ball** again |
 | `camera arm5 Save is already running` | Save was pressed twice | Wait for the first Save to finish |

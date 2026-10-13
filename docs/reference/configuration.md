@@ -97,6 +97,16 @@ calibration for its `lens_id` replaces it. The unit's choice and each lens's own
 modes, default mode and ladder are kept in `~/.config/openflight/camera-lens.json`.
 See [the fixed box](../camera/tester-fixed-box.md#the-lens).
 
+## `config/swing_exposure.json`
+
+The kiosk's automatic swing exposure. It holds the blur budget (4 mm on approach,
+1 mm near impact), the measured club-edge speeds (13.6 and 3.3 m/s), each mode's
+blur ceiling (294 µs) and signal factor (640×400 is 2.00× 1280×800, measured), and
+the derivation of each. A stated ceiling that disagrees with its budget and speeds
+is refused. The sensor's shortest exposure is not written here: it is read from the
+camera at runtime and recorded in `~/.config/openflight/camera-sensor-limits.json`.
+See [automatic exposure](../camera/README.md#automatic-exposure).
+
 ## `config/placement_box.json`
 
 The tester's fixed placement box: the placement window (`placement_window_m`,
