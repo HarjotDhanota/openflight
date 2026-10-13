@@ -4917,11 +4917,39 @@ def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_
     return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
 
 
+# E1 arc labels the collision model takes as inputs: a "measured" arc entry is the
+# chained value displayed_club_path / displayed_attack_angle already read.
+_ARC_INPUT_LABELS = (collision_model.LABEL_CALCULATED, collision_model.LABEL_MODEL_GEOMETRY)
+
+
+def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Input:
+    """E1's selected arc value for ``name`` under its own label, or a missing input.
+
+    Used only when the kiosk has no accepted measured value. The arc's value enters
+    as "calculated" (fitted from the shot alone) or "model_geometry" (leaning on the
+    published prior, D39), and every collision output built on it inherits that label.
+    A not-measured or non-finite arc value is a missing input (nothing is filled in).
+    """
+    from openflight.club_arc import selected_path_and_attack  # noqa: PLC0415
+
+    entry = selected_path_and_attack(shot.club_delivery).get(name)
+    entry = entry if isinstance(entry, dict) else {}
+    value, label = entry.get("value"), entry.get("status")
+    if label in _ARC_INPUT_LABELS and _finite(value):
+        frame = entry.get("frame") if name == "club_path_deg" else None
+        return collision_model.Input(float(value), label, entry.get("source"), frame)
+    reason = entry.get("reason")
+    return collision_model.Input(
+        None, reason=f"{missing}; club arc: {reason}" if reason else missing
+    )
+
+
 def _collision_inputs(shot: Shot) -> dict:
     """The shot's own collision inputs, each labelled (E2).
 
-    Every source wired today is a measurement. E1's arc path and attack (D39) enter
-    here with the label "model_geometry", which the outputs then inherit.
+    The kiosk's accepted measured path and attack come first. Without one, E1's arc
+    value enters under its own label ("calculated", or "model_geometry" for the arc
+    prior, D39), which every output built on it then inherits.
     """
     path, path_source = displayed_club_path(shot)
     attack, attack_source = displayed_attack_angle(shot)
@@ -4938,12 +4966,12 @@ def _collision_inputs(shot: Shot) -> dict:
                 _club_path_frame_of(shot, path_source),
             )
             if path is not None
-            else collision_model.Input(None, reason="no accepted club path")
+            else _club_arc_input(shot, "club_path_deg", "no accepted club path")
         ),
         "attack_angle": (
             collision_model.Input(attack, collision_model.LABEL_MEASURED, attack_source)
             if attack is not None
-            else collision_model.Input(None, reason="no accepted attack angle")
+            else _club_arc_input(shot, "attack_angle_deg", "no accepted attack angle")
         ),
         "launch_horizontal": _measured_angle_input(
             shot.launch_angle_horizontal,
@@ -5027,6 +5055,8 @@ def _attach_collision_model(shot: Shot) -> None:
             status += "_azimuth_uncalibrated"
         if face.frame == MIXED:
             status += "_mixed_frames"
+        if face.status == collision_model.STATUS_MODEL_GEOMETRY:
+            status += "_model_geometry"
         shot.experimental_face_angle_status = status
         shot.experimental_face_angle_path_source = result.inputs["club_path"].source
         shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source

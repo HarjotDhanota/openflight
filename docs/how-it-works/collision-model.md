@@ -60,8 +60,12 @@ pilot) and D38 (fitted physics, published sources first, labelled
 | Vertical launch | `launch_angle_vertical`, unless its source is `estimated` | deg, + up |
 | Club speed | `club_speed_mph` (today the OPS243 radial reading, which runs 2–6 mph low until W6 and W9) | mph |
 
-E1's arc values enter through `_collision_inputs` with the label
-`model_geometry`, and every output built on them inherits it.
+When the kiosk has no accepted measured path or attack, E1's selected arc value
+(`club_arc.selected_path_and_attack`) enters through `_collision_inputs` under
+its own label: `calculated` for the shot's own fit, `model_geometry` for the
+arc prior (D39, every shot on today's lens). Every output built on it inherits
+the label, and the kiosk's face status then ends in `_model_geometry`. A
+not-measured arc value is a missing input.
 
 ## 1. Face angle and dynamic loft: D-plane inversion
 
