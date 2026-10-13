@@ -316,6 +316,11 @@ class Shot:
     experimental_face_angle_path_source: Optional[str] = None
     experimental_face_angle_launch_source: Optional[str] = None
     experimental_aoa_offset_source: Optional[str] = None
+    # E1 club delivery (openflight.club_arc.club_delivery_payload): club path,
+    # attack angle, swing plane, swing direction and low point, each with status
+    # (measured / calculated / model_geometry / not_measured), source, frame, range
+    # and reason, plus the arc fit and the chained cross-check; None without a camera.
+    club_delivery: Optional[dict] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
     # value remains available for replay and comparison.
@@ -539,6 +544,7 @@ class Shot:
             "experimental_face_angle_path_source": self.experimental_face_angle_path_source,
             "experimental_face_angle_launch_source": self.experimental_face_angle_launch_source,
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
+            "club_delivery": deepcopy(self.club_delivery),
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,
             "experimental_camera_horizontal_deg": self.experimental_camera_horizontal_deg,

@@ -27,6 +27,11 @@ each stage.
 
     Drag, Magnus, and the RK4 integration that produces carry distance.
 
+- :material-golf: **[Club delivery arc](club-arc.md)**
+
+    Club path, attack angle, swing plane, swing direction and low point from a
+    circular arc, labelled calculated or model geometry.
+
 - :material-map-marker-radius-outline: **[Radar positioning](positioning.md)**
 
     Where each radar goes and why the geometry matters.

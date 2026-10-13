@@ -30,6 +30,7 @@ from openflight.camera.geometry import (
     resting_ball_camera_model,
     unit_world_rays,
 )
+from openflight.club_arc import HeadPosition
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for, to_reported_deg
@@ -227,6 +228,15 @@ class ChainedDelivery:
     # Where the camera's pitch and focal length came from, with the resting
     # ball's own inference as a cross-check (D36 item 4a)
     camera_model: dict | None = None
+    # E1: the head's 3D position in each tracked frame (camera rays on the IWR
+    # club range sphere, unit-boresight frame), the contact time, both on the
+    # camera clock ``clock``, the horizontal offset the published path used, and
+    # the resting ball's position. The club arc (``openflight.club_arc``) reads them.
+    head_positions: tuple[HeadPosition, ...] = ()
+    contact_t_s: float | None = None
+    clock: str | None = None
+    horizontal_offset_deg: float = 0.0
+    ball_position: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +251,9 @@ class ApproachPairEstimate:
     speed_ratio_ops: float | None
     velocity_mad_mph: float
     n_features: int
+    # E1: the median (lateral, up, forward) position of the plausible features
+    # in each of the two frames; None when the interval had no IWR depth
+    positions_m: tuple[tuple[float, float, float], ...] | None = None
 
 
 def _ratio_within(ratio: float | None, bounds: tuple[float, float]) -> bool:
@@ -687,12 +700,14 @@ def _delivery_from_feature_pair(
     path_deg, attack_angle_deg = _velocity_angles(center)
     speed_mph = float(np.median(np.linalg.norm(velocity, axis=1)) * 2.23694)
     velocity_mad_mph = float(np.median(np.linalg.norm(velocity - center, axis=1)) * 2.23694)
+    head = np.median(positions[plausible], axis=0)
     return ApproachPairEstimate(
         path_deg=path_deg,
         attack_angle_deg=attack_angle_deg,
         speed_ratio_ops=speed_mph / ops_club_speed_mph if ops_club_speed_mph else None,
         velocity_mad_mph=velocity_mad_mph,
         n_features=len(velocity),
+        positions_m=tuple(tuple(float(value) for value in frame) for frame in head),
     )
 
 
@@ -986,6 +1001,35 @@ def _clubhead_feature_tracks(
     return np.stack((flat0[valid], flat1[valid], flat2[valid]), axis=1), head_thickness
 
 
+def _head_positions(
+    pair_estimates: dict[tuple[int, int], ApproachPairEstimate],
+    impact_idx: int,
+    camera_s: np.ndarray,
+) -> tuple[HeadPosition, ...]:
+    """One head position per tracked frame: the median over the intervals that saw it.
+
+    Each interval's features were seeded afresh, so a frame seen by two intervals
+    has two slightly different head points; their median is the frame's. A
+    consistent physical head point is W9's work.
+    """
+    by_frame: dict[int, list] = {}
+    for offsets, estimate in pair_estimates.items():
+        for offset, position in zip(offsets, estimate.positions_m or ()):
+            by_frame.setdefault(impact_idx + offset, []).append(position)
+    positions = []
+    for frame in sorted(by_frame):
+        lateral, up, forward = np.median(np.asarray(by_frame[frame]), axis=0)
+        positions.append(
+            HeadPosition(
+                t_s=float(camera_s[frame]),
+                lateral_m=float(lateral),
+                up_m=float(up),
+                forward_m=float(forward),
+            )
+        )
+    return tuple(positions)
+
+
 def estimate_chained_delivery(
     frames: np.ndarray,
     host_timestamp_ns: np.ndarray,
@@ -1149,6 +1193,7 @@ def estimate_chained_delivery(
             pair_estimates[offsets] = estimate
 
     head_thickness = max(head_thicknesses, default=None)
+    camera_s = timestamps_ns.astype(float) / 1e9
     common = {
         "impact_frame": impact_idx,
         "impact_vs_trigger_ms": (
@@ -1159,6 +1204,15 @@ def estimate_chained_delivery(
         "range_evidence_status": range_evidence_status,
         "notes": tuple(notes),
         "camera_model": camera_check,
+        "head_positions": _head_positions(pair_estimates, impact_idx, camera_s),
+        "contact_t_s": contact_camera_s,
+        "clock": timestamp_source,
+        "horizontal_offset_deg": float(geometry.horizontal_offset_deg or 0.0),
+        "ball_position": {
+            "lateral_m": float(geometry.ball_position_lfu[0]),
+            "up_m": float(geometry.ball_position_lfu[2]),
+            "forward_m": float(geometry.ball_position_lfu[1]),
+        },
     }
     if not pair_estimates:
         return ChainedDelivery(

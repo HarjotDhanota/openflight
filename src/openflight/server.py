@@ -4531,6 +4531,19 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     )
 
 
+def _attach_club_arc(shot: Shot, delivery) -> None:
+    """E1: the shot's club delivery from the arc, beside the chained cross-check.
+
+    ``delivery`` is the chained club delivery (dataclass or its persisted dict),
+    or None. Right-handed unless the golfer is set left-handed (owner rule).
+    """
+    from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
+
+    shot.club_delivery = club_delivery_payload(
+        delivery, club=shot.club, handedness=sim_player_state.handed
+    )
+
+
 def _fuse_camera_club_delivery(
     shot: Shot,
     camera_capture,
@@ -4608,6 +4621,7 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
+        _attach_club_arc(shot, fused)
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -4806,6 +4820,7 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_fused_status = status
     shot.experimental_fused_attack_angle_confidence = "withheld"
     shot.experimental_fused_club_path_confidence = "withheld"
+    _attach_club_arc(shot, {"status": status})
     shot.camera_fusion_context = {
         "schema": "openflight.camera.fusion_context",
         "version": CAMERA_FUSION_CONTEXT_VERSION,
@@ -5142,6 +5157,7 @@ def _fuse_camera_measurements(
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
+            _attach_club_arc(shot, fused)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
             shot.camera_fusion_context = {
