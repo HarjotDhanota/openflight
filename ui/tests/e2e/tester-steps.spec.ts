@@ -157,6 +157,7 @@ test('the lens is picked by touch, its settings shown, and a change warns before
   await expect(cards.nth(0)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#lens')).toHaveAttribute('data-ready', 'true');
   await expect(page.locator('#lens-settings')).toContainText('Modes: 1280×800 (default), 640×400');
+  await expect(page.locator('#ladder-source')).toContainText('The settings the Stock 2.8 mm lens runs');
   await expect(page.locator('#lens-settings')).toContainText('1280×800 ladder: 300, 200, 150, 100, 75, 50, 30, 20, 10 µs');
   for (const card of await cards.all()) {
     expect((await card.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);

@@ -4802,6 +4802,10 @@
       // the tick chips and the switch buttons, rebuilt when the lens's settings change
       function buildLadderControls() {
         const modes = lensLadder();
+        const lens = selectedLens();
+        el('ladder-source').textContent = lens
+          ? `The settings the ${lens.label} lens runs (change them in step 1). Untick one to leave it out this time.`
+          : 'Untick a setting to leave it out this time.';
         const key = JSON.stringify(modes);
         if (key === ladderBuiltFor) return;
         const kept = ladderBuiltFor === null ? readLadderChoice() : tickedRungs();
@@ -4840,10 +4844,6 @@
           el('ladder-choice').append(choice);
           el('ladder-jump').append(jump);
         }
-        const lens = selectedLens();
-        el('ladder-source').textContent = lens
-          ? `The settings the ${lens.label} lens runs (change them in step 1). Untick one to leave it out this time.`
-          : 'Untick a setting to leave it out this time.';
         renderLadderChoice(ladderRungs, ladderRunning);
         renderLadderJump();
       }
