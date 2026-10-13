@@ -32,6 +32,7 @@ from openflight.camera.geometry import (
 )
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
+from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
 
 # OpenCV's extension members are not visible to Pylint.
@@ -154,8 +155,9 @@ class CameraDeliveryGeometry:
     roll_correction_deg: float = 0.0
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
-    # The camera's target-line correction. It turns club path exactly as it
-    # turns the camera's horizontal launch, so both stay in one frame (F9).
+    # The one unit-to-target yaw (D36 item 2; + = target line right of the
+    # unit boresight). Subtracted from club path exactly as from the camera's
+    # horizontal launch, so both stay in one frame (F9).
     horizontal_offset_deg: float = 0.0
 
     @property
@@ -203,8 +205,8 @@ class ChainedDelivery:
     attack_confidence_tier: str = "withheld"
     # The IWR club track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
-    # Every club path is measured from the unit's boresight (audit F2); the
-    # target-line correction comes later, from the alignment stick.
+    # Every club path is measured from the unit's boresight (audit F2) until a
+    # target yaw moves it to the target line (D36 item 2).
     club_path_frame: str = "unit_boresight"
     # Labels on the values that no longer withhold them (D15, P8-7): a dim
     # scene, a trigger-derived contact, an unchecked or implausible speed.
@@ -309,10 +311,10 @@ def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
 
 
 def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDelivery:
-    """Turn every reported path by the camera's target-line correction (audit F9).
+    """Report every path against the one target yaw (audit F9, D36 item 2).
 
     The gates above judge path in the measurement frame; only the published
-    values move. A zero correction leaves the unit's boresight as the zero.
+    values move. A zero yaw leaves the unit's boresight as the zero.
     """
     if offset_deg == 0.0:
         return delivery
@@ -320,14 +322,14 @@ def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDel
     def turned(value: float | None) -> float | None:
         if value is None:
             return None
-        return round((value + offset_deg + 180.0) % 360.0 - 180.0, 2)
+        return round(float(to_reported_deg(value, offset_deg)), 2)
 
     return replace(
         delivery,
         club_path_deg=turned(delivery.club_path_deg),
         pre_path_deg=turned(delivery.pre_path_deg),
         cross_path_deg=turned(delivery.cross_path_deg),
-        club_path_frame="target_line",
+        club_path_frame=frame_for(offset_deg),
     )
 
 

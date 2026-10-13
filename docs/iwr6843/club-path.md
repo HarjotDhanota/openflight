@@ -42,8 +42,10 @@ uv run python scripts/analysis/evaluate_iwr_horizontal_models.py \
 The value is subtracted in phase space before conversion to degrees. Omitting
 it reports horizontal launch relative to the board's uncalibrated RF phase
 zero, which can create a consistent left/right bias even when the enclosure is
-aimed correctly. This is separate from `--iwr6843-azimuth-offset-deg`, which is
-the geometric target-line correction used by the experimental club-path fit.
+aimed correctly. This is the IWR's own boresight zero. It is separate from the
+unit-to-target yaw (`--iwr6843-azimuth-offset-deg`), which is subtracted from the
+horizontal launch and the club path alike, as from every horizontal angle
+([target line reference](../how-it-works/positioning.md#target-line-reference)).
 
 ## Club Path
 
@@ -75,21 +77,25 @@ operator trusting ±0.3° there would be relying on a number nobody measured.
 ### Set the target-line reference
 
 Club path is relative to the target line, and the array calibration cannot
-supply where the radar's boresight points. Measure the angle between boresight
-and your target line, then pass it:
+supply where the unit's boresight points. Measure the unit-to-target yaw, then
+pass it:
 
 ```bash
 scripts/start-kiosk.sh --iwr6843 --iwr6843-azimuth-offset-deg 1.5
 ```
 
-Positive means boresight points right of the target line. The value is added
-to the measured path. Left at 0, club path is reported relative to boresight
-rather than the target line, which is fine for separation testing but not for
-absolute numbers.
+Positive means the target line lies right of the unit boresight, seen from
+behind the unit. The value is **subtracted** from the measured path, exactly as
+from the horizontal launch and every other horizontal angle (D36; before
+12 Oct 2026 it was added with the opposite sign). Left unset or at 0, club path
+is reported relative to the boresight (`club_path_frame: unit_boresight`) rather
+than the target line (`target_line`), which is fine for separation testing but
+not for absolute numbers. The same value goes to
+`--camera-capture-horizontal-offset-deg`; two different values are refused.
 
 This flag is not optional trim. The estimator fits `x(t)` and `y(t)` in
 Cartesian coordinates and reports `path = atan2(v_y, v_x)`, so absolute
-azimuth enters *additively* rather than cancelling out: a constant
+azimuth enters as a constant offset rather than cancelling out: a constant
 per-element phase error from the shipped array calibration (measured on a
 different board than the one it ships on) shifts the reported path by a
 constant. `--iwr6843-azimuth-offset-deg` is what absorbs that shift, not a

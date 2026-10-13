@@ -175,6 +175,34 @@ def test_horizontal_launch_uses_measured_vertical_and_tracked_centroids(monkeypa
     assert result.depth_source == "ops_speed_iwr_vertical"
 
 
+def test_horizontal_launch_reports_against_the_target_yaw(monkeypatch):
+    """D36 item 2: the unwired comparator uses the same zero model as the kiosk."""
+    geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
+        horizontal_offset_deg=1.0
+    )
+    timestamps = np.concatenate(([0], candidate_times))
+    frames = np.zeros(
+        (len(timestamps), geometry.image_height_px, geometry.image_width_px), dtype=np.uint8
+    )
+    track = {index + 1: candidate for index, candidate in enumerate(candidates)}
+    monkeypatch.setattr(ball_flight_module, "detect_impact_frame", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ball_flight_module, "_track_launch_ball", lambda *_args, **_kwargs: track)
+
+    result = estimate_horizontal_launch(
+        frames,
+        timestamps,
+        trigger_ns=0,
+        geometry=geometry,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        vertical_deg=20.0,
+        vertical_source="radar",
+        reference_ball=anchor,
+    )
+
+    assert result.horizontal_deg == pytest.approx(3.0, abs=0.25)
+    assert result.horizontal_frame == "target_line"
+
+
 def test_horizontal_launch_withholds_non_radar_vertical_before_tracking(monkeypatch):
     monkeypatch.setattr(
         ball_flight_module,
@@ -313,9 +341,10 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
 
 
 def test_path_estimate_applies_setup_level_horizontal_offset():
+    """D36 item 2: the target yaw (+ = target line right of boresight) is subtracted."""
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0,
-        horizontal_offset_deg=-0.45,
+        horizontal_offset_deg=0.45,
     )
 
     result = _path_estimate(

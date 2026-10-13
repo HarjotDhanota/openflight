@@ -55,14 +55,28 @@ Full procedure: **[mounting, aiming, and measuring](../iwr6843/mounting.md)**.
 
 ## Target line reference
 
-Club path and launch direction are reported relative to a target line, which the
-system cannot infer. Two flags set the reference:
+Every horizontal angle (horizontal launch, club path, the D-plane face angle and
+the spin-axis proxy, from the camera and the IWR alike) has one zero model, in two
+layers (D36):
 
-- `--iwr6843-azimuth-offset-deg` — azimuth of the radar boresight relative to
-  the target line. Positive means boresight points right of the target line.
-  With `0`, club path is reported relative to boresight rather than the target.
-- `--iwr6843-horizontal-phase-reference-rad` — the static target-line phase from
-  horizontal aim calibration.
+1. **Each sensor's own boresight zero.** The IWR's is its board's horizontal phase
+   reference, `--iwr6843-horizontal-phase-reference-rad`, measured per board. The
+   camera's is its optical axis.
+2. **One unit-to-target yaw**: how far the target line is from the unit's
+   boresight. Positive means the target line lies **right** of the unit boresight,
+   seen from behind the unit. Every reported angle is its angle from the boresight
+   minus this yaw, so + still means right of the target line.
+
+The yaw is given through `--camera-capture-horizontal-offset-deg` and
+`--iwr6843-azimuth-offset-deg`, with the same value and sign (either alone sets it
+for both sensors; two different values are refused). Unset or `0`, every
+horizontal angle is reported against the unit boresight and its record says
+`unit_boresight`; with a yaw, against the target line, `target_line`. A value
+built from two frames (a face angle or spin axis from a target-line launch and a
+boresight path) says `mixed`.
+
+Before 12 Oct 2026 the IWR value was added, positive meaning the boresight
+pointed right of the target line: an old value needs its sign flipped.
 
 See [horizontal launch and club path](../iwr6843/club-path.md#set-the-target-line-reference).
 

@@ -45,6 +45,13 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
+from .horizontal_frame import (
+    MIXED,
+    combined_frame,
+    frame_for,
+    resolve_target_yaw,
+    to_reported_deg,
+)
 from .launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
@@ -170,6 +177,20 @@ camera_replay_manager = None
 CAMERA_FUSION_CONTEXT_VERSION = 2
 camera_optical_calibration: dict | None = None
 camera_placement: dict | None = None
+# The one unit-to-target yaw (D36 item 2): + = the target line lies right of
+# the unit boresight, seen from behind the unit. None until a flag sets it.
+horizontal_target_yaw_deg: float | None = None
+
+
+def _horizontal_frame() -> str:
+    """The frame every reported horizontal angle is in this session."""
+    return frame_for(horizontal_target_yaw_deg)
+
+
+def _reported_horizontal_deg(angle_from_boresight_deg: float) -> float:
+    """An angle from the unit boresight, reported against the one target yaw."""
+    return float(to_reported_deg(angle_from_boresight_deg, horizontal_target_yaw_deg))
+
 
 # The ready light (P7-14): one readiness state from what the sensors report,
 # carried to the kiosk screen on the socket and to the tester page over HTTP.
@@ -1816,14 +1837,17 @@ def _null_non_finite(value, path: str, not_measured: list[dict]):
 # "no source" value): a nulled value never keeps a measuring source's name.
 _SOURCE_LABELS_OF_METRIC = {
     "launch_angle_vertical": ("launch_angle_vertical_source", "angle_source"),
-    "launch_angle_horizontal": ("launch_angle_horizontal_source",),
+    "launch_angle_horizontal": ("launch_angle_horizontal_source", "launch_angle_horizontal_frame"),
     "spin_rpm": ("spin_source",),
     # a nulled committed carry is not measured, simulated or calculated
     "carry_spin_adjusted": ("carry_status",),
     "experimental_face_angle_deg": (
         "experimental_face_angle_path_source",
         "experimental_face_angle_launch_source",
+        "experimental_face_angle_frame",
     ),
+    "club_path_deg": ("club_path_frame",),
+    "spin_axis_deg": ("spin_axis_frame",),
 }
 
 
@@ -4231,6 +4255,9 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             from .iwr6843.runtime import camera_horizontal_input  # noqa: PLC0415
 
             fused_horizontal, fused_confidence = camera_horizontal_input(measurement)
+            horizontal_frame = getattr(measurement, "horizontal_frame", None) or (
+                _horizontal_frame()
+            )
             if fused_horizontal is not None:
                 shot.iwr6843_horizontal_deg = fused_horizontal
                 shot.iwr6843_horizontal_confidence = fused_confidence
@@ -4238,6 +4265,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal_confidence = fused_confidence
                 shot.launch_angle_horizontal_source = "radar"
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
+                shot.launch_angle_horizontal_frame = horizontal_frame
             elif horizontal_deg is not None:
                 # a low-coherence horizontal is shown under its own source and
                 # never handed to the camera as the IWR's evidence (P8-7)
@@ -4247,6 +4275,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 )
                 shot.launch_angle_horizontal_source = "radar_low_coherence"
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
+                shot.launch_angle_horizontal_frame = horizontal_frame
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
@@ -4305,6 +4334,9 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             )
             if candidate_path is not None:
                 shot.experimental_club_path_deg = round(candidate_path, 1)
+                shot.experimental_club_path_frame = (
+                    getattr(club_path, "club_path_frame", None) or _horizontal_frame()
+                )
             if candidate_attack is not None:
                 shot.experimental_attack_angle_deg = round(candidate_attack, 1)
             if accepted_path is not None:
@@ -4520,6 +4552,9 @@ def _fuse_camera_club_delivery(
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")
         shot.experimental_fused_attack_angle_deg = fused.attack_angle_deg
         shot.experimental_fused_club_path_deg = fused.club_path_deg
+        shot.experimental_fused_club_path_frame = (
+            fused.club_path_frame if fused.club_path_deg is not None else None
+        )
         shot.experimental_fused_status = fused.status
         shot.experimental_fused_attack_angle_confidence = fused.attack_confidence_tier
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
@@ -4571,17 +4606,26 @@ def _apply_camera_horizontal_decision(
     selected_deg: float | None,
     confidence: float | None,
     source: str | None,
+    *,
+    frame: str | None = None,
 ) -> None:
-    """Display a camera-fusion horizontal only when it outranks the current one (F6)."""
+    """Display a camera-fusion horizontal only when it outranks the current one (F6).
+
+    ``frame`` is the camera estimate's horizontal frame (D36 item 2); a
+    decision that falls back to radar keeps the IWR value's own frame.
+    """
     if selected_deg is None:
         return
     if shot.launch_angle_horizontal is not None:
         current_rank = _HORIZONTAL_SOURCE_RANK.get(shot.launch_angle_horizontal_source, 1)
         if _HORIZONTAL_SOURCE_RANK.get(source, 0) < current_rank:
             return
+    if source == "radar":
+        frame = shot.launch_angle_horizontal_frame
     shot.launch_angle_horizontal = selected_deg
     shot.launch_angle_horizontal_confidence = confidence
     shot.launch_angle_horizontal_source = source
+    shot.launch_angle_horizontal_frame = frame or _horizontal_frame()
     # A camera decision that falls back to radar hands back the IWR's value.
     shot.launch_angle_horizontal_status = _iwr_azimuth_status() if source == "radar" else None
 
@@ -4667,8 +4711,15 @@ def _fuse_camera_ball_flight(
             else f"{decision.status}:{estimate.status}"
         )
         shot.experimental_camera_iwr_delta_deg = decision.camera_iwr_delta_deg
+        shot.experimental_camera_horizontal_frame = (
+            estimate.horizontal_frame if decision.camera_horizontal_deg is not None else None
+        )
         _apply_camera_horizontal_decision(
-            shot, decision.selected_deg, decision.confidence, decision.source
+            shot,
+            decision.selected_deg,
+            decision.confidence,
+            decision.source,
+            frame=estimate.horizontal_frame,
         )
         logger.info(
             "[SERVER] Camera-assisted horizontal: selected=%s camera=%s IWR=%s "
@@ -4697,8 +4748,10 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_camera_horizontal_deg = None
     shot.experimental_camera_horizontal_confidence = None
     shot.experimental_camera_iwr_delta_deg = None
+    shot.experimental_camera_horizontal_frame = None
     shot.experimental_fused_attack_angle_deg = None
     shot.experimental_fused_club_path_deg = None
+    shot.experimental_fused_club_path_frame = None
     shot.experimental_fused_status = status
     shot.experimental_fused_attack_angle_confidence = "withheld"
     shot.experimental_fused_club_path_confidence = "withheld"
@@ -4749,11 +4802,23 @@ def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
+    """The frame of the club path ``displayed_club_path`` chose (D36 item 2)."""
+    if path_source == "canonical":
+        return shot.club_path_frame
+    if path_source in ("camera_fused_chained", "camera_fused_ops"):
+        return shot.experimental_fused_club_path_frame
+    if path_source == "iwr":
+        return shot.experimental_club_path_frame
+    return None
+
+
 def _attach_experimental_face_angle(shot: Shot) -> None:
     """Derive face angle from the measured start direction and club path (D-plane)."""
     shot.experimental_face_angle_deg = None
     shot.experimental_face_angle_path_source = None
     shot.experimental_face_angle_launch_source = None
+    shot.experimental_face_angle_frame = None
     launch = shot.launch_angle_horizontal
     if launch is None or shot.launch_angle_horizontal_source == "estimated":
         shot.experimental_face_angle_status = "missing_measured_start_direction"
@@ -4770,6 +4835,12 @@ def _attach_experimental_face_angle(shot: Shot) -> None:
     shot.experimental_face_angle_status = (
         "d_plane_estimate_azimuth_uncalibrated" if azimuth_uncalibrated else "d_plane_estimate"
     )
+    # One zero for both legs (D36 item 2); two zeros are computed and labelled.
+    shot.experimental_face_angle_frame = combined_frame(
+        shot.launch_angle_horizontal_frame, _club_path_frame_of(shot, path_source)
+    )
+    if shot.experimental_face_angle_frame == MIXED:
+        shot.experimental_face_angle_status += "_mixed_frames"
     shot.experimental_face_angle_path_source = path_source
     shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
 
@@ -4993,11 +5064,23 @@ def _fuse_camera_measurements(
                 else f"{decision['status']}:{estimate['status']}"
             )
             shot.experimental_camera_iwr_delta_deg = decision["camera_iwr_delta_deg"]
+            shot.experimental_camera_horizontal_frame = (
+                estimate.get("horizontal_frame")
+                if decision["camera_horizontal_deg"] is not None
+                else None
+            )
             _apply_camera_horizontal_decision(
-                shot, decision["selected_deg"], decision["confidence"], decision["source"]
+                shot,
+                decision["selected_deg"],
+                decision["confidence"],
+                decision["source"],
+                frame=estimate.get("horizontal_frame"),
             )
             shot.experimental_fused_attack_angle_deg = fused["attack_angle_deg"]
             shot.experimental_fused_club_path_deg = fused["club_path_deg"]
+            shot.experimental_fused_club_path_frame = (
+                fused.get("club_path_frame") if fused["club_path_deg"] is not None else None
+            )
             shot.experimental_fused_status = fused["status"]
             shot.experimental_fused_attack_angle_confidence = fused["attack_confidence_tier"]
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
@@ -5198,10 +5281,14 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     )
                     selection_reason_h = horizontal_selection_details["selection_reason"]
                     if accepted_h:
-                        shot.launch_angle_horizontal = kld7_angle_h.horizontal_deg
+                        # the K-LD7 offset is its own zero; the target yaw is the one model's
+                        shot.launch_angle_horizontal = _reported_horizontal_deg(
+                            kld7_angle_h.horizontal_deg
+                        )
                         shot.launch_angle_horizontal_confidence = kld7_angle_h.confidence
                         shot.launch_angle_horizontal_source = "radar"
                         shot.launch_angle_horizontal_status = None
+                        shot.launch_angle_horizontal_frame = _horizontal_frame()
                         if shot.angle_source is None:
                             shot.angle_source = "radar"
                         if shot.launch_angle_confidence is None:
@@ -5232,7 +5319,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                         shot_timestamp=shot_ts,
                     )
                     if club_angle_h and club_angle_h.horizontal_deg is not None:
-                        shot.club_path_deg = club_angle_h.horizontal_deg
+                        shot.club_path_deg = _reported_horizontal_deg(club_angle_h.horizontal_deg)
+                        shot.club_path_frame = _horizontal_frame()
                         logger.info(
                             "[SERVER] Club path: %.1f° (conf=%.0f%%)",
                             club_angle_h.horizontal_deg,
@@ -5268,6 +5356,10 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                 and (shot.launch_angle_horizontal_confidence or 0.0) >= SPIN_AXIS_MIN_CONFIDENCE
             ):
                 shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
+                # a difference of two angles: the yaw cancels only within one frame
+                shot.spin_axis_frame = combined_frame(
+                    shot.launch_angle_horizontal_frame, shot.club_path_frame
+                )
                 logger.info(
                     "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
                     shot.spin_axis_deg,
@@ -7357,8 +7449,13 @@ def main():
     parser.add_argument(
         "--camera-capture-horizontal-offset-deg",
         type=float,
-        default=0.0,
-        help="Measured camera target-line correction added to horizontal launch angles.",
+        default=None,
+        help=(
+            "Unit-to-target yaw, degrees: positive when the target line lies right of "
+            "the unit boresight, seen from behind the unit. Subtracted from every "
+            "horizontal angle (camera and IWR). Same value and sign as "
+            "--iwr6843-azimuth-offset-deg; two different values are refused."
+        ),
     )
     parser.add_argument(
         "--camera-capture-lateral-offset-m",
@@ -7713,12 +7810,13 @@ def main():
     parser.add_argument(
         "--iwr6843-azimuth-offset-deg",
         type=float,
-        default=0.0,
+        default=None,
         help=(
-            "Azimuth of the radar boresight relative to the target line, in degrees. "
-            "Positive means boresight points right of the target line. Added to "
-            "measured horizontal launch and club path; 0 reports both relative "
-            "to boresight."
+            "Unit-to-target yaw, degrees: positive when the target line lies right of "
+            "the unit boresight, seen from behind the unit. Subtracted from every "
+            "horizontal angle (camera and IWR); unset or 0 reports them relative to the "
+            "unit boresight. Same value and sign as "
+            "--camera-capture-horizontal-offset-deg; two different values are refused."
         ),
     )
     parser.add_argument(
@@ -7823,6 +7921,17 @@ def main():
     )
     args = parser.parse_args()
     _apply_kld7_device_defaults(args)
+    # D36 item 2: one unit-to-target yaw for every horizontal angle, through both flags.
+    global horizontal_target_yaw_deg  # pylint: disable=global-statement
+    try:
+        horizontal_target_yaw_deg = resolve_target_yaw(
+            camera_deg=args.camera_capture_horizontal_offset_deg,
+            iwr_deg=args.iwr6843_azimuth_offset_deg,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    args.camera_capture_horizontal_offset_deg = horizontal_target_yaw_deg or 0.0
+    args.iwr6843_azimuth_offset_deg = horizontal_target_yaw_deg or 0.0
     if args.iwr6843_tee_range_pending:
         args.iwr6843_tee_m = None
 

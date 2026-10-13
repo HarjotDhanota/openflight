@@ -9,6 +9,7 @@ import math
 import time
 from dataclasses import asdict, dataclass, field, replace
 
+from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult, ClubWindowPolicy, estimate_club_path
 from openflight.iwr6843.lcmf import (
@@ -256,11 +257,15 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         tdm_sign_policy=tdm_sign_policy,
         horizontal_phase_reference_rad=horizontal_phase_reference_rad,
     )
+    # ``azimuth_offset_deg`` is the one unit-to-target yaw (D36 item 2; + =
+    # target line right of the unit boresight), subtracted from the ball's
+    # horizontal launch exactly as from the club path below.
     if measurement is not None and getattr(measurement, "horizontal_deg", None) is not None:
         measurement = replace(
             measurement,
-            horizontal_deg=measurement.horizontal_deg + azimuth_offset_deg,
+            horizontal_deg=float(to_reported_deg(measurement.horizontal_deg, azimuth_offset_deg)),
             horizontal_raw_deg=measurement.horizontal_deg,
+            horizontal_frame=frame_for(azimuth_offset_deg),
         )
     if not club_speed_mph:
         return measurement, None
@@ -276,7 +281,7 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         calibration,
         ops_club_speed_mph=club_speed_mph,
         impact_t_s=impact_t_s,
-        aim_offset_deg=azimuth_offset_deg,
+        target_yaw_deg=azimuth_offset_deg,
         phase_reference_rad=horizontal_phase_reference_rad,
         tdm_sign=policy_sign if fallback else ball_sign,
         window_policy=club_window_policy,
@@ -295,6 +300,8 @@ class IWR6843Runtime:
     net_range_m: float | None
     tx_order: str = "normal"
     capture_timeout_s: float = 12.0
+    # The one unit-to-target yaw (D36 item 2): + = target line right of the
+    # unit boresight; subtracted from horizontal launch and club path.
     azimuth_offset_deg: float = 0.0
     horizontal_phase_reference_rad: float | None = None
     tdm_sign_policy: str = "positive"

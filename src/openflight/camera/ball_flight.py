@@ -30,6 +30,7 @@ from openflight.camera.geometry import (
     reference_ball_camera_model,
     unit_world_rays,
 )
+from openflight.horizontal_frame import frame_for, to_boresight_deg, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
 
 MPH_PER_MS = 2.23694
@@ -122,6 +123,9 @@ class CameraBallGeometry:
     # Camera optical-center position relative to radar center. Positive is
     # target-right when viewed from behind the sensors looking downrange.
     camera_lateral_offset_m: float = 0.0
+    # The one unit-to-target yaw (D36 item 2): positive when the target line
+    # lies right of the unit boresight, seen from behind the unit. Subtracted
+    # from every reported horizontal angle (``openflight.horizontal_frame``).
     horizontal_offset_deg: float = 0.0
     # Convert saved-image horizontal pixels back to physical target direction.
     # Mirrored operator previews use -1; unmirrored captures use +1.
@@ -185,6 +189,8 @@ class CameraBallEstimate:
     jackknife_mad_deg: float | None = None
     profile_span_deg: float | None = None
     impact_delay_ms: float | None = None
+    # unit_boresight or target_line (D36 item 2); set with horizontal_deg
+    horizontal_frame: str | None = None
 
 
 @dataclass(frozen=True)
@@ -627,7 +633,7 @@ def _fit_horizontal_launch(  # pylint: disable=too-many-arguments
     speed_ms = speed_mph / MPH_PER_MS
     vertical = math.radians(vertical_deg)
     target_angles = np.linspace(-20.0, 20.0, 801)
-    camera_angles = np.radians(target_angles - geometry.horizontal_offset_deg)
+    camera_angles = np.radians(to_boresight_deg(target_angles, geometry.horizontal_offset_deg))
     velocities = speed_ms * np.stack(
         (
             math.cos(vertical) * np.sin(camera_angles),
@@ -806,6 +812,7 @@ def estimate_horizontal_launch(
         ),
         confidence_tier="experimental" if failure is None else "withheld",
         horizontal_deg=base.horizontal_deg if failure is None else None,
+        horizontal_frame=frame_for(geometry.horizontal_offset_deg) if failure is None else None,
         vertical_deg=vertical_deg,
         support=support,
         support_pct=min(100.0, 100.0 * support / 15.0),
@@ -843,8 +850,8 @@ def _horizontal(velocity: np.ndarray) -> float:
 
 
 def _apply_horizontal_offset(angle_deg: float, offset_deg: float) -> float:
-    """Apply a measured setup yaw correction while preserving angle wrapping."""
-    return (angle_deg + offset_deg + 180.0) % 360.0 - 180.0
+    """Report an angle from the boresight against the target yaw (D36 item 2)."""
+    return float(to_reported_deg(angle_deg, offset_deg))
 
 
 def _path_estimate(
@@ -1144,6 +1151,7 @@ def estimate_camera_ball_flight(
         status="low_consensus" if tier == "low" else "accepted",
         confidence_tier=tier,
         horizontal_deg=median_horizontal,
+        horizontal_frame=frame_for(geometry.horizontal_offset_deg),
         vertical_deg=float(np.median([estimate.vertical_deg for estimate in estimates])),
         support=len(estimates),
         support_pct=100.0 * len(estimates) / PARAMETER_SWEEP_SIZE,

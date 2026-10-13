@@ -107,6 +107,8 @@ class LCMFResult:
     horizontal_raw_deg: float | None = None
     horizontal_confidence: float | None = None
     horizontal_status: str | None = None
+    # unit_boresight or target_line, set with the target yaw (D36 item 2)
+    horizontal_frame: str | None = None
     effective_tdm_tau_s: float = doa.TDM_TAU_S
     effective_loop_period_s: float = tracking.LOOP_PRI_S
     range_evidence: BallRangeEvidence | None = field(
@@ -145,6 +147,7 @@ class LCMFResult:
             "horizontal_raw_deg": self.horizontal_raw_deg,
             "horizontal_confidence": self.horizontal_confidence,
             "horizontal_status": self.horizontal_status,
+            "horizontal_frame": self.horizontal_frame,
             "effective_tdm_tau_s": self.effective_tdm_tau_s,
             "effective_loop_period_s": self.effective_loop_period_s,
         }
