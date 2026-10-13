@@ -1,5 +1,6 @@
-import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
-import { getSwingSpeedMph, isCarryEstimated, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
+import type { MetricLabel, Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
+import { carryLabel, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
+import { shotMetric } from '../../data/metricCatalog';
 import type { UnitSystem } from '../../utils/units';
 import {
   NO_VALUE,
@@ -22,8 +23,13 @@ export interface LiveMetric {
   value: string;
   unit?: string;
   subtext?: string;
-  /** True when the value is modeled rather than measured. Rendered as an icon. */
-  estimated?: boolean;
+  /**
+   * The shown value's label: the server's (`Shot.metrics`) when it has one, else
+   * read from the shot's own source fields. Rendered as a badge on the title.
+   */
+  status?: MetricLabel;
+  /** Why the metric is not measured, when the tile shows no value. */
+  reason?: string;
   confidence?: SpinQuality | null;
   /** Override confidence copy while preserving its dot level. */
   confidenceLabel?: string;
@@ -77,8 +83,49 @@ export function smashSubtext(shot: Shot): string | undefined {
   return isMeasured(shot.smash_factor) && shot.smash_factor_status === 'radial_ratio' ? 'radial ratio' : undefined;
 }
 
-function markEstimated(isEstimated: boolean): true | undefined {
-  return isEstimated ? true : undefined;
+/** The server's metric id behind each live tile (openflight.shot_metrics). */
+const TILE_METRIC: Record<string, string> = {
+  ball_speed: 'ball_speed',
+  carry: 'carry',
+  club_speed: 'club_speed',
+  smash: 'smash_factor',
+  launch_v: 'launch_vertical',
+  launch_h: 'launch_horizontal',
+  spin: 'spin_rate',
+  spin_axis: 'spin_axis',
+  club_path: 'club_path',
+  club_aoa: 'attack_angle',
+};
+
+/** A label only for a value that is shown; a missing value has none. */
+function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel | undefined {
+  return isMeasured(value) ? status : undefined;
+}
+
+function spinLabel(shot: Shot): MetricLabel {
+  return shot.spin_source === 'calculated' || shot.spin_source === 'model_geometry' ? shot.spin_source : 'measured';
+}
+
+/**
+ * Put the server's label (and, for a value the tile lacks, its value and reason)
+ * on a tile built from the shot's fields. A shot from before `Shot.metrics` keeps
+ * the tile exactly as built.
+ */
+function withServerLabel(
+  shot: Shot,
+  metric: LiveMetric,
+  formatted: (metric: LiveMetric, value: number) => LiveMetric
+): LiveMetric {
+  const record = shotMetric(shot, TILE_METRIC[metric.id]);
+  if (!record) return metric;
+  if (metric.value === NO_VALUE && isMeasured(record.value)) {
+    return { ...formatted(metric, record.value), subtext: undefined, status: record.status };
+  }
+  if (metric.value === NO_VALUE) {
+    return { ...metric, status: undefined, reason: record.reason ?? undefined };
+  }
+  // a candidate the server does not report (rejected or withheld) keeps its own pill
+  return isMeasured(record.value) ? { ...metric, status: record.status } : { ...metric, status: undefined };
 }
 
 /** The D-plane face angle rides on the club-path tile it is derived from. */
@@ -156,12 +203,13 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       shot.experimental_club_path_deg != null ||
       shot.experimental_club_path_status != null);
 
-  return [
+  const tiles: LiveMetric[] = [
     {
       id: 'ball_speed',
       label: t('metric.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
       unit: unitIfMeasured(shot.ball_speed_mph, speedUnit),
+      status: labelIf(shot.ball_speed_mph, 'measured'),
     },
     {
       id: 'carry',
@@ -169,26 +217,28 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatDistance(carry, unitSystem, 0),
       unit: unitIfMeasured(carry, getDistanceUnit(unitSystem)),
       subtext: carryIsCommitted ? t('metric.spinAdjusted') : undefined,
-      estimated: markEstimated(isCarryEstimated(shot)),
+      status: carryLabel(shot) ?? undefined,
     },
     {
       id: 'club_speed',
       label: t('metric.clubSpeed'),
       value: formatSpeed(shot.club_speed_mph, unitSystem, 1),
       unit: unitIfMeasured(shot.club_speed_mph, speedUnit),
+      status: labelIf(shot.club_speed_mph, 'measured'),
     },
     {
       id: 'smash',
       label: t('metric.smash'),
       value: isMeasured(shot.smash_factor) ? shot.smash_factor.toFixed(2) : NO_VALUE,
       subtext: smashSubtext(shot),
+      status: labelIf(shot.smash_factor, 'calculated'),
     },
     {
       id: 'launch_v',
       label: t('metric.vLaunch'),
       value: formatOptionalAngle(shot.launch_angle_vertical),
       unit: angleUnit(shot.launch_angle_vertical),
-      estimated: markEstimated(isMeasured(shot.launch_angle_vertical) && angleEstimated),
+      status: labelIf(shot.launch_angle_vertical, angleEstimated ? 'estimated' : 'measured'),
       confidence: isMeasured(shot.launch_angle_vertical) ? angleConfidence : null,
     },
     {
@@ -197,7 +247,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
       subtext: horizontalSubtext,
-      estimated: markEstimated(isMeasured(shot.launch_angle_horizontal) && horizontalEstimated),
+      status: labelIf(shot.launch_angle_horizontal, horizontalEstimated ? 'estimated' : 'measured'),
       confidence: isMeasured(shot.launch_angle_horizontal) ? horizontalConfidence : null,
       confidenceLabel: horizontalSourceLabel ? 'experimental' : undefined,
     },
@@ -206,9 +256,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.spin'),
       value: formatSpinRpm(shot.spin_rpm),
       unit: unitIfMeasured(shot.spin_rpm, 'rpm'),
-      estimated: markEstimated(
-        isMeasured(shot.spin_rpm) && (shot.spin_source === 'calculated' || shot.spin_source === 'model_geometry')
-      ),
+      status: labelIf(shot.spin_rpm, spinLabel(shot)),
       confidence: isMeasured(shot.spin_rpm) ? shot.spin_quality : null,
     },
     {
@@ -237,6 +285,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
         shot.experimental_face_angle_status
       ),
       confidence: clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null,
+      status: isMeasured(shot.club_path_deg) ? 'measured' : undefined,
       confidenceLabel: shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,
     },
     {
@@ -255,8 +304,33 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
             : undefined,
       confidence: attackIsExperimental ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental') : null,
       confidenceLabel: shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined,
+      status: isMeasured(shot.club_angle_deg) ? 'measured' : undefined,
     },
   ];
+  const signedAngle = (metric: LiveMetric, value: number): LiveMetric => ({
+    ...metric,
+    value: formatOptionalAngle(value, true),
+    unit: angleUnit(value),
+    confidence: null,
+    confidenceLabel: undefined,
+  });
+  const fromServer: Record<string, (metric: LiveMetric, value: number) => LiveMetric> = {
+    ball_speed: (metric, value) => ({ ...metric, value: formatSpeed(value, unitSystem, 1), unit: speedUnit }),
+    club_speed: (metric, value) => ({ ...metric, value: formatSpeed(value, unitSystem, 1), unit: speedUnit }),
+    carry: (metric, value) => ({
+      ...metric,
+      value: formatDistance(value, unitSystem, 0),
+      unit: getDistanceUnit(unitSystem),
+    }),
+    smash: (metric, value) => ({ ...metric, value: value.toFixed(2) }),
+    launch_v: (metric, value) => ({ ...metric, value: formatOptionalAngle(value), unit: angleUnit(value) }),
+    spin: (metric, value) => ({ ...metric, value: formatSpinRpm(value), unit: 'rpm' }),
+    launch_h: signedAngle,
+    spin_axis: signedAngle,
+    club_path: signedAngle,
+    club_aoa: signedAngle,
+  };
+  return tiles.map((tile) => withServerLabel(shot, tile, fromServer[tile.id]));
 }
 
 function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: UnitSystem): LiveMetric[] {

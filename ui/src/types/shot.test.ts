@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Shot } from './shot';
+import type { Shot, ShotMetric } from './shot';
 import {
   computeStats,
   computeSwingSpeedStats,
   excludeShotsByProfile,
   filterShotsByProfile,
   getSwingSpeedMph,
-  isCarryEstimated,
+  carryLabel,
   reportedCarryYards,
 } from './shot';
 
@@ -80,20 +80,33 @@ describe('reportedCarryYards', () => {
   });
 });
 
-describe('isCarryEstimated', () => {
+describe('carryLabel', () => {
   const carryShot = (overrides: Partial<Shot>): Shot =>
     ({ ball_speed_mph: 150, estimated_carry_yards: 257, carry_spin_adjusted: null, ...overrides }) as Shot;
 
-  it('marks a calculated-spin carry and a bare table carry, not a measured one', () => {
-    expect(isCarryEstimated(carryShot({ carry_status: 'measured', carry_spin_adjusted: 244 }))).toBe(false);
-    expect(isCarryEstimated(carryShot({ carry_status: 'calculated', carry_spin_adjusted: 238 }))).toBe(true);
-    expect(isCarryEstimated(carryShot({ carry_status: 'estimated' }))).toBe(true);
-    expect(isCarryEstimated(carryShot({}))).toBe(true);
-    expect(isCarryEstimated(carryShot({ carry_status: 'not_measured' }))).toBe(false);
+  it('gives a simulated carry built from a measured spin the calculated label, never estimated', () => {
+    expect(carryLabel(carryShot({ carry_status: 'calculated', carry_spin_adjusted: 238 }))).toBe('calculated');
+    // an older log's "measured" carry is the same simulated carry (D38)
+    expect(carryLabel(carryShot({ carry_status: 'measured', carry_spin_adjusted: 244 }))).toBe('calculated');
   });
 
-  it('marks a carry flown on model geometry (D39) as modelled, never measured', () => {
-    expect(isCarryEstimated(carryShot({ carry_status: 'model_geometry', carry_spin_adjusted: 160 }))).toBe(true);
+  it('labels a table carry estimated and a missing carry not at all', () => {
+    expect(carryLabel(carryShot({ carry_status: 'estimated' }))).toBe('estimated');
+    expect(carryLabel(carryShot({}))).toBe('estimated');
+    expect(carryLabel(carryShot({ carry_status: 'not_measured' }))).toBeNull();
+  });
+
+  it('labels a carry flown on model geometry (D39) model_geometry', () => {
+    expect(carryLabel(carryShot({ carry_status: 'model_geometry', carry_spin_adjusted: 160 }))).toBe('model_geometry');
+  });
+
+  it("prefers the server's own label when the shot carries metrics", () => {
+    const shot = carryShot({
+      carry_status: 'calculated',
+      carry_spin_adjusted: 200,
+      metrics: { carry: { status: 'model_geometry' } as ShotMetric },
+    });
+    expect(carryLabel(shot)).toBe('model_geometry');
   });
 });
 
@@ -132,14 +145,14 @@ describe('reportedCarryYards with a non-finite carry', () => {
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
       const shot = carryShot({ carry_status: 'measured', carry_spin_adjusted: bad, estimated_carry_yards: null });
       expect(reportedCarryYards(shot)).toBeNull();
-      expect(isCarryEstimated(shot)).toBe(false);
+      expect(carryLabel(shot)).toBeNull();
     }
   });
 
   it('an OPS-only shot with a non-finite committed carry keeps its labelled table estimate', () => {
     const shot = carryShot({ carry_status: 'estimated', carry_spin_adjusted: Number.NaN });
     expect(reportedCarryYards(shot)).toBe(257);
-    expect(isCarryEstimated(shot)).toBe(true);
+    expect(carryLabel(shot)).toBe('estimated');
   });
 
   it('a non-finite table carry is not reported either', () => {

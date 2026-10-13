@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Shot, SwingSpeedStats } from '../../types/shot';
+import type { Shot, ShotMetric, SwingSpeedStats } from '../../types/shot';
 import {
   buildLiveMetrics,
   LIVE_METRIC_COUNT,
@@ -109,11 +109,12 @@ describe('buildLiveMetrics', () => {
     expect(byId(metric, 'carry')).toMatchObject({ value: '196', unit: 'm' });
   });
 
-  it('prefers the spin-adjusted carry and marks model carry as estimated', () => {
+  it('prefers the spin-adjusted carry and labels a table carry estimated', () => {
     const adjusted = byId(buildLiveMetrics(makeShot(), 'imperial', emptySwingStats), 'carry');
     expect(adjusted.value).toBe('214');
     expect(adjusted.subtext).toBe('Spin-adjusted');
-    expect(adjusted.estimated).toBeUndefined();
+    // an unlabelled committed carry (a replay, an older log) is an estimate
+    expect(adjusted.status).toBe('estimated');
 
     const estimated = byId(
       buildLiveMetrics(makeShot({ carry_spin_adjusted: null }), 'imperial', emptySwingStats),
@@ -121,7 +122,7 @@ describe('buildLiveMetrics', () => {
     );
     expect(estimated.value).toBe('210');
     expect(estimated.subtext).toBeUndefined();
-    expect(estimated.estimated).toBe(true);
+    expect(estimated.status).toBe('estimated');
   });
 
   it('shows a fusion carry that is not measured as no value, never the table', () => {
@@ -137,10 +138,10 @@ describe('buildLiveMetrics', () => {
     expect(carry.value).toBe(NO_VALUE);
     expect(carry.unit).toBeUndefined();
     expect(carry.subtext).toBeUndefined();
-    expect(carry.estimated).toBeUndefined();
+    expect(carry.status).toBeUndefined();
   });
 
-  it('shows a measured fusion carry plainly and a calculated one as estimated', () => {
+  it('labels a simulated fusion carry calculated, even one an older log called measured', () => {
     const measured = byId(
       buildLiveMetrics(makeShot({ carry_status: 'measured' }), 'imperial', emptySwingStats),
       'carry'
@@ -151,8 +152,9 @@ describe('buildLiveMetrics', () => {
     );
 
     expect(measured).toMatchObject({ value: '214', unit: 'yds' });
-    expect(measured.estimated).toBeUndefined();
-    expect(calculated).toMatchObject({ value: '214', estimated: true });
+    expect(measured.status).toBe('calculated');
+    // the integration's bug: a calculated carry on a measured spin was badged estimated
+    expect(calculated).toMatchObject({ value: '214', status: 'calculated' });
   });
 
   it('signs the directional angles and labels the shot shape', () => {
@@ -280,8 +282,8 @@ describe('buildLiveMetrics', () => {
         'imperial',
         emptySwingStats
       );
-      expect(byId(verticalEstimated, 'launch_v').estimated).toBe(true);
-      expect(byId(verticalEstimated, 'launch_h').estimated).toBeUndefined();
+      expect(byId(verticalEstimated, 'launch_v').status).toBe('estimated');
+      expect(byId(verticalEstimated, 'launch_h').status).toBe('measured');
 
       const horizontalEstimated = buildLiveMetrics(
         makeShot({
@@ -294,7 +296,7 @@ describe('buildLiveMetrics', () => {
         'imperial',
         emptySwingStats
       );
-      expect(byId(horizontalEstimated, 'launch_h').estimated).toBe(true);
+      expect(byId(horizontalEstimated, 'launch_h').status).toBe('estimated');
       expect(byId(horizontalEstimated, 'launch_h').confidence).toBe('medium');
     });
 
@@ -380,26 +382,26 @@ describe('buildLiveMetrics', () => {
   it('marks estimated launch and spin with a flag, not provenance subtext', () => {
     const measured = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
     expect(byId(measured, 'launch_v').subtext).toBeUndefined();
-    expect(byId(measured, 'launch_v').estimated).toBeUndefined();
-    expect(byId(measured, 'launch_h').estimated).toBeUndefined();
+    expect(byId(measured, 'launch_v').status).toBe('measured');
+    expect(byId(measured, 'launch_h').status).toBe('measured');
     expect(byId(measured, 'spin').subtext).toBeUndefined();
-    expect(byId(measured, 'spin').estimated).toBeUndefined();
+    expect(byId(measured, 'spin').status).toBe('measured');
 
     const estimated = buildLiveMetrics(
       makeShot({ angle_source: 'estimated', spin_source: 'calculated' }),
       'imperial',
       emptySwingStats
     );
-    expect(byId(estimated, 'launch_v').estimated).toBe(true);
-    expect(byId(estimated, 'launch_h').estimated).toBe(true);
-    expect(byId(estimated, 'spin').estimated).toBe(true);
+    expect(byId(estimated, 'launch_v').status).toBe('estimated');
+    expect(byId(estimated, 'launch_h').status).toBe('estimated');
+    expect(byId(estimated, 'spin').status).toBe('calculated');
     expect(byId(estimated, 'launch_v').subtext).toBeUndefined();
     expect(byId(estimated, 'spin').subtext).toBeUndefined();
   });
 
-  it('flags a spin built on model geometry (D39) like a calculated one', () => {
+  it('labels a spin built on model geometry (D39) model_geometry, not calculated', () => {
     const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
-    expect(byId(modelled, 'spin').estimated).toBe(true);
+    expect(byId(modelled, 'spin').status).toBe('model_geometry');
   });
 
   it('returns the swing-speed set, with ids that never collide with ball-strike ids', () => {
@@ -533,5 +535,68 @@ describe('missing values: one rule, never a unit next to the no-value mark', () 
       expect(metric.value).not.toContain('Infinity');
       if (metric.value === NO_VALUE) expect(metric.unit, metric.id).toBeUndefined();
     }
+  });
+});
+
+describe('buildLiveMetrics with the server labels (Shot.metrics)', () => {
+  const record = (overrides: Partial<ShotMetric>): ShotMetric => ({
+    value: null,
+    unit: 'deg',
+    status: 'not_measured',
+    source: null,
+    range: null,
+    reason: null,
+    frame: null,
+    note: null,
+    normalized: null,
+    ...overrides,
+  });
+
+  it('takes each tile label from the server record', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        metrics: {
+          carry: record({ value: 214, unit: 'yd', status: 'calculated', source: 'Ferguson 2022' }),
+          spin_axis: record({ value: 3.4, status: 'model_geometry', source: 'model geometry (D-plane)' }),
+          smash_factor: record({ value: 1.35, unit: '', status: 'calculated' }),
+        },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'carry').status).toBe('calculated');
+    expect(byId(metrics, 'spin_axis').status).toBe('model_geometry');
+    expect(byId(metrics, 'smash').status).toBe('calculated');
+  });
+
+  it("shows the arc's model-geometry club path when no measured path exists", () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: null,
+        club_angle_deg: null,
+        metrics: {
+          club_path: record({ value: -3.25, status: 'model_geometry', source: 'club_arc:published_prior' }),
+          attack_angle: record({ value: -4.5, status: 'calculated', source: 'club_arc:shot_fit' }),
+        },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path')).toMatchObject({ value: '-3.3', unit: '°', status: 'model_geometry' });
+    expect(byId(metrics, 'club_aoa')).toMatchObject({ value: '-4.5', status: 'calculated' });
+  });
+
+  it('shows why a metric is not measured, compactly', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        carry_status: 'not_measured',
+        carry_spin_adjusted: null,
+        metrics: { carry: record({ unit: 'yd', reason: 'spin not measured on this shot' }) },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'carry')).toMatchObject({ value: NO_VALUE, reason: 'spin not measured on this shot' });
+    expect(byId(metrics, 'carry').status).toBeUndefined();
   });
 });

@@ -44,7 +44,7 @@
   align-items: center;
   gap: 6px;
   margin-top: 0;
-  /* Estimated ≈ is 16px; keep titles the same height without it. */
+  /* Label badges are 16px tall; keep titles the same height without one. */
   min-height: 16px;
   letter-spacing: 0.18em;
   font-size: 0.72rem;
@@ -113,33 +113,19 @@
   gap: 4px;
 }
 
-.metric-card__estimated {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-accent);
-  flex-shrink: 0;
-}
-
-.metric-card__estimated svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  fill: none;
-  stroke-linecap: round;
-}
-
-.metric-card__estimated-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
+/* Why a metric is not measured: at most two short lines, the rest in the title. */
+.metric-card__reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  max-width: 100%;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--color-text-faint);
+  overflow-wrap: anywhere;
 }
 
 .metric-card__unit {

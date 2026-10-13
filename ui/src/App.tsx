@@ -21,6 +21,7 @@ import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
   LivePanel,
+  MetricGroupPanel,
   ProfileNameDialog,
   ProfilesPanel,
   ClearSessionDialog,
@@ -45,10 +46,12 @@ import { isLiveResultCovered } from './utils/liveResultCover';
 import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
 
 import { useI18n } from './i18n/useI18n';
+import { useUnitPreference } from './state/useUnitPreference';
 import './components/panel/panel.css';
 
 function AppContent() {
   const { t } = useI18n();
+  const { unitSystem } = useUnitPreference();
   const { shutdown } = useSocket();
   const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub } = useSystemStore(
     useShallow((state) => ({
@@ -342,6 +345,16 @@ function AppContent() {
             <SimNotSentNotice notSent={simShotNotSent} latestShotTimestamp={profileLatestShot?.timestamp ?? null} />
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
           </>
+        )}
+        {(currentView === 'club' || currentView === 'flight') && (
+          <MetricGroupPanel
+            view={currentView}
+            shot={profileLatestShot}
+            profileName={activeProfileName}
+            clubLabel={activeImplementLabel}
+            unitSystem={unitSystem}
+            headerAction={changeClubAction}
+          />
         )}
         {currentView === 'profiles' && (
           <ProfilesPanel

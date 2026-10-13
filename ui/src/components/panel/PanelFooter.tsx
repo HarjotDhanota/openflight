@@ -28,7 +28,7 @@ interface PanelFooterProps {
   powerStatus?: PowerStatus | null;
 }
 
-const VIEWS_WITH_UNITS: ReadonlySet<PanelView> = new Set(['live', 'stats', 'shots']);
+const VIEWS_WITH_UNITS: ReadonlySet<PanelView> = new Set(['live', 'club', 'flight', 'stats', 'shots']);
 
 /**
  * Bottom bar: menu button, divider-separated panel tabs, and view meta on the

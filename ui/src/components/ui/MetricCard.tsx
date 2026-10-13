@@ -1,6 +1,6 @@
-import type { SpinQuality } from '../../types/shot';
-import { t } from '../../i18n';
+import type { MetricLabel, SpinQuality } from '../../types/shot';
 import { NO_VALUE } from '../../utils/units';
+import { LabelBadge } from './LabelBadge';
 import './MetricCard.css';
 
 export interface MetricCardProps {
@@ -15,8 +15,13 @@ export interface MetricCardProps {
    * the number underneath; the original card leads with the number.
    */
   labelPosition?: 'below' | 'above';
-  /** Modeled value. Shown as an ≈ mark; measured values have no mark. */
-  estimated?: boolean;
+  /**
+   * The value's label (measured / calculated / model geometry / estimated), shown
+   * as a compact badge on the title. Not measured shows `reason` instead.
+   */
+  status?: MetricLabel;
+  /** Why the metric is not measured: one short line under the value. */
+  reason?: string;
   confidence?: SpinQuality | null;
   /** Override confidence copy while preserving its dot level. */
   confidenceLabel?: string;
@@ -24,18 +29,6 @@ export interface MetricCardProps {
   onClick?: () => void;
   /** Marks an interactive card as the currently promoted one (`aria-pressed`). */
   selected?: boolean;
-}
-
-export function EstimatedMark() {
-  return (
-    <span className="metric-card__estimated" title={t('metric.estimated')}>
-      <svg viewBox="0 0 16 10" aria-hidden="true">
-        <path d="M1 3.1c2.2-1.6 4.4 1.6 6.6 0s4.4-1.6 6.6 0" />
-        <path d="M1 7.4c2.2-1.6 4.4 1.6 6.6 0s4.4-1.6 6.6 0" />
-      </svg>
-      <span className="metric-card__estimated-label">{t('metric.estimated')}</span>
-    </span>
-  );
 }
 
 export function MetricCard({
@@ -50,7 +43,8 @@ export function MetricCard({
   confidenceLabel,
   onClick,
   selected,
-  estimated,
+  status,
+  reason,
 }: MetricCardProps) {
   const classes = ['metric-card', `metric-card--${variant}`, `metric-card--label-${labelPosition}`];
   if (size === 'hero') {
@@ -66,11 +60,16 @@ export function MetricCard({
   const label_ = (
     <span className="metric-card__label">
       {label}
-      {estimated ? <EstimatedMark /> : null}
+      <LabelBadge status={status} compact />
     </span>
   );
   const meta = (
     <>
+      {reason ? (
+        <span className="metric-card__reason" title={reason}>
+          {reason}
+        </span>
+      ) : null}
       {subtext ? <span className="metric-card__subtext metric-card__confidence-label">{subtext}</span> : null}
       {confidence ? (
         <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>

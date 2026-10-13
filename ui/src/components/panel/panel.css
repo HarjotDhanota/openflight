@@ -360,6 +360,13 @@
   white-space: nowrap;
 }
 
+/* A phone has no room for the units beside eight tabs; the panels name their units. */
+@media (max-width: 560px) {
+  .panel-footer__units {
+    display: none;
+  }
+}
+
 .panel-footer__units:not(:last-child) {
   padding-right: 0.9vw;
   border-right: 1px solid var(--color-border);

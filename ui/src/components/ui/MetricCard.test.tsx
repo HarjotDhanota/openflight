@@ -39,18 +39,32 @@ describe('MetricCard', () => {
     expect(html).toContain('metric-card__confidence-label">experimental<');
   });
 
-  it('shows an estimated mark on the title, not beside the value', () => {
+  it('shows the label badge on the title, not beside the value', () => {
     const estimated = renderToString(
-      <MetricCard value="8.9" unit="°" label="V. launch" labelPosition="above" estimated />
+      <MetricCard value="8.9" unit="°" label="V. launch" labelPosition="above" status="estimated" />
     );
     const labelIdx = estimated.indexOf('metric-card__label');
-    const markIdx = estimated.indexOf('metric-card__estimated');
+    const markIdx = estimated.indexOf('label-badge--estimated');
     const valueIdx = estimated.indexOf('metric-card__value-row');
     expect(markIdx).toBeGreaterThan(labelIdx);
     expect(markIdx).toBeLessThan(valueIdx);
+  });
 
-    const measured = renderToString(<MetricCard value="140.7" unit="mph" label="Ball speed" />);
-    expect(measured).not.toContain('metric-card__estimated');
+  it('gives the four labels four distinct badges and not measured none', () => {
+    const badges = (['measured', 'calculated', 'model_geometry', 'estimated'] as const).map((status) =>
+      renderToString(<MetricCard value="1.0" label="Metric" labelPosition="above" status={status} />)
+    );
+    badges.forEach((html, index) => {
+      const status = ['measured', 'calculated', 'model_geometry', 'estimated'][index];
+      expect(html).toContain(`label-badge--${status}`);
+      expect(html).toContain(`data-label="${status}"`);
+    });
+    const notMeasured = renderToString(
+      <MetricCard value="—" label="Carry" labelPosition="above" status="not_measured" reason="spin not measured" />
+    );
+    expect(notMeasured).not.toContain('label-badge');
+    expect(notMeasured).toContain('metric-card__reason');
+    expect(notMeasured).toContain('spin not measured');
   });
 
   it('always reserves a meta slot on label-above tiles so values share a row', () => {

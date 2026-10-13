@@ -1,0 +1,124 @@
+/*
+ * Club and Flight panels: every metric in a hairline grid of compact cells.
+ * The body scrolls when a group does not fit (800×400 kiosk, phones).
+ */
+.metric-groups {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.metric-group__title {
+  margin: 0 0 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.metric-group__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.25rem, 1fr));
+  /* hairlines from each cell's outline, so a short last row leaves no grey block */
+  gap: 1px;
+  padding: 1px;
+}
+
+.metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px 8px;
+  background: var(--color-surface);
+  outline: 1px solid var(--color-border);
+}
+
+.metric-cell__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.metric-cell__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* the label badge leads the line under the value, leaving the name its full width */
+.metric-cell__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  min-width: 0;
+}
+
+.metric-cell__value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.metric-cell--not_measured .metric-cell__value {
+  color: var(--color-text-faint);
+}
+
+.metric-cell__unit {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.metric-cell__detail,
+.metric-cell__reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+}
+
+.metric-cell__reason {
+  color: var(--color-text-faint);
+}
+
+.metric-groups__legend {
+  margin: 2px 0 0;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  color: var(--color-text-faint);
+}
+
+@media (max-height: 500px) {
+  .metric-cell {
+    padding: 5px 7px 6px;
+    gap: 2px;
+  }
+
+  .metric-cell__value {
+    font-size: 1.2rem;
+  }
+}
