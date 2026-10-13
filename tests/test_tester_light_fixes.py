@@ -6,11 +6,15 @@ Each test names the audit section it pins.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 import numpy as np
 
 from openflight.camera import tester_server as ts
 from tests.test_tester_server import _guided_camera, _guided_patch, _guided_result
+
+# the flow tests' ``inputs`` fixture, registered under its own name
+from tests.test_tester_tee_range_flow import inputs as flow_inputs  # noqa: F401
 
 
 def _locked_controller(monkeypatch, pose, estimate=None):
@@ -183,7 +187,7 @@ class TestLightIsKeyedByLens:
         state = {
             "gain": 12.0,
             "gain_at_300_equivalent": 12.0,
-            "gain_screened_at": (now - ts.timedelta(days=12)).isoformat(),
+            "gain_screened_at": (now - timedelta(days=12)).isoformat(),
             "gain_lens_id": "6mm",
         }
 
@@ -210,3 +214,87 @@ class TestLightIsKeyedByLens:
 
         assert age["stale"] is True
         assert "another lens" in age["prompt"]
+
+
+class TestSaveRunsOutsideTheRequestLock:
+    """§5: the POST took 20.4 s holding tee_range_lock; GET placement-box queued 19.8 s."""
+
+    def test_page_requests_are_answered_while_the_save_searches(
+        self,
+        tmp_path,
+        inputs,
+        monkeypatch,
+    ):
+        import threading  # noqa: PLC0415
+        import time  # noqa: PLC0415
+
+        from tests.test_tester_tee_range_flow import app_for, phase, post, start_arm5  # noqa
+
+        app, tester = app_for(tmp_path, inputs, monkeypatch)
+        client = app.test_client()
+        start_arm5(client, tester)
+        searching, release = threading.Event(), threading.Event()
+        original = ts.StaticExposureController.analyze_for_save
+
+        def slow_save(self, *args, **kwargs):
+            searching.set()
+            assert release.wait(10.0)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(ts.StaticExposureController, "analyze_for_save", slow_save)
+        saved = {}
+        worker = threading.Thread(
+            target=lambda: saved.update(
+                response=post(app.test_client(), tester, "evaluate_camera_arm5", "slow-save")
+            )
+        )
+        worker.start()
+        assert searching.wait(10.0)
+
+        started = time.monotonic()
+        box = app.test_client().get("/api/tester/placement-box", query_string={"tester_id": tester})
+        during = phase(app.test_client(), tester)
+        waited_s = time.monotonic() - started
+        release.set()
+        worker.join(20.0)
+
+        assert box.status_code == 200
+        assert waited_s < 3.0
+        # a page refresh during the search leaves the step as it was
+        assert during["phase"] == "camera_arm5_capturing"
+        assert saved["response"].status_code == 200, saved["response"].get_json()
+
+    def test_a_second_save_while_one_searches_is_refused(
+        self,
+        tmp_path,
+        inputs,
+        monkeypatch,
+    ):
+        import threading  # noqa: PLC0415
+
+        from tests.test_tester_tee_range_flow import app_for, post, start_arm5  # noqa
+
+        app, tester = app_for(tmp_path, inputs, monkeypatch)
+        client = app.test_client()
+        start_arm5(client, tester)
+        searching, release = threading.Event(), threading.Event()
+        original = ts.StaticExposureController.analyze_for_save
+
+        def slow_save(self, *args, **kwargs):
+            searching.set()
+            assert release.wait(10.0)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(ts.StaticExposureController, "analyze_for_save", slow_save)
+        worker = threading.Thread(
+            target=lambda: post(app.test_client(), tester, "evaluate_camera_arm5", "first")
+        )
+        worker.start()
+        assert searching.wait(10.0)
+
+        second = post(app.test_client(), tester, "evaluate_camera_arm5", "second")
+        release.set()
+        worker.join(20.0)
+
+        assert second.status_code == 409
+        assert "already running" in second.get_json()["error"]

@@ -1631,7 +1631,13 @@ class TestGuidedRangeAnalyzer:
         assert reason is None
         # the live looks followed the ball; Save searched the whole patch again
         assert "roi" in calls[-2]
-        assert calls[-1] == {"search": patch, "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0}
+        # the whole patch's disk pass, fitting the stable ball and its close rivals (13 Oct)
+        assert calls[-1] == {
+            "search": patch,
+            "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "confirm_anchor": {"x_px": 160.0, "y_px": 140.0, "diameter_px": 14.0},
+        }
+        assert analysis["save_search"] == "anchor_plus_close_rivals"
         assert analysis["analysis_role"] == "independent_save_confirmation"
         assert analysis["independent"] is True
         assert analysis["promotion_eligible"] is True

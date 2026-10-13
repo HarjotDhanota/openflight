@@ -105,6 +105,12 @@ def _brighter_all_round(
     image: np.ndarray, row: int, col: int, radius: float, margin: float
 ) -> bool:
     """Whether the middle outshines the ring around it in at least six of eight directions."""
+    # only the window the ring reaches is read: the same pixels, without building
+    # index grids over the whole picture for every seed (13 Oct Save speed)
+    reach = int(math.ceil(2.3 * radius)) + 1
+    top, left = max(0, row - reach), max(0, col - reach)
+    image = image[top : row + reach + 1, left : col + reach + 1]
+    row, col = row - top, col - left
     yy, xx = np.indices(image.shape)
     distance = np.hypot(xx - col, yy - row)
     middle = image[distance <= 0.7 * radius]
@@ -126,6 +132,15 @@ BALL_CANDIDATES = 6
 # The resting-ball range search fits at most this many places, merged over
 # every size it tries; each lit-sphere fit costs a few tenths of a second.
 REFERENCE_SEED_FITS = 8
+# The setup Save confirms the stable live ball instead of re-searching (13 Oct light
+# audit section 5: 16.5-18.2 s on the Pi): the disk pass still covers the whole box,
+# then only the ball at its held size and seeds scoring at least this share of the
+# ball's own disk score (its rivals) are fitted, each from one size start.
+CONFIRM_RIVAL_FRACTION = 0.8
+# The most seeds the confirm search weighs as rivals (each is a cheap disk check), and
+# the most rivals it fits: the strongest by disk score, which decide an ambiguity.
+CONFIRM_MAX_SEEDS = 64
+CONFIRM_MAX_RIVALS = 3
 # A ball's shaded underside can sit within a few DN of the carpet it rests on,
 # however bright its top: the ring need only be darker by more than the noise.
 ALL_ROUND_MARGIN_NOISE = 3.0
@@ -249,8 +264,16 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
     seed_filter: SeedFilter | None = None,
     max_fits: int = REFERENCE_SEED_FITS,
     hold_diameter_px: float | None = None,
+    confirm_anchor: tuple[float, float, float] | None = None,
+    rival_fraction: float = CONFIRM_RIVAL_FRACTION,
 ) -> list[ReferenceBall]:
     """Enumerate distinct lit-sphere fits over a caller-supplied size range.
+
+    ``confirm_anchor`` (x, y, diameter in pixels: a ball already found and held
+    still) switches to confirming it: the anchor is fitted at its held size, and
+    every other seed whose disk score is at least ``rival_fraction`` of the anchor's
+    is fitted from one size start at the size it matched. A rival is still found,
+    so an ambiguous box still reads ambiguous.
 
     The cheap disk filter runs at every size; its peaks from all sizes are
     merged first, so each place in the picture is fitted once, at the size it
@@ -312,21 +335,54 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
     # an edge, like a door's foot over the gap beneath it, scores along its
     # whole length; a ball is brighter than its surroundings all round
     margin = ALL_ROUND_MARGIN_NOISE * picture_noise / factor
-    kept: list[tuple[float, float, float]] = []
-    for _score, x, y, radius, row, col in sorted(seeds, key=lambda item: item[0], reverse=True):
-        if any(math.hypot(x - kx, y - ky) <= max(radius, kr) for kx, ky, kr in kept):
+    cap = CONFIRM_MAX_SEEDS if confirm_anchor is not None else max_fits
+    kept: list[tuple[float, float, float, float]] = []
+    for score, x, y, radius, row, col in sorted(seeds, key=lambda item: item[0], reverse=True):
+        if any(math.hypot(x - kx, y - ky) <= max(radius, kr) for _ks, kx, ky, kr in kept):
             continue
         if not _brighter_all_round(coarse, row, col, radius / factor, margin):
             continue
-        kept.append((x, y, radius))
-        if len(kept) >= max_fits:
+        kept.append((score, x, y, radius))
+        if len(kept) >= cap:
             break
 
+    held = hold_diameter_px / 2.0 if hold_diameter_px is not None else None
+    # (x, y, start radius, held radius, size starts, extra light starts)
+    targets: list[tuple[float, float, float, float | None, tuple[float, ...] | None, bool]]
+    if confirm_anchor is None:
+        targets = [(x, y, held or radius, held, None, True) for _score, x, y, radius in kept]
+    else:
+        ax, ay, adiameter = (float(value) for value in confirm_anchor)
+        aradius = adiameter / 2.0
+        near = [
+            item for item in kept if math.hypot(item[1] - ax, item[2] - ay) <= max(aradius, item[3])
+        ]
+        anchor_score = max((item[0] for item in near), default=None)
+        others = [item for item in kept if item not in near]
+        rivals = (
+            [item for item in others if item[0] >= rival_fraction * anchor_score][
+                :CONFIRM_MAX_RIVALS
+            ]
+            if anchor_score is not None
+            # the disk pass did not see the anchor: weigh the strongest seeds as before
+            else others[:max_fits]
+        )
+        # the anchor's centre and size come from an earlier fit: one start, its lean
+        targets = [(ax, ay, aradius, aradius, None, False)] + [
+            (x, y, radius, None, (1.0,), True) for _score, x, y, radius in rivals
+        ]
+
     found: list[tuple[float, ReferenceBall]] = []
-    for x, y, radius in kept:
-        held = hold_diameter_px / 2.0 if hold_diameter_px is not None else None
+    for x, y, start_radius, held_radius, starts, extra_lights in targets:
         fit = fit_lit_ball(
-            image, x, y, held or radius, noise_dn=picture_noise, expected_radius=held
+            image,
+            x,
+            y,
+            start_radius,
+            noise_dn=picture_noise,
+            expected_radius=held_radius,
+            **({"size_starts": starts} if starts is not None else {}),
+            **({} if extra_lights else {"extra_light_starts": False}),
         )
         if fit is None:
             continue

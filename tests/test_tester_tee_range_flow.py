@@ -1124,6 +1124,8 @@ def test_the_camera_never_uses_the_radar_while_it_searches(tmp_path, inputs, mon
         "expected_diameter_range_px",
         "max_fits",
         "hold_diameter_px",
+        # the Save confirms the camera's own stable ball (13 Oct light audit section 5)
+        "confirm_anchor",
     }
     assert {width for width, _keys in seen} == {1280}
     assert all(set(keys) <= allowed for _width, keys in seen)

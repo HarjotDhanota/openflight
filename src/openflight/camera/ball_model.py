@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 from scipy import ndimage, optimize
@@ -142,8 +143,16 @@ def fit_lit_ball(
     noise_dn: float = 2.5,
     expected_radius: float | None = None,
     size_tolerance: float = 0.01,
+    size_starts: Sequence[float] | None = None,
+    extra_light_starts: bool = True,
 ) -> LitBall | None:
     """Fit a lit sphere near (x, y); ``expected_radius`` holds its size.
+
+    ``size_starts`` are the free size's starting points, as fractions of ``radius``:
+    three by default; one, (1.0,), when the seed's own matched size is trusted (the
+    setup Save's confirm search, 13 Oct light audit section 5). ``extra_light_starts``
+    False starts the light only from its measured lean: for a centre an earlier fit
+    already placed, where the lean cannot point the wrong way.
 
     On a real ball in room light the size is not in the pixels: the shaded
     side meets its own shadow with no edge, and a glossy, dimpled ball with a
@@ -164,6 +173,8 @@ def fit_lit_ball(
             noise_dn=noise_dn / 2,
             expected_radius=expected_radius / 2 if expected_radius else None,
             size_tolerance=size_tolerance,
+            size_starts=size_starts,
+            extra_light_starts=extra_light_starts,
         )
         if fit is None:
             return None
@@ -219,11 +230,13 @@ def fit_lit_ball(
         return (_render(params, yy, xx) - patch)[use] / noise_dn
 
     best = None
-    sizes = (1.0,) if expected_radius else (0.85, 1.0, 1.2)
+    sizes = (1.0,) if expected_radius else tuple(size_starts or (0.85, 1.0, 1.2))
     # the lean can point the wrong way when the seed sits off the ball's centre,
     # so the fit also starts from the upper left and the upper right
     lights = [azimuth] + [
-        math.radians(a) for a in (225.0, 315.0) if abs(math.degrees(azimuth) - a) > 30.0
+        math.radians(a)
+        for a in (225.0, 315.0)
+        if extra_light_starts and abs(math.degrees(azimuth) - a) > 30.0
     ]
     for start_r, start_az in (
         (float(np.clip(s * guess, low_r * 1.01, high_r * 0.99)), az) for s in sizes for az in lights

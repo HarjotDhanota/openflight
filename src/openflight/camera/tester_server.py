@@ -4070,13 +4070,17 @@ def _guided_camera_analysis(
     *,
     analysis_role: str = "live_preview",
     follow: Mapping | None = None,
+    confirm: Mapping | None = None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
     """Look for the resting ball inside the patch, and nowhere else (P8-2).
 
     The search never uses the radar: its range is paired with the camera's only
     after both finish (P8-4). ``follow`` (a previous live selection) narrows a
     live look to that ball's neighbourhood and size; Save never follows and
-    always searches the whole patch.
+    always runs the disk pass over the whole patch. ``confirm`` (the stable live
+    ball) makes the Save fit only that ball at its held size and its close rivals,
+    not the eight strongest seeds three sizes each: ~1 s on the Pi instead of
+    ~18 s, and a rival is still found (13 Oct light audit section 5).
     """
     if analysis_role not in {"live_preview", "independent_save_confirmation"}:
         raise ValueError("unknown guided camera analysis role")
@@ -4102,6 +4106,11 @@ def _guided_camera_analysis(
         # at the size the whole-patch search measured, so looks stay comparable
         kwargs["max_fits"] = 1
         kwargs["hold_diameter_px"] = diameter
+    confirming = confirm is not None and analysis_role == "independent_save_confirmation"
+    if confirming:
+        kwargs["confirm_anchor"] = {
+            key: float(confirm[key]) for key in ("x_px", "y_px", "diameter_px")
+        }
     started_at = time.perf_counter()
     result = _run_ball_search(frames, camera, kwargs)
     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -4111,6 +4120,7 @@ def _guided_camera_analysis(
         "method": "camera_patch_size_range_v1",
         "analysis_role": analysis_role,
         "discovery_mode": "follow_last_selection" if following else "whole_patch",
+        "save_search": "anchor_plus_close_rivals" if confirming else None,
         "independent": True,
         "promotion_eligible": False,
         "promotion_rejection_reason": "independent Save confirmation has not completed",
@@ -4388,6 +4398,7 @@ class GuidedRangeAnalyzer:
             self.camera,
             self.patch,
             analysis_role="independent_save_confirmation",
+            confirm=stable,
         )
         if not prior or not prior.get("save_eligible"):
             reason = "provisional camera selection is not temporally stable"
@@ -6991,6 +7002,9 @@ def create_app(
     if qualification is None and tee_range_qualification is not None:
         logger.warning("Tee-range qualification unavailable: %s", qualification_reason)
     tee_range_lock = threading.RLock()
+    # setup Saves whose search is running outside tee_range_lock (13 Oct)
+    saves_lock = threading.Lock()
+    saves_in_progress: set[tuple[str, str, str]] = set()
     live_owner_lock = threading.RLock()
 
     def unit_camera_tilt() -> dict | None:
@@ -8832,41 +8846,103 @@ def create_app(
         return state
 
     def _evaluate_camera_range(tester_id: str, arm_id: str, request_id: str):
-        store = range_store(tester_id)
-        state = _range_state(tester_id)
-        expected = f"camera_{arm_id}_capturing"
-        if state is None or state.phase != expected:
-            raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
-        if request_id in state.request_ids:
-            return state
-        if not guided_live_matches(tester_id, state.epoch_id, arm_id):
-            raise RuntimeError(f"camera {arm_id} is no longer owned by this guided range capture")
-        with live_owner_lock:
-            analyzer = guided_analyzer["value"]
-        if analyzer is None:
-            raise RuntimeError(f"camera {arm_id} has no guided camera-only analyzer")
-        readiness = analyzer.snapshot()
-        if not readiness or not readiness.get("save_eligible"):
-            reason = (readiness or {}).get("readiness_reason") or "camera analysis is warming up"
-            raise RuntimeError(f"camera {arm_id} is not ready to save: {reason}")
-        capture_context = live.capture_context_snapshot()
-        if capture_context.get("analyzer") is not analyzer:
-            raise RuntimeError(f"camera {arm_id} guided analyzer context changed")
-        if not capture_context.get("running") or capture_context.get("error"):
-            raise RuntimeError(
-                f"camera {arm_id} is not healthy: "
-                f"{capture_context.get('error') or 'live view stopped'}"
+        """Save the camera step: the whole-patch confirmation runs outside the request lock.
+
+        The Save's search took 16.5-18.2 s on the Pi under ``tee_range_lock``, and every
+        page request (placement box, aim point) queued behind it for up to 20 s (13 Oct
+        light audit section 5). The checks and the evidence are written under the lock;
+        the search between them is not, and the state must be unchanged when it ends.
+        """
+        with tee_range_lock:
+            state = _range_state(tester_id)
+            expected = f"camera_{arm_id}_capturing"
+            if state is None or state.phase != expected:
+                raise RuntimeError(f"tee-range setup is {state.phase if state else 'not_started'}")
+            if request_id in state.request_ids:
+                return state
+            if not guided_live_matches(tester_id, state.epoch_id, arm_id):
+                raise RuntimeError(
+                    f"camera {arm_id} is no longer owned by this guided range capture"
+                )
+            with live_owner_lock:
+                analyzer = guided_analyzer["value"]
+            if analyzer is None:
+                raise RuntimeError(f"camera {arm_id} has no guided camera-only analyzer")
+            readiness = analyzer.snapshot()
+            if not readiness or not readiness.get("save_eligible"):
+                reason = (readiness or {}).get(
+                    "readiness_reason"
+                ) or "camera analysis is warming up"
+                raise RuntimeError(f"camera {arm_id} is not ready to save: {reason}")
+            capture_context = live.capture_context_snapshot()
+            if capture_context.get("analyzer") is not analyzer:
+                raise RuntimeError(f"camera {arm_id} guided analyzer context changed")
+            if not capture_context.get("running") or capture_context.get("error"):
+                raise RuntimeError(
+                    f"camera {arm_id} is not healthy: "
+                    f"{capture_context.get('error') or 'live view stopped'}"
+                )
+            shown_arm = capture_context.get("arm")
+            frames = capture_context.get("frames")
+            applied_controls = capture_context.get("applied_controls") or ()
+            frame_sequence = capture_context.get("frame_sequence")
+            latest_frame_at = capture_context.get("latest_frame_at")
+            if shown_arm != ARMS[arm_id] or frames is None:
+                raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
+            if latest_frame_at is None or time.monotonic() - latest_frame_at > LIVE_FRAME_STALE_S:
+                raise RuntimeError(f"camera {arm_id} latest frame is stale")
+            frame_age_at_save_start_ms = max(0.0, (time.monotonic() - latest_frame_at) * 1000.0)
+            pressed_on = state
+        save_key = (tester_id, pressed_on.epoch_id, arm_id)
+        with saves_lock:
+            if save_key in saves_in_progress:
+                raise RuntimeError(f"camera {arm_id} Save is already running")
+            saves_in_progress.add(save_key)
+        analysis_error = None
+        outcome = None
+        try:
+            outcome = analyzer.analyze_for_save(frames, frame_sequence, applied_controls)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            analysis_error = exc
+        finally:
+            with saves_lock:
+                saves_in_progress.discard(save_key)
+        with tee_range_lock:
+            return _record_camera_save(
+                tester_id,
+                arm_id,
+                request_id,
+                pressed_on,
+                analyzer=analyzer,
+                readiness=readiness,
+                capture_context=capture_context,
+                frames=frames,
+                frame_sequence=frame_sequence,
+                frame_age_at_save_start_ms=frame_age_at_save_start_ms,
+                outcome=outcome,
+                analysis_error=analysis_error,
             )
-        shown_arm = capture_context.get("arm")
-        frames = capture_context.get("frames")
-        applied_controls = capture_context.get("applied_controls") or ()
-        frame_sequence = capture_context.get("frame_sequence")
-        latest_frame_at = capture_context.get("latest_frame_at")
-        if shown_arm != ARMS[arm_id] or frames is None:
-            raise RuntimeError(f"camera {arm_id} does not have a stable frame yet")
-        if latest_frame_at is None or time.monotonic() - latest_frame_at > LIVE_FRAME_STALE_S:
-            raise RuntimeError(f"camera {arm_id} latest frame is stale")
-        frame_age_at_save_start_ms = max(0.0, (time.monotonic() - latest_frame_at) * 1000.0)
+
+    def _record_camera_save(  # pylint: disable=too-many-arguments,too-many-locals
+        tester_id: str,
+        arm_id: str,
+        request_id: str,
+        pressed_on,
+        *,
+        analyzer,
+        readiness,
+        capture_context,
+        frames,
+        frame_sequence,
+        frame_age_at_save_start_ms,
+        outcome,
+        analysis_error,
+    ):
+        """The Save's evidence and outcome, written under the lock once its search ended."""
+        store = range_store(tester_id)
+        state = store.load()
+        if state is None or state.sequence != pressed_on.sequence:
+            raise RuntimeError("the setup changed while Save was searching; press Save again")
         state = store.transition(
             state,
             phase=f"camera_{arm_id}_evaluating",
@@ -8898,9 +8974,9 @@ def create_app(
             if not frame_path.exists():
                 atomic_write(frame_path, frame_bytes)
             frame_sha256 = hashlib.sha256(frame_bytes).hexdigest()
-            result, save_analysis, unsafe_reason = analyzer.analyze_for_save(
-                frames, frame_sequence, applied_controls
-            )
+            if analysis_error is not None:
+                raise analysis_error
+            result, save_analysis, unsafe_reason = outcome
             save_analysis["input_identity"] = {
                 **save_analysis["input_identity"],
                 "epoch_id": state.epoch_id,
@@ -9234,6 +9310,32 @@ def create_app(
         )
         return _finalize_range_state(store, completed)
 
+    def _camera_save_route(tester_id: str, payload: Mapping):
+        """The camera step's Save: checked under the lock, searched outside it."""
+        request_id = str(payload.get("request_id", "")).strip()
+        if not request_id or len(request_id) > 128:
+            raise ValueError("request_id is required and must be at most 128 characters")
+        with tee_range_lock:
+            state = range_store(tester_id).load()
+            if state is not None and request_id in state.request_ids:
+                bound_range_setup(tester_id, state, "idempotent_evaluate_camera_arm5")
+                return jsonify({"state": state.to_dict(), "idempotent": True})
+            bound_range_setup(tester_id, state, "evaluate_camera_arm5")
+        state = _evaluate_camera_range(tester_id, "arm5", request_id)
+        with tee_range_lock:
+            if not (state.phase.startswith("camera_") and state.phase.endswith("_capturing")):
+                stop_guided_live(tester_id)
+            return jsonify(
+                {
+                    "state": state.to_dict(),
+                    "display": tee_range_display(
+                        state.to_dict(),
+                        use_unqualified=use_unqualified_tee_range,
+                        placement_box=placement_box_display(state),
+                    ),
+                }
+            )
+
     @app.route("/api/tester/tee-range", methods=["GET", "POST"])
     def guided_tee_range():
         payload = request.get_json(silent=True) if request.method == "POST" else request.args
@@ -9243,7 +9345,12 @@ def create_app(
         tester_id = str(payload.get("tester_id", "")).strip()
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
+        request_id = str(payload.get("request_id", "")).strip()
         try:
+            if request.method == "POST" and payload.get("action") == "evaluate_camera_arm5":
+                # the Save's search runs outside tee_range_lock so page requests never
+                # queue behind it (13 Oct light audit section 5)
+                return _camera_save_route(tester_id, payload)
             with tee_range_lock:
                 if request.method == "GET":
                     state = _range_state(tester_id)
@@ -9320,9 +9427,6 @@ def create_app(
                 elif action == "start_camera_arm5":
                     bound_range_setup(tester_id, state, action)
                     state = _start_camera_range(tester_id, "arm5", request_id)
-                elif action == "evaluate_camera_arm5":
-                    bound_range_setup(tester_id, state, action)
-                    state = _evaluate_camera_range(tester_id, "arm5", request_id)
                 elif action == "skip_camera_arm6":
                     bound_range_setup(tester_id, state, action)
                     state = _skip_camera_arm6(tester_id, request_id)

@@ -957,17 +957,52 @@ def _patch_candidate(  # pylint: disable=too-many-locals
     )
 
 
-def _patch_seed_filter(search):
-    """Seeds whose centre lies in the patch outline, give or take the coarse grid."""
+# With the unit's camera tilt calibrated, a seed is fitted only when its disk size is
+# within this factor of the size a ball at its row has (13 Oct light audit section 5:
+# a 172 px seed at row 427 was fitted though no ball at that row is that size). The
+# disk pass steps its sizes about 23 % apart, so this keeps every real ball.
+SEED_ROW_SIZE_FACTOR = 1.6
+
+
+def tilt_is_calibrated(camera: BallPlaneCamera) -> bool:
+    """Whether this model's pitch carries the unit's calibrated camera tilt (P8-5)."""
+    offset = camera.vertical_offset
+    return isinstance(offset, Mapping) and offset.get("status") == "calibrated"
+
+
+def expected_diameters_at_rows(
+    camera: BallPlaneCamera, xs: np.ndarray, ys: np.ndarray, ball_center_height_m: float
+) -> np.ndarray:
+    """The diameter a resting ball has at each pixel's floor point; NaN off the floor."""
+    pixels = np.column_stack([np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)])
+    rays = np.asarray(camera.ray_model.rays(pixels), dtype=float).reshape(-1, 3)
+    origin = np.asarray(camera.camera_origin_lfu, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        distance = (float(ball_center_height_m) - origin[2]) / rays[:, 2]
+        expected = camera.focal_size_px * GOLF_BALL_DIAMETER_M / distance
+    return np.where((rays[:, 2] < 0.0) & (distance > 0.0), expected, np.nan)
+
+
+def _patch_seed_filter(search, camera=None, ball_center_height_m=None):
+    """Seeds whose centre lies in the patch outline, give or take the coarse grid,
+    and, once the camera tilt is calibrated, whose size suits a ball at their row."""
     from openflight.camera.ground_patch import points_in_polygon  # noqa: PLC0415
 
     margin = PATCH_SEED_MARGIN_PX
     shifts = ((0.0, 0.0), (margin, 0.0), (-margin, 0.0), (0.0, margin), (0.0, -margin))
+    by_row = camera is not None and ball_center_height_m is not None and tilt_is_calibrated(camera)
 
-    def allowed(xs: np.ndarray, ys: np.ndarray, _diameter: float) -> np.ndarray:
+    def allowed(xs: np.ndarray, ys: np.ndarray, diameter: float) -> np.ndarray:
         inside = np.zeros(np.shape(xs), dtype=bool)
         for dx, dy in shifts:
             inside |= points_in_polygon(np.asarray(xs) + dx, np.asarray(ys) + dy, search.outline_px)
+        if by_row and np.any(inside):
+            expected = expected_diameters_at_rows(camera, xs, ys, ball_center_height_m)
+            with np.errstate(invalid="ignore"):
+                fits = (diameter >= expected / SEED_ROW_SIZE_FACTOR) & (
+                    diameter <= expected * SEED_ROW_SIZE_FACTOR
+                )
+            inside &= np.asarray(fits, dtype=bool)
         return inside
 
     return allowed
@@ -983,11 +1018,15 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     expected_diameter_range_px: tuple[float, float] | None = None,
     max_fits: int = REFERENCE_SEED_FITS,
     hold_diameter_px: float | None = None,
+    confirm_anchor: Mapping[str, Any] | None = None,
 ) -> ReferenceBallRangeResult:
     """Find the resting ball inside the patch (``search``, a ``PatchSearch``).
 
     There is no search outside the patch. ``roi`` and ``expected_diameter_range_px``
     only narrow it further (a live look following the ball it found).
+    ``confirm_anchor`` (the stable live ball's x_px, y_px, diameter_px) makes it the
+    setup Save's confirm search: the whole patch's disk pass, then the ball at its
+    held size and only its close rivals fitted (13 Oct light audit section 5).
     """
     if frames.ndim != 3 or frames.shape[1:] != (
         camera.image_height_px,
@@ -1015,6 +1054,12 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
         "roi_px": list(region) if region is not None else None,
         "diameter_search_px": [float(smallest), float(largest)],
         "floor_row": "diagnostic_only_until_the_camera_tilt_is_calibrated",
+        "seed_size_by_row": (
+            "calibrated_tilt" if tilt_is_calibrated(camera) else "not_used_tilt_uncalibrated"
+        ),
+        "save_search": (
+            "anchor_plus_close_rivals" if confirm_anchor is not None else "strongest_seeds"
+        ),
     }
     if region is None or not 0.0 < smallest < largest:
         return ReferenceBallRangeResult(
@@ -1029,9 +1074,18 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
         frames,
         expected_diameters_px=diameters,
         roi=region,
-        seed_filter=_patch_seed_filter(search),
+        seed_filter=_patch_seed_filter(search, camera, ball_center_height_m),
         max_fits=max_fits,
         hold_diameter_px=hold_diameter_px,
+        confirm_anchor=(
+            (
+                float(confirm_anchor["x_px"]),
+                float(confirm_anchor["y_px"]),
+                float(confirm_anchor["diameter_px"]),
+            )
+            if confirm_anchor is not None
+            else None
+        ),
     )
     candidates = tuple(
         _patch_candidate(ball, camera, ball_center_height_m, search) for ball in observed
