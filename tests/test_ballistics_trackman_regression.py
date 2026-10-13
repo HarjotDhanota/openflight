@@ -69,19 +69,35 @@ TRACKMAN_CSV = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 #   pitching wedge   3.43   +3.18       3.73   +3.47
 #   OVERALL          2.31   +1.39       2.60   +1.72
 #
+# E8a (flight-fit-v1): Ferguson's form with its seven constants refitted to TM4's
+# normalized exports on carry, apex, landing angle and hang time jointly (this
+# capture plus Robinante's public 43-shot session; see
+# ballistics.FLIGHT_FIT_V1.calibration). Ratcheted DOWN. NOTE: this capture is
+# part of the fit, so these numbers are in-sample; the held-out numbers (pooled
+# 10-fold, leave-one-out, leave-one-source-out) are in the calibration record
+# and docs/how-it-works/ballistics.md.
+#
+#                    + C7 (Ferguson)     flight-fit-v1
+#   club            rmse     bias       rmse    bias
+#   7-iron           2.25   +2.20       0.39   -0.24
+#   driver           1.54   -0.34       1.19   -0.04
+#   pitching wedge   3.73   +3.47       1.64   -1.62
+#   OVERALL          2.60   +1.72       1.14   -0.57
+#
 # Ceilings sit slightly above the measured values to absorb float/platform
 # drift. Lower them again if the model improves; never raise them without a
 # stated, deliberate change of reference (as above).
 RMSE_BUDGET_YARDS = {
-    "driver": 1.6,
-    "7-iron": 2.3,
-    "pitching wedge": 4.0,
+    "driver": 1.25,
+    "7-iron": 0.45,
+    "pitching wedge": 1.7,
 }
-OVERALL_RMSE_BUDGET_YARDS = 2.7
+OVERALL_RMSE_BUDGET_YARDS = 1.2
 
 # Apex ceilings in FEET (TrackMan's "Max Height - Height" column is feet).
-# Apex is the strongest evidence the quadratic form is right: nothing was ever
-# fitted against it, so the improvement is out-of-sample.
+# Until E8a nothing was fitted against apex, so the Hill -> quadratic improvement
+# below was out-of-sample. Since flight-fit-v1 apex is a fit target and this
+# capture is in the fit: the E8a row is in-sample.
 #
 #   club            Hill (#229)   quadratic
 #   7-iron            18.15         1.53
@@ -91,15 +107,48 @@ OVERALL_RMSE_BUDGET_YARDS = 2.7
 #
 #   + C4 and C7 (RH 50 %): driver 4.08, 7-iron 1.74, PW 2.77, overall 2.99
 #   (driver and overall budgets RAISED for that stated change of reference).
+#   E8a flight-fit-v1 (apex now a fit target; in-sample here):
+#                    driver 0.73, 7-iron 1.05, PW 0.76, overall 0.87
 #
 # Seeded above measured to absorb float/platform drift, matching the carry
 # budgets above. Lower them when the model improves; never raise them.
 APEX_RMSE_BUDGET_FEET = {
-    "driver": 4.2,
-    "7-iron": 2.0,
-    "pitching wedge": 3.5,
+    "driver": 0.8,
+    "7-iron": 1.1,
+    "pitching wedge": 0.8,
 }
-OVERALL_APEX_RMSE_BUDGET_FEET = 3.1
+OVERALL_APEX_RMSE_BUDGET_FEET = 0.9
+
+# Landing angle ceilings in DEGREES ("Carry Flat - Land. Angle"), added with E8a.
+#
+#   club            Ferguson (C7)   flight-fit-v1
+#   7-iron              2.26           0.76
+#   driver              1.96           0.37
+#   pitching wedge      4.00           1.24
+#   OVERALL             2.80           0.84
+LANDING_ANGLE_RMSE_BUDGET_DEG = {
+    "driver": 0.4,
+    "7-iron": 0.8,
+    "pitching wedge": 1.3,
+}
+OVERALL_LANDING_ANGLE_RMSE_BUDGET_DEG = 0.9
+
+# Hang time ceilings in SECONDS ("Carry Flat - Time"), added with E8a.
+#
+#   club            Ferguson (C7)   flight-fit-v1
+#   7-iron              0.04           0.10
+#   driver              0.23           0.08
+#   pitching wedge      0.22           0.04
+#   OVERALL             0.18           0.08
+#
+# The 7-iron's hang time got worse (+0.10 s bias, from -0.04): the joint fit traded
+# it for the other outputs. Its ceiling is set at the new value, not the old one.
+HANG_TIME_RMSE_BUDGET_S = {
+    "driver": 0.09,
+    "7-iron": 0.11,
+    "pitching wedge": 0.05,
+}
+OVERALL_HANG_TIME_RMSE_BUDGET_S = 0.09
 
 # The reference capture is a fixed, committed file: if the shot count changes,
 # the fixture changed and every budget above needs re-deriving.
@@ -191,5 +240,65 @@ def test_per_club_apex_rmse_within_budget(validation_rows, club):
     assert stats["rmse"] <= budget, (
         f"{club}: apex RMSE {stats['rmse']:.2f} ft exceeds budget {budget} ft "
         f"(bias {stats['mean']:+.2f}, max |delta| {stats['max_abs']:.2f}, "
+        f"n={stats['n']})."
+    )
+
+
+def _deltas(rows, attr, club=None):
+    """Errors for one output, skipping rows whose source did not measure it."""
+    return [
+        getattr(r, attr)
+        for r in rows
+        if getattr(r, attr) is not None and (club is None or r.club == club)
+    ]
+
+
+SHAPE_BUDGETS = {
+    # output: (row attribute, unit, per-club budgets, overall budget)
+    "landing angle": (
+        "delta_landing_angle_deg",
+        "deg",
+        LANDING_ANGLE_RMSE_BUDGET_DEG,
+        OVERALL_LANDING_ANGLE_RMSE_BUDGET_DEG,
+    ),
+    "hang time": (
+        "delta_hang_time_s",
+        "s",
+        HANG_TIME_RMSE_BUDGET_S,
+        OVERALL_HANG_TIME_RMSE_BUDGET_S,
+    ),
+}
+
+
+@pytest.mark.parametrize("output", sorted(SHAPE_BUDGETS))
+def test_reference_capture_has_every_shape_measurement(validation_rows, output):
+    attr = SHAPE_BUDGETS[output][0]
+    assert len(_deltas(validation_rows, attr)) == EXPECTED_SHOT_COUNT, (
+        f"the fixture lost its {output} column: every {output} budget would pass vacuously"
+    )
+
+
+@pytest.mark.parametrize("output", sorted(SHAPE_BUDGETS))
+def test_overall_shape_rmse_within_budget(validation_rows, output):
+    attr, unit, _, budget = SHAPE_BUDGETS[output]
+    stats = _stats(_deltas(validation_rows, attr))
+    assert stats["rmse"] <= budget, (
+        f"Overall {output} RMSE {stats['rmse']:.2f} {unit} exceeds budget {budget} {unit} "
+        f"(bias {stats['mean']:+.2f}, max |delta| {stats['max_abs']:.2f}, n={stats['n']})."
+    )
+
+
+@pytest.mark.parametrize(
+    "output, club",
+    [(o, c) for o in sorted(SHAPE_BUDGETS) for c in sorted(SHAPE_BUDGETS[o][2])],
+)
+def test_per_club_shape_rmse_within_budget(validation_rows, output, club):
+    attr, unit, budgets, _ = SHAPE_BUDGETS[output]
+    deltas = _deltas(validation_rows, attr, club)
+    assert deltas, f"No reference shots with {output} for club {club!r}"
+    stats = _stats(deltas)
+    assert stats["rmse"] <= budgets[club], (
+        f"{club}: {output} RMSE {stats['rmse']:.2f} {unit} exceeds budget {budgets[club]} "
+        f"{unit} (bias {stats['mean']:+.2f}, max |delta| {stats['max_abs']:.2f}, "
         f"n={stats['n']})."
     )

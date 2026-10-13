@@ -61,7 +61,10 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from openflight.ballistics import (  # noqa: E402
+    ACTIVE_AERO_MODEL,
+    AERO_MODELS,
     CLUB_TYPICAL_SPIN_RPM,
+    AeroModel,
     LaunchConditions,
     simulate,
 )
@@ -153,6 +156,105 @@ def _to_float(v) -> Optional[float]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# TM4 export formats
+# ---------------------------------------------------------------------------
+
+TRACKMAN_NORMALIZED = "trackman_normalized"
+SWINGSYNC = "swingsync"
+
+# A format is recognised by columns only it has.
+_FORMAT_SIGNATURES: Dict[str, Tuple[str, ...]] = {
+    TRACKMAN_NORMALIZED: ("Carry Flat - Length", "Ball Speed", "Spin Rate"),
+    SWINGSYNC: ("Carry", "Ball speed", "Backspin", "Sidespin", "Peak height"),
+}
+
+# Unit tokens as the exports print them in their units row ("[yds]", "[mph]"), to
+# the unit the fit uses. An unknown token is refused, never guessed.
+_LENGTH_TO_METRES = {"yds": 0.9144, "yd": 0.9144, "m": 1.0, "ft": 0.3048, "feet": 0.3048}
+_SPEED_TO_MPH = {"mph": 1.0, "km/h": 1.0 / 1.609344, "kmh": 1.0 / 1.609344, "m/s": 1.0 / 0.44704}
+_TIME_TO_S = {"s": 1.0, "sec": 1.0, "seconds": 1.0}
+_ANGLE_UNITS = {"deg", "°", ""}
+
+
+def _scaled(value, factor: float) -> Optional[float]:
+    x = _to_float(value)
+    return None if x is None else x * factor
+
+
+def _is_units_row(row: Dict[str, Optional[str]]) -> bool:
+    """TrackMan-style exports put "[mph]", "[deg]" … under the header."""
+    return any(
+        isinstance(v, str) and v.strip().startswith("[") and v.strip().endswith("]")
+        for v in row.values()
+    )
+
+
+def _unit_token(units: Dict[str, str], column: str, default: str) -> str:
+    raw = units.get(column)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().strip("[]").strip().lower()
+
+
+def _scale(units: Dict[str, str], column: str, default: str, table: Dict[str, float]) -> float:
+    token = _unit_token(units, column, default)
+    if token not in table:
+        raise ValueError(f"unknown unit [{token}] in column {column!r}")
+    return table[token]
+
+
+def _check_angle_unit(units: Dict[str, str], column: str) -> None:
+    token = _unit_token(units, column, "deg")
+    if token not in _ANGLE_UNITS:
+        raise ValueError(f"unknown unit [{token}] in column {column!r}")
+
+
+def _open_export(path: Path):
+    """Yield (fieldnames, units-by-column, data rows) for a CSV export.
+
+    Handles the optional Excel ``sep=,`` preamble and the units row under the
+    header; a file without a units row gets an empty units map.
+    """
+    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        pos = fh.tell()
+        first = fh.readline().lstrip("﻿").lstrip()
+        if not first.lower().startswith("sep="):
+            fh.seek(pos)
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        units: Dict[str, str] = {}
+        rows: List[Dict[str, Optional[str]]] = []
+        for row in reader:
+            if not units and not rows and _is_units_row(row):
+                units = {k: (v or "") for k, v in row.items() if k is not None}
+                continue
+            if _is_units_row(row):
+                continue
+            rows.append(row)
+    return fieldnames, units, rows
+
+
+def detect_export_format(path: Path) -> str:
+    """The export format of ``path``, from its header; ValueError when unknown."""
+    fieldnames, _, _ = _open_export(path)
+    for name, required in _FORMAT_SIGNATURES.items():
+        if all(col in fieldnames for col in required):
+            return name
+    raise ValueError(
+        f"{path}: unrecognised TM4 export format (header has none of the known "
+        f"column sets: {', '.join(_FORMAT_SIGNATURES)})"
+    )
+
+
+def load_tm_export(path: Path, session: Optional[str] = None) -> List["TMShot"]:
+    """Load any supported TM4 export, the format detected from its header."""
+    fmt = detect_export_format(path)
+    if fmt == SWINGSYNC:
+        return load_swingsync(path, session=session)
+    return load_trackman(path, session=session)
+
+
 @dataclass
 class TMShot:
     """Slim TrackMan record carrying only what the ballistic model needs."""
@@ -171,6 +273,16 @@ class TMShot:
     # yard-denominated distance columns. Kept in feet end to end so the
     # numbers stay comparable to the raw export.
     apex_feet: Optional[float] = None
+    # Descent angle below horizontal at the landing point, and launch-to-landing
+    # time ("Carry Flat - Land. Angle" / "Carry Flat - Time"; SwingSync's
+    # "Landing angle" / "Hang time").
+    landing_angle_deg: Optional[float] = None
+    hang_time_s: Optional[float] = None
+    # Which loader read the row: "trackman_normalized" or "swingsync".
+    export_format: str = TRACKMAN_NORMALIZED
+    # SwingSync splits spin into back and side spin; a negative backspin is a
+    # topped (topspin) shot. None for the TrackMan format, which gives total spin.
+    backspin_rpm: Optional[float] = None
 
 
 def _default_session_label(path: Path) -> str:
@@ -191,40 +303,89 @@ def load_trackman(path: Path, session: Optional[str] = None) -> List[TMShot]:
     aggregations can keep their origin straight."""
     session_label = session if session is not None else _default_session_label(path)
     shots: List[TMShot] = []
-    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
-        # Skip optional ``sep=,`` Excel preamble.
-        pos = fh.tell()
-        first = fh.readline().lstrip("﻿").lstrip()
-        if not first.lower().startswith("sep="):
-            fh.seek(pos)
-        reader = csv.DictReader(fh)
-        if reader.fieldnames is None:
-            return shots
-        # Trackman exports sometimes include a units row ("[mph]", "[deg]")
-        # right under the header. Detect by looking for "[..]" cells.
-        idx = 0
-        for row in reader:
-            if any(
-                isinstance(v, str) and v.strip().startswith("[") and v.strip().endswith("]")
-                for v in row.values()
-            ):
-                continue
-            idx += 1
-            shots.append(
-                TMShot(
-                    shot_index=idx,
-                    club_raw=row.get("Club", "") or "",
-                    ball_speed_mph=_to_float(row.get("Ball Speed")),
-                    launch_v_deg=_to_float(row.get("Launch Angle")),
-                    launch_h_deg=_to_float(row.get("Launch Direction")),
-                    spin_rpm=_to_float(row.get("Spin Rate")),
-                    spin_axis_deg=_to_float(row.get("Spin Axis")),
-                    carry_yards=_to_float(row.get("Carry Flat - Length")),
-                    timestamp=row.get("Date", "") or "",
-                    session=session_label,
-                    apex_feet=_to_float(row.get("Max Height - Height")),
-                )
+    fieldnames, units, rows = _open_export(path)
+    if not fieldnames:
+        return shots
+    # Units from the export's own units row; the defaults are TrackMan's
+    # imperial export (yards, feet for heights, mph, seconds).
+    speed = _scale(units, "Ball Speed", "mph", _SPEED_TO_MPH)
+    carry = _scale(units, "Carry Flat - Length", "yds", _LENGTH_TO_METRES) / 0.9144
+    apex = _scale(units, "Max Height - Height", "ft", _LENGTH_TO_METRES) / 0.3048
+    hang = _scale(units, "Carry Flat - Time", "s", _TIME_TO_S)
+    for col in ("Launch Angle", "Launch Direction", "Spin Axis", "Carry Flat - Land. Angle"):
+        _check_angle_unit(units, col)
+
+    for idx, row in enumerate(rows, start=1):
+        shots.append(
+            TMShot(
+                shot_index=idx,
+                club_raw=row.get("Club", "") or "",
+                ball_speed_mph=_scaled(row.get("Ball Speed"), speed),
+                launch_v_deg=_to_float(row.get("Launch Angle")),
+                launch_h_deg=_to_float(row.get("Launch Direction")),
+                spin_rpm=_to_float(row.get("Spin Rate")),
+                spin_axis_deg=_to_float(row.get("Spin Axis")),
+                carry_yards=_scaled(row.get("Carry Flat - Length"), carry),
+                timestamp=row.get("Date", "") or "",
+                session=session_label,
+                apex_feet=_scaled(row.get("Max Height - Height"), apex),
+                landing_angle_deg=_to_float(row.get("Carry Flat - Land. Angle")),
+                hang_time_s=_scaled(row.get("Carry Flat - Time"), hang),
+                export_format=TRACKMAN_NORMALIZED,
             )
+        )
+    return shots
+
+
+def load_swingsync(path: Path, session: Optional[str] = None) -> List[TMShot]:
+    """Read a TM4 session exported through SwingSync.
+
+    SwingSync gives back and side spin, not total spin and axis: total spin is
+    hypot(backspin, sidespin) and the axis atan2(sidespin, backspin) in degrees
+    (positive = side spin to the right, the tilt convention of
+    ``launch_relative_spin_axis``). Its "Peak height" is in the units row's unit
+    (yards in the exports seen so far) and is converted to feet like TrackMan's.
+    """
+    session_label = session if session is not None else _default_session_label(path)
+    fieldnames, units, rows = _open_export(path)
+    if not fieldnames:
+        return []
+    speed = _scale(units, "Ball speed", "mph", _SPEED_TO_MPH)
+    carry = _scale(units, "Carry", "yds", _LENGTH_TO_METRES) / 0.9144
+    apex = _scale(units, "Peak height", "yds", _LENGTH_TO_METRES) / 0.3048
+    hang = _scale(units, "Hang time", "s", _TIME_TO_S)
+    for col in ("Vertical Launch angle", "Horizontal Launch Angle", "Landing angle"):
+        _check_angle_unit(units, col)
+
+    shots: List[TMShot] = []
+    for idx, row in enumerate(rows, start=1):
+        back = _to_float(row.get("Backspin"))
+        side = _to_float(row.get("Sidespin"))
+        if back is None or side is None:
+            spin = axis = None
+        else:
+            spin = math.hypot(back, side)
+            axis = math.degrees(math.atan2(side, back))
+
+        shots.append(
+            TMShot(
+                shot_index=idx,
+                club_raw=row.get("Club type", "") or "",
+                ball_speed_mph=_scaled(row.get("Ball speed"), speed),
+                launch_v_deg=_to_float(row.get("Vertical Launch angle")),
+                launch_h_deg=_to_float(row.get("Horizontal Launch Angle")),
+                spin_rpm=spin,
+                spin_axis_deg=axis,
+                carry_yards=_scaled(row.get("Carry"), carry),
+                timestamp=row.get("Date", "") or "",
+                session=session_label,
+                apex_feet=_scaled(row.get("Peak height"), apex),
+                landing_angle_deg=_to_float(row.get("Landing angle")),
+                hang_time_s=_scaled(row.get("Hang time"), hang),
+                export_format=SWINGSYNC,
+                backspin_rpm=back,
+            )
+        )
     return shots
 
 
@@ -314,17 +475,33 @@ class ValidationRow:
     measured_apex_feet: Optional[float] = None
     model_apex_feet: Optional[float] = None
     delta_apex_feet: Optional[float] = None
+    # Landing angle (deg) and hang time (s), likewise None when not measured.
+    measured_landing_angle_deg: Optional[float] = None
+    model_landing_angle_deg: Optional[float] = None
+    delta_landing_angle_deg: Optional[float] = None
+    measured_hang_time_s: Optional[float] = None
+    model_hang_time_s: Optional[float] = None
+    delta_hang_time_s: Optional[float] = None
 
 
 def _has_required_inputs(*vals) -> bool:
     return all(v is not None and not (isinstance(v, float) and math.isnan(v)) for v in vals)
 
 
+def _delta(model: float, measured: Optional[float]) -> Optional[float]:
+    return None if measured is None else model - measured
+
+
 def validate_tm_inputs(
     tm_shots: List[TMShot],
     air_density: float = TM_FLAT_AIR_DENSITY,
+    aero: Optional[AeroModel] = None,
 ) -> List[ValidationRow]:
-    """Run the model on each TrackMan shot and compare to TM's flat carry."""
+    """Run the model on each TrackMan shot and compare to TM's flat carry.
+
+    ``aero`` selects the aerodynamic model (default: the active one), so the
+    published Ferguson constants can be compared on the same shots.
+    """
     out: List[ValidationRow] = []
     for s in tm_shots:
         if not _has_required_inputs(s.ball_speed_mph, s.launch_v_deg, s.spin_rpm, s.carry_yards):
@@ -339,7 +516,7 @@ def validate_tm_inputs(
             spin_axis_deg=spin_axis,
             spin_source="measured",
         )
-        traj = simulate(conditions, air_density=air_density)
+        traj = simulate(conditions, air_density=air_density, aero=aero)
         # apex_yards is a height in yards; TrackMan's column is feet.
         model_apex_feet = traj.apex_yards * YD_TO_FT
         session_tag = s.session or "default"
@@ -361,6 +538,12 @@ def validate_tm_inputs(
                 measured_apex_feet=s.apex_feet,
                 model_apex_feet=model_apex_feet,
                 delta_apex_feet=(None if s.apex_feet is None else model_apex_feet - s.apex_feet),
+                measured_landing_angle_deg=s.landing_angle_deg,
+                model_landing_angle_deg=traj.landing_angle_deg,
+                delta_landing_angle_deg=_delta(traj.landing_angle_deg, s.landing_angle_deg),
+                measured_hang_time_s=s.hang_time_s,
+                model_hang_time_s=traj.flight_time_s,
+                delta_hang_time_s=_delta(traj.flight_time_s, s.hang_time_s),
             )
         )
     return out
@@ -384,6 +567,7 @@ def validate_of_inputs(
     comp_rows: List[ComparisonRow],
     spin_axis_lookup: Dict[Tuple[str, float, float], float],
     air_density: float = TM_FLAT_AIR_DENSITY,
+    aero: Optional[AeroModel] = None,
 ) -> List[ValidationRow]:
     """Run the model on OpenFlight inputs and compare to TrackMan's
     flat carry. Skips rows flagged as ``ball_speed_mismatch`` etc."""
@@ -415,7 +599,7 @@ def validate_of_inputs(
             spin_axis_deg=spin_axis,
             spin_source="measured" if spin_source == "measured" else "club_typical",
         )
-        traj = simulate(conditions, air_density=air_density)
+        traj = simulate(conditions, air_density=air_density, aero=aero)
         session_tag = row.session or "default"
         out.append(
             ValidationRow(
@@ -552,6 +736,23 @@ def format_stats(label: str, rows: List[ValidationRow]) -> str:
                 f"  {sess_disp:24s}  {s['n']:3d}  {s['mean']:+7.2f}  {s['rmse']:6.2f}  "
                 f"{s['mae']:6.2f}  {s['max_abs']:7.2f}"
             )
+    # The other flight outputs, where the source measured them.
+    others = (
+        ("apex", "ft", "delta_apex_feet"),
+        ("landing angle", "deg", "delta_landing_angle_deg"),
+        ("hang time", "s", "delta_hang_time_s"),
+    )
+    for name, unit, attr in others:
+        if not any(getattr(r, attr) is not None for r in rows):
+            continue
+        lines.append(f"{name} ({unit}), model - measured:")
+        for club in [*clubs, None]:
+            sel = [r for r in rows if club is None or r.club == club]
+            s = _stats([getattr(r, attr) for r in sel if getattr(r, attr) is not None])
+            lines.append(
+                f"  {club or 'OVERALL':10s}  {s['n']:3d}  bias={s['mean']:+7.2f}  "
+                f"rmse={s['rmse']:6.2f}  max|d|={s['max_abs']:6.2f}"
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -647,8 +848,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         required=True,
         type=Path,
         nargs="+",
-        help="One or more TrackMan normalized CSVs (each "
-        "contains Spin Axis column). Multiple files "
+        help="One or more TM4 exports: TrackMan normalized CSVs or SwingSync "
+        "exports (format detected from the header). Multiple files "
         "are concatenated; each shot is tagged with a "
         "session label derived from the filename "
         "(override with --session-label).",
@@ -685,7 +886,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=f"Air density (kg/m³) for simulate(). Default "
         f"{TM_FLAT_AIR_DENSITY} matches TrackMan 'Flat' (77°F sea level).",
     )
+    parser.add_argument(
+        "--aero",
+        choices=sorted(AERO_MODELS),
+        default=ACTIVE_AERO_MODEL.version,
+        help=f"Aerodynamic model to fly (default {ACTIVE_AERO_MODEL.version}).",
+    )
     args = parser.parse_args(argv)
+    aero = AERO_MODELS[args.aero]
 
     # Resolve session labels.
     if args.session_label and len(args.session_label) != len(args.trackman):
@@ -719,13 +927,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     all_tm_shots: List[TMShot] = []
     per_session_tm: List[List[TMShot]] = []  # for per-session axis lookup
     for path, label in zip(args.trackman, labels):
-        shots = load_trackman(path, session=label)
+        shots = load_tm_export(path, session=label)
         print(f"Loaded {len(shots)} TM shots from {path.name} [{label}]")
         all_tm_shots.extend(shots)
         per_session_tm.append(shots)
 
     # --- TM inputs ---
-    tm_rows = validate_tm_inputs(all_tm_shots, air_density=args.air_density)
+    tm_rows = validate_tm_inputs(all_tm_shots, air_density=args.air_density, aero=aero)
     write_per_shot_csv(tm_rows, args.output_dir / "validation_tm_inputs.csv")
     write_scatter(
         tm_rows,
@@ -754,6 +962,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     comp,
                     axis_lookup,
                     air_density=args.air_density,
+                    aero=aero,
                 )
             )
             all_comp_rows.extend(comp)
