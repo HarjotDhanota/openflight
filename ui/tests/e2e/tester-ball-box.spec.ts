@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { BOX_OUTLINE_PX, foundBall, placementBoxState, useTester } from './helpers';
+import { BOX_OUTLINE_PX, foundBall, placementBoxState, rectOf, useTester } from './helpers';
 
 // 1a (13 Oct): the TrackMan-style ball box. A FIXED box on the live view: the tester
 // puts the ball in it and a check appears when the camera finds it; one horizontal
@@ -314,7 +314,7 @@ test('a camera that does not answer is the first camera check, said plainly', as
 
   await expect(page.locator('#placement-box')).toBeVisible();
   await expect(show).toBeHidden();
-  await expect(summary).toContainText('Drag the blue line to where the floor meets the net or screen');
+  await expect(summary).toContainText('Put the ball in the yellow box and confirm when the check is green');
 });
 
 test('redoing the box later makes the light stale and starts the ball range over', async ({ page }) => {
@@ -347,7 +347,7 @@ for (const viewport of [
   { width: 800, height: 480 },
   { width: 1024, height: 600 },
 ]) {
-  test(`the live view uses the width and fits below the bars at ${viewport.width}x${viewport.height}`, async ({
+  test(`the live view, box and check are fully visible on arrival at ${viewport.width}x${viewport.height}`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -355,13 +355,26 @@ for (const viewport of [
     await page.goto('/tester.html');
     const picture = page.locator('#placement-camera-frame');
     await expect(picture).toBeVisible();
-    await picture.scrollIntoViewIfNeeded();
-    const rect = await picture.boundingBox();
-    const bars = await page.locator('#sticky-top').boundingBox();
+    await expect(page.locator('#placement-check')).toHaveAttribute('display', 'inline');
+    // on arrival, with no scrolling: the whole live view, box and check sit under the sticky bars
+    await page.waitForTimeout(300);
+    const rect = await rectOf(page, '#placement-camera-frame');
+    const bars = await rectOf(page, '#sticky-top');
     if (!rect || !bars) throw new Error('nothing drawn');
-    // wider than the old 44vh cap allowed, and the whole picture fits under the sticky bars
+    expect(rect.y).toBeGreaterThanOrEqual(bars.y + bars.height - 1);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height + 1);
+    expect(rect.x).toBeGreaterThanOrEqual(0);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width);
+    for (const id of ['#placement-outline', '#placement-check']) {
+      const part = await rectOf(page, id);
+      expect(part, id).not.toBeNull();
+      expect(part!.y, id).toBeGreaterThanOrEqual(bars.y + bars.height - 1);
+      expect(part!.y + part!.height, id).toBeLessThanOrEqual(viewport.height + 1);
+    }
+    // as large as fits: within a few pixels of the room under the bars, or the full width
+    const room = viewport.height - (bars.y + bars.height);
+    expect(rect.height >= room - 24 || rect.width >= viewport.width - 120).toBe(true);
     expect(rect.width).toBeGreaterThan(viewport.height * 0.44 * 1.6 + 20);
-    expect(rect.height).toBeLessThanOrEqual(viewport.height - bars.height + 1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     for (const id of ['#placement-confirm']) {
       const button = await page.locator(id).boundingBox();

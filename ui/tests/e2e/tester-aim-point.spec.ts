@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox, PATCH_PROJECTION, useTester } from './helpers';
+import { mockConfirmedPlacementBox, PATCH_PROJECTION, rectOf, useTester } from './helpers';
 
 // D34 (13 Oct pass): right after the ball box, the tester drags the aim point onto the
 // target in the live 1280×800 view, drawn as TrackMan's vertical yellow line with an
@@ -235,6 +235,29 @@ test('right after the box the aim step opens its camera; the dragged yellow line
   await expect(page.locator('#aim')).toHaveAttribute('data-ready', 'true');
   await expect(page.locator('#aim-move')).toBeVisible();
 });
+
+for (const viewport of [
+  { width: 1024, height: 600 },
+  { width: 800, height: 480 },
+]) {
+  test(`the aim picture and its line are fully visible on arrival at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await aimStep(page);
+    await page.goto('/tester.html');
+    await expect(page.locator('#aim-overlay')).toHaveAttribute('data-aim', '640.0,400.0');
+    await page.waitForTimeout(300);
+    const rect = await rectOf(page, '#aim-camera-frame');
+    const bars = await rectOf(page, '#sticky-top');
+    if (!rect || !bars) throw new Error('nothing drawn');
+    expect(rect.y).toBeGreaterThanOrEqual(bars.y + bars.height - 1);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height + 1);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width);
+    const room = viewport.height - (bars.y + bars.height);
+    expect(rect.height >= room - 24 || rect.width >= viewport.width - 120).toBe(true);
+  });
+}
 
 test('a finger away from the reticle puts it above the fingertip; near it, it drags without a jump', async ({
   page,

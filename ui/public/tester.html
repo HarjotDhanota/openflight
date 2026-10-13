@@ -339,7 +339,7 @@
         position: relative;
         width: 100%;
         /* (16) as wide as the page allows while the whole picture fits under the sticky bars */
-        max-width: min(100%, calc((100vh - var(--sticky-h)) * 1.6));
+        max-width: min(100%, calc((100vh - var(--sticky-h) - 12px) * 1.6));
         margin: 0 auto;
       }
       .box-stage img {
@@ -783,6 +783,23 @@
       .step,
       main [id] {
         scroll-margin-top: calc(var(--sticky-h) + 4px);
+      }
+      /* a live view is scrolled to sit right under the bars, with its preview frame */
+      .box-stage {
+        scroll-margin-top: calc(var(--sticky-h) + 4px);
+      }
+      .guided-camera-preview .ball-status,
+      .guided-camera-preview .note {
+        margin: 6px 0 0;
+      }
+      .ready-light.ready-light--compact {
+        min-height: 0;
+        padding: 4px 16px;
+      }
+      /* (2) setup steps: the band never says ready */
+      .ready-light[data-state='setup'] {
+        background: #3b5b7f;
+        color: #ffffff;
       }
       /* a step in progress is not an error: its gate reads blue until it is done */
       #placement[data-ready='false'],
@@ -1515,15 +1532,12 @@
         <h2><span class="step-n">3</span> Ball in the box</h2>
         <div class="setup-gate" id="placement" data-ready="false">
           <p class="guide" id="placement-guide">
-            Set the unit <b>1.8–2.9 m behind the ball</b>, pointing down the target line. Put the ball in the yellow
-            box; a green check appears when the camera finds it.
+            Set the unit <b>1.8–2.9 m behind the ball</b>, pointing down the target line.
           </p>
           <p id="placement-summary" class="note" role="status">
             Confirm the physical setup first; the camera then opens here.
           </p>
           <div class="guided-camera-preview" id="placement-preview" hidden>
-            <p class="note" id="placement-camera-status" role="status">Waiting for the first camera frame…</p>
-            <p class="note" id="placement-brightness" role="status" hidden>Adjusting brightness…</p>
             <div class="box-stage" id="placement-stage">
               <img id="placement-camera-frame" alt="Live view for putting the ball in the box" hidden />
               <svg
@@ -1548,6 +1562,8 @@
             <p class="ball-status" id="placement-ball-status" role="status" data-state="waiting"></p>
             <p class="note" id="placement-net-status" role="status"></p>
             <p class="note" id="placement-distance" role="status"></p>
+            <p class="note" id="placement-camera-status" role="status">Waiting for the first camera frame…</p>
+            <p class="note" id="placement-brightness" role="status" hidden>Adjusting brightness…</p>
           </div>
           <div class="steps">
             <button type="button" id="placement-show" hidden>Show the camera</button>
@@ -1564,8 +1580,6 @@
           <p id="aim-summary" class="note" role="status">Confirm the ball in the box first: the target line starts at the ball.</p>
           <p id="aim-stale" class="problem" role="status" hidden></p>
           <div class="guided-camera-preview" id="aim-preview" hidden>
-            <p class="note" id="aim-camera-status" role="status">Waiting for the first camera frame…</p>
-            <p class="note" id="aim-brightness" role="status" hidden>Adjusting brightness…</p>
             <div class="box-stage" id="aim-stage">
               <img id="aim-camera-frame" alt="Live view for setting the aim point" hidden />
               <svg
@@ -1584,6 +1598,8 @@
               </svg>
             </div>
             <p class="note" id="aim-yaw" role="status"></p>
+            <p class="note" id="aim-camera-status" role="status">Waiting for the first camera frame…</p>
+            <p class="note" id="aim-brightness" role="status" hidden>Adjusting brightness…</p>
           </div>
           <div class="steps">
             <button type="button" id="aim-show" hidden>Show the camera</button>
@@ -2852,8 +2868,7 @@
         const window_m = placementState?.placement_window_m;
         if (Array.isArray(window_m) && window_m.length === 2) {
           el('placement-guide').innerHTML =
-            `Set the unit <b>${Number(window_m[0]).toFixed(1)}–${Number(window_m[1]).toFixed(1)} m behind the ball</b>, pointing down the target line. ` +
-            'Put the ball in the yellow box; a green check appears when the camera finds it.';
+            `Set the unit <b>${Number(window_m[0]).toFixed(1)}–${Number(window_m[1]).toFixed(1)} m behind the ball</b>, pointing down the target line.`;
         }
         let text;
         let problem = false;
@@ -2875,7 +2890,7 @@
             'Put the ball in the box where you will hit from and confirm it. A new spot means measuring the ' +
             'light again and starting the ball range over.';
         } else if (state === 'needs_confirmation') {
-          text = 'Drag the blue line to where the floor meets the net or screen, then confirm when the check is green.';
+          text = 'Put the ball in the yellow box and confirm when the check is green.';
         } else {
           const when = placementState.reconfirmed_at_utc || placementState.confirmed_at_utc;
           const range = ball?.range_m ?? placementState.box?.distance_m;
@@ -2941,9 +2956,11 @@
           placementPendingFrame = null;
           placementFrameLoading = false;
           if (version === placementPreviewVersion && placementPlacing()) {
+            const first = el('placement-camera-frame').hidden;
             frame.hidden = false;
             el('placement-camera-frame').replaceWith(frame);
             renderPlacementOverlay();
+            if (first && (placementMoving || currentStep() === 3)) revealStep(3);
           }
         });
         frame.addEventListener('error', () => {
@@ -3430,6 +3447,7 @@
             if (aimFullOpen) el('aim-full-frame').src = frame.src;
             if (first) renderAim();
             else renderAimDraft();
+            if (first && (aimMoving || currentStep() === 4)) revealStep(4);
           }
         });
         frame.addEventListener('error', () => {
@@ -5575,7 +5593,7 @@
       function lensFacts(lens) {
         const parts = [];
         if (Number.isFinite(lens.f_number)) parts.push(`f/${lens.f_number}`);
-        if (Number.isFinite(lens.hfov_deg)) parts.push(`${Math.round(lens.hfov_deg)}° wide`);
+        if (Number.isFinite(lens.hfov_deg)) parts.push(`${Number(lens.hfov_deg.toFixed(1))}° wide`);
         parts.push(lens.intrinsics === 'calibrated' ? 'calibrated' : 'nominal model');
         return parts.join(' · ');
       }
@@ -5859,6 +5877,24 @@
         }
       });
 
+      // the sticky bars' real height, for the live views' size and the scroll position
+      function measureStickyBars() {
+        const height = el('sticky-top').offsetHeight;
+        if (height) document.documentElement.style.setProperty('--sticky-h', `${height}px`);
+      }
+      measureStickyBars();
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureStickyBars).observe(el('sticky-top'));
+      window.addEventListener('resize', measureStickyBars);
+
+      // a step's live view (the box, the aim) sits right under the bars when it comes up
+      function revealStep(step) {
+        const views = { 3: ['placement-preview', 'placement-stage'], 4: ['aim-preview', 'aim-stage'] };
+        const [preview, stage] = views[step] || [];
+        const target = preview && !el(preview).hidden ? el(stage) : el(`step-${step}`);
+        target.scrollIntoView({ block: 'start' });
+      }
+      let revealedStep = null;
+
       // (10) one step sequence, and a sticky “You are here” that scrolls to the next open step
       let lightMeasured = false;
       let ladderFinished = false;
@@ -5893,6 +5929,8 @@
         }
       }
       function currentStep() {
+        // a walking ladder is the swing step, whatever an earlier step's poll says
+        if (ladderRunning) return 7;
         for (let step = 1; step <= 7; step += 1) {
           if (!stepDone(step)) return step;
         }
@@ -5905,6 +5943,15 @@
         }
         el('stepbar-step').textContent = `Step ${now} · ${STEP_TITLES[now]}`;
         el('stepbar-here').dataset.step = String(now);
+        // the ready band reads these: it says ready only from step 7 on
+        document.body.dataset.step = String(now);
+        document.body.dataset.stepTitle = STEP_TITLES[now];
+        if (now !== revealedStep) {
+          const first = revealedStep === null;
+          revealedStep = now;
+          // the page opens at the top on step 1; any later step scrolls into view
+          if (!(first && now === 1)) queueMicrotask(() => revealStep(now));
+        }
       }
       el('stepbar-here').addEventListener('click', () => {
         el(`step-${currentStep()}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -6034,6 +6081,19 @@
         }
 
         function render(light) {
+          // steps 1-6 are setup: whatever the kiosk says, the band never says ready there
+          const step = Number(document.body.dataset.step || 0);
+          if (!(step >= 7)) {
+            band.dataset.state = 'setup';
+            band.classList.add('ready-light--compact');
+            setText(word, 'SETTING UP');
+            setText(cause, step ? `Step ${step} · ${document.body.dataset.stepTitle || ''}: swing from step 7` : 'Loading');
+            setText(swingText, '');
+            flash.classList.remove('ready-light__flash--on');
+            // a swing heard during setup must not flash once the swing step opens
+            if (light.swing) lastSwingId = light.swing.id;
+            return;
+          }
           const state = WORDS[light.state] ? light.state : 'red';
           band.dataset.state = state;
           band.classList.toggle('ready-light--compact', light.source === 'tester' && light.cause === 'kiosk not running');

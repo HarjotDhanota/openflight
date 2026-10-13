@@ -204,7 +204,7 @@ for (const size of SIZES) {
       });
       await page.goto('/tester.html');
       await expect(page.locator('#placement-check')).toHaveAttribute('display', 'inline');
-      await shot(page, '06-step3-ball-found', size, '#step-3');
+      await shot(page, '06-step3-ball-found', size);
     });
 
     test('step 3: ball outside the box', async ({ page }) => {
@@ -221,7 +221,7 @@ for (const size of SIZES) {
       });
       await page.goto('/tester.html');
       await expect(page.locator('#placement-ball-status')).toHaveAttribute('data-state', 'outside_box');
-      await shot(page, '07-step3-ball-outside', size, '#step-3');
+      await shot(page, '07-step3-ball-outside', size);
     });
 
     test('step 4: aim and the full-screen magnifier', async ({ page }) => {
@@ -231,7 +231,7 @@ for (const size of SIZES) {
       });
       await page.goto('/tester.html');
       await expect(page.locator('#aim-overlay')).toHaveAttribute('data-aim', '758.0,252.0');
-      await shot(page, '08-step4-aim', size, '#step-4');
+      await shot(page, '08-step4-aim', size);
       await page.locator('#aim-fullscreen').tap();
       await expect(page.locator('#aim-full')).toBeVisible();
       await shot(page, '09-step4-aim-fullscreen-loupe', size);
