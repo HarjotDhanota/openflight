@@ -10,10 +10,26 @@ target-line reference.
 
 ## Horizontal Ball Launch
 
-TX2 measures horizontal ball launch from phase relative to the TX1/TX3 phase
-center. The IWR6843LEVM TX2 baseline is one-half wavelength; OpenFlight applies
+TX2 measures the ball's lateral direction cosine from phase relative to TX1
+and TX3. The IWR6843LEVM TX2 baseline is one-half wavelength; OpenFlight applies
 that board geometry and uses the OPS ball speed when removing TDM motion phase.
 This keeps multipath in the TI range slope from rotating the horizontal result.
+
+**HLCMF-v2 (D36, status `hlcmf_v2_*`): launch direction is the ball's direction
+of motion.** Each frame's TX2 phase, taken against TX1 and TX3 separately and
+followed through time as club path does, gives that frame's bearing; with the
+frame's range from the ball track it places the ball laterally
+(`y = r sin(bearing)`) and downrange (`x = sqrt(r² − y² − z²)`, the height `z`
+from this shot's own vertical launch along the line from the tee). The launch
+direction is `atan2(v_y, v_x)` of the robust velocity through those positions:
+geometry, with no fitted scale. The 0.90 coherence gate is unchanged.
+
+HLCMF-v1 (`hlcmf_v1_*`, in sessions recorded before 12 Oct 2026) averaged the
+*bearing* over the last eight frames instead. Seen from a radar behind a tee
+1–2.5 m away, that late-flight bearing (2.2–4.6 m out) reads about 0.5–0.7× the
+launch direction: on synthetic straight flights at ±5° and ±10° it read 2.1–7.0°
+where v2 reads within 0.25°. Averaging the two vertical reference voltages also
+cancelled them once a high launch climbed about 15° off the boresight.
 
 Each physical board and enclosure can retain a static target-line phase. Pass
 the phase measured by horizontal aim calibration when starting OpenFlight:
@@ -25,10 +41,12 @@ scripts/start-kiosk.sh --iwr6843 \
 
 `-0.33434 rad` is the measured reference for the OpenFlight prototype setup,
 not a universal default. It was calibrated from 18 wide-IQ16 shots against
-TrackMan using the eight-frame horizontal estimator, then frozen before a
-separate 41-shot holdout. The holdout produced 0.948 degrees MAE at full
-coverage and 0.797 degrees MAE on the 37 shots that passed the 0.90 phase-
-coherence gate.
+TrackMan using the eight-frame horizontal estimator (HLCMF-v1), then frozen
+before a separate 41-shot holdout. The holdout produced 0.948 degrees MAE at
+full coverage and 0.797 degrees MAE on the 37 shots that passed the 0.90 phase-
+coherence gate. Those figures are v1's: HLCMF-v2 has not yet been graded
+against TrackMan, and a reference calibrated through v1's late bearing should be
+re-measured with v2.
 
 Recalibrate this value after changing the radar board, enclosure, antenna
 orientation, or target-line alignment. To evaluate a TrackMan-aligned session

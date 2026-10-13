@@ -56,6 +56,9 @@ MAX_PER_FRAME = 4
 MPH_PER_MS = tracking.MPH_PER_MS
 HORIZONTAL_TAIL_FRAMES = 8
 HORIZONTAL_COHERENCE_MIN = 0.90
+# HLCMF-v2 fits a direction of motion through each frame's position, so it
+# needs positions at three or more instants (two would fit any line exactly).
+HORIZONTAL_MOTION_MIN_FRAMES = 3
 
 # One collapsed channel must not drag the answer down. 8.0 sits in an observed
 # gap: agreeing channels spread 4.59 deg, collapsed ones 15.9-20.2 deg
@@ -754,22 +757,21 @@ def _frame_balanced_horizontal_mean(
     )
 
 
-def _tx2_horizontal_proxy(
+def _tx2_phase_snapshots(
     raw: bytes,
     shot: ShotMeasurement,
     *,
     tdm_sign: int,
-    phase_reference_rad: float | None = None,
-    phase_velocity_ms: float | None = None,
-    prepared: PreparedLCMFCapture | None = None,
-) -> tuple[float | None, float | None, str | None]:
-    """HLCMF-v1: frame-balanced TX2 horizontal launch estimator.
+    phase_velocity_ms: float | None,
+    prepared: PreparedLCMFCapture | None,
+    separate_references: bool = False,
+) -> tuple[tracking.Geometry, list[tuple[float, ...]]] | None:
+    """Motion-corrected TX2 phase along the fitted ball track.
 
-    Follow the fitted ball range track, correct TDM motion, robustly median
-    TX2 phase per RX channel, and power-fuse loops within each frame. The final
-    eight observed frames are then fused with equal frame influence. The final
-    sign is flipped into TrackMan convention: positive starts right of the
-    target line, negative starts left.
+    Returns the capture geometry and one ``(frame, time_s, phase_rad,
+    weight)`` per usable loop, or None for a capture without TX2 or a track.
+    With ``separate_references`` each loop is ``(frame, time_s, phase_vs_tx1,
+    phase_vs_tx3, weight)`` (``doa.tx2_reference_phases_at``) instead.
     """
     if prepared is None:
         meta, cube = parse_dump(raw)
@@ -779,7 +781,7 @@ def _tx2_horizontal_proxy(
         cube = prepared.full_cube
         horizontal_mti = prepared.horizontal_mti()
     if meta["n_tx"] != 3 or shot.track is None:
-        return None, None, None
+        return None
     geometry = geometry_from_header(meta, loop_period_s=TX2_LOOP_PERIOD_S)
     n_frames, chirps_per_frame, n_rx, n_samples = cube.shape
     loops = chirps_per_frame // meta["n_tx"]
@@ -789,7 +791,8 @@ def _tx2_horizontal_proxy(
         mti = rfft - rfft.mean(axis=1, keepdims=True)
     else:
         mti = horizontal_mti
-    snapshots: list[tuple[float, float, float]] = []
+    sampler = doa.tx2_reference_phases_at if separate_references else doa.tx2_phase_at
+    snapshots: list[tuple[float, ...]] = []
     for frame in range(geometry.n_frames):
         for loop in range(geometry.n_loops):
             time_s = geometry.loop_time(frame, loop)
@@ -804,7 +807,7 @@ def _tx2_horizontal_proxy(
                 if phase_velocity_ms is not None
                 else shot.track.speed_ms_at(time_s, geometry.range_res_m)
             )
-            sample = doa.tx2_phase_at(
+            sample = sampler(
                 mti,
                 frame,
                 loop,
@@ -814,18 +817,157 @@ def _tx2_horizontal_proxy(
                 n_rx=n_rx,
             )
             if sample is not None:
-                phase, weight = sample
-                snapshots.append((float(frame), phase, weight))
+                snapshots.append((float(frame), time_s, *sample))
+    return geometry, snapshots
+
+
+def _tx2_horizontal_proxy(
+    raw: bytes,
+    shot: ShotMeasurement,
+    *,
+    tdm_sign: int,
+    phase_reference_rad: float | None = None,
+    phase_velocity_ms: float | None = None,
+    prepared: PreparedLCMFCapture | None = None,
+) -> tuple[float | None, float | None, str | None]:
+    """HLCMF-v1, SUPERSEDED by ``_tx2_horizontal_motion`` (D36 item 3).
+
+    The frame-balanced late-flight BEARING of the ball: the final eight
+    observed frames' TX2 phase fused with equal frame influence. Seen from a
+    radar behind a tee 1-2.5 m away that bearing is not the launch direction:
+    at 2.2-4.6 m it reads about 0.5-0.7 x the true angle. Kept as an offline
+    comparator only; production reports HLCMF-v2.
+    """
+    collected = _tx2_phase_snapshots(
+        raw,
+        shot,
+        tdm_sign=tdm_sign,
+        phase_velocity_ms=phase_velocity_ms,
+        prepared=prepared,
+    )
+    if collected is None:
+        return None, None, None
+    _geometry, snapshots = collected
     if len(snapshots) < 6:
         return None, None, "hlcmf_v1_insufficient_tail_snapshots"
     angle_deg, coherence = _frame_balanced_horizontal_mean(
-        snapshots,
+        [(frame, phase, weight) for frame, _time_s, phase, weight in snapshots],
         phase_reference_rad=phase_reference_rad,
     )
     if coherence < HORIZONTAL_COHERENCE_MIN:
         # measured and labelled (D15, P8-7); consumers read the status
         return angle_deg, coherence, "hlcmf_v1_low_coherence"
     return angle_deg, coherence, "hlcmf_v1_accepted"
+
+
+def _continuous_phase(values: np.ndarray) -> np.ndarray:
+    """Follow a wrapped phase through time by its shortest step (as club path)."""
+    if values.size < 2:
+        return values.copy()
+    steps = np.angle(np.exp(1j * np.diff(values)))
+    return np.concatenate(([values[0]], values[0] + np.cumsum(steps)))
+
+
+def _median_pairwise_slope(times: np.ndarray, values: np.ndarray) -> float:
+    """Theil-Sen slope: the median over every pair of instants (as club path)."""
+    dt = times[:, None] - times[None, :]
+    valid = np.triu(np.ones(dt.shape, dtype=bool), k=1) & (np.abs(dt) > 1e-9)
+    slopes = (values[:, None] - values[None, :])[valid] / dt[valid]
+    return float(np.median(slopes))
+
+
+def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
+    raw: bytes,
+    shot: ShotMeasurement,
+    cal: Calibration,
+    *,
+    tdm_sign: int,
+    vertical_launch_deg: float,
+    tee_position_m: tuple[float, float, float],
+    phase_reference_rad: float | None = None,
+    phase_velocity_ms: float | None = None,
+    prepared: PreparedLCMFCapture | None = None,
+) -> tuple[float | None, float | None, str | None]:
+    """HLCMF-v2: horizontal launch as the ball's DIRECTION OF MOTION (D36 item 3).
+
+    Each frame's TX2 phase (the board's phase reference removed) is the ball's
+    lateral direction cosine. It is taken against TX1 and TX3 separately, each
+    followed through time, and then midpointed, as club path does: averaging
+    the two vertical reference VOLTAGES (HLCMF-v1) cancels them once the ball
+    climbs about 15 degrees off the boresight, and the late frames' bearings
+    went wrong with it. With that
+    frame's range from the ball track it places the ball laterally: ``y =
+    r * sin(bearing)``. Its downrange position is what the range has left
+    once the lateral offset and the ball's height above the radar are taken
+    out: ``x = sqrt(r**2 - y**2 - z**2)``. The height comes from this shot's
+    own vertical launch along the straight line from the tee
+    (``tee_position_m``: forward, lateral and height from the radar's phase
+    centre, the calibration's tee). Launch direction is then
+    ``atan2(v_y, v_x)`` of the robust velocity through those positions, as
+    ``club.estimate_club_path`` does for the club: geometry, no fitted scale.
+    Gravity's few centimetres over the window are left out.
+
+    The coherence gate is HLCMF-v1's: the equal-weight resultant length of the
+    per-frame phases. Positive starts right of the boresight, negative left.
+    """
+    collected = _tx2_phase_snapshots(
+        raw,
+        shot,
+        tdm_sign=tdm_sign,
+        phase_velocity_ms=phase_velocity_ms,
+        prepared=prepared,
+        separate_references=True,
+    )
+    if collected is None:
+        return None, None, None
+    geometry, snapshots = collected
+    if len(snapshots) < 6:
+        return None, None, "hlcmf_v2_insufficient_snapshots"
+    frames = sorted({snapshot[0] for snapshot in snapshots})
+    if len(frames) < HORIZONTAL_MOTION_MIN_FRAMES:
+        return None, None, "hlcmf_v2_insufficient_frames"
+    times: list[float] = []
+    vs_tx1: list[float] = []
+    vs_tx3: list[float] = []
+    for frame in frames:
+        in_frame = [snapshot for snapshot in snapshots if snapshot[0] == frame]
+        weights = [snapshot[4] for snapshot in in_frame]
+        vs_tx1.append(_weighted_circular_mean([snapshot[2] for snapshot in in_frame], weights)[0])
+        vs_tx3.append(_weighted_circular_mean([snapshot[3] for snapshot in in_frame], weights)[0])
+        times.append(float(np.mean([snapshot[1] for snapshot in in_frame])))
+    midpoint = 0.5 * (_continuous_phase(np.asarray(vs_tx1)) + _continuous_phase(np.asarray(vs_tx3)))
+    frame_phases = [float(phase) for phase in np.angle(np.exp(1j * midpoint))]
+    _mean_deg, coherence = _referenced_horizontal_mean(
+        frame_phases,
+        [1.0] * len(frame_phases),
+        phase_reference_rad=phase_reference_rad,
+    )
+    phases = np.asarray(frame_phases)
+    if phase_reference_rad is not None:
+        phases = np.angle(np.exp(1j * (phases - phase_reference_rad)))
+    # TrackMan sign: positive right of the boresight (as HLCMF-v1)
+    bearing_rad = -doa.tx2_phase_to_axis_angle_rad(phases)
+    t_array = np.asarray(times)
+    ranges_m = (
+        np.asarray([shot.track.range_at(time_s, geometry.range_res_m) for time_s in t_array])
+        - cal.range_bias_m
+    )
+    lateral_m = ranges_m * np.sin(bearing_rad)
+    tee_x_m, tee_y_m, tee_z_m = tee_position_m
+    rise = math.tan(math.radians(vertical_launch_deg))
+    height_m = np.full_like(ranges_m, tee_z_m)
+    for _ in range(4):  # the height depends on the downrange distance: settle both
+        downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
+        travelled_m = np.hypot(np.maximum(downrange_m - tee_x_m, 0.0), lateral_m - tee_y_m)
+        height_m = tee_z_m + travelled_m * rise
+    downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
+    v_lateral = _median_pairwise_slope(t_array, lateral_m)
+    v_forward = _median_pairwise_slope(t_array, downrange_m)
+    angle_deg = math.degrees(math.atan2(v_lateral, v_forward))
+    if coherence < HORIZONTAL_COHERENCE_MIN:
+        # measured and labelled (D15, P8-7); consumers read the status
+        return angle_deg, coherence, "hlcmf_v2_low_coherence"
+    return angle_deg, coherence, "hlcmf_v2_accepted"
 
 
 def estimate_lcmf_v1(
@@ -916,14 +1058,6 @@ def estimate_lcmf_v1(
         # OPS measures radial speed directly. TI range slope still supplies
         # position, but multipath-biased slope must not rotate TDM phase.
         phase_velocity_ms = ball_speed_mph / MPH_PER_MS
-        horizontal_deg, horizontal_conf, horizontal_status = _tx2_horizontal_proxy(
-            full_raw,
-            shot,
-            tdm_sign=shot.tdm_sign_used,
-            phase_reference_rad=horizontal_phase_reference_rad,
-            phase_velocity_ms=phase_velocity_ms,
-            prepared=prepared,
-        )
         cache, radar_geometry, cube = _snapshot_cache(
             raw,
             shot,
@@ -980,6 +1114,32 @@ def estimate_lcmf_v1(
     if raw_angle_deg is None:
         return _result_from_track(
             "rejected_no_conditioned_channel",
+            shot,
+            cal=cal,
+            effective_tdm_tau_s=tdm_tau_s,
+            effective_loop_period_s=loop_period_s,
+            evidence_status=evidence_status,
+        )
+    try:
+        # HLCMF-v2 places the ball in height from this shot's own vertical launch
+        horizontal_deg, horizontal_conf, horizontal_status = _tx2_horizontal_motion(
+            full_raw,
+            shot,
+            cal,
+            tdm_sign=shot.tdm_sign_used,
+            vertical_launch_deg=raw_angle_deg,
+            tee_position_m=(
+                model_geometry["tee_x_m"],
+                model_geometry["lateral_offset_m"],
+                model_geometry["ball_height_m"] - model_geometry["phase_centre_height_m"],
+            ),
+            phase_reference_rad=horizontal_phase_reference_rad,
+            phase_velocity_ms=phase_velocity_ms,
+            prepared=prepared,
+        )
+    except (ValueError, IndexError, np.linalg.LinAlgError) as error:
+        return _result_from_track(
+            str(error).replace(" ", "_"),
             shot,
             cal=cal,
             effective_tdm_tau_s=tdm_tau_s,

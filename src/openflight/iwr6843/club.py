@@ -767,7 +767,7 @@ def estimate_club_path(
     tdm = cube3.reshape(n_frames, loops, n_tx, n_rx, n_samples)
     # Range-snapshot dumps (production) are already range-domain; raw-ADC
     # dumps (replay of older captures) still need the range FFT. Mirror
-    # lcmf._tx2_horizontal_proxy: FFTing an already-FFT'd range snapshot a
+    # lcmf._tx2_phase_snapshots: FFTing an already-FFT'd range snapshot a
     # second time would flatten a real peak into noise.
     rfft = tdm if is_range_snapshot(_meta3) else np.fft.fft(tdm, axis=-1)
     tdm = rfft - rfft.mean(axis=1, keepdims=True)

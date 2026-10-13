@@ -82,6 +82,7 @@ def synth_ball_position(
     lateral_m=0.0,
     accel_ms2=0.0,
     gravity_ms2=GRAVITY_MS2,
+    horizontal_deg=0.0,
 ):
     """The ball's (forward, lateral, up) at ``t_s`` after it leaves the tee.
 
@@ -89,16 +90,18 @@ def synth_ball_position(
     the virtual array's phase centre, heights above the hitting surface.
     ``tee_m`` is the slant range from the phase centre to the resting ball.
     The ball flies along the launch direction, ``accel_ms2`` changing its
-    speed along that line, and falls under gravity.
+    speed along that line, and falls under gravity. ``horizontal_deg`` turns
+    the launch direction target-right (+) or left (-) of the boresight.
     """
     centre_m = layout.phase_centre_height_m(np.radians(tilt_deg))
     tee_x = np.sqrt(tee_m**2 - (ball_height_m - centre_m) ** 2 - lateral_m**2)
     launch = np.radians(launch_deg)
+    heading = np.radians(horizontal_deg)
     along = speed_ms * t_s + 0.5 * accel_ms2 * t_s * t_s
     return np.array(
         [
-            tee_x + along * np.cos(launch),
-            lateral_m,
+            tee_x + along * np.cos(launch) * np.cos(heading),
+            lateral_m + along * np.cos(launch) * np.sin(heading),
             ball_height_m + along * np.sin(launch) - 0.5 * gravity_ms2 * t_s * t_s,
         ]
     )
@@ -156,6 +159,7 @@ def synth_shot(
     ball_height_m=RADAR_HEIGHT_M,
     lateral_m=0.0,
     gravity_ms2=GRAVITY_MS2,
+    horizontal_deg=0.0,
 ):
     """Raw dump bytes for one synthetic ball flight, with exact per-antenna paths.
 
@@ -203,6 +207,7 @@ def synth_shot(
                     lateral_m=lateral_m,
                     accel_ms2=accel_ms2,
                     gravity_ms2=gravity_ms2,
+                    horizontal_deg=horizontal_deg,
                 )
                 for rx in range(4):
                     cube[slot, n_tx * loop + chirp, rx] = amp * synth_channel(
@@ -1116,7 +1121,7 @@ def test_lcmf_v1_uses_ops_speed_for_tdm_phase_compensation(cal, monkeypatch):
     ops_speed_ms = 37.0
     observed = {}
     original_cache = lcmf._snapshot_cache  # pylint: disable=protected-access
-    original_horizontal = lcmf._tx2_horizontal_proxy  # pylint: disable=protected-access
+    original_horizontal = lcmf._tx2_horizontal_motion  # pylint: disable=protected-access
 
     def cache_spy(*args, phase_velocity_ms=None, **kwargs):
         observed["vertical"] = phase_velocity_ms
@@ -1127,7 +1132,7 @@ def test_lcmf_v1_uses_ops_speed_for_tdm_phase_compensation(cal, monkeypatch):
         return original_horizontal(*args, phase_velocity_ms=phase_velocity_ms, **kwargs)
 
     monkeypatch.setattr(lcmf, "_snapshot_cache", cache_spy)
-    monkeypatch.setattr(lcmf, "_tx2_horizontal_proxy", horizontal_spy)
+    monkeypatch.setattr(lcmf, "_tx2_horizontal_motion", horizontal_spy)
 
     estimate_lcmf_v1(
         raw,
@@ -1208,6 +1213,74 @@ def test_lcmf_v1_mti_uses_per_frame_capture_geometry(cal, monkeypatch):
 
     assert observed_geometry
     assert all(geometry is not None for geometry in observed_geometry)
+
+
+@pytest.mark.parametrize(
+    ("tee_m", "horizontal_deg", "launch_deg"),
+    [
+        (1.5, 0.0, 18.0),
+        (1.5, 5.0, 18.0),
+        (1.5, -5.0, 18.0),
+        (1.5, 10.0, 18.0),
+        (1.5, -10.0, 18.0),
+        (1.0, 10.0, 18.0),
+        (1.0, -5.0, 18.0),
+        (2.5, 10.0, 18.0),
+        (2.5, -5.0, 18.0),
+        # a wedge's climb cancels the averaged TX1/TX3 reference late in flight
+        (1.0, 0.0, 30.0),
+        (1.0, 10.0, 30.0),
+    ],
+)
+def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
+    tee_m, horizontal_deg, launch_deg
+):
+    """D36 item 3: horizontal launch is the ball's direction of motion.
+
+    Seen from a radar behind a tee 1-2.5 m away, the late-flight bearing (the
+    old proxy, averaged over the last eight frames at 2.2-4.6 m) reads only
+    0.5-0.7 x the launch direction. Each frame's bearing and range place the
+    ball laterally and downrange, and the fitted velocity's direction is the
+    launch direction: geometry, with no fitted scale.
+    """
+    cal = Calibration.identity()
+    cal.tilt_rad = np.radians(10.4)
+    cal.tee_range_m = tee_m
+    cal.tee_ball_height_m = RADAR_HEIGHT_M
+    cal.meta["radar_height_m"] = RADAR_HEIGHT_M
+    raw = synth_shot(
+        speed_ms=45.0,
+        launch_deg=launch_deg,
+        tee_m=tee_m,
+        horizontal_deg=horizontal_deg,
+        n_loops=12,
+        n_tx=3,
+        n_frames=18,
+        frame_period_us=4000,
+        trigger_frame=0,
+    )
+
+    result = estimate_lcmf_v1(raw, cal, ball_speed_mph=45.0 * 2.23694, club="9i")
+
+    assert result.accepted
+    assert result.horizontal_status == "hlcmf_v2_accepted"
+    assert result.horizontal_deg == pytest.approx(horizontal_deg, abs=0.5)
+    # the superseded late-flight bearing on the same capture shows the bias
+    shot = process_dump(
+        project_tx_pair(raw, (0, 2)),
+        cal,
+        club="9i",
+        loop_period_s=TX2_LOOP_PERIOD_S,
+        tdm_tau_s=TX2_VERTICAL_TDM_TAU_S,
+        tdm_sign_policy="positive",
+    )
+    old_deg, _coherence, old_status = _tx2_horizontal_proxy(
+        raw, shot, tdm_sign=1, phase_velocity_ms=45.0
+    )
+    assert old_status == "hlcmf_v1_accepted"
+    if horizontal_deg:
+        assert abs(old_deg) < 0.75 * abs(horizontal_deg)
+        assert abs(result.horizontal_deg - horizontal_deg) < 0.25 * abs(old_deg - horizontal_deg)
 
 
 def test_tx2_horizontal_uses_tail_of_ball_track_not_fixed_ring_tail():
@@ -1305,3 +1378,48 @@ def test_horizontal_proxy_withholds_incoherent_frames(monkeypatch):
     assert angle_deg is not None and math.isfinite(angle_deg)
     assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
     assert status == "hlcmf_v1_low_coherence"
+
+
+def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
+    """D36 item 3: HLCMF-v2 keeps v1's coherence gate, under its own status."""
+    n_frames, n_loops, n_tx, n_rx, n_bins = 12, 10, 3, 4, 80
+    cube = np.zeros((n_frames, n_loops * n_tx, n_rx, n_bins), dtype=complex)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=3,
+        frame_period_us=6000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16,
+        range_bin_start=20,
+    )
+    track = BallTrack(
+        speed_ms=45.0,
+        slope_bins=900.0,
+        intercept_bins=31.0,
+        rms_bins=0.2,
+        n_inliers=80,
+        t_first=0.0,
+        t_last=0.067,
+        low_confidence=False,
+    )
+    shot = ShotMeasurement(geometry=None, ball_found=True, track=track)
+
+    def alternating_frame_phases(_mti, frame, *_args, **_kwargs):
+        phase = 0.0 if frame % 2 == 0 else np.pi
+        return phase, phase, 1.0
+
+    monkeypatch.setattr(lcmf.doa, "tx2_reference_phases_at", alternating_frame_phases)
+
+    angle_deg, coherence, status = lcmf._tx2_horizontal_motion(  # pylint: disable=protected-access
+        raw,
+        shot,
+        Calibration.identity(),
+        tdm_sign=1,
+        vertical_launch_deg=18.0,
+        tee_position_m=(1.5, 0.0, 0.0),
+    )
+
+    # D15 (P8-7): the value is kept and labelled by its status and coherence
+    assert angle_deg is not None and math.isfinite(angle_deg)
+    assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
+    assert status == "hlcmf_v2_low_coherence"

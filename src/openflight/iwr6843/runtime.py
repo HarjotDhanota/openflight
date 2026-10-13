@@ -48,7 +48,9 @@ def horizontal_confidence_from(coherence: float | None) -> float:
     return round(min(HORIZONTAL_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
 
 
-LOW_COHERENCE_HORIZONTAL = "hlcmf_v1_low_coherence"
+LOW_COHERENCE_HORIZONTAL = "hlcmf_v2_low_coherence"
+# Recorded sessions carry the superseded late-flight bearing's label (D36 item 3).
+LOW_COHERENCE_HORIZONTAL_STATUSES = frozenset({"hlcmf_v1_low_coherence", LOW_COHERENCE_HORIZONTAL})
 
 
 def camera_horizontal_input(measurement) -> tuple[float | None, float | None]:
@@ -60,8 +62,9 @@ def camera_horizontal_input(measurement) -> tuple[float | None, float | None]:
     if measurement is None or not getattr(measurement, "accepted", False):
         return None, None
     horizontal = getattr(measurement, "horizontal_deg", None)
-    if horizontal is None or getattr(measurement, "horizontal_status", None) == (
-        LOW_COHERENCE_HORIZONTAL
+    if (
+        horizontal is None
+        or getattr(measurement, "horizontal_status", None) in LOW_COHERENCE_HORIZONTAL_STATUSES
     ):
         return None, None
     return horizontal, horizontal_confidence_from(

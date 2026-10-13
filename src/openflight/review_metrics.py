@@ -313,7 +313,11 @@ def _iwr_metrics(stage: Any, tee_range: Mapping[str, Any] | None = None) -> list
     # a low-coherence horizontal is measured and labelled (P8-7)
     horizontal_because = [
         *experimental_because,
-        *([str(horizontal_status)] if horizontal_status == "hlcmf_v1_low_coherence" else []),
+        *(
+            [str(horizontal_status)]
+            if horizontal_status in ("hlcmf_v1_low_coherence", "hlcmf_v2_low_coherence")
+            else []
+        ),
     ]
     metrics.append(
         _metric(
