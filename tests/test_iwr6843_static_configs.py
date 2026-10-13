@@ -105,21 +105,31 @@ def test_a_far_patch_takes_the_wider_setup_profile():
     assert (near_low, near_high) == pytest.approx((0.375, 2.8125))
     assert (far_low, far_high) == pytest.approx((0.375, 3.703125))
 
-    chosen = {
+    # 13 Oct: until the radar has measured the ball, every setup capture is far
+    unknown = {
         distance: ts.static_config_for_patch(_patch(camera, distance), default, far, bias)
         for distance in (1.25, 2.0, 2.5, 3.0)
     }
-    assert {distance: facts["chosen"] for distance, (_path, facts) in chosen.items()} == {
-        1.25: "default",
-        2.0: "default",
+    assert {distance: facts["chosen"] for distance, (_path, facts) in unknown.items()} == {
+        1.25: "far",
+        2.0: "far",
         2.5: "far",
         3.0: "far",
     }
-    for distance, (path, facts) in chosen.items():
+    assert all(facts["basis"] == "ball_range_not_yet_known" for _path, facts in unknown.values())
+    assert ts.static_config_for_patch(None, default, far, bias)[1]["chosen"] == "far"
+    # with the ball's range known, the default profile serves while it covers the ball
+    known = {
+        distance: ts.static_config_for_patch(None, default, far, bias, ball_range_m=distance)
+        for distance in (1.25, 2.0, 2.5, 3.0)
+    }
+    assert {distance: facts["chosen"] for distance, (_path, facts) in known.items()} == {
+        1.25: "default",
+        2.0: "default",
+        2.5: "default",
+        3.0: "far",
+    }
+    for distance, (path, facts) in known.items():
         usable = facts["profiles"][facts["chosen"]]["usable_corrected_m"][1]
-        record = _patch(camera, distance)
-        # the patch's far edge and the window margin lie inside the chosen capture
-        assert record["nominal_edges_m"]["far_slant_m"] + 0.1 <= usable
+        assert distance + 0.1 <= usable
         assert path == (far if facts["chosen"] == "far" else default)
-    # without a patch (an older setup), the default profile
-    assert ts.static_config_for_patch(None, default, far, bias)[1]["chosen"] == "default"

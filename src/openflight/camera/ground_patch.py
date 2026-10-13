@@ -94,47 +94,65 @@ def ground_patch_policy() -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class GroundPatch:
-    """A square of ground, centred ``(lateral, forward)`` in the rig frame."""
+    """A rectangle of ground, centred ``(lateral, forward)`` in the rig frame.
+
+    ``size_m`` is its width across; ``depth_m`` its extent along the boresight, the
+    width again when not given (the dragged square, P8-1). The fixed placement box
+    (placement_box) is 0.6 m across and 1.1 m deep.
+    """
 
     centre_lateral_m: float
     centre_forward_m: float
     size_m: float = PATCH_SIZE_M
+    depth_m: float | None = None
 
     def __post_init__(self) -> None:
-        for name in ("centre_lateral_m", "centre_forward_m", "size_m"):
+        if self.depth_m is None:
+            object.__setattr__(self, "depth_m", self.size_m)
+        for name in ("centre_lateral_m", "centre_forward_m", "size_m", "depth_m"):
             value = getattr(self, name)
             if isinstance(value, bool) or not math.isfinite(float(value)):
                 raise ValueError(f"{name} must be finite")
             object.__setattr__(self, name, float(value))
-        if self.size_m <= 0.0:
+        if self.size_m <= 0.0 or float(self.depth_m) <= 0.0:
             raise ValueError("the patch size must be positive")
-        if self.centre_forward_m - self.size_m / 2.0 <= 0.0:
+        if self.centre_forward_m - float(self.depth_m) / 2.0 <= 0.0:
             raise ValueError("the patch must lie in front of the lens")
 
     def corners(self, height_m: float = 0.0) -> np.ndarray:
         """Near-left, near-right, far-right, far-left, at ``height_m``."""
         half = self.size_m / 2.0
+        deep = float(self.depth_m) / 2.0
         x, y = self.centre_lateral_m, self.centre_forward_m
         return np.asarray(
             [
-                (x - half, y - half, height_m),
-                (x + half, y - half, height_m),
-                (x + half, y + half, height_m),
-                (x - half, y + half, height_m),
+                (x - half, y - deep, height_m),
+                (x + half, y - deep, height_m),
+                (x + half, y + deep, height_m),
+                (x - half, y + deep, height_m),
             ]
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "centre_lfu_m": [self.centre_lateral_m, self.centre_forward_m],
             "size_m": self.size_m,
             "frame": "rig_lfu_origin_on_the_surface_below_the_lens",
         }
+        if self.depth_m != self.size_m:
+            payload["depth_m"] = self.depth_m
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "GroundPatch":
         centre = payload["centre_lfu_m"]
-        return cls(float(centre[0]), float(centre[1]), float(payload.get("size_m", PATCH_SIZE_M)))
+        depth = payload.get("depth_m")
+        return cls(
+            float(centre[0]),
+            float(centre[1]),
+            float(payload.get("size_m", PATCH_SIZE_M)),
+            float(depth) if depth is not None else None,
+        )
 
 
 def _origins(camera) -> tuple[np.ndarray, np.ndarray]:

@@ -41,7 +41,9 @@ from openflight.camera import (
     camera_roll,
     camera_tilt,
     ground_patch,
+    lens_profiles,
     patch_pairing,
+    placement_box,
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
@@ -250,14 +252,17 @@ ARMS: dict[str, Arm] = {
 ARM_ORDER = tuple(ARMS)
 
 
-def mode_focal_px(arm: Arm, rig_geometry: Path) -> float:
-    """The arm's focal length from the rig file, by its binning (wiring audit C2).
+def mode_focal_px(arm: Arm, rig_geometry: Path, lens=None) -> float:
+    """The arm's focal length: the selected lens's, else the rig file's by its binning.
 
     The 2x-binned modes share one focal because each output pixel spans the same
-    two sensor pixels (320x200 is a crop of 640x400); 1:1 doubles it.
+    two sensor pixels (320x200 is a crop of 640x400); 1:1 doubles it (wiring
+    audit C2). ``lens`` is a ``lens_profiles.ActiveLens``: the lens on the unit.
     """
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
+    if lens is not None:
+        return float(lens.focal_px(arm.width))
     return ball_pixels.mode_focal_px(arm.width, RigGeometry.from_json(rig_geometry))
 
 
@@ -831,17 +836,43 @@ PATCH_BALL_SAVED_REASON = "patch_ball_saved"
 PATCH_BALL_WITHHELD_PREFIX = "patch_ball_withheld_"
 
 
-def patch_ball_decision(camera_candidate: Mapping | None, iwr_candidate: Mapping | None) -> dict:
-    """Pair the camera's ball with the radar's candidates in the patch (P8-4)."""
+def patch_ball_decision(  # pylint: disable=too-many-arguments
+    camera_candidate: Mapping | None,
+    iwr_candidate: Mapping | None,
+    *,
+    camera_status: str | None = None,
+    camera_ray: Mapping | None = None,
+    box_range_m: Sequence[float] | None = None,
+) -> dict:
+    """Pair the camera's ball with the radar's candidates in the box (P8-4, 13 Oct).
+
+    ``camera_status`` says whether the camera looked (patch_pairing): a camera that
+    found no ball never lets a radar peak stand in. ``camera_ray`` carries the ray's
+    window (and its distance once the tilt is calibrated); ``box_range_m`` is the
+    box's radar range extent, for a radar-only save.
+    """
     evidence = (camera_candidate or {}).get("evidence") or {}
     ball = evidence.get("patch_ball_camera") if isinstance(evidence, Mapping) else None
     result = evidence.get("result") if isinstance(evidence, Mapping) else None
     if not isinstance(result, Mapping) or result.get("status") != "selected":
         ball = None
+    if isinstance(ball, Mapping) and isinstance(camera_ray, Mapping):
+        ball = {**ball, **{key: value for key, value in camera_ray.items() if value is not None}}
     radar_evidence = (iwr_candidate or {}).get("evidence") or {}
     found = radar_evidence.get("patch_candidates") if isinstance(radar_evidence, Mapping) else None
     radar = list((found or {}).get("candidates") or []) if isinstance(found, Mapping) else []
-    decision = patch_pairing.pair_patch_ball(ball if isinstance(ball, Mapping) else None, radar)
+    coherent_available = (
+        bool(found.get("coherent_available"))
+        if isinstance(found, Mapping) and "coherent_available" in found
+        else None
+    )
+    decision = patch_pairing.pair_patch_ball(
+        ball if isinstance(ball, Mapping) else None,
+        radar,
+        camera_status=camera_status or ("found" if isinstance(ball, Mapping) else "no_ball"),
+        coherent_available=coherent_available,
+        box_range_m=box_range_m,
+    )
     return {
         **decision,
         "radar_warnings": list((found or {}).get("warnings") or [])
@@ -998,12 +1029,20 @@ NET_MIN_PEAK_DB = 10.0
 DEFAULT_NET_RANGE_M = 4.6
 
 
-def empty_capture_net_range(record: Mapping) -> dict:
-    """The net's apparent range from an empty static capture, or why none was found."""
+def empty_capture_net_range(record: Mapping, window_m: Sequence[float] | None = None) -> dict:
+    """The net's apparent range from an empty static capture, or why none was found.
+
+    ``window_m`` (apparent) narrows the search to where the tester's floor line
+    puts the net (``net_line_window``); without it, ``NET_SEARCH_WINDOW_M``.
+    """
+    window = (
+        (float(window_m[0]), float(window_m[1])) if window_m is not None else NET_SEARCH_WINDOW_M
+    )
     facts = {
         "source": "empty_static_capture",
         "range_space": "apparent",
-        "window_m": list(NET_SEARCH_WINDOW_M),
+        "window_m": list(window),
+        "window_basis": "floor_line" if window_m is not None else "default",
         "capture_id": record.get("capture_id") if isinstance(record, Mapping) else None,
         "net_range_m": None,
     }
@@ -1015,14 +1054,14 @@ def empty_capture_net_range(record: Mapping) -> dict:
     ranges = (profile.range_bin_start + np.arange(profile.range_bin_count)) * (
         profile.range_resolution_m
     )
-    inside = np.flatnonzero((ranges >= NET_SEARCH_WINDOW_M[0]) & (ranges <= NET_SEARCH_WINDOW_M[1]))
+    inside = np.flatnonzero((ranges >= window[0]) & (ranges <= window[1]))
     if inside.size < 3:
         return {
             **facts,
             "status": "not_found",
             "reason": (
                 f"the empty capture covers {ranges[0]:.2f}-{ranges[-1]:.2f} m, "
-                f"not the {NET_SEARCH_WINDOW_M[0]:g}-{NET_SEARCH_WINDOW_M[1]:g} m window"
+                f"not the {window[0]:g}-{window[1]:g} m window"
             ),
         }
     level_db = 10.0 * np.log10(power)
@@ -1067,18 +1106,140 @@ def empty_capture_net_range(record: Mapping) -> dict:
     return {**facts, "status": "measured", "net_range_m": round(float(net), 3)}
 
 
-def setup_net_range(solution: tee_range.TeeRangeSolution | None) -> dict:
+def setup_net_range(
+    solution: tee_range.TeeRangeSolution | None, window_m: Sequence[float] | None = None
+) -> dict:
     """The net range this setup's empty static capture measured, if any."""
     for item in solution.candidates if solution is not None else ():
         empty = (item.evidence or {}).get("empty_result")
         if item.source_group == "iwr" and isinstance(empty, Mapping):
-            return empty_capture_net_range(empty)
+            return empty_capture_net_range(empty, window_m)
     return {
         "source": "empty_static_capture",
         "range_space": "apparent",
         "net_range_m": None,
         "status": "not_found",
         "reason": "this setup has no empty static capture",
+    }
+
+
+# The tester drags one horizontal line to where the floor meets the net or screen
+# (13 Oct). At 95 mm a floor row is a poor ruler (the foot of a screen 4.5 m out is
+# about 20 rows below the horizon), so the row only bounds where the radar looks
+# for the net in the empty capture; the radar's far profile measures it when the
+# net lies inside the capture. Stored per tester beside the box.
+NET_LINE_FILE = "net-line.json"
+NET_LINE_SCHEMA = "openflight.tester_net_line.v1"
+# a row is a usable ruler when its window is at most this fraction of its distance
+NET_LINE_CONDITIONED_FRACTION = 0.3
+# the radar looks this far either side of the row's window for the net
+NET_LINE_SEARCH_MARGIN_M = 0.3
+NET_LINE_MESSAGES = {
+    "not_set": "Drag the line to where the floor meets the net or screen.",
+    "set": "Net line set.",
+    "measured_by_radar": "The radar measured the net.",
+    "poorly_conditioned": (
+        "The net is too far for the camera to judge from the floor line; the radar looks "
+        "for it, and the swing server's default is used until it is measured."
+    ),
+}
+
+
+def _floor_range_m(camera, pixel: Sequence[float]) -> float | None:
+    """How far from the radar, along the floor, the floor seen at this pixel lies."""
+    ray = np.asarray(camera.ray_model.rays(np.asarray(pixel, dtype=float)), dtype=float)
+    lens = np.asarray(camera.camera_origin_lfu, dtype=float)
+    if ray[2] >= -1e-9:
+        return None
+    point = lens + (-lens[2] / float(ray[2])) * ray
+    radar = np.asarray(camera.radar_origin_lfu, dtype=float)
+    return float(math.hypot(point[0] - radar[0], point[1] - radar[1]))
+
+
+def net_line_window(camera, row_px: float, *, pad_deg: float) -> dict:
+    """The net's range window from the floor line's row, and whether it can say more.
+
+    The row's floor point at the picture's middle column, with the camera tilt's
+    uncertainty (``pad_deg``) either way: tilted up, the same row meets the floor
+    farther out, or never. ``status`` is ``set`` when the window is narrow enough
+    to be a ruler, else ``poorly_conditioned``.
+    """
+    row = float(row_px)
+    if not 0.0 <= row <= camera.image_height_px:
+        raise ValueError(f"row_px must lie in the {camera.image_height_px}-row picture")
+    pixel = (camera.image_width_px / 2.0, row)
+    nominal = _floor_range_m(camera, pixel)
+    near = _floor_range_m(placement_box.pitched(camera, -abs(pad_deg)), pixel)
+    far = _floor_range_m(placement_box.pitched(camera, abs(pad_deg)), pixel)
+    conditioned = (
+        nominal is not None
+        and near is not None
+        and far is not None
+        and (far - near) <= NET_LINE_CONDITIONED_FRACTION * nominal
+    )
+    return {
+        "row_px": round(row, 2),
+        "frame_size_px": [int(camera.image_width_px), int(camera.image_height_px)],
+        "nominal_m": round(nominal, 3) if nominal is not None else None,
+        "window_m": [
+            round(near, 3) if near is not None else None,
+            round(far, 3) if far is not None else None,
+        ],
+        "pad_deg": float(pad_deg),
+        "status": "set" if conditioned else "poorly_conditioned",
+    }
+
+
+def net_search_window(line: Mapping | None, bias_m: float = 0.0) -> list[float] | None:
+    """Where the radar looks for the net (apparent), from the floor line, or None."""
+    if not isinstance(line, Mapping):
+        return None
+    near, far = (line.get("window") or {}).get("window_m") or (None, None)
+    low = (
+        NET_SEARCH_WINDOW_M[0] if near is None else max(0.5, float(near) - NET_LINE_SEARCH_MARGIN_M)
+    )
+    high = NET_SEARCH_WINDOW_M[1] if far is None else float(far) + NET_LINE_SEARCH_MARGIN_M
+    return [round(low + bias_m, 3), round(max(high, low + 0.2) + bias_m, 3)]
+
+
+def read_net_line(root: Path) -> dict | None:
+    try:
+        payload = json.loads((root / NET_LINE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("schema") != NET_LINE_SCHEMA:
+        return None
+    return dict(payload)
+
+
+def remember_net_line(root: Path, record: Mapping) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    atomic_write(
+        root / NET_LINE_FILE,
+        (json.dumps({**dict(record), "schema": NET_LINE_SCHEMA}, indent=2) + "\n").encode("utf-8"),
+    )
+
+
+def net_line_status(line: Mapping | None, measured: Mapping | None) -> dict:
+    """The contract's ``net_line``: the dragged row, and the net's range where measured."""
+    row = line.get("row_px") if isinstance(line, Mapping) else None
+    window = (line or {}).get("window") if isinstance(line, Mapping) else None
+    if isinstance(measured, Mapping) and measured.get("status") == "measured":
+        status, range_m = "measured_by_radar", measured.get("net_range_m")
+    elif row is None:
+        status, range_m = "not_set", None
+    elif (window or {}).get("status") == "set":
+        status, range_m = "set", (window or {}).get("nominal_m")
+    else:
+        status, range_m = "poorly_conditioned", None
+    return {
+        "row_px": row,
+        "range_m": range_m,
+        "range_space": "apparent" if status == "measured_by_radar" else "floor_line",
+        "status": status,
+        "message": NET_LINE_MESSAGES[status],
+        "window_m": (window or {}).get("window_m"),
+        "measured": dict(measured) if isinstance(measured, Mapping) else None,
     }
 
 
@@ -1103,6 +1264,10 @@ def setup_placement_box(solution: tee_range.TeeRangeSolution | None) -> dict | N
                     "outline_px",
                     "search_outline_px",
                     "camera_tilt",
+                    "mode",
+                    "box_outline_px",
+                    "placement_window_m",
+                    "lens",
                 )
                 return {
                     key: tee_range._thaw_json(value)  # pylint: disable=protected-access
@@ -1132,6 +1297,8 @@ def tee_range_handoff(
     reference: tee_range_setup.TeeRangeEpochReference | None = None,
     camera_tilt_calibration: Mapping | None = None,
     target_line_record: Mapping | None = None,
+    net_line: Mapping | None = None,
+    lens=None,
 ) -> tuple[list[str], dict]:
     """The swing server's tee-range arguments, and the record of what they hand over.
 
@@ -1142,6 +1309,10 @@ def tee_range_handoff(
     (D34): its yaw goes to both kiosk yaw flags as one value, and the record says
     where it came from and how sure it is. Without one no yaw flag is passed, and
     the record says the target line was not set.
+
+    ``net_line`` is the tester's floor line (13 Oct): the net is looked for in the
+    empty capture where it puts it. ``lens`` is the lens on the unit: the kiosk's
+    camera metrics take its focal length (``--camera-lens-id``).
 
     The record goes into arm.json, setup_admission.json and the run's tee_range.json,
     so the tester's files say what the kiosk ran with (wiring audit S3).
@@ -1161,7 +1332,7 @@ def tee_range_handoff(
         status = "unqualified"
         source = (
             patch_pairing.SOURCES.get(decision["source"], f"unqualified_{decision['source']}")
-            if decision.get("schema") == patch_pairing.DECISION_SCHEMA
+            if decision.get("schema") in patch_pairing.DECISION_SCHEMAS
             else _EXPERIMENTAL_SOURCES[decision["source"]]
         )
         logger.warning(
@@ -1183,7 +1354,7 @@ def tee_range_handoff(
         status = source = "pending"
     tee_m = candidate.radar_slant_range_m if candidate is not None else None
     scene = setup_scene(solution, rig_geometry)
-    net = setup_net_range(solution)
+    net = setup_net_range(solution, net_search_window(net_line))
     measured_net = net["status"] == "measured"
     if not measured_net:
         net["default_m"] = DEFAULT_NET_RANGE_M
@@ -1223,7 +1394,7 @@ def tee_range_handoff(
     ]
     side_offset_m = (
         decision.get("side_offset_m")
-        if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
+        if decision is not None and decision.get("schema") in patch_pairing.DECISION_SCHEMAS
         else None
     )
     if side_offset_m is not None:
@@ -1252,6 +1423,9 @@ def tee_range_handoff(
         ),
     )
     args += line_args
+    if lens is not None and lens.lens_id is not None:
+        # every camera calculation in the kiosk takes the selected lens's focal length
+        args += ["--camera-lens-id", lens.lens_id]
     window = candidate.evidence.get("camera_window") if candidate is not None else None
     record = {
         "schema": HANDED_TO_SWINGS_SCHEMA,
@@ -1294,7 +1468,7 @@ def tee_range_handoff(
                     "label",
                 )
             }
-            if decision is not None and decision.get("schema") == patch_pairing.DECISION_SCHEMA
+            if decision is not None and decision.get("schema") in patch_pairing.DECISION_SCHEMAS
             else None
         ),
         "tee_side_offset_m": side_offset_m,
@@ -1313,6 +1487,9 @@ def tee_range_handoff(
         },
         # D34: the target line both yaw flags were set from, or why none was
         "target_line": line,
+        # 13 Oct: the floor line that bounded the net's search, and the lens
+        "net_line": net_line_status(net_line, net),
+        "lens": lens.to_dict() if lens is not None else None,
         **rig_geometry_hashes(rig_geometry),
         "cli_args": args,
     }
@@ -1881,13 +2058,16 @@ def action_commands(
     handed_to_swings: Mapping | None = None,
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
     zone_box: Sequence[int] | None = None,
+    ball_box: Sequence[int] | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
     ``handed_to_swings`` (from ``tee_range_handoff``) supplies the tee-range
     arguments, so the kiosk runs with exactly what the tester records.
     ``zone_box`` is the tester's confirmed box in this arm's pixels: the gain
-    screen measures its hitting zone there (P7-15).
+    screen measures its hitting zone there (P7-15). ``ball_box`` is the fixed box in
+    this arm's pixels: the kiosk finds the resting ball inside it before each swing
+    (per-shot re-location, 13 Oct).
     """
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
@@ -2014,6 +2194,13 @@ def action_commands(
     if action in {"ladder", "swings"}:
         if not tester_setup or not tester_setup.get("config_hash"):
             raise ValueError("tester setup evidence is required for capture")
+        # the tester page stays on screen: no fullscreen kiosk window (2a); the page's
+        # "Kiosk view" button opens the kiosk UI in a normal window or tab
+        commands[0].insert(2, "--no-browser")
+        if ball_box is not None:
+            commands[0].extend(
+                ["--camera-ball-box", ",".join(str(int(value)) for value in ball_box)]
+            )
         if iwr_static_port:
             # The kiosk must own the same interface the hardware check verified.
             commands[0].extend(["--iwr6843-port", iwr_static_port])
@@ -2536,6 +2723,7 @@ def distance_cues(
     rig_geometry: Path,
     tilt: Mapping | None = None,
     camera_tilt_calibration: Mapping | None = None,
+    focal_px: float | None = None,
 ) -> dict:
     """How far the camera thinks the ball is, two ways, beside the tape.
 
@@ -2549,7 +2737,8 @@ def distance_cues(
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     rig = RigGeometry.from_json(rig_geometry)
-    focal = ball_pixels.mode_focal_px(arm.width, rig)
+    # the selected lens's focal length when given, else the rig file's lens
+    focal = float(focal_px) if focal_px is not None else ball_pixels.mode_focal_px(arm.width, rig)
     cx, cy = arm.width / 2.0, arm.height / 2.0
     # with a tape, the ring's size IS the tape's: only the picture's own reading
     # of the same ball is an independent estimate, and without one there is none
@@ -2678,12 +2867,15 @@ def _reference_ball_camera(
     optical_calibration: Path | None,
     camera_placement: Path | None,
     camera_tilt_calibration: Mapping | None = None,
+    lens=None,
 ) -> BallPlaneCamera:
     """Build the active saved-image camera model without claiming qualification.
 
     ``camera_tilt_calibration`` is the unit's stored camera tilt (P8-5): the nominal
     model's pitch is the LIS3DH's composed with it. A calibrated optical model
     carries its own principal point and placement pose, so it is not applied there.
+    ``lens`` (a ``lens_profiles.ActiveLens``) gives the nominal model its focal
+    length: the lens on the unit, nominal or checkerboard-calibrated.
     """
     from openflight.rig_geometry import (  # noqa: PLC0415
         RigGeometry,
@@ -2756,7 +2948,7 @@ def _reference_ball_camera(
         else UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
     )
     return BallPlaneCamera.nominal(
-        focal_px=ball_pixels.mode_focal_px(arm.width, rig),
+        focal_px=mode_focal_px(arm, rig_geometry, lens),
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(applied["pitch_deg"]),
@@ -2778,20 +2970,20 @@ def _reference_ball_camera(
 
 
 PLACEMENT_BOX_FILE = "placement-box.json"
-# P8-1 (D14): the box became a 2 ft x 2 ft ground patch, stored as ground
-# coordinates in the rig frame. Records of the old pixel box (v1) are not read: the
-# page starts from the default patch instead.
-PLACEMENT_BOX_SCHEMA = ground_patch.PATCH_SCHEMA
+# 13 Oct (owner decision 1a): the box is the fixed, TrackMan-style box
+# (placement_box), stored with its ground rectangle and its projection. A dragged
+# patch (P8-1, ground_patch.PATCH_SCHEMA) is still read, never used: its binding
+# has no lens or box identity, so it asks to be confirmed again.
+PLACEMENT_BOX_SCHEMA = placement_box.RECORD_SCHEMA
+PLACEMENT_BOX_READABLE_SCHEMAS = frozenset({placement_box.RECORD_SCHEMA, ground_patch.PATCH_SCHEMA})
 # The patch is placed on the 1280x800 view; 640x400 is the same view 2x binned.
 PLACEMENT_BOX_ARM = "arm5"
-PUT_BALL_IN_BOX = (
-    "No ball found in the patch. The ball may be outside it: move the ball or the patch."
-)
+PUT_BALL_IN_BOX = placement_box.BALL_MESSAGES["no_ball"]
 # A re-confirmed box within this many pixels (1280x800) of the last one has not
 # moved: the light and the ball range stand (P7-15). A patch compares its ground
 # centre instead (ground_patch.PATCH_MOVE_TOLERANCE_M).
 PLACEMENT_BOX_MOVE_TOLERANCE_PX = 4
-PLACEMENT_BOX_REQUIRED = "confirm the patch first (step 1): drag it over the spot you will hit from"
+PLACEMENT_BOX_REQUIRED = "confirm the box first (step 1): put the ball in the box and confirm"
 # The ladder's modes: their light screens and the ball range need the box (P7-15).
 PLACEMENT_BOX_REQUIRED_ARMS = frozenset({"arm5", "arm6"})
 # The setup checks the box waits for are all but the hardware check, which follows it.
@@ -2800,14 +2992,21 @@ PLACEMENT_BOX_SETUP_REQUIRED = "confirm the physical setup first: the box follow
 
 
 def placement_box_binding(eligibility: Mapping) -> dict:
-    """The physical setup confirmation a box belongs to; a new one asks for it again."""
+    """The physical setup a box belongs to; a real change asks for it again.
+
+    The confirmation's identity, never its time: a restarted server reads the same
+    confirmation from disk and keeps the box (setup_eligibility). The lens and the
+    fixed box's identity (``unit_setup``, added by the server) are part of it, so a
+    lens change resets the box, and with it the aim point.
+    """
     confirmation = eligibility.get("operator_confirmation") or {}
-    # the confirmation's identity, never its time: a restarted server reads the same
-    # confirmation from disk and keeps the box (setup_eligibility)
+    unit = eligibility.get("unit_setup") or {}
     return {
         "tester_id": eligibility.get("tester_id"),
         "config_hash": eligibility.get("config_hash"),
         "operator_confirmation_id": confirmation.get("confirmation_id"),
+        "lens_id": unit.get("lens_id"),
+        "box_id": unit.get("box_id"),
     }
 
 
@@ -2890,7 +3089,13 @@ def confirm_placement_box(
     history = list(last.get("history") or []) if last is not None else []
     if same_spot:
         change = "reconfirmed"
-        saved = {**last, "setup_binding": dict(binding), "reconfirmed_at_utc": now}
+        # today's projection (tilt, lens) of the same box, its first confirmation kept
+        saved = {
+            **dict(record),
+            "setup_binding": dict(binding),
+            "confirmed_at_utc": last.get("confirmed_at_utc"),
+            "reconfirmed_at_utc": now,
+        }
         entry = {}
     else:
         change = "first" if last is None else "moved"
@@ -2966,6 +3171,7 @@ def patch_record(
     tilt: Mapping,
     roll_deg: float | None,
     source: str,
+    projection: ground_patch.PatchProjection | None = None,
 ) -> dict:
     """A patch in the 1280x800 view, as it is stored, shown and handed on (P8-1).
 
@@ -2975,14 +3181,15 @@ def patch_record(
     light screens, the ladder and the kiosk judge, as the P7-4 box was.
     """
     facts = camera_tilt_facts(tilt, camera)
-    search_pad, window_pad = ground_patch.tilt_pads_deg(facts["calibrated"])
-    projection = ground_patch.project_patch(
-        camera,
-        patch,
-        tilt_pad_deg=search_pad,
-        window_pad_deg=window_pad,
-        roll_deg=roll_deg,
-    )
+    if projection is None:
+        search_pad, window_pad = ground_patch.tilt_pads_deg(facts["calibrated"])
+        projection = ground_patch.project_patch(
+            camera,
+            patch,
+            tilt_pad_deg=search_pad,
+            window_pad_deg=window_pad,
+            roll_deg=roll_deg,
+        )
     projected = projection.to_dict()
     distance = patch_distance_facts(camera, patch)
     return {
@@ -3022,14 +3229,15 @@ def patch_distance_facts(camera: BallPlaneCamera, patch: ground_patch.GroundPatc
 
 
 def read_last_placement_box(root: Path) -> dict | None:
-    """The last patch this tester confirmed, to start the next setup from.
+    """The last box this tester confirmed: the fixed box, or an older dragged patch.
 
-    A record of the old pixel box (P7-4, before the patch) is not read.
+    An older patch is read so the page can say it must be confirmed again; it never
+    matches a current binding (no lens or box identity).
     """
     try:
         payload = json.loads((root / PLACEMENT_BOX_FILE).read_text(encoding="utf-8"))
         box = [int(value) for value in payload["box_px"]]
-        if payload.get("schema") != PLACEMENT_BOX_SCHEMA or len(box) != 4:
+        if payload.get("schema") not in PLACEMENT_BOX_READABLE_SCHEMAS or len(box) != 4:
             return None
         ground_patch.GroundPatch.from_dict(payload["patch"])
         return {**payload, "box_px": box}
@@ -3047,59 +3255,50 @@ def remember_placement_box(root: Path, record: Mapping) -> None:
     )
 
 
-def proposed_placement_box(
-    camera: BallPlaneCamera, tilt: Mapping, roll_deg: float | None, last: Mapping | None
+def fixed_box_record(
+    camera: BallPlaneCamera,
+    tilt: Mapping,
+    roll_deg: float | None,
+    *,
+    lens=None,
+    config: placement_box.PlacementBoxConfig | None = None,
 ) -> dict:
-    """Where the patch starts in a new setup: the last confirmed patch, else 1.25 m ahead.
+    """The fixed box in one camera mode, as it is stored, shown and handed on (1a).
 
-    The last patch keeps its ground position; its outline is projected again at
-    today's tilt, so a unit set down differently shows it where it now falls.
+    ``box_outline_px`` is the box the page draws: every ball resting in the
+    placement window, at any camera pitch within the tilt margin. The record is
+    the patch record the setup's windows, search and hand-off already read.
     """
-    source, patch = "default_straight_ahead", ground_patch.patch_at(camera)
-    if last is not None:
-        try:
-            patch = ground_patch.clamp_patch(
-                camera, ground_patch.GroundPatch.from_dict(last["patch"])
-            )
-            source = "last_confirmed"
-        except (KeyError, TypeError, ValueError):
-            pass
-    return patch_record(camera, patch, tilt=tilt, roll_deg=roll_deg, source=source)
-
-
-def requested_patch(camera: BallPlaneCamera, payload: Mapping) -> ground_patch.GroundPatch:
-    """The patch the page dropped: its ground centre, or the pixel over its centre.
-
-    The page drags the patch in true perspective itself and sends the ground centre
-    (``centre_m``, rig frame, metres); ``centre_px`` is the 1280x800 pixel over it.
-    Either is kept within the supported distances.
-    """
-    for key, parse in (("centre_m", "ground"), ("centre_px", "pixel")):
-        value = payload.get(key)
-        if value is None:
-            continue
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
-            raise ValueError(f"{key} must be two numbers")
-        numbers = [float(item) for item in value]
-        if not all(math.isfinite(item) for item in numbers):
-            raise ValueError(f"{key} must be two finite numbers")
-        if parse == "ground":
-            forward = max(numbers[1], ground_patch.PATCH_SIZE_M / 2.0 + 0.01)
-            return ground_patch.clamp_patch(camera, ground_patch.GroundPatch(numbers[0], forward))
-        return ground_patch.patch_from_centre_pixel(camera, numbers)
-    raise ValueError("centre_m (the patch's ground centre) or centre_px is required")
-
-
-def placement_box_record(
-    camera: BallPlaneCamera, tilt: Mapping, roll_deg: float | None, payload: Mapping
-) -> dict:
-    """The confirmed patch: where the tester dropped it, kept within the supported distances."""
-    patch = requested_patch(camera, payload)
-    record = patch_record(camera, patch, tilt=tilt, roll_deg=roll_deg, source="tester_dragged")
+    config = config or placement_box.load_config()
+    facts = camera_tilt_facts(tilt, camera)
+    projection = placement_box.project_fixed_box(
+        camera, calibrated=facts["calibrated"], roll_deg=roll_deg, config=config
+    )
+    record = patch_record(
+        camera,
+        projection.patch,
+        tilt=tilt,
+        roll_deg=roll_deg,
+        source=placement_box.SOURCE,
+        projection=projection,
+    )
+    record["arm_id"] = next(
+        (
+            arm_id
+            for arm_id, arm in ARMS.items()
+            if (arm.width, arm.height) == (camera.image_width_px, camera.image_height_px)
+            and arm_id in PLACEMENT_BOX_REQUIRED_ARMS
+        ),
+        PLACEMENT_BOX_ARM,
+    )
     return {
         **record,
-        "requested": {key: payload.get(key) for key in ("centre_m", "centre_px") if key in payload},
-        "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "mode": placement_box.MODE,
+        "box_outline_px": record["search_outline_px"],
+        "placement_window_m": list(config.placement_window_m),
+        "half_width_m": config.half_width_m,
+        "box_config": config.to_dict(),
+        "lens": lens.to_dict() if lens is not None else None,
     }
 
 
@@ -3130,11 +3329,14 @@ def patch_search_for(
 
     The patch is ground coordinates, so each camera mode projects it with its own
     model and the tilt it has now; a tilt calibrated since the patch was confirmed
-    (P8-5) tightens the outline by itself. Returns the search and what the live
-    view draws.
+    (P8-5) tightens the outline by itself. The fixed box is projected as the fixed
+    box is (placement_box). Returns the search and what the live view draws.
     """
-    patch = ground_patch.GroundPatch.from_dict(record["patch"])
-    projected = patch_record(camera, patch, tilt=tilt, roll_deg=roll_deg, source="setup_search")
+    if record.get("mode") == placement_box.MODE:
+        projected = fixed_box_record(camera, tilt, roll_deg)
+    else:
+        patch = ground_patch.GroundPatch.from_dict(record["patch"])
+        projected = patch_record(camera, patch, tilt=tilt, roll_deg=roll_deg, source="setup_search")
     search = ground_patch.PatchSearch.from_record(projected)
     view = {
         "arm_id": None,
@@ -3412,6 +3614,9 @@ class BoxPreviewExposure:
         self._state = "adjusting"
         self._steps = 0
         self._measured: dict | None = None
+        # who the live view knows as its analyzer: this, or the box's ball locator
+        # that wraps it (the live view ignores control changes from anyone else)
+        self.owner: object = self
 
     def split(self, product: float) -> tuple[int, float]:
         """Exposure and gain for this exposure x gain: the shortest exposure, then gain."""
@@ -3499,10 +3704,197 @@ class BoxPreviewExposure:
             wanted[1],
         )
         try:
-            self._live.change_controls(wanted[0], wanted[1], owner=self)
+            self._live.change_controls(wanted[0], wanted[1], owner=self.owner)
         except RuntimeError as exc:
             logger.info("[BOX_PREVIEW] the preview stopped before its controls changed: %s", exc)
         return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": "adjusting"}
+
+
+# The box step looks for the ball about once a second (the live view's own cadence);
+# a miss counts as "no ball" only once the picture's brightness has settled, or
+# after this long.
+BOX_BALL_SETTLE_S = 6.0
+# a wider ground region the box step searches when the box holds no ball, to say
+# "outside the box" rather than "no ball": the hitting area either side and beyond
+BOX_WIDE_SEARCH_WINDOW_M = (0.7, 4.0)
+BOX_WIDE_SEARCH_HALF_WIDTH_M = 1.2
+
+
+class BoxBallLocator:
+    """The box step's live analyzer: the picture's viewing brightness, and the ball.
+
+    Brightness as ``BoxPreviewExposure`` sets it (display only). The ball is looked
+    for inside the fixed box (its search outline in this mode) and, when the box
+    holds none, in a wider region, so the page can say ``outside_box``; the state
+    and its plain message come from ``placement_box.classify_ball``. Nothing it
+    finds is a distance: the IWR gives that.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        brightness: "BoxPreviewExposure",
+        camera: BallPlaneCamera,
+        box: ground_patch.PatchSearch,
+        wide: ground_patch.PatchSearch | None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        on_change: Callable[[dict], None] | None = None,
+    ):
+        self.brightness = brightness
+        # the live view knows this locator as its analyzer: brightness changes are its
+        brightness.owner = self
+        self.camera = camera
+        self.box = box
+        self.wide = wide
+        self._clock = clock
+        self._on_change = on_change
+        self._started = clock()
+        self._lock = threading.Lock()
+        self._state: dict = self._ball_payload({"state": "waiting", "selected": None}, None)
+
+    def _ball_payload(self, classified: Mapping, stable_since: float | None) -> dict:
+        selected = classified.get("selected") or {}
+        state = classified["state"]
+        now = self._clock()
+        return {
+            "state": state,
+            "center_px": (
+                [round(float(selected["x_px"]), 1), round(float(selected["y_px"]), 1)]
+                if selected
+                else None
+            ),
+            "diameter_px": round(float(selected["diameter_px"]), 2) if selected else None,
+            "stable_s": round(now - stable_since, 2) if stable_since is not None else None,
+            "stable_since": stable_since,
+            "message": placement_box.BALL_MESSAGES[state],
+            "frame_size_px": [int(self.camera.image_width_px), int(self.camera.image_height_px)],
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def __call__(self, frames: np.ndarray, frame_sequence: int, applied=None) -> dict:
+        result = dict(self.brightness(frames, frame_sequence, applied))
+        settled = (
+            self.brightness.status()["state"] in {"settled", "limit"}
+            or self._clock() - self._started >= BOX_BALL_SETTLE_S
+        )
+        try:
+            _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
+            wide = None
+            if in_box.get("status") not in {"selected", "ambiguous"} and self.wide is not None:
+                _result, wide = _guided_camera_analysis(frames, self.camera, self.wide)
+            classified = placement_box.classify_ball(
+                in_box, wide, outline_px=self.box.outline_px, settled=settled
+            )
+        except (RuntimeError, ValueError, TypeError) as exc:
+            logger.info("[BOX_BALL] the ball search failed: %s", exc)
+            classified = {"state": "waiting", "selected": None}
+        with self._lock:
+            previous = self._state
+            stable_since = None
+            if classified["state"] == "found":
+                same = previous.get("state") == "found" and _same_guided_candidate(
+                    {
+                        "x_px": (previous.get("center_px") or [0, 0])[0],
+                        "y_px": (previous.get("center_px") or [0, 0])[1],
+                        "diameter_px": previous.get("diameter_px") or 0.0,
+                    },
+                    classified["selected"],
+                )
+                stable_since = previous.get("stable_since") if same else self._clock()
+            self._state = self._ball_payload(classified, stable_since)
+            current = dict(self._state)
+        if self._on_change is not None:
+            self._on_change(current)
+        return {**result, "ball_state": classified["state"]}
+
+    def status(self) -> dict:
+        return self.brightness.status()
+
+    def ball(self) -> dict:
+        """The ball's state now, as the contract's ``ball`` block carries it."""
+        with self._lock:
+            state = dict(self._state)
+        if state.get("stable_since") is not None:
+            state["stable_s"] = round(self._clock() - float(state["stable_since"]), 2)
+        return state
+
+
+# The ladder's blur ceiling for a mode and lens: the exposure at which the 7-iron
+# toe's measured image speed (13.6 m/s across the picture, the smear budget's own
+# figure) smears 1.5 px at the ball's range (arm 3's figure), never past the 4 mm
+# budget's EXPOSURE_CEILING_US. A longer lens or 1:1 sampling lowers it.
+BLUR_CEILING_PX = 1.5
+BLUR_CEILING_IMAGE_SPEED_M_S = 13.6
+
+
+def blur_ceiling_us(focal_px: float, range_m: float | None) -> dict:
+    """The exposure ceiling for this focal length at the ball's range, and its basis."""
+    distance = float(range_m) if range_m else sum(placement_box.PLACEMENT_WINDOW_M) / 2.0
+    pixel_limit = BLUR_CEILING_PX * distance / (BLUR_CEILING_IMAGE_SPEED_M_S * float(focal_px))
+    value = min(float(EXPOSURE_CEILING_US), pixel_limit * 1e6)
+    return {
+        "blur_ceiling_us": int(math.floor(value)),
+        "basis": (
+            f"{BLUR_CEILING_PX:g} px of smear at {BLUR_CEILING_IMAGE_SPEED_M_S:g} m/s across "
+            f"the picture, {distance:.2f} m out"
+            + ("" if range_m else " (the placement window's middle: the range is not measured)")
+            + f", never past {EXPOSURE_CEILING_US} us"
+        ),
+        "range_m": round(distance, 3),
+    }
+
+
+def ladder_live_metrics(runner, *, focal_px_for: Callable[[str], float], range_m) -> dict:
+    """What the ladder last measured on the resting ball, for the page (contract 13 Oct).
+
+    Taken from the ladder's own light check on the current setting (its ball core,
+    the applied controls); nothing is measured for this.
+    """
+    empty = {
+        "ball_px": None,
+        "ball_peak_dn": None,
+        "clipped_pct": None,
+        "exposure_us": None,
+        "blur_ceiling_us": None,
+        "fps": None,
+        "gain": None,
+        "rung_id": None,
+    }
+    if runner is None:
+        return empty
+    state = runner.state.to_dict()
+    rung_id = state.get("current")
+    if isinstance(state.get("pending_photo"), Mapping):
+        rung_id = state["pending_photo"].get("rung_id") or rung_id
+    rung = next((item for item in study_ladder.LADDER if item.rung_id == rung_id), None)
+    if rung is None:
+        return empty
+    entry = (state.get("rungs") or {}).get(rung.rung_id) or {}
+    check = entry.get("pre_check") if isinstance(entry.get("pre_check"), Mapping) else {}
+    ball = check.get("ball") if isinstance(check.get("ball"), Mapping) else None
+    applied = check.get("applied_controls") or {}
+    exposure = applied.get("exposure_us") if isinstance(applied, Mapping) else None
+    gain = applied.get("gain") if isinstance(applied, Mapping) else None
+    ceiling = blur_ceiling_us(focal_px_for(rung.arm_id), range_m)
+    return {
+        "ball_px": round(float(ball["diameter_px"]), 2) if ball else None,
+        "ball_peak_dn": (
+            round(float(ball["peak_dn"]), 1) if ball and ball.get("peak_dn") is not None else None
+        ),
+        "ball_median_dn": round(float(ball["median_dn"]), 1) if ball else None,
+        "clipped_pct": (
+            round(float(ball["clipped_pct"]), 2)
+            if ball
+            else (round(float(check["clipped_pct"]), 2) if "clipped_pct" in check else None)
+        ),
+        "exposure_us": round(float(exposure), 1) if exposure is not None else rung.exposure_us,
+        "exposure_source": "applied" if exposure is not None else "rung_setting",
+        "blur_ceiling_us": ceiling["blur_ceiling_us"],
+        "blur_ceiling_basis": ceiling["basis"],
+        "fps": study_ladder.RUNG_FPS.get(rung.arm_id),
+        "gain": round(float(gain), 2) if gain is not None else None,
+        "rung_id": rung.rung_id,
+    }
 
 
 def placement_preview_controls(
@@ -3787,13 +4179,10 @@ class GuidedRangeAnalyzer:
             # at the patch's distances has
             return PUT_BALL_IN_BOX
         if status == "ambiguous":
-            return (
-                "several ball-like things are in the patch and the ball cannot be picked out; "
-                "keep only the ball in the patch"
-            )
+            return placement_box.BALL_MESSAGES["ambiguous"]
         if status != "selected":
-            return f"the patch search is {status or 'not ready'}"
-        return "the ball in the patch is still stabilizing"
+            return f"the box search is {status or 'not ready'}"
+        return "the ball in the box is still stabilizing"
 
     def observe(
         self,
@@ -4752,25 +5141,32 @@ def static_config_reach_m(config: Path) -> tuple[float, float]:
 
 
 def static_config_for_patch(
-    patch: Mapping | None, default: Path, far: Path, bias_m: float
+    patch: Mapping | None,
+    default: Path,
+    far: Path,
+    bias_m: float,
+    *,
+    ball_range_m: float | None = None,
 ) -> tuple[Path, dict]:
-    """The setup radar profile whose window covers this patch (P8-1, P8-3).
+    """The setup radar profile: the far one until the ball's range is known (13 Oct).
 
-    The patch's nominal far edge plus the window margin, as an apparent range, must
-    stay the edge guard inside the profile's last bin; otherwise the wider profile.
-    The padded window of an uncalibrated tilt reaches to the horizon, so the
-    nominal edge decides, and the search is clipped to what the capture covers.
+    A setup does not know where the ball is until the radar has measured it, and the
+    fixed box reaches 2.9 m and past it at an uncalibrated tilt, so its captures take
+    the far profile. With a known ``ball_range_m`` the default profile serves when
+    the ball and the window margin, as an apparent range, stay the edge guard inside
+    its last bin.
     """
-    far_edge = None
-    if isinstance(patch, Mapping):
-        far_edge = (patch.get("nominal_edges_m") or {}).get("far_slant_m")
     needed = (
-        float(far_edge) + ground_patch.RADAR_WINDOW_MARGIN_M + bias_m
-        if isinstance(far_edge, (int, float))
+        float(ball_range_m) + ground_patch.RADAR_WINDOW_MARGIN_M + bias_m
+        if ball_range_m is not None
         else None
     )
-    facts = {"needed_apparent_m": needed, "profiles": {}}
-    chosen = default
+    facts = {
+        "needed_apparent_m": needed,
+        "profiles": {},
+        "basis": "ball_range_known" if needed is not None else "ball_range_not_yet_known",
+    }
+    chosen = default if needed is not None else far
     for name, path in (("default", default), ("far", far)):
         try:
             low, high = static_config_reach_m(path)
@@ -5405,7 +5801,7 @@ def _swings_display(solution: Mapping, *, use_unqualified: bool) -> dict | None:
         parsed = None
     experimental, decision = experimental_tee_range_choice(parsed)
     if experimental is not None and decision is not None:
-        if decision.get("schema") == patch_pairing.DECISION_SCHEMA:
+        if decision.get("schema") in patch_pairing.DECISION_SCHEMAS:
             # P8-4: what the camera and the radar agreed on, or what one found alone
             basis = {
                 "validated": "the radar's distance, which the camera's ball in the patch confirms",
@@ -6279,6 +6675,40 @@ def study_overview(sessions_root: Path, tester_id: str, environment: str | None 
     return {"tester_id": tester_id, "club": CLUB, "arms": arms}
 
 
+# the kiosk's web port (start-kiosk.sh's default), for the tester page's "Kiosk view"
+KIOSK_WEB_PORT = 8080
+# what marks a folder under the sessions root as a tester's
+TESTER_MARKERS = (
+    "setup_eligibility.jsonl",
+    "setup-confirmation.json",
+    "placement-box.json",
+    "calibration",
+    "arm5",
+    "arm6",
+)
+
+
+def known_testers(sessions_root: Path, today: datetime | None = None) -> dict:
+    """The testers on this unit (newest first) and a new id, so none is ever typed."""
+    root = Path(sessions_root)
+    found = []
+    if root.is_dir():
+        for child in root.iterdir():
+            if (
+                child.is_dir()
+                and not child.is_symlink()
+                and SAFE_SEGMENT.fullmatch(child.name)
+                and any((child / marker).exists() for marker in TESTER_MARKERS)
+            ):
+                found.append((child.stat().st_mtime, child.name))
+    names = [name for _mtime, name in sorted(found, reverse=True)]
+    stamp = (today or datetime.now()).strftime("%Y-%m-%d")
+    index = 1
+    while f"tester-{stamp}-{index}" in names or (root / f"tester-{stamp}-{index}").exists():
+        index += 1
+    return {"testers": names, "suggested_new": f"tester-{stamp}-{index}"}
+
+
 def create_app(
     *,
     sessions_root: Path = DEFAULT_SESSIONS_ROOT,
@@ -6301,12 +6731,21 @@ def create_app(
     require_iwr_preflight: bool = False,
     static_radar=None,
     camera_tilt_path: Path | None = None,
+    lens_settings_path: Path | None = None,
+    optical_calibration_dir: Path | None = None,
+    lens_catalogue_path: Path | None = None,
+    placement_box_config: Path | None = None,
 ) -> Flask:
     """Build the standalone tester service.
 
     ``camera_tilt_path`` is this unit's camera-tilt calibration (P8-5), kept with
     the unit's other local settings; without one the camera stays uncalibrated
-    and nothing is stored.
+    and nothing is stored. It is the stock lens's; another lens keeps its own
+    beside it (``lens_profiles.tilt_calibration_path``).
+
+    ``lens_settings_path`` keeps the unit's lens choice and each lens's settings
+    (memory only without one); ``optical_calibration_dir`` holds checkerboard
+    calibrations a lens's intrinsics are taken from when one exists for it.
     """
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
@@ -6330,7 +6769,51 @@ def create_app(
         if radar_jobs is not jobs:
             radar_jobs.release()
 
-    live = live_view or LiveView(focal_px_for=lambda arm: mode_focal_px(arm, rig_geometry))
+    lens_catalogue = lens_profiles.load_catalogue(lens_catalogue_path)
+    lens_store = lens_profiles.LensSettingsStore(lens_settings_path, lens_catalogue)
+    box_config = placement_box.load_config(placement_box_config)
+
+    def current_lens() -> lens_profiles.ActiveLens | None:
+        """The lens on the unit (the rig file's own until one is chosen); None without a rig."""
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        try:
+            rig = RigGeometry.from_json(rig_geometry)
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+        return lens_profiles.active_lens(
+            rig,
+            lens_catalogue,
+            lens_store.selected(),
+            [optical_calibration_dir, optical_calibration],
+        )
+
+    def tilt_path() -> Path | None:
+        """This lens's camera-tilt calibration file (the tilt is stored per lens)."""
+        return lens_profiles.tilt_calibration_path(
+            camera_tilt_path, lens_store.selected(), lens_catalogue
+        )
+
+    def unit_setup() -> dict:
+        """What every box, aim point and range of this unit is bound to besides the setup."""
+        lens_id = lens_store.selected()
+        return {"lens_id": lens_id, "box_id": placement_box.box_id(box_config, lens_id)}
+
+    def camera_for(arm: Arm, reading: Mapping) -> BallPlaneCamera:
+        """The camera model every setup step uses: this tilt, the unit's tilt, the lens."""
+        return _reference_ball_camera(
+            arm,
+            rig_geometry,
+            reading,
+            optical_calibration,
+            camera_placement,
+            unit_camera_tilt(),
+            current_lens(),
+        )
+
+    live = live_view or LiveView(
+        focal_px_for=lambda arm: mode_focal_px(arm, rig_geometry, current_lens())
+    )
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
         rig_geometry,
@@ -6353,8 +6836,8 @@ def create_app(
     live_owner_lock = threading.RLock()
 
     def unit_camera_tilt() -> dict | None:
-        """The unit's stored camera tilt, if it has been calibrated (P8-5)."""
-        return camera_tilt.load_calibration(camera_tilt_path)
+        """The unit's stored camera tilt for this lens, if it has been calibrated (P8-5)."""
+        return camera_tilt.load_calibration(tilt_path())
 
     live_owner: dict[str, dict[str, str] | None] = {"guided": None}
     guided_analyzer: dict[str, GuidedRangeAnalyzer | None] = {"value": None}
@@ -6422,6 +6905,8 @@ def create_app(
             }
 
     def with_iwr_preflight(result: dict) -> dict:
+        # the lens and the fixed box every box, aim point and range is bound to
+        result = {**result, "unit_setup": unit_setup()}
         if not require_iwr_preflight:
             return result
         passed = iwr_preflight.get(str(result.get("tester_id"))) is True
@@ -6787,17 +7272,10 @@ def create_app(
     def range_store(tester_id: str) -> FlowStore:
         return FlowStore(tester_root(sessions_root, tester_id))
 
-    def patch_camera() -> tuple[BallPlaneCamera, dict, float | None]:
-        """The 1280x800 camera model the patch is drawn through, the tilt, and the roll."""
+    def patch_camera(arm_id: str = PLACEMENT_BOX_ARM) -> tuple[BallPlaneCamera, dict, float | None]:
+        """The camera model the box is drawn through (1280x800 by default), the tilt, the roll."""
         reading = enclosure.reading()
-        model = _reference_ball_camera(
-            ARMS[PLACEMENT_BOX_ARM],
-            rig_geometry,
-            reading,
-            optical_calibration,
-            camera_placement,
-            unit_camera_tilt(),
-        )
+        model = camera_for(ARMS[arm_id], reading)
         return model, reading, _placement_roll_deg(rig_geometry, reading)
 
     BOX_DISPLAY_KEYS = (
@@ -6815,7 +7293,22 @@ def create_app(
         "windows",
         "camera_tilt",
         "source",
+        "mode",
+        "box_outline_px",
+        "placement_window_m",
+        "lens",
     )
+    # the box step's ball, per tester: the live locator's latest look, kept after it stops
+    box_ball_last: dict[str, dict] = {}
+    box_locator: dict[str, BoxBallLocator | None] = {"value": None}
+    # what a setup's pairing decided, as the contract's range_status
+    RANGE_STATUS = {
+        "validated": "validated",
+        "radar_only_unconfirmed": "radar_only_unconfirmed",
+        "camera_only": "camera_only",
+        "disagree": "camera_only",
+    }
+    CAMERA_STATE = {"found": "found", "no_ball": "no_ball", "ambiguous": "ambiguous"}
 
     def placement_box_display(state) -> dict | None:
         """The box this setup searches, drawn (not dragged) over its camera steps."""
@@ -6824,30 +7317,140 @@ def create_app(
             return None
         return {**{key: confirmed.get(key) for key in BOX_DISPLAY_KEYS}, "state": "confirmed"}
 
-    def placement_box_status(tester_id: str, eligibility: Mapping) -> dict:
-        """Step 1's box: confirmed for this setup, or where to start dragging it (P7-15)."""
+    def box_mode_view(record: Mapping, arm_id: str | None) -> dict:
+        """The box's outline in one ladder mode's pixels (640x400 is 1280x800 halved)."""
+        arm = ARMS.get(arm_id or PLACEMENT_BOX_ARM) or ARMS[PLACEMENT_BOX_ARM]
+        if arm.arm_id not in PLACEMENT_BOX_REQUIRED_ARMS:
+            arm = ARMS[PLACEMENT_BOX_ARM]
+        frame = record.get("frame_size_px") or [ARMS[PLACEMENT_BOX_ARM].width]
+        factor = arm.width / float(frame[0])
+        return {
+            "arm_id": arm.arm_id,
+            "frame_size_px": [arm.width, arm.height],
+            "box_outline_px": [
+                [round(x, 1), round(y, 1)]
+                for x, y in ground_patch.scale_outline(record.get("box_outline_px") or [], factor)
+            ],
+        }
+
+    def setup_ball_range(tester_id: str, eligibility: Mapping) -> dict:
+        """The range this box's setup measured for its ball, as the page shows it."""
+        facts = {
+            "range_m": None,
+            "range_status": None,
+            "side_offset_m": None,
+            "camera_status": None,
+            "net": None,
+            "decision": None,
+        }
+        flow = _range_state(tester_id, reconcile=False)
+        if flow is None:
+            return facts
+        box = flow.evidence.get("placement_box")
+        if not isinstance(box, Mapping) or box.get("setup_binding") != placement_box_binding(
+            eligibility
+        ):
+            return facts
+        facts["net"] = flow.evidence.get("net_range")
+        if flow.phase not in TERMINAL_PHASES:
+            return {**facts, "range_status": "pending"}
+        decision = flow.evidence.get("patch_ball")
+        if not isinstance(decision, Mapping):
+            return facts
+        status = RANGE_STATUS.get(str(decision.get("status")))
+        return {
+            **facts,
+            "range_m": decision.get("range_m") if status != "camera_only" else None,
+            "range_status": status,
+            "side_offset_m": decision.get("side_offset_m"),
+            "camera_status": decision.get("camera_status"),
+            "decision": {
+                key: decision.get(key)
+                for key in ("status", "warning", "source", "range_m", "uncertainty_m")
+            },
+        }
+
+    def ball_block(tester_id: str, ranged: Mapping, previewing: bool) -> dict:
+        """The contract's ``ball``: what the camera sees in the box, and its measured range."""
+        locator = box_locator["value"]
+        if previewing and locator is not None:
+            ball = locator.ball()
+        else:
+            ball = dict(box_ball_last.get(tester_id) or {})
+            setup_state = CAMERA_STATE.get(str(ranged.get("camera_status")))
+            if setup_state is not None and not ball:
+                ball = {"state": setup_state}
+        state = ball.get("state") or "waiting"
+        message = ball.get("message") or placement_box.BALL_MESSAGES[state]
+        decision = ranged.get("decision") or {}
+        if ranged.get("range_status") == "camera_only" and decision.get("warning"):
+            message = f"{message} {decision['warning']}"
+        return {
+            "state": state,
+            "center_px": ball.get("center_px"),
+            "diameter_px": ball.get("diameter_px"),
+            "stable_s": ball.get("stable_s"),
+            "range_m": ranged.get("range_m"),
+            "range_status": ranged.get("range_status") or ("pending" if state == "found" else None),
+            "message": message,
+            "updated_at_utc": ball.get("updated_at_utc"),
+        }
+
+    def placement_box_status(
+        tester_id: str, eligibility: Mapping, arm_id: str | None = None
+    ) -> dict:
+        """Step 1's fixed box: confirmed for this setup, or waiting for the ball (13 Oct)."""
         root = tester_root(sessions_root, tester_id)
         blockers = placement_box_setup_blockers(eligibility)
         owner = live_owner_snapshot()
+        previewing = bool(
+            owner and owner.get("kind") == "placement_box" and owner.get("tester_id") == tester_id
+        )
+        lens = current_lens()
         payload = {
             "tester_id": tester_id,
-            "previewing": bool(
-                owner
-                and owner.get("kind") == "placement_box"
-                and owner.get("tester_id") == tester_id
-            ),
+            "previewing": previewing,
             "setup_blockers": blockers,
+            "mode": placement_box.MODE,
+            "placement_window_m": list(box_config.placement_window_m),
+            "lens_id": lens_store.selected(),
+            "lens": lens.to_dict() if lens is not None else None,
         }
+        ranged = setup_ball_range(tester_id, eligibility)
+        payload["ball"] = ball_block(tester_id, ranged, previewing)
+        payload["net_line"] = net_line_status(read_net_line(root), ranged.get("net"))
         try:
             camera, reading, roll = patch_camera()
-            # what the page drags the patch through, in true perspective (P8-1)
+            record = fixed_box_record(camera, reading, roll, lens=lens, config=box_config)
+            # what the page draws the box with (P8-1 projection parameters)
             payload["projection"] = ground_patch.projection_parameters(camera)
             payload["camera_tilt"] = camera_tilt_facts(reading, camera)
         except (OSError, TypeError, ValueError, KeyError) as exc:
-            camera = None
-            unavailable = str(exc)
+            return {
+                **payload,
+                "state": "unavailable",
+                "box": None,
+                "box_outline_px": None,
+                "frame_size_px": None,
+                "distance_note": placement_box.BALL_MESSAGES["waiting"],
+                "reason": str(exc),
+            }
+        view = box_mode_view(record, arm_id)
+        payload.update(
+            {
+                "box_outline_px": view["box_outline_px"],
+                "frame_size_px": view["frame_size_px"],
+                "box_arm_id": view["arm_id"],
+                "distance_note": placement_box.distance_note(
+                    camera,
+                    ranged["range_m"],
+                    side_offset_m=ranged["side_offset_m"],
+                    config=box_config,
+                ),
+            }
+        )
         confirmed = confirmed_placement_box(root, eligibility)
-        if confirmed is not None:
+        if confirmed is not None and confirmed.get("mode") == placement_box.MODE:
             return {
                 **payload,
                 "state": "confirmed",
@@ -6856,23 +7459,29 @@ def create_app(
                 "reconfirmed_at_utc": confirmed.get("reconfirmed_at_utc"),
                 "change": confirmed.get("change"),
             }
-        if camera is None:
-            return {**payload, "state": "unavailable", "box": None, "reason": unavailable}
-        proposed = proposed_placement_box(camera, reading, roll, read_last_placement_box(root))
+        last = read_last_placement_box(root)
+        reconfirm = None
+        if last is not None:
+            reconfirm = (
+                "an_older_dragged_patch_is_not_used"
+                if last.get("mode") != placement_box.MODE
+                else "the_setup_lens_or_box_changed"
+            )
         return {
             **payload,
             "state": "setup_not_confirmed" if blockers else "needs_confirmation",
-            "box": {key: proposed.get(key) for key in BOX_DISPLAY_KEYS},
+            "box": {key: record.get(key) for key in BOX_DISPLAY_KEYS},
+            "reconfirm_reason": reconfirm,
         }
 
     def start_box_preview(
         tester_id: str, *, take_over: bool = False, kind: str = "placement_box"
     ) -> None:
-        """Show the 1280x800 view so the tester can drag the box over the hitting spot.
+        """Show the 1280x800 view with the fixed box, and look for the ball in it.
 
         A live view someone else opened is only replaced when the tester asks. The
         aim point's preview (``kind`` ``aim_point``, D34) sets its viewing brightness
-        over the whole frame: the target stands far beyond the patch.
+        over the whole frame: the target stands far beyond the box.
         """
         busy = _range_resources_busy(live_yields=take_over)
         if busy:
@@ -6886,20 +7495,36 @@ def create_app(
             ),
         )
         arm = ARMS[PLACEMENT_BOX_ARM]
-        placed = read_last_placement_box(tester_root(sessions_root, tester_id))
-        box = (
-            placed["box_px"]
-            if kind == "placement_box"
-            and placed is not None
-            and list(placed.get("frame_size_px") or []) == [arm.width, arm.height]
-            else None
-        )
-        # the picture's brightness is set for viewing only, never recorded (P7-15b)
-        brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=box)
+        locator = None
+        if kind == "placement_box":
+            camera, reading, roll = patch_camera()
+            lens = current_lens()
+            record = fixed_box_record(camera, reading, roll, lens=lens, config=box_config)
+            wide_config = replace(
+                box_config,
+                placement_window_m=BOX_WIDE_SEARCH_WINDOW_M,
+                half_width_m=BOX_WIDE_SEARCH_HALF_WIDTH_M,
+            )
+            wide = fixed_box_record(camera, reading, roll, lens=lens, config=wide_config)
+            # the picture's brightness is set for viewing only, never recorded (P7-15b)
+            brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=record["box_px"])
+            box_ball_last.pop(tester_id, None)
+            locator = BoxBallLocator(
+                brightness,
+                camera,
+                ground_patch.PatchSearch.from_record(record),
+                ground_patch.PatchSearch.from_record(wide),
+                on_change=lambda ball: box_ball_last.__setitem__(tester_id, ball),
+            )
+            analyzer = locator
+        else:
+            brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=None)
+            analyzer = brightness
         with live_owner_lock:
-            live.start(arm, exposure_us, gain, analyzer=brightness)
+            live.start(arm, exposure_us, gain, analyzer=analyzer)
             guided_analyzer["value"] = None
             box_preview_exposure["value"] = brightness
+            box_locator["value"] = locator
             live_owner["guided"] = {
                 "kind": kind,
                 "tester_id": tester_id,
@@ -6928,33 +7553,57 @@ def create_app(
                 live.stop()
                 live_owner["guided"] = None
                 guided_analyzer["value"] = None
+                if kind == "placement_box":
+                    box_locator["value"] = None
+
+    def box_changed(previous: Mapping | None, current: Mapping) -> bool:
+        """Whether a setup's box is no longer this one: moved, or another lens or box."""
+        if not isinstance(previous, Mapping):
+            return True
+        if previous.get("mode") != current.get("mode"):
+            return True
+        before = previous.get("setup_binding") or {}
+        after = current.get("setup_binding") or {}
+        if any(before.get(key) != after.get(key) for key in ("lens_id", "box_id")):
+            return True
+        return placement_box_moved(previous, current)
 
     def _confirm_box(tester_id: str, eligibility: Mapping, request_id: str, requested) -> dict:
-        """Confirm step 1's box; a box moved beyond a few pixels starts the ball range over.
+        """Confirm step 1's fixed box with the ball the camera found in it (13 Oct).
 
-        The light screens measured in the old box read stale by themselves (their
-        box no longer matches); the same spot again changes nothing (P7-15).
+        Nothing is dragged: drag coordinates from an older page are ignored, and
+        said so. A box on another lens, or a setup that began from an older patch,
+        starts the ball range over; the same box again changes nothing (P7-15).
         """
         root = tester_root(sessions_root, tester_id)
         camera, reading, roll = patch_camera()
-        record = placement_box_record(camera, reading, roll, requested)
+        binding = placement_box_binding(eligibility)
+        ball = dict(box_ball_last.get(tester_id) or {})
+        ball.pop("stable_since", None)
+        record = {
+            **fixed_box_record(camera, reading, roll, lens=current_lens(), config=box_config),
+            "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
+            # what the camera saw in the box when it was confirmed; never a distance
+            "ball_at_confirm": ball or {"state": "waiting"},
+            "ignored_drag": {
+                key: requested.get(key) for key in ("centre_m", "centre_px") if key in requested
+            }
+            or None,
+        }
         store = range_store(tester_id)
         flow = store.load()
         flow_box = flow.evidence.get("placement_box") if flow is not None else None
+        candidate = {**record, "setup_binding": binding}
         if (
             flow is not None
             and flow.phase != "needs_box"
-            and placement_box_moved(flow_box, record)
-            and placement_box_moved(read_last_placement_box(root), record)
+            and box_changed(flow_box, candidate)
+            and box_changed(read_last_placement_box(root), candidate)
         ):
             busy = _range_resources_busy(live_yields=True)
             if busy:
-                raise RuntimeError(
-                    f"stop first: moving the box starts the ball range over, and {busy}"
-                )
-        saved, change = confirm_placement_box(
-            root, record, placement_box_binding(eligibility), request_id=request_id
-        )
+                raise RuntimeError(f"stop first: a new box starts the ball range over, and {busy}")
+        saved, change = confirm_placement_box(root, record, binding, request_id=request_id)
         stop_box_preview(tester_id)
         evidence = placement_box_evidence(saved)
         restarted = None
@@ -6967,12 +7616,15 @@ def create_app(
                 request_id=f"{request_id}-box",
                 evidence={"placement_box": evidence},
             )
-        elif flow is not None and placement_box_moved(flow_box, saved):
+        elif flow is not None and box_changed(flow_box, saved):
             moved = {
-                "reason": "placement_box_moved",
+                "reason": "placement_box_changed",
                 "previous_epoch_id": flow.epoch_id,
                 "previous_box_px": list(flow_box["box_px"])
                 if isinstance(flow_box, Mapping) and flow_box.get("box_px") is not None
+                else None,
+                "previous_lens_id": ((flow_box or {}).get("setup_binding") or {}).get("lens_id")
+                if isinstance(flow_box, Mapping)
                 else None,
                 "box_px": list(saved["box_px"]),
                 "moved_px": placement_box_shift_px(flow_box, saved),
@@ -6992,16 +7644,42 @@ def create_app(
             )
             restarted = moved
             logger.info(
-                "Patch moved %.2f m: ball range restarted as %s (was %s)",
-                moved["moved_m"] if moved["moved_m"] is not None else -1.0,
+                "Box changed: ball range restarted as %s (was %s)",
                 flow.epoch_id,
                 moved["previous_epoch_id"],
             )
-        return {"change": change, "range_restarted": restarted is not None, "restart": restarted}
+        return {
+            "change": change,
+            "range_restarted": restarted is not None,
+            "restart": restarted,
+            "ignored_drag": record["ignored_drag"],
+        }
+
+    def _set_net_line(tester_id: str, payload: Mapping) -> dict:
+        """Keep the tester's floor line: the row bounds where the radar looks for the net."""
+        try:
+            row = float(payload.get("row_px"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("row_px must be a number") from exc
+        if not math.isfinite(row):
+            raise ValueError("row_px must be finite")
+        camera, reading, _roll = patch_camera()
+        calibrated = camera_tilt_facts(reading, camera)["calibrated"]
+        pad = placement_box.pads_deg(box_config, calibrated)[1 if calibrated else 0]
+        window = net_line_window(camera, row, pad_deg=pad)
+        record = {
+            "row_px": window["row_px"],
+            "frame_size_px": window["frame_size_px"],
+            "lens_id": lens_store.selected(),
+            "set_at_utc": datetime.now(timezone.utc).isoformat(),
+            "window": window,
+        }
+        remember_net_line(tester_root(sessions_root, tester_id), record)
+        return record
 
     @app.route("/api/tester/placement-box", methods=["GET", "POST"])
     def placement_box_route():
-        """Step 1's placement box: show the live view, and confirm where the tester dragged it."""
+        """Step 1's fixed box: show the live view, confirm the ball in it, set the net line."""
         payload = request.get_json(silent=True) if request.method == "POST" else request.args
         payload = payload or {}
         if not isinstance(payload, Mapping):
@@ -7009,13 +7687,14 @@ def create_app(
         tester_id = str(payload.get("tester_id", "")).strip()
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
+        arm_id = payload.get("arm_id")
         try:
             with tee_range_lock:
                 eligibility = with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
                 if request.method == "GET":
-                    return jsonify(placement_box_status(tester_id, eligibility))
+                    return jsonify(placement_box_status(tester_id, eligibility, arm_id))
                 action = str(payload.get("action", ""))
-                if action not in {"show", "confirm"}:
+                if action not in {"show", "confirm", "set_net_line"}:
                     raise ValueError("unknown placement-box action")
                 refuse_while_analysing()
                 if placement_box_setup_blockers(eligibility):
@@ -7027,12 +7706,20 @@ def create_app(
                     ), 409
                 if action == "show":
                     start_box_preview(tester_id, take_over=True)
-                    return jsonify(placement_box_status(tester_id, eligibility))
+                    return jsonify(placement_box_status(tester_id, eligibility, arm_id))
+                if action == "set_net_line":
+                    line = _set_net_line(tester_id, payload)
+                    return jsonify(
+                        {
+                            **placement_box_status(tester_id, eligibility, arm_id),
+                            "net_line_record": line,
+                        }
+                    )
                 request_id = str(payload.get("request_id", "")).strip()
                 if not request_id or len(request_id) > 128:
                     raise ValueError("request_id is required and must be at most 128 characters")
                 result = _confirm_box(tester_id, eligibility, request_id, payload)
-                return jsonify({**placement_box_status(tester_id, eligibility), **result})
+                return jsonify({**placement_box_status(tester_id, eligibility, arm_id), **result})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -7346,8 +8033,15 @@ def create_app(
                 retry_phase="needs_empty" if key == "empty" else "needs_ball",
             )
         if key == "empty":
-            # the net is measured from the scene without the ball (wiring audit C7)
-            evidence["net_range"] = empty_capture_net_range(record)
+            # the net is measured from the scene without the ball (wiring audit C7), in
+            # the window the tester's floor line gives (13 Oct), apparent like the record
+            line = read_net_line(store.tester_root)
+            try:
+                bias = iwr_range_bias_m(json.loads(iwr_calibration.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                bias = 0.0
+            evidence["net_range"] = empty_capture_net_range(record, net_search_window(line, bias))
+            evidence["net_line"] = line
             return store.transition(
                 state,
                 phase="needs_ball",
@@ -7424,9 +8118,15 @@ def create_app(
                 retry_phase="needs_camera_arm5",
             )
         # P8-4: after both have finished, the camera's ball and the radar's candidates
-        # validate each other; whatever exists is saved, labelled experimental
+        # validate each other; whatever exists is saved, labelled experimental. A camera
+        # that looked and found no ball finishes as "no ball" (13 Oct).
+        camera_dict = camera.to_dict() if camera is not None else None
         decision = patch_ball_decision(
-            camera.to_dict() if camera is not None else None, iwr.to_dict()
+            camera_dict,
+            iwr.to_dict(),
+            camera_status=camera_search_status(state.evidence, camera_dict),
+            camera_ray=camera_ray_facts(camera_dict, state.evidence),
+            box_range_m=box_range_extent(state.evidence.get("placement_box")),
         )
         tilt_outcome = None
         if camera is not None:
@@ -7500,6 +8200,82 @@ def create_app(
             },
         )
 
+    def camera_search_status(evidence: Mapping, camera_dict: Mapping | None) -> str:
+        """Whether the setup's camera looked: found a ball, found none, or could not look."""
+        result = ((camera_dict or {}).get("evidence") or {}).get("result") or {}
+        if isinstance(result, Mapping) and result.get("status") == "selected":
+            return "found"
+        exposure = evidence.get("camera_arm5_static_exposure") or {}
+        status = exposure.get("status") if isinstance(exposure, Mapping) else None
+        if status == "ball_not_identified":
+            # more than one ball-like thing: the camera looked and could not pick one
+            return "ambiguous"
+        if status in {"ball_not_found", "ball_not_stable"}:
+            return "no_ball"
+        if camera_dict is not None:
+            return "no_ball"
+        # too dark, too bright, the controls never applied, or no camera step at all
+        return "unavailable"
+
+    def camera_ray_facts(camera_dict: Mapping | None, evidence: Mapping) -> dict | None:
+        """The camera's ray to its ball: the radar window it spans across the box's depth
+        and short of the net, and its distance once the unit's tilt is calibrated."""
+        camera_evidence = (camera_dict or {}).get("evidence") or {}
+        ball = camera_evidence.get("patch_ball_camera")
+        if not isinstance(ball, Mapping):
+            return None
+        controls = (
+            (camera_evidence.get("capture_identity") or {}).get("mode", {}).get("controls", {})
+        )
+        orientation = dict(controls.get("orientation_frozen_for_association") or {})
+        if not orientation:
+            orientation = dict(enclosure.reading())
+        try:
+            model = camera_for(ARMS[PLACEMENT_BOX_ARM], orientation)
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+        calibration = unit_camera_tilt()
+        calibrated = (getattr(model, "vertical_offset", None) or {}).get(
+            "status"
+        ) == "calibrated" and calibration is not None
+        pad = (
+            max(float(calibration.get("uncertainty_deg") or 0.0), 0.1)
+            if calibrated
+            else box_config.uncalibrated_window_pad_deg
+        )
+        net = evidence.get("net_range") or {}
+        far_cap = ground_patch.FAR_CAP_M
+        if isinstance(net, Mapping) and net.get("status") == "measured":
+            far_cap = min(far_cap, float(net["net_range_m"]) - box_config.net_margin_m)
+        try:
+            window = placement_box.ray_window(
+                model, (float(ball["x_px"]), float(ball["y_px"])), pad_deg=pad, far_cap_m=far_cap
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        facts = {
+            "ray_window_m": window["window_m"],
+            "ray_window": window,
+        }
+        if calibrated and window["nominal_m"] is not None and not window["reaches_the_cap"]:
+            low, high = window["window_m"]
+            facts["ray_range_m"] = window["nominal_m"]
+            facts["ray_uncertainty_m"] = max((high - low) / 2.0, 0.01)
+        return facts
+
+    def box_range_extent(record: Mapping | None) -> list[float] | None:
+        """The box's own radar range extent (nominal edges, plus the window margin)."""
+        if not isinstance(record, Mapping) or record.get("mode") != placement_box.MODE:
+            return None
+        edges = record.get("nominal_edges_m") or {}
+        try:
+            return [
+                float(edges["near_slant_m"]) - ground_patch.RADAR_WINDOW_MARGIN_M,
+                float(edges["far_slant_m"]) + ground_patch.RADAR_WINDOW_MARGIN_M,
+            ]
+        except (KeyError, TypeError, ValueError):
+            return None
+
     def _calibrate_camera_tilt(epoch_id: str, camera_evidence: Mapping, decision: Mapping):
         """Solve the camera's tilt from a validated pair, and calibrate or check the unit's.
 
@@ -7517,6 +8293,7 @@ def create_app(
         ball = decision.get("camera") or {}
         lis3dh = seen.get("lis3dh_pitch_deg", orientation.get("camera_pitch_deg"))
         try:
+            lens = current_lens()
             solved = camera_tilt.solve_vertical_offset(
                 lambda pitch: _reference_ball_camera(
                     ARMS[PLACEMENT_BOX_ARM],
@@ -7525,6 +8302,7 @@ def create_app(
                     None,
                     None,
                     None,
+                    lens,
                 ),
                 (float(ball["x_px"]), float(ball["y_px"])),
                 radar_range_m=float(decision["range_m"]),
@@ -7540,13 +8318,15 @@ def create_app(
             "pixel_px": solved["pixel_px"],
             "uncertainty_parts_deg": solved["uncertainty_parts_deg"],
         }
-        if camera_tilt_path is None:
+        path = tilt_path()
+        if path is None:
             return {
                 "action": "not_stored",
                 "reason": "no unit calibration file is configured",
                 "solved": solved,
             }
-        outcome = camera_tilt.record_pair(camera_tilt_path, solved, facts=facts)
+        facts["lens_id"] = lens_store.selected()
+        outcome = camera_tilt.record_pair(path, solved, facts=facts)
         logger.info(
             "[SETUP] camera tilt %s: %+.2f deg (%s)",
             outcome["action"],
@@ -7687,14 +8467,7 @@ def create_app(
         params = TesterParameters(tester_id, arm_id, "indoors")
         black_floor = read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn")
         tilt_snapshot = enclosure.reading()
-        model = _reference_ball_camera(
-            params.arm,
-            rig_geometry,
-            tilt_snapshot,
-            optical_calibration,
-            camera_placement,
-            unit_camera_tilt(),
-        )
+        model = camera_for(params.arm, tilt_snapshot)
         camera_input_identity = _guided_camera_input_identity(
             params.arm,
             model,
@@ -8387,6 +9160,173 @@ def create_app(
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    def kiosk_ball_box(tester_id: str, eligibility: Mapping, arm: Arm) -> list[int] | None:
+        """The fixed box in this mode's pixels, for the kiosk's per-shot ball re-location."""
+        record = confirmed_placement_box(tester_root(sessions_root, tester_id), eligibility)
+        if not isinstance(record, Mapping) or record.get("mode") != placement_box.MODE:
+            return None
+        outline = box_mode_view(record, arm.arm_id)["box_outline_px"]
+        if not outline:
+            return None
+        xs = [x for x, _y in outline]
+        ys = [y for _x, y in outline]
+        return [
+            int(math.floor(min(xs))),
+            int(math.floor(min(ys))),
+            int(math.ceil(max(xs))),
+            int(math.ceil(max(ys))),
+        ]
+
+    def lens_payload(tester_id: str | None) -> dict:
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        rig = RigGeometry.from_json(rig_geometry)
+        return {
+            "tester_id": tester_id,
+            "lens_id": lens_store.selected(),
+            "lenses": lens_profiles.lens_listing(
+                rig, lens_catalogue, lens_store, [optical_calibration_dir, optical_calibration]
+            ),
+            "allowed_ladder_us": {
+                arm_id: list(values) for arm_id, values in lens_catalogue.allowed_ladder_us.items()
+            },
+            "setup_reset_on_change": True,
+            "camera_tilt": camera_tilt.calibration_status(tilt_path()),
+        }
+
+    def reset_for_lens(tester_id: str, previous: str | None, lens_id: str) -> list[str]:
+        """What a new lens resets for this unit: its box, aim point, tilt and the range."""
+        reset = ["placement_box", "aim_point", "camera_tilt"]
+        stop_box_preview(tester_id)
+        stop_box_preview(tester_id, AIM_POINT_PREVIEW_KIND)
+        box_ball_last.pop(tester_id, None)
+        store = range_store(tester_id)
+        with tee_range_lock:
+            flow = store.load()
+            if flow is not None and not (
+                flow.phase == "retryable_failure" and flow.retry_phase is None
+            ):
+                stop_guided_live(tester_id)
+                store.transition(
+                    flow,
+                    phase="retryable_failure",
+                    reason=f"lens_changed_start_over_required: {previous} -> {lens_id}",
+                    retry_phase=None,
+                )
+                reset.append("tee_range")
+        return reset
+
+    @app.route("/api/tester/lens", methods=["GET", "POST"])
+    def lens_route():
+        """The lens on the unit and each lens's settings (contract 13 Oct)."""
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        tester_id = str(payload.get("tester_id", "")).strip() or None
+        if tester_id is not None and not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        try:
+            if request.method == "GET":
+                return jsonify(lens_payload(tester_id))
+            action = str(payload.get("action", ""))
+            lens_id = str(payload.get("lens_id", "")).strip()
+            if action not in {"select", "settings", "reset_tilt"}:
+                raise ValueError("action must be select, settings or reset_tilt")
+            if action == "reset_tilt":
+                outcome = camera_tilt.reset_calibration(tilt_path(), reason="tester asked")
+                return jsonify({**lens_payload(tester_id), "tilt_reset": outcome})
+            lens_catalogue.get(lens_id)
+            refuse_while_analysing()
+            if action == "settings":
+                saved = lens_store.save_settings(lens_id, payload.get("settings"))
+                return jsonify({**lens_payload(tester_id), "saved": {lens_id: saved}})
+            busy = _range_resources_busy(live_yields=True)
+            if busy:
+                raise RuntimeError(f"stop first: {busy}")
+            previous, changed = lens_store.select(lens_id)
+            reset = reset_for_lens(tester_id, previous, lens_id) if changed and tester_id else []
+            if changed:
+                logger.info("Lens changed %s -> %s; reset %s", previous, lens_id, reset)
+            return jsonify({**lens_payload(tester_id), "changed": changed, "reset": reset})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/tester/testers")
+    def testers_route():
+        """The testers this unit has, to pick by touch, and a new id to create without typing."""
+        return jsonify(known_testers(sessions_root))
+
+    def kiosk_block() -> dict:
+        """The kiosk the tester started: its state, the mode switch's progress, its URL."""
+        host = (request.host or "localhost").split(":")[0] or "localhost"
+        url = f"http://{host}:{KIOSK_WEB_PORT}/"
+        job = jobs.status()
+        running = job.get("state") == "running" and job.get("action") in {"ladder", "swings"}
+        between = [
+            runner
+            for runner in ladder_runners.values()
+            if not runner.stopped and runner.mode == "between modes"
+        ]
+        if between:
+            return {
+                "state": "switching_mode",
+                "progress_message": (
+                    "Switching the camera between 1280×800 and 640×400: the kiosk restarts, "
+                    "about 20 s."
+                ),
+                "url": url,
+            }
+        if running:
+            answered = runtime_client.ready_light() is not None
+            return {
+                "state": "running" if answered else "starting",
+                "progress_message": None if answered else "Starting the kiosk…",
+                "url": url,
+            }
+        return {"state": "stopped", "progress_message": None, "url": url}
+
+    def ball_at_address(tester_id: str) -> dict:
+        """The kiosk's per-shot re-location of the resting ball, for the ready light."""
+        job = jobs.status()
+        if not (job.get("state") == "running" and job.get("action") in {"ladder", "swings"}):
+            return {"state": "unknown", "range_m": None, "updated_at": None, "reason": "no kiosk"}
+        if active_setup_tester["tester_id"] not in {None, tester_id}:
+            return {
+                "state": "unknown",
+                "range_m": None,
+                "updated_at": None,
+                "reason": "other tester",
+            }
+        found = runtime_client.ball_at_address()
+        if not isinstance(found, Mapping):
+            return {
+                "state": "unknown",
+                "range_m": None,
+                "updated_at": None,
+                "reason": "the kiosk did not answer",
+            }
+        return {
+            "state": found.get("state") or "unknown",
+            "range_m": found.get("range_m"),
+            "range_source": found.get("range_source"),
+            "updated_at": found.get("updated_at"),
+            "reason": found.get("reason"),
+        }
+
+    def live_metrics(tester_id: str) -> dict:
+        runner = ladder_runners.get(tester_id)
+        lens = current_lens()
+        solution = admitted_tee_range.get(tester_id, (None, None))[0]
+        choice, _decision = experimental_tee_range_choice(solution)
+        return ladder_live_metrics(
+            runner if runner is not None and not runner.stopped else None,
+            focal_px_for=lambda arm_id: mode_focal_px(ARMS[arm_id], rig_geometry, lens),
+            range_m=choice.radar_slant_range_m if choice is not None else None,
+        )
+
     @app.route("/api/tester/status", methods=["GET", "POST"])
     def status():
         try:
@@ -8402,6 +9342,11 @@ def create_app(
                     "inclinometer": enclosure.reading(),
                     "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
+                    # contract 13 Oct
+                    "lens_id": lens_store.selected(),
+                    "kiosk": kiosk_block(),
+                    "ball_at_address": ball_at_address(params.tester_id),
+                    "live_metrics": live_metrics(params.tester_id),
                 }
             )
         except ValueError as exc:
@@ -8495,6 +9440,8 @@ def create_app(
                     reference=reference,
                     camera_tilt_calibration=unit_camera_tilt(),
                     target_line_record=current_target_line(params.tester_id, eligibility),
+                    net_line=read_net_line(tester_root(sessions_root, params.tester_id)),
+                    lens=current_lens(),
                 )[1]
                 if action == "swings"
                 else None
@@ -8515,6 +9462,9 @@ def create_app(
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
                 zone_box=mode_placement_box(box, params.arm) if action == "gain" else None,
+                ball_box=kiosk_ball_box(params.tester_id, eligibility, params.arm)
+                if action == "swings"
+                else None,
             )
             busy = _range_resources_busy(live_yields=True)
             if busy:
@@ -8629,6 +9579,7 @@ def create_app(
                         rig_geometry,
                         enclosure.reading(),
                         unit_camera_tilt(),
+                        mode_focal_px(params.arm, rig_geometry, current_lens()),
                     ),
                     None,
                 )
@@ -8655,14 +9606,14 @@ def create_app(
                 raise RuntimeError("the live view is showing another arm; select it first")
             # Measure this placement from the current frames and current rig pose.
             tilt = enclosure.reading()
-            camera = _reference_ball_camera(
-                arm, rig_geometry, tilt, optical_calibration, camera_placement, unit_camera_tilt()
-            )
+            camera = camera_for(arm, tilt)
             rig_ball_height_m = BALL_DIAMETER_MM / 2000.0
             # the camera looks only in the confirmed patch (P8-2, P8-6); without one
             # the placement is still recorded, with no search
             root = tester_root(sessions_root, params.tester_id)
-            record = confirmed_placement_box(root, setup.evaluate(params.tester_id, tilt))
+            record = confirmed_placement_box(
+                root, with_iwr_preflight(setup.evaluate(params.tester_id, tilt))
+            )
             if record is not None:
                 patch, _view = patch_search_for(
                     camera, record, tilt, _placement_roll_deg(rig_geometry, tilt)
@@ -8934,6 +9885,17 @@ def create_app(
     ladder_runs: dict[str, Path] = {}  # the run folder each tester's ladder is writing
     ladder_lock = threading.RLock()
 
+    def lens_default_rungs() -> list[str]:
+        """The rung ids the selected lens keeps: its enabled modes, its exposures."""
+        lens_id = lens_store.selected() or lens_catalogue.reference_lens_id
+        settings = lens_store.settings(lens_id)
+        return [
+            rung.rung_id
+            for rung in study_ladder.LADDER
+            if rung.arm_id in settings["modes"]
+            and rung.exposure_us in settings["ladder"].get(rung.arm_id, [])
+        ]
+
     def ladder_state(tester_id: str, *, persist_initial: bool = True) -> study_ladder.LadderState:
         return study_ladder.LadderState(
             tester_root(sessions_root, tester_id) / "ladder.json",
@@ -8971,6 +9933,8 @@ def create_app(
                 reference=reference,
                 camera_tilt_calibration=unit_camera_tilt(),
                 target_line_record=current_target_line(tester_id, admitted_setup[tester_id]),
+                net_line=read_net_line(tester_root(sessions_root, tester_id)),
+                lens=current_lens(),
             )
             commands, log_path = action_commands(
                 "ladder",
@@ -8986,6 +9950,7 @@ def create_app(
                 use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
+                ball_box=kiosk_ball_box(tester_id, admitted_setup[tester_id], ARMS[arm_id]),
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(
@@ -9046,10 +10011,9 @@ def create_app(
         try:
             payload = request.get_json(silent=True)
             params = TesterParameters.from_payload(payload)
-            # Without a choice (an older page) every setting that has not run is eligible.
-            selected = study_ladder.validate_selection(
-                payload.get("rungs", [rung.rung_id for rung in study_ladder.LADDER])
-            )
+            # Without a choice (an older page) the lens's own settings decide: its enabled
+            # modes and the rungs it keeps for each (13 Oct)
+            selected = study_ladder.validate_selection(payload.get("rungs", lens_default_rungs()))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         # The light step is needed only for a mode with a ticked or pressed setting.
@@ -9407,6 +10371,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             "camera and radar agreed; kept with the unit's local settings, not the rig file"
         ),
     )
+    parser.add_argument(
+        "--lens-settings",
+        type=Path,
+        default=lens_profiles.default_unit_settings_path(),
+        help="This unit's lens choice and per-lens settings (kept with its local settings)",
+    )
+    parser.add_argument(
+        "--optical-calibration-dir",
+        type=Path,
+        default=lens_profiles.default_calibration_dir(),
+        help="Checkerboard calibrations; a lens's intrinsics come from one for its lens_id",
+    )
     parser.add_argument("--iwr-firmware", type=Path, default=DEFAULT_IWR_FIRMWARE)
     parser.add_argument("--iwr-calibration", type=Path, default=DEFAULT_IWR_CALIBRATION)
     parser.add_argument(
@@ -9480,6 +10456,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             camera_placement=args.camera_placement,
             iwr_static_config=args.iwr_static_config,
             camera_tilt_path=args.camera_tilt_calibration,
+            lens_settings_path=args.lens_settings,
+            optical_calibration_dir=args.optical_calibration_dir,
             iwr_firmware=args.iwr_firmware,
             iwr_calibration=args.iwr_calibration,
             iwr_static_port=args.iwr_static_port,

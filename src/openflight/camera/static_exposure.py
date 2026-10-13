@@ -526,8 +526,7 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
             if self._unidentified >= IDENTIFY_LIMIT:
                 self._finish(
                     "ball_not_identified",
-                    "several ball-like things are in the patch and the ball could not be picked "
-                    "out; keep only the ball in the patch",
+                    "More than one ball-like thing is in the box. Keep only the ball in the box.",
                 )
             return
         patch = observation.frame_signal_dn
@@ -543,8 +542,7 @@ class BallBrightnessSearch:  # pylint: disable=too-many-instance-attributes
         if self._not_found >= NOT_FOUND_LIMIT:
             self._finish(
                 "ball_not_found",
-                "No ball found in the patch. The ball may be outside it: move the ball or the "
-                "patch.",
+                "No ball in the box. Put the ball in the box.",
             )
 
     def to_dict(self) -> dict:

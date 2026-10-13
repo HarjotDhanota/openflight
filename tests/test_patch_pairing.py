@@ -1,9 +1,13 @@
-"""Camera and radar validate each other inside the patch (P8-4).
+"""Camera and radar validate each other inside the box (P8-4, fixed box 13 Oct).
 
-The ball is the camera candidate and radar candidate whose distances agree within
-their combined uncertainty; the distance comes from the radar and the side offset
-from the camera. Whatever exists is saved, labelled experimental, with a warning
-when only one sensor found it or when they disagree.
+The radar's ball is a magnitude change and a coherent change that agree with each
+other; a dominant still reflector (a door) never counts. The ball is the radar pair
+whose distance agrees with the camera's (its ray distance once the tilt is
+calibrated, else its size, a sanity check only) inside the window the camera's ray
+spans; the distance comes from the radar and the side offset from the camera. A
+camera that found no ball finishes as "no ball" and never falls back to a radar
+peak; only a camera that could not look lets a radar pair stand alone, and only
+inside the box's range extent.
 """
 
 import json
@@ -23,7 +27,6 @@ from openflight.camera.ground_patch import (
     tilt_pads_deg,
 )
 from openflight.camera.patch_pairing import (
-    AGREEMENT_SIGMAS,
     NO_BALL_MESSAGE,
     camera_ball,
     pair_patch_ball,
@@ -85,8 +88,14 @@ def _radar(name, window, *, channels=True):
         36.0,
     ],
 )
-def test_the_indoor_pair_is_the_magnitude_1_2_m_not_the_coherent_1_575_m(diameter_px):
-    """harjot-indoor-test-1: the ball's centre taped at about 1.25 m from the radar."""
+def test_the_indoor_test_1_radar_never_agrees_with_itself_so_no_distance_is_saved(diameter_px):
+    """harjot-indoor-test-1: the ball's centre taped at about 1.25 m from the radar.
+
+    The magnitude change at 1.18 m comes from 17 deg above the array's boresight and
+    the coherent difference sees nothing there; its only ground-level peak is the
+    door at 1.575 m, a still reflector. The two methods never agree, so the setup
+    saves no distance and says why, where it once took the magnitude's 1.18 m alone.
+    """
     camera = v3(pitch_deg=1.72)
     frames = indoor_scene(diameter_px=diameter_px)
     patch = patch_from_centre_pixel(camera, (INDOOR_BALL_PX[0], INDOOR_BALL_PX[1] + 10.0))
@@ -99,18 +108,13 @@ def test_the_indoor_pair_is_the_magnitude_1_2_m_not_the_coherent_1_575_m(diamete
     decision = pair_patch_ball(camera_ball(result.selected, camera), radar)
 
     assert {item["method"] for item in radar} == {"magnitude", "coherent"}
-    assert decision["status"] == "validated"
+    assert decision["status"] == "camera_only"
     assert decision["label"] == "experimental"
-    assert decision["source"] == "static_iwr_magnitude"
-    # the magnitude cluster's centroid: bin 27 (1.20 m) pulled a little toward bin 26
-    assert 1.15 <= decision["range_m"] <= 1.26
-    assert decision["pair"]["radar"]["range_m"] == pytest.approx(1.18, abs=0.03)
-    assert decision["pair"]["normalized_residual"] <= AGREEMENT_SIGMAS
-    # the coherent 1.575 m was weighed and agreed less well
-    weighed = {round(item["radar_range_m"], 2): item for item in decision["weighed"]}
-    coherent = next(value for key, value in weighed.items() if abs(key - 1.575) < 0.03)
-    assert coherent["normalized_residual"] > decision["pair"]["normalized_residual"]
-    assert decision["warning"] is None
+    assert decision["range_m"] is None
+    assert "did not agree" in decision["warning"]
+    # the door is reported, and rejected as the still reflector it is
+    door = next(item for item in decision["rejected"] if abs(item["range_m"] - 1.575) < 0.03)
+    assert door["reason"] == "still_reflector"
 
 
 def test_outdoors_test_7_pairs_its_camera_ball_with_the_nearest_radar_peak():
@@ -123,10 +127,16 @@ def test_outdoors_test_7_pairs_its_camera_ball_with_the_nearest_radar_peak():
     )
     radar = _radar("outdoors-test-7-5a7821af3641", projection.radar_window_m, channels=False)
 
-    decision = pair_patch_ball(camera_ball(result.selected, camera), radar)
+    # this capture kept no per-channel means: the coherent method could not run, so the
+    # magnitude change stands with the camera alone, and says so
+    decision = pair_patch_ball(
+        camera_ball(result.selected, camera), radar, coherent_available=False
+    )
 
     assert decision["camera"]["range_m"] == pytest.approx(1.34, abs=0.05)
     assert decision["status"] == "validated"
+    assert decision["source"] == "static_iwr_magnitude"
+    assert "coherent" in decision["warning"]
     assert decision["range_m"] == pytest.approx(1.53, abs=0.03)
     # the side offset is the camera's, at the radar's distance: the ball sat
     # 138 px right of the picture's centre, about 0.22 m right of the radar's axis
@@ -180,35 +190,118 @@ def test_a_camera_ball_without_a_radar_peak_saves_no_distance():
 
 
 def test_disagreeing_sensors_show_both_distances_and_warn_about_other_objects():
-    decision = pair_patch_ball(_camera(1.2, 0.05), [_peak("coherent", 2.0, score=40.0)])
+    decision = pair_patch_ball(
+        _camera(1.2, 0.05),
+        [_peak("magnitude", 2.02, score=4.0), _peak("coherent", 2.0, score=40.0)],
+    )
 
     assert decision["status"] == "disagree"
     assert decision["range_m"] is None
     assert "1.20 m" in decision["warning"] and "2.00 m" in decision["warning"]
-    assert "other objects in the patch" in decision["warning"]
+    assert "other objects in the box" in decision["warning"]
     assert "no distance" in decision["warning"]
 
 
-def test_a_radar_peak_without_a_camera_ball_is_saved_with_a_warning():
-    decision = pair_patch_ball(
-        None, [_peak("magnitude", 1.4, score=3.0), _peak("coherent", 1.6, score=30.0)]
-    )
+def test_a_camera_that_found_no_ball_never_falls_back_to_a_radar_peak():
+    """The door case: the radar's strongest peak is never taken for a missing ball."""
+    radar = [_peak("magnitude", 2.2, score=3.0), _peak("coherent", 2.21, score=30.0)]
 
-    assert decision["status"] == "radar_only"
-    # the radar's strongest ground-level coherent peak before a magnitude one
-    assert decision["range_m"] == pytest.approx(1.6)
-    assert "camera did not find the ball" in decision["warning"]
-
-
-def test_no_ball_in_the_patch_says_so():
-    decision = pair_patch_ball(None, [_peak("coherent", 1.7, ground_level=False)])
+    decision = pair_patch_ball(None, radar, camera_status="no_ball", box_range_m=(1.8, 2.95))
 
     assert decision["status"] == "no_ball"
     assert decision["range_m"] is None
+    assert decision["source"] is None
     assert decision["warning"] == NO_BALL_MESSAGE
-    assert NO_BALL_MESSAGE == (
-        "No ball found in the patch. The ball may be outside it: move the ball or the patch."
-    )
+    assert NO_BALL_MESSAGE == "No ball: put the ball in the box."
+    # a missing camera ball is "no ball" by default
+    assert pair_patch_ball(None, radar)["status"] == "no_ball"
+
+
+def test_a_camera_that_could_not_look_lets_an_agreed_radar_pair_stand_inside_the_box():
+    radar = [_peak("magnitude", 2.18, score=3.0), _peak("coherent", 2.21, score=30.0)]
+
+    decision = pair_patch_ball(None, radar, camera_status="unavailable", box_range_m=(1.8, 2.95))
+
+    assert decision["status"] == "radar_only_unconfirmed"
+    assert decision["range_m"] == pytest.approx(2.21)
+    assert decision["source"] == "static_iwr_coherent_magnitude_unconfirmed"
+    assert "camera could not look" in decision["warning"]
+
+
+@pytest.mark.parametrize(
+    "radar",
+    [
+        # one method alone, however strong
+        [_peak("coherent", 2.2, score=80.0)],
+        # both methods, but not together
+        [_peak("magnitude", 1.4, score=3.0), _peak("coherent", 2.2, score=30.0)],
+        # together, outside the box's range extent (the door at 1.575 m)
+        [_peak("magnitude", 1.57, score=3.0), _peak("coherent", 1.575, score=85.0)],
+    ],
+)
+def test_a_radar_only_setup_saves_no_range_without_a_magnitude_change_in_the_box(radar):
+    decision = pair_patch_ball(None, radar, camera_status="unavailable", box_range_m=(1.8, 2.95))
+
+    assert decision["status"] == "camera_unavailable"
+    assert decision["range_m"] is None
+
+
+def test_a_dominant_still_reflector_is_never_the_ball():
+    door = {"bin": 35, "range_m": 1.575, "dominance": 6.0, "power_change": 0.03}
+    radar = [
+        {**_peak("magnitude", 1.58, score=3.0), "still_reflector": door},
+        {**_peak("coherent", 1.575, score=85.0), "still_reflector": door},
+    ]
+
+    decision = pair_patch_ball(_camera(1.5, 0.3), radar)
+
+    assert decision["status"] == "camera_only"
+    assert {item["reason"] for item in decision["rejected"]} == {"still_reflector"}
+
+
+def test_the_radar_pair_must_lie_in_the_camera_s_ray_window():
+    radar = [_peak("magnitude", 2.6, score=3.0), _peak("coherent", 2.62, score=30.0)]
+    ball = {**_camera(2.4, 0.5), "ray_window_m": [1.0, 2.3]}
+
+    decision = pair_patch_ball(ball, radar)
+
+    assert decision["status"] == "camera_only"
+    assert decision["rejected"][0]["reason"] == "outside_the_camera_ray_window"
+
+
+def test_a_calibrated_ray_distance_is_the_camera_s_main_distance():
+    """The size says 2.6 m +- 0.55 and would accept either pair; the calibrated row
+    (2.05 m +- 0.08) picks the one that is the ball."""
+    radar = [
+        _peak("magnitude", 2.06, score=3.0),
+        _peak("coherent", 2.05, score=20.0),
+        {**_peak("magnitude", 2.55, score=4.0), "candidate": "magnitude-2"},
+        {**_peak("coherent", 2.56, score=40.0), "candidate": "coherent-2"},
+    ]
+    ball = {**_camera(2.6, 0.55), "ray_range_m": 2.05, "ray_uncertainty_m": 0.08}
+
+    decision = pair_patch_ball(ball, radar)
+
+    assert decision["status"] == "validated"
+    assert decision["range_m"] == pytest.approx(2.05)
+    assert decision["camera_distance"] == "ray_calibrated_tilt"
+
+
+def test_the_two_radar_methods_agree_within_two_and_a_half_bins():
+    """harjot-indoor-test-2: the magnitude at 1.293 m and the coherent at 1.200 m are
+    two bins apart (the magnitude is pulled by a loss in the next bin); they agree."""
+    radar = [
+        _peak("magnitude", 1.293, score=2.2, uncertainty_m=0.023),
+        _peak("coherent", 1.200, score=26.8, uncertainty_m=0.023),
+    ]
+
+    decision = pair_patch_ball(_camera(1.225, 0.26), radar)
+
+    assert decision["status"] == "validated"
+    assert decision["source"] == "static_iwr_coherent_magnitude"
+    assert decision["range_m"] == pytest.approx(1.200)
+    # half their disagreement is added to the coherent peak's own uncertainty
+    assert decision["uncertainty_m"] == pytest.approx(math.hypot(0.023, 0.0465), abs=1e-3)
 
 
 def test_a_coherent_peak_off_the_ground_is_never_the_ball():
@@ -231,7 +324,9 @@ def test_a_2_m_patch_pairs_at_2_m():
         "radar_origin_lfu": list(camera.radar_origin_lfu),
     }
 
-    decision = pair_patch_ball(ball, [_peak("magnitude", 2.01, uncertainty_m=0.04)])
+    decision = pair_patch_ball(
+        ball, [_peak("magnitude", 2.01, uncertainty_m=0.04)], coherent_available=False
+    )
 
     assert projection.radar_window_m[0] < 2.0 < projection.radar_window_m[1]
     assert decision["status"] == "validated"
@@ -242,3 +337,27 @@ def test_a_2_m_patch_pairs_at_2_m():
         point[0] - camera.radar_origin_lfu[0], abs=0.01
     )
     assert math.isfinite(decision["uncertainty_m"])
+
+
+def test_a_camera_that_could_not_look_and_no_radar_pair_in_the_box_says_so():
+    """A dark view: the radar alone does not confirm a ball inside the box."""
+    decision = pair_patch_ball(
+        None,
+        [_peak("magnitude", 1.2, score=3.0)],
+        camera_status="unavailable",
+        box_range_m=(1.8, 2.95),
+    )
+
+    assert decision["status"] == "camera_unavailable"
+    assert decision["range_m"] is None
+    assert "could not look" in decision["warning"]
+
+
+def test_an_ambiguous_camera_view_saves_nothing_and_says_keep_only_the_ball():
+    radar = [_peak("magnitude", 2.2, score=3.0), _peak("coherent", 2.21, score=30.0)]
+
+    decision = pair_patch_ball(None, radar, camera_status="ambiguous", box_range_m=(1.8, 2.95))
+
+    assert decision["status"] == "ambiguous"
+    assert decision["range_m"] is None
+    assert "Keep only the ball in the box" in decision["warning"]

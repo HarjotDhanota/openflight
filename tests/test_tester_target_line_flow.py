@@ -149,16 +149,26 @@ def test_a_new_setup_starts_straight_ahead_then_from_the_last_aim(tmp_path, inpu
     assert stored["schema"] == tl.SCHEMA
     assert [entry["change"] for entry in stored["history"]] == ["first"]
 
-    # the patch moves: the line from the ball changes, so the aim is asked again,
-    # starting from where it was
-    shown = aim_state(client, tester)["patch"]["centre_lfu_m"]
-    assert (
-        confirm_box(client, tester, "box-2", centre=[shown[0] + 0.3, shown[1]]).status_code == 200
+
+def test_a_new_lens_asks_for_the_aim_again_from_where_it_was(tmp_path, inputs, monkeypatch):
+    """13 Oct: a lens change resets the box and the aim point; the aim starts again from
+    the last one."""
+    inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    client = app.test_client()
+    assert confirm_box(client, tester, "box-1").status_code == 200
+    assert confirm_aim(client, tester, "aim-1", [700.0, 380.0]).status_code == 200
+
+    selected = client.post(
+        "/api/tester/lens", json={"tester_id": tester, "action": "select", "lens_id": "6mm"}
     )
+    assert selected.status_code == 200, selected.get_json()
+    assert aim_state(client, tester)["state"] == "needs_patch"
+    assert confirm_box(client, tester, "box-2").status_code == 200
     again = aim_state(client, tester)
 
     assert again["state"] == "needs_confirmation"
-    assert again["reason"] == "patch_moved"
+    assert again["reason"] == "new_setup"
     assert again["aim"]["source"] == "last_confirmed"
     assert again["aim"]["aim_px"] == [700.0, 380.0]
 

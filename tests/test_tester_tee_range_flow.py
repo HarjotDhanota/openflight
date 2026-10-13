@@ -58,7 +58,8 @@ class FakeTilt:
 
 def ball_pixels(width: int, height: int) -> tuple[float, float, float]:
     """Where the fake camera draws the reference ball, and its diameter."""
-    return width / 2.0, height * 0.625, 24.0 * width / 1280.0
+    # inside the fixed box (1.8-2.9 m, padded for the tilt) at a level camera
+    return width / 2.0, height * 0.55, 24.0 * width / 1280.0
 
 
 class FakeLive:
@@ -483,9 +484,14 @@ def app_for(
     use_unqualified=False,
     camera_tilt_path=None,
 ):
-    def camera_model(arm, *_args):
+    def camera_model(arm, *args):
+        lens = args[5] if len(args) > 5 else None
         return BallPlaneCamera.nominal(
-            focal_px=933.0 if arm.width == 1280 else 466.5,
+            focal_px=(
+                lens.focal_px(arm.width)
+                if lens is not None
+                else (933.0 if arm.width == 1280 else 466.5)
+            ),
             image_width_px=arm.width,
             image_height_px=arm.height,
             pitch_deg=0.0,
@@ -595,15 +601,18 @@ def box_display(client, tester):
     return box_state(client, tester)["box"]
 
 
+# the fixed box's centre on the ground: 1.8-2.9 m ahead of the lens, on its axis
+FIXED_CENTRE = [0.0, 2.35]
+
+
 def confirm_box(client, tester, request_id, origin=None, centre=None):
-    """Drop the patch (P8-1): its centre under the pixel ``origin``, or at the ground
-    point ``centre`` (rig frame, metres), or where it starts, by default."""
-    shown = box_display(client, tester)
+    """Confirm the fixed box (13 Oct). ``origin`` / ``centre`` are what an older page
+    sent for a dragged patch; they are sent when given, and ignored by the server."""
     payload = {"tester_id": tester, "action": "confirm", "request_id": request_id}
     if origin is not None:
         payload["centre_px"] = list(origin)
-    else:
-        payload["centre_m"] = list(centre if centre is not None else shown["patch"]["centre_lfu_m"])
+    if centre is not None:
+        payload["centre_m"] = list(centre)
     return client.post("/api/tester/placement-box", json=payload)
 
 
@@ -771,15 +780,15 @@ def test_a_dark_camera_view_can_be_kept_as_unqualified_raw_evidence(tmp_path, in
         / saved["file"]
     )
     assert response.status_code == 200
-    # P8-4: the camera's raw evidence is kept and the radar's ball is saved alone,
-    # labelled experimental with a warning (D15)
-    assert state["phase"] == "experimental"
-    assert state["solution"]["status"] == "unresolved"
-    assert state["solution"]["reason"] == "patch_ball_saved"
+    # the camera could not look (too dark): its raw evidence is kept, and the radar
+    # alone saves a range only for a magnitude and coherent change that agree inside
+    # the box (13 Oct); this radar has one method, at 1.2 m, short of the box
+    assert state["phase"] == "raw_only"
     decision = state["evidence"]["patch_ball"]
-    assert decision["status"] == "radar_only"
-    assert decision["range_m"] == pytest.approx(1.2, abs=0.03)
-    assert "camera did not find the ball" in decision["warning"]
+    assert decision["camera_status"] == "unavailable"
+    assert decision["status"] == "camera_unavailable"
+    assert decision["range_m"] is None
+    assert "could not look" in decision["warning"]
     assert saved["qualified"] is False
     assert saved["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert "camera_arm5_candidate" not in state["evidence"]
@@ -805,8 +814,11 @@ def test_an_ambiguous_ball_is_reported_as_unidentified_not_as_dark(tmp_path, inp
     assert refused.status_code == 409
     assert "ball not identified" in refused.get_json()["error"]
     assert kept.status_code == 200
-    assert state["phase"] == "experimental"
-    assert state["evidence"]["patch_ball"]["status"] == "radar_only"
+    # the camera looked and could not pick the ball out: nothing is saved, and the
+    # tester is told to keep only the ball in the box; no radar peak stands in
+    assert state["phase"] == "raw_only"
+    assert state["evidence"]["patch_ball"]["status"] == "ambiguous"
+    assert "Keep only the ball in the box" in state["evidence"]["patch_ball"]["warning"]
 
 
 def test_the_diagnostic_save_is_refused_when_the_light_is_usable(tmp_path, inputs, monkeypatch):
@@ -2907,28 +2919,36 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
 
     assert shown["state"] == "needs_confirmation"
+    # 13 Oct: the fixed, TrackMan-style box: 1.8-2.9 m ahead of the lens, 0.3 m aside
+    assert shown["mode"] == "fixed"
+    assert shown["placement_window_m"] == [1.8, 2.9]
+    assert shown["frame_size_px"] == [1280, 800]
+    assert len(shown["box_outline_px"]) == 4
+    assert shown["ball"]["state"] == "waiting"
+    assert shown["ball"]["message"].endswith(".")
+    assert shown["net_line"]["status"] == "not_set"
     box = shown["box"]
     assert box["arm_id"] == "arm5"
     assert box["frame_size_px"] == [1280, 800]
-    # P8-1: a 2 ft ground patch, 1.25 m straight ahead of the radar to start with
-    assert box["patch"]["size_m"] == 0.61
-    assert box["distance_m"] == pytest.approx(1.25, abs=0.01)
+    assert box["patch"]["size_m"] == pytest.approx(0.6)
+    assert box["patch"]["depth_m"] == pytest.approx(1.1)
+    assert box["patch"]["centre_lfu_m"] == pytest.approx(FIXED_CENTRE)
     assert box["side_offset_m"] == pytest.approx(0.0, abs=1e-6)
-    assert box["source"] == "default_straight_ahead"
+    assert box["source"] == "fixed_box"
     assert len(box["outline_px"]) == 4 and len(box["search_outline_px"]) == 4
     # box_px, the hitting zone, bounds what is drawn and searched
     xs = [x for x, _y in box["outline_px"] + box["search_outline_px"]]
     assert box["box_px"][0] <= min(xs) and max(xs) <= box["box_px"][2]
-    # the page drags it through the same camera model, in true perspective
     assert shown["projection"]["focal_px"] == pytest.approx(933.0)
-    assert shown["projection"]["size_m"] == 0.61
     assert box["camera_tilt"]["status"] == "uncalibrated"
-    # the 1280x800 preview runs so the tester can see where to drag it
+    # the 1280x800 preview runs so the tester can see the box and the ball
     assert opened.status_code == 200, opened.get_json()
     assert opened.get_json()["previewing"] is True
     assert live.running is True and live.arm == ts.ARMS["arm5"]
-    # its only analyzer sets the picture's brightness for viewing (P7-15b)
-    assert isinstance(live.analyzer, ts.BoxPreviewExposure)
+    # the analyzer sets the picture's brightness for viewing (P7-15b) and looks for
+    # the ball in the box
+    assert isinstance(live.analyzer, ts.BoxBallLocator)
+    assert isinstance(live.analyzer.brightness, ts.BoxPreviewExposure)
     owner = client.get("/api/tester/live").get_json()["owner"]
     assert owner["kind"] == "placement_box" and owner["epoch_id"] is None
     # the ball range does not start until the box is confirmed
@@ -2942,28 +2962,29 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     assert app.config["TEST_STATIC_MANAGER"].start_count == 0
 
 
-def test_a_dragged_patch_is_kept_within_the_supported_distances(tmp_path, inputs, monkeypatch):
+def test_drag_coordinates_from_an_older_page_are_ignored(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
     client = app.test_client()
     client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
 
-    # dragged 5 m out, beyond anything the sensors support
+    # an older page still sends where it dragged the patch: 5 m out, to the right
     response = confirm_box(client, tester, "box", centre=(0.4, 5.0))
     assert response.status_code == 200, response.get_json()
-    assert response.get_json()["change"] == "first"
-    # the setup then starts at the radar captures, from that patch
+    body = response.get_json()
+    assert body["change"] == "first"
+    assert body["ignored_drag"] == {"centre_m": [0.4, 5.0]}
     state = post(client, tester, "start", "start").get_json()["state"]
 
     record = state["evidence"]["placement_box"]
     assert state["phase"] == "needs_empty"
+    assert record["mode"] == "fixed"
     assert record["arm_id"] == "arm5"
     assert record["frame_size_px"] == [1280, 800]
-    assert record["ground_distance_m"] == pytest.approx(3.0, abs=1e-3)
-    # the drag's heading is kept: to the right
-    assert record["side_offset_m"] > 0.2
-    assert record["source"] == "tester_dragged"
-    assert record["requested"] == {"centre_m": [0.4, 5.0]}
+    # the box stays where it is: the window, on the lens's axis
+    assert _centre(record) == pytest.approx(FIXED_CENTRE)
+    assert record["source"] == "fixed_box"
+    assert record["ball_at_confirm"]["state"] == "waiting"
     assert "history" not in record
     assert box_state(client, tester)["state"] == "confirmed"
     # the preview is released once the box is confirmed
@@ -2980,7 +3001,7 @@ def test_starting_over_keeps_the_confirmed_box(tmp_path, inputs, monkeypatch):
 
     assert restarted["epoch_id"] != first["epoch_id"]
     assert restarted["phase"] == "needs_empty"
-    assert _centre(restarted["evidence"]["placement_box"]) == pytest.approx([-0.3, 1.8])
+    assert _centre(restarted["evidence"]["placement_box"]) == pytest.approx(FIXED_CENTRE)
 
 
 def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
@@ -2995,10 +3016,11 @@ def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
     setup.confirmation_id = "confirmation-2"
     shown = box_state(client, tester)
 
-    # the last patch is pre-filled, at the same place on the ground
+    # the fixed box asks to be confirmed again, where it always is
     assert shown["state"] == "needs_confirmation"
-    assert _centre(shown["box"]) == pytest.approx([-0.3, 1.8])
-    assert shown["box"]["source"] == "last_confirmed"
+    assert _centre(shown["box"]) == pytest.approx(FIXED_CENTRE)
+    assert shown["box"]["source"] == "fixed_box"
+    assert shown["reconfirm_reason"] == "the_setup_lens_or_box_changed"
 
 
 def test_every_setup_search_looks_only_inside_the_confirmed_box(tmp_path, inputs, monkeypatch):
@@ -3065,9 +3087,7 @@ def test_no_ball_in_the_box_tells_the_tester_to_put_it_there(tmp_path, inputs, m
 
     association = analyzer.observe(np.zeros((3, 800, 1280), dtype=np.uint8), 1)
 
-    assert association["readiness_reason"] == (
-        "No ball found in the patch. The ball may be outside it: move the ball or the patch."
-    )
+    assert association["readiness_reason"] == "No ball in the box. Put the ball in the box."
     assert association["placement_box_px"] == [500, 380, 657, 511]
 
 
@@ -3158,7 +3178,8 @@ def test_the_swings_record_says_where_the_box_was(tmp_path, inputs, monkeypatch)
 
     assert handed["placement_box"]["box_px"] == state["evidence"]["placement_box"]["box_px"]
     assert handed["placement_box"]["frame_size_px"] == [1280, 800]
-    assert handed["placement_box"]["source"] == "tester_dragged"
+    assert handed["placement_box"]["source"] == "fixed_box"
+    assert handed["placement_box"]["mode"] == "fixed"
 
 
 # P7-6: the setup's radar difference is subtracted coherently per virtual channel.
@@ -3242,8 +3263,8 @@ def _v3_patch_record(distance_m, *, pitch_deg=1.72, side_m=0.0):
 
 
 def test_the_radar_reports_every_candidate_inside_the_patch_window():
-    """P8-3 on harjot-indoor-test-1: both the coherent 1.575 m and the magnitude's
-    1.20 m (near the tape's 1.25 m) are candidates; neither method's gate drops one."""
+    """P8-3 on harjot-indoor-test-1: the magnitude's 1.20 m (near the tape's 1.25 m) is
+    a candidate; the door at 1.575 m is a still reflector, flagged wherever it shows."""
     empty, present = _indoor_records()
     window = ts.patch_radar_window(_v3_patch_record(1.25))
 
@@ -3264,7 +3285,11 @@ def test_the_radar_reports_every_candidate_inside_the_patch_window():
         for method in ("magnitude", "coherent")
     }
     assert any(abs(value - 1.20) < 0.03 for value in ranges["magnitude"])
-    assert any(abs(value - 1.575) < 0.03 for value in ranges["coherent"])
+    # the door at 1.575 m: fitted as a still reflector, and flagged wherever it is reported
+    for item in found["candidates"]:
+        if abs(item["range_m"] - 1.575) < 0.03:
+            assert item["still_reflector"] is not None
+    assert any(abs(item["range_m"] - 1.575) < 0.05 for item in found["still_reflectors"])
     # the window runs from before the patch's near edge to past its far edge, padded
     # for the uncalibrated tilt, and the candidates lie inside it
     assert found["window_m"][0] <= window["nominal_edges_m"][0]
@@ -3505,7 +3530,7 @@ def test_a_radar_that_disagrees_with_the_camera_saves_no_distance_and_names_both
     assert decision["status"] == "disagree"
     assert decision["range_m"] is None
     assert "1.50 m" in decision["warning"] and "1.20 m" in decision["warning"]
-    assert "other objects in the patch" in decision["warning"]
+    assert "other objects in the box" in decision["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
     assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
 
@@ -3535,7 +3560,7 @@ def test_a_setup_without_a_usable_radar_range_saves_no_camera_range():
     assert "range_m" not in decision
 
 
-def test_no_ball_in_the_patch_saves_nothing_and_says_so(tmp_path, inputs, monkeypatch):
+def test_a_dark_box_with_no_radar_ball_saves_nothing_and_says_so(tmp_path, inputs, monkeypatch):
     live = FakeLive()
     live.ball_per_signal = 0.0001
     app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, live_view=live)
@@ -3548,13 +3573,42 @@ def test_no_ball_in_the_patch_saves_nothing_and_says_so(tmp_path, inputs, monkey
     assert response.status_code == 200, response.get_json()
     state = phase(client, tester)
     assert state["phase"] == "raw_only"
-    assert state["solution"]["reason"] == "patch_ball_withheld_no_ball"
-    assert state["evidence"]["patch_ball"]["warning"] == (
-        "No ball found in the patch. The ball may be outside it: move the ball or the patch."
-    )
+    assert state["solution"]["reason"] == "patch_ball_withheld_camera_unavailable"
+    assert "could not look" in state["evidence"]["patch_ball"]["warning"]
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
     assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
     assert ts.tee_range_display(state)["swings"]["state"] == "pending"
+
+
+def test_a_camera_that_finds_no_ball_finishes_as_no_ball_never_a_radar_peak(
+    tmp_path, inputs, monkeypatch
+):
+    """13 Oct: the camera looked through the whole box and found nothing; the radar
+    has a strong change (the door case) and it is never taken for the ball."""
+    # a lit scene (black level 0): the box's own pixels are bright enough to look in
+    app, tester = _unqualified_app(tmp_path, inputs, monkeypatch, black_floor_dn=0.0)
+    nothing = ReferenceBallRangeResult("not_found", "withheld", None, (), {})
+    monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_args, **_kwargs: nothing)
+    client = app.test_client()
+    start_arm5(client, tester)
+
+    response = post(client, tester, "save_camera_arm5_diagnostic", "no-ball")
+
+    assert response.status_code == 200, response.get_json()
+    state = phase(client, tester)
+    decision = state["evidence"]["patch_ball"]
+    assert state["evidence"]["camera_arm5_static_exposure"]["status"] == "ball_not_found"
+    assert decision["camera_status"] == "no_ball"
+    assert decision["status"] == "no_ball"
+    assert decision["range_m"] is None
+    assert decision["warning"] == "No ball: put the ball in the box."
+    # the radar did see a change; it is on record, never the range
+    assert state["evidence"]["iwr_candidate"]["evidence"]["patch_candidates"]["candidates"]
+    assert state["phase"] == "raw_only"
+    assert state["solution"]["reason"] == "patch_ball_withheld_no_ball"
+    shown = box_state(client, tester)
+    assert shown["ball"]["state"] == "no_ball"
+    assert shown["ball"]["range_m"] is None
 
 
 def test_the_1280x800_ball_must_be_locked_in_the_box_to_save_anything():
@@ -3610,12 +3664,13 @@ def test_the_640x400_settings_use_the_1280x800_ball_halved():
     }
 
 
-def test_the_indoor_setup_pairs_the_ball_at_the_tape_not_the_coherent_pick(
+def test_the_indoor_test_1_setup_saves_no_distance_where_the_radar_disagrees_with_itself(
     tmp_path, inputs, monkeypatch
 ):
-    """End to end on harjot-indoor-test-1's radar captures (P8-4): the coherent
-    difference's 1.575 m and the magnitude's 1.2 m are both candidates, and a camera
-    ball at the tape's 1.25 m (its size uncertainty, about 21 %) picks the 1.2 m."""
+    """End to end on harjot-indoor-test-1's radar captures (13 Oct): the magnitude change
+    near the tape's 1.25 m is not a ground-level coherent change, and the coherent
+    difference's only candidate there is the door, a still reflector. The radar's two
+    methods never agree, so no distance is saved (it once took the magnitude alone)."""
     inputs["rig"].write_text(V3_RIG.read_text(encoding="utf-8"), encoding="utf-8")
     inputs["calibration"].write_text(
         REFERENCE_CALIBRATION.read_text(encoding="utf-8"), encoding="utf-8"
@@ -3655,17 +3710,13 @@ def test_the_indoor_setup_pairs_the_ball_at_the_tape_not_the_coherent_pick(
 
     state = drive(app.test_client(), tester)
 
-    iwr = state["evidence"]["iwr_candidate"]
-    # the coherent difference alone still says 1.575 m, as it did in the field
-    assert iwr["evidence"]["difference"]["status"] == "accepted_unqualified"
-    assert iwr["radar_slant_range_m"] == pytest.approx(1.575, abs=0.01)
     decision = state["evidence"]["patch_ball"]
-    assert decision["status"] == "validated"
-    assert decision["source"] == "static_iwr_magnitude"
-    assert 1.15 <= decision["range_m"] <= 1.26
-    assert state["phase"] == "experimental"
+    assert decision["status"] == "camera_only"
+    assert decision["range_m"] is None
+    assert "did not agree" in decision["warning"]
+    assert state["phase"] == "raw_only"
     args = ts._tee_range_cli_args(tee_range.TeeRangeSolution.from_dict(state["solution"]))
-    assert 1.15 <= float(args[1]) <= 1.26
+    assert args[0] == "--iwr6843-tee-range-pending"
 
 
 # P7-15: the placement box is step 1, and it is the hitting zone.
@@ -3702,7 +3753,7 @@ def test_the_light_and_the_ball_range_wait_for_the_box(tmp_path, inputs, monkeyp
     for refused in (light, rng):
         assert refused.status_code == 409
         assert refused.get_json()["placement_box_required"] is True
-        assert "patch" in refused.get_json()["error"]
+        assert "box" in refused.get_json()["error"]
     assert manager.start_count == 0
     assert phase(client, tester) is None
 
@@ -3782,34 +3833,52 @@ def test_confirming_the_same_spot_again_changes_nothing(tmp_path, inputs, monkey
     assert phase(client, tester)["epoch_id"] == first["epoch_id"]
 
 
-def test_moving_the_box_starts_the_ball_range_over_and_is_recorded(tmp_path, inputs, monkeypatch):
+def _with_the_real_rig(inputs):
+    """The rig file the lens catalogue scales: the measured v3 enclosure."""
+    inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
+
+
+def _select_lens(client, tester, lens_id):
+    return client.post(
+        "/api/tester/lens", json={"tester_id": tester, "action": "select", "lens_id": lens_id}
+    )
+
+
+def test_a_new_lens_starts_the_ball_range_over_and_is_recorded(tmp_path, inputs, monkeypatch):
+    _with_the_real_rig(inputs)
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
+    assert confirm_box(client, tester, "box").status_code == 200
     finished = drive(client, tester)
     assert finished["phase"] in tee_range_flow.TERMINAL_PHASES
 
-    moved = confirm_box(client, tester, "moved", centre=(0.05, 1.3))
+    selected = _select_lens(client, tester, "6mm")
 
-    assert moved.status_code == 200, moved.get_json()
-    body = moved.get_json()
-    assert body["change"] == "moved"
+    assert selected.status_code == 200, selected.get_json()
+    assert selected.get_json()["reset"] == [
+        "placement_box",
+        "aim_point",
+        "camera_tilt",
+        "tee_range",
+    ]
+    assert box_state(client, tester)["state"] == "needs_confirmation"
+    assert phase(client, tester)["retry_phase"] is None
+    reconfirmed = confirm_box(client, tester, "six")
+    assert reconfirmed.status_code == 200, reconfirmed.get_json()
+    body = reconfirmed.get_json()
     assert body["range_restarted"] is True
     state = phase(client, tester)
     assert state["epoch_id"] != finished["epoch_id"]
     assert state["phase"] == "needs_empty"
-    assert _centre(state["evidence"]["placement_box"]) == pytest.approx([0.05, 1.3])
+    record = state["evidence"]["placement_box"]
+    assert record["lens"]["effective_lens_id"] == "6mm"
+    assert record["setup_binding"]["lens_id"] == "6mm"
     started_by = state["evidence"]["started_by"]
-    assert started_by["reason"] == "placement_box_moved"
+    assert started_by["reason"] == "placement_box_changed"
     assert started_by["previous_epoch_id"] == finished["epoch_id"]
-    assert started_by["moved_m"] == pytest.approx(0.05)
-    assert started_by["at_utc"]
+    assert started_by["previous_lens_id"] is None
     history = json.loads(_box_file(tmp_path, tester).read_text(encoding="utf-8"))["history"]
-    assert [entry["change"] for entry in history] == ["first", "moved"]
-    assert history[-1]["moved_m"] == pytest.approx(0.05)
-    assert history[-1]["moved_from_centre_lfu_m"] == pytest.approx([0.0, 1.3])
-    assert history[-1]["centre_lfu_m"] == pytest.approx([0.05, 1.3])
-    assert history[-1]["at_utc"]
+    assert [entry["change"] for entry in history] == ["first", "reconfirmed"]
     # the ladder cannot start on the old setup
     ladder = client.post(
         "/api/tester/ladder/start",
@@ -3818,21 +3887,20 @@ def test_moving_the_box_starts_the_ball_range_over_and_is_recorded(tmp_path, inp
     assert ladder.status_code == 409
 
 
-def test_moving_the_box_is_refused_while_a_capture_holds_the_hardware(
-    tmp_path, inputs, monkeypatch
-):
+def test_a_new_lens_is_refused_while_a_capture_holds_the_hardware(tmp_path, inputs, monkeypatch):
+    _with_the_real_rig(inputs)
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
+    assert confirm_box(client, tester, "box").status_code == 200
     post(client, tester, "start", "start")
     manager = app.config["TEST_STATIC_MANAGER"]
     manager._status = {"state": "running", "action": "ladder", "message": "busy"}
 
-    moved = confirm_box(client, tester, "moved", centre=(0.2, 1.3))
+    refused = _select_lens(client, tester, "8mm")
 
-    assert moved.status_code == 409
-    assert "stop first" in moved.get_json()["error"]
-    assert _centre(box_display(client, tester)) == pytest.approx([0.0, 1.3])
+    assert refused.status_code == 409
+    assert "stop first" in refused.get_json()["error"]
+    assert client.get("/api/tester/lens").get_json()["lens_id"] is None
 
 
 def _screened(tmp_path, tester, box_px, arm_id="arm5"):
@@ -3857,29 +3925,30 @@ def _screen(client, tester, arm_id="arm5"):
     return next(arm for arm in status["study"]["arms"] if arm["arm_id"] == arm_id)["gain_screen"]
 
 
-def test_moving_the_box_makes_the_light_measurement_stale(tmp_path, inputs, monkeypatch):
+def test_a_new_lens_makes_the_light_measurement_stale(tmp_path, inputs, monkeypatch):
+    _with_the_real_rig(inputs)
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
+    assert confirm_box(client, tester, "box").status_code == 200
     box = box_display(client, tester)["box_px"]
     for arm_id in ("arm5", "arm6"):
         _screened(tmp_path, tester, box, arm_id)
     assert _screen(client, tester)["stale"] is False
-    assert confirm_box(client, tester, "same", centre=(0.01, 1.3)).status_code == 200
+    assert confirm_box(client, tester, "same").status_code == 200
     assert _screen(client, tester)["stale"] is False
 
-    assert confirm_box(client, tester, "moved", centre=(0.3, 1.3)).status_code == 200
+    # a 6 mm lens draws the same ground box wider in the picture
+    assert _select_lens(client, tester, "6mm").status_code == 200
+    assert confirm_box(client, tester, "six").status_code == 200
 
     screen = _screen(client, tester)
     assert screen["stale"] is True
-    assert "box you have since moved" in screen["prompt"]
     assert screen["prompt"].startswith("Measure the light again (B)")
     ladder = client.post(
         "/api/tester/ladder/start",
         json={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
     )
     assert ladder.status_code == 409
-    assert ladder.get_json()["gain_screen_stale"] is True
 
 
 def test_a_screen_over_the_fixed_zone_is_stale_once_a_box_is_confirmed(tmp_path):
@@ -3958,12 +4027,12 @@ def test_a_setup_begun_before_the_box_moved_to_step_one_takes_the_confirmed_box(
     legacy = store.start("legacy", setup_admission={**binding, "tester_id": tester})
     assert legacy.phase == "needs_box"
 
-    assert confirm_box(client, tester, "box", centre=(0.0, 1.3)).status_code == 200
+    assert confirm_box(client, tester, "box").status_code == 200
 
     state = phase(client, tester)
     assert state["epoch_id"] == legacy.epoch_id
     assert state["phase"] == "needs_empty"
-    assert _centre(state["evidence"]["placement_box"]) == pytest.approx([0.0, 1.3])
+    assert _centre(state["evidence"]["placement_box"]) == pytest.approx(FIXED_CENTRE)
 
 
 def test_the_first_preview_uses_the_last_ball_lock_before_any_light_screen():
@@ -3991,20 +4060,24 @@ def test_a_camera_that_does_not_answer_is_said_plainly(tmp_path, inputs, monkeyp
     assert box_state(client, tester)["previewing"] is False
 
 
-def test_both_setup_captures_use_the_profile_the_patch_needs(tmp_path, inputs, monkeypatch):
-    """P8-1/P8-3: a far patch's captures take the wider profile, the same for both."""
+def test_both_setup_captures_use_the_far_profile_while_the_range_is_unknown(
+    tmp_path, inputs, monkeypatch
+):
+    """13 Oct: the ball's range is not known until the radar measures it, so both
+    captures take the far profile, chosen once."""
     far = tmp_path / "far.cfg"
     far.write_text("far profile", encoding="utf-8")
     seen = []
+    real = ts.static_config_for_patch
 
-    def choose(patch, default, _far, bias_m):
-        seen.append((patch, default, bias_m))
-        return far, {"chosen": "far", "path": str(far)}
+    def choose(patch, default, _far, bias_m, **kwargs):
+        seen.append((patch, default, bias_m, kwargs))
+        return real(patch, default, far, bias_m, **kwargs)
 
     monkeypatch.setattr(ts, "static_config_for_patch", choose)
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    assert confirm_box(client, tester, "box", centre=(0.0, 2.6)).status_code == 200
+    assert confirm_box(client, tester, "box").status_code == 200
     manager = app.config["TEST_STATIC_MANAGER"]
     commands = []
     for index, action in enumerate(("start", "capture_empty", "capture_ball")):
@@ -4014,47 +4087,54 @@ def test_both_setup_captures_use_the_profile_the_patch_needs(tmp_path, inputs, m
 
     for command in commands:
         assert command[command.index("--config") + 1] == str(far)
-    # chosen once, from the confirmed patch, and recorded with the setup
+    # chosen once, from the confirmed box, and recorded with the setup
     assert len(seen) == 1
-    assert seen[0][0]["patch"]["centre_lfu_m"] == pytest.approx([0.0, 2.6])
-    assert phase(client, tester)["evidence"]["iwr_static_config"]["chosen"] == "far"
+    assert seen[0][0]["mode"] == "fixed"
+    config = phase(client, tester)["evidence"]["iwr_static_config"]
+    assert config["chosen"] == "far"
+    assert config["basis"] == "ball_range_not_yet_known"
 
 
-def test_a_patch_2_m_out_works_end_to_end(tmp_path, inputs, monkeypatch):
-    """P8-1..P8-4 on a synthetic 2 m setup: the patch, both captures, the camera's
-    ball, the pair and what swings are started with."""
+def test_a_ball_2_2_m_out_in_the_fixed_box_works_end_to_end(tmp_path, inputs, monkeypatch):
+    """The fixed box on a synthetic 2.2 m setup: both captures, the camera's ball, the
+    pair, the page's ball block and what swings are started with."""
     app, tester = app_for(tmp_path, inputs, monkeypatch, qualified=False)
     monkeypatch.setattr(
         ts,
         "estimate_patch_ball",
         lambda _frames, camera, **_kwargs: camera_result(
-            2.02, camera.image_width_px, camera.image_height_px, uncertainty=0.43
+            2.22, camera.image_width_px, camera.image_height_px, uncertainty=0.45
         ),
     )
-    app.config["TEST_STATIC_MANAGER"].ball_bins = (50,)  # 2.0 m at 0.04 m per bin
+    app.config["TEST_STATIC_MANAGER"].ball_bins = (55,)  # 2.2 m at 0.04 m per bin
     client = app.test_client()
-    assert confirm_box(client, tester, "far", centre=(0.2, 2.0)).status_code == 200
-    patch = box_display(client, tester)
-    assert patch["ground_distance_m"] == pytest.approx(2.0, abs=0.05)
+    assert confirm_box(client, tester, "far").status_code == 200
 
     state = drive(client, tester)
 
     window = state["evidence"]["iwr_candidate"]["evidence"]["patch_window"]["window_m"]
-    assert window[0] < 2.0 < window[1]
+    assert window[0] < 2.2 < window[1]
     decision = state["evidence"]["patch_ball"]
     assert decision["status"] == "validated"
-    assert decision["range_m"] == pytest.approx(2.0, abs=0.03)
+    assert decision["range_m"] == pytest.approx(2.2, abs=0.03)
+    # the camera's ray spans the box's depth: the radar's ball lies inside it
+    low, high = decision["camera"]["ray_window_m"]
+    assert low < 2.2 < high
     assert state["phase"] == "experimental"
     args, handed = ts.tee_range_handoff(tee_range.TeeRangeSolution.from_dict(state["solution"]))
-    assert float(args[1]) == pytest.approx(2.0, abs=0.03)
-    assert handed["placement_box"]["patch"]["centre_lfu_m"] == pytest.approx([0.2, 2.0])
+    assert float(args[1]) == pytest.approx(2.2, abs=0.03)
+    assert handed["placement_box"]["patch"]["centre_lfu_m"] == pytest.approx(FIXED_CENTRE)
+    shown = box_state(client, tester)
+    assert shown["ball"]["range_status"] == "validated"
+    assert shown["ball"]["range_m"] == pytest.approx(2.2, abs=0.03)
+    assert shown["distance_note"] == "inside the 1.8–2.9 m window"
 
 
 def _tilting_camera(monkeypatch):
     """The test camera, composing the LIS3DH's pitch with the unit's tilt as the real one does."""
     from openflight.camera import camera_tilt  # noqa: PLC0415
 
-    def model(arm, _rig, tilt, _optical=None, _placement=None, calibration=None):
+    def model(arm, _rig, tilt, _optical=None, _placement=None, calibration=None, _lens=None):
         applied = camera_tilt.applied_pitch(float(tilt.get("camera_pitch_deg") or 0.0), calibration)
         return BallPlaneCamera.nominal(
             focal_px=933.0 if arm.width == 1280 else 466.5,
@@ -4073,12 +4153,12 @@ def _tilting_camera(monkeypatch):
     monkeypatch.setattr(ts, "_reference_ball_camera", model)
 
 
-def test_the_first_validated_pair_calibrates_the_camera_tilt_and_later_setups_use_it(
+def test_two_validated_pairs_calibrate_the_camera_tilt_and_later_setups_use_it(
     tmp_path, inputs, monkeypatch
 ):
-    """P8-5: the ball's row against the row the radar's distance predicts gives the
-    camera's vertical offset; it is stored per unit, outside the rig file, and every
-    later setup composes it with the LIS3DH and tightens the patch."""
+    """P8-5, 13 Oct: each validated pair solves the camera's vertical offset; two that
+    agree calibrate it from their median, stored per unit and lens outside the rig file;
+    every later setup composes it with the LIS3DH and tightens the box."""
     calibration = tmp_path / "unit" / "camera-vertical-offset.json"
     rig_before = inputs["rig"].read_bytes()
     app, tester = app_for(
@@ -4092,21 +4172,27 @@ def test_the_first_validated_pair_calibrates_the_camera_tilt_and_later_setups_us
 
     outcome = first["evidence"]["camera_tilt"]
     assert first["evidence"]["patch_ball"]["status"] == "validated"
-    assert outcome["action"] == "calibrated"
-    # the fake ball sits 100 rows below the centre at 1.2 m: about 2.6 deg up
-    assert outcome["solved"]["offset_deg"] == pytest.approx(2.6, abs=0.3)
-    stored = json.loads(calibration.read_text(encoding="utf-8"))
-    assert stored["offset_deg"] == pytest.approx(outcome["solved"]["offset_deg"])
+    # one pair never calibrates the unit
+    assert outcome["action"] == "pending"
+    # the fake ball sits 40 rows below the centre at the radar's 1.2 m, nearer than that
+    # row puts a ball for a level camera: the camera looks about 1.1 deg low
+    assert outcome["solved"]["offset_deg"] == pytest.approx(-1.15, abs=0.3)
     assert inputs["rig"].read_bytes() == rig_before
-    # the calibrating pair cannot also check the lens height it assumed
+    # a pair that assumed the lens height cannot also check it
     height = first["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]
     assert height["check"] == "not_checked"
     uncalibrated = first["evidence"]["camera_arm5_capture_setup"]["patch_search"]
 
     assert post(client, tester, "start_over", "again").status_code == 200
     second = drive(client, tester)
+    assert second["evidence"]["camera_tilt"]["action"] == "calibrated"
+    stored = json.loads(calibration.read_text(encoding="utf-8"))
+    assert stored["offset_deg"] == pytest.approx(outcome["solved"]["offset_deg"], abs=0.01)
+    assert stored["method"] == "median_of_validated_pairs"
 
-    setup = second["evidence"]["camera_arm5_capture_setup"]
+    assert post(client, tester, "start_over", "third").status_code == 200
+    third = drive(client, tester)
+    setup = third["evidence"]["camera_arm5_capture_setup"]
     assert setup["camera_input_identity"]["camera_model"]["source"] == "nominal_uncalibrated"
     calibrated = setup["patch_search"]
 
@@ -4115,16 +4201,16 @@ def test_the_first_validated_pair_calibrates_the_camera_tilt_and_later_setups_us
         return max(rows) - min(rows)
 
     assert tall(calibrated) < tall(uncalibrated)
-    assert second["evidence"]["camera_tilt"]["action"] == "checked"
-    assert second["evidence"]["camera_tilt"]["warning"] is None
+    assert third["evidence"]["camera_tilt"]["action"] == "checked"
+    assert third["evidence"]["camera_tilt"]["warning"] is None
     # a calibrated tilt lets the pair check the lens height again
     assert (
-        second["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]["check"]
+        third["evidence"]["camera_arm5_candidate"]["evidence"]["camera_height"]["check"]
         != "not_checked"
     )
     # the kiosk is started with the unit's tilt, which session_start records
     args, handed = ts.tee_range_handoff(
-        tee_range.TeeRangeSolution.from_dict(second["solution"]),
+        tee_range.TeeRangeSolution.from_dict(third["solution"]),
         camera_tilt_calibration=json.loads(calibration.read_text(encoding="utf-8")),
     )
     assert args[args.index("--camera-vertical-offset-deg") + 1] == f"{stored['offset_deg']:.6g}"
@@ -4132,25 +4218,26 @@ def test_the_first_validated_pair_calibrates_the_camera_tilt_and_later_setups_us
     assert handed["camera_tilt"]["status"] == "calibrated"
 
 
-def test_a_tilt_beyond_eight_degrees_is_refused_and_not_stored(tmp_path, inputs, monkeypatch):
+def test_a_radar_ball_outside_the_camera_s_ray_window_never_calibrates_the_tilt(
+    tmp_path, inputs, monkeypatch
+):
+    """A radar change at 0.4 m with the camera's ball at a row only a far ball can be
+    seen at: no camera pitch within the tilt margin joins them, so they never pair and
+    the unit's tilt is never solved from them (a +8 deg solve can no longer happen)."""
     calibration = tmp_path / "unit" / "camera-vertical-offset.json"
     app, tester = app_for(
-        tmp_path, inputs, monkeypatch, qualified=False, camera_tilt_path=calibration
+        tmp_path, inputs, monkeypatch, qualified=False, camera_tilt_path=calibration, camera_m=0.4
     )
     _tilting_camera(monkeypatch)
-    # a "ball" 330 rows below the centre at the radar's 1.2 m: the camera would have
-    # to be pitched up about 16 deg
-    monkeypatch.setitem(
-        globals(),
-        "ball_pixels",
-        lambda width, height: (width / 2.0, height * 0.9125, 24.0 * width / 1280.0),
-    )
+    app.config["TEST_STATIC_MANAGER"].ball_bins = (10,)  # 0.4 m
 
     state = drive(app.test_client(), tester)
 
-    outcome = state["evidence"]["camera_tilt"]
-    assert outcome["action"] == "refused"
-    assert "8" in outcome["warning"]
+    decision = state["evidence"]["patch_ball"]
+    assert decision["status"] == "camera_only"
+    low, _high = decision["camera"]["ray_window_m"]
+    assert low > 0.4
+    assert state["evidence"]["camera_tilt"] is None
     assert not calibration.exists()
 
 

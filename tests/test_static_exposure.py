@@ -240,7 +240,7 @@ def test_no_ball_in_a_lit_patch_ends_quickly_and_never_brightens():
     search, requested = _run(scene, se.StaticExposureStep(300, 8.0))
 
     assert search.status == "ball_not_found"
-    assert "patch" in search.reason
+    assert "box" in search.reason
     assert requested == [se.StaticExposureStep(300, 8.0)]
     assert len(search.attempts) <= se.NOT_FOUND_LIMIT + 1
 
@@ -270,7 +270,7 @@ def test_ambiguity_never_changes_the_brightness_and_is_counted_apart_from_not_fo
         search.record(observation)
 
     assert search.status == "ball_not_identified"
-    assert "patch" in search.reason
+    assert "box" in search.reason
     assert {attempt["exposure_us"] for attempt in search.attempts} == {300}
 
 

@@ -242,7 +242,9 @@ def test_the_box_preview_adjusts_and_nothing_records_its_exposure(tmp_path):
 
     opened = client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
     assert opened.status_code == 200, opened.get_json()
-    assert isinstance(live.analyzer, ts.BoxPreviewExposure)
+    # the fixed box's preview: its brightness, and the ball looked for in the box
+    assert isinstance(live.analyzer, ts.BoxBallLocator)
+    assert isinstance(live.analyzer.brightness, ts.BoxPreviewExposure)
     adjusting = client.get("/api/tester/live").get_json()["preview_exposure"]
     live.pump(STEP_LIMIT)
     settled = client.get("/api/tester/live").get_json()["preview_exposure"]

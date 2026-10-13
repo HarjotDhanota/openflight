@@ -277,6 +277,8 @@ def ball_light(
         "y": y,
         "diameter_px": size,
         "median_dn": median,
+        # the brightest of the ball's core, for the page's live readout
+        "peak_dn": float(np.max(core)),
         "signal_dn": median - black_floor,
         "clipped_pct": clipped,
         "found_by": found_by,
@@ -1031,6 +1033,16 @@ class KioskClient:
 
     def frames(self, count: int) -> np.ndarray:
         return self.frames_with_controls(count)["frames"]
+
+    def ball_at_address(self) -> dict | None:
+        """The kiosk's per-shot re-location of the resting ball, or None (13 Oct)."""
+        try:
+            with urllib.request.urlopen(
+                self.base_url + "/api/ball-at-address", timeout=min(self.timeout_s, 1.0)
+            ) as response:
+                return json.loads(response.read())
+        except (OSError, ValueError):
+            return None
 
     def ready_light(self) -> dict | None:
         """The kiosk's ready light (P7-14), or None when it does not answer."""
