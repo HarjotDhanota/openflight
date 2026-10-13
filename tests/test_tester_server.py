@@ -1285,6 +1285,7 @@ class TestLiveEndpoints:
         recorded = swing_exposure.recorded_sensor_limits(path, 640, 400)
         assert recorded["exposure_min_us"] == 4
         assert recorded["recorded_by"] == "tester_live_view"
+        assert "lens_id" in recorded  # the unit's lens choice (none chosen here)
 
     def test_overlay_preserves_raw_brightness_and_marks_the_detected_ball(self, tmp_path):
         image = np.zeros((40, 60), dtype=np.uint8)

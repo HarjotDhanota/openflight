@@ -6491,8 +6491,10 @@ class LiveView:
         focal_px_for: Callable[[Arm], float] | None = None,
     ):
         self._camera_factory = camera_factory
-        # where this mode's reported limits are kept (13 Oct); None keeps nothing
+        # where this mode's reported limits are kept (13 Oct); None keeps nothing.
+        # The lens on the unit is recorded with them.
         self.sensor_limits_path: Path | None = None
+        self.lens_id: Callable[[], str | None] = lambda: None
         # the arm's focal length from the rig file; without it the live readout
         # gives no size range rather than a nominal one (wiring audit C2)
         self._focal_px_for = focal_px_for
@@ -6842,6 +6844,7 @@ class LiveView:
                     arm.width,
                     arm.height,
                     limits,
+                    lens_id=self.lens_id(),
                     recorded_by="tester_live_view",
                 )
         except (OSError, TypeError, ValueError):
@@ -7286,6 +7289,7 @@ def create_app(
     _sensor_limits_path = sensor_limits_path
     if isinstance(live, LiveView):
         live.sensor_limits_path = sensor_limits_path
+        live.lens_id = lens_store.selected
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
         rig_geometry,
