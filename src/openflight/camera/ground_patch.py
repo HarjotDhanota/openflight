@@ -233,6 +233,15 @@ def _roll_pad_deg(roll_deg: float | None) -> float:
     return max(abs(float(roll_deg)), MIN_ROLL_PAD_DEG)
 
 
+def unapplied_roll_pad_deg(roll_deg: float | None) -> float:
+    """The roll the camera models record but do not apply, as the patch pads for it.
+
+    The reading's size, at least ``MIN_ROLL_PAD_DEG``; ``UNKNOWN_ROLL_PAD_DEG``
+    without one. The target line (D34) carries the same roll as its uncertainty.
+    """
+    return _roll_pad_deg(roll_deg)
+
+
 def point_in_polygon(x: float, y: float, polygon: Sequence[Sequence[float]]) -> bool:
     """Whether (x, y) lies inside a simple polygon (even-odd rule)."""
     inside = False
