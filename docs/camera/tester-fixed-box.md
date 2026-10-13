@@ -45,7 +45,26 @@ after 6 s). The size the search accepts is the ball's physical range: from the
 box's padded near edge to 0.6 m past the window (`size_far_margin_m`), not to
 the horizon a padded row reaches.
 
-### The distance: the IWR, matched to the camera's direction
+### The distance: measured on each swing (13 Oct, decision "a")
+
+The setup no longer measures the resting ball's distance with the radar. The camera
+locks the ball in the box and gives a **coarse** distance from its size and the
+lens's focal length (`camera_prior`, labelled experimental, shown as "camera
+estimate (coarse)", uncertainty never under 15 %). The kiosk gets it as a prior
+(`--iwr6843-tee-prior-m`, `--iwr6843-tee-prior-uncertainty-m`,
+`--iwr6843-tee-prior-source camera_size_coarse`), never `--iwr6843-tee-m`, and the
+side offset from the camera's ray at that distance. The prior sizes each swing's
+IWR search, the IWR club gate and the club's contact check; each swing's own IWR
+capture then measures its launch point (`ball_range_source` `iwr_post_impact`),
+else the prior stands in, labelled estimated. Not yet validated against a tape.
+
+#### The radar check (diagnostic)
+
+The static captures below run only from the **Radar check (diagnostic)** button.
+They never become the swings' distance: indoors the scene changes between the two
+captures by more than a ball 2 m out echoes, so the method fails beyond about 1.5 m
+(and outdoors beyond about 2.4 m). Their pairing with the camera's ball is kept as
+`radar_check`.
 
 The two static radar captures (empty, then ball present) take the **far
 profile** until the ball's range is known. Their candidates are reported over
@@ -108,9 +127,12 @@ default, labelled.
 The ladder and swing kiosks get the box in their mode (`--camera-ball-box`).
 About once a second, between clips, the kiosk finds the resting ball in it on its
 latest frame. A shot takes the last look before its trigger (none older than
-30 s): the setup's radar range while the ball sits where the setup measured it
+30 s): the setup's range while the ball sits where the setup measured it
 (within half a diameter), else that range scaled by the setup ball's size over
-this ball's, labelled `camera_size_ratio_to_the_setup_radar_range`. A ball
+this ball's. Since 13 Oct the setup's range is the camera prior, so a look is
+that shot's own prior, with the prior's relative uncertainty
+(`setup_camera_prior`, `camera_size_ratio_to_the_setup_camera_prior`); a
+configured `--iwr6843-tee-m` keeps the old `..._radar_range` labels. A ball
 outside the box, or none, labels the shot and carries no range. The look is in
 the IWR record's `per_shot_inputs`; `GET /api/ball-at-address` serves the
 latest, and the tester's status relays it as `ball_at_address`.
@@ -129,7 +151,14 @@ lens and the box's identity, never a time). An older dragged-patch
 
 ## The camera tilt
 
-Each validated pair solves the camera's vertical offset (P8-5). The unit's tilt
+Since 13 Oct the pairs come from **swings** (`openflight.camera.swing_tilt`): a
+pair is one swing's measured IWR launch point and the resting ball's row in that
+swing's own pre-impact frames, with its stable LIS3DH pitch; a swing ranged only
+by the camera prior is never a pair. The tester hands the kiosk the lens's tilt
+file (`--camera-tilt-calibration-path`) and the kiosk records each pair in it
+(`median_of_swing_pairs`); a setup's static pair no longer calibrates it.
+
+Each pair solves the camera's vertical offset (P8-5). The unit's tilt
 is calibrated from the **median** of at least two pairs that agree (within 0.75°
 of their median); one pair never calibrates it. Later pairs check it; two that
 disagree on the same side in a row re-calibrate it, and say so. It is stored per

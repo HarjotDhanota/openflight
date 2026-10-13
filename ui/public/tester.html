@@ -1638,8 +1638,9 @@
         <h2><span class="step-n">6</span> Ball range</h2>
         <div class="setup-gate" id="automatic-range" data-ready="false">
           <p class="plain-status" id="automatic-range-plain" role="status">Ball range: not started</p>
+          <p id="tee-range-light-warning" class="note" role="status" hidden></p>
           <p id="automatic-range-summary" class="note">
-            The camera and radar checks work from the ball box you confirmed in step 3. No tape measurement is required.
+            The camera finds the ball in the box you confirmed in step 3; the radar measures its distance on each swing. No tape measurement is required.
           </p>
           <div class="guided-camera-preview" id="tee-range-camera-preview" hidden>
             <p class="note" id="tee-range-camera-status" role="status">Waiting for the first camera frame…</p>
@@ -1665,6 +1666,7 @@
             <button type="button" class="primary" id="tee-range-action">Start automatic range</button>
             <button type="button" id="tee-range-restart" hidden>Ball or rig moved: start over</button>
             <button type="button" id="tee-range-diagnostic" hidden>Keep raw evidence and continue without a range (unqualified)</button>
+            <button type="button" id="tee-range-radar-check" hidden>Radar check (diagnostic)</button>
           </div>
           <details class="range-details" id="automatic-range-details">
             <summary>Details for the record</summary>
@@ -1672,9 +1674,9 @@
           </details>
         </div>
         <p class="note">
-          Keep the enclosure and nearby objects still between radar captures, and stand in the same spot, at least 2 m
-          from the ball and the unit, for both of them: a person, club or shoe near the ball changes the radar picture
-          more than the ball does.
+          The ball's distance comes from the radar on each swing; the camera's estimate here is coarse and only sizes
+          the radar's search. The radar check is optional and for diagnosis only: if you run it, keep still in one spot
+          at least 2 m from the ball for both of its captures.
         </p>
       </section>
 
@@ -1693,6 +1695,7 @@
         <div class="live-metrics" id="live-metrics" hidden></div>
         <div class="ladder-now" id="ladder-panel"></div>
         <h3 class="sub">Settings to run</h3>
+        <p class="note" id="ladder-light-warning" role="status" hidden></p>
         <p class="note" id="ladder-source"></p>
         <div class="ladder-choice" id="ladder-choice"></div>
         <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
@@ -3808,8 +3811,8 @@
           prompt: 'This setup is waiting for the ball box: confirm it in step 3, and the checks continue from it.',
         },
         needs_empty: {
-          label: 'Capture empty hitting area',
-          prompt: 'Remove the ball. Pick a spot outside the radar’s view (behind the rig) and stand there, still, for both radar captures; keep everyone else away. Keep the rig, mat, cables and nearby objects completely still, then capture the empty area.',
+          label: 'Radar check: capture the empty area',
+          prompt: 'Radar check (diagnostic, optional): remove the ball. Pick a spot outside the radar’s view (behind the rig) and stand there, still, for both radar captures; keep everyone else away. Keep the rig, mat, cables and nearby objects completely still, then capture the empty area.',
           action: 'capture_empty',
         },
         empty_capturing: {
@@ -3817,8 +3820,8 @@
           prompt: 'Radar is recording the empty area. Stay still in your spot. Do not place the ball yet.',
         },
         needs_ball: {
-          label: 'Capture ball at address',
-          prompt: 'Place one ball inside the box you confirmed, directly on the hitting surface (on the mat or grass, not on a tee). Do not move the rig, mat, cables, clubs or the ball tray. Step at least 2 m away from the ball and the unit, back to the same spot as for the empty capture, keep still, then capture it.',
+          label: 'Radar check: capture the ball',
+          prompt: 'Radar check (diagnostic): place one ball inside the box you confirmed, directly on the hitting surface (on the mat or grass, not on a tee). Do not move the rig, mat, cables, clubs or the ball tray. Step at least 2 m away from the ball and the unit, back to the same spot as for the empty capture, keep still, then capture it.',
           action: 'capture_ball',
         },
         ball_capturing: {
@@ -3826,13 +3829,13 @@
           prompt: 'Radar is recording the ball at address. Stay still in the same spot and keep everything else still. The 1280×800 camera finds its exposure at the same time.',
         },
         needs_camera_arm5: {
-          label: 'Open 1280×800 camera',
-          prompt: 'Leave the ball at address. Open the reference camera mode.',
+          label: 'Open the camera',
+          prompt: 'Put one ball in the box, on the hitting surface, then open the camera: it finds the ball and a coarse distance from its size. The radar measures the distance on each swing.',
           action: 'start_camera_arm5',
         },
         camera_arm5_capturing: {
-          label: 'Save 1280×800 observation',
-          prompt: 'The reference camera is live. Wait for a stable view, then save its observation.',
+          label: 'Save the ball',
+          prompt: 'The camera is live. When the ball in the box is found and steady, save it.',
           action: 'evaluate_camera_arm5',
         },
         camera_arm5_evaluating: { label: 'Evaluating 1280×800…', prompt: 'Checking the saved reference frame.' },
@@ -3855,12 +3858,12 @@
         },
         resolved: { label: 'Automatic range complete', prompt: 'The qualified camera and radar evidence agree.' },
         experimental: {
-          label: 'Setup saved — experimental range',
-          prompt: 'Saved as EXPERIMENTAL: the camera’s ball in the box and the radar’s distance to it (or what one of them found alone, with a warning below). Nothing has qualified this range, so every number built on it is labelled experimental. The ladder can start.',
+          label: 'Setup saved — ball found',
+          prompt: 'The camera found the ball in the box. Its distance from the ball’s size is coarse and only sizes the radar’s search: each swing’s radar measures the ball’s distance. The ladder can start.',
         },
         raw_only: {
-          label: 'Evidence complete — no ball found',
-          prompt: 'No ball found in the box. The ball may be outside it: move the ball into the box, then start over. The ladder can continue with range-dependent metrics withheld.',
+          label: 'Setup saved — no ball distance',
+          prompt: 'No distance was saved; the reason is above. Fix it and start over, or let the ladder continue: each swing’s radar still measures the ball’s distance when it can.',
         },
       };
 
@@ -4002,6 +4005,8 @@
         controls_not_applied: 'The camera did not take the brightness settings',
         optical_gates_failed: 'Ball found, but its pixels are not usable at this exposure',
         lighting_required: 'More light is needed on the ball',
+        // 13 Oct: no ball found in a box too dim to brighten further: never "no ball"
+        too_dark: 'Too dark to see a ball in the box: add light',
         too_bright: 'Too bright: the ball clips even at the darkest setting; shade the ball or turn the unit so the sun is behind or beside it',
         low_contrast: 'The ball does not stand out from what is behind it',
         ball_not_identified: 'Several ball-like objects are in view; the ball cannot be picked out',
@@ -4021,7 +4026,8 @@
           line.textContent = 'Finding the camera exposure…';
           return;
         }
-        const label = GUIDED_CAMERA_STATES[display.state] || display.state;
+        // a found ball locked dim is labelled, never failed (13 Oct light audit B2)
+        const label = `${GUIDED_CAMERA_STATES[display.state] || display.state}${display.light_message ? ` — ${display.light_message}` : ''}`;
         const lock = display.exposure?.lock;
         const step = display.exposure?.current_step;
         const where = lock ? ` at ${controlsText(lock)}` : step ? ` (trying ${controlsText(step)})` : '';
@@ -4031,6 +4037,7 @@
           : `Requested ${controlsText(controls.requested)}; camera applied ${controlsText(controls.applied)}.`;
         const blocked = [
           'lighting_required',
+          'too_dark',
           'too_bright',
           'ball_not_identified',
           'ball_not_found',
@@ -4264,6 +4271,8 @@
           return [`Ball range: found ${metres(canonical.range_m)} (camera and radar agree)`, 'found'];
         }
         if (phase === 'experimental') {
+          // 13 Oct: the camera's coarse distance, a prior; the radar measures each swing
+          if (display?.summary) return [display.summary, 'found'];
           const range = canonical?.range_m ?? ball?.range_m;
           return [
             Number.isFinite(range)
@@ -4272,13 +4281,17 @@
             'found',
           ];
         }
-        if (phase === 'raw_only') return ['Ball range: no ball found; swings carry on without it', 'problem'];
+        if (phase === 'raw_only') {
+          // the reason, never "no ball found" for a ball the camera found (13 Oct)
+          const why = display?.summary || ball?.warning || String(state.reason || '').replaceAll('_', ' ');
+          return [`Ball range: ${why || 'no distance saved'}`, 'problem'];
+        }
         const waiting = {
           needs_empty: 'Ball range: take the ball away and capture the empty area',
           empty_capturing: 'Ball range: radar is recording the empty area…',
           needs_ball: 'Ball range: put the ball in the box and capture it',
           ball_capturing: 'Ball range: waiting for radar…',
-          needs_camera_arm5: 'Ball range: open the camera',
+          needs_camera_arm5: 'Ball range: put the ball in the box and open the camera',
           camera_arm5_capturing: 'Ball range: the camera is looking for the ball…',
           camera_arm5_evaluating: 'Ball range: checking the camera picture…',
           evaluating: 'Ball range: comparing camera and radar…',
@@ -4301,6 +4314,7 @@
         el('tee-range-restart').disabled = !boxConfirmed();
         const diagnosticArm = [
           'lighting_required',
+          'too_dark',
           'too_bright',
           'ball_not_identified',
           'ball_not_found',
@@ -4311,6 +4325,16 @@
           && phase?.startsWith('camera_')
           ? guidedCameraContext()?.armId
           : null;
+        // 13 Oct: the static radar captures are an optional diagnostic, offered only
+        // before the camera step opens; the camera alone finishes the setup
+        const radarCheck = el('tee-range-radar-check');
+        radarCheck.hidden = phase !== 'needs_camera_arm5';
+        radarCheck.disabled = teeRangeRequestRunning || !boxConfirmed();
+        const lightWarning = el('tee-range-light-warning');
+        const light = teeRangeDisplay?.light_warning;
+        lightWarning.hidden = !(light?.status === 'measured' && light.message);
+        lightWarning.textContent = lightWarning.hidden ? '' : `Light: ${light.message}`;
+        lightWarning.className = light?.unsupported?.length ? 'problem' : 'note';
         const diagnostic = el('tee-range-diagnostic');
         diagnostic.hidden = !diagnosticArm;
         diagnostic.disabled = teeRangeRequestRunning || !diagnosticArm;
@@ -4345,7 +4369,12 @@
         // (the camera's own estimate is never handed over as the tee range).
         const swings = display?.swings;
         const swingsLine = swings
-          ? `<span data-state="swings-${escapeHtml(swings.state)}">swings get <b>${swings.state === 'pending' ? 'tee range pending' : metres(swings.range_m)}</b> — ${escapeHtml(swings.message)}</span>`
+          ? `<span data-state="swings-${escapeHtml(swings.state)}">swings get <b>${swings.state === 'pending' ? 'tee range pending' : swings.state === 'camera_prior' ? `a prior of ${metres(swings.range_m)}` : metres(swings.range_m)}</b> — ${escapeHtml(swings.message)}</span>`
+          : '';
+        // 13 Oct: the optional radar check is a diagnostic beside the camera's prior
+        const radarCheckResult = display?.radar_check;
+        const radarCheckLine = radarCheckResult
+          ? `<span data-state="radar-check">radar check (diagnostic, never the swings’ distance) <b>${escapeHtml(String(radarCheckResult.status || '').replaceAll('_', ' '))}</b>${Number.isFinite(radarCheckResult.range_m) ? ` · ${metres(radarCheckResult.range_m)}` : ''}</span>`
           : '';
         // The 640×400 check against the 1280×800 search: a disagreement is flagged,
         // never blocking.
@@ -4405,8 +4434,11 @@
               ? ''
               : describe('camera arm 6 validation', display?.camera?.arm6)) +
             validationLine +
+            radarCheckLine +
             (canonical?.state === 'resolved'
               ? `<span data-state="resolved">canonical range <b>${metres(canonical.range_m)}</b></span>`
+              : canonical?.state === 'camera_prior'
+                ? `<span data-state="camera-prior">${escapeHtml(canonical.label || 'camera estimate (coarse)')} <b>${metres(canonical.range_m)}</b>${Number.isFinite(canonical.uncertainty_m) ? ` ± ${metres(canonical.uncertainty_m)}` : ''} — a prior only</span>`
               : canonical?.state === 'experimental'
                 ? `<span data-state="experimental">experimental range <b>${metres(canonical.range_m)}</b> — not qualified</span>`
                 : `<span data-state="withheld">canonical range <b>withheld</b>${canonical?.reason ? ` — ${escapeHtml(canonical.reason.replaceAll('_', ' '))}` : ''}</span>`) +
@@ -4501,6 +4533,7 @@
         const action = el('tee-range-diagnostic').dataset.action;
         if (action) submitTeeRange(action);
       });
+      el('tee-range-radar-check').addEventListener('click', () => submitTeeRange('capture_empty'));
 
       const attemptScopeKey = (scope) => (scope ? `${scope.tester_id}\n${scope.arm_id}\n${scope.run_dir}` : '');
       const attemptScopeLabel = (scope) => `${scope.arm_id} · ${scope.run}`;
@@ -5029,6 +5062,12 @@
           loadAttemptState(selectedAttemptScope);
         }
         renderVerdict(v || null);
+        // 13 Oct: which settings the setup's measured light supports, before any swing
+        const light = s.light_warning;
+        const lightNote = el('ladder-light-warning');
+        lightNote.hidden = !(light?.status === 'measured' && light.message);
+        lightNote.textContent = lightNote.hidden ? '' : `Light: ${light.message}`;
+        lightNote.className = light?.unsupported?.length ? 'problem' : 'note';
         if (!l) {
           ladderRunning = false;
           renderLadderControls();
@@ -5181,7 +5220,10 @@
         const node = el('address-status');
         const state = address?.state || 'unknown';
         node.dataset.state = state;
-        const range = Number.isFinite(address?.range_m) ? `, ${Number(address.range_m).toFixed(2)} m away` : '';
+        // a camera estimate (coarse): the radar measures the distance on the swing (13 Oct)
+        const range = Number.isFinite(address?.range_m)
+          ? `, about ${Number(address.range_m).toFixed(2)} m away (camera estimate)`
+          : '';
         node.textContent =
           {
             in_box: `✓ Ready for a swing: the ball is in the box${range}.`,
@@ -5193,6 +5235,7 @@
       // The kiosk's latest shot (GET /api/shots/latest on the kiosk), inside the verdict
       // card so the numbers sit with the picture verdict they came with (8).
       const KIOSK_KEY_METRICS = [
+        'ball_range',
         'ball_speed',
         'ball_speed_full',
         'launch_vertical',
@@ -5221,6 +5264,13 @@
         club_speed_full: 'Club speed (total)',
         smash_factor: 'Smash (radar line)',
         smash_factor_full: 'Smash (total)',
+        ball_range: 'Ball distance',
+      };
+      // where a shot's ball distance came from (13 Oct): its own radar launch point, or
+      // the setup camera's coarse estimate standing in
+      const BALL_RANGE_SOURCE_TEXT = {
+        measured: 'radar, this swing',
+        estimated: 'camera estimate (coarse)',
       };
       // left or right of the target line (+ right), or of where the unit points
       const KIOSK_SIDEWAYS = new Set([
@@ -5246,7 +5296,7 @@
       function kioskValue(record, id) {
         if (typeof record?.value !== 'number' || !Number.isFinite(record.value)) return '—';
         const value = record.value;
-        const digits = record.unit === 'rpm' || record.unit === 'mm' ? 0 : record.unit === '' || record.unit === 's' ? 2 : 1;
+        const digits = record.unit === 'rpm' || record.unit === 'mm' ? 0 : ['', 's', 'm'].includes(record.unit) ? 2 : 1;
         const sideways = KIOSK_SIDEWAYS.has(id) && ['deg', 'yd', 'mm'].includes(record.unit);
         const number = `${sideways && value > 0 ? '+' : ''}${value.toFixed(digits)}`;
         const unit = record.unit === 'deg' ? '°' : record.unit ? ` ${record.unit}` : '';
@@ -5266,9 +5316,12 @@
         (!record || record.status === 'not_measured' || typeof record.value !== 'number');
       function kioskMetric(spec, record) {
         const why = record?.status === 'not_measured' && record.reason ? ` ${reasonHtml(record.reason)}` : '';
+        const from = spec.id === 'ball_range' && BALL_RANGE_SOURCE_TEXT[record?.status]
+          ? `<span class="kiosk-frame">${escapeHtml(BALL_RANGE_SOURCE_TEXT[record.status])}</span>`
+          : '';
         return `<span class="kiosk-metric" data-kiosk-metric="${escapeHtml(spec.id)}">${escapeHtml(kioskName(spec))}: <b>${escapeHtml(
           kioskValue(record, spec.id)
-        )}</b>${kioskLabel(record)}${kioskFrame(record)}${why}</span>`;
+        )}</b>${kioskLabel(record)}${kioskFrame(record)}${from}${why}</span>`;
       }
       function renderKioskShot(data) {
         const box = el('kiosk-shot');

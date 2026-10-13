@@ -971,10 +971,17 @@ test('shows the kiosk shot beside the swing verdict, every metric with its label
 
   const box = page.locator('#kiosk-shot');
   await expect(box).toContainText('Kiosk numbers for its latest shot #7 (7-iron)');
-  await expect(box.locator('.kiosk-shot__key [data-kiosk-metric]')).toHaveCount(12);
-  const rows = box.locator('tr[data-kiosk-metric]');
-  await expect(rows).toHaveCount(catalog.metrics.length);
+  // 13 Oct: the ball distance joins the key line
+  await expect(box.locator('.kiosk-shot__key [data-kiosk-metric]')).toHaveCount(13);
+  // a metric not built yet with no value goes to the one "Coming later" row
+  const comingLater = new Set(['club_speed_full', 'gyro', 'impact_offset', 'impact_height', 'dynamic_lie']);
+  const later = catalog.metrics.filter(
+    (spec, index) => comingLater.has(spec.id) && cycle[index % cycle.length] === 'not_measured'
+  );
+  const rows = box.locator('tr[data-kiosk-metric]:not(.coming-later)');
+  await expect(rows).toHaveCount(catalog.metrics.length - later.length);
   for (const [index, spec] of catalog.metrics.entries()) {
+    if (later.includes(spec)) continue;
     const status = cycle[index % cycle.length];
     const row = box.locator(`tr[data-kiosk-metric="${spec.id}"]`);
     await expect(row.locator(`.kiosk-label.l-${status}`)).toHaveCount(1);
@@ -987,4 +994,97 @@ test('says so when the kiosk does not answer for its shot', async ({ page }) => 
   await page.route('**/api/shots/latest', (route) => route.abort());
   await page.goto('/tester.html');
   await expect(page.locator('#kiosk-shot')).toContainText('Kiosk numbers unavailable');
+});
+
+// 13 Oct: each swing's ball distance, with where it came from, on the verdict card
+const VERDICT_SHOT_DIR = process.env.UX_SWING_RANGE_DIR;
+
+function ballDistanceShot(status: 'measured' | 'estimated') {
+  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+    metrics: Array<{ id: string; label: string; unit: string }>;
+  };
+  const metrics = Object.fromEntries(
+    catalog.metrics.map((spec) => [
+      spec.id,
+      { value: null, unit: spec.unit, status: 'not_measured', source: null, reason: 'not on this fixture' },
+    ])
+  );
+  metrics.ball_speed = { value: 101.1, unit: 'mph', status: 'measured', source: 'OPS243 radial', reason: null };
+  metrics.club_speed = { value: 75.1, unit: 'mph', status: 'measured', source: 'OPS243 radial', reason: null };
+  metrics.launch_vertical = {
+    value: 18.9,
+    unit: 'deg',
+    status: status === 'measured' ? 'measured' : 'estimated',
+    source: 'radar',
+    reason: null,
+  };
+  metrics.ball_range =
+    status === 'measured'
+      ? {
+          value: 2.08,
+          unit: 'm',
+          status,
+          source: "IWR post-impact launch point (this shot's own capture)",
+          reason: null,
+        }
+      : { value: 2.11, unit: 'm', status, source: 'camera prior: the resting ball’s size, coarse', reason: null };
+  return { shot: { shot_number: 12, club: '7-iron', metrics }, catalog };
+}
+
+test('the verdict card shows the swing’s ball distance and where it came from', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  let body = ballDistanceShot('measured');
+  await page.route('**/api/shots/latest', (route) => fulfillJson(route, body));
+  await page.goto('/tester.html');
+
+  const distance = page.locator('#kiosk-shot .kiosk-shot__key [data-kiosk-metric="ball_range"]');
+  await expect(distance).toContainText('Ball distance: 2.08 m');
+  await expect(distance).toContainText('radar, this swing');
+  await expect(distance.locator('.kiosk-label.l-measured')).toHaveCount(1);
+
+  body = ballDistanceShot('estimated');
+  await expect(distance).toContainText('Ball distance: 2.11 m', { timeout: 10000 });
+  await expect(distance).toContainText('camera estimate (coarse)');
+  await expect(distance.locator('.kiosk-label.l-estimated')).toHaveCount(1);
+});
+
+for (const viewport of [
+  { width: 1024, height: 600 },
+  { width: 800, height: 480 },
+]) {
+  test(`the verdict card with the ball distance fits at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockBaseApis(page, () => ladderState(null));
+    await page.route('**/api/shots/latest', (route) => fulfillJson(route, ballDistanceShot('measured')));
+    await page.goto('/tester.html');
+
+    const card = page.locator('#verdict-card');
+    await card.scrollIntoViewIfNeeded();
+    await expect(card).toContainText('Ball distance: 2.08 m');
+    const outside = await card
+      .locator('.kiosk-metric')
+      .evaluateAll((nodes) => nodes.some((node) => node.getBoundingClientRect().right > window.innerWidth + 1));
+    expect(outside).toBe(false);
+    if (VERDICT_SHOT_DIR) {
+      await card.screenshot({ path: `${VERDICT_SHOT_DIR}/verdict-${viewport.width}x${viewport.height}.png` });
+    }
+  });
+}
+
+test('the ladder tells the tester which settings their light supports, before any swing', async ({ page }) => {
+  await mockBaseApis(page, () => ({
+    ...ladderState(null),
+    light_warning: {
+      status: 'measured',
+      supported: ['full-300', 'full-200'],
+      unsupported: ['full-150', 'full-100'],
+      message:
+        'Your light supports 1280x800 300 us, 1280x800 200 us. Shorter settings need at least 1.33x more light on the ball; they are recorded but will read too dark.',
+    },
+  }));
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-light-warning')).toContainText(
+    'Your light supports 1280x800 300 us, 1280x800 200 us'
+  );
 });

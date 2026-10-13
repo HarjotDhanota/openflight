@@ -492,41 +492,70 @@ uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
 
 ### Ball range, step 6
 
-Step 6 then begins directly with the radar captures, with the live picture and the
-box over it while you clear the spot and place the ball (viewing only: nothing
-is measured from it). The workflow asks for an empty and a ball radar capture and
-one 1280×800 Save; there is no 640×400 check: the ladder's 640×400 settings use the
-1280×800 ball halved. Each setup epoch is immutable; **Start over / ball moved**
-preserves it and creates a new one, while refresh resumes the saved step. The
-setup always finishes **experimental** (see *The setup saves as experimental*
-above) or, when neither sensor found a ball in the box, with no range: the
-ladder remains available, as long as the camera found the ball, but range metrics
-stay withheld. Advanced tape is validation only.
+Since 13 Oct (owner decision "a") step 6 is **camera-only**. Put one ball in the
+box on the hitting surface, press **Open the camera**, and **Save the ball** once
+the camera has it steady. The camera locks the ball in the box and reads a coarse
+distance from its size and the selected lens's focal length; the step then says,
+for example, **Ball found · camera estimate 2.11 m (coarse) · the radar measures it
+on each swing**. That is enough to finish the setup, and you never stand still for
+radar captures.
 
-For the two radar captures, stand in one spot outside the radar's view (behind
-the rig) for both, keep still, and keep others away. The ball is a weak radar
-target: in the first tape-checked test at 1.25 m its return was about a quarter
-of the room's typical background, so a person standing somewhere different for
-the second capture changed the picture more than the ball did and the pair was
-correctly rejected.
+The camera's distance is only a **prior**: the kiosk gets it with its uncertainty
+(never less than 15 % of the distance) as `--iwr6843-tee-prior-m`, and uses it to
+size the radar's search. Each swing's IWR capture then measures that swing's own
+launch point: the ball's track after impact, worked back to where the club met it
+(`openflight.iwr6843.launch_range`). A swing the radar cannot range uses the prior,
+and every number built on it is labelled *estimated*; with neither, those numbers
+are not measured, with the reason. Each shot records its `ball_range_m`,
+`ball_range_source` (`iwr_post_impact`, `camera_prior` or none) and
+`ball_range_uncertainty_m`; the swing's verdict card and the kiosk's Flight details
+show the distance and where it came from. **The per-swing radar range is not
+validated against a tape yet**: grade it with
+`scripts/analysis/grade_launch_range.py SESSION --truth tape.json` at the next
+taped session.
 
-The camera step first sets its brightness on the ball, in a few steps. It
-starts from the light measurement (B) or the last lock that passed, and uses the
-camera's linear response (signal above black is proportional to exposure × gain)
-to go straight to a target: when it sees a ball, the next step brings the ball's
-brightest part to about 60 % of clipping, so it is at least 20 DN above black and
-not clipped; when it sees no ball and the box itself is dark, it brings the box
-up and looks again; when it sees no ball in a lit box, it looks again at the same
-setting, and after four such looks it stops with "No ball found in the box".
-Not finding the ball is never taken to mean the picture is too dark. Each step uses
-the shortest exposure that reaches the brightness, then gain. At most eight changes
-are made; the lock is the setting whose applied camera metadata match the request
-and whose ball pixels pass the brightness and clipping checks. Save stays disabled
-until that lock holds, and the lock is dropped if the light changes. If the ball
-cannot be made bright enough, the step reports that more light is needed: add
-light and retry, or keep the view as unqualified raw evidence, which saves what the
-radar found; with no ball found at 1280×800 the ladder then refuses to start. This
-lock is for the stationary ball only; it never sets swing-capture exposure.
+**Radar check (diagnostic)** is a secondary button before the camera opens. It runs
+the old static empty and ball captures (stand in one spot outside the radar's view,
+behind the rig, for both, keep still, and keep others away). What it finds is
+recorded beside the camera's ball (`radar_check`, with the agreement) and never
+becomes a swing's distance: indoors the scene changes between the two captures
+more than a ball 2 m out echoes, so the method fails beyond about 1.5 m.
+
+Each setup epoch is immutable; **Start over / ball moved** preserves it and creates
+a new one, while refresh resumes the saved step. There is no 640×400 check: the
+ladder's 640×400 settings use the 1280×800 ball halved. Advanced tape is
+validation only. The camera tilt is no longer calibrated from a setup's static
+pair: swings calibrate it (two swings whose radar launch point and resting-ball
+row agree, per lens, `openflight.camera.swing_tilt`).
+
+The camera step first sets its brightness on the ball, in a few steps. A still
+ball is exposed for itself: the longest exposure the frame allows, then the lowest
+gain (4x the exposure at a quarter of the gain is twice the signal-to-noise), never
+the swing's 300 µs. It starts from this lens's last lock that passed, else this
+lens's same-day light measurement (B), else 300 µs × 4's light at that split; a
+screen or a lock from another lens is never used. When it sees a ball whose
+brightest part is below 40 % of clipping, it raises it to about 60 %; a ball that
+clips is brought down. A found, steady, unclipped ball is **never failed on
+brightness**: if the sensor cannot make it brighter, it locks labelled **dim: add
+light**, and Save goes on. When it sees no ball in a dim box (below 60 DN above
+black), it brightens once before looking again; a box too dark to brighten further
+reads **Too dark to see a ball in the box: add light**, never "No ball". In a lit
+box it looks again at the same setting and after four looks says "No ball found in
+the box". At most eight changes are made; the lock is the setting whose applied
+camera metadata match the request. The exposure status is frozen when Save is
+pressed, so a pose blip during the Save's search no longer fails it (every pose
+change is logged). Save confirms the steady ball at its size and fits only the
+close rivals the whole box's quick pass finds (about 0.5 s on a PC, about 2 s
+expected on the Pi, which is not yet measured), and runs outside the request lock,
+so the page never freezes while it works. This lock is for the stationary ball
+only; it never sets swing-capture exposure.
+
+After Save, the step shows which ladder settings your light supports: the measured
+light (the ball's DN per µs of exposure and unit of gain) predicts each setting's
+resting-ball level at gain 12, against the swings' 20 DN gate. 640×400 collects
+twice the signal per pixel of 1280×800 at the same exposure and gain (measured from
+the paired light screens). Settings below the gate are recorded but will read too
+dark; the ladder step repeats the warning.
 
 The ball search looks only inside the box's dashed outline, and only for balls
 of the sizes the box's near and far edges allow (25 % either way). It does not
@@ -733,17 +762,23 @@ every earlier frame and failure record for review.
 | After resuming the ladder, a rung's swing count is back to 0 | The light no longer passed that exposure's check, so the rung started again | Nothing to fix; keep swinging. The earlier swings are kept for review but no longer count |
 | A swing is listed as set aside, `taken at ... not this rung's ...` or `taken during a still_photo` | It was taken while the ladder was changing the camera's settings | Nothing is lost; hit the next swing once the rung shows as set |
 | `finish automatic tee range before capture (retryable_failure)` | The setup's range record no longer matches the one the ladder was admitted with | Press **Start over / ball moved** and run the setup again |
-| Range summary: **swings get tee range pending**, `No ball found in the box. The ball may be outside it: move it into the box.` | Neither the camera nor the radar found a ball in the box | Swings still record; launch and club metrics that need the range are withheld. Check the ball is inside the box on the picture; if it is not, move the ball, or press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
-| Range summary: **experimental range**, ball line `camera and radar agree` | The normal result: the camera's ball and a radar candidate agree | Nothing to fix. Numbers built on it are labelled experimental |
-| Ball line `camera and radar disagree` — `The camera puts the ball at … m and the radar at … m` | The radar's strongest candidate is not where the camera's ball is: something else in the box changed (a person, a club, a second ball), or the ball moved | The camera's distance is saved, with the warning. Redo the setup if you can: stand in the same spot, at least 2 m away, for both captures, and keep clubs, spare balls and bags out of the box |
-| Ball line `camera only` — `The radar found no ball in the box` | The ball's echo did not stand out in the box's distances | The camera's distance is saved, with the warning. Keep everyone still and away during both radar captures; on a far ball box (beyond about 2.5 m) the ball's echo is weak |
-| Ball line `radar only` — `The camera did not find the ball in the box` | The camera could not pick the ball out (too dark, clipped, or several ball-like things) | The radar's strongest candidate is saved, unconfirmed. Fix the light or clear the box and start over for a camera-checked range |
+| `Ball found · camera estimate … m (coarse) · the radar measures it on each swing` | The normal result (13 Oct): the camera found the ball; its size distance is a coarse prior | Nothing to fix: each swing's radar measures the distance. Start the ladder |
+| `Ball range: No ball found in the box: put the ball in the box, then start over` | The camera looked through the whole box and found no ball | Swings still record; numbers that need the ball's distance use each swing's own radar range when it measures one, else they are not measured. Put the ball inside the box (or press **Move the box** in step 1) and start over |
+| `Ball range: The camera could not look for the ball (too dark or too bright)` | The light kept the camera from looking | Add light (or shade the ball in sun) and start over; the reason is shown, never "no ball found" |
+| Detail line `radar check (diagnostic, never the swings' distance) disagree` or `camera only` | The optional radar check did not agree with the camera's ball: indoors the room changes between its two captures more than a ball 2 m out echoes | Nothing to fix for swings: the radar check is a diagnostic. Each swing's radar measures the distance |
+| `… — dim: add light` beside **Exposure locked** | The ball is found and steady but under the 20 DN brightness floor even at the brightest setting | Save still works and the label is recorded. Add light on the hitting area for better numbers |
+| `Too dark to see a ball in the box: add light` | No ball could be seen and the box is too dark to brighten further: a ball under the detector's 8 DN contrast floor | Add light on the hitting area, then retry; this is never reported as "no ball" |
+| `Light: Your light supports … Shorter settings need at least …x more light` | The setup's measured light predicts which ladder settings reach the 20 DN ball gate | Add light before swinging to run the shorter settings; otherwise they are recorded and will read too dark |
+| Verdict card `Ball distance: … m · camera estimate (coarse)` | That swing's radar did not measure its launch point; the setup camera's prior stood in | The swing's range-dependent numbers are labelled estimated. If it happens on every swing, check the OPS243 ball speed is reading and the ball flies down the radar's view |
+| `the setup changed while Save was searching; press Save again` | Something changed the setup (start over, a lens change) while Save was searching | Press **Save the ball** again |
+| `camera arm5 Save is already running` | Save was pressed twice | Wait for the first Save to finish |
 | Summary **camera tilt** line in red: `… it disagrees by … deg` | This setup's ball puts the camera's tilt more than 1.5° from the unit's calibration: the unit stands raised or tilted differently, or the camera moved in the enclosure | If the unit is on the hitting surface and the camera was not touched, ignore one; if every setup says it, delete `~/.config/openflight/camera-vertical-offset.json` on the Pi and the next agreeing setup calibrates again |
 | Summary **camera tilt** `not calibrated` — `… beyond ±8 deg: it was not stored` | The pair's solve is implausible: the ball, the radar's distance or the lens height is wrong | Check the unit stands on the hitting surface and nothing else is in the box, then start over |
 | `Finish this setup` on a setup from before this change | It reached the old 640×400 check, which no longer exists | Press **Finish this setup**: it saves what the 1280×800 camera and the radar found |
 | `the LIS3DH reading has no camera pitch` | The inclinometer is off or still settling (for example just after the kiosk handed it back) | Wait a few seconds for a stable reading, then press the step again |
 | `The camera hasn't found the ball, so the ladder can't judge your swings` when pressing **Start the exposure ladder** | The setup's camera never picked out the ball in the box (a spare ball or a white cloth in it, or the ball outside it) | Run the setup again: put the ball inside the box on the hitting surface, keep spare balls and white things out of it, then press **Start the exposure ladder** |
-| `No ball found in the box. The ball may be outside it: move it into the box` during the camera step | The camera looks only inside the box's dashed outline, and nothing ball-sized for that distance is there | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
+| `No ball found in the box. The ball may be outside it: move it into the box` during the camera step | The camera looks only inside the box's dashed outline, and nothing ball-sized for that distance is there, in a box lit well enough to see one | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
+| `The OpenFlight kiosk service (openflight.service) is running or starting.` when starting the tester | The boot service owns the camera and radars and its starts sync the Python environment | Run `sudo systemctl stop openflight.service`, then start the tester again |
 | `Several ball-like things are in the box: keep only the ball in it` | Two things in the box fit a lit ball about equally well (a spare ball, a tee, a white tuft or a logo) | Take everything but the ball out of the box; the step looks again at the same brightness |
 | **Confirm the ball in the box** stays greyed out, or `The camera is not showing here` | The live picture is not running, or the camera has not found the ball in the box yet | Press **Show the camera**; if it still fails, run **Check the hardware**. With the picture showing, see the two ball-in-the-box rows below |
 | **Aim at your target** says `Confirm the ball in the box (step 3) first: the target line starts at the ball.` | The target line starts at the ball in the box | Confirm the ball in the box (step 3); the aim point's picture then opens by itself |

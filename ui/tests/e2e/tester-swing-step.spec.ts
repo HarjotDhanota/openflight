@@ -36,10 +36,16 @@ const RUNG_IDS = [
 function ladder(current: string | null, statuses: Record<string, string>, verdict: object | null, stopped = false) {
   // the server sends its rungs in any order: alphabetical here, as the audit saw
   const rungs = Object.fromEntries(
-    [...RUNG_IDS].sort().map((id) => [
-      id,
-      { status: statuses[id] ?? 'pending', swings: statuses[id] === 'done' ? Array(5).fill({ color: 'green' }) : [], reason: null },
-    ])
+    [...RUNG_IDS]
+      .sort()
+      .map((id) => [
+        id,
+        {
+          status: statuses[id] ?? 'pending',
+          swings: statuses[id] === 'done' ? Array(5).fill({ color: 'green' }) : [],
+          reason: null,
+        },
+      ])
   );
   return { ladder: { current, pending_photo: null, rungs }, last_verdict: verdict, photo_target: null, stopped };
 }
@@ -76,7 +82,12 @@ async function swingStep(page: Page, readLadder: () => object, readStatus: () =>
   await page.route('**/api/tester/attempts?**', (route) => json(route, { schema_version: 1, scopes: [] }));
   await page.route('**/api/tester/ladder?**', (route) => json(route, readLadder()));
   await page.route('**/api/tester/aim-point**', (route) =>
-    json(route, { tester_id: '20260922-name', state: 'confirmed', target_line: { yaw_deg: 2.1 }, total_uncertainty_deg: 0.8 })
+    json(route, {
+      tester_id: '20260922-name',
+      state: 'confirmed',
+      target_line: { yaw_deg: 2.1 },
+      total_uncertainty_deg: 0.8,
+    })
   );
   await page.route('**/api/camera/preview.jpg**', (route) => route.fulfill({ status: 204 }));
 }
@@ -96,7 +107,9 @@ const RED = {
 
 test('the verdict is a big card at the top of the swing step, its colour mirrored on the band', async ({ page }) => {
   let verdict: object = RED;
-  await swingStep(page, () => ladder('full-150', { 'full-300': 'done', 'full-200': 'done', 'full-150': 'active' }, verdict));
+  await swingStep(page, () =>
+    ladder('full-150', { 'full-300': 'done', 'full-200': 'done', 'full-150': 'active' }, verdict)
+  );
   await page.goto('/tester.html');
 
   const card = page.locator('#verdict-card');
@@ -155,7 +168,10 @@ test('the rungs run in ladder order with plain labels, and the ones still to run
     '20 µs',
     '10 µs',
   ]);
-  await expect(page.getByRole('button', { name: 'Switch to 1280×800 at 150 µs' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Switch to 1280×800 at 150 µs' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
 });
 
 test('Start is off while the ladder runs, and back once it stops', async ({ page }) => {
@@ -172,19 +188,32 @@ test('Start is off while the ladder runs, and back once it stops', async ({ page
 
 test('live numbers, the ball at address and the kiosk come from the status poll', async ({ page }) => {
   let status: Status = {
-    live_metrics: { ball_px: 21.6, ball_peak_dn: 188, clipped_pct: 0.2, exposure_us: 150, blur_ceiling_us: 200, fps: 120, gain: 4 },
+    live_metrics: {
+      ball_px: 21.6,
+      ball_peak_dn: 188,
+      clipped_pct: 0.2,
+      exposure_us: 150,
+      blur_ceiling_us: 200,
+      fps: 120,
+      gain: 4,
+    },
     ball_at_address: { state: 'in_box', range_m: 2.31, updated_at: 'now' },
     kiosk: { state: 'running', progress_message: null, url: 'http://localhost:8080/' },
     lens_id: 'stock-2.8mm',
   };
-  await swingStep(page, () => ladder('full-150', { 'full-150': 'active' }, null), () => status);
+  await swingStep(
+    page,
+    () => ladder('full-150', { 'full-150': 'active' }, null),
+    () => status
+  );
   await page.goto('/tester.html');
 
   await expect(page.locator('#live-metrics')).toHaveText(
     'Live:ball 22 pxball peak 188 DNclipped 0.2%exposure 150 µs (blur limit 200 µs)120 fpsgain 4.00'
   );
   const address = page.locator('#address-status');
-  await expect(address).toHaveText('✓ Ready for a swing: the ball is in the box, 2.31 m away.');
+  // a camera estimate: the radar measures the distance on the swing (13 Oct)
+  await expect(address).toHaveText('✓ Ready for a swing: the ball is in the box, about 2.31 m away (camera estimate).');
   await expect(address).toHaveAttribute('data-state', 'in_box');
 
   // the kiosk opens in a normal window or tab, at the address this page was reached by
@@ -200,7 +229,11 @@ test('live numbers, the ball at address and the kiosk come from the status poll'
   status = {
     ...status,
     ball_at_address: { state: 'outside_box', range_m: null, updated_at: 'now' },
-    kiosk: { state: 'switching_mode', progress_message: 'Switching to 640×400: restarting the camera (12 s left)', url: 'http://localhost:8080/' },
+    kiosk: {
+      state: 'switching_mode',
+      progress_message: 'Switching to 640×400: restarting the camera (12 s left)',
+      url: 'http://localhost:8080/',
+    },
   };
   const progress = page.locator('#kiosk-progress');
   await expect(progress).toHaveText('Switching to 640×400: restarting the camera (12 s left)');
@@ -208,7 +241,12 @@ test('live numbers, the ball at address and the kiosk come from the status poll'
   await expect(address).toHaveText('Not ready: the ball is outside the box. Move it back into the box.');
   expect(page.url()).toContain('/tester.html');
 
-  status = { ...status, ball_at_address: { state: 'not_seen', range_m: null, updated_at: 'now' }, kiosk: { state: 'stopped', progress_message: null, url: null }, live_metrics: null };
+  status = {
+    ...status,
+    ball_at_address: { state: 'not_seen', range_m: null, updated_at: 'now' },
+    kiosk: { state: 'stopped', progress_message: null, url: null },
+    live_metrics: null,
+  };
   await expect(progress).toBeHidden();
   await expect(view).toBeDisabled();
   await expect(address).toHaveText('Not ready: the camera cannot see a ball in the box.');
@@ -231,7 +269,13 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
     frame: null,
     ...extra,
   });
-  const notMeasured = (unit: string, reason: string) => ({ value: null, unit, status: 'not_measured', source: null, reason });
+  const notMeasured = (unit: string, reason: string) => ({
+    value: null,
+    unit,
+    status: 'not_measured',
+    source: null,
+    reason,
+  });
   const metrics: Record<string, object> = Object.fromEntries(
     catalog.metrics.map((spec) => [spec.id, notMeasured(spec.unit, 'no camera club delivery on this shot')])
   );
@@ -240,7 +284,10 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
     launch_horizontal: measured(-3.9, 'deg', { frame: 'target_line' }),
     club_path: measured(2.4, 'deg', { frame: 'unit_boresight' }),
     face_angle: { ...measured(6.1, 'deg', { frame: 'target_line' }), status: 'calculated' },
-    club_speed_full: notMeasured('mph', 'the OPS club speed is a percentile over 4-18 ms before impact, not the full speed'),
+    club_speed_full: notMeasured(
+      'mph',
+      'the OPS club speed is a percentile over 4-18 ms before impact, not the full speed'
+    ),
     impact_offset: notMeasured('mm', 'pending E5: impact location is not built yet (needs the 6 mm / 8 mm lens)'),
   });
   await swingStep(page, () => ladder(null, {}, RED));
@@ -259,7 +306,11 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
   await expect(key('launch_horizontal').locator('.kiosk-frame')).toHaveText('vs target line');
   await expect(key('club_path')).toContainText('+2.4° right');
   await expect(key('club_path').locator('.kiosk-frame')).toHaveText('vs unit aim');
-  expect(await key('face_angle').locator('b').evaluate((node) => getComputedStyle(node).whiteSpace)).toBe('nowrap');
+  expect(
+    await key('face_angle')
+      .locator('b')
+      .evaluate((node) => getComputedStyle(node).whiteSpace)
+  ).toBe('nowrap');
   // the darker calculated badge reads at 4.5:1 or better on the page
   const contrast = await key('face_angle')
     .locator('.kiosk-label')
@@ -287,12 +338,14 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
   expect(contrast).toBeGreaterThanOrEqual(4.5);
 
   // a short reason, the full one on tap
-  await shot.getByText('All 34 metrics with labels').tap();
+  await shot.getByText('All 35 metrics with labels').tap();
   const speedRow = shot.locator('tr[data-kiosk-metric="carry"]');
   await expect(speedRow.locator('summary')).toHaveText('the camera did not see the club ▸');
   // the not-built ones fold into one “Coming later” row
   const later = shot.locator('tr[data-kiosk-metric="coming-later"]');
-  await expect(later).toHaveText(/^Coming later.*Gyro.*Club speed \(total\).*Impact offset.*Impact height.*Dynamic lie/);
+  await expect(later).toHaveText(
+    /^Coming later.*Gyro.*Club speed \(total\).*Impact offset.*Impact height.*Dynamic lie/
+  );
   for (const id of ['gyro', 'club_speed_full', 'impact_offset', 'impact_height', 'dynamic_lie']) {
     await expect(shot.locator(`tr[data-kiosk-metric="${id}"]`)).toHaveCount(0);
   }

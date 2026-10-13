@@ -59,6 +59,11 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
   const tappable = !measured && Boolean(record.reason) && short !== record.reason;
   const { open, props } = useTapToggle(tappable);
   const details: string[] = [];
+  if (measured && spec.id === 'ball_range') {
+    // where this shot's distance came from (13 Oct): its own radar launch point, or
+    // the setup camera's coarse estimate standing in
+    details.push(t(record.status === 'measured' ? 'metrics.ballRangeRadar' : 'metrics.ballRangeCamera'));
+  }
   if (measured) {
     if (record.range) {
       const [low] = formatMetricValue({ ...record, value: record.range[0] }, unitSystem);

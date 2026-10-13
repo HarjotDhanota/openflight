@@ -45,14 +45,10 @@ type Range = { epoch_id: string; phase: string; reason: string; evidence: object
 
 async function boxStep(page: Page, options: BoxOptions = {}) {
   let range: Range | null = null;
-  let box: Record<string, unknown> = placementBoxState(
-    TESTER,
-    options.confirmed ? 'confirmed' : 'needs_confirmation',
-    {
-      ...(options.ball ? { ball: options.ball } : {}),
-      net_line: options.netLine ?? { row_px: null, range_m: null, status: 'not_set', message: null },
-    }
-  );
+  let box: Record<string, unknown> = placementBoxState(TESTER, options.confirmed ? 'confirmed' : 'needs_confirmation', {
+    ...(options.ball ? { ball: options.ball } : {}),
+    net_line: options.netLine ?? { row_px: null, range_m: null, status: 'not_set', message: null },
+  });
   let previewRunning = false;
   let brightness = 'settled';
   let showFails = options.showFails ?? null;
@@ -106,7 +102,13 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
     const action = route.request().postDataJSON().action as string;
     if (action === 'show_camera') return json(route, { state: range });
     rangePosts.push(action);
-    range = { epoch_id: `epoch-${rangePosts.length}`, phase: 'needs_empty', reason: 'needs_empty', evidence: {}, solution: null };
+    range = {
+      epoch_id: `epoch-${rangePosts.length}`,
+      phase: 'needs_camera_arm5',
+      reason: 'place_the_ball_in_the_box',
+      evidence: {},
+      solution: null,
+    };
     return json(route, { state: range });
   });
   await page.route('**/api/tester/placement-box**', (route) => {
@@ -121,7 +123,12 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
     if (body.action === 'set_net_line') {
       box = {
         ...box,
-        net_line: { row_px: body.row_px, range_m: 4.2, status: 'set', message: 'Net line set: about 4.2 m beyond the ball.' },
+        net_line: {
+          row_px: body.row_px,
+          range_m: 4.2,
+          status: 'set',
+          message: 'Net line set: about 4.2 m beyond the ball.',
+        },
       };
       return json(route, { ...box, previewing: previewRunning });
     }
@@ -130,7 +137,13 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
     previewRunning = false;
     if (moved) {
       lightStale = true;
-      range = { epoch_id: 'epoch-moved', phase: 'needs_empty', reason: 'needs_empty', evidence: {}, solution: null };
+      range = {
+        epoch_id: 'epoch-moved',
+        phase: 'needs_camera_arm5',
+        reason: 'place_the_ball_in_the_box',
+        evidence: {},
+        solution: null,
+      };
     }
     return json(route, { ...box, previewing: false, change: box.change, range_restarted: moved });
   });
@@ -156,16 +169,22 @@ async function boxStep(page: Page, options: BoxOptions = {}) {
 test('the ball box is step 3: its camera opens by itself, the box is fixed, and every check waits for it', async ({
   page,
 }) => {
-  const mocks = await boxStep(page, { ball: foundBall({ state: 'no_ball', center_px: null, diameter_px: null, message: null }) });
+  const mocks = await boxStep(page, {
+    ball: foundBall({ state: 'no_ball', center_px: null, diameter_px: null, message: null }),
+  });
   await page.goto('/tester.html');
 
   await expect(page.getByRole('heading', { level: 2, name: '3 Ball in the box' })).toBeVisible();
-  await expect(page.locator('#placement-guide')).toContainText('Set the unit 1.8–2.9 m behind the ball, pointing down the target line');
+  await expect(page.locator('#placement-guide')).toContainText(
+    'Set the unit 1.8–2.9 m behind the ball, pointing down the target line'
+  );
   const overlay = page.locator('#placement-box');
   await expect(overlay).toBeVisible();
   await expect(overlay).toHaveAttribute('data-outline', BOX_OUTLINE_PX.map(([x, y]) => `${x},${y}`).join(' '));
   // nothing to drag but the net line: the box itself takes no pointer
-  expect(await page.locator('#placement-outline').evaluate((node) => getComputedStyle(node).pointerEvents)).toBe('none');
+  expect(await page.locator('#placement-outline').evaluate((node) => getComputedStyle(node).pointerEvents)).toBe(
+    'none'
+  );
   expect(mocks.posts.map((item) => item.action)).toEqual(['show']);
   await expect(page.locator('#placement-ball-status')).toContainText('No ball in the box yet');
   await expect(page.locator('#placement-check')).toHaveAttribute('display', 'none');
@@ -200,7 +219,7 @@ test('the ball box is step 3: its camera opens by itself, the box is fixed, and 
   const action = page.locator('#tee-range-action');
   await expect(action).toBeEnabled();
   await action.click();
-  await expect(action).toHaveText('Capture empty hitting area');
+  await expect(action).toHaveText('Open the camera');
   expect(mocks.rangePosts).toEqual(['start']);
 });
 
@@ -327,7 +346,7 @@ test('redoing the box later makes the light stale and starts the ball range over
     solution: { status: 'unresolved', selected_range_m: null },
   });
   await page.goto('/tester.html');
-  await expect(page.locator('#tee-range-action')).toHaveText('Evidence complete — no ball found');
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — no ball distance');
   // a confirmed box opens no camera by itself
   await expect(page.locator('#placement-box')).toBeHidden();
   expect(mocks.posts).toEqual([]);
@@ -338,7 +357,7 @@ test('redoing the box later makes the light stale and starts the ball range over
 
   await expect(page.locator('#placement-summary')).toContainText('The ball box moved');
   await expect(page.locator('#placement-summary')).toContainText('the ball range has started over');
-  await expect(page.locator('#tee-range-action')).toHaveText('Capture empty hitting area');
+  await expect(page.locator('#tee-range-action')).toHaveText('Open the camera');
   await expect(page.locator('#light-age')).toContainText('Measure the light again');
   expect(mocks.posts.map((item) => item.action)).toEqual(['show', 'confirm']);
 });

@@ -121,14 +121,15 @@ async function base(page: Page, initial: FlowState | null = null) {
   let state = initial;
   let postFailure: { body: object; status: number } | null = null;
   const next: Record<string, string> = {
-    start: 'needs_empty',
-    start_over: 'needs_empty',
+    // 13 Oct: a setup starts at the camera; the radar check is a diagnostic
+    start: 'needs_camera_arm5',
+    start_over: 'needs_camera_arm5',
     capture_empty: 'needs_ball',
     capture_ball: 'needs_camera_arm5',
     start_camera_arm5: 'camera_arm5_capturing',
     // P8-6: the 1280x800 Save finishes the setup; there is no 640x400 check
     evaluate_camera_arm5: 'raw_only',
-    retry: 'needs_empty',
+    retry: 'needs_camera_arm5',
   };
   // P8-6: step 3's viewing preview while the ball is placed
   const previews: string[] = [];
@@ -139,7 +140,9 @@ async function base(page: Page, initial: FlowState | null = null) {
   await page.route('**/api/tester/ladder?**', (route) => json(route, { ladder: null, stopped: true }));
   await page.route('**/api/tester/live', (route) => {
     const previewing = Boolean(
-      state && ['needs_empty', 'needs_ball'].includes(state.phase) && previews.includes(`${state.epoch_id}|${state.phase}`)
+      state &&
+      ['needs_empty', 'needs_ball'].includes(state.phase) &&
+      previews.includes(`${state.epoch_id}|${state.phase}`)
     );
     if (previewing && state) {
       return json(route, {
@@ -156,14 +159,15 @@ async function base(page: Page, initial: FlowState | null = null) {
     return json(route, {
       running: Boolean(armId),
       arm_id: armId,
-      owner: armId && state
-        ? {
-            kind: 'guided_tee_range',
-            tester_id: '20260922-name',
-            epoch_id: state.epoch_id,
-            arm_id: armId,
-          }
-        : null,
+      owner:
+        armId && state
+          ? {
+              kind: 'guided_tee_range',
+              tester_id: '20260922-name',
+              epoch_id: state.epoch_id,
+              arm_id: armId,
+            }
+          : null,
       stats: armId ? { mean: 70, p99: 140, max: 180, clipped_pct: 0 } : null,
       association: armId
         ? {
@@ -207,8 +211,7 @@ async function base(page: Page, initial: FlowState | null = null) {
               camera_arm5_candidate: { radar_slant_range_m: 1.5 },
             }
           : {},
-      solution:
-        phase === 'raw_only' ? { status: 'unresolved', selected_range_m: null } : null,
+      solution: phase === 'raw_only' ? { status: 'unresolved', selected_range_m: null } : null,
     };
     return json(route, { state, display: rangeDisplay(state) });
   });
@@ -231,19 +234,20 @@ test('walks the main automatic-range prompts and reconstructs after reload', asy
 
   await expect(action).toHaveText('Start automatic range');
   await action.tap();
-  await expect(action).toHaveText('Capture empty hitting area');
-  await action.tap();
-  await expect(action).toHaveText('Capture ball at address');
+  // 13 Oct: camera first; the radar check is the secondary diagnostic button
+  await expect(action).toHaveText('Open the camera');
+  await page.locator('#tee-range-radar-check').tap();
+  await expect(action).toHaveText('Radar check: capture the ball');
   await page.reload();
-  await expect(action).toHaveText('Capture ball at address');
+  await expect(action).toHaveText('Radar check: capture the ball');
   await action.tap();
-  await expect(action).toHaveText('Open 1280×800 camera');
+  await expect(action).toHaveText('Open the camera');
   await action.tap();
-  await expect(action).toHaveText('Save 1280×800 observation');
+  await expect(action).toHaveText('Save the ball');
   await action.tap();
 
   // P8-6: the 1280×800 Save finishes the setup
-  await expect(action).toHaveText('Evidence complete — no ball found');
+  await expect(action).toHaveText('Setup saved — no ball distance');
   await expect(page.locator('#automatic-range')).toContainText(
     'bias-corrected IWR slant range unqualified — not qualified for promotion on this setup · diagnostic 1.520 m, not used'
   );
@@ -279,22 +283,23 @@ test('shows the server-owned guided camera frame without starting another live v
         arm_id: 'arm5',
       },
       stats: statusPolls > 1 ? { mean: 72.1, p99: 140, max: 181, clipped_pct: 0 } : null,
-      association: statusPolls > 1
-        ? {
-            status: 'selected',
-            selected: {
-              x_px: 641.2,
-              y_px: 502.7,
-              diameter_px: 24.4,
-              size_radar_range_m: 1.527,
-            },
-            candidates: [],
-            stable_count: 3,
-            stable_span_s: 1,
-            save_eligible: true,
-            frame_sequence: 12,
-          }
-        : null,
+      association:
+        statusPolls > 1
+          ? {
+              status: 'selected',
+              selected: {
+                x_px: 641.2,
+                y_px: 502.7,
+                diameter_px: 24.4,
+                size_radar_range_m: 1.527,
+              },
+              candidates: [],
+              stable_count: 3,
+              stable_span_s: 1,
+              save_eligible: true,
+              frame_sequence: 12,
+            }
+          : null,
       guided_display: statusPolls > 1 ? guidedDisplay('exposure_locked') : null,
     });
   });
@@ -312,7 +317,7 @@ test('shows the server-owned guided camera frame without starting another live v
   await expect(preview).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Waiting for the first frame');
   await expect(page.locator('#tee-range-camera-detector')).toContainText('Ball detector is warming up');
-  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The camera is live');
   await expect(page.locator('#tee-range-camera-status')).toContainText('Live 1280×800 frame ready');
   await expect(page.locator('#tee-range-camera-detector')).toContainText(
     'Camera search in the box: ball selected · x 641.2 · y 502.7 · diameter 24.4 px · range 1.527 m · stable and ready to save'
@@ -369,8 +374,8 @@ test('reports the live detector reason without treating it as a camera failure',
   );
   await expect(detector).toHaveClass(/note/);
   await expect(detector).not.toHaveClass(/problem/);
-  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
-  await expect(page.locator('#tee-range-action')).toHaveText('Save 1280×800 observation');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The camera is live');
+  await expect(page.locator('#tee-range-action')).toHaveText('Save the ball');
   await expect(page.locator('#tee-range-action')).toBeDisabled();
 });
 
@@ -410,7 +415,7 @@ test('withholds Save and a confident verdict when camera-only association is amb
     'Camera search in the box: Several ball-like things are in the box: keep only the ball in it. Save remains disabled.'
   );
   await expect(page.locator('#tee-range-action')).toBeDisabled();
-  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The camera is live');
 });
 
 // P8-2: the camera never uses the radar while it searches, so nothing it shows is radar-guided.
@@ -503,7 +508,7 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
   await expect(page.locator('#tee-range-camera-preview')).toBeVisible();
   await expect(page.locator('#tee-range-camera-status')).toContainText('Camera error: camera cable disconnected');
   await expect(page.locator('#tee-range-action')).toBeDisabled();
-  await expect(page.locator('#automatic-range-summary')).toContainText('The reference camera is live');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The camera is live');
   await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
   await expect.poll(() => releaseStatus !== null).toBe(true);
 
@@ -511,9 +516,7 @@ test('guided camera errors stay beside the preview and stale tester polls are ig
   releaseStatus?.();
 
   await expect(page.locator('#tee-range-camera-preview')).toBeHidden();
-  await expect(page.locator('#automatic-range-summary')).toContainText(
-    'camera and radar checks work from'
-  );
+  await expect(page.locator('#automatic-range-summary')).toContainText('camera and radar checks work from');
   await expect(page.locator('#automatic-range-summary')).not.toContainText('camera cable disconnected');
 });
 
@@ -590,7 +593,7 @@ test('shows retry and a qualified resolved range without accepting tape input', 
     'Remedy: Use the CP2105 Enhanced/UARTA interface (if00), press RESET, and retry.'
   );
   await page.locator('#tee-range-action').tap();
-  await expect(page.locator('#tee-range-action')).toHaveText('Capture empty hitting area');
+  await expect(page.locator('#tee-range-action')).toHaveText('Open the camera');
 
   fixture.setState({
     epoch_id: 'epoch-resolved',
@@ -703,7 +706,8 @@ const CONNECT_FAILURE = {
   capture_kind: 'empty',
   stage: 'connect',
   type: 'RuntimeError',
-  message: 'no IWR6843 CLI found — board on, flashed, single-port fw? Probes: /dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help within 1.5 s',
+  message:
+    'no IWR6843 CLI found — board on, flashed, single-port fw? Probes: /dev/ttyUSB0 (CP2105 Enhanced if00): no reply to help within 1.5 s',
   remedy: 'Press RESET and retry.',
 };
 
@@ -989,7 +993,9 @@ for (const viewport of KIOSK_VIEWPORTS) {
     });
   }
 
-  test(`a rejected radar number is shown only as a diagnostic at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`a rejected radar number is shown only as a diagnostic at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
     await page.setViewportSize(viewport);
     const state = {
       epoch_id: 'epoch-rejected-radar',
@@ -1025,15 +1031,15 @@ for (const viewport of KIOSK_VIEWPORTS) {
     await expect(radar).toContainText('bias-corrected IWR slant range rejected — rejected_scene_changed');
     await expect(radar).toContainText('diagnostic 1.621 m, not used');
     await expect(radar).toHaveClass('problem');
-    await expect(page.locator('#automatic-range-values')).not.toContainText(
-      'bias-corrected IWR slant range 1.621 m'
-    );
+    await expect(page.locator('#automatic-range-values')).not.toContainText('bias-corrected IWR slant range 1.621 m');
     const box = await radar.boundingBox();
     expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test(`the summary says what swings get and flags a 640x400 disagreement at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`the summary says what swings get and flags a 640x400 disagreement at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
     await page.setViewportSize(viewport);
     const state = {
       epoch_id: 'epoch-pending-swings',
@@ -1106,7 +1112,9 @@ for (const viewport of KIOSK_VIEWPORTS) {
 }
 
 for (const viewport of KIOSK_VIEWPORTS) {
-  test(`a lighting failure offers an unqualified raw-evidence save at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`a lighting failure offers an unqualified raw-evidence save at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
     await page.setViewportSize(viewport);
     const state = {
       epoch_id: 'epoch-dark',
@@ -1191,7 +1199,7 @@ test('shows the 1280x800 exposure search while the radar records the ball', asyn
   display = guidedDisplay('exposure_locked');
   await expect(exposure).toContainText('Exposure locked at 1250 µs × 8.00');
   control.setState({ ...state, phase: 'camera_arm5_capturing', reason: 'camera_arm5_searched_during_radar_capture' });
-  await expect(action).toHaveText('Save 1280×800 observation');
+  await expect(action).toHaveText('Save the ball');
   await expect(action).toBeEnabled();
   await expect(exposure).toContainText('Ready to save.');
 });
@@ -1316,9 +1324,7 @@ test('an agreeing pair shows both distances and where the ball sits aside', asyn
   await expect(ball).toContainText('radar 1.176 m (magnitude)');
   await expect(ball).toContainText('0.10 m right');
   await expect(ball).not.toHaveClass('problem');
-  await expect(page.locator('[data-state="radar-candidates"]')).toContainText(
-    '1.176 m magnitude, 1.575 m coherent'
-  );
+  await expect(page.locator('[data-state="radar-candidates"]')).toContainText('1.176 m magnitude, 1.575 m coherent');
   await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
 });
 
@@ -1394,8 +1400,8 @@ test('a setup saved as experimental says so and lets the ladder start', async ({
   );
   await page.goto('/tester.html');
 
-  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — experimental range');
-  await expect(page.locator('#automatic-range-summary')).toContainText('Saved as EXPERIMENTAL');
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — ball found');
+  await expect(page.locator('#automatic-range-summary')).toContainText('The camera found the ball in the box');
   await expect(page.locator('#automatic-range')).toContainText('experimental range 1.581 m — not qualified');
   await expect(page.locator('#automatic-range')).toContainText('swings get 1.581 m — EXPERIMENTAL');
   await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
@@ -1429,12 +1435,14 @@ test('a setup that reached the old 640×400 check finishes without it', async ({
   await page.goto('/tester.html');
 
   const action = page.locator('#tee-range-action');
-  await expect(page.locator('#automatic-range-summary')).toContainText('The 640×400 check is no longer part of the setup');
+  await expect(page.locator('#automatic-range-summary')).toContainText(
+    'The 640×400 check is no longer part of the setup'
+  );
   await expect(action).toHaveText('Finish this setup');
   await expect(page.locator('#tee-range-skip-arm6')).toHaveCount(0);
   await action.click();
 
-  await expect(action).toHaveText('Setup saved — experimental range');
+  await expect(action).toHaveText('Setup saved — ball found');
   expect(posts).toEqual(['skip_camera_arm6']);
 });
 
@@ -1459,7 +1467,7 @@ test('step 3 shows the camera and the patch while the ball is placed', async ({ 
     'Place the ball inside the box. The camera and radar search it when you capture the ball.'
   );
   await expect(page.locator('#tee-range-camera-exposure')).toContainText('Viewing only');
-  await expect(page.locator('#tee-range-action')).toHaveText('Capture ball at address');
+  await expect(page.locator('#tee-range-action')).toHaveText('Radar check: capture the ball');
   await expect(page.locator('#tee-range-action')).toBeEnabled();
   // asked once for this step, not on every tick
   await page.waitForTimeout(1000);
@@ -1477,4 +1485,207 @@ test('the step headings are numbered once', async ({ page }) => {
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: /^[A-D]\. / })).toHaveCount(0);
+});
+
+// 13 Oct (decision "a"): step 6 is camera-only; the radar measures the distance on
+// each swing, and the static radar check is an optional diagnostic.
+const SHOT_DIR = process.env.UX_SWING_RANGE_DIR;
+
+const PRIOR_STATE: FlowState = {
+  epoch_id: 'epoch-prior',
+  phase: 'experimental',
+  reason: 'camera_prior_saved',
+  evidence: {
+    camera_prior: { status: 'saved', range_m: 2.11, uncertainty_m: 0.32, label: 'experimental' },
+    camera_arm5_candidate: { radar_slant_range_m: 2.11 },
+  },
+  solution: { status: 'unresolved', selected_range_m: null },
+};
+
+const LIGHT_WARNING = {
+  status: 'measured',
+  supported: ['full-300', 'full-200', 'full-150', 'half-300', 'half-150'],
+  unsupported: ['full-100', 'full-75'],
+  message:
+    'Your light supports 1280x800 300 us, 1280x800 200 us, 1280x800 150 us. Shorter settings need at least 1.13x more light on the ball; they are recorded but will read too dark.',
+};
+
+function priorDisplay(state: FlowState | null) {
+  return {
+    ...rangeDisplay(state),
+    summary: 'Ball found · camera estimate 2.11 m (coarse) · the radar measures it on each swing',
+    camera_prior: {
+      status: 'saved',
+      range_m: 2.11,
+      uncertainty_m: 0.32,
+      display_label: 'camera estimate (coarse)',
+    },
+    canonical: {
+      state: 'camera_prior',
+      range_m: 2.11,
+      uncertainty_m: 0.32,
+      label: 'camera estimate (coarse)',
+      reason: null,
+    },
+    swings: {
+      state: 'camera_prior',
+      range_m: 2.11,
+      message:
+        'Each swing’s radar measures the ball’s distance from its own capture; the camera’s 2.11 m (coarse) sizes its search.',
+    },
+    light_warning: LIGHT_WARNING,
+  };
+}
+
+test('step 6 says the ball was found and the radar measures it on each swing', async ({ page }) => {
+  const mocks = await base(page, PRIOR_STATE);
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, { state: mocks.state(), display: priorDisplay(mocks.state()) })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#automatic-range-plain')).toHaveText(
+    'Ball found · camera estimate 2.11 m (coarse) · the radar measures it on each swing'
+  );
+  await expect(page.locator('#tee-range-action')).toHaveText('Setup saved — ball found');
+  await expect(page.locator('#automatic-range')).not.toContainText('no ball found');
+  await expect(page.locator('#tee-range-light-warning')).toContainText('Your light supports 1280x800 300 us');
+  await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeEnabled();
+});
+
+for (const viewport of [
+  { width: 1024, height: 600 },
+  { width: 800, height: 480 },
+]) {
+  test(`step 6 fits and is screenshotted at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const mocks = await base(page, PRIOR_STATE);
+    await page.route('**/api/tester/tee-range**', (route) =>
+      json(route, { state: mocks.state(), display: priorDisplay(mocks.state()) })
+    );
+    await page.goto('/tester.html');
+    const step = page.locator('#step-6');
+    await step.scrollIntoViewIfNeeded();
+    await expect(page.locator('#automatic-range-plain')).toContainText('camera estimate 2.11 m (coarse)');
+    const outside = await step
+      .locator('button, p')
+      .evaluateAll((nodes) => nodes.some((node) => node.getBoundingClientRect().right > window.innerWidth + 1));
+    expect(outside).toBe(false);
+    if (SHOT_DIR) await step.screenshot({ path: `${SHOT_DIR}/step6-${viewport.width}x${viewport.height}.png` });
+  });
+}
+
+test('the camera step offers the radar check as a secondary diagnostic button', async ({ page }) => {
+  const posted: string[] = [];
+  const mocks = await base(page, {
+    epoch_id: 'epoch-camera-first',
+    phase: 'needs_camera_arm5',
+    reason: 'place_the_ball_in_the_box',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/tee-range**', (route) => {
+    if (route.request().method() === 'POST') posted.push(route.request().postDataJSON().action);
+    return json(route, { state: mocks.state(), display: rangeDisplay(mocks.state()) });
+  });
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-action')).toHaveText('Open the camera');
+  await expect(page.locator('#automatic-range-summary')).not.toContainText('stand there, still');
+  const radar = page.locator('#tee-range-radar-check');
+  await expect(radar).toBeVisible();
+  await expect(radar).toHaveText('Radar check (diagnostic)');
+  await radar.tap();
+  await expect.poll(() => posted).toEqual(['capture_empty']);
+});
+
+test('a finished setup without a ball says why, never "no ball found" for a found ball', async ({ page }) => {
+  const mocks = await base(page, {
+    epoch_id: 'epoch-dark',
+    phase: 'raw_only',
+    reason: 'patch_ball_withheld_camera_unavailable',
+    evidence: {},
+    solution: { status: 'unresolved', selected_range_m: null },
+  });
+  await page.route('**/api/tester/tee-range**', (route) =>
+    json(route, {
+      state: mocks.state(),
+      display: {
+        ...rangeDisplay(mocks.state()),
+        summary: 'The camera could not look for the ball (too dark or too bright)',
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#automatic-range-plain')).toHaveText(
+    'Ball range: The camera could not look for the ball (too dark or too bright)'
+  );
+  await expect(page.locator('#tee-range-action')).not.toContainText('no ball found');
+});
+
+test('a found ball locked dim says dim, add light, and can still be saved', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-dim',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: { kind: 'guided_tee_range', tester_id: '20260922-name', epoch_id: 'epoch-dim', arm_id: 'arm5' },
+      stats: { mean: 30, p99: 60, max: 80, clipped_pct: 0 },
+      association: {
+        status: 'selected',
+        selected: { x_px: 640, y_px: 470, diameter_px: 70 },
+        save_eligible: true,
+      },
+      guided_display: guidedDisplay('exposure_locked', {
+        light_label: 'dim_add_light',
+        light_message: 'dim: add light',
+      }),
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-camera-exposure')).toContainText('dim: add light');
+  await expect(page.locator('#tee-range-action')).toBeEnabled();
+});
+
+test('a box too dark to see a ball reads too dark, not no ball', async ({ page }) => {
+  await base(page, {
+    epoch_id: 'epoch-too-dark',
+    phase: 'camera_arm5_capturing',
+    reason: 'camera_arm5_warming',
+    evidence: {},
+    solution: null,
+  });
+  await page.route('**/api/tester/live', (route) =>
+    json(route, {
+      running: true,
+      arm_id: 'arm5',
+      owner: {
+        kind: 'guided_tee_range',
+        tester_id: '20260922-name',
+        epoch_id: 'epoch-too-dark',
+        arm_id: 'arm5',
+      },
+      stats: { mean: 18, p99: 20, max: 22, clipped_pct: 0 },
+      association: { status: 'not_found', selected: null, save_eligible: false },
+      guided_display: {
+        ...guidedDisplay('warming'),
+        state: 'too_dark',
+        reason: 'Too dark to see a ball in the box: add light on the hitting area.',
+        save_ready: false,
+      },
+    })
+  );
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#tee-range-camera-exposure')).toContainText('Too dark');
+  await expect(page.locator('#tee-range-camera-exposure')).not.toContainText('No ball');
+  await expect(page.locator('#tee-range-diagnostic')).toBeVisible();
 });

@@ -304,3 +304,46 @@ class TestSaveRunsOutsideTheRequestLock:
 
         assert second.status_code == 409
         assert "already running" in second.get_json()["error"]
+
+
+class TestTheDimLabelReachesThePage:
+    """B2 (D15): a found ball locked dim is labelled 'dim: add light', and Save goes on."""
+
+    @staticmethod
+    def _status(light_label):
+        observation = {"status": "accepted", "light_label": light_label, "ball_found": True}
+        return {
+            "running": True,
+            "requested": {"exposure_us": 3600, "gain": 1.0},
+            "applied": {"exposure_us": 3600, "gain": 1.0},
+            "association": {
+                "status": "selected",
+                "selected": {"x_px": 1.0, "y_px": 2.0, "diameter_px": 20.0},
+                "save_eligible": True,
+                "static_exposure": {
+                    "status": "locked",
+                    "locked_and_passing": True,
+                    "last_observation": observation,
+                    "lock": {
+                        "exposure_us": 3600,
+                        "gain": 1.0,
+                        "applied_exposure_us": 3600,
+                        "applied_gain": 1.0,
+                        "observation": observation,
+                    },
+                },
+            },
+        }
+
+    def test_a_dim_lock_is_labelled_and_still_ready_to_save(self):
+        display = ts.guided_camera_display(self._status("dim_add_light"))
+
+        assert display["save_ready"] is True
+        assert display["light_label"] == "dim_add_light"
+        assert display["light_message"] == "dim: add light"
+
+    def test_a_bright_enough_lock_carries_no_label(self):
+        display = ts.guided_camera_display(self._status(None))
+
+        assert display["light_label"] is None
+        assert display["light_message"] is None

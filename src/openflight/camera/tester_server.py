@@ -6059,10 +6059,18 @@ def guided_camera_display(status: Mapping) -> dict:
     else:
         state, reason = "exposure_searching", "waiting for a stable ball at the current exposure"
     lock = (exposure or {}).get("lock")
+    # 13 Oct (light audit B2): a found ball locked dim is labelled, never failed
+    light_label = (
+        ((lock or {}).get("observation") or {}).get("light_label")
+        if isinstance(lock, Mapping)
+        else last.get("light_label")
+    )
     return {
         "schema": "openflight.tester_guided_camera_display.v1",
         "state": state,
         "reason": reason,
+        "light_label": light_label,
+        "light_message": "dim: add light" if light_label == "dim_add_light" else None,
         "save_ready": bool(
             state == "exposure_locked" and association and association.get("save_eligible")
         ),
