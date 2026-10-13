@@ -282,8 +282,13 @@ class Shot:
     # Raw radar-measured spin, kept when --calculated-spin rewrites
     # spin_rpm with the kinematic estimate (for offline scoring)
     spin_rpm_measured: Optional[float] = None
-    spin_source: Optional[str] = None  # "measured", "calculated", or None
+    # "measured", "calculated", "model_geometry" (a model's spin built on an assumed
+    # swing geometry, D39), or None
+    spin_source: Optional[str] = None
     spin_method: Optional[str] = None
+    # the measured spin's method, kept beside spin_rpm_measured when a model's spin
+    # displaces it, and given back with it
+    spin_method_measured: Optional[str] = None
     spin_result_quality: Optional[str] = None
     spin_multipath_fade_hz: Optional[float] = None
     spin_snr: Optional[float] = None
@@ -351,7 +356,9 @@ class Shot:
     spin_rpm_collision: Optional[float] = None
     spin_rpm_calculated_empirical: Optional[float] = None
     # "calculated (D-plane tilt, Wood et al. 2018 weights)" from the collision model
-    # (or "calculated (D-plane + gear effect, Cross & Nathan 2007)"); None otherwise
+    # (or "calculated (D-plane + gear effect, Cross & Nathan 2007)"); "model geometry
+    # (D-plane tilt, ...; club path from the arc prior)" when built on model geometry
+    # (D39); None otherwise
     spin_axis_source: Optional[str] = None
     collision_model: Optional[dict] = None
     experimental_aoa_offset_source: Optional[str] = None
@@ -629,6 +636,7 @@ class Shot:
             "spin_rpm_measured": self.spin_rpm_measured,
             "spin_source": self.spin_source,
             "spin_method": self.spin_method,
+            "spin_method_measured": self.spin_method_measured,
             "spin_confidence": self.spin_confidence,
             "spin_quality": self.spin_quality,
             "spin_multipath_fade_hz": self.spin_multipath_fade_hz,

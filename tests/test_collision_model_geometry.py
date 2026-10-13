@@ -284,3 +284,142 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
     for name in ("total_spin", "spin_axis", "back_spin", "side_spin", "carry", "club_path"):
         assert resolved.provenance[name] == "model_geometry", name
     assert resolved.provenance["vla"] == "measured"
+
+
+# ---- the shot's spin and spin axis from model-geometry inputs ------------------------
+
+PENNER_MODEL_GEOMETRY = "Penner 2001; club inputs model geometry (D39)"
+AXIS_FROM_THE_ARC = (
+    "model geometry (D-plane tilt, Wood et al. 2018 weights; "
+    "club path from the arc prior, attack angle from the arc prior)"
+)
+
+
+def _low_confidence_spin():
+    return {
+        "spin_rpm": 900.0,
+        "spin_confidence": 0.2,
+        "spin_source": "measured",
+        "spin_method": "ops_fft",
+    }
+
+
+def test_a_model_geometry_spin_becomes_the_shot_s_spin_under_its_own_label():
+    shot = _arc_shot(**_low_confidence_spin())
+
+    _attach(shot)
+
+    assert shot.spin_rpm_collision is not None
+    assert shot.spin_rpm == shot.spin_rpm_collision
+    assert shot.spin_source == "model_geometry"
+    assert shot.spin_method == PENNER_MODEL_GEOMETRY
+    assert shot.spin_confidence is None
+    assert shot.spin_rpm_measured == 900.0
+    assert shot.spin_method_measured == "ops_fft"
+    payload = server_module.shot_to_dict(shot)
+    assert payload["spin_source"] == "model_geometry"
+    assert payload["spin_method"] == PENNER_MODEL_GEOMETRY
+
+
+def test_a_model_geometry_spin_axis_becomes_the_shot_s_axis_naming_its_inputs():
+    shot = _arc_shot()
+
+    _attach(shot)
+
+    axis = shot.collision_model["metrics"]["spin_axis"]
+    assert axis["status"] == "model_geometry"
+    assert shot.spin_axis_deg == pytest.approx(round(axis["value"], 1))
+    assert shot.spin_axis_source == AXIS_FROM_THE_ARC
+    assert shot.spin_axis_frame == axis["frame"]
+
+
+def test_the_axis_source_names_only_the_inputs_that_were_model_geometry():
+    delivery = _club_delivery(
+        attack_angle_deg=_arc_entry(-4.0, status="calculated", source="club_arc:shot_fit")
+    )
+    shot = _arc_shot(club_delivery=delivery)
+
+    _attach(shot)
+
+    assert shot.spin_axis_source == (
+        "model geometry (D-plane tilt, Wood et al. 2018 weights; club path from the arc prior)"
+    )
+
+
+def test_an_accepted_measured_spin_still_wins_over_model_geometry():
+    shot = _arc_shot(
+        spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured", spin_method="ops_fft"
+    )
+
+    _attach(shot)
+
+    assert shot.spin_rpm == 6800.0
+    assert shot.spin_source == "measured"
+    assert shot.spin_method == "ops_fft"
+    assert shot.spin_rpm_collision is not None  # recorded beside it
+    assert shot.spin_axis_source == AXIS_FROM_THE_ARC
+
+
+def test_a_rerun_without_the_arc_restores_the_displaced_measured_spin():
+    shot = _arc_shot(**_low_confidence_spin())
+    _attach(shot)
+    assert shot.spin_source == "model_geometry"
+
+    shot.club_delivery = None
+    _attach(shot)
+
+    assert shot.spin_rpm == 900.0
+    assert shot.spin_source == "measured"
+    assert shot.spin_method == "ops_fft"
+    assert shot.spin_axis_deg is None and shot.spin_axis_source is None
+
+
+def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_spin():
+    shot = _arc_shot(**_low_confidence_spin())
+    _attach(shot)
+
+    shot.experimental_fused_status = "chained_high"
+    shot.experimental_fused_club_path_deg = -2.0
+    shot.experimental_fused_club_path_frame = "target_line"
+    shot.experimental_fused_attack_angle_deg = -4.0
+    shot.experimental_fused_club_path_confidence = "medium"
+    shot.experimental_fused_attack_angle_confidence = "medium"
+    _attach(shot)
+
+    assert shot.spin_source == "calculated"
+    assert shot.spin_method == "Penner 2001; club inputs measured"
+    assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
+    assert shot.spin_rpm_measured == 900.0
+    assert shot.spin_method_measured == "ops_fft"
+
+    shot.experimental_fused_club_path_deg = None
+    shot.club_delivery = None
+    _attach(shot)
+
+    assert shot.spin_rpm == 900.0 and shot.spin_source == "measured"
+    assert shot.spin_method == "ops_fft"
+
+
+def test_the_empirical_formula_over_a_model_geometry_spin_keeps_the_measured_one():
+    shot = _arc_shot(**_low_confidence_spin())
+    _attach(shot)
+
+    assert server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
+
+    assert shot.spin_source == "calculated"
+    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_calculated_empirical)
+    assert "empirical" in shot.spin_method
+    assert shot.spin_rpm_measured == 900.0
+    assert shot.spin_method_measured == "ops_fft"
+
+
+def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
+    """No filled-in values: no club speed, no spin; the axis needs no club speed."""
+    shot = _arc_shot(club_speed_mph=None)
+
+    _attach(shot)
+
+    spin = shot.collision_model["metrics"]["spin_rate"]
+    assert spin["status"] == "not_measured" and "club speed" in spin["reason"]
+    assert shot.spin_rpm is None and shot.spin_source is None and shot.spin_method is None
+    assert shot.spin_axis_source == AXIS_FROM_THE_ARC

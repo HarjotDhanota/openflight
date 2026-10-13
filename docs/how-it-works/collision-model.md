@@ -211,19 +211,26 @@ The refit in E8 sets the size of this bias.
 
 **Status and source.** Labelled `calculated`, source "Penner 2001 collision
 model (Am. J. Phys. 69, 563)". The value is always recorded in
-`spin_rpm_collision`. It becomes the shot's `spin_rpm` (`spin_source =
-"calculated"`) only when:
+`spin_rpm_collision`. When there is no accepted measured spin (confidence ≥
+`SPIN_CONFIDENCE_HIGH`), it becomes the shot's `spin_rpm` under its own status:
 
-- there is no accepted measured spin (confidence ≥ `SPIN_CONFIDENCE_HIGH`); and
-- its status is `calculated`, not `model_geometry`.
+- `calculated`: `spin_source = "calculated"`, `spin_method = "Penner 2001;
+  club inputs measured"` (or `calculated` when an input is);
+- `model_geometry` (an input is model geometry, D39): `spin_source =
+  "model_geometry"`, `spin_method = "Penner 2001; club inputs model geometry
+  (D39)"`. It feeds the flight model (D38) under that label; simulators do not
+  get it (D31).
 
-The spin it displaces is kept in `spin_rpm_measured`. A calculated value is
-never labelled measured.
+The spin it displaces is kept in `spin_rpm_measured` (its method in
+`spin_method_measured`), and is given back when a later run of the model has no
+spin. A model's value is never labelled measured.
 
 **The `--calculated-spin` flag.** Its formula, `170 · v · sin(LA)^1.2` in
 `spin_estimate.py`, is empirical, not a published collision model. When the
 flag is on, its value is recorded in `spin_rpm_calculated_empirical`. If
-Penner's spin exists for the shot, Penner's is the one used.
+Penner's spin is calculated for the shot, Penner's is the one used; over a
+model-geometry Penner spin, the formula's calculated value is used
+(`spin_method` names it).
 
 ## 4. Spin axis
 
@@ -244,6 +251,11 @@ when the horizontal launch confidence is below `SPIN_AXIS_MIN_CONFIDENCE`
 `"calculated (D-plane + gear effect, Cross & Nathan 2007)"` once E5 supplies a
 gear sidespin. The flight (E4) and the simulators treat any source starting
 with "calculated" as a calculated value.
+
+When an input is model geometry (D39), the axis still becomes `spin_axis_deg`,
+with a source that starts with "model geometry" and names those inputs, e.g.
+`"model geometry (D-plane tilt, Wood et al. 2018 weights; club path from the arc
+prior)"`. The flight takes it under that label; simulators do not get it.
 
 **Gear effect (for E5).** Source: R. Cross & A. M. Nathan, "Experimental study
 of the gear effect in ball collisions", *Am. J. Phys.* **75**, 658–664 (2007),

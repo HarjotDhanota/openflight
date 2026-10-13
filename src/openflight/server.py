@@ -4029,6 +4029,12 @@ def _sim_on_inbound(target: str, event) -> None:
             logger.info("[sim] ← %s ack: shot %s ok", target, event.shot_number)
 
 
+# Shot.spin_method for the --calculated-spin formula's value
+EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a published model)"
+# spin_source values a model wrote; anything else is the radar's (or None)
+_MODEL_SPIN_SOURCES = ("calculated", "model_geometry")
+
+
 def _apply_calculated_spin(shot: Shot) -> bool:
     """Replace radar-measured spin with the kinematic estimate.
 
@@ -4052,11 +4058,15 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     if spin_calc is None:
         return False
     shot.spin_rpm_calculated_empirical = spin_calc
+    method = EMPIRICAL_SPIN_METHOD
     if _collision_spin_feeds(shot):
         spin_calc = shot.spin_rpm_collision
-    if shot.spin_source != "calculated":
+        method = _collision_spin_method(shot)
+    if shot.spin_source not in _MODEL_SPIN_SOURCES:
         shot.spin_rpm_measured = shot.spin_rpm
+        shot.spin_method_measured = shot.spin_method
     shot.spin_rpm = spin_calc
+    shot.spin_method = method
     # a model's output has no measurement confidence; spin_source labels it (D17)
     shot.spin_confidence = None
     shot.spin_source = "calculated"
@@ -4997,7 +5007,7 @@ def _round_or_none(value, digits: int):
 def _accepted_measured_spin(shot: Shot) -> bool:
     """A measured spin carry and simulators accept (ballistics.resolve_launch, sim resolver)."""
     return (
-        shot.spin_source != "calculated"
+        shot.spin_source not in _MODEL_SPIN_SOURCES
         and _finite(shot.spin_rpm)
         and shot.spin_rpm > 0
         and _finite(shot.spin_confidence)
@@ -5005,15 +5015,31 @@ def _accepted_measured_spin(shot: Shot) -> bool:
     )
 
 
-def _collision_spin_feeds(shot: Shot) -> bool:
-    """Whether this shot's collision spin is a calculated value carry and simulators may use.
+def _collision_spin_status(shot: Shot) -> str | None:
+    """The label of this shot's collision spin, "calculated" or "model_geometry", or None.
 
-    A value built on model geometry (D39) is kept on the shot, labelled, but is not
-    "measured or calculated" (D31), so it does not stand in for the shot's spin.
+    Either becomes the shot's spin, under its own label, when there is no accepted
+    measured spin. A spin built on model geometry (D39) feeds the flight model (D38)
+    labelled so, but is not "measured or calculated" (D31): simulators do not get it.
     """
     metrics = (shot.collision_model or {}).get("metrics", {})
-    spin = metrics.get("spin_rate", {})
-    return shot.spin_rpm_collision is not None and spin.get("status") == "calculated"
+    status = metrics.get("spin_rate", {}).get("status")
+    if shot.spin_rpm_collision is None or status not in _MODEL_SPIN_SOURCES:
+        return None
+    return status
+
+
+def _collision_spin_feeds(shot: Shot) -> bool:
+    """Whether this shot's collision spin is calculated (the --calculated-spin formula
+    yields to it; a model-geometry spin yields to that formula's calculated value)."""
+    return _collision_spin_status(shot) == "calculated"
+
+
+def _collision_spin_method(shot: Shot) -> str:
+    """Shot.spin_method for the collision spin: Penner 2001 and its inputs' label."""
+    inputs = (shot.collision_model or {}).get("inputs", {})
+    labels = [record.get("label") for record in inputs.values() if record.get("value") is not None]
+    return collision_model.shot_spin_method(_collision_spin_status(shot) or "", labels)
 
 
 def _attach_collision_model(shot: Shot) -> None:
@@ -5071,24 +5097,34 @@ def _attach_collision_model(shot: Shot) -> None:
         shot.experimental_face_angle_path_source = None
         shot.experimental_face_angle_launch_source = None
 
-    if axis.present and axis.status == collision_model.STATUS_CALCULATED:
+    # a calculated axis, or one built on model geometry (D39) under that label
+    if axis.present and axis.status in (
+        collision_model.STATUS_CALCULATED,
+        collision_model.STATUS_MODEL_GEOMETRY,
+    ):
         shot.spin_axis_deg = round(axis.value, 1)
-        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis)
+        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis, result.inputs)
         shot.spin_axis_frame = axis.frame
-    elif collision_model.is_calculated_source(shot.spin_axis_source):
+    elif collision_model.is_calculated_source(
+        shot.spin_axis_source
+    ) or collision_model.is_model_geometry_source(shot.spin_axis_source):
         shot.spin_axis_deg = None
         shot.spin_axis_source = None
         shot.spin_axis_frame = None
 
-    if _collision_spin_feeds(shot) and not _accepted_measured_spin(shot):
-        if shot.spin_source != "calculated":
+    spin_status = _collision_spin_status(shot)
+    if spin_status is not None and not _accepted_measured_spin(shot):
+        if shot.spin_source not in _MODEL_SPIN_SOURCES:
             shot.spin_rpm_measured = shot.spin_rpm
+            shot.spin_method_measured = shot.spin_method
         shot.spin_rpm = shot.spin_rpm_collision
-        shot.spin_source = "calculated"
+        shot.spin_source = spin_status
+        shot.spin_method = _collision_spin_method(shot)
         shot.spin_confidence = None
-    elif shot.spin_source == "calculated" and not _collision_spin_feeds(shot):
-        # an earlier run's calculated spin; give back the measured one it displaced
+    elif shot.spin_source in _MODEL_SPIN_SOURCES and spin_status is None:
+        # an earlier run's model spin; give back the measured one it displaced
         shot.spin_rpm = shot.spin_rpm_measured
+        shot.spin_method = shot.spin_method_measured
         shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
     if shot.face_angle_deg is not None or shot.spin_rpm_collision is not None:
         logger.info(

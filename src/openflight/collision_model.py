@@ -91,11 +91,19 @@ SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and lof
 SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
+# Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
+SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
 NOTE_NO_GEAR = "no impact location: gear effect not applied"
 # Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
-# both start with "calculated").
-SPIN_AXIS_SOURCE_TILT = "calculated (D-plane tilt, Wood et al. 2018 weights)"
-SPIN_AXIS_SOURCE_GEAR = "calculated (D-plane + gear effect, Cross & Nathan 2007)"
+# both start with "calculated"). An axis built on a model-geometry input (D39) starts
+# with "model geometry" instead and names those inputs.
+AXIS_BASIS_TILT = "D-plane tilt, Wood et al. 2018 weights"
+AXIS_BASIS_GEAR = "D-plane + gear effect, Cross & Nathan 2007"
+SPIN_AXIS_SOURCE_TILT = f"calculated ({AXIS_BASIS_TILT})"
+SPIN_AXIS_SOURCE_GEAR = f"calculated ({AXIS_BASIS_GEAR})"
+# Shot.spin_method for the Penner spin, by the labels of the inputs it was built on.
+SPIN_METHOD_PENNER = "Penner 2001"
+SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_PENNER}; club inputs model geometry (D39)"
 
 MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
@@ -432,18 +440,59 @@ def spin_axis(
     )
 
 
-def shot_spin_axis_source(axis: Metric) -> str:
-    """The Shot.spin_axis_source string for a calculated spin axis."""
-    return SPIN_AXIS_SOURCE_GEAR if SOURCE_GEAR in (axis.source or "") else SPIN_AXIS_SOURCE_TILT
+_INPUT_NAMES = {
+    "club_path": "club path",
+    "attack_angle": "attack angle",
+    "launch_horizontal": "launch direction",
+    "launch_vertical": "vertical launch",
+    "club_speed_mph": "club speed",
+}
+# E1's arc sources (club_arc.ARC_PRIOR_SOURCE, ARC_FIT_SOURCE), in words
+_SOURCE_NAMES = {
+    "club_arc:published_prior": "the arc prior",
+    "club_arc:shot_fit": "the arc fit",
+}
+
+
+def model_geometry_inputs(inputs: dict) -> list[str]:
+    """Each present model-geometry input (D39), named with its source, in input order.
+
+    ``inputs`` maps input names to ``Input`` or to their recorded dicts
+    (``CollisionResult.to_dict()["inputs"]``).
+    """
+    named = []
+    for key, value in (inputs or {}).items():
+        record = asdict(value) if isinstance(value, Input) else dict(value or {})
+        if record.get("label") != LABEL_MODEL_GEOMETRY or record.get("value") is None:
+            continue
+        source = record.get("source")
+        named.append(
+            f"{_INPUT_NAMES.get(key, key)} from {_SOURCE_NAMES.get(source, source or 'an unnamed source')}"
+        )
+    return named
+
+
+def shot_spin_axis_source(axis: Metric, inputs: Optional[dict] = None) -> str:
+    """The Shot.spin_axis_source string for a calculated or model-geometry spin axis."""
+    gear = SOURCE_GEAR in (axis.source or "")
+    if axis.status == STATUS_MODEL_GEOMETRY:
+        basis = AXIS_BASIS_GEAR if gear else AXIS_BASIS_TILT
+        named = ", ".join(model_geometry_inputs(inputs or {})) or "inputs unnamed"
+        return f"{SPIN_AXIS_MODEL_GEOMETRY_PREFIX} ({basis}; {named})"
+    return SPIN_AXIS_SOURCE_GEAR if gear else SPIN_AXIS_SOURCE_TILT
+
+
+def shot_spin_method(status: str, input_labels) -> str:
+    """The Shot.spin_method string for the Penner spin, naming its inputs' weakest label."""
+    if status == STATUS_MODEL_GEOMETRY:
+        return SPIN_METHOD_MODEL_GEOMETRY
+    weakest = LABEL_CALCULATED if LABEL_CALCULATED in set(input_labels) else LABEL_MEASURED
+    return f"{SPIN_METHOD_PENNER}; club inputs {weakest}"
 
 
 def is_calculated_source(source: Optional[str]) -> bool:
     """Whether a Shot source label names a calculated (model) value."""
     return bool(source) and source.startswith(LABEL_CALCULATED)
-
-
-# Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
-SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
 
 
 def is_model_geometry_source(source: Optional[str]) -> bool:
