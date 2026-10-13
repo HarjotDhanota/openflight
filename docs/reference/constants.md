@@ -94,7 +94,7 @@ references.
 | `CD_POLY` | (0.1304, 0.9287, -0.8259) |
 | `CL_POLY` | (0.0504, 1.2031, -1.1490) |
 | `SP_FIT_MAX` | 0.75 |
-| `SPIN_DECAY_RATE` | 0.04 |
+| `CM_PER_SP` | 0.01 |
 | `GRAVITY` | 9.81 |
 | `DT_SECONDS` | 0.002 |
 | `MAX_FLIGHT_SECONDS` | 15.0 |

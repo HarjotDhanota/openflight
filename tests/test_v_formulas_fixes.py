@@ -299,3 +299,44 @@ def test_estimated_is_the_weakest_collision_input_label():
     assert metrics["face_angle"].status == "estimated"
     assert metrics["spin_axis"].status == "estimated"
     assert metrics["dynamic_loft"].status == "calculated"
+
+
+# ---- C4: spin decays by Ferguson 2022's own moment model ------------------------------
+
+
+def test_the_spin_moment_coefficient_is_ferguson_s():
+    # Ferguson, McNally & McPhee 2022, Eq. (4) C_M = g S, with g = 0.01 (the last of
+    # "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031, -1.1490, 0.01}")
+    assert ballistics.CM_PER_SP == 0.01
+    assert not hasattr(ballistics, "SPIN_DECAY_RATE")
+
+
+def test_the_spin_deceleration_is_the_moment_over_the_ball_s_inertia():
+    import math
+
+    r, m = ballistics.BALL_RADIUS_M, ballistics.BALL_MASS_KG
+    omega, v, rho = 280.0, 70.0, 1.2
+    torque = 0.01 * (r * omega / v) * 0.5 * rho * v * v * math.pi * r * r * 2 * r
+    expected = -torque / (0.4 * m * r * r)
+    assert ballistics.spin_acceleration(omega, v, rho) == pytest.approx(expected)
+    # the same law as Penner 2001 Eq. (16), alpha = -(0.00002) omega v / r (from Smits
+    # & Smith 1994), to 0.5 % at Penner's 1.204 kg/m3
+    penner = -0.00002 * omega * v / r
+    assert ballistics.spin_acceleration(omega, v, 1.204) == pytest.approx(penner, rel=0.005)
+
+
+def test_the_flight_s_spin_follows_the_moment_model():
+    import math
+
+    traj = ballistics.simulate(
+        ballistics.LaunchConditions(160.0, 11.0, 0.0, 3000.0, 0.0, "measured"),
+        air_density=1.2,
+    )
+    # d(omega)/dt = -k omega v  =>  ln(omega0 / omega) = k x path length
+    k = 0.01 * 1.2 * math.pi * ballistics.BALL_RADIUS_M**2 / (0.4 * ballistics.BALL_MASS_KG)
+    points = traj.points
+    path = (
+        sum(math.dist((a.x, a.y, a.z), (b.x, b.y, b.z)) for a, b in zip(points, points[1:]))
+        / ballistics.M_TO_YD
+    )
+    assert math.log(3000.0 / points[-1].spin_rpm) == pytest.approx(k * path, rel=0.02)

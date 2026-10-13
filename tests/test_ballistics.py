@@ -12,7 +12,6 @@ from openflight.ballistics import (
     CLUB_TYPICAL_SPIN_RPM,
     MPH_TO_MPS,
     SP_FIT_MAX,
-    SPIN_DECAY_RATE,
     LaunchConditions,
     _cd,
     _cl,
@@ -151,10 +150,8 @@ class TestSimulate:
         traj = simulate(_driver(spin_rpm=initial_spin))
         final_spin = traj.points[-1].spin_rpm
 
-        # Assert the decay law itself rather than a hardcoded window, so the
-        # test stays valid when aero coefficients change the flight time.
-        expected = initial_spin * math.exp(-SPIN_DECAY_RATE * traj.flight_time_s)
-        assert final_spin == pytest.approx(expected, rel=1e-3)
+        # The decay law (Ferguson 2022's C_M = 0.01 S) is checked in
+        # test_v_formulas_fixes; here only its size over one flight.
 
         # Sanity: spin must fall, but not collapse over a single flight.
         assert 0.6 * initial_spin < final_spin < initial_spin

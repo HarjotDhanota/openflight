@@ -188,12 +188,22 @@ $$
 These forms are consistent with **Bearman & Harvey (1976)** and **Kensrud &
 Smith (2018)** for dimpled balls past the drag crisis (Re ≈ 5×10⁴–2×10⁵).
 
-Spin decays exponentially over the flight, at roughly 4 %/s per **Kiratidis &
-Leinweber (2018)**:
+Spin decays by the **same paper's moment coefficient**, Eq. (4), $C_M = g\,S_p$
+with $g = 0.01$ (the last of its fitted constants), so the decay is the one its
+$C_d$ and $C_l$ were fitted with. The abstract does not print the torque; it is
+taken in Smits & Smith's (1994) convention, its cited source, with $d$ the
+diameter and $I = \tfrac{2}{5} m r^2$:
 
 $$
-\omega(t) = \omega_0 \, e^{-\lambda t}
+\frac{d\omega}{dt} = -\frac{C_M \, \tfrac{1}{2}\rho v^2 A \, d}{I}
+= -\lambda \frac{\omega v}{r}
 $$
+
+At 1.204 kg/m³ this is $\lambda = 2.0\times10^{-5}$: Penner 2001's Eq. (16),
+"α = −(0.00002)(ω_b v_b / r)", from the same Smits & Smith data, to 0.2 %. The
+spin is integrated with the flight (RK4). It replaces a 4 %/s exponential that
+was attributed to Kiratidis & Leinweber (2018), a paper on FIFA footballs with
+no spin decay in it.
 
 ## Total: bounce and roll
 
@@ -288,7 +298,7 @@ ball themselves from speed, launch and spin.
 | `CD_POLY` | (0.1304, 0.9287, -0.8259) | $C_d$ polynomial $(a, b, c)$ |
 | `CL_POLY` | (0.0504, 1.2031, -1.1490) | $C_l$ polynomial $(d, e, f)$ |
 | `SP_FIT_MAX` | 0.75 | Top of the fitted $S_p$ range; curves held beyond it |
-| `SPIN_DECAY_RATE` | 0.04 /s | ≈4 %/s |
+| `CM_PER_SP` | 0.01 | Spin-down moment coefficient per unit $S_p$ (Ferguson 2022 Eq. 4) |
 | `GRAVITY` | 9.81 m/s² | |
 | `DT_SECONDS` | 0.002 | 500 Hz integration |
 | `RANGE_DT_SECONDS` | 0.02 | Range sweep only |

@@ -99,7 +99,7 @@ STATUS_ORDER = (
 
 FLIGHT_MODEL_LABEL = (
     "Ferguson, McNally & McPhee 2022 quadratic Cd/Cl (ISEA 14, doi:10.5703/1288284317493), "
-    "RK4 point mass, spin decay 4 %/s"
+    "RK4 point mass, spin decay by the same paper's C_M = 0.01 S"
 )
 
 # Normalized air: sea level, 25 C (77 F), calm, dry. Ideal gas, dry-air specific
