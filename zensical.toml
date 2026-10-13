@@ -80,6 +80,7 @@ nav = [
     "how-it-works/rolling-buffer.md",
     "how-it-works/launch-angle.md",
     "how-it-works/ballistics.md",
+    "how-it-works/collision-model.md",
     "how-it-works/positioning.md",
   ] },
 
