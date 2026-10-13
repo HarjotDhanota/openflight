@@ -111,3 +111,89 @@ def test_the_finished_setup_and_the_ladder_show_the_light_warning(
     assert display["light_warning"]["status"] == "measured"
     assert display["light_warning"]["supported"]
     assert ladder["light_warning"] == display["light_warning"]
+
+
+# --- 13 Oct: shorter rungs to the sensor minimum, and what the kiosk would use ----------
+
+from openflight.camera import swing_exposure as sx  # noqa: E402
+
+
+def _limits(minimum):
+    return sx.SensorLimits(
+        exposure_min_us=minimum, exposure_max_us=8_000, gain_min=1.0, gain_max=15.9375
+    )
+
+
+def test_rungs_under_the_recorded_sensor_minimum_are_not_offered():
+    below = sl.rungs_below_sensor_minimum({"arm5": 9, "arm6": 4})
+
+    assert set(below) == {"full-7", "full-5", "half-3"}
+    assert "9 us" in below["full-7"]
+
+
+def test_without_a_recorded_minimum_only_the_proven_rungs_are_offered():
+    """Both modes took a 10 us request in full sun (30 Sept); shorter waits for the read."""
+    below = sl.rungs_below_sensor_minimum({"arm5": None, "arm6": None})
+
+    assert set(below) == {"full-7", "full-5", "half-7", "half-5", "half-3"}
+    assert "not been read" in below["half-7"]
+
+
+def test_the_warning_marks_the_rung_the_kiosk_would_use_in_today_s_room():
+    warning = sl.light_warning(
+        INDOOR_1_32_M,
+        source="setup_static_lock",
+        sensor_limits={"arm5": _limits(9), "arm6": _limits(4)},
+    )
+
+    full = warning["kiosk_would_use"]["arm5"]
+    assert (full["exposure_us"], full["rung_id"]) == (294, "full-300")
+    assert full["text"] == "kiosk would use: 1280×800 · 294 µs × gain 15.94"
+    marked = [item["rung_id"] for item in warning["rungs"] if item["kiosk_would_use"]]
+    assert "full-300" in marked
+    assert warning["below_sensor_minimum"].keys() == {"full-7", "full-5", "half-3"}
+
+
+def test_in_sun_the_kiosk_mark_sits_on_the_shortest_rung_the_sensor_allows():
+    sun = 0.6 * 234.0 / 7.0  # 7 us x 1 put the ball at 0.6 of clip (30 Sept)
+
+    warning = sl.light_warning(
+        sun, source="setup_static_lock", sensor_limits={"arm5": _limits(9), "arm6": _limits(4)}
+    )
+
+    full = warning["kiosk_would_use"]["arm5"]
+    half = warning["kiosk_would_use"]["arm6"]
+    assert (full["exposure_us"], full["gain"], full["rung_id"]) == (9, 1.0, "full-10")
+    # 640x400 doubles the light: at the 4 us minimum the ball sits near 0.69 of clip
+    assert half["exposure_us"] == 4 and half["status"] == "ball_driven"
+    assert half["rung_id"] == "half-5"
+
+
+def test_without_the_sensor_minimum_the_kiosk_mark_says_so():
+    warning = sl.light_warning(
+        INDOOR_1_32_M, source="setup_static_lock", sensor_limits={"arm5": None, "arm6": None}
+    )
+
+    assert warning["kiosk_would_use"]["arm5"]["status"] == "needs_sensor_minimum"
+    assert "rung_id" not in warning["kiosk_would_use"]["arm5"]
+
+
+def test_the_ladder_shows_the_kiosk_mark_from_the_recorded_limits(
+    tmp_path, flow_inputs, monkeypatch
+):
+    from tests.test_tester_tee_range_flow import app_for, drive  # noqa: PLC0415
+
+    limits_path = tmp_path / "camera-sensor-limits.json"
+    sx.record_sensor_limits(limits_path, 1280, 800, _limits(9))
+    sx.record_sensor_limits(limits_path, 640, 400, _limits(4))
+    app, tester = app_for(tmp_path, flow_inputs, monkeypatch, sensor_limits_path=limits_path)
+    client = app.test_client()
+    drive(client, tester)
+
+    ladder = client.get("/api/tester/ladder", query_string={"tester_id": tester}).get_json()
+
+    marks = ladder["light_warning"]["kiosk_would_use"]
+    assert marks["arm5"]["text"].startswith("kiosk would use: 1280×800 · ")
+    assert marks["arm5"]["sensor_min_us"] == 9
+    assert ladder["sensor_limits"]["arm6"]["exposure_min_us"] == 4
+    assert set(ladder["below_sensor_minimum"]) == {"full-7", "full-5", "half-3"}

@@ -1262,6 +1262,21 @@
         margin: 6px 0 0;
         padding-left: 1.2em;
       }
+      /* 13 Oct: what to do about the light, in words a tester acts on */
+      .verdict-card__light {
+        margin: 6px 0 0;
+        font-weight: 800;
+      }
+      .kiosk-mark {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 0 6px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
       .verdict-card .kiosk-shot {
         margin-top: 10px;
         padding-top: 8px;
@@ -1689,6 +1704,7 @@
           </div>
           <div class="verdict-card__nums" id="verdict-nums"></div>
           <ul class="verdict-card__reasons" id="verdict-reasons"></ul>
+          <p class="verdict-card__light" id="verdict-light-label" hidden></p>
           <div class="kiosk-shot" id="kiosk-shot" aria-live="polite"></div>
         </div>
         <p class="address" id="address-status" data-state="unknown" role="status"></p>
@@ -1696,6 +1712,7 @@
         <div class="ladder-now" id="ladder-panel"></div>
         <h3 class="sub">Settings to run</h3>
         <p class="note" id="ladder-light-warning" role="status" hidden></p>
+        <p class="note" id="ladder-kiosk-mark" role="status" hidden></p>
         <p class="note" id="ladder-source"></p>
         <div class="ladder-choice" id="ladder-choice"></div>
         <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
@@ -4810,8 +4827,8 @@
       const LADDER_CHOICE_STORAGE_KEY = 'openflight-tester-ladder-rungs';
       const NOT_SELECTED = 'not selected by the tester';
       const LADDER_MODES = [
-        ['arm5', '1280×800', 'full', [300, 200, 150, 100, 75, 50, 30, 20, 10]],
-        ['arm6', '640×400', 'half', [300, 150, 75, 30, 15]],
+        ['arm5', '1280×800', 'full', [300, 200, 150, 100, 75, 50, 30, 20, 10, 7, 5]],
+        ['arm6', '640×400', 'half', [300, 150, 75, 30, 15, 10, 7, 5, 3]],
       ];
       const LADDER_ORDER = LADDER_MODES.flatMap(([, , prefix, exposures]) => exposures.map((us) => `${prefix}-${us}`));
       function rungLabel(rungId) {
@@ -4849,6 +4866,9 @@
       function tickedRungs() {
         return [...el('ladder-choice').querySelectorAll('input')].filter((box) => box.checked).map((box) => box.value);
       }
+      // the kiosk's mark and the settings the sensor cannot take (renderKioskMarks)
+      let kioskRungs = new Set();
+      let belowSensorMinimum = new Set();
       let ladderBuiltFor = null;
       // the tick chips and the switch buttons, rebuilt when the lens's settings change
       function buildLadderControls() {
@@ -4910,7 +4930,7 @@
         for (const box of el('ladder-choice').querySelectorAll('input')) {
           const rung = rungs[box.value];
           const ran = rung && rung.status !== 'pending' && !(rung.status === 'skipped' && rung.reason === NOT_SELECTED);
-          box.disabled = walking || Boolean(ran);
+          box.disabled = walking || Boolean(ran) || belowSensorMinimum.has(box.value);
           box.parentElement.classList.toggle('off', box.disabled);
         }
         el('ladder-choice-hint').hidden = !walking;
@@ -5008,10 +5028,49 @@
         if (Number.isFinite(v?.clipped_pct)) numbers.push(`<span>clipped <b>${Number(v.clipped_pct).toFixed(1)}%</b></span>`);
         el('verdict-nums').innerHTML = numbers.join('');
         el('verdict-reasons').innerHTML = (v?.reasons || []).map((reason) => `<li>${reasonHtml(reason)}</li>`).join('');
+        // too bright: shade the ball area (or an ND filter); too dark: add light (13 Oct)
+        const lightLabel = el('verdict-light-label');
+        lightLabel.hidden = !v?.light_label;
+        lightLabel.textContent = v?.light_label ? `Light: ${v.light_label}` : '';
         const band = el('ready-light-verdict');
         band.dataset.color = color;
         band.hidden = !v;
         band.textContent = v ? `Last picture: ${VERDICT_WORD[v.color] || v.color}` : '';
+      }
+
+      // 13 Oct: the setting the kiosk's swing exposure would use in this light, marked on
+      // its nearest setting so its choice can be judged against that setting's verdicts;
+      // settings shorter than the sensor reported it can go are greyed out with why.
+      function renderKioskMarks(light, below) {
+        belowSensorMinimum = new Set(Object.keys(below || {}));
+        const marks = Object.values(light?.kiosk_would_use || {});
+        kioskRungs = new Set(marks.map((mark) => mark.rung_id).filter(Boolean));
+        const note = el('ladder-kiosk-mark');
+        const texts = marks.map((mark) =>
+          mark.text ? `${mark.text}${mark.rung_id ? ` (nearest setting: ${rungLabel(mark.rung_id)})` : ''}` : `${mark.mode}: ${mark.reason}`
+        );
+        note.hidden = !texts.length;
+        note.textContent = texts.join(' · ');
+        for (const box of el('ladder-choice').querySelectorAll('input')) {
+          const label = box.parentElement;
+          label.querySelector('.kiosk-mark')?.remove();
+          if (kioskRungs.has(box.value)) {
+            const badge = document.createElement('span');
+            badge.className = 'kiosk-mark';
+            badge.textContent = 'kiosk';
+            badge.title = 'The kiosk would use about this setting in your light';
+            label.append(badge);
+          }
+          const why = below?.[box.value];
+          if (why) {
+            box.checked = false;
+            box.disabled = true;
+            label.classList.add('off');
+            label.title = why;
+          } else if (label.title) {
+            label.title = '';
+          }
+        }
       }
 
       // what the ladder is doing now, each setting that has run, and the rest in one line
@@ -5031,8 +5090,9 @@
           }
           const ok = (r.swings || []).filter((w) => w.color !== 'red').length;
           const warning = r.light_warning ? `<span class="setup-warning">runs anyway: ${escapeHtml(r.light_warning)}</span>` : '';
+          const kiosk = kioskRungs.has(id) ? '<span class="kiosk-mark">kiosk would use</span>' : '';
           rows.push(
-            `<div class="rung" data-rung="${escapeHtml(id)}" data-status="${escapeHtml(r.status)}"><b>${escapeHtml(rungLabel(id))}</b>` +
+            `<div class="rung" data-rung="${escapeHtml(id)}" data-status="${escapeHtml(r.status)}"><b>${escapeHtml(rungLabel(id))}</b>${kiosk}` +
               `<span>${escapeHtml(r.status)}: ${ok}/5 usable pictures</span>` +
               (r.reason ? `<span>${reasonHtml(r.reason)}</span>` : '') +
               `${warning}</div>`
@@ -5068,6 +5128,7 @@
         lightNote.hidden = !(light?.status === 'measured' && light.message);
         lightNote.textContent = lightNote.hidden ? '' : `Light: ${light.message}`;
         lightNote.className = light?.unsupported?.length ? 'problem' : 'note';
+        renderKioskMarks(light, s.below_sensor_minimum);
         if (!l) {
           ladderRunning = false;
           renderLadderControls();

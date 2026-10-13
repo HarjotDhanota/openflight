@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+from openflight.camera import swing_exposure
 from openflight.camera.auto_exposure import hitting_zone, measure_exposure
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.paired_eligibility import evaluate_paired_capture
@@ -96,9 +97,19 @@ class Rung:
 # full sun on 30 Sept the setup locked the ball at 10 us (7 applied) and 30 us was
 # marginal, so 20 and 10 us follow, and 30 and 15 us at 640x400 (P7-9). The
 # sensor's shortest exposure is 9 us (one row); both modes took 10 us and applied 7.
+# 13 Oct: shorter rungs run down to each mode's own shortest exposure (in full sun
+# 640x400 needed about 3 us). They are offered only where the camera has reported
+# that it can go that short (``rungs_below_sensor_minimum``).
+SHORT_RUNGS_US = {"arm5": (7, 5), "arm6": (10, 7, 5, 3)}
+# Both modes took a 10 us request in full sun (30 Sept): without a recorded minimum
+# nothing shorter is offered.
+PROVEN_SHORTEST_US = 10
 LADDER: tuple[Rung, ...] = tuple(
-    [Rung(f"full-{e}", "arm5", e, True) for e in (300, 200, 150, 100, 75, 50, 30, 20, 10)]
-    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75, 30, 15)]
+    [
+        Rung(f"full-{e}", "arm5", e, True)
+        for e in (300, 200, 150, 100, 75, 50, 30, 20, 10, *SHORT_RUNGS_US["arm5"])
+    ]
+    + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75, 30, 15, *SHORT_RUNGS_US["arm6"])]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # Signal per pixel relative to 1280x800 at the same exposure and gain. MEASURED
@@ -106,9 +117,12 @@ RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # Outdoors-test-5/-8 (arm5 binned 2x2 against arm6, unclipped pixels) give
 # 1.96-2.04x for 640x400. It supersedes light-audit.md section 4's "unmeasured, the
 # same rows apply". Used to predict which rungs a light supports and to carry a light
-# measurement between the modes.
-ARM6_SIGNAL_FACTOR = 2.0
-MODE_SIGNAL_FACTOR = {"arm5": 1.0, "arm6": ARM6_SIGNAL_FACTOR}
+# measurement between the modes. Kept once, in config/swing_exposure.json.
+_SWING_CONFIG = swing_exposure.load_config()
+MODE_SIGNAL_FACTOR = {
+    arm_id: swing_exposure.mode_signal_factor(_SWING_CONFIG, arm_id) for arm_id in RUNG_FPS
+}
+ARM6_SIGNAL_FACTOR = MODE_SIGNAL_FACTOR["arm6"]
 # A setting the tester unticked: review and analysis must not read it as a light failure.
 NOT_SELECTED = "not selected by the tester"
 # A pressed setting in the other mode waits this long for a swing taken just before
@@ -150,13 +164,84 @@ def rung_light_support(
     return support
 
 
-def light_warning(light_index_dn_per_us_gain: float | None, *, source: str | None) -> dict:
+def rungs_below_sensor_minimum(
+    sensor_min_us: dict[str, int | None], *, rungs: tuple[Rung, ...] = LADDER
+) -> dict[str, str]:
+    """The rungs the sensor cannot take, each with why (13 Oct).
+
+    ``sensor_min_us`` is each mode's shortest exposure as its camera reported it
+    (``swing_exposure.recorded_sensor_limits``). A mode with none recorded offers
+    nothing under ``PROVEN_SHORTEST_US``.
+    """
+    below = {}
+    for rung in rungs:
+        minimum = sensor_min_us.get(rung.arm_id)
+        mode = "1280x800" if rung.arm_id == "arm5" else "640x400"
+        if minimum is None:
+            if rung.exposure_us < PROVEN_SHORTEST_US:
+                below[rung.rung_id] = (
+                    f"the sensor's shortest exposure at {mode} has not been read yet; settings "
+                    f"under {PROVEN_SHORTEST_US} us wait for it"
+                )
+        elif rung.exposure_us < int(minimum):
+            below[rung.rung_id] = f"below the sensor's shortest exposure at {mode} ({minimum} us)"
+    return below
+
+
+def kiosk_marks(
+    light_index_dn_per_us_gain: float | None,
+    sensor_limits: dict[str, swing_exposure.SensorLimits | None],
+) -> dict[str, dict]:
+    """Per mode, the setting the kiosk's swing exposure would seed in this light.
+
+    Each carries ``rung_id``: the offered rung nearest it (in log exposure), so the
+    owner can judge the policy against the ladder's verdicts on that row.
+    """
+    below = rungs_below_sensor_minimum(
+        {arm: (limits.exposure_min_us if limits else None) for arm, limits in sensor_limits.items()}
+    )
+    marks = {}
+    for arm_id in RUNG_FPS:
+        mark = swing_exposure.kiosk_would_use(
+            light_index_dn_per_us_gain, arm_id, sensor_limits.get(arm_id), config=_SWING_CONFIG
+        )
+        offered = [r for r in LADDER if r.arm_id == arm_id and r.rung_id not in below]
+        if "exposure_us" in mark and offered:
+            nearest = min(
+                offered, key=lambda rung: abs(math.log(rung.exposure_us / mark["exposure_us"]))
+            )
+            mark["rung_id"] = nearest.rung_id
+        marks[arm_id] = mark
+    return marks
+
+
+def light_warning(
+    light_index_dn_per_us_gain: float | None,
+    *,
+    source: str | None,
+    sensor_limits: dict[str, swing_exposure.SensorLimits | None] | None = None,
+) -> dict:
     """What the tester is told before any swing: the rungs their light supports.
 
     Labelled estimated: a prediction from the setup's still ball, which the swings'
     own resting frames judge again. Without a measured light it says so and predicts
-    nothing.
+    nothing. With the sensor's recorded limits it also marks the rung the kiosk's
+    swing exposure would use and the rungs the sensor cannot take (13 Oct).
     """
+    extra = {}
+    marked: set[str] = set()
+    if sensor_limits is not None:
+        marks = kiosk_marks(light_index_dn_per_us_gain, sensor_limits)
+        marked = {mark["rung_id"] for mark in marks.values() if mark.get("rung_id")}
+        extra = {
+            "kiosk_would_use": marks,
+            "below_sensor_minimum": rungs_below_sensor_minimum(
+                {
+                    arm: (limits.exposure_min_us if limits else None)
+                    for arm, limits in sensor_limits.items()
+                }
+            ),
+        }
     base = {
         "schema": "openflight.tester_light_warning.v1",
         "gate_dn": BALL_MIN_SIGNAL_DN,
@@ -164,6 +249,7 @@ def light_warning(light_index_dn_per_us_gain: float | None, *, source: str | Non
         "mode_signal_factor": dict(MODE_SIGNAL_FACTOR),
         "label": "estimated",
         "source": source,
+        **extra,
     }
     if light_index_dn_per_us_gain is None or not math.isfinite(light_index_dn_per_us_gain):
         return {
@@ -176,7 +262,10 @@ def light_warning(light_index_dn_per_us_gain: float | None, *, source: str | Non
             "unsupported": [],
             "message": "The light was not measured: finish the setup's camera step first.",
         }
-    rungs = rung_light_support(light_index_dn_per_us_gain)
+    rungs = [
+        {**item, "kiosk_would_use": item["rung_id"] in marked}
+        for item in rung_light_support(light_index_dn_per_us_gain)
+    ]
     supported = [item["rung_id"] for item in rungs if item["supported"]]
     unsupported = [item for item in rungs if not item["supported"]]
     if not unsupported:
@@ -317,11 +406,6 @@ def _zone_name(zone: dict) -> str:
     return "the box" if zone.get("zone_source") == "placement_box" else "the hitting zone"
 
 
-def _ball_core(image: np.ndarray, x: float, y: float, diameter: float) -> np.ndarray:
-    yy, xx = np.indices(image.shape)
-    return image[np.hypot(xx - x, yy - y) <= 0.8 * diameter / 2.0]
-
-
 def ball_light(
     frames: np.ndarray, black_floor: float, expected_ball: dict | None = None
 ) -> dict | None:
@@ -365,7 +449,7 @@ def ball_light(
         x, y, size, found_by = float(found.x), float(found.y), float(found.diameter_px), "detector"
     else:
         x, y, size, found_by = expected_x, expected_y, diameter, "setup_position"
-    core = _ball_core(image, x, y, size)
+    core = swing_exposure.ball_core(image, x, y, size)
     if not core.size:
         return None
     clipped = float(np.mean(core >= 250) * 100.0)
@@ -383,6 +467,15 @@ def ball_light(
         "clipped_pct": clipped,
         "found_by": found_by,
     }
+
+
+def light_label(cause: str | None) -> str | None:
+    """The tester-facing label for a light cause: what to do about it (13 Oct)."""
+    if cause in BRIGHT_LIGHT_CAUSES:
+        return swing_exposure.TOO_BRIGHT_LABEL
+    if cause in DARK_LIGHT_CAUSES:
+        return swing_exposure.TOO_DARK_LABEL
+    return None
 
 
 def judge_light(
@@ -535,6 +628,7 @@ def pre_rung_check(
         "light_cause": cause,
         "too_bright": cause in BRIGHT_LIGHT_CAUSES,
         "too_dark": cause in DARK_LIGHT_CAUSES,
+        "light_label": light_label(cause),
         "suggested_gain": _suggested_gain(light, gain, black_floor) if gain and red else None,
     }
 
@@ -637,6 +731,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         "clipped_pct": stats["clipped_pct"],
         "zone_source": stats["zone_source"],
         "light_cause": light["cause"],
+        "light_label": light_label(light["cause"]),
         "ball": ball,
     }
 

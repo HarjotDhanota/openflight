@@ -205,7 +205,7 @@ def test_the_lens_endpoint_lists_selects_and_keeps_settings(tmp_path, inputs, mo
     assert [item["lens_id"] for item in listed["lenses"]] == ["stock-2.8mm", "6mm", "8mm"]
     assert listed["lenses"][0]["focal_px_by_arm"]["arm5"] == pytest.approx(933.33, abs=0.01)
     assert listed["lenses"][1]["intrinsics"] == "nominal"
-    assert listed["allowed_ladder_us"]["arm6"] == [300, 150, 75, 30, 15]
+    assert listed["allowed_ladder_us"]["arm6"] == [300, 150, 75, 30, 15, 10, 7, 5, 3]
     assert chosen["lens_id"] == "8mm" and chosen["changed"] is True
     assert chosen["reset"] == ["placement_box", "aim_point", "camera_tilt"]
     assert saved.status_code == 200

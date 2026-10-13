@@ -488,6 +488,7 @@ def app_for(
     black_floor_dn=None,
     use_unqualified=False,
     camera_tilt_path=None,
+    sensor_limits_path=None,
 ):
     def camera_model(arm, *args):
         lens = args[5] if len(args) > 5 else None
@@ -555,6 +556,7 @@ def app_for(
         static_radar=held,
         use_unqualified_tee_range=use_unqualified,
         camera_tilt_path=camera_tilt_path,
+        sensor_limits_path=sensor_limits_path,
     )
     app.config["TEST_STATIC_MANAGER"] = manager
     app.config["TEST_HELD_RADAR"] = held

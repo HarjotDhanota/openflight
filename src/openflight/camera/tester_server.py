@@ -47,6 +47,7 @@ from openflight.camera import (
     reference_ball_range,
     session_review_routes as review_routes,
     study_ladder,
+    swing_exposure,
     target_line,
     tester_ready_light,
     worker_lifetime,
@@ -2100,8 +2101,32 @@ def lock_light_index(lock: Mapping | None) -> float | None:
     return index if math.isfinite(index) and index > 0.0 else None
 
 
+# Where the cameras' reported limits are kept (``swing_exposure.record_sensor_limits``):
+# the kiosk and this page's live view write them per mode when a camera is configured.
+# None (tests, a page without a unit) reads and writes nothing. Set by ``create_app``.
+_sensor_limits_path: Path | None = None
+
+
+def recorded_sensor_limits() -> dict[str, swing_exposure.SensorLimits | None]:
+    """Each ladder mode's limits as its camera last reported them, None where never read."""
+    limits: dict[str, swing_exposure.SensorLimits | None] = {}
+    for arm_id in study_ladder.RUNG_FPS:
+        arm = ARMS[arm_id]
+        entry = (
+            swing_exposure.recorded_sensor_limits(_sensor_limits_path, arm.width, arm.height)
+            if _sensor_limits_path is not None
+            else None
+        )
+        limits[arm_id] = swing_exposure.SensorLimits.from_dict(entry) if entry else None
+    return limits
+
+
 def setup_light_warning(solution: tee_range.TeeRangeSolution | None) -> dict:
-    """Which ladder rungs the setup's measured light supports, before any swing (13 Oct)."""
+    """Which ladder rungs the setup's measured light supports, before any swing (13 Oct).
+
+    It also marks the rung the kiosk's swing exposure would use in that light, from
+    the sensor limits the cameras reported.
+    """
     lock = None
     if solution is not None:
         for item in solution.candidates:
@@ -2113,7 +2138,9 @@ def setup_light_warning(solution: tee_range.TeeRangeSolution | None) -> dict:
                 break
     index = lock_light_index(lock)
     return study_ladder.light_warning(
-        index, source="setup_static_lock_1280x800" if index is not None else None
+        index,
+        source="setup_static_lock_1280x800" if index is not None else None,
+        sensor_limits=recorded_sensor_limits(),
     )
 
 
@@ -6464,6 +6491,8 @@ class LiveView:
         focal_px_for: Callable[[Arm], float] | None = None,
     ):
         self._camera_factory = camera_factory
+        # where this mode's reported limits are kept (13 Oct); None keeps nothing
+        self.sensor_limits_path: Path | None = None
         # the arm's focal length from the rig file; without it the live readout
         # gives no size range rather than a nominal one (wiring audit C2)
         self._focal_px_for = focal_px_for
@@ -6799,6 +6828,25 @@ class LiveView:
             }
         return image, status
 
+    def _record_sensor_limits(self, camera, arm: Arm) -> None:
+        """Keep the limits this mode reported, for the ladder's shortest rungs (13 Oct)."""
+        if self.sensor_limits_path is None:
+            return
+        try:
+            limits = swing_exposure.sensor_limits_from_controls(
+                getattr(camera, "camera_controls", None)
+            )
+            if limits is not None:
+                swing_exposure.record_sensor_limits(
+                    self.sensor_limits_path,
+                    arm.width,
+                    arm.height,
+                    limits,
+                    recorded_by="tester_live_view",
+                )
+        except (OSError, TypeError, ValueError):
+            logger.warning("Could not record the camera's limits", exc_info=True)
+
     def _open(self):
         if self._camera_factory is not None:
             return self._camera_factory()
@@ -6824,6 +6872,7 @@ class LiveView:
                 encode=None,
             )
             camera.configure(config)
+            self._record_sensor_limits(camera, arm)
             camera.start()
             shown = 0.0
             while not stop_event.is_set():
@@ -7153,6 +7202,7 @@ def create_app(
     optical_calibration_dir: Path | None = None,
     lens_catalogue_path: Path | None = None,
     placement_box_config: Path | None = None,
+    sensor_limits_path: Path | None = None,
 ) -> Flask:
     """Build the standalone tester service.
 
@@ -7232,6 +7282,10 @@ def create_app(
     live = live_view or LiveView(
         focal_px_for=lambda arm: mode_focal_px(arm, rig_geometry, current_lens())
     )
+    global _sensor_limits_path  # pylint: disable=global-statement
+    _sensor_limits_path = sensor_limits_path
+    if isinstance(live, LiveView):
+        live.sensor_limits_path = sensor_limits_path
     enclosure = tilt or EnclosureTilt(rig_geometry)
     setup = setup_policy or SetupEligibility(
         rig_geometry,
@@ -10645,6 +10699,13 @@ def create_app(
             selected = study_ladder.validate_selection(payload.get("rungs", lens_default_rungs()))
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        # 13 Oct: a rung shorter than the sensor reported it can go is not run
+        below = below_sensor_minimum()
+        if pressed is not None and pressed.rung_id in below:
+            return jsonify({"error": f"{pressed.rung_id}: {below[pressed.rung_id]}"}), 409
+        selected = [rung_id for rung_id in selected if rung_id not in below]
+        if not selected:
+            return jsonify({"error": "no ticked setting is one the sensor can take"}), 400
         # The light step is needed only for a mode with a ticked or pressed setting.
         modes = [
             arm_id
@@ -10904,8 +10965,22 @@ def create_app(
                 "run_dir": str(run) if run else None,
                 "capture_scope": current_capture_scope(tester_id),
                 "saved_attempt_scopes": attempt_scopes(sessions_root, tester_id),
-                # 13 Oct: which rungs the setup's measured light supports
+                # 13 Oct: which rungs the setup's measured light supports, and the
+                # rung the kiosk's swing exposure would use
                 "light_warning": ladder_light_warning(tester_id),
+                "sensor_limits": {
+                    arm_id: (limits.to_dict() if limits else None)
+                    for arm_id, limits in recorded_sensor_limits().items()
+                },
+                "below_sensor_minimum": below_sensor_minimum(),
+            }
+        )
+
+    def below_sensor_minimum() -> dict[str, str]:
+        return study_ladder.rungs_below_sensor_minimum(
+            {
+                arm_id: (limits.exposure_min_us if limits else None)
+                for arm_id, limits in recorded_sensor_limits().items()
             }
         )
 
@@ -11097,6 +11172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             iwr_static_config=args.iwr_static_config,
             camera_tilt_path=args.camera_tilt_calibration,
             lens_settings_path=args.lens_settings,
+            sensor_limits_path=swing_exposure.DEFAULT_SENSOR_LIMITS_PATH,
             optical_calibration_dir=args.optical_calibration_dir,
             iwr_firmware=args.iwr_firmware,
             iwr_calibration=args.iwr_calibration,

@@ -20,8 +20,11 @@ const FULL_RUNGS = [
   'full-30',
   'full-20',
   'full-10',
+  // 13 Oct: shorter settings down to the sensor's own minimum
+  'full-7',
+  'full-5',
 ];
-const HALF_RUNGS = ['half-300', 'half-150', 'half-75', 'half-30', 'half-15'];
+const HALF_RUNGS = ['half-300', 'half-150', 'half-75', 'half-30', 'half-15', 'half-10', 'half-7', 'half-5', 'half-3'];
 const ALL_RUNGS = [...FULL_RUNGS, ...HALF_RUNGS];
 const NOT_SELECTED = 'not selected by the tester';
 
@@ -564,7 +567,7 @@ test('every setting is ticked by default and the ticked ones are sent on Start',
   await expect(page.locator('#ladder-choice')).toContainText('1280×800');
   await expect(page.locator('#ladder-choice')).toContainText('640×400');
   for (const box of await page.locator('#ladder-choice input').all()) await expect(box).toBeChecked();
-  await expect(page.locator('#ladder-choice input')).toHaveCount(14);
+  await expect(page.locator('#ladder-choice input')).toHaveCount(20);
 
   await setting(page, '1280×800', 50).uncheck();
   await setting(page, '640×400', 75).uncheck();
@@ -584,10 +587,16 @@ test('every setting is ticked by default and the ticked ones are sent on Start',
       'full-30',
       'full-20',
       'full-10',
+      'full-7',
+      'full-5',
       'half-300',
       'half-150',
       'half-30',
       'half-15',
+      'half-10',
+      'half-7',
+      'half-5',
+      'half-3',
     ],
   });
 });
@@ -658,10 +667,16 @@ test('the choice is remembered after a reload and sent when the ladder resumes',
     'full-50',
     'full-20',
     'full-10',
+    'full-7',
+    'full-5',
     'half-300',
     'half-75',
     'half-30',
     'half-15',
+    'half-10',
+    'half-7',
+    'half-5',
+    'half-3',
   ]);
 });
 
@@ -763,7 +778,7 @@ test('pressing a setting on a running ladder switches to it and sends the ticked
   });
   await page.goto('/tester.html');
 
-  await expect(page.locator('#ladder-jump button')).toHaveCount(14);
+  await expect(page.locator('#ladder-jump button')).toHaveCount(20);
   await expect(settingButton(page, '1280×800', 300)).toHaveClass(/now/);
   await settingButton(page, '640×400', 150).tap();
 
@@ -1086,5 +1101,57 @@ test('the ladder tells the tester which settings their light supports, before an
 
   await expect(page.locator('#ladder-light-warning')).toContainText(
     'Your light supports 1280x800 300 us, 1280x800 200 us'
+  );
+});
+
+test('the ladder marks the setting the kiosk would use and greys out ones the sensor cannot take', async ({ page }) => {
+  await mockBaseApis(page, () => ({
+    ...ladderState(null),
+    light_warning: {
+      status: 'measured',
+      supported: ['full-300'],
+      unsupported: ['full-150'],
+      message: 'Your light supports 1280x800 300 us.',
+      kiosk_would_use: {
+        arm5: {
+          arm_id: 'arm5',
+          mode: '1280×800',
+          status: 'ball_driven',
+          exposure_us: 294,
+          gain: 15.9375,
+          rung_id: 'full-300',
+          text: 'kiosk would use: 1280×800 · 294 µs × gain 15.94',
+        },
+        arm6: { arm_id: 'arm6', mode: '640×400', status: 'needs_sensor_minimum', reason: 'not read yet' },
+      },
+    },
+    below_sensor_minimum: { 'full-10': "below the sensor's shortest exposure at 1280x800 (12 us)" },
+  }));
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#ladder-kiosk-mark')).toContainText(
+    'kiosk would use: 1280×800 · 294 µs × gain 15.94 (nearest setting: 1280×800 · 300 µs)'
+  );
+  await expect(page.locator('#ladder-panel .rung[data-rung="full-300"] .kiosk-mark')).toHaveText('kiosk would use');
+  const short = page.locator('#ladder-choice input[value="full-10"]');
+  await expect(short).toBeDisabled();
+  await expect(short).not.toBeChecked();
+});
+
+test('the verdict card says what to do about the light', async ({ page }) => {
+  await mockBaseApis(page, () => ({
+    ...ladderState(null),
+    last_verdict: {
+      color: 'red',
+      rung_id: 'full-300',
+      reasons: ['light: too bright for the ball: 40% of it is clipped'],
+      light_cause: 'ball_clipped',
+      light_label: 'too bright: shade the ball area (or an ND filter)',
+    },
+  }));
+  await page.goto('/tester.html');
+
+  await expect(page.locator('#verdict-light-label')).toHaveText(
+    'Light: too bright: shade the ball area (or an ND filter)'
   );
 });

@@ -117,8 +117,8 @@ def test_settings_default_validate_and_persist(tmp_path, catalogue):
         "modes": ["arm5", "arm6"],
         "default_arm": "arm5",
         "ladder": {
-            "arm5": [300, 200, 150, 100, 75, 50, 30, 20, 10],
-            "arm6": [300, 150, 75, 30, 15],
+            "arm5": [300, 200, 150, 100, 75, 50, 30, 20, 10, 7, 5],
+            "arm6": [300, 150, 75, 30, 15, 10, 7, 5, 3],
         },
     }
     saved = store.save_settings(

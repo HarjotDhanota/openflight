@@ -57,11 +57,19 @@ def test_the_ladder_is_the_agreed_rungs():
         ("arm5", 30),
         ("arm5", 20),
         ("arm5", 10),
+        # 13 Oct: shorter rungs down to the sensor's own minimum, offered only where
+        # the camera reported it can go that short
+        ("arm5", 7),
+        ("arm5", 5),
         ("arm6", 300),
         ("arm6", 150),
         ("arm6", 75),
         ("arm6", 30),
         ("arm6", 15),
+        ("arm6", 10),
+        ("arm6", 7),
+        ("arm6", 5),
+        ("arm6", 3),
     ]
     assert all(r.photos for r in sl.LADDER if r.arm_id == "arm5")
     assert not any(r.photos for r in sl.LADDER if r.arm_id == "arm6")
@@ -403,19 +411,19 @@ def test_fifth_accepted_last_full_rung_swing_waits_for_its_exact_photo(tmp_path)
         for _ in range(5):
             state.record_swing(_verdict("green", f"old-{capture_number}"))
             capture_number += 1
-    state.begin("full-10", 12.0, {"ok": True})
+    state.begin("full-5", 12.0, {"ok": True})
     for index in range(4):
-        state.record_swing(_verdict("green", f"full10-{index}"))
+        state.record_swing(_verdict("green", f"full5-{index}"))
     done = []
     runner = _runner(tmp_path, FakeKiosk(), run_dir=tmp_path / "run-01", done=done)
     runner.start_rung()
-    _capture(run, exposure=10, gain=12.0, name="camera_final_10")
+    _capture(run, exposure=5, gain=12.0, name="camera_final_5")
 
     runner.poll_once()
 
     assert runner.state.to_dict()["pending_photo"] == {
-        "capture": "camera_final_10",
-        "rung_id": "full-10",
+        "capture": "camera_final_5",
+        "rung_id": "full-5",
     }
     assert done == []
 
@@ -788,8 +796,14 @@ def test_a_ladder_file_from_before_the_sun_rungs_loads_with_them_pending(tmp_pat
         "full-30",
         "full-20",
         "full-10",
+        "full-7",
+        "full-5",
         "half-30",
         "half-15",
+        "half-10",
+        "half-7",
+        "half-5",
+        "half-3",
     ]
 
 
@@ -935,6 +949,7 @@ def test_a_clipped_ball_merged_into_the_mat_is_red_but_places_no_ball(tmp_path):
     assert verdict["color"] == "red"
     assert verdict["light_cause"] == "ball_clipped"
     assert verdict["ball"] is None
+    assert verdict["light_label"] == "too bright: shade the ball area (or an ND filter)"
 
 
 def test_a_photo_without_a_light_index_keeps_the_rungs_brightness(tmp_path):
@@ -1146,8 +1161,20 @@ FULL_IDS = [
     "full-30",
     "full-20",
     "full-10",
+    "full-7",
+    "full-5",
 ]
-HALF_IDS = ["half-300", "half-150", "half-75", "half-30", "half-15"]
+HALF_IDS = [
+    "half-300",
+    "half-150",
+    "half-75",
+    "half-30",
+    "half-15",
+    "half-10",
+    "half-7",
+    "half-5",
+    "half-3",
+]
 
 
 def _statuses(state):
@@ -1209,11 +1236,17 @@ def test_settings_that_ran_or_were_skipped_for_light_are_never_changed(tmp_path)
         "full-30": "skipped",
         "full-20": "skipped",
         "full-10": "skipped",
+        "full-7": "skipped",
+        "full-5": "skipped",
         "half-300": "skipped",
         "half-150": "pending",
         "half-75": "skipped",
         "half-30": "skipped",
         "half-15": "skipped",
+        "half-10": "skipped",
+        "half-7": "skipped",
+        "half-5": "skipped",
+        "half-3": "skipped",
     }
     assert rungs["full-200"]["reason"] == "too bright"
     assert rungs["full-75"]["reason"] == sl.NOT_SELECTED
@@ -1596,22 +1629,25 @@ def test_the_30_sept_sun_skips_the_long_rungs_and_runs_full_10_near_unity(tmp_pa
     assert rungs["full-10"]["swings"] == []
 
 
-def test_the_30_sept_sun_runs_no_640x400_rung_below_the_sensors_floor(tmp_path, monkeypatch):
-    """640x400 in that sun needs about 2.9 us at unity; its shortest rung is 15 us."""
+def test_the_30_sept_sun_reaches_a_640x400_rung_only_below_ten_microseconds(tmp_path, monkeypatch):
+    """640x400 in that sun needs about 2.9 us at unity. Its old shortest rung was 15 us,
+    so nothing ran (30 Sept); the 13 Oct rungs down to the sensor minimum open it."""
     monkeypatch.setattr(sl, "SETTLE_S", 0)
     kiosk = SunKiosk("arm6")
     runner = _sun_runner(tmp_path, kiosk, "arm6")
 
-    assert runner.start_rung() is None
+    active = runner.start_rung()
 
     rungs = runner.state.to_dict()["rungs"]
-    for rung_id in HALF_IDS:
+    proven = [rung_id for rung_id in HALF_IDS if int(rung_id.split("-")[1]) >= 10]
+    for rung_id in proven:
         assert rungs[rung_id]["status"] == "skipped", rung_id
         assert rungs[rung_id]["pre_check"]["too_bright"] is True
         assert rungs[rung_id]["gain"] == 1.0
         assert rungs[rung_id]["gain_source"] == "setup_lock_scaled"
-    # each was tried once at unity: nothing lower exists to correct to
-    assert [gain for _exposure, gain in kiosk.calls] == [1.0] * len(HALF_IDS)
+    assert active is not None
+    assert active["exposure_us"] < 10
+    assert active["gain"] == 1.0
 
 
 # P7-13 (D12): "let me switch between them freely. this is separate from the

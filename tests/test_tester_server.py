@@ -1260,6 +1260,32 @@ class TestLiveEndpoints:
         client, _live = self._client(tmp_path)
         assert client.get("/api/tester/live.png").status_code == 503
 
+    def test_the_live_view_records_the_mode_s_sensor_limits(self, tmp_path):
+        """13 Oct: the ladder's shortest rungs wait for the sensor's own minimum."""
+        from openflight.camera import swing_exposure  # noqa: PLC0415
+
+        class LimitedCamera(FakeCamera):
+            camera_controls = {"ExposureTime": (4, 3_000, 300), "AnalogueGain": (1.0, 15.9375, 1)}
+
+        path = tmp_path / "camera-sensor-limits.json"
+        live = ts.LiveView(camera_factory=LimitedCamera)
+        app = eligible_app(
+            sessions_root=tmp_path,
+            rig_geometry=RIG,
+            live_view=live,
+            tilt=_level_tilt(),
+            sensor_limits_path=path,
+        )
+        client = app.test_client()
+        body = {"tester_id": "20260922-name", "arm_id": "arm6", "environment": "indoors"}
+        assert client.post("/api/tester/live", json={**body, "gain": 2}).status_code == 200
+        assert _wait(lambda: swing_exposure.recorded_sensor_limits(path, 640, 400) is not None)
+        client.post("/api/tester/live", json={"action": "stop"})
+
+        recorded = swing_exposure.recorded_sensor_limits(path, 640, 400)
+        assert recorded["exposure_min_us"] == 4
+        assert recorded["recorded_by"] == "tester_live_view"
+
     def test_overlay_preserves_raw_brightness_and_marks_the_detected_ball(self, tmp_path):
         image = np.zeros((40, 60), dtype=np.uint8)
 
@@ -3068,11 +3094,62 @@ class TestTheTesterChoosesTheSettings:
             data = response.get_json()
             assert response.status_code == 200
             assert data["ladder"]["current"] == "full-300"
-            assert all(r["status"] == "pending" for r in data["ladder"]["rungs"].values())
+            # without the sensor's recorded minimum, nothing under the proven 10 us runs
+            unread = ts.study_ladder.rungs_below_sensor_minimum({"arm5": None, "arm6": None})
+            for rung_id, entry in data["ladder"]["rungs"].items():
+                expected = "skipped" if rung_id in unread else "pending"
+                assert entry["status"] == expected, rung_id
             assert "arm5" in data["run_dir"] and runners[0].mode == "arm5"
         finally:
             self._stop(client, manager)
             manager.cancel()
+
+
+class TestTheSensorMinimumBoundsTheLadder:
+    """13 Oct: a rung shorter than the sensor reported it can go is never run."""
+
+    body = TestTheTesterChoosesTheSettings.body
+    _stop = TestTheTesterChoosesTheSettings._stop
+    _client = TestTheTesterChoosesTheSettings._client
+
+    def test_a_ticked_rung_below_the_minimum_is_left_out(self, tmp_path, monkeypatch):
+        client, manager, _runners = self._client(tmp_path, monkeypatch)
+        try:
+            response = client.post(
+                "/api/tester/ladder/start",
+                json={**self.body, "rungs": ["full-10", "full-7", "full-5"]},
+            )
+            data = response.get_json()
+            assert response.status_code == 200, data
+            rungs = data["ladder"]["rungs"]
+            assert rungs["full-10"]["status"] in ("pending", "active")
+            assert rungs["full-7"]["status"] == "skipped"
+            assert rungs["full-5"]["status"] == "skipped"
+        finally:
+            self._stop(client, manager)
+            manager.cancel()
+
+    def test_only_rungs_below_the_minimum_is_refused(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+
+        response = client.post(
+            "/api/tester/ladder/start", json={**self.body, "rungs": ["full-7", "half-3"]}
+        )
+
+        assert response.status_code == 400
+        assert "sensor" in response.get_json()["error"]
+        assert runners == []
+
+    def test_pressing_a_rung_below_the_minimum_is_refused_with_why(self, tmp_path, monkeypatch):
+        client, manager, runners = self._client(tmp_path, monkeypatch)
+
+        response = client.post(
+            "/api/tester/ladder/jump", json={**self.body, "rungs": ["full-5"], "rung_id": "full-5"}
+        )
+
+        assert response.status_code == 409
+        assert "not been read" in response.get_json()["error"]
+        assert runners == []
 
 
 class TestTheTesterPressesASetting:
