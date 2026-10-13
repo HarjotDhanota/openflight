@@ -32,6 +32,11 @@ each stage.
     Club path, attack angle, swing plane, swing direction and low point from a
     circular arc, labelled calculated or model geometry.
 
+- :material-vector-triangle: **[Collision model](collision-model.md)**
+
+    Face angle, dynamic loft, spin loft and a calculated spin from published
+    physics (Wood et al. 2018, Penner 2001), labelled calculated.
+
 - :material-map-marker-radius-outline: **[Radar positioning](positioning.md)**
 
     Where each radar goes and why the geometry matters.

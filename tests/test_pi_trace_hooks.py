@@ -821,7 +821,7 @@ def test_enrichment_marks_iwr_and_camera_stages_on_the_shot_attempt(recorder, mo
     )
     monkeypatch.setattr(server, "_attach_camera_replay", lambda *_a: None)
     monkeypatch.setattr(server, "_fuse_camera_measurements", lambda *_a: None)
-    monkeypatch.setattr(server, "_attach_experimental_face_angle", lambda _shot: None)
+    monkeypatch.setattr(server, "_attach_collision_model", lambda _shot: None)
     shot = _traced_shot("t-00003")
     shot.mode = "rolling-buffer"
     server._enrich_shot_from_optional_hardware(shot)  # pylint: disable=protected-access

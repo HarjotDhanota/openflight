@@ -248,7 +248,7 @@ def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):
     shot = _shot()
 
     server_module._process_iwr6843_angle(shot)
-    server_module._attach_experimental_face_angle(shot)
+    server_module._attach_collision_model(shot)
     payload = shot.to_dict()
 
     assert payload["launch_angle_horizontal_frame"] == "target_line"
@@ -270,7 +270,7 @@ def test_face_angle_from_two_frames_is_labelled_mixed():
         club_path_frame="unit_boresight",
     )
 
-    server_module._attach_experimental_face_angle(shot)
+    server_module._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg is not None
     assert shot.experimental_face_angle_frame == "mixed"

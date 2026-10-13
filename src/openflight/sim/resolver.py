@@ -56,7 +56,9 @@ _DEFAULT_SPIN_RPM = 5000.0
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
     """Measured spin if high-confidence, else a calculated one under its own label, else None.
 
-    A calculated spin is a model's output, so its provenance is estimated.
+    A calculated spin is a model's output from the shot's own measured inputs (the E2
+    collision model, or the --calculated-spin formula): it goes out labelled
+    "calculated", never "measured" (D31, D38).
     """
     if (
         _finite(shot.spin_rpm)
@@ -66,7 +68,7 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
     ):
         return float(shot.spin_rpm), "measured"
     if shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm:
-        return float(shot.spin_rpm), "estimated"
+        return float(shot.spin_rpm), "calculated"
     return None
 
 
@@ -198,7 +200,10 @@ def resolve_shot(
 
     if _finite(shot.spin_axis_deg):
         spin_axis = float(shot.spin_axis_deg)
-        axis_prov = "measured"
+        # the collision model's axis (E2) is calculated, never measured
+        axis_prov = (
+            "calculated" if (shot.spin_axis_source or "").startswith("calculated") else "measured"
+        )
     else:
         spin_axis = 0.0
         axis_prov = "estimated"
@@ -207,9 +212,13 @@ def resolve_shot(
     axis_rad = math.radians(spin_axis)
     back_spin = total_spin * math.cos(axis_rad)
     side_spin = total_spin * math.sin(axis_rad)
-    derived_prov = (
-        "measured" if (spin_prov == "measured" and axis_prov == "measured") else "estimated"
-    )
+    # a component is as good as its weaker source: estimated, then calculated, then measured
+    if "estimated" in (spin_prov, axis_prov):
+        derived_prov = "estimated"
+    elif "calculated" in (spin_prov, axis_prov):
+        derived_prov = "calculated"
+    else:
+        derived_prov = "measured"
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight import server as server_module
+from openflight import collision_model, server as server_module
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
@@ -5472,7 +5472,7 @@ class TestOnShotDetected:
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
 
     def _spin_axis_shot(self, *, horizontal_confidence):
-        """A shot with launch angle and club path already resolved, isolating
+        """A shot with launch angles, club path and attack already resolved, isolating
         the spin-axis gate itself rather than whatever radar path fed it."""
         return Shot(
             ball_speed_mph=150.0,
@@ -5481,8 +5481,28 @@ class TestOnShotDetected:
             impact_timestamp=1234.5,
             club=ClubType.DRIVER,
             launch_angle_horizontal=3.2,
+            launch_angle_horizontal_source="radar",
             launch_angle_horizontal_confidence=horizontal_confidence,
+            launch_angle_vertical=14.0,
+            launch_angle_vertical_source="radar",
             club_path_deg=-1.5,
+            club_angle_deg=2.0,
+        )
+
+    @staticmethod
+    def _expected_spin_axis():
+        """E2: the collision model's D-plane tilt, not horizontal launch minus path."""
+        return (
+            collision_model.evaluate(
+                club=ClubType.DRIVER,
+                club_path=collision_model.Input(-1.5),
+                attack_angle=collision_model.Input(2.0),
+                launch_horizontal=collision_model.Input(3.2),
+                launch_vertical=collision_model.Input(14.0),
+                club_speed_mph=collision_model.Input(100.0),
+            )
+            .metrics["spin_axis"]
+            .value
         )
 
     def _run_with_no_radar_hardware(self, monkeypatch, shot):
@@ -5501,17 +5521,18 @@ class TestOnShotDetected:
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
-        assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
+        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
+        assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
 
     def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
-        """D36 item 2: HLA - path cancels the horizontal offset only within one frame."""
+        """D36 item 2: face to path cancels the horizontal offset only within one frame."""
         shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
         shot.launch_angle_horizontal_frame = "target_line"
         shot.club_path_frame = "unit_boresight"
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
-        assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
+        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
         assert shot.to_dict()["spin_axis_frame"] == "mixed"
 
     def test_spin_axis_withheld_when_horizontal_confidence_below_gate(self, monkeypatch):
@@ -6485,14 +6506,16 @@ class TestIwrAzimuthCalibration:
         )
         assert shot.launch_angle_horizontal_status is None
 
-        server_module._attach_experimental_face_angle(shot)
+        server_module._attach_collision_model(shot)
         assert shot.experimental_face_angle_deg is None
         assert shot.experimental_face_angle_status == "missing_accepted_club_path"
 
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
-        server_module._attach_experimental_face_angle(shot)
-        assert shot.experimental_face_angle_deg == pytest.approx(3.5)
+        server_module._attach_collision_model(shot)
+        # E2: the PING weight for this club (Wood et al. 2018), not a fixed 0.8
+        weight = collision_model.weights_for_club(shot.club).horizontal
+        assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.0 / weight, abs=0.05)
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
     def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
@@ -6501,9 +6524,10 @@ class TestIwrAzimuthCalibration:
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 
-        server_module._attach_experimental_face_angle(shot)
+        server_module._attach_collision_model(shot)
 
-        assert shot.experimental_face_angle_deg == pytest.approx((2.25 + 0.2 * 4.0) / 0.8, abs=0.1)
+        weight = collision_model.weights_for_club(shot.club).horizontal
+        assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.25 / weight, abs=0.05)
         assert shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated"
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
         assert shot.experimental_face_angle_launch_source == "radar"

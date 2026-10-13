@@ -81,6 +81,7 @@ nav = [
     "how-it-works/launch-angle.md",
     "how-it-works/ballistics.md",
     "how-it-works/club-arc.md",
+    "how-it-works/collision-model.md",
     "how-it-works/positioning.md",
   ] },
 

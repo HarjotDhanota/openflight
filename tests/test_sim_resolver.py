@@ -209,3 +209,39 @@ def test_no_resolved_value_can_leave_non_finite(monkeypatch):
     monkeypatch.setattr(resolver, "get_club_physics", lambda _club: Physics())
     with pytest.raises(IncompleteShotError, match="vla"):
         resolve_shot(_shot(), PlayerState())
+
+
+# ---- calculated values keep their label (E2, D31) ------------------------------------
+
+
+def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
+    r = resolve_shot(
+        _shot(
+            spin_rpm=2700.0,
+            spin_source="calculated",
+            spin_axis_deg=4.0,
+            spin_axis_source="calculated (D-plane tilt, Wood et al. 2018 weights)",
+        ),
+        PlayerState(),
+    )
+
+    for field in ("total_spin", "spin_axis", "back_spin", "side_spin"):
+        assert r.provenance[field] == "calculated", field
+
+
+def test_a_spin_component_is_as_good_as_its_weaker_source():
+    measured_spin = dict(spin_rpm=2500.0, spin_confidence=0.9)
+    calculated_axis = resolve_shot(
+        _shot(
+            **measured_spin,
+            spin_axis_deg=2.0,
+            spin_axis_source="calculated (D-plane tilt, Wood et al. 2018 weights)",
+        ),
+        PlayerState(),
+    )
+    estimated_axis = resolve_shot(_shot(spin_rpm=2700.0, spin_source="calculated"), PlayerState())
+
+    assert calculated_axis.provenance["spin_axis"] == "calculated"
+    assert calculated_axis.provenance["side_spin"] == "calculated"
+    assert estimated_axis.provenance["spin_axis"] == "estimated"
+    assert estimated_axis.provenance["side_spin"] == "estimated"
