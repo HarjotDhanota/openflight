@@ -110,7 +110,7 @@ class LCMFResult:
     horizontal_raw_deg: float | None = None
     horizontal_confidence: float | None = None
     horizontal_status: str | None = None
-    # unit_boresight or target_line, set with the target yaw (D36 item 2)
+    # unit_boresight or target_line, set with the horizontal offset (D36 item 2)
     horizontal_frame: str | None = None
     effective_tdm_tau_s: float = doa.TDM_TAU_S
     effective_loop_period_s: float = tracking.LOOP_PRI_S

@@ -5434,7 +5434,7 @@ class TestOnShotDetected:
         assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
 
     def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
-        """D36 item 2: HLA - path cancels the target yaw only within one frame."""
+        """D36 item 2: HLA - path cancels the horizontal offset only within one frame."""
         shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
         shot.launch_angle_horizontal_frame = "target_line"
         shot.club_path_frame = "unit_boresight"

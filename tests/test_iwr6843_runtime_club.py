@@ -264,13 +264,13 @@ def test_club_path_receives_ball_tdm_sign():
 def test_club_path_receives_the_configured_azimuth_offset():
     """The aim offset must cross the runtime -> estimator boundary.
 
-    Club path is an absolute angle and the target yaw is subtracted from it,
-    as from every horizontal angle (D36 item 2), so a boresight that is not the
-    target line shifts every reported path by that amount. Coverage stopped one step short on each side: test_server.py
+    Club path is an absolute angle and the offset enters additively, as for
+    every horizontal angle (D36 item 2), so a boresight that is not the target
+    line shifts every reported path by that amount. Coverage stopped one step short on each side: test_server.py
     checks the CLI value reaches ``IWR6843Runtime.azimuth_offset_deg``, and the
     tests around this one check that ``tdm_sign`` and ``ops_club_speed_mph``
     reach ``estimate_club_path`` -- but nothing checked that *this* value
-    crosses *that* boundary. Replacing ``target_yaw_deg=self.azimuth_offset_deg``
+    crosses *that* boundary. Replacing ``aim_offset_deg=self.azimuth_offset_deg``
     with a literal ``0.0`` therefore left the entire suite green while silently
     reporting club path relative to boresight instead of the target line, which
     is precisely the error the flag exists to correct.
@@ -295,7 +295,7 @@ def test_club_path_receives_the_configured_azimuth_offset():
             impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
         )
 
-    assert seen["target_yaw_deg"] == 1.5
+    assert seen["aim_offset_deg"] == 1.5
 
 
 def test_azimuth_offset_corrects_horizontal_launch():
@@ -306,14 +306,14 @@ def test_azimuth_offset_corrects_horizontal_launch():
         horizontal_status="hlcmf_v0_accepted",
     )
     with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=measurement):
-        result = _runtime(azimuth_offset_deg=3.0).process_shot(
+        result = _runtime(azimuth_offset_deg=-3.0).process_shot(
             impact_timestamp=1.0,
             ball_speed_mph=100.0,
             club="9i",
             club_speed_mph=None,
         )
 
-    # D36 item 2: the target yaw is subtracted (+ = target line right of boresight)
+    # D36 item 2: the horizontal offset is added (+ = boresight right of target line)
     assert result.measurement.horizontal_deg == pytest.approx(0.3)
     assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
     assert result.measurement.horizontal_frame == "target_line"
@@ -496,13 +496,13 @@ def test_azimuth_offset_corrects_horizontal_ball_launch():
         horizontal_status="hlcmf_v0_accepted",
     )
     with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=measurement):
-        result = _runtime(azimuth_offset_deg=3.0).process_shot(
+        result = _runtime(azimuth_offset_deg=-3.0).process_shot(
             impact_timestamp=1.0,
             ball_speed_mph=100.0,
             club="9i",
         )
 
-    # D36 item 2: the target yaw is subtracted (+ = target line right of boresight)
+    # D36 item 2: the horizontal offset is added (+ = boresight right of target line)
     assert result.measurement.horizontal_deg == pytest.approx(0.3)
     assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
     assert result.measurement.horizontal_frame == "target_line"

@@ -21,9 +21,9 @@ then exact for straight-line motion, independent of where in the window the
 samples happen to sit.
 
 The LEVM's board-specific electrical phase zero is removed first via
-``phase_reference_rad``. The unit-to-target yaw is a separate
-``target_yaw_deg``, subtracted from the path as from every horizontal angle
-(``openflight.horizontal_frame``, D36 item 2). Keeping those corrections
+``phase_reference_rad``. Installation yaw remains a separate additive
+``aim_offset_deg``: -(target yaw), added to the path as to every horizontal
+angle (``openflight.horizontal_frame``, D36 item 2). Keeping those corrections
 separate is important: a constant phase bias rotates every recovered
 Cartesian position, so it also rotates the fitted velocity direction and does
 not cancel out of club path.
@@ -176,8 +176,8 @@ class ClubPathResult:
     path_pre_frames: int = 0
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
-    # The path's zero: the IWR's boresight, fixed to the unit's, until a target
-    # yaw moves it to the target line (audit F2, D36 item 2).
+    # The path's zero: the IWR's boresight, fixed to the unit's, until an aim
+    # offset moves it to the target line (audit F2, D36 item 2).
     club_path_frame: str = "unit_boresight"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
@@ -538,7 +538,7 @@ def experimental_path_candidate(
     phase_tx3: np.ndarray,
     frames: np.ndarray,
     *,
-    target_yaw_deg: float = 0.0,
+    aim_offset_deg: float = 0.0,
     phase_reference_rad: float | None = None,
 ) -> tuple[float | None, str, float | None]:
     """Fuse TX2 horizontal motion through time without midpoint branch flips.
@@ -610,7 +610,7 @@ def experimental_path_candidate(
             / max(float(np.mean(r_array)), 1e-9)
         )
     )
-    path_deg = float(to_reported_deg(math.degrees(math.atan2(v_y, v_x)), target_yaw_deg))
+    path_deg = float(to_reported_deg(math.degrees(math.atan2(v_y, v_x)), aim_offset_deg))
     status = "candidate_available"
     if abs(path_deg) > 30.0:
         status = "candidate_out_of_bounds"
@@ -625,7 +625,7 @@ def estimate_club_path(
     *,
     ops_club_speed_mph: float,
     impact_t_s: float | None,
-    target_yaw_deg: float = 0.0,
+    aim_offset_deg: float = 0.0,
     phase_reference_rad: float | None = None,
     tdm_sign: int = 1,
     window_policy: ClubWindowPolicy | None = None,
@@ -700,7 +700,7 @@ def estimate_club_path(
         path_pre_frames=window_policy.path_pre_frames,
         path_post_frames=window_policy.path_post_frames,
         path_post_speed_scale=window_policy.path_post_speed_scale,
-        club_path_frame=frame_for(target_yaw_deg),
+        club_path_frame=frame_for(aim_offset_deg),
         range_evidence=ClubRangeEvidence(
             track=track,
             geometry=geo,
@@ -837,7 +837,7 @@ def estimate_club_path(
         np.asarray(candidate_phase_tx1),
         np.asarray(candidate_phase_tx3),
         np.asarray(candidate_frames),
-        target_yaw_deg=target_yaw_deg,
+        aim_offset_deg=aim_offset_deg,
         phase_reference_rad=phase_reference_rad,
     )
 
@@ -926,7 +926,7 @@ def estimate_club_path(
         result.status = "rejected_azimuth_fit"
         return result
 
-    result.path_deg = float(to_reported_deg(path_deg, target_yaw_deg))
+    result.path_deg = float(to_reported_deg(path_deg, aim_offset_deg))
     result.confidence = _confidence(result)
     result.status = "accepted"
     logger.info(

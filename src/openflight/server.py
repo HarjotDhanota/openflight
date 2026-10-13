@@ -49,7 +49,7 @@ from .horizontal_frame import (
     MIXED,
     combined_frame,
     frame_for,
-    resolve_target_yaw,
+    resolve_horizontal_offset,
     to_reported_deg,
 )
 from .launch_monitor import (
@@ -177,19 +177,20 @@ camera_replay_manager = None
 CAMERA_FUSION_CONTEXT_VERSION = 2
 camera_optical_calibration: dict | None = None
 camera_placement: dict | None = None
-# The one unit-to-target yaw (D36 item 2): + = the target line lies right of
-# the unit boresight, seen from behind the unit. None until a flag sets it.
-horizontal_target_yaw_deg: float | None = None
+# The one horizontal offset (D36 item 2): -(target yaw), + when the unit's
+# boresight points right of the target line, added to every horizontal angle.
+# None until a flag sets it.
+horizontal_offset_deg: float | None = None
 
 
 def _horizontal_frame() -> str:
     """The frame every reported horizontal angle is in this session."""
-    return frame_for(horizontal_target_yaw_deg)
+    return frame_for(horizontal_offset_deg)
 
 
 def _reported_horizontal_deg(angle_from_boresight_deg: float) -> float:
-    """An angle from the unit boresight, reported against the one target yaw."""
-    return float(to_reported_deg(angle_from_boresight_deg, horizontal_target_yaw_deg))
+    """An angle from the unit boresight, reported with the one horizontal offset."""
+    return float(to_reported_deg(angle_from_boresight_deg, horizontal_offset_deg))
 
 
 # The ready light (P7-14): one readiness state from what the sensors report,
@@ -5291,7 +5292,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
                     )
                     selection_reason_h = horizontal_selection_details["selection_reason"]
                     if accepted_h:
-                        # the K-LD7 offset is its own zero; the target yaw is the one model's
+                        # the K-LD7 offset is its own zero; the horizontal offset is the model's
                         shot.launch_angle_horizontal = _reported_horizontal_deg(
                             kld7_angle_h.horizontal_deg
                         )
@@ -7471,9 +7472,9 @@ def main():
         type=float,
         default=None,
         help=(
-            "Unit-to-target yaw, degrees: positive when the target line lies right of "
-            "the unit boresight, seen from behind the unit. Subtracted from every "
-            "horizontal angle (camera and IWR). Same value and sign as "
+            "The one horizontal offset, degrees, = -(target yaw): positive when the unit "
+            "boresight points right of the target line. Added to every horizontal angle "
+            "(camera and IWR); the D34 target-line hand-off sets it. Same value as "
             "--iwr6843-azimuth-offset-deg; two different values are refused."
         ),
     )
@@ -7832,11 +7833,11 @@ def main():
         type=float,
         default=None,
         help=(
-            "Unit-to-target yaw, degrees: positive when the target line lies right of "
-            "the unit boresight, seen from behind the unit. Subtracted from every "
-            "horizontal angle (camera and IWR); unset or 0 reports them relative to the "
-            "unit boresight. Same value and sign as "
-            "--camera-capture-horizontal-offset-deg; two different values are refused."
+            "Azimuth of the radar boresight relative to the target line, in degrees, = "
+            "-(target yaw): positive means boresight points right of the target line. "
+            "Added to every horizontal angle (camera and IWR horizontal launch, club "
+            "path); unset or 0 reports them relative to the unit boresight. Same value "
+            "as --camera-capture-horizontal-offset-deg; two different values are refused."
         ),
     )
     parser.add_argument(
@@ -7941,17 +7942,17 @@ def main():
     )
     args = parser.parse_args()
     _apply_kld7_device_defaults(args)
-    # D36 item 2: one unit-to-target yaw for every horizontal angle, through both flags.
-    global horizontal_target_yaw_deg  # pylint: disable=global-statement
+    # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
+    global horizontal_offset_deg  # pylint: disable=global-statement
     try:
-        horizontal_target_yaw_deg = resolve_target_yaw(
+        horizontal_offset_deg = resolve_horizontal_offset(
             camera_deg=args.camera_capture_horizontal_offset_deg,
             iwr_deg=args.iwr6843_azimuth_offset_deg,
         )
     except ValueError as error:
         parser.error(str(error))
-    args.camera_capture_horizontal_offset_deg = horizontal_target_yaw_deg or 0.0
-    args.iwr6843_azimuth_offset_deg = horizontal_target_yaw_deg or 0.0
+    args.camera_capture_horizontal_offset_deg = horizontal_offset_deg or 0.0
+    args.iwr6843_azimuth_offset_deg = horizontal_offset_deg or 0.0
     if args.iwr6843_tee_range_pending:
         args.iwr6843_tee_m = None
 

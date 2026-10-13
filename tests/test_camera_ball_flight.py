@@ -175,7 +175,7 @@ def test_horizontal_launch_uses_measured_vertical_and_tracked_centroids(monkeypa
     assert result.depth_source == "ops_speed_iwr_vertical"
 
 
-def test_horizontal_launch_reports_against_the_target_yaw(monkeypatch):
+def test_horizontal_launch_reports_with_the_horizontal_offset(monkeypatch):
     """D36 item 2: the unwired comparator uses the same zero model as the kiosk."""
     geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
         horizontal_offset_deg=1.0
@@ -199,7 +199,7 @@ def test_horizontal_launch_reports_against_the_target_yaw(monkeypatch):
         reference_ball=anchor,
     )
 
-    assert result.horizontal_deg == pytest.approx(3.0, abs=0.25)
+    assert result.horizontal_deg == pytest.approx(5.0, abs=0.25)
     assert result.horizontal_frame == "target_line"
 
 
@@ -341,10 +341,10 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
 
 
 def test_path_estimate_applies_setup_level_horizontal_offset():
-    """D36 item 2: the target yaw (+ = target line right of boresight) is subtracted."""
+    """D36 item 2: the horizontal offset (+ = boresight right of target) is added."""
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0,
-        horizontal_offset_deg=0.45,
+        horizontal_offset_deg=-0.45,
     )
 
     result = _path_estimate(
@@ -811,3 +811,27 @@ def test_a_side_offset_tee_is_fitted_from_where_it_sits(monkeypatch):
     assert untold.horizontal_deg is None or abs(untold.horizontal_deg - 4.0) > 2 * abs(
         told.horizontal_deg - 4.0
     )
+
+
+def test_a_camera_ball_straight_down_the_target_line_reports_zero():
+    """D36 item 2, the sign pinned: yaw +3 deg, hand-off flag -3, along the target line -> 0."""
+    geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
+        horizontal_deg=3.0,  # from the boresight: straight down a target line 3 deg right
+        horizontal_offset_deg=-3.0,
+    )
+
+    result = _path_estimate(
+        path=list(enumerate(candidates)),
+        frame_indices=list(range(len(candidates))),
+        timestamps_ns=timestamps,
+        contact_ns=0,
+        range_evidence=evidence,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        iwr_vertical_deg=20.0,
+        model=model,
+        geometry=geometry,
+        thresholds=(100, 12, 5),
+    )
+
+    assert result is not None
+    assert result[1].horizontal_deg == pytest.approx(0.0, abs=0.15)

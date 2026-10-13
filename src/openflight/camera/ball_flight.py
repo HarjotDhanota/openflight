@@ -123,9 +123,9 @@ class CameraBallGeometry:
     # Camera optical-center position relative to radar center. Positive is
     # target-right when viewed from behind the sensors looking downrange.
     camera_lateral_offset_m: float = 0.0
-    # The one unit-to-target yaw (D36 item 2): positive when the target line
-    # lies right of the unit boresight, seen from behind the unit. Subtracted
-    # from every reported horizontal angle (``openflight.horizontal_frame``).
+    # The one horizontal offset (D36 item 2, ``openflight.horizontal_frame``):
+    # -(target yaw), + when the boresight points right of the target line.
+    # Added once to every reported horizontal angle.
     horizontal_offset_deg: float = 0.0
     # Convert saved-image horizontal pixels back to physical target direction.
     # Mirrored operator previews use -1; unmirrored captures use +1.
@@ -858,7 +858,7 @@ def _horizontal(velocity: np.ndarray) -> float:
 
 
 def _apply_horizontal_offset(angle_deg: float, offset_deg: float) -> float:
-    """Report an angle from the boresight against the target yaw (D36 item 2)."""
+    """Report an angle from the boresight with the one horizontal offset (D36 item 2)."""
     return float(to_reported_deg(angle_deg, offset_deg))
 
 

@@ -1,10 +1,11 @@
 """D36 item 2: one horizontal-angle zero model for every horizontal angle.
 
 Two layers: each sensor's own boresight zero (the IWR's horizontal phase
-reference, the camera's optical axis), then ONE unit-to-target yaw. The yaw is
-positive when the target line lies to the right of the unit boresight, seen
-from behind the unit, and every reported horizontal angle is its angle from
-the boresight minus that yaw, so + still means right of the target line.
+reference, the camera's optical axis), then ONE horizontal offset, added once to
+every angle. The offset is -(target yaw): the target yaw is + when the target
+line lies right of the unit boresight, seen from behind the unit, so the offset
+is + when the boresight points right of the target line (the flags' existing
+meaning). A ball hit straight down the target line reports 0.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from openflight.horizontal_frame import (
     TARGET_LINE,
     UNIT_BORESIGHT,
     frame_for,
-    resolve_target_yaw,
+    offset_from_target_yaw,
+    resolve_horizontal_offset,
     to_boresight_deg,
     to_reported_deg,
 )
@@ -30,32 +32,37 @@ from openflight.iwr6843.lcmf import LCMFResult
 from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
 
-YAW_DEG = 2.5  # the target line lies 2.5 deg right of the unit boresight
+YAW_DEG = 3.0  # the target line lies 3 deg right of the unit boresight
+OFFSET_DEG = -3.0  # what the D34 hand-off passes to both flags for that yaw
 
 
-def test_frame_is_the_boresight_until_a_yaw_is_set():
+def test_the_hand_off_value_is_minus_the_target_yaw():
+    assert offset_from_target_yaw(YAW_DEG) == OFFSET_DEG
+
+
+def test_frame_is_the_boresight_until_an_offset_is_set():
     assert frame_for(None) == UNIT_BORESIGHT == "unit_boresight"
     assert frame_for(0.0) == UNIT_BORESIGHT
-    assert frame_for(YAW_DEG) == TARGET_LINE == "target_line"
-    assert frame_for(-YAW_DEG) == TARGET_LINE
+    assert frame_for(OFFSET_DEG) == TARGET_LINE == "target_line"
+    assert frame_for(-OFFSET_DEG) == TARGET_LINE
 
 
-def test_reported_angle_is_the_boresight_angle_minus_the_yaw():
-    # A ball flying straight down the target line reads +yaw from the boresight
-    assert to_reported_deg(YAW_DEG, YAW_DEG) == pytest.approx(0.0)
-    assert to_reported_deg(4.0, YAW_DEG) == pytest.approx(1.5)
+def test_reported_angle_is_the_boresight_angle_plus_the_offset():
+    # a ball straight down the target line reads +yaw from the boresight: it reports 0
+    assert to_reported_deg(YAW_DEG, OFFSET_DEG) == pytest.approx(0.0)
+    assert to_reported_deg(4.0, OFFSET_DEG) == pytest.approx(1.0)
     assert to_reported_deg(4.0, None) == pytest.approx(4.0)
-    assert to_reported_deg(179.0, -2.0) == pytest.approx(-179.0)
-    assert to_boresight_deg(to_reported_deg(4.0, YAW_DEG), YAW_DEG) == pytest.approx(4.0)
+    assert to_reported_deg(-179.0, -2.0) == pytest.approx(179.0)
+    assert to_boresight_deg(to_reported_deg(4.0, OFFSET_DEG), OFFSET_DEG) == pytest.approx(4.0)
 
 
 def test_the_two_flags_must_agree_when_both_are_given():
-    assert resolve_target_yaw(camera_deg=None, iwr_deg=None) is None
-    assert resolve_target_yaw(camera_deg=YAW_DEG, iwr_deg=None) == YAW_DEG
-    assert resolve_target_yaw(camera_deg=None, iwr_deg=YAW_DEG) == YAW_DEG
-    assert resolve_target_yaw(camera_deg=YAW_DEG, iwr_deg=YAW_DEG) == YAW_DEG
-    with pytest.raises(ValueError, match="same value and sign"):
-        resolve_target_yaw(camera_deg=YAW_DEG, iwr_deg=-YAW_DEG)
+    assert resolve_horizontal_offset(camera_deg=None, iwr_deg=None) is None
+    assert resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=None) == OFFSET_DEG
+    assert resolve_horizontal_offset(camera_deg=None, iwr_deg=OFFSET_DEG) == OFFSET_DEG
+    assert resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=OFFSET_DEG) == OFFSET_DEG
+    with pytest.raises(ValueError, match="must be equal"):
+        resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=-OFFSET_DEG)
 
 
 def _stub_main_runtime(monkeypatch):
@@ -67,7 +74,7 @@ def _stub_main_runtime(monkeypatch):
     monkeypatch.setattr(server_module.socketio, "run", lambda *args, **kwargs: None)
 
 
-def test_kiosk_refuses_two_different_yaws(monkeypatch, capsys):
+def test_kiosk_refuses_two_different_offsets(monkeypatch, capsys):
     monkeypatch.setattr(
         sys,
         "argv",
@@ -76,9 +83,9 @@ def test_kiosk_refuses_two_different_yaws(monkeypatch, capsys):
             "--mock",
             "--no-logging",
             "--camera-capture-horizontal-offset-deg",
-            "2.5",
+            "-3",
             "--iwr6843-azimuth-offset-deg",
-            "-2.5",
+            "3",
         ],
     )
 
@@ -94,14 +101,14 @@ def test_kiosk_refuses_two_different_yaws(monkeypatch, capsys):
 @pytest.mark.parametrize(
     "flag", ["--camera-capture-horizontal-offset-deg", "--iwr6843-azimuth-offset-deg"]
 )
-def test_one_flag_sets_the_yaw_for_every_sensor(monkeypatch, flag):
+def test_one_flag_sets_the_offset_for_every_sensor(monkeypatch, flag):
     _stub_main_runtime(monkeypatch)
-    monkeypatch.setattr(server_module, "horizontal_target_yaw_deg", None)
-    monkeypatch.setattr(sys, "argv", ["openflight-server", "--mock", "--no-logging", flag, "2.5"])
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
+    monkeypatch.setattr(sys, "argv", ["openflight-server", "--mock", "--no-logging", flag, "-3"])
 
     server_module.main()
 
-    assert server_module.horizontal_target_yaw_deg == pytest.approx(YAW_DEG)
+    assert server_module.horizontal_offset_deg == pytest.approx(OFFSET_DEG)
 
 
 def _runtime(**kwargs):
@@ -117,10 +124,9 @@ def _runtime(**kwargs):
     )
 
 
-@pytest.mark.parametrize(("yaw", "frame"), [(0.0, "unit_boresight"), (YAW_DEG, "target_line")])
-def test_iwr_horizontal_launch_subtracts_the_yaw_and_names_its_frame(yaw, frame):
+def _iwr_horizontal(boresight_deg, offset_deg):
     measurement = LCMFResult(
-        status="accepted", angle_deg=18.0, horizontal_deg=3.3, horizontal_status="ok"
+        status="accepted", angle_deg=18.0, horizontal_deg=boresight_deg, horizontal_status="ok"
     )
     with (
         patch(
@@ -129,17 +135,37 @@ def test_iwr_horizontal_launch_subtracts_the_yaw_and_names_its_frame(yaw, frame)
         ),
         patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=measurement),
     ):
-        result = _runtime(azimuth_offset_deg=yaw).process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="9i"
+        return (
+            _runtime(azimuth_offset_deg=offset_deg)
+            .process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="9i")
+            .measurement
         )
 
-    assert result.measurement.horizontal_deg == pytest.approx(3.3 - yaw)
-    assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
-    assert result.measurement.horizontal_frame == frame
-    assert result.measurement.to_dict()["horizontal_frame"] == frame
+
+def test_a_ball_straight_down_the_target_line_reports_zero():
+    """The sign, pinned: yaw +3 deg, hand-off flag -3, a ball along the target line reads 0."""
+    flag = offset_from_target_yaw(YAW_DEG)
+
+    measured = _iwr_horizontal(YAW_DEG, flag)  # the IWR sees it 3 deg right of boresight
+
+    assert flag == -3.0
+    assert measured.horizontal_deg == pytest.approx(0.0)
+    assert measured.horizontal_frame == "target_line"
 
 
-def test_iwr_club_path_gets_the_same_yaw_as_the_ball():
+@pytest.mark.parametrize(
+    ("offset", "frame"), [(0.0, "unit_boresight"), (OFFSET_DEG, "target_line")]
+)
+def test_iwr_horizontal_launch_adds_the_offset_and_names_its_frame(offset, frame):
+    measured = _iwr_horizontal(3.3, offset)
+
+    assert measured.horizontal_deg == pytest.approx(3.3 + offset)
+    assert measured.horizontal_raw_deg == pytest.approx(3.3)
+    assert measured.horizontal_frame == frame
+    assert measured.to_dict()["horizontal_frame"] == frame
+
+
+def test_iwr_club_path_gets_the_same_offset_as_the_ball():
     seen = {}
 
     def fake_club(_raw, _cal, **kwargs):
@@ -157,11 +183,11 @@ def test_iwr_club_path_gets_the_same_yaw_as_the_ball():
         patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=Measurement()),
         patch("openflight.iwr6843.runtime.estimate_club_path", side_effect=fake_club),
     ):
-        _runtime(azimuth_offset_deg=YAW_DEG).process_shot(
+        _runtime(azimuth_offset_deg=OFFSET_DEG).process_shot(
             impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
         )
 
-    assert seen["target_yaw_deg"] == YAW_DEG
+    assert seen["aim_offset_deg"] == OFFSET_DEG
 
 
 def _shot(**kwargs) -> Shot:
@@ -218,7 +244,7 @@ def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):
     )
     monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-    monkeypatch.setattr(server_module, "horizontal_target_yaw_deg", YAW_DEG)
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
     shot = _shot()
 
     server_module._process_iwr6843_angle(shot)
@@ -252,11 +278,11 @@ def test_face_angle_from_two_frames_is_labelled_mixed():
 
 
 def test_kld7_angles_take_the_same_yaw(monkeypatch):
-    """The K-LD7's own offset is its sensor zero; the target yaw is still the one model's."""
-    monkeypatch.setattr(server_module, "horizontal_target_yaw_deg", YAW_DEG)
+    """The K-LD7's own offset is its sensor zero; the horizontal offset is the one model's."""
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
 
-    assert server_module._reported_horizontal_deg(4.0) == pytest.approx(1.5)
+    assert server_module._reported_horizontal_deg(4.0) == pytest.approx(1.0)
     assert server_module._horizontal_frame() == "target_line"
-    monkeypatch.setattr(server_module, "horizontal_target_yaw_deg", None)
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
     assert server_module._reported_horizontal_deg(4.0) == pytest.approx(4.0)
     assert server_module._horizontal_frame() == "unit_boresight"

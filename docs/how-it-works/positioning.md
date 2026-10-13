@@ -62,21 +62,21 @@ layers (D36):
 1. **Each sensor's own boresight zero.** The IWR's is its board's horizontal phase
    reference, `--iwr6843-horizontal-phase-reference-rad`, measured per board. The
    camera's is its optical axis.
-2. **One unit-to-target yaw**: how far the target line is from the unit's
-   boresight. Positive means the target line lies **right** of the unit boresight,
-   seen from behind the unit. Every reported angle is its angle from the boresight
-   minus this yaw, so + still means right of the target line.
+2. **One horizontal offset, added once to every angle.** It is −(target yaw):
+   the target yaw is the target line's direction from the unit boresight,
+   positive when the target line lies **right** of it, seen from behind the
+   unit, so the offset is positive when the boresight points right of the target
+   line. A ball hit straight down the target line reads +yaw from the boresight
+   and reports 0; + still means right of the target line.
 
-The yaw is given through `--camera-capture-horizontal-offset-deg` and
-`--iwr6843-azimuth-offset-deg`, with the same value and sign (either alone sets it
-for both sensors; two different values are refused). Unset or `0`, every
-horizontal angle is reported against the unit boresight and its record says
-`unit_boresight`; with a yaw, against the target line, `target_line`. A value
-built from two frames (a face angle or spin axis from a target-line launch and a
-boresight path) says `mixed`.
-
-Before 12 Oct 2026 the IWR value was added, positive meaning the boresight
-pointed right of the target line: an old value needs its sign flipped.
+The offset is given through `--camera-capture-horizontal-offset-deg` and
+`--iwr6843-azimuth-offset-deg`, with the same value; the D34 target-line
+hand-off from the tester page passes it to both (target line 3° right of the
+boresight → `-3`). Either flag alone sets it for both sensors; two different
+values are refused. Unset or `0`, every horizontal angle is reported against the
+unit boresight and its record says `unit_boresight`; with an offset, against the
+target line, `target_line`. A value built from two frames (a face angle or spin
+axis from a target-line launch and a boresight path) says `mixed`.
 
 See [horizontal launch and club path](../iwr6843/club-path.md#set-the-target-line-reference).
 

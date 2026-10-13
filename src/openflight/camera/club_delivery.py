@@ -155,9 +155,9 @@ class CameraDeliveryGeometry:
     roll_correction_deg: float = 0.0
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
-    # The one unit-to-target yaw (D36 item 2; + = target line right of the
-    # unit boresight). Subtracted from club path exactly as from the camera's
-    # horizontal launch, so both stay in one frame (F9).
+    # The one horizontal offset (D36 item 2): -(target yaw), + when the
+    # boresight points right of the target line. Added to club path exactly as
+    # to the camera's horizontal launch, so both stay in one frame (F9).
     horizontal_offset_deg: float = 0.0
     # The resting ball's side offset from the radar's axis, + target-right: the
     # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
@@ -214,7 +214,7 @@ class ChainedDelivery:
     # The IWR club track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
     # Every club path is measured from the unit's boresight (audit F2) until a
-    # target yaw moves it to the target line (D36 item 2).
+    # horizontal offset moves it to the target line (D36 item 2).
     club_path_frame: str = "unit_boresight"
     # Labels on the values that no longer withhold them (D15, P8-7): a dim
     # scene, a trigger-derived contact, an unchecked or implausible speed.
@@ -319,7 +319,7 @@ def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
 
 
 def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDelivery:
-    """Report every path against the one target yaw (audit F9, D36 item 2).
+    """Report every path with the one horizontal offset (audit F9, D36 item 2).
 
     The gates above judge path in the measurement frame; only the published
     values move. A zero yaw leaves the unit's boresight as the zero.

@@ -260,9 +260,9 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         tdm_sign_policy=tdm_sign_policy,
         horizontal_phase_reference_rad=horizontal_phase_reference_rad,
     )
-    # ``azimuth_offset_deg`` is the one unit-to-target yaw (D36 item 2; + =
-    # target line right of the unit boresight), subtracted from the ball's
-    # horizontal launch exactly as from the club path below.
+    # ``azimuth_offset_deg`` is the one horizontal offset (D36 item 2):
+    # -(target yaw), added to the ball's horizontal launch exactly as to the
+    # club path below.
     if measurement is not None and getattr(measurement, "horizontal_deg", None) is not None:
         measurement = replace(
             measurement,
@@ -284,7 +284,7 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         calibration,
         ops_club_speed_mph=club_speed_mph,
         impact_t_s=impact_t_s,
-        target_yaw_deg=azimuth_offset_deg,
+        aim_offset_deg=azimuth_offset_deg,
         phase_reference_rad=horizontal_phase_reference_rad,
         tdm_sign=policy_sign if fallback else ball_sign,
         window_policy=club_window_policy,
@@ -303,8 +303,8 @@ class IWR6843Runtime:
     net_range_m: float | None
     tx_order: str = "normal"
     capture_timeout_s: float = 12.0
-    # The one unit-to-target yaw (D36 item 2): + = target line right of the
-    # unit boresight; subtracted from horizontal launch and club path.
+    # The one horizontal offset (D36 item 2): -(target yaw), + when the
+    # boresight points right of the target line; added to launch and club path.
     azimuth_offset_deg: float = 0.0
     horizontal_phase_reference_rad: float | None = None
     tdm_sign_policy: str = "positive"

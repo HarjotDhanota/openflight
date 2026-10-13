@@ -239,7 +239,7 @@ class Shot:
     # measured without a horizontal phase reference (audit F8).
     launch_angle_horizontal_status: Optional[str] = None
     # The zero of each horizontal metric (D36 item 2, openflight.horizontal_frame):
-    # "unit_boresight" with no target yaw, "target_line" with one, "mixed" for a
+    # "unit_boresight" with no horizontal offset, "target_line" with one, "mixed" for a
     # value built from angles in two frames; None when the metric is absent.
     launch_angle_horizontal_frame: Optional[str] = None
     club_path_frame: Optional[str] = None

@@ -232,9 +232,9 @@ def test_experimental_path_candidate_unwraps_vertical_references_through_time():
     assert residual is not None and residual < 0.2
 
 
-def test_target_yaw_is_subtracted():
-    """D36 item 2: the one unit-to-target yaw is subtracted from club path, as
-    from every other horizontal angle (+ = target line right of boresight)."""
+def test_aim_offset_is_added():
+    """D36 item 2: the one horizontal offset is added to club path, as to every
+    other horizontal angle (+ = boresight right of the target line)."""
     without = club.estimate_club_path(
         _synth_club(0.0), _cal(), ops_club_speed_mph=OPS_CLUB_MPH, impact_t_s=IMPACT_S, tdm_sign=1
     )
@@ -244,10 +244,10 @@ def test_target_yaw_is_subtracted():
         ops_club_speed_mph=OPS_CLUB_MPH,
         impact_t_s=IMPACT_S,
         tdm_sign=1,
-        target_yaw_deg=2.0,
+        aim_offset_deg=2.0,
     )
-    assert with_offset.path_deg == pytest.approx(without.path_deg - 2.0, abs=0.01)
-    # F2: the path names its zero; a target yaw moves it to the target line.
+    assert with_offset.path_deg == pytest.approx(without.path_deg + 2.0, abs=0.01)
+    # F2: the path names its zero; an aim offset moves it to the target line.
     assert without.club_path_frame == "unit_boresight"
     assert with_offset.club_path_frame == "target_line"
     assert without.to_dict()["club_path_frame"] == "unit_boresight"
