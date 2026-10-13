@@ -5648,7 +5648,9 @@ class TestIwrTeeRangeConfiguration:
         received = self._run_main_until_iwr_init(monkeypatch, tmp_path, [])
 
         assert received["tee_range_m"] is None
-        assert server_module.ball_speed_correction_enabled is False
+        assert received["range_prior"] is None
+        # the cosine candidate takes each shot's own range; a shot without one has none
+        assert server_module.ball_speed_correction_enabled is True
 
     def test_production_launch_passes_measured_tee_range_unchanged(self, monkeypatch, tmp_path):
         received = self._run_main_until_iwr_init(
@@ -5666,7 +5668,8 @@ class TestIwrTeeRangeConfiguration:
         )
 
         assert received["tee_range_m"] is None
-        assert server_module.ball_speed_correction_enabled is False
+        # 13 Oct: each shot's own range drives the candidate, never a configured one
+        assert server_module.ball_speed_correction_enabled is True
 
     @pytest.mark.parametrize(
         ("profile", "message"),
@@ -5804,7 +5807,8 @@ class TestIwrTeeRangeConfiguration:
 
         runtime = server_module.iwr6843_runtime
         assert runtime.calibration.tee_range_m is None
-        assert server_module.iwr6843_runtime_config["tee_range_status"] == "unresolved"
+        # 13 Oct: no configured range means each shot is ranged from its own capture
+        assert server_module.iwr6843_runtime_config["tee_range_status"] == "per_shot_without_prior"
         assert server_module.iwr6843_runtime_config["tee_slant_range_m"] is None
         snapshot = runtime.replay_config_snapshot()
         assert snapshot["tee_range_status"] == "unresolved"

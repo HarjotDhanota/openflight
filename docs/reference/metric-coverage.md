@@ -26,6 +26,12 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.
+
+`ball_range` (13 Oct) is the range the shot's range-dependent metrics used: its own
+IWR launch point (`measured`, noted "not validated against a tape yet"), else the
+setup's camera prior (`estimated`), else `not_measured` with the reason. When the
+camera prior stood in, every metric that rests on the range (all but the OPS243's
+radial speeds, radial smash and spin rate) is `estimated` and its note says so.
 An older log's `measured` carry is read as `calculated`.
 
 ## Places
@@ -66,6 +72,7 @@ launch, spin and spin axis, and model geometry only with
 | Gyro | `gyro` | ✓ | ✓ | Flight | all | ✓ | ✓ | ✓ | ✓ (PENDING) | n/a |
 | Smash (radial) | `smash_factor` | ✓ | ✓ | Live, Flight | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Smash (full) | `smash_factor_full` | ✓ | ✓ | Flight | all | ✓ | ✓ | ✓ | ✓ (PENDING on club speed) | n/a |
+| Ball distance | `ball_range` | ✓ | ✓ | Club, Flight | key, all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Carry | `carry` | ✓ | ✓ | Live, Flight | key, all | ✓ | ✓ | ✓ | ✓ | sent (D31) |
 | Carry side | `carry_side` | ✓ | ✓ | Flight | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Total | `total` | ✓ | ✓ | Flight | all | ✓ | ✓ | ✓ | ✓ | n/a |

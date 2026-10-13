@@ -73,6 +73,13 @@
       "pending": null
     },
     {
+      "id": "ball_range",
+      "label": "Ball distance",
+      "group": "ball",
+      "unit": "m",
+      "pending": null
+    },
+    {
       "id": "carry",
       "label": "Carry",
       "group": "flight",

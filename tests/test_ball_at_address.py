@@ -106,3 +106,29 @@ def test_the_box_argument_parses_and_refuses_nonsense():
     for bad in ("1,2,3", "5,5,4,9", "a,b,c,d"):
         with pytest.raises(ValueError):
             baa.parse_ball_box(bad)
+
+
+def test_with_a_camera_prior_each_look_is_a_prior_with_its_uncertainty():
+    """13 Oct: the setup hands the camera's coarse estimate as a prior; each shot's own
+    look scales it, uncertainty and all, and says it is a camera prior."""
+    locator = baa.BallAtAddress(
+        box_px=BOX,
+        setup_ball=SETUP,
+        setup_range_m=2.2,
+        setup_range_uncertainty_m=0.44,
+        setup_range_kind="camera_prior",
+    )
+
+    same = locator.observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
+    moved = locator.observe(_scene([(700.0, 420.0, 16.0)]), at=11.0)
+
+    assert same["range_source"] == "setup_camera_prior"
+    assert same["range_uncertainty_m"] == pytest.approx(0.44)
+    assert moved["range_source"] == "camera_size_ratio_to_the_setup_camera_prior"
+    assert moved["range_uncertainty_m"] == pytest.approx(0.44 * moved["range_m"] / 2.2, rel=0.01)
+
+
+def test_without_an_uncertainty_a_look_states_none():
+    seen = _locator().observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
+
+    assert seen["range_uncertainty_m"] is None

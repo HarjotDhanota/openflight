@@ -391,6 +391,16 @@ class Shot:
         repr=False,
         compare=False,
     )
+    # 13 Oct (decision "a"): the range this shot's range-dependent metrics used: its
+    # own IWR launch point (iwr_post_impact, measured), else the camera prior
+    # (camera_prior, estimated), else None with the reason. Never a default number.
+    ball_range_m: Optional[float] = None
+    ball_range_source: Optional[str] = None
+    ball_range_uncertainty_m: Optional[float] = None
+    ball_range_label: Optional[str] = None
+    ball_range_reason: Optional[str] = None
+    # the launch-point estimate's own record (openflight.iwr6843.launch_range)
+    iwr_launch_range: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
@@ -588,6 +598,12 @@ class Shot:
             "experimental_fused_club_path_deg": self.experimental_fused_club_path_deg,
             "experimental_fused_club_path_frame": self.experimental_fused_club_path_frame,
             "experimental_fused_status": self.experimental_fused_status,
+            "ball_range_m": self.ball_range_m,
+            "ball_range_source": self.ball_range_source,
+            "ball_range_uncertainty_m": self.ball_range_uncertainty_m,
+            "ball_range_label": self.ball_range_label,
+            "ball_range_reason": self.ball_range_reason,
+            "iwr_launch_range": deepcopy(self.iwr_launch_range),
             "experimental_fused_attack_angle_confidence": (
                 self.experimental_fused_attack_angle_confidence
             ),

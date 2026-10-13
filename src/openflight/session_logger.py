@@ -619,8 +619,14 @@ class SessionLogger:
         temperature_report: Optional[Dict[str, Any]] = None,
         runtime_config: Optional[Dict[str, Any]] = None,
         runtime_config_sha256: Optional[str] = None,
+        launch_range: Optional[Dict[str, Any]] = None,
+        ball_range: Optional[Dict[str, Any]] = None,
     ):
-        """Log the TI raw-dump reference and complete LCMF evidence."""
+        """Log the TI raw-dump reference and complete LCMF evidence.
+
+        ``launch_range`` is the shot's own IWR launch-point estimate and ``ball_range``
+        the range its metrics used, with source and label (13 Oct).
+        """
         if not self.enabled:
             return
         self._write_entry(
@@ -644,6 +650,8 @@ class SessionLogger:
                 "club_path": club_path,
                 "temperature_report": temperature_report,
                 "runtime_config": runtime_config,
+                "launch_range": launch_range,
+                "ball_range": ball_range,
                 "runtime_config_sha256": runtime_config_sha256,
             },
         )

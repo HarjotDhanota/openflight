@@ -1634,6 +1634,65 @@ def target_line_config(args) -> dict:
     }
 
 
+def range_prior_from_args(args):
+    """The camera's coarse range prior the setup handed over, or None (13 Oct).
+
+    A prior without its uncertainty is refused: a prior is a range plus how sure it is.
+    """
+    from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
+
+    range_m = getattr(args, "iwr6843_tee_prior_m", None)
+    if range_m is None:
+        return None
+    uncertainty = getattr(args, "iwr6843_tee_prior_uncertainty_m", None)
+    if uncertainty is None:
+        raise ValueError("--iwr6843-tee-prior-m needs --iwr6843-tee-prior-uncertainty-m")
+    return LaunchRangePrior(
+        range_m=float(range_m),
+        uncertainty_m=float(uncertainty),
+        source=getattr(args, "iwr6843_tee_prior_source", None) or "camera_size_coarse",
+    )
+
+
+def _look_range_prior(look: dict | None):
+    """A shot's own resting-ball look as its range prior, when it has a range and an
+    uncertainty (the setup handed a camera prior over)."""
+    from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
+
+    if not isinstance(look, dict) or look.get("range_m") is None:
+        return None
+    uncertainty = look.get("range_uncertainty_m")
+    if not uncertainty:
+        return None
+    try:
+        return LaunchRangePrior(
+            range_m=float(look["range_m"]),
+            uncertainty_m=float(uncertainty),
+            source="camera_ball_at_address",
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def shot_iwr_calibration(shot):
+    """The IWR calibration with this shot's own range, for its range-dependent metrics.
+
+    The session's calibration is never changed: each shot's range (its IWR launch point,
+    or the camera prior, labelled) is its own (13 Oct). Without one, the session's.
+    """
+    calibration = getattr(iwr6843_runtime, "calibration", None)
+    if calibration is None or getattr(shot, "ball_range_m", None) is None:
+        return calibration
+    try:
+        return replace(
+            calibration,
+            tee_range_m=float(shot.ball_range_m),
+            tee_range_uncertainty_m=float(shot.ball_range_uncertainty_m or 0.0),
+        )
+    except TypeError:
+        return calibration
+
+
 def shot_ball_at_address(trigger_at: float | None) -> dict | None:
     """The shot's own resting-ball look: the last one before its trigger, if recent."""
     monitor = ball_at_address_monitor
@@ -1682,16 +1741,23 @@ def _ball_at_address_loop() -> None:
             logger.warning("[BALL_AT_ADDRESS] look failed", exc_info=True)
 
 
-def start_ball_at_address(box, setup_ball, setup_range_m) -> None:
-    """Re-locate the resting ball in the box about once a second, between clips."""
+def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> None:
+    """Re-locate the resting ball in the box about once a second, between clips.
+
+    With the setup's camera prior (13 Oct) each look is a per-shot prior; a configured
+    range (``--iwr6843-tee-m``) keeps the old radar-range looks.
+    """
     global ball_at_address_monitor, _ball_at_address_thread  # pylint: disable=global-statement
     from .camera.ball_at_address import BallAtAddress  # noqa: PLC0415
 
+    prior_only = setup_range_m is None and range_prior is not None
     ball_at_address_monitor = BallAtAddress(
         box_px=box,
         setup_ball=setup_ball,
-        setup_range_m=setup_range_m,
+        setup_range_m=range_prior.range_m if prior_only else setup_range_m,
         lens=rig_geometry_config.get("lens"),
+        setup_range_uncertainty_m=range_prior.uncertainty_m if prior_only else None,
+        setup_range_kind="camera_prior" if prior_only else "radar_range",
     )
     if _ball_at_address_thread is None or not _ball_at_address_thread.is_alive():
         _ball_at_address_thread = threading.Thread(
@@ -1796,10 +1862,28 @@ def init_setup_handoff(args, enclosure) -> None:
     setup_handoff_config = {
         "tee_range": {
             "tee_slant_range_m": tee,
-            "status": "configured" if tee is not None else "pending",
+            "status": (
+                "configured"
+                if tee is not None
+                else "prior"
+                if getattr(args, "iwr6843_tee_prior_m", None) is not None
+                else "pending"
+            ),
             "source": args.iwr6843_tee_range_source
             or ("command_line" if tee is not None else "pending"),
             "candidate_id": args.iwr6843_tee_range_candidate,
+            # 13 Oct: the camera's coarse estimate, a prior each shot's capture refines
+            "prior": (
+                {
+                    "range_m": args.iwr6843_tee_prior_m,
+                    "uncertainty_m": getattr(args, "iwr6843_tee_prior_uncertainty_m", None),
+                    "source": getattr(args, "iwr6843_tee_prior_source", None),
+                    "label": "estimated",
+                }
+                if getattr(args, "iwr6843_tee_prior_m", None) is not None
+                else None
+            ),
+            "per_shot_range": "iwr_post_impact_else_camera_prior",
         },
         "scene": {
             "reference": "hitting_surface",
@@ -2384,6 +2468,7 @@ def init_iwr6843(
     net_range_m: float | None,
     tx_order: str,
     capture_timeout_s: float,
+    range_prior=None,
     tilt_deg: float,
     radar_height_m: float,
     ball_height_m: float = 0.04,
@@ -2480,6 +2565,8 @@ def init_iwr6843(
             # registration. Auto sign selection can choose the mirror solution
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
+            # 13 Oct: the camera's coarse range, a prior each shot's capture refines
+            range_prior=range_prior,
             calibration_provenance={
                 "schema_version": 1,
                 "source_path": str(calibration_source),
@@ -2507,7 +2594,14 @@ def init_iwr6843(
             "enabled": True,
             "estimator": lcmf.NAME,
             "antenna_layout": calibration.antennas.as_dict(),
-            "tee_range_status": "unresolved" if tee_range_m is None else "configured",
+            "tee_range_status": (
+                "configured"
+                if tee_range_m is not None
+                else "per_shot_with_camera_prior"
+                if range_prior is not None
+                else "per_shot_without_prior"
+            ),
+            "range_prior": range_prior.to_dict() if range_prior is not None else None,
             "port": capture_monitor.port,
             "config": str(config_path),
             "calibration": str(calibration_path),
@@ -4380,6 +4474,28 @@ def _iwr_azimuth_status() -> str | None:
     return None
 
 
+def _attach_ball_range(shot: Shot, shot_result) -> None:
+    """The range this shot's metrics used, with its source, uncertainty and label (13 Oct)."""
+    launch = getattr(shot_result, "launch_range", None)
+    chosen = getattr(shot_result, "ball_range", None)
+    shot.iwr_launch_range = launch.to_dict() if launch is not None else None
+    if chosen is not None:
+        shot.ball_range_m = chosen.range_m
+        shot.ball_range_source = chosen.source
+        shot.ball_range_uncertainty_m = chosen.uncertainty_m
+        shot.ball_range_label = chosen.label
+        shot.ball_range_reason = chosen.reason
+        return
+    capture = getattr(shot_result, "capture", None)
+    shot.ball_range_m = shot.ball_range_source = shot.ball_range_uncertainty_m = None
+    shot.ball_range_label = "not_measured"
+    shot.ball_range_reason = (
+        "no IWR capture matched this shot"
+        if capture is None or not getattr(capture, "valid", False)
+        else "the IWR runtime did not range this shot"
+    )
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -4394,14 +4510,10 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             else None
         )
         club = shot.club.value
-        # 13 Oct: the resting ball re-located in the box before this swing gives the
-        # shot its own range; without a look the setup's range stands, said so
+        # 13 Oct: the resting ball re-located in the box before this swing is the
+        # shot's own range PRIOR; the shot's own capture measures its launch point
         at_address = shot_ball_at_address(shot.impact_timestamp)
-        own_range = (
-            {"tee_range_m": float(at_address["range_m"]), "ball_at_address": at_address}
-            if at_address is not None and at_address.get("range_m") is not None
-            else ({"ball_at_address": at_address} if at_address is not None else {})
-        )
+        own_prior = _look_range_prior(at_address)
         snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
         iwr_runtime_config_snapshot = (
             snapshotter(  # pylint: disable=not-callable
@@ -4409,7 +4521,8 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 club=club,
                 club_speed_mph=shot.club_speed_mph,
                 effective_tilt_deg=effective_tilt_deg,
-                **own_range,
+                **({"ball_at_address": at_address} if at_address is not None else {}),
+                **({"range_prior": own_prior} if own_prior is not None else {}),
             )
             if callable(snapshotter)
             else None
@@ -4420,11 +4533,12 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             club=club,
             club_speed_mph=shot.club_speed_mph,
             tilt_deg=effective_tilt_deg,
-            **({"tee_range_m": own_range["tee_range_m"]} if "tee_range_m" in own_range else {}),
+            **({"range_prior": own_prior} if own_prior is not None else {}),
         )
         capture = shot_result.capture
         measurement = shot_result.measurement
         club_path = getattr(shot_result, "club_path", None)
+        _attach_ball_range(shot, shot_result)
         if measurement is not None:
             shot.iwr6843_ball_range_evidence = getattr(measurement, "range_evidence", None)
         session_log = get_session_logger()
@@ -4453,6 +4567,14 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     if iwr_runtime_config_snapshot is not None
                     else None
                 ),
+                launch_range=shot.iwr_launch_range,
+                ball_range={
+                    "ball_range_m": shot.ball_range_m,
+                    "ball_range_source": shot.ball_range_source,
+                    "ball_range_uncertainty_m": shot.ball_range_uncertainty_m,
+                    "ball_range_label": shot.ball_range_label,
+                    "ball_range_reason": shot.ball_range_reason,
+                },
             )
 
         if capture is None:
@@ -4780,7 +4902,8 @@ def _fuse_camera_club_delivery(
                     if iwr6843_runtime is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
-                        calibration = iwr6843_runtime.calibration
+                        # this shot's own range (13 Oct), never the session's
+                        calibration = shot_iwr_calibration(shot)
                         if calibration.tee_range_m is None:
                             fused = ChainedDelivery(status="rejected_missing_tee_geometry")
                         else:
@@ -4917,7 +5040,8 @@ def _fuse_camera_ball_flight(
             elif iwr6843_runtime is None:
                 estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
             else:
-                calibration = iwr6843_runtime.calibration
+                # this shot's own range (13 Oct), never the session's
+                calibration = shot_iwr_calibration(shot)
                 if calibration.tee_range_m is None:
                     estimate = CameraBallEstimate(status="rejected_missing_tee_geometry")
                 else:
@@ -5966,17 +6090,41 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
     shot.ball_speed_contract = "radial"
     shot.ball_speed_raw_mph = shot.ball_speed_mph
     shot.experimental_ball_speed_total = None
-    if ball_speed_correction_enabled:
+    geometry = _shot_speed_correction_geometry(shot) if ball_speed_correction_enabled else None
+    if geometry is not None:
+        distance_ft, above_ft, lateral_ft, geometry_source = geometry
         shot.experimental_ball_speed_total = evaluate_experimental_total_speed(
             shot.ball_speed_mph,
             shot.launch_angle_vertical,
             shot.launch_angle_vertical_source,
-            ball_speed_correction_distance_ft,
-            ball_speed_correction_ball_above_radar_ft,
-            geometry_source=ball_speed_correction_geometry_source,
-            ops_ball_lateral_ft=ball_speed_correction_lateral_ft,
+            distance_ft,
+            above_ft,
+            geometry_source=geometry_source,
+            ops_ball_lateral_ft=lateral_ft,
         )
     _attach_full_speeds(shot)
+
+
+def _shot_speed_correction_geometry(shot: Shot):
+    """The cosine candidate's geometry: the shot's own range on an IWR unit (13 Oct).
+
+    A K-LD7 unit keeps its configured distance. An IWR shot without a range has no
+    geometry, and no candidate: nothing is filled in.
+    """
+    if iwr6843_runtime is None:
+        return (
+            ball_speed_correction_distance_ft,
+            ball_speed_correction_ball_above_radar_ft,
+            ball_speed_correction_lateral_ft,
+            ball_speed_correction_geometry_source,
+        )
+    calibration = shot_iwr_calibration(shot)
+    if getattr(calibration, "tee_range_m", None) is None:
+        return None
+    try:
+        return _ops_speed_correction_geometry(calibration)
+    except (TypeError, ValueError):
+        return None
 
 
 # E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
@@ -5999,7 +6147,8 @@ def _attach_full_speeds(shot: Shot) -> None:
         evaluate_full_smash,
     )
 
-    calibration = getattr(iwr6843_runtime, "calibration", None)
+    # this shot's own range and how sure it is (13 Oct)
+    calibration = shot_iwr_calibration(shot)
 
     def calibrated(name: str):
         try:
@@ -6018,6 +6167,8 @@ def _attach_full_speeds(shot: Shot) -> None:
         horizontal_offset_deg=horizontal_offset_deg,
         rig=rig_geometry,
         tee_range_m=calibrated("tee_range_m"),
+        tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
+        tee_range_source=getattr(shot, "ball_range_source", None),
         radar_height_m=calibrated("radar_height_m"),
         ball_height_m=calibrated("tee_ball_height_m"),
         tee_side_offset_m=(setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
@@ -7862,6 +8013,27 @@ def _add_iwr_tee_range_arguments(parser):
         ),
     )
     parser.add_argument(
+        "--iwr6843-tee-prior-m",
+        type=float,
+        default=None,
+        help=(
+            "The camera's coarse estimate of the resting ball's slant range (13 Oct): a "
+            "PRIOR only. It sizes each shot's IWR search and stands in, labelled "
+            "estimated, for a shot whose own capture does not measure its launch point"
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843-tee-prior-uncertainty-m",
+        type=float,
+        default=None,
+        help="The prior's one-sigma uncertainty in metres; required with the prior",
+    )
+    parser.add_argument(
+        "--iwr6843-tee-prior-source",
+        default=None,
+        help="Where the prior came from (camera_size_coarse from the tester's setup)",
+    )
+    parser.add_argument(
         "--iwr6843-tee-range-pending",
         action="store_true",
         help=(
@@ -8548,6 +8720,10 @@ def main():
     args.iwr6843_azimuth_offset_deg = horizontal_offset_deg
     if args.iwr6843_tee_range_pending:
         args.iwr6843_tee_m = None
+    try:
+        range_prior = range_prior_from_args(args)
+    except ValueError as error:
+        parser.error(str(error))
 
     if args.camera_shot_analysis:
         # The flag turns the camera on, so every unit it runs on is a fusion unit.
@@ -8753,7 +8929,8 @@ def main():
     global ball_speed_correction_lateral_ft, ball_speed_correction_geometry_source
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
-    ball_speed_correction_enabled = args.kld7 or (args.iwr6843 and args.iwr6843_tee_m is not None)
+    # an IWR unit's candidate takes each shot's own range (13 Oct)
+    ball_speed_correction_enabled = args.kld7 or bool(args.iwr6843)
     ball_speed_correction_distance_ft = args.kld7_ball_distance
     ball_speed_correction_ball_above_radar_ft = -args.kld7_radar_height_inches / 12.0
     global _VERTICAL_RADAR_GATE_BYPASS
@@ -8900,7 +9077,9 @@ def main():
             print(f"Camera capture enabled: {camera_capture_output_dir}")
             startup_status.ready("camera", "High-speed camera connected")
             if camera_ball_box is not None:
-                start_ball_at_address(camera_ball_box, camera_setup_ball, args.iwr6843_tee_m)
+                start_ball_at_address(
+                    camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
+                )
 
     if args.iwr6843:
         startup_status.start("ti", "Connecting TI radar")
@@ -8921,6 +9100,7 @@ def main():
             output_dir=iwr_output_dir,
             trigger_pin=args.iwr6843_trigger_pin,
             tee_range_m=args.iwr6843_tee_m,
+            range_prior=range_prior,
             net_range_m=args.iwr6843_net_m,
             tx_order=args.iwr6843_tx_order,
             capture_timeout_s=args.iwr6843_capture_timeout,
@@ -8958,8 +9138,17 @@ def main():
                 "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
             )
-            if args.iwr6843_tee_m is None:
-                print("IWR6843 tee range unresolved; saving raw captures only")
+            if args.iwr6843_tee_m is None and range_prior is None:
+                print(
+                    "IWR6843: no camera prior; each shot is ranged from its own capture "
+                    "or its range-dependent metrics are not measured"
+                )
+            elif range_prior is not None:
+                print(
+                    f"IWR6843 camera prior {range_prior.range_m:.2f} +/- "
+                    f"{range_prior.uncertainty_m:.2f} m ({range_prior.source}); each shot "
+                    "is ranged from its own capture"
+                )
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")

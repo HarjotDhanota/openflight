@@ -398,8 +398,15 @@ def evaluate_full_ball_speed(
     radar_height_m: Any,
     ball_height_m: Any,
     tee_side_offset_m: Any,
+    tee_range_uncertainty_m: Any = None,
+    tee_range_source: Any = None,
 ) -> dict:
-    """Full ball speed at separation from one OPS reading, or not measured with the reason."""
+    """Full ball speed at separation from one OPS reading, or not measured with the reason.
+
+    ``tee_range_m`` is the shot's own range (13 Oct): its IWR launch point, or the
+    camera prior labelled; ``tee_range_uncertainty_m`` widens the range's tolerance
+    when it is larger than the stated 5 cm, and ``tee_range_source`` is recorded.
+    """
     inputs = {
         "vertical_deg": vertical_deg if _finite(vertical_deg) else None,
         "vertical_source": vertical_source,
@@ -408,6 +415,8 @@ def evaluate_full_ball_speed(
         "horizontal_frame": horizontal_frame,
         "horizontal_offset_deg": horizontal_offset_deg,
         "tee_range_m": tee_range_m,
+        "tee_range_uncertainty_m": tee_range_uncertainty_m,
+        "tee_range_source": tee_range_source,
         "tee_side_offset_m": tee_side_offset_m,
         "radar_height_m": radar_height_m,
         "ball_height_m": ball_height_m,
@@ -517,7 +526,9 @@ def evaluate_full_ball_speed(
         finite = [abs(v - value) for v in values if math.isfinite(v)]
         return max(finite) if finite and len(finite) == len(values) else math.inf
 
-    tol = TOLERANCES
+    tol = dict(TOLERANCES)
+    if _finite(tee_range_uncertainty_m):
+        tol["tee_range_m"] = max(tol["tee_range_m"], float(tee_range_uncertainty_m))
     resolution = float(ops_track.get("radial_resolution_mph") or DEFAULT_RADIAL_RESOLUTION_MPH)
     impact_tol_s = float(ops_track.get("impact_uncertainty_ms") or 0.0) / 1000.0
     # the FFT peak is about the window's mean radial; the value takes it at the centre
@@ -594,8 +605,9 @@ def evaluate_full_ball_speed(
             name: term if math.isfinite(term) else None for name, term in budget.items()
         },
         "tolerances": dict(
-            TOLERANCES, impact_time_ms=impact_tol_s * 1000.0, radial_resolution_mph=resolution
+            tol, impact_time_ms=impact_tol_s * 1000.0, radial_resolution_mph=resolution
         ),
+        "tee_range_source": tee_range_source,
         "source": BALL_SOURCE,
         "method": METHOD,
         "reason": None,

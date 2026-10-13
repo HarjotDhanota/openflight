@@ -32,6 +32,8 @@ BALL = (
     "gyro",
     "smash_factor",
     "smash_factor_full",
+    # 13 Oct: the range this shot's range-dependent metrics used
+    "ball_range",
 )
 FLIGHT = (
     "carry",

@@ -97,6 +97,7 @@ METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("gyro", "Gyro", BALL, "deg"),
     MetricSpec("smash_factor", "Smash (radial)", BALL, ""),
     MetricSpec("smash_factor_full", "Smash (full)", BALL, ""),
+    MetricSpec("ball_range", "Ball distance", BALL, "m"),
     MetricSpec("carry", "Carry", FLIGHT, "yd"),
     MetricSpec("carry_side", "Carry side", FLIGHT, "yd"),
     MetricSpec("total", "Total", FLIGHT, "yd"),
@@ -525,8 +526,70 @@ def _pending(metric_id: str):
     return build
 
 
+# ---------------------------------------------------------------- ball range
+
+BALL_RANGE_SOURCES = {
+    "iwr_post_impact": "IWR post-impact launch point (this shot's own capture)",
+    "camera_prior": "camera prior: the resting ball's size, coarse",
+    "configured_tee": "range configured for the run (--iwr6843-tee-m)",
+}
+BALL_RANGE_UNVALIDATED = "per-swing IWR range: not validated against a tape yet"
+CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"
+# What does not use the ball's range: the OPS243's own radial speeds and spin.
+RANGE_INDEPENDENT = frozenset({"ball_speed", "club_speed", "smash_factor", "spin_rate"})
+
+
+def _ball_range(shot):
+    source = shot.get("ball_range_source")
+    value = shot.get("ball_range_m")
+    uncertainty = _finite(shot.get("ball_range_uncertainty_m"))
+    number = _finite(value)
+    span = (
+        [number - uncertainty, number + uncertainty]
+        if number is not None and uncertainty is not None
+        else None
+    )
+    status = {
+        "iwr_post_impact": MEASURED,
+        "camera_prior": ESTIMATED,
+        "configured_tee": MEASURED,
+    }.get(source, ESTIMATED)
+    return _record(
+        "ball_range",
+        value,
+        status,
+        source=BALL_RANGE_SOURCES.get(source, source),
+        range_=span,
+        reason=shot.get("ball_range_reason") or "the ball's distance was not measured",
+        note=BALL_RANGE_UNVALIDATED
+        if source == "iwr_post_impact"
+        else CAMERA_PRIOR_NOTE
+        if source == "camera_prior"
+        else None,
+    )
+
+
+def _with_prior_label(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dict[str, Any]]:
+    """Every range-dependent metric of a shot that rested on the camera prior is estimated.
+
+    The prior is a coarse size estimate; a metric built on it carries that weaker label
+    and says why (13 Oct, B3).
+    """
+    if shot.get("ball_range_source") != "camera_prior":
+        return metrics
+    for metric_id, record in metrics.items():
+        if metric_id in RANGE_INDEPENDENT or metric_id == "ball_range":
+            continue
+        if record.get("status") in (MEASURED, CALCULATED, MODEL_GEOMETRY):
+            note = record.get("note")
+            record["status"] = ESTIMATED
+            record["note"] = f"{note}; {CAMERA_PRIOR_NOTE}" if note else CAMERA_PRIOR_NOTE
+    return metrics
+
+
 _BUILDERS: dict[str, Callable[[Mapping[str, Any]], dict]] = {
     "ball_speed": _ball_speed,
+    "ball_range": _ball_range,
     "ball_speed_full": lambda shot: _full_speed(
         "ball_speed_full", shot.get("ball_speed_full"), "value_mph"
     ),
@@ -560,7 +623,7 @@ assert tuple(sorted(_BUILDERS)) == tuple(sorted(METRIC_IDS)), "every metric need
 def from_record(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Every metric of one shot record, in catalog order, built from its fields."""
     shot = _mapping(shot)
-    return {spec.id: _BUILDERS[spec.id](shot) for spec in METRICS}
+    return _with_prior_label({spec.id: _BUILDERS[spec.id](shot) for spec in METRICS}, shot)
 
 
 def records(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

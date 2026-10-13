@@ -12,6 +12,11 @@ that shot its own range:
   lens's focal length cancels out of, anchored on the radar's distance. It is
   labelled, never passed off as a radar range.
 
+Since 13 Oct (decision "a") the setup hands over the camera's coarse size estimate
+as a PRIOR (``setup_range_kind="camera_prior"``, with its uncertainty): each look is
+then a per-shot prior, scaled with its uncertainty, and the shot's own IWR capture
+measures the distance.
+
 A ball outside the box, or none, is the shot's label (``outside_box``,
 ``not_seen``) and carries no range; nothing is filled in. A shot takes the last
 look before its trigger, and none older than ``MAX_LOOK_AGE_S``.
@@ -61,10 +66,17 @@ class BallAtAddress:
         setup_ball: Mapping[str, float] | None,
         setup_range_m: float | None,
         lens: Mapping[str, Any] | None = None,
+        setup_range_uncertainty_m: float | None = None,
+        setup_range_kind: str = "radar_range",
     ):
         self.box = tuple(int(value) for value in box_px)
         self.setup_ball = dict(setup_ball) if setup_ball else None
         self.setup_range_m = float(setup_range_m) if setup_range_m else None
+        self.setup_range_uncertainty_m = (
+            float(setup_range_uncertainty_m) if setup_range_uncertainty_m else None
+        )
+        # what the setup's range is: "radar_range" before 13 Oct, "camera_prior" since
+        self.setup_range_kind = str(setup_range_kind)
         self.lens = dict(lens) if lens else None
         self._lock = threading.Lock()
         self._looks: list[dict] = []
@@ -93,11 +105,12 @@ class BallAtAddress:
             return None, None
         setup_d = float(self.setup_ball["diameter_px"])
         moved = math.hypot(x - float(self.setup_ball["x"]), y - float(self.setup_ball["y"]))
+        kind = self.setup_range_kind
         if moved <= SAME_SPOT_DIAMETERS * setup_d:
-            return self.setup_range_m, "setup_radar_range"
+            return self.setup_range_m, f"setup_{kind}"
         if diameter <= 0.0:
             return None, None
-        return self.setup_range_m * setup_d / diameter, "camera_size_ratio_to_the_setup_radar_range"
+        return self.setup_range_m * setup_d / diameter, f"camera_size_ratio_to_the_setup_{kind}"
 
     def observe(self, image: np.ndarray, *, at: float) -> dict:
         """Look for the resting ball in this frame; keep and return what was found."""
@@ -127,6 +140,12 @@ class BallAtAddress:
             "diameter_px": diameter,
             "range_m": round(range_m, 4) if range_m is not None else None,
             "range_source": source,
+            # the setup prior's relative uncertainty, carried to this look's range
+            "range_uncertainty_m": (
+                round(self.setup_range_uncertainty_m * range_m / self.setup_range_m, 4)
+                if range_m is not None and self.setup_range_uncertainty_m and self.setup_range_m
+                else None
+            ),
             "observed_at": float(at),
             "updated_at": _now_utc(),
             "box_px": list(self.box),
