@@ -3549,7 +3549,9 @@ def test_each_mode_starts_from_its_own_setup_lock_applied_controls():
     assert arm6["source"] == "setup_lock" and arm6["signal_us"] == pytest.approx(18.0)
 
 
-def test_640x400_without_a_lock_scales_the_1280x800_lock_by_the_gain_screens():
+def test_640x400_without_a_lock_scales_the_1280x800_lock_by_the_measured_mode_factor():
+    """13 Oct: 640x400 gives 2.00x the 1280x800 signal per pixel (paired gain screens),
+    so the scaled lock no longer depends on two gain screens being current."""
     from openflight import tee_range
 
     solution = tee_range.TeeRangeSolution.unresolved(
@@ -3559,11 +3561,11 @@ def test_640x400_without_a_lock_scales_the_1280x800_lock_by_the_gain_screens():
     arm6 = ts.ladder_gain_basis(solution, "arm6", SUN_FACTS)
 
     assert arm6["source"] == "setup_lock_scaled"
-    assert arm6["brightness_ratio"] == pytest.approx(0.229 / 0.547)
-    assert arm6["signal_us"] == pytest.approx(7.0 * 0.229 / 0.547)
+    assert arm6["mode_signal_factor"] == pytest.approx(2.0)
+    assert arm6["signal_us"] == pytest.approx(7.0 / 2.0)
     assert arm6["lock"]["arm_id"] == "arm5"
-    # no gain screens to scale by: today's rule
-    assert ts.ladder_gain_basis(solution, "arm6", {"arm5": SUN_FACTS["arm5"]}) is None
+    # the gain screens are not needed to scale it
+    assert ts.ladder_gain_basis(solution, "arm6", {}) == arm6
 
 
 @pytest.mark.parametrize(

@@ -101,6 +101,14 @@ LADDER: tuple[Rung, ...] = tuple(
     + [Rung(f"half-{e}", "arm6", e, False) for e in (300, 150, 75, 30, 15)]
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
+# Signal per pixel relative to 1280x800 at the same exposure and gain. MEASURED
+# (13 Oct, coordinator): the paired gain screens in harjot-indoor-test-1/-2 and
+# Outdoors-test-5/-8 (arm5 binned 2x2 against arm6, unclipped pixels) give
+# 1.96-2.04x for 640x400. It supersedes light-audit.md section 4's "unmeasured, the
+# same rows apply". Used to predict which rungs a light supports and to carry a light
+# measurement between the modes.
+ARM6_SIGNAL_FACTOR = 2.0
+MODE_SIGNAL_FACTOR = {"arm5": 1.0, "arm6": ARM6_SIGNAL_FACTOR}
 # A setting the tester unticked: review and analysis must not read it as a light failure.
 NOT_SELECTED = "not selected by the tester"
 # A pressed setting in the other mode waits this long for a swing taken just before
@@ -108,6 +116,98 @@ NOT_SELECTED = "not selected by the tester"
 # the paired check's 30 s no-radar-shot timeout), before the kiosk restarts (P7-13).
 SWITCH_GRACE_S = 2.0
 SWITCH_WAIT_S = 35.0
+
+
+def rung_light_support(
+    light_index_dn_per_us_gain: float, *, rungs: tuple[Rung, ...] = LADDER
+) -> list[dict]:
+    """Each rung's predicted resting-ball level at the gain ceiling, against the 20 DN gate.
+
+    ``light_index_dn_per_us_gain`` is the setup's measured light: the 1280x800 ball
+    core's DN above black per microsecond x gain applied (the static lock, 13 Oct).
+    A rung's ball is that times its exposure, the gain ceiling and its mode's
+    measured signal factor. A rung below the gate needs ``light_needed_factor`` times
+    the light (light audit section 4 and B3).
+    """
+    index = float(light_index_dn_per_us_gain)
+    support = []
+    for rung in rungs:
+        predicted = index * rung.exposure_us * GAIN_CEILING * MODE_SIGNAL_FACTOR[rung.arm_id]
+        supported = predicted >= BALL_MIN_SIGNAL_DN
+        support.append(
+            {
+                "rung_id": rung.rung_id,
+                "arm_id": rung.arm_id,
+                "exposure_us": rung.exposure_us,
+                "gain": GAIN_CEILING,
+                "predicted_ball_dn": round(predicted, 2),
+                "supported": supported,
+                "light_needed_factor": (
+                    None if supported else round(BALL_MIN_SIGNAL_DN / max(predicted, 1e-9), 2)
+                ),
+            }
+        )
+    return support
+
+
+def light_warning(light_index_dn_per_us_gain: float | None, *, source: str | None) -> dict:
+    """What the tester is told before any swing: the rungs their light supports.
+
+    Labelled estimated: a prediction from the setup's still ball, which the swings'
+    own resting frames judge again. Without a measured light it says so and predicts
+    nothing.
+    """
+    base = {
+        "schema": "openflight.tester_light_warning.v1",
+        "gate_dn": BALL_MIN_SIGNAL_DN,
+        "gain_ceiling": GAIN_CEILING,
+        "mode_signal_factor": dict(MODE_SIGNAL_FACTOR),
+        "label": "estimated",
+        "source": source,
+    }
+    if light_index_dn_per_us_gain is None or not math.isfinite(light_index_dn_per_us_gain):
+        return {
+            **base,
+            "status": "not_measured",
+            "reason": "the setup has no locked still ball to measure the light on",
+            "light_index_dn_per_us_gain": None,
+            "rungs": [],
+            "supported": [],
+            "unsupported": [],
+            "message": "The light was not measured: finish the setup's camera step first.",
+        }
+    rungs = rung_light_support(light_index_dn_per_us_gain)
+    supported = [item["rung_id"] for item in rungs if item["supported"]]
+    unsupported = [item for item in rungs if not item["supported"]]
+    if not unsupported:
+        message = "Your light supports every setting."
+    elif not supported:
+        need = min(item["light_needed_factor"] for item in unsupported)
+        message = (
+            f"Your light is too dim for every setting: even the longest needs {need:g}x "
+            "more light on the ball. Add light before swinging."
+        )
+    else:
+        names = ", ".join(_rung_label(item) for item in rungs if item["supported"])
+        need = min(item["light_needed_factor"] for item in unsupported)
+        message = (
+            f"Your light supports {names}. Shorter settings need at least {need:g}x more "
+            "light on the ball; they are recorded but will read too dark."
+        )
+    return {
+        **base,
+        "status": "measured",
+        "light_index_dn_per_us_gain": float(light_index_dn_per_us_gain),
+        "rungs": rungs,
+        "supported": supported,
+        "unsupported": [item["rung_id"] for item in unsupported],
+        "message": message,
+    }
+
+
+def _rung_label(item: dict) -> str:
+    mode = "1280x800" if item["arm_id"] == "arm5" else "640x400"
+    return f"{mode} {item['exposure_us']} us"
 
 
 def find_rung(rung_id: object) -> Rung:

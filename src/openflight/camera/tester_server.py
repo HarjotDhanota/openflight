@@ -1934,13 +1934,52 @@ def _setup_static_lock(solution: tee_range.TeeRangeSolution | None, arm_id: str)
     return None
 
 
+def lock_light_index(lock: Mapping | None) -> float | None:
+    """The measured light a static lock carries: ball DN above black per us x gain.
+
+    Locks from before 13 Oct carry no index; it is their signal over their applied
+    exposure x gain, the same measurement.
+    """
+    if not isinstance(lock, Mapping):
+        return None
+    observation = lock.get("observation") or {}
+    try:
+        index = observation.get("light_index_dn_per_us_gain")
+        if index is None:
+            product = float(lock["applied_exposure_us"]) * float(lock["applied_gain"])
+            index = float(observation["signal_above_floor_dn"]) / product
+        index = float(index)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    return index if math.isfinite(index) and index > 0.0 else None
+
+
+def setup_light_warning(solution: tee_range.TeeRangeSolution | None) -> dict:
+    """Which ladder rungs the setup's measured light supports, before any swing (13 Oct)."""
+    lock = None
+    if solution is not None:
+        for item in solution.candidates:
+            if item.source_group != "camera" or not item.candidate_id.endswith(PLACEMENT_BOX_ARM):
+                continue
+            evidence = item.evidence or {}
+            if (evidence.get("result") or {}).get("status") == "selected":
+                lock = evidence.get("static_exposure_lock")
+                break
+    index = lock_light_index(lock)
+    return study_ladder.light_warning(
+        index, source="setup_static_lock_1280x800" if index is not None else None
+    )
+
+
 def ladder_gain_basis(
     solution: tee_range.TeeRangeSolution | None, arm_id: str, facts: Mapping
 ) -> dict | None:
     """The setup lock a rung's first gain keeps, as exposure x gain (P7-12).
 
-    A mode without its own lock (640x400 is advisory) scales the 1280x800 lock by
-    the two gain screens' brightness ratio. None means the gain screen decides.
+    A mode without its own lock (640x400 is advisory) scales the 1280x800 lock by the
+    modes' measured signal factor (13 Oct: 2.0 for 640x400, from paired gain
+    screens), no longer by two gain screens that may be stale or from another lens.
+    None means the gain screen decides.
     """
     lock = _setup_static_lock(solution, arm_id)
     if lock is not None:
@@ -1952,19 +1991,14 @@ def ladder_gain_basis(
     full = _setup_static_lock(solution, "arm5") if arm_id != "arm5" else None
     if full is None:
         return None
-    try:
-        ratio = float(facts[arm_id]["gain_at_300_equivalent"]) / float(
-            facts["arm5"]["gain_at_300_equivalent"]
-        )
-    except (KeyError, TypeError, ValueError, ZeroDivisionError):
-        return None
-    if not math.isfinite(ratio) or ratio <= 0:
-        return None
+    del facts  # the modes' factor is measured, not taken from the gain screens
+    factor = study_ladder.MODE_SIGNAL_FACTOR[arm_id]
     return {
         "source": "setup_lock_scaled",
-        "signal_us": full["exposure_us"] * full["gain"] * ratio,
+        "signal_us": full["exposure_us"] * full["gain"] / factor,
         "lock": full,
-        "brightness_ratio": ratio,
+        "mode_signal_factor": factor,
+        "mode_signal_factor_source": "measured_paired_gain_screens_13_oct",
     }
 
 
@@ -6128,7 +6162,18 @@ def tee_range_display(
         "swings": swings,
         "validation": _validation_display(evidence.get("validation_agreement")),
         "placement_box": dict(placement_box) if placement_box is not None else None,
+        # 13 Oct: the ladder rungs the measured light supports, before any swing
+        "light_warning": setup_light_warning(_solution_or_none(solution)),
     }
+
+
+def _solution_or_none(payload: Mapping | None) -> tee_range.TeeRangeSolution | None:
+    if not isinstance(payload, Mapping) or not payload:
+        return None
+    try:
+        return tee_range.TeeRangeSolution.from_dict(payload)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _static_capture_failure(record: Mapping, capture_kind: str) -> dict[str, str]:
@@ -10628,8 +10673,19 @@ def create_app(
                 "run_dir": str(run) if run else None,
                 "capture_scope": current_capture_scope(tester_id),
                 "saved_attempt_scopes": attempt_scopes(sessions_root, tester_id),
+                # 13 Oct: which rungs the setup's measured light supports
+                "light_warning": ladder_light_warning(tester_id),
             }
         )
+
+    def ladder_light_warning(tester_id: str) -> dict:
+        try:
+            solution = pending_tee_range_solution(
+                sessions_root, TesterParameters(tester_id, PLACEMENT_BOX_ARM, "indoors")
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            solution = None
+        return setup_light_warning(solution)
 
     @app.post("/api/tester/ladder/photo")
     def ladder_photo():
