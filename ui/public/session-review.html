@@ -163,6 +163,24 @@
       .amber {
         color: var(--warn);
       }
+      /* the kiosk's labels: four looks for four labels, not measured muted */
+      .l-measured {
+        color: var(--ok);
+      }
+      .l-calculated {
+        color: var(--accent);
+      }
+      .l-model_geometry {
+        color: var(--exp);
+        border-style: dashed;
+      }
+      .l-estimated {
+        color: var(--warn);
+        border-style: dotted;
+      }
+      .l-not_measured {
+        color: var(--muted);
+      }
       .green {
         color: var(--ok);
       }
@@ -286,6 +304,12 @@
       <section class="panel stack" id="summary-panel" hidden aria-labelledby="summary-title">
         <h2 id="summary-title">Summary</h2>
         <div class="table-wrap" id="summary"></div>
+        <h3>Kiosk metrics by label</h3>
+        <p class="muted">
+          Every metric the kiosk reported, under its label: measured by a sensor, calculated by a named model, model
+          geometry (an assumed swing arc), estimated, or not measured with the reason.
+        </p>
+        <div class="table-wrap" id="label-summary"></div>
         <div id="runs" class="stack"></div>
       </section>
 
@@ -297,6 +321,7 @@
               <option value="all">Every attempt</option>
               <option value="problems">Attempts with a rejected or failed metric</option>
               <option value="experimental">Attempts with an experimental candidate</option>
+              <option value="model_geometry">Shots with a model-geometry value</option>
               <option value="triggers">Camera triggers without a shot</option>
             </select></label
           >
@@ -345,6 +370,15 @@
         return value.toFixed(size >= 1000 ? 0 : size >= 10 ? 1 : 2);
       };
       const chip = (status) => `<span class="chip s-${esc(status)}">${esc(STATUS_TEXT[status] || status)}</span>`;
+      const LABEL_TEXT = {
+        measured: 'measured',
+        calculated: 'calculated',
+        model_geometry: 'model geometry',
+        estimated: 'estimated',
+        not_measured: 'not measured',
+      };
+      const labelChip = (status) =>
+        `<span class="chip l-${esc(status)}" data-label="${esc(status)}">${esc(LABEL_TEXT[status] || status)}</span>`;
 
       function showError(message) {
         el('error').hidden = !message;
@@ -771,6 +805,23 @@
         return `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Status</th><th>Source</th><th>Confidence</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`;
       }
 
+      // Every metric the kiosk reported for this shot (session_review.kiosk_metrics).
+      function kioskMetricsTable(metrics) {
+        if (!metrics.length) return '';
+        const rows = metrics
+          .map((m) => {
+            const range = m.range ? `${fmt(m.range[0])} to ${fmt(m.range[1])}` : '';
+            const why = m.status === 'not_measured' ? m.reason : [m.source, m.note].filter(Boolean).join('; ');
+            return `<tr data-kiosk-metric="${esc(m.key)}"><td>${esc(m.label)}</td><td class="num">${fmt(m.value)} ${esc(
+              m.value == null ? '' : m.unit
+            )}</td><td>${labelChip(m.status)}</td><td class="num">${esc(range)}</td><td class="muted">${esc(
+              why || ''
+            )}</td></tr>`;
+          })
+          .join('');
+        return `<details class="kiosk-metrics" open><summary>Kiosk metrics, as the kiosk reported them (${metrics.length})</summary><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Value</th><th>Label</th><th>Range</th><th>Source or reason</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+      }
+
       function agreementsTable(rows) {
         if (!rows.length) return '';
         const body = rows
@@ -922,6 +973,7 @@
           )} px). Circles: the candidates its detectors found.</p>
           ${a.camera ? `<details><summary>Camera capture facts</summary>${definitionList(a.camera)}</details>` : ''}
           ${metricsTable(a.metrics || [])}
+          ${kioskMetricsTable(a.kiosk_metrics || [])}
           ${agreementsTable(a.agreements || [])}
           ${movingRangeDiagnostic(a.moving_range_diagnostics)}
           <details><summary>Identity and provenance</summary>${definitionList(a.identity, a.identity_evidence)}</details>
@@ -934,6 +986,7 @@
         const statuses = (a.metrics || []).map((m) => m.status);
         if (filter === 'problems') return statuses.includes('rejected') || statuses.includes('processing_failed');
         if (filter === 'experimental') return statuses.includes('experimental');
+        if (filter === 'model_geometry') return (a.kiosk_metrics || []).some((m) => m.status === 'model_geometry');
         if (filter === 'triggers') return a.kind === 'camera_trigger_without_shot';
         return true;
       }
@@ -964,6 +1017,21 @@
         el('summary').innerHTML = rows
           ? `<table><thead><tr><th>Metric</th>${statuses.map((s) => `<th>${chip(s)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`
           : '<p class="muted">No metrics yet.</p>';
+        const labelVocabulary = review.label_vocabulary || Object.keys(LABEL_TEXT);
+        const kioskNames = {};
+        for (const attempt of review.attempts) for (const m of attempt.kiosk_metrics || []) kioskNames[m.key] = m.label;
+        const labelRows = Object.entries(review.kiosk_metric_label_counts || {})
+          .filter(([, byLabel]) => Object.keys(byLabel).length)
+          .map(
+            ([key, byLabel]) =>
+              `<tr data-kiosk-summary="${esc(key)}"><td>${esc(kioskNames[key] || key)}</td>${labelVocabulary
+                .map((s) => `<td class="num">${byLabel[s] ? `${byLabel[s]}` : ''}</td>`)
+                .join('')}</tr>`
+          )
+          .join('');
+        el('label-summary').innerHTML = labelRows
+          ? `<table><thead><tr><th>Metric</th>${labelVocabulary.map((s) => `<th>${labelChip(s)}</th>`).join('')}</tr></thead><tbody>${labelRows}</tbody></table>`
+          : '<p class="muted">No kiosk shot in this review.</p>';
         el('runs').innerHTML = review.runs
           .map((run) => {
             const errors = (run.errors || []).map((e) => `<li class="error">${esc(e)}</li>`).join('');

@@ -191,6 +191,35 @@ const review = {
   metric_status_counts: { spin_rpm: { experimental: 1 } },
 };
 
+// Every kiosk metric (openflight.shot_metrics), cycling through the five labels.
+const CATALOG = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+  labels: string[];
+  metrics: Array<{ id: string; label: string; group: string; unit: string }>;
+};
+const KIOSK_METRICS = CATALOG.metrics.map((spec, index) => {
+  const status = CATALOG.labels[index % CATALOG.labels.length];
+  const measured = status !== 'not_measured';
+  return {
+    key: spec.id,
+    label: spec.label,
+    group: spec.group,
+    unit: spec.unit,
+    status,
+    value: measured ? 10 + index : null,
+    source: measured ? `${spec.id} source` : null,
+    range: measured ? [9 + index, 11 + index] : null,
+    reason: measured ? null : `${spec.id} reason`,
+    frame: null,
+    note: null,
+    normalized: null,
+  };
+});
+Object.assign(review, {
+  label_vocabulary: CATALOG.labels,
+  kiosk_metric_label_counts: Object.fromEntries(KIOSK_METRICS.map((m) => [m.key, { [m.status]: 1 }])),
+});
+Object.assign(review.attempts[0], { kiosk_metrics: KIOSK_METRICS });
+
 const bundleEntry = {
   name: `${testerId}-session-bundle-20260925T010203Z.zip`,
   size_bytes: 2097152,
@@ -296,6 +325,24 @@ test('live review starts the analysis, survives a reload and shows every status'
     'href',
     `/api/tester/bundle?tester_id=${testerId}&name=${encodeURIComponent(bundleEntry.name)}`
   );
+});
+
+test('every kiosk metric shows with its label, and the summary counts labels', async ({ page }) => {
+  const state = await mockLive(page);
+  state.phase = 'done';
+  await page.goto('/session-review.html');
+  const card = page.locator('[data-attempt="session-one:1"]');
+  await expect(card.locator('tr[data-kiosk-metric]')).toHaveCount(CATALOG.metrics.length);
+  for (const metric of KIOSK_METRICS) {
+    const row = card.locator(`tr[data-kiosk-metric="${metric.key}"]`);
+    await expect(row.locator(`[data-label="${metric.status}"]`)).toHaveCount(1);
+    await expect(row).toContainText(metric.status === 'not_measured' ? `${metric.key} reason` : `${metric.key} source`);
+    await expect(page.locator(`tr[data-kiosk-summary="${metric.key}"]`)).toHaveCount(1);
+  }
+  await expect(page.locator('#label-summary')).toContainText('model geometry');
+  await page.getByLabel('Show').selectOption('model_geometry');
+  await expect(card).toBeVisible();
+  await expect(page.locator('[data-attempt="run-01:camera_009"]')).toHaveCount(0);
 });
 
 for (const viewport of KIOSK_VIEWPORTS) {

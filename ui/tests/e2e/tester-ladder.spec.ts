@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox } from './helpers';
 
@@ -213,9 +214,7 @@ test('changing tester ID cancels the remaining light-measurement sequence', asyn
   await page.locator('#tester-id').fill('new-tester');
   await page.waitForTimeout(1200);
 
-  expect(runBodies).toEqual([
-    { tester_id: '20260922-name', arm_id: 'arm5', environment: 'indoors', action: 'gain' },
-  ]);
+  expect(runBodies).toEqual([{ tester_id: '20260922-name', arm_id: 'arm5', environment: 'indoors', action: 'gain' }]);
   await expect(page.locator('#light-verdict')).toContainText('cancelled');
 });
 
@@ -939,4 +938,46 @@ test('the hardware check records whether RESET was pressed', async ({ page }) =>
 
   expect(runBodies.map((body) => body.operator_reset)).toEqual([true, false]);
   expect(runBodies.every((body) => body.action === 'preflight')).toBe(true);
+});
+
+test('shows the kiosk shot beside the swing verdict, every metric with its label', async ({ page }) => {
+  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+    metrics: Array<{ id: string; label: string; unit: string }>;
+  };
+  const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'not_measured'];
+  const metrics = Object.fromEntries(
+    catalog.metrics.map((spec, index) => {
+      const status = cycle[index % cycle.length];
+      return [
+        spec.id,
+        status === 'not_measured'
+          ? { value: null, unit: spec.unit, status, source: null, reason: `${spec.id} reason` }
+          : { value: 1 + index, unit: spec.unit, status, source: 'fixture', reason: null },
+      ];
+    })
+  );
+  await mockBaseApis(page, () => ladderState(null));
+  await page.route('**/api/shots/latest', (route) =>
+    fulfillJson(route, { shot: { shot_number: 7, club: '7-iron', metrics }, catalog })
+  );
+  await page.goto('/tester.html');
+
+  const box = page.locator('#kiosk-shot');
+  await expect(box).toContainText('Last kiosk shot #7');
+  await expect(box.locator('.kiosk-shot__key [data-kiosk-metric]')).toHaveCount(12);
+  const rows = box.locator('tr[data-kiosk-metric]');
+  await expect(rows).toHaveCount(catalog.metrics.length);
+  for (const [index, spec] of catalog.metrics.entries()) {
+    const status = cycle[index % cycle.length];
+    const row = box.locator(`tr[data-kiosk-metric="${spec.id}"]`);
+    await expect(row.locator(`.kiosk-label.l-${status}`)).toHaveCount(1);
+    if (status === 'not_measured') await expect(row).toContainText(`${spec.id} reason`);
+  }
+});
+
+test('says so when the kiosk does not answer for its shot', async ({ page }) => {
+  await mockBaseApis(page, () => ladderState(null));
+  await page.route('**/api/shots/latest', (route) => route.abort());
+  await page.goto('/tester.html');
+  await expect(page.locator('#kiosk-shot')).toContainText('Kiosk numbers unavailable');
 });

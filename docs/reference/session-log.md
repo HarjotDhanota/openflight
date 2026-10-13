@@ -41,7 +41,7 @@ Written by `src/openflight/session_logger.py`.
 
 | Type | Written when |
 | --- | --- |
-| `shot_detected` | A shot is measured. Ball speed, club speed, spin, angles, carry. |
+| `shot_detected` | A shot is measured. Ball speed, club speed, spin, angles, carry, and `metrics`: every golf metric with its label, source, range and reason (see [Metric coverage](metric-coverage.md)). |
 
 ### Capture data
 
