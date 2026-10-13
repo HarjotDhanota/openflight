@@ -242,9 +242,22 @@ effect not applied".
 **Sign.** Positive means the ball curves right. On a normal strike it has the
 sign of face to path.
 
-**Confidence floor.** The axis keeps the old proxy's floor: it is not measured
-when the horizontal launch confidence is below `SPIN_AXIS_MIN_CONFIDENCE`
-(0.6).
+**A weak horizontal launch.** When the horizontal launch the model uses is a
+low-coherence IWR value (source `radar_low_coherence`), or its confidence is below
+`SPIN_AXIS_MIN_CONFIDENCE` (0.6) or not given, it enters as an `estimated` input
+with that reason. Every output built on it is then `estimated`, with the reason:
+face angle, face to path, spin loft, D-plane tilt, the Penner spin and the spin
+axis (dynamic loft does not use it and keeps its label). The axis used to be
+withheld below 0.6; it is now shown, labelled `estimated`
+(`spin_axis_source = "estimated (D-plane tilt, ...; <reason>)"`), and the spin
+becomes the shot's under `spin_source = "estimated"` when no measured spin was
+accepted. Through the weakest-label rule the flight is then `estimated` too.
+Simulators get neither (D31). The label order is measured > calculated >
+model_geometry > estimated > not_measured.
+
+**Club speed.** Penner's club speed is the OPS243's club speed, which Tier 1 of
+the Part E plan treats as measured. It is a line-of-sight (radial) reading, not
+the head's full speed (E3 cannot project it yet), and the spin scales with it.
 
 **On the shot.** When calculated, it becomes `spin_axis_deg` with its frame and
 `spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"`, or

@@ -28,8 +28,9 @@ Total (carry plus bounce and roll) uses the USGA / R&A 2021 linear bounce model
 Aerodynamic model: Cd and Cl are functions of the spin parameter
 Sp = r*omega / v. Fits are consistent with Bearman & Harvey (1976) and
 Kensrud & Smith (2018) measurements for dimpled golf balls in the
-post-drag-crisis regime (Re ~ 5e4 to 2e5). Spin decay follows
-Kiratidis & Leinweber (2018) at ~4%/s.
+post-drag-crisis regime (Re ~ 5e4 to 2e5). Spin decays by the same paper's
+moment coefficient C_M = 0.01 S (Ferguson, McNally & McPhee 2022, Eq. 4), the
+decay its Cd/Cl were fitted with.
 """
 
 import math
@@ -76,9 +77,28 @@ CD_POLY = (0.1304, 0.9287, -0.8259)
 CL_POLY = (0.0504, 1.2031, -1.1490)
 SP_FIT_MAX = 0.75
 
-# Exponential spin decay: ω(t) = ω₀·exp(-rate·t).
-# ~4%/s per Kiratidis & Leinweber (2018); small but matters over ~6 s flights.
-SPIN_DECAY_RATE = 0.04
+# Spin decay: Ferguson, McNally & McPhee (2022) Eq. (4), C_M = g S, fitted with
+# their Cd/Cl: "The constants were found to be {0.1304, 0.9287, -0.8259, 0.0504,
+# 1.2031, -1.1490, 0.01}" (g, the last, bounded 0.010-0.015 "to reflect realistic
+# spin decay [Smits & Smith 1994]"). The abstract does not print the torque; it is
+# taken as Smits & Smith's convention, T = C_M (1/2) rho v^2 A d (d the diameter),
+# with I = (2/5) m r^2. That gives d(omega)/dt = -lambda omega v / r with
+# lambda = 2.0e-5 at 1.204 kg/m3: Penner 2001's Eq. (16), "alpha =
+# -(0.00002)(omega_b v_b / r)", from the same Smits & Smith data, to 0.2 %.
+# (The 4 %/s exponential this replaces was attributed to Kiratidis & Leinweber
+# 2018, a paper on FIFA footballs with no spin decay in it.)
+CM_PER_SP = 0.01
+_BALL_INERTIA = 0.4 * BALL_MASS_KG * BALL_RADIUS_M**2
+
+
+def spin_acceleration(omega: float, speed_mps: float, air_density: float) -> float:
+    """d(omega)/dt in rad/s^2: the aerodynamic spin-down moment over the ball's inertia."""
+    if speed_mps <= 0.0:
+        return 0.0
+    c_m = CM_PER_SP * BALL_RADIUS_M * omega / speed_mps
+    torque = c_m * 0.5 * air_density * speed_mps * speed_mps * BALL_AREA_M2 * 2.0 * BALL_RADIUS_M
+    return -torque / _BALL_INERTIA
+
 
 GRAVITY = 9.81
 # 500 Hz integration. RK4 error is O(dt⁵) so this is effectively exact for
@@ -134,6 +154,11 @@ USGA_RA_2021_BOUNCE_MODEL = BounceModel(
     landing_angle_range_deg=(10.0, 50.0),
 )
 
+# Eq. 1 reaches zero at 79.1 / 1.6 = 49.44 deg and is negative from there to the top
+# of its data (50 deg). A ball does not roll backwards on a fairway: the roll is
+# clamped at 0 there, and the total says so (ROLL_CLAMP_NOTE).
+ROLL_CLAMP_NOTE = "roll clamped at 0: Eq. 1 is negative above 49.4°"
+
 FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
 BOUNCE_MODELS: dict[str, BounceModel] = {FAIRWAY_NORMAL: USGA_RA_2021_BOUNCE_MODEL}
@@ -145,7 +170,8 @@ def bounce_and_roll_yards(
     """Distance from landing to rest (yards) by the surface's published model, or None.
 
     None for a surface with no published model, a non-finite angle, or a landing
-    angle outside the model's data range (no extrapolation).
+    angle outside the model's data range (no extrapolation). Inside the range, a
+    negative value of the linear model is clamped at 0 (``ROLL_CLAMP_NOTE``).
     """
     model = BOUNCE_MODELS.get(surface)
     if model is None or not _finite(landing_angle_deg):
@@ -153,7 +179,15 @@ def bounce_and_roll_yards(
     low, high = model.landing_angle_range_deg
     if not low <= landing_angle_deg <= high:
         return None
-    return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg
+    return max(0.0, model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg)
+
+
+def roll_clamped(landing_angle_deg: float, surface: str = DEFAULT_SURFACE) -> bool:
+    """Whether the surface's model gave a negative roll here that was clamped at 0."""
+    model = BOUNCE_MODELS.get(surface)
+    if model is None or bounce_and_roll_yards(landing_angle_deg, surface) is None:
+        return False
+    return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg < 0.0
 
 
 @dataclass
@@ -165,7 +199,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "calculated", "model_geometry", "club_typical"]
+    spin_source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
 
 
 @dataclass
@@ -236,7 +270,7 @@ FULL_BALL_SPEED_CONTRACTS = ("full",)
 
 
 # Shot.spin_source values a model wrote, each kept as the flight's spin label
-MODEL_SPIN_SOURCES = ("calculated", "model_geometry")
+MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
 
 
 def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
@@ -285,7 +319,7 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
-    source: Literal["measured", "calculated", "model_geometry", "club_typical"]
+    source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
     if (
         _finite(shot.spin_rpm)
         and _finite(shot.spin_confidence)
@@ -330,22 +364,19 @@ def _cl(sp: float) -> float:
 
 def _derivatives(
     state: tuple,
-    omega: float,
     axis: tuple,
     air_density: float,
 ) -> tuple:
-    """d/dt of (x, y, z, vx, vy, vz) under gravity + drag + Magnus."""
-    _, _, _, vx, vy, vz = state
+    """d/dt of (x, y, z, vx, vy, vz, omega) under gravity + drag + Magnus + spin-down."""
+    _, _, _, vx, vy, vz, omega = state
     v = math.sqrt(vx * vx + vy * vy + vz * vz)
-    # At v ≈ 0 both drag and Magnus vanish (F ∝ v²) and division below
-    # would be unsafe. Should only happen at the instantaneous apex of a
-    # pathological straight-up launch.
+    # At v ≈ 0 drag, Magnus and the spin-down moment vanish (all ∝ v²) and the
+    # division below would be unsafe. Should only happen at the instantaneous
+    # apex of a pathological straight-up launch.
     if v < 1e-6:
-        return (vx, vy, vz, 0.0, 0.0, -GRAVITY)
+        return (vx, vy, vz, 0.0, 0.0, -GRAVITY, 0.0)
 
-    # Spin parameter Sp drives both Cd and Cl. Note ω is tracked separately
-    # (not in the state tuple) because its decay is exponential, not an ODE
-    # we want to couple into RK4.
+    # Spin parameter Sp drives Cd, Cl and C_M (Ferguson 2022).
     sp = BALL_RADIUS_M * omega / v
     cd = _cd(sp)
     cl = _cl(sp)
@@ -376,24 +407,24 @@ def _derivatives(
 
     az -= GRAVITY
 
-    return (vx, vy, vz, ax, ay, az)
+    return (vx, vy, vz, ax, ay, az, spin_acceleration(omega, v, air_density))
 
 
 def _rk4_step(
     state: tuple,
-    omega: float,
     axis: tuple,
     air_density: float,
     dt: float,
 ) -> tuple:
-    k1 = _derivatives(state, omega, axis, air_density)
-    s2 = tuple(state[i] + 0.5 * dt * k1[i] for i in range(6))
-    k2 = _derivatives(s2, omega, axis, air_density)
-    s3 = tuple(state[i] + 0.5 * dt * k2[i] for i in range(6))
-    k3 = _derivatives(s3, omega, axis, air_density)
-    s4 = tuple(state[i] + dt * k3[i] for i in range(6))
-    k4 = _derivatives(s4, omega, axis, air_density)
-    return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(6))
+    n = len(state)
+    k1 = _derivatives(state, axis, air_density)
+    s2 = tuple(state[i] + 0.5 * dt * k1[i] for i in range(n))
+    k2 = _derivatives(s2, axis, air_density)
+    s3 = tuple(state[i] + 0.5 * dt * k2[i] for i in range(n))
+    k3 = _derivatives(s3, axis, air_density)
+    s4 = tuple(state[i] + dt * k3[i] for i in range(n))
+    k4 = _derivatives(s4, axis, air_density)
+    return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(n))
 
 
 def launch_relative_spin_axis(spin_axis_deg: float, launch_angle_h_deg: float) -> tuple:
@@ -432,24 +463,24 @@ def simulate(
     # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
     axis = launch_relative_spin_axis(conditions.spin_axis_deg, conditions.launch_angle_h)
 
-    # rpm → rad/s. Decays exponentially each step; see loop below.
+    # rpm → rad/s; integrated with the flight (Ferguson 2022's spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
 
     points: list[TrajectoryPoint] = [
         TrajectoryPoint(0.0, 0.0, 0.0, 0.0, conditions.ball_speed_mph, conditions.spin_rpm)
     ]
 
-    state = (0.0, 0.0, 0.0, vx, vy, vz)
+    state = (0.0, 0.0, 0.0, vx, vy, vz, omega)
     t = 0.0
     max_z = 0.0
     last_sample_t = 0.0
 
     while t < MAX_FLIGHT_SECONDS:
-        new_state = _rk4_step(state, omega, axis, air_density, dt)
+        new_state = _rk4_step(state, axis, air_density, dt)
         t += dt
-        omega *= math.exp(-SPIN_DECAY_RATE * dt)
+        omega = new_state[6]
 
-        _, _, z, _, _, _ = new_state
+        z = new_state[2]
         if z > max_z:
             max_z = z
 
@@ -462,8 +493,8 @@ def simulate(
             denom = prev_z - z
             frac = prev_z / denom if abs(denom) > 1e-9 else 0.0
             t_hit = (t - dt) + frac * dt
-            final = tuple(state[i] + frac * (new_state[i] - state[i]) for i in range(6))
-            fx, fy, fz, fvx, fvy, fvz = final
+            final = tuple(state[i] + frac * (new_state[i] - state[i]) for i in range(7))
+            fx, fy, fz, fvx, fvy, fvz, omega = final
             v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
             points.append(
                 TrajectoryPoint(
@@ -480,7 +511,7 @@ def simulate(
         state = new_state
 
         if t - last_sample_t >= SAMPLE_INTERVAL_S:
-            sx_, sy_, sz_, svx, svy, svz = state
+            sx_, sy_, sz_, svx, svy, svz, _ = state
             v = math.sqrt(svx * svx + svy * svy + svz * svz)
             points.append(
                 TrajectoryPoint(
@@ -500,7 +531,7 @@ def simulate(
 
 def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Trajectory:
     """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7)."""
-    fx, fy, _, fvx, fvy, fvz = final
+    fx, fy, _, fvx, fvy, fvz = final[:6]
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
     horizontal = math.sqrt(fvx * fvx + fvy * fvy)
     return Trajectory(

@@ -178,18 +178,19 @@ def test_a_canonical_attack_angle_is_used_first():
     assert shot.collision_model["inputs"]["attack_angle"]["source"] == "canonical"
 
 
-def test_a_low_confidence_horizontal_launch_gives_no_spin_axis():
-    """The spin axis keeps its horizontal-launch confidence floor (the proxy's guard)."""
+def test_a_low_confidence_horizontal_launch_gives_an_estimated_spin_axis():
+    """Below the confidence floor the axis is estimated, with the reason (V-formulas C2)."""
     shot = _delivered_shot(
         launch_angle_horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
     )
 
     server_module._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_axis_deg is None
     axis = shot.collision_model["metrics"]["spin_axis"]
-    assert axis["status"] == "not_measured"
+    assert axis["status"] == "estimated"
     assert "confidence" in axis["reason"]
+    assert shot.spin_axis_deg == pytest.approx(axis["value"], abs=0.05)
+    assert shot.spin_axis_source.startswith("estimated")
 
 
 def test_mixed_frames_are_computed_and_named():

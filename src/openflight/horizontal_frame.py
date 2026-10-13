@@ -19,8 +19,10 @@ goes through the same two layers:
 The offset reaches the kiosk through ``--camera-capture-horizontal-offset-deg``
 and ``--iwr6843-azimuth-offset-deg``, with the same value (the D34 target-line
 hand-off passes it to both); two different values are refused
-(``resolve_horizontal_offset``). An angle reported with no offset (unset or 0)
-is in the ``unit_boresight`` frame; with one, in the ``target_line`` frame.
+(``resolve_horizontal_offset``). An angle reported with no offset (None:
+no target line was set) is in the ``unit_boresight`` frame; with one, in the
+``target_line`` frame, even when it is exactly 0 (a target line straight down the
+boresight is still a target line).
 """
 
 from __future__ import annotations
@@ -48,8 +50,8 @@ def offset_from_target_yaw(target_yaw_deg: float) -> float:
 
 
 def frame_for(offset_deg: Optional[float]) -> str:
-    """The frame a reported horizontal angle is in, for this offset."""
-    return TARGET_LINE if offset_deg else UNIT_BORESIGHT
+    """The frame a reported horizontal angle is in: None is unset, 0.0 is a target line."""
+    return UNIT_BORESIGHT if offset_deg is None else TARGET_LINE
 
 
 def to_reported_deg(angle_from_boresight_deg, offset_deg: Optional[float]):

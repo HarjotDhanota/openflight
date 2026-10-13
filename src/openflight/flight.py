@@ -25,8 +25,11 @@ Two flights from the same launch (TrackMan's "raw" and "normalized"):
 - ``as_measured``: in the shot's own air. The density is ``Shot.air_density_kg_m3``
   when supplied (the owner's density hook; this module never measures weather),
   else the ISA sea-level 1.225 kg/m3, labelled "ISA default".
-- ``normalized``: sea level, 25 C (77 F), calm, dry air, as in the owner's
-  TrackMan export note "normalized to no wind conditions at 0 ft altitude, 77 F".
+- ``normalized``: TrackMan's reference, 77 F (25 C) and sea level (1013.25 hPa),
+  calm ("normalized to no wind conditions at 0 ft altitude, 77 F", the owner's
+  export; "Default values are 77°F and sea level", TrackMan's normalization page),
+  with a relative humidity TrackMan does not publish, set here as
+  ``NORMALIZED_REFERENCE_RH_PCT`` (50 %). The density is computed from the three.
 
 The launch values (ball speed, launch angles, spin, spin axis) are identical in
 both; only the air differs.
@@ -45,14 +48,20 @@ from .ballistics import (
     BOUNCE_MODELS,
     DEFAULT_SURFACE,
     MODEL_SPIN_SOURCES,
+    ROLL_CLAMP_NOTE,
     LaunchConditions,
     Trajectory,
     ball_speed_for_flight,
     resolve_launch,
+    roll_clamped,
     simulate,
 )
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
-from .collision_model import is_model_geometry_source, model_geometry_inputs
+from .collision_model import (
+    is_estimated_source,
+    is_model_geometry_source,
+    model_geometry_inputs,
+)
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .pi_trace import _finite
 
@@ -93,17 +102,54 @@ STATUS_ORDER = (
 
 FLIGHT_MODEL_LABEL = (
     "Ferguson, McNally & McPhee 2022 quadratic Cd/Cl (ISEA 14, doi:10.5703/1288284317493), "
-    "RK4 point mass, spin decay 4 %/s"
+    "RK4 point mass, spin decay by the same paper's C_M = 0.01 S"
 )
 
-# Normalized air: sea level, 25 C (77 F), calm, dry. Ideal gas, dry-air specific
-# gas constant 287.05 J/(kg K). TrackMan's export note gives altitude and
-# temperature but not humidity; dry air is our stated assumption.
+# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
+# calm. TrackMan publishes no humidity (its normalization page and help articles
+# give altitude and temperature only), so the relative humidity is a named
+# assumption: 50 %, as the owner's August research took it (1.1769 kg/m3); dry air
+# (0 %) gives 1.1839 kg/m3 and saturated air (100 %) 1.1700.
+NORMALIZED_TEMPERATURE_C = 25.0
+NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
 NORMALIZED_PRESSURE_PA = 101325.0
-NORMALIZED_TEMPERATURE_K = 298.15
-DRY_AIR_GAS_CONSTANT = 287.05
-AIR_DENSITY_NORMALIZED = NORMALIZED_PRESSURE_PA / (DRY_AIR_GAS_CONSTANT * NORMALIZED_TEMPERATURE_K)
-NORMALIZED_AIR_LABEL = "normalized: sea level (101,325 Pa), 25 C (77 F), calm, dry air"
+NORMALIZED_REFERENCE_RH_PCT = 50.0
+DRY_AIR_GAS_CONSTANT = 287.05  # J/(kg K)
+WATER_VAPOUR_GAS_CONSTANT = 461.495  # J/(kg K)
+
+
+def saturation_vapour_pressure_pa(temperature_c: float) -> float:
+    """Saturation vapour pressure over water, Pa: Buck (1981).
+
+    A. L. Buck, "New equations for computing vapor pressure and enhancement
+    factor", J. Appl. Meteorol. 20, 1527-1532 (1981):
+    e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C. Buck's enhancement
+    factor for moist air (about 1.004 at sea level) is left out: it moves the
+    density by under 0.003 %.
+    """
+    return 611.21 * math.exp(17.502 * temperature_c / (240.97 + temperature_c))
+
+
+def humid_air_density_kg_m3(temperature_c: float, pressure_pa: float, rh_pct: float) -> float:
+    """Density of moist air: dry air and water vapour as ideal gases (Dalton's law).
+
+    rho = (p - e) / (R_d T) + e / (R_v T), with e = RH x e_s(T) (Buck 1981).
+    """
+    temperature_k = temperature_c + 273.15
+    vapour = rh_pct / 100.0 * saturation_vapour_pressure_pa(temperature_c)
+    return (pressure_pa - vapour) / (DRY_AIR_GAS_CONSTANT * temperature_k) + vapour / (
+        WATER_VAPOUR_GAS_CONSTANT * temperature_k
+    )
+
+
+AIR_DENSITY_NORMALIZED = humid_air_density_kg_m3(
+    NORMALIZED_TEMPERATURE_C, NORMALIZED_PRESSURE_PA, NORMALIZED_REFERENCE_RH_PCT
+)
+NORMALIZED_AIR_LABEL = (
+    f"normalized: {NORMALIZED_TEMPERATURE_C:.1f} °C (77 °F), "
+    f"{NORMALIZED_PRESSURE_PA / 100.0:.2f} hPa (sea level), "
+    f"RH {NORMALIZED_REFERENCE_RH_PCT:g} % (assumed: TrackMan publishes none), calm"
+)
 
 AIR_ISA_DEFAULT = "ISA default"
 AIR_SUPPLIED = "supplied"
@@ -248,6 +294,8 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
         spin_label = f"calculated ({shot.spin_method or 'model unnamed on the shot'})"
     elif conditions.spin_source == STATUS_MODEL_GEOMETRY:
         spin_label = f"model geometry ({shot.spin_method or 'model unnamed on the shot'})"
+    elif conditions.spin_source == STATUS_ESTIMATED:
+        spin_label = f"estimated ({shot.spin_method or 'model unnamed on the shot'})"
     else:
         spin_label = CLUB_TYPICAL_SPIN_LABEL
 
@@ -295,9 +343,44 @@ def _model_geometry_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -
     return named
 
 
-def _flight_status(substitutes: bool, model_geometry: list[str]) -> str:
-    """The weakest input label: estimated (OPS-only), model geometry, else calculated."""
-    labels = [STATUS_ESTIMATED if substitutes else STATUS_CALCULATED]
+RADIAL_SPEED_REASON = (
+    "ball speed is the OPS line-of-sight speed (full speed refused: {}), about 3-5% low"
+)
+
+
+def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
+    """Why the flight's inputs make it an estimate, one reason each; empty when none do.
+
+    The OPS243's line-of-sight (radial) ball speed stands in for the full speed when
+    E3 refused it: a different, lower quantity (V-formulas C1).
+    """
+    if conditions is None:
+        return []
+    reasons = []
+    _speed, speed_label = ball_speed_for_flight(shot)
+    if speed_label.startswith("radial"):
+        full = getattr(shot, "ball_speed_full", None)
+        why = (full or {}).get("reason") if isinstance(full, dict) else None
+        reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
+    # a collision spin or axis built on an estimated input (C2), with that input's reason
+    metrics = (getattr(shot, "collision_model", None) or {}).get("metrics") or {}
+    estimated_spin = conditions.spin_source == STATUS_ESTIMATED
+    estimated_axis = _finite(shot.spin_axis_deg) and is_estimated_source(
+        getattr(shot, "spin_axis_source", None)
+    )
+    for used, name in ((estimated_spin, "spin_rate"), (estimated_axis, "spin_axis")):
+        if not used:
+            continue
+        why = (metrics.get(name) or {}).get("reason") or f"{name.replace('_', ' ')} estimated"
+        if why not in reasons:
+            reasons.append(why)
+    return reasons
+
+
+def _flight_status(substitutes: bool, model_geometry: list[str], estimated: list[str] = ()) -> str:
+    """The weakest input label: estimated (OPS-only, or an estimated input), model
+    geometry, else calculated."""
+    labels = [STATUS_ESTIMATED if substitutes or estimated else STATUS_CALCULATED]
     if model_geometry:
         labels.append(STATUS_MODEL_GEOMETRY)
     return min(labels, key=STATUS_ORDER.index)
@@ -405,6 +488,7 @@ def _block(
     surface_assumed: bool,
     launch: Optional[dict],
     model_geometry: tuple = (),
+    estimated: tuple = (),
 ) -> dict:
     block = {
         "air_density_kg_m3": density,
@@ -442,8 +526,11 @@ def _block(
             "status": status,
             "source": _source(name, status, air, surface, surface_assumed, model_geometry),
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
-            "reason": None,
+            # an estimate says why it is one (V-formulas C1, C2)
+            "reason": "; ".join(estimated) if status == STATUS_ESTIMATED and estimated else None,
         }
+        if name in _TOTAL_METRICS and roll_clamped(traj.landing_angle_deg, surface):
+            metrics[name]["note"] = ROLL_CLAMP_NOTE
     block["metrics"] = metrics
     return block
 
@@ -469,7 +556,8 @@ def compute_flight(
     surface = DEFAULT_SURFACE if surface is None else surface
     conditions = resolve_launch(shot, substitutes=substitutes) if enabled else None
     model_geometry = tuple(_model_geometry_inputs(shot, conditions))
-    status = _flight_status(substitutes, list(model_geometry))
+    estimated = tuple(_estimated_inputs(shot, conditions))
+    status = _flight_status(substitutes, list(model_geometry), list(estimated))
 
     if not enabled:
         reason = "flight model disabled (--no-ballistics)"
@@ -507,6 +595,7 @@ def compute_flight(
         },
         "inputs": _inputs(shot, conditions),
         "model_geometry_inputs": list(model_geometry),
+        "estimated_inputs": list(estimated),
         "range_basis": RANGE_BASIS,
         "density_hook": DENSITY_HOOK,
         "as_measured": _block(
@@ -521,6 +610,7 @@ def compute_flight(
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
             model_geometry=model_geometry,
+            estimated=estimated,
         ),
         "normalized": _block(
             traj=norm_traj,
@@ -534,6 +624,7 @@ def compute_flight(
             surface_assumed=surface_assumed,
             launch=copy.deepcopy(launch),
             model_geometry=model_geometry,
+            estimated=estimated,
         ),
     }
     return FlightResult(

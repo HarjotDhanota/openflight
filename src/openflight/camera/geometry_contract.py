@@ -69,7 +69,7 @@ class EffectiveCameraGeometryInputs:
     image_height_px: int
     horizontal_pixel_sign: float
     roll_correction_deg: float
-    ball_horizontal_output_offset_deg: float
+    ball_horizontal_output_offset_deg: float | None
     ball_diameter_m: float
     calibrated_model_snapshot: Mapping[str, Any] | None = None
     calibrated_mode_evidence: Mapping[str, Any] | None = None
@@ -88,12 +88,19 @@ class EffectiveCameraGeometryInputs:
             "camera_forward_offset_m",
             "horizontal_pixel_sign",
             "roll_correction_deg",
-            "ball_horizontal_output_offset_deg",
             "ball_diameter_m",
             "ball_lateral_offset_m",
         )
         for name in numeric:
             object.__setattr__(self, name, _number(getattr(self, name), name))
+        # None: no target line set (the boresight frame); a number, even 0.0, is one
+        offset = self.ball_horizontal_output_offset_deg
+        if offset is not None:
+            object.__setattr__(
+                self,
+                "ball_horizontal_output_offset_deg",
+                _number(offset, "ball_horizontal_output_offset_deg"),
+            )
         object.__setattr__(self, "image_width_px", _integer(self.image_width_px, "image_width_px"))
         object.__setattr__(
             self, "image_height_px", _integer(self.image_height_px, "image_height_px")
@@ -187,7 +194,7 @@ class EffectiveCameraGeometryInputs:
             image_height_px=camera["height"],
             horizontal_pixel_sign=-1.0 if mirror else 1.0,
             roll_correction_deg=camera.get("roll_correction_deg", 0.0),
-            ball_horizontal_output_offset_deg=camera.get("horizontal_offset_deg", 0.0),
+            ball_horizontal_output_offset_deg=camera.get("horizontal_offset_deg"),
             ball_diameter_m=camera.get("ball_diameter_m", GOLF_BALL_DIAMETER_M),
             ball_lateral_offset_m=(
                 camera["tee_side_offset_m"] if camera.get("tee_side_offset_m") is not None else 0.0

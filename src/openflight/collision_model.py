@@ -81,10 +81,14 @@ MODEL_VERSION = "e2-2026-10-12"
 LABEL_MEASURED = "measured"
 LABEL_CALCULATED = "calculated"
 LABEL_MODEL_GEOMETRY = "model_geometry"
+# a measured input too weak to stand as one (e.g. a low-coherence horizontal launch):
+# every output built on it is "estimated", with the input's reason (V-formulas C2)
+LABEL_ESTIMATED = "estimated"
 STATUS_CALCULATED = "calculated"
 STATUS_MODEL_GEOMETRY = "model_geometry"
+STATUS_ESTIMATED = "estimated"
 STATUS_NOT_MEASURED = "not_measured"
-_INPUT_LABELS = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY)
+_INPUT_LABELS = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
 
 SOURCE_INVERSION = "D-plane inversion, Wood et al. 2018 weights"
 SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and loft"
@@ -93,6 +97,8 @@ SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
 # Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
 SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
+# Shot.spin_axis_source for an axis built on an estimated input starts so (C2).
+SPIN_AXIS_ESTIMATED_PREFIX = "estimated"
 NOTE_NO_GEAR = "no impact location: gear effect not applied"
 # Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
 # both start with "calculated"). An axis built on a model-geometry input (D39) starts
@@ -104,6 +110,7 @@ SPIN_AXIS_SOURCE_GEAR = f"calculated ({AXIS_BASIS_GEAR})"
 # Shot.spin_method for the Penner spin, by the labels of the inputs it was built on.
 SPIN_METHOD_PENNER = "Penner 2001"
 SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_PENNER}; club inputs model geometry (D39)"
+SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_PENNER}; an input estimated"
 
 MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
@@ -197,10 +204,23 @@ def _not_measured(unit: str, reason: str, source: Optional[str] = None) -> Metri
 
 
 def _status_from(*labels: Optional[str]) -> str:
-    """calculated, unless any input is model geometry (D39), which it inherits."""
+    """The weakest input label: estimated, then model geometry (D39), else calculated."""
+    if LABEL_ESTIMATED in labels:
+        return STATUS_ESTIMATED
     if LABEL_MODEL_GEOMETRY in labels or STATUS_MODEL_GEOMETRY in labels:
         return STATUS_MODEL_GEOMETRY
     return STATUS_CALCULATED
+
+
+def _estimated_reason(*sources) -> Optional[str]:
+    """The reasons of the estimated inputs (or outputs) a value is built on, or None."""
+    reasons = []
+    for source in sources:
+        label = getattr(source, "label", None) or getattr(source, "status", None)
+        reason = getattr(source, "reason", None)
+        if label == LABEL_ESTIMATED and reason and reason not in reasons:
+            reasons.append(reason)
+    return "; ".join(reasons) or None
 
 
 def _frame_note(frame: Optional[str]) -> Optional[str]:
@@ -361,6 +381,7 @@ def calculated_spin(*, club_speed: Input, spin_loft: Metric) -> Metric:
         unit="rpm",
         frame=spin_loft.frame,
         note=_frame_note(spin_loft.frame),
+        reason=_estimated_reason(club_speed, spin_loft),
     )
 
 
@@ -424,6 +445,7 @@ def spin_axis(
             unit="deg",
             frame=d_plane_tilt.frame,
             note=note,
+            reason=_estimated_reason(d_plane_tilt),
         )
     if spin_rate is None or not spin_rate.present:
         return _not_measured("deg", "gear effect needs the calculated spin rate", SOURCE_AXIS)
@@ -437,6 +459,7 @@ def spin_axis(
         unit="deg",
         frame=d_plane_tilt.frame,
         note=frame_note,
+        reason=_estimated_reason(d_plane_tilt, spin_rate),
     )
 
 
@@ -475,6 +498,9 @@ def model_geometry_inputs(inputs: dict) -> list[str]:
 def shot_spin_axis_source(axis: Metric, inputs: Optional[dict] = None) -> str:
     """The Shot.spin_axis_source string for a calculated or model-geometry spin axis."""
     gear = SOURCE_GEAR in (axis.source or "")
+    if axis.status == STATUS_ESTIMATED:
+        basis = AXIS_BASIS_GEAR if gear else AXIS_BASIS_TILT
+        return f"{SPIN_AXIS_ESTIMATED_PREFIX} ({basis}; {axis.reason or 'an input estimated'})"
     if axis.status == STATUS_MODEL_GEOMETRY:
         basis = AXIS_BASIS_GEAR if gear else AXIS_BASIS_TILT
         named = ", ".join(model_geometry_inputs(inputs or {})) or "inputs unnamed"
@@ -484,6 +510,8 @@ def shot_spin_axis_source(axis: Metric, inputs: Optional[dict] = None) -> str:
 
 def shot_spin_method(status: str, input_labels) -> str:
     """The Shot.spin_method string for the Penner spin, naming its inputs' weakest label."""
+    if status == STATUS_ESTIMATED:
+        return SPIN_METHOD_ESTIMATED
     if status == STATUS_MODEL_GEOMETRY:
         return SPIN_METHOD_MODEL_GEOMETRY
     weakest = LABEL_CALCULATED if LABEL_CALCULATED in set(input_labels) else LABEL_MEASURED
@@ -498,6 +526,11 @@ def is_calculated_source(source: Optional[str]) -> bool:
 def is_model_geometry_source(source: Optional[str]) -> bool:
     """Whether a Shot source label names a value built on model geometry (D39)."""
     return bool(source) and source.startswith(SPIN_AXIS_MODEL_GEOMETRY_PREFIX)
+
+
+def is_estimated_source(source: Optional[str]) -> bool:
+    """Whether a Shot source label names a value built on an estimated input (C2)."""
+    return bool(source) and source.startswith(SPIN_AXIS_ESTIMATED_PREFIX)
 
 
 GYRO_REASON = (
@@ -554,6 +587,7 @@ def _face_angle(
             unit="deg",
             frame=frame,
             note=_frame_note(frame),
+            reason=_estimated_reason(path, launch_h),
         ),
         frame,
     )
@@ -574,6 +608,7 @@ def _dynamic_loft(weights: Optional[LaunchWeights], attack: Input, launch_v: Inp
         status=_status_from(attack.label, launch_v.label),
         source=SOURCE_INVERSION,
         unit="deg",
+        reason=_estimated_reason(attack, launch_v),
     )
 
 
@@ -600,6 +635,7 @@ def evaluate(
             unit="deg",
             frame=frame,
             note=_frame_note(frame),
+            reason=_estimated_reason(face, club_path),
         )
     else:
         face_to_path = _not_measured("deg", f"face angle not measured ({face.reason})", SOURCE_D37)
@@ -607,6 +643,7 @@ def evaluate(
     delivery_present = face.present and loft.present and attack_angle.present and club_path.present
     if delivery_present:
         status = _status_from(face.status, loft.status, attack_angle.label, club_path.label)
+        why = _estimated_reason(face, loft, attack_angle, club_path)
         loft_value = metric_definitions.spin_loft_deg(
             loft.value, face.value, attack_angle.value, club_path.value
         )
@@ -614,12 +651,16 @@ def evaluate(
             loft.value, face.value, attack_angle.value, club_path.value
         )
         spin_loft = (
-            Metric(loft_value, status, SOURCE_D37, "deg", frame, note=_frame_note(frame))
+            Metric(
+                loft_value, status, SOURCE_D37, "deg", frame, reason=why, note=_frame_note(frame)
+            )
             if loft_value is not None and math.isfinite(loft_value)
             else _not_measured("deg", "spin loft undefined for this delivery", SOURCE_D37)
         )
         tilt = (
-            Metric(tilt_value, status, SOURCE_D37, "deg", frame, note=_frame_note(frame))
+            Metric(
+                tilt_value, status, SOURCE_D37, "deg", frame, reason=why, note=_frame_note(frame)
+            )
             if tilt_value is not None and math.isfinite(tilt_value)
             else _not_measured(
                 "deg", "no D plane: club direction parallel to the face normal", SOURCE_D37

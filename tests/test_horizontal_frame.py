@@ -42,7 +42,8 @@ def test_the_hand_off_value_is_minus_the_target_yaw():
 
 def test_frame_is_the_boresight_until_an_offset_is_set():
     assert frame_for(None) == UNIT_BORESIGHT == "unit_boresight"
-    assert frame_for(0.0) == UNIT_BORESIGHT
+    # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+    assert frame_for(0.0) == TARGET_LINE
     assert frame_for(OFFSET_DEG) == TARGET_LINE == "target_line"
     assert frame_for(-OFFSET_DEG) == TARGET_LINE
 
@@ -154,12 +155,13 @@ def test_a_ball_straight_down_the_target_line_reports_zero():
 
 
 @pytest.mark.parametrize(
-    ("offset", "frame"), [(0.0, "unit_boresight"), (OFFSET_DEG, "target_line")]
+    ("offset", "frame"),
+    [(None, "unit_boresight"), (0.0, "target_line"), (OFFSET_DEG, "target_line")],
 )
 def test_iwr_horizontal_launch_adds_the_offset_and_names_its_frame(offset, frame):
     measured = _iwr_horizontal(3.3, offset)
 
-    assert measured.horizontal_deg == pytest.approx(3.3 + offset)
+    assert measured.horizontal_deg == pytest.approx(3.3 + (offset or 0.0))
     assert measured.horizontal_raw_deg == pytest.approx(3.3)
     assert measured.horizontal_frame == frame
     assert measured.to_dict()["horizontal_frame"] == frame

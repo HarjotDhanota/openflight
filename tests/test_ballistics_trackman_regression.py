@@ -55,14 +55,29 @@ TRACKMAN_CSV = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 # ceiling: the straight-line carry is longer than the old x component on
 # offline shots, which adds to the quadratic's existing +1.3 yd 7-iron bias.
 #
+# V-formulas C4 + C7 (both deliberate, not regressions, so the budgets were
+# RAISED, and say so): spin decay by Ferguson 2022's own C_M = 0.01 S, and the
+# model now flies the kiosk's own normalized reference (25 C, 1013.25 hPa, RH 50 %:
+# 1.1769 kg/m3) instead of a hand-typed dry 1.184 kg/m3, so the comparison is
+# normalized against normalized at the reference the kiosk reports. Thinner air
+# carries farther, which adds to the 7-iron's existing positive bias.
+#
+#                    + C4 (dry 1.184)    + C7 (RH 50 %)
+#   club            rmse     bias       rmse    bias
+#   7-iron           1.81   +1.75       2.25   +2.20
+#   driver           1.44   -0.60       1.54   -0.34
+#   pitching wedge   3.43   +3.18       3.73   +3.47
+#   OVERALL          2.31   +1.39       2.60   +1.72
+#
 # Ceilings sit slightly above the measured values to absorb float/platform
-# drift. Lower them again if the model improves; never raise them.
+# drift. Lower them again if the model improves; never raise them without a
+# stated, deliberate change of reference (as above).
 RMSE_BUDGET_YARDS = {
-    "driver": 1.5,
-    "7-iron": 2.0,
+    "driver": 1.6,
+    "7-iron": 2.3,
     "pitching wedge": 4.0,
 }
-OVERALL_RMSE_BUDGET_YARDS = 2.6
+OVERALL_RMSE_BUDGET_YARDS = 2.7
 
 # Apex ceilings in FEET (TrackMan's "Max Height - Height" column is feet).
 # Apex is the strongest evidence the quadratic form is right: nothing was ever
@@ -74,14 +89,17 @@ OVERALL_RMSE_BUDGET_YARDS = 2.6
 #   pitching wedge    18.00         2.81
 #   OVERALL           15.05         2.56
 #
+#   + C4 and C7 (RH 50 %): driver 4.08, 7-iron 1.74, PW 2.77, overall 2.99
+#   (driver and overall budgets RAISED for that stated change of reference).
+#
 # Seeded above measured to absorb float/platform drift, matching the carry
 # budgets above. Lower them when the model improves; never raise them.
 APEX_RMSE_BUDGET_FEET = {
-    "driver": 4.0,
+    "driver": 4.2,
     "7-iron": 2.0,
     "pitching wedge": 3.5,
 }
-OVERALL_APEX_RMSE_BUDGET_FEET = 3.0
+OVERALL_APEX_RMSE_BUDGET_FEET = 3.1
 
 # The reference capture is a fixed, committed file: if the shot count changes,
 # the fixture changed and every budget above needs re-deriving.

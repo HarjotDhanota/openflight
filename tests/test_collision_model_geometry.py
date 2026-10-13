@@ -437,7 +437,8 @@ ALL_MODEL_GEOMETRY_INPUTS = (
 
 
 def _arc_flight_shot(**overrides):
-    shot = _arc_shot(mode="rolling-buffer", **overrides)
+    # a full ball speed: a flight on the line-of-sight speed is estimated (V-formulas C1)
+    shot = _arc_shot(mode="rolling-buffer", ball_speed_contract="full", **overrides)
     _attach(shot)
     return shot
 
@@ -528,7 +529,6 @@ def test_an_ops_only_flight_stays_estimated_over_model_geometry():
     "overrides, reason",
     [
         ({"club_speed_mph": None}, "spin not measured"),
-        ({"launch_angle_horizontal_confidence": 0.5}, "spin axis not measured"),
         ({"club_delivery": None}, "spin not measured"),
     ],
 )
@@ -543,12 +543,14 @@ def test_a_missing_model_geometry_input_leaves_the_flight_not_measured(overrides
             assert reason in metric["reason"], (block, name)
 
 
-def test_a_model_geometry_spin_without_an_axis_is_not_called_unmeasured_spin():
+def test_a_weak_horizontal_launch_makes_the_model_geometry_flight_an_estimate():
+    """Below the confidence floor the axis is estimated, not withheld (V-formulas C2),
+    and estimated is weaker than model geometry."""
     payload = _flight(_arc_flight_shot(launch_angle_horizontal_confidence=0.5)).to_dict()
 
-    reason = payload["as_measured"]["metrics"]["carry"]["reason"]
-    assert "spin axis not measured" in reason
-    assert "spin not measured" not in reason
+    carry = payload["as_measured"]["metrics"]["carry"]
+    assert carry["status"] == "estimated"
+    assert "horizontal launch confidence 0.50 below 0.6" in carry["reason"]
 
 
 # ---- finalization: carry_status is the flight's label --------------------------------
@@ -561,6 +563,15 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
+    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
+    # the other inputs' labels
+    def full_speed(shot):
+        shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
+        shot.ball_speed_full_mph = shot.ball_speed_mph
+
+    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):
@@ -604,9 +615,9 @@ def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
 
     assert shot.flight["as_measured"]["metrics"]["carry"]["status"] == "calculated"
     assert shot.carry_status == "calculated"
-    # simulators unchanged: a carry flown on a measured spin still goes out "measured"
     resolved = resolve_shot(shot, PlayerState(), substitutes=False)
-    assert resolved.provenance["carry"] == "measured"
+    # a simulated carry is the flight model's: at most calculated (V-formulas C8)
+    assert resolved.provenance["carry"] == "calculated"
     assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
 
 

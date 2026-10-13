@@ -230,7 +230,7 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
     net_range_m: float | None,
     tx_order: str,
     tdm_sign_policy: str,
-    azimuth_offset_deg: float,
+    azimuth_offset_deg: float | None,
     horizontal_phase_reference_rad: float | None,
     club_window_policy: ClubWindowPolicy,
     club_impact_correction_s: float,
@@ -305,7 +305,7 @@ class IWR6843Runtime:
     capture_timeout_s: float = 12.0
     # The one horizontal offset (D36 item 2): -(target yaw), + when the
     # boresight points right of the target line; added to launch and club path.
-    azimuth_offset_deg: float = 0.0
+    azimuth_offset_deg: float | None = None
     horizontal_phase_reference_rad: float | None = None
     tdm_sign_policy: str = "positive"
     club_window_policy: ClubWindowPolicy = field(default_factory=ClubWindowPolicy)

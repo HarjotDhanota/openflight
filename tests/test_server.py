@@ -5535,16 +5535,17 @@ class TestOnShotDetected:
         assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
         assert shot.to_dict()["spin_axis_frame"] == "mixed"
 
-    def test_spin_axis_withheld_when_horizontal_confidence_below_gate(self, monkeypatch):
-        """Regression guard: spin axis must not appear the moment club path
-        is non-null -- only once the horizontal leg is trustworthy enough."""
+    def test_spin_axis_estimated_when_horizontal_confidence_below_gate(self, monkeypatch):
+        """Below the horizontal leg's confidence floor the axis is labelled estimated,
+        never calculated (V-formulas C2; it used to be withheld)."""
         shot = self._spin_axis_shot(
             horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
         )
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
-        assert shot.spin_axis_deg is None
+        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
+        assert shot.spin_axis_source.startswith("estimated")
 
 
 class TestBallisticsConfiguration:

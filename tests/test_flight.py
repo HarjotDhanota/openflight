@@ -58,6 +58,8 @@ def _shot(**overrides) -> Shot:
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
+        # a full ball speed: a flight on the line-of-sight speed is estimated (C1)
+        ball_speed_contract="full",
     )
     values.update(overrides)
     return Shot(**values)
@@ -193,8 +195,9 @@ def test_raw_and_normalized_share_their_launch_and_differ_only_in_the_air():
     assert norm["metrics"]["carry"]["value"] > raw["metrics"]["carry"]["value"]
 
 
-def test_the_normalized_density_is_sea_level_25c_dry_air():
-    assert AIR_DENSITY_NORMALIZED == pytest.approx(101325.0 / (287.05 * 298.15), rel=1e-4)
+def test_the_normalized_density_is_sea_level_25c_at_the_reference_humidity():
+    # 50 % RH (V-formulas C7); dry air would be 101325 / (287.05 x 298.15) = 1.1839
+    assert AIR_DENSITY_NORMALIZED == pytest.approx(1.1769, abs=5e-5)
 
 
 def test_a_supplied_density_is_used_and_labelled():
@@ -224,8 +227,10 @@ def test_the_full_ball_speed_is_preferred_and_recorded():
     flight = _fusion(shot)
     assert flight["inputs"]["ball_speed"]["value"] == 155.0
     assert flight["inputs"]["ball_speed"]["label"].startswith("full")
-    straight = _fusion(_shot())
+    straight = _fusion(_shot(ball_speed_contract="radial"))
     assert straight["inputs"]["ball_speed"]["label"].startswith("radial")
+    # the line-of-sight speed stands in for the full speed: an estimate (V-formulas C1)
+    assert straight["as_measured"]["metrics"]["carry"]["status"] == "estimated"
     assert (
         flight["as_measured"]["metrics"]["carry"]["value"]
         > straight["as_measured"]["metrics"]["carry"]["value"]
@@ -309,6 +314,15 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
+    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
+    # the other inputs' labels
+    def full_speed(shot):
+        shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
+        shot.ball_speed_full_mph = shot.ball_speed_mph
+
+    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

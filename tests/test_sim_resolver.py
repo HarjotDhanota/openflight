@@ -44,13 +44,13 @@ def test_full_measured_shot():
         "vla",
         "hla",
         "total_spin",
-        "spin_axis",
-        "back_spin",
-        "side_spin",
         "club_speed",
         "club_path",
     ):
         assert r.provenance[f] == "measured", f
+    # no sensor measures the spin axis: the kiosk computes it (V-formulas C8)
+    for f in ("spin_axis", "back_spin", "side_spin"):
+        assert r.provenance[f] == "calculated", f
 
 
 def test_missing_vla_falls_back_to_optimal_launch():
@@ -118,7 +118,8 @@ def test_an_ops_only_carry_is_always_estimated():
     assert estimated.provenance["carry"] == "estimated"
 
 
-def test_a_fusion_carry_from_measured_inputs_is_sent_as_measured():
+def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
+    """A simulated carry is the flight model's output: at most calculated (C8)."""
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_horizontal=1.5,
@@ -130,7 +131,7 @@ def test_a_fusion_carry_from_measured_inputs_is_sent_as_measured():
     )
     resolved = resolve_shot(shot, PlayerState(), substitutes=False)
     assert resolved.carry_yards == pytest.approx(244.0)
-    assert resolved.provenance["carry"] == "measured"
+    assert resolved.provenance["carry"] == "calculated"
 
 
 def test_missing_ball_speed_raises():
