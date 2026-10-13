@@ -9,12 +9,18 @@ import logging
 from datetime import timedelta
 
 import numpy as np
+import pytest
 
 from openflight.camera import tester_server as ts
 from tests.test_tester_server import _guided_camera, _guided_patch, _guided_result
 
-# the flow tests' ``inputs`` fixture, registered under its own name
-from tests.test_tester_tee_range_flow import inputs as flow_inputs  # noqa: F401
+
+@pytest.fixture
+def flow_inputs(tmp_path):
+    """The setup flow tests' input files."""
+    from tests.test_tester_tee_range_flow import make_inputs  # noqa: PLC0415
+
+    return make_inputs(tmp_path)
 
 
 def _locked_controller(monkeypatch, pose, estimate=None):
@@ -222,7 +228,7 @@ class TestSaveRunsOutsideTheRequestLock:
     def test_page_requests_are_answered_while_the_save_searches(
         self,
         tmp_path,
-        inputs,
+        flow_inputs,
         monkeypatch,
     ):
         import threading  # noqa: PLC0415
@@ -230,7 +236,7 @@ class TestSaveRunsOutsideTheRequestLock:
 
         from tests.test_tester_tee_range_flow import app_for, phase, post, start_arm5  # noqa
 
-        app, tester = app_for(tmp_path, inputs, monkeypatch)
+        app, tester = app_for(tmp_path, flow_inputs, monkeypatch)
         client = app.test_client()
         start_arm5(client, tester)
         searching, release = threading.Event(), threading.Event()
@@ -267,14 +273,14 @@ class TestSaveRunsOutsideTheRequestLock:
     def test_a_second_save_while_one_searches_is_refused(
         self,
         tmp_path,
-        inputs,
+        flow_inputs,
         monkeypatch,
     ):
         import threading  # noqa: PLC0415
 
         from tests.test_tester_tee_range_flow import app_for, post, start_arm5  # noqa
 
-        app, tester = app_for(tmp_path, inputs, monkeypatch)
+        app, tester = app_for(tmp_path, flow_inputs, monkeypatch)
         client = app.test_client()
         start_arm5(client, tester)
         searching, release = threading.Event(), threading.Event()

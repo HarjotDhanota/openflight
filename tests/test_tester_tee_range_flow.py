@@ -443,6 +443,11 @@ def qualification(paths, *, residual=0.08):
 
 @pytest.fixture
 def inputs(tmp_path):
+    return make_inputs(tmp_path)
+
+
+def make_inputs(tmp_path):
+    """The setup's input files in ``tmp_path``; other test modules build them too."""
     paths = {
         "rig": tmp_path / "rig.json",
         "camera": tmp_path / "camera.json",
