@@ -22,6 +22,12 @@ DEFAULT_APPROVED_RIGS = (
 APPROVED_RIGS_SCHEMA = "openflight.approved_rig_geometry.v1"
 RUNTIME_REQUIREMENTS = ["ops", "camera", "iwr6843", "lis3dh"]
 PLACEMENT_TOLERANCE_DEG = 2.0
+# The operator's confirmation is kept on disk beside the tester's sessions, so a
+# restarted tester server keeps it. Only a real change asks for it again: another
+# approved configuration, or the unit turned by more than this since it was confirmed.
+CONFIRMATION_FILE = "setup-confirmation.json"
+CONFIRMATION_SCHEMA = "openflight.tester_setup_confirmation.v1"
+CONFIRMATION_MOVE_TOLERANCE_DEG = 0.5
 
 
 def placement_guard(
@@ -90,6 +96,47 @@ def placement_guard(
         "warning": warning,
         "accuracy_qualified": False,
     }
+
+
+def reading_angles(reading: Any) -> tuple[float | None, float | None]:
+    """The LIS3DH pitch and roll a confirmation compares, or None where a reading has none."""
+    get = (
+        reading.get
+        if isinstance(reading, Mapping)
+        else lambda name, default=None: getattr(reading, name, default)
+    )
+
+    def number(*names: str) -> float | None:
+        for name in names:
+            value = get(name)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+            ):
+                return float(value)
+        return None
+
+    return number("calibrated_pitch_deg", "pitch_deg", "camera_pitch_deg"), number("roll_deg")
+
+
+def unit_moved(confirmed: Mapping[str, Any], reading: Any) -> str | None:
+    """Why the unit no longer stands as it was confirmed, or None (also with no angles)."""
+    if not isinstance(reading, Mapping) or reading.get("status") != "stable":
+        return None
+    at_confirm = confirmed.get("reading") or {}
+    now_pitch, now_roll = reading_angles(reading)
+    for name, now in (("pitch", now_pitch), ("roll", now_roll)):
+        then = at_confirm.get(f"{name}_deg")
+        if now is None or not isinstance(then, (int, float)) or isinstance(then, bool):
+            continue
+        if abs(now - float(then)) > CONFIRMATION_MOVE_TOLERANCE_DEG:
+            return (
+                f"the unit moved since the setup was confirmed ({name} {float(then):+.2f} "
+                f"-> {now:+.2f} degrees, more than {CONFIRMATION_MOVE_TOLERANCE_DEG:g}); "
+                "confirm the setup again"
+            )
+    return None
 
 
 def setup_config_hash(
@@ -184,7 +231,12 @@ def _operator_remedy(path: Path) -> str:
 
 
 class SetupEligibility:
-    """Server-lifetime physical confirmations bound to tester and exact configuration."""
+    """Physical confirmations bound to tester, exact configuration and the unit's pose.
+
+    Kept on disk (``setup-confirmation.json`` per tester) so a tester-server
+    restart keeps them; another configuration, or the unit turned by more than
+    ``CONFIRMATION_MOVE_TOLERANCE_DEG`` since, asks for a new one.
+    """
 
     def __init__(
         self,
@@ -204,6 +256,55 @@ class SetupEligibility:
         self.inclinometer_zero_offset_deg = float(inclinometer_zero_offset_deg)
         self._lock = threading.Lock()
         self._confirmations: dict[str, dict[str, Any]] = {}
+
+    def _confirmation_path(self, tester_id: str) -> Path:
+        return self.sessions_root.expanduser().resolve() / tester_id / CONFIRMATION_FILE
+
+    def _stored_confirmation(self, tester_id: str) -> dict[str, Any]:
+        """This tester's confirmation: held in memory, else read once from disk."""
+        with self._lock:
+            if tester_id in self._confirmations:
+                return dict(self._confirmations[tester_id])
+        try:
+            payload = json.loads(self._confirmation_path(tester_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+        confirmation: dict[str, Any] = {}
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("schema") == CONFIRMATION_SCHEMA
+            and payload.get("tester_id") == tester_id
+            and isinstance(payload.get("config_hash"), str)
+            and isinstance(payload.get("confirmation_id"), str)
+        ):
+            confirmation = {
+                key: payload.get(key)
+                for key in (
+                    "confirmed_at",
+                    "reconfirmed_at",
+                    "config_hash",
+                    "confirmation_id",
+                    "reading",
+                )
+            }
+        with self._lock:
+            self._confirmations.setdefault(tester_id, confirmation)
+            return dict(self._confirmations[tester_id])
+
+    def _write_confirmation(self, tester_id: str, confirmation: Mapping[str, Any]) -> None:
+        path = self._confirmation_path(tester_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {"schema": CONFIRMATION_SCHEMA, "tester_id": tester_id, **dict(confirmation)},
+                indent=2,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
 
     def _config_hash(self, geometry_hash: str | None) -> str | None:
         if geometry_hash is None:
@@ -253,12 +354,13 @@ class SetupEligibility:
         geometry_hash, geometry = inspect_geometry(self.geometry_path, self.approved_rigs)
         config_hash = self._config_hash(geometry_hash)
         inclinometer = self._inclinometer_check(reading)
-        with self._lock:
-            confirmation = dict(self._confirmations.get(tester_id, {}))
+        confirmation = self._stored_confirmation(tester_id)
+        moved = unit_moved(confirmation, reading) if confirmation else None
         confirmed = (
             config_hash is not None
             and bool(confirmation)
             and confirmation.get("config_hash") == config_hash
+            and moved is None
         )
         operator = {
             "id": "operator_confirmation",
@@ -266,7 +368,9 @@ class SetupEligibility:
             "status": "pass" if confirmed else "block",
             "reason": None
             if confirmed
-            else "confirm the physical v3 rig and setup for this tester and configuration",
+            else (
+                moved or "confirm the physical v3 rig and setup for this tester and configuration"
+            ),
             "remedy": None if confirmed else _operator_remedy(self.geometry_path),
         }
         checks = [geometry, inclinometer, operator]
@@ -291,7 +395,10 @@ class SetupEligibility:
             "warnings": warnings,
             "operator_confirmation": {
                 "confirmed": confirmed,
+                # when it was confirmed, for display; never part of an identity
                 "confirmed_at": confirmation.get("confirmed_at") if confirmed else None,
+                # stable across server restarts and re-confirmations without a real change
+                "confirmation_id": confirmation.get("confirmation_id") if confirmed else None,
                 "config_hash": confirmation.get("config_hash") if confirmed else None,
                 "authority": "operator_physical_setup",
             },
@@ -309,11 +416,38 @@ class SetupEligibility:
             raise ValueError("physical_rig_confirmed must be true")
         if self._inclinometer_check(reading)["status"] == "block":
             raise ValueError("a stable current LIS3DH reading is required before confirmation")
+        now = datetime.now(timezone.utc).isoformat()
+        pitch, roll = reading_angles(reading)
+        previous = self._stored_confirmation(tester_id)
+        same = bool(
+            previous
+            and previous.get("config_hash") == current_hash
+            and unit_moved(previous, reading) is None
+        )
         confirmation = {
-            "confirmed_at": datetime.now(timezone.utc).isoformat(),
+            "confirmed_at": previous.get("confirmed_at") if same else now,
+            "reconfirmed_at": now if same else None,
             "config_hash": current_hash,
+            "confirmation_id": (
+                previous["confirmation_id"]
+                if same
+                else hashlib.sha256(f"{tester_id}|{current_hash}|{now}".encode()).hexdigest()[:16]
+            ),
+            # the unit's pose when confirmed: a later move beyond the tolerance revokes it
+            "reading": (
+                previous.get("reading") if same else {"pitch_deg": pitch, "roll_deg": roll}
+            ),
         }
-        self.record(tester_id, "operator_confirmed", {"config_hash": current_hash})
+        self.record(
+            tester_id,
+            "operator_confirmed",
+            {
+                "config_hash": current_hash,
+                "confirmation_id": confirmation["confirmation_id"],
+                "reconfirmed_without_change": same,
+            },
+        )
+        self._write_confirmation(tester_id, confirmation)
         with self._lock:
             self._confirmations[tester_id] = confirmation
         return self.evaluate(tester_id, reading)
@@ -351,13 +485,12 @@ class SetupEligibility:
     def confirmation_valid(self, tester_id: str) -> bool:
         geometry_hash, _check = inspect_geometry(self.geometry_path, self.approved_rigs)
         current_hash = self._config_hash(geometry_hash)
-        with self._lock:
-            confirmation = self._confirmations.get(tester_id)
-            return bool(
-                current_hash is not None
-                and confirmation
-                and confirmation.get("config_hash") == current_hash
-            )
+        confirmation = self._stored_confirmation(tester_id)
+        return bool(
+            current_hash is not None
+            and confirmation
+            and confirmation.get("config_hash") == current_hash
+        )
 
     def current_config_hash(self) -> str | None:
         """Return the current approved configuration identity, if valid."""

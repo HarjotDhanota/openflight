@@ -85,7 +85,7 @@ def policy(tmp_path, rig=RIG):
     )
 
 
-def test_confirmation_is_explicit_config_bound_and_process_local(tmp_path):
+def test_confirmation_is_explicit_config_bound_and_survives_a_server_restart(tmp_path):
     gate = policy(tmp_path)
     initial = gate.evaluate(TESTER, STABLE)
     assert not initial["eligible"]
@@ -94,6 +94,60 @@ def test_confirmation_is_explicit_config_bound_and_process_local(tmp_path):
     confirmed = gate.confirm(TESTER, initial["config_hash"], True, STABLE)
     assert confirmed["eligible"]
     assert gate.confirmation_valid(TESTER)
+    # the confirmation is on disk: a restarted tester server keeps it, with its identity
+    restarted = policy(tmp_path)
+    assert restarted.confirmation_valid(TESTER)
+    again = restarted.evaluate(TESTER, STABLE)
+    assert again["eligible"]
+    assert (
+        again["operator_confirmation"]["confirmation_id"]
+        == confirmed["operator_confirmation"]["confirmation_id"]
+    )
+
+
+def test_a_reconfirmation_without_a_real_change_keeps_the_identity(tmp_path):
+    gate = policy(tmp_path)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    first = gate.confirm(TESTER, config_hash, True, STABLE)
+    nudged = {**STABLE, "pitch_deg": 0.3, "roll_deg": -0.2}
+
+    second = policy(tmp_path).confirm(TESTER, config_hash, True, nudged)
+
+    assert (
+        second["operator_confirmation"]["confirmation_id"]
+        == first["operator_confirmation"]["confirmation_id"]
+    )
+
+
+@pytest.mark.parametrize("name", ["pitch_deg", "roll_deg"])
+def test_a_unit_moved_more_than_half_a_degree_needs_confirming_again(tmp_path, name):
+    gate = policy(tmp_path)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    first = gate.confirm(TESTER, config_hash, True, STABLE)
+    moved = {**STABLE, name: 0.8}
+
+    result = policy(tmp_path).evaluate(TESTER, moved)
+
+    assert not result["eligible"]
+    operator = next(item for item in result["checks"] if item["id"] == "operator_confirmation")
+    assert "moved" in operator["reason"]
+    # a reading the kiosk holds (no angles) does not count as a move
+    assert policy(tmp_path).evaluate(TESTER, {"status": "stable"})["operator_confirmation"][
+        "confirmed"
+    ]
+    second = gate.confirm(TESTER, config_hash, True, moved)
+    assert (
+        second["operator_confirmation"]["confirmation_id"]
+        != first["operator_confirmation"]["confirmation_id"]
+    )
+
+
+def test_an_unreadable_confirmation_file_is_no_confirmation(tmp_path):
+    gate = policy(tmp_path)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    gate.confirm(TESTER, config_hash, True, STABLE)
+    (tmp_path / TESTER / "setup-confirmation.json").write_text("{not json", encoding="utf-8")
+
     assert not policy(tmp_path).confirmation_valid(TESTER)
 
 

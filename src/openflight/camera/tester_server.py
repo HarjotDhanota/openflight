@@ -2802,10 +2802,12 @@ PLACEMENT_BOX_SETUP_REQUIRED = "confirm the physical setup first: the box follow
 def placement_box_binding(eligibility: Mapping) -> dict:
     """The physical setup confirmation a box belongs to; a new one asks for it again."""
     confirmation = eligibility.get("operator_confirmation") or {}
+    # the confirmation's identity, never its time: a restarted server reads the same
+    # confirmation from disk and keeps the box (setup_eligibility)
     return {
         "tester_id": eligibility.get("tester_id"),
         "config_hash": eligibility.get("config_hash"),
-        "operator_confirmed_at": confirmation.get("confirmed_at"),
+        "operator_confirmation_id": confirmation.get("confirmation_id"),
     }
 
 
@@ -4421,10 +4423,17 @@ def _file_sha256(path: Path) -> str:
 
 def _tee_range_setup_binding(eligibility: Mapping, reading: Mapping) -> dict:
     """Freeze the physical/config admission that owns one automatic-range epoch."""
+    # the confirmation's identity without its display times, which a restart or a
+    # re-confirmation without a real change does not make a new admission
+    confirmation = {
+        key: value
+        for key, value in dict(eligibility.get("operator_confirmation") or {}).items()
+        if key not in {"confirmed_at", "reconfirmed_at"}
+    }
     authority = {
         "tester_id": eligibility.get("tester_id"),
         "config_hash": eligibility.get("config_hash"),
-        "operator_confirmation": dict(eligibility.get("operator_confirmation") or {}),
+        "operator_confirmation": confirmation,
     }
     identity = hashlib.sha256(
         json.dumps(authority, sort_keys=True, allow_nan=False, separators=(",", ":")).encode(

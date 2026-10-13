@@ -231,8 +231,12 @@ class MutableSetup(EligibleSetup):
 
 
 class ReconfirmedSetup(EligibleSetup):
+    """A setup whose operator confirmation can be renewed (``confirmation_id``) or merely
+    shown again at another time (``confirmed_at``, never part of an identity)."""
+
     def __init__(self):
         self.confirmed_at = "first-server"
+        self.confirmation_id = "confirmation-1"
 
     def require(self, tester_id, _reading, _action, **_kwargs):
         result = super().require(tester_id, _reading, _action, **_kwargs)
@@ -241,6 +245,7 @@ class ReconfirmedSetup(EligibleSetup):
             "operator_confirmation": {
                 "confirmed": True,
                 "confirmed_at": self.confirmed_at,
+                "confirmation_id": self.confirmation_id,
                 "authority": "operator_physical_setup",
             },
         }
@@ -1478,7 +1483,7 @@ def test_reconfirmation_persists_start_over_required_in_the_guided_state(
     app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
     client = app.test_client()
     assert post(client, tester, "start", "start").status_code == 200
-    setup.confirmed_at = "after-restart"
+    setup.confirmation_id = "confirmation-2"
 
     response = post(client, tester, "capture_empty", "stale-epoch")
 
@@ -1499,7 +1504,7 @@ def test_start_over_persistence_that_loses_a_race_reports_the_stored_state(
     client = app.test_client()
     assert post(client, tester, "start", "start").status_code == 200
     stored = phase(client, tester)
-    setup.confirmed_at = "after-restart"
+    setup.confirmation_id = "confirmation-2"
 
     def lost_race(*_args, **_kwargs):
         raise RuntimeError("tee-range setup state changed; reload and retry")
@@ -2987,7 +2992,7 @@ def test_a_new_physical_confirmation_asks_for_the_box_again_where_it_was(
     assert confirm_box(client, tester, "box", centre=(-0.3, 1.8)).status_code == 200
     assert box_state(client, tester)["state"] == "confirmed"
 
-    setup.confirmed_at = "second-server"
+    setup.confirmation_id = "confirmation-2"
     shown = box_state(client, tester)
 
     # the last patch is pre-filled, at the same place on the ground
@@ -4172,3 +4177,21 @@ def test_the_pairs_tee_side_offset_is_handed_to_swings(monkeypatch, side_offset_
         assert "--tee-side-offset-m" not in args
     else:
         assert float(args[args.index("--tee-side-offset-m") + 1]) == pytest.approx(side_offset_m)
+
+
+def test_a_restarted_server_showing_the_same_confirmation_keeps_the_setup(
+    tmp_path, inputs, monkeypatch
+):
+    """The confirmation's time is for display: a server that reads the same confirmation
+    from disk (same identity) keeps the box and the range epoch."""
+    setup = ReconfirmedSetup()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, setup_policy=setup)
+    client = app.test_client()
+    assert post(client, tester, "start", "start").status_code == 200
+    assert box_state(client, tester)["state"] == "confirmed"
+
+    setup.confirmed_at = "shown-again-after-restart"
+
+    assert box_state(client, tester)["state"] == "confirmed"
+    response = post(client, tester, "capture_empty", "same-epoch")
+    assert response.status_code == 200, response.get_json()
