@@ -43,6 +43,7 @@ const AUTO_EXPOSURE_LABELS: Record<CameraAutoExposureStatus['status'], string> =
   too_bright: 'Too bright',
   too_dark: 'Too dark',
   holding_no_ball: 'Holding: no ball',
+  searching_for_ball: 'Searching for the ball',
   unavailable: 'Waiting',
   manual: 'Manual',
 };

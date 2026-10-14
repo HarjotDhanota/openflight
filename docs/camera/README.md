@@ -335,7 +335,21 @@ inputs and their derivation are in `config/swing_exposure.json`.
   - a mild move waits for two looks in a row that agree;
   - a clipped ball, or one under the gate, moves at once.
 - **No resting ball.** The last setting is kept, with the reason (for example
-  `no ball in the box`, or `the last look at the ball is 12 s old`). Every decision
+  `no ball in the box`, or `the last look at the ball is 12 s old`).
+- **Searching for the ball.** A light far from the start setting can wash the ball
+  out or sink it into the dark, so no look can find it. After three looks in a row
+  with no ball (about 3 s, never during a clip), the policy sweeps its own range.
+  It changes exposure × gain in steps of 2, one step brighter and then one step
+  darker, outward from the current setting, never past the blur ceiling or the gain
+  cap (status **Searching for the ball**). Each step waits for a look taken after
+  the controls changed.
+  - The sweep stops at the first setting where the ball is found, and metering takes
+    over. It never meters the hitting zone.
+  - If the whole range shows no ball, the policy holds the last good setting, or else
+    the seed, and says **no ball found in the box (searched the full range)**.
+  - It searches again after 30 s, or at once when the box moves or the light index
+    changes.
+  - Manual-exposure runs (the tester ladder) are never metered or swept. Every decision
   is kept with its inputs (the reading, the light index, the envelope and the
   hysteresis state): the last twenty are in `auto_exposure.recent_decisions` on
   `/api/camera/exposure-quality`, and each clip's metadata carries the decision in

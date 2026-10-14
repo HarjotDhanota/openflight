@@ -36,7 +36,14 @@ export interface CameraCaptureSettings {
  * re-checked before every swing. `status` is why the controls are what they are.
  */
 export type SwingExposureStatus =
-  'seeded' | 'ball_driven' | 'too_bright' | 'too_dark' | 'holding_no_ball' | 'unavailable' | 'manual';
+  | 'seeded'
+  | 'ball_driven'
+  | 'too_bright'
+  | 'too_dark'
+  | 'holding_no_ball'
+  | 'searching_for_ball'
+  | 'unavailable'
+  | 'manual';
 
 export interface SwingExposureSetting {
   exposure_us: number;

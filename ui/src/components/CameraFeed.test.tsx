@@ -114,6 +114,7 @@ describe('CameraFeed', () => {
     ['too_bright', 'Too bright', 'too bright: shade the ball area (or an ND filter)'],
     ['holding_no_ball', 'Holding: no ball', null],
     ['seeded', 'Waiting for the ball', null],
+    ['searching_for_ball', 'Searching for the ball', null],
   ] as const)('shows why the controls are what they are: %s', (status, label, frameLabel) => {
     const html = renderToString(
       <CameraFeed
