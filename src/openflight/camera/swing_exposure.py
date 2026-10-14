@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -63,6 +64,17 @@ FRAME_MARGIN_US = 200
 DRIVER_GAIN_CAP = 255.0 / 16.0
 LADDER_STEP = math.sqrt(2.0)
 
+# The ball-finding sweep (coordinator review, 13 Oct): after this many looks in a row
+# with no resting ball, the policy steps through its own envelope (never past the blur
+# ceiling or the gain cap) until a look finds the ball, then meters on it. A sweep that
+# finds none holds the last good setting (else the seed) and waits this long before
+# searching again, unless the box or the light index changes. It never meters the zone.
+SWEEP_AFTER_LOOKS = 3
+SWEEP_COOLDOWN_S = 30.0
+# Steps of exposure x gain: a factor of 2 is well inside what the box look tolerates.
+SWEEP_STEP = 2.0
+NO_BALL_FOUND_MESSAGE = "no ball found in the box (searched the full range)"
+
 TOO_BRIGHT_LABEL = "too bright: shade the ball area (or an ND filter)"
 TOO_DARK_LABEL = "too dark: add light"
 
@@ -72,6 +84,7 @@ DecisionStatus = Literal[
     "too_bright",
     "too_dark",
     "holding_no_ball",
+    "searching_for_ball",
     "unavailable",
 ]
 
@@ -529,6 +542,39 @@ def setting_for_product(wanted: float, envelope: Envelope) -> Setting:
     return envelope.top_setting
 
 
+def sweep_settings(envelope: Envelope, current: Setting) -> list[Setting]:
+    """The settings a ball-finding sweep tries, in order, starting next to ``current``.
+
+    Exposure x gain runs from the floor (sensor minimum x gain 1) to the top (blur
+    ceiling x gain cap) in ``SWEEP_STEP`` steps, each split the policy's own way
+    (shortest exposure, gain first). The sweep alternates one step brighter, one step
+    darker, outward from the current setting, and carries on along one side once the
+    other is used up. Every setting is inside the envelope.
+    """
+    floor, top = envelope.floor_setting.product, envelope.top_setting.product
+    products = []
+    product = floor
+    while product < top * (1.0 - 1e-9):
+        products.append(product)
+        product *= SWEEP_STEP
+    products.append(top)
+    settings: list[Setting] = []
+    for value in products:
+        setting = setting_for_product(value, envelope) if value < top else envelope.top_setting
+        if not any(setting.same_as(seen) for seen in settings):
+            settings.append(setting)
+    here = current.product
+    brighter = [item for item in settings if item.product > here * 1.05]
+    darker = [item for item in reversed(settings) if item.product < here / 1.05]
+    order: list[Setting] = []
+    for index in range(max(len(brighter), len(darker))):
+        if index < len(brighter):
+            order.append(brighter[index])
+        if index < len(darker):
+            order.append(darker[index])
+    return order
+
+
 def _predict(setting: Setting, peak_index: float, median_index: float, envelope: Envelope):
     return (
         peak_index * setting.product / envelope.clip_range_dn,
@@ -651,12 +697,36 @@ class SwingExposurePolicy:
         self._pending_count = 0
         self._last_eligible: bool | None = None
         self._seen_ball = False
+        # the ball-finding sweep
+        self._no_ball_looks = 0
+        self._sweep: list[Setting] | None = None
+        self._sweep_index = 0
+        self._sweep_ended_at: float | None = None
+        self._found_by_sweep = False
+        self._last_good: Setting | None = None
+        self._seed_setting: Setting | None = None
 
     def reset(self) -> None:
         self._pending_direction = None
         self._pending_count = 0
         self._last_eligible = None
         self._seen_ball = False
+        self._no_ball_looks = 0
+        self._sweep = None
+        self._sweep_index = 0
+        self._sweep_ended_at = None
+        self._found_by_sweep = False
+
+    def restart_search(self, why: str = "") -> None:
+        """Search again at the next look without a ball: the box or the light changed."""
+        del why  # the caller logs it
+        self._sweep = None
+        self._sweep_index = 0
+        self._sweep_ended_at = None
+
+    @property
+    def searching(self) -> bool:
+        return self._sweep is not None
 
     def _hysteresis(self) -> dict:
         return {
@@ -688,6 +758,7 @@ class SwingExposurePolicy:
         if light_index is not None and math.isfinite(light_index) and light_index > 0:
             choice = choose_setting(light_index, light_index, env)
             target = None if choice.setting.same_as(fallback) else choice.setting
+            self._seed_setting = choice.setting
             return SwingExposureDecision(
                 status="seeded",
                 reason=source,
@@ -708,6 +779,7 @@ class SwingExposurePolicy:
         exposure = int(min(max(int(fallback.exposure_us), env.ladder[0]), env.exposure_ceiling_us))
         clamped = Setting(exposure, _gain(fallback.product / exposure, env))
         kept = clamped.same_as(fallback)
+        self._seed_setting = clamped
         return SwingExposureDecision(
             status="seeded",
             reason="startup_controls" if kept else "startup_controls_clamped",
@@ -729,25 +801,27 @@ class SwingExposurePolicy:
         current: Setting,
         *,
         no_ball_reason: str | None = None,
+        now: float | None = None,
     ) -> SwingExposureDecision:
-        """The controls for the next swing, from this look at the resting ball."""
+        """The controls for the next swing, from this look at the resting ball.
+
+        ``now`` (monotonic seconds) times the sweep's cool-down.
+        """
         env = self.envelope
         if reading is None:
-            self._clear_pending()
-            why = no_ball_reason or "no resting ball seen"
-            return SwingExposureDecision(
-                status="holding_no_ball",
-                reason="no_ball",
-                message=f"Holding {current.text()}: {why}",
-                analysis_eligible=bool(self._last_eligible),
-                current=current,
-                target=None,
-                envelope=env,
-                hysteresis=self._hysteresis(),
+            return self._no_ball(
+                current,
+                no_ball_reason or "no resting ball seen",
+                time.monotonic() if now is None else now,
             )
 
-        first_ball = not self._seen_ball
+        first_ball = not self._seen_ball or self._found_by_sweep or self._sweep is not None
         self._seen_ball = True
+        self._no_ball_looks = 0
+        self._sweep = None
+        self._sweep_index = 0
+        self._sweep_ended_at = None
+        self._found_by_sweep = False
         light = {"peak": reading.peak_index, "median": reading.median_index}
         if reading.saturated:
             # the clipped peak only bounds the light from below: step down
@@ -812,6 +886,8 @@ class SwingExposurePolicy:
             status = "ball_driven"
         eligible = reading.passes
         self._last_eligible = eligible
+        if eligible:
+            self._last_good = after
         message = self._message(status, reading, after, target, predicted_fraction, note)
         return SwingExposureDecision(
             status=status,
@@ -834,6 +910,80 @@ class SwingExposurePolicy:
             ),
             light_index=light,
         )
+
+    def _no_ball(self, current: Setting, why: str, now: float) -> SwingExposureDecision:
+        """No resting ball in this look: hold, or step the sweep, or hold after one."""
+        env = self.envelope
+        self._clear_pending()
+        self._no_ball_looks += 1
+
+        def decision(status, reason, message, target=None, sweep=None):
+            return SwingExposureDecision(
+                status=status,
+                reason=reason,
+                message=message,
+                analysis_eligible=False
+                if status == "searching_for_ball"
+                else bool(self._last_eligible),
+                current=current,
+                target=None if target is None or target.same_as(current) else target,
+                envelope=env,
+                hysteresis={**self._hysteresis(), "sweep": sweep or self._sweep_state(now)},
+            )
+
+        if self._sweep is None:
+            if self._sweep_ended_at is not None:
+                left = SWEEP_COOLDOWN_S - (now - self._sweep_ended_at)
+                if left > 0:
+                    return decision(
+                        "holding_no_ball",
+                        "no_ball_searched",
+                        f"Holding {current.text()}: {NO_BALL_FOUND_MESSAGE}; searching again in "
+                        f"{left:.0f} s, or when the box or the light changes",
+                    )
+            if self._no_ball_looks < SWEEP_AFTER_LOOKS:
+                return decision("holding_no_ball", "no_ball", f"Holding {current.text()}: {why}")
+            self._sweep = sweep_settings(env, current)
+            self._sweep_index = 0
+            self._sweep_ended_at = None
+        if self._sweep_index < len(self._sweep):
+            step = self._sweep[self._sweep_index]
+            self._sweep_index += 1
+            self._found_by_sweep = True
+            return decision(
+                "searching_for_ball",
+                "ball_search",
+                f"Searching for the ball ({why}): step {self._sweep_index} of "
+                f"{len(self._sweep)}, {step.text()}",
+                target=step,
+            )
+        state = self._sweep_state(now)
+        self._sweep = None
+        self._sweep_index = 0
+        self._sweep_ended_at = now
+        self._found_by_sweep = False
+        hold = self._last_good or self._seed_setting or current
+        return decision(
+            "holding_no_ball",
+            "no_ball_searched",
+            f"Holding {hold.text()}: {NO_BALL_FOUND_MESSAGE}; searching again in "
+            f"{SWEEP_COOLDOWN_S:.0f} s, or when the box or the light changes",
+            target=hold,
+            sweep={**state, "finished": True},
+        )
+
+    def _sweep_state(self, now: float) -> dict:
+        return {
+            "active": self._sweep is not None,
+            "step": self._sweep_index,
+            "steps": len(self._sweep) if self._sweep is not None else None,
+            "no_ball_looks": self._no_ball_looks,
+            "cooling_down_s": (
+                round(max(0.0, SWEEP_COOLDOWN_S - (now - self._sweep_ended_at)), 1)
+                if self._sweep_ended_at is not None
+                else None
+            ),
+        }
 
     def _message(
         self,

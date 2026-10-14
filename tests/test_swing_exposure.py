@@ -546,3 +546,186 @@ def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
 
 def test_a_size_outside_the_modes_takes_the_shared_mm_budget():
     assert sx.blur_ceiling_us(sx.load_config(), None) == 294
+
+
+# --- the ball-finding sweep (no ball for a while: step the envelope until one shows) ------
+
+
+def _in_envelope(setting, env):
+    return (
+        env.ladder[0] <= setting.exposure_us <= env.exposure_ceiling_us
+        and env.gain_min <= setting.gain <= env.gain_cap
+    )
+
+
+def _look(world, setting):
+    """What a look sees at ``setting``: a reading if the ball is visible there, else None."""
+    peak_index, visible = world
+    product = setting.exposure_us * setting.gain
+    peak = peak_index * product
+    if not visible(peak):
+        return None
+    return reading(
+        signal=min(peak * 0.8, CLIP_RANGE),
+        peak=min(peak, CLIP_RANGE),
+        exposure_us=setting.exposure_us,
+        gain=setting.gain,
+        clipped_pct=60.0 if peak >= CLIP_RANGE else 0.0,
+    )
+
+
+def _walk(policy, world, start, looks=40, now=0.0):
+    current, seen, decisions = start, [], []
+    for index in range(looks):
+        decision = policy.decide(
+            _look(world, current), current, no_ball_reason="no ball in the box", now=now + index
+        )
+        decisions.append(decision)
+        if decision.target is not None:
+            current = decision.target
+            seen.append(current)
+        if decision.reading is not None:
+            break
+    return current, seen, decisions
+
+
+def test_the_sweep_waits_for_three_looks_without_a_ball():
+    policy = sx.SwingExposurePolicy(envelope())
+    current = sx.Setting(104, 8.0)
+
+    first = policy.decide(None, current, no_ball_reason="no ball in the box", now=0.0)
+    second = policy.decide(None, current, no_ball_reason="no ball in the box", now=1.0)
+    third = policy.decide(None, current, no_ball_reason="no ball in the box", now=2.0)
+
+    assert first.target is None and second.target is None
+    assert first.status == second.status == "holding_no_ball"
+    assert third.status == "searching_for_ball"
+    assert third.target is not None
+
+
+def test_the_sweep_alternates_brighter_and_darker_from_the_current_setting():
+    env = envelope()
+    current = sx.Setting(104, 8.0)
+
+    steps = sx.sweep_settings(env, current)
+
+    assert steps[0].product > current.product
+    assert steps[1].product < current.product
+    assert steps[2].product > steps[0].product
+    assert steps[3].product < steps[1].product
+    assert all(_in_envelope(step, env) for step in steps)
+    assert steps[-1] in (env.top_setting, env.floor_setting) or any(
+        step.same_as(env.top_setting) for step in steps
+    )
+    assert any(step.same_as(env.floor_setting) for step in steps)
+
+
+def test_a_dark_seed_in_sun_finds_the_ball_by_stepping_darker():
+    """30 Sept sun at 1280x800: 20 DN per us x gain on the peak. At the dark seed's
+    294 us x 15.94 the box is washed out and no ball can be seen; only near the floor
+    is it unclipped enough for the box look to find it."""
+    env = envelope(minimum=9)
+    policy = sx.SwingExposurePolicy(env)
+    sun = (20.0, lambda peak: peak < CLIP_RANGE)
+
+    found, seen, decisions = _walk(policy, sun, env.top_setting)
+
+    assert decisions[-1].reading is not None
+    assert found.product * 20.0 < CLIP_RANGE
+    assert all(_in_envelope(step, env) for step in seen)
+    # every step it took went darker: there is nothing brighter than the ceiling and cap
+    products = [step.product for step in seen]
+    assert products == sorted(products, reverse=True)
+    assert any(d.status == "searching_for_ball" for d in decisions)
+
+
+def test_a_bright_seed_in_a_dark_room_finds_the_ball_by_stepping_brighter():
+    """A dim room: the box look needs about 20 DN on the ball's peak to see it."""
+    env = envelope(minimum=9)
+    policy = sx.SwingExposurePolicy(env)
+    dim = (0.01, lambda peak: peak >= 20.0)
+
+    found, seen, decisions = _walk(policy, dim, env.floor_setting)
+
+    assert decisions[-1].reading is not None
+    assert found.product * 0.01 >= 20.0
+    assert all(_in_envelope(step, env) for step in seen)
+    products = [step.product for step in seen]
+    assert products == sorted(products)
+
+
+def test_the_found_ball_hands_over_to_normal_metering():
+    env = envelope(minimum=9)
+    policy = sx.SwingExposurePolicy(env)
+    dim = (0.01, lambda peak: peak >= 20.0)
+    found, _seen, decisions = _walk(policy, dim, env.floor_setting)
+
+    after = decisions[-1]
+
+    assert after.status in ("ball_driven", "too_dark")
+    assert after.reason == "resting_ball"
+    # metering moves at once on the found ball: here to the ceiling and cap
+    assert after.setting.same_as(env.top_setting)
+
+
+def test_no_ball_anywhere_holds_the_last_good_setting_and_says_it_searched():
+    env = envelope()
+    policy = sx.SwingExposurePolicy(env)
+    good = sx.Setting(104, 8.0)
+    policy.decide(reading(signal=60, peak=128, exposure_us=104, gain=8.0), good)
+    nowhere = (0.1, lambda _peak: False)
+
+    current, seen, decisions = _walk(policy, nowhere, good, looks=30)
+
+    final = next(d for d in decisions if d.reason == "no_ball_searched")
+    assert final.status == "holding_no_ball"
+    assert sx.NO_BALL_FOUND_MESSAGE in final.message
+    assert final.setting.same_as(good)
+    assert current.same_as(good)
+    assert all(_in_envelope(step, env) for step in seen)
+    # every setting the sweep has was tried once
+    assert len(seen) >= len(sx.sweep_settings(env, good))
+
+
+def test_without_a_good_setting_the_hold_is_the_seed():
+    env = envelope()
+    policy = sx.SwingExposurePolicy(env)
+    seed = policy.seed(0.15, sx.Setting(1000, 4.0)).setting
+    nowhere = (0.1, lambda _peak: False)
+
+    current, _seen, decisions = _walk(policy, nowhere, seed, looks=30)
+
+    assert any(d.reason == "no_ball_searched" for d in decisions)
+    assert current.same_as(seed)
+
+
+def test_after_a_failed_sweep_it_waits_for_the_cool_down_or_a_restart():
+    env = envelope()
+    policy = sx.SwingExposurePolicy(env)
+    nowhere = (0.1, lambda _peak: False)
+    start = sx.Setting(104, 8.0)
+    current, _seen, decisions = _walk(policy, nowhere, start, looks=30)
+    ended = next(i for i, d in enumerate(decisions) if d.reason == "no_ball_searched")
+    ended_at = float(ended)
+
+    cooling = policy.decide(None, current, now=ended_at + 5.0)
+    after = policy.decide(None, current, now=ended_at + sx.SWEEP_COOLDOWN_S + 1.0)
+
+    assert cooling.target is None and cooling.reason == "no_ball_searched"
+    assert "again in" in cooling.message
+    assert after.status == "searching_for_ball"
+
+    policy2 = sx.SwingExposurePolicy(env)
+    current2, _s, decisions2 = _walk(policy2, nowhere, start, looks=30)
+    ended2 = next(i for i, d in enumerate(decisions2) if d.reason == "no_ball_searched")
+    policy2.restart_search("the placement box moved")
+    restarted = policy2.decide(None, current2, now=float(ended2) + 1.0)
+    assert restarted.status == "searching_for_ball"
+
+
+def test_the_sweep_never_passes_the_ceiling_or_the_cap():
+    for minimum, ceiling, gain_max in ((9, 294, 15.9375), (4, 150, 8.0), (20, 294, 4.0)):
+        env = envelope(minimum=minimum, ceiling=ceiling, gain_max=gain_max)
+        for current in (env.floor_setting, env.top_setting, sx.Setting(60, 3.0)):
+            for step in sx.sweep_settings(env, current):
+                assert _in_envelope(step, env), (minimum, ceiling, gain_max, step)

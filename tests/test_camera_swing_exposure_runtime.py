@@ -52,7 +52,7 @@ def _runtime(tmp_path, *, limits=LIMITS, locator=True, **overrides):
                 "state": "in_box",
                 "center_px": [BALL[0], BALL[1]],
                 "diameter_px": BALL[2],
-                "observed_at": time.time(),
+                "observed_at": time.time() + 1.0,  # newer than any change in the test
             }
         )
     return runtime
@@ -429,3 +429,116 @@ def test_a_clip_keeps_its_own_decision_not_the_log(tmp_path):
     assert recorded["status"] == "ball_driven"
     assert recorded["exposure_us"] == 294
     assert runtime.auto_exposure_status()["recent_decisions"]
+
+
+# --- the ball-finding sweep in the runtime --------------------------------------------
+
+
+def _not_seen(box=(40, 40, 80, 80)):
+    return lambda: {
+        "state": "not_seen",
+        "reason": "no ball in the box",
+        "observed_at": time.time() + 1.0,  # newer than any change in the test
+        "box_px": list(box),
+    }
+
+
+def _look_cycle(runtime, signal=5):
+    _add_frames(runtime, signal)
+    return runtime._run_auto_exposure_cycle()
+
+
+def test_three_looks_without_a_ball_start_a_sweep_inside_the_envelope(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+
+    first = _look_cycle(runtime)
+    second = _look_cycle(runtime)
+    third = _look_cycle(runtime)
+
+    assert first.status == second.status == "holding_no_ball"
+    assert third.status == "searching_for_ball"
+    assert runtime._camera.controls  # the sweep moved the controls
+    applied = runtime._camera.controls[-1]
+    envelope = runtime._swing_policy.envelope
+    assert envelope.ladder[0] <= applied["ExposureTime"] <= envelope.exposure_ceiling_us
+    assert applied["AnalogueGain"] <= envelope.gain_cap
+    assert runtime.auto_exposure_status()["status"] == "searching_for_ball"
+
+
+def test_a_clip_in_progress_pauses_the_sweep(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+    for _ in range(3):
+        _look_cycle(runtime)
+    step = runtime._swing_policy._sweep_index
+    controls = list(runtime._camera.controls)
+    _add_frames(runtime, 5)
+    assert runtime._ring.trigger()
+
+    paused = runtime._run_auto_exposure_cycle()
+
+    assert paused is None
+    assert runtime._camera.controls == controls
+    assert runtime._swing_policy._sweep_index == step
+    assert runtime.auto_exposure_status()["capture_deferred"] is True
+
+
+def test_a_look_from_before_the_last_change_is_not_judged(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+    for _ in range(3):
+        _look_cycle(runtime)
+    step = runtime._swing_policy._sweep_index
+    old = time.time() - 0.5
+    runtime.set_resting_ball_locator(
+        lambda: {"state": "not_seen", "reason": "no ball in the box", "observed_at": old}
+    )
+
+    stale = _look_cycle(runtime)
+
+    assert stale is None
+    assert runtime._swing_policy._sweep_index == step
+
+
+def test_a_moved_box_restarts_the_search_after_a_failed_sweep(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+    decision = None
+    for _ in range(40):
+        decision = _look_cycle(runtime)
+        if decision is not None and decision.reason == "no_ball_searched":
+            break
+    assert decision.reason == "no_ball_searched"
+    assert sx.NO_BALL_FOUND_MESSAGE in decision.message
+    cooling = _look_cycle(runtime)
+    assert cooling.reason == "no_ball_searched" and cooling.target is None
+
+    runtime.set_resting_ball_locator(_not_seen(box=(50, 50, 90, 90)))
+    restarted = _look_cycle(runtime)
+
+    assert restarted.status == "searching_for_ball"
+
+
+def test_manual_exposure_never_sweeps(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, auto_exposure=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+
+    for _ in range(5):
+        assert _look_cycle(runtime) is None
+
+    assert runtime._camera.controls == []
+
+
+def test_a_new_light_index_restarts_the_search_past_the_cool_down(tmp_path):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+    runtime.set_resting_ball_locator(_not_seen())
+    for _ in range(40):
+        decision = _look_cycle(runtime)
+        if decision is not None and decision.reason == "no_ball_searched":
+            break
+
+    runtime.restart_ball_search("the setup measured a new light index")
+    restarted = _look_cycle(runtime)
+
+    assert restarted.status == "searching_for_ball"

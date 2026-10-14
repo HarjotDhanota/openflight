@@ -49,6 +49,10 @@ SWING_EXPOSURE_FRAMES = 3
 # A resting-ball look older than this is not a ball for the exposure.
 SWING_EXPOSURE_LOOK_MAX_AGE_S = 5.0
 SWING_EXPOSURE_DECISIONS_KEPT = 20
+# A look at the box must be taken this long after the last control change to count:
+# new controls reach the frames a few frames late, and a look at the old controls
+# would step a ball-finding sweep past the setting that shows the ball.
+SWING_EXPOSURE_LOOK_SETTLE_S = 0.2
 # Completed clips waiting for the disk. Each full-resolution clip is about 25 MB in
 # RAM; a false-trigger storm on a slow card must not grow this without bound.
 MAX_PENDING_SAVES = 3
@@ -450,6 +454,7 @@ class CameraCaptureRuntime:
         self._ball_locator: Callable[[], Mapping | None] | None = None
         self._swing_decisions: deque[dict] = deque(maxlen=SWING_EXPOSURE_DECISIONS_KEPT)
         self._swing_thread: threading.Thread | None = None
+        self._last_look_box: tuple | None = None
         self._auto_exposure_stop = threading.Event()
         self._auto_exposure_lock = threading.Lock()
         self._auto_exposure_decision = sx.unavailable_decision(
@@ -1261,8 +1266,14 @@ class CameraCaptureRuntime:
             if self._auto_exposure_stop.wait(SWING_EXPOSURE_EVERY_S):
                 return
 
+    def restart_ball_search(self, why: str) -> None:
+        """Search for the ball again at once, past any cool-down: the box or the light changed."""
+        if self._swing_policy is not None:
+            self._swing_policy.restart_search(why)
+            logger.info("[CAMERA] Ball search restarts: %s", why)
+
     def _resting_ball(
-        self, frames: tuple[CameraFrame, ...]
+        self, frames: tuple[CameraFrame, ...], look: Mapping | None
     ) -> tuple[sx.BallReading | None, str | None]:
         """The resting ball's reading in these frames, or why there is none."""
         images = [frame.image for frame in frames]
@@ -1272,7 +1283,6 @@ class CameraCaptureRuntime:
             "exposure_us": float(last.exposure_us),
             "gain": float(last.analogue_gain),
         }
-        look = self._ball_locator() if self._ball_locator is not None else None
         if look is not None:
             state = look.get("state")
             if state != "in_box" or not look.get("center_px") or not look.get("diameter_px"):
@@ -1315,8 +1325,8 @@ class CameraCaptureRuntime:
         trigger never lands between them.
         """
         policy = self._swing_policy
-        if policy is None:
-            return None
+        if policy is None or not self.settings.auto_exposure:
+            return None  # held controls (the tester ladder) are never metered or swept
         frames = self._ring.recent(SWING_EXPOSURE_FRAMES)
         if not frames:
             with self._auto_exposure_lock:
@@ -1331,7 +1341,21 @@ class CameraCaptureRuntime:
             for frame in frames
             if (frame.exposure_us, frame.analogue_gain) == (last.exposure_us, last.analogue_gain)
         )
-        reading, why = self._resting_ball(frames)
+        look = self._ball_locator() if self._ball_locator is not None else None
+        if look is not None:
+            observed, changed = look.get("observed_at"), self._auto_exposure_last_adjustment_epoch
+            if (
+                observed is not None
+                and changed is not None
+                and float(observed) < changed + SWING_EXPOSURE_LOOK_SETTLE_S
+            ):
+                return None  # that look saw the old controls: wait for one at these
+            box = tuple(look["box_px"]) if look.get("box_px") else None
+            if box is not None and self._last_look_box is not None and box != self._last_look_box:
+                self.restart_ball_search(f"the box moved to {list(box)}")
+            if box is not None:
+                self._last_look_box = box
+        reading, why = self._resting_ball(frames, look)
         with self._trigger_exposure_lock:
             if self._ring.capture_busy:
                 with self._auto_exposure_lock:
