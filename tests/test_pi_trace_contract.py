@@ -15,6 +15,7 @@ from flask import Flask
 from flask_socketio import SocketIO
 
 from openflight import pi_trace, pi_trace_summary as pts
+from openflight.gate_timing import GateEvent
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
 from openflight.rolling_buffer.processor import RollingBufferProcessor
@@ -143,7 +144,8 @@ def test_real_hooks_make_one_anchored_painted_attempt_the_summary_reads(live_rec
     client = _kiosk_client()
     try:
         _clock_sample(client)
-        server._trace_gate_edge(time.time())  # pylint: disable=protected-access
+        event = GateEvent.observe(_edge_tick_reading, time.time())
+        server._trace_gate_edge(event)  # pylint: disable=protected-access
         processor, capture = _capture(monkeypatch)
         server._trace_processor(processor)  # pylint: disable=protected-access
         processor.process_capture(capture)
@@ -217,7 +219,8 @@ def test_real_hooks_make_one_anchored_painted_attempt_the_summary_reads(live_rec
 def test_a_real_dump_pending_at_wait_start_reaches_the_summary_as_late(live_recorder, monkeypatch):
     """The A-I2 mark's name is the one the summary looks for."""
     server, _emitted = _server(monkeypatch)
-    server._trace_gate_edge(time.time())  # pylint: disable=protected-access
+    event = GateEvent.observe(_edge_tick_reading, time.time())
+    server._trace_gate_edge(event)  # pylint: disable=protected-access
     _capture(monkeypatch, dump_pending_at_wait_start=True)
     _trace, attempts = _summarize(live_recorder)
     (attempt,) = attempts

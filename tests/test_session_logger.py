@@ -641,6 +641,29 @@ class TestLogIWR6843Capture:
 
         entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
         assert entry["club_path"] is None
+        assert entry["gate_event"] is None
+
+    def test_iwr6843_capture_keeps_shared_gate_evidence(self, tmp_path):
+        from openflight.gate_timing import GateEvent
+
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        event = GateEvent.observe(None, 100.0)
+        logger.log_iwr6843_capture(
+            shot_number=1,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.0,
+            capture_path=None,
+            capture_bytes=12,
+            dump_duration_s=0.1,
+            capture_error=None,
+            ball_speed_mph=94.5,
+            gate_event=event.to_dict(),
+        )
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["gate_event"] == event.to_dict()
+        assert entry["gate_event"]["kernel_mono_interval_ns"] is None
+        logger.end_session()
 
 
 class TestLogClockSync:

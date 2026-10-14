@@ -621,6 +621,7 @@ class SessionLogger:
         runtime_config_sha256: Optional[str] = None,
         launch_range: Optional[Dict[str, Any]] = None,
         ball_range: Optional[Dict[str, Any]] = None,
+        gate_event: Optional[Dict[str, Any]] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence.
 
@@ -652,6 +653,7 @@ class SessionLogger:
                 "runtime_config": runtime_config,
                 "launch_range": launch_range,
                 "ball_range": ball_range,
+                "gate_event": gate_event,
                 "runtime_config_sha256": runtime_config_sha256,
             },
         )

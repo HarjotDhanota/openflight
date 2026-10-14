@@ -45,6 +45,7 @@ from .clubs.physics import (
     get_club_simulation_profile,
 )
 from .flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
+from .gate_timing import GateEvent, warm_edge_reading_cache
 from .horizontal_frame import (
     MIXED,
     frame_for,
@@ -521,25 +522,13 @@ def _trace_tag(  # pylint: disable=too-many-arguments
     }
 
 
-def _trace_gate_edge(edge_wall_s: float) -> None:
-    """First BCM17 observer: bracketed edge age, a bracketed wall pair, then note the edge.
-
-    The edge is noted even when the reading fails: an edge happened, and an
-    age-less edge is kept as such (never given an invented age).
-    """
+def _trace_gate_edge(edge: GateEvent) -> None:
+    """Record original GATE evidence without reading the pin again."""
     recorder = pi_trace.get_recorder()
     if recorder is None:
         return
     try:
-        # Lazy like the other IWR imports; loaded already whenever this observer runs.
-        from .iwr6843.monitor import (
-            edge_trace_fields,  # noqa: PLC0415  pylint: disable=import-outside-toplevel
-        )
-
-        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
-        edge_fields = edge_trace_fields(
-            getattr(capture_monitor, "edge_tick_reading", None), edge_wall_s
-        )
+        edge_fields = edge.trace_fields()
         mono_after_ns = edge_fields["mono_after_ns"]
         recorder.note_edge(
             monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
@@ -573,14 +562,8 @@ def _install_pi_trace_hooks() -> None:
             _trace_processor(processor)
         capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
         if capture_monitor is not None:
-            # Lazy like the other IWR imports. Warm the version lookup before
-            # the first edge, so it never runs inside the GPIO callback (M5).
-            from .iwr6843.monitor import (
-                warm_edge_reading_cache,  # noqa: PLC0415  pylint: disable=import-outside-toplevel
-            )
-
             warm_edge_reading_cache()
-            capture_monitor.prepend_trigger_observer(_trace_gate_edge)
+            capture_monitor.prepend_gate_event_observer(_trace_gate_edge)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
 
@@ -2561,8 +2544,8 @@ def init_iwr6843(
             port=port,
             gpio_pin=trigger_pin,
             save_dumps=save_dumps,
-            trigger_observers=(
-                [camera_capture_runtime.notify_trigger]
+            gate_event_observers=(
+                [camera_capture_runtime.notify_gate_event]
                 if camera_capture_runtime is not None
                 else None
             ),
@@ -4579,6 +4562,11 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     getattr(capture, "temperature_report", None) if capture is not None else None
                 ),
                 runtime_config=iwr_runtime_config_snapshot,
+                gate_event=(
+                    capture.gate_event.to_dict()
+                    if capture is not None and getattr(capture, "gate_event", None) is not None
+                    else None
+                ),
                 runtime_config_sha256=(
                     iwr_runtime_config_snapshot["sha256"]
                     if iwr_runtime_config_snapshot is not None
