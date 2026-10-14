@@ -167,6 +167,8 @@ test('the rungs run in ladder order with plain labels, and the ones still to run
     '30 µs',
     '20 µs',
     '10 µs',
+    '7 µs',
+    '5 µs',
   ]);
   await expect(page.getByRole('button', { name: 'Switch to 1280×800 at 150 µs' })).toHaveAttribute(
     'aria-pressed',
