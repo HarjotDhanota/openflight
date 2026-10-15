@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Doc paths named from the Python package resolve again.** The K-LD7
   OPS-bin penalty warning, the cloud client and session-logger comments,
   and the two-ray module docstring pointed at flat `docs/*.md` files that
-  moved in the docs restructure. A new test scans `src/openflight` for
-  `docs/…​.md` references and fails on any that do not exist.
+  moved in the docs restructure. A new test scans `src/openflight`,
+  `scripts/`, `.github/`, and the top-level guides for `docs/…​.md`
+  references and fails on any that do not exist.
 - **`openflight-cloud` honors `--config`/`--log-dir` before the subcommand.**
   The subcommand's defaults overwrote options given before it, so
   `openflight-cloud --log-dir X push` scanned the default session directory.
