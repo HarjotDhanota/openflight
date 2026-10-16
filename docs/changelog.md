@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **Simulator output tags estimated launch angles as estimated.** When the
+  server fills in a launch angle before the sim fan-out, the resolver tagged
+  it, and the carry built on it, as measured. It now reads the angle's source,
+  so the simulator badges, `sim_shot` event and `sim_send` log entries match
+  the data.
 - **Doc paths named from the Python package resolve again.** The K-LD7
   OPS-bin penalty warning, the cloud client and session-logger comments,
   and the two-ray module docstring pointed at flat `docs/*.md` files that
