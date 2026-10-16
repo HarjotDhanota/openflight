@@ -5,6 +5,10 @@ fit captures and evaluates separate validation captures without refitting.
 It preserves input hashes, cadence/gap diagnostics, residuals and unsuccessful
 inputs. It does not install a clock correction in live fusion.
 
+For a visible GATE reference, use the [LED timing calibration procedure](led-timing-calibration.md).
+It provides a production-runtime recorder, an offline ROI picker and bounded
+fit/validation analysis; physical timing qualification still requires the Pi.
+
 Host timestamps are recorded when frames reach the application. Their
 relationship to sensor timestamps includes readout, delivery and scheduling
 delay. A small regression residual is therefore not proof of physical event
