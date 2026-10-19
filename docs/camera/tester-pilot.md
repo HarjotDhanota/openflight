@@ -15,7 +15,9 @@ ladder, per-shot verdict, face photograph or annotation step. Testers collect an
 send data; the maintainer handles any reference marking and accuracy grading.
 
 - **Green SWING:** every configured sensor is armed. Too dark / too bright adds a
-  lighting note without blocking shots.
+  lighting note without blocking shots. "Camera exposure unavailable" means the
+  camera reported no exposure limits and holds its startup controls; shots still
+  record, with that state in each shot's exposure record.
 - **Amber WAIT:** a capture is saving, processing is busy, or the camera is finding
   the ball. Wait for green.
 - **Red NOT READY:** read the cause. A completed search with no ball says “no ball
@@ -29,8 +31,9 @@ The advanced ladder retains its approved-enclosure requirement.
 
 Tap **Stop & package** on the scoreboard or tester page. Accepted shots finish
 writing before the session closes and analysis/packages start. Keep the scoreboard
-open until **Package ready** shows its zip path; download it from step 8 on the
-tester page. Send that zip and a short description of the lighting and enclosure.
+open until **Package ready: <file>.zip** shows, with its full path; once the run
+stops, that message and the **Done** button take the ready light's band. Download
+the zip from step 8 on the tester page. Send that zip and a short description of the lighting and enclosure.
 Tap **Done** on the scoreboard to close the window. This keeps progress visible
 after acquisition stops. The bundle includes every shot's exposure decision,
 brightness, light index, lens/mode and blur ceiling, or an explicit missing-capture
@@ -41,6 +44,7 @@ reason, plus the unit/run identity and setup/rig provenance.
 | Finding the ball | Keep a ball inside the confirmed box and wait for the search. |
 | No ball in the box | Re-tee inside the box; add light if the ball is hard to see. |
 | Too dark / too bright | Add light or shade the ball. The note does not block a shot. |
+| Camera exposure unavailable | The camera reported no exposure limits. Shots still record; restart the unit to retry, and mention it when sending the zip. |
 | Packaging fails or shots are still finishing | Tap **Try again** on the scoreboard once processing settles. Captures remain on disk. |
 | Kiosk or tester restarted | Do not assume the run resumed. Start the tester again; use step 8 to analyse and package the saved captures. |
 | Sensor fails mid-run | Read the ready-light cause; OPS numbers continue. Package the session before restarting the unit. |
