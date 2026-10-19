@@ -683,7 +683,14 @@
 }
 
 .live-panel__grid .metric-card--label-above {
-  gap: 0.35rem;
+  /* only label, value and caption are spaced: a gap beside each empty spacer row
+     cost a short tile 11 px, which the club path's D-plane note needed beside
+     the ready light at 800×400 */
+  row-gap: 0;
+}
+
+.live-panel__grid .metric-card--label-above .metric-card__value-row {
+  margin-block: 0.35rem;
 }
 
 .live-panel__grid .metric-card__label,
@@ -706,6 +713,28 @@
 .live-panel__grid .metric-card__confidence {
   min-width: 0;
   max-width: 100%;
+}
+
+/* Short kiosks (800×480, 800×400) with the ready light: captions stay whole but
+   tighter, so a two-line note and its experimental pill fit beside the value */
+@media (max-height: 520px) {
+  .live-panel__grid .metric-card--label-above .metric-card__value-row {
+    margin-block: 0.25rem;
+  }
+
+  .live-panel__grid .metric-card__meta {
+    gap: 2px;
+  }
+
+  .live-panel__grid .metric-card__subtext {
+    line-height: 1.05;
+    letter-spacing: 0.02em;
+  }
+
+  .live-panel__grid .metric-card__confidence--experimental {
+    margin-top: 0;
+    padding: 0 5px;
+  }
 }
 
 .live-panel__grid .metric-card__value-row {
