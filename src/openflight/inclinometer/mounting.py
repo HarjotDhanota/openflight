@@ -15,11 +15,16 @@ class MountedAccelerometer:
     enclosure's front. A board turned by ``yaw_deg`` (counter-clockwise seen from
     above) reads X and Y rotated by that much; at 180 degrees both are reversed,
     and a front tipped up would otherwise read as tipped down.
+
+    ``upside_down`` turns the board over about its own Y axis first (X and Z read
+    reversed), for a board fitted component side down. The tester's orientation
+    check finds both for each unit (``orientation_check.Mount``).
     """
 
-    def __init__(self, sensor: Accelerometer, yaw_deg: float):
+    def __init__(self, sensor: Accelerometer, yaw_deg: float, *, upside_down: bool = False):
         self.sensor = sensor
         self.yaw_deg = float(yaw_deg)
+        self.upside_down = bool(upside_down)
         self._cos = math.cos(math.radians(self.yaw_deg))
         self._sin = math.sin(math.radians(self.yaw_deg))
 
@@ -28,11 +33,12 @@ class MountedAccelerometer:
 
     def read(self, *, timestamp: float | None = None) -> AccelerationSample:
         sample = self.sensor.read(timestamp=timestamp)
+        x_g, z_g = (-sample.x_g, -sample.z_g) if self.upside_down else (sample.x_g, sample.z_g)
         return AccelerationSample(
             timestamp=sample.timestamp,
-            x_g=self._cos * sample.x_g - self._sin * sample.y_g,
-            y_g=self._sin * sample.x_g + self._cos * sample.y_g,
-            z_g=sample.z_g,
+            x_g=self._cos * x_g - self._sin * sample.y_g,
+            y_g=self._sin * x_g + self._cos * sample.y_g,
+            z_g=z_g,
         )
 
     def close(self) -> None:
