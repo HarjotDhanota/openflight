@@ -339,3 +339,36 @@ def test_kiosk_rejects_foreign_run_and_retries_a_failed_stop(monkeypatch):
         time.sleep(0.001)
     assert config["phase"] == "error" and "saving" in config["error"]
     assert not config.get("capture_closed")
+
+
+def test_delayed_done_from_an_old_run_cannot_cancel_its_replacement(tmp_path, monkeypatch):
+    (tmp_path / "tester").mkdir()
+    capture, packaging = Jobs(), Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+    controller = free_play.FreePlayController(tmp_path, capture, packaging)
+    controller.begin("tester", "old", tmp_path / "tester")
+    controller.run["phase"] = "ready"
+    timers = []
+
+    class Timer:
+        def __init__(self, _delay, callback):
+            timers.append(callback)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(free_play.threading, "Timer", Timer)
+    app = Flask(__name__)
+    controller.register(app)
+    response = app.test_client().post(
+        "/api/tester/free-play/close",
+        json={
+            "tester_id": "tester",
+            "run_id": "old",
+        },
+    )
+    assert response.status_code == 200
+    controller.capture_finished("old", 0)
+    controller.begin("tester", "new", tmp_path / "tester")
+    timers[0]()
+    assert capture.status()["state"] == "running"

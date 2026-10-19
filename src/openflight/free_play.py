@@ -11,6 +11,7 @@ from pathlib import Path
 
 from flask import jsonify, request
 
+from openflight import session_bundle
 from openflight.camera import session_review_routes as review
 
 
@@ -97,7 +98,15 @@ class FreePlayController:
                         return
                     latest = review.read_analysis(self.root, tester_id)["latest_bundle"]
                     if returncode == 0 and latest is not None and latest != previous:
-                        self.run.update(phase="ready", bundle=latest, error=None)
+                        bundle = {
+                            **latest,
+                            "path": str(
+                                (
+                                    session_bundle.bundle_directory(self.root) / latest["name"]
+                                ).resolve()
+                            ),
+                        }
+                        self.run.update(phase="ready", bundle=bundle, error=None)
                     else:
                         self.run.update(
                             phase="error",
@@ -195,7 +204,13 @@ class FreePlayController:
                 state = self.status(payload.get("tester_id"), payload.get("run_id"))
                 if state.get("phase") != "ready":
                     raise ValueError("wait for the package before closing")
-                timer = threading.Timer(0.3, self.capture_jobs.cancel)
+
+                def close_run():
+                    with self.lock:
+                        if self.run and self.run["run_id"] == state["run_id"]:
+                            self.capture_jobs.cancel()
+
+                timer = threading.Timer(0.3, close_run)
                 timer.daemon = True
                 timer.start()
                 return jsonify(closing=True)
