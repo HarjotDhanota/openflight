@@ -12,6 +12,8 @@ for (const viewport of KIOSK_VIEWPORTS) {
     test.use({ viewport, hasTouch: true });
     test('touch stop keeps metrics visible, packages, then closes with Done', async ({ page }) => {
       let phase = 'recording';
+      let studyPhase = 'ladder';
+      let studyText = 'Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6';
       const actions: string[] = [];
       const bundle = {
         name: '20260922-name-session-bundle-20261019T143012Z.zip',
@@ -29,6 +31,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
             phase,
             geometry_unverified: true,
             bundle: phase === 'ready' ? bundle : null,
+            exposure_study: { phase: studyPhase, text: studyText, changing: false },
           },
         });
       });
@@ -73,7 +76,22 @@ for (const viewport of KIOSK_VIEWPORTS) {
         expect(bounds!.height).toBeGreaterThan(0);
         expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
       }
+      // the exposure study runs itself: one progress line in the band, no prompt
+      const study = page.locator('.free-play__study');
+      await expect(study).toHaveText(studyText);
+      const studyBox = (await study.boundingBox())!;
+      const panelBox = (await page.locator('.free-play').boundingBox())!;
+      expect(studyBox.y).toBeGreaterThanOrEqual(panelBox.y - 0.5);
+      expect(studyBox.y + studyBox.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 0.5);
+      expect(studyBox.x + studyBox.width).toBeLessThanOrEqual(box!.x + 0.5);
+      // the whole line reads: wrapped onto at most two lines, never cut
+      expect(await study.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+      expect((await page.locator('.session-status').boundingBox())!.height).toBeLessThanOrEqual(bandHeight + 0.5);
       await shot('recording');
+
+      studyPhase = 'automatic';
+      studyText = 'Automatic exposure';
+      await expect(study).toHaveText('Automatic exposure');
 
       await stop.tap();
       await expect(stop).toBeDisabled();

@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react';
 import './FreePlayControls.css';
 
+// free play's exposure ladder, as the kiosk reports it (free_play_ladder.progress_from_state)
+interface ExposureStudy {
+  phase: string;
+  text: string;
+  changing?: boolean;
+}
+
 interface FreePlayState {
   enabled: boolean;
   phase?: string;
   geometry_unverified?: boolean;
   bundle?: { name: string; path?: string } | null;
   error?: string | null;
+  exposure_study?: ExposureStudy | null;
 }
 
 export function FreePlayStatus({
@@ -39,6 +47,10 @@ export function FreePlayStatus({
                 : 'Free play needs attention'}
         </strong>
         {state.geometry_unverified && !finished ? <span>Geometry unverified</span> : null}
+        {/* the exposure study runs itself: a progress line, never a prompt */}
+        {state.exposure_study?.text && !finished ? (
+          <span className="free-play__study">{state.exposure_study.text}</span>
+        ) : null}
         {ready && state.bundle?.path ? (
           <span className="free-play__path" title={state.bundle.path}>
             {state.bundle.path}

@@ -51,3 +51,44 @@ describe('Free-play status', () => {
     expect(failed).not.toContain('free-play--finished');
   });
 });
+
+describe('Free play exposure study line', () => {
+  it('shows the ladder progress while recording', () => {
+    const html = renderToString(
+      <FreePlayStatus
+        state={{
+          enabled: true,
+          phase: 'recording',
+          exposure_study: { phase: 'ladder', text: 'Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6' },
+        }}
+        onAction={noop}
+      />
+    );
+    expect(html).toContain('Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6');
+    expect(html).toContain('free-play__study');
+  });
+  it('says automatic exposure once the ladder is done', () => {
+    const html = renderToString(
+      <FreePlayStatus
+        state={{ enabled: true, phase: 'recording', exposure_study: { phase: 'automatic', text: 'Automatic exposure' } }}
+        onAction={noop}
+      />
+    );
+    expect(html).toContain('Automatic exposure');
+  });
+  it('drops the line once acquisition stops', () => {
+    const html = renderToString(
+      <FreePlayStatus
+        state={{ enabled: true, phase: 'packaging', exposure_study: { phase: 'ladder', text: 'Exposure study: 150 µs' } }}
+        onAction={noop}
+      />
+    );
+    expect(html).not.toContain('Exposure study');
+  });
+  it('shows nothing for a run without a study', () => {
+    const html = renderToString(
+      <FreePlayStatus state={{ enabled: true, phase: 'recording', exposure_study: null }} onAction={noop} />
+    );
+    expect(html).not.toContain('free-play__study');
+  });
+});

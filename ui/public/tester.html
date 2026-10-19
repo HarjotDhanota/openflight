@@ -885,6 +885,21 @@
         color: var(--bg);
         font-weight: 700;
       }
+      /* free play's exposure study: progress only, the tester never acts on it */
+      .free-play-study {
+        margin: 8px 0 4px;
+        font-weight: 700;
+      }
+      .free-play-rungs {
+        margin: 0 0 8px;
+        padding-left: 18px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .free-play-rungs li[data-status='active'] {
+        color: inherit;
+        font-weight: 700;
+      }
       .field-row {
         display: flex;
         flex-wrap: wrap;
@@ -1697,9 +1712,19 @@
 
       <section class="step" id="step-7" data-step="7">
         <h2><span class="step-n">7</span> Free play</h2>
+        <div class="field-row" id="free-play-resolution-row">
+          <span class="field-row__label" id="free-play-resolution-label">Resolution</span>
+          <div class="seg" role="group" aria-labelledby="free-play-resolution-label" id="free-play-resolution">
+            <button type="button" data-resolution="arm5" aria-pressed="false">1280×800</button>
+            <button type="button" data-resolution="arm6" aria-pressed="false">640×400</button>
+          </div>
+          <span class="note" id="free-play-resolution-hint">Tap the resolution for this session.</span>
+        </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
-        <p class="note" id="free-play-status" role="status">Record every shot with automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
+        <p class="note" id="free-play-status" role="status">Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
+        <p class="free-play-study" id="free-play-study" role="status" hidden></p>
+        <ul class="free-play-rungs" id="free-play-rungs" aria-label="Exposure study settings" hidden></ul>
         <div class="verdict-card" id="verdict-card" data-color="none" aria-live="polite">
           <div class="verdict-card__head">
             <strong class="verdict-card__word" id="verdict-word">No swing judged yet</strong>
@@ -4950,7 +4975,77 @@
         const blocked = photoActionPending || !setupReady() || !teeRangeComplete() || !boxConfirmed();
         el('step-ladder').disabled = blocked || ladderRunning;
         el('step-ladder').textContent = ladderRunning ? 'The ladder is running' : 'Start the exposure ladder';
-        el('step-free-play').disabled = blocked || ladderRunning || freePlayPending || ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
+        el('step-free-play').disabled =
+          blocked ||
+          ladderRunning ||
+          freePlayPending ||
+          !freePlayResolution ||
+          ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
+        renderFreePlayResolution();
+      }
+
+      // One resolution per session, tapped by the tester (19 Oct). The lens's default
+      // is marked but must still be tapped; a mode the lens disables is not offered.
+      const FREE_PLAY_SIZES = { arm5: '1280×800', arm6: '640×400' };
+      let freePlayResolution = null;
+      function freePlayModes() {
+        let settings = null;
+        try {
+          settings = selectedLens()?.settings; // the lens list loads after this script starts
+        } catch {
+          settings = null;
+        }
+        const modes = Array.isArray(settings?.modes) && settings.modes.length ? settings.modes : ['arm5', 'arm6'];
+        return { modes, defaultArm: settings?.default_arm || modes[0] };
+      }
+      function renderFreePlayResolution() {
+        const { modes, defaultArm } = freePlayModes();
+        if (freePlayResolution && !modes.includes(freePlayResolution)) freePlayResolution = null;
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(freePlayState?.phase);
+        el('free-play-resolution-row').hidden = active;
+        for (const button of el('free-play-resolution').querySelectorAll('button')) {
+          const arm = button.dataset.resolution;
+          button.hidden = !modes.includes(arm);
+          button.textContent = `${FREE_PLAY_SIZES[arm]}${arm === defaultArm ? ' (lens default)' : ''}`;
+          button.setAttribute('aria-pressed', String(arm === freePlayResolution));
+          button.disabled = freePlayPending;
+        }
+        el('free-play-resolution-hint').textContent = freePlayResolution
+          ? `This session records at ${FREE_PLAY_SIZES[freePlayResolution]}.`
+          : `Tap the resolution for this session (the lens default is ${FREE_PLAY_SIZES[defaultArm]}).`;
+      }
+      el('free-play-resolution').addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-resolution]');
+        if (!button || button.disabled) return;
+        freePlayResolution = button.dataset.resolution;
+        renderLadderControls();
+      });
+      function renderFreePlayStudy(state) {
+        const study = state?.exposure_study;
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(state?.phase);
+        el('free-play-study').hidden = !active || !study?.text;
+        el('free-play-study').textContent = study?.text || '';
+        const rungs = active && Array.isArray(study?.rungs) ? study.rungs : [];
+        el('free-play-rungs').hidden = !rungs.length;
+        el('free-play-rungs').replaceChildren(
+          ...rungs.map((rung) => {
+            const item = document.createElement('li');
+            item.dataset.status = rung.status;
+            const counts = rung.counts || {};
+            const judged = ['green', 'amber', 'red']
+              .filter((color) => counts[color])
+              .map((color) => `${counts[color]} ${color}`);
+            if (counts.no_capture) judged.push(`${counts.no_capture} without a clip`);
+            if (counts.error) judged.push(`${counts.error} unreadable`);
+            const gain = rung.gain != null ? ` × gain ${Number(rung.gain).toFixed(2)}` : '';
+            const head = `${rung.exposure_us} µs${gain}`;
+            item.textContent =
+              rung.status === 'skipped'
+                ? `${head}: skipped (${rung.skip_reason})`
+                : `${head}: ${rung.status}, ${rung.swings} of ${study.swings_per_rung} swings${judged.length ? ` · ${judged.join(', ')}` : ''}`;
+            return item;
+          })
+        );
       }
 
       let freePlayState = null;
@@ -4965,6 +5060,7 @@
         el('ladder-controls').hidden = active;
         el('free-play-stop').hidden = !['recording', 'stopping', 'packaging', 'error'].includes(phase);
         el('free-play-stop').disabled = freePlayPending || ['stopping', 'packaging'].includes(phase);
+        renderFreePlayStudy(state);
         el('free-play-status').textContent = ['ready', 'closed'].includes(phase)
           ? `Package ready: ${state.bundle?.path || state.bundle?.name}. Download it below.${phase === 'ready' ? ' Then tap Done on the scoreboard.' : ''}`
           : phase === 'recording' ? `Free play is recording.${state.geometry_unverified ? ' Geometry unverified.' : ''}`
@@ -5496,7 +5592,12 @@
         try {
           if (!(await requireSetupEligibility())) return;
           liveShown(false);
-          const result = await post('/api/tester/run', { ...payload(), action: 'free_play' });
+          if (!freePlayResolution) throw new Error('Tap a resolution for this session first.');
+          const result = await post('/api/tester/run', {
+            ...payload(),
+            action: 'free_play',
+            resolution: freePlayResolution,
+          });
           renderFreePlay(result.free_play);
           if (!result.free_play?.run_id) throw new Error('Free play did not return its session identity.');
         } catch (error) {
@@ -5772,6 +5873,7 @@
         return [...list].filter((us) => Number.isFinite(us)).sort((a, b) => b - a);
       }
       function renderLens() {
+        renderFreePlayResolution();
         const lenses = lensState?.lenses || [];
         const current = selectedLens();
         el('lens').dataset.ready = String(Boolean(current));

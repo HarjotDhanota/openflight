@@ -32,8 +32,11 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  gap: 0.5rem;
+  /* tight rows: the state, a geometry note and the exposure study's line fit the
+     60 px band at 800×480 without making it taller */
+  gap: 0.1rem 0.5rem;
   flex-wrap: wrap;
+  line-height: 1.15;
 }
 
 .free-play__status span {
@@ -49,6 +52,30 @@
   padding: 0.35rem 0.75rem;
   font-size: 0.875rem;
   font-weight: 700;
+}
+
+/* the exposure study's line reads in full: it may take two short lines, never the
+   ready light's room (the band keeps its height) */
+/* while recording, the notes under the state are a size smaller and set close:
+   at 800×480 the status column is about 150 px wide and the band 60 px tall */
+.free-play:not(.free-play--finished) .free-play__status {
+  row-gap: 0;
+  line-height: 1.1;
+}
+
+.free-play:not(.free-play--finished) .free-play__status span {
+  font-size: 0.6875rem;
+  line-height: 1.05;
+}
+
+.free-play__status span.free-play__study {
+  flex-basis: 100%;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: var(--color-text-muted);
 }
 
 /* the bundle's file name is one long word: wrap it rather than run under the button */
