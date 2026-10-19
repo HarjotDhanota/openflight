@@ -18,10 +18,12 @@ from openflight.camera import session_review_routes as review
 class FreePlayController:
     """Keep packaging separate from the still-visible kiosk process."""
 
-    def __init__(self, sessions_root, capture_jobs, package_jobs):
+    def __init__(self, sessions_root, capture_jobs, package_jobs, *, kiosk_port):
         self.root = Path(sessions_root)
         self.capture_jobs = capture_jobs
         self.package_jobs = package_jobs
+        # the kiosk's web port (the tester server's KIOSK_WEB_PORT): Stop is proxied there
+        self.kiosk_port = int(kiosk_port)
         self.lock = threading.RLock()
         self.run = None
 
@@ -78,7 +80,11 @@ class FreePlayController:
                 self._save()
 
     def package(self, tester_id, run_id):
-        """Start one analysis/package job for this stopped capture."""
+        """Start one analysis/package job for this stopped capture.
+
+        The lock is held only to claim the run: the package job's start waits up
+        to SPAWN_WAIT_S for its process, and status polls must answer meanwhile.
+        """
         with self.lock:
             state = self.status(tester_id, run_id)
             if not state.get("enabled"):
@@ -88,45 +94,58 @@ class FreePlayController:
             job = self.capture_jobs.status()
             if job.get("action") != "free_play" or job.get("state") != "running":
                 raise RuntimeError("the free-play kiosk is no longer running")
-            self.run.update(phase="packaging", error=None)
+            self.run.update(phase="packaging", bundle=None, error=None)
             self._save()
-            previous = review.read_analysis(self.root, tester_id)["latest_bundle"]
 
-            def finished(_action, returncode):
-                with self.lock:
-                    if self.run["run_id"] != run_id:
-                        return
-                    latest = review.read_analysis(self.root, tester_id)["latest_bundle"]
-                    if returncode == 0 and latest is not None and latest != previous:
-                        bundle = {
-                            **latest,
-                            "path": str(
-                                (
-                                    session_bundle.bundle_directory(self.root) / latest["name"]
-                                ).resolve()
-                            ),
-                        }
-                        self.run.update(phase="ready", bundle=bundle, error=None)
-                    else:
-                        self.run.update(
-                            phase="error",
-                            error="Packaging failed; retry or download the saved captures.",
-                        )
-                    self._save()
-
-            try:
-                self.package_jobs.start(
-                    "analyze",
-                    [review.analysis_command(self.root, tester_id)],
-                    review.analysis_log(self.root, tester_id),
-                    on_finish=finished,
-                    output_to_log=True,
-                )
-            except (OSError, RuntimeError) as error:
-                self.run.update(phase="error", error=str(error))
+        def finished(_action, returncode):
+            with self.lock:
+                if self.run is None or self.run["run_id"] != run_id:
+                    return
+                bundle = self._made_bundle(tester_id) if returncode == 0 else None
+                if bundle is not None:
+                    self.run.update(phase="ready", bundle=bundle, error=None)
+                else:
+                    self.run.update(
+                        phase="error",
+                        bundle=None,
+                        error="Packaging failed; retry or download the saved captures.",
+                    )
                 self._save()
-                raise
+
+        try:
+            self.package_jobs.start(
+                "analyze",
+                [review.analysis_command(self.root, tester_id)],
+                review.analysis_log(self.root, tester_id),
+                on_finish=finished,
+                output_to_log=True,
+            )
+        except (OSError, RuntimeError) as error:
+            with self.lock:
+                if self.run is not None and self.run["run_id"] == run_id:
+                    self.run.update(phase="error", error=str(error))
+                    self._save()
+            raise
+        with self.lock:
             return dict(self.run)
+
+    def _made_bundle(self, tester_id):
+        """The bundle this analysis job made or reused, from its own job record.
+
+        An unchanged session reuses its latest bundle (same name, ``reused``):
+        that is this run's package too. A bundle the job did not name is never
+        claimed, however recent.
+        """
+        analysis = review.read_analysis(self.root, tester_id)
+        made = (analysis.get("job") or {}).get("bundle") or {}
+        listed = {item["name"]: item for item in analysis.get("bundles") or []}
+        if made.get("name") not in listed:
+            return None
+        return {
+            **listed[made["name"]],
+            "reused": bool(made.get("reused")),
+            "path": str((session_bundle.bundle_directory(self.root) / made["name"]).resolve()),
+        }
 
     def register(self, app):
         """Expose run-bound tester controls and progress."""
@@ -161,7 +180,7 @@ class FreePlayController:
                 self.status(payload["tester_id"], payload["run_id"])
                 data = json.dumps({**payload, "action": "stop"}).encode()
                 query = urllib.request.Request(
-                    "http://127.0.0.1:8080/api/free-play",
+                    f"http://127.0.0.1:{self.kiosk_port}/api/free-play",
                     data=data,
                     headers={"Content-Type": "application/json"},
                 )

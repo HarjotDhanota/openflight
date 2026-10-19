@@ -93,7 +93,7 @@ def test_packaging_is_run_bound_and_duplicate_requests_start_one_job(tmp_path, m
     capture.job = {"state": "running", "action": "free_play"}
     run = tmp_path / "tester" / "arm5" / "paired" / "run-01"
     run.mkdir(parents=True)
-    controller = free_play.FreePlayController(tmp_path, capture, packaging)
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
     controller.begin("tester", "run-one", run)
     with pytest.raises(ValueError, match="another run"):
         controller.package("tester", "old-run")
@@ -102,9 +102,7 @@ def test_packaging_is_run_bound_and_duplicate_requests_start_one_job(tmp_path, m
     controller.package("tester", "run-one")
     assert len(packaging.calls) == 1
     monkeypatch.setattr(
-        free_play.review,
-        "read_analysis",
-        lambda *_: {"latest_bundle": {"name": "session.zip", "path": ".bundles/session.zip"}},
+        free_play.review, "read_analysis", lambda *_: analysis_with_bundle("session.zip")
     )
     packaging.done("analyze", 0)
     assert controller.status()["phase"] == "ready"
@@ -199,7 +197,7 @@ def test_free_play_refuses_to_close_logs_while_radar_thread_is_alive(monkeypatch
 
 def test_an_exited_kiosk_does_not_leave_the_next_run_blocked(tmp_path):
     (tmp_path / "tester").mkdir()
-    controller = free_play.FreePlayController(tmp_path, Jobs(), Jobs())
+    controller = free_play.FreePlayController(tmp_path, Jobs(), Jobs(), kiosk_port=8080)
     controller.begin("tester", "one", tmp_path / "tester")
     controller.capture_finished("one", 1)
     assert controller.status()["phase"] == "interrupted"
@@ -287,7 +285,7 @@ def test_progress_and_package_routes_reject_stale_controls_and_old_bundles(tmp_p
     (tmp_path / "tester").mkdir()
     capture, packaging = Jobs(), Jobs()
     capture.job = {"state": "running", "action": "free_play"}
-    controller = free_play.FreePlayController(tmp_path, capture, packaging)
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
     controller.begin("tester", "one", tmp_path / "tester")
     app = Flask(__name__)
     controller.register(app)
@@ -306,8 +304,9 @@ def test_progress_and_package_routes_reject_stale_controls_and_old_bundles(tmp_p
         == 409
     )
     assert client.post("/api/tester/free-play/close", json=identity).status_code == 409
+    # an old bundle is listed, but this job made none: never claim the old one
     monkeypatch.setattr(
-        free_play.review, "read_analysis", lambda *_: {"latest_bundle": {"name": "old.zip"}}
+        free_play.review, "read_analysis", lambda *_: analysis_with_bundle("old.zip", made=False)
     )
     assert (
         client.post(
@@ -317,6 +316,7 @@ def test_progress_and_package_routes_reject_stale_controls_and_old_bundles(tmp_p
     )
     packaging.done("analyze", 0)
     assert controller.status()["phase"] == "error"
+    assert controller.status()["bundle"] is None
 
 
 def test_kiosk_rejects_foreign_run_and_retries_a_failed_stop(monkeypatch):
@@ -345,7 +345,7 @@ def test_delayed_done_from_an_old_run_cannot_cancel_its_replacement(tmp_path, mo
     (tmp_path / "tester").mkdir()
     capture, packaging = Jobs(), Jobs()
     capture.job = {"state": "running", "action": "free_play"}
-    controller = free_play.FreePlayController(tmp_path, capture, packaging)
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
     controller.begin("tester", "old", tmp_path / "tester")
     controller.run["phase"] = "ready"
     timers = []
@@ -372,3 +372,143 @@ def test_delayed_done_from_an_old_run_cannot_cancel_its_replacement(tmp_path, mo
     controller.begin("tester", "new", tmp_path / "tester")
     timers[0]()
     assert capture.status()["state"] == "running"
+
+
+def analysis_with_bundle(name, *, made=True, reused=False):
+    """``review.read_analysis`` as it reads a finished analysis job (job.json + bundles)."""
+    listed = {"name": name, "size_bytes": 1234, "sha256": "a" * 64}
+    built = {"name": name, "path": f".bundles/{name}", "reused": reused, "sha256": "a" * 64}
+    return {
+        "state": "complete",
+        "reason": None,
+        "job": {"state": "complete", "bundle": built if made else None},
+        "review_ready": True,
+        "bundles": [listed],
+        "latest_bundle": listed,
+    }
+
+
+def test_repackaging_into_the_same_bundle_name_is_ready_not_failed(tmp_path, monkeypatch):
+    """An unchanged session reuses its latest bundle: the same name, and a success."""
+    (tmp_path / "tester").mkdir()
+    capture, packaging = Jobs(), Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+    monkeypatch.setattr(
+        free_play.review, "read_analysis", lambda *_: analysis_with_bundle("tester.zip")
+    )
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
+    controller.begin("tester", "one", tmp_path / "tester")
+    controller.package("tester", "one")
+    monkeypatch.setattr(
+        free_play.review,
+        "read_analysis",
+        lambda *_: analysis_with_bundle("tester.zip", reused=True),
+    )
+    packaging.done("analyze", 0)
+    state = controller.status()
+    assert state["phase"] == "ready", state
+    assert state["bundle"]["name"] == "tester.zip"
+    assert state["bundle"]["reused"] is True
+    assert state["bundle"]["path"].endswith("tester.zip")
+
+
+def test_a_failed_analysis_is_an_error_even_with_a_bundle_listed(tmp_path, monkeypatch):
+    (tmp_path / "tester").mkdir()
+    capture, packaging = Jobs(), Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+    monkeypatch.setattr(
+        free_play.review, "read_analysis", lambda *_: analysis_with_bundle("tester.zip")
+    )
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
+    controller.begin("tester", "one", tmp_path / "tester")
+    controller.package("tester", "one")
+    packaging.done("analyze", 1)
+    assert controller.status()["phase"] == "error"
+
+
+def test_package_does_not_hold_the_lock_while_the_job_spawns(tmp_path):
+    """Status polls answer while the package job waits (up to 10 s) for its process."""
+    (tmp_path / "tester").mkdir()
+    capture = Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+    spawning, release = threading.Event(), threading.Event()
+
+    class SlowSpawn(Jobs):
+        def start(self, *args, **kwargs):
+            spawning.set()
+            assert release.wait(5)
+            super().start(*args, **kwargs)
+
+    packaging = SlowSpawn()
+    controller = free_play.FreePlayController(tmp_path, capture, packaging, kiosk_port=8080)
+    controller.begin("tester", "one", tmp_path / "tester")
+    worker = threading.Thread(target=controller.package, args=("tester", "one"), daemon=True)
+    worker.start()
+    try:
+        assert spawning.wait(5)
+        answered = []
+        poll = threading.Thread(
+            target=lambda: answered.append(controller.status("tester", "one")), daemon=True
+        )
+        poll.start()
+        poll.join(timeout=1.0)
+        assert answered, "status blocked behind the package job's spawn wait"
+        assert answered[0]["phase"] == "packaging"
+        # a second Stop during the wait starts nothing new
+        assert controller.package("tester", "one")["phase"] == "packaging"
+    finally:
+        release.set()
+        worker.join(timeout=5)
+    assert len(packaging.calls) == 1
+
+
+def test_a_spawn_failure_releases_the_run_with_its_error(tmp_path):
+    (tmp_path / "tester").mkdir()
+    capture = Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+
+    class NoSpawn(Jobs):
+        def start(self, *_args, **_kwargs):
+            raise RuntimeError("the analyze process did not start within 10 s")
+
+    controller = free_play.FreePlayController(tmp_path, capture, NoSpawn(), kiosk_port=8080)
+    controller.begin("tester", "one", tmp_path / "tester")
+    with pytest.raises(RuntimeError, match="did not start"):
+        controller.package("tester", "one")
+    assert controller.status()["phase"] == "error"
+    assert "did not start" in controller.status()["error"]
+
+
+def test_stop_reaches_the_kiosk_on_its_configured_port(tmp_path, monkeypatch):
+    (tmp_path / "tester").mkdir()
+    controller = free_play.FreePlayController(tmp_path, Jobs(), Jobs(), kiosk_port=9123)
+    controller.begin("tester", "one", tmp_path / "tester")
+    app = Flask(__name__)
+    controller.register(app)
+    seen = []
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self, *_args):
+            return b'{"phase": "stopping"}'
+
+    def urlopen(query, timeout):
+        seen.append((query.full_url, timeout))
+        return Reply()
+
+    monkeypatch.setattr(free_play.urllib.request, "urlopen", urlopen)
+    response = app.test_client().post(
+        "/api/tester/free-play/stop", json={"tester_id": "tester", "run_id": "one"}
+    )
+    assert response.status_code == 202, response.get_json()
+    assert seen[0][0] == "http://127.0.0.1:9123/api/free-play"
+
+
+def test_the_tester_server_points_free_play_at_the_kiosk_web_port(tmp_path):
+    app = eligible_app(sessions_root=tmp_path, manager=Jobs())
+    assert app.extensions["openflight_free_play"].kiosk_port == ts.KIOSK_WEB_PORT

@@ -36,7 +36,7 @@ def test_stop_packages_real_saved_evidence_and_preserves_free_play_decisions(tmp
     log.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
     capture, packaging = Jobs(), JobManager()
     capture.job = {"state": "running", "action": "free_play"}
-    controller = free_play.FreePlayController(root, capture, packaging)
+    controller = free_play.FreePlayController(root, capture, packaging, kiosk_port=8080)
     controller.begin(TESTER, identity["run_id"], log.parent)
     tester = Flask("free-play-tester-workflow")
     controller.register(tester)
@@ -83,3 +83,28 @@ def test_stop_packages_real_saved_evidence_and_preserves_free_play_decisions(tmp
     assert saved[0]["config"]["free_play"]["unit_id"] == "synthetic-unit"
     packaging._thread.join(timeout=5)
     assert packaging.status()["state"] == "complete"
+
+
+def test_repackaging_an_unchanged_session_reuses_its_bundle_and_is_ready(tmp_path):
+    """The analysis reuses the latest bundle when nothing changed; that is a success."""
+    root = capture_tree(tmp_path / "sessions")
+    log = next(root.rglob("session_*.jsonl"))
+    capture, packaging = Jobs(), JobManager()
+    capture.job = {"state": "running", "action": "free_play"}
+    controller = free_play.FreePlayController(root, capture, packaging, kiosk_port=8080)
+    controller.begin(TESTER, "free-one", log.parent)
+
+    def package_and_wait():
+        controller.package(TESTER, "free-one")
+        packaging._thread.join(timeout=120)
+        return controller.status()
+
+    first = package_and_wait()
+    assert first["phase"] == "ready", (first, packaging.status())
+    # a retry after a failure the tester saw: the same run packages again, unchanged
+    controller.run.update(phase="error", bundle=None, error="Packaging failed")
+    second = package_and_wait()
+    assert second["phase"] == "ready", (second, packaging.status())
+    assert second["bundle"]["name"] == first["bundle"]["name"]
+    assert second["bundle"]["reused"] is True
+    assert session_bundle.validate_bundle(second["bundle"]["path"])["tester_id"] == TESTER

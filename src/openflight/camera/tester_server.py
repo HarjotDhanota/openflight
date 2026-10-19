@@ -7237,7 +7237,9 @@ def create_app(
     jobs = manager or TesterJobManager()
     from openflight.free_play import FreePlayController
 
-    free_play = FreePlayController(sessions_root, jobs, package_manager or TesterJobManager())
+    free_play = FreePlayController(
+        sessions_root, jobs, package_manager or TesterJobManager(), kiosk_port=KIOSK_WEB_PORT
+    )
     free_play.register(app)
     app.extensions["openflight_free_play"] = free_play
     # Setup radar captures share one session so the port closes once per setup (the
