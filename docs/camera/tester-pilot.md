@@ -5,21 +5,55 @@
 Free play is implemented on the local `feat/tester-free-play` branch. It still
 needs the Pi checks below before a tester release. Start `scripts/start-tester.sh`,
 open `http://<pi-address>:8765/`, choose the tester and fitted lens, and complete
-setup steps 1–6. In step 7 tap **Start free play**. Ignore the advanced exposure
-ladder; free play uses the selected lens's default mode and automatic exposure,
-seeded from the setup's light measurement.
+setup steps 1–6. In step 7 tap the session's **resolution**, **1280×800** or
+**640×400** (the maintainer tells each tester which one), then tap **Start free
+play**. The lens's default resolution is marked "(lens default)" but is never
+assumed: Start stays off until one is tapped. A resolution the lens settings
+disable is not offered, and there is no switch mid-session. Ignore the advanced
+exposure ladder section.
 
 Hit normally while the full-screen scoreboard records camera clips, distance-radar
-dumps, speed-radar data and exposure decisions. There is no swing limit, exposure
-ladder, per-shot verdict, face photograph or annotation step. Testers collect and
-send data; the maintainer handles any reference marking and accuracy grading.
+dumps, speed-radar data and exposure decisions. There is no swing limit, per-shot
+prompt, face photograph or annotation step. Testers collect and send data; the
+maintainer handles any reference marking and accuracy grading.
+
+### The exposure study runs by itself
+
+Free play first walks the exposure ladder for the tapped resolution, so the
+maintainer can lock in which exposure settings work for fusion:
+
+- The settings are that mode's ladder rungs from the lens settings, longest
+  exposure first. Before any swing, settings the setup's measured light cannot
+  support (the same prediction as the ladder's light warning, 640×400 counted at
+  its measured 2× signal) and settings below the sensor's recorded shortest
+  exposure are skipped, with the reason recorded.
+- Each setting's gain keeps the brightness of the setup's ball lock (the ladder's
+  own rung gain). The camera starts at the first setting from its first frame,
+  and moves to the next one live: no window or restart between settings.
+- Five real shots per setting: only swings the speed radar records as a shot
+  count; a trigger with no shot does not. Then the next setting follows.
+- Every shot gets the ladder's automatic picture verdict (frames delivered,
+  signal, clipping, whether the ball and the club are usable), recorded silently
+  against its setting. The tester never acts on it.
+- After the last setting, the automatic swing exposure runs for the rest of the
+  session, seeded from the setup's light. When no setting can run (too little
+  light, or no light measured), free play starts on the automatic exposure at
+  once, never at a near-black startup.
+- **Stop & package** works at any time; a partly run study is packaged and marked
+  partial.
+
+The scoreboard shows one line under "Free play: recording", for example
+`Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6`, then
+`Automatic exposure`. The tester page shows the same line and each setting's
+verdict counts (green, amber, red, without a clip) or why it was skipped.
 
 - **Green SWING:** every configured sensor is armed. Too dark / too bright adds a
   lighting note without blocking shots. "Camera exposure unavailable" means the
   camera reported no exposure limits and holds its startup controls; shots still
   record, with that state in each shot's exposure record.
-- **Amber WAIT:** a capture is saving, processing is busy, or the camera is finding
-  the ball. Wait for green.
+- **Amber WAIT:** a capture is saving, processing is busy, the camera is finding
+  the ball, or it is **changing the camera setting** (the study's next setting).
+  Wait for green.
 - **Red NOT READY:** read the cause. A completed search with no ball says “no ball
   in the box”; a failed camera or distance radar remains a visible cause while OPS
   numbers continue to be recorded.
@@ -39,10 +73,40 @@ after acquisition stops. The bundle includes every shot's exposure decision,
 brightness, light index, lens/mode and blur ceiling, or an explicit missing-capture
 reason, plus the unit/run identity and setup/rig provenance.
 
+### What the bundle records for the exposure study
+
+In the run folder (`<tester>/<arm>/paired/run-NN/`):
+
+- `free_play_exposure_plan.json` (`openflight.free_play_exposure_plan.v1`): the
+  tester server's plan before any swing: `resolution`, `resolution_choice` (the
+  tap, the lens and its default), each rung's `rung_id`, `exposure_us`, `gain`,
+  `gain_source`, `status` (`pending` or `skipped`), `skip_cause` (`light`,
+  `below_sensor_minimum`, `no_gain`), `skip_reason` and `light_support`, and the
+  `startup` controls with their `source`.
+- `free_play_exposure_study.json` (`openflight.free_play_exposure_study.v1`): the
+  kiosk's study as it ran: `phase` (`ladder`, `automatic`, `camera_unavailable`),
+  `ladder_status` (`running`, `complete`, `partial`, `not_run`), each rung's
+  `status` (`active`, `done`, `incomplete`, `not_reached`, `skipped`), its swings
+  (`shot_number`, `verdict`) and verdict `counts`, and the `automatic` hand-over
+  with the policy's seed decision.
+- `session_start.config.free_play` carries `resolution` and the whole
+  `exposure_plan`.
+- Every shot entry carries `free_play.exposure_study`
+  (`openflight.free_play_exposure_study_shot.v1`): `ladder_phase`, `resolution`,
+  `rung_id`, `setting_index`, `settings_total`, `swing_of_rung`,
+  `swings_per_rung`, `exposure_us`, `gain`, `controls_source` and `verdict`
+  (`openflight.free_play_swing_verdict.v1`: `status` `judged`, `no_capture` or
+  `error`, `color`, `reasons`, `delivered_fps`, `gaps`, the applied `exposure_us`
+  and `gain`, `signal_dn`, `clipped_pct`, `light_cause`, `ball`, `ball_usable`,
+  `club_usable` and `judged_against`). A shot first logged before its clip was
+  matched gets the verdict in its `shot_updated` entry.
+
 | Symptom | Action |
 |---|---|
+| Start free play stays off | Tap a resolution first, then check the setup steps are complete. |
 | Finding the ball | Keep a ball inside the confirmed box and wait for the search. |
 | No ball in the box | Re-tee inside the box; add light if the ball is hard to see. |
+| Changing the camera setting | Wait for green: the study is moving to its next setting. |
 | Too dark / too bright | Add light or shade the ball. The note does not block a shot. |
 | Camera exposure unavailable | The camera reported no exposure limits. Shots still record; restart the unit to retry, and mention it when sending the zip. |
 | Packaging fails or shots are still finishing | Tap **Try again** on the scoreboard once processing settles. Captures remain on disk. |
@@ -50,7 +114,9 @@ reason, plus the unit/run identity and setup/rig provenance.
 | Sensor fails mid-run | Read the ready-light cause; OPS numbers continue. Package the session before restarting the unit. |
 
 Before release, check on the Pi: full-screen opening and the touch Stop/Done
-buttons; the light through a complete shot cycle; and zip size/packaging time for
+buttons; the light through a complete shot cycle; that the first frames are at
+the first setting's exposure, and each setting change lands between swings
+without a restart; the verdict's time per shot; and zip size/packaging time for
 30 shots. Desktop mocks do not establish these hardware behaviors.
 
 ## Advanced exposure-ladder study
