@@ -170,6 +170,7 @@ camera_capture_runtime = None
 # The tester study page may set exposure and gain and read raw frames only when
 # the kiosk is started with --study-mode; production never exposes either.
 study_mode_enabled = False
+free_play_config: dict = {}
 tester_setup_required = False
 tester_config_hash: str | None = None
 camera_capture_config: dict = {"enabled": False}
@@ -2004,6 +2005,11 @@ def _session_start_config() -> dict:
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     # the unit's camera tilt the setup handed over (P8-5), recorded beside the geometry
     config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
+    if free_play_config.get("enabled"):
+        config["free_play"] = {
+            key: free_play_config.get(key)
+            for key in ("enabled", "tester_id", "run_id", "unit_id", "geometry_unverified")
+        }
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -2909,7 +2915,7 @@ def _tester_setup_readiness(
     )
     camera_ok = bool(
         camera_capture_runtime is not None
-        and not camera_capture_runtime.settings.auto_exposure
+        and (not camera_capture_runtime.settings.auto_exposure or free_play_config.get("enabled"))
         and camera_status.get("running")
         and (camera_status.get("armed") or not require_camera_armed)
         and camera_age is not None
@@ -3023,7 +3029,7 @@ def _tester_setup_readiness(
 @app.get("/api/camera/study/readiness")
 def study_setup_readiness():
     """Expose the mandatory tester hardware gate without taking sensor ownership."""
-    if not study_mode_enabled:
+    if not (study_mode_enabled or free_play_config.get("enabled")):
         return jsonify({"error": "study mode is off"}), 404
     return jsonify(_tester_setup_readiness())
 
@@ -3065,6 +3071,12 @@ def _tester_trigger_hard_stop(evidence: dict) -> str | None:
     refuses; everything else the evidence says becomes a note on the shot.
     """
     for blocker in evidence.get("blockers") or []:
+        if (
+            free_play_config.get("enabled")
+            and isinstance(blocker, dict)
+            and blocker.get("id") in {"camera", "iwr6843"}
+        ):
+            continue
         if isinstance(blocker, dict) and blocker.get("id") in _HARD_STOP_BLOCKERS:
             return f"{blocker.get('id')}: {blocker.get('reason')}"
     runtime = (evidence.get("observations") or {}).get("runtime") or {}
@@ -3618,7 +3630,11 @@ def _ready_light_setup_problems() -> list[str]:
     active_logger = get_session_logger()
     if active_logger is None or not active_logger.active_session_uuid:
         problems.append("session log is not open")
-    if camera_capture_runtime is not None and camera_capture_runtime.settings.auto_exposure:
+    if (
+        camera_capture_runtime is not None
+        and camera_capture_runtime.settings.auto_exposure
+        and not free_play_config.get("enabled")
+    ):
         problems.append("camera exposure is automatic")
     return problems
 
@@ -3657,7 +3673,10 @@ def _ready_light_states() -> SensorStates | None:
         iwr = {"running": False}
     camera = None
     if camera_capture_runtime is not None:
-        camera = camera_capture_runtime.ready_snapshot()
+        camera = {
+            **camera_capture_runtime.ready_snapshot(),
+            "free_play": bool(free_play_config.get("enabled")),
+        }
     elif camera_capture_config.get("error"):
         camera = {"running": False}  # the kiosk runs on without it; a tester's swing cannot
     return SensorStates(
@@ -6139,6 +6158,14 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         if session_log:
             shot_number = _shot_number_for_log(shot, session_log)
             if camera_capture is not None:
+                if free_play_config.get("enabled"):
+                    shot.free_play_exposure = {
+                        "decision": deepcopy(camera_capture.metadata.get("auto_exposure")),
+                        "capture_settings": deepcopy(camera_capture.metadata.get("settings")),
+                        "capture_mode": deepcopy(camera_capture.metadata.get("capture_mode")),
+                        "status": "recorded" if not camera_capture.error else "capture_error",
+                        "reason": camera_capture.error,
+                    }
                 session_log.log_camera_capture(
                     shot_number=shot_number,
                     shot_timestamp=shot.impact_timestamp,
@@ -7186,11 +7213,17 @@ def _handle_shot_detected(shot: Shot) -> None:
             join="serial_capture_loop",
         )
     if tester_setup_required:
-        readiness = (
-            camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
-            if camera_capture_runtime is not None
-            else None
-        )
+        try:
+            readiness = (
+                camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
+                if camera_capture_runtime is not None
+                else None
+            )
+        except (OSError, RuntimeError) as error:
+            if not free_play_config.get("enabled"):
+                raise
+            readiness = None
+            log_session_error(str(error), component="camera_trigger")
         evidence_problem = _tester_trigger_evidence_problem(readiness)
         if readiness is None and evidence_problem is not None:
             # No camera trigger near this impact (P7-3): the edge never reached
@@ -7246,6 +7279,15 @@ def _handle_shot_detected(shot: Shot) -> None:
     _open_carry_status(shot)
     _open_smash_factor_status(shot)
     _assign_shot_number(shot)
+    if free_play_config.get("enabled"):
+        shot.free_play_run_id = free_play_config["run_id"]
+        shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
+        shot.free_play_exposure = {
+            "status": "unavailable",
+            "reason": "no matched camera capture",
+            "capture_settings": deepcopy(camera_capture_config),
+            "decision": None,
+        }
     pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
@@ -7791,6 +7833,51 @@ def stop_monitor():
         monitor.disconnect()
         monitor = None
     mock_swing_speed_mode = False
+
+
+def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
+    """Close acquisition only after accepted shots have finished writing."""
+    global monitor  # pylint: disable=global-statement
+    if monitor is not None:
+        monitor.stop()
+        capture_thread = getattr(monitor, "_capture_thread", None)
+        if capture_thread is not None and capture_thread.is_alive():
+            raise RuntimeError("radar capture is still finishing; retry Stop & package")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        with _shot_finalization_condition:
+            pending = bool(
+                _shot_finalization_registered
+                or _shot_finalization_current
+                or _shot_awaiting_late_enrichment
+                or _shot_finalization_running
+                or _deferred_shot_enrichment
+                or not shot_enrichment_queue.empty()
+            )
+        if shot_enrichment_task is None and not pending:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "shots are still finishing; retry Stop & package when processing finishes"
+            )
+        time.sleep(0.05)
+    for service in (camera_capture_runtime, iwr6843_runtime, inclinometer_service):
+        if service is not None:
+            service.stop()
+    camera_writer = getattr(camera_capture_runtime, "_worker", None)
+    if camera_writer is not None and camera_writer.is_alive():
+        raise RuntimeError("camera save is still finishing; retry Stop & package")
+    if monitor is not None:
+        monitor.disconnect()
+        monitor = None
+    session = get_session_logger()
+    if session is not None:
+        session.end_session()
+
+
+from .free_play import register_kiosk_routes  # noqa: E402
+
+register_kiosk_routes(app, free_play_config, lambda: _finish_free_play_capture())
 
 
 class MockLaunchMonitor:
@@ -8670,6 +8757,11 @@ def main():
         default=None,
         help="Required SHA-256 fingerprint of the measured tester rig geometry",
     )
+    parser.add_argument("--tester-free-play", action="store_true")
+    parser.add_argument("--tester-id")
+    parser.add_argument("--tester-run-id")
+    parser.add_argument("--tester-control-port", type=int, default=8765)
+    parser.add_argument("--tester-geometry-unverified", action="store_true")
     parser.add_argument(
         "--inclinometer",
         action="store_true",
@@ -8921,6 +9013,13 @@ def main():
         help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
     )
     args = parser.parse_args()
+    if args.tester_free_play and (
+        not args.tester_setup_required
+        or not args.tester_id
+        or not args.tester_run_id
+        or not 1 <= args.tester_control_port <= 65535
+    ):
+        parser.error("free play requires admitted setup, tester ID, run ID and a valid tester port")
     _apply_kld7_device_defaults(args)
     # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
@@ -9150,6 +9249,19 @@ def main():
     study_mode_enabled = bool(args.study_mode)
     tester_setup_required = bool(args.tester_setup_required)
     tester_config_hash = args.tester_config_hash
+    free_play_config.clear()
+    if args.tester_free_play:
+        import platform
+
+        free_play_config.update(
+            enabled=True,
+            phase="recording",
+            tester_id=args.tester_id,
+            run_id=args.tester_run_id,
+            control_port=args.tester_control_port,
+            unit_id=platform.node(),
+            geometry_unverified=args.tester_geometry_unverified,
+        )
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
@@ -9382,6 +9494,9 @@ def main():
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
+        elif args.tester_free_play:
+            startup_status.skip("ti", "Distance radar unavailable; free play keeps OPS numbers")
+            print("WARNING: IWR6843 unavailable; free play continues with OPS numbers")
         else:
             startup_status.error(
                 "ti",

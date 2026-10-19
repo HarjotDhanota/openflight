@@ -3605,6 +3605,83 @@ class TestOnShotDetected:
         assert result.enrichment_ms is not None
         assert result.clock_domain == "host_monotonic"
 
+    def test_free_play_camera_failure_keeps_ops_numbers_and_persists_the_shot(self, monkeypatch):
+        emitted, session_log = self._record_finalization(monkeypatch)
+        workers = []
+
+        class FailedCamera:
+            @staticmethod
+            def trigger_rejection_for_shot(_impact):
+                return None
+
+            @staticmethod
+            def trigger_evidence_for_shot(_impact):
+                raise OSError("camera disconnected")
+
+            @staticmethod
+            def capture_for_shot(_impact, **_kwargs):
+                raise OSError("camera disconnected")
+
+        monkeypatch.setattr(
+            server_module, "free_play_config", {"enabled": True, "run_id": "free-run"}
+        )
+        monkeypatch.setattr(server_module, "tester_setup_required", True)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", FailedCamera())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda target, *_a, **_kw: workers.append(target) or object(),
+        )
+        shot = self._shot()
+        on_shot_detected(shot)
+        assert emitted[0][1]["shot"]["ball_speed_mph"] == 150
+        workers[0]()
+        self._wait_for_finalization_coordinator_idle()
+        assert session_log.shots[0]["ball_speed_mph"] == 150
+        assert session_log.shots[0]["free_play"]["run_id"] == "free-run"
+        assert session_log.shots[0]["exposure_decision"]["status"] == "unavailable"
+
+    def test_free_play_records_the_matched_capture_decision_instead_of_live_controls(
+        self, monkeypatch
+    ):
+        _emitted, session_log = self._record_finalization(monkeypatch)
+        metadata = {
+            "auto_exposure": {
+                "setting": {"exposure_us": 100, "gain": 2},
+                "reading": {"median_dn": 60},
+            },
+            "settings": {"width": 1280, "height": 800, "lens": {"lens_id": "stock"}},
+            "capture_mode": {"context_status": "uniform"},
+        }
+        capture = SimpleNamespace(
+            trigger_timestamp=100,
+            path=Path("camera-001"),
+            metadata=metadata,
+            valid=True,
+            error=None,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            capture_for_shot=lambda *_a, **_kw: capture,
+            auto_exposure_status=lambda: {"setting": {"exposure_us": 200}},
+        )
+        monkeypatch.setattr(server_module, "free_play_config", {"enabled": True})
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda *_: None)
+        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_: None)
+        monkeypatch.setattr(server_module, "_fuse_camera_measurements", lambda *_: None)
+        shot = self._shot()
+        server_module._enrich_shot_from_optional_hardware(shot)
+        metadata["auto_exposure"]["setting"]["exposure_us"] = 300
+        assert shot.free_play_exposure["decision"]["setting"]["exposure_us"] == 100
+        assert shot.free_play_exposure["capture_settings"]["lens"]["lens_id"] == "stock"
+        assert len(session_log.camera_captures) == 1
+
     def test_camera_prefetch_failure_does_not_discard_iwr_result(self, monkeypatch):
         """A camera association failure remains isolated from radar enrichment."""
         fused = []

@@ -59,7 +59,7 @@ test('the page is the OpenFlight Tester, with one numbered sequence', async ({ p
     '4 Aim at your target',
     '5 Check the hardware and light',
     '6 Ball range',
-    '7 Swing: the exposure ladder',
+    '7 Free play',
     '8 Review and package',
   ].map((text) => new RegExp(`^${text}`)));
 });

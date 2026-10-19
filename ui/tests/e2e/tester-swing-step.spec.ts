@@ -105,7 +105,7 @@ const RED = {
   clipped_pct: 0.4,
 };
 
-test('the verdict is a big card at the top of the swing step, its colour mirrored on the band', async ({ page }) => {
+test('the advanced ladder keeps its verdict card and mirrors its colour on the band', async ({ page }) => {
   let verdict: object = RED;
   await swingStep(page, () =>
     ladder('full-150', { 'full-300': 'done', 'full-200': 'done', 'full-150': 'active' }, verdict)
@@ -113,8 +113,8 @@ test('the verdict is a big card at the top of the swing step, its colour mirrore
   await page.goto('/tester.html');
 
   const card = page.locator('#verdict-card');
-  // first in its step
-  expect(await page.locator('#step-7 > :nth-child(2)').getAttribute('id')).toBe('verdict-card');
+  await expect(page.locator('#step-7').getByRole('button', { name: 'Start free play', exact: true })).toBeVisible();
+  await expect(card).toBeVisible();
   await expect(card).toHaveAttribute('data-color', 'red');
   await expect(page.locator('#verdict-word')).toHaveText('Not usable');
   await expect(page.locator('#verdict-setting')).toHaveText('1280×800 · 150 µs');

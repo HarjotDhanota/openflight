@@ -412,6 +412,9 @@ class Shot:
     # What blocked or mismatched trigger evidence said about a tester shot the
     # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
     trigger_evidence_notes: Optional[list] = None
+    free_play_run_id: Optional[str] = None
+    free_play_exposure: Optional[dict] = None
+    geometry_unverified: bool = False
     # Labels on the camera's values that no longer withhold them (D15): the
     # capture's lighting and optical-quality verdicts; None when there are none.
     camera_notes: Optional[list] = None
@@ -688,6 +691,26 @@ class Shot:
             "flight": deepcopy(self.flight),
         }
         data["metrics"] = shot_metrics.from_record(data)
+        if self.free_play_run_id:
+            data["free_play"] = {
+                "run_id": self.free_play_run_id,
+                "geometry_unverified": self.geometry_unverified,
+            }
+            data["exposure_decision"] = deepcopy(self.free_play_exposure)
+            if self.geometry_unverified:
+                for metric_id, metric in data["metrics"].items():
+                    source = metric.get("source") or ""
+                    if (
+                        metric_id in {"ball_speed", "club_speed"}
+                        or (metric_id == "spin_rate" and metric["status"] == "measured")
+                        or source.startswith("radial ratio")
+                        or metric["value"] is None
+                    ):
+                        continue
+                    metric["geometry_validation"] = "unverified"
+                    metric["note"] = "; ".join(
+                        filter(None, [metric.get("note"), "geometry unverified"])
+                    )
         return data
 
 

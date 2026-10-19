@@ -555,7 +555,8 @@ class CameraCaptureRuntime:
         self._ready.put(None)
         if self._worker is not None:
             self._worker.join(timeout=3.0)
-            self._worker = None
+            if not self._worker.is_alive():
+                self._worker = None
 
     def capture_preview_jpeg(self, quality: int = 80, max_width: int | None = None) -> bytes | None:
         """Encode the latest rolling-buffer frame as a preview JPEG.
@@ -925,6 +926,7 @@ class CameraCaptureRuntime:
             ),
             "requested_size": [self.settings.width, self.settings.height],
             "resolved_size": (resolved or {}).get("size"),
+            "auto_exposure": self._auto_exposure_decision.to_dict(),
             "controls_purpose": self._controls_purpose,
             "collecting_tail": collecting,
             "awaiting_handoff": awaiting,
