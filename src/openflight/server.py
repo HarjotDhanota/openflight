@@ -6159,13 +6159,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             shot_number = _shot_number_for_log(shot, session_log)
             if camera_capture is not None:
                 if free_play_config.get("enabled"):
-                    shot.free_play_exposure = {
-                        "decision": deepcopy(camera_capture.metadata.get("auto_exposure")),
-                        "capture_settings": deepcopy(camera_capture.metadata.get("settings")),
-                        "capture_mode": deepcopy(camera_capture.metadata.get("capture_mode")),
-                        "status": "recorded" if not camera_capture.error else "capture_error",
-                        "reason": camera_capture.error,
-                    }
+                    shot.free_play_exposure = _free_play_exposure_from_clip(camera_capture)
                 session_log.log_camera_capture(
                     shot_number=shot_number,
                     shot_timestamp=shot.impact_timestamp,
@@ -7197,6 +7191,61 @@ def on_shot_detected(shot: Shot) -> None:
         _handle_shot_detected(shot)
 
 
+def _free_play_exposure_from_clip(capture) -> dict:
+    """The free-play exposure record from the shot's own clip (F6).
+
+    The clip's ``settings`` is the capture's startup snapshot and holds no lens;
+    the lens the clip was taken through is its own top-level ``lens`` key.
+    """
+    metadata = capture.metadata or {}
+    return {
+        "status": "recorded" if not capture.error else "capture_error",
+        "reason": capture.error,
+        "decision_scope": "clip",
+        "decision": deepcopy(metadata.get("auto_exposure")),
+        "decision_reason": None,
+        "lens_scope": "clip",
+        "lens": deepcopy(metadata.get("lens")),
+        "capture_settings": deepcopy(metadata.get("settings")),
+        "capture_mode": deepcopy(metadata.get("capture_mode")),
+    }
+
+
+def _free_play_exposure_at_shot() -> dict:
+    """The record for a shot with no matched clip: the policy's live decision.
+
+    Read when the shot is detected and labelled ``live_at_shot``: it is what the
+    swing-exposure policy held then, not a clip's measurement. A camera that
+    cannot answer leaves the decision missing, with its reason.
+    """
+    record = {
+        "status": "unavailable",
+        "reason": "no matched camera capture",
+        "decision_scope": None,
+        "decision": None,
+        "decision_reason": "no camera runtime",
+        "lens_scope": None,
+        "lens": None,
+        "capture_settings": deepcopy(camera_capture_config),
+    }
+    runtime = camera_capture_runtime
+    if runtime is None:
+        return record
+    try:
+        decision = dict(runtime.auto_exposure_status())
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        record["decision_reason"] = f"auto_exposure_status failed: {error}"
+    else:
+        decision.pop("recent_decisions", None)  # the live page's log, not this shot's
+        record.update(
+            decision_scope="live_at_shot", decision=deepcopy(decision), decision_reason=None
+        )
+    lens = getattr(getattr(runtime, "settings", None), "lens", None)
+    if lens:
+        record.update(lens_scope="kiosk_run", lens=deepcopy(dict(lens)))
+    return record
+
+
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
@@ -7282,12 +7331,7 @@ def _handle_shot_detected(shot: Shot) -> None:
     if free_play_config.get("enabled"):
         shot.free_play_run_id = free_play_config["run_id"]
         shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
-        shot.free_play_exposure = {
-            "status": "unavailable",
-            "reason": "no matched camera capture",
-            "capture_settings": deepcopy(camera_capture_config),
-            "decision": None,
-        }
+        shot.free_play_exposure = _free_play_exposure_at_shot()
     pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
