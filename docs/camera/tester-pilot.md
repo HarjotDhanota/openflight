@@ -65,6 +65,10 @@ or estimated) and every left/right angle signed against its frame ("vs target
 line" or "vs unit aim"): they are the kiosk's working numbers, not validated
 measurements. The separate [saved-capture review page](recorded-track-comparison.md)
 supports manual annotations and conditional geometry comparisons after recording.
+Community contributors only need to record and package sessions; frame marking
+is the maintainer's follow-up work. Harjot curates the official reference set.
+Automatic diagnostics do not require marks, and sessions without independent
+references are not accuracy graded. See [community contributions](community-contributions.md).
 Use **View fusion diagnostics** for existing pipeline results as shots finish,
 including source labels, partial outcomes and recorded camera/IWR disagreements.
 The [diagnostics guide](live-fusion-diagnostics.md) explains hidden-metric blocks
