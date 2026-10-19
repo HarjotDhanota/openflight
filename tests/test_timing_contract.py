@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openflight.gate_timing import GateEvent
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
 from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
@@ -22,6 +23,19 @@ from openflight.timing import (
     measured_stage,
     new_stage_timing,
 )
+
+
+def _queue_gate_event(capture_monitor: IWR6843CaptureMonitor, edge_wall_s: float) -> GateEvent:
+    """Queue the edge as production does: notify_trigger's GateEvent, then the stop sentinel."""
+    event = GateEvent.observe(
+        capture_monitor.edge_tick_reading,
+        edge_wall_s,
+        previous_callback_mono_ns=capture_monitor._previous_callback_mono_ns,
+    )
+    capture_monitor._events = queue.Queue()
+    capture_monitor._events.put(event)
+    capture_monitor._events.put(None)
+    return event
 
 
 class _FakeClock:
@@ -321,8 +335,6 @@ def test_iwr_capture_separates_uart_transport_from_dump_bookkeeping(monkeypatch,
     from openflight.iwr6843 import monitor as monitor_module
 
     clock = _FakeClock()
-    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(monitor_module.time, "time", lambda: clock.wall_time)
 
     class Radar:
         port = "test"
@@ -338,6 +350,10 @@ def test_iwr_capture_separates_uart_transport_from_dump_bookkeeping(monkeypatch,
         output_dir=tmp_path,
         radar=Radar(),
     )
+    # Observed on the real clocks before they are faked, as the GPIO callback does.
+    event = _queue_gate_event(capture_monitor, 123.0)
+    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
+    monkeypatch.setattr(monitor_module.time, "time", lambda: clock.wall_time)
 
     def validate(_raw):
         clock.advance_ns(200_000_000)
@@ -345,13 +361,12 @@ def test_iwr_capture_separates_uart_transport_from_dump_bookkeeping(monkeypatch,
 
     monkeypatch.setattr(capture_monitor, "_validate_dump", validate)
     capture_monitor._running = True
-    capture_monitor._events = queue.Queue()
-    capture_monitor._events.put(123.0)
-    capture_monitor._events.put(None)
     capture_monitor._capture_loop()
 
     capture = capture_monitor.capture_for_shot(123.0, timeout_s=0.0)
     assert capture is not None
+    assert capture.gate_event is event
+    assert capture.trigger_timestamp == 123.0
     assert capture.uart_transport_duration_ns == 7_550_000_000
     assert capture.dump_duration_ns == 7_750_000_000
     assert capture.dump_duration_s == -10.0
@@ -363,27 +378,27 @@ def test_iwr_capture_preserves_reversed_monotonic_transport_for_contract_rejecti
 ):
     from openflight.iwr6843 import monitor as monitor_module
 
-    monotonic_ticks = iter((1_000, 900, 800, 700))
-    wall_ticks = iter((10.0, 12.0))
-    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
-    monkeypatch.setattr(monitor_module.time, "time", lambda: next(wall_ticks))
-
     radar = SimpleNamespace(port="test", read_dump=lambda: b"dump")
     capture_monitor = IWR6843CaptureMonitor(
         config_path=tmp_path / "unused.cfg",
         output_dir=tmp_path,
         radar=radar,
     )
+    # Observed on the real clocks; the scripted ticks below belong to the dump alone.
+    event = _queue_gate_event(capture_monitor, 123.0)
+
+    monotonic_ticks = iter((1_000, 900, 800, 700))
+    wall_ticks = iter((10.0, 12.0))
+    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
+    monkeypatch.setattr(monitor_module.time, "time", lambda: next(wall_ticks))
     monkeypatch.setattr(capture_monitor, "_validate_dump", lambda _raw: {})
     capture_monitor._running = True
-    capture_monitor._events = queue.Queue()
-    capture_monitor._events.put(123.0)
-    capture_monitor._events.put(None)
 
     capture_monitor._capture_loop()
 
     capture = capture_monitor.capture_for_shot(123.0, timeout_s=0.0)
     assert capture is not None
+    assert capture.gate_event is event
     assert capture.uart_transport_duration_ns == -100
     assert capture.dump_duration_ns == -300
     assert capture.dump_duration_s == 2.0
@@ -581,3 +596,20 @@ def test_server_publication_is_callback_to_emit_invocation_not_browser_time(monk
     assert emitted[0][1]["shot"]["stage_timing"]["server"]["publication"]["duration_ns"] == (
         4_000_000_000
     )
+
+
+def test_iwr_notify_trigger_queues_only_gate_events(tmp_path):
+    """The capture loop's only producer queues a GateEvent per edge, never a bare timestamp."""
+    capture_monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg",
+        output_dir=tmp_path,
+        radar=SimpleNamespace(port="test"),
+    )
+    capture_monitor._running = True
+    capture_monitor._armed = True
+
+    assert capture_monitor.notify_trigger(123.0) is True
+
+    queued = capture_monitor._events.get_nowait()
+    assert isinstance(queued, GateEvent)
+    assert queued.observation.observer_wall_s == 123.0
