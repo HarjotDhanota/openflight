@@ -1,9 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
+import { KIOSK_VIEWPORTS, keepManualLadderOpen, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
 
 test.use({ hasTouch: true });
 
 test.beforeEach(async ({ page }) => {
+  // the ladder's Start, gated on the range, sits in the closed maintainer section
+  await keepManualLadderOpen(page);
   await useTester(page);
 });
 
@@ -1481,7 +1483,7 @@ test('the step headings are numbered once', async ({ page }) => {
   // (10) one sequence, 1 to 8, and no lettered buttons beside it
   await expect(page.getByRole('heading', { level: 2, name: '6 Ball range' })).toBeVisible();
   await expect(page.locator('section.step .step-n')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8']);
-  for (const name of ['Check the hardware', 'Measure the light (both modes)', 'Start the exposure ladder']) {
+  for (const name of ['Check the hardware', 'Measure the light (both modes)', 'Start free play']) {
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: /^[A-D]\. / })).toHaveCount(0);
