@@ -207,3 +207,76 @@ def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypat
     assert isinstance(made["sensor"], MountedAccelerometer)
     assert made["sensor"].yaw_deg == 180.0
     assert server.inclinometer_runtime_config["mount_yaw_deg"] == 180.0
+
+
+def _fake_lis3dh(monkeypatch, made):
+    class Board:
+        def __init__(self, **_kwargs):
+            pass
+
+    class Service:
+        sample_hz = 10.0
+
+        def __init__(self, sensor, **_kwargs):
+            made["sensor"] = sensor
+
+        def start(self):
+            pass
+
+        def wait_for_stable(self, timeout_s):
+            return SnapshotSelection(snapshot=None, status="no_stable_preimpact_reading")
+
+    monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
+    monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
+    from openflight.rig_geometry import RigGeometry
+
+    monkeypatch.setattr(
+        server,
+        "rig_geometry",
+        RigGeometry.from_json(
+            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
+        ),
+    )
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {})
+
+
+def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path):
+    """The tester's orientation check saved a correction: the kiosk reads with it."""
+    from openflight.inclinometer import MountedAccelerometer, orientation_check as oc
+
+    made = {}
+    _fake_lis3dh(monkeypatch, made)
+    path = tmp_path / "lis3dh-mount.json"
+    store = oc.MountStore(path, rig_yaw_deg=180.0)
+    store.apply_correction("quarter_left")
+    store.apply_correction("upside_down")
+    store.record_pass({"front_up_deg": 5.8})
+
+    assert server.init_inclinometer(zero_offset_deg=0.0, mount_file=path) is True
+
+    sensor = made["sensor"]
+    assert isinstance(sensor, MountedAccelerometer)
+    expected = oc.Mount(270.0).corrected("upside_down")
+    assert (sensor.yaw_deg, sensor.upside_down) == (expected.yaw_deg, expected.upside_down)
+    config = server.inclinometer_runtime_config
+    assert config["mount_yaw_deg"] == expected.yaw_deg
+    assert config["mount_upside_down"] is True
+    assert config["mount_source"] == "unit_file"
+    # session_start carries the check result and the corrections (config["inclinometer"])
+    assert config["orientation_check"]["check"]["state"] == "passed"
+    assert [c["correction"] for c in config["orientation_check"]["corrections"]] == [
+        "quarter_left",
+        "upside_down",
+    ]
+
+
+def test_init_inclinometer_without_a_unit_file_keeps_the_rig_mount(monkeypatch, tmp_path):
+    made = {}
+    _fake_lis3dh(monkeypatch, made)
+
+    assert server.init_inclinometer(zero_offset_deg=0.0, mount_file=tmp_path / "none.json")
+
+    assert made["sensor"].yaw_deg == 180.0
+    assert server.inclinometer_runtime_config["mount_source"] == "rig_file"
+    assert server.inclinometer_runtime_config["orientation_check"]["check"] is None

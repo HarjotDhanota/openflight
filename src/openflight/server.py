@@ -52,6 +52,7 @@ from .horizontal_frame import (
     resolve_horizontal_offset,
     to_reported_deg,
 )
+from .inclinometer.orientation_check import default_mount_path as _default_lis3dh_mount_path
 from .launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
@@ -2668,20 +2669,40 @@ def _iwr6843_startup_recovery(error: object) -> str:
     return "Check the TI radar USB and power connections, then relaunch OpenFlight."
 
 
-def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
-    """Start the optional LIS3DH service without risking radar availability."""
+def init_inclinometer(
+    *,
+    zero_offset_deg: float,
+    bus_number: int = 1,
+    address: int = 0x18,
+    mount_file: Path | None = None,
+) -> bool:
+    """Start the optional LIS3DH service without risking radar availability.
+
+    ``mount_file`` is this unit's checked LIS3DH mount (the tester's orientation
+    check, ``orientation_check``); without one the rig file's yaw stands. Its
+    mount, check and corrections go into session_start with the rest of this
+    config.
+    """
     global inclinometer_service  # pylint: disable=global-statement
     global inclinometer_runtime_config  # pylint: disable=global-statement
 
     service = None
     try:
-        from .inclinometer import LIS3DH, InclinometerService, MountedAccelerometer
+        from .inclinometer import (
+            LIS3DH,
+            InclinometerService,
+            MountedAccelerometer,
+            orientation_check,
+        )
 
         sensor = LIS3DH(bus_number=bus_number, address=address)
-        mount_yaw = rig_geometry.lis3dh_mount_yaw_deg if rig_geometry is not None else None
-        if mount_yaw:
+        mount, mount_source, mount_record = orientation_check.effective_mount(
+            mount_file, rig_geometry.lis3dh_mount_yaw_deg if rig_geometry is not None else None
+        )
+        mount_yaw = mount.yaw_deg
+        if mount_yaw or mount.upside_down:
             # a board turned in the housing reads the housing's tilt turned with it
-            sensor = MountedAccelerometer(sensor, mount_yaw)
+            sensor = MountedAccelerometer(sensor, mount_yaw, upside_down=mount.upside_down)
         service = InclinometerService(sensor, zero_offset_deg=zero_offset_deg)
         service.start()
         startup = service.wait_for_stable(timeout_s=2.0)
@@ -2694,6 +2715,11 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "sample_hz": service.sample_hz,
             "zero_offset_deg": zero_offset_deg,
             "mount_yaw_deg": mount_yaw,
+            "mount_upside_down": mount.upside_down,
+            "mount_source": mount_source,
+            "mount_file": str(mount_file) if mount_file is not None else None,
+            # the tester's orientation check and the corrections it saved for this unit
+            "orientation_check": mount_record,
             "startup": startup.to_dict(),
         }
         if startup.snapshot is None:
@@ -8968,6 +8994,16 @@ def main():
         help="LIS3DH I2C address (default: 0x18)",
     )
     parser.add_argument(
+        "--lis3dh-mount-file",
+        type=Path,
+        default=_default_lis3dh_mount_path(),
+        help=(
+            "This unit's checked LIS3DH mount, saved by the tester's orientation check "
+            "(default ~/.config/openflight/lis3dh-mount.json); without the file the rig "
+            "file's lis3dh_mount_yaw_deg stands"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
     )
     parser.add_argument(
@@ -9711,6 +9747,7 @@ def main():
             zero_offset_deg=args.inclinometer_zero_offset,
             bus_number=args.inclinometer_bus,
             address=args.inclinometer_address,
+            mount_file=args.lis3dh_mount_file,
         ):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
