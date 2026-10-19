@@ -451,3 +451,40 @@ def test_the_range_summary_names_what_was_never_the_ball():
         {"method": "coherent", "range_m": 1.575, "reason": "still_reflector"}
     ]
     assert shown["radar_candidates"][0]["still_reflector"] == {"bin": 35}
+
+
+@pytest.mark.parametrize("action", ["swings", "free_play"])
+def test_a_running_kiosk_reports_the_ball_at_address_in_free_play_too(
+    tmp_path, inputs, monkeypatch, action
+):
+    """Free play's kiosk re-locates the resting ball like the swings kiosk does."""
+    from openflight.camera import study_ladder
+
+    app, tester = app_for(tmp_path, inputs, monkeypatch)
+    manager = app.config["TEST_STATIC_MANAGER"]
+    monkeypatch.setattr(manager, "status", lambda: {"state": "running", "action": action})
+    monkeypatch.setattr(study_ladder.KioskClient, "ready_light", lambda _self: {"state": "green"})
+    monkeypatch.setattr(
+        study_ladder.KioskClient,
+        "ball_at_address",
+        lambda _self: {
+            "state": "in_box",
+            "range_m": 2.21,
+            "range_source": "iwr6843",
+            "updated_at": 1.0,
+            "reason": None,
+        },
+    )
+
+    status = (
+        app.test_client()
+        .get(
+            "/api/tester/status",
+            query_string={"tester_id": tester, "arm_id": "arm5", "environment": "indoors"},
+        )
+        .get_json()
+    )
+
+    assert status["kiosk"]["state"] == "running"
+    assert status["ball_at_address"]["state"] == "in_box"
+    assert status["ball_at_address"]["range_m"] == 2.21

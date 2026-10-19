@@ -9986,7 +9986,9 @@ def create_app(
     def ball_at_address(tester_id: str, kiosk: Mapping | None = None) -> dict:
         """The kiosk's per-shot re-location of the resting ball, for the ready light."""
         job = jobs.status()
-        if not (job.get("state") == "running" and job.get("action") in {"ladder", "swings"}):
+        if not (
+            job.get("state") == "running" and job.get("action") in tester_ready_light.KIOSK_ACTIONS
+        ):
             return {"state": "unknown", "range_m": None, "updated_at": None, "reason": "no kiosk"}
         if isinstance(kiosk, Mapping) and kiosk.get("state") != "running":
             return {
