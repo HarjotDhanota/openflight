@@ -1,0 +1,76 @@
+.session-status {
+  display: flex;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.session-status > .ready-light {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-status:has(.free-play) > .ready-light {
+  gap: 0.5rem;
+  padding-inline: 0.75rem;
+}
+
+.session-status:has(.free-play) .ready-light__word {
+  font-size: 1.75rem;
+}
+
+.session-status:has(.free-play) .ready-light__cause,
+.session-status:has(.free-play) .ready-light__time,
+.session-status:has(.free-play) .ready-light__swing {
+  font-size: 0.875rem;
+}
+
+.session-status:has(.ready-light) > .free-play {
+  flex: 0 0 43%;
+}
+
+.panel-app:has(.free-play) .live-panel__grid .metric-card__value-row {
+  font-size: clamp(1.5rem, min(6vw, 11vh, 20cqi, 32cqb), 3.5rem);
+}
+
+.free-play {
+  display: flex;
+  flex-shrink: 0;
+  flex-grow: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.75rem;
+}
+
+.free-play__status {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.free-play__status span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.free-play button {
+  flex-shrink: 0;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+@media (max-height: 520px) {
+  .panel-app:has(.free-play) .live-panel__grid .metric-card--label-above {
+    gap: 0.1rem;
+    padding-block: 0.2rem;
+  }
+}

@@ -17,6 +17,7 @@ import { SimShotBadges } from './components/SimShotBadges';
 import { SimNotSentNotice } from './components/SimNotSentNotice';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ReadyLightBar } from './components/ReadyLight';
+import { FreePlayControls } from './components/FreePlayControls';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
@@ -288,7 +289,10 @@ function AppContent() {
       <LaunchDaddyOverlay />
 
       {/* In the flow above the panels, so it never covers the camera feed (P7-14). */}
-      <ReadyLightBar />
+      <div className="session-status">
+        <ReadyLightBar />
+        <FreePlayControls />
+      </div>
 
       {iwr6843Alert && (
         <div className="iwr-alert" role="alert">

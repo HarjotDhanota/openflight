@@ -148,6 +148,14 @@ def _camera(camera: Mapping, now: float, red: list, amber: list) -> None:
         amber.append(
             ("camera refilling its ring", round((needed - buffered) / fps, 1) if fps else None)
         )
+    if camera.get("free_play"):
+        policy = camera.get("auto_exposure") or {}
+        if policy.get("status") == "holding_no_ball" and policy.get("reason") == "no_ball_searched":
+            red.append("no ball in the box")
+        elif policy.get("status") in {"holding_no_ball", "searching_for_ball", "seeded"}:
+            amber.append(("finding the ball", None))
+        elif policy.get("status") == "unavailable":
+            red.append(policy.get("message") or "camera exposure unavailable")
 
 
 def compute_state(states: SensorStates, now: float, hold: str | None = None) -> dict:
@@ -178,10 +186,13 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
             "time_left_s": left,
             "causes": [{"cause": item[0], "time_left_s": item[1]} for item in amber],
         }
+    policy = (states.camera or {}).get("auto_exposure") or {}
+    note = policy.get("status") if (states.camera or {}).get("free_play") else None
     return {
         "state": "green",
         "word": WORDS["green"],
-        "cause": "Ready for a swing",
+        "cause": "Ready for a swing"
+        + (f"; {note.replace('_', ' ')}" if note in {"too_dark", "too_bright"} else ""),
         "time_left_s": None,
         "causes": [],
     }

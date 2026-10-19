@@ -228,6 +228,36 @@ def test_tester_kiosk_is_green_with_its_admitted_setup(sensors, monkeypatch):
     assert sensors.light()["state"] == "green"
 
 
+@pytest.mark.parametrize(
+    "status,reason,state,cause",
+    [
+        ("ball_driven", "ball", "green", "Ready for a swing"),
+        ("searching_for_ball", "search", "amber", "finding the ball"),
+        ("holding_no_ball", "no_ball", "amber", "finding the ball"),
+        ("holding_no_ball", "no_ball_searched", "red", "no ball in the box"),
+        ("too_dark", "limit", "green", "too dark"),
+        ("too_bright", "limit", "green", "too bright"),
+    ],
+)
+def test_free_play_automatic_exposure_drives_the_light(
+    sensors, monkeypatch, status, reason, state, cause
+):
+    _admitted(monkeypatch)
+    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    server.camera_capture_runtime.settings.auto_exposure = True
+    sensors.camera["auto_exposure"] = {"enabled": True, "status": status, "reason": reason}
+    light = sensors.light()
+    assert light["state"] == state
+    assert cause in light["cause"]
+
+
+def test_free_play_does_not_relax_manual_exposure_for_the_ladder(sensors, monkeypatch):
+    _admitted(monkeypatch)
+    monkeypatch.setattr(server, "free_play_config", {}, raising=False)
+    server.camera_capture_runtime.settings.auto_exposure = True
+    assert "camera exposure is automatic" in sensors.light()["cause"]
+
+
 def test_no_admitted_setup_is_red(sensors, monkeypatch):
     _admitted(monkeypatch, admitted_hash="b" * 64)
 

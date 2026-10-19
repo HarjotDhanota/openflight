@@ -57,6 +57,29 @@ STABLE = {
 }
 
 
+def test_unverified_geometry_is_allowed_only_for_free_play_collection(tmp_path):
+    unknown = tmp_path / "unknown.json"
+    content = json.loads(RIG.read_text(encoding="utf-8"))
+    content["lens_height_above_floor_mm"] = 110.0
+    unknown.write_text(json.dumps(content), encoding="utf-8")
+    gate = SetupEligibility(
+        unknown,
+        tmp_path / "sessions",
+        inclinometer_bus=1,
+        inclinometer_address=0x18,
+        inclinometer_zero_offset_deg=0.0,
+        allow_unverified_geometry=True,
+    )
+    before = gate.evaluate(TESTER, STABLE)
+    assert before["config_hash"]
+    confirmed = gate.confirm(TESTER, before["config_hash"], True, STABLE)
+    assert confirmed["eligible"] is True
+    assert any(item["id"] == "geometry" for item in confirmed["warnings"])
+    assert gate.require(TESTER, STABLE, "free_play")["eligible"] is True
+    assert gate.require(TESTER, STABLE, "gain")["eligible"] is True
+    assert gate.require(TESTER, STABLE, "ladder")["eligible"] is False
+
+
 class StaticTilt:
     bus = 1
     address = 0x18

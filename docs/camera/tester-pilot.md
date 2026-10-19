@@ -1,5 +1,56 @@
 # Camera mode study — tester guide
 
+## Free play for outside testers
+
+Free play is implemented on the local `feat/tester-free-play` branch. It still
+needs the Pi checks below before a tester release. Start `scripts/start-tester.sh`,
+open `http://<pi-address>:8765/`, choose the tester and fitted lens, and complete
+setup steps 1–6. In step 7 tap **Start free play**. Ignore the advanced exposure
+ladder; free play uses the selected lens's default mode and automatic exposure,
+seeded from the setup's light measurement.
+
+Hit normally while the full-screen scoreboard records camera clips, distance-radar
+dumps, speed-radar data and exposure decisions. There is no swing limit, exposure
+ladder, per-shot verdict, face photograph or annotation step. Testers collect and
+send data; the maintainer handles any reference marking and accuracy grading.
+
+- **Green SWING:** every configured sensor is armed. Too dark / too bright adds a
+  lighting note without blocking shots.
+- **Amber WAIT:** a capture is saving, processing is busy, or the camera is finding
+  the ball. Wait for green.
+- **Red NOT READY:** read the cause. A completed search with no ball says “no ball
+  in the box”; a failed camera or distance radar remains a visible cause while OPS
+  numbers continue to be recorded.
+
+Any valid enclosure geometry file can collect free-play data. Unknown geometry is
+labelled **geometry unverified**; geometry-dependent results carry that note.
+The supplied file's values are used, so this does not validate their physical accuracy.
+The advanced ladder retains its approved-enclosure requirement.
+
+Tap **Stop & package** on the scoreboard or tester page. Accepted shots finish
+writing before the session closes and analysis/packages start. Keep the scoreboard
+open until **Package ready** shows its zip path; download it from step 8 on the
+tester page. Send that zip and a short description of the lighting and enclosure.
+Tap **Done** on the scoreboard to close the window. This keeps progress visible
+after acquisition stops. The bundle includes every shot's exposure decision,
+brightness, light index, lens/mode and blur ceiling, or an explicit missing-capture
+reason, plus the unit/run identity and setup/rig provenance.
+
+| Symptom | Action |
+|---|---|
+| Finding the ball | Keep a ball inside the confirmed box and wait for the search. |
+| No ball in the box | Re-tee inside the box; add light if the ball is hard to see. |
+| Too dark / too bright | Add light or shade the ball. The note does not block a shot. |
+| Packaging fails or shots are still finishing | Tap **Try again** on the scoreboard once processing settles. Captures remain on disk. |
+| Kiosk or tester restarted | Do not assume the run resumed. Start the tester again; use step 8 to analyse and package the saved captures. |
+| Sensor fails mid-run | Read the ready-light cause; OPS numbers continue. Package the session before restarting the unit. |
+
+Before release, check on the Pi: full-screen opening and the touch Stop/Done
+buttons; the light through a complete shot cycle; and zip size/packaging time for
+30 shots. Desktop mocks do not establish these hardware behaviors.
+
+## Advanced exposure-ladder study
+
 For the first run of the complete fusion bench, follow the
 [Pi commissioning procedure](pi-commissioning.md) alongside this guide.
 

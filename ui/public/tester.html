@@ -1696,7 +1696,10 @@
       </section>
 
       <section class="step" id="step-7" data-step="7">
-        <h2><span class="step-n">7</span> Swing: the exposure ladder</h2>
+        <h2><span class="step-n">7</span> Free play</h2>
+        <button type="button" class="primary" id="step-free-play">Start free play</button>
+        <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
+        <p class="note" id="free-play-status" role="status">Record every shot with automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
         <div class="verdict-card" id="verdict-card" data-color="none" aria-live="polite">
           <div class="verdict-card__head">
             <strong class="verdict-card__word" id="verdict-word">No swing judged yet</strong>
@@ -1710,7 +1713,8 @@
         <p class="address" id="address-status" data-state="unknown" role="status"></p>
         <div class="live-metrics" id="live-metrics" hidden></div>
         <div class="ladder-now" id="ladder-panel"></div>
-        <h3 class="sub">Settings to run</h3>
+        <div id="ladder-controls">
+        <h3 class="sub">Exposure ladder (advanced)</h3>
         <p class="note" id="ladder-light-warning" role="status" hidden></p>
         <p class="note" id="ladder-kiosk-mark" role="status" hidden></p>
         <p class="note" id="ladder-source"></p>
@@ -1777,6 +1781,7 @@
           </div>
           <p class="problem" id="attempt-error" role="alert" hidden></p>
         </details>
+        </div>
       </section>
 
       <section class="step" id="step-8" data-step="8">
@@ -1797,7 +1802,7 @@
           (review.html, also inside every bundle), open it on the other computer, then choose the original bundle .zip.
         </p>
         <p>
-          <a href="/track-review.html">Annotate saved capture tracks</a> ·
+          <span id="maintainer-track-tools"><a href="/track-review.html">Annotate saved capture tracks</a> ·</span>
           <a href="/fusion-diagnostics.html">View live fusion diagnostics</a>
         </p>
       </section>
@@ -2309,6 +2314,7 @@
       }
 
       function render(body) {
+        if ('free_play' in body) renderFreePlay(body.free_play);
         if (body.failed) {
           el('status').dataset.state = 'error';
           el('status').textContent = body.failed;
@@ -4944,7 +4950,39 @@
         const blocked = photoActionPending || !setupReady() || !teeRangeComplete() || !boxConfirmed();
         el('step-ladder').disabled = blocked || ladderRunning;
         el('step-ladder').textContent = ladderRunning ? 'The ladder is running' : 'Start the exposure ladder';
+        el('step-free-play').disabled = blocked || ladderRunning || freePlayPending || ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
       }
+
+      let freePlayState = null;
+      let freePlayPending = false;
+      function renderFreePlay(state) {
+        freePlayState = state;
+        const phase = state?.enabled ? state.phase : null;
+        el('maintainer-track-tools').hidden = Boolean(state?.enabled);
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(phase);
+        el('verdict-card').hidden = active;
+        el('ladder-panel').hidden = active;
+        el('ladder-controls').hidden = active;
+        el('free-play-stop').hidden = !['recording', 'stopping', 'packaging', 'error'].includes(phase);
+        el('free-play-stop').disabled = freePlayPending || ['stopping', 'packaging'].includes(phase);
+        el('free-play-status').textContent = ['ready', 'closed'].includes(phase)
+          ? `Package ready: ${state.bundle?.path || state.bundle?.name}. Download it below.${phase === 'ready' ? ' Then tap Done on the scoreboard.' : ''}`
+          : phase === 'recording' ? `Free play is recording.${state.geometry_unverified ? ' Geometry unverified.' : ''}`
+          : phase ? `${phase}${state.error ? ': ' + state.error : ''}` : '';
+        renderLadderControls();
+      }
+      el('free-play-stop').addEventListener('click', async () => {
+        const state = freePlayState;
+        if (!state?.run_id || freePlayPending) return;
+        freePlayPending = true;
+        renderFreePlay(state);
+        try {
+          const result = await post('/api/tester/free-play/stop', { tester_id: state.tester_id, run_id: state.run_id });
+          if (el('tester-id').value.trim() === state.tester_id) renderFreePlay(result);
+        } catch (error) {
+          el('free-play-status').textContent = error.message;
+        } finally { freePlayPending = false; renderLadderControls(); refresh(); }
+      });
 
       // P7-13 (D12): a button per setting switches to it now, ticked or not, and can
       // start the ladder on it. The ticks still decide the order that follows.
@@ -5452,6 +5490,19 @@
           ladderRequestRunning = false;
         }
       }
+      el('step-free-play').addEventListener('click', async () => {
+        freePlayPending = true;
+        el('step-free-play').disabled = true;
+        try {
+          if (!(await requireSetupEligibility())) return;
+          liveShown(false);
+          const result = await post('/api/tester/run', { ...payload(), action: 'free_play' });
+          renderFreePlay(result.free_play);
+          if (!result.free_play?.run_id) throw new Error('Free play did not return its session identity.');
+        } catch (error) {
+          el('free-play-status').textContent = error.message;
+        } finally { freePlayPending = false; renderLadderControls(); }
+      });
       el('step-ladder').addEventListener('click', async () => {
         if (photoActionPending) return;
         const body = ladderStartBody();
@@ -6019,7 +6070,7 @@
         4: 'Aim at your target',
         5: 'Hardware and light',
         6: 'Ball range',
-        7: 'Swing: the exposure ladder',
+        7: 'Free play',
         8: 'Review and package',
       };
       function stepDone(step) {
@@ -6043,6 +6094,8 @@
         }
       }
       function currentStep() {
+        if (['ready', 'closed'].includes(freePlayState?.phase)) return 8;
+        if (['recording', 'stopping', 'packaging', 'error'].includes(freePlayState?.phase)) return 7;
         // a walking ladder is the swing step, whatever an earlier step's poll says
         if (ladderRunning) return 7;
         for (let step = 1; step <= 7; step += 1) {

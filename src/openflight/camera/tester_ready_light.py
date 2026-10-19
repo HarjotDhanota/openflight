@@ -20,7 +20,7 @@ from openflight.ready_light import WORDS
 logger = logging.getLogger(__name__)
 
 # the actions whose job is a running kiosk
-KIOSK_ACTIONS = {"ladder", "swings"}
+KIOSK_ACTIONS = {"ladder", "swings", "free_play"}
 RELAY_PERIOD_S = 0.5
 
 

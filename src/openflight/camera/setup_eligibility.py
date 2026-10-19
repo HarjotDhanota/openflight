@@ -176,7 +176,7 @@ def approved_rig_hashes(path: Path = DEFAULT_APPROVED_RIGS) -> list[str]:
 
 
 def inspect_geometry(
-    path: Path, approved_rigs: Path = DEFAULT_APPROVED_RIGS
+    path: Path, approved_rigs: Path = DEFAULT_APPROVED_RIGS, *, allow_unverified: bool = False
 ) -> tuple[str | None, dict[str, Any]]:
     """Validate the rig file and admit it only if its fingerprint is approved.
 
@@ -187,6 +187,14 @@ def inspect_geometry(
     try:
         fingerprint = RigGeometry.from_json(path).snapshot()["sha256"]
         if fingerprint not in approved_rig_hashes(approved_rigs):
+            if allow_unverified:
+                return fingerprint, {
+                    "id": "geometry",
+                    "label": label,
+                    "status": "warn",
+                    "reason": "geometry unverified; capture uses the supplied rig values",
+                    "remedy": "Geometry-dependent numbers are unverified; exposure collection is allowed.",
+                }
             raise ValueError(
                 f"rig geometry {Path(path).name} ({fingerprint[:12]}) is not on the approved "
                 f"list {Path(approved_rigs).name}"
@@ -247,9 +255,11 @@ class SetupEligibility:
         inclinometer_address: int,
         inclinometer_zero_offset_deg: float,
         approved_rigs: Path = DEFAULT_APPROVED_RIGS,
+        allow_unverified_geometry: bool = False,
     ):
         self.geometry_path = Path(geometry_path)
         self.approved_rigs = Path(approved_rigs)
+        self.allow_unverified_geometry = allow_unverified_geometry
         self.sessions_root = Path(sessions_root)
         self.inclinometer_bus = int(inclinometer_bus)
         self.inclinometer_address = int(inclinometer_address)
@@ -259,6 +269,11 @@ class SetupEligibility:
 
     def _confirmation_path(self, tester_id: str) -> Path:
         return self.sessions_root.expanduser().resolve() / tester_id / CONFIRMATION_FILE
+
+    def _geometry(self):
+        return inspect_geometry(
+            self.geometry_path, self.approved_rigs, allow_unverified=self.allow_unverified_geometry
+        )
 
     def _stored_confirmation(self, tester_id: str) -> dict[str, Any]:
         """This tester's confirmation: held in memory, else read once from disk."""
@@ -351,7 +366,7 @@ class SetupEligibility:
         }
 
     def evaluate(self, tester_id: str, reading: Mapping[str, Any]) -> dict[str, Any]:
-        geometry_hash, geometry = inspect_geometry(self.geometry_path, self.approved_rigs)
+        geometry_hash, geometry = self._geometry()
         config_hash = self._config_hash(geometry_hash)
         inclinometer = self._inclinometer_check(reading)
         confirmation = self._stored_confirmation(tester_id)
@@ -406,9 +421,9 @@ class SetupEligibility:
         }
 
     def confirm(self, tester_id: str, config_hash: Any, physical_confirmed: Any, reading) -> dict:
-        geometry_hash, geometry = inspect_geometry(self.geometry_path, self.approved_rigs)
+        geometry_hash, geometry = self._geometry()
         current_hash = self._config_hash(geometry_hash)
-        if geometry["status"] != "pass" or config_hash != current_hash:
+        if geometry["status"] == "block" or config_hash != current_hash:
             raise ValueError(
                 "confirmation config_hash must match the current approved configuration"
             )
@@ -467,6 +482,17 @@ class SetupEligibility:
         audit T12).
         """
         result = self.evaluate(tester_id, reading)
+        if action in {"swings", "ladder"} and any(
+            item["id"] == "geometry" for item in result["warnings"]
+        ):
+            result["blockers"].append(
+                {
+                    "id": "geometry",
+                    "reason": "geometry unverified; use free play for collection",
+                    "remedy": "Use an approved rig for the exposure ladder.",
+                }
+            )
+            result["eligible"] = False
         if adjust is not None:
             result = adjust(result)
         self.record(
@@ -483,7 +509,7 @@ class SetupEligibility:
         return result
 
     def confirmation_valid(self, tester_id: str) -> bool:
-        geometry_hash, _check = inspect_geometry(self.geometry_path, self.approved_rigs)
+        geometry_hash, _check = self._geometry()
         current_hash = self._config_hash(geometry_hash)
         confirmation = self._stored_confirmation(tester_id)
         return bool(
@@ -494,7 +520,7 @@ class SetupEligibility:
 
     def current_config_hash(self) -> str | None:
         """Return the current approved configuration identity, if valid."""
-        geometry_hash, _check = inspect_geometry(self.geometry_path, self.approved_rigs)
+        geometry_hash, _check = self._geometry()
         return self._config_hash(geometry_hash)
 
     def record(self, tester_id: str, outcome: str, detail: Mapping[str, Any]) -> None:

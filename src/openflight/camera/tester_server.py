@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
@@ -268,6 +269,7 @@ def mode_focal_px(arm: Arm, rig_geometry: Path, lens=None) -> float:
 
 
 ACTION_LABELS = {
+    "free_play": "Free play: recording shots",
     "preflight": "Hardware and software preflight",
     "gain": "Find the gain for this arm",
     "swings": "Capture paired swings for this arm",
@@ -2272,6 +2274,7 @@ def action_commands(
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
     zone_box: Sequence[int] | None = None,
     ball_box: Sequence[int] | None = None,
+    light_index_dn_per_us_gain: float | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
@@ -2289,7 +2292,7 @@ def action_commands(
     root = arm_directory(sessions_root, params)
     arm = params.arm
     tee_range_args = []
-    if action in {"ladder", "swings"}:
+    if action in {"ladder", "swings", "free_play"}:
         tee_range_args = (
             list(handed_to_swings["cli_args"])
             if handed_to_swings is not None
@@ -2371,7 +2374,9 @@ def action_commands(
             ]
         ]
     else:
-        gain, exposure_us = resolve_gain(sessions_root, params)
+        gain, exposure_us = (
+            (1.0, 8) if action == "free_play" else resolve_gain(sessions_root, params)
+        )
         commands = [
             [
                 "bash",
@@ -2380,7 +2385,7 @@ def action_commands(
                 radar_port,
                 "--club",
                 CLUB,
-                "--camera-capture-manual-exposure",
+                *([] if action == "free_play" else ["--camera-capture-manual-exposure"]),
                 "--debug",
                 "--iwr6843",
                 *tee_range_args,
@@ -2404,12 +2409,17 @@ def action_commands(
                 params.arm_id,
             ]
         ]
-    if action in {"ladder", "swings"}:
+    if action in {"ladder", "swings", "free_play"}:
         if not tester_setup or not tester_setup.get("config_hash"):
             raise ValueError("tester setup evidence is required for capture")
         # the tester page stays on screen: no fullscreen kiosk window (2a); the page's
         # "Kiosk view" button opens the kiosk UI in a normal window or tab
-        commands[0].insert(2, "--no-browser")
+        if action == "free_play":
+            commands[0].append("--tester-free-play")
+            if light_index_dn_per_us_gain is not None:
+                commands[0].extend(["--camera-light-index", str(light_index_dn_per_us_gain)])
+        else:
+            commands[0].insert(2, "--no-browser")
         if ball_box is not None:
             commands[0].extend(
                 ["--camera-ball-box", ",".join(str(int(value)) for value in ball_box)]
@@ -7199,6 +7209,9 @@ def create_app(
     require_tee_range_flow: bool = False,
     iwr_static_port: str | None = None,
     require_iwr_preflight: bool = False,
+    allow_unverified_geometry: bool = False,
+    tester_control_port: int = 8765,
+    package_manager: TesterJobManager | None = None,
     static_radar=None,
     camera_tilt_path: Path | None = None,
     lens_settings_path: Path | None = None,
@@ -7222,6 +7235,11 @@ def create_app(
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     app = Flask(__name__)
     jobs = manager or TesterJobManager()
+    from openflight.free_play import FreePlayController
+
+    free_play = FreePlayController(sessions_root, jobs, package_manager or TesterJobManager())
+    free_play.register(app)
+    app.extensions["openflight_free_play"] = free_play
     # Setup radar captures share one session so the port closes once per setup (the
     # CP2105 close costs 5 s on the Pi). An injected job manager keeps running them
     # itself, as before.
@@ -7297,6 +7315,7 @@ def create_app(
         inclinometer_bus=enclosure.bus,
         inclinometer_address=enclosure.address,
         inclinometer_zero_offset_deg=enclosure.zero_offset_deg,
+        allow_unverified_geometry=allow_unverified_geometry,
     )
     runtime_client = study_ladder.KioskClient()
     # the page's status poll asks the kiosk with a short timeout (13 Oct)
@@ -7438,7 +7457,7 @@ def create_app(
         if (
             active_setup_tester["tester_id"] == tester_id
             and job.get("state") == "running"
-            and job.get("action") in {"ladder", "swings"}
+            and job.get("action") in {"ladder", "swings", "free_play"}
         ):
             runtime = runtime_client.setup_readiness()
             observations = runtime.get("observations")
@@ -9935,7 +9954,11 @@ def create_app(
         host = (request.host or "localhost").split(":")[0] or "localhost"
         url = f"http://{host}:{KIOSK_WEB_PORT}/"
         job = jobs.status()
-        running = job.get("state") == "running" and job.get("action") in {"ladder", "swings"}
+        running = job.get("state") == "running" and job.get("action") in {
+            "ladder",
+            "swings",
+            "free_play",
+        }
         between = [
             runner
             for runner in ladder_runners.values()
@@ -10015,6 +10038,9 @@ def create_app(
                 {
                     "available": True,
                     "job": jobs.status(),
+                    "free_play": free_play.status()
+                    if free_play.status().get("tester_id") == params.tester_id
+                    else {"enabled": False},
                     "arm": arm_progress(sessions_root, params),
                     "study": study_overview(
                         sessions_root,
@@ -10086,12 +10112,15 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
+            if action == "free_play":
+                lens_id = lens_store.selected() or lens_catalogue.reference_lens_id
+                params = replace(params, arm_id=lens_store.settings(lens_id)["default_arm"])
             operator_reset = (payload or {}).get("operator_reset")
             if operator_reset is not None and not isinstance(operator_reset, bool):
                 raise ValueError("operator_reset must be true, false or absent")
             refuse_while_analysing()
             eligibility = None
-            if action in {"gain", "swings"}:
+            if action in {"gain", "swings", "free_play"}:
                 eligibility = require_setup(
                     params.tester_id, settle_reading(enclosure.reading), action
                 )
@@ -10113,7 +10142,7 @@ def create_app(
                     ), 409
             solution = None
             reference = None
-            if action == "swings":
+            if action in {"swings", "free_play"}:
                 solution, reference = admitted_range(params.tester_id)
                 if reference is None and not require_tee_range_flow:
                     solution = pending_tee_range_solution(sessions_root, params)
@@ -10129,7 +10158,7 @@ def create_app(
                     lens=current_lens(),
                     camera_tilt_path=tilt_path(),
                 )[1]
-                if action == "swings"
+                if action in {"swings", "free_play"}
                 else None
             )
             commands, log_path = action_commands(
@@ -10138,7 +10167,7 @@ def create_app(
                 sessions_root,
                 rig_geometry,
                 radar_port,
-                setup_command_config(eligibility) if action == "swings" else None,
+                setup_command_config(eligibility) if action in {"swings", "free_play"} else None,
                 optical_calibration,
                 camera_placement,
                 solution,
@@ -10148,23 +10177,49 @@ def create_app(
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
                 zone_box=mode_placement_box(box, params.arm) if action == "gain" else None,
+                light_index_dn_per_us_gain=setup_light_warning(solution).get(
+                    "light_index_dn_per_us_gain"
+                )
+                if action == "free_play"
+                else None,
                 ball_box=kiosk_ball_box(params.tester_id, eligibility, params.arm)
-                if action == "swings"
+                if action in {"swings", "free_play"}
                 else None,
             )
+            run_id = None
+            if action == "free_play":
+                run_id = uuid.uuid4().hex
+                commands[0].extend(
+                    [
+                        "--tester-id",
+                        params.tester_id,
+                        "--tester-run-id",
+                        run_id,
+                        "--tester-control-port",
+                        str(tester_control_port),
+                    ]
+                )
+                if any(
+                    c["id"] == "geometry" and c["status"] == "warn" for c in eligibility["checks"]
+                ):
+                    commands[0].append("--tester-geometry-unverified")
             busy = _range_resources_busy(live_yields=True)
             if busy:
                 raise RuntimeError(busy)
             release_static_radar()  # before anything is written: it can refuse
-            if action == "swings":
-                gain, exposure_us = resolve_gain(sessions_root, params)
+            if action in {"swings", "free_play"}:
+                gain, exposure_us = (
+                    (1.0, 8) if action == "free_play" else resolve_gain(sessions_root, params)
+                )
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params, box) if rc == 0 else None  # noqa: E731
-            elif action == "swings":
+            elif action in {"swings", "free_play"}:
                 # the kiosk runs its own inclinometer service for the swings
                 enclosure.stop()
 
                 def on_finish(_action, _return_code):
+                    if _action == "free_play":
+                        free_play.capture_finished(run_id, _return_code)
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
                     enclosure.start()
@@ -10177,7 +10232,7 @@ def create_app(
             stop_live()  # the camera does one thing at a time
             run_dir = None
             try:
-                if action == "swings":
+                if action in {"swings", "free_play"}:
                     active_setup_tester["tester_id"] = params.tester_id
                     run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
                     with session_bundle.snapshot_lock(
@@ -10191,9 +10246,18 @@ def create_app(
                             run_dir / "tee_range.json", solution, handed_to_swings=handed
                         )
                     active_runtime_dir["path"] = run_dir
+                if action == "free_play":
+                    free_play.begin(
+                        params.tester_id,
+                        run_id,
+                        run_dir,
+                        "--tester-geometry-unverified" in commands[0],
+                    )
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
-                if action == "swings":
+                if action == "free_play":
+                    free_play.capture_finished(run_id, -1)
+                if action in {"swings", "free_play"}:
                     active_setup_tester["tester_id"] = None
                     active_runtime_dir["path"] = None
                     enclosure.start()
@@ -10202,7 +10266,7 @@ def create_app(
                 raise
             # the job is accepted: only now does the arm record change (T11)
             write_arm_state(sessions_root, params)
-            if action == "swings":
+            if action in {"swings", "free_play"}:
                 write_arm_state(
                     sessions_root,
                     params,
@@ -10217,7 +10281,15 @@ def create_app(
                     tee_range_solution=solution.to_dict(),
                     handed_to_swings=handed,
                 )
-            return jsonify({"job": jobs.status(), "arm": arm_progress(sessions_root, params)}), 202
+            return jsonify(
+                {
+                    "job": jobs.status(),
+                    "arm": arm_progress(sessions_root, params),
+                    "free_play": free_play.status(params.tester_id)
+                    if action == "free_play"
+                    else None,
+                }
+            ), 202
         except RuntimeError as exc:
             return jsonify({"error": str(exc), "job": jobs.status()}), 409
         except ValueError as exc:
@@ -11185,6 +11257,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             use_unqualified_tee_range=args.use_unqualified_tee_range,
             require_tee_range_flow=True,
             require_iwr_preflight=True,
+            allow_unverified_geometry=True,
+            tester_control_port=args.port,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()
