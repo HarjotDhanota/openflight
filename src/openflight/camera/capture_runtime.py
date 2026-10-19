@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 
 import numpy as np
 
@@ -517,10 +517,16 @@ class CameraCaptureRuntime:
         )
         self._worker.start()
         try:
+            seeded = None
+            if self.settings.auto_exposure:
+                # Seeded before streaming starts: picamera2 sends controls set before
+                # start() with the first request, so no frame is taken at the startup
+                # controls (free play once started at a near-black 8 us x 1).
+                seeded = self._seed_swing_exposure()
             self._camera.start()
             self._wait_for_prebuffer()
             if self.settings.auto_exposure:
-                self._start_auto_exposure()
+                self._start_auto_exposure(seeded=seeded)
             if self._use_gpio_trigger:
                 self._start_gpio_trigger()
         except Exception:
@@ -1274,16 +1280,75 @@ class CameraCaptureRuntime:
         self._record_swing_decision(decision, checked_at=time.time())
         return decision
 
-    def _start_auto_exposure(self) -> None:
-        """Seed the controls, refill the ring at them, then keep re-checking between clips."""
+    def _start_auto_exposure(self, seeded: sx.SwingExposureDecision | None = None) -> None:
+        """Seed the controls, then keep re-checking between clips.
+
+        ``seeded`` is a seed already applied before the camera started streaming;
+        without one the seed is applied now and the ring refilled at it.
+        """
         self._auto_exposure_stop.clear()
-        decision = self._seed_swing_exposure()
-        if decision.should_apply:
-            self._refill_locked_exposure_prebuffer()
+        if seeded is None:
+            decision = self._seed_swing_exposure()
+            if decision.should_apply:
+                self._refill_locked_exposure_prebuffer()
         self._swing_thread = threading.Thread(
             target=self._auto_exposure_loop, name="camera-swing-exposure", daemon=True
         )
         self._swing_thread.start()
+
+    @property
+    def sensor_limits(self) -> sx.SensorLimits | None:
+        """This mode's exposure and gain limits as the camera reported them, or None."""
+        return self._sensor_limits
+
+    def _while_no_clip_is_collected(self, work: Callable[[], Any], timeout_s: float, what: str):
+        """Run ``work`` under the trigger lock once no clip's tail is being collected.
+
+        A clip's post-trigger frames keep the controls it was triggered at, and a
+        trigger waits for a control change in progress (the swing exposure's rule).
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            with self._trigger_exposure_lock:
+                if not self._ring.capture_busy:
+                    return work()
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"a clip is still being collected; {what} waits for it")
+            time.sleep(0.01)
+
+    def apply_held_controls(self, exposure_us: int, gain: float, *, timeout_s: float = 3.0) -> dict:
+        """Set held (manual) controls live for the next swing: free play's ladder rungs.
+
+        The camera keeps streaming and the ring keeps its frames; nothing restarts.
+        Refused while the automatic exposure owns the controls.
+        """
+        if self.settings.auto_exposure:
+            raise RuntimeError("exposure is automatic: held controls would be overridden")
+        return self._while_no_clip_is_collected(
+            lambda: self.update_image_controls(exposure_us=exposure_us, gain=gain),
+            timeout_s,
+            "the new setting",
+        )
+
+    def begin_automatic_exposure(self, *, timeout_s: float = 3.0) -> dict:
+        """Hand the controls to the swing exposure policy mid-session, seeded from the light.
+
+        Free play's ladder ends here. The seed (the setup's light index, as at a
+        startup) is applied live with no ring refill or restart, and the resting-ball
+        re-check loop starts. Calling it again changes nothing.
+        """
+        running = self._swing_thread is not None and self._swing_thread.is_alive()
+        if self.settings.auto_exposure and running:
+            return self.auto_exposure_status()
+
+        def seed() -> sx.SwingExposureDecision:
+            self.settings = replace(self.settings, auto_exposure=True)
+            return self._seed_swing_exposure()
+
+        decision = self._while_no_clip_is_collected(seed, timeout_s, "the automatic exposure")
+        self._start_auto_exposure(seeded=decision)
+        logger.info("[CAMERA] Automatic swing exposure started: %s", decision.message)
+        return decision.to_dict()
 
     def _auto_exposure_loop(self) -> None:
         """Re-check the resting ball before every swing: there is no startup lock."""

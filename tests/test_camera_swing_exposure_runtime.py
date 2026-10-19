@@ -542,3 +542,154 @@ def test_a_new_light_index_restarts_the_search_past_the_cool_down(tmp_path):
     restarted = _look_cycle(runtime)
 
     assert restarted.status == "searching_for_ball"
+
+
+# --- free play's exposure ladder: held rung controls, then the automatic exposure ----------
+
+
+def test_a_held_rung_is_applied_live_without_restarting_the_ring(tmp_path):
+    runtime = _runtime(tmp_path, auto_exposure=False, exposure_us=300, gain=2.0)
+    _add_frames(runtime, 53)
+    ring = runtime._ring
+
+    applied = runtime.apply_held_controls(150, 4.0)
+
+    assert applied == {"exposure_us": 150, "gain": 4.0}
+    assert runtime._camera.controls[-1] == {"ExposureTime": 150, "AnalogueGain": 4.0}
+    assert runtime._ring is ring  # no restart: the ring keeps running
+    assert runtime.settings.auto_exposure is False
+
+
+def test_a_held_rung_waits_for_a_clip_being_collected(tmp_path):
+    runtime = _runtime(tmp_path, auto_exposure=False, exposure_us=300, gain=2.0)
+    _add_frames(runtime, 53)
+    assert runtime._ring.trigger()
+    done = threading.Event()
+
+    thread = threading.Thread(
+        target=lambda: (runtime.apply_held_controls(150, 4.0, timeout_s=2.0), done.set())
+    )
+    thread.start()
+    assert not done.wait(timeout=0.1)  # the clip's tail is still at the old controls
+    _add_frames(runtime, 53, count=8)  # the post-trigger tail completes
+    thread.join(timeout=2.0)
+
+    assert done.is_set()
+    assert runtime.settings.exposure_us == 150
+
+
+def test_a_held_rung_refuses_while_the_automatic_exposure_runs(tmp_path):
+    runtime = _runtime(tmp_path)
+
+    with pytest.raises(RuntimeError, match="automatic"):
+        runtime.apply_held_controls(150, 4.0)
+
+
+def test_the_automatic_exposure_takes_over_seeded_from_the_light_index(tmp_path, monkeypatch):
+    runtime = _runtime(
+        tmp_path, auto_exposure=False, exposure_us=75, gain=8.0, light_index_dn_per_us_gain=0.1
+    )
+    monkeypatch.setattr(capture_runtime, "SWING_EXPOSURE_EVERY_S", 30.0)
+
+    decision = runtime.begin_automatic_exposure()
+
+    expected = sx.choose_setting(0.1, 0.1, runtime._swing_policy.envelope).setting
+    assert runtime.settings.auto_exposure is True
+    assert (runtime.settings.exposure_us, runtime.settings.gain) == (
+        expected.exposure_us,
+        expected.gain,
+    )
+    assert decision["status"] == "seeded"
+    assert decision["reason"] == "setup_light_index"
+    assert runtime.auto_exposure_status()["status"] == "seeded"
+    assert runtime._swing_thread is not None and runtime._swing_thread.is_alive()
+    runtime._auto_exposure_stop.set()
+    runtime._swing_thread.join(timeout=1.0)
+
+
+def test_starting_automatic_twice_is_harmless(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, auto_exposure=False, light_index_dn_per_us_gain=0.1)
+    monkeypatch.setattr(capture_runtime, "SWING_EXPOSURE_EVERY_S", 30.0)
+    runtime.begin_automatic_exposure()
+    thread = runtime._swing_thread
+
+    again = runtime.begin_automatic_exposure()
+
+    assert runtime._swing_thread is thread
+    assert again["status"] == "seeded"
+    runtime._auto_exposure_stop.set()
+    thread.join(timeout=1.0)
+
+
+def test_the_sensor_limits_are_readable_for_the_free_play_ladder(tmp_path):
+    runtime = _runtime(tmp_path)
+
+    assert runtime.sensor_limits == LIMITS
+
+
+class _StartCamera(FakeCamera):
+    """A Picamera2 stand-in that records the order of configure, controls and start."""
+
+    calls: list = []
+
+    def __init__(self):
+        super().__init__({"ExposureTime": (9, 8_000, 300), "AnalogueGain": (1.0, 15.9375, 1.0)})
+        self.configured = None
+
+    def create_video_configuration(self, **kwargs):
+        return kwargs
+
+    def configure(self, config):
+        self.configured = config
+        _StartCamera.calls.append(("configure", config["controls"]["ExposureTime"]))
+
+    def set_controls(self, controls):
+        super().set_controls(controls)
+        _StartCamera.calls.append(("set_controls", controls.get("ExposureTime")))
+
+    def start(self):
+        _StartCamera.calls.append(("start", None))
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    _StartCamera.calls = []
+    fake = types.ModuleType("picamera2")
+    fake.Picamera2 = _StartCamera
+    monkeypatch.setitem(sys.modules, "picamera2", fake)
+    monkeypatch.setattr(capture_runtime, "ensure_picamera2_import_path", lambda: None)
+    monkeypatch.setattr(capture_runtime, "resolved_camera_config", lambda _camera: {})
+    monkeypatch.setattr(capture_runtime, "SWING_EXPOSURE_EVERY_S", 30.0)
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=1280,
+            height=800,
+            fps=120.0,
+            exposure_us=8,  # the near-black startup free play used to pass
+            gain=1.0,
+            light_index_dn_per_us_gain=0.1,
+        ),
+        use_gpio_trigger=False,
+    )
+    monkeypatch.setattr(runtime, "_wait_for_prebuffer", lambda: None)
+    monkeypatch.setattr(runtime, "_capture_mode_startup_snapshot", lambda: {})
+
+    runtime.start()
+    try:
+        names = [name for name, _value in _StartCamera.calls]
+        seeded = runtime.settings.exposure_us
+        assert seeded > 8
+        # the seed reaches the sensor before streaming starts: no frame at 8 us x 1
+        assert names.index("set_controls") < names.index("start")
+        assert ("set_controls", seeded) in _StartCamera.calls
+    finally:
+        runtime.stop()
