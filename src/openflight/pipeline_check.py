@@ -125,8 +125,33 @@ def stage(  # pylint: disable=too-many-arguments
     }
 
 
-def _blocked(stage_id: str, upstream: Mapping[str, Any], **extra) -> dict[str, Any]:
-    """A stage an upstream failure stopped: it inherits that failure's cause."""
+def _blocked(
+    stage_id: str, upstream: Mapping[str, Any], *, facts: str | None = None, **extra
+) -> dict[str, Any]:
+    """A stage an upstream failure stopped: it inherits that failure's cause.
+
+    Only a failed (or itself stopped) upstream has a cause to inherit. A refusal
+    that points at a stage which passed, was labelled or was not requested is
+    this stage's own unexplained failure: UNKNOWN, with the contradiction named,
+    never a borrowed cause (and never the "names no cause" refusal).
+    """
+    if upstream["status"] not in (FAIL, NOT_REACHED):
+        return stage(
+            stage_id,
+            FAIL,
+            cause="UNKNOWN",
+            evidence="; ".join(
+                filter(
+                    None,
+                    [
+                        facts,
+                        f"refused on {upstream['label']}, which did not fail "
+                        f"(status {upstream['status']})",
+                    ],
+                )
+            ),
+            **extra,
+        )
     return stage(
         stage_id,
         NOT_REACHED,
@@ -801,7 +826,21 @@ def camera_club(  # pylint: disable=too-many-return-statements
             evidence="rejected_no_ops_speed: the OPS found no club speed",
         )
     if status == "rejected_calibrated_requires_iwr_range":
-        return _blocked("camera_club", upstream["lcmf"], gate="club_delivery")
+        if upstream["lcmf"]["status"] in (FAIL, NOT_REACHED):
+            return _blocked("camera_club", upstream["lcmf"], gate="club_delivery")
+        # LCMF did not fail: the calibrated delivery still had no accepted IWR range.
+        # A range the IWR offered and the camera refused is this shot's data; none
+        # handed over at all is unexplained.
+        range_status = delivery.get("range_evidence_status")
+        return stage(
+            "camera_club",
+            FAIL,
+            cause="DATA" if range_status not in (None, "accepted") else "UNKNOWN",
+            gate="club_delivery",
+            evidence=f"{status}; the calibrated delivery has no accepted IWR range; "
+            f"range evidence {range_status or 'not recorded'}; "
+            f"LCMF {upstream['lcmf']['status']}",
+        )
     if status == "rejected_low_light":
         return stage(
             "camera_club",
@@ -864,7 +903,12 @@ def lcmf(  # pylint: disable=too-many-return-statements
         return _blocked("lcmf", upstream["iwr_capture"], gate="lcmf")
     status = str(report_stage.get("status") or "")
     if status == "withheld" and report_stage.get("reason") == "tee_range_unresolved":
-        return _blocked("lcmf", upstream["tee_range"], gate="lcmf")
+        return _blocked(
+            "lcmf",
+            upstream["tee_range"],
+            gate="lcmf",
+            facts="LCMF withheld: tee_range_unresolved",
+        )
     if status == "error":
         error = str(report_stage.get("error"))
         if "no OPS ball speed" in error and not passed(upstream["ops_shot"]):

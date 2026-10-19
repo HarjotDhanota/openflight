@@ -349,6 +349,78 @@ def test_camera_range_refusal_preserves_the_failed_upstream_root_cause():
     )
 
 
+@pytest.mark.parametrize("upstream_status", [check.PASS, check.LABELLED, check.NOT_REQUESTED])
+@pytest.mark.parametrize("range_status,cause", [(None, "UNKNOWN"), ("rejected_low_snr", "DATA")])
+def test_club_range_refusal_does_not_inherit_a_successful_launch_cause(
+    upstream_status, range_status, cause
+):
+    """The club twin of the camera-ball fix: LCMF passed, so nothing is inherited."""
+    result = {
+        "club_delivery": {
+            "status": "rejected_calibrated_requires_iwr_range",
+            "range_evidence_status": range_status,
+            "impact_frame": 41,
+        }
+    }
+    row = check.camera_club(
+        result, _upstream(lcmf=check.stage("lcmf", upstream_status)), ops_club_speed=101.0
+    )
+
+    assert (row["status"], row["cause"], row["blocked_by"]) == (check.FAIL, cause, None)
+    assert "rejected_calibrated_requires_iwr_range" in row["evidence"]
+    assert f"range evidence {range_status or 'not recorded'}" in row["evidence"]
+    assert row["gate"] == check.GATES["club_delivery"]
+
+
+def test_club_range_refusal_preserves_the_failed_upstream_root_cause():
+    tee = check.stage("tee_range", check.FAIL, cause="DATA", evidence="no range")
+    lcmf = check.lcmf(
+        {"status": "withheld", "reason": "tee_range_unresolved"}, _upstream(tee_range=tee)
+    )
+    row = check.camera_club(
+        {"club_delivery": {"status": "rejected_calibrated_requires_iwr_range"}},
+        _upstream(lcmf=lcmf),
+        ops_club_speed=101.0,
+    )
+    assert (row["status"], row["cause"], row["blocked_by"]) == (
+        check.NOT_REACHED,
+        "DATA",
+        "tee_range",
+    )
+
+
+@pytest.mark.parametrize("tee_status", [check.PASS, check.LABELLED, check.NOT_REQUESTED])
+def test_lcmf_withheld_on_a_tee_range_that_did_not_fail_names_the_contradiction(tee_status):
+    row = check.lcmf(
+        {"status": "withheld", "reason": "tee_range_unresolved"},
+        _upstream(tee_range=check.stage("tee_range", tee_status)),
+    )
+    assert (row["status"], row["cause"], row["blocked_by"]) == (check.FAIL, "UNKNOWN", None)
+    assert "tee_range_unresolved" in row["evidence"]
+    assert tee_status in row["evidence"]
+
+
+@pytest.mark.parametrize("upstream_status", [check.PASS, check.LABELLED, check.NOT_REQUESTED])
+def test_blocked_on_an_upstream_that_did_not_fail_degrades_instead_of_raising(upstream_status):
+    """A refusal that points at a stage which did not fail inherits no cause."""
+    parent = check.stage("geometry", upstream_status)
+    row = check._blocked("context", parent, gate="geometry")
+    assert (row["status"], row["cause"], row["blocked_by"]) == (check.FAIL, "UNKNOWN", None)
+    assert parent["label"] in row["evidence"]
+    assert upstream_status in row["evidence"]
+    assert row["gate"] == check.GATES["geometry"]
+
+
+def test_blocked_on_a_failed_upstream_still_inherits_its_cause():
+    parent = check.stage("geometry", check.FAIL, cause="CODE", evidence="bad tee")
+    row = check._blocked("context", parent, gate="geometry")
+    assert (row["status"], row["cause"], row["blocked_by"]) == (
+        check.NOT_REACHED,
+        "CODE",
+        "geometry",
+    )
+
+
 def test_a_face_angle_on_a_low_consensus_start_direction_is_labelled():
     live = {
         "face_angle_status": "d_plane_estimate",
