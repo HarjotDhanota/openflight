@@ -6,8 +6,8 @@ One readiness state, computed from what each sensor reports right now:
   light check, the ladder stopped or finished), no admitted setup, or a sensor
   missing, failed or not yet armed;
 - amber, WAIT, with the cause and a rough time left: the OPS243 dumping,
-  draining or re-arming, the IWR6843 dumping, the camera saving a clip or
-  refilling its ring;
+  draining or re-arming, the IWR6843 dumping, the camera saving a clip,
+  refilling its ring, or changing to free play's next exposure setting;
 - green, SWING, only when the OPS243 is armed and waiting, the IWR6843 (if
   fitted) is idle and armed, and the camera (if fitted) is running in the
   asked setting with a full ring and no clip being saved.
@@ -149,6 +149,14 @@ def _camera(camera: Mapping, now: float, red: list, amber: list) -> None:
             ("camera refilling its ring", round((needed - buffered) / fps, 1) if fps else None)
         )
     if camera.get("free_play"):
+        study = camera.get("exposure_study") or {}
+        if study.get("changing"):
+            # free play's exposure ladder is moving to its next setting, or handing
+            # over to the automatic exposure: a swing now may be at either setting
+            amber.append(("changing the camera setting", None))
+            return
+        if study.get("phase") == "ladder":
+            return  # a held rung: the automatic policy is not running, nothing to read
         policy = camera.get("auto_exposure") or {}
         if policy.get("status") == "holding_no_ball" and policy.get("reason") == "no_ball_searched":
             red.append("no ball in the box")
@@ -162,6 +170,8 @@ def _free_play_note(camera: Mapping | None) -> str | None:
     """The free-play exposure state a green light carries as a note (F4)."""
     if not (camera or {}).get("free_play"):
         return None
+    if (camera.get("exposure_study") or {}).get("phase") == "ladder":
+        return None  # held rung controls: the policy's idle state says nothing
     policy = camera.get("auto_exposure") or {}
     status = policy.get("status")
     if status in {"too_dark", "too_bright"}:

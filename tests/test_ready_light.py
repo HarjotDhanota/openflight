@@ -324,3 +324,67 @@ def test_a_shot_replaces_an_earlier_non_shot_result_for_the_same_swing():
     light.swing_result("shot", ball_speed_mph=99.0, at=NOW + 1.5)
 
     assert light.update(_states(), now=NOW + 2.0)["swing"]["result"]["kind"] == "shot"
+
+
+# --- free play's exposure ladder (19 Oct) ---------------------------------------------------
+
+
+def _free_play_camera(study, **policy):
+    return _camera(
+        free_play=True,
+        exposure_study=study,
+        auto_exposure={
+            "status": "unavailable",
+            "message": "Waiting for the camera's exposure limits",
+        }
+        | policy,
+    )
+
+
+def test_free_play_is_amber_while_the_ladder_changes_its_setting():
+    camera = _free_play_camera({"phase": "ladder", "changing": True})
+
+    light = compute_state(_states(camera=camera), NOW)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "changing the camera setting"
+
+
+def test_free_play_on_a_held_rung_is_green_without_an_exposure_note():
+    # the rung's controls are held: the automatic policy is not running, so its
+    # idle "unavailable" decision is not a camera problem
+    camera = _free_play_camera({"phase": "ladder", "changing": False})
+
+    light = compute_state(_states(camera=camera), NOW)
+
+    assert light["state"] == "green"
+    assert light["cause"] == "Ready for a swing"
+
+
+def test_free_play_is_amber_while_the_automatic_exposure_takes_over():
+    camera = _free_play_camera({"phase": "automatic", "changing": True}, status="seeded")
+
+    light = compute_state(_states(camera=camera), NOW)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "changing the camera setting"
+
+
+def test_free_play_after_the_ladder_reads_the_automatic_exposure_as_before():
+    camera = _free_play_camera(
+        {"phase": "automatic", "changing": False}, status="too_dark", message="too dark"
+    )
+
+    light = compute_state(_states(camera=camera), NOW)
+
+    assert light["state"] == "green"
+    assert light["cause"] == "Ready for a swing; too dark"
+
+
+def test_a_clip_saving_outranks_a_setting_change_in_the_wait_cause():
+    camera = _free_play_camera({"phase": "ladder", "changing": True}) | {"saving": True}
+
+    light = compute_state(_states(camera=camera), NOW)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "camera saving a clip"
