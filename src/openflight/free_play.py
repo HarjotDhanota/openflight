@@ -12,7 +12,7 @@ from pathlib import Path
 from flask import jsonify, request
 
 from openflight import session_bundle
-from openflight.camera import free_play_ladder, session_review_routes as review
+from openflight.camera import session_review_routes as review
 
 
 class FreePlayController:
@@ -74,6 +74,8 @@ class FreePlayController:
         The kiosk writes the study as it goes; before it has, the tester server's
         plan shows as starting. None for a run without one (an older run).
         """
+        from openflight.camera import free_play_ladder  # pylint: disable=import-outside-toplevel
+
         run_dir = Path(self.run["run_dir"])
         for name, read in (
             (free_play_ladder.STATE_NAME, free_play_ladder.progress_from_state),
@@ -276,9 +278,21 @@ def tester_request(config, path, payload=None):
         return json.load(response)
 
 
-def register_kiosk_routes(app, config, finish_capture):
-    """Stop acquisition, keep its UI alive, then ask the tester to package."""
+def register_kiosk_routes(app, config, finish_capture, progress=None):
+    """Stop acquisition, keep its UI alive, then ask the tester to package.
+
+    ``progress`` returns the exposure study's line for the band (19 Oct), or None.
+    """
     lock = threading.Lock()
+
+    def body(extra=None):
+        payload = {**config, **(extra or {})}
+        if progress is not None:
+            try:
+                payload["exposure_study"] = progress()
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                payload["exposure_study"] = {"phase": "error", "text": str(error)}
+        return payload
 
     def finish():
         try:
@@ -327,5 +341,5 @@ def register_kiosk_routes(app, config, finish_capture):
                 state = tester_request(config, "")
                 config.update({key: state.get(key) for key in ("phase", "bundle", "error")})
             except (OSError, ValueError) as error:
-                return jsonify({**config, "error": str(error)}), 503
-        return jsonify(config)
+                return jsonify(body({"error": str(error)})), 503
+        return jsonify(body())

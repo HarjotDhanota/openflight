@@ -171,6 +171,11 @@ camera_capture_runtime = None
 # the kiosk is started with --study-mode; production never exposes either.
 study_mode_enabled = False
 free_play_config: dict = {}
+# Free play's exposure ladder (19 Oct): the plan the tester server wrote for the
+# tapped resolution (--free-play-ladder), where it lives, and the kiosk's study of it.
+free_play_plan: dict | None = None
+free_play_plan_path: Path | None = None
+free_play_study = None
 tester_setup_required = False
 tester_config_hash: str | None = None
 camera_capture_config: dict = {"enabled": False}
@@ -2010,6 +2015,11 @@ def _session_start_config() -> dict:
             key: free_play_config.get(key)
             for key in ("enabled", "tester_id", "run_id", "unit_id", "geometry_unverified")
         }
+        # the resolution the tester tapped, and the exposure ladder planned for it
+        config["free_play"]["resolution"] = (
+            deepcopy(free_play_plan["resolution"]) if free_play_plan is not None else None
+        )
+        config["free_play"]["exposure_plan"] = deepcopy(free_play_plan)
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -3676,6 +3686,10 @@ def _ready_light_states() -> SensorStates | None:
         camera = {
             **camera_capture_runtime.ready_snapshot(),
             "free_play": bool(free_play_config.get("enabled")),
+            # free play's exposure ladder: amber while its setting changes
+            "exposure_study": (
+                free_play_study.ready_state() if free_play_study is not None else None
+            ),
         }
     elif camera_capture_config.get("error"):
         camera = {"running": False}  # the kiosk runs on without it; a tester's swing cannot
@@ -6160,6 +6174,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             if camera_capture is not None:
                 if free_play_config.get("enabled"):
                     shot.free_play_exposure = _free_play_exposure_from_clip(camera_capture)
+                    _judge_free_play_clip(shot, camera_capture)
                 session_log.log_camera_capture(
                     shot_number=shot_number,
                     shot_timestamp=shot.impact_timestamp,
@@ -7191,6 +7206,115 @@ def on_shot_detected(shot: Shot) -> None:
         _handle_shot_detected(shot)
 
 
+def load_free_play_plan(path) -> dict:
+    """Read free play's exposure plan (``free_play_ladder.build_plan``) for this run."""
+    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
+
+    global free_play_plan, free_play_plan_path  # pylint: disable=global-statement
+    source = Path(path)
+    try:
+        plan = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"free play's exposure plan {source} is unreadable: {error}") from error
+    if not isinstance(plan, dict) or plan.get("schema") != free_play_ladder.PLAN_SCHEMA:
+        raise ValueError(f"{source} is not a {free_play_ladder.PLAN_SCHEMA} exposure plan")
+    free_play_plan, free_play_plan_path = plan, source
+    return plan
+
+
+def init_free_play_study(*, run_async=None, settle_s: float | None = None):
+    """Start the kiosk's study of the plan, on the running camera (or none).
+
+    The camera was started at the plan's startup controls: the first rung, held,
+    or the automatic seed when no rung can run. The study is kept beside the plan.
+    """
+    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
+
+    global free_play_study  # pylint: disable=global-statement
+    if free_play_plan is None or free_play_plan_path is None:
+        free_play_study = None
+        return None
+    runtime = camera_capture_runtime
+    limits = getattr(runtime, "sensor_limits", None) if runtime is not None else None
+    options = {}
+    if run_async is not None:
+        options["run_async"] = run_async
+    if settle_s is not None:
+        options["settle_s"] = settle_s
+    free_play_study = free_play_ladder.FreePlayExposureStudy(
+        free_play_plan,
+        free_play_plan_path.parent / free_play_ladder.STATE_NAME,
+        apply_controls=runtime.apply_held_controls if runtime is not None else None,
+        begin_automatic=runtime.begin_automatic_exposure if runtime is not None else None,
+        current_controls=(
+            (lambda: (runtime.settings.exposure_us, runtime.settings.gain))
+            if runtime is not None
+            else None
+        ),
+        live_sensor_min_us=limits.exposure_min_us if limits is not None else None,
+        run_id=free_play_config.get("run_id"),
+        **options,
+    )
+    return free_play_study
+
+
+def _free_play_progress() -> dict | None:
+    """The study's line for the kiosk band and the tester page, or None without one."""
+    study = free_play_study
+    return study.progress() if study is not None else None
+
+
+def _count_free_play_shot(shot: Shot) -> None:
+    """Count a real (OPS) shot toward the current rung and record its ladder fields.
+
+    Called from the serialized shot callback, so rungs advance in impact order. A
+    false trigger's clip never gets here, so it never counts.
+    """
+    study = free_play_study
+    if study is None:
+        shot.free_play_exposure_study = None
+        return
+    try:
+        shot.free_play_exposure_study = study.on_shot(shot.shot_number)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[FREE PLAY] Exposure study could not count a shot", exc_info=True)
+        shot.free_play_exposure_study = {"error": f"{type(error).__name__}: {error}"}
+
+
+def _judge_free_play_clip(shot: Shot, capture) -> None:
+    """The ladder's picture-only verdict for the shot's own clip, on the shot and its rung."""
+    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
+
+    record = shot.free_play_exposure_study
+    study = free_play_study
+    if study is None or not isinstance(record, dict) or "ladder_phase" not in record:
+        return
+    if capture is None:
+        verdict = free_play_ladder.no_capture_verdict("no matched camera capture")
+    elif capture.error or capture.path is None:
+        verdict = free_play_ladder.no_capture_verdict(
+            f"the clip was not saved: {capture.error or 'no path'}"
+        )
+    else:
+        settings = getattr(camera_capture_runtime, "settings", None)
+        on_rung = record["ladder_phase"] == "ladder"
+        verdict = free_play_ladder.judge_swing(
+            Path(capture.path),
+            arm_id=record["resolution"]["arm_id"],
+            rung_id=record["rung_id"],
+            # an automatic shot is judged at the controls its own trigger recorded
+            exposure_us=record["exposure_us"] if on_rung else None,
+            gain=record["gain"] if on_rung else None,
+            expected_ball=getattr(settings, "setup_ball", None),
+            zone_box=getattr(settings, "hitting_zone", None),
+        )
+    shot.free_play_exposure_study = {**record, "verdict": verdict}
+    try:
+        study.record_verdict(shot.shot_number, verdict)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[FREE PLAY] Exposure study could not file a verdict", exc_info=True)
+
+
 def _free_play_exposure_from_clip(capture) -> dict:
     """The free-play exposure record from the shot's own clip (F6).
 
@@ -7332,6 +7456,7 @@ def _handle_shot_detected(shot: Shot) -> None:
         shot.free_play_run_id = free_play_config["run_id"]
         shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
         shot.free_play_exposure = _free_play_exposure_at_shot()
+        _count_free_play_shot(shot)
     pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
@@ -7905,6 +8030,9 @@ def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
                 "shots are still finishing; retry Stop & package when processing finishes"
             )
         time.sleep(0.05)
+    if free_play_study is not None:
+        # every accepted shot has its verdict: the ladder is complete or partial
+        free_play_study.finish()
     for service in (camera_capture_runtime, iwr6843_runtime, inclinometer_service):
         if service is not None:
             service.stop()
@@ -7921,7 +8049,12 @@ def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
 
 from .free_play import register_kiosk_routes  # noqa: E402
 
-register_kiosk_routes(app, free_play_config, lambda: _finish_free_play_capture())
+register_kiosk_routes(
+    app,
+    free_play_config,
+    lambda: _finish_free_play_capture(),
+    progress=lambda: _free_play_progress(),
+)
 
 
 class MockLaunchMonitor:
@@ -8807,6 +8940,14 @@ def main():
     parser.add_argument("--tester-control-port", type=int, default=8765)
     parser.add_argument("--tester-geometry-unverified", action="store_true")
     parser.add_argument(
+        "--free-play-ladder",
+        default=None,
+        help=(
+            "Free play's exposure plan for the tapped resolution (written by the tester "
+            "server in the run folder): five shots per rung, then the automatic exposure"
+        ),
+    )
+    parser.add_argument(
         "--inclinometer",
         action="store_true",
         help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
@@ -9064,6 +9205,8 @@ def main():
         or not 1 <= args.tester_control_port <= 65535
     ):
         parser.error("free play requires admitted setup, tester ID, run ID and a valid tester port")
+    if args.free_play_ladder and not args.tester_free_play:
+        parser.error("--free-play-ladder is free play's: add --tester-free-play")
     _apply_kld7_device_defaults(args)
     # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
@@ -9306,6 +9449,13 @@ def main():
             unit_id=platform.node(),
             geometry_unverified=args.tester_geometry_unverified,
         )
+    global free_play_plan, free_play_plan_path, free_play_study  # pylint: disable=global-statement
+    free_play_plan = free_play_plan_path = free_play_study = None
+    if args.free_play_ladder:
+        try:
+            load_free_play_plan(args.free_play_ladder)
+        except ValueError as error:
+            parser.error(str(error))
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
@@ -9466,6 +9616,10 @@ def main():
                 start_ball_at_address(
                     camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
                 )
+
+    if free_play_plan is not None:
+        # after the camera, before any shot: it counts shots and moves the camera
+        init_free_play_study()
 
     if args.iwr6843:
         startup_status.start("ti", "Connecting TI radar")

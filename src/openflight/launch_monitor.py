@@ -414,6 +414,10 @@ class Shot:
     trigger_evidence_notes: Optional[list] = None
     free_play_run_id: Optional[str] = None
     free_play_exposure: Optional[dict] = None
+    # Free play's exposure ladder record for this shot: its rung (or the automatic
+    # phase), the controls, the resolution and the picture verdict
+    # (openflight.free_play_exposure_study_shot.v1); None outside a ladder run.
+    free_play_exposure_study: Optional[dict] = None
     geometry_unverified: bool = False
     # Labels on the camera's values that no longer withhold them (D15): the
     # capture's lighting and optical-quality verdicts; None when there are none.
@@ -696,6 +700,8 @@ class Shot:
                 "run_id": self.free_play_run_id,
                 "geometry_unverified": self.geometry_unverified,
             }
+            if self.free_play_exposure_study is not None:
+                data["free_play"]["exposure_study"] = deepcopy(self.free_play_exposure_study)
             data["exposure_decision"] = deepcopy(self.free_play_exposure)
             if self.geometry_unverified:
                 for metric_id, metric in data["metrics"].items():
