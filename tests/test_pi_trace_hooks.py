@@ -392,11 +392,13 @@ def _iwr_runtime(capture_monitor):
     return runtime
 
 
-def test_server_edge_observer_uses_its_own_bracket_not_the_observer_argument(recorder, monkeypatch):
+def test_server_edge_observer_keeps_the_shared_bracket(recorder, monkeypatch):
     from openflight import server
+    from openflight.gate_timing import GateEvent
 
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
-    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+    shared = GateEvent.observe(_EdgeCaptureMonitor.edge_tick_reading, 1_790_000_000.25)
+    server._trace_gate_edge(shared)  # pylint: disable=protected-access
     edge = _named(read_marks(recorder), "gate_edge_callback")[0]
     assert (edge["mono_before_ns"], edge["age_ns"], edge["mono_after_ns"]) == (
         1_000,
@@ -418,6 +420,7 @@ def test_server_edge_observer_uses_its_own_bracket_not_the_observer_argument(rec
 def test_server_edge_observer_still_notes_the_edge_when_the_reading_fails(recorder, monkeypatch):
     """An edge happened: it is noted age-less (an ambiguity-maker), never invented."""
     from openflight import server
+    from openflight.gate_timing import GateEvent
 
     class Broken:
         @staticmethod
@@ -425,7 +428,8 @@ def test_server_edge_observer_still_notes_the_edge_when_the_reading_fails(record
             raise RuntimeError("pin gone")
 
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Broken()))
-    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+    shared = GateEvent.observe(Broken.edge_tick_reading, 1_790_000_000.25)
+    server._trace_gate_edge(shared)  # pylint: disable=protected-access
     edge = _named(read_marks(recorder), "gate_edge_callback")[0]
     assert edge["age_ns"] is None and edge["mono_before_ns"] is None
     assert edge["mono_after_ns"] is None
@@ -434,17 +438,20 @@ def test_server_edge_observer_still_notes_the_edge_when_the_reading_fails(record
 
 def test_server_edge_observer_never_raises_into_the_gpio_callback(recorder, monkeypatch):
     from openflight import server
+    from openflight.gate_timing import GateEvent
 
     def broken(**_kwargs):
         raise RuntimeError("trace bug")
 
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
     monkeypatch.setattr(recorder, "note_edge", broken)
-    server._trace_gate_edge(1_790_000_000.25)  # pylint: disable=protected-access
+    shared = GateEvent.observe(_EdgeCaptureMonitor.edge_tick_reading, 1_790_000_000.25)
+    server._trace_gate_edge(shared)  # pylint: disable=protected-access
 
 
 def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
     from openflight import server
+    from openflight.gate_timing import GateEvent
 
     class Counting:
         calls = 0
@@ -455,7 +462,8 @@ def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
 
     pi_trace.set_recorder(None)
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Counting()))
-    server._trace_gate_edge(1.0)  # pylint: disable=protected-access
+    shared = GateEvent.observe(None, 1.0)
+    server._trace_gate_edge(shared)  # pylint: disable=protected-access
     assert Counting.calls == 0
 
 
@@ -550,7 +558,7 @@ def test_install_hooks_wraps_the_processor_and_puts_the_edge_observer_first(
     server._install_pi_trace_hooks()  # pylint: disable=protected-access
     assert "process_capture" in vars(Monitor.processor)
     assert "detect_spin_multitaper" in vars(Monitor.processor)
-    observers = capture_monitor._trigger_observers  # pylint: disable=protected-access
+    observers = capture_monitor._gate_event_observers  # pylint: disable=protected-access
     assert observers[0] is server._trace_gate_edge  # pylint: disable=protected-access
 
 
@@ -1015,18 +1023,18 @@ def test_a_debounced_edge_with_a_raising_recorder_still_returns_false(
     assert capture_monitor.notify_trigger(10.01) is False
 
 
-def test_debounced_edges_are_not_read_when_tracing_is_off(tmp_path, monkeypatch):
+def test_edges_are_read_once_each_when_tracing_is_off(tmp_path, monkeypatch):
     pi_trace.set_recorder(None)
     capture_monitor = _armed_capture_monitor(tmp_path, lambda _wall: None)
     reads = []
     monkeypatch.setattr(capture_monitor, "edge_tick_reading", lambda: reads.append(1) or {})
     capture_monitor.notify_trigger(10.0)
     assert capture_monitor.notify_trigger(10.01) is False
-    assert reads == []
+    assert reads == [1, 1]
 
 
 def test_edge_reading_looks_package_versions_up_once(monkeypatch):
-    from openflight.iwr6843 import monitor as iwr_monitor
+    from openflight import gate_timing as iwr_monitor
 
     calls = []
     real_version = iwr_monitor.importlib.metadata.version
@@ -1146,8 +1154,7 @@ def test_installing_the_hooks_warms_the_version_lookup_so_the_first_edge_does_no
     recorder, monkeypatch, tmp_path
 ):
     """M5: no metadata lookup inside the GPIO callback, not even on the first edge."""
-    from openflight import server
-    from openflight.iwr6843 import monitor as iwr_monitor
+    from openflight import gate_timing as iwr_monitor, server
 
     del recorder
     iwr_monitor._package_version.cache_clear()  # pylint: disable=protected-access

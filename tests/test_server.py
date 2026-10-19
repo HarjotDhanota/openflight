@@ -519,6 +519,8 @@ class TestIWR6843ShotIntegration:
         """Production capture must always request the firmware-frozen boundary ring immediately."""
         captured = {}
         calibration = Calibration.identity()
+        camera = SimpleNamespace(notify_gate_event=lambda _event: True)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", camera)
 
         class FakeCaptureMonitor:
             def __init__(self, **kwargs):
@@ -561,6 +563,7 @@ class TestIWR6843ShotIntegration:
         )
 
         assert "freeze_delay_s" not in captured
+        assert captured["gate_event_observers"] == [camera.notify_gate_event]
         assert captured["armed"] is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
@@ -669,6 +672,8 @@ class TestIWR6843ShotIntegration:
         server_module.iwr6843_runtime = None
 
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
+        from openflight.gate_timing import GateEvent
+
         emitted = []
         measurement = SimpleNamespace(
             accepted=True,
@@ -686,6 +691,7 @@ class TestIWR6843ShotIntegration:
             error=None,
             valid=True,
             sequence=1,
+            gate_event=GateEvent.observe(None, 100.01),
         )
         frozen_inputs = {}
 
@@ -734,6 +740,7 @@ class TestIWR6843ShotIntegration:
         assert logged[0]["shot_number"] == 3
         assert logged[0]["ball_speed_mph"] == 100.0
         assert logged[0]["measurement"]["estimator"] == "lcmf_v1"
+        assert logged[0]["gate_event"] == capture.gate_event.to_dict()
         assert logged[0]["runtime_config"]["net_range_m"] == 3.0
         assert logged[0]["runtime_config_sha256"] == "runtime-hash"
         assert frozen_inputs == {

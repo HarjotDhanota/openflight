@@ -20,6 +20,7 @@ from typing import Callable, Literal, Mapping
 
 import numpy as np
 
+from openflight import gate_timing
 from openflight.camera import study_ladder, swing_exposure as sx
 from openflight.camera.auto_exposure import ExposureObservation, measure_exposure
 from openflight.camera.optical_quality import controls_match, within_armed_profile
@@ -34,6 +35,7 @@ from openflight.camera.triggered_buffer import (
     unpack_r8_frame,
     unpack_yuv420_y_plane,
 )
+from openflight.gate_timing import GateEvent
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 
 logger = logging.getLogger(__name__)
@@ -429,6 +431,7 @@ class CameraCaptureRuntime:
         self._resolved_config: dict | None = None
         self._startup_capture_mode: dict | None = None
         self._button = None
+        self._previous_gate_callback_mono_ns: int | None = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._running = False
         self._sequence = 0
@@ -969,7 +972,13 @@ class CameraCaptureRuntime:
             self._trigger_rejections.remove(chosen)
             return dict(chosen)
 
-    def notify_trigger(self, timestamp: float | None = None) -> bool:
+    def notify_gate_event(self, event: GateEvent) -> bool:
+        """Freeze on the shared GATE, retaining its original observation."""
+        return self.notify_trigger(event.observation.observer_wall_s, gate_event=event)
+
+    def notify_trigger(
+        self, timestamp: float | None = None, *, gate_event: GateEvent | None = None
+    ) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
         # Timed before anything else (P6-5): gathering the evidence under the frame
         # lock once stalled delivery 14-31 ms and stamped the trigger that late.
@@ -1002,9 +1011,16 @@ class CameraCaptureRuntime:
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(auto_exposure)
             self._trigger_evidence.put(evidence)
-            self._trigger_clocks.put(
-                {"host_monotonic_ns": trigger_host_ns, "boottime_ns": trigger_boottime_ns}
-            )
+            clocks = {"host_monotonic_ns": trigger_host_ns, "boottime_ns": trigger_boottime_ns}
+            if gate_event is not None:
+                interval = gate_event.kernel_mono_interval_ns
+                clocks["gate_event"] = gate_event.to_dict()
+                clocks["gate_to_camera_callback_ns"] = (
+                    [trigger_host_ns - interval[1], trigger_host_ns - interval[0]]
+                    if interval is not None
+                    else None
+                )
+            self._trigger_clocks.put(clocks)
             with self._trigger_exposure_lock:
                 self._admission_evidence.append((trigger_epoch, admission))
             return True
@@ -1118,6 +1134,8 @@ class CameraCaptureRuntime:
         }
 
     def _start_gpio_trigger(self) -> None:
+        gate_timing.warm_edge_reading_cache()
+        self._previous_gate_callback_mono_ns = None
         button_factory = self._button_factory
         if button_factory is None:
             ensure_lgpio_pin_factory()
@@ -1129,7 +1147,16 @@ class CameraCaptureRuntime:
             pull_up=False,
             bounce_time=None,
         )
-        self._button.when_pressed = self.notify_trigger
+        self._button.when_pressed = self._notify_gpio_trigger
+
+    def _notify_gpio_trigger(self) -> bool:
+        event = GateEvent.observe(
+            lambda: gate_timing.read_edge_tick(self._button),
+            time.time(),
+            previous_callback_mono_ns=self._previous_gate_callback_mono_ns,
+        )
+        self._previous_gate_callback_mono_ns = event.observation.mono_after_ns
+        return self.notify_gate_event(event)
 
     def _wait_for_prebuffer(self) -> None:
         deadline = time.monotonic() + 5.0
@@ -1661,6 +1688,11 @@ class CameraCaptureRuntime:
                         else None
                     ),
                     "exposure_split": EXPOSURE_SPLIT_DEFINITION,
+                    **{
+                        key: clocks[key]
+                        for key in ("gate_event", "gate_to_camera_callback_ns")
+                        if key in clocks
+                    },
                 },
                 "mean_brightness": float(images.mean()),
                 "p99_brightness": float(np.percentile(images, 99)),
