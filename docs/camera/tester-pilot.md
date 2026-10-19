@@ -9,8 +9,11 @@ setup steps 1–6. In step 7 tap the session's **resolution**, **1280×800** or
 **640×400** (the maintainer tells each tester which one), then tap **Start free
 play**. The lens's default resolution is marked "(lens default)" but is never
 assumed: Start stays off until one is tapped. A resolution the lens settings
-disable is not offered, and there is no switch mid-session. Ignore the advanced
-exposure ladder section.
+disable is not offered, and there is no switch mid-session. The manual exposure
+ladder and its per-swing verdict card sit in the closed **Advanced: manual
+exposure ladder (maintainer)** section under free play: leave it closed. While
+setting up, the band at the top names the same step as the "You are here" bar,
+e.g. "SETTING UP · Step 4 · Aim at your target · free play starts at step 7".
 
 Hit normally while the full-screen scoreboard records camera clips, distance-radar
 dumps, speed-radar data and exposure decisions. There is no swing limit, per-shot
@@ -329,9 +332,11 @@ setup (step 2), put the ball in the box (step 3) and set or skip the aim point
    measurement lasts 30 minutes; indoors it lasts the day. After that, if you
    move between indoors and outdoors, or if you redo the ball box, the page asks you
    to measure the light again, and the ladder waits until you do.
-3. **Start the exposure ladder** (step 7). The page sets each exposure itself and
-   shows which one you are on ("Now: 1280×800 · 150 µs"). Hit a normal shot, wait
-   for the verdict, repeat. The verdict is the big card at the top of the step:
+3. **Start the exposure ladder** (step 7: open **Advanced: manual exposure ladder
+   (maintainer)** first; it opens by itself while a manual ladder runs). The page
+   sets each exposure itself and shows which one you are on ("Now: 1280×800 ·
+   150 µs"). Hit a normal shot, wait for the verdict, repeat. The verdict is the
+   big card at the top of that section:
    green (good picture), amber (usable, with a warning) or red (not usable), with
    the setting, the frame rate delivered, the light on the ball zone and the
    clipped share, and the reasons in plain words (tap one for the full reason). The
