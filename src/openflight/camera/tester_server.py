@@ -35,7 +35,7 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
-from openflight import session_bundle, tee_range, tee_range_setup
+from openflight import session_bundle, tee_range, tee_range_setup, unit_check
 from openflight.camera import (
     attempt_ledger,
     ball_pixels,
@@ -93,6 +93,7 @@ from openflight.camera.tee_range_flow import (
 )
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
+from openflight.inclinometer import orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
     StaticRangeProfile,
@@ -2381,20 +2382,24 @@ def action_commands(
             else _tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range)
         )
     if action == "preflight":
+        # Check the unit (step 2): the sensors first, so nothing before them can stop
+        # them; each one's result is written for the tester server to read
         commands = [
-            ["git", "rev-parse", "HEAD"],
-            ["uname", "-a"],
-            ["rpicam-hello", "--list-cameras"],
-            ["vcgencmd", "get_throttled"],
             _python_command(
-                "scripts/iwr6843/check_cli.py",
-                *(["--port", iwr_static_port] if iwr_static_port else []),
+                "scripts/hardware-test/check_unit.py",
+                "--out",
+                tester_root(sessions_root, params.tester_id) / unit_check.RESULT_FILE,
+                *(["--ops-port", radar_port] if radar_port else []),
+                *(["--iwr-port", iwr_static_port] if iwr_static_port else []),
                 *(
                     ["--operator-reset", "pressed" if operator_reset else "not-pressed"]
                     if operator_reset is not None
                     else []
                 ),
             ),
+            ["git", "rev-parse", "HEAD"],
+            ["uname", "-a"],
+            ["vcgencmd", "get_throttled"],
         ]
     elif action == "gain":
         commands = [
@@ -2549,6 +2554,9 @@ def action_commands(
                 str(tester_setup["inclinometer_zero_offset_deg"]),
             ]
         )
+        if tester_setup.get("lis3dh_mount_file"):
+            # the unit's checked LIS3DH mount (step 2's orientation check)
+            commands[0].extend(["--lis3dh-mount-file", str(tester_setup["lis3dh_mount_file"])])
         if optical_calibration is not None and camera_placement is not None:
             commands[0].extend(
                 [
@@ -2941,6 +2949,10 @@ class EnclosureTilt:
     reading. Its departure from the rig file's expected placement moves every
     sensor fixed to the housing, the camera as much as the radar, which is how
     the kiosk corrects the radar's tilt; the same correction gives the camera's.
+
+    The board is read in this unit's checked mount (``mount_path``, written by
+    the orientation check, step 2), else the rig file's yaw. ``set_mount``
+    restarts the reading with a corrected mount at once.
     """
 
     def __init__(
@@ -2951,12 +2963,38 @@ class EnclosureTilt:
         address: int = 0x18,
         zero_offset_deg: float = 0.0,
         service_factory: Callable[[], object] | None = None,
+        mount_path: Path | None = None,
+        sensor_factory: Callable[..., object] | None = None,
     ):
         self.rig_geometry = rig_geometry
         self.bus, self.address, self.zero_offset_deg = bus, address, zero_offset_deg
         self._factory = service_factory
+        self._sensor_factory = sensor_factory
+        self.mount_path = mount_path
+        self._mount_override = None
         self._service = None
         self._error: str | None = None
+
+    def mount(self):
+        """``(Mount, source)``: the corrected mount, else the unit file's, else the rig's."""
+        from openflight.inclinometer import orientation_check  # noqa: PLC0415
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        if self._mount_override is not None:
+            return self._mount_override, "tester_check"
+        try:
+            rig_yaw = RigGeometry.from_json(self.rig_geometry).lis3dh_mount_yaw_deg
+        except (OSError, TypeError, ValueError, KeyError):
+            rig_yaw = None
+        mount, source, _record = orientation_check.effective_mount(self.mount_path, rig_yaw)
+        return mount, source
+
+    def set_mount(self, mount) -> None:
+        """Read with this mount from now on: a running service restarts with it."""
+        self._mount_override = mount
+        if self._service is not None:
+            self.stop()
+            self.start()
 
     def _make(self):
         if self._factory is not None:
@@ -2966,12 +3004,12 @@ class EnclosureTilt:
             InclinometerService,
             MountedAccelerometer,
         )
-        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
-        sensor = LIS3DH(bus_number=self.bus, address=self.address)
-        mount_yaw = RigGeometry.from_json(self.rig_geometry).lis3dh_mount_yaw_deg
-        if mount_yaw:
-            sensor = MountedAccelerometer(sensor, mount_yaw)
+        factory = self._sensor_factory or LIS3DH
+        sensor = factory(bus_number=self.bus, address=self.address)
+        mount, _source = self.mount()
+        if mount.yaw_deg or mount.upside_down:
+            sensor = MountedAccelerometer(sensor, mount.yaw_deg, upside_down=mount.upside_down)
         return InclinometerService(sensor, zero_offset_deg=self.zero_offset_deg)
 
     def start(self) -> None:
@@ -3009,6 +3047,7 @@ class EnclosureTilt:
         if snapshot is None:
             return data
         rig = RigGeometry.from_json(self.rig_geometry)
+        mount, mount_source = self.mount()
         expected = rig.expected_inclinometer_orientation().as_dict().get("pitch_deg") or 0.0
         departure = snapshot.calibrated_pitch_deg - expected
         data.update(
@@ -3025,7 +3064,10 @@ class EnclosureTilt:
                 "x_g": snapshot.x_g,
                 "y_g": snapshot.y_g,
                 "z_g": snapshot.z_g,
-                "mount_yaw_deg": rig.lis3dh_mount_yaw_deg,
+                # the mount the board is read in (the orientation check's, step 2)
+                "mount_yaw_deg": mount.yaw_deg,
+                "mount_upside_down": mount.upside_down,
+                "mount_source": mount_source,
             }
         )
         return data
@@ -3301,9 +3343,12 @@ PLACEMENT_BOX_MOVE_TOLERANCE_PX = 4
 PLACEMENT_BOX_REQUIRED = "confirm the box first (step 1): put the ball in the box and confirm"
 # The ladder's modes: their light screens and the ball range need the box (P7-15).
 PLACEMENT_BOX_REQUIRED_ARMS = frozenset({"arm5", "arm6"})
-# The setup checks the box waits for are all but the hardware check, which follows it.
-PLACEMENT_BOX_DEFERRED_BLOCKERS = frozenset({"iwr6843_cli"})
+# The box waits for every setup check: step 2 checks the whole unit, all four
+# sensors and the LIS3DH's orientation, before step 3 opens (19 Oct).
+PLACEMENT_BOX_DEFERRED_BLOCKERS: frozenset[str] = frozenset()
 PLACEMENT_BOX_SETUP_REQUIRED = "confirm the physical setup first: the box follows it"
+# the setup rows Check the unit (step 2) sets, one per sensor it reads
+HARDWARE_ROWS = frozenset({"ops243", "camera", "iwr6843_cli"})
 
 
 def placement_box_binding(eligibility: Mapping) -> dict:
@@ -7311,6 +7356,9 @@ def create_app(
     lens_catalogue_path: Path | None = None,
     placement_box_config: Path | None = None,
     sensor_limits_path: Path | None = None,
+    lis3dh_mount_path: Path | None = None,
+    require_lis3dh_orientation: bool = False,
+    send_dir: Path | None = None,
 ) -> Flask:
     """Build the standalone tester service.
 
@@ -7322,6 +7370,15 @@ def create_app(
     ``lens_settings_path`` keeps the unit's lens choice and each lens's settings
     (memory only without one); ``optical_calibration_dir`` holds checkerboard
     calibrations a lens's intrinsics are taken from when one exists for it.
+
+    ``require_iwr_preflight`` makes Check the unit (step 2) part of the setup:
+    the OPS243, the camera and the IWR6843 must each answer (the LIS3DH is the
+    setup policy's own check). ``require_lis3dh_orientation`` adds the LIS3DH's
+    orientation check, whose mount is kept for this unit at ``lis3dh_mount_path``
+    (memory only without one) and handed to the kiosk.
+
+    ``send_dir`` is the visible folder (``~/OpenFlight-to-send``) each finished
+    bundle is also put in, for the tester to send from.
     """
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
@@ -7330,8 +7387,21 @@ def create_app(
     from openflight.free_play import FreePlayController
 
     free_play = FreePlayController(
-        sessions_root, jobs, package_manager or TesterJobManager(), kiosk_port=KIOSK_WEB_PORT
+        sessions_root,
+        jobs,
+        package_manager or TesterJobManager(),
+        kiosk_port=KIOSK_WEB_PORT,
+        send_dir=send_dir,
     )
+
+    def analysis_for_page(tester_id: str) -> dict:
+        """The analysis, with the send folder the page shows (decision 3)."""
+        analysis = review_routes.read_analysis(sessions_root, tester_id)
+        analysis["send_folder"] = (
+            session_bundle.display_path(send_dir) if send_dir is not None else None
+        )
+        return analysis
+
     free_play.register(app)
     app.extensions["openflight_free_play"] = free_play
     # Setup radar captures share one session so the port closes once per setup (the
@@ -7500,33 +7570,132 @@ def create_app(
                 "arm_id": arm_id,
             }
 
-    def with_iwr_preflight(result: dict) -> dict:
-        # the lens and the fixed box every box, aim point and range is bound to
-        result = {**result, "unit_setup": unit_setup()}
-        if not require_iwr_preflight:
-            return result
-        passed = iwr_preflight.get(str(result.get("tester_id"))) is True
-        check = {
-            "id": "iwr6843_cli",
-            "label": "IWR6843 Enhanced/UARTA CLI",
+    # Check the unit's results per tester: the result file the script wrote, or,
+    # for a check that wrote none, only its exit code
+    unit_checks: dict[str, dict | None] = {}
+    unit_check_exit: dict[str, int] = {}
+
+    def rig_lis3dh_yaw() -> float | None:
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        try:
+            return RigGeometry.from_json(rig_geometry).lis3dh_mount_yaw_deg
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+
+    def apply_mount(mount) -> None:
+        # the tester's own reading follows the corrected mount at once
+        if hasattr(enclosure, "set_mount"):
+            enclosure.set_mount(mount)
+
+    mount_store = orientation_check.MountStore(lis3dh_mount_path, rig_yaw_deg=rig_lis3dh_yaw())
+    orientation = orientation_check.GuidedCheck(
+        mount_store, lambda: enclosure.reading(), on_mount_change=apply_mount
+    )
+
+    def hardware_rows(tester_id: str) -> list[dict]:
+        """One row per sensor Check the unit reads, in plain words."""
+        checked = tester_id in iwr_preflight
+        result = unit_checks.get(tester_id)
+        rows = []
+        for sensor, row_id in (
+            ("ops243", "ops243"),
+            ("camera", "camera"),
+            ("iwr6843", "iwr6843_cli"),
+        ):
+            name = unit_check.SENSOR_NAMES[sensor]
+            if not checked:
+                ok, reason, remedy = False, "not checked yet", "Tap Check the unit (step 2)."
+            elif result is None:
+                ok = unit_check_exit.get(tester_id) == 0
+                reason = None if ok else "the unit check did not report each sensor; see its log"
+                remedy = None if ok else "Check the unit again."
+            else:
+                item = result["sensors"].get(sensor) or {}
+                ok = bool(item.get("ok"))
+                detail = item.get("detail")
+                reason = (
+                    None
+                    if ok
+                    else f"{name} is missing or not answering" + (f": {detail}" if detail else "")
+                )
+                remedy = None if ok else item.get("remedy") or unit_check.REMEDIES[sensor]
+            if sensor == "iwr6843" and checked and ok and iwr_preflight.get(tester_id) is not True:
+                # a later radar capture failed: the radar is checked again
+                ok = False
+                reason = f"{name} stopped answering during a capture"
+                remedy = unit_check.REMEDIES[sensor]
+            rows.append(
+                {
+                    "id": row_id,
+                    "label": name,
+                    "status": "pass" if ok else "block",
+                    "reason": reason,
+                    "remedy": remedy,
+                }
+            )
+        return rows
+
+    def orientation_row() -> dict:
+        passed = mount_store.passed()
+        return {
+            "id": "lis3dh_orientation",
+            "label": "Tilt sensor orientation (LIS3DH)",
             "status": "pass" if passed else "block",
-            "reason": None if passed else "IWR6843 CLI preflight has not passed for this tester",
+            "reason": None if passed else "the tilt sensor's orientation has not been checked",
             "remedy": None
             if passed
-            else "Run Check the hardware and resolve its IWR6843 CLI result.",
+            else "Run the tilt sensor check in step 2: lift the front of the unit when asked.",
         }
-        checks = [item for item in result.get("checks", []) if item.get("id") != check["id"]]
-        blockers = [item for item in result.get("blockers", []) if item.get("id") != check["id"]]
-        checks.append(check)
-        if not passed:
-            blockers.append({key: check[key] for key in ("id", "reason", "remedy")})
-        return {**result, "checks": checks, "blockers": blockers, "eligible": not blockers}
+
+    def with_unit_checks(result: dict) -> dict:
+        # the lens and the fixed box every box, aim point and range is bound to
+        result = {**result, "unit_setup": unit_setup()}
+        if not require_iwr_preflight and not require_lis3dh_orientation:
+            return result
+        tester_id = str(result.get("tester_id"))
+        added = []
+        if require_iwr_preflight:
+            added += hardware_rows(tester_id)
+        if require_lis3dh_orientation:
+            added.append(orientation_row())
+        ids = {row["id"] for row in added}
+        checks = [item for item in result.get("checks", []) if item.get("id") not in ids]
+        blockers = [item for item in result.get("blockers", []) if item.get("id") not in ids]
+        checks += added
+        blockers += [
+            {key: row[key] for key in ("id", "reason", "remedy")}
+            for row in added
+            if row["status"] == "block"
+        ]
+        # what the page names when it refuses: each sensor missing or not answering
+        checked = tester_id in iwr_preflight
+        missing = [
+            unit_check.SENSOR_NAMES["lis3dh"] if row["id"] == "lis3dh" else row["label"]
+            for row in checks
+            if row.get("status") == "block"
+            and (row.get("id") == "lis3dh" or (checked and row.get("id") in HARDWARE_ROWS))
+        ]
+        return {
+            **result,
+            "checks": checks,
+            "blockers": blockers,
+            "eligible": not blockers,
+            "hardware": {"checked": checked, "missing": missing},
+        }
+
+    def record_unit_check(tester_id: str, return_code: int) -> None:
+        result = unit_check.read_result(
+            tester_root(sessions_root, tester_id) / unit_check.RESULT_FILE
+        )
+        unit_checks[tester_id] = result
+        unit_check_exit[tester_id] = return_code
+        iwr = (result or {}).get("sensors", {}).get("iwr6843") if result else None
+        iwr_preflight[tester_id] = bool(iwr.get("ok")) if iwr else return_code == 0
 
     def require_setup(tester_id: str, reading: Mapping, action: str) -> dict:
         # the policy records after the IWR check (T12); applying it again is a no-op
-        return with_iwr_preflight(
-            setup.require(tester_id, reading, action, adjust=with_iwr_preflight)
-        )
+        return with_unit_checks(setup.require(tester_id, reading, action, adjust=with_unit_checks))
 
     @app.before_request
     def start_request_timer():
@@ -7619,8 +7788,8 @@ def create_app(
             result["eligible"] = bool(not result["blockers"] and runtime.get("ready"))
             result["stage"] = "runtime"
             result["runtime"] = runtime
-            return with_iwr_preflight(result)
-        return with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
+            return with_unit_checks(result)
+        return with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
 
     def setup_command_config(result: Mapping) -> dict:
         return {
@@ -7628,6 +7797,8 @@ def create_app(
             "inclinometer_bus": enclosure.bus,
             "inclinometer_address": enclosure.address,
             "inclinometer_zero_offset_deg": enclosure.zero_offset_deg,
+            # the unit's checked LIS3DH mount, which the kiosk reads its board with
+            "lis3dh_mount_file": str(lis3dh_mount_path) if lis3dh_mount_path is not None else None,
         }
 
     def blocked_setup(result: dict):
@@ -7869,14 +8040,43 @@ def create_app(
                 )
             else:
                 result = setup_status(tester_id)
-            return jsonify(with_iwr_preflight(result))
+            return jsonify(with_unit_checks(result))
         except ValueError as exc:
             return jsonify(
                 {
                     "error": str(exc),
-                    "setup_eligibility": with_iwr_preflight(setup.evaluate(tester_id, reading)),
+                    "setup_eligibility": with_unit_checks(setup.evaluate(tester_id, reading)),
                 }
             ), 400
+
+    @app.route("/api/tester/lis3dh-check", methods=["GET", "POST"])
+    def lis3dh_check():
+        """Step 2's tilt sensor check: gravity, lift the front and hold, correct by tap.
+
+        GET advances the check from the current reading; POST ``start``,
+        ``cancel``, or ``correct`` with one of ``orientation_check.CORRECTIONS``.
+        The corrected mount is saved for this unit and read by the tester at once.
+        """
+        if request.method == "GET":
+            return jsonify(orientation.status()), 200, {"Cache-Control": "no-store"}
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "request body must be an object"}), 400
+        job = jobs.status()
+        if job.get("state") == "running" and job.get("action") in {"ladder", "swings", "free_play"}:
+            # the kiosk holds the LIS3DH while it records
+            return jsonify({"error": "stop the capture first: the kiosk is using the sensors"}), 409
+        action = str(payload.get("action", ""))
+        try:
+            if action == "start":
+                return jsonify(orientation.start())
+            if action == "cancel":
+                return jsonify(orientation.cancel())
+            if action == "correct":
+                return jsonify(orientation.correct(str(payload.get("correction", ""))))
+            raise ValueError("action must be start, cancel or correct")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     def range_store(tester_id: str) -> FlowStore:
         return FlowStore(tester_root(sessions_root, tester_id))
@@ -8311,7 +8511,7 @@ def create_app(
         arm_id = payload.get("arm_id")
         try:
             with tee_range_lock:
-                eligibility = with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
                 if request.method == "GET":
                     return jsonify(placement_box_status(tester_id, eligibility, arm_id))
                 action = str(payload.get("action", ""))
@@ -8499,7 +8699,7 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         try:
             with tee_range_lock:
-                eligibility = with_iwr_preflight(setup.evaluate(tester_id, enclosure.reading()))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
                 if request.method == "GET":
                     return jsonify(aim_point_status(tester_id, eligibility))
                 action = str(payload.get("action", ""))
@@ -10145,7 +10345,7 @@ def create_app(
                         selected_lens_id=lens_store.selected(),
                     ),
                     "inclinometer": enclosure.reading(),
-                    "analysis": review_routes.read_analysis(sessions_root, params.tester_id),
+                    "analysis": analysis_for_page(params.tester_id),
                     "saved_attempt_scopes": attempt_scopes(sessions_root, params.tester_id),
                     # contract 13 Oct
                     "lens_id": lens_store.selected(),
@@ -10330,9 +10530,13 @@ def create_app(
                     active_runtime_dir["path"] = None
                     enclosure.start()
             elif action == "preflight":
+                # a result from an earlier check never stands for this one
+                (tester_root(sessions_root, params.tester_id) / unit_check.RESULT_FILE).unlink(
+                    missing_ok=True
+                )
 
                 def on_finish(_action, return_code):
-                    iwr_preflight[params.tester_id] = return_code == 0
+                    record_unit_check(params.tester_id, return_code)
             else:
                 on_finish = None
             stop_live()  # the camera does one thing at a time
@@ -10480,7 +10684,7 @@ def create_app(
             # the placement is still recorded, with no search
             root = tester_root(sessions_root, params.tester_id)
             record = confirmed_placement_box(
-                root, with_iwr_preflight(setup.evaluate(params.tester_id, tilt))
+                root, with_unit_checks(setup.evaluate(params.tester_id, tilt))
             )
             if record is not None:
                 patch, _view = patch_search_for(
@@ -10718,14 +10922,14 @@ def create_app(
                 log_path = review_routes.analysis_log(sessions_root, tester_id)
                 jobs.start(
                     "analyze",
-                    [review_routes.analysis_command(sessions_root, tester_id)],
+                    [review_routes.analysis_command(sessions_root, tester_id, send_dir)],
                     log_path,
                     output_to_log=True,
                 )
             return jsonify(
                 {
                     "job": jobs.status(),
-                    "analysis": review_routes.read_analysis(sessions_root, tester_id),
+                    "analysis": analysis_for_page(tester_id),
                 }
             ), 202
         except SpawnError as exc:
@@ -11316,6 +11520,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--inclinometer-address", type=lambda value: int(value, 0), default=0x18)
     parser.add_argument("--inclinometer-bus", type=int, default=1)
     parser.add_argument("--inclinometer-zero-offset-deg", type=float, default=0.0)
+    parser.add_argument(
+        "--lis3dh-mount",
+        type=Path,
+        default=orientation_check.default_mount_path(),
+        help=(
+            "This unit's LIS3DH mount, found by the orientation check in step 2 and kept "
+            "with the unit's local settings (never in the shared rig file)"
+        ),
+    )
+    parser.add_argument(
+        "--send-dir",
+        type=Path,
+        default=session_bundle.default_send_directory(),
+        help="The visible folder each finished bundle is also put in, to send from",
+    )
     args = parser.parse_args(argv)
     if (args.camera_optical_calibration is None) != (args.camera_placement is None):
         parser.error("calibrated camera fusion requires both calibration and placement")
@@ -11344,6 +11563,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bus=args.inclinometer_bus,
         address=args.inclinometer_address,
         zero_offset_deg=args.inclinometer_zero_offset_deg,
+        mount_path=args.lis3dh_mount,
     )
     if not args.no_inclinometer:
         enclosure.start()
@@ -11367,6 +11587,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             use_unqualified_tee_range=args.use_unqualified_tee_range,
             require_tee_range_flow=True,
             require_iwr_preflight=True,
+            require_lis3dh_orientation=True,
+            lis3dh_mount_path=args.lis3dh_mount,
+            send_dir=args.send_dir,
             allow_unverified_geometry=True,
             tester_control_port=args.port,
         )

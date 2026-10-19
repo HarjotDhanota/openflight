@@ -39,8 +39,13 @@ def analysis_log(sessions_root: Path, tester_id: str) -> Path:
     return session_bundle.bundle_directory(sessions_root) / f"{tester_id}-analysis.log"
 
 
-def analysis_command(sessions_root: Path, tester_id: str) -> list[str]:
-    """The allowlisted analysis command, at low CPU priority where the OS offers it."""
+def analysis_command(
+    sessions_root: Path, tester_id: str, send_dir: Path | None = None
+) -> list[str]:
+    """The allowlisted analysis command, at low CPU priority where the OS offers it.
+
+    ``send_dir`` is the visible folder each finished bundle is also put in.
+    """
     command = [
         sys.executable,
         str(ANALYSIS_SCRIPT),
@@ -49,6 +54,7 @@ def analysis_command(sessions_root: Path, tester_id: str) -> list[str]:
         "--tester-id",
         tester_id,
         "--package",
+        *(["--send-dir", str(Path(send_dir))] if send_dir is not None else []),
     ]
     nice = shutil.which("nice") if os.name == "posix" else None
     return [nice, "-n", "10", *command] if nice else command
@@ -82,8 +88,14 @@ def read_analysis(
             )
     review = Path(sessions_root) / tester_id / ANALYSIS_DIR / "session_review.json"
     bundles = session_bundle.list_bundles(sessions_root, tester_id)
+    made = ((job or {}).get("bundle") or {}) if isinstance(job, dict) else {}
+    # the latest bundle's copy in the send folder, when the job that made it put one there
+    send_copy = (
+        made.get("send_copy") if bundles and made.get("name") == bundles[0]["name"] else None
+    )
     return {
         "state": state,
+        "send_copy": send_copy,
         "reason": reason,
         "job": job,
         "review_ready": review.is_file(),

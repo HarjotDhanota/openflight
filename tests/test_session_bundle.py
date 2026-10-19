@@ -458,3 +458,54 @@ def test_evidence_changing_while_reuse_is_checked_is_not_reused(tmp_path):
     assert second["reused"] is False and second["name"] != first["name"]
     with zipfile.ZipFile(second["path"]) as archive:
         assert archive.read(f"{TESTER}/arm5/arm.json") == changed[0]
+
+
+def test_a_finished_bundle_is_also_put_in_the_visible_send_folder(tmp_path, viewer):
+    """Decision 3 (19 Oct): the tester finds the zip in ~/OpenFlight-to-send/."""
+    root = capture_tree(tmp_path / "pi")
+    send = tmp_path / "home" / "OpenFlight-to-send"
+
+    assert runner.analyze(root, TESTER, package=True, viewer=viewer, send_dir=send) == 0
+
+    job = json.loads((root / TESTER / "analysis" / "job.json").read_text(encoding="utf-8"))
+    bundle = root / job["bundle"]["path"]
+    copy = send / bundle.name
+    assert copy.read_bytes() == bundle.read_bytes()
+    assert job["bundle"]["send_copy"]["name"] == bundle.name
+    assert job["bundle"]["send_copy"]["size_bytes"] == bundle.stat().st_size
+    assert job["bundle"]["send_copy"]["method"] in {"link", "copy"}
+    # an unchanged session reuses its bundle, and the send folder keeps one copy of it
+    assert runner.analyze(root, TESTER, package=True, viewer=viewer, send_dir=send) == 0
+    assert sorted(path.name for path in send.iterdir()) == [bundle.name]
+
+
+def test_the_send_copy_is_skipped_when_it_is_already_there(tmp_path):
+    source = tmp_path / ".bundles" / "t-session-bundle-x.zip"
+    source.parent.mkdir()
+    source.write_bytes(b"zip")
+    send = tmp_path / "send"
+
+    first = session_bundle.publish_for_sending(source, send)
+    second = session_bundle.publish_for_sending(source, send)
+
+    assert first["method"] in {"link", "copy"}
+    assert second["method"] == "existing"
+    assert (send / source.name).read_bytes() == b"zip"
+
+
+def test_a_send_copy_that_cannot_be_made_is_labelled_not_fatal(tmp_path, monkeypatch):
+    source = tmp_path / "t-session-bundle-x.zip"
+    source.write_bytes(b"zip")
+    blocked = tmp_path / "send"
+    blocked.write_text("a file where the folder should be", encoding="utf-8")
+
+    result = session_bundle.publish_for_sending(source, blocked)
+
+    assert result["method"] is None
+    assert result["error"]
+
+
+def test_the_send_folder_is_shown_from_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    assert session_bundle.display_path(tmp_path / "OpenFlight-to-send") == "~/OpenFlight-to-send"
+    assert session_bundle.display_path(Path("/srv/x")).endswith("x")

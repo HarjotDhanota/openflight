@@ -18,8 +18,10 @@ from openflight.camera import session_review_routes as review
 class FreePlayController:
     """Keep packaging separate from the still-visible kiosk process."""
 
-    def __init__(self, sessions_root, capture_jobs, package_jobs, *, kiosk_port):
+    def __init__(self, sessions_root, capture_jobs, package_jobs, *, kiosk_port, send_dir=None):
         self.root = Path(sessions_root)
+        # the visible folder each finished bundle is also put in (decision 3, 19 Oct)
+        self.send_dir = Path(send_dir) if send_dir is not None else None
         self.capture_jobs = capture_jobs
         self.package_jobs = package_jobs
         # the kiosk's web port (the tester server's KIOSK_WEB_PORT): Stop is proxied there
@@ -142,7 +144,7 @@ class FreePlayController:
         try:
             self.package_jobs.start(
                 "analyze",
-                [review.analysis_command(self.root, tester_id)],
+                [review.analysis_command(self.root, tester_id, self.send_dir)],
                 review.analysis_log(self.root, tester_id),
                 on_finish=finished,
                 output_to_log=True,
@@ -172,6 +174,8 @@ class FreePlayController:
             **listed[made["name"]],
             "reused": bool(made.get("reused")),
             "path": str((session_bundle.bundle_directory(self.root) / made["name"]).resolve()),
+            # the copy in the send folder, as the tester finds it
+            "send_copy": made.get("send_copy"),
         }
 
     def register(self, app):

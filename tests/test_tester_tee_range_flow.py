@@ -3793,20 +3793,23 @@ def test_the_light_and_the_ball_range_wait_for_the_box(tmp_path, inputs, monkeyp
     assert state["evidence"]["placement_box"]["box_px"] == box_display(client, tester)["box_px"]
 
 
-def test_the_box_is_confirmed_before_the_hardware_check(tmp_path, inputs, monkeypatch):
+def test_the_box_waits_for_the_unit_check(tmp_path, inputs, monkeypatch):
+    """19 Oct: step 2 checks the whole unit, all four sensors, before the box opens."""
     app, tester = app_for(tmp_path, inputs, monkeypatch, require_iwr_preflight=True)
     client = app.test_client()
 
-    assert box_state(client, tester)["state"] == "needs_confirmation"
-    assert confirm_box(client, tester, "box").status_code == 200
-    # the range still waits for the hardware check, which follows the box
-    blocked = client.post(
-        "/api/tester/tee-range",
-        json={"tester_id": tester, "action": "start", "request_id": "no-check"},
-    )
-    assert blocked.status_code == 409
+    waiting = box_state(client, tester)
+    assert waiting["state"] == "setup_not_confirmed"
+    assert {blocker["id"] for blocker in waiting["setup_blockers"]} == {
+        "ops243",
+        "camera",
+        "iwr6843_cli",
+    }
+    assert confirm_box(client, tester, "early").status_code == 409
     assert _run(client, tester, "preflight").status_code == 202
 
+    assert box_state(client, tester)["state"] == "needs_confirmation"
+    assert confirm_box(client, tester, "box").status_code == 200
     assert post(client, tester, "start", "checked").status_code == 200
 
 

@@ -333,7 +333,19 @@ def _throttled(job: Job):
     return report
 
 
-def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path | None) -> int:
+def analyze(
+    sessions_root: Path,
+    tester_id: str,
+    *,
+    package: bool,
+    viewer: Path | None,
+    send_dir: Path | None = None,
+) -> int:
+    """Replay, review and (with ``package``) bundle one tester's session.
+
+    ``send_dir`` is the visible folder the tester sends from: each finished bundle
+    is put there too (a hard link, else a copy), labelled in job.json if it fails.
+    """
     sessions_root = sessions_root.expanduser().resolve()
     tester_dir = sessions_root / tester_id
     if not tester_dir.is_dir():
@@ -370,7 +382,12 @@ def analyze(sessions_root: Path, tester_id: str, *, package: bool, viewer: Path 
             # job.json is a derived output: it names the bundle relative to the
             # sessions folder, so the same session analyses identically anywhere
             relative = Path(built["path"]).resolve().relative_to(Path(sessions_root).resolve())
-            job.update(bundle={**built, "path": relative.as_posix()})
+            record = {**built, "path": relative.as_posix()}
+            if send_dir is not None:
+                record["send_copy"] = session_bundle.publish_for_sending(
+                    Path(built["path"]), send_dir
+                )
+            job.update(bundle=record)
     except KeyboardInterrupt:
         job.error("stopped by the operator before it finished")
         job.finish("stopped")
@@ -471,6 +488,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--viewer", type=Path, default=VIEWER)
     parser.add_argument("--verify", type=Path, help="Verify a bundle reproduces from its raw files")
     parser.add_argument("--work-dir", type=Path)
+    parser.add_argument(
+        "--send-dir",
+        type=Path,
+        default=None,
+        help="Also put each finished bundle in this visible folder (~/OpenFlight-to-send)",
+    )
     args = parser.parse_args(argv)
     if args.verify:
         try:
@@ -483,7 +506,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.sessions_root or not args.tester_id:
         parser.error("--sessions-root and --tester-id are required unless --verify is given")
     signal.signal(signal.SIGTERM, _stop_requested)
-    return analyze(args.sessions_root, args.tester_id, package=args.package, viewer=args.viewer)
+    return analyze(
+        args.sessions_root,
+        args.tester_id,
+        package=args.package,
+        viewer=args.viewer,
+        send_dir=args.send_dir,
+    )
 
 
 if __name__ == "__main__":

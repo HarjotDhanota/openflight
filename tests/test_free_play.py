@@ -696,3 +696,49 @@ def test_the_tester_status_shows_the_kiosks_exposure_study(tmp_path):
     assert shown["text"] == "Exposure study: 300 µs · swing 2 of 5 · setting 1 of 2"
     assert shown["rungs"][0]["counts"]["green"] == 1
     assert controller.status()["resolution"]["label"] == "1280×800"
+
+
+# --- sending the package (decision 3, 19 Oct) ----------------------------------------
+
+
+def test_free_play_packages_into_the_send_folder_and_reports_its_copy(tmp_path, monkeypatch):
+    (tmp_path / "tester").mkdir()
+    capture, packaging = Jobs(), Jobs()
+    capture.job = {"state": "running", "action": "free_play"}
+    send = tmp_path / "OpenFlight-to-send"
+    analysis = analysis_with_bundle("tester.zip")
+    analysis["job"]["bundle"]["send_copy"] = {
+        "name": "tester.zip",
+        "folder": "~/OpenFlight-to-send",
+        "size_bytes": 1234,
+        "method": "link",
+        "error": None,
+    }
+    monkeypatch.setattr(free_play.review, "read_analysis", lambda *_: analysis)
+    controller = free_play.FreePlayController(
+        tmp_path, capture, packaging, kiosk_port=8080, send_dir=send
+    )
+    controller.begin("tester", "one", tmp_path / "tester")
+    controller.package("tester", "one")
+
+    command = packaging.calls[0][1][0]
+    assert command[command.index("--send-dir") + 1] == str(send)
+    packaging.done("analyze", 0)
+    bundle = controller.status()["bundle"]
+    assert bundle["size_bytes"] == 1234
+    assert bundle["send_copy"]["folder"] == "~/OpenFlight-to-send"
+
+
+def test_the_tester_page_is_told_the_send_folder_and_the_bundle_copy(tmp_path):
+    send = tmp_path / "OpenFlight-to-send"
+    app = eligible_app(sessions_root=tmp_path, manager=Jobs(), send_dir=send)
+    body = (
+        app.test_client()
+        .post(
+            "/api/tester/status",
+            json={"tester_id": "20260922-name", "arm_id": "arm5", "environment": "indoors"},
+        )
+        .get_json()
+    )
+    assert body["analysis"]["send_folder"] == ts.session_bundle.display_path(send)
+    assert body["analysis"]["send_copy"] is None

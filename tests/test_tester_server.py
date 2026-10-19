@@ -304,15 +304,17 @@ class TestCommands:
             iwr_static_port="/dev/serial/by-id/iwr-if00-port0",
         )
 
-        probe = commands[-1]
-        assert ts.Path(probe[1]).name == "check_cli.py"
-        assert probe[-2:] == ["--port", "/dev/serial/by-id/iwr-if00-port0"]
+        # Check the unit (19 Oct): one script reads the OPS243, the camera and the IWR
+        probe = commands[0]
+        assert ts.Path(probe[1]).name == "check_unit.py"
+        flag = probe.index("--iwr-port")
+        assert probe[flag : flag + 2] == ["--iwr-port", "/dev/serial/by-id/iwr-if00-port0"]
 
     def test_preflight_keeps_iwr_cli_autodetection_when_no_port_is_configured(self, tmp_path):
         commands, _ = ts.action_commands("preflight", params(), tmp_path, RIG)
 
-        assert ts.Path(commands[-1][1]).name == "check_cli.py"
-        assert "--port" not in commands[-1]
+        assert ts.Path(commands[0][1]).name == "check_unit.py"
+        assert "--iwr-port" not in commands[0]
 
     @pytest.mark.parametrize(
         ("operator_reset", "expected"),
@@ -325,12 +327,12 @@ class TestCommands:
             "preflight", params(), tmp_path, RIG, operator_reset=operator_reset
         )
 
-        assert commands[-1][-2:] == expected
+        assert commands[0][-2:] == expected
 
     def test_preflight_leaves_the_reset_record_unknown_when_not_reported(self, tmp_path):
         commands, _ = ts.action_commands("preflight", params(), tmp_path, RIG)
 
-        assert "--operator-reset" not in commands[-1]
+        assert "--operator-reset" not in commands[0]
 
     def test_gain_step_screens_gain_at_the_arms_exposure(self, tmp_path):
         commands, log_path = ts.action_commands("gain", params(arm_id="arm5"), tmp_path, RIG)
@@ -739,7 +741,7 @@ class TestApp:
 
         assert refused.status_code == 400
         assert accepted.status_code == 202
-        assert list(manager.commands[-1][-2:]) == ["--operator-reset", "pressed"]
+        assert list(manager.commands[0][-2:]) == ["--operator-reset", "pressed"]
 
     def test_normal_tester_setup_is_blocked_until_iwr_cli_preflight_passes(self, tmp_path):
         class ImmediatePreflight:
@@ -765,12 +767,10 @@ class TestApp:
 
         before = client.get("/api/tester/setup-eligibility", query_string=query).get_json()
         assert before["eligible"] is False
+        # all four sensors (19 Oct): each one Check the unit reads waits for it
         assert before["blockers"] == [
-            {
-                "id": "iwr6843_cli",
-                "reason": "IWR6843 CLI preflight has not passed for this tester",
-                "remedy": "Run Check the hardware and resolve its IWR6843 CLI result.",
-            }
+            {"id": sensor, "reason": "not checked yet", "remedy": "Tap Check the unit (step 2)."}
+            for sensor in ("ops243", "camera", "iwr6843_cli")
         ]
 
         response = client.post(
@@ -782,7 +782,7 @@ class TestApp:
         assert after["eligible"] is True
         assert next(check for check in after["checks"] if check["id"] == "iwr6843_cli") == {
             "id": "iwr6843_cli",
-            "label": "IWR6843 Enhanced/UARTA CLI",
+            "label": "Ranging radar (IWR6843)",
             "status": "pass",
             "reason": None,
             "remedy": None,

@@ -516,4 +516,4 @@ def test_an_action_refused_by_the_hardware_check_is_logged_as_refused(tmp_path):
     last = _records(tmp_path)[-1]
     assert last["outcome"] == "blocked"
     assert last["action"] == "gain"
-    assert [blocker["id"] for blocker in last["blockers"]] == ["iwr6843_cli"]
+    assert [blocker["id"] for blocker in last["blockers"]] == ["ops243", "camera", "iwr6843_cli"]

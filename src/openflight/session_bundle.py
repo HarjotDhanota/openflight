@@ -109,6 +109,69 @@ def bundle_directory(sessions_root: Path) -> Path:
     return Path(sessions_root) / BUNDLE_DIR
 
 
+# The visible folder a tester sends bundles from (decision 3, 19 Oct): the hidden
+# .bundles folder keeps the originals, this one a copy of each to upload.
+SEND_FOLDER_NAME = "OpenFlight-to-send"
+
+
+def default_send_directory() -> Path:
+    return Path.home() / SEND_FOLDER_NAME
+
+
+def display_path(path: Path) -> str:
+    """A path as a tester reads it: under the home folder as ``~/...``."""
+    path = Path(path)
+    try:
+        return "~/" + path.resolve().relative_to(Path.home().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def publish_for_sending(bundle: Path, send_dir: Path) -> dict[str, Any]:
+    """Put a finished bundle in the send folder: a hard link, else a copy.
+
+    A link costs no space (sessions can be about 1 GB); a copy is made only when
+    the folders are on different drives, and only with room left for it. A copy
+    already there with the same size is kept. A failure is returned, labelled,
+    never raised: the bundle itself is finished either way.
+    """
+    bundle = Path(bundle)
+    send_dir = Path(send_dir)
+    target = send_dir / bundle.name
+    size = bundle.stat().st_size
+    result: dict[str, Any] = {
+        "name": bundle.name,
+        "folder": display_path(send_dir),
+        "size_bytes": size,
+        "method": None,
+        "error": None,
+    }
+    try:
+        send_dir.mkdir(parents=True, exist_ok=True)
+        if target.is_file() and target.stat().st_size == size:
+            return {**result, "method": "existing"}
+        try:
+            os.link(bundle, target)
+            return {**result, "method": "link"}
+        except OSError:
+            pass
+        free = shutil.disk_usage(send_dir).free
+        if free < size + FREE_SPACE_MARGIN_BYTES:
+            raise OSError(
+                f"not enough free space to copy the bundle: {size // 2**20} MiB needed, "
+                f"{free // 2**20} MiB free"
+            )
+        partial = target.with_name(f".{target.name}.partial")
+        try:
+            shutil.copyfile(bundle, partial)
+            os.replace(partial, target)
+        finally:
+            partial.unlink(missing_ok=True)
+        return {**result, "method": "copy"}
+    except OSError as error:
+        return {**result, "error": f"{type(error).__name__}: {error}"}
+
+
 def _role(relative: str, tester_id: str) -> str:
     if relative == VIEWER_NAME:
         return "viewer"
