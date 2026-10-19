@@ -237,6 +237,9 @@ def test_tester_kiosk_is_green_with_its_admitted_setup(sensors, monkeypatch):
         ("holding_no_ball", "no_ball_searched", "red", "no ball in the box"),
         ("too_dark", "limit", "green", "too dark"),
         ("too_bright", "limit", "green", "too bright"),
+        # seeded from the setup's light index, before the first ball look: wait
+        ("seeded", "setup_light_index", "amber", "finding the ball"),
+        ("seeded", "startup_controls", "amber", "finding the ball"),
     ],
 )
 def test_free_play_automatic_exposure_drives_the_light(
@@ -249,6 +252,34 @@ def test_free_play_automatic_exposure_drives_the_light(
     light = sensors.light()
     assert light["state"] == state
     assert cause in light["cause"]
+
+
+def test_free_play_exposure_unavailable_is_green_with_its_cause_named(sensors, monkeypatch):
+    """No exposure limits from the camera: measure and label, never a permanent red."""
+    _admitted(monkeypatch)
+    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    server.camera_capture_runtime.settings.auto_exposure = True
+    sensors.camera["auto_exposure"] = {
+        "enabled": True,
+        "status": "unavailable",
+        "reason": "unavailable",
+        "message": "The camera reported no exposure limits; holding the startup controls",
+    }
+    light = sensors.light()
+    assert light["state"] == "green"
+    assert light["cause"].startswith("Ready for a swing")
+    assert "camera exposure unavailable" in light["cause"]
+    assert "no exposure limits" in light["cause"]
+
+
+def test_free_play_exposure_unavailable_without_a_message_still_names_it(sensors, monkeypatch):
+    _admitted(monkeypatch)
+    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    server.camera_capture_runtime.settings.auto_exposure = True
+    sensors.camera["auto_exposure"] = {"enabled": True, "status": "unavailable"}
+    light = sensors.light()
+    assert light["state"] == "green"
+    assert "camera exposure unavailable" in light["cause"]
 
 
 def test_free_play_does_not_relax_manual_exposure_for_the_ladder(sensors, monkeypatch):

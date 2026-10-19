@@ -154,8 +154,22 @@ def _camera(camera: Mapping, now: float, red: list, amber: list) -> None:
             red.append("no ball in the box")
         elif policy.get("status") in {"holding_no_ball", "searching_for_ball", "seeded"}:
             amber.append(("finding the ball", None))
-        elif policy.get("status") == "unavailable":
-            red.append(policy.get("message") or "camera exposure unavailable")
+        # "unavailable" (no exposure limits from the camera) is a label on the
+        # green light, never a red: the OPS numbers and the clips still record
+
+
+def _free_play_note(camera: Mapping | None) -> str | None:
+    """The free-play exposure state a green light carries as a note (F4)."""
+    if not (camera or {}).get("free_play"):
+        return None
+    policy = camera.get("auto_exposure") or {}
+    status = policy.get("status")
+    if status in {"too_dark", "too_bright"}:
+        return status.replace("_", " ")
+    if status == "unavailable":
+        message = policy.get("message")
+        return "camera exposure unavailable" + (f" ({message})" if message else "")
+    return None
 
 
 def compute_state(states: SensorStates, now: float, hold: str | None = None) -> dict:
@@ -186,13 +200,11 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
             "time_left_s": left,
             "causes": [{"cause": item[0], "time_left_s": item[1]} for item in amber],
         }
-    policy = (states.camera or {}).get("auto_exposure") or {}
-    note = policy.get("status") if (states.camera or {}).get("free_play") else None
+    note = _free_play_note(states.camera)
     return {
         "state": "green",
         "word": WORDS["green"],
-        "cause": "Ready for a swing"
-        + (f"; {note.replace('_', ' ')}" if note in {"too_dark", "too_bright"} else ""),
+        "cause": "Ready for a swing" + (f"; {note}" if note else ""),
         "time_left_s": None,
         "causes": [],
     }
