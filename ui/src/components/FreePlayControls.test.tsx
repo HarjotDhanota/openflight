@@ -26,8 +26,28 @@ describe('Free-play status', () => {
         onAction={noop}
       />
     );
-    expect(html).toContain('Package ready');
+    expect(html).toContain('Package ready: session.zip');
     expect(html).toContain('/captures/session.zip');
     expect(html).toContain('>Done</button>');
+    expect(html).not.toContain('disabled');
+  });
+  it('names the bundle even when only its name is known', () => {
+    const html = renderToString(
+      <FreePlayStatus state={{ enabled: true, phase: 'ready', bundle: { name: 'session.zip' } }} onAction={noop} />
+    );
+    expect(html).toContain('Package ready: session.zip');
+  });
+  it('takes the whole band once acquisition stops: the ready light no longer applies', () => {
+    const recording = renderToString(<FreePlayStatus state={{ enabled: true, phase: 'recording' }} onAction={noop} />);
+    expect(recording).not.toContain('free-play--finished');
+    for (const phase of ['stopping', 'packaging', 'ready']) {
+      const html = renderToString(<FreePlayStatus state={{ enabled: true, phase }} onAction={noop} />);
+      expect(html).toContain('free-play--finished');
+    }
+    // a failed stop may leave acquisition running: the light stays
+    const failed = renderToString(
+      <FreePlayStatus state={{ enabled: true, phase: 'error', error: 'x' }} onAction={noop} />
+    );
+    expect(failed).not.toContain('free-play--finished');
   });
 });

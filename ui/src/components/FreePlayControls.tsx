@@ -21,20 +21,29 @@ export function FreePlayStatus({
   if (!state?.enabled) return null;
   const ready = state.phase === 'ready';
   const waiting = busy || state.phase === 'stopping' || state.phase === 'packaging';
+  // once acquisition stops the ready light no longer describes anything: the
+  // controls take its band, so "Package ready" and the file name read in full
+  const finished = ['stopping', 'packaging', 'ready'].includes(state.phase ?? '');
   return (
-    <div className="free-play" aria-label="Free play">
+    <div className={finished ? 'free-play free-play--finished' : 'free-play'} aria-label="Free play">
       <div className="free-play__status" role="status" aria-live="polite">
-        <strong>
+        <strong className={ready ? 'free-play__ready' : undefined}>
           {ready
-            ? 'Package ready'
+            ? state.bundle?.name
+              ? `Package ready: ${state.bundle.name}`
+              : 'Package ready'
             : state.phase === 'recording'
               ? 'Free play: recording'
               : waiting
                 ? 'Stopping and packaging…'
                 : 'Free play needs attention'}
         </strong>
-        {state.geometry_unverified ? <span>Geometry unverified</span> : null}
-        {ready ? <span title={state.bundle?.path}>{state.bundle?.path || state.bundle?.name}</span> : null}
+        {state.geometry_unverified && !finished ? <span>Geometry unverified</span> : null}
+        {ready && state.bundle?.path ? (
+          <span className="free-play__path" title={state.bundle.path}>
+            {state.bundle.path}
+          </span>
+        ) : null}
         {state.error ? <span role="alert">{state.error}</span> : null}
       </div>
       <button type="button" disabled={waiting} onClick={() => onAction(ready ? 'close' : 'stop')}>

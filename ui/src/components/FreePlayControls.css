@@ -9,27 +9,8 @@
   min-width: 0;
 }
 
-.session-status:has(.free-play) > .ready-light {
-  gap: 0.5rem;
-  padding-inline: 0.75rem;
-}
-
-.session-status:has(.free-play) .ready-light__word {
-  font-size: 1.75rem;
-}
-
-.session-status:has(.free-play) .ready-light__cause,
-.session-status:has(.free-play) .ready-light__time,
-.session-status:has(.free-play) .ready-light__swing {
-  font-size: 0.875rem;
-}
-
 .session-status:has(.ready-light) > .free-play {
   flex: 0 0 43%;
-}
-
-.panel-app:has(.free-play) .live-panel__grid .metric-card__value-row {
-  font-size: clamp(1.5rem, min(6vw, 11vh, 20cqi, 32cqb), 3.5rem);
 }
 
 .free-play {
@@ -39,7 +20,9 @@
   min-width: 0;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.25rem 0.75rem;
+  /* no vertical padding: the 44 px button fits the ready light's band (60 px at
+     800×480), so the controls never make the band, and the tiles, change height */
+  padding: 0 0.75rem;
   background: var(--color-surface);
   color: var(--color-text);
   font-size: 0.75rem;
@@ -68,9 +51,53 @@
   font-weight: 700;
 }
 
+/* the bundle's file name is one long word: wrap it rather than run under the button */
+.free-play__ready {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* acquisition stopped: the controls replace the ready light in its band, at its height */
+.session-status:has(.free-play--finished) > .ready-light {
+  display: none;
+}
+
+.session-status > .free-play--finished,
+.session-status:has(.ready-light) > .free-play--finished {
+  flex: 1 1 auto;
+  min-height: 96px;
+  padding-inline: 1.25rem;
+  gap: 1rem;
+}
+
+.free-play--finished .free-play__status {
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.free-play--finished strong {
+  font-size: 1.05rem;
+}
+
+.free-play--finished button {
+  min-width: 6rem;
+  font-size: 1.125rem;
+}
+
+/* Done is the one thing left to do: a solid accent fill, like the kiosk's other actions */
+.free-play--finished button:enabled {
+  border-color: var(--color-accent-block);
+  background: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
 @media (max-height: 520px) {
-  .panel-app:has(.free-play) .live-panel__grid .metric-card--label-above {
-    gap: 0.1rem;
-    padding-block: 0.2rem;
+  .session-status > .free-play--finished,
+  .session-status:has(.ready-light) > .free-play--finished {
+    min-height: 60px;
+  }
+
+  .free-play--finished strong {
+    font-size: 0.95rem;
   }
 }
