@@ -285,8 +285,6 @@ def resolve_shot(
 
     if _finite(shot.launch_angle_vertical):
         vla = float(shot.launch_angle_vertical)
-        # an OPS-only club-table launch (_ensure_user_facing_launch_angles) is filled
-        # in, not measured (trackman-comparison §5 item 4, V-formulas C8)
         provenance["vla"] = (
             "estimated" if shot.launch_angle_vertical_source == "estimated" else "measured"
         )

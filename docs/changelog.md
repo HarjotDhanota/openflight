@@ -73,6 +73,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/camera/tester-pilot.md` and `docs/camera/mode-study-analysis.md`.
 
 ### Fixed
+- **Simulator output tags estimated launch angles as estimated.** When the
+  server fills in a launch angle before the sim fan-out, the resolver tagged
+  it, and the carry built on it, as measured. It now reads the angle's source,
+  so the simulator badges, `sim_shot` event and `sim_send` log entries match
+  the data.
+- **Doc paths named from the Python package resolve again.** The K-LD7
+  OPS-bin penalty warning, the cloud client and session-logger comments,
+  and the two-ray module docstring pointed at flat `docs/*.md` files that
+  moved in the docs restructure. A new test scans `src/openflight`,
+  `scripts/`, `.github/`, and the top-level guides for `docs/…​.md`
+  references and fails on any that do not exist.
+- **`openflight-cloud` honors `--config`/`--log-dir` before the subcommand.**
+  The subcommand's defaults overwrote options given before it, so
+  `openflight-cloud --log-dir X push` scanned the default session directory.
+  The server's session-end push uses that form, so with a custom `--log-dir`
+  it looked in the wrong place.
 - **Stale doc paths from the docs restructure.** The hardware-help issue
   template and the user-facing messages in `scripts/setup/setup.sh`,
   `setup_kld7_devices.sh`, `capture_kld7_radc.py`, `replay_spin_dechirp.py`,
@@ -121,6 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Mock mode simulates the optional hardware phones react to.** So a Pi
+  with no radar, UPS or camera can exercise every phone event: mock shots
+  now report `shot_processing` `capturing` then `calculating` like the radar,
+  `simulate_shot` with `{"fail": true}` reports `failed` without a shot,
+  `--mock-enrichment-ms MS` sends mock shots provisional then final through the
+  real enrichment pipeline (above the 20 s deadline they finalize as skipped),
+  and `--battery mock` cycles `power_status` through every state. See
+  [simulating hardware](ios-ble.md#simulating-hardware-on-a-pi-without-it).
 - **Bluetooth LE connection for phone apps.** `--ble` (with the optional `ble`
   extra, `bless==0.3.0` on Linux) advertises one GATT service with a shot and a
   control characteristic, speaking schema version 2; without BlueZ or the

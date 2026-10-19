@@ -264,3 +264,37 @@ def test_a_spin_component_is_as_good_as_its_weaker_source():
     assert calculated_axis.provenance["side_spin"] == "calculated"
     assert estimated_axis.provenance["spin_axis"] == "estimated"
     assert estimated_axis.provenance["side_spin"] == "estimated"
+
+
+def test_server_estimated_launch_angles_are_tagged_estimated():
+    # server._ensure_user_facing_launch_angles fills missing angles before the
+    # sim fan-out and marks them with source "estimated".
+    shot = _shot(
+        launch_angle_vertical=11.0,
+        launch_angle_vertical_source="estimated",
+        launch_angle_horizontal=0.0,
+        launch_angle_horizontal_source="estimated",
+    )
+    r = resolve_shot(shot, PlayerState())
+    assert r.vla == 11.0
+    assert r.hla == 0.0
+    assert r.provenance["vla"] == "estimated"
+    assert r.provenance["hla"] == "estimated"
+    assert r.provenance["carry"] == "estimated"
+
+
+def test_measured_vla_with_estimated_hla_keeps_each_angle_s_own_label():
+    # A vertical angle radar alone gives a measured VLA, and the server fills in
+    # the neutral 0.0 HLA. The carry stays "estimated" on this fork: an OPS-only
+    # carry flies a club-typical spin whatever the launch angle (E4, V-formulas C8),
+    # so the launch angle no longer upgrades its badge.
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=0.0,
+        launch_angle_horizontal_source="estimated",
+    )
+    r = resolve_shot(shot, PlayerState())
+    assert r.provenance["vla"] == "measured"
+    assert r.provenance["hla"] == "estimated"
+    assert r.provenance["carry"] == "estimated"
