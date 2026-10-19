@@ -273,7 +273,6 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
         self._run_async = run_async or self._thread
         self._settle_s = float(settle_s)
         self._lock = threading.RLock()
-        self._changing = False
         self._arm_id = plan["resolution"]["arm_id"]
         self._data = {
             "schema": STATE_SCHEMA,
@@ -295,6 +294,8 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
             "started_at": _now(),
             "updated_at": None,
             "stopped_at": None,
+            # the ready light is amber while a new setting reaches the sensor
+            "changing": False,
         }
         if live_sensor_min_us is not None:
             self._skip_below_live_minimum(int(live_sensor_min_us))
@@ -351,7 +352,7 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
             logger.warning("[FREE PLAY] Could not save the exposure study", exc_info=True)
 
     def _schedule_apply(self, rung: dict) -> None:
-        self._changing = True
+        self._data["changing"] = True
         rung_id, exposure, gain = rung["rung_id"], rung["exposure_us"], rung["gain"]
 
         def work() -> None:
@@ -368,7 +369,7 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
                     if entry["rung_id"] == rung_id:
                         entry["applied_at"] = None if error else _now()
                         entry["apply_error"] = error
-                self._changing = False
+                self._data["changing"] = False
                 self._save()
 
         self._run_async(work)
@@ -376,7 +377,7 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
     def _start_automatic_now(self) -> None:
         self._data["phase"] = "automatic"
         self._data["automatic"] = {"started_at": _now(), "seed": None, "error": None}
-        self._changing = True
+        self._data["changing"] = True
 
         def work() -> None:
             seed, error = None, None
@@ -390,7 +391,7 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
                     seed=json.loads(json.dumps(seed, default=str)) if seed else None,
                     error=error,
                 )
-                self._changing = False
+                self._data["changing"] = False
                 self._save()
 
         self._run_async(work)
@@ -492,52 +493,12 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
     def ready_state(self) -> dict:
         """For the ready light: the phase, and whether the setting is changing (amber)."""
         with self._lock:
-            return {"phase": self._data["phase"], "changing": self._changing}
+            return {"phase": self._data["phase"], "changing": bool(self._data["changing"])}
 
     def progress(self) -> dict:
         """The one line both pages show, plus each rung's verdict counts (tester page)."""
         with self._lock:
-            phase = self._data["phase"]
-            runnable = self._runnable()
-            active = self._active() if phase == "ladder" else None
-            per_rung = self._data["swings_per_rung"]
-            rung = None
-            if active is not None:
-                index = runnable.index(active) + 1
-                done = len(active["swings"])
-                rung = {
-                    "rung_id": active["rung_id"],
-                    "exposure_us": active["exposure_us"],
-                    "gain": active["gain"],
-                    "swings_done": done,
-                }
-                text = (
-                    f"Exposure study: {active['exposure_us']} µs · swing "
-                    f"{min(done + 1, per_rung)} of {per_rung} · setting {index} of {len(runnable)}"
-                )
-            elif phase == "automatic":
-                text = "Automatic exposure"
-            else:
-                text = "Exposure study: camera unavailable"
-            return {
-                "phase": phase,
-                "ladder_status": self._data["ladder_status"],
-                "resolution": dict(self._data["resolution"]),
-                "text": text,
-                "changing": self._changing,
-                "rung": rung,
-                "setting_index": runnable.index(active) + 1 if active is not None else None,
-                "settings_total": len(runnable),
-                "swings_per_rung": per_rung,
-                "rungs": [
-                    {
-                        key: entry.get(key)
-                        for key in ("rung_id", "exposure_us", "gain", "status", "skip_reason")
-                    }
-                    | {"swings": len(entry["swings"]), "counts": dict(entry["counts"])}
-                    for entry in self._data["rungs"]
-                ],
-            }
+            return progress_from_state(self._data)
 
     def to_dict(self) -> dict:
         """A copy of the saved study: what ``STATE_NAME`` holds."""
@@ -620,3 +581,77 @@ def judge_swing(  # pylint: disable=too-many-arguments
         ),
         "judged_against": {"rung_id": rung_id, "exposure_us": int(exposure_us), "gain": gain},
     }
+
+
+def _runnable_rungs(data: Mapping) -> list[Mapping]:
+    return [rung for rung in data["rungs"] if rung["status"] != "skipped"]
+
+
+def progress_from_state(data: Mapping) -> dict:
+    """What the kiosk band and the tester page show, from a study (``STATE_NAME``).
+
+    ``text`` is the one line: ``Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6``
+    on the ladder, ``Automatic exposure`` after it.
+    """
+    phase = data["phase"]
+    runnable = _runnable_rungs(data)
+    active = next((rung for rung in runnable if rung["status"] == "active"), None)
+    if phase != "ladder":
+        active = None
+    per_rung = int(data["swings_per_rung"])
+    rung, index = None, None
+    if active is not None:
+        index = runnable.index(active) + 1
+        done = len(active["swings"])
+        rung = {
+            "rung_id": active["rung_id"],
+            "exposure_us": active["exposure_us"],
+            "gain": active["gain"],
+            "swings_done": done,
+        }
+        text = (
+            f"Exposure study: {active['exposure_us']} µs · swing "
+            f"{min(done + 1, per_rung)} of {per_rung} · setting {index} of {len(runnable)}"
+        )
+    elif phase == "automatic":
+        text = "Automatic exposure"
+    elif phase == "starting":
+        text = "Exposure study: starting"
+    else:
+        text = "Exposure study: camera unavailable"
+    return {
+        "phase": phase,
+        "ladder_status": data.get("ladder_status"),
+        "resolution": dict(data["resolution"]),
+        "text": text,
+        "changing": bool(data.get("changing")),
+        "rung": rung,
+        "setting_index": index,
+        "settings_total": len(runnable),
+        "swings_per_rung": per_rung,
+        "rungs": [
+            {
+                key: entry.get(key)
+                for key in ("rung_id", "exposure_us", "gain", "status", "skip_reason")
+            }
+            | {
+                "swings": len(entry.get("swings") or []),
+                "counts": dict(entry.get("counts") or _counts([])),
+            }
+            for entry in data["rungs"]
+        ],
+        "automatic_counts": dict((data.get("automatic") or {}).get("counts") or _counts([])),
+    }
+
+
+def progress_from_plan(plan: Mapping) -> dict:
+    """Before the kiosk has written its study: the plan, waiting for the camera."""
+    return progress_from_state(
+        {
+            "phase": "starting",
+            "ladder_status": "starting" if plan.get("status") == "ready" else plan.get("status"),
+            "resolution": plan["resolution"],
+            "swings_per_rung": plan.get("swings_per_rung") or SWINGS_PER_RUNG,
+            "rungs": [{**rung, "swings": []} for rung in plan["rungs"]],
+        }
+    )

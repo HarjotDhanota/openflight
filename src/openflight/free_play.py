@@ -12,7 +12,7 @@ from pathlib import Path
 from flask import jsonify, request
 
 from openflight import session_bundle
-from openflight.camera import session_review_routes as review
+from openflight.camera import free_play_ladder, session_review_routes as review
 
 
 class FreePlayController:
@@ -33,8 +33,13 @@ class FreePlayController:
         temporary.write_text(json.dumps(self.run, indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
 
-    def begin(self, tester_id, run_id, run_dir, geometry_unverified=False):
-        """Record the new capture identity before its child process starts."""
+    def begin(  # pylint: disable=too-many-arguments
+        self, tester_id, run_id, run_dir, geometry_unverified=False, resolution=None
+    ):
+        """Record the new capture identity before its child process starts.
+
+        ``resolution`` is the mode the tester tapped (``free_play_ladder.resolution``).
+        """
         with self.lock:
             if self.run and self.run["phase"] in {"recording", "stopping", "packaging"}:
                 raise RuntimeError("free play is already active")
@@ -46,6 +51,7 @@ class FreePlayController:
                 "phase": "recording",
                 "bundle": None,
                 "geometry_unverified": geometry_unverified,
+                "resolution": resolution,
                 "error": None,
             }
             self._save()
@@ -60,7 +66,26 @@ class FreePlayController:
                 self.run["run_id"],
             ):
                 raise ValueError("free-play request belongs to another run")
-            return dict(self.run)
+            return {**self.run, "exposure_study": self._exposure_study()}
+
+    def _exposure_study(self):
+        """The kiosk's exposure-study progress, read from the run folder.
+
+        The kiosk writes the study as it goes; before it has, the tester server's
+        plan shows as starting. None for a run without one (an older run).
+        """
+        run_dir = Path(self.run["run_dir"])
+        for name, read in (
+            (free_play_ladder.STATE_NAME, free_play_ladder.progress_from_state),
+            (free_play_ladder.PLAN_NAME, free_play_ladder.progress_from_plan),
+        ):
+            try:
+                return read(json.loads((run_dir / name).read_text(encoding="utf-8")))
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                return {"phase": "unreadable", "text": f"Exposure study unreadable: {error}"}
+        return None
 
     def capture_finished(self, run_id, returncode):
         """Release recording state after an exit, retaining any finished bundle."""

@@ -4,14 +4,21 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from flask import Flask
 
 from openflight import free_play, server
-from openflight.camera import tester_server as ts
-from tests.test_tester_server import TESTER_SETUP, eligible_app, params, setup_saw_ball
+from openflight.camera import free_play_ladder as fpl, tester_server as ts
+from tests.test_tester_server import (
+    SETUP_BALL_PX,
+    TESTER_SETUP,
+    eligible_app,
+    params,
+    setup_saw_ball,
+)
 
 
 def test_free_play_command_uses_automatic_exposure_and_opens_the_kiosk(tmp_path):
@@ -75,6 +82,7 @@ def test_free_play_starts_without_a_gain_screen_or_ladder(
             "tester_id": "20260922-name",
             "arm_id": "arm1",
             "environment": "indoors",
+            "resolution": default_arm,
         },
     )
     assert response.status_code == 202, response.get_json()
@@ -512,3 +520,179 @@ def test_stop_reaches_the_kiosk_on_its_configured_port(tmp_path, monkeypatch):
 def test_the_tester_server_points_free_play_at_the_kiosk_web_port(tmp_path):
     app = eligible_app(sessions_root=tmp_path, manager=Jobs())
     assert app.extensions["openflight_free_play"].kiosk_port == ts.KIOSK_WEB_PORT
+
+
+# --- the resolution tap and free play's exposure ladder (19 Oct) ------------------------
+
+LOCK = {
+    "applied_exposure_us": 150.0,
+    "applied_gain": 4.0,
+    "observation": {"light_index_dn_per_us_gain": 0.25},
+}
+
+
+def setup_locked_ball(root, tester="20260922-name", arms=("arm5",)):
+    """A finished setup whose camera locked the resting ball: its light is measured."""
+    from openflight import tee_range, tee_range_setup  # pylint: disable=import-outside-toplevel
+
+    candidates = [
+        tee_range.TeeRangeCandidate(
+            candidate_id=f"camera-setup-1-{arm}",
+            source="camera_reference_ball_size_range",
+            source_group="camera",
+            radar_slant_range_m=None,
+            uncertainty_m=None,
+            selectable=False,
+            evidence={
+                "result": {"status": "selected", "selected": SETUP_BALL_PX},
+                "static_exposure_lock": LOCK,
+            },
+        )
+        for arm in arms
+    ]
+    solution = tee_range.TeeRangeSolution.unresolved(
+        candidates, reason="qualification_artifact_missing"
+    )
+    epoch = tee_range_setup.TeeRangeEvidenceEpoch(
+        epoch_id="setup-1", created_at_utc="2026-09-29T18:00:00Z", solution=solution
+    )
+    tee_range_setup.write_epoch(root / tester, epoch, make_current=True)
+
+
+def free_play_app(tmp_path, modes=("arm5", "arm6"), default_arm="arm5", ladder=None):
+    setup_locked_ball(tmp_path)
+    catalogue = ts.lens_profiles.load_catalogue()
+    settings_path = tmp_path / "lens-settings.json"
+    store = ts.lens_profiles.LensSettingsStore(settings_path, catalogue)
+    settings = {"modes": list(modes), "default_arm": default_arm}
+    if ladder is not None:
+        settings["ladder"] = ladder
+    store.save_settings(catalogue.reference_lens_id, settings)
+    manager = Jobs()
+    app = eligible_app(sessions_root=tmp_path, manager=manager, lens_settings_path=settings_path)
+    return app, manager
+
+
+def start_free_play(app, **extra):
+    return app.test_client().post(
+        "/api/tester/run",
+        json={
+            "action": "free_play",
+            "tester_id": "20260922-name",
+            "arm_id": "arm1",
+            "environment": "indoors",
+            **extra,
+        },
+    )
+
+
+def test_free_play_waits_for_the_tester_to_tap_a_resolution(tmp_path):
+    app, manager = free_play_app(tmp_path)
+
+    response = start_free_play(app)
+
+    assert response.status_code == 400
+    assert "resolution" in response.get_json()["error"]
+    assert not manager.calls
+
+
+def test_a_resolution_the_lens_disables_is_refused(tmp_path):
+    app, manager = free_play_app(tmp_path, modes=("arm5",))
+
+    response = start_free_play(app, resolution="arm6")
+
+    assert response.status_code == 400
+    assert "640" in response.get_json()["error"]
+    assert not manager.calls
+
+
+@pytest.mark.parametrize("arm_id,width,first", [("arm5", "1280", 300), ("arm6", "640", 300)])
+def test_the_tapped_resolution_runs_its_ladder_from_the_first_rung(tmp_path, arm_id, width, first):
+    app, manager = free_play_app(tmp_path, ladder={"arm5": [300, 150, 75], "arm6": [300, 75]})
+
+    response = start_free_play(app, resolution=arm_id)
+
+    assert response.status_code == 202, response.get_json()
+    command = manager.calls[0][1][0]
+    assert command[command.index("--camera-capture-width") + 1] == width
+    # the ladder holds each rung's controls: the kiosk starts at the first, not 8 us x 1
+    assert "--camera-capture-manual-exposure" in command
+    assert command[command.index("--camera-capture-exposure-us") + 1] == str(first)
+    assert float(command[command.index("--camera-capture-gain") + 1]) >= 1.0
+    plan_path = Path(command[command.index("--free-play-ladder") + 1])
+    run_dir = Path(command[command.index("--log-dir") + 1])
+    assert plan_path == run_dir / fpl.PLAN_NAME
+    plan = json.loads(plan_path.read_text())
+    assert plan["resolution"]["arm_id"] == arm_id
+    assert plan["rungs"][0]["exposure_us"] == first
+    assert plan["startup"]["source"] == "first_rung"
+    assert plan["resolution_choice"]["confirmed_by"] == "tester_tap"
+    assert plan["resolution_choice"]["lens_default_arm"] == "arm5"
+    state = response.get_json()["free_play"]
+    assert state["resolution"]["arm_id"] == arm_id
+    assert state["exposure_study"]["phase"] == "starting"
+
+
+def test_a_ladder_the_light_cannot_run_starts_automatic_from_the_policy_seed(tmp_path, monkeypatch):
+    app, manager = free_play_app(tmp_path)
+    monkeypatch.setattr(
+        ts, "setup_light_warning", lambda _solution: {"light_index_dn_per_us_gain": 0.00001}
+    )
+
+    response = start_free_play(app, resolution="arm5")
+
+    assert response.status_code == 202, response.get_json()
+    command = manager.calls[0][1][0]
+    assert "--camera-capture-manual-exposure" not in command
+    exposure = int(command[command.index("--camera-capture-exposure-us") + 1])
+    gain = float(command[command.index("--camera-capture-gain") + 1])
+    assert exposure * gain > 8.0 * 1.0  # never the near-black startup
+    plan = json.loads(Path(command[command.index("--free-play-ladder") + 1]).read_text())
+    assert plan["status"] == "not_run"
+
+
+def test_free_play_without_a_plan_never_starts_near_black(tmp_path):
+    commands, _ = ts.action_commands(
+        "free_play",
+        params(arm_id="arm5"),
+        tmp_path,
+        ts.DEFAULT_RIG_GEOMETRY,
+        tester_setup=TESTER_SETUP,
+    )
+    command = commands[0]
+    exposure = int(command[command.index("--camera-capture-exposure-us") + 1])
+    gain = float(command[command.index("--camera-capture-gain") + 1])
+    assert (exposure, gain) != (8, 1.0)
+    assert exposure == 294
+
+
+def test_the_tester_status_shows_the_kiosks_exposure_study(tmp_path):
+    run = tmp_path / "tester" / "arm5" / "paired" / "run-01"
+    run.mkdir(parents=True)
+    controller = free_play.FreePlayController(tmp_path, Jobs(), Jobs(), kiosk_port=8080)
+    built = fpl.build_plan(
+        "arm5",
+        [300, 150],
+        light_index=0.25,
+        sensor_limits=None,
+        gain_basis={"source": "setup_lock", "signal_us": 600.0},
+    )
+    fpl.write_json(run / fpl.PLAN_NAME, built)
+    controller.begin("tester", "one", run, resolution=built["resolution"])
+    assert controller.status()["exposure_study"]["text"] == "Exposure study: starting"
+
+    study = fpl.FreePlayExposureStudy(
+        built,
+        run / fpl.STATE_NAME,
+        apply_controls=lambda *_: None,
+        begin_automatic=lambda: None,
+        run_async=lambda work: work(),
+        settle_s=0.0,
+    )
+    study.on_shot(1)
+    study.record_verdict(1, {"status": "judged", "color": "green"})
+
+    shown = controller.status()["exposure_study"]
+    assert shown["text"] == "Exposure study: 300 µs · swing 2 of 5 · setting 1 of 2"
+    assert shown["rungs"][0]["counts"]["green"] == 1
+    assert controller.status()["resolution"]["label"] == "1280×800"

@@ -41,6 +41,7 @@ from openflight.camera import (
     ball_pixels,
     camera_roll,
     camera_tilt,
+    free_play_ladder,
     ground_patch,
     lens_profiles,
     patch_pairing,
@@ -2177,6 +2178,82 @@ def ladder_gain_basis(
     }
 
 
+def free_play_startup(arm: Arm, plan: Mapping | None) -> dict:
+    """The controls free play's kiosk starts at: the plan's, never a near-black 8 us x 1.
+
+    Without a plan (an older caller) the camera starts at the mode's blur ceiling at
+    unity gain, labelled, and the automatic exposure takes it from there.
+    """
+    if plan is not None and isinstance(plan.get("startup"), Mapping):
+        return dict(plan["startup"])
+    config = swing_exposure.load_config()
+    mode = swing_exposure.mode_for_size(arm.width, arm.height, config)
+    return {
+        "exposure_us": swing_exposure.blur_ceiling_us(config, mode),
+        "gain": free_play_ladder.NO_LIGHT_STARTUP_GAIN,
+        "source": "no_plan_blur_ceiling",
+    }
+
+
+FREE_PLAY_RESOLUTION_MISSING = (
+    "Tap a resolution for this session (1280×800 or 640×400), then start free play."
+)
+
+
+def free_play_resolution(payload: Mapping | None, lens_settings: Mapping) -> str:
+    """The resolution the tester tapped, if the fitted lens enables it (19 Oct).
+
+    There is no default here: the page offers the lens's default, and the tester
+    confirms it by tapping. A resolution the lens disables is refused.
+    """
+    chosen = (payload or {}).get("resolution")
+    if chosen in (None, ""):
+        raise ValueError(FREE_PLAY_RESOLUTION_MISSING)
+    if chosen not in study_ladder.RUNG_FPS:
+        raise ValueError(f"unknown resolution {chosen!r}: tap 1280×800 or 640×400")
+    if chosen not in lens_settings["modes"]:
+        offered = " or ".join(ARM_SIZES[arm] for arm in lens_settings["modes"])
+        raise ValueError(f"this lens does not run {ARM_SIZES[chosen]}; tap {offered}")
+    return str(chosen)
+
+
+def free_play_plan(
+    sessions_root: Path,
+    params: TesterParameters,
+    solution: tee_range.TeeRangeSolution | None,
+    lens_id: str,
+    lens_settings: Mapping,
+) -> dict:
+    """Free play's exposure ladder at the tapped resolution, decided before any swing.
+
+    The rungs are the lens settings' for the mode; the light, the setup lock and
+    the sensor's recorded limits decide which run and at what gain.
+    """
+    arm_id = params.arm_id
+    basis = ladder_gain_basis(solution, arm_id, {})
+    gain_at_300 = None
+    if basis is None:
+        try:
+            gain_at_300 = float(ladder_gain_facts(sessions_root, params)["gain_at_300_equivalent"])
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+            gain_at_300 = None  # no gain screen either: the plan says no rung can run
+    return free_play_ladder.build_plan(
+        arm_id,
+        list(lens_settings["ladder"][arm_id]),
+        light_index=setup_light_warning(solution).get("light_index_dn_per_us_gain"),
+        sensor_limits=recorded_sensor_limits().get(arm_id),
+        gain_basis=basis,
+        gain_at_300=gain_at_300,
+        resolution_choice={
+            "arm_id": arm_id,
+            "confirmed_by": "tester_tap",
+            "lens_id": lens_id,
+            "lens_default_arm": lens_settings["default_arm"],
+            "enabled_modes": list(lens_settings["modes"]),
+        },
+    )
+
+
 def next_run_directory(arm_dir: Path) -> Path:
     """Each capture run gets its own folder: a new kiosk is a new session.
 
@@ -2197,7 +2274,7 @@ def _discard_unstarted_run(run_dir: Path) -> None:
     It is removed only while it holds nothing but the admission records written
     for that start; anything else means a kiosk wrote there, and it stays.
     """
-    admission_files = {"setup_admission.json", "tee_range.json"}
+    admission_files = {"setup_admission.json", "tee_range.json", free_play_ladder.PLAN_NAME}
     try:
         contents = list(run_dir.iterdir()) if run_dir.is_dir() else None
         if contents is None or not all(
@@ -2275,8 +2352,13 @@ def action_commands(
     zone_box: Sequence[int] | None = None,
     ball_box: Sequence[int] | None = None,
     light_index_dn_per_us_gain: float | None = None,
+    free_play_plan: Mapping | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
+
+    ``free_play_plan`` (``free_play_ladder.build_plan``) is free play's exposure
+    ladder at the tapped resolution: the kiosk starts at its startup controls,
+    held (manual) while a ladder runs, and reads the plan from the run folder.
 
     ``handed_to_swings`` (from ``tee_range_handoff``) supplies the tee-range
     arguments, so the kiosk runs with exactly what the tester records.
@@ -2374,9 +2456,14 @@ def action_commands(
             ]
         ]
     else:
-        gain, exposure_us = (
-            (1.0, 8) if action == "free_play" else resolve_gain(sessions_root, params)
-        )
+        if action == "free_play":
+            startup = free_play_startup(arm, free_play_plan)
+            gain, exposure_us = startup["gain"], startup["exposure_us"]
+            # the ladder holds each rung's controls; without one the policy runs at once
+            held = bool(free_play_plan and free_play_plan.get("status") == "ready")
+        else:
+            gain, exposure_us = resolve_gain(sessions_root, params)
+            held = True
         commands = [
             [
                 "bash",
@@ -2385,7 +2472,7 @@ def action_commands(
                 radar_port,
                 "--club",
                 CLUB,
-                *([] if action == "free_play" else ["--camera-capture-manual-exposure"]),
+                *(["--camera-capture-manual-exposure"] if held else []),
                 "--debug",
                 "--iwr6843",
                 *tee_range_args,
@@ -2418,6 +2505,11 @@ def action_commands(
             commands[0].append("--tester-free-play")
             if light_index_dn_per_us_gain is not None:
                 commands[0].extend(["--camera-light-index", str(light_index_dn_per_us_gain)])
+            if free_play_plan is not None:
+                run_dir = Path(commands[0][commands[0].index("--log-dir") + 1])
+                commands[0].extend(
+                    ["--free-play-ladder", str(run_dir / free_play_ladder.PLAN_NAME)]
+                )
         else:
             commands[0].insert(2, "--no-browser")
         if ball_box is not None:
@@ -10116,9 +10208,12 @@ def create_app(
         try:
             params = TesterParameters.from_payload(payload)
             action = str((payload or {}).get("action", ""))
+            lens_id = lens_settings = None
             if action == "free_play":
+                # one resolution per session, tapped by the tester (19 Oct)
                 lens_id = lens_store.selected() or lens_catalogue.reference_lens_id
-                params = replace(params, arm_id=lens_store.settings(lens_id)["default_arm"])
+                lens_settings = lens_store.settings(lens_id)
+                params = replace(params, arm_id=free_play_resolution(payload, lens_settings))
             operator_reset = (payload or {}).get("operator_reset")
             if operator_reset is not None and not isinstance(operator_reset, bool):
                 raise ValueError("operator_reset must be true, false or absent")
@@ -10165,6 +10260,11 @@ def create_app(
                 if action in {"swings", "free_play"}
                 else None
             )
+            plan = (
+                free_play_plan(sessions_root, params, solution, lens_id, lens_settings)
+                if action == "free_play"
+                else None
+            )
             commands, log_path = action_commands(
                 action,
                 params,
@@ -10189,6 +10289,7 @@ def create_app(
                 ball_box=kiosk_ball_box(params.tester_id, eligibility, params.arm)
                 if action in {"swings", "free_play"}
                 else None,
+                free_play_plan=plan,
             )
             run_id = None
             if action == "free_play":
@@ -10211,10 +10312,11 @@ def create_app(
             if busy:
                 raise RuntimeError(busy)
             release_static_radar()  # before anything is written: it can refuse
-            if action in {"swings", "free_play"}:
-                gain, exposure_us = (
-                    (1.0, 8) if action == "free_play" else resolve_gain(sessions_root, params)
-                )
+            if action == "free_play":
+                startup = free_play_startup(params.arm, plan)
+                gain, exposure_us = startup["gain"], startup["exposure_us"]
+            elif action == "swings":
+                gain, exposure_us = resolve_gain(sessions_root, params)
             if action == "gain":
                 on_finish = lambda _a, rc: record_gain(params, box) if rc == 0 else None  # noqa: E731
             elif action in {"swings", "free_play"}:
@@ -10249,6 +10351,9 @@ def create_app(
                         tee_range.write_solution(
                             run_dir / "tee_range.json", solution, handed_to_swings=handed
                         )
+                        if plan is not None:
+                            # the kiosk reads it at startup (--free-play-ladder)
+                            free_play_ladder.write_json(run_dir / free_play_ladder.PLAN_NAME, plan)
                     active_runtime_dir["path"] = run_dir
                 if action == "free_play":
                     free_play.begin(
@@ -10256,6 +10361,7 @@ def create_app(
                         run_id,
                         run_dir,
                         "--tester-geometry-unverified" in commands[0],
+                        resolution=plan["resolution"],
                     )
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
