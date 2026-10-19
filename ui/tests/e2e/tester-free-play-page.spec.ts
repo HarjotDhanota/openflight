@@ -11,8 +11,11 @@ const VIEWPORTS = [
   { width: 800, height: 480 },
 ] as const;
 
-const SHOTS =
-  'C:/Users/harjo/AppData/Local/Temp/claude/c--Users-harjo-Desktop-Coding-OpenFlight/0608e493-7d29-4601-be36-e4653bd9f5ae/scratchpad/free-play-page';
+/** Screenshots go to the test's output folder, or to FREE_PLAY_PAGE_SHOTS_DIR when set. */
+function shotPath(name: string) {
+  const dir = process.env.FREE_PLAY_PAGE_SHOTS_DIR;
+  return dir ? `${dir}/${name}` : test.info().outputPath(name);
+}
 
 async function fulfillJson(route: Route, payload: object, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) });
@@ -165,7 +168,7 @@ for (const viewport of VIEWPORTS) {
       await page.locator('#free-play-resolution button[data-resolution="arm6"]').tap();
       await page.locator('#step-7').scrollIntoViewIfNeeded();
       await summary.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${SHOTS}/free-play-idle-${viewport.width}x${viewport.height}.png` });
+      await page.screenshot({ path: shotPath(`free-play-idle-${viewport.width}x${viewport.height}.png`) });
 
       // the advanced section still opens, and its controls are still there
       await summary.tap();
@@ -194,7 +197,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator('#stepbar-step')).toHaveText('Step 7 · Free play');
       await expect(page.locator('#ready-light')).toHaveAttribute('data-state', 'green');
       await page.locator('#free-play-rungs').scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${SHOTS}/free-play-recording-${viewport.width}x${viewport.height}.png` });
+      await page.screenshot({ path: shotPath(`free-play-recording-${viewport.width}x${viewport.height}.png`) });
     });
 
     test('the sticky band and the “You are here” bar always name the same step', async ({ page }) => {
@@ -204,11 +207,11 @@ for (const viewport of VIEWPORTS) {
       await page.goto('/tester.html');
 
       await expectAgreeAt(page, 2, 'Check the setup');
-      await page.screenshot({ path: `${SHOTS}/band-step2-${viewport.width}x${viewport.height}.png` });
+      await page.screenshot({ path: shotPath(`band-step2-${viewport.width}x${viewport.height}.png`) });
 
       world.eligible = true;
       await expectAgreeAt(page, 4, 'Aim at your target');
-      await page.screenshot({ path: `${SHOTS}/band-step4-${viewport.width}x${viewport.height}.png` });
+      await page.screenshot({ path: shotPath(`band-step4-${viewport.width}x${viewport.height}.png`) });
 
       world.aim = 'skipped';
       await expectAgreeAt(page, 5, 'Hardware and light');
