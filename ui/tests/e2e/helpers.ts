@@ -421,4 +421,19 @@ export async function rectOf(page: Page, selector: string) {
   }, selector);
 }
 
+/**
+ * Opens the tester page's "Advanced: manual exposure ladder (maintainer)" section on
+ * every load, as a maintainer working the manual ladder does. The section holds the
+ * manual ladder, its verdict card and the capture-rate tally, and is closed by default
+ * since free play runs the exposure study itself.
+ */
+export async function keepManualLadderOpen(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const section = document.getElementById('advanced-ladder') as HTMLDetailsElement | null;
+      if (section) section.open = true;
+    });
+  });
+}
+
 export { expect };

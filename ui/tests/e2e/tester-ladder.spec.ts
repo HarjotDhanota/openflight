@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
+import { KIOSK_VIEWPORTS, keepManualLadderOpen, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
 
 test.use({ hasTouch: true });
 
 test.beforeEach(async ({ page }) => {
+  // the manual ladder's controls sit in the closed maintainer section
+  await keepManualLadderOpen(page);
   await useTester(page);
 });
 

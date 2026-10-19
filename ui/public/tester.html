@@ -111,12 +111,14 @@
       summary {
         min-height: 44px;
       }
-      .advanced-tools {
+      .advanced-tools,
+      .advanced-ladder {
         margin-top: 24px;
         border-top: 1px solid var(--line);
         padding-top: 8px;
       }
-      .advanced-tools > summary {
+      .advanced-tools > summary,
+      .advanced-ladder > summary {
         display: flex;
         align-items: center;
         cursor: pointer;
@@ -1725,88 +1727,93 @@
         <p class="note" id="free-play-status" role="status">Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
         <p class="free-play-study" id="free-play-study" role="status" hidden></p>
         <ul class="free-play-rungs" id="free-play-rungs" aria-label="Exposure study settings" hidden></ul>
-        <div class="verdict-card" id="verdict-card" data-color="none" aria-live="polite">
-          <div class="verdict-card__head">
-            <strong class="verdict-card__word" id="verdict-word">No swing judged yet</strong>
-            <span class="verdict-card__setting" id="verdict-setting"></span>
-          </div>
-          <div class="verdict-card__nums" id="verdict-nums"></div>
-          <ul class="verdict-card__reasons" id="verdict-reasons"></ul>
-          <p class="verdict-card__light" id="verdict-light-label" hidden></p>
-          <div class="kiosk-shot" id="kiosk-shot" aria-live="polite"></div>
-        </div>
         <p class="address" id="address-status" data-state="unknown" role="status"></p>
         <div class="live-metrics" id="live-metrics" hidden></div>
-        <div class="ladder-now" id="ladder-panel"></div>
-        <div id="ladder-controls">
-        <h3 class="sub">Exposure ladder (advanced)</h3>
-        <p class="note" id="ladder-light-warning" role="status" hidden></p>
-        <p class="note" id="ladder-kiosk-mark" role="status" hidden></p>
-        <p class="note" id="ladder-source"></p>
-        <div class="ladder-choice" id="ladder-choice"></div>
-        <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
-        <button type="button" class="primary" id="step-ladder">Start the exposure ladder</button>
-        <h3 class="sub">Switch to a setting now</h3>
-        <p class="note">Tap a setting to switch to it now, ticked or not. The ticked order carries on after it.</p>
-        <div class="ladder-jump" id="ladder-jump"></div>
-        <p class="problem" id="ladder-jump-error" role="alert" hidden></p>
-        <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
-          <img id="face-preview" alt="Camera preview" style="width: 100%; display: block" />
-          <div
-            style="position: absolute; left: 45%; top: 35%; width: 10%; height: 22%; border: 2px dashed #ffd400"
-          ></div>
-        </div>
-        <div class="photo-handoff" id="photo-handoff" hidden>
-          <p id="photo-message"></p>
-          <p class="problem" id="photo-error" role="alert" hidden></p>
-          <div class="photo-actions">
-            <button type="button" id="photo-pause">Pause ladder</button>
-            <button type="button" id="step-photo">Photograph face</button>
-            <button type="button" id="photo-skip">Skip photo</button>
+        <!-- 19 Oct: free play runs the exposure study by itself; the manual ladder and its
+             per-swing verdict are maintainer tools, folded away and closed by default -->
+        <details class="advanced-ladder" id="advanced-ladder">
+          <summary>Advanced: manual exposure ladder (maintainer)</summary>
+          <div class="verdict-card" id="verdict-card" data-color="none" aria-live="polite">
+            <div class="verdict-card__head">
+              <strong class="verdict-card__word" id="verdict-word">No swing judged yet</strong>
+              <span class="verdict-card__setting" id="verdict-setting"></span>
+            </div>
+            <div class="verdict-card__nums" id="verdict-nums"></div>
+            <ul class="verdict-card__reasons" id="verdict-reasons"></ul>
+            <p class="verdict-card__light" id="verdict-light-label" hidden></p>
+            <div class="kiosk-shot" id="kiosk-shot" aria-live="polite"></div>
           </div>
-        </div>
-        <p class="note">
-          Before each 1280×800 swing, spray the face. After it, hold the face about 0.5 m from the lens inside the
-          dashed box, press <strong>Photograph face</strong>, then wipe it.
-        </p>
-        <details class="attempts" id="attempts">
-          <summary>Measure capture rate (optional)</summary>
-          <p class="note">
-            Not needed for the ladder: every swing is captured and judged automatically. Use this only when asked to
-            count your swings, to measure how often the system misses one.
-          </p>
-          <div class="attempt-scope">
-            <label
-              >Run<select id="attempt-run">
-                <option value="">No saved run</option>
-              </select></label
-            >
-            <button type="button" id="attempt-refresh">Refresh</button>
+          <div class="ladder-now" id="ladder-panel"></div>
+          <div id="ladder-controls">
+          <h3 class="sub">Exposure ladder (advanced)</h3>
+          <p class="note" id="ladder-light-warning" role="status" hidden></p>
+          <p class="note" id="ladder-kiosk-mark" role="status" hidden></p>
+          <p class="note" id="ladder-source"></p>
+          <div class="ladder-choice" id="ladder-choice"></div>
+          <p class="note" id="ladder-choice-hint" hidden>The ladder is running: press Stop to change the settings.</p>
+          <button type="button" class="primary" id="step-ladder">Start the exposure ladder</button>
+          <h3 class="sub">Switch to a setting now</h3>
+          <p class="note">Tap a setting to switch to it now, ticked or not. The ticked order carries on after it.</p>
+          <div class="ladder-jump" id="ladder-jump"></div>
+          <p class="problem" id="ladder-jump-error" role="alert" hidden></p>
+          <div id="face-guide" hidden style="position: relative; width: 640px; max-width: 100%">
+            <img id="face-preview" alt="Camera preview" style="width: 100%; display: block" />
+            <div
+              style="position: absolute; left: 45%; top: 35%; width: 10%; height: 22%; border: 2px dashed #ffd400"
+            ></div>
           </div>
-          <p class="note" id="attempt-scope">Start or select an exact saved run.</p>
-          <div class="attempt-actions">
-            <button type="button" class="primary" id="attempt-swing">Record swing</button>
-            <button type="button" id="attempt-missed">Record missed shot</button>
+          <div class="photo-handoff" id="photo-handoff" hidden>
+            <p id="photo-message"></p>
+            <p class="problem" id="photo-error" role="alert" hidden></p>
+            <div class="photo-actions">
+              <button type="button" id="photo-pause">Pause ladder</button>
+              <button type="button" id="step-photo">Photograph face</button>
+              <button type="button" id="photo-skip">Skip photo</button>
+            </div>
           </div>
           <p class="note">
-            <strong>Record each physical swing once:</strong> use Record swing OR Record missed shot.
+            Before each 1280×800 swing, spray the face. After it, hold the face about 0.5 m from the lens inside the
+            dashed box, press <strong>Photograph face</strong>, then wipe it.
           </p>
-          <button type="button" id="attempt-retry" hidden>Retry unresolved entry</button>
-          <div class="attempt-counts" id="attempt-counts"></div>
-          <p class="note" id="attempt-reconciliation">Reconciliation has not started.</p>
-          <div class="attempt-advanced">
-            <label
-              >Other event<select id="attempt-kind">
-                <option value="warmup">Warm-up</option>
-                <option value="false_trigger">False trigger</option>
-              </select></label
-            >
-            <button type="button" id="attempt-other">Add event</button>
-            <button type="button" id="attempt-undo">Undo last</button>
+          <details class="attempts" id="attempts">
+            <summary>Measure capture rate (optional)</summary>
+            <p class="note">
+              Not needed for the ladder: every swing is captured and judged automatically. Use this only when asked to
+              count your swings, to measure how often the system misses one.
+            </p>
+            <div class="attempt-scope">
+              <label
+                >Run<select id="attempt-run">
+                  <option value="">No saved run</option>
+                </select></label
+              >
+              <button type="button" id="attempt-refresh">Refresh</button>
+            </div>
+            <p class="note" id="attempt-scope">Start or select an exact saved run.</p>
+            <div class="attempt-actions">
+              <button type="button" class="primary" id="attempt-swing">Record swing</button>
+              <button type="button" id="attempt-missed">Record missed shot</button>
+            </div>
+            <p class="note">
+              <strong>Record each physical swing once:</strong> use Record swing OR Record missed shot.
+            </p>
+            <button type="button" id="attempt-retry" hidden>Retry unresolved entry</button>
+            <div class="attempt-counts" id="attempt-counts"></div>
+            <p class="note" id="attempt-reconciliation">Reconciliation has not started.</p>
+            <div class="attempt-advanced">
+              <label
+                >Other event<select id="attempt-kind">
+                  <option value="warmup">Warm-up</option>
+                  <option value="false_trigger">False trigger</option>
+                </select></label
+              >
+              <button type="button" id="attempt-other">Add event</button>
+              <button type="button" id="attempt-undo">Undo last</button>
+            </div>
+            <p class="problem" id="attempt-error" role="alert" hidden></p>
+          </details>
           </div>
-          <p class="problem" id="attempt-error" role="alert" hidden></p>
         </details>
-        </div>
       </section>
 
       <section class="step" id="step-8" data-step="8">
@@ -5246,6 +5253,18 @@
         return rows.join('');
       }
 
+      // The manual ladder lives in a closed “Advanced” section (19 Oct). A manual ladder
+      // that starts walking, or waits for its face photo, opens it once, so a maintainer
+      // who reloads mid-ladder still sees its controls; free play never opens it.
+      let manualLadderShown = false;
+      function revealManualLadder(walking) {
+        const freePlayActive =
+          Boolean(freePlayState?.enabled) &&
+          ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(freePlayState.phase);
+        if (walking && !manualLadderShown && !freePlayActive) el('advanced-ladder').open = true;
+        manualLadderShown = walking;
+      }
+
       function renderLadder(s) {
         const l = s.ladder,
           v = s.last_verdict;
@@ -5270,6 +5289,7 @@
           return;
         }
         ladderRunning = s.stopped === false && Boolean(l.current || l.pending_photo);
+        revealManualLadder(ladderRunning || Boolean(l.pending_photo));
         ladderFinished =
           !l.current && !l.pending_photo && Object.values(l.rungs).some((rung) => rung.status === 'done');
         renderLadderChoice(l.rungs, s.stopped === false);
@@ -6210,11 +6230,17 @@
         for (let step = 1; step <= 8; step += 1) {
           el(`step-${step}`).dataset.state = step === now ? 'current' : stepDone(step) ? 'done' : 'todo';
         }
-        el('stepbar-step').textContent = `Step ${now} · ${STEP_TITLES[now]}`;
+        // one label for both indicators: the “You are here” bar and the sticky band
+        const label = `Step ${now} · ${STEP_TITLES[now]}`;
+        el('stepbar-step').textContent = label;
         el('stepbar-here').dataset.step = String(now);
         // the ready band reads these: it says ready only from step 7 on
+        const changed = document.body.dataset.stepLabel !== label;
         document.body.dataset.step = String(now);
         document.body.dataset.stepTitle = STEP_TITLES[now];
+        document.body.dataset.stepLabel = label;
+        // the band redraws now, not on its next kiosk poll, so the two never disagree
+        if (changed) document.dispatchEvent(new CustomEvent('tester-step', { detail: { step: now, label } }));
         if (now !== revealedStep) {
           const first = revealedStep === null;
           revealedStep = now;
@@ -6349,18 +6375,33 @@
           if (node.textContent !== text) node.textContent = text;
         }
 
+        let lastLight = null; // the kiosk's last answer, redrawn when the step changes
+
         function render(light) {
-          // steps 1-6 are setup: whatever the kiosk says, the band never says ready there
+          // steps 1-6 are setup: whatever the kiosk says, the band never says ready there.
+          // The step and its label are the page's one current step (renderSteps), the
+          // same words the “You are here” bar shows.
           const step = Number(document.body.dataset.step || 0);
           if (!(step >= 7)) {
             band.dataset.state = 'setup';
             band.classList.add('ready-light--compact');
             setText(word, 'SETTING UP');
-            setText(cause, step ? `Step ${step} · ${document.body.dataset.stepTitle || ''}: swing from step 7` : 'Loading');
+            const label = document.body.dataset.stepLabel;
+            setText(cause, step && label ? `${label} · free play starts at step 7` : 'Loading');
             setText(swingText, '');
             flash.classList.remove('ready-light__flash--on');
             // a swing heard during setup must not flash once the swing step opens
-            if (light.swing) lastSwingId = light.swing.id;
+            if (light?.swing) lastSwingId = light.swing.id;
+            return;
+          }
+          if (!light) {
+            // the swing step before the kiosk's first answer
+            band.dataset.state = 'unknown';
+            band.classList.remove('ready-light--compact');
+            setText(word, '…');
+            setText(cause, 'Checking the kiosk');
+            setText(swingText, '');
+            flash.classList.remove('ready-light__flash--on');
             return;
           }
           const state = WORDS[light.state] ? light.state : 'red';
@@ -6400,15 +6441,20 @@
             });
             const light = await response.json();
             if (!response.ok || typeof light.state !== 'string') throw new Error(light.error || 'no light');
+            lastLight = light;
             render(light);
           } catch {
-            render({ state: 'red', cause: 'tester server not answering', time_left_s: null, swing: null });
+            lastLight = { state: 'red', cause: 'tester server not answering', time_left_s: null, swing: null };
+            render(lastLight);
           } finally {
             clearTimeout(timer);
             polling = false;
           }
         }
 
+        // the page's step changed: redraw from the last answer, without waiting for a poll
+        document.addEventListener('tester-step', () => render(lastLight));
+        render(lastLight);
         tick();
         setInterval(tick, POLL_MS);
       })();

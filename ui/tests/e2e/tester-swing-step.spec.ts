@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox, useTester } from './helpers';
+import { keepManualLadderOpen, mockConfirmedPlacementBox, useTester } from './helpers';
 
 // 13 Oct UX pass, step 7: the per-shot verdict as a big card at the top (mirrored on the
 // band), live numbers while the ladder runs, “Ready for a swing” from the ball at
@@ -9,6 +9,8 @@ import { mockConfirmedPlacementBox, useTester } from './helpers';
 test.use({ hasTouch: true });
 
 test.beforeEach(async ({ page }) => {
+  // the manual ladder's controls sit in the closed maintainer section
+  await keepManualLadderOpen(page);
   await useTester(page);
 });
 
