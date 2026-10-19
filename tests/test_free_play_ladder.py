@@ -476,3 +476,32 @@ def test_a_shot_without_a_clip_says_so():
         "ball_usable": None,
         "club_usable": None,
     }
+
+
+def test_the_setting_change_runs_off_the_shot_callback_thread(tmp_path):
+    import threading
+    import time
+
+    applied_on = []
+    done = threading.Event()
+
+    def apply(exposure_us, gain):
+        applied_on.append((threading.current_thread().name, exposure_us, gain))
+        done.set()
+
+    running = fpl.FreePlayExposureStudy(
+        plan(ladder_us=(300, 150)),
+        tmp_path / fpl.STATE_NAME,
+        apply_controls=apply,
+        begin_automatic=lambda: None,
+        settle_s=0.0,
+    )
+    for number in range(1, 6):
+        running.on_shot(number)
+
+    assert done.wait(2.0)
+    assert applied_on == [("free-play-exposure", 150, 4.0)]
+    deadline = time.monotonic() + 2.0
+    while running.progress()["changing"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert running.progress()["changing"] is False

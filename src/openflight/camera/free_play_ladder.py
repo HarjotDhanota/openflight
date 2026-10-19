@@ -273,7 +273,6 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
         self._run_async = run_async or self._thread
         self._settle_s = float(settle_s)
         self._lock = threading.RLock()
-        self._arm_id = plan["resolution"]["arm_id"]
         self._data = {
             "schema": STATE_SCHEMA,
             "run_id": run_id,
@@ -297,9 +296,13 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
             # the ready light is amber while a new setting reaches the sensor
             "changing": False,
         }
+        with self._lock:  # a hand-over started here saves from its own thread
+            self._start(plan, live_sensor_min_us)
+
+    def _start(self, plan: Mapping, live_sensor_min_us: int | None) -> None:
         if live_sensor_min_us is not None:
             self._skip_below_live_minimum(int(live_sensor_min_us))
-        if apply_controls is None or begin_automatic is None:
+        if self._apply_controls is None or self._begin_automatic is None:
             self._data.update(
                 phase="camera_unavailable",
                 ladder_status="not_run",
