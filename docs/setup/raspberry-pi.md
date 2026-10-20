@@ -223,12 +223,31 @@ error recovery, updating existing launchers, and rollback.
 The setup script installs and enables a systemd service configured for your
 username and install path.
 
+The service runs `scripts/start-kiosk.sh` with no arguments. It finds the
+OPS243 on its own: a radar on USB first, then one on the Pi GPIO UART
+(`/dev/ttyAMA0`, the J3 wiring in the [UART guide](../build/ops243-uart.md)),
+used only when the radar answers its version query there. To name the port
+yourself, see [Setting the radar port](#setting-the-radar-port).
+
+If a start fails, systemd retries it every 5 s, at most five times in five
+minutes, then stops. The journal shows the launcher's error, then
+`Start request repeated too quickly`. Fix the cause, then re-arm the service:
+
+```bash
+journalctl -u openflight -n 60 --no-pager        # why it failed
+sudo systemctl reset-failed openflight.service
+sudo systemctl start openflight.service
+```
+
 <details>
 <summary>Manual steps and service management</summary>
 
 ```bash
-# Install (adjust User= and paths in the file if your username isn't the default)
-sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
+# Install, rewriting User= and the paths for this Pi (what setup.sh does)
+sed -e "s|^User=.*|User=$USER|" \
+    -e "s|/home/coleman/openflight|$HOME/openflight|g" \
+    ~/openflight/scripts/setup/openflight.service \
+    | sudo tee /etc/systemd/system/openflight.service > /dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable openflight
 sudo systemctl start openflight
@@ -239,20 +258,69 @@ Management:
 ```bash
 sudo systemctl status openflight --no-pager   # Check status
 journalctl -u openflight -f                   # View logs
-sudo systemctl stop openflight                # Stop
+sudo systemctl stop openflight                # Stop until the next boot
 sudo systemctl restart openflight             # Restart
-sudo systemctl disable openflight             # Disable auto-start
+sudo systemctl disable --now openflight       # Stop now and turn off auto-start
 ```
 
-To modify the service:
+To modify the service, use a drop-in, which survives reinstalling the unit:
 
 ```bash
-sudo nano /etc/systemd/system/openflight.service
-sudo systemctl daemon-reload
+sudo systemctl edit openflight
 sudo systemctl restart openflight
 ```
 
 </details>
+
+#### Updating a unit installed before October 2026
+
+Units installed before the restart limits were added retry forever: one Pi
+restarted 98 times in 10 minutes when its radar could not be found, running
+`uv sync` and grabbing the hardware on every attempt. `systemctl daemon-reload`
+alone does not help, because the installed file is a copy. Reinstall it with
+the `sed ... | sudo tee` command above (or rerun `scripts/setup/setup.sh` and
+answer yes to auto-start), then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl reset-failed openflight.service
+grep StartLimit /etc/systemd/system/openflight.service   # expect two lines
+```
+
+#### Setting the radar port
+
+Detection covers the usual wirings. To name the OPS243 port explicitly (it
+always wins over detection), set `OPENFLIGHT_OPS_PORT` in a drop-in:
+
+```bash
+sudo systemctl edit openflight
+```
+
+```ini
+[Service]
+Environment=OPENFLIGHT_OPS_PORT=/dev/ttyAMA0
+```
+
+```bash
+sudo systemctl restart openflight
+```
+
+On the command line, `./scripts/start-kiosk.sh --radar-port /dev/ttyAMA0` does
+the same and beats the environment variable. On a Pi 5 use `/dev/ttyAMA0`, not
+`/dev/serial0`, which points at the separate debug-header UART.
+
+#### A unit used with the tester
+
+The tester and the kiosk service both want the camera, the radars and the
+Python environment, and `start-tester.sh` refuses to start while the service
+is running. `stop` only lasts until the next boot, so on a unit used with the
+tester turn the service off for good:
+
+```bash
+sudo systemctl disable --now openflight.service
+```
+
+Turn it back on with `sudo systemctl enable --now openflight.service`.
 
 ## Running OpenFlight
 
@@ -303,6 +371,13 @@ uv run python scripts/hardware-test/diagnose.py
 uv run python scripts/hardware-test/diagnose.py --ops-port /dev/ttyAMA0
 ```
 
+The server and kiosk look for the OPS243 on USB, then on the GPIO UART
+(`/dev/ttyAMA0`). `No OPS243 radar found on USB or on the GPIO UART` lists each
+UART it tried and why it failed; the diagnose command above checks the UART
+wiring step by step. `... and no GPIO UART was available to probe` means UART0
+is not enabled, or the kernel console owns it
+([UART guide, step 3](../build/ops243-uart.md#3-prepare-the-pi-uart)).
+
 ### Sound Trigger Not Working
 
 See the [Sound Trigger Wiring Guide — Troubleshooting](../build/sound-trigger.md#troubleshooting).
@@ -336,7 +411,7 @@ sudo systemctl status openflight --no-pager   # "activating (auto-restart)" = lo
 journalctl -u openflight -n 40 --no-pager     # the recovery hint is printed here
 ```
 
-Fix whatever the journal reports, or `sudo systemctl disable openflight` if
+Fix whatever the journal reports, or `sudo systemctl disable --now openflight` if
 you launch from the desktop instead. Current launchers refuse to start while
 another instance holds `/tmp/openflight-kiosk-<port>.lock` (exit code 3) and
 only ever stop the browser they started, so an old unit file is the one thing

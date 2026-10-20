@@ -34,7 +34,10 @@ dump is 40,556 bytes:
 
 So `connect()` probes for the rate the board is actually talking at and raises
 it to 230,400. You don't have to configure this; it happens automatically when
-`--radar-port` names a UART device. Everything else — the sound trigger, the
+`--radar-port` names a UART device, or when no port is given and no OPS243 is
+on USB: the driver then probes `/dev/ttyAMA0` and uses it if the radar answers
+there. That is how the boot service (`openflight.service`, which passes no
+arguments) finds a UART-wired radar. Everything else — the sound trigger, the
 rolling buffer, HOST_INT — is unchanged.
 
 ## 1. Power down

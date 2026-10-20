@@ -73,6 +73,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/camera/tester-pilot.md` and `docs/camera/mode-study-analysis.md`.
 
 ### Fixed
+- **The boot service finds a UART-wired OPS243 and no longer restarts
+  forever.** `openflight.service` runs `start-kiosk.sh` with no arguments, and
+  the OPS243 was only auto-detected on USB, so a Pi with the radar on the GPIO
+  UART restarted 98 times in 10 minutes. With no port given, the driver now
+  probes `/dev/ttyAMA0` (and `/dev/serial0` when it names another device, never
+  the Pi 5 debug UART or a console's UART) and uses it when the radar answers
+  `?V`; an explicit port still wins. `OPENFLIGHT_OPS_PORT` names the port for
+  the service through a drop-in. A failed start under systemd now tells the
+  journal how to re-arm the unit or turn it off, and the tester's refusal
+  suggests `sudo systemctl disable --now openflight.service`. The unit's
+  restart limits only reach a Pi through a reinstalled unit file; see
+  [Auto-start](setup/auto-start.md#updating-a-unit-installed-before-october-2026).
 - **Simulator output tags estimated launch angles as estimated.** When the
   server fills in a launch angle before the sim fan-out, the resolver tagged
   it, and the carry built on it, as measured. It now reads the angle's source,
