@@ -36,7 +36,7 @@ MODELS = sorted(AERO_MODELS.values(), key=lambda m: m.version)
 def test_the_active_model_is_flight_fit_v1():
     assert ACTIVE_AERO_MODEL is FLIGHT_FIT_V1
     assert FLIGHT_FIT_V1.version == "flight-fit-v1"
-    assert set(AERO_MODELS) == {"ferguson-2022", "flight-fit-v1"}
+    assert set(AERO_MODELS) == {"ferguson-2022", "flight-fit-v1", "flight-fit-v2"}
     assert all(AERO_MODELS[name].version == name for name in AERO_MODELS)
 
 

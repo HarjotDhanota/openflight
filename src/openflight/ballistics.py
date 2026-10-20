@@ -131,15 +131,22 @@ class FlightCalibration:
 
 @dataclass(frozen=True)
 class AeroModel:
-    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4)."""
+    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4).
+
+    ``descent_drag``, ``descent_lift`` and ``descent_power`` scale Cd and Cl while
+    the ball descends (``descent_factors``); zero leaves the form as published.
+    """
 
     version: str
     label: str
-    cd_poly: tuple[float, float, float]
-    cl_poly: tuple[float, float, float]
+    cd_poly: tuple[float, ...]
+    cl_poly: tuple[float, ...]
     cm_per_sp: float
     sp_fit_max: float = SP_FIT_MAX
     calibration: Optional[FlightCalibration] = None
+    descent_drag: float = 0.0
+    descent_lift: float = 0.0
+    descent_power: float = 1.0
 
     def cd(self, sp: float) -> float:
         """Drag coefficient, held at its SP_FIT_MAX value beyond the fit."""
@@ -151,9 +158,19 @@ class AeroModel:
             return 0.0
         return max(0.0, _poly(self.cl_poly, min(sp, self.sp_fit_max)))
 
+    def descent_factors(self, sin_descent: float) -> tuple[float, float]:
+        """(Cd, Cl) multipliers at a descent angle with this sine; 1 when climbing."""
+        if sin_descent <= 0.0 or not (self.descent_drag or self.descent_lift):
+            return 1.0, 1.0
+        x = sin_descent**self.descent_power
+        return math.exp(-self.descent_drag * x), math.exp(-self.descent_lift * x)
+
 
 def _poly(coeffs: tuple, sp: float) -> float:
-    return coeffs[0] + coeffs[1] * sp + coeffs[2] * sp * sp
+    value = 0.0
+    for c in reversed(coeffs):
+        value = value * sp + c
+    return value
 
 
 FERGUSON_FORM = (
@@ -267,7 +284,86 @@ FLIGHT_FIT_V1 = AeroModel(
     calibration=FLIGHT_FIT_V1_CALIBRATION,
 )
 
-AERO_MODELS: dict[str, AeroModel] = {m.version: m for m in (FERGUSON_2022, FLIGHT_FIT_V1)}
+# flight-fit-v2: Ferguson's quadratics on the way up; on the way down both
+# coefficients are scaled by exp(-k sin(descent)^n). The descent term is an empirical
+# form motivated by the published dependence of a sphere's force coefficients on
+# whether the flow around it accelerates (Odar & Hamilton 1964); a falling ball
+# speeds up, so it is keyed to the descent angle, whose sine is the share of gravity
+# along the path. Not active: on the export shots flight-fit-v1 was fitted to it is
+# behind on carry and apex (see its metrics).
+FLIGHT_FIT_V2_FORM = (
+    FERGUSON_FORM + "; times exp(-k_d s^n) on Cd and exp(-k_l s^n) on Cl while descending, "
+    "s = sin(descent angle), after Odar & Hamilton 1964, Forces on a sphere accelerating in "
+    "a viscous fluid (J. Fluid Mech. 18, 302)"
+)
+
+FLIGHT_FIT_V2_CALIBRATION = FlightCalibration(
+    version="flight-fit-v2",
+    source=(
+        "fitted by the maintainer (flight-fit-v2) on carry, apex, apex distance, landing "
+        "angle, landing speed, hang time, curve and landing spin over a launch grid"
+    ),
+    form=FLIGHT_FIT_V2_FORM,
+    fitted_on="2026-10-20",
+    data=(),
+    domain=(
+        "ball speed 40-190 mph, launch 0-45 deg, spin 500-12,000 rpm, spin axis -30 to "
+        "+30 deg, launch direction -10 to +10 deg; 11,264 launches, a random 20 % held out"
+    ),
+    reference_air_density_kg_m3=1.176931,
+    residual_scales=(
+        ("carry", "yd", 1.0),
+        ("apex", "ft", 1.0),
+        ("apex_distance", "yd", 1.0),
+        ("landing_angle", "deg", 0.5),
+        ("landing_speed", "mph", 1.0),
+        ("hang_time", "s", 0.1),
+        ("curve", "yd", 1.0),
+        ("landing_spin", "rpm", 100.0),
+    ),
+    method=(
+        "scipy least_squares (soft L1) over 4000 training launches, RK4 at 10 ms, nine "
+        "constants with the Cd intercept held at 0.151, then rounded"
+    ),
+    metrics=(
+        # RMSE on the 2187 held-out grid launches, model minus target
+        ("grid held-out carry RMSE yd", 1.72),
+        ("grid held-out apex RMSE ft", 1.81),
+        ("grid held-out landing_angle RMSE deg", 1.10),
+        ("grid held-out hang_time RMSE s", 0.06),
+        ("grid held-out curve RMSE yd", 0.57),
+        ("grid held-out landing_speed RMSE mph", 2.13),
+        # the 67 export shots flight-fit-v1 was fitted to, all held out here
+        ("export shots held-out carry RMSE yd", 1.06),
+        ("export shots held-out apex RMSE ft", 1.40),
+        ("export shots held-out landing_angle RMSE deg", 0.46),
+        ("export shots held-out hang_time RMSE s", 0.07),
+        # flight-fit-v1 on the same grid hold-out
+        ("flight-fit-v1 grid carry RMSE yd", 5.75),
+        ("flight-fit-v1 grid apex RMSE ft", 2.09),
+        ("flight-fit-v1 grid landing_angle RMSE deg", 5.98),
+        ("flight-fit-v1 grid hang_time RMSE s", 0.25),
+    ),
+)
+
+FLIGHT_FIT_V2 = AeroModel(
+    version="flight-fit-v2",
+    label=(
+        "flight-fit-v2: Ferguson, McNally & McPhee 2022 quadratic Cd/Cl with a descent "
+        "term after Odar & Hamilton 1964, fitted by the maintainer, spin decay C_M = 0.0117 S"
+    ),
+    cd_poly=(0.1510, 0.8274, -0.5778),
+    cl_poly=(0.0715, 1.1250, -0.9015),
+    cm_per_sp=0.0117,
+    calibration=FLIGHT_FIT_V2_CALIBRATION,
+    descent_drag=4.99,
+    descent_lift=4.90,
+    descent_power=8.03,
+)
+
+AERO_MODELS: dict[str, AeroModel] = {
+    m.version: m for m in (FERGUSON_2022, FLIGHT_FIT_V1, FLIGHT_FIT_V2)
+}
 ACTIVE_AERO_MODEL = FLIGHT_FIT_V1
 
 # The active model's constants under their long-standing names (full_speed's drag
@@ -600,8 +696,9 @@ def _derivatives(
 
     # Spin parameter Sp drives Cd, Cl and C_M (Ferguson 2022 Eq. 1).
     sp = BALL_RADIUS_M * omega / v
-    cd = aero.cd(sp)
-    cl = aero.cl(sp)
+    drag_scale, lift_scale = aero.descent_factors(-vz / v)
+    cd = aero.cd(sp) * drag_scale
+    cl = aero.cl(sp) * lift_scale
 
     # q: dynamic-pressure × reference-area / mass = acceleration per unit C.
     # Pre-dividing by mass here lets us return accelerations directly.
