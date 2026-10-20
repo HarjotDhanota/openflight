@@ -342,7 +342,7 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
   expect(contrast).toBeGreaterThanOrEqual(4.5);
 
   // a short reason, the full one on tap
-  await shot.getByText('All 35 metrics with labels').tap();
+  await shot.getByText('All 37 metrics with labels').tap();
   const speedRow = shot.locator('tr[data-kiosk-metric="carry"]');
   await expect(speedRow.locator('summary')).toHaveText('the camera did not see the club ▸');
   // the not-built ones fold into one “Coming later” row
