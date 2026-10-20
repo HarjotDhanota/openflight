@@ -40,7 +40,7 @@ from openflight.launch_monitor import (
     Shot,
 )
 from openflight.numeric import finite as _finite
-from openflight.source_labels import MODEL_LABELS
+from openflight.source_labels import MODEL_LABELS, is_measured_source
 
 logger = logging.getLogger("openflight.server")
 
@@ -240,7 +240,40 @@ def _collision_inputs(shot: Shot) -> dict:
             if _finite(speed) and speed > 0
             else collision_model.Input(None, reason="club speed not measured")
         ),
+        "ball_speed_mph": _full_ball_speed_input(shot),
+        "spin_rpm": _spin_input(shot),
     }
+
+
+def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
+    """The full ball speed (E3), calculated; the radial speed never stands in for it."""
+    speed = shot.ball_speed_full_mph
+    if _finite(speed) and speed > 0:
+        return collision_model.Input(
+            float(speed), collision_model.LABEL_CALCULATED, "full ball speed"
+        )
+    full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
+    why = full.get("reason") or "not computed on this shot yet"
+    return collision_model.Input(None, reason=f"full ball speed not measured ({why})")
+
+
+def _spin_input(shot: Shot) -> collision_model.Input:
+    """The shot's spin under its own label: an accepted measured spin, or a model's spin.
+
+    A model's spin enters labelled, so the collision model can refuse it for face and
+    loft; a measured spin below the confidence floor is not an input.
+    """
+    if _accepted_measured_spin(shot):
+        return collision_model.Input(
+            float(shot.spin_rpm), collision_model.LABEL_MEASURED, shot.spin_method or "measured"
+        )
+    if shot.spin_source in MODEL_LABELS and _finite(shot.spin_rpm):
+        return collision_model.Input(float(shot.spin_rpm), shot.spin_source, shot.spin_method)
+    if _finite(shot.spin_rpm):
+        return collision_model.Input(
+            None, reason=f"measured spin confidence below {SPIN_CONFIDENCE_HIGH}"
+        )
+    return collision_model.Input(None, reason="spin not measured")
 
 
 def _round_or_none(value, digits: int):
@@ -278,11 +311,53 @@ def _collision_spin_feeds(shot: Shot) -> bool:
     return _collision_spin_status(shot) == "calculated"
 
 
+_PENNER_INPUTS = (
+    "club_path",
+    "attack_angle",
+    "launch_horizontal",
+    "launch_vertical",
+    "club_speed_mph",
+)
+
+
 def _collision_spin_method(shot: Shot) -> str:
     """Shot.spin_method for the collision spin: Penner 2001 and its inputs' label."""
     inputs = (shot.collision_model or {}).get("inputs", {})
-    labels = [record.get("label") for record in inputs.values() if record.get("value") is not None]
+    labels = [
+        record.get("label")
+        for name, record in inputs.items()
+        if name in _PENNER_INPUTS and record.get("value") is not None
+    ]
     return collision_model.shot_spin_method(_collision_spin_status(shot) or "", labels)
+
+
+def _attach_spin_axis(shot: Shot, result) -> None:
+    """The model's axis on the shot under its label; a measured axis is never replaced.
+
+    A weak horizontal launch does not withhold the axis: that input is "estimated"
+    (``_horizontal_launch_input``) and so is the axis, with the reason.
+    """
+    if _finite(shot.spin_axis_deg) and is_measured_source(shot.spin_axis_source):
+        return
+    axis = result.metrics["spin_axis"]
+    if axis.present and axis.status in (
+        collision_model.STATUS_CALCULATED,
+        collision_model.STATUS_MODEL_GEOMETRY,
+        collision_model.STATUS_ESTIMATED,
+    ):
+        shot.spin_axis_deg = round(axis.value, 1)
+        shot.spin_axis_source = collision_model.shot_spin_axis_source(
+            axis, result.inputs, result.face_method
+        )
+        shot.spin_axis_frame = axis.frame
+    elif (
+        collision_model.is_calculated_source(shot.spin_axis_source)
+        or collision_model.is_model_geometry_source(shot.spin_axis_source)
+        or collision_model.is_estimated_source(shot.spin_axis_source)
+    ):
+        shot.spin_axis_deg = None
+        shot.spin_axis_source = None
+        shot.spin_axis_frame = None
 
 
 def _attach_collision_model(shot: Shot) -> None:
@@ -294,9 +369,6 @@ def _attach_collision_model(shot: Shot) -> None:
     """
     result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
     metrics = result.metrics
-    # a weak horizontal launch no longer withholds the axis: the input is "estimated"
-    # (_horizontal_launch_input) and so is the axis, with the reason (C2)
-    axis = metrics["spin_axis"]
     shot.collision_model = result.to_dict()
     shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
     shot.dynamic_loft_deg = _round_or_none(metrics["dynamic_loft"].value, 1)
@@ -333,23 +405,7 @@ def _attach_collision_model(shot: Shot) -> None:
         shot.experimental_face_angle_path_source = None
         shot.experimental_face_angle_launch_source = None
 
-    # a calculated axis, or one built on model geometry (D39) under that label
-    if axis.present and axis.status in (
-        collision_model.STATUS_CALCULATED,
-        collision_model.STATUS_MODEL_GEOMETRY,
-        collision_model.STATUS_ESTIMATED,
-    ):
-        shot.spin_axis_deg = round(axis.value, 1)
-        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis, result.inputs)
-        shot.spin_axis_frame = axis.frame
-    elif (
-        collision_model.is_calculated_source(shot.spin_axis_source)
-        or collision_model.is_model_geometry_source(shot.spin_axis_source)
-        or collision_model.is_estimated_source(shot.spin_axis_source)
-    ):
-        shot.spin_axis_deg = None
-        shot.spin_axis_source = None
-        shot.spin_axis_frame = None
+    _attach_spin_axis(shot, result)
 
     spin_status = _collision_spin_status(shot)
     if spin_status is not None and not _accepted_measured_spin(shot):
@@ -503,6 +559,13 @@ class ShotModelsExtension(kiosk_extensions.KioskExtension):
 
     def after_speed_contract(self, shot) -> None:
         _attach_full_speeds(shot)
+        # the rigid-body face needs the full ball speed, known only now
+        if (
+            shot.collision_model is not None
+            and _accepted_measured_spin(shot)
+            and _finite(shot.ball_speed_full_mph)
+        ):
+            _attach_collision_model(shot)
 
     def simulate_carry(self, shot, *, fusion: bool, enabled: bool):
         return _simulate_carry(shot, fusion=fusion, enabled=enabled)

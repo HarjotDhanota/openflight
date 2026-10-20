@@ -273,3 +273,99 @@ def test_a_fusion_shot_without_collision_inputs_is_still_not_sent():
         resolve_shot(shot, PlayerState(), substitutes=False)
 
     assert raised.value.missing == ["spin", "spin axis"]
+
+
+# ---- face and loft from a measured spin (rigid-body relation) ----------------------
+
+
+def _measured_spin_shot(**overrides):
+    values = {
+        "spin_rpm": 6000.0,
+        "spin_confidence": 0.9,
+        "spin_source": "measured",
+        "spin_method": "camera spin",
+        "ball_speed_full_mph": 124.0,
+    }
+    values.update(overrides)
+    return _delivered_shot(**values)
+
+
+def test_a_measured_spin_and_full_ball_speed_give_the_rigid_body_face():
+    shot = _measured_spin_shot()
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    face, loft = cm.rigid_body_face(
+        ball_speed_mph=cm.Input(124.0, cm.LABEL_CALCULATED),
+        spin_rpm=cm.Input(6000.0),
+        launch_horizontal=cm.Input(1.0, frame="target_line"),
+        launch_vertical=cm.Input(18.0),
+        club_path=cm.Input(-2.0, frame="target_line"),
+        attack_angle=cm.Input(-4.0),
+    )
+    assert shot.face_angle_deg == pytest.approx(face.value, abs=0.05)
+    assert shot.dynamic_loft_deg == pytest.approx(loft.value, abs=0.05)
+    record = shot.collision_model
+    assert record["face_method"] == cm.FACE_METHOD_RIGID_BODY
+    assert record["metrics"]["face_angle"]["source"] == cm.SOURCE_RIGID_BODY
+    assert record["inputs"]["spin_rpm"]["label"] == "measured"
+    assert record["inputs"]["ball_speed_mph"]["label"] == "calculated"
+    assert shot.spin_rpm == 6000.0 and shot.spin_source == "measured"
+
+
+def test_a_low_confidence_measured_spin_is_not_used_for_the_face():
+    shot = _measured_spin_shot(spin_confidence=0.2)
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert shot.collision_model["face_method"] == cm.FACE_METHOD_INVERSION
+    assert "confidence" in shot.collision_model["inputs"]["spin_rpm"]["reason"]
+
+
+def test_without_a_full_ball_speed_the_inversion_says_why():
+    shot = _measured_spin_shot(
+        ball_speed_full_mph=None, ball_speed_full={"status": "not_measured", "reason": "no range"}
+    )
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    face = shot.collision_model["metrics"]["face_angle"]
+    assert shot.collision_model["face_method"] == cm.FACE_METHOD_INVERSION
+    assert "no range" in face["note"]
+
+
+def test_the_model_runs_again_once_the_full_ball_speed_is_known(monkeypatch):
+    shot = _measured_spin_shot(ball_speed_full_mph=None)
+    shot_models.extension.after_enrichment(shot)
+    assert shot.collision_model["face_method"] == cm.FACE_METHOD_INVERSION
+
+    def full_speeds(target):
+        target.ball_speed_full_mph = 124.0
+
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speeds)
+    shot_models.extension.after_speed_contract(shot)
+
+    assert shot.collision_model["face_method"] == cm.FACE_METHOD_RIGID_BODY
+
+
+def test_a_rerun_never_builds_the_face_from_the_models_own_spin():
+    shot = _delivered_shot(ball_speed_full_mph=124.0)
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+    first_face = shot.face_angle_deg
+    assert shot.spin_source == "calculated"
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert shot.collision_model["face_method"] == cm.FACE_METHOD_INVERSION
+    assert shot.face_angle_deg == first_face
+    assert "circular" in shot.collision_model["metrics"]["face_angle"]["note"]
+
+
+def test_a_measured_spin_axis_is_never_replaced():
+    shot = _delivered_shot(spin_axis_deg=4.2, spin_axis_source="measured (camera)")
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert shot.spin_axis_deg == 4.2
+    assert shot.spin_axis_source == "measured (camera)"
+    assert shot.collision_model["metrics"]["spin_axis"]["value"] is not None

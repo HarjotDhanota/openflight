@@ -24,6 +24,14 @@ def test_the_predicates_read_the_label_from_the_source_text(
     assert labels.is_estimated_source(source) is estimated
 
 
+@pytest.mark.parametrize(
+    ("source", "measured"),
+    [("measured (camera)", True), ("calculated (D-plane tilt)", False), ("", False), (None, False)],
+)
+def test_a_measured_source_is_read_back(source, measured):
+    assert labels.is_measured_source(source) is measured
+
+
 def test_the_label_words_are_the_shared_vocabulary():
     assert (
         labels.LABEL_MEASURED,

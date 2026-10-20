@@ -42,7 +42,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
-from .source_labels import is_calculated_source, is_model_geometry_source
+from .source_labels import is_calculated_source, is_measured_source, is_model_geometry_source
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +292,8 @@ def _spin_axis(shot):
     collision_status = _collision_metric(shot, "spin_axis").get("status")
     if is_model_geometry_source(source):
         status = MODEL_GEOMETRY
+    elif is_measured_source(source):
+        status = MEASURED
     elif source and source.startswith(ESTIMATED):
         # a weak horizontal launch under the axis (agent/v-formulas): labelled, not withheld
         status = ESTIMATED

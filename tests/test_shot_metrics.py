@@ -205,3 +205,12 @@ def test_a_calculated_axis_the_collision_model_marked_estimated_is_estimated():
     shot.spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"
     shot.collision_model["metrics"]["spin_axis"]["status"] = "estimated"
     assert shot.to_dict()["metrics"]["spin_axis"]["status"] == "estimated"
+
+
+def test_a_measured_spin_axis_is_labelled_measured():
+    shot = fusion_shot()
+    shot.spin_axis_deg = 4.2
+    shot.spin_axis_source = "measured (camera)"
+    record = shot.to_dict()["metrics"]["spin_axis"]
+    assert record["status"] == "measured"
+    assert record["source"] == "measured (camera)"

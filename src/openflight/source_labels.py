@@ -31,6 +31,11 @@ SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
 SPIN_AXIS_ESTIMATED_PREFIX = "estimated"
 
 
+def is_measured_source(source: Optional[str]) -> bool:
+    """Whether a Shot source label names a measured value (a sensor saw it)."""
+    return bool(source) and source.startswith(LABEL_MEASURED)
+
+
 def is_calculated_source(source: Optional[str]) -> bool:
     """Whether a Shot source label names a calculated (model) value."""
     return bool(source) and source.startswith(LABEL_CALCULATED)
