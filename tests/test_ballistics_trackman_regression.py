@@ -25,8 +25,9 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ANALYSIS = _REPO_ROOT / "scripts" / "analysis"
-if str(_ANALYSIS) not in sys.path:
-    sys.path.insert(0, str(_ANALYSIS))
+for _path in (_ANALYSIS, _REPO_ROOT / "tests"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from validate_ballistics import (  # noqa: E402  (path set up above)
     _stats,
@@ -304,4 +305,76 @@ def test_per_club_shape_rmse_within_budget(validation_rows, output, club):
         f"{club}: {output} RMSE {stats['rmse']:.2f} {unit} exceeds budget {budgets[club]} "
         f"{unit} (bias {stats['mean']:+.2f}, max |delta| {stats['max_abs']:.2f}, "
         f"n={stats['n']})."
+    )
+
+
+# Total ("Est. Total Flat - Length", yards): the normalized flight's carry plus the
+# active fairway bounce and roll, against the export's estimated total. Added with
+# turf-roll-v2, whose hops fly through the air (the roll is not fitted to this
+# capture: out of sample).
+#
+#   club            turf-roll-v1     turf-roll-v2
+#                   rmse   bias      rmse   bias
+#   7-iron          0.49  +0.28      0.54  +0.31
+#   driver          3.48  +1.94      2.08  +0.76
+#   pitching wedge  0.94  -0.83      1.23  -1.19
+#   OVERALL         2.09             1.41
+#
+# The wedge's total moved down with the shorter roll; flight-fit-v1 carries this
+# capture's wedges short, which turf-roll-v1's longer roll had partly hidden.
+TOTAL_RMSE_BUDGET_YARDS = {
+    "driver": 2.15,
+    "7-iron": 0.6,
+    "pitching wedge": 1.3,
+}
+OVERALL_TOTAL_RMSE_BUDGET_YARDS = 1.45
+
+
+@pytest.fixture(scope="module")
+def total_deltas():
+    """(club, model total - export total) per shot, flown at the normalized density."""
+    import math
+
+    from tm_owner_export import number, owner_shots
+    from validate_ballistics import TM_FLAT_AIR_DENSITY, _normalize_club
+
+    from openflight.ballistics import LaunchConditions, simulate
+
+    if not TRACKMAN_CSV.exists():
+        pytest.skip(f"TrackMan reference capture not present: {TRACKMAN_CSV}")
+    out = []
+    for shot in owner_shots():
+        launch = LaunchConditions(
+            number(shot, "Ball Speed"),
+            number(shot, "Launch Angle"),
+            number(shot, "Launch Direction") or 0.0,
+            number(shot, "Spin Rate"),
+            number(shot, "Spin Axis") or 0.0,
+            "measured",
+        )
+        rest = simulate(launch, air_density=TM_FLAT_AIR_DENSITY).rest_point()
+        total = number(shot, "Est. Total Flat - Length")
+        if rest is not None and total is not None:
+            out.append((_normalize_club(shot["Club"]), math.hypot(*rest) - total))
+    return out
+
+
+def test_every_reference_shot_has_a_total(total_deltas):
+    assert len(total_deltas) == EXPECTED_SHOT_COUNT
+
+
+def test_overall_total_rmse_within_budget(total_deltas):
+    stats = _stats([d for _, d in total_deltas])
+    assert stats["rmse"] <= OVERALL_TOTAL_RMSE_BUDGET_YARDS, (
+        f"Overall total RMSE {stats['rmse']:.2f} yd exceeds budget "
+        f"{OVERALL_TOTAL_RMSE_BUDGET_YARDS} yd (bias {stats['mean']:+.2f}, n={stats['n']})."
+    )
+
+
+@pytest.mark.parametrize("club", sorted(TOTAL_RMSE_BUDGET_YARDS))
+def test_per_club_total_rmse_within_budget(total_deltas, club):
+    stats = _stats([d for c, d in total_deltas if c == club])
+    assert stats["rmse"] <= TOTAL_RMSE_BUDGET_YARDS[club], (
+        f"{club}: total RMSE {stats['rmse']:.2f} yd exceeds budget "
+        f"{TOTAL_RMSE_BUDGET_YARDS[club]} yd (bias {stats['mean']:+.2f}, n={stats['n']})."
     )

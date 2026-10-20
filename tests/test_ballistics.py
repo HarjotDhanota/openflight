@@ -432,13 +432,14 @@ class TestBounceModel:
 
         assert bounce_and_roll_yards(39.0, surface="green_fast") is None
 
-    def test_both_roll_models_are_registered(self):
+    def test_every_roll_model_is_registered(self):
         from openflight.ballistics import ROLL_MODELS, USGA_RA_2021_BOUNCE_MODEL
-        from openflight.bounce_roll import TURF_ROLL_V1
+        from openflight.bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2
 
         assert ROLL_MODELS == {
             "usga-ra-2021": USGA_RA_2021_BOUNCE_MODEL,
             "turf-roll-v1": TURF_ROLL_V1,
+            "turf-roll-v2": TURF_ROLL_V2,
         }
 
 
@@ -446,12 +447,12 @@ class TestTurfRollIsTheFairwayModel:
     """Total on fairway turf comes from the turf bounce-and-roll model, which
     needs the landing speed and backspin as well as the landing angle."""
 
-    def test_the_fairway_model_is_the_turf_roll(self):
+    def test_the_fairway_model_is_the_turf_roll_with_airborne_hops(self):
         from openflight.ballistics import ACTIVE_ROLL_MODEL, BOUNCE_MODELS, FAIRWAY_NORMAL
-        from openflight.bounce_roll import TURF_ROLL_V1
+        from openflight.bounce_roll import TURF_ROLL_V2
 
-        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V1
-        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V1
+        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V2
+        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V2
 
     def test_the_turf_roll_is_never_clamped(self):
         from openflight.ballistics import roll_clamped
@@ -492,3 +493,45 @@ class TestTurfRollIsTheFairwayModel:
         rest = traj.rest_point(model=USGA_RA_2021_BOUNCE_MODEL)
         roll = 79.1 - 1.6 * traj.landing_angle_deg
         assert rest[0] == pytest.approx(traj.downrange_yards + roll, abs=1e-6)
+
+
+class TestHopsFlyInTheTrajectorysAir:
+    """A turf model with airborne hops flies them in the flight's own air and model."""
+
+    @staticmethod
+    def _airborne():
+        import dataclasses
+
+        from openflight.bounce_roll import TURF_ROLL_V1
+
+        return dataclasses.replace(TURF_ROLL_V1, aerodynamic_hops=True)
+
+    def test_the_trajectory_records_its_air_and_model(self):
+        from openflight.ballistics import ACTIVE_AERO_MODEL, FERGUSON_2022
+
+        traj = simulate(_driver(), air_density=1.1)
+        assert traj.air_density_kg_m3 == pytest.approx(1.1)
+        assert traj.aero is ACTIVE_AERO_MODEL
+        assert simulate(_driver(), aero=FERGUSON_2022).aero is FERGUSON_2022
+
+    def test_rest_point_flies_the_hops_in_that_air(self):
+        import dataclasses
+
+        traj = simulate(_driver())
+        model = self._airborne()
+        thick = dataclasses.replace(traj, air_density_kg_m3=1.4).rest_point(model=model)
+        thin = dataclasses.replace(traj, air_density_kg_m3=0.9).rest_point(model=model)
+        assert thin[0] > thick[0]
+
+    def test_without_a_trajectory_the_hops_fly_the_default_air(self):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        traj = simulate(_driver())
+        model = self._airborne()
+        roll = bounce_and_roll_yards(
+            traj.landing_angle_deg,
+            landing_speed_mph=traj.landing_speed_mph,
+            backspin_rpm=traj.landing_backspin_rpm,
+            model=model,
+        )
+        assert traj.rest_point(model=model)[0] == pytest.approx(traj.downrange_yards + roll)

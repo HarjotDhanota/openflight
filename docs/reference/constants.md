@@ -103,7 +103,7 @@ references.
 | `MAX_FLIGHT_SECONDS` | 15.0 |
 | `SAMPLE_INTERVAL_S` | 0.05 |
 | `USGA_RA_2021_BOUNCE_MODEL` | roll = 79.1 − 1.6 × landing angle (yd), landing angle 10–50° (selectable) |
-| `ACTIVE_ROLL_MODEL` | `bounce_roll.TURF_ROLL_V1` (turf-roll-v1) |
+| `ACTIVE_ROLL_MODEL` | `bounce_roll.TURF_ROLL_V2` (turf-roll-v2; turf-roll-v1 selectable) |
 
 `src/openflight/flight.py` (flight outputs, raw and normalized):
 

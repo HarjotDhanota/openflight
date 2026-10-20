@@ -23,8 +23,9 @@ W7 (E4) frames:
                  pure-backspin shot launched right flies the straight shot, rotated.
 
 Total (carry plus bounce and roll) uses the turf bounce-and-roll model
-(``bounce_roll.TURF_ROLL_V1``) from the landing angle, speed and backspin on
-assumed fairway turf; the USGA / R&A 2021 linear model stays selectable. See
+(``bounce_roll.TURF_ROLL_V2``, its hops flown in the flight's own air and model)
+from the landing angle, speed and backspin on assumed fairway turf; turf-roll-v1
+(vacuum hops) and the USGA / R&A 2021 linear model stay selectable. See
 BOUNCE_MODELS and ROLL_MODELS.
 
 Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
@@ -39,7 +40,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from .bounce_roll import TURF_ROLL_V1, TurfRollModel
+from .bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2, HopFlight, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
@@ -263,6 +264,9 @@ FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
         ("Robinante-fit on owner held-out apex RMSE ft", 15.34),
         ("Robinante-fit on owner held-out landing_angle RMSE deg", 4.55),
         ("Robinante-fit on owner held-out hang_time RMSE s", 0.57),
+        # each of the owner's 8 drives flown by a fit to the other 59 shots
+        ("owner drives leave-one-out held-out carry RMSE yd", 1.46),
+        ("owner drives leave-one-out held-out apex RMSE ft", 0.92),
         # ferguson-2022 on the same 60 shots, for comparison
         ("ferguson-2022 carry RMSE yd", 1.73),
         ("ferguson-2022 apex RMSE ft", 2.09),
@@ -289,8 +293,8 @@ FLIGHT_FIT_V1 = AeroModel(
 # form motivated by the published dependence of a sphere's force coefficients on
 # whether the flow around it accelerates (Odar & Hamilton 1964); a falling ball
 # speeds up, so it is keyed to the descent angle, whose sine is the share of gravity
-# along the path. Not active: on the export shots flight-fit-v1 was fitted to it is
-# behind on carry and apex (see its metrics).
+# along the path. Not active: with every export shot held out from both models it
+# is still behind flight-fit-v1 on the drives' carry and apex (see their metrics).
 FLIGHT_FIT_V2_FORM = (
     FERGUSON_FORM + "; times exp(-k_d s^n) on Cd and exp(-k_l s^n) on Cl while descending, "
     "s = sin(descent angle), after Odar & Hamilton 1964, Forces on a sphere accelerating in "
@@ -388,6 +392,9 @@ GRAVITY = 9.81
 # 500 Hz integration. RK4 error is O(dt⁵) so this is effectively exact for
 # the timescales involved; larger dt starts to visibly shorten long drives.
 DT_SECONDS = 0.002
+# A hop between bounces lasts a second or less: at 10 ms RK4 lands it within 2 mm of
+# the 2 ms step, at a fifth of the cost.
+HOP_DT_SECONDS = 0.01
 # Safety cap — real shots terminate in 5–9 s; anything longer implies the
 # solver went unstable or physical inputs are pathological.
 MAX_FLIGHT_SECONDS = 15.0
@@ -421,6 +428,7 @@ class BounceModel:
         landing_angle_deg: float,
         landing_speed_mph: Optional[float] = None,
         backspin_rpm: Optional[float] = None,
+        fly_hop: Optional[HopFlight] = None,
     ) -> Optional[float]:
         """The linear model's roll (yd) from the landing angle alone, clamped at 0."""
         if not _finite(landing_angle_deg):
@@ -462,9 +470,9 @@ FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
 RollModel = BounceModel | TurfRollModel
 ROLL_MODELS: dict[str, RollModel] = {
-    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1)
+    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1, TURF_ROLL_V2)
 }
-ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V1
+ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V2
 BOUNCE_MODELS: dict[str, RollModel] = {FAIRWAY_NORMAL: ACTIVE_ROLL_MODEL}
 
 
@@ -474,6 +482,7 @@ def bounce_and_roll_yards(
     landing_speed_mph: Optional[float] = None,
     backspin_rpm: Optional[float] = None,
     model: Optional[RollModel] = None,
+    fly_hop: Optional[HopFlight] = None,
 ) -> Optional[float]:
     """Distance from landing to rest (yards) by the surface's model, or None.
 
@@ -481,14 +490,17 @@ def bounce_and_roll_yards(
     no model, a missing or non-finite input the model needs, or a landing angle
     outside the model's data range (no extrapolation). The turf model needs the
     landing speed and backspin; the USGA / R&A line clamps a negative roll at 0
-    (``ROLL_CLAMP_NOTE``).
+    (``ROLL_CLAMP_NOTE``). A turf model with airborne hops flies them with
+    ``fly_hop``, by default ``hop_flight()``: the active model in ISA sea-level air.
     """
     model = BOUNCE_MODELS.get(surface) if model is None else model
     if model is None:
         return None
     if isinstance(model, TurfRollModel) and (landing_speed_mph is None or backspin_rpm is None):
         return None
-    return model.roll_yards(landing_angle_deg, landing_speed_mph, backspin_rpm)
+    if fly_hop is None and isinstance(model, TurfRollModel) and model.aerodynamic_hops:
+        fly_hop = hop_flight()
+    return model.roll_yards(landing_angle_deg, landing_speed_mph, backspin_rpm, fly_hop)
 
 
 def roll_clamped(
@@ -543,6 +555,8 @@ class Trajectory:
     downrange_yards: float = 0.0
     landing_heading_deg: float = 0.0
     landing_backspin_rpm: float = 0.0
+    air_density_kg_m3: float = AIR_DENSITY_STD
+    aero: Optional[AeroModel] = None
 
     @property
     def carry_side_yards(self) -> float:
@@ -557,7 +571,7 @@ class Trajectory:
         The landing point plus the surface's (or ``model``'s) bounce-and-roll
         distance along the landing heading. Rolling on along the heading is an
         assumption: the model gives a distance, not a direction, and no sideways
-        kick is modelled.
+        kick is modelled. Airborne hops fly in this flight's air and model.
         """
         roll = bounce_and_roll_yards(
             self.landing_angle_deg,
@@ -565,6 +579,7 @@ class Trajectory:
             self.landing_speed_mph,
             self.landing_backspin_rpm,
             model,
+            hop_flight(self.air_density_kg_m3, self.aero),
         )
         if roll is None:
             return None
@@ -843,7 +858,7 @@ def simulate(
                     omega * 60 / (2 * math.pi),
                 )
             )
-            return _trajectory(points, final, max_z, t_hit, backspin_share)
+            return _trajectory(points, final, max_z, t_hit, backspin_share, air_density, aero)
 
         state = new_state
 
@@ -863,11 +878,17 @@ def simulate(
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
-    return _trajectory(points, state, max_z, t, backspin_share)
+    return _trajectory(points, state, max_z, t, backspin_share, air_density, aero)
 
 
 def _trajectory(
-    points: list, final: tuple, max_z: float, t_end: float, backspin_share: float = 1.0
+    points: list,
+    final: tuple,
+    max_z: float,
+    t_end: float,
+    backspin_share: float = 1.0,
+    air_density: float = AIR_DENSITY_STD,
+    aero: Optional[AeroModel] = None,
 ) -> Trajectory:
     """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7).
 
@@ -888,4 +909,46 @@ def _trajectory(
         downrange_yards=fx * M_TO_YD,
         landing_heading_deg=math.degrees(math.atan2(fvy, fvx)),
         landing_backspin_rpm=final[6] * backspin_share * 60 / (2 * math.pi),
+        air_density_kg_m3=air_density,
+        aero=aero,
     )
+
+
+def hop_flight(
+    air_density: float = AIR_DENSITY_STD,
+    aero: Optional[AeroModel] = None,
+    dt: float = HOP_DT_SECONDS,
+) -> HopFlight:
+    """A bounce_roll.HopFlight that flies each hop through ``simulate``.
+
+    The hop leaves the turf along the landing heading carrying the spin out of the
+    bounce, ``om`` (rad/s about the horizontal axis, positive rolling forward):
+    backspin is a spin axis tilt of 0, topspin of 180 deg. Drag, Magnus lift and
+    the spin-down moment act as in flight.
+    """
+
+    def fly(vx: float, vz: float, om: float) -> tuple[float, float, float, float]:
+        traj = simulate(
+            LaunchConditions(
+                ball_speed_mph=math.hypot(vx, vz) * MPS_TO_MPH,
+                launch_angle_v=math.degrees(math.atan2(vz, vx)),
+                launch_angle_h=0.0,
+                spin_rpm=abs(om) * 30.0 / math.pi,
+                spin_axis_deg=180.0 if om > 0.0 else 0.0,
+                spin_source="calculated",
+            ),
+            air_density=air_density,
+            dt=dt,
+            aero=aero,
+        )
+        speed = traj.landing_speed_mph * MPH_TO_MPS
+        angle = math.radians(traj.landing_angle_deg)
+        heading = math.radians(traj.landing_heading_deg)
+        return (
+            traj.downrange_yards / M_TO_YD,
+            speed * math.cos(angle) * math.cos(heading),
+            -speed * math.sin(angle),
+            -traj.landing_backspin_rpm * math.pi / 30.0,
+        )
+
+    return fly
