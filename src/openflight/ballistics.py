@@ -23,8 +23,9 @@ W7 (E4) frames:
                  pure-backspin shot launched right flies the straight shot, rotated.
 
 Total (carry plus bounce and roll) uses the turf bounce-and-roll model
-(``bounce_roll.TURF_ROLL_V1``) from the landing angle, speed and backspin on
-assumed fairway turf; the USGA / R&A 2021 linear model stays selectable. See
+(``bounce_roll.TURF_ROLL_V2``, its hops flown in the flight's own air and model)
+from the landing angle, speed and backspin on assumed fairway turf; turf-roll-v1
+(vacuum hops) and the USGA / R&A 2021 linear model stay selectable. See
 BOUNCE_MODELS and ROLL_MODELS.
 
 Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
@@ -39,7 +40,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from .bounce_roll import TURF_ROLL_V1, HopFlight, TurfRollModel
+from .bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2, HopFlight, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
@@ -466,9 +467,9 @@ FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
 RollModel = BounceModel | TurfRollModel
 ROLL_MODELS: dict[str, RollModel] = {
-    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1)
+    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1, TURF_ROLL_V2)
 }
-ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V1
+ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V2
 BOUNCE_MODELS: dict[str, RollModel] = {FAIRWAY_NORMAL: ACTIVE_ROLL_MODEL}
 
 

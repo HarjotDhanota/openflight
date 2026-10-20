@@ -432,13 +432,14 @@ class TestBounceModel:
 
         assert bounce_and_roll_yards(39.0, surface="green_fast") is None
 
-    def test_both_roll_models_are_registered(self):
+    def test_every_roll_model_is_registered(self):
         from openflight.ballistics import ROLL_MODELS, USGA_RA_2021_BOUNCE_MODEL
-        from openflight.bounce_roll import TURF_ROLL_V1
+        from openflight.bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2
 
         assert ROLL_MODELS == {
             "usga-ra-2021": USGA_RA_2021_BOUNCE_MODEL,
             "turf-roll-v1": TURF_ROLL_V1,
+            "turf-roll-v2": TURF_ROLL_V2,
         }
 
 
@@ -446,12 +447,12 @@ class TestTurfRollIsTheFairwayModel:
     """Total on fairway turf comes from the turf bounce-and-roll model, which
     needs the landing speed and backspin as well as the landing angle."""
 
-    def test_the_fairway_model_is_the_turf_roll(self):
+    def test_the_fairway_model_is_the_turf_roll_with_airborne_hops(self):
         from openflight.ballistics import ACTIVE_ROLL_MODEL, BOUNCE_MODELS, FAIRWAY_NORMAL
-        from openflight.bounce_roll import TURF_ROLL_V1
+        from openflight.bounce_roll import TURF_ROLL_V2
 
-        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V1
-        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V1
+        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V2
+        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V2
 
     def test_the_turf_roll_is_never_clamped(self):
         from openflight.ballistics import roll_clamped
