@@ -23,10 +23,19 @@ SCRIPT = REPO_ROOT / "scripts/start-kiosk.sh"
 RIG = ["--rig-geometry", str(REPO_ROOT / "config/enclosure_v3_rig_geometry.json")]
 
 
-def _dry_run(*args: str) -> list[str]:
+def _with_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    """The process env plus ``env``, also forwarded when `bash` is WSL's (System32 wins)."""
+    if env is None:
+        return None
+    forwarded = ":".join(part for part in (os.environ.get("WSLENV"), *env) if part)
+    return {**os.environ, **env, "WSLENV": forwarded}
+
+
+def _dry_run(*args: str, env: dict[str, str] | None = None) -> list[str]:
     result = subprocess.run(
         ["bash", "scripts/start-kiosk.sh", *args, "--dry-run"],
         cwd=REPO_ROOT,
+        env=_with_env(env),
         check=True,
         capture_output=True,
         text=True,
@@ -131,6 +140,45 @@ def test_radar_alias_is_distinct_from_web_port(alias):
         "/dev/serial0",
         *RIG,
     ]
+
+
+def test_the_ops_port_setting_reaches_the_server():
+    """openflight.service passes no arguments; a drop-in Environment= line can name the port."""
+    assert _dry_run(env={"OPENFLIGHT_OPS_PORT": "/dev/ttyAMA0"}) == [
+        "openflight-server",
+        "--web-port",
+        "8080",
+        "--port",
+        "/dev/ttyAMA0",
+        *RIG,
+    ]
+
+
+@pytest.mark.parametrize("alias", ["--radar-port", "--ops-port"])
+def test_an_explicit_radar_port_flag_wins_over_the_setting(alias):
+    command = _dry_run(alias, "/dev/ttyACM0", env={"OPENFLIGHT_OPS_PORT": "/dev/ttyAMA0"})
+
+    assert command.count("--port") == 1
+    assert command[command.index("--port") + 1] == "/dev/ttyACM0"
+    assert "/dev/ttyAMA0" not in command
+
+
+def test_an_empty_ops_port_setting_leaves_detection_to_the_driver():
+    assert "--port" not in _dry_run(env={"OPENFLIGHT_OPS_PORT": ""})
+
+
+def test_a_failed_start_under_systemd_says_how_to_stop_the_service():
+    """The journal must say why the restarts stop and how to switch autostart off."""
+    script = _script()
+    failure = script[script.index("show_startup_failure() {") :]
+    failure = failure[: failure.index("\n}\n")]
+
+    assert "explain_service_failure" in failure
+    helper = script[script.index("explain_service_failure() {") :]
+    helper = helper[: helper.index("\n}\n")]
+    assert "INVOCATION_ID" in helper
+    assert "sudo systemctl reset-failed openflight.service" in helper
+    assert "sudo systemctl disable --now openflight.service" in helper
 
 
 @pytest.mark.parametrize(

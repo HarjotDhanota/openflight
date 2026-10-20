@@ -136,6 +136,20 @@ normalize_mock_swing_speed() {
 
 normalize_mock_swing_speed
 
+# openflight.service runs this script with no arguments, so the OPS243 port can also
+# come from OPENFLIGHT_OPS_PORT (a drop-in Environment= line, docs/setup/auto-start.md).
+# An explicit --radar-port/--ops-port wins. Unset, the driver tries USB and then the
+# GPIO UART (/dev/ttyAMA0) on its own.
+has_radar_port=false
+for argument in "${SERVER_ARGS[@]}"; do
+    case "$argument" in
+        --port|--port=*) has_radar_port=true ;;
+    esac
+done
+if [ "$has_radar_port" = false ] && [ -n "${OPENFLIGHT_OPS_PORT:-}" ]; then
+    SERVER_ARGS+=(--port "$OPENFLIGHT_OPS_PORT")
+fi
+
 # The swing server takes the enclosure's geometry only from a rig file and
 # refuses --iwr6843 without one (wiring audit C1, decision D6). Default to the
 # measured v3 enclosure unless the caller names another file.
@@ -334,6 +348,15 @@ start_startup_splash() {
     stop_startup_splash_server
 }
 
+# Under systemd (openflight.service) stderr is the journal. The unit's StartLimitBurst
+# stops the retries after a few failures; say so, and how to recover or switch off.
+explain_service_failure() {
+    [ -n "${INVOCATION_ID:-}" ] || return 0
+    error "Running as openflight.service: systemd stops retrying after repeated failures (StartLimitBurst)."
+    error "  After fixing the cause: sudo systemctl reset-failed openflight.service && sudo systemctl start openflight.service"
+    error "  To turn autostart off (e.g. on a unit used with the tester): sudo systemctl disable --now openflight.service"
+}
+
 show_startup_failure() {
     local component_id="$1"
     local message="$2"
@@ -343,6 +366,7 @@ show_startup_failure() {
 
     error "$message"
     error "$recovery"
+    explain_service_failure
     if [ -n "$STARTUP_STATUS_FILE" ] && [ -f "$STARTUP_STATUS_FILE" ]; then
         local status_args=(
             fail "$STARTUP_STATUS_FILE"
