@@ -2,7 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { PROFILES_PATH_ENV, uniqueE2eProfilesPath } from './tests/e2e/isolateProfilesPath';
 
-const PORT = 5173;
+// OPENFLIGHT_E2E_UI_PORT moves the dev server off 5173 (another checkout's may hold it).
+const PORT = Number(process.env.OPENFLIGHT_E2E_UI_PORT ?? 5173);
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
 const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -46,6 +47,8 @@ export default defineConfig({
       url: BASE_URL,
       reuseExistingServer: !process.env.CI,
       cwd: CONFIG_DIR,
+      // the UI finds the backend on 8080 by itself only from port 5173 (serverOrigin.ts)
+      env: { ...backendEnv(), VITE_SOCKET_URL: process.env.VITE_SOCKET_URL ?? `http://${HOST}:8080` },
     },
   ],
   projects: [
