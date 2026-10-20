@@ -10,9 +10,9 @@ derived from the quoted public wording and plain geometry. The code is
 `src/openflight/metric_definitions.py`; its tests, `tests/test_metric_definitions.py`,
 check hand-worked cases and properties.
 
-Only smash factor is shown today. Spin loft, face to path, D-plane tilt and
-curve are library functions only: face angle and dynamic loft are not measured
-(D33 is open), and carry is not measured on fusion units.
+The kiosk shows all five. Spin loft, face to path and D-plane tilt use the
+collision model's calculated face and loft (`docs/how-it-works/collision-model.md`);
+curve uses the flight model's landing point.
 
 ## Frame, units and signs
 
@@ -149,6 +149,8 @@ curve are library functions only: face angle and dynamic loft are not measured
     - With t = 0, curve equals carry side.
     - A ball launched 5° right that lands on the target line at 200 yd curved
       200 sin 5° = 17.4 yd left.
+    - The owner's TM4 export: the formula on its flat carry, carry side and
+      launch direction gives its Curve column on all 24 shots, to 1e-9 ft.
 - **Domain:** None for a non-positive carry, |S| > C, or a launch direction
   that is not downrange (|t| ≥ 90°).
 

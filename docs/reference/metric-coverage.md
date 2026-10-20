@@ -34,6 +34,17 @@ camera prior stood in, every metric that rests on the range (all but the OPS243'
 radial speeds, radial smash and spin rate) is `estimated` and its note says so.
 An older log's `measured` carry is read as `calculated`.
 
+## Face, loft, spin axis and curve
+
+Details and sources are in `docs/how-it-works/collision-model.md`.
+
+| Metric | Built from | Label |
+|---|---|---|
+| Face angle, dynamic loft | With an accepted measured spin and the full ball speed: the rigid-body relation, ball speed · sin θ = (I / m r) · spin with I / m r = 7.50 mm (Cross & Nathan 2007; Penner 2001). Otherwise the D-plane inversion with the Wood et al. 2018 weights, noted "rigid-body relation not used" with the reason. The model's own spin never feeds them | `calculated`, or the weakest input's label |
+| Spin loft, face to path, D-plane tilt | The exact 3-D definitions (`metric_definitions`) on that face and loft | the same |
+| Spin axis | A measured axis wins. Irons and wedges: tan(axis) = tan(tilt) · (0.81385 + 0.00342 · dynamic loft), a clean-room fit to the owner's TM4 irons. Drivers, woods, hybrids: the D-plane tilt; a gear term only with a measured impact offset (none yet, noted) | `calculated (model: …)` for irons |
+| Curve | TrackMan's definition: the landing point's distance from the launch-direction line, with carry as the straight-line distance (`metric_definitions.curve`). Matches the owner's export to 1e-9 ft | the flight's label |
+
 ## Places
 
 | Code | Place | Where in the code | Test |

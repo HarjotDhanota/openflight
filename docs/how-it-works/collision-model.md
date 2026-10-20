@@ -8,7 +8,8 @@ icon: lucide/git-merge
 wiring: `server._attach_collision_model`.*
 
 OpenFlight's camera can't see the club face. These metrics are therefore
-**calculated** from each shot's own measured inputs, using published physics:
+**calculated** from each shot's own measured inputs, using published physics
+and two clean-room fits to the owner's own TrackMan 4 export:
 
 - face angle and dynamic loft;
 - spin loft, face to path and D-plane tilt;
@@ -34,7 +35,8 @@ pilot) and D38 (fitted physics, published sources first, labelled
   inputs never are.
 - **No filled-in values.** If a metric's inputs are missing, the metric is
   `not_measured` and names the missing input. An unknown club has no weight
-  category, so its face and loft are not measured.
+  category, so its face and loft are not measured unless a measured spin lets
+  the rigid-body relation build them.
 - **Frames.** Every value built from a horizontal angle carries the frame of
   its inputs (`horizontal_frame`). When the inputs are in two frames, it is
   `mixed`, and the value is still computed and labelled.
@@ -59,6 +61,8 @@ pilot) and D38 (fitted physics, published sources first, labelled
 | Launch direction | `launch_angle_horizontal`, unless its source is `estimated` | deg, + right |
 | Vertical launch | `launch_angle_vertical`, unless its source is `estimated` | deg, + up |
 | Club speed | `club_speed_mph` (today the OPS243 radial reading, which runs 2–6 mph low until W6 and W9) | mph |
+| Ball speed (full) | `ball_speed_full_mph`, `calculated`. The radial speed never stands in for it | mph |
+| Spin rate | `spin_rpm` under its own label: an accepted measured spin (confidence ≥ `SPIN_CONFIDENCE_HIGH`), or a model's spin labelled as one | rpm |
 
 When the kiosk has no accepted measured path or attack, E1's selected arc value
 (`club_arc.selected_path_and_attack`) enters through `_collision_inputs` under
@@ -67,7 +71,56 @@ arc prior (D39, every shot on today's lens). Every output built on it inherits
 the label, and the kiosk's face status then ends in `_model_geometry`. A
 not-measured arc value is a missing input.
 
-## 1. Face angle and dynamic loft: D-plane inversion
+## 1. Face angle and dynamic loft
+
+### With a measured spin: the rigid-body relation
+
+When a ball strikes a rigid face, the friction that slides the ball along the
+face also spins it. For a ball of mass m, radius r and moment of inertia I, the
+tangential impulse gives m · v_t · r = I · ω (Penner 2001, Eq. (11); Cross &
+Nathan 2007, section 4). So the ball's speed along the face is fixed by its
+spin:
+
+    ball speed · sin θ = c · spin,     c = I / (m r)
+
+θ is the angle between the ball's launch direction b and the face normal n.
+The normal lies in the plane of b and the club's direction v (the D plane), on
+the far side of b from v. That fixes it: `n = cos θ · b + sin θ · u`, with u
+the unit vector in that plane, normal to b, pointing away from v. Face angle
+and dynamic loft are the azimuth and elevation of n (`rigid_body_face`).
+
+**The constant.** c = 7.5005 mm, which is I = 0.352 · m r² for r = 21.335 mm
+(a uniform sphere would be 0.4). It comes from a clean-room study of the
+owner's TM4 export: the relation held for driver, 7-iron and wedge with a
+relative spread of 2.5 × 10⁻⁴. With it, the code rebuilds TM4's face angle to
+0.024° RMS and dynamic loft to 0.004° RMS on the 21 measured-spin shots
+(`tests/test_rigid_body_face.py` checks this against
+`session_logs/OpenFlight-Test.Normalized.csv`). One consequence: TM4's face
+angle and loft are calculated from the ball, so they are not independent truth
+for a camera face measurement.
+
+**Inputs and label.** The full ball speed, launch direction and vertical
+launch, the spin, and the club path and attack angle. The result is
+`calculated`, or the weakest input's label (`model_geometry` on an arc path,
+`estimated` on a weak launch), with source "rigid-body relation: …".
+
+**Why only a measured spin.** The collision model also calculates a spin
+(Penner, section 3) from the face and loft. Building face and loft from that
+spin would be circular, so:
+
+- a measured spin uses the rigid-body relation;
+- any other spin, including the model's own, keeps the D-plane inversion
+  below. The face and loft then carry the note "rigid-body relation not used:
+  …" with the reason (no measured spin, a calculated spin, the circular case,
+  or a missing full ball speed);
+- `collision_model["face_method"]` says which one ran: `rigid_body` or
+  `d_plane_inversion`.
+
+The full ball speed is computed after the first run, so the model runs again
+once it is known, whenever an accepted measured spin can use it. Today no
+sensor measures spin, so every shot still takes the inversion.
+
+### Without a measured spin: D-plane inversion
 
 **Source:** P. Wood, E. Henrikson, C. Broadie (PING), "The Influence of Face
 Angle and Club Path on the Resultant Launch Angle of a Golf Ball",
@@ -127,7 +180,8 @@ loft because the anchors' spin lofts are not published. E8 refits both the
 weights and the curve to the owner's TM4 exports.
 
 **Status and source.** Labelled `calculated`, with source "D-plane inversion,
-Wood et al. 2018 weights". It is `model_geometry` if the path or attack is.
+Wood et al. 2018 weights" and the note above. It is `model_geometry` if the path
+or attack is.
 
 ## 2. Spin loft, face to path, D-plane tilt
 
@@ -138,8 +192,8 @@ These come from the D37 definitions in `metric_definitions`:
 - `d_plane_tilt_deg`: the tilt of the plane spanned by the club direction and
   the face normal.
 
-All three use the face and loft calculated above and the shot's own path and
-attack. When face equals path (the 2D limit), the tilt is 0 and the spin loft
+All three use the face and loft from section 1, whichever way they were
+built, and the shot's own path and attack. When face equals path (the 2D limit), the tilt is 0 and the spin loft
 is loft − attack.
 
 ## 3. Calculated spin rate: Penner 2001
@@ -234,10 +288,24 @@ model-geometry Penner spin, the formula's calculated value is used
 
 ## 4. Spin axis
 
-**Without an impact location** (the only case today), the spin axis is the
-D-plane tilt. TrackMan's public definition: "D Plane Tilt is the expected spin
-axis disregarding any gear effect". The note reads "no impact location: gear
-effect not applied".
+**A measured spin axis always wins.** The model never replaces an axis whose
+source starts with "measured".
+
+**Irons and wedges** (2-iron to lob wedge) take a clean-room fit to the
+owner's TM4 irons, which reproduces them to 0.014° in one session:
+
+    tan(spin axis) = tan(D-plane tilt) · (0.81385 + 0.00342 · dynamic loft)
+
+It is labelled `calculated` (or its inputs' weakest label), with
+`spin_axis_source = "calculated (model: D-plane tilt x TM4 iron factor, …)"`.
+Irons take no gear term.
+
+**Drivers, woods and hybrids, without an impact location** (the only case
+today): the spin axis is the D-plane tilt. TrackMan's public definition: "D
+Plane Tilt is the expected spin axis disregarding any gear effect". The note
+reads "no impact location: gear effect not applied". In the owner's export the
+driver axes are not locked to the tilt; the residual follows the toe-heel
+impact offset, which is the gear effect.
 
 **Sign.** Positive means the ball curves right. On a normal strike it has the
 sign of face to path.
@@ -260,9 +328,11 @@ the Part E plan treats as measured. It is a line-of-sight (radial) reading, not
 the head's full speed (E3 cannot project it yet), and the spin scales with it.
 
 **On the shot.** When calculated, it becomes `spin_axis_deg` with its frame and
-`spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"`, or
-`"calculated (D-plane + gear effect, Cross & Nathan 2007)"` once E5 supplies a
-gear sidespin. The flight (E4) and the simulators treat any source starting
+`spin_axis_source = "calculated (D-plane tilt, Wood et al. 2018 weights)"` (an
+iron: `"calculated (model: D-plane tilt x TM4 iron factor, …)"`; a rigid-body
+face says "rigid-body face" in place of the weights), or
+`"calculated (D-plane + gear effect, Cross & Nathan 2007)"` once a measured
+impact location supplies a gear sidespin. The flight (E4) and the simulators treat any source starting
 with "calculated" as a calculated value.
 
 When an input is model geometry (D39), the axis still becomes `spin_axis_deg`,
@@ -292,9 +362,12 @@ curves right) tilts the axis:
 where S is the calculated spin and t is the D-plane tilt (`spin_axis(...,
 gear_sidespin_rpm=g)`).
 
-This is not wired yet. It needs E5's measured impact location and the head's d,
-I_B and M from an official specification. The paper's Appendix covers oblique
-impacts.
+The hook is wired but inactive: `evaluate` takes `impact_offset_mm` and
+`gear_sidespin_rpm`, and applies the gear term only to a driver, wood or hybrid
+with a **measured** impact offset. A measured offset without a gear sidespin
+gives the note "measured impact location but no head model: gear effect not
+applied". Impact location and the head's d, I_B and M (from an official
+specification) are a later feature. The paper's Appendix covers oblique impacts.
 
 ## 5. Gyro
 
@@ -321,8 +394,9 @@ back spin and side spin take the weaker label.
 ## What this replaced
 
 - **The face estimate.** Was `face = (launch − 0.2 · path) / 0.8`, one fixed
-  weight for every club. It is replaced by the PING weights per category. The
+  weight for every club. It is replaced by the PING weights per category, and
+  by the rigid-body relation when the spin is measured. The
   `experimental_face_angle_*` fields mirror the new value so the kiosk tile
   keeps working until the UI pass.
 - **The spin-axis proxy.** Was `spin axis = launch direction − path`. It is
-  replaced by the D-plane tilt.
+  replaced by the D-plane tilt, and for irons by the iron fit on it.
