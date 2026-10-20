@@ -350,8 +350,10 @@ start_startup_splash() {
 
 # Under systemd (openflight.service) stderr is the journal. The unit's StartLimitBurst
 # stops the retries after a few failures; say so, and how to recover or switch off.
+# INVOCATION_ID alone also marks a desktop autostart service, so check the cgroup too.
 explain_service_failure() {
     [ -n "${INVOCATION_ID:-}" ] || return 0
+    grep -qs '/openflight\.service$' "/proc/$$/cgroup" || return 0
     error "Running as openflight.service: systemd stops retrying after repeated failures (StartLimitBurst)."
     error "  After fixing the cause: sudo systemctl reset-failed openflight.service && sudo systemctl start openflight.service"
     error "  To turn autostart off (e.g. on a unit used with the tester): sudo systemctl disable --now openflight.service"

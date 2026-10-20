@@ -177,6 +177,8 @@ def test_a_failed_start_under_systemd_says_how_to_stop_the_service():
     helper = script[script.index("explain_service_failure() {") :]
     helper = helper[: helper.index("\n}\n")]
     assert "INVOCATION_ID" in helper
+    # a desktop autostart service has an INVOCATION_ID too; only this unit's cgroup counts
+    assert "openflight\\.service$" in helper and "/proc/$$/cgroup" in helper
     assert "sudo systemctl reset-failed openflight.service" in helper
     assert "sudo systemctl disable --now openflight.service" in helper
 
