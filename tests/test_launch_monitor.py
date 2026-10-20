@@ -96,12 +96,12 @@ class TestShot:
         assert shot.smash_factor is None
 
     def test_smash_factor_uses_the_cited_definition(self, monkeypatch):
-        """D37: Shot.smash_factor is metric_definitions.smash_factor, not a copy."""
-        from openflight import metric_definitions
+        """D37: Shot.smash_factor is smash.smash_factor, not a copy."""
+        from openflight import smash
 
         calls = []
         monkeypatch.setattr(
-            metric_definitions,
+            smash,
             "smash_factor",
             lambda ball, club: calls.append((ball, club)) or 9.99,
         )

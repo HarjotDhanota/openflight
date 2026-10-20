@@ -277,8 +277,6 @@ int main(int argc, char **argv)
 @pytest.mark.parametrize("version", [8, 9])
 def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
     """Independent of dump.py's packer (S5): the bytes come from dump_format.h's structs."""
-    from openflight.iwr6843.frame_evidence import frame_timing_report
-
     out = tmp_path / f"v{version}.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), str(version))
 
@@ -301,33 +299,21 @@ def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
     }
     assert meta["dump_trailer"] == {"payload_end_tick": 0x55555555}
     assert cube[1, 2, 3, 1] == 48 - 48j
-    assert frame_timing_report(meta)["status"] == "continuous"
 
 
 @pytest.mark.skipif(
     sys.byteorder != "little", reason="the firmware and the parser are little-endian"
 )
 def test_a_c_written_unassociated_record_reads_as_unobserved(tmp_path):
-    """I1: a no-stamp record parses to None, and the request relation stays unobserved."""
-    from openflight.iwr6843.frame_evidence import frame_timing_report
-
+    """I1: a no-stamp record parses to None."""
     out = tmp_path / "unassociated.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), "8", "unassociated")
 
     meta, _cube = dump.parse_dump(out.read_bytes())
     # pylint: disable=unsubscriptable-object
     record = meta["frame_evidence"][1]
-    report = frame_timing_report(meta)
-    request = report["request"]
-
     assert (record["seq"], record["start_tick"], record["associated"]) == (None, None, False)
     assert record["done_tick"] == 0x010927C0 + 340000
-    assert [(f["kind"], f["frame"]) for f in report["findings"]] == [("unassociated", 1)]
-    assert report["observed_start_offsets_us"] == [0.0, None]
-    assert request["status"] == "unobserved"
-    assert request["first_post_seq"] is None
-    assert request["frames_request_to_first_post"] is None
-    assert request["request_to_first_post_start_us"] is None
 
 
 # Drives the firmware's own l3_recordFrameEvidence (the evidence block, host-compiled with
@@ -852,8 +838,6 @@ def test_c_struct_written_iq8_dumps_parse_scale_table_then_evidence(tmp_path, ve
     fmt 5 puts the n_frames uint16 scale table after the descriptors and before the
     evidence block; the payload is int8 Im/Re times the frame's scale.
     """
-    from openflight.iwr6843.frame_evidence import sample_integrity_report
-
     out = tmp_path / f"iq8_v{version}.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), str(version), "iq8")
 
@@ -873,30 +857,6 @@ def test_c_struct_written_iq8_dumps_parse_scale_table_then_evidence(tmp_path, ve
     assert cube[0, 0, 0, 0] == 16 * (1 - 1j)
     assert cube[1, 2, 3, 1] == 128 * (48 - 48j)
     assert len(raw) == meta["header_nbytes"] + dump.payload_nbytes(meta, raw)
-    # Frame 0 was not scanned: the whole capture's integrity is unobserved, never clean.
-    report = sample_integrity_report(meta, cube)
-    assert (report["format"], report["status"]) == ("iq8", "unobserved")
-    assert report["reason"] == "frames [0] were not scanned before narrowing"
-
-
-@pytest.mark.skipif(
-    sys.byteorder != "little", reason="the firmware and the parser are little-endian"
-)
-def test_a_c_written_fully_scanned_iq8_dump_reports_its_overflow(tmp_path):
-    """Every frame scanned: the report carries the firmware's counts, frame by frame."""
-    from openflight.iwr6843.frame_evidence import sample_integrity_report
-
-    out = tmp_path / "iq8_scanned.l3dump"
-    _run_c(FIXTURE_WRITER, tmp_path, str(out), "8", "iq8", "all-scanned")
-
-    meta, cube = dump.parse_dump(out.read_bytes())
-    report = sample_integrity_report(meta, cube)
-
-    assert report["status"] == "overflowed"
-    assert report["frames_scanned"] == 2
-    assert report["overflow_components"] == 2
-    assert report["frames_with_overflow"] == [1]
-    assert report["max_abs"] == 300
 
 
 # Ruling on Task 4 concern 2: with a one-frame pre ring the next frame reuses the slot being

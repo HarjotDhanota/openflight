@@ -89,7 +89,7 @@ STAGE_LABELS = {
     "lcmf": "LCMF status",
 }
 
-# Club delivery statuses whose values the kiosk shows (server.displayed_club_path
+# Club delivery statuses whose values the kiosk shows (shot_models.displayed_club_path
 # refuses only rejected, error or withheld results).
 _DELIVERY_REFUSED_PREFIXES = ("rejected", "error")
 _ABSENT = object()
@@ -1106,7 +1106,7 @@ _LOW_LAUNCH_SOURCES = frozenset({"camera_low_consensus", "radar_low_coherence"})
 
 
 def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> dict:
-    """The kiosk's D-plane face angle (server._attach_collision_model, E2)."""
+    """The kiosk's D-plane face angle (shot_models._attach_collision_model, E2)."""
     status = live.get("face_angle_status")
     value = finite(live.get("face_angle_deg"))
     label = "Face angle (D-plane, kiosk)"
@@ -1253,7 +1253,7 @@ _KIOSK_GATE = {
 }
 # Not measured because a named dependency is not built yet, not for want of data.
 _KIOSK_PENDING = {
-    # server.CLUB_SPEED_NOT_FULL_REASON: the OPS club speed is not one reading (W6, W9, E1)
+    # shot_models.CLUB_SPEED_NOT_FULL_REASON: the OPS club speed is not one reading (W6, W9, E1)
     "club_speed_full": ("W6, W9", "OPS club speed"),
     "smash_factor_full": ("W6, W9", "club speed is not a full speed"),
     # collision_model.GYRO_REASON: the planar model has no gyro (E2, low priority)

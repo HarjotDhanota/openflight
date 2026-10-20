@@ -162,9 +162,10 @@ def test_trace_method_marks_end_with_the_error_and_reraises(tmp_path):
     assert done["error"] == "ValueError"
 
 
-def test_bracketed_pair_bounds_contain_the_offset():
-    pair = BracketedPair(mono_before_ns=1_000, realtime_ns=50_000, mono_after_ns=1_200)
-    assert pair.wall_minus_mono_bounds_ns() == (48_800, 49_000)
+def test_bracketed_pair_is_re_exported_from_clock_mapping():
+    from openflight.clock_mapping import BracketedPair as product_pair
+
+    assert BracketedPair is product_pair
 
 
 def test_module_mark_is_a_no_op_without_a_recorder():
@@ -206,21 +207,10 @@ def test_reserved_keys_in_fields_do_not_override(tmp_path):
     assert row["monotonic_ns"] == 42 and row["thread"] != "evil" and row["keep"] == "yes"
 
 
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        (1, True),
-        (1.5, True),
-        (0, True),
-        (math.nan, False),
-        (math.inf, False),
-        (True, False),
-        (None, False),
-        ("1", False),
-    ],
-)
-def test_finite_accepts_only_finite_real_numbers(value, expected):
-    assert _finite(value) is expected
+def test_finite_is_re_exported_from_the_shared_numeric_check():
+    from openflight.numeric import finite
+
+    assert _finite is finite
 
 
 class _FailingFile:
@@ -329,32 +319,14 @@ def test_close_is_idempotent(tmp_path):
     assert [r["type"] for r in rows].count("trace_end") == 1
 
 
-@pytest.mark.parametrize(
-    "value,expected",
-    [
-        ("float32", True),
-        ("float64", True),
-        ("int64", True),
-        ("float32_nan", False),
-        ("float64_inf", False),
-        ("bool_", False),
-    ],
-)
-def test_finite_accepts_numpy_real_scalars_but_not_bools(value, expected):
-    """A-M4: any numbers.Real counts (np.float32, np.int64); a bool never does."""
-    import fractions
+def test_pi_trace_installs_its_recorder_through_the_same_hooks(tmp_path):
+    from openflight import instrumentation
 
-    import numpy as np
-
-    values = {
-        "float32": np.float32(1.5),
-        "float64": np.float64(2.5),
-        "int64": np.int64(7),
-        "float32_nan": np.float32("nan"),
-        "float64_inf": np.float64("inf"),
-        "bool_": np.bool_(True),
-    }
-    assert _finite(values[value]) is expected
-    assert _finite(fractions.Fraction(1, 3)) is True
-    assert _finite(complex(1, 0)) is False
-    assert _finite(10**400) is False  # never raises OverflowError
+    recorder = pi_trace.TraceRecorder(tmp_path / "t.jsonl", temp_reader=lambda: None)
+    pi_trace.set_recorder(recorder)
+    try:
+        assert instrumentation.get_recorder() is recorder
+    finally:
+        pi_trace.set_recorder(None)
+        recorder.close()
+    assert instrumentation.get_recorder() is None

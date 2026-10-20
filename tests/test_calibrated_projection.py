@@ -28,7 +28,6 @@ from openflight.camera.club_delivery import (
     ChainedDelivery,
     _pixels_to_world,
 )
-from openflight.camera.fusion_sensitivity import run_sensitivity
 from openflight.camera.geometry import unit_world_rays
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.camera.optical_calibration import validate_mode_profile
@@ -336,7 +335,8 @@ def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_p
     assert server_module.camera_placement["rig_geometry_sha256"] == "loaded-rig"
 
 
-def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path, monkeypatch):
+def live_calibrated_replay(tmp_path, monkeypatch):
+    """A live calibrated shot the kiosk fused: shot, archive, replay, trigger, capture."""
     import openflight.camera.ball_flight as ball_module
     import openflight.camera.fusion_processing as fusion_module
 
@@ -444,7 +444,6 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     )
     monkeypatch.setattr(server_module, "camera_optical_calibration", artifact)
     monkeypatch.setattr(server_module, "camera_placement", placement)
-    monkeypatch.setattr(server_module, "tester_setup_required", False)
     monkeypatch.setattr(
         server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
     )
@@ -482,42 +481,17 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     server_module._fuse_camera_measurements(shot, capture)
     archive = server_module._load_camera_capture_archive(capture)
     replay = fusion_module.process_camera_fusion(shot.camera_fusion_context, archive)
+    return shot, archive, replay, trigger_index, capture
+
+
+def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path, monkeypatch):
+    shot, _archive, replay, trigger_index, capture = live_calibrated_replay(tmp_path, monkeypatch)
     assert shot.calibrated_camera_status == "experimental_unqualified"
     assert shot.camera_fusion_processing == replay
     assert replay["ball_estimate"]["status"] == "accepted"
     assert replay["ball_estimate"]["timing_anchor"] == "ball_departure"
     assert replay["ball_estimate"]["contact_frame"] == trigger_index - 1
     assert replay["ball_estimate"]["horizontal_deg"] == pytest.approx(3.9, abs=0.5)
-    frozen = {"_context": shot.camera_fusion_context, "_archive": archive, "replay": replay}
-    original_context = copy.deepcopy(shot.camera_fusion_context)
-    sensitivity = run_sensitivity(
-        frozen,
-        {
-            "schema_version": 1,
-            "variants": [
-                {"id": "zero", "kind": "calibrated_focal_scale", "scale": 1.0},
-                {"id": "focal", "kind": "calibrated_focal_scale", "scale": 1.1},
-                {
-                    "id": "origin",
-                    "kind": "camera_translation_m",
-                    "lateral_m": 0.02,
-                    "forward_m": 0.0,
-                    "height_m": 0.0,
-                },
-                {"id": "no-depth", "kind": "remove_ball_range_evidence"},
-            ],
-        },
-    )
-    variants = {item["id"]: item for item in sensitivity["variants"]}
-    assert variants["zero"]["result"] == replay
-    assert variants["focal"]["result"]["ball_estimate"]["horizontal_deg"] != pytest.approx(
-        replay["ball_estimate"]["horizontal_deg"], abs=1e-6
-    )
-    assert variants["origin"]["result"]["ball_estimate"]["horizontal_deg"] != pytest.approx(
-        replay["ball_estimate"]["horizontal_deg"], abs=1e-6
-    )
-    assert variants["no-depth"]["result"]["ball_estimate"]["status"] != "accepted"
-    assert shot.camera_fusion_context == original_context
 
     baseline = []
     monkeypatch.setattr(
@@ -878,59 +852,3 @@ def test_runtime_capture_mode_can_supply_complete_unqualified_candidate_evidence
     encoded = json.dumps(startup, sort_keys=True, separators=(",", ":"))
     capture["contexts"][0]["id"] = hashlib.sha256(encoded.encode()).hexdigest()
     assert inspect_capture_compatibility(capture, mode_profile=profile).status == "incompatible"
-
-
-class TestTheTesterRunsTheServersPlacementChecks:
-    """C11: a placement for another rig is refused at setup, not later at the kiosk."""
-
-    RIG = "config/enclosure_v3_rig_geometry.json"
-    TILT = {"pitch_deg": 0.0, "roll_deg": 0.0, "camera_pitch_deg": 0.0}
-
-    def _files(self, tmp_path, **changes):
-        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
-
-        rig = RigGeometry.from_json(self.RIG)
-        right_mm, down_mm, forward_mm = rig.iwr_offset_mm
-        lens_mm = rig.lens_height_above_floor_mm
-        placement = _placement(
-            rig_geometry_sha256=rig.snapshot()["sha256"],
-            enclosure_to_target_lfu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-            # the v3 file's IWR receive-row offset through the declared mount, read
-            # from the file so a re-measured rig keeps this placement consistent
-            camera_origin_lfu=[0.0, 0.0, lens_mm / 1000.0],
-            radar_origin_lfu=[right_mm / 1000.0, forward_mm / 1000.0, (lens_mm - down_mm) / 1000.0],
-            reference_pose_deg={"pitch": 0.0, "roll": 0.0},
-        )
-        placement.update(changes)
-        artifact_path = tmp_path / "optical.json"
-        placement_path = tmp_path / "placement.json"
-        artifact_path.write_text(json.dumps(_artifact()), encoding="utf-8")
-        placement_path.write_text(json.dumps(placement), encoding="utf-8")
-        return artifact_path, placement_path
-
-    def _camera(self, artifact_path, placement_path):
-        from pathlib import Path  # noqa: PLC0415
-
-        from openflight.camera import tester_server as ts  # noqa: PLC0415
-
-        return ts._reference_ball_camera(  # pylint: disable=protected-access
-            ts.ARMS["arm6"], Path(self.RIG), self.TILT, artifact_path, placement_path
-        )
-
-    def test_a_placement_for_the_loaded_rig_builds(self, tmp_path):
-        camera = self._camera(*self._files(tmp_path))
-        assert camera.source == "calibrated_candidate_unqualified"
-
-    def test_the_lis3dh_roll_is_recorded_not_applied(self, tmp_path, monkeypatch):
-        # C8: the calibrated path used to turn by the raw LIS3DH roll
-        monkeypatch.setattr(self, "TILT", {**self.TILT, "roll_deg": -2.9})
-        camera = self._camera(*self._files(tmp_path))
-        assert camera.ray_model.snapshot["observed_pose_deg"]["roll"] == 0.0
-
-    def test_a_placement_for_another_rig_is_refused(self, tmp_path):
-        with pytest.raises(ValueError, match="rig_geometry_sha256"):
-            self._camera(*self._files(tmp_path, rig_geometry_sha256="another-rig"))
-
-    def test_origins_that_contradict_the_rigs_iwr_offset_are_refused(self, tmp_path):
-        with pytest.raises(ValueError, match="rig offset"):
-            self._camera(*self._files(tmp_path, radar_origin_lfu=[0.0, -0.08, 0.051]))

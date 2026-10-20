@@ -18,7 +18,6 @@ import serial
 from openflight.iwr6843 import device_lock, driver
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError, IWR6843DeviceLock
 from openflight.iwr6843.driver import IWR6843Radar
-from openflight.iwr6843.static_capture import StaticCaptureInputs, capture_static_range
 from tests.iwr6843_firmware_fake import FakeClock, FakePort, FirmwareModel, NoLock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "iwr6843" / "check_cli.py"
@@ -310,32 +309,3 @@ def test_standard_interface_check_names_the_enhanced_port_to_use(board, capsys, 
             "(/dev/serial/by-id/...-if00-port0)"
         )
     )
-
-
-def test_failed_static_capture_and_failed_cleanup_leave_the_port_free(board, tmp_path):
-    for name in ("radar.cfg", "firmware.bin", "rig.json", "calibration.json"):
-        (tmp_path / name).write_bytes(b"sensorStart\n")
-    inputs = StaticCaptureInputs(
-        capture_id="empty-001",
-        capture_kind="empty",
-        output_dir=tmp_path / "iwr",
-        config_path=tmp_path / "radar.cfg",
-        firmware_path=tmp_path / "firmware.bin",
-        rig_geometry_path=tmp_path / "rig.json",
-        calibration_path=tmp_path / "calibration.json",
-        port=BY_ID,
-        settle_s=0.25,
-    )
-    answer = board.firmware.receive
-    board.firmware.receive = lambda _data: None
-
-    result = capture_static_range(inputs, wait_for_settle=lambda *_args: False)
-
-    assert result["error"]["stage"] == "configure"
-    assert [error["operation"] for error in result["cleanup_errors"]] == ["stop_sensor"]
-    assert board.open_handles() == []
-    assert _lock_is_free(board)
-
-    board.firmware.receive = answer
-    assert CHECK.main(["--port", BY_ID]) == 0
-    assert _lock_is_free(board)

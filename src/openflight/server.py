@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import collision_model, core_eligibility, pi_trace, shot_metrics
+from . import instrumentation, kiosk_extensions, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -37,33 +37,27 @@ from .ble.protocol import (
     build_shot_deleted_event,
     build_shot_processing_event,
 )
-from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
 from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
     get_club_physics,
     get_club_simulation_profile,
 )
-from .flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
-from .gate_timing import GateEvent, warm_edge_reading_cache
 from .horizontal_frame import (
-    MIXED,
     frame_for,
     resolve_horizontal_offset,
     to_reported_deg,
 )
 from .inclinometer.orientation_check import default_mount_path as _default_lis3dh_mount_path
 from .launch_monitor import (
-    CARRY_CALCULATED,
     CARRY_ESTIMATED,
-    CARRY_MODEL_GEOMETRY,
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
-    SPIN_CONFIDENCE_HIGH,
     SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
 )
+from .numeric import finite as _finite
 from .ops243 import (
     UART_BAUD_COMMANDS,
     Direction,
@@ -71,7 +65,6 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
-from .pi_trace import _finite
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
@@ -89,12 +82,12 @@ from .sim import (
     load_sim_config,
     resolve_shot,
 )
+from .source_labels import MODEL_LABELS
 from .speed_correction import evaluate_experimental_total_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
-from .trace_routes import register_trace_routes
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -168,17 +161,6 @@ kld7_horizontal = None
 iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
-# The tester study page may set exposure and gain and read raw frames only when
-# the kiosk is started with --study-mode; production never exposes either.
-study_mode_enabled = False
-free_play_config: dict = {}
-# Free play's exposure ladder (19 Oct): the plan the tester server wrote for the
-# tapped resolution (--free-play-ladder), where it lives, and the kiosk's study of it.
-free_play_plan: dict | None = None
-free_play_plan_path: Path | None = None
-free_play_study = None
-tester_setup_required = False
-tester_config_hash: str | None = None
 camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
 # openflight.camera.fusion_processing.VERSION, kept here so the server needn't import the
@@ -390,32 +372,6 @@ class _LateShotUpdate:
         }
 
 
-def _log_fusion_diagnostic(
-    diagnostic_logger,
-    session_uuid: str | None,
-    shot: Shot,
-    *,
-    revision: int,
-    phase: str,
-    outcome: str,
-    reason: str | None = None,
-) -> None:
-    if diagnostic_logger is None or session_uuid is None:
-        return
-    try:
-        snapshot = build_fusion_diagnostic(
-            shot,
-            session_uuid=session_uuid,
-            revision=revision,
-            phase=phase,
-            outcome=outcome,
-            reason=reason,
-        )
-        diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
-
-
 def _enrichment_timing_payload(enrichment: _ShotEnrichmentResult) -> dict[str, object]:
     """Return explicit monotonic stage durations for lifecycle evidence."""
     return {
@@ -489,210 +445,24 @@ def _assign_shot_number(shot: Shot) -> None:
             _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
 
 
-# --- Pi trace hooks (--pi-trace, stage 1b) -------------------------------------------
-# Every hook is a no-op when tracing is off, and every trace call is guarded: a
-# trace error is logged and ignored, so it can never skip, delay or drop an emit
-# or any metric (R-F16; owner rule: 2 s is a goal, not a cutoff).
-# Revisions per trace attempt: each shot-carrying emit (first or late update)
-# advances it; a status notice carries the latest one.
-_trace_revisions: dict[str, int] = {}
-_trace_revisions_lock = threading.Lock()
+def _emit_shot_payload(
+    shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str
+) -> None:
+    """Emit one shot payload inside every extension's emit observer (a trace, say).
 
-
-def _trace_tag(  # pylint: disable=too-many-arguments
-    shot: Shot,
-    *,
-    revision: int | None,
-    final: bool,
-    update_kind: str,
-    core_eligible: bool,
-    core_fields=(),
-) -> dict | None:
-    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart.
-
-    ``final`` is True on every emit from ``_finalize_shot_detected``: the shot's first
-    finalized result (``update_kind`` "first") AND every late update after it
-    (``late_update``). It means "a finalized result", not "the last emit"; a later
-    revision may follow a final one. The initial OPS emit (also ``update_kind``
-    "first") and status notices carry False. A reader that needs the newest revision
-    compares ``revision`` numbers, never ``final``.
+    ``final`` is True on every emit from ``_finalize_shot_detected`` (the first
+    finalized result and each late update); ``update_kind`` is "first",
+    "late_update" or "status". An emit error still reaches the caller's handler.
     """
-    if pi_trace.get_recorder() is None or shot.trace_attempt_id is None:
-        return None
-    return {
-        "attempt_id": shot.trace_attempt_id,
-        "revision": revision,
-        "final": final,
-        "update_kind": update_kind,
-        "core_eligible": core_eligible,
-        "core_fields": list(core_fields),
-    }
-
-
-def _trace_gate_edge(edge: GateEvent) -> None:
-    """Record original GATE evidence without reading the pin again."""
-    recorder = pi_trace.get_recorder()
-    if recorder is None:
-        return
-    try:
-        edge_fields = edge.trace_fields()
-        mono_after_ns = edge_fields["mono_after_ns"]
-        recorder.note_edge(
-            monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
-            **edge_fields,
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] GATE edge mark failed; ignored", exc_info=True)
-
-
-def _trace_processor(processor) -> None:
-    """Instance-only marks around analysis and spin (D27: measure spin's Pi cost).
-
-    Wraps once: an instance whose methods are already its own attributes is left as is.
-    The class is never touched, so replay_config and its hash are unchanged.
-    """
-    for name, start_mark, end_mark in (
-        ("process_capture", "ops_analysis_started", "ops_core_ready"),
-        ("detect_spin_multitaper", "ops_spin_started", "ops_spin_done"),
+    with kiosk_extensions.observing_shot_emit(
+        shot, event, payload, final=final, update_kind=update_kind
     ):
-        if name not in vars(processor):
-            pi_trace.trace_method(processor, name, start_mark, end_mark)
-
-
-def _install_pi_trace_hooks() -> None:
-    """Before the OPS monitor starts: trace its processor, and observe BCM17 edges first."""
-    if pi_trace.get_recorder() is None:
-        return
-    try:
-        processor = getattr(monitor, "processor", None)
-        if processor is not None:
-            _trace_processor(processor)
-        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
-        if capture_monitor is not None:
-            warm_edge_reading_cache()
-            capture_monitor.prepend_gate_event_observer(_trace_gate_edge)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
+        socketio.emit(event, payload)
 
 
 def _non_finite_float(value) -> bool:
-    """A float that is NaN or infinite (the one check, on pi_trace._finite)."""
+    """A float that is NaN or infinite (the one check, numeric.finite)."""
     return isinstance(value, float) and not _finite(value)
-
-
-def _json_safe_core(core: dict) -> dict:
-    """The core values as written to the trace: a non-finite float as its exact text.
-
-    Shot payloads are already nulled by shot_to_dict; this only guards a direct
-    _traced_emit caller, so a raw NaN can't fail the trace's strict-JSON write.
-    """
-    return {
-        key: (repr(value) if _non_finite_float(value) else value) for key, value in core.items()
-    }
-
-
-def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str):
-    """Revision, eligibility and tag for one emit; None (and logged) on any trace error."""
-    try:
-        attempt_id = shot.trace_attempt_id
-        revision = None
-        if attempt_id is not None:
-            with _trace_revisions_lock:
-                revision = _trace_revisions.get(attempt_id, 0)
-                if update_kind != "status":
-                    revision += 1
-                    _trace_revisions[attempt_id] = revision
-        verdict = core_eligibility.evaluate(payload["shot"])
-        eligible = verdict["eligible"] and update_kind != "status"
-        reasons = (["status_update"] if update_kind == "status" else []) + verdict["reasons"]
-        tag = _trace_tag(
-            shot,
-            revision=revision,
-            final=final,
-            update_kind=update_kind,
-            core_eligible=eligible,
-            core_fields=verdict["core"].keys(),
-        )
-        if tag is not None:
-            payload["trace"] = tag
-        return {
-            "revision": revision,
-            "final": final,
-            "update_kind": update_kind,
-            "event": event,
-            "core_eligible": eligible,
-            "core_reasons": reasons,
-            "core": _json_safe_core(verdict["core"]),
-            "contract": verdict["contract"],
-        }
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning(
-            "[TRACE] tagging the %s emit failed; emitting untagged", event, exc_info=True
-        )
-        # No revision, but the summary must still see that a result went out (A-M1):
-        # an untagged emit is not measurable, never "no result emitted".
-        return {"update_kind": update_kind, "event": event, "final": final, "tagging_failed": True}
-
-
-def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str) -> None:
-    """Emit one shot payload; when tracing, tag it and mark invoked/returned around it.
-
-    The emit itself is never inside a trace guard: whatever the trace does, the
-    payload is emitted, and an emit error still reaches the caller's handler.
-    """
-    if pi_trace.get_recorder() is None:
-        socketio.emit(event, payload)
-        return
-    trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
-    pi_trace.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
-    error = None
-    try:
-        socketio.emit(event, payload)
-    except BaseException as exc:
-        error = type(exc).__name__
-        raise
-    finally:
-        pi_trace.mark("server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error)
-
-
-def _start_pi_trace(log_dir: Path | None) -> Path | None:
-    """Open the trace file beside the session logs (--pi-trace); None if it can't open.
-
-    A trace that cannot start is reported loudly and the kiosk runs untraced: the
-    trace must never cost a shot (owner rule).
-    """
-    directory = Path(log_dir).expanduser() if log_dir else Path.home() / "openflight_sessions"
-    path = directory / f"pi_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    with _trace_revisions_lock:
-        _trace_revisions.clear()
-    try:
-        pi_trace.set_recorder(pi_trace.TraceRecorder(path))
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.error(
-            "[SERVER] Pi trace could not start at %s; running untraced", path, exc_info=True
-        )
-        return None
-    return path
-
-
-def _start_browser_trace():
-    """Browser clock pings and post-render reports on the kiosk socket (--pi-trace).
-
-    None when tracing is off or the routes cannot start; the kiosk runs on either way.
-    """
-    try:
-        return register_trace_routes(socketio)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.error("[SERVER] Pi trace browser trace routes could not start", exc_info=True)
-        return None
-
-
-def _stop_pi_trace() -> None:
-    """Remove and close the recorder; say so when its footer could not be written."""
-    recorder = pi_trace.get_recorder()
-    pi_trace.set_recorder(None)
-    if recorder is not None and not recorder.close():
-        logger.warning("[SERVER] Pi trace closed incomplete: its footer is missing (T1 fails)")
 
 
 def _reset_shot_sequence() -> None:
@@ -750,7 +520,8 @@ def _register_shot_for_finalization(
             diagnostic_session_uuid=diagnostic_session_uuid,
         )
         if needs_watchdog:
-            _log_fusion_diagnostic(
+            kiosk_extensions.call_all(
+                "on_fusion_diagnostic",
                 diagnostic_logger,
                 diagnostic_session_uuid,
                 shot,
@@ -845,7 +616,7 @@ def _shot_finalization_worker_loop() -> None:
                 )
                 # Records the first-result timer only: enrichment keeps running and
                 # its late result updates this shot (server_late_update_applied).
-                pi_trace.mark(
+                instrumentation.mark(
                     "server_enrichment_watchdog_fired",
                     registered.shot.trace_attempt_id,
                     reason=diagnostic_reason,
@@ -922,7 +693,8 @@ def _shot_finalization_worker_loop() -> None:
                     },
                     exc=error,
                 )
-                _log_fusion_diagnostic(
+                kiosk_extensions.call_all(
+                    "on_fusion_diagnostic",
                     pending.diagnostic_logger,
                     pending.diagnostic_session_uuid,
                     pending.shot,
@@ -943,6 +715,20 @@ def _shot_finalization_worker_loop() -> None:
             if _shot_finalization_worker is current_thread:
                 _shot_finalization_worker = None
             _shot_finalization_condition.notify_all()
+
+
+def shot_processing_pending() -> bool:
+    """True while an accepted shot is still being enriched, finalized or published."""
+    with _shot_finalization_condition:
+        pending = bool(
+            _shot_finalization_registered
+            or _shot_finalization_current
+            or _shot_awaiting_late_enrichment
+            or _shot_finalization_running
+            or _deferred_shot_enrichment
+            or not shot_enrichment_queue.empty()
+        )
+    return shot_enrichment_task is not None or pending
 
 
 def _ops_only_reason(pending: _PendingShotFinalization | None, *, deadline_expired: bool) -> str:
@@ -989,7 +775,7 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         entry.registered.shot.shot_number,
         _SHOT_AWAITING_LATE_CAPACITY,
     )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_result_abandoned",
         entry.registered.shot.trace_attempt_id,
         reason="awaiting_capacity",
@@ -1065,7 +851,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
     for connector in sim_connectors:
         _run_shutdown_step(f"simulator connector stop ({connector.name})", connector.stop)
 
-    _run_shutdown_step("pi trace close", _stop_pi_trace)
+    for extension in kiosk_extensions.registered():
+        _run_shutdown_step(f"{extension.name} shutdown", extension.on_shutdown)
     return True
 
 
@@ -2011,16 +1798,7 @@ def _session_start_config() -> dict:
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     # the unit's camera tilt the setup handed over (P8-5), recorded beside the geometry
     config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
-    if free_play_config.get("enabled"):
-        config["free_play"] = {
-            key: free_play_config.get(key)
-            for key in ("enabled", "tester_id", "run_id", "unit_id", "geometry_unverified")
-        }
-        # the resolution the tester tapped, and the exposure ladder planned for it
-        config["free_play"]["resolution"] = (
-            deepcopy(free_play_plan["resolution"]) if free_play_plan is not None else None
-        )
-        config["free_play"]["exposure_plan"] = deepcopy(free_play_plan)
+    kiosk_extensions.call_all("session_start_config", config)
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
     if not camera_capture_config.get("enabled"):
@@ -2365,13 +2143,7 @@ def init_camera_capture(
             output_dir=output_dir,
             settings=settings,
             use_gpio_trigger=use_gpio_trigger,
-            trigger_evidence_provider=(
-                lambda timestamp: _tester_setup_readiness(
-                    require_camera_armed=False, checked_at=timestamp
-                )
-            )
-            if tester_setup_required
-            else None,
+            trigger_evidence_provider=kiosk_extensions.first("trigger_evidence_provider"),
             on_trigger_rejected=_log_camera_trigger_rejection,
         )
         # the swing exposure meters on the resting ball the box look finds (13 Oct)
@@ -2864,335 +2636,6 @@ def camera_capture_exposure_quality():
     return jsonify(quality)
 
 
-def _study_runtime():
-    """The capture runtime the study page may drive, or the response refusing it."""
-    if not study_mode_enabled:
-        return None, (jsonify({"error": "study mode is off"}), 404)
-    if camera_capture_runtime is None:
-        return None, (jsonify({"error": "camera capture is not running"}), 409)
-    if camera_capture_runtime.settings.auto_exposure:
-        return None, (
-            jsonify({"error": "exposure is automatic; start with manual exposure"}),
-            409,
-        )
-    return camera_capture_runtime, None
-
-
-def _loaded_setup_config_hash() -> str:
-    """The fingerprint of the rig geometry and LIS3DH settings this kiosk loaded."""
-    from .camera.setup_eligibility import setup_config_hash
-
-    address = inclinometer_runtime_config.get("i2c_address")
-    parsed_address = int(address, 0) if isinstance(address, str) else address
-    return setup_config_hash(
-        (rig_geometry_config.get("snapshot") or {}).get("sha256") or "",
-        inclinometer_runtime_config.get("i2c_bus") or 0,
-        parsed_address or 0,
-        inclinometer_runtime_config.get("zero_offset_deg") or 0.0,
-    )
-
-
-def _tester_setup_readiness(
-    *, require_camera_armed: bool = True, checked_at: float | None = None
-) -> dict:
-    """Report current health of the hardware required by the tester kiosk."""
-    checks = []
-    observations: dict = {}
-
-    def add(
-        check_id: str, passed: bool, reason: str | None = None, *, warned: bool = False
-    ) -> None:
-        checks.append(
-            {
-                "id": check_id,
-                "status": "warn" if warned else ("pass" if passed else "block"),
-                "reason": reason if warned or not passed else None,
-            }
-        )
-
-    actual_hash = _loaded_setup_config_hash()
-    add(
-        "geometry",
-        bool(tester_config_hash and actual_hash == tester_config_hash),
-        "loaded rig geometry and LIS3DH settings do not match the required setup fingerprint",
-    )
-    observations["geometry"] = {"actual_config_hash": actual_hash}
-    ops_thread = getattr(monitor, "_capture_thread", None)
-    ops_serial = getattr(getattr(monitor, "radar", None), "serial", None)
-    ops_ok = bool(
-        monitor is not None
-        and not mock_mode
-        and getattr(monitor, "_running", False)
-        and ops_thread is not None
-        and ops_thread.is_alive()
-        and ops_serial is not None
-        and getattr(ops_serial, "is_open", False)
-    )
-    add("ops", ops_ok, "OPS capture transport is not running with an open serial link")
-    observations["ops"] = {
-        "running": bool(getattr(monitor, "_running", False)),
-        "worker_alive": bool(ops_thread is not None and ops_thread.is_alive()),
-        "serial_open": bool(ops_serial is not None and getattr(ops_serial, "is_open", False)),
-    }
-
-    camera_status = camera_capture_runtime.status() if camera_capture_runtime is not None else {}
-    camera_age = camera_status.get("latest_frame_age_s")
-    capture_mode = (
-        getattr(camera_capture_runtime, "_startup_capture_mode", None)
-        if camera_capture_runtime is not None
-        else None
-    ) or {}
-    camera_model = ((capture_mode.get("camera_properties") or {}).get("Model") or "").casefold()
-    resolved_raw_size = ((capture_mode.get("resolved_config") or {}).get("raw") or {}).get("size")
-    requested_size = (
-        [camera_capture_runtime.settings.width, camera_capture_runtime.settings.height]
-        if camera_capture_runtime is not None
-        else None
-    )
-    camera_ok = bool(
-        camera_capture_runtime is not None
-        and (not camera_capture_runtime.settings.auto_exposure or free_play_config.get("enabled"))
-        and camera_status.get("running")
-        and (camera_status.get("armed") or not require_camera_armed)
-        and camera_age is not None
-        and camera_age <= 2.0
-        and ("ov9281" in camera_model or "ov9282" in camera_model)
-        and resolved_raw_size == requested_size
-    )
-    add(
-        "camera",
-        camera_ok,
-        "OV9281/OV9282 camera mode is not identified, dimension-matched, manual, armed, and fresh",
-    )
-    observations["camera"] = {
-        "running": bool(camera_status.get("running")),
-        "armed": bool(camera_status.get("armed")),
-        "latest_frame_age_s": camera_age,
-        "model": camera_model or None,
-        "resolved_raw_size": resolved_raw_size,
-        "requested_size": requested_size,
-    }
-
-    iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
-    iwr_worker = getattr(iwr_monitor, "_worker", None)
-    iwr_serial = getattr(getattr(iwr_monitor, "radar", None), "ser", None)
-    iwr_ok = bool(
-        iwr6843_runtime_config.get("enabled")
-        and iwr_monitor is not None
-        and getattr(iwr_monitor, "_running", False)
-        and getattr(iwr_monitor, "_armed", False)
-        and iwr_worker is not None
-        and iwr_worker.is_alive()
-        and iwr_serial is not None
-        and getattr(iwr_serial, "is_open", False)
-    )
-    add("iwr6843", iwr_ok, "IWR6843 capture transport, serial link, or GPIO arm is unavailable")
-    observations["iwr6843"] = {
-        "running": bool(getattr(iwr_monitor, "_running", False)),
-        "armed": bool(getattr(iwr_monitor, "_armed", False)),
-        "worker_alive": bool(iwr_worker is not None and iwr_worker.is_alive()),
-        "serial_open": bool(iwr_serial is not None and getattr(iwr_serial, "is_open", False)),
-    }
-    checked_at = time.time() if checked_at is None else checked_at
-    selection = (
-        inclinometer_service.snapshot_for_impact(checked_at)
-        if inclinometer_service is not None
-        else None
-    )
-    from .camera.setup_eligibility import placement_guard
-
-    expected_orientation = _expected_inclinometer_orientation()
-    placement = (
-        placement_guard(
-            selection.snapshot,
-            expected_pitch_deg=expected_orientation.get("pitch_deg") or 0.0,
-            expected_roll_deg=expected_orientation.get("roll_deg") or 0.0,
-        )
-        if selection is not None and selection.snapshot is not None
-        else {"ready": False, "reason": "no stable LIS3DH placement snapshot"}
-    )
-    lis_ok = bool(
-        inclinometer_runtime_config.get("enabled")
-        and selection is not None
-        and selection.status == "stable"
-        and selection.snapshot is not None
-        and placement["ready"]
-    )
-    lis_reason = placement.get("reason") or (
-        f"LIS3DH reading is {selection.status}"
-        if selection is not None
-        else "LIS3DH is not enabled"
-    )
-    add(
-        "lis3dh",
-        lis_ok,
-        placement.get("warning") or lis_reason,
-        warned=bool(lis_ok and placement.get("warned")),
-    )
-    observations["lis3dh"] = (
-        selection.to_dict()
-        if selection is not None and hasattr(selection, "to_dict")
-        else {
-            "status": selection.status if selection is not None else "unavailable",
-            "age_s": getattr(selection, "age_s", None),
-        }
-    )
-    observations["lis3dh"]["placement_guard"] = placement
-    active_logger = get_session_logger()
-    session_uuid = active_logger.active_session_uuid if active_logger is not None else None
-    run_dir = (
-        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
-    )
-    logging_ok = bool(active_logger is not None and session_uuid and run_dir)
-    add("logging", logging_ok, "required session logger is not active")
-    observations["runtime"] = {"run_dir": run_dir, "session_uuid": session_uuid}
-    blockers = [dict(check) for check in checks if check["status"] == "block"]
-    warnings = [dict(check) for check in checks if check["status"] == "warn"]
-    return {
-        "schema_version": 1,
-        "required": tester_setup_required,
-        "checked_at": checked_at,
-        "trigger_checked_at": checked_at,
-        "ready": not blockers,
-        "config_hash": tester_config_hash,
-        "checks": checks,
-        "blockers": [{"id": item["id"], "reason": item["reason"]} for item in blockers],
-        "warnings": [{"id": item["id"], "reason": item["reason"]} for item in warnings],
-        "observations": observations,
-    }
-
-
-@app.get("/api/camera/study/readiness")
-def study_setup_readiness():
-    """Expose the mandatory tester hardware gate without taking sensor ownership."""
-    if not (study_mode_enabled or free_play_config.get("enabled")):
-        return jsonify({"error": "study mode is off"}), 404
-    return jsonify(_tester_setup_readiness())
-
-
-def _tester_trigger_evidence_problem(evidence: object) -> str | None:
-    """Reject trigger evidence that is incomplete or belongs to another run."""
-    if not isinstance(evidence, dict):
-        return "no matching trigger readiness evidence"
-    if evidence.get("schema_version") != 1:
-        return "trigger readiness schema is not version 1"
-    if evidence.get("required") is not True:
-        return "trigger readiness does not mark the setup gate required"
-    if evidence.get("ready") is not True:
-        return "trigger readiness was blocked"
-    if evidence.get("config_hash") != tester_config_hash:
-        return "trigger readiness setup hash does not match the active requirement"
-    runtime = (evidence.get("observations") or {}).get("runtime") or {}
-    active_logger = get_session_logger()
-    active_uuid = active_logger.active_session_uuid if active_logger is not None else None
-    active_run_dir = (
-        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
-    )
-    if not active_uuid or runtime.get("session_uuid") != active_uuid:
-        return "trigger readiness belongs to a different or inactive logging session"
-    if not active_run_dir or runtime.get("run_dir") != active_run_dir:
-        return "trigger readiness belongs to a different runtime log directory"
-    return None
-
-
-# Readiness blockers that stay hard stops under D15: a sensor that is not
-# connected or running, and a rig that moved (the LIS3DH placement guard).
-_HARD_STOP_BLOCKERS = frozenset({"ops", "camera", "iwr6843", "lis3dh"})
-
-
-def _tester_trigger_hard_stop(evidence: dict) -> str | None:
-    """Why trigger evidence must still refuse the shot (D15), or None to keep it.
-
-    Only an unconnected sensor, a moved rig, or evidence from another session
-    refuses; everything else the evidence says becomes a note on the shot.
-    """
-    for blocker in evidence.get("blockers") or []:
-        if (
-            free_play_config.get("enabled")
-            and isinstance(blocker, dict)
-            and blocker.get("id") in {"camera", "iwr6843"}
-        ):
-            continue
-        if isinstance(blocker, dict) and blocker.get("id") in _HARD_STOP_BLOCKERS:
-            return f"{blocker.get('id')}: {blocker.get('reason')}"
-    runtime = (evidence.get("observations") or {}).get("runtime") or {}
-    active_logger = get_session_logger()
-    active_uuid = active_logger.active_session_uuid if active_logger is not None else None
-    recorded_uuid = runtime.get("session_uuid")
-    if recorded_uuid and active_uuid and recorded_uuid != active_uuid:
-        return "trigger readiness belongs to a different logging session"
-    active_run_dir = (
-        str(active_logger.log_dir.expanduser().resolve()) if active_logger is not None else None
-    )
-    recorded_run_dir = runtime.get("run_dir")
-    if recorded_run_dir and active_run_dir and recorded_run_dir != active_run_dir:
-        return "trigger readiness belongs to a different runtime log directory"
-    return None
-
-
-def _tester_trigger_evidence_notes(evidence: dict, problem: str) -> list[dict]:
-    """What a kept shot's trigger evidence said against the setup, as notes (P8-7)."""
-    notes = [{"id": "trigger_readiness", "reason": problem}]
-    for blocker in evidence.get("blockers") or []:
-        if isinstance(blocker, dict):
-            notes.append({"id": str(blocker.get("id")), "reason": str(blocker.get("reason"))})
-    return notes
-
-
-@app.route("/api/camera/study/controls", methods=["POST"])
-def study_camera_controls():
-    """Set exposure and gain live, without restarting the rolling buffer."""
-    runtime, refusal = _study_runtime()
-    if refusal is not None:
-        return refusal
-    body = request.get_json(silent=True) or {}
-    try:
-        applied = runtime.update_image_controls(
-            exposure_us=int(body["exposure_us"]),
-            gain=float(body["gain"]),
-            purpose=str(body.get("purpose", "capture")),
-        )
-    except (KeyError, TypeError, ValueError) as error:
-        return jsonify({"error": str(error)}), 400
-    except RuntimeError as error:
-        return jsonify({"error": str(error)}), 409
-    return jsonify(applied)
-
-
-@app.route("/api/camera/study/frames")
-def study_camera_frames():
-    """The next few raw frames, with the exposure and gain each was taken at."""
-    import io  # pylint: disable=import-outside-toplevel
-
-    import numpy as np  # pylint: disable=import-outside-toplevel
-
-    runtime, refusal = _study_runtime()
-    if refusal is not None:
-        return refusal
-    try:
-        count = max(1, min(20, int(request.args.get("n", 5))))
-    except ValueError:
-        return jsonify({"error": "n must be a whole number"}), 400
-    frames = runtime.recent_frames(count, timeout_s=2.0)
-    if len(frames) < count:
-        return jsonify({"error": "the camera did not deliver frames"}), 503
-    buffer = io.BytesIO()
-    np.savez(
-        buffer,
-        frames=np.stack([frame.image for frame in frames]),
-        exposure_us=np.asarray([frame.exposure_us for frame in frames], dtype=np.int32),
-        analogue_gain=np.asarray([frame.analogue_gain for frame in frames], dtype=np.float32),
-        sensor_timestamp_ns=np.asarray(
-            [frame.sensor_timestamp_ns for frame in frames], dtype=np.int64
-        ),
-    )
-    return Response(
-        buffer.getvalue(),
-        mimetype="application/octet-stream",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
 @app.route("/api/camera/replays/<replay_id>/prepare", methods=["GET", "POST"])
 def prepare_camera_replay(replay_id: str):
     """Create a cached MP4 only after an explicit replay interaction."""
@@ -3636,54 +3079,13 @@ def start_power_monitor(provider: str) -> None:
 _NO_RADAR_SHOT_REASONS = {"edge_without_dump", "dump_discarded"}
 
 
-def _ready_light_setup_problems() -> list[str]:
-    """The tester setup gate's red causes, from cheap reads only (P7-14).
-
-    The camera and radars are judged by the light itself; this adds what makes a
-    tester capture ineligible besides them: the admitted setup, the LIS3DH, the
-    session log and manual exposure.
-    """
-    from .camera.setup_eligibility import placement_guard
-
-    problems = []
-    if not tester_config_hash or _loaded_setup_config_hash() != tester_config_hash:
-        problems.append("no admitted setup: this rig or LIS3DH is not the admitted one")
-    if inclinometer_service is None or not inclinometer_runtime_config.get("enabled"):
-        problems.append("tilt sensor (LIS3DH) is not running")
-    else:
-        selection = inclinometer_service.snapshot_for_impact(time.time())
-        if selection.snapshot is None:
-            problems.append(f"tilt sensor reading is {selection.status}")
-        else:
-            expected = _expected_inclinometer_orientation()
-            placement = placement_guard(
-                selection.snapshot,
-                expected_pitch_deg=expected.get("pitch_deg") or 0.0,
-                expected_roll_deg=expected.get("roll_deg") or 0.0,
-            )
-            if not placement["ready"]:
-                problems.append(f"tilt sensor: {placement.get('reason')}")
-    active_logger = get_session_logger()
-    if active_logger is None or not active_logger.active_session_uuid:
-        problems.append("session log is not open")
-    if (
-        camera_capture_runtime is not None
-        and camera_capture_runtime.settings.auto_exposure
-        and not free_play_config.get("enabled")
-    ):
-        problems.append("camera exposure is automatic")
-    return problems
-
-
 def _ready_light_states() -> SensorStates | None:
     """What each sensor reports now, read from flags: never a serial or frame lock.
 
-    None, and the light off, outside a tester's kiosk (the ladder or plain swings),
-    and where nothing reports readiness (the shot simulator, swing-speed mode or
-    the streaming speed trigger).
+    None, and the light off, where nothing reports readiness (the shot simulator,
+    swing-speed mode or the streaming speed trigger). Extensions may add their own
+    causes (``KioskExtension.ready_light_states``).
     """
-    if not (tester_setup_required or study_mode_enabled):
-        return None
     if monitor is not None and (
         mock_mode or getattr(monitor, "trigger_type", None) not in ("sound", "hardware")
     ):
@@ -3709,22 +3111,10 @@ def _ready_light_states() -> SensorStates | None:
         iwr = {"running": False}
     camera = None
     if camera_capture_runtime is not None:
-        camera = {
-            **camera_capture_runtime.ready_snapshot(),
-            "free_play": bool(free_play_config.get("enabled")),
-            # free play's exposure ladder: amber while its setting changes
-            "exposure_study": (
-                free_play_study.ready_state() if free_play_study is not None else None
-            ),
-        }
+        camera = dict(camera_capture_runtime.ready_snapshot())
     elif camera_capture_config.get("error"):
-        camera = {"running": False}  # the kiosk runs on without it; a tester's swing cannot
-    return SensorStates(
-        ops=ops,
-        iwr=iwr,
-        camera=camera,
-        setup_problems=tuple(_ready_light_setup_problems()) if tester_setup_required else (),
-    )
+        camera = {"running": False}  # a requested camera that failed to start
+    return kiosk_extensions.adjust_ready_light(SensorStates(ops=ops, iwr=iwr, camera=camera))
 
 
 def _publish_ready_light() -> dict:
@@ -3784,21 +3174,6 @@ def _ready_light_trigger_outcome(event: dict) -> None:
 def ready_light_status():
     """The ready light for the tester page; the kiosk screen gets it on the socket."""
     return jsonify(ready_light.update(_ready_light_states()))
-
-
-@app.post("/api/ready-light/hold")
-def ready_light_hold():
-    """Hold the light red for what only the tester page knows (the ladder's phase)."""
-    if not study_mode_enabled:
-        return jsonify({"error": "study mode is off"}), 404
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return jsonify({"error": "request body must be an object"}), 400
-    cause = body.get("cause")
-    if cause is not None and (not isinstance(cause, str) or not cause.strip() or len(cause) > 120):
-        return jsonify({"error": "cause must be null or a short text"}), 400
-    ready_light.set_hold(cause.strip() if cause else None)
-    return jsonify(_publish_ready_light())
 
 
 @socketio.on("connect")
@@ -4358,7 +3733,7 @@ EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a p
 # spin_source values a model wrote; anything else is the radar's (or None)
 # a model's spin labels: calculated, model geometry (D39), or estimated (built on an
 # estimated input, V-formulas C2); none is ever measured
-_MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
+_MODEL_SPIN_SOURCES = MODEL_LABELS
 
 
 def _apply_calculated_spin(shot: Shot) -> bool:
@@ -4385,9 +3760,9 @@ def _apply_calculated_spin(shot: Shot) -> bool:
         return False
     shot.spin_rpm_calculated_empirical = spin_calc
     method = EMPIRICAL_SPIN_METHOD
-    if _collision_spin_feeds(shot):
-        spin_calc = shot.spin_rpm_collision
-        method = _collision_spin_method(shot)
+    model_spin = kiosk_extensions.first("model_spin", shot)
+    if model_spin is not None:
+        spin_calc, method = model_spin
     if shot.spin_source not in _MODEL_SPIN_SOURCES:
         shot.spin_rpm_measured = shot.spin_rpm
         shot.spin_method_measured = shot.spin_method
@@ -4511,7 +3886,7 @@ def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     """Validate the stable, upright LIS3DH pose used by calibrated projection."""
     if pose.get("status") != "stable" or pose.get("stable") is not True:
         raise ValueError("calibrated camera fusion requires a stable LIS3DH reading")
-    from .camera.setup_eligibility import (  # pylint: disable=import-outside-toplevel
+    from .inclinometer.placement import (  # pylint: disable=import-outside-toplevel
         placement_guard,
     )
 
@@ -4883,16 +4258,18 @@ def _trace_camera_frames(shot: Shot, camera_capture, camera_archive) -> None:
     Both are CLOCK_MONOTONIC readings the camera runtime took; a clip without them
     gets no mark (no stand-in time).
     """
-    if pi_trace.get_recorder() is None:
+    if instrumentation.get_recorder() is None:
         return
     try:
         metadata = getattr(camera_capture, "metadata", None) or {}
         trigger_ns = metadata.get("trigger_host_timestamp_ns")
         if trigger_ns is not None:
-            pi_trace.mark("camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns))
+            instrumentation.mark(
+                "camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns)
+            )
         host_ns = (camera_archive or {}).get("host_timestamp_ns")
         if host_ns is not None and len(host_ns):
-            pi_trace.mark(
+            instrumentation.mark(
                 "camera_last_frame", shot.trace_attempt_id, monotonic_ns=int(np.max(host_ns))
             )
     except Exception:  # pylint: disable=broad-exception-caught
@@ -4916,19 +4293,6 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
         archive=camera_archive,
         match_ms=(match_finished - match_started) * 1000.0,
         archive_load_ms=(archive_finished - archive_started) * 1000.0,
-    )
-
-
-def _attach_club_arc(shot: Shot, delivery) -> None:
-    """E1: the shot's club delivery from the arc, beside the chained cross-check.
-
-    ``delivery`` is the chained club delivery (dataclass or its persisted dict),
-    or None. Right-handed unless the golfer is set left-handed (owner rule).
-    """
-    from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
-
-    shot.club_delivery = club_delivery_payload(
-        delivery, club=shot.club, handedness=sim_player_state.handed
     )
 
 
@@ -5010,7 +4374,7 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
-        _attach_club_arc(shot, fused)
+        kiosk_extensions.call_all("on_club_delivery", shot, fused)
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -5210,329 +4574,13 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_fused_status = status
     shot.experimental_fused_attack_angle_confidence = "withheld"
     shot.experimental_fused_club_path_confidence = "withheld"
-    _attach_club_arc(shot, {"status": status})
+    kiosk_extensions.call_all("on_club_delivery", shot, {"status": status})
     shot.camera_fusion_context = {
         "schema": "openflight.camera.fusion_context",
         "version": CAMERA_FUSION_CONTEXT_VERSION,
         "available": False,
         "reason": reason,
     }
-
-
-def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
-    """Return the club path the kiosk shows, when it is accepted, and its source.
-
-    The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
-    canonical field, then the camera-fused path, and the IWR path only when
-    camera fusion did not run (the kiosk hides it otherwise). Candidate,
-    out-of-bounds, noisy, rejected and withheld paths return (None, None), so
-    face angle is never built on a path the kiosk does not show as a
-    measurement (audit F1). An IWR path without a horizontal phase reference
-    carries status "azimuth_uncalibrated", not "accepted", so it is left out
-    too (audit F8).
-    """
-    if shot.club_path_deg is not None:
-        return shot.club_path_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
-    if shot.experimental_fused_club_path_deg is not None:
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_club_path_confidence == "withheld"
-        ):
-            return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_club_path_deg, source
-    if shot.experimental_fused_status is not None:
-        return None, None
-    iwr_status = shot.experimental_club_path_status or ""
-    if shot.experimental_club_path_deg is not None and iwr_status.startswith("accepted"):
-        return shot.experimental_club_path_deg, "iwr"
-    return None, None
-
-
-def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
-    """The frame of the club path ``displayed_club_path`` chose (D36 item 2)."""
-    if path_source == "canonical":
-        return shot.club_path_frame
-    if path_source in ("camera_fused_chained", "camera_fused_ops"):
-        return shot.experimental_fused_club_path_frame
-    if path_source == "iwr":
-        return shot.experimental_club_path_frame
-    return None
-
-
-def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
-    """The attack angle the collision model may use, and its source.
-
-    Mirrors the kiosk's attack tile (ui liveMetrics.ts): the canonical field, then the
-    camera-fused attack unless fusion rejected it or withheld its confidence. The IWR
-    attack angle is only ever a candidate ("candidate_available"), so, like a path
-    that is not accepted (audit F1), it is never a collision input.
-    """
-    if _finite(shot.club_angle_deg):
-        return shot.club_angle_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
-    if _finite(shot.experimental_fused_attack_angle_deg):
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_attack_angle_confidence == "withheld"
-        ):
-            return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_attack_angle_deg, source
-    return None, None
-
-
-def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
-    """The horizontal launch as a collision input, "estimated" when it is weak (C2).
-
-    A low-coherence IWR horizontal, or one whose confidence is below the spin axis's
-    floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
-    every output built on it is labelled "estimated", with this reason.
-    """
-    measured = _measured_angle_input(
-        shot.launch_angle_horizontal,
-        source,
-        frame=shot.launch_angle_horizontal_frame,
-        name="launch direction",
-    )
-    if not measured.present:
-        return measured
-    confidence = shot.launch_angle_horizontal_confidence
-    if shot.launch_angle_horizontal_source == "radar_low_coherence":
-        reason = "horizontal launch is low-coherence (radar_low_coherence)"
-    elif not _finite(confidence):
-        reason = "horizontal launch confidence not given"
-    elif confidence < SPIN_AXIS_MIN_CONFIDENCE:
-        reason = f"horizontal launch confidence {confidence:.2f} below {SPIN_AXIS_MIN_CONFIDENCE}"
-    else:
-        return measured
-    return collision_model.Input(
-        measured.value,
-        collision_model.LABEL_ESTIMATED,
-        measured.source,
-        measured.frame,
-        reason=reason,
-    )
-
-
-def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_model.Input:
-    """A launch angle as a collision input: an estimated (table) angle is not an input."""
-    if value is None or source is None:
-        return collision_model.Input(None, reason=f"{name} not measured")
-    if source == "estimated":
-        return collision_model.Input(None, reason=f"{name} is a table estimate, not measured")
-    return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
-
-
-# E1 arc labels the collision model takes as inputs: a "measured" arc entry is the
-# chained value displayed_club_path / displayed_attack_angle already read.
-_ARC_INPUT_LABELS = (collision_model.LABEL_CALCULATED, collision_model.LABEL_MODEL_GEOMETRY)
-
-
-def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Input:
-    """E1's selected arc value for ``name`` under its own label, or a missing input.
-
-    Used only when the kiosk has no accepted measured value. The arc's value enters
-    as "calculated" (fitted from the shot alone) or "model_geometry" (leaning on the
-    published prior, D39), and every collision output built on it inherits that label.
-    A not-measured or non-finite arc value is a missing input (nothing is filled in).
-    """
-    from openflight.club_arc import selected_path_and_attack  # noqa: PLC0415
-
-    entry = selected_path_and_attack(shot.club_delivery).get(name)
-    entry = entry if isinstance(entry, dict) else {}
-    value, label = entry.get("value"), entry.get("status")
-    if label in _ARC_INPUT_LABELS and _finite(value):
-        frame = entry.get("frame") if name == "club_path_deg" else None
-        return collision_model.Input(float(value), label, entry.get("source"), frame)
-    reason = entry.get("reason")
-    return collision_model.Input(
-        None, reason=f"{missing}; club arc: {reason}" if reason else missing
-    )
-
-
-def _collision_inputs(shot: Shot) -> dict:
-    """The shot's own collision inputs, each labelled (E2).
-
-    The kiosk's accepted measured path and attack come first. Without one, E1's arc
-    value enters under its own label ("calculated", or "model_geometry" for the arc
-    prior, D39), which every output built on it then inherits.
-    """
-    path, path_source = displayed_club_path(shot)
-    attack, attack_source = displayed_attack_angle(shot)
-    launch_source = shot.launch_angle_horizontal_source
-    if launch_source and shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-        launch_source = f"{launch_source} (azimuth uncalibrated)"
-    speed = shot.club_speed_mph
-    return {
-        "club_path": (
-            collision_model.Input(
-                path,
-                collision_model.LABEL_MEASURED,
-                path_source,
-                _club_path_frame_of(shot, path_source),
-            )
-            if path is not None
-            else _club_arc_input(shot, "club_path_deg", "no accepted club path")
-        ),
-        "attack_angle": (
-            collision_model.Input(attack, collision_model.LABEL_MEASURED, attack_source)
-            if attack is not None
-            else _club_arc_input(shot, "attack_angle_deg", "no accepted attack angle")
-        ),
-        "launch_horizontal": _horizontal_launch_input(
-            shot,
-            launch_source if shot.launch_angle_horizontal_source != "estimated" else "estimated",
-        ),
-        "launch_vertical": _measured_angle_input(
-            shot.launch_angle_vertical, shot.launch_angle_vertical_source, name="vertical launch"
-        ),
-        "club_speed_mph": (
-            collision_model.Input(speed, collision_model.LABEL_MEASURED, "ops243_radial")
-            if _finite(speed) and speed > 0
-            else collision_model.Input(None, reason="club speed not measured")
-        ),
-    }
-
-
-def _round_or_none(value, digits: int):
-    return round(value, digits) if value is not None else None
-
-
-def _accepted_measured_spin(shot: Shot) -> bool:
-    """A measured spin carry and simulators accept (ballistics.resolve_launch, sim resolver)."""
-    return (
-        shot.spin_source not in _MODEL_SPIN_SOURCES
-        and _finite(shot.spin_rpm)
-        and shot.spin_rpm > 0
-        and _finite(shot.spin_confidence)
-        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
-    )
-
-
-def _collision_spin_status(shot: Shot) -> str | None:
-    """The label of this shot's collision spin, "calculated" or "model_geometry", or None.
-
-    Either becomes the shot's spin, under its own label, when there is no accepted
-    measured spin. A spin built on model geometry (D39) feeds the flight model (D38)
-    labelled so, but is not "measured or calculated" (D31): simulators do not get it.
-    """
-    metrics = (shot.collision_model or {}).get("metrics", {})
-    status = metrics.get("spin_rate", {}).get("status")
-    if shot.spin_rpm_collision is None or status not in _MODEL_SPIN_SOURCES:
-        return None
-    return status
-
-
-def _collision_spin_feeds(shot: Shot) -> bool:
-    """Whether this shot's collision spin is calculated (the --calculated-spin formula
-    yields to it; a model-geometry spin yields to that formula's calculated value)."""
-    return _collision_spin_status(shot) == "calculated"
-
-
-def _collision_spin_method(shot: Shot) -> str:
-    """Shot.spin_method for the collision spin: Penner 2001 and its inputs' label."""
-    inputs = (shot.collision_model or {}).get("inputs", {})
-    labels = [record.get("label") for record in inputs.values() if record.get("value") is not None]
-    return collision_model.shot_spin_method(_collision_spin_status(shot) or "", labels)
-
-
-def _attach_collision_model(shot: Shot) -> None:
-    """Face, loft, spin loft, face to path, D-plane tilt, spin and spin axis (E2).
-
-    Replaces the fixed 0.8-weight face estimate and the "launch minus path" spin-axis
-    proxy with ``collision_model`` (published sources, labelled calculated). Each run
-    starts from scratch, so a late re-run never keeps an earlier run's values.
-    """
-    result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
-    metrics = result.metrics
-    # a weak horizontal launch no longer withholds the axis: the input is "estimated"
-    # (_horizontal_launch_input) and so is the axis, with the reason (C2)
-    axis = metrics["spin_axis"]
-    shot.collision_model = result.to_dict()
-    shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
-    shot.dynamic_loft_deg = _round_or_none(metrics["dynamic_loft"].value, 1)
-    shot.spin_loft_deg = _round_or_none(metrics["spin_loft"].value, 1)
-    shot.face_to_path_deg = _round_or_none(metrics["face_to_path"].value, 1)
-    shot.d_plane_tilt_deg = _round_or_none(metrics["d_plane_tilt"].value, 1)
-    shot.spin_rpm_collision = _round_or_none(metrics["spin_rate"].value, 0)
-
-    # The kiosk's face tile reads the experimental fields; they mirror the new value.
-    face = metrics["face_angle"]
-    shot.experimental_face_angle_deg = shot.face_angle_deg
-    shot.experimental_face_angle_frame = face.frame if face.present else None
-    if face.present:
-        status = "d_plane_estimate"
-        if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-            status += "_azimuth_uncalibrated"
-        if face.status == collision_model.STATUS_ESTIMATED:
-            status += "_estimated"
-        if face.frame == MIXED:
-            status += "_mixed_frames"
-        if face.status == collision_model.STATUS_MODEL_GEOMETRY:
-            status += "_model_geometry"
-        shot.experimental_face_angle_status = status
-        shot.experimental_face_angle_path_source = result.inputs["club_path"].source
-        shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
-    else:
-        shot.experimental_face_angle_status = (
-            "missing_measured_start_direction"
-            if not result.inputs["launch_horizontal"].present
-            else "missing_accepted_club_path"
-            if not result.inputs["club_path"].present
-            else "missing_club_category"
-        )
-        shot.experimental_face_angle_path_source = None
-        shot.experimental_face_angle_launch_source = None
-
-    # a calculated axis, or one built on model geometry (D39) under that label
-    if axis.present and axis.status in (
-        collision_model.STATUS_CALCULATED,
-        collision_model.STATUS_MODEL_GEOMETRY,
-        collision_model.STATUS_ESTIMATED,
-    ):
-        shot.spin_axis_deg = round(axis.value, 1)
-        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis, result.inputs)
-        shot.spin_axis_frame = axis.frame
-    elif (
-        collision_model.is_calculated_source(shot.spin_axis_source)
-        or collision_model.is_model_geometry_source(shot.spin_axis_source)
-        or collision_model.is_estimated_source(shot.spin_axis_source)
-    ):
-        shot.spin_axis_deg = None
-        shot.spin_axis_source = None
-        shot.spin_axis_frame = None
-
-    spin_status = _collision_spin_status(shot)
-    if spin_status is not None and not _accepted_measured_spin(shot):
-        if shot.spin_source not in _MODEL_SPIN_SOURCES:
-            shot.spin_rpm_measured = shot.spin_rpm
-            shot.spin_method_measured = shot.spin_method
-        shot.spin_rpm = shot.spin_rpm_collision
-        shot.spin_source = spin_status
-        shot.spin_method = _collision_spin_method(shot)
-        shot.spin_confidence = None
-    elif shot.spin_source in _MODEL_SPIN_SOURCES and spin_status is None:
-        # an earlier run's model spin; give back the measured one it displaced
-        shot.spin_rpm = shot.spin_rpm_measured
-        shot.spin_method = shot.spin_method_measured
-        shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
-    if shot.face_angle_deg is not None or shot.spin_rpm_collision is not None:
-        logger.info(
-            "[SERVER] Collision model: face=%s loft=%s spin loft=%s spin=%s rpm axis=%s",
-            shot.face_angle_deg,
-            shot.dynamic_loft_deg,
-            shot.spin_loft_deg,
-            shot.spin_rpm_collision,
-            shot.spin_axis_deg,
-        )
 
 
 # 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
@@ -5802,13 +4850,7 @@ def _fuse_camera_measurements(
             shot_number = getattr(shot, "shot_number", None)
             if not session_uuid or not isinstance(shot_number, int) or shot_number <= 0:
                 raise ValueError("active session and positive shot identity are required")
-            trigger_setup = getattr(camera_capture, "metadata", {}).get("tester_setup", {})
-            trigger_runtime = trigger_setup.get("observations", {}).get("runtime", {})
-            trigger_session_uuid = trigger_runtime.get("session_uuid")
-            if tester_setup_required and trigger_session_uuid != session_uuid:
-                raise ValueError(
-                    "camera trigger session does not match the registered shot session"
-                )
+            kiosk_extensions.call_all("check_camera_capture", shot, camera_capture, session_uuid)
             context = build_context(
                 geometry=geometry,
                 lighting_eligible=analysis_eligible,
@@ -5882,7 +4924,7 @@ def _fuse_camera_measurements(
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
-            _attach_club_arc(shot, fused)
+            kiosk_extensions.call_all("on_club_delivery", shot, fused)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
             shot.camera_fusion_context = {
@@ -5901,7 +4943,7 @@ def _fuse_camera_measurements(
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
             if "tee_slant_range_m" in str(error):
                 # the tee contract stands (P8-7 gate 2); the shot names what it lacked
-                from openflight.review_metrics import NO_TEE_RANGE  # noqa: PLC0415
+                from openflight.camera.geometry_contract import NO_TEE_RANGE  # noqa: PLC0415
 
                 camera_notes.append(NO_TEE_RANGE)
                 shot.camera_notes = camera_notes
@@ -5951,7 +4993,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode == "mock" and _mock_enrichment_enabled():
         return _ShotEnrichmentResult(iwr6843_ms=monitor.enrich(shot))
 
-    pi_trace.mark("enrichment_started", shot.trace_attempt_id)
+    instrumentation.mark("enrichment_started", shot.trace_attempt_id)
     enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -5961,9 +5003,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
-    pi_trace.mark("iwr_process_started", shot.trace_attempt_id)
+    instrumentation.mark("iwr_process_started", shot.trace_attempt_id)
     iwr6843_ms = _process_iwr6843_angle(shot)
-    pi_trace.mark("iwr_process_done", shot.trace_attempt_id)
+    instrumentation.mark("iwr_process_done", shot.trace_attempt_id)
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -6170,7 +5212,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     camera_archive = None
     if camera_future is not None:
         camera_wait_started = time.monotonic()
-        pi_trace.mark("camera_wait_started", shot.trace_attempt_id)
+        instrumentation.mark("camera_wait_started", shot.trace_attempt_id)
         try:
             prefetched = camera_future.result()
             camera_capture = prefetched.capture
@@ -6190,7 +5232,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             )
         finally:
             camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
-            pi_trace.mark("camera_ready", shot.trace_attempt_id, matched=camera_capture is not None)
+            instrumentation.mark(
+                "camera_ready", shot.trace_attempt_id, matched=camera_capture is not None
+            )
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -6198,9 +5242,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         if session_log:
             shot_number = _shot_number_for_log(shot, session_log)
             if camera_capture is not None:
-                if free_play_config.get("enabled"):
-                    shot.free_play_exposure = _free_play_exposure_from_clip(camera_capture)
-                    _judge_free_play_clip(shot, camera_capture)
+                kiosk_extensions.call_all("on_camera_capture", shot, camera_capture)
                 session_log.log_camera_capture(
                     shot_number=shot_number,
                     shot_timestamp=shot.impact_timestamp,
@@ -6247,8 +5289,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
-        pi_trace.mark("camera_analysis_done", shot.trace_attempt_id)
-    _attach_collision_model(shot)
+        instrumentation.mark("camera_analysis_done", shot.trace_attempt_id)
+    # a shot model (an extension's) builds face, loft and spin axis from the inputs
+    kiosk_extensions.call_all("after_enrichment", shot)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,
@@ -6278,7 +5321,8 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             geometry_source=geometry_source,
             ops_ball_lateral_ft=lateral_ft,
         )
-    _attach_full_speeds(shot)
+    # a shot model (an extension's) projects the radial speeds to full speeds
+    kiosk_extensions.call_all("after_speed_contract", shot)
 
 
 def _shot_speed_correction_geometry(shot: Shot):
@@ -6301,69 +5345,6 @@ def _shot_speed_correction_geometry(shot: Shot):
         return _ops_speed_correction_geometry(calibration)
     except (TypeError, ValueError):
         return None
-
-
-# E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
-CLUB_SPEED_NOT_FULL_REASON = (
-    "the OPS club speed is a percentile over 4-18 ms before impact, not one FFT-window "
-    "reading, and the head's direction at that time needs the swing arc (E1) and a fixed "
-    "head point (W6, W9)"
-)
-
-
-def _attach_full_speeds(shot: Shot) -> None:
-    """E3: full ball speed by measured projection, full club speed and full smash.
-
-    The canonical radial ball speed is unchanged; each full speed is its own field
-    with its status, range and reason (openflight.full_speed).
-    """
-    from .full_speed import (  # noqa: PLC0415
-        evaluate_full_ball_speed,
-        evaluate_full_club_speed,
-        evaluate_full_smash,
-    )
-
-    # this shot's own range and how sure it is (13 Oct)
-    calibration = shot_iwr_calibration(shot)
-
-    def calibrated(name: str):
-        try:
-            return getattr(calibration, name, None)
-        except ValueError:  # the radar height is unset until the rig sets it
-            return None
-
-    shot.ball_speed_full = evaluate_full_ball_speed(
-        ops_track=shot.ops_speed_track,
-        vertical_deg=shot.launch_angle_vertical,
-        vertical_source=shot.launch_angle_vertical_source,
-        horizontal_deg=shot.launch_angle_horizontal,
-        horizontal_source=shot.launch_angle_horizontal_source,
-        horizontal_status=shot.launch_angle_horizontal_status,
-        horizontal_frame=shot.launch_angle_horizontal_frame,
-        horizontal_offset_deg=horizontal_offset_deg,
-        rig=rig_geometry,
-        tee_range_m=calibrated("tee_range_m"),
-        tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
-        tee_range_source=getattr(shot, "ball_range_source", None),
-        radar_height_m=calibrated("radar_height_m"),
-        ball_height_m=calibrated("tee_ball_height_m"),
-        tee_side_offset_m=(setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
-    )
-    # the flight model (E4) reads the value alone: calculated, or None
-    shot.ball_speed_full_mph = (
-        shot.ball_speed_full["value_mph"]
-        if shot.ball_speed_full.get("status") == "calculated"
-        else None
-    )
-    shot.club_speed_full = evaluate_full_club_speed(
-        radial_mph=None,
-        head_position_m=None,
-        direction=None,
-        ops_position_m=None,
-        direction_source=None,
-        reason=CLUB_SPEED_NOT_FULL_REASON,
-    )
-    shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 
 
 def _carry_log_text(shot: Shot, source: str | None) -> str:
@@ -6453,40 +5434,21 @@ def _finalize_shot_detected(
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
-        # E4: every flight output, as measured (the shot's supplied air density, or
-        # ISA) and normalized, each labelled; carry below is the as-measured carry.
-        flight = compute_flight(shot, substitutes=not fusion, enabled=ballistics_enabled)
-        shot.flight = flight.to_dict()
-        conditions, trajectory = flight.conditions, flight.as_measured
-        if trajectory is None and fusion:
-            # a fusion unit builds carry only from measured inputs (D17):
-            # nothing already on the shot stands in for the simulator
+        # A flight model (an extension's) simulates every flight output and commits
+        # the carry. Without one, a fusion unit has no carry (D17) and an OPS-only
+        # unit takes the table estimate.
+        outcome = kiosk_extensions.first(
+            "simulate_carry", shot, fusion=fusion, enabled=ballistics_enabled
+        )
+        if outcome is None and fusion:
             shot.carry_spin_adjusted = None
             shot.carry_status = CARRY_NOT_MEASURED
-            logger.info(
-                "[SERVER] Carry not measured: %s",
-                shot.flight["as_measured"]["metrics"]["carry"]["reason"],
-            )
-        elif trajectory is not None:
-            shot.carry_spin_adjusted = trajectory.carry_yards
-            if not fusion:
-                shot.carry_status = CARRY_ESTIMATED
-            elif flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
-                shot.carry_status = CARRY_MODEL_GEOMETRY
-            elif flight.status == CARRY_ESTIMATED:
-                # an estimated input (the OPS line-of-sight ball speed): the flight's label
-                shot.carry_status = CARRY_ESTIMATED
-            else:
-                # the flight's own label: a simulated carry is calculated (D38)
-                shot.carry_status = CARRY_CALCULATED
-            carry_source = "ballistic"
-            logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
-                shot.carry_spin_adjusted,
-                conditions.spin_rpm,
-                conditions.spin_source,
-            )
-        else:
+            logger.info("[SERVER] Carry not measured: no flight model")
+        elif outcome is None:
+            outcome = kiosk_extensions.CarryOutcome(source=None, table_reason="no flight model")
+        if outcome is not None:
+            carry_source = outcome.source
+        if outcome is not None and outcome.table_reason is not None:
             has_reliable_spin = (
                 shot.spin_rpm
                 and shot.spin_rpm > 0
@@ -6506,14 +5468,9 @@ def _finalize_shot_detected(
             )
             shot.carry_status = CARRY_ESTIMATED
             carry_source = "table with spin"
-            reason = (
-                "ballistics disabled"
-                if not ballistics_enabled
-                else ("no launch angle" if conditions is None else "supplied air density invalid")
-            )
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
-                reason,
+                outcome.table_reason,
                 shot.carry_spin_adjusted,
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
@@ -6526,7 +5483,8 @@ def _finalize_shot_detected(
             "%.0f" % (shot.spin_peak_freq_hz * 60) if shot.spin_peak_freq_hz is not None else "N/A",
         )
 
-    _log_fusion_diagnostic(
+    kiosk_extensions.call_all(
+        "on_fusion_diagnostic",
         diagnostic_logger,
         diagnostic_session_uuid,
         shot,
@@ -6636,7 +5594,7 @@ def _finalize_shot_detected(
             shot
         )
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             emit_event,
             {"shot": shot_data, "stats": stats},
@@ -6845,7 +5803,7 @@ def _queue_ordered_shot_finalization(
         "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
         shot_number,
     )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_result_unmatched",
         getattr(source_shot, "trace_attempt_id", None),
         reason="shot_not_awaiting_enrichment",
@@ -6916,7 +5874,7 @@ def _publish_late_enrichment(
             },
             exc=error,
         )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_update_applied",
         shot.trace_attempt_id,
         state=state,
@@ -7058,7 +6016,7 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         shot_data = shot_to_dict(shot)
         _record_server_publication_invocation(shot)
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             "shot",
             {
@@ -7096,7 +6054,7 @@ def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None
     if camera_capture_runtime is not None:
         hardware.append("camera")
     try:
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             "shot_update",
             {
@@ -7232,258 +6190,31 @@ def on_shot_detected(shot: Shot) -> None:
         _handle_shot_detected(shot)
 
 
-def load_free_play_plan(path) -> dict:
-    """Read free play's exposure plan (``free_play_ladder.build_plan``) for this run."""
-    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
-
-    global free_play_plan, free_play_plan_path  # pylint: disable=global-statement
-    source = Path(path)
-    try:
-        plan = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise ValueError(f"free play's exposure plan {source} is unreadable: {error}") from error
-    if not isinstance(plan, dict) or plan.get("schema") != free_play_ladder.PLAN_SCHEMA:
-        raise ValueError(f"{source} is not a {free_play_ladder.PLAN_SCHEMA} exposure plan")
-    free_play_plan, free_play_plan_path = plan, source
-    return plan
-
-
-def init_free_play_study(*, run_async=None, settle_s: float | None = None):
-    """Start the kiosk's study of the plan, on the running camera (or none).
-
-    The camera was started at the plan's startup controls: the first rung, held,
-    or the automatic seed when no rung can run. The study is kept beside the plan.
-    """
-    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
-
-    global free_play_study  # pylint: disable=global-statement
-    if free_play_plan is None or free_play_plan_path is None:
-        free_play_study = None
-        return None
-    runtime = camera_capture_runtime
-    limits = getattr(runtime, "sensor_limits", None) if runtime is not None else None
-    options = {}
-    if run_async is not None:
-        options["run_async"] = run_async
-    if settle_s is not None:
-        options["settle_s"] = settle_s
-    free_play_study = free_play_ladder.FreePlayExposureStudy(
-        free_play_plan,
-        free_play_plan_path.parent / free_play_ladder.STATE_NAME,
-        apply_controls=runtime.apply_held_controls if runtime is not None else None,
-        begin_automatic=runtime.begin_automatic_exposure if runtime is not None else None,
-        current_controls=(
-            (lambda: (runtime.settings.exposure_us, runtime.settings.gain))
-            if runtime is not None
-            else None
-        ),
-        live_sensor_min_us=limits.exposure_min_us if limits is not None else None,
-        run_id=free_play_config.get("run_id"),
-        **options,
-    )
-    return free_play_study
-
-
-def _free_play_progress() -> dict | None:
-    """The study's line for the kiosk band and the tester page, or None without one."""
-    study = free_play_study
-    return study.progress() if study is not None else None
-
-
-def _count_free_play_shot(shot: Shot) -> None:
-    """Count a real (OPS) shot toward the current rung and record its ladder fields.
-
-    Called from the serialized shot callback, so rungs advance in impact order. A
-    false trigger's clip never gets here, so it never counts.
-    """
-    study = free_play_study
-    if study is None:
-        shot.free_play_exposure_study = None
-        return
-    try:
-        shot.free_play_exposure_study = study.on_shot(shot.shot_number)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[FREE PLAY] Exposure study could not count a shot", exc_info=True)
-        shot.free_play_exposure_study = {"error": f"{type(error).__name__}: {error}"}
-
-
-def _judge_free_play_clip(shot: Shot, capture) -> None:
-    """The ladder's picture-only verdict for the shot's own clip, on the shot and its rung."""
-    from .camera import free_play_ladder  # pylint: disable=import-outside-toplevel
-
-    record = shot.free_play_exposure_study
-    study = free_play_study
-    if study is None or not isinstance(record, dict) or "ladder_phase" not in record:
-        return
-    if capture is None:
-        verdict = free_play_ladder.no_capture_verdict("no matched camera capture")
-    elif capture.error or capture.path is None:
-        verdict = free_play_ladder.no_capture_verdict(
-            f"the clip was not saved: {capture.error or 'no path'}"
-        )
-    else:
-        settings = getattr(camera_capture_runtime, "settings", None)
-        on_rung = record["ladder_phase"] == "ladder"
-        verdict = free_play_ladder.judge_swing(
-            Path(capture.path),
-            arm_id=record["resolution"]["arm_id"],
-            rung_id=record["rung_id"],
-            # an automatic shot is judged at the controls its own trigger recorded
-            exposure_us=record["exposure_us"] if on_rung else None,
-            gain=record["gain"] if on_rung else None,
-            expected_ball=getattr(settings, "setup_ball", None),
-            zone_box=getattr(settings, "hitting_zone", None),
-        )
-    shot.free_play_exposure_study = {**record, "verdict": verdict}
-    try:
-        study.record_verdict(shot.shot_number, verdict)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[FREE PLAY] Exposure study could not file a verdict", exc_info=True)
-
-
-def _free_play_exposure_from_clip(capture) -> dict:
-    """The free-play exposure record from the shot's own clip (F6).
-
-    The clip's ``settings`` is the capture's startup snapshot and holds no lens;
-    the lens the clip was taken through is its own top-level ``lens`` key.
-    """
-    metadata = capture.metadata or {}
-    return {
-        "status": "recorded" if not capture.error else "capture_error",
-        "reason": capture.error,
-        "decision_scope": "clip",
-        "decision": deepcopy(metadata.get("auto_exposure")),
-        "decision_reason": None,
-        "lens_scope": "clip",
-        "lens": deepcopy(metadata.get("lens")),
-        "capture_settings": deepcopy(metadata.get("settings")),
-        "capture_mode": deepcopy(metadata.get("capture_mode")),
-    }
-
-
-def _free_play_exposure_at_shot() -> dict:
-    """The record for a shot with no matched clip: the policy's live decision.
-
-    Read when the shot is detected and labelled ``live_at_shot``: it is what the
-    swing-exposure policy held then, not a clip's measurement. A camera that
-    cannot answer leaves the decision missing, with its reason.
-    """
-    record = {
-        "status": "unavailable",
-        "reason": "no matched camera capture",
-        "decision_scope": None,
-        "decision": None,
-        "decision_reason": "no camera runtime",
-        "lens_scope": None,
-        "lens": None,
-        "capture_settings": deepcopy(camera_capture_config),
-    }
-    runtime = camera_capture_runtime
-    if runtime is None:
-        return record
-    try:
-        decision = dict(runtime.auto_exposure_status())
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        record["decision_reason"] = f"auto_exposure_status failed: {error}"
-    else:
-        decision.pop("recent_decisions", None)  # the live page's log, not this shot's
-        record.update(
-            decision_scope="live_at_shot", decision=deepcopy(decision), decision_reason=None
-        )
-    lens = getattr(getattr(runtime, "settings", None), "lens", None)
-    if lens:
-        record.update(lens_scope="kiosk_run", lens=deepcopy(dict(lens)))
-    return record
-
-
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
     shot.stage_timing = clone_stage_timing(shot.stage_timing)
-    if pi_trace.get_recorder() is not None:
+    if instrumentation.get_recorder() is not None:
         # Phase A join: the monitor calls this synchronously in its capture thread,
         # before its next wait, so the current OPS attempt is this shot's (pinned by
         # test_phase_a_join_invariant...; Task 12 replaces it with an explicit ID).
-        shot.trace_attempt_id = pi_trace.current_ops_attempt()
-        pi_trace.mark(
+        shot.trace_attempt_id = instrumentation.current_ops_attempt()
+        instrumentation.mark(
             "server_callback_started",
             shot.trace_attempt_id,
             monotonic_ns=shot.server_callback_started_monotonic_ns,
             join="serial_capture_loop",
         )
-    if tester_setup_required:
-        try:
-            readiness = (
-                camera_capture_runtime.trigger_evidence_for_shot(shot.impact_timestamp)
-                if camera_capture_runtime is not None
-                else None
-            )
-        except (OSError, RuntimeError) as error:
-            if not free_play_config.get("enabled"):
-                raise
-            readiness = None
-            log_session_error(str(error), component="camera_trigger")
-        evidence_problem = _tester_trigger_evidence_problem(readiness)
-        if readiness is None and evidence_problem is not None:
-            # No camera trigger near this impact (P7-3): the edge never reached
-            # the camera, which says nothing against the setup. Keep the OPS
-            # shot and name the gap, instead of dropping a real swing.
-            shot.missing_trigger_evidence = [
-                {
-                    "id": "camera_trigger",
-                    "reason": f"{evidence_problem}: the camera recorded no trigger "
-                    "near this impact",
-                }
-            ]
-            logger.warning(
-                "[SERVER] Tester shot kept without camera trigger evidence (%.1f mph)",
-                shot.ball_speed_mph,
-            )
-        elif evidence_problem is not None and _tester_trigger_hard_stop(readiness) is None:
-            # D15: measure and label. A blocked or mismatched setup is noted on
-            # the shot; only a hard stop below still drops it (P8-7).
-            shot.trigger_evidence_notes = _tester_trigger_evidence_notes(
-                readiness, evidence_problem
-            )
-            logger.warning(
-                "[SERVER] Tester shot kept with trigger readiness notes: %s",
-                shot.trigger_evidence_notes,
-            )
-        elif evidence_problem is not None:
-            evidence = readiness or {
-                "schema_version": 1,
-                "required": True,
-                "ready": False,
-                "config_hash": tester_config_hash,
-                "blockers": [
-                    {"id": "trigger_evidence", "reason": "no matching trigger readiness evidence"}
-                ],
-            }
-            if readiness:
-                evidence.setdefault("blockers", []).append(
-                    {"id": "trigger_evidence", "reason": evidence_problem}
-                )
-            log_session_error(
-                "Tester shot rejected because required setup readiness dropped",
-                component="tester_setup",
-                context={"readiness": evidence},
-            )
-            logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
-            ready_light.swing_result("not_counted")
-            pi_trace.mark(
-                "server_shot_rejected", shot.trace_attempt_id, reason="tester_setup_readiness"
-            )
-            return
+    if not kiosk_extensions.all_admit(shot):
+        return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
     _open_carry_status(shot)
     _open_smash_factor_status(shot)
     _assign_shot_number(shot)
-    if free_play_config.get("enabled"):
-        shot.free_play_run_id = free_play_config["run_id"]
-        shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
-        shot.free_play_exposure = _free_play_exposure_at_shot()
-        _count_free_play_shot(shot)
-    pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
+    kiosk_extensions.call_all("on_shot_accepted", shot)
+    instrumentation.mark(
+        "server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number
+    )
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -7553,7 +6284,9 @@ def _handle_shot_detected(shot: Shot) -> None:
                 _SHOT_ENRICHMENT_QUEUE_CAPACITY,
                 shot.shot_number,
             )
-            pi_trace.mark("server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full")
+            instrumentation.mark(
+                "server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full"
+            )
             if emitted:
                 _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
             _queue_shot_finalization(
@@ -7576,7 +6309,7 @@ def _abandon_shot_enrichment(
 ) -> None:
     """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
     reason = "enrichment_backlog_full"
-    pi_trace.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
+    instrumentation.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
     logger.error(
         "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
         "its IWR and camera metrics will not be computed",
@@ -7879,9 +6612,9 @@ def start_monitor(
             _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
-        # Before the capture thread starts and before BCM17 is armed, so the
-        # first capture and the first edge are traced too.
-        _install_pi_trace_hooks()
+        # Before the capture thread starts and before BCM17 is armed, so an
+        # extension that observes them sees the first capture and edge too.
+        kiosk_extensions.call_all("before_monitor_start")
         monitor.start(  # pylint: disable=unexpected-keyword-arg
             shot_callback=on_shot_detected,
             live_callback=on_live_reading,
@@ -8028,59 +6761,6 @@ def stop_monitor():
         monitor.disconnect()
         monitor = None
     mock_swing_speed_mode = False
-
-
-def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
-    """Close acquisition only after accepted shots have finished writing."""
-    global monitor  # pylint: disable=global-statement
-    if monitor is not None:
-        monitor.stop()
-        capture_thread = getattr(monitor, "_capture_thread", None)
-        if capture_thread is not None and capture_thread.is_alive():
-            raise RuntimeError("radar capture is still finishing; retry Stop & package")
-    deadline = time.monotonic() + timeout_s
-    while True:
-        with _shot_finalization_condition:
-            pending = bool(
-                _shot_finalization_registered
-                or _shot_finalization_current
-                or _shot_awaiting_late_enrichment
-                or _shot_finalization_running
-                or _deferred_shot_enrichment
-                or not shot_enrichment_queue.empty()
-            )
-        if shot_enrichment_task is None and not pending:
-            break
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                "shots are still finishing; retry Stop & package when processing finishes"
-            )
-        time.sleep(0.05)
-    if free_play_study is not None:
-        # every accepted shot has its verdict: the ladder is complete or partial
-        free_play_study.finish()
-    for service in (camera_capture_runtime, iwr6843_runtime, inclinometer_service):
-        if service is not None:
-            service.stop()
-    camera_writer = getattr(camera_capture_runtime, "_worker", None)
-    if camera_writer is not None and camera_writer.is_alive():
-        raise RuntimeError("camera save is still finishing; retry Stop & package")
-    if monitor is not None:
-        monitor.disconnect()
-        monitor = None
-    session = get_session_logger()
-    if session is not None:
-        session.end_session()
-
-
-from .free_play import register_kiosk_routes  # noqa: E402
-
-register_kiosk_routes(
-    app,
-    free_play_config,
-    lambda: _finish_free_play_capture(),
-    progress=lambda: _free_play_progress(),
-)
 
 
 class MockLaunchMonitor:
@@ -8583,6 +7263,8 @@ def main():
     """Run the server."""
     import argparse  # pylint: disable=import-outside-toplevel
 
+    # installed extensions add their flags and hooks before the flags are parsed
+    kiosk_extensions.load_installed()
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
     parser.add_argument(
@@ -8617,22 +7299,12 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument(
-        "--study-mode",
-        action="store_true",
-        help="Let the tester study page set camera exposure and gain and read raw frames",
-    )
-    parser.add_argument(
         "--startup-status-file",
         default=None,
         help="Write structured initialization progress for the optional kiosk splash",
     )
     parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
-    )
-    parser.add_argument(
-        "--pi-trace",
-        action="store_true",
-        help=("Write the stage 1b host-monotonic trace (pi_trace_*.jsonl) beside the session logs"),
     )
     parser.add_argument(
         "--radar-log", action="store_true", help="Log raw radar data to console (Python logging)"
@@ -8951,29 +7623,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--tester-setup-required",
-        action="store_true",
-        help="Require the study kiosk hardware readiness gate before accepting shots",
-    )
-    parser.add_argument(
-        "--tester-config-hash",
-        default=None,
-        help="Required SHA-256 fingerprint of the measured tester rig geometry",
-    )
-    parser.add_argument("--tester-free-play", action="store_true")
-    parser.add_argument("--tester-id")
-    parser.add_argument("--tester-run-id")
-    parser.add_argument("--tester-control-port", type=int, default=8765)
-    parser.add_argument("--tester-geometry-unverified", action="store_true")
-    parser.add_argument(
-        "--free-play-ladder",
-        default=None,
-        help=(
-            "Free play's exposure plan for the tapped resolution (written by the tester "
-            "server in the run folder): five shots per rung, then the automatic exposure"
-        ),
-    )
-    parser.add_argument(
         "--inclinometer",
         action="store_true",
         help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
@@ -9233,16 +7882,9 @@ def main():
         default=0.0,
         help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
     )
+    kiosk_extensions.call_all("add_arguments", parser)
     args = parser.parse_args()
-    if args.tester_free_play and (
-        not args.tester_setup_required
-        or not args.tester_id
-        or not args.tester_run_id
-        or not 1 <= args.tester_control_port <= 65535
-    ):
-        parser.error("free play requires admitted setup, tester ID, run ID and a valid tester port")
-    if args.free_play_ladder and not args.tester_free_play:
-        parser.error("--free-play-ladder is free play's: add --tester-free-play")
+    kiosk_extensions.call_all("configure", args, parser)
     _apply_kld7_device_defaults(args)
     # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
@@ -9322,8 +7964,6 @@ def main():
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
         parser.error("--camera-capture cannot be used with --mock")
-    if args.tester_setup_required and not args.tester_config_hash:
-        parser.error("--tester-setup-required requires --tester-config-hash")
     if args.iwr6843_net_m is None:
         args.iwr6843_net_m = DEFAULT_NET_RANGE_M
         args.iwr6843_net_range_source = "default_not_measured"
@@ -9427,7 +8067,7 @@ def main():
             armed_profile = load_armed_exposure_profile(args.camera_armed_profile)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             parser.error(f"--camera-armed-profile: {error}")
-        if not args.study_mode and not within_armed_profile(
+        if not kiosk_extensions.any_true("diagnostic_camera") and not within_armed_profile(
             armed_profile, args.camera_capture_exposure_us, args.camera_capture_gain
         ):
             parser.error(
@@ -9468,30 +8108,6 @@ def main():
     global ballistics_enabled
     global battery_provider
     global profile_store
-    global study_mode_enabled, tester_setup_required, tester_config_hash
-    study_mode_enabled = bool(args.study_mode)
-    tester_setup_required = bool(args.tester_setup_required)
-    tester_config_hash = args.tester_config_hash
-    free_play_config.clear()
-    if args.tester_free_play:
-        import platform
-
-        free_play_config.update(
-            enabled=True,
-            phase="recording",
-            tester_id=args.tester_id,
-            run_id=args.tester_run_id,
-            control_port=args.tester_control_port,
-            unit_id=platform.node(),
-            geometry_unverified=args.tester_geometry_unverified,
-        )
-    global free_play_plan, free_play_plan_path, free_play_study  # pylint: disable=global-statement
-    free_play_plan = free_play_plan_path = free_play_study = None
-    if args.free_play_ladder:
-        try:
-            load_free_play_plan(args.free_play_ladder)
-        except ValueError as error:
-            parser.error(str(error))
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
@@ -9548,13 +8164,7 @@ def main():
         init_session_logger(enabled=False)
         print("Session logging DISABLED")
 
-    if args.pi_trace:
-        trace_path = _start_pi_trace(Path(args.log_dir) if args.log_dir else None)
-        if trace_path is None:
-            print("Pi trace FAILED to start (see log); running WITHOUT a trace")
-        else:
-            print(f"Pi trace enabled: {trace_path}")
-            _start_browser_trace()
+    kiosk_extensions.call_all("on_startup", args)
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")
@@ -9634,7 +8244,7 @@ def main():
             use_gpio_trigger=not args.iwr6843,
             auto_exposure=not args.camera_capture_manual_exposure,
             armed_profile=armed_profile,
-            diagnostic_capture=bool(args.study_mode),
+            diagnostic_capture=kiosk_extensions.any_true("diagnostic_camera"),
             setup_ball=camera_setup_ball,
             hitting_zone=camera_hitting_zone,
             tee_side_offset_m=args.tee_side_offset_m,
@@ -9653,9 +8263,8 @@ def main():
                     camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
                 )
 
-    if free_play_plan is not None:
-        # after the camera, before any shot: it counts shots and moves the camera
-        init_free_play_study()
+    # after the camera, before any shot
+    kiosk_extensions.call_all("after_camera_setup")
 
     if args.iwr6843:
         startup_status.start("ti", "Connecting TI radar")
@@ -9728,9 +8337,9 @@ def main():
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
-        elif args.tester_free_play:
-            startup_status.skip("ti", "Distance radar unavailable; free play keeps OPS numbers")
-            print("WARNING: IWR6843 unavailable; free play continues with OPS numbers")
+        elif iwr_optional := kiosk_extensions.first("iwr_optional"):
+            startup_status.skip("ti", f"Distance radar unavailable; {iwr_optional}")
+            print(f"WARNING: IWR6843 unavailable; {iwr_optional}")
         else:
             startup_status.error(
                 "ti",

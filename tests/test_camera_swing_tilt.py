@@ -151,16 +151,6 @@ def test_no_ball_in_the_box_gives_no_row():
     assert swing_tilt.resting_ball_px(frames, trigger_index=8, box_px=(560, 400, 720, 540)) is None
 
 
-def test_the_tester_hands_the_kiosk_the_lens_s_tilt_file(tmp_path):
-    from openflight.camera import tester_server as ts  # noqa: PLC0415
-
-    path = tmp_path / "camera-vertical-offset-6mm.json"
-
-    args, _record = ts.tee_range_handoff(None, camera_tilt_path=path)
-
-    assert args[args.index("--camera-tilt-calibration-path") + 1] == str(path)
-
-
 def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path):
     from datetime import datetime  # noqa: PLC0415
 

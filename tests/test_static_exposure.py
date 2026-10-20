@@ -484,3 +484,10 @@ def test_the_dim_patch_step_is_taken_only_once():
 
     assert search.status == "ball_not_found"
     assert len(requested) == 2
+
+
+def test_the_static_lock_aims_at_twice_the_shared_ball_gate():
+    from openflight.camera import light_judging, swing_exposure
+
+    assert se.TARGET_BALL_SIGNAL_DN / 2.0 == swing_exposure.BALL_GATE_DN
+    assert se.SENSOR_BLACK_LEVEL_DN == light_judging.SENSOR_BLACK_LEVEL_DN

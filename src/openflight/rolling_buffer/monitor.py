@@ -15,6 +15,7 @@ from ..clubs import ClubType
 from ..clubs.physics import get_club_physics
 from ..launch_monitor import Shot, estimate_carry_distance, summarize_shots
 from ..ops243 import OPS243Radar, SpeedReading
+from ..ops_speed_track import ops_speed_track
 from ..session_logger import get_session_logger, log_session_error
 from ..timing import (
     clone_stage_timing,
@@ -975,9 +976,7 @@ class RollingBufferMonitor:
             spin_rejection_reason=spin_rejection_reason,
             mode="rolling-buffer",
         )
-        # E3: the OPS readings around impact, for the full ball speed
-        from openflight.full_speed import ops_speed_track  # noqa: PLC0415
-
+        # the OPS readings around impact, kept for a model that projects the speed
         shot.ops_speed_track = ops_speed_track(processed)
 
         return shot

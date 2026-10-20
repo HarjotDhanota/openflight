@@ -13,7 +13,6 @@ from openflight.camera.capture_runtime import CameraCaptureRuntime
 from openflight.camera.triggered_buffer import TriggeredFrameBuffer
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
-from openflight.session_review import camera_outcome
 
 
 def _runtime(tmp_path, seen=None):
@@ -140,32 +139,3 @@ def test_the_session_log_names_why_a_shot_has_no_clip(monkeypatch, capture, reje
     assert session_log.captures[-1]["capture_error"] == error
     if rejection:
         assert session_log.captures[-1]["metadata"] == {"trigger_rejection": rejection}
-
-
-@pytest.mark.parametrize(
-    ("events", "category"),
-    [
-        ([{"capture_path": "/x/camera_001", "capture_error": None}], "captured"),
-        ([], "not_recorded"),
-        (
-            [
-                {
-                    "capture_error": "camera_trigger_rejected:save_backlog_full",
-                    "metadata": {"trigger_rejection": {"detail": "3 completed clips"}},
-                }
-            ],
-            "trigger_rejected_backlog",
-        ),
-        ([{"capture_error": "camera_trigger_rejected:ring_busy"}], "trigger_rejected_ring_busy"),
-        (
-            [{"capture_error": "camera_trigger_rejected:camera_stopped"}],
-            "trigger_rejected_camera_stopped",
-        ),
-        ([{"capture_error": "camera_save_failed: disk full"}], "save_failed"),
-        ([{"capture_error": "no_matching_camera_capture"}], "association_timeout"),
-    ],
-)
-def test_the_review_distinguishes_every_camera_outcome(events, category):
-    outcome = camera_outcome(events)
-    assert outcome["category"] == category
-    assert outcome["label"]

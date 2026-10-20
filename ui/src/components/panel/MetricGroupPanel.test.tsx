@@ -61,7 +61,7 @@ function everyMetricShot(): Shot {
 
 function render(view: 'club' | 'flight', shot: Shot | null = everyMetricShot()) {
   return renderToString(
-    <MetricGroupPanel view={view} shot={shot} profileName="Harjot" clubLabel="7 Iron" unitSystem="imperial" />
+    <MetricGroupPanel view={view} shot={shot} profileName="Golfer" clubLabel="7 Iron" unitSystem="imperial" />
   );
 }
 

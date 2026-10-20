@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import server as server_module
+from openflight import server as server_module, shot_models
 from openflight.clubs import ClubType
 from openflight.iwr6843 import launch_range as lr
 from openflight.iwr6843.calibration import Calibration
@@ -187,7 +187,7 @@ def test_full_ball_speed_is_given_the_shot_s_range_and_its_uncertainty(monkeypat
     shot.ball_range_uncertainty_m = 0.42
     shot.ball_range_source = "camera_prior"
 
-    server_module._attach_full_speeds(shot)  # pylint: disable=protected-access
+    shot_models._attach_full_speeds(shot)  # pylint: disable=protected-access
 
     assert seen["tee_range_m"] == 2.11
     assert seen["tee_range_uncertainty_m"] == 0.42

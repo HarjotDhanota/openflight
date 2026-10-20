@@ -14,6 +14,7 @@ from openflight.review_metrics import STATUSES, review_replay
 from openflight.session_review import (
     attempts_csv,
     build_session_review,
+    camera_outcome,
     replay_report_path,
     report_markdown,
 )
@@ -587,3 +588,32 @@ def test_a_shot_kept_with_blocked_trigger_readiness_carries_its_notes(tmp_path):
     attempt = next(a for a in review["attempts"] if a["attempt_id"] == "session-one:3")
     assert attempt["trigger_evidence_notes"] == notes
     assert "Trigger readiness note: geometry: setup fingerprint differs" in report_markdown(review)
+
+
+@pytest.mark.parametrize(
+    ("events", "category"),
+    [
+        ([{"capture_path": "/x/camera_001", "capture_error": None}], "captured"),
+        ([], "not_recorded"),
+        (
+            [
+                {
+                    "capture_error": "camera_trigger_rejected:save_backlog_full",
+                    "metadata": {"trigger_rejection": {"detail": "3 completed clips"}},
+                }
+            ],
+            "trigger_rejected_backlog",
+        ),
+        ([{"capture_error": "camera_trigger_rejected:ring_busy"}], "trigger_rejected_ring_busy"),
+        (
+            [{"capture_error": "camera_trigger_rejected:camera_stopped"}],
+            "trigger_rejected_camera_stopped",
+        ),
+        ([{"capture_error": "camera_save_failed: disk full"}], "save_failed"),
+        ([{"capture_error": "no_matching_camera_capture"}], "association_timeout"),
+    ],
+)
+def test_the_review_distinguishes_every_camera_outcome(events, category):
+    outcome = camera_outcome(events)
+    assert outcome["category"] == category
+    assert outcome["label"]

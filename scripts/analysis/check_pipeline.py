@@ -8,7 +8,7 @@
 For every shot of every run it replays:
 
 - the kiosk's own code (``server._process_iwr6843_angle``,
-  ``server._fuse_camera_measurements``, ``server._attach_collision_model``)
+  ``server._fuse_camera_measurements``, ``shot_models._attach_collision_model``)
   with the module's hardware objects replaced by the replayed IWR result and the
   saved clip, so the hand-offs are the ones the Pi makes;
 - the review path (``replay_raw_fusion.replay`` and ``review_metrics``), which the
@@ -347,18 +347,22 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
         matched=bool(iwr_event) and not iwr_event.get("capture_error"),
     )
     tester_required = bool(mapping(metadata.get("tester_setup")).get("required"))
-    with _kiosk(
-        server,
-        iwr6843_runtime=runtime,
-        camera_capture_runtime=None,
-        camera_capture_config=camera_config,
-        camera_optical_calibration=None,
-        camera_placement=None,
-        tester_setup_required=tester_required,
+    from openflight import shot_models, tester_hooks  # noqa: PLC0415  (heavy: the server)
+
+    with (
+        _kiosk(
+            server,
+            iwr6843_runtime=runtime,
+            camera_capture_runtime=None,
+            camera_capture_config=camera_config,
+            camera_optical_calibration=None,
+            camera_placement=None,
+        ),
+        _kiosk(tester_hooks, tester_setup_required=tester_required),
     ):
         server._process_iwr6843_angle(shot)  # pylint: disable=protected-access
         server._fuse_camera_measurements(shot, capture, archive)  # pylint: disable=protected-access
-        server._attach_collision_model(shot)  # pylint: disable=protected-access
+        shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     return {
         "context": shot.camera_fusion_context,
         "processing": getattr(shot, "camera_fusion_processing", None),

@@ -161,7 +161,7 @@ def test_the_outline_tightens_once_the_tilt_is_calibrated():
 
 @pytest.mark.parametrize("placed_by", ["eye", "distance"])
 def test_before_calibration_a_3_deg_tilt_error_still_puts_the_ball_in_the_patch(placed_by):
-    """harjot-indoor-test-1: the camera looked about 3-4 deg further down than modelled."""
+    """indoor-test-1: the camera looked about 3-4 deg further down than modelled."""
     modelled = _v3(pitch_deg=1.72)
     truth = _v3(pitch_deg=1.72 - 3.8)
     ball = (0.02, 1.25, BALL_CENTER_HEIGHT_M)

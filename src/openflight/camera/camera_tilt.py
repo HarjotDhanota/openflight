@@ -4,7 +4,7 @@ The nominal camera model takes its pitch from the LIS3DH and puts the principal
 point at the image centre. Neither is the camera's true vertical: the camera is
 mounted in the enclosure at a small pitch of its own, and the lens's centre sits
 some rows off the image's middle. At 95 mm above the ground both move a ball's
-row a long way (harjot-indoor-test-1: the floor met the door about 50 px lower
+row a long way (indoor-test-1: the floor met the door about 50 px lower
 than the level, image-centred model predicts, about 3 deg).
 
 Each ball the camera and radar agree on (P8-4) measures the two together as one
@@ -12,7 +12,7 @@ vertical offset: the pitch the camera must have for the ball's row to be where
 the radar's distance, the lens height and the ball's radius put it, less the
 LIS3DH's pitch at the time. One pair never calibrates the unit: the offset is the
 median of at least ``MIN_PAIRS`` validated pairs that agree (a single wrong pair,
-harjot-indoor-test-1's, once calibrated a unit for good). It is stored per unit
+indoor-test-1's, once calibrated a unit for good). It is stored per unit
 and per lens, beside the unit's other local settings (``~/.config/openflight/``),
 never in the shared rig file.
 

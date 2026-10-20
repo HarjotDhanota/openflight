@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight import server as server_module
+from openflight import server as server_module, shot_models
 from openflight.club_arc import MEASURED, MODEL_GEOMETRY, NOT_MEASURED
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
@@ -61,7 +61,7 @@ def test_attach_reads_the_fused_delivery_with_the_shot_s_club(monkeypatch):
         "horizontal_offset_deg": 0.0,
     }
 
-    server_module._attach_club_arc(shot, fused)
+    shot_models._attach_club_arc(shot, fused)
 
     metrics = shot.club_delivery["metrics"]
     assert metrics["club_path_deg"]["status"] == MEASURED
@@ -79,7 +79,7 @@ def test_attach_takes_the_golfer_s_handedness(monkeypatch):
     monkeypatch.setattr(server_module.sim_player_state, "handed", "LH")
     shot = _shot()
 
-    server_module._attach_club_arc(shot, None)
+    shot_models._attach_club_arc(shot, None)
 
     assert shot.club_delivery["handedness"] == "LH"
 
@@ -126,7 +126,6 @@ def test_live_camera_fusion_attaches_the_arc_from_the_shared_core(monkeypatch, t
         "camera_capture_config",
         {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
     )
-    monkeypatch.setattr(server_module, "tester_setup_required", False)
     calls = []
     monkeypatch.setattr(
         server_module,

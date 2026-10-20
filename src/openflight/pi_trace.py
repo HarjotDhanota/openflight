@@ -9,12 +9,9 @@ missing time.
 
 from __future__ import annotations
 
-import functools
 import itertools
 import json
 import logging
-import math
-import numbers
 import os
 import queue
 import threading
@@ -23,6 +20,11 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+# BracketedPair and _finite live in product modules; re-exported for trace readers.
+from openflight import instrumentation as _hooks
+from openflight.clock_mapping import BracketedPair  # noqa: F401
+from openflight.numeric import finite as _finite  # noqa: F401
 
 logger = logging.getLogger("openflight.pi_trace")
 
@@ -51,40 +53,6 @@ class ClockTriple:
         boot_clock = getattr(time, "CLOCK_BOOTTIME", None)
         boot = time.clock_gettime_ns(boot_clock) if boot_clock is not None else None
         return cls(mono, real, boot)
-
-
-@dataclass(frozen=True)
-class BracketedPair:
-    """A wall reading between two monotonic readings: bounds wall − monotonic honestly."""
-
-    mono_before_ns: int
-    realtime_ns: int
-    mono_after_ns: int
-
-    @classmethod
-    def now(cls) -> "BracketedPair":
-        """monotonic, wall, monotonic."""
-        before = time.monotonic_ns()
-        real = time.time_ns()
-        return cls(before, real, time.monotonic_ns())
-
-    def wall_minus_mono_bounds_ns(self) -> tuple[int, int]:
-        """(low, high) of wall − monotonic at this instant."""
-        return self.realtime_ns - self.mono_after_ns, self.realtime_ns - self.mono_before_ns
-
-
-def _finite(value: Any) -> bool:
-    """True for a finite real number, numpy scalars included (np.float32, np.int64).
-
-    bool (and numpy's bool_, which is not a numbers.Real), None, strings, complex,
-    NaN and inf are not, nor is an int too large for a float (it would overflow).
-    """
-    if not isinstance(value, numbers.Real) or isinstance(value, bool):
-        return False
-    try:
-        return math.isfinite(float(value))
-    except OverflowError:
-        return False
 
 
 def read_cpu_temp_c(path: Path = THERMAL_ZONE) -> Optional[float]:
@@ -327,77 +295,12 @@ class TraceRecorder:
         return True
 
 
-_RECORDER: Optional[TraceRecorder] = None
-
-
-def set_recorder(recorder: Optional[TraceRecorder]) -> None:
-    """Install (or remove) the process-wide recorder used by the hooks."""
-    global _RECORDER  # pylint: disable=global-statement
-    _RECORDER = recorder
-
-
-def get_recorder() -> Optional[TraceRecorder]:
-    """The process-wide recorder, or None when tracing is off."""
-    return _RECORDER
-
-
-def mark(name: str, attempt_id: Optional[str] = None, **fields: Any) -> None:
-    """Hook entry point: a no-op when tracing is off; never raises into the caller.
-
-    Hooks sit on the capture, re-arm and emit paths: a trace error is logged and
-    ignored, so it can never skip, delay or drop the work it observes (R-F16).
-    """
-    recorder = _RECORDER
-    if recorder is None:
-        return
-    try:
-        recorder.mark(name, attempt_id, **fields)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] mark %s failed; ignored", name, exc_info=True)
-
-
-def _read_guarded(what: str, read: Callable[[TraceRecorder], Any]) -> Any:
-    """A recorder read for a hook: None when tracing is off or the read fails (logged)."""
-    recorder = _RECORDER
-    if recorder is None:
-        return None
-    try:
-        return read(recorder)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] reading %s failed; ignored", what, exc_info=True)
-        return None
-
-
-def current_ops_attempt() -> Optional[str]:
-    """The current OPS attempt, or None when tracing is off; never raises."""
-    return _read_guarded("current_ops_attempt", lambda rec: rec.current_ops_attempt)
-
-
-def bound_attempt() -> Optional[str]:
-    """The attempt the calling thread declared, or None when tracing is off; never raises."""
-    return _read_guarded("bound_attempt", lambda rec: rec.bound_attempt())
-
-
-def last_edge_seq() -> Optional[int]:
-    """Sequence number of the latest GATE edge, or None (tracing off, none yet); never raises."""
-    return _read_guarded("last_edge_seq", lambda rec: rec.last_edge_seq)
-
-
-def trace_method(obj: Any, name: str, start_mark: str, end_mark: str) -> None:
-    """Wrap one bound method on this instance with start/end marks on the bound attempt."""
-    original = getattr(obj, name)
-
-    @functools.wraps(original)
-    def traced(*args, **kwargs):
-        attempt_id = bound_attempt()
-        mark(start_mark, attempt_id)
-        error = None
-        try:
-            return original(*args, **kwargs)
-        except BaseException as exc:
-            error = type(exc).__name__
-            raise
-        finally:
-            mark(end_mark, attempt_id, error=error)
-
-    setattr(obj, name, traced)
+# The hooks live in openflight.instrumentation and are no-ops until set_recorder
+# installs a TraceRecorder; re-exported here so trace code has one import.
+set_recorder = _hooks.set_recorder
+get_recorder = _hooks.get_recorder
+mark = _hooks.mark
+current_ops_attempt = _hooks.current_ops_attempt
+bound_attempt = _hooks.bound_attempt
+last_edge_seq = _hooks.last_edge_seq
+trace_method = _hooks.trace_method

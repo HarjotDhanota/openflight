@@ -129,7 +129,7 @@ class TestTheFile:
 
     def test_the_v3_file_records_how_the_iwr_board_is_turned(self):
         # F11: seen from the front, USB top right and the RX row vertical on the
-        # left is the board turned +90 deg (ECAD +X up), as Harjot reported.
+        # left is the board turned +90 deg (ECAD +X up), as reported.
         loaded = RigGeometry.from_json(V3)
         assert loaded.iwr_board_rotation_deg == 90.0
         assert "2026-09-29" in loaded.provenance

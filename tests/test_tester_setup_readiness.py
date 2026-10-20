@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from openflight import server
+from openflight import server, tester_hooks
 from openflight.camera import capture_runtime
 from openflight.rig_geometry import geometry_fingerprint
 from openflight.session_logger import SessionLogger
@@ -20,8 +20,8 @@ def _ready(monkeypatch, *, camera_age=0.1, pitch_deg=0.0, x_g=0.0, z_g=1.0):
             },
         }
     )
-    monkeypatch.setattr(server, "study_mode_enabled", True)
-    monkeypatch.setattr(server, "tester_config_hash", config_hash)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)
+    monkeypatch.setattr(tester_hooks, "tester_config_hash", config_hash)
     monkeypatch.setattr(server, "rig_geometry_config", {"snapshot": {"sha256": rig_hash}})
     alive = SimpleNamespace(is_alive=lambda: True)
     monkeypatch.setattr(
@@ -162,7 +162,7 @@ def test_camera_runtime_gets_trigger_provider_only_when_tester_gate_required(mon
     monkeypatch.setattr(capture_runtime, "CameraCaptureRuntime", Runtime)
 
     def initialize(required):
-        monkeypatch.setattr(server, "tester_setup_required", required)
+        monkeypatch.setattr(tester_hooks, "tester_setup_required", required)
         assert server.init_camera_capture(
             output_dir=tmp_path / str(required),
             gpio_pin=17,
@@ -210,7 +210,7 @@ def _trigger_evidence(tmp_path, **overrides):
 
 
 def _active_logger(monkeypatch, tmp_path, session_uuid="active-session"):
-    monkeypatch.setattr(server, "tester_config_hash", "expected")
+    monkeypatch.setattr(tester_hooks, "tester_config_hash", "expected")
     monkeypatch.setattr(
         server,
         "get_session_logger",
@@ -220,13 +220,15 @@ def _active_logger(monkeypatch, tmp_path, session_uuid="active-session"):
 
 def test_trigger_evidence_requires_explicit_required_flag(monkeypatch, tmp_path):
     _active_logger(monkeypatch, tmp_path)
-    problem = server._tester_trigger_evidence_problem(_trigger_evidence(tmp_path, required=None))
+    problem = tester_hooks._tester_trigger_evidence_problem(
+        _trigger_evidence(tmp_path, required=None)
+    )
     assert "does not mark" in problem
 
 
 def test_trigger_evidence_requires_active_setup_hash(monkeypatch, tmp_path):
     _active_logger(monkeypatch, tmp_path)
-    problem = server._tester_trigger_evidence_problem(
+    problem = tester_hooks._tester_trigger_evidence_problem(
         _trigger_evidence(tmp_path, config_hash="old")
     )
     assert "setup hash" in problem
@@ -234,7 +236,7 @@ def test_trigger_evidence_requires_active_setup_hash(monkeypatch, tmp_path):
 
 def test_trigger_evidence_cannot_cross_logger_session_restart(monkeypatch, tmp_path):
     _active_logger(monkeypatch, tmp_path, session_uuid="new-session")
-    problem = server._tester_trigger_evidence_problem(_trigger_evidence(tmp_path))
+    problem = tester_hooks._tester_trigger_evidence_problem(_trigger_evidence(tmp_path))
     assert "different or inactive logging session" in problem
 
 
@@ -247,7 +249,7 @@ def test_readiness_uses_real_session_logger_uuid_property(monkeypatch, tmp_path)
     logger.start_session()
     monkeypatch.setattr(server, "get_session_logger", lambda: logger)
     try:
-        payload = server._tester_setup_readiness()
+        payload = tester_hooks._tester_setup_readiness()
     finally:
         logger.end_session()
 

@@ -13,6 +13,7 @@ from openflight.camera.ball_flight import (
     REFERENCE_BALL_X_FRACTION,
     REFERENCE_BALL_Y_FRACTION,
 )
+from openflight.camera.geometry_contract import NO_TEE_RANGE
 
 STATUSES = (
     "accepted",
@@ -24,7 +25,7 @@ STATUSES = (
 )
 ACCEPTED_DELIVERY_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
 # Refusals carry no value; every other delivery status is a value the kiosk shows
-# (server.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
+# (shot_models.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
 _REFUSED_DELIVERY_PREFIXES = ("rejected", "error")
 
 
@@ -48,12 +49,6 @@ _ABSENT_INPUT_MARKERS = (
     "has no recorded",
     "no OPS ball speed",
     "no tee range",
-)
-# What a swing without a tee range cannot have, said the same way on every metric
-# it prevents (P8-7 gate 2; the setup side owns handing one over).
-NO_TEE_RANGE = (
-    "no tee range: the setup handed the swings none, and the IWR launch and the "
-    "camera's geometry both need one"
 )
 
 

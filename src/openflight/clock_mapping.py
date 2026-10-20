@@ -12,10 +12,11 @@ Pure module: no I/O, no rolling_buffer imports.
 
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass
 from typing import Optional, Sequence
 
-from openflight.pi_trace import _finite
+from openflight.numeric import finite as _finite
 
 SEGMENT_SAMPLES = 128
 BUFFER_SEGMENTS = 32  # 4,096 samples; S#n moves the trigger split among them (AN-027-A p.2)
@@ -49,6 +50,26 @@ def association_window_ns(sample_rate_hz: float, pre_trigger_segments: int) -> t
         (BUFFER_SEGMENTS - pre_trigger_segments) * SEGMENT_SAMPLES / sample_rate_hz * 1e9
     )
     return segment_ns, post_ns
+
+
+@dataclass(frozen=True)
+class BracketedPair:
+    """A wall reading between two monotonic readings: bounds wall − monotonic honestly."""
+
+    mono_before_ns: int
+    realtime_ns: int
+    mono_after_ns: int
+
+    @classmethod
+    def now(cls) -> "BracketedPair":
+        """monotonic, wall, monotonic."""
+        before = time.monotonic_ns()
+        real = time.time_ns()
+        return cls(before, real, time.monotonic_ns())
+
+    def wall_minus_mono_bounds_ns(self) -> tuple[int, int]:
+        """(low, high) of wall − monotonic at this instant."""
+        return self.realtime_ns - self.mono_after_ns, self.realtime_ns - self.mono_before_ns
 
 
 @dataclass(frozen=True)

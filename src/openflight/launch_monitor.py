@@ -11,11 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
-from . import metric_definitions, shot_metrics
+from . import shot_metrics, smash
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
+from .numeric import finite as _finite
 from .ops243 import SpeedReading
-from .pi_trace import _finite
 
 # Spin confidence threshold for "high" quality — used across modules.
 # Measured spin is trusted for physics simulation only above this level.
@@ -449,7 +449,7 @@ class Shot:
     @property
     def smash_factor(self) -> Optional[float]:
         """
-        Smash factor: ball speed over club speed (metric_definitions.smash_factor, D37).
+        Smash factor: ball speed over club speed (smash.smash_factor, D37).
 
         Indicates quality of contact:
         - Driver: 1.44-1.50 (optimal)
@@ -462,7 +462,7 @@ class Shot:
         Returns:
             Smash factor, or None without a positive finite club speed
         """
-        return metric_definitions.smash_factor(self.ball_speed_mph, self.club_speed_mph)
+        return smash.smash_factor(self.ball_speed_mph, self.club_speed_mph)
 
     @property
     def estimated_carry_yards(self) -> float:

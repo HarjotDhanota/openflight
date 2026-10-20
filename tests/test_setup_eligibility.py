@@ -4,46 +4,7 @@ from pathlib import Path
 import pytest
 
 from openflight.camera import tester_server as ts
-from openflight.camera.setup_eligibility import SetupEligibility, inspect_geometry, placement_guard
-
-
-@pytest.mark.parametrize(
-    ("reading", "ready", "warned"),
-    [
-        ({"calibrated_pitch_deg": 2.0, "x_g": 0.0, "y_g": 0.0, "z_g": 1.0}, True, False),
-        ({"calibrated_pitch_deg": 2.01, "x_g": 0.0, "y_g": 0.0, "z_g": 1.0}, True, True),
-        ({"calibrated_pitch_deg": -2.01, "x_g": 0.0, "y_g": 0.0, "z_g": 1.0}, True, True),
-        ({"calibrated_pitch_deg": 0.0, "x_g": 1.0, "y_g": 0.0, "z_g": 0.01}, True, True),
-        ({"calibrated_pitch_deg": 0.0, "x_g": -1.0, "y_g": 0.0, "z_g": 0.01}, True, True),
-        ({"calibrated_pitch_deg": 0.0, "x_g": 0.0, "y_g": 0.0, "z_g": -1.0}, False, False),
-        (
-            {
-                "calibrated_pitch_deg": 0.0,
-                "roll_deg": True,
-                "x_g": 0.0,
-                "y_g": 0.0,
-                "z_g": 1.0,
-            },
-            False,
-            False,
-        ),
-        (
-            {
-                "calibrated_pitch_deg": float("nan"),
-                "x_g": 0.0,
-                "y_g": 0.0,
-                "z_g": 1.0,
-            },
-            False,
-            False,
-        ),
-    ],
-)
-def test_placement_guard_flags_deviation_and_blocks_invalid_orientation(reading, ready, warned):
-    result = placement_guard(reading)
-    assert result["ready"] is ready
-    assert result["warned"] is warned
-
+from openflight.camera.setup_eligibility import SetupEligibility, inspect_geometry
 
 RIG = Path(__file__).parents[1] / "config" / "enclosure_v3_rig_geometry.json"
 TESTER = "20260924-setup"

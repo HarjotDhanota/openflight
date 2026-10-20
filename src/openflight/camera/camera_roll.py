@@ -29,7 +29,7 @@ pins exactly this, for both paths.
 
 **Not applied yet.** Two facts are outside what the geometry and code can show:
 
-1. That the board's axes are right-handed. The code only fixes +Y (Harjot's
+1. That the board's axes are right-handed. The code only fixes +Y (the owner's
    pitch check, 23 Sept) and +Z (the unit's +1 g); +X follows from handedness,
    which is the sensor's datasheet convention, not something this repo measures.
 2. That the board sits square in the housing. On 28 Sept it read -2.9 deg while

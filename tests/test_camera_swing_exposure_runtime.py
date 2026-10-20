@@ -296,7 +296,7 @@ def test_without_a_box_the_setup_ball_spot_is_checked(tmp_path, monkeypatch):
         seen["expected"] = dict(expected_ball)
         return {"x": BALL[0], "y": BALL[1], "diameter_px": BALL[2], "found_by": "detector"}
 
-    monkeypatch.setattr(capture_runtime.study_ladder, "ball_light", ball_light)
+    monkeypatch.setattr(capture_runtime.light_judging, "ball_light", ball_light)
     _add_frames(runtime, 53)
 
     decision = runtime._run_auto_exposure_cycle()

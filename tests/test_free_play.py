@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from flask import Flask
 
-from openflight import free_play, server
+from openflight import free_play, server, tester_hooks
 from openflight.camera import free_play_ladder as fpl, tester_server as ts
 from tests.test_tester_server import (
     SETUP_BALL_PX,
@@ -122,7 +122,7 @@ def test_packaging_is_run_bound_and_duplicate_requests_start_one_job(tmp_path, m
 
 @pytest.mark.parametrize("sensor", ["camera", "iwr6843"])
 def test_optional_sensor_failure_does_not_reject_a_free_play_shot(monkeypatch, sensor):
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True})
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True})
     monkeypatch.setattr(
         server,
         "get_session_logger",
@@ -132,14 +132,14 @@ def test_optional_sensor_failure_does_not_reject_a_free_play_shot(monkeypatch, s
         "blockers": [{"id": sensor, "reason": "disconnected"}],
         "observations": {"runtime": {"session_uuid": "same"}},
     }
-    assert server._tester_trigger_hard_stop(evidence) is None
+    assert tester_hooks._tester_trigger_hard_stop(evidence) is None
     evidence["observations"]["runtime"]["session_uuid"] = "different"
-    assert "different logging session" in server._tester_trigger_hard_stop(evidence)
+    assert "different logging session" in tester_hooks._tester_trigger_hard_stop(evidence)
 
 
 def test_session_start_records_the_free_play_identity(monkeypatch):
     monkeypatch.setattr(
-        server,
+        tester_hooks,
         "free_play_config",
         {
             "enabled": True,
@@ -190,7 +190,7 @@ def test_free_play_refuses_to_package_before_pending_shots_finish(monkeypatch):
     monkeypatch.setattr(server, "monitor", SimpleNamespace(stop=lambda: None))
     monkeypatch.setattr(server, "shot_enrichment_task", object())
     with pytest.raises(RuntimeError, match="finishing"):
-        server._finish_free_play_capture(timeout_s=0)
+        tester_hooks._finish_free_play_capture(timeout_s=0)
 
 
 def test_free_play_refuses_to_close_logs_while_radar_thread_is_alive(monkeypatch):
@@ -200,7 +200,7 @@ def test_free_play_refuses_to_close_logs_while_radar_thread_is_alive(monkeypatch
         SimpleNamespace(stop=lambda: None, _capture_thread=SimpleNamespace(is_alive=lambda: True)),
     )
     with pytest.raises(RuntimeError, match="radar"):
-        server._finish_free_play_capture(timeout_s=0)
+        tester_hooks._finish_free_play_capture(timeout_s=0)
 
 
 def test_an_exited_kiosk_does_not_leave_the_next_run_blocked(tmp_path):
@@ -224,7 +224,7 @@ def test_camera_writer_must_stop_before_the_log_is_closed(monkeypatch):
         server, "get_session_logger", lambda: pytest.fail("log closed before camera save finished")
     )
     with pytest.raises(RuntimeError, match="camera"):
-        server._finish_free_play_capture()
+        tester_hooks._finish_free_play_capture()
 
 
 def test_free_play_starts_ops_even_if_the_distance_radar_cannot_connect(monkeypatch, tmp_path):
@@ -238,15 +238,11 @@ def test_free_play_starts_ops_even_if_the_distance_radar_cannot_connect(monkeypa
     monkeypatch.setattr(server, "init_session_logger", lambda **_kw: None)
     monkeypatch.setattr(server, "start_monitor", start_ops)
     monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
-    monkeypatch.setattr(server, "free_play_config", {})
-    for name in (
-        "tester_setup_required",
-        "tester_config_hash",
-        "study_mode_enabled",
-        "ball_speed_correction_enabled",
-        "ballistics_enabled",
-    ):
+    monkeypatch.setattr(tester_hooks, "free_play_config", {})
+    for name in ("ball_speed_correction_enabled", "ballistics_enabled"):
         monkeypatch.setattr(server, name, getattr(server, name))
+    for name in ("tester_setup_required", "tester_config_hash", "study_mode_enabled"):
+        monkeypatch.setattr(tester_hooks, name, getattr(tester_hooks, name))
     monkeypatch.setattr(server, "profile_store", None)
     monkeypatch.setattr(
         sys,

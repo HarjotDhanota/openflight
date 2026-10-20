@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight.camera import study_ladder as sl
+from openflight.camera import light_judging as lj
 from openflight.camera.auto_exposure import measure_exposure
 from openflight.camera.capture_runtime import (
     CameraCaptureRuntime,
@@ -45,18 +45,18 @@ def test_the_setups_own_lock_is_eligible_where_the_zone_rule_said_too_dark():
     frames, setup = _sun("lock")
     assert measure_exposure(frames[0]).acceptable is False  # the old rule
 
-    judged = sl.capture_analysis_eligibility(frames, BLACK, setup)
+    judged = lj.capture_analysis_eligibility(frames, BLACK, setup)
 
     assert judged["eligible"] is True, judged["reason"]
     assert judged["rule"] == "setup_ball"
     assert judged["ball"]["found_by"] == "detector"
-    assert judged["ball"]["signal_dn"] >= sl.BALL_MIN_SIGNAL_DN
+    assert judged["ball"]["signal_dn"] >= lj.BALL_MIN_SIGNAL_DN
 
 
 def test_a_sunlit_clip_is_ineligible_because_the_ball_clips_not_the_background():
     frames, setup = _sun("clip")
 
-    judged = sl.capture_analysis_eligibility(frames, BLACK, setup)
+    judged = lj.capture_analysis_eligibility(frames, BLACK, setup)
 
     assert judged["eligible"] is False
     assert judged["light_cause"] == "ball_clipped"
@@ -72,7 +72,7 @@ def test_a_clipped_background_behind_a_well_exposed_ball_is_eligible():
     frames = frames.astype(np.uint8)
     assert measure_exposure(frames[0]).status == "too_bright"
 
-    judged = sl.capture_analysis_eligibility(
+    judged = lj.capture_analysis_eligibility(
         frames, BLACK, {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
     )
 
@@ -83,7 +83,7 @@ def test_a_clipped_background_behind_a_well_exposed_ball_is_eligible():
 def test_no_ball_where_the_setup_saw_it_is_not_eligible():
     frames = np.full((10, 800, 1280), 90, np.uint8)
 
-    judged = sl.capture_analysis_eligibility(
+    judged = lj.capture_analysis_eligibility(
         frames, BLACK, {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
     )
 
@@ -193,7 +193,6 @@ def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
             "--camera-capture-manual-exposure",
             "--rig-geometry",
             "config/enclosure_v3_rig_geometry.json",
-            "--study-mode",
             "--no-logging",
             "--profiles-path",
             str(tmp_path / "profiles.json"),

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import server
+from openflight import server, tester_hooks
 from openflight.launch_monitor import Shot
 from openflight.rolling_buffer.trigger import SoundTrigger
 
@@ -52,7 +52,7 @@ def _drive_tester_shot(monkeypatch, readiness):
     """Run one OPS-accepted shot through the tester gate; return what finished."""
     finished = []
     errors = []
-    monkeypatch.setattr(server, "tester_setup_required", True)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
     monkeypatch.setattr(
         server,
         "camera_capture_runtime",
@@ -105,7 +105,7 @@ def test_blocked_trigger_readiness_keeps_the_shot_with_a_note(monkeypatch):
 
 
 def test_a_wrong_setup_hash_is_a_note_not_a_refusal(monkeypatch):
-    monkeypatch.setattr(server, "tester_config_hash", "a" * 64)
+    monkeypatch.setattr(tester_hooks, "tester_config_hash", "a" * 64)
     readiness = {"schema_version": 1, "required": True, "ready": True, "config_hash": "b" * 64}
     shot, finished, _errors = _drive_tester_shot(monkeypatch, readiness)
 
@@ -138,7 +138,7 @@ def test_a_shot_from_another_session_still_refuses(monkeypatch):
         "schema_version": 1,
         "required": True,
         "ready": True,
-        "config_hash": server.tester_config_hash,
+        "config_hash": tester_hooks.tester_config_hash,
         "observations": {"runtime": {"session_uuid": "session-before", "run_dir": "/x"}},
     }
     _shot, finished, errors = _drive_tester_shot(monkeypatch, readiness)

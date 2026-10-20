@@ -20,7 +20,7 @@ const OUT = process.env.UX_SHOTS_DIR;
 test.skip(!OUT, 'set UX_SHOTS_DIR to write the review screenshots');
 test.use({ hasTouch: true });
 
-const TESTER = 'harjot-indoor-test-2';
+const TESTER = 'indoor-test-2';
 const SIZES = [
   { width: 1024, height: 600 },
   { width: 800, height: 480 },
@@ -124,7 +124,7 @@ async function stage(page: Page, options: Stage) {
     else localStorage.removeItem('openflight-tester-id');
   }, tester);
   await page.route('**/api/tester/testers**', (route) =>
-    json(route, { testers: [TESTER, '20260922-name', 'cormac-garage-1'], suggested_new: 'tester-2026-10-13-1' })
+    json(route, { testers: [TESTER, '20260922-name', 'garage-unit-1'], suggested_new: 'tester-2026-10-13-1' })
   );
   await page.route('**/api/tester/lens**', (route) => json(route, lensState(TESTER, options.lens === undefined ? 'stock-2.8mm' : options.lens)));
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility(options.eligible ?? true)));

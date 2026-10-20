@@ -2,12 +2,11 @@
 
 One readiness state, computed from what each sensor reports right now:
 
-- red, NOT READY, naming the cause: a hold the tester page set (the ladder's
-  light check, the ladder stopped or finished), no admitted setup, or a sensor
-  missing, failed or not yet armed;
+- red, NOT READY, naming the cause: a hold another page set, a setup problem an
+  extension reports, or a sensor missing, failed or not yet armed;
 - amber, WAIT, with the cause and a rough time left: the OPS243 dumping,
-  draining or re-arming, the IWR6843 dumping, the camera saving a clip,
-  refilling its ring, or changing to free play's next exposure setting;
+  draining or re-arming, the IWR6843 dumping, the camera saving a clip or
+  refilling its ring (and whatever an extension's camera rule adds);
 - green, SWING, only when the OPS243 is armed and waiting, the IWR6843 (if
   fitted) is idle and armed, and the camera (if fitted) is running in the
   asked setting with a full ring and no clip being saved.
@@ -25,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -51,19 +50,31 @@ RESULT_WINDOW_S = 30.0
 RESULT_TEXT = {
     "no_radar_shot": "No radar shot",
     "not_a_shot": "Not a shot",
-    # an OPS shot the tester gate refused: the setup dropped at the trigger
+    # an OPS shot an extension's gate refused: the setup dropped at the trigger
     "not_counted": "Not counted: setup not ready",
 }
 
 
+# An extra camera rule a kiosk extension adds: (camera, now, red, amber). It runs
+# only once the camera's own checks pass, and may append red or amber causes.
+CameraRule = Callable[[Mapping, float, list, list], None]
+
+
 @dataclass(frozen=True)
 class SensorStates:
-    """What each sensor reports now. ``None`` for the IWR or camera: not fitted."""
+    """What each sensor reports now. ``None`` for the IWR or camera: not fitted.
+
+    ``setup_problems`` are red causes an extension adds ahead of the sensors';
+    ``camera_rule`` and ``green_note`` let it judge the camera further and note
+    something on a green light.
+    """
 
     ops: Mapping | None
     iwr: Mapping | None = None
     camera: Mapping | None = None
     setup_problems: Sequence[str] = ()
+    camera_rule: CameraRule | None = None
+    green_note: str | None = None
 
 
 def _left(typical: float | None, since: float | None, now: float) -> float | None:
@@ -111,7 +122,9 @@ def _size(value) -> str:
     return "x".join(str(int(part)) for part in value)
 
 
-def _camera(camera: Mapping, now: float, red: list, amber: list) -> None:
+def _camera(  # pylint: disable=too-many-return-statements
+    camera: Mapping, now: float, red: list, amber: list, camera_rule: CameraRule | None = None
+) -> None:
     if not camera.get("running"):
         red.append("camera is not running")
         return
@@ -148,38 +161,8 @@ def _camera(camera: Mapping, now: float, red: list, amber: list) -> None:
         amber.append(
             ("camera refilling its ring", round((needed - buffered) / fps, 1) if fps else None)
         )
-    if camera.get("free_play"):
-        study = camera.get("exposure_study") or {}
-        if study.get("changing"):
-            # free play's exposure ladder is moving to its next setting, or handing
-            # over to the automatic exposure: a swing now may be at either setting
-            amber.append(("changing the camera setting", None))
-            return
-        if study.get("phase") == "ladder":
-            return  # a held rung: the automatic policy is not running, nothing to read
-        policy = camera.get("auto_exposure") or {}
-        if policy.get("status") == "holding_no_ball" and policy.get("reason") == "no_ball_searched":
-            red.append("no ball in the box")
-        elif policy.get("status") in {"holding_no_ball", "searching_for_ball", "seeded"}:
-            amber.append(("finding the ball", None))
-        # "unavailable" (no exposure limits from the camera) is a label on the
-        # green light, never a red: the OPS numbers and the clips still record
-
-
-def _free_play_note(camera: Mapping | None) -> str | None:
-    """The free-play exposure state a green light carries as a note (F4)."""
-    if not (camera or {}).get("free_play"):
-        return None
-    if (camera.get("exposure_study") or {}).get("phase") == "ladder":
-        return None  # held rung controls: the policy's idle state says nothing
-    policy = camera.get("auto_exposure") or {}
-    status = policy.get("status")
-    if status in {"too_dark", "too_bright"}:
-        return status.replace("_", " ")
-    if status == "unavailable":
-        message = policy.get("message")
-        return "camera exposure unavailable" + (f" ({message})" if message else "")
-    return None
+    if camera_rule is not None:
+        camera_rule(camera, now, red, amber)
 
 
 def compute_state(states: SensorStates, now: float, hold: str | None = None) -> dict:
@@ -191,7 +174,7 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
     if states.iwr is not None:
         _iwr(states.iwr, now, red, amber)
     if states.camera is not None:
-        _camera(states.camera, now, red, amber)
+        _camera(states.camera, now, red, amber, states.camera_rule)
     if red:
         return {
             "state": "red",
@@ -210,7 +193,7 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
             "time_left_s": left,
             "causes": [{"cause": item[0], "time_left_s": item[1]} for item in amber],
         }
-    note = _free_play_note(states.camera)
+    note = states.green_note
     return {
         "state": "green",
         "word": WORDS["green"],
@@ -225,7 +208,7 @@ def _clock(epoch: float) -> str:
 
 
 class ReadyLight:
-    """The kiosk's one ready light: its state, the tester's hold and the last swing."""
+    """The kiosk's one ready light: its state, an outside hold and the last swing."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -237,12 +220,12 @@ class ReadyLight:
 
     @property
     def hold(self) -> str | None:
-        """The tester page's red cause, or None."""
+        """The red cause another page holds, or None."""
         with self._lock:
             return self._hold
 
     def set_hold(self, cause: str | None) -> None:
-        """Hold the light red for a cause the tester page knows (the ladder's phase)."""
+        """Hold the light red for a cause another page knows (None clears it)."""
         with self._lock:
             self._hold = cause or None
 

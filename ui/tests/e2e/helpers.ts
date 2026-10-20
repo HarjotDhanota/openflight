@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { io, type Socket } from 'socket.io-client';
 
-const UI_URL = 'http://127.0.0.1:5173';
+const UI_URL = `http://127.0.0.1:${process.env.OPENFLIGHT_E2E_UI_PORT ?? 5173}`;
 const SOCKET_URL = 'http://127.0.0.1:8080';
 
 function connectSocket(): Promise<Socket> {

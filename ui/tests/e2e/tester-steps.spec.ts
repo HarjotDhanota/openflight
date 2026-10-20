@@ -68,7 +68,7 @@ test('with no tester chosen, the picker lists the saved IDs and a new one; a tap
   page,
 }) => {
   await mockBase(page);
-  await mockTesters(page, ['harjot-indoor-test-2', DEFAULT_TESTER], 'tester-2026-10-13-1');
+  await mockTesters(page, ['indoor-test-2', DEFAULT_TESTER], 'tester-2026-10-13-1');
   const asked: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/api/tester/setup-eligibility?')) asked.push(new URL(request.url()).searchParams.get('tester_id') ?? '');
@@ -80,7 +80,7 @@ test('with no tester chosen, the picker lists the saved IDs and a new one; a tap
   await expect(page.locator('#setup-summary')).toHaveText('Pick your tester ID in step 1 first.');
   await expect(page.locator('#stepbar-step')).toHaveText('Step 1 · Tester and lens');
   const chips = page.locator('#tester-list').getByRole('button');
-  await expect(chips).toHaveText(['harjot-indoor-test-2', DEFAULT_TESTER]);
+  await expect(chips).toHaveText(['indoor-test-2', DEFAULT_TESTER]);
   for (const chip of await chips.all()) {
     expect((await chip.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   }
@@ -94,9 +94,9 @@ test('with no tester chosen, the picker lists the saved IDs and a new one; a tap
   expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBe('tester-2026-10-13-1');
 
   await page.locator('#tester-change').tap();
-  await chips.filter({ hasText: 'harjot-indoor-test-2' }).tap();
-  await expect(page.locator('#tester-current-id')).toHaveText('harjot-indoor-test-2');
-  await expect(page.locator('#tester-id')).toHaveValue('harjot-indoor-test-2');
+  await chips.filter({ hasText: 'indoor-test-2' }).tap();
+  await expect(page.locator('#tester-current-id')).toHaveText('indoor-test-2');
+  await expect(page.locator('#tester-id')).toHaveValue('indoor-test-2');
 });
 
 test('a tester list the server cannot give still offers a new ID by touch', async ({ page }) => {

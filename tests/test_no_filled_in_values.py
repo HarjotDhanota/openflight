@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import server as server_module
+from openflight import server as server_module, shot_models
 from openflight.ballistics import resolve_launch
 from openflight.clubs import ClubType
 from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
@@ -60,7 +60,7 @@ def full_ball_speed(monkeypatch):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
         shot.ball_speed_full_mph = shot.ball_speed_mph
 
-    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

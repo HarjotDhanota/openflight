@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from openflight import collision_model as cm, server as server_module
+from openflight import collision_model as cm, server as server_module, shot_models
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
 from openflight.sim.resolver import resolve_shot
@@ -55,7 +55,7 @@ def _expected():
 def test_every_collision_value_lands_on_the_shot_with_status_source_and_frame():
     shot = _delivered_shot()
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     expected = _expected()
     assert shot.face_angle_deg == pytest.approx(expected["face_angle"].value, abs=0.05)
@@ -75,7 +75,7 @@ def test_every_collision_value_lands_on_the_shot_with_status_source_and_frame():
 
 def test_the_payload_carries_the_collision_values():
     shot = _delivered_shot()
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     payload = server_module.shot_to_dict(shot)
 
@@ -98,7 +98,7 @@ def test_the_payload_carries_the_collision_values():
 def test_the_spin_axis_is_the_d_plane_tilt_not_launch_minus_path():
     shot = _delivered_shot()
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.spin_axis_deg == pytest.approx(_expected()["d_plane_tilt"].value, abs=0.05)
     assert shot.spin_axis_deg != pytest.approx(1.0 - (-2.0))
@@ -109,7 +109,7 @@ def test_the_spin_axis_is_the_d_plane_tilt_not_launch_minus_path():
 def test_without_a_measured_spin_the_calculated_spin_is_used_under_its_label():
     shot = _delivered_shot(spin_rpm=900.0, spin_confidence=0.2, spin_source="measured")
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.spin_rpm == pytest.approx(shot.spin_rpm_collision)
     assert shot.spin_source == "calculated"
@@ -120,7 +120,7 @@ def test_without_a_measured_spin_the_calculated_spin_is_used_under_its_label():
 def test_an_accepted_measured_spin_is_never_replaced():
     shot = _delivered_shot(spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured")
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.spin_rpm == 6800.0
     assert shot.spin_source == "measured"
@@ -142,7 +142,7 @@ def test_an_accepted_measured_spin_is_never_replaced():
 def test_a_missing_input_leaves_spin_and_axis_not_measured(overrides):
     shot = _delivered_shot(**overrides)
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.spin_axis_deg is None
     assert shot.spin_rpm is None
@@ -162,7 +162,7 @@ def test_an_iwr_attack_candidate_is_not_an_input():
         experimental_attack_angle_status="candidate_available",
     )
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.face_angle_deg is not None  # the accepted IWR path is used
     assert shot.dynamic_loft_deg is None
@@ -172,7 +172,7 @@ def test_an_iwr_attack_candidate_is_not_an_input():
 def test_a_canonical_attack_angle_is_used_first():
     shot = _delivered_shot(club_angle_deg=-3.0)
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.collision_model["inputs"]["attack_angle"]["value"] == -3.0
     assert shot.collision_model["inputs"]["attack_angle"]["source"] == "canonical"
@@ -184,7 +184,7 @@ def test_a_low_confidence_horizontal_launch_gives_an_estimated_spin_axis():
         launch_angle_horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
     )
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     axis = shot.collision_model["metrics"]["spin_axis"]
     assert axis["status"] == "estimated"
@@ -196,7 +196,7 @@ def test_a_low_confidence_horizontal_launch_gives_an_estimated_spin_axis():
 def test_mixed_frames_are_computed_and_named():
     shot = _delivered_shot(experimental_fused_club_path_frame="unit_boresight")
 
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.spin_axis_frame == "mixed"
     assert shot.experimental_face_angle_status == "d_plane_estimate_mixed_frames"
@@ -204,11 +204,11 @@ def test_mixed_frames_are_computed_and_named():
 
 def test_a_rerun_with_fewer_inputs_clears_its_own_earlier_values():
     shot = _delivered_shot()
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     assert shot.spin_source == "calculated"
 
     shot.launch_angle_vertical_source = "estimated"
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.dynamic_loft_deg is None
     assert shot.spin_axis_deg is None
@@ -217,7 +217,7 @@ def test_a_rerun_with_fewer_inputs_clears_its_own_earlier_values():
 
 def test_the_empirical_formula_is_recorded_but_the_published_model_is_preferred():
     shot = _delivered_shot()
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     published = shot.spin_rpm_collision
 
     server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
@@ -230,7 +230,7 @@ def test_the_empirical_formula_is_recorded_but_the_published_model_is_preferred(
 
 def test_the_empirical_formula_still_runs_alone_without_the_published_model():
     shot = _delivered_shot(experimental_fused_club_path_deg=None, experimental_fused_status=None)
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
 
@@ -243,7 +243,7 @@ def test_the_empirical_formula_still_runs_alone_without_the_published_model():
 
 def test_simulators_receive_calculated_spin_and_axis_under_the_calculated_label():
     shot = _delivered_shot()
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     resolved = resolve_shot(shot, PlayerState(), substitutes=False)
 
@@ -257,7 +257,7 @@ def test_simulators_receive_calculated_spin_and_axis_under_the_calculated_label(
 
 def test_a_fusion_shot_without_collision_inputs_is_still_not_sent():
     shot = _delivered_shot(experimental_fused_club_path_deg=None, experimental_fused_status=None)
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     with pytest.raises(UnmeasuredShotError) as raised:
         resolve_shot(shot, PlayerState(), substitutes=False)

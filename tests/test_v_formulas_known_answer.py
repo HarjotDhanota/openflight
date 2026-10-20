@@ -34,6 +34,7 @@ import numpy as np
 import pytest
 
 import openflight.server as server_module
+from openflight import shot_models
 from openflight.ballistics import AIR_DENSITY_STD, LaunchConditions, simulate
 from openflight.club_arc import prior_for_club
 from openflight.clubs import ClubType
@@ -283,8 +284,8 @@ def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False):
     else:
         shot.experimental_fused_status = "rejected_low_path_consensus"
     server_module._open_smash_factor_status(shot)
-    server_module._attach_club_arc(shot, delivery_dict)
-    server_module._attach_collision_model(shot)
+    shot_models._attach_club_arc(shot, delivery_dict)
+    shot_models._attach_collision_model(shot)
     server_module._finalize_shot_detected(shot, emit_event="shot")
     truth.update(arc=arc, path=path, attack=attack, face=face, loft=loft, speed=speed)
     return shot, truth

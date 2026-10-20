@@ -86,15 +86,6 @@ class TestABallSizedHighlightIsNotGood:
         observation = auto_exposure.measure_exposure(_frame(110, clipped_px=4))
         assert observation.status == "good"
 
-    def test_the_gate_matches_the_gain_screen(self):
-        from openflight.camera import tester_server
-
-        results = [{"gain": 4.0, "mean": 120.0, "clipped_pct": auto_exposure.BALL_CLIP_PCT + 0.05}]
-        # in band but clipped past the gate: too bright, never "needs light"
-        choice = tester_server.choose_gain(results)
-        assert choice["too_bright"] is True
-        assert choice["lighting_required"] is False
-
 
 class TestBallSpeedContract:
     def test_the_shot_says_which_speed_it_carries(self):

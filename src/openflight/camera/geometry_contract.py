@@ -17,6 +17,12 @@ SCHEMA = "openflight.camera.effective_geometry"
 TEE_LATERAL_ASSUMED = "assumed_directly_downrange"
 TEE_LATERAL_MEASURED = "setup_patch_pair"
 VERSION = 1
+# What a swing without a tee range cannot have, said the same way on every metric
+# it prevents (P8-7 gate 2; the setup side owns handing one over).
+NO_TEE_RANGE = (
+    "no tee range: the setup handed the swings none, and the IWR launch and the "
+    "camera's geometry both need one"
+)
 ASSUMPTIONS = {
     "focal_length": "inferred_from_reference_ball",
     "pitch": "inferred_from_reference_ball",

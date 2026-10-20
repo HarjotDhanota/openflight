@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from openflight.camera.light_judging import SENSOR_BLACK_LEVEL_DN
 from openflight.camera.optical_quality import (
     APPLIED_EXPOSURE_TOLERANCE_FRACTION,
     APPLIED_EXPOSURE_TOLERANCE_US,
@@ -37,11 +38,6 @@ _MIN_SIGNAL_ABOVE_FLOOR_DN = 20.0
 # stands out is the detector's call: a stable selection here and an independent
 # full-frame search at Save.
 _MAX_BALL_CLIPPED_PCT = 5.0
-# The OV9281's black level in the raw R8 stream every analysis uses: libcamera's
-# SensorBlackLevels reports 4096 on a 16-bit scale (read on the Pi, 29 Sept). It
-# stands in when no floor was measured; the ring around the ball never does, as
-# that turned the signal gate back into a contrast gate (wiring audit B5).
-SENSOR_BLACK_LEVEL_DN = 16.0
 _REQUIRED_STABLE_OBSERVATIONS = 3
 SETTLE_LIMIT = 4
 STABILIZE_LIMIT = 12

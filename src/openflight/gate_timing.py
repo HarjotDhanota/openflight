@@ -9,9 +9,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Callable
 
-from openflight import pi_trace
-from openflight.clock_mapping import QUALIFIED_BACKENDS, EdgeObservation
-from openflight.pi_trace import _finite
+from openflight.clock_mapping import QUALIFIED_BACKENDS, BracketedPair, EdgeObservation
+from openflight.numeric import finite as _finite
 
 
 @functools.lru_cache(maxsize=None)
@@ -55,7 +54,7 @@ def edge_trace_fields(reader: Callable[[], dict] | None, observer_wall_s: float)
         reading = reader() if reader is not None else {}
     except Exception as error:  # pylint: disable=broad-exception-caught
         reading_error = type(error).__name__
-    low, high = pi_trace.BracketedPair.now().wall_minus_mono_bounds_ns()
+    low, high = BracketedPair.now().wall_minus_mono_bounds_ns()
     return {
         "mono_before_ns": reading.get("mono_before_ns"),
         "age_ns": reading.get("age_ns"),

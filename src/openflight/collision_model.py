@@ -74,16 +74,22 @@ from . import metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .horizontal_frame import MIXED, combined_frame
+from .source_labels import (  # noqa: F401  (the predicates are re-exported)
+    LABEL_CALCULATED,
+    LABEL_ESTIMATED,
+    LABEL_MEASURED,
+    LABEL_MODEL_GEOMETRY,
+    SPIN_AXIS_ESTIMATED_PREFIX,
+    SPIN_AXIS_MODEL_GEOMETRY_PREFIX,
+    is_calculated_source,
+    is_estimated_source,
+    is_model_geometry_source,
+)
 
 MODEL_VERSION = "e2-2026-10-12"
 
-# Input labels (Part E's three labels) and output statuses.
-LABEL_MEASURED = "measured"
-LABEL_CALCULATED = "calculated"
-LABEL_MODEL_GEOMETRY = "model_geometry"
-# a measured input too weak to stand as one (e.g. a low-coherence horizontal launch):
-# every output built on it is "estimated", with the input's reason (V-formulas C2)
-LABEL_ESTIMATED = "estimated"
+# Input labels (source_labels: measured, calculated, model geometry, estimated) and
+# output statuses.
 STATUS_CALCULATED = "calculated"
 STATUS_MODEL_GEOMETRY = "model_geometry"
 STATUS_ESTIMATED = "estimated"
@@ -95,10 +101,6 @@ SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and lof
 SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
-# Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
-SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
-# Shot.spin_axis_source for an axis built on an estimated input starts so (C2).
-SPIN_AXIS_ESTIMATED_PREFIX = "estimated"
 NOTE_NO_GEAR = "no impact location: gear effect not applied"
 # Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
 # both start with "calculated"). An axis built on a model-geometry input (D39) starts
@@ -516,21 +518,6 @@ def shot_spin_method(status: str, input_labels) -> str:
         return SPIN_METHOD_MODEL_GEOMETRY
     weakest = LABEL_CALCULATED if LABEL_CALCULATED in set(input_labels) else LABEL_MEASURED
     return f"{SPIN_METHOD_PENNER}; club inputs {weakest}"
-
-
-def is_calculated_source(source: Optional[str]) -> bool:
-    """Whether a Shot source label names a calculated (model) value."""
-    return bool(source) and source.startswith(LABEL_CALCULATED)
-
-
-def is_model_geometry_source(source: Optional[str]) -> bool:
-    """Whether a Shot source label names a value built on model geometry (D39)."""
-    return bool(source) and source.startswith(SPIN_AXIS_MODEL_GEOMETRY_PREFIX)
-
-
-def is_estimated_source(source: Optional[str]) -> bool:
-    """Whether a Shot source label names a value built on an estimated input (C2)."""
-    return bool(source) and source.startswith(SPIN_AXIS_ESTIMATED_PREFIX)
 
 
 GYRO_REASON = (
