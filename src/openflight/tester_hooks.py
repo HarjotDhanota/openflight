@@ -834,10 +834,11 @@ def _session_start_config(config: dict) -> None:
 def _ready_light_states(states):
     """A tester's kiosk adds its setup problems and free play's camera causes.
 
-    Off outside a tester's kiosk (the ladder or plain swings).
+    Outside a tester's kiosk (the ladder or plain swings) the light is the plain
+    kiosk's: the sensors alone decide it.
     """
     if states is None or not (tester_setup_required or study_mode_enabled):
-        return None
+        return states
     camera = states.camera
     if server.camera_capture_runtime is not None and camera is not None:
         camera = {

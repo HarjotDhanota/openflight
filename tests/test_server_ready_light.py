@@ -168,12 +168,16 @@ def test_a_camera_that_failed_to_start_is_red(sensors, monkeypatch):
     assert sensors.light()["cause"] == "camera is not running"
 
 
-def test_the_light_is_off_outside_a_testers_kiosk(sensors, monkeypatch):
+def test_outside_a_testers_kiosk_the_light_runs_on_the_sensors_alone(sensors, monkeypatch):
+    # a plain kiosk: the tester adds no setup problems, camera rule or note
     monkeypatch.setattr(tester_hooks, "tester_setup_required", False)
-    assert sensors.light()["state"] == "off"
-
-    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)  # the ladder's kiosk
+    monkeypatch.setattr(tester_hooks, "_ready_light_setup_problems", lambda: ["not asked"])
+    states = server._ready_light_states()
+    assert tuple(states.setup_problems) == () and states.camera_rule is None
     assert sensors.light()["state"] == "green"
+
+    sensors.set_phase(None)
+    assert sensors.light()["cause"] == "OPS243 starting: not armed yet"
 
 
 def test_the_light_is_off_without_the_sound_triggered_ops(sensors, monkeypatch):
