@@ -46,7 +46,7 @@ from typing import Callable, List, Optional
 import serial
 import serial.tools.list_ports
 
-from . import pi_trace
+from . import instrumentation
 from .serial_latency import log_usb_serial_latency_timer
 
 # Configure logging for raw radar data
@@ -686,7 +686,7 @@ class OPS243Radar:
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
-        pi_trace.mark("ops_clock_sync_started", pi_trace.current_ops_attempt())
+        instrumentation.mark("ops_clock_sync_started", instrumentation.current_ops_attempt())
 
         reads: List[dict] = []
 
@@ -836,9 +836,9 @@ class OPS243Radar:
             )
         else:
             logger.warning("[OPS] Clock sync: no valid C? responses (%d attempts)", len(reads))
-        pi_trace.mark(
+        instrumentation.mark(
             "ops_clock_sync_done",
-            pi_trace.current_ops_attempt(),
+            instrumentation.current_ops_attempt(),
             method=clock_sync_method,
             usable=usable_for_trigger_timestamps,
         )
@@ -1662,9 +1662,9 @@ class OPS243Radar:
         split, split_reason = getattr(
             self, "_pre_trigger_split", (None, "not_written_this_session")
         )
-        pi_trace.mark(
+        instrumentation.mark(
             "ops_wait_armed",
-            pi_trace.current_ops_attempt(),
+            instrumentation.current_ops_attempt(),
             pre_trigger_segments=split,
             pre_trigger_segments_reason=split_reason,
             arm_writes_complete=not unconfirmed,
@@ -1714,9 +1714,9 @@ class OPS243Radar:
                             "began (%d bytes); an edge raced the re-arm",
                             pending_at_start,
                         )
-                        pi_trace.mark(
+                        instrumentation.mark(
                             "ops_dump_pending_at_wait_start",
-                            pi_trace.current_ops_attempt(),
+                            instrumentation.current_ops_attempt(),
                             pending_bytes=pending_at_start,
                             marker_offset=marker_offset,
                         )
@@ -1844,8 +1844,8 @@ class OPS243Radar:
             pre_trigger_segments: Number of pre-trigger segments (0-32).
                 Each segment = 128 samples = ~4.27ms at 30ksps.
         """
-        attempt_id = pi_trace.current_ops_attempt()
-        pi_trace.mark(
+        attempt_id = instrumentation.current_ops_attempt()
+        instrumentation.mark(
             "ops_rearm_started",
             attempt_id,
             pre_trigger_segments=max(0, min(32, pre_trigger_segments)),
@@ -1854,7 +1854,7 @@ class OPS243Radar:
         try:
             outcome = self._rearm_rolling_buffer_body(pre_trigger_segments)
         finally:
-            pi_trace.mark("ops_rearm_done", attempt_id, outcome=outcome)
+            instrumentation.mark("ops_rearm_done", attempt_id, outcome=outcome)
 
     def _rearm_rolling_buffer_body(self, pre_trigger_segments: int) -> str:
         """The re-arm itself; returns "rearmed", or "write_timeout" when the radar is busy."""
