@@ -1854,7 +1854,7 @@ class TestShotToDict:
 
     def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
         """P8-7 gate 2: the tee contract stands; the shot says plainly what it lacked."""
-        from openflight.review_metrics import NO_TEE_RANGE
+        from openflight.camera.geometry_contract import NO_TEE_RANGE
 
         np.savez(
             tmp_path / "frames.npz",

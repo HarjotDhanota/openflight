@@ -4513,7 +4513,7 @@ def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     """Validate the stable, upright LIS3DH pose used by calibrated projection."""
     if pose.get("status") != "stable" or pose.get("stable") is not True:
         raise ValueError("calibrated camera fusion requires a stable LIS3DH reading")
-    from .camera.setup_eligibility import (  # pylint: disable=import-outside-toplevel
+    from .inclinometer.placement import (  # pylint: disable=import-outside-toplevel
         placement_guard,
     )
 
@@ -5905,7 +5905,7 @@ def _fuse_camera_measurements(
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
             if "tee_slant_range_m" in str(error):
                 # the tee contract stands (P8-7 gate 2); the shot names what it lacked
-                from openflight.review_metrics import NO_TEE_RANGE  # noqa: PLC0415
+                from openflight.camera.geometry_contract import NO_TEE_RANGE  # noqa: PLC0415
 
                 camera_notes.append(NO_TEE_RANGE)
                 shot.camera_notes = camera_notes

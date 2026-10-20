@@ -13,6 +13,7 @@ from openflight.camera.ball_flight import (
     REFERENCE_BALL_X_FRACTION,
     REFERENCE_BALL_Y_FRACTION,
 )
+from openflight.camera.geometry_contract import NO_TEE_RANGE
 
 STATUSES = (
     "accepted",
@@ -48,12 +49,6 @@ _ABSENT_INPUT_MARKERS = (
     "has no recorded",
     "no OPS ball speed",
     "no tee range",
-)
-# What a swing without a tee range cannot have, said the same way on every metric
-# it prevents (P8-7 gate 2; the setup side owns handing one over).
-NO_TEE_RANGE = (
-    "no tee range: the setup handed the swings none, and the IWR launch and the "
-    "camera's geometry both need one"
 )
 
 
