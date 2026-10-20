@@ -33,7 +33,7 @@ import pytest
 import openflight.server as server_module
 from openflight import collision_forward, shot_models
 from openflight.ballistics import AIR_DENSITY_STD, LaunchConditions, simulate
-from openflight.club_arc import prior_for_club
+from openflight.club_arc import LOW_POINT_OFFSETS_MM, prior_for_club
 from openflight.clubs import ClubType
 from openflight.flight import AIR_DENSITY_NORMALIZED, FLIGHT_METRICS
 from openflight.horizontal_frame import offset_from_target_yaw
@@ -337,7 +337,9 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     )
     assert arc["swing_direction_deg"]["frame"] == frame
     distance, height, side = truth["arc"]["low_point_mm"]
-    assert arc["low_point_distance_mm"]["value"] == pytest.approx(distance, abs=0.5)
+    offset = LOW_POINT_OFFSETS_MM[DELIVERIES[name][0]]
+    assert arc["low_point_distance_mm"]["geometry_value"] == pytest.approx(distance, abs=0.5)
+    assert arc["low_point_distance_mm"]["value"] == pytest.approx(distance + offset, abs=0.5)
     assert arc["low_point_height_mm"]["value"] == pytest.approx(height, abs=0.5)
     assert arc["low_point_side_mm"]["value"] == pytest.approx(side, abs=0.5)
     assert distance > 0 if truth["attack"] < 0 else distance < 0  # TrackMan: down = after

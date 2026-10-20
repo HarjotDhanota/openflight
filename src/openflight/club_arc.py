@@ -93,6 +93,12 @@ Definitions (TrackMan's public pages, D37)
   the head's position at impact to "where the swing would bottom out". Here:
   ``L - P(t_impact)`` in the target-line frame: distance along the target line
   (+ after the ball), height (+ above the head at impact), side (+ right).
+  The reported low point distance adds a per-club offset for the 7-iron, driver
+  and pitching wedge (``LOW_POINT_OFFSETS_MM``): the reported distance is the arc's
+  geometry plus a constant per club, fitted by the maintainer to the owner's export
+  session (``session_logs/OpenFlight-Test.Normalized.csv``; 9, 8 and 7 shots, 1.5 mm
+  RMS after the offset). Other clubs have no fitted offset yet and report the arc's
+  geometry alone, with a note.
 
 Frame (D36): positions arrive in the unit-boresight frame; they are turned by
 the one horizontal offset (``horizontal_frame``) before the fit, so every
@@ -654,6 +660,8 @@ SELECTION_RULE = (
 CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
 ARC_FIT_SOURCE = "club_arc:shot_fit"
+LOW_POINT_OFFSETS_MM = {ClubType.IRON_7: 2.3, ClubType.DRIVER: -28.3, ClubType.PW: 5.5}
+NOTE_NO_LOW_POINT_OFFSET = "arc geometry only: no per-club offset fitted for this club"
 ARC_PRIOR_SOURCE = "club_arc:published_prior"
 _HORIZONTAL = {"club_path_deg", "swing_direction_deg", "low_point_distance_mm", "low_point_side_mm"}
 
@@ -701,6 +709,24 @@ def _arc_metric(arc: ClubArc, name: str) -> dict:
     }
 
 
+def _with_low_point_offset(entry: dict, club: Any) -> dict:
+    """The low point distance with the club's fitted offset, the arc's geometry kept."""
+    entry = {**entry, "geometry_value": entry["value"], "offset_mm": None}
+    if entry["value"] is None:
+        return entry
+    offset = LOW_POINT_OFFSETS_MM.get(club)
+    if offset is None:
+        return {**entry, "note": NOTE_NO_LOW_POINT_OFFSET}
+    shifted = entry["range"]
+    return {
+        **entry,
+        "value": round(entry["value"] + offset, 2),
+        "range": [round(bound + offset, 2) for bound in shifted] if shifted else None,
+        "offset_mm": offset,
+        "note": f"arc geometry {offset:+.1f} mm per-club offset (fitted by the maintainer)",
+    }
+
+
 def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]) -> dict:
     """The shot's club delivery: every E1 metric with status, source, frame, range, reason.
 
@@ -734,6 +760,9 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
                 ball_position=HeadPosition(t_s=0.0, **dict(ball)) if ball else None,
             )
     metrics = {name: _arc_metric(arc, name) for name in _OUTPUTS}
+    metrics["low_point_distance_mm"] = _with_low_point_offset(
+        metrics["low_point_distance_mm"], club
+    )
     chained = data or {}
     chained_source = (
         CHAINED_OPS_SOURCE if chained.get("status") == "camera_ops_fallback" else CHAINED_IWR_SOURCE
