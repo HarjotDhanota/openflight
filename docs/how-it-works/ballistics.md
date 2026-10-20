@@ -7,8 +7,8 @@ icon: lucide/trending-up
 Carry and the rest of the flight are not measured: they are **calculated**.
 OpenFlight integrates the ball's trajectory from the shot's own launch
 conditions with a published aerodynamic model form whose constants are fitted to
-TrackMan 4 exports (flight-fit-v1), then adds bounce and roll from a published
-turf model. Every output says what it is, where it came from and how
+TrackMan 4 exports (flight-fit-v1), then adds bounce and roll from a turf bounce-and-roll
+model. Every output says what it is, where it came from and how
 uncertain it is.
 
 Implemented in `src/openflight/ballistics.py` (the physics) and
@@ -453,51 +453,59 @@ on FIFA footballs with no spin decay in it.
 
 ## Total: bounce and roll
 
-Total is carry plus bounce and roll from **USGA & R&A Rules Ltd (9 March 2021),
-"Proposed Bounce Model for Use in Evaluating Optimum Overall Distance"**, Eq. 1.
-It was published with the R&A's "Notice to Golf Ball Manufacturers –
-Publication of Technical Documents" (16 March 2021):
+Total is carry plus bounce and roll from **turf-roll-v1**
+(`src/openflight/bounce_roll.py`), from the landing angle, landing speed and
+landing backspin (the spin times the cosine of the spin axis tilt):
+
+- **Bounce:** the ball lands on turf that dents under it. Penner, "The run of a
+  golf ball" (*Can. J. Phys.* 80, 931–940, 2002), models the dent as a tilt of
+  the impact plane toward the incoming ball; here the tilt grows with the landing
+  speed, \(\theta_c = \theta_\max (1 - e^{-v/v_\theta})\, e^{-((\alpha-\alpha_p)/w)^2}\),
+  and peaks at a landing angle \(\alpha_p\).
+- **Each impact** is a rigid ball with grip-slip friction (Cross, "Grip-slip
+  behavior of a bouncing ball", *Am. J. Phys.* 70, 1093–1102, 2002): it slides
+  with friction \(\mu\) unless friction can stop the contact point, in which case
+  it leaves rolling. The normal restitution falls with the normal impact speed,
+  \(e = e_0 / (1 + v_n / v_e)\), and the turf caps the speed kept along the
+  surface, \(v_t / \sqrt{1 + (v_t / v_c)^2}\) with \(v_c\) falling with \(v_n\).
+- **Hops** are ballistic; once a hop is under 1 cm the ball slides until it
+  rolls, then rolls out against a constant resistance plus a speed-squared turf
+  drag, \(\dot v = -(g c_0 + k v^2)\), which integrates in closed form. Heavy
+  backspin on a steep landing can bring the ball back past where it landed.
+
+The twelve constants were fitted by the maintainer (flight-fit-v2) for fairway
+turf of normal firmness over landing speeds 18–100 mph, landing angles 5–65° and
+backspin 0–11,000 rpm. On the 67 export shots flight-fit-v1 was fitted to,
+flight-fit-v1's carry plus this roll is within 1.74 yd RMSE of the exports'
+estimated total (driver 3.47, mid irons 1.64, wedges 0.80), against 5.90 yd for
+the USGA / R&A line below (driver 5.58, mid irons 4.42, wedges 7.07) on the shots
+inside its range.
+
+OpenFlight applies it as follows:
+
+- **Surface:** assumed "fairway, normal firmness" unless one is set. The source
+  says `surface assumed: fairway, normal firmness`. Any other surface gives total
+  "not measured".
+- **Range of use:** landing angles 5–65°; outside them there is no total, with
+  the reason.
+- **Direction:** the model gives a distance, not a direction. The ball is
+  assumed to roll on along its landing heading, with no sideways kick, which
+  gives `total_side`.
+
+The **USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in
+Evaluating Optimum Overall Distance"**, Eq. 1, stays selectable
+(`USGA_RA_2021_BOUNCE_MODEL`, `ROLL_MODELS`, or `model=` on
+`bounce_and_roll_yards` and `Trajectory.rest_point`):
 
 $$
 d_\text{bounce} = 79.1 - 1.6\,\alpha_f \quad\text{(yards; } \alpha_f \text{ = landing angle in degrees)}
 $$
 
-- **What it models:** fairways. It was fitted to USGA/R&A ball-launcher tests
-  (USGA test range, Pinehurst No. 2, Philadelphia CC, Rutgers turf plots, Lehigh
-  CC) and to 2016–2018 PGA TOUR ShotLink/TrackMan bounce-and-roll data.
-- **The slope, −1.6 yd/°,** sits between the USGA test range (−1.8 to −1.6) and
-  the tour (−1.5).
-- **The intercept** keeps the 2020 Overall Distance Standard test balls' mean
-  total unchanged.
-- **Worked figure:** at their mean landing angle, 37.6°, the model gives
-  18.94 yd; at the typical 39° it gives 16.7 yd.
-
-OpenFlight applies it as follows:
-
-- **Surface:** assumed "fairway, normal firmness" unless one is set. The source
-  says `surface assumed: fairway, normal firmness`. No other surface has a
-  published model in the code yet, so any other surface gives total "not
-  measured".
-- **Range of use:** only for landing angles inside the paper's data, 10–50°.
-  A steeper landing (a high wedge) or a flatter one has no total, with the reason.
-- **Clamp at zero:** Eq. 1 reaches 0 yd at 49.4° (79.1 / 1.6) and is negative
-  from there to 50°, the top of its data. A fairway ball does not roll backwards,
-  so the roll is clamped at 0 there and `total` / `total_side` carry the note
-  "roll clamped at 0: Eq. 1 is negative above 49.4°". Tour irons land at
-  48–52° (TrackMan's 2023 Tour averages), so this edge is reached in practice.
-- **Direction:** the model gives a distance, not a direction. The ball is
-  assumed to roll on along its landing heading, with no sideways kick, which
-  gives `total_side`.
-
-As a sanity check, not a gate: fed the TrackMan export's own landing angles, the
-model's roll is within +0.8 yd (bias) and 3.8 yd (RMSE) of TrackMan's estimated
-roll on the 21 shots inside its range. TrackMan's total is itself modelled, so
-this is not ground truth.
-
-Penner, "The run of a golf ball" (*Can. J. Phys.* 80, 931–940, 2002) and Haake's
-turf measurements model the bounce on **greens**. The USGA/R&A paper sets them
-aside for fairway distance for that reason. A green model would be a separate
-`BOUNCE_MODELS` entry.
+It was fitted to USGA/R&A ball-launcher tests and 2016–2018 tour bounce-and-roll
+data on fairways, over landing angles of 10–50°. It reaches 0 yd at 49.4° and is
+negative from there to 50°; a fairway ball does not roll backwards on it, so the
+roll is clamped at 0 there and `total` / `total_side` carry the note "roll
+clamped at 0: Eq. 1 is negative above 49.4°". At 37.6° it gives 18.94 yd.
 
 ## Inputs
 
@@ -558,7 +566,8 @@ themselves from speed, launch and spin.
 | `RANGE_DT_SECONDS` | 0.02 | Range sweep only |
 | `MAX_FLIGHT_SECONDS` | 15.0 | Safety cap |
 | `SAMPLE_INTERVAL_S` | 0.05 | Cadence of returned trajectory points |
-| `USGA_RA_2021_BOUNCE_MODEL` | 79.1 yd, −1.6 yd/°, 10–50° | Fairway bounce and roll |
+| `TURF_ROLL_V1` | twelve fitted constants, landing angle 5–65° | Fairway bounce and roll (active) |
+| `USGA_RA_2021_BOUNCE_MODEL` | 79.1 yd, −1.6 yd/°, 10–50° | Fairway bounce and roll (selectable) |
 
 !!! note "Why the maximum-conforming ball"
 
