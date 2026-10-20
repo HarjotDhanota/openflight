@@ -36,17 +36,24 @@ def _fusion_shot(**overrides):
 # ---- C3: Eq. 1 never rolls the ball backwards --------------------------------------
 
 CLAMP_NOTE = "roll clamped at 0: Eq. 1 is negative above 49.4°"
+USGA = ballistics.USGA_RA_2021_BOUNCE_MODEL
+
+
+@pytest.fixture
+def usga_fairway(monkeypatch):
+    """The fairway total from the USGA / R&A line, which is no longer the default."""
+    monkeypatch.setitem(ballistics.BOUNCE_MODELS, ballistics.FAIRWAY_NORMAL, USGA)
 
 
 @pytest.mark.parametrize("angle", [49.5, 49.9, 50.0])
 def test_roll_is_clamped_at_zero_where_eq_1_goes_negative(angle):
     assert 79.1 - 1.6 * angle < 0.0
-    assert bounce_and_roll_yards(angle) == 0.0
+    assert bounce_and_roll_yards(angle, model=USGA) == 0.0
 
 
 def test_roll_below_the_zero_crossing_is_eq_1_unchanged():
-    assert bounce_and_roll_yards(49.0) == pytest.approx(79.1 - 1.6 * 49.0)
-    assert bounce_and_roll_yards(50.1) is None  # outside the data range, as before
+    assert bounce_and_roll_yards(49.0, model=USGA) == pytest.approx(79.1 - 1.6 * 49.0)
+    assert bounce_and_roll_yards(50.1, model=USGA) is None  # outside the data range
 
 
 def _landing_at(angle):
@@ -63,7 +70,7 @@ def _landing_at(angle):
     )
 
 
-def test_a_clamped_roll_rests_at_the_landing_point_and_says_so(monkeypatch):
+def test_a_clamped_roll_rests_at_the_landing_point_and_says_so(monkeypatch, usga_fairway):
     traj = _landing_at(49.8)
     assert traj.total_yards == pytest.approx(150.0)
     assert traj.total_side_yards == pytest.approx(3.0)
@@ -79,7 +86,7 @@ def test_a_clamped_roll_rests_at_the_landing_point_and_says_so(monkeypatch):
         assert metrics["carry"].get("note") is None
 
 
-def test_an_unclamped_roll_has_no_note(monkeypatch):
+def test_an_unclamped_roll_has_no_note(monkeypatch, usga_fairway):
     monkeypatch.setattr(flight_module, "simulate", lambda *args, **kwargs: _landing_at(40.0))
     payload = compute_flight(_fusion_shot(), substitutes=False).to_dict()
     assert payload["normalized"]["metrics"]["total"].get("note") is None

@@ -22,7 +22,7 @@ if str(_ANALYSIS) not in sys.path:
 import fit_flight_model as ffm  # noqa: E402
 from validate_ballistics import TMShot  # noqa: E402
 
-from openflight.ballistics import FERGUSON_2022, FLIGHT_FIT_V1  # noqa: E402
+from openflight.ballistics import FERGUSON_2022, FLIGHT_FIT_V1, FLIGHT_FIT_V2  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +60,9 @@ SYNTHETIC = [
 ]
 
 
-@pytest.mark.parametrize("model", [FERGUSON_2022, FLIGHT_FIT_V1], ids=lambda m: m.version)
+@pytest.mark.parametrize(
+    "model", [FERGUSON_2022, FLIGHT_FIT_V1, FLIGHT_FIT_V2], ids=lambda m: m.version
+)
 def test_the_batch_simulator_is_the_production_simulator(owner_shots, model):
     shots = owner_shots + SYNTHETIC
     batch = ffm.simulate_batch(shots, model)

@@ -367,7 +367,39 @@ class TestW7Coordinates:
         assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
 
 
-# --- E4: total distance from the USGA / R&A 2021 bounce-and-roll model ---
+class TestSpinAxisCarriesNoRifleSpin:
+    """A tilted axis is the backspin axis turned about the launch direction itself.
+
+    The spin vector stays perpendicular to the launch velocity whatever the launch
+    angle, so a tilted axis adds no spin about the direction of travel.
+    """
+
+    @pytest.mark.parametrize("launch_v", [0.0, 12.0, 30.0])
+    @pytest.mark.parametrize("launch_h", [0.0, 7.0])
+    @pytest.mark.parametrize("axis", [-25.0, 0.0, 15.0])
+    def test_the_spin_vector_is_a_unit_vector_across_the_launch(self, launch_v, launch_h, axis):
+        from openflight.ballistics import launch_relative_spin_axis
+
+        w = launch_relative_spin_axis(axis, launch_h, launch_v)
+        v, h = math.radians(launch_v), math.radians(launch_h)
+        d = (math.cos(v) * math.cos(h), math.cos(v) * math.sin(h), math.sin(v))
+        assert math.hypot(*w) == pytest.approx(1.0, abs=1e-12)
+        assert sum(a * b for a, b in zip(w, d)) == pytest.approx(0.0, abs=1e-12)
+
+    def test_a_level_launch_keeps_the_old_axis(self):
+        from openflight.ballistics import launch_relative_spin_axis
+
+        a = math.radians(10.0)
+        h = math.radians(4.0)
+        expected = (math.cos(a) * math.sin(h), -math.cos(a) * math.cos(h), math.sin(a))
+        assert launch_relative_spin_axis(10.0, 4.0) == pytest.approx(expected, abs=1e-12)
+
+    def test_a_tilt_to_the_right_still_fades(self):
+        assert simulate(_driver(axis=20.0, launch=25.0)).carry_side_yards > 0.0
+        assert simulate(_driver(axis=-20.0, launch=25.0)).carry_side_yards < 0.0
+
+
+# --- E4: total distance; the USGA / R&A 2021 bounce model stays selectable ---
 
 
 class TestBounceModel:
@@ -376,37 +408,87 @@ class TestBounceModel:
     (yards, alpha_f the terminal angle in degrees), from fairway data over
     terminal angles of 10-50 degrees (its Table 1)."""
 
+    @staticmethod
+    def _usga(angle):
+        from openflight.ballistics import USGA_RA_2021_BOUNCE_MODEL, bounce_and_roll_yards
+
+        return bounce_and_roll_yards(angle, model=USGA_RA_2021_BOUNCE_MODEL)
+
     def test_the_papers_equation_at_its_reference_angle(self):
         # The intercept was set so the model matches the 2003 model at the
         # mean terminal angle of the 2020 ODS tests, 37.6 deg (§4, Figure 9).
-        from openflight.ballistics import bounce_and_roll_yards
-
-        assert bounce_and_roll_yards(37.6) == pytest.approx(79.1 - 1.6 * 37.6)
-        assert bounce_and_roll_yards(37.6) == pytest.approx(18.94, abs=1e-9)
+        assert self._usga(37.6) == pytest.approx(79.1 - 1.6 * 37.6)
+        assert self._usga(37.6) == pytest.approx(18.94, abs=1e-9)
 
     def test_the_typical_39_degree_landing(self):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        assert bounce_and_roll_yards(39.0) == pytest.approx(16.7, abs=1e-9)
+        assert self._usga(39.0) == pytest.approx(16.7, abs=1e-9)
 
     @pytest.mark.parametrize("angle", [9.9, 50.1, 70.0, -5.0])
     def test_outside_the_models_data_range_there_is_no_total(self, angle):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        assert bounce_and_roll_yards(angle) is None
+        assert self._usga(angle) is None
 
     def test_an_unknown_surface_has_no_model(self):
         from openflight.ballistics import bounce_and_roll_yards
 
         assert bounce_and_roll_yards(39.0, surface="green_fast") is None
 
+    def test_both_roll_models_are_registered(self):
+        from openflight.ballistics import ROLL_MODELS, USGA_RA_2021_BOUNCE_MODEL
+        from openflight.bounce_roll import TURF_ROLL_V1
+
+        assert ROLL_MODELS == {
+            "usga-ra-2021": USGA_RA_2021_BOUNCE_MODEL,
+            "turf-roll-v1": TURF_ROLL_V1,
+        }
+
+
+class TestTurfRollIsTheFairwayModel:
+    """Total on fairway turf comes from the turf bounce-and-roll model, which
+    needs the landing speed and backspin as well as the landing angle."""
+
+    def test_the_fairway_model_is_the_turf_roll(self):
+        from openflight.ballistics import ACTIVE_ROLL_MODEL, BOUNCE_MODELS, FAIRWAY_NORMAL
+        from openflight.bounce_roll import TURF_ROLL_V1
+
+        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V1
+        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V1
+
+    def test_the_turf_roll_is_never_clamped(self):
+        from openflight.ballistics import roll_clamped
+
+        assert roll_clamped(55.0) is False
+
+    def test_without_the_landing_speed_and_spin_there_is_no_roll(self):
+        from openflight.ballistics import bounce_and_roll_yards
+
+        assert bounce_and_roll_yards(39.0) is None
+
+    def test_the_trajectory_carries_its_landing_backspin(self):
+        traj = _yawed(0.0, axis=20.0)
+        spin = traj.points[-1].spin_rpm
+        assert 0.0 < spin < 2700.0
+        assert traj.landing_backspin_rpm == pytest.approx(spin * math.cos(math.radians(20.0)))
+
     def test_total_rolls_on_along_the_landing_heading(self):
         from openflight.ballistics import bounce_and_roll_yards
 
         traj = _yawed(5.0, axis=8.0)
-        roll = bounce_and_roll_yards(traj.landing_angle_deg)
+        roll = bounce_and_roll_yards(
+            traj.landing_angle_deg,
+            landing_speed_mph=traj.landing_speed_mph,
+            backspin_rpm=traj.landing_backspin_rpm,
+        )
+        assert roll is not None and roll > 0.0
         heading = math.radians(traj.landing_heading_deg)
         rest_x = traj.downrange_yards + roll * math.cos(heading)
         rest_y = traj.carry_side_yards + roll * math.sin(heading)
         assert traj.total_yards == pytest.approx(math.hypot(rest_x, rest_y), abs=1e-6)
         assert traj.total_side_yards == pytest.approx(rest_y, abs=1e-6)
+
+    def test_the_usga_line_can_still_be_asked_for(self):
+        from openflight.ballistics import USGA_RA_2021_BOUNCE_MODEL
+
+        traj = _yawed(0.0)
+        rest = traj.rest_point(model=USGA_RA_2021_BOUNCE_MODEL)
+        roll = 79.1 - 1.6 * traj.landing_angle_deg
+        assert rest[0] == pytest.approx(traj.downrange_yards + roll, abs=1e-6)

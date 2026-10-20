@@ -22,8 +22,10 @@ W7 (E4) frames:
                  so the spin vector turns with the horizontal launch angle and a
                  pure-backspin shot launched right flies the straight shot, rotated.
 
-Total (carry plus bounce and roll) uses the USGA / R&A 2021 linear bounce model
-(`bounce_and_roll_yards`) on assumed fairway turf; see BOUNCE_MODELS.
+Total (carry plus bounce and roll) uses the turf bounce-and-roll model
+(``bounce_roll.TURF_ROLL_V1``) from the landing angle, speed and backspin on
+assumed fairway turf; the USGA / R&A 2021 linear model stays selectable. See
+BOUNCE_MODELS and ROLL_MODELS.
 
 Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
 parameter Sp = r*omega / v in the form of Ferguson, McNally & McPhee (2022) Eqs.
@@ -37,6 +39,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .bounce_roll import TURF_ROLL_V1, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
@@ -128,15 +131,22 @@ class FlightCalibration:
 
 @dataclass(frozen=True)
 class AeroModel:
-    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4)."""
+    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4).
+
+    ``descent_drag``, ``descent_lift`` and ``descent_power`` scale Cd and Cl while
+    the ball descends (``descent_factors``); zero leaves the form as published.
+    """
 
     version: str
     label: str
-    cd_poly: tuple[float, float, float]
-    cl_poly: tuple[float, float, float]
+    cd_poly: tuple[float, ...]
+    cl_poly: tuple[float, ...]
     cm_per_sp: float
     sp_fit_max: float = SP_FIT_MAX
     calibration: Optional[FlightCalibration] = None
+    descent_drag: float = 0.0
+    descent_lift: float = 0.0
+    descent_power: float = 1.0
 
     def cd(self, sp: float) -> float:
         """Drag coefficient, held at its SP_FIT_MAX value beyond the fit."""
@@ -148,9 +158,19 @@ class AeroModel:
             return 0.0
         return max(0.0, _poly(self.cl_poly, min(sp, self.sp_fit_max)))
 
+    def descent_factors(self, sin_descent: float) -> tuple[float, float]:
+        """(Cd, Cl) multipliers at a descent angle with this sine; 1 when climbing."""
+        if sin_descent <= 0.0 or not (self.descent_drag or self.descent_lift):
+            return 1.0, 1.0
+        x = sin_descent**self.descent_power
+        return math.exp(-self.descent_drag * x), math.exp(-self.descent_lift * x)
+
 
 def _poly(coeffs: tuple, sp: float) -> float:
-    return coeffs[0] + coeffs[1] * sp + coeffs[2] * sp * sp
+    value = 0.0
+    for c in reversed(coeffs):
+        value = value * sp + c
+    return value
 
 
 FERGUSON_FORM = (
@@ -264,7 +284,86 @@ FLIGHT_FIT_V1 = AeroModel(
     calibration=FLIGHT_FIT_V1_CALIBRATION,
 )
 
-AERO_MODELS: dict[str, AeroModel] = {m.version: m for m in (FERGUSON_2022, FLIGHT_FIT_V1)}
+# flight-fit-v2: Ferguson's quadratics on the way up; on the way down both
+# coefficients are scaled by exp(-k sin(descent)^n). The descent term is an empirical
+# form motivated by the published dependence of a sphere's force coefficients on
+# whether the flow around it accelerates (Odar & Hamilton 1964); a falling ball
+# speeds up, so it is keyed to the descent angle, whose sine is the share of gravity
+# along the path. Not active: on the export shots flight-fit-v1 was fitted to it is
+# behind on carry and apex (see its metrics).
+FLIGHT_FIT_V2_FORM = (
+    FERGUSON_FORM + "; times exp(-k_d s^n) on Cd and exp(-k_l s^n) on Cl while descending, "
+    "s = sin(descent angle), after Odar & Hamilton 1964, Forces on a sphere accelerating in "
+    "a viscous fluid (J. Fluid Mech. 18, 302)"
+)
+
+FLIGHT_FIT_V2_CALIBRATION = FlightCalibration(
+    version="flight-fit-v2",
+    source=(
+        "fitted by the maintainer (flight-fit-v2) on carry, apex, apex distance, landing "
+        "angle, landing speed, hang time, curve and landing spin over a launch grid"
+    ),
+    form=FLIGHT_FIT_V2_FORM,
+    fitted_on="2026-10-20",
+    data=(),
+    domain=(
+        "ball speed 40-190 mph, launch 0-45 deg, spin 500-12,000 rpm, spin axis -30 to "
+        "+30 deg, launch direction -10 to +10 deg; 11,264 launches, a random 20 % held out"
+    ),
+    reference_air_density_kg_m3=1.176931,
+    residual_scales=(
+        ("carry", "yd", 1.0),
+        ("apex", "ft", 1.0),
+        ("apex_distance", "yd", 1.0),
+        ("landing_angle", "deg", 0.5),
+        ("landing_speed", "mph", 1.0),
+        ("hang_time", "s", 0.1),
+        ("curve", "yd", 1.0),
+        ("landing_spin", "rpm", 100.0),
+    ),
+    method=(
+        "scipy least_squares (soft L1) over 4000 training launches, RK4 at 10 ms, nine "
+        "constants with the Cd intercept held at 0.151, then rounded"
+    ),
+    metrics=(
+        # RMSE on the 2187 held-out grid launches, model minus target
+        ("grid held-out carry RMSE yd", 1.72),
+        ("grid held-out apex RMSE ft", 1.81),
+        ("grid held-out landing_angle RMSE deg", 1.10),
+        ("grid held-out hang_time RMSE s", 0.06),
+        ("grid held-out curve RMSE yd", 0.57),
+        ("grid held-out landing_speed RMSE mph", 2.13),
+        # the 67 export shots flight-fit-v1 was fitted to, all held out here
+        ("export shots held-out carry RMSE yd", 1.06),
+        ("export shots held-out apex RMSE ft", 1.40),
+        ("export shots held-out landing_angle RMSE deg", 0.46),
+        ("export shots held-out hang_time RMSE s", 0.07),
+        # flight-fit-v1 on the same grid hold-out
+        ("flight-fit-v1 grid carry RMSE yd", 5.75),
+        ("flight-fit-v1 grid apex RMSE ft", 2.09),
+        ("flight-fit-v1 grid landing_angle RMSE deg", 5.98),
+        ("flight-fit-v1 grid hang_time RMSE s", 0.25),
+    ),
+)
+
+FLIGHT_FIT_V2 = AeroModel(
+    version="flight-fit-v2",
+    label=(
+        "flight-fit-v2: Ferguson, McNally & McPhee 2022 quadratic Cd/Cl with a descent "
+        "term after Odar & Hamilton 1964, fitted by the maintainer, spin decay C_M = 0.0117 S"
+    ),
+    cd_poly=(0.1510, 0.8274, -0.5778),
+    cl_poly=(0.0715, 1.1250, -0.9015),
+    cm_per_sp=0.0117,
+    calibration=FLIGHT_FIT_V2_CALIBRATION,
+    descent_drag=4.99,
+    descent_lift=4.90,
+    descent_power=8.03,
+)
+
+AERO_MODELS: dict[str, AeroModel] = {
+    m.version: m for m in (FERGUSON_2022, FLIGHT_FIT_V1, FLIGHT_FIT_V2)
+}
 ACTIVE_AERO_MODEL = FLIGHT_FIT_V1
 
 # The active model's constants under their long-standing names (full_speed's drag
@@ -315,6 +414,21 @@ class BounceModel:
     intercept_yards: float
     slope_yards_per_deg: float
     landing_angle_range_deg: tuple[float, float]
+    version: str = "usga-ra-2021"
+
+    def roll_yards(
+        self,
+        landing_angle_deg: float,
+        landing_speed_mph: Optional[float] = None,
+        backspin_rpm: Optional[float] = None,
+    ) -> Optional[float]:
+        """The linear model's roll (yd) from the landing angle alone, clamped at 0."""
+        if not _finite(landing_angle_deg):
+            return None
+        low, high = self.landing_angle_range_deg
+        if not low <= landing_angle_deg <= high:
+            return None
+        return max(0.0, self.intercept_yards + self.slope_yards_per_deg * landing_angle_deg)
 
 
 # USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in Evaluating
@@ -346,31 +460,43 @@ ROLL_CLAMP_NOTE = "roll clamped at 0: Eq. 1 is negative above 49.4°"
 
 FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
-BOUNCE_MODELS: dict[str, BounceModel] = {FAIRWAY_NORMAL: USGA_RA_2021_BOUNCE_MODEL}
+RollModel = BounceModel | TurfRollModel
+ROLL_MODELS: dict[str, RollModel] = {
+    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1)
+}
+ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V1
+BOUNCE_MODELS: dict[str, RollModel] = {FAIRWAY_NORMAL: ACTIVE_ROLL_MODEL}
 
 
 def bounce_and_roll_yards(
-    landing_angle_deg: float, surface: str = DEFAULT_SURFACE
+    landing_angle_deg: float,
+    surface: str = DEFAULT_SURFACE,
+    landing_speed_mph: Optional[float] = None,
+    backspin_rpm: Optional[float] = None,
+    model: Optional[RollModel] = None,
 ) -> Optional[float]:
-    """Distance from landing to rest (yards) by the surface's published model, or None.
+    """Distance from landing to rest (yards) by the surface's model, or None.
 
-    None for a surface with no published model, a non-finite angle, or a landing
-    angle outside the model's data range (no extrapolation). Inside the range, a
-    negative value of the linear model is clamped at 0 (``ROLL_CLAMP_NOTE``).
+    ``model`` overrides the surface's (``ROLL_MODELS``). None for a surface with
+    no model, a missing or non-finite input the model needs, or a landing angle
+    outside the model's data range (no extrapolation). The turf model needs the
+    landing speed and backspin; the USGA / R&A line clamps a negative roll at 0
+    (``ROLL_CLAMP_NOTE``).
     """
-    model = BOUNCE_MODELS.get(surface)
-    if model is None or not _finite(landing_angle_deg):
+    model = BOUNCE_MODELS.get(surface) if model is None else model
+    if model is None:
         return None
-    low, high = model.landing_angle_range_deg
-    if not low <= landing_angle_deg <= high:
+    if isinstance(model, TurfRollModel) and (landing_speed_mph is None or backspin_rpm is None):
         return None
-    return max(0.0, model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg)
+    return model.roll_yards(landing_angle_deg, landing_speed_mph, backspin_rpm)
 
 
-def roll_clamped(landing_angle_deg: float, surface: str = DEFAULT_SURFACE) -> bool:
-    """Whether the surface's model gave a negative roll here that was clamped at 0."""
-    model = BOUNCE_MODELS.get(surface)
-    if model is None or bounce_and_roll_yards(landing_angle_deg, surface) is None:
+def roll_clamped(
+    landing_angle_deg: float, surface: str = DEFAULT_SURFACE, model: Optional[RollModel] = None
+) -> bool:
+    """Whether the USGA / R&A line gave a negative roll here that was clamped at 0."""
+    model = BOUNCE_MODELS.get(surface) if model is None else model
+    if not isinstance(model, BounceModel) or model.roll_yards(landing_angle_deg) is None:
         return False
     return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg < 0.0
 
@@ -416,20 +542,30 @@ class Trajectory:
     landing_angle_deg: float
     downrange_yards: float = 0.0
     landing_heading_deg: float = 0.0
+    landing_backspin_rpm: float = 0.0
 
     @property
     def carry_side_yards(self) -> float:
         """Signed side of the landing point from the x axis, positive right."""
         return self.lateral_yards
 
-    def rest_point(self, surface: str = DEFAULT_SURFACE) -> Optional[tuple[float, float]]:
+    def rest_point(
+        self, surface: str = DEFAULT_SURFACE, model: Optional[RollModel] = None
+    ) -> Optional[tuple[float, float]]:
         """(x, y) yards where the ball stops, or None where the model gives no value.
 
-        The landing point plus the surface's bounce-and-roll distance along the
-        landing heading. Rolling on along the heading is an assumption: the model
-        gives a distance, not a direction, and no sideways kick is modelled.
+        The landing point plus the surface's (or ``model``'s) bounce-and-roll
+        distance along the landing heading. Rolling on along the heading is an
+        assumption: the model gives a distance, not a direction, and no sideways
+        kick is modelled.
         """
-        roll = bounce_and_roll_yards(self.landing_angle_deg, surface)
+        roll = bounce_and_roll_yards(
+            self.landing_angle_deg,
+            surface,
+            self.landing_speed_mph,
+            self.landing_backspin_rpm,
+            model,
+        )
         if roll is None:
             return None
         heading = math.radians(self.landing_heading_deg)
@@ -560,8 +696,9 @@ def _derivatives(
 
     # Spin parameter Sp drives Cd, Cl and C_M (Ferguson 2022 Eq. 1).
     sp = BALL_RADIUS_M * omega / v
-    cd = aero.cd(sp)
-    cl = aero.cl(sp)
+    drag_scale, lift_scale = aero.descent_factors(-vz / v)
+    cd = aero.cd(sp) * drag_scale
+    cl = aero.cl(sp) * lift_scale
 
     # q: dynamic-pressure × reference-area / mass = acceleration per unit C.
     # Pre-dividing by mass here lets us return accelerations directly.
@@ -610,20 +747,28 @@ def _rk4_step(
     return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(n))
 
 
-def launch_relative_spin_axis(spin_axis_deg: float, launch_angle_h_deg: float) -> tuple:
+def launch_relative_spin_axis(
+    spin_axis_deg: float, launch_angle_h_deg: float, launch_angle_v_deg: float = 0.0
+) -> tuple:
     """Unit spin vector for a spin axis tilted against the launch direction (W7).
 
     spin_axis_deg = 0 is pure backspin: the axis is horizontal, perpendicular to
     the horizontal launch direction (cos h, sin h, 0) and pointing to its left, so
-    omega x v lifts. A positive tilt raises the axis's top toward the right of the
-    launch line (fade/slice); a negative one toward the left (draw/hook). The axis
-    turns with the horizontal launch angle h: a spin axis is a tilt of the ball's
-    own rotation, not of a fixed world axis.
+    omega x v lifts. A positive tilt turns the axis about the launch direction so
+    its top leans toward the right of the launch line (fade/slice); a negative one
+    toward the left (draw/hook). The tilt is a rotation about the launch velocity
+    itself, so the spin vector stays perpendicular to it: a tilted axis adds no
+    rifle spin, whatever the vertical launch angle v.
     """
     axis_rad = math.radians(spin_axis_deg)
     h = math.radians(launch_angle_h_deg)
-    tilt = math.cos(axis_rad)
-    return (tilt * math.sin(h), -tilt * math.cos(h), math.sin(axis_rad))
+    v = math.radians(launch_angle_v_deg)
+    c, s = math.cos(axis_rad), math.sin(axis_rad)
+    return (
+        c * math.sin(h) - s * math.sin(v) * math.cos(h),
+        -c * math.cos(h) - s * math.sin(v) * math.sin(h),
+        s * math.cos(v),
+    )
 
 
 def simulate(
@@ -650,10 +795,13 @@ def simulate(
     vz = v0 * math.sin(la_v)
 
     # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
-    axis = launch_relative_spin_axis(conditions.spin_axis_deg, conditions.launch_angle_h)
+    axis = launch_relative_spin_axis(
+        conditions.spin_axis_deg, conditions.launch_angle_h, conditions.launch_angle_v
+    )
 
     # rpm → rad/s; integrated with the flight (Ferguson 2022's Eq. 4 spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
+    backspin_share = math.cos(math.radians(conditions.spin_axis_deg))
 
     points: list[TrajectoryPoint] = [
         TrajectoryPoint(0.0, 0.0, 0.0, 0.0, conditions.ball_speed_mph, conditions.spin_rpm)
@@ -695,7 +843,7 @@ def simulate(
                     omega * 60 / (2 * math.pi),
                 )
             )
-            return _trajectory(points, final, max_z, t_hit)
+            return _trajectory(points, final, max_z, t_hit, backspin_share)
 
         state = new_state
 
@@ -715,11 +863,17 @@ def simulate(
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
-    return _trajectory(points, state, max_z, t)
+    return _trajectory(points, state, max_z, t, backspin_share)
 
 
-def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Trajectory:
-    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7)."""
+def _trajectory(
+    points: list, final: tuple, max_z: float, t_end: float, backspin_share: float = 1.0
+) -> Trajectory:
+    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7).
+
+    ``backspin_share`` is the cosine of the spin axis tilt: the part of the spin
+    about the horizontal axis, which is what bounces and rolls.
+    """
     fx, fy, _, fvx, fvy, fvz = final[:6]
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
     horizontal = math.sqrt(fvx * fvx + fvy * fvy)
@@ -733,4 +887,5 @@ def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Traje
         landing_angle_deg=math.degrees(math.atan2(-fvz, horizontal)),
         downrange_yards=fx * M_TO_YD,
         landing_heading_deg=math.degrees(math.atan2(fvy, fvx)),
+        landing_backspin_rpm=final[6] * backspin_share * 60 / (2 * math.pi),
     )

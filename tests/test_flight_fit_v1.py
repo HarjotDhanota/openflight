@@ -36,7 +36,7 @@ MODELS = sorted(AERO_MODELS.values(), key=lambda m: m.version)
 def test_the_active_model_is_flight_fit_v1():
     assert ACTIVE_AERO_MODEL is FLIGHT_FIT_V1
     assert FLIGHT_FIT_V1.version == "flight-fit-v1"
-    assert set(AERO_MODELS) == {"ferguson-2022", "flight-fit-v1"}
+    assert set(AERO_MODELS) == {"ferguson-2022", "flight-fit-v1", "flight-fit-v2"}
     assert all(AERO_MODELS[name].version == name for name in AERO_MODELS)
 
 
@@ -127,12 +127,13 @@ def test_simulate_flies_the_active_model_unless_told_otherwise():
             45.95708662018948,
             6.147371219130198,
         ),
+        # the tilted axis now turns about the launch direction itself (no rifle spin)
         (
             (104, 23.7, 2, 9316, -3),
-            138.0917688895672,
-            30.741295088297598,
-            47.903876535474794,
-            5.613043455351577,
+            138.0946014785882,
+            30.735900023693745,
+            47.898373368959085,
+            5.6127339127065055,
         ),
     ],
 )

@@ -236,10 +236,17 @@ def simulate_batch(
     state[4] = v0 * np.cos(la) * np.sin(lh)
     state[5] = v0 * np.sin(la)
     state[6] = np.array([s.spin_rpm for s in shots]) * 2 * np.pi / 60.0
-    tilt = np.cos(axis_deg)
-    axis = np.stack([tilt * np.sin(lh), -tilt * np.cos(lh), np.sin(axis_deg)])
-    cd0, cd1, cd2 = model.cd_poly
-    cl0, cl1, cl2 = model.cl_poly
+    c, s_ = np.cos(axis_deg), np.sin(axis_deg)
+    axis = np.stack(
+        [
+            c * np.sin(lh) - s_ * np.sin(la) * np.cos(lh),
+            -c * np.cos(lh) - s_ * np.sin(la) * np.sin(lh),
+            s_ * np.cos(la),
+        ]
+    )
+    cd_coeffs = np.asarray(model.cd_poly[::-1], dtype=float)
+    cl_coeffs = np.asarray(model.cl_poly[::-1], dtype=float)
+    descent = bool(model.descent_drag or model.descent_lift)
     spin_k = model.cm_per_sp * 0.5 * air_density * area * 2.0 * r * r / inertia
 
     def derivatives(s: np.ndarray) -> np.ndarray:
@@ -247,8 +254,12 @@ def simulate_batch(
         v = np.sqrt(vx * vx + vy * vy + vz * vz)
         sp = r * om / v
         spc = np.minimum(sp, model.sp_fit_max)
-        cd = cd0 + cd1 * spc + cd2 * spc * spc
-        cl = np.where(sp > 0, np.maximum(0.0, cl0 + cl1 * spc + cl2 * spc * spc), 0.0)
+        cd = np.polyval(cd_coeffs, spc)
+        cl = np.where(sp > 0, np.maximum(0.0, np.polyval(cl_coeffs, spc)), 0.0)
+        if descent:
+            x = np.maximum(-vz / v, 0.0) ** model.descent_power
+            cd = cd * np.exp(-model.descent_drag * x)
+            cl = cl * np.exp(-model.descent_lift * x)
         q = 0.5 * air_density * v * v * area / mass
         cx = axis[1] * vz - axis[2] * vy
         cy = axis[2] * vx - axis[0] * vz

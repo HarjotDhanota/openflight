@@ -97,11 +97,13 @@ references.
 | `SP_FIT_MAX` | 0.75 |
 | `CM_PER_SP` (active) | 0.010 |
 | `FERGUSON_2022` | Cd (0.1304, 0.9287, -0.8259), Cl (0.0504, 1.2031, -1.1490), C_M 0.01 |
+| `FLIGHT_FIT_V2` | Cd (0.1510, 0.8274, -0.5778), Cl (0.0715, 1.1250, -0.9015), C_M 0.0117; descent k_d 4.99, k_l 4.90, n 8.03 (selectable) |
 | `GRAVITY` | 9.81 |
 | `DT_SECONDS` | 0.002 |
 | `MAX_FLIGHT_SECONDS` | 15.0 |
 | `SAMPLE_INTERVAL_S` | 0.05 |
-| `USGA_RA_2021_BOUNCE_MODEL` | roll = 79.1 − 1.6 × landing angle (yd), landing angle 10–50° |
+| `USGA_RA_2021_BOUNCE_MODEL` | roll = 79.1 − 1.6 × landing angle (yd), landing angle 10–50° (selectable) |
+| `ACTIVE_ROLL_MODEL` | `bounce_roll.TURF_ROLL_V1` (turf-roll-v1) |
 
 `src/openflight/flight.py` (flight outputs, raw and normalized):
 
