@@ -30,7 +30,6 @@ from openflight.camera.geometry import (
     resting_ball_camera_model,
     unit_world_rays,
 )
-from openflight.club_arc import HeadPosition
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for, to_reported_deg
@@ -134,6 +133,20 @@ def _frame_scale(shape: tuple[int, ...]) -> float:
     """Scale the DTL trace's frame-bound windows to the active frame."""
     height, width = shape[-2:]
     return min(width / _TRACE_REFERENCE_FRAME[0], height / _TRACE_REFERENCE_FRAME[1])
+
+
+@dataclass(frozen=True)
+class HeadPosition:
+    """One club-head position in the unit-boresight frame, on the camera clock.
+
+    ``lateral_m`` is + right of the unit boresight, ``forward_m`` downrange and
+    ``up_m`` up, all from the radar origin (this module's frame).
+    """
+
+    t_s: float
+    lateral_m: float
+    up_m: float
+    forward_m: float
 
 
 @dataclass(frozen=True)

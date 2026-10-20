@@ -113,6 +113,7 @@ from typing import Any, Mapping, Optional, Sequence
 import numpy as np
 from scipy.optimize import least_squares
 
+from openflight.camera.club_delivery import HeadPosition
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for
@@ -192,20 +193,6 @@ _UPPER = np.array(
 )
 _DEFAULT_PLANE_DEG = 55.0
 _DEFAULT_RADIUS_M = 1.0
-
-
-@dataclass(frozen=True)
-class HeadPosition:
-    """One club-head position in the unit-boresight frame, on the camera clock.
-
-    ``lateral_m`` is + right of the unit boresight, ``forward_m`` downrange and
-    ``up_m`` up, all from the radar origin (``club_delivery``'s frame).
-    """
-
-    t_s: float
-    lateral_m: float
-    up_m: float
-    forward_m: float
 
 
 @dataclass(frozen=True)
