@@ -102,7 +102,7 @@ physics; its constants were **fitted by the maintainer**, per club category
    rolling needs more friction than the face has, it slides and tan δ grows more
    slowly. A p-norm minimum (p = 24) joins the two lines:
 
-        tan δ = K(L) · min_p(tan SL, s₁ + (s₂ − s₁)(tan SL − 1)/1.5)
+        tan δ = K(L) · min_p(tan SL, s₁ + (s₂ − s₁)(tan SL − 1)/1.25)
 
 3. **Ball speed: the normal impulse** (Penner 2001, Eq. (7)):
    `ball speed = V · S(L) · cos SL / cos δ`. An off-centre strike loses speed

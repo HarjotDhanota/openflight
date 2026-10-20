@@ -66,7 +66,7 @@ WEDGE = "wedge"
 MODEL_NAME = "fitted collision model"
 HYBRID_LOFT_SHIFT_DEG = 11.5
 LAUNCH_SHARPNESS = 24.0
-SLIDE_TAN_POINTS = (1.0, 2.5)
+SLIDE_TAN_POINTS = (1.0, 2.25)
 SPIN_FLOOR_SHARPNESS = 4.5
 SPEED_LOSS_SMOOTHING_MM = 2.0
 LEFT_HANDED = "LH"
@@ -119,7 +119,7 @@ class CategoryConstants:
     expected_smash: Pair
     gear_height: Pair = 0.0
     gear_offset: Pair = 0.0
-    gear_shape: tuple[float, float] = (0.0, 1.0)
+    gear_shape: tuple[float, float] = (0.0, 20.0)
 
     def at(self, name: str, loft_deg: float) -> float:
         """A constant at the model loft: linear through the two anchors."""
@@ -134,7 +134,7 @@ CONSTANTS = {
     DRIVER_WOOD: CategoryConstants(
         loft_anchors_deg=(17.0, 26.0),
         launch_ratio=(0.17932, 0.25073),
-        slide=(0.99264, 1.1609),
+        slide=(0.99264, 1.1329),
         smash=(1.5151, 1.5302),
         loss_offset=0.0016177,
         loss_toe=-0.00053407,
@@ -154,7 +154,7 @@ CONSTANTS = {
     IRON_HYBRID: CategoryConstants(
         loft_anchors_deg=(29.0, 44.0),
         launch_ratio=(0.16911, 0.18485),
-        slide=(0.99284, 1.16),
+        slide=(0.99284, 1.1321),
         smash=(1.5164, 1.5383),
         loss_offset=0.00065315,
         loss_toe=-7.8911e-05,
@@ -174,7 +174,7 @@ CONSTANTS = {
     WEDGE: CategoryConstants(
         loft_anchors_deg=(29.0, 44.0),
         launch_ratio=(0.10629, 0.17914),
-        slide=(0.99329, 1.1584),
+        slide=(0.99329, 1.1309),
         smash=(1.5355, 1.5393),
         loss_offset=0.00065357,
         loss_toe=-7.881e-05,
