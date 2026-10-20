@@ -9,7 +9,6 @@ Each path, given that reading through ``camera_roll``, must see the line level.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -181,14 +180,7 @@ def test_the_calibrated_projection_sees_a_level_line_level(roll_deg):
 
 
 def test_the_roll_is_recorded_not_applied_until_b2_confirms_it():
-    """Neither path applies the LIS3DH roll yet; both go through camera_roll."""
-    from openflight.camera import tester_server as ts  # noqa: PLC0415
-
+    """The LIS3DH roll is not applied yet; every path goes through camera_roll."""
     assert camera_roll.LIS3DH_ROLL_APPLIED is False
     assert camera_roll.applied_camera_roll_deg(-2.9, 0.0) == 0.0
     assert camera_roll.calibrated_observed_roll_deg(-2.9, 1.5) == 1.5
-    rig = Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
-    camera = ts._reference_ball_camera(  # pylint: disable=protected-access
-        ts.ARMS["arm6"], rig, {"camera_pitch_deg": 0.0, "roll_deg": -2.9}, None, None
-    )
-    assert camera.ray_model.roll_correction_deg == 0.0

@@ -3,7 +3,6 @@
 import json
 import time
 
-import pytest
 import serial
 
 from openflight import pi_trace
@@ -39,9 +38,8 @@ def make_recorder(tmp_path, **kw):
     )
 
 
-@pytest.fixture
-def recorder(tmp_path):
-    """A recorder installed as the process-wide one; removed afterwards."""
+def installed_recorder(tmp_path):
+    """A recorder installed as the process-wide one; removed afterwards (a fixture's body)."""
     rec = pi_trace.TraceRecorder(tmp_path / "t.jsonl", temp_reader=lambda: None)
     pi_trace.set_recorder(rec)
     yield rec

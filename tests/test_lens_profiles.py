@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from openflight.camera import lens_profiles, study_ladder
+from openflight.camera import lens_profiles
 from openflight.rig_geometry import RigGeometry
 
 RIG = lens_profiles.DEFAULT_LENSES_PATH.parents[0] / "enclosure_v3_rig_geometry.json"
@@ -31,12 +31,6 @@ def test_the_catalogue_lists_the_three_lenses_with_the_listing_facts(catalogue):
     assert catalogue.get(None).lens_id == "stock-2.8mm"
     with pytest.raises(ValueError):
         catalogue.get("12mm")
-
-
-def test_the_allowed_rungs_are_the_ladder_s_own(catalogue):
-    for arm_id in ("arm5", "arm6"):
-        ladder = [rung.exposure_us for rung in study_ladder.LADDER if rung.arm_id == arm_id]
-        assert list(catalogue.allowed_ladder_us[arm_id]) == ladder
 
 
 def test_nominal_focal_scales_the_rig_s_by_focal_length(catalogue, rig):

@@ -19,7 +19,7 @@ from openflight.trace_routes import (
     record_paint_report,
     register_trace_routes,
 )
-from tests.pi_trace_helpers import read_marks
+from tests.pi_trace_helpers import installed_recorder, read_marks
 
 IDENTITY = {
     "document_id": "doc-1",
@@ -51,6 +51,12 @@ NOT_SHOWN = {
     "reported_ms": 101.0,
     "reason": "covered",
 }
+
+
+@pytest.fixture
+def recorder(tmp_path):
+    """The process-wide Pi trace recorder for one test (pi_trace_helpers)."""
+    yield from installed_recorder(tmp_path)
 
 
 def _pong(seq, **extra):

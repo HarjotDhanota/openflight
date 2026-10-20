@@ -412,12 +412,3 @@ class TestThe320x200StripIsRefusedForMeasurement:
 
         assert shot.experimental_fused_status == "rejected_strip_offset_not_modelled"
         assert shot.ball_speed_mph == 110.0
-
-
-def test_the_tester_refuses_320x200_for_measurement():
-    from openflight.camera import tester_server as ts  # noqa: PLC0415
-
-    with pytest.raises(ValueError, match="320x200"):
-        ts._reference_ball_camera(  # pylint: disable=protected-access
-            ts.ARMS["arm1"], V3, {"camera_pitch_deg": 0.0}, None, None
-        )

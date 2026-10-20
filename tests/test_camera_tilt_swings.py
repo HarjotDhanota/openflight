@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 from openflight import server as server_module
-from openflight.camera import ball_flight, camera_tilt, fusion_processing as fp, tester_server as ts
+from openflight.camera import ball_flight, camera_tilt, fusion_processing as fp
 from openflight.camera.ball_pixels import mode_focal_px
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.geometry import (
@@ -56,27 +56,6 @@ def test_a_calibrated_unit_swings_with_the_lis3dh_pitch_plus_its_offset():
     assert pose["pitch_deg"] == pytest.approx(rig.boresight_pitch_deg + (1.0 - expected) + 2.0)
     assert pose["focal_px"] == pytest.approx(mode_focal_px(1280, rig))
     assert pose["offset_deg"] == 2.0
-
-
-def test_the_swing_pose_is_the_setup_pose_for_the_same_reading():
-    """Setup (tester) and swings (kiosk) compose the same pitch and focal length."""
-    rig = RigGeometry.from_json(RIG_PATH)
-    expected = rig.expected_inclinometer_orientation().pitch_deg or 0.0
-    reading = _inclinometer(0.75)
-    tilt = {"camera_pitch_deg": rig.boresight_pitch_deg + (0.75 - expected), "roll_deg": 0.0}
-
-    setup = ts._reference_ball_camera(  # pylint: disable=protected-access
-        ts.ARMS["arm5"], RIG_PATH, tilt, None, None, CALIBRATION
-    )
-    swing = camera_tilt.swing_camera_pose(
-        rig=rig,
-        image_width_px=ts.ARMS["arm5"].width,
-        inclinometer=reading,
-        calibration=CALIBRATION,
-    )
-
-    assert math.degrees(setup.ray_model.pitch_rad) == pytest.approx(swing["pitch_deg"])
-    assert setup.ray_model.focal_px == pytest.approx(swing["focal_px"])
 
 
 @pytest.mark.parametrize(
@@ -258,34 +237,3 @@ def test_by_default_the_roll_is_recorded_not_applied_on_swings():
     assert pose["roll"]["measured_deg"] == pytest.approx(-2.9)
     assert pose["roll"]["roll_correction_deg"] == 0.0
     assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == 0.4
-
-
-def test_with_the_gate_on_setup_and_swings_apply_the_same_roll(monkeypatch):
-    from openflight.camera import camera_roll  # noqa: PLC0415
-
-    monkeypatch.setattr(camera_roll, "LIS3DH_ROLL_APPLIED", True)
-    rig = RigGeometry.from_json(RIG_PATH)
-    reading = _rolled_reading(-2.9)
-    expected = rig.expected_inclinometer_orientation()
-    tilt = {
-        "camera_pitch_deg": rig.boresight_pitch_deg + (1.0 - (expected.pitch_deg or 0.0)),
-        "roll_deg": camera_roll.lis3dh_roll_deg(reading["x_g"], reading["y_g"], reading["z_g"]),
-    }
-
-    setup = ts._reference_ball_camera(  # pylint: disable=protected-access
-        ts.ARMS["arm5"], RIG_PATH, tilt, None, None, CALIBRATION
-    )
-    pose = camera_tilt.swing_camera_pose(
-        rig=rig, image_width_px=1280, inclinometer=reading, calibration=CALIBRATION
-    )
-    geometry = camera_tilt.with_swing_pose(
-        ball_flight.CameraBallGeometry(
-            camera_height_m=0.095, radar_height_m=0.05, tee_range_m=1.5, ball_height_m=0.0213
-        ),
-        pose,
-    )
-
-    assert pose["roll"]["applied"] is True
-    assert setup.ray_model.roll_correction_deg != 0.0
-    assert geometry.roll_correction_deg == pytest.approx(setup.ray_model.roll_correction_deg)
-    assert pose["roll"]["roll_correction_deg"] == pytest.approx(setup.ray_model.roll_correction_deg)

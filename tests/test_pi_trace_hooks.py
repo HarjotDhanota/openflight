@@ -18,8 +18,20 @@ from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.rolling_buffer.trigger import SoundTrigger
 from openflight.rolling_buffer.types import IQCapture, ProcessedCapture, SpeedTimeline
 from openflight.timing import OpsCaptureTimer
-from tests.pi_trace_helpers import ClockAndQuietSerial, dump_bytes, read_marks, skip_ops243_sleeps
+from tests.pi_trace_helpers import (
+    ClockAndQuietSerial,
+    dump_bytes,
+    installed_recorder,
+    read_marks,
+    skip_ops243_sleeps,
+)
 from tests.spin_synth import synth_capture
+
+
+@pytest.fixture
+def recorder(tmp_path):
+    """The process-wide Pi trace recorder for one test (pi_trace_helpers)."""
+    yield from installed_recorder(tmp_path)
 
 
 def _radar(monkeypatch, **serial_kwargs):
