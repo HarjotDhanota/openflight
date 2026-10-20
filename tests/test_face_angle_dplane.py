@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from openflight import server
+from openflight import shot_models
 from openflight.launch_monitor import ClubType, Shot
 
 
@@ -26,7 +26,7 @@ def test_face_angle_is_mostly_start_direction_and_partly_path():
     )
     shot.experimental_fused_club_path_deg = -4.0
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     # 7-iron: start = path + 0.69 (face - path)  ->  face = -4 + 6 / 0.69
     assert shot.experimental_face_angle_deg == pytest.approx(4.7)
@@ -55,7 +55,7 @@ def test_no_face_angle_without_a_measured_direction_and_path(fields, path, statu
     shot = _shot(**fields)
     shot.experimental_fused_club_path_deg = path
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg is None
     assert shot.experimental_face_angle_status == status
@@ -79,7 +79,7 @@ def test_iwr_path_that_is_not_accepted_gives_no_face_angle(iwr_status):
         experimental_club_path_deg=35.2, experimental_club_path_status=iwr_status
     )
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg is None
     assert shot.experimental_face_angle_status == "missing_accepted_club_path"
@@ -101,7 +101,7 @@ def test_accepted_camera_path_gives_face_angle_with_its_source(fused_status, sou
         experimental_fused_club_path_confidence="low",
     )
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg == pytest.approx(4.7)
     assert shot.experimental_face_angle_path_source == source
@@ -119,7 +119,7 @@ def test_face_angle_uses_the_camera_path_the_kiosk_shows_over_an_iwr_path():
         experimental_club_path_status="accepted",
     )
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg == pytest.approx(4.7)
     assert shot.experimental_face_angle_path_source == "camera_fused_chained"
@@ -133,7 +133,7 @@ def test_rejected_camera_fusion_hides_the_iwr_path_from_face_angle():
         experimental_club_path_status="accepted",
     )
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg is None
     assert shot.experimental_face_angle_status == "missing_accepted_club_path"
@@ -144,7 +144,7 @@ def test_accepted_iwr_path_without_camera_fusion_is_used_and_named():
         experimental_club_path_deg=-4.0, experimental_club_path_status="accepted"
     )
 
-    server._attach_collision_model(shot)
+    shot_models._attach_collision_model(shot)
 
     assert shot.experimental_face_angle_deg == pytest.approx(4.7)
     assert shot.experimental_face_angle_path_source == "iwr"
@@ -157,7 +157,7 @@ def test_displayed_club_path_withholds_a_withheld_camera_path():
         experimental_fused_club_path_confidence="withheld",
     )
 
-    assert server.displayed_club_path(shot) == (None, None)
+    assert shot_models.displayed_club_path(shot) == (None, None)
 
 
 def test_a_frame_rotation_moves_face_with_launch_and_path():
@@ -172,7 +172,7 @@ def test_a_frame_rotation_moves_face_with_launch_and_path():
             experimental_fused_status="chained_high",
         )
         shot.launch_angle_horizontal = 2.0 + offset
-        server._attach_collision_model(shot)
+        shot_models._attach_collision_model(shot)
         faces.append((shot.experimental_face_angle_deg, shot.experimental_fused_club_path_deg))
 
     (face_0, path_0), (face_2, path_2) = faces

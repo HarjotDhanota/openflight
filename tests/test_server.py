@@ -19,6 +19,7 @@ from openflight import (
     collision_model,
     flight as flight_module,
     server as server_module,
+    shot_models,
     tester_hooks,
 )
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
@@ -6626,13 +6627,13 @@ class TestIwrAzimuthCalibration:
         )
         assert shot.launch_angle_horizontal_status is None
 
-        server_module._attach_collision_model(shot)
+        shot_models._attach_collision_model(shot)
         assert shot.experimental_face_angle_deg is None
         assert shot.experimental_face_angle_status == "missing_accepted_club_path"
 
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
-        server_module._attach_collision_model(shot)
+        shot_models._attach_collision_model(shot)
         # E2: the PING weight for this club (Wood et al. 2018), not a fixed 0.8
         weight = collision_model.weights_for_club(shot.club).horizontal
         assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.0 / weight, abs=0.05)
@@ -6644,7 +6645,7 @@ class TestIwrAzimuthCalibration:
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 
-        server_module._attach_collision_model(shot)
+        shot_models._attach_collision_model(shot)
 
         weight = collision_model.weights_for_club(shot.club).horizontal
         assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.25 / weight, abs=0.05)

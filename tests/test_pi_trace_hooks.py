@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 import serial
 
-from openflight import pi_trace, research_hooks, tester_hooks
+from openflight import pi_trace, research_hooks, shot_models, tester_hooks
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
@@ -821,7 +821,7 @@ def test_enrichment_marks_iwr_and_camera_stages_on_the_shot_attempt(recorder, mo
     )
     monkeypatch.setattr(server, "_attach_camera_replay", lambda *_a: None)
     monkeypatch.setattr(server, "_fuse_camera_measurements", lambda *_a: None)
-    monkeypatch.setattr(server, "_attach_collision_model", lambda _shot: None)
+    monkeypatch.setattr(shot_models, "_attach_collision_model", lambda _shot: None)
     shot = _traced_shot("t-00003")
     shot.mode = "rolling-buffer"
     server._enrich_shot_from_optional_hardware(shot)  # pylint: disable=protected-access

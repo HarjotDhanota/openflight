@@ -58,7 +58,7 @@ NO_COLLISION_MODEL = "collision model did not run on this shot"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
 NO_FULL_SPEED = "full speed not computed on this shot (not finalized)"
 # Where the club path / attack angle the collision model used came from
-# (server.displayed_club_path, displayed_attack_angle).
+# (shot_models.displayed_club_path, displayed_attack_angle).
 _PATH_SOURCES = {
     "canonical": "radar club track",
     "camera_fused_chained": "camera + IWR chained delivery",

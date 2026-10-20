@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import metric_definitions, server as server_module
+from openflight import metric_definitions, server as server_module, shot_models
 from openflight.ballistics import (
     AIR_DENSITY_STD,
     CLUB_TYPICAL_SPIN_RPM,
@@ -323,7 +323,7 @@ def fusion_finalize(monkeypatch):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
         shot.ball_speed_full_mph = shot.ball_speed_mph
 
-    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

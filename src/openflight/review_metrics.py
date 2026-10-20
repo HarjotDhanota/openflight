@@ -25,7 +25,7 @@ STATUSES = (
 )
 ACCEPTED_DELIVERY_STATUSES = frozenset({"ok", "fused", "chained_high", "approach_high"})
 # Refusals carry no value; every other delivery status is a value the kiosk shows
-# (server.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
+# (shot_models.displayed_club_path), so the review shows it too, labelled (P8-7, D15).
 _REFUSED_DELIVERY_PREFIXES = ("rejected", "error")
 
 

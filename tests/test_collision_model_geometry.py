@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight import collision_model as cm, server as server_module
+from openflight import collision_model as cm, server as server_module, shot_models
 from openflight.ballistics import resolve_launch
 from openflight.club_arc import ARC_PRIOR_SOURCE, MODEL_GEOMETRY
 from openflight.clubs import ClubType
@@ -89,7 +89,7 @@ def _arc_shot(**overrides):
 
 
 def _attach(shot):
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
 
 # ---- the arc's labelled path and attack reach the collision model --------------------
@@ -189,7 +189,7 @@ def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
     """The real E1 payload: a rejected chained path, the arc on its prior."""
     monkeypatch.setattr(server_module.sim_player_state, "handed", "RH")
     shot = _arc_shot(club_delivery=None)
-    server_module._attach_club_arc(  # pylint: disable=protected-access
+    shot_models._attach_club_arc(  # pylint: disable=protected-access
         shot,
         {
             "status": "rejected_low_path_consensus",
@@ -571,7 +571,7 @@ def fusion_finalize(monkeypatch):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
         shot.ball_speed_full_mph = shot.ball_speed_mph
 
-    monkeypatch.setattr(server_module, "_attach_full_speeds", full_speed)
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speed)
 
 
 def _finalize(shot):

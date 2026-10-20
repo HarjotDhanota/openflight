@@ -14,6 +14,7 @@ from datetime import datetime
 
 import numpy as np
 
+from openflight import shot_models
 from openflight.clubs import ClubType
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
@@ -104,7 +105,6 @@ def full_ball_speed(value_mph: float = 124.0) -> dict:
 
 def fusion_shot(**overrides) -> Shot:
     """A 7-iron fusion shot with every Part E producer attached, as the kiosk does."""
-    from openflight import server as server_module  # noqa: PLC0415
     from openflight.flight import compute_flight  # noqa: PLC0415
     from openflight.full_speed import evaluate_full_club_speed, evaluate_full_smash  # noqa: PLC0415
 
@@ -130,7 +130,7 @@ def fusion_shot(**overrides) -> Shot:
     }
     values.update(overrides)
     shot = Shot(**values)
-    server_module._attach_club_arc(  # pylint: disable=protected-access
+    shot_models._attach_club_arc(  # pylint: disable=protected-access
         shot,
         {
             "status": "chained_high",
@@ -150,7 +150,7 @@ def fusion_shot(**overrides) -> Shot:
     shot.experimental_fused_status = "chained_high"
     shot.experimental_fused_attack_angle_confidence = "medium"
     shot.experimental_fused_club_path_confidence = "medium"
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     shot.ball_speed_full = full_ball_speed()
     shot.ball_speed_full_mph = shot.ball_speed_full["value_mph"]
     shot.club_speed_full = evaluate_full_club_speed(
@@ -159,7 +159,7 @@ def fusion_shot(**overrides) -> Shot:
         direction=None,
         ops_position_m=None,
         direction_source=None,
-        reason=server_module.CLUB_SPEED_NOT_FULL_REASON,
+        reason=shot_models.CLUB_SPEED_NOT_FULL_REASON,
     )
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
     flight = compute_flight(shot, substitutes=False)

@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from openflight import ballistics, collision_model as cm, flight as flight_module
+from openflight import ballistics, collision_model as cm, flight as flight_module, shot_models
 from openflight.ballistics import Trajectory, bounce_and_roll_yards
 from openflight.clubs import ClubType
 from openflight.flight import compute_flight
@@ -218,9 +218,7 @@ def _collision_shot(**overrides):
 
 
 def _attach_collision(shot):
-    import openflight.server as server_module
-
-    server_module._attach_collision_model(shot)  # pylint: disable=protected-access
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     return shot.collision_model["metrics"]
 
 

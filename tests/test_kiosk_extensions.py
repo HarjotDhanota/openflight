@@ -73,6 +73,8 @@ def test_the_base_extension_does_nothing():
     base.session_start_config(config)
     assert config == {}
     assert base.observe_shot_emit(object(), "shot", {}, final=False, update_kind="first") is None
+    assert base.model_spin(object()) is None
+    assert base.simulate_carry(object(), fusion=True, enabled=True) is None
 
 
 def test_registering_twice_keeps_one_and_order_is_kept(isolated):

@@ -16,11 +16,23 @@ import contextlib
 import importlib.metadata
 import logging
 import threading
-from typing import Any, Callable, ContextManager, Iterator, Optional
+from typing import Any, Callable, ContextManager, Iterator, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "openflight.kiosk_extensions"
+
+
+class CarryOutcome(NamedTuple):
+    """What a flight model did with a shot's carry.
+
+    ``source`` names the carry it committed ("ballistic"), or None. With no carry,
+    ``table_reason`` says why an OPS-only unit takes the table estimate instead;
+    both None means the model decided there is no carry (a fusion unit, D17).
+    """
+
+    source: Optional[str]
+    table_reason: Optional[str]
 
 
 class KioskExtension:  # pylint: disable=unused-argument
@@ -85,6 +97,29 @@ class KioskExtension:  # pylint: disable=unused-argument
 
     def on_camera_capture(self, shot, camera_capture) -> None:
         """A camera clip matched this shot (before it is logged)."""
+
+    # --- shot models: what a model builds from the measured inputs --------------------
+
+    def on_club_delivery(self, shot, delivery) -> None:
+        """The camera's club delivery for this shot (a result, or a dict with its status)."""
+
+    def after_enrichment(self, shot) -> None:
+        """The shot's radar and camera enrichment is done (face, loft, spin axis go here)."""
+
+    def model_spin(self, shot) -> Optional[tuple[float, str]]:
+        """A model's spin (rpm, method) that --calculated-spin uses instead of its formula."""
+        return None
+
+    def after_speed_contract(self, shot) -> None:
+        """The radial speeds are fixed; a model may add the full speeds."""
+
+    def simulate_carry(self, shot, *, fusion: bool, enabled: bool) -> Optional["CarryOutcome"]:
+        """Simulate the flight and commit the carry, or None without a flight model.
+
+        ``fusion`` is a unit with an IWR6843 or camera (no table carry, D17);
+        ``enabled`` is --ballistics.
+        """
+        return None
 
     def observe_shot_emit(
         self, shot, event: str, payload: dict, *, final: bool, update_kind: str

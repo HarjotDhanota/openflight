@@ -21,6 +21,10 @@ LABEL_MODEL_GEOMETRY = "model_geometry"
 # every output built on it is "estimated", with the input's reason (V-formulas C2)
 LABEL_ESTIMATED = "estimated"
 
+# The labels of a value a model built (calculated, model geometry, or estimated on an
+# estimated input); none is ever measured. Shot.spin_source holds one for a model's spin.
+MODEL_LABELS = (LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
+
 # Shot.spin_axis_source for an axis built on a model-geometry input (D39) starts so.
 SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
 # Shot.spin_axis_source for an axis built on an estimated input starts so (C2).

@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import collision_model, instrumentation, kiosk_extensions, shot_metrics
+from . import instrumentation, kiosk_extensions, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -43,21 +43,16 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
-from .flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
 from .horizontal_frame import (
-    MIXED,
     frame_for,
     resolve_horizontal_offset,
     to_reported_deg,
 )
 from .inclinometer.orientation_check import default_mount_path as _default_lis3dh_mount_path
 from .launch_monitor import (
-    CARRY_CALCULATED,
     CARRY_ESTIMATED,
-    CARRY_MODEL_GEOMETRY,
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
-    SPIN_CONFIDENCE_HIGH,
     SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
@@ -87,6 +82,7 @@ from .sim import (
     load_sim_config,
     resolve_shot,
 )
+from .source_labels import MODEL_LABELS
 from .speed_correction import evaluate_experimental_total_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
@@ -3737,7 +3733,7 @@ EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a p
 # spin_source values a model wrote; anything else is the radar's (or None)
 # a model's spin labels: calculated, model geometry (D39), or estimated (built on an
 # estimated input, V-formulas C2); none is ever measured
-_MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
+_MODEL_SPIN_SOURCES = MODEL_LABELS
 
 
 def _apply_calculated_spin(shot: Shot) -> bool:
@@ -3764,9 +3760,9 @@ def _apply_calculated_spin(shot: Shot) -> bool:
         return False
     shot.spin_rpm_calculated_empirical = spin_calc
     method = EMPIRICAL_SPIN_METHOD
-    if _collision_spin_feeds(shot):
-        spin_calc = shot.spin_rpm_collision
-        method = _collision_spin_method(shot)
+    model_spin = kiosk_extensions.first("model_spin", shot)
+    if model_spin is not None:
+        spin_calc, method = model_spin
     if shot.spin_source not in _MODEL_SPIN_SOURCES:
         shot.spin_rpm_measured = shot.spin_rpm
         shot.spin_method_measured = shot.spin_method
@@ -4300,19 +4296,6 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     )
 
 
-def _attach_club_arc(shot: Shot, delivery) -> None:
-    """E1: the shot's club delivery from the arc, beside the chained cross-check.
-
-    ``delivery`` is the chained club delivery (dataclass or its persisted dict),
-    or None. Right-handed unless the golfer is set left-handed (owner rule).
-    """
-    from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
-
-    shot.club_delivery = club_delivery_payload(
-        delivery, club=shot.club, handedness=sim_player_state.handed
-    )
-
-
 def _fuse_camera_club_delivery(
     shot: Shot,
     camera_capture,
@@ -4391,7 +4374,7 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
-        _attach_club_arc(shot, fused)
+        kiosk_extensions.call_all("on_club_delivery", shot, fused)
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -4591,329 +4574,13 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_fused_status = status
     shot.experimental_fused_attack_angle_confidence = "withheld"
     shot.experimental_fused_club_path_confidence = "withheld"
-    _attach_club_arc(shot, {"status": status})
+    kiosk_extensions.call_all("on_club_delivery", shot, {"status": status})
     shot.camera_fusion_context = {
         "schema": "openflight.camera.fusion_context",
         "version": CAMERA_FUSION_CONTEXT_VERSION,
         "available": False,
         "reason": reason,
     }
-
-
-def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
-    """Return the club path the kiosk shows, when it is accepted, and its source.
-
-    The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
-    canonical field, then the camera-fused path, and the IWR path only when
-    camera fusion did not run (the kiosk hides it otherwise). Candidate,
-    out-of-bounds, noisy, rejected and withheld paths return (None, None), so
-    face angle is never built on a path the kiosk does not show as a
-    measurement (audit F1). An IWR path without a horizontal phase reference
-    carries status "azimuth_uncalibrated", not "accepted", so it is left out
-    too (audit F8).
-    """
-    if shot.club_path_deg is not None:
-        return shot.club_path_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
-    if shot.experimental_fused_club_path_deg is not None:
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_club_path_confidence == "withheld"
-        ):
-            return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_club_path_deg, source
-    if shot.experimental_fused_status is not None:
-        return None, None
-    iwr_status = shot.experimental_club_path_status or ""
-    if shot.experimental_club_path_deg is not None and iwr_status.startswith("accepted"):
-        return shot.experimental_club_path_deg, "iwr"
-    return None, None
-
-
-def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
-    """The frame of the club path ``displayed_club_path`` chose (D36 item 2)."""
-    if path_source == "canonical":
-        return shot.club_path_frame
-    if path_source in ("camera_fused_chained", "camera_fused_ops"):
-        return shot.experimental_fused_club_path_frame
-    if path_source == "iwr":
-        return shot.experimental_club_path_frame
-    return None
-
-
-def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
-    """The attack angle the collision model may use, and its source.
-
-    Mirrors the kiosk's attack tile (ui liveMetrics.ts): the canonical field, then the
-    camera-fused attack unless fusion rejected it or withheld its confidence. The IWR
-    attack angle is only ever a candidate ("candidate_available"), so, like a path
-    that is not accepted (audit F1), it is never a collision input.
-    """
-    if _finite(shot.club_angle_deg):
-        return shot.club_angle_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
-    if _finite(shot.experimental_fused_attack_angle_deg):
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_attack_angle_confidence == "withheld"
-        ):
-            return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_attack_angle_deg, source
-    return None, None
-
-
-def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
-    """The horizontal launch as a collision input, "estimated" when it is weak (C2).
-
-    A low-coherence IWR horizontal, or one whose confidence is below the spin axis's
-    floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
-    every output built on it is labelled "estimated", with this reason.
-    """
-    measured = _measured_angle_input(
-        shot.launch_angle_horizontal,
-        source,
-        frame=shot.launch_angle_horizontal_frame,
-        name="launch direction",
-    )
-    if not measured.present:
-        return measured
-    confidence = shot.launch_angle_horizontal_confidence
-    if shot.launch_angle_horizontal_source == "radar_low_coherence":
-        reason = "horizontal launch is low-coherence (radar_low_coherence)"
-    elif not _finite(confidence):
-        reason = "horizontal launch confidence not given"
-    elif confidence < SPIN_AXIS_MIN_CONFIDENCE:
-        reason = f"horizontal launch confidence {confidence:.2f} below {SPIN_AXIS_MIN_CONFIDENCE}"
-    else:
-        return measured
-    return collision_model.Input(
-        measured.value,
-        collision_model.LABEL_ESTIMATED,
-        measured.source,
-        measured.frame,
-        reason=reason,
-    )
-
-
-def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_model.Input:
-    """A launch angle as a collision input: an estimated (table) angle is not an input."""
-    if value is None or source is None:
-        return collision_model.Input(None, reason=f"{name} not measured")
-    if source == "estimated":
-        return collision_model.Input(None, reason=f"{name} is a table estimate, not measured")
-    return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
-
-
-# E1 arc labels the collision model takes as inputs: a "measured" arc entry is the
-# chained value displayed_club_path / displayed_attack_angle already read.
-_ARC_INPUT_LABELS = (collision_model.LABEL_CALCULATED, collision_model.LABEL_MODEL_GEOMETRY)
-
-
-def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Input:
-    """E1's selected arc value for ``name`` under its own label, or a missing input.
-
-    Used only when the kiosk has no accepted measured value. The arc's value enters
-    as "calculated" (fitted from the shot alone) or "model_geometry" (leaning on the
-    published prior, D39), and every collision output built on it inherits that label.
-    A not-measured or non-finite arc value is a missing input (nothing is filled in).
-    """
-    from openflight.club_arc import selected_path_and_attack  # noqa: PLC0415
-
-    entry = selected_path_and_attack(shot.club_delivery).get(name)
-    entry = entry if isinstance(entry, dict) else {}
-    value, label = entry.get("value"), entry.get("status")
-    if label in _ARC_INPUT_LABELS and _finite(value):
-        frame = entry.get("frame") if name == "club_path_deg" else None
-        return collision_model.Input(float(value), label, entry.get("source"), frame)
-    reason = entry.get("reason")
-    return collision_model.Input(
-        None, reason=f"{missing}; club arc: {reason}" if reason else missing
-    )
-
-
-def _collision_inputs(shot: Shot) -> dict:
-    """The shot's own collision inputs, each labelled (E2).
-
-    The kiosk's accepted measured path and attack come first. Without one, E1's arc
-    value enters under its own label ("calculated", or "model_geometry" for the arc
-    prior, D39), which every output built on it then inherits.
-    """
-    path, path_source = displayed_club_path(shot)
-    attack, attack_source = displayed_attack_angle(shot)
-    launch_source = shot.launch_angle_horizontal_source
-    if launch_source and shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-        launch_source = f"{launch_source} (azimuth uncalibrated)"
-    speed = shot.club_speed_mph
-    return {
-        "club_path": (
-            collision_model.Input(
-                path,
-                collision_model.LABEL_MEASURED,
-                path_source,
-                _club_path_frame_of(shot, path_source),
-            )
-            if path is not None
-            else _club_arc_input(shot, "club_path_deg", "no accepted club path")
-        ),
-        "attack_angle": (
-            collision_model.Input(attack, collision_model.LABEL_MEASURED, attack_source)
-            if attack is not None
-            else _club_arc_input(shot, "attack_angle_deg", "no accepted attack angle")
-        ),
-        "launch_horizontal": _horizontal_launch_input(
-            shot,
-            launch_source if shot.launch_angle_horizontal_source != "estimated" else "estimated",
-        ),
-        "launch_vertical": _measured_angle_input(
-            shot.launch_angle_vertical, shot.launch_angle_vertical_source, name="vertical launch"
-        ),
-        "club_speed_mph": (
-            collision_model.Input(speed, collision_model.LABEL_MEASURED, "ops243_radial")
-            if _finite(speed) and speed > 0
-            else collision_model.Input(None, reason="club speed not measured")
-        ),
-    }
-
-
-def _round_or_none(value, digits: int):
-    return round(value, digits) if value is not None else None
-
-
-def _accepted_measured_spin(shot: Shot) -> bool:
-    """A measured spin carry and simulators accept (ballistics.resolve_launch, sim resolver)."""
-    return (
-        shot.spin_source not in _MODEL_SPIN_SOURCES
-        and _finite(shot.spin_rpm)
-        and shot.spin_rpm > 0
-        and _finite(shot.spin_confidence)
-        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
-    )
-
-
-def _collision_spin_status(shot: Shot) -> str | None:
-    """The label of this shot's collision spin, "calculated" or "model_geometry", or None.
-
-    Either becomes the shot's spin, under its own label, when there is no accepted
-    measured spin. A spin built on model geometry (D39) feeds the flight model (D38)
-    labelled so, but is not "measured or calculated" (D31): simulators do not get it.
-    """
-    metrics = (shot.collision_model or {}).get("metrics", {})
-    status = metrics.get("spin_rate", {}).get("status")
-    if shot.spin_rpm_collision is None or status not in _MODEL_SPIN_SOURCES:
-        return None
-    return status
-
-
-def _collision_spin_feeds(shot: Shot) -> bool:
-    """Whether this shot's collision spin is calculated (the --calculated-spin formula
-    yields to it; a model-geometry spin yields to that formula's calculated value)."""
-    return _collision_spin_status(shot) == "calculated"
-
-
-def _collision_spin_method(shot: Shot) -> str:
-    """Shot.spin_method for the collision spin: Penner 2001 and its inputs' label."""
-    inputs = (shot.collision_model or {}).get("inputs", {})
-    labels = [record.get("label") for record in inputs.values() if record.get("value") is not None]
-    return collision_model.shot_spin_method(_collision_spin_status(shot) or "", labels)
-
-
-def _attach_collision_model(shot: Shot) -> None:
-    """Face, loft, spin loft, face to path, D-plane tilt, spin and spin axis (E2).
-
-    Replaces the fixed 0.8-weight face estimate and the "launch minus path" spin-axis
-    proxy with ``collision_model`` (published sources, labelled calculated). Each run
-    starts from scratch, so a late re-run never keeps an earlier run's values.
-    """
-    result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
-    metrics = result.metrics
-    # a weak horizontal launch no longer withholds the axis: the input is "estimated"
-    # (_horizontal_launch_input) and so is the axis, with the reason (C2)
-    axis = metrics["spin_axis"]
-    shot.collision_model = result.to_dict()
-    shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
-    shot.dynamic_loft_deg = _round_or_none(metrics["dynamic_loft"].value, 1)
-    shot.spin_loft_deg = _round_or_none(metrics["spin_loft"].value, 1)
-    shot.face_to_path_deg = _round_or_none(metrics["face_to_path"].value, 1)
-    shot.d_plane_tilt_deg = _round_or_none(metrics["d_plane_tilt"].value, 1)
-    shot.spin_rpm_collision = _round_or_none(metrics["spin_rate"].value, 0)
-
-    # The kiosk's face tile reads the experimental fields; they mirror the new value.
-    face = metrics["face_angle"]
-    shot.experimental_face_angle_deg = shot.face_angle_deg
-    shot.experimental_face_angle_frame = face.frame if face.present else None
-    if face.present:
-        status = "d_plane_estimate"
-        if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
-            status += "_azimuth_uncalibrated"
-        if face.status == collision_model.STATUS_ESTIMATED:
-            status += "_estimated"
-        if face.frame == MIXED:
-            status += "_mixed_frames"
-        if face.status == collision_model.STATUS_MODEL_GEOMETRY:
-            status += "_model_geometry"
-        shot.experimental_face_angle_status = status
-        shot.experimental_face_angle_path_source = result.inputs["club_path"].source
-        shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
-    else:
-        shot.experimental_face_angle_status = (
-            "missing_measured_start_direction"
-            if not result.inputs["launch_horizontal"].present
-            else "missing_accepted_club_path"
-            if not result.inputs["club_path"].present
-            else "missing_club_category"
-        )
-        shot.experimental_face_angle_path_source = None
-        shot.experimental_face_angle_launch_source = None
-
-    # a calculated axis, or one built on model geometry (D39) under that label
-    if axis.present and axis.status in (
-        collision_model.STATUS_CALCULATED,
-        collision_model.STATUS_MODEL_GEOMETRY,
-        collision_model.STATUS_ESTIMATED,
-    ):
-        shot.spin_axis_deg = round(axis.value, 1)
-        shot.spin_axis_source = collision_model.shot_spin_axis_source(axis, result.inputs)
-        shot.spin_axis_frame = axis.frame
-    elif (
-        collision_model.is_calculated_source(shot.spin_axis_source)
-        or collision_model.is_model_geometry_source(shot.spin_axis_source)
-        or collision_model.is_estimated_source(shot.spin_axis_source)
-    ):
-        shot.spin_axis_deg = None
-        shot.spin_axis_source = None
-        shot.spin_axis_frame = None
-
-    spin_status = _collision_spin_status(shot)
-    if spin_status is not None and not _accepted_measured_spin(shot):
-        if shot.spin_source not in _MODEL_SPIN_SOURCES:
-            shot.spin_rpm_measured = shot.spin_rpm
-            shot.spin_method_measured = shot.spin_method
-        shot.spin_rpm = shot.spin_rpm_collision
-        shot.spin_source = spin_status
-        shot.spin_method = _collision_spin_method(shot)
-        shot.spin_confidence = None
-    elif shot.spin_source in _MODEL_SPIN_SOURCES and spin_status is None:
-        # an earlier run's model spin; give back the measured one it displaced
-        shot.spin_rpm = shot.spin_rpm_measured
-        shot.spin_method = shot.spin_method_measured
-        shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
-    if shot.face_angle_deg is not None or shot.spin_rpm_collision is not None:
-        logger.info(
-            "[SERVER] Collision model: face=%s loft=%s spin loft=%s spin=%s rpm axis=%s",
-            shot.face_angle_deg,
-            shot.dynamic_loft_deg,
-            shot.spin_loft_deg,
-            shot.spin_rpm_collision,
-            shot.spin_axis_deg,
-        )
 
 
 # 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
@@ -5257,7 +4924,7 @@ def _fuse_camera_measurements(
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
-            _attach_club_arc(shot, fused)
+            kiosk_extensions.call_all("on_club_delivery", shot, fused)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
             shot.camera_fusion_context = {
@@ -5623,7 +5290,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
         instrumentation.mark("camera_analysis_done", shot.trace_attempt_id)
-    _attach_collision_model(shot)
+    # a shot model (an extension's) builds face, loft and spin axis from the inputs
+    kiosk_extensions.call_all("after_enrichment", shot)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,
@@ -5653,7 +5321,8 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             geometry_source=geometry_source,
             ops_ball_lateral_ft=lateral_ft,
         )
-    _attach_full_speeds(shot)
+    # a shot model (an extension's) projects the radial speeds to full speeds
+    kiosk_extensions.call_all("after_speed_contract", shot)
 
 
 def _shot_speed_correction_geometry(shot: Shot):
@@ -5676,69 +5345,6 @@ def _shot_speed_correction_geometry(shot: Shot):
         return _ops_speed_correction_geometry(calibration)
     except (TypeError, ValueError):
         return None
-
-
-# E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
-CLUB_SPEED_NOT_FULL_REASON = (
-    "the OPS club speed is a percentile over 4-18 ms before impact, not one FFT-window "
-    "reading, and the head's direction at that time needs the swing arc (E1) and a fixed "
-    "head point (W6, W9)"
-)
-
-
-def _attach_full_speeds(shot: Shot) -> None:
-    """E3: full ball speed by measured projection, full club speed and full smash.
-
-    The canonical radial ball speed is unchanged; each full speed is its own field
-    with its status, range and reason (openflight.full_speed).
-    """
-    from .full_speed import (  # noqa: PLC0415
-        evaluate_full_ball_speed,
-        evaluate_full_club_speed,
-        evaluate_full_smash,
-    )
-
-    # this shot's own range and how sure it is (13 Oct)
-    calibration = shot_iwr_calibration(shot)
-
-    def calibrated(name: str):
-        try:
-            return getattr(calibration, name, None)
-        except ValueError:  # the radar height is unset until the rig sets it
-            return None
-
-    shot.ball_speed_full = evaluate_full_ball_speed(
-        ops_track=shot.ops_speed_track,
-        vertical_deg=shot.launch_angle_vertical,
-        vertical_source=shot.launch_angle_vertical_source,
-        horizontal_deg=shot.launch_angle_horizontal,
-        horizontal_source=shot.launch_angle_horizontal_source,
-        horizontal_status=shot.launch_angle_horizontal_status,
-        horizontal_frame=shot.launch_angle_horizontal_frame,
-        horizontal_offset_deg=horizontal_offset_deg,
-        rig=rig_geometry,
-        tee_range_m=calibrated("tee_range_m"),
-        tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
-        tee_range_source=getattr(shot, "ball_range_source", None),
-        radar_height_m=calibrated("radar_height_m"),
-        ball_height_m=calibrated("tee_ball_height_m"),
-        tee_side_offset_m=(setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
-    )
-    # the flight model (E4) reads the value alone: calculated, or None
-    shot.ball_speed_full_mph = (
-        shot.ball_speed_full["value_mph"]
-        if shot.ball_speed_full.get("status") == "calculated"
-        else None
-    )
-    shot.club_speed_full = evaluate_full_club_speed(
-        radial_mph=None,
-        head_position_m=None,
-        direction=None,
-        ops_position_m=None,
-        direction_source=None,
-        reason=CLUB_SPEED_NOT_FULL_REASON,
-    )
-    shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 
 
 def _carry_log_text(shot: Shot, source: str | None) -> str:
@@ -5828,40 +5434,21 @@ def _finalize_shot_detected(
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
-        # E4: every flight output, as measured (the shot's supplied air density, or
-        # ISA) and normalized, each labelled; carry below is the as-measured carry.
-        flight = compute_flight(shot, substitutes=not fusion, enabled=ballistics_enabled)
-        shot.flight = flight.to_dict()
-        conditions, trajectory = flight.conditions, flight.as_measured
-        if trajectory is None and fusion:
-            # a fusion unit builds carry only from measured inputs (D17):
-            # nothing already on the shot stands in for the simulator
+        # A flight model (an extension's) simulates every flight output and commits
+        # the carry. Without one, a fusion unit has no carry (D17) and an OPS-only
+        # unit takes the table estimate.
+        outcome = kiosk_extensions.first(
+            "simulate_carry", shot, fusion=fusion, enabled=ballistics_enabled
+        )
+        if outcome is None and fusion:
             shot.carry_spin_adjusted = None
             shot.carry_status = CARRY_NOT_MEASURED
-            logger.info(
-                "[SERVER] Carry not measured: %s",
-                shot.flight["as_measured"]["metrics"]["carry"]["reason"],
-            )
-        elif trajectory is not None:
-            shot.carry_spin_adjusted = trajectory.carry_yards
-            if not fusion:
-                shot.carry_status = CARRY_ESTIMATED
-            elif flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
-                shot.carry_status = CARRY_MODEL_GEOMETRY
-            elif flight.status == CARRY_ESTIMATED:
-                # an estimated input (the OPS line-of-sight ball speed): the flight's label
-                shot.carry_status = CARRY_ESTIMATED
-            else:
-                # the flight's own label: a simulated carry is calculated (D38)
-                shot.carry_status = CARRY_CALCULATED
-            carry_source = "ballistic"
-            logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
-                shot.carry_spin_adjusted,
-                conditions.spin_rpm,
-                conditions.spin_source,
-            )
-        else:
+            logger.info("[SERVER] Carry not measured: no flight model")
+        elif outcome is None:
+            outcome = kiosk_extensions.CarryOutcome(source=None, table_reason="no flight model")
+        if outcome is not None:
+            carry_source = outcome.source
+        if outcome is not None and outcome.table_reason is not None:
             has_reliable_spin = (
                 shot.spin_rpm
                 and shot.spin_rpm > 0
@@ -5881,14 +5468,9 @@ def _finalize_shot_detected(
             )
             shot.carry_status = CARRY_ESTIMATED
             carry_source = "table with spin"
-            reason = (
-                "ballistics disabled"
-                if not ballistics_enabled
-                else ("no launch angle" if conditions is None else "supplied air density invalid")
-            )
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
-                reason,
+                outcome.table_reason,
                 shot.carry_spin_adjusted,
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
