@@ -6,6 +6,11 @@ Wants=graphical.target
 # limit systemd retried it every 5 s indefinitely, and each attempt's cleanup
 # killed the desktop session's kiosk. Five failures in five minutes stops the
 # loop; `sudo systemctl reset-failed openflight` re-arms it after a fix.
+# A permanent hardware fault (e.g. no OPS243 on USB or the GPIO UART) fails
+# the same way: after the fifth failure the journal shows the launcher's own
+# error, then "Start request repeated too quickly", and systemd stops. A Pi
+# whose unit predates these lines restarts forever: reinstall it
+# (docs/setup/auto-start.md).
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
