@@ -33,7 +33,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
-from .collision_model import GYRO_REASON, is_calculated_source, is_model_geometry_source
+from .collision_model import GYRO_REASON
+from .source_labels import is_calculated_source, is_model_geometry_source
 
 SCHEMA = "openflight.shot_metrics"
 VERSION = 1

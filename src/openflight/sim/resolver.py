@@ -10,7 +10,6 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from openflight.clubs import ClubType
 from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
-from openflight.collision_model import is_estimated_source, is_model_geometry_source
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
@@ -26,6 +25,7 @@ from openflight.sim.types import (
     ResolvedShot,
     UnmeasuredShotError,
 )
+from openflight.source_labels import is_estimated_source, is_model_geometry_source
 
 # The one club-typical spin table (clubs.physics, E4), used only on an OPS-only
 # install when a measured spin is absent or low-confidence; the kiosk's ballistics
