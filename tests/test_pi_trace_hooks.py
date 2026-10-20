@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 import serial
 
-from openflight import pi_trace, tester_hooks
+from openflight import pi_trace, research_hooks, tester_hooks
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
@@ -398,7 +398,7 @@ def test_server_edge_observer_keeps_the_shared_bracket(recorder, monkeypatch):
 
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
     shared = GateEvent.observe(_EdgeCaptureMonitor.edge_tick_reading, 1_790_000_000.25)
-    server._trace_gate_edge(shared)  # pylint: disable=protected-access
+    research_hooks._trace_gate_edge(shared)  # pylint: disable=protected-access
     edge = _named(read_marks(recorder), "gate_edge_callback")[0]
     assert (edge["mono_before_ns"], edge["age_ns"], edge["mono_after_ns"]) == (
         1_000,
@@ -429,7 +429,7 @@ def test_server_edge_observer_still_notes_the_edge_when_the_reading_fails(record
 
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Broken()))
     shared = GateEvent.observe(Broken.edge_tick_reading, 1_790_000_000.25)
-    server._trace_gate_edge(shared)  # pylint: disable=protected-access
+    research_hooks._trace_gate_edge(shared)  # pylint: disable=protected-access
     edge = _named(read_marks(recorder), "gate_edge_callback")[0]
     assert edge["age_ns"] is None and edge["mono_before_ns"] is None
     assert edge["mono_after_ns"] is None
@@ -446,7 +446,7 @@ def test_server_edge_observer_never_raises_into_the_gpio_callback(recorder, monk
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(_EdgeCaptureMonitor()))
     monkeypatch.setattr(recorder, "note_edge", broken)
     shared = GateEvent.observe(_EdgeCaptureMonitor.edge_tick_reading, 1_790_000_000.25)
-    server._trace_gate_edge(shared)  # pylint: disable=protected-access
+    research_hooks._trace_gate_edge(shared)  # pylint: disable=protected-access
 
 
 def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
@@ -463,15 +463,13 @@ def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
     pi_trace.set_recorder(None)
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(Counting()))
     shared = GateEvent.observe(None, 1.0)
-    server._trace_gate_edge(shared)  # pylint: disable=protected-access
+    research_hooks._trace_gate_edge(shared)  # pylint: disable=protected-access
     assert Counting.calls == 0
 
 
 def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(recorder):
-    from openflight import server
-
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
-    tag = server._trace_tag(  # pylint: disable=protected-access
+    tag = research_hooks._trace_tag(  # pylint: disable=protected-access
         shot,
         revision=2,
         final=True,
@@ -489,7 +487,7 @@ def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(rec
     }
     untraced = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
     assert (
-        server._trace_tag(  # pylint: disable=protected-access
+        research_hooks._trace_tag(  # pylint: disable=protected-access
             untraced, revision=1, final=False, update_kind="first", core_eligible=False
         )
         is None
@@ -497,12 +495,10 @@ def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(rec
 
 
 def test_trace_tag_is_absent_when_tracing_is_off():
-    from openflight import server
-
     pi_trace.set_recorder(None)
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
     assert (
-        server._trace_tag(  # pylint: disable=protected-access
+        research_hooks._trace_tag(  # pylint: disable=protected-access
             shot, revision=1, final=False, update_kind="first", core_eligible=False
         )
         is None
@@ -510,11 +506,9 @@ def test_trace_tag_is_absent_when_tracing_is_off():
 
 
 def test_spin_and_analysis_are_traced_on_the_instance_and_results_unchanged(recorder):
-    from openflight import server
-
     plain, traced = RollingBufferProcessor(), RollingBufferProcessor()
-    server._trace_processor(traced)  # pylint: disable=protected-access
-    server._trace_processor(traced)  # pylint: disable=protected-access  (wrapped once)
+    research_hooks._trace_processor(traced)  # pylint: disable=protected-access
+    research_hooks._trace_processor(traced)  # pylint: disable=protected-access  (wrapped once)
     i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
     capture = IQCapture(
         1.0, 1.068, [int(v) for v in i_samples], [int(v) for v in q_samples], timestamp=0.0
@@ -555,11 +549,11 @@ def test_install_hooks_wraps_the_processor_and_puts_the_edge_observer_first(
 
     monkeypatch.setattr(server, "monitor", Monitor())
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(capture_monitor))
-    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+    research_hooks._install_pi_trace_hooks()  # pylint: disable=protected-access
     assert "process_capture" in vars(Monitor.processor)
     assert "detect_spin_multitaper" in vars(Monitor.processor)
     observers = capture_monitor._gate_event_observers  # pylint: disable=protected-access
-    assert observers[0] is server._trace_gate_edge  # pylint: disable=protected-access
+    assert observers[0] is research_hooks._trace_gate_edge  # pylint: disable=protected-access
 
 
 def test_install_hooks_does_nothing_without_a_recorder(monkeypatch):
@@ -572,7 +566,7 @@ def test_install_hooks_does_nothing_without_a_recorder(monkeypatch):
 
     monkeypatch.setattr(server, "monitor", Monitor())
     monkeypatch.setattr(server, "iwr6843_runtime", None)
-    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+    research_hooks._install_pi_trace_hooks()  # pylint: disable=protected-access
     assert "process_capture" not in vars(Monitor.processor)
 
 
@@ -749,7 +743,7 @@ def test_a_raising_recorder_never_drops_or_blocks_the_emit(recorder, monkeypatch
         raise RuntimeError("trace bug")
 
     monkeypatch.setattr(recorder, "mark", broken)
-    monkeypatch.setattr(server.core_eligibility, "evaluate", broken)
+    monkeypatch.setattr(research_hooks.core_eligibility, "evaluate", broken)
     assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
     assert [event for event, _payload in emitted] == ["shot"]
     assert "trace" not in emitted[0][1]
@@ -772,7 +766,7 @@ def test_non_finite_core_values_cannot_break_the_trace_file(recorder, monkeypatc
     server, emitted = _initial_emit_server(monkeypatch)
     attempt = recorder.open_ops_attempt()
     payload = {"shot": {"ball_speed_mph": 120.0, "launch_angle_vertical": float("nan")}}
-    server._traced_emit(  # pylint: disable=protected-access
+    server._emit_shot_payload(  # pylint: disable=protected-access
         _traced_shot(attempt), "shot", payload, final=False, update_kind="first"
     )
     assert math.isnan(emitted[0][1]["shot"]["launch_angle_vertical"]), "payload untouched"
@@ -869,15 +863,13 @@ def test_camera_marks_are_skipped_when_the_clip_carries_no_host_times(recorder, 
 
 
 def test_start_and_stop_trace_beside_the_session_logs(tmp_path):
-    from openflight import server
-
-    path = server._start_pi_trace(tmp_path)  # pylint: disable=protected-access
+    path = research_hooks._start_pi_trace(tmp_path)  # pylint: disable=protected-access
     try:
         assert path.parent == tmp_path
         assert path.name.startswith("pi_trace_") and path.suffix == ".jsonl"
         assert pi_trace.get_recorder() is not None
     finally:
-        server._stop_pi_trace()  # pylint: disable=protected-access
+        research_hooks._stop_pi_trace()  # pylint: disable=protected-access
     assert pi_trace.get_recorder() is None
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert lines[0]["type"] == "trace_start" and lines[-1]["type"] == "trace_end"
@@ -894,7 +886,7 @@ def test_shutdown_cleanup_closes_the_trace(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "sim_connectors", [])
     monkeypatch.setattr(server, "stop_monitor", lambda: None)
     monkeypatch.setattr(server, "shutdown_cleanup_started", False)
-    path = server._start_pi_trace(tmp_path)  # pylint: disable=protected-access
+    path = research_hooks._start_pi_trace(tmp_path)  # pylint: disable=protected-access
     assert server._cleanup_hardware_for_shutdown() is True  # pylint: disable=protected-access
     assert pi_trace.get_recorder() is None
     assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["type"] == "trace_end"
@@ -1124,7 +1116,7 @@ def test_a_raising_trace_tag_still_emits_untagged(recorder, monkeypatch):
     def broken(*_a, **_k):
         raise RuntimeError("trace bug")
 
-    monkeypatch.setattr(server, "_trace_tag", broken)
+    monkeypatch.setattr(research_hooks, "_trace_tag", broken)
     attempt = recorder.open_ops_attempt()
     assert server._emit_initial_ops_shot(_traced_shot(attempt)) is True  # pylint: disable=protected-access
     assert len(emitted) == 1 and "trace" not in emitted[0][1]
@@ -1137,11 +1129,9 @@ def test_a_raising_trace_tag_still_emits_untagged(recorder, monkeypatch):
 
 
 def test_a_trace_that_cannot_start_leaves_the_kiosk_running_untraced(tmp_path, caplog):
-    from openflight import server
-
     blocker = tmp_path / "not_a_dir"
     blocker.write_text("x", encoding="utf-8")
-    assert server._start_pi_trace(blocker) is None  # pylint: disable=protected-access
+    assert research_hooks._start_pi_trace(blocker) is None  # pylint: disable=protected-access
     assert pi_trace.get_recorder() is None
     assert "Pi trace could not start" in caplog.text
 
@@ -1159,7 +1149,7 @@ def test_installing_the_hooks_warms_the_version_lookup_so_the_first_edge_does_no
     )
     monkeypatch.setattr(server, "monitor", None)
     monkeypatch.setattr(server, "iwr6843_runtime", _iwr_runtime(capture_monitor))
-    server._install_pi_trace_hooks()  # pylint: disable=protected-access
+    research_hooks._install_pi_trace_hooks()  # pylint: disable=protected-access
 
     lookups = []
     real_version = iwr_monitor.importlib.metadata.version
@@ -1205,22 +1195,20 @@ def test_browser_trace_routes_start_on_the_kiosk_socket_when_tracing(recorder, m
     del recorder
     registered = []
     monkeypatch.setattr(
-        server, "register_trace_routes", lambda sock: registered.append(sock) or "pinger"
+        research_hooks, "register_trace_routes", lambda sock: registered.append(sock) or "pinger"
     )
-    assert server._start_browser_trace() == "pinger"  # pylint: disable=protected-access
+    assert research_hooks._start_browser_trace() == "pinger"  # pylint: disable=protected-access
     assert registered == [server.socketio]
 
 
 def test_browser_trace_routes_that_fail_leave_the_kiosk_running(recorder, monkeypatch, caplog):
-    from openflight import server
-
     del recorder
 
     def _boom(_sock):
         raise RuntimeError("no socket")
 
-    monkeypatch.setattr(server, "register_trace_routes", _boom)
-    assert server._start_browser_trace() is None  # pylint: disable=protected-access
+    monkeypatch.setattr(research_hooks, "register_trace_routes", _boom)
+    assert research_hooks._start_browser_trace() is None  # pylint: disable=protected-access
     assert "browser trace routes could not start" in caplog.text
 
 

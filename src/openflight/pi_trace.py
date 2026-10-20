@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-# The hooks, BracketedPair and _finite live in product modules (re-exported below/here).
+# BracketedPair and _finite live in product modules; re-exported for trace readers.
 from openflight import instrumentation as _hooks
 from openflight.clock_mapping import BracketedPair  # noqa: F401
 from openflight.numeric import finite as _finite  # noqa: F401

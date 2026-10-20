@@ -9,7 +9,7 @@ from datetime import datetime
 
 import pytest
 
-from openflight import server
+from openflight import research_hooks, server
 from openflight.launch_monitor import Shot
 
 
@@ -70,7 +70,7 @@ def _capture_finalization(monkeypatch, diagnostic_log, calls=None):
         if calls is not None:
             calls.append((shot, kwargs))
         enrichment = kwargs["enrichment"]
-        server._log_fusion_diagnostic(
+        research_hooks._log_fusion_diagnostic(
             kwargs["diagnostic_logger"],
             kwargs["diagnostic_session_uuid"],
             shot,

@@ -29,14 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import (
-    collision_model,
-    core_eligibility,
-    instrumentation,
-    kiosk_extensions,
-    pi_trace,
-    shot_metrics,
-)
+from . import collision_model, instrumentation, kiosk_extensions, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -44,7 +37,6 @@ from .ble.protocol import (
     build_shot_deleted_event,
     build_shot_processing_event,
 )
-from .camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
 from .clubs import ClubType
 from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
@@ -52,7 +44,6 @@ from .clubs.physics import (
     get_club_simulation_profile,
 )
 from .flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
-from .gate_timing import GateEvent, warm_edge_reading_cache
 from .horizontal_frame import (
     MIXED,
     frame_for,
@@ -101,7 +92,6 @@ from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
-from .trace_routes import register_trace_routes
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -386,32 +376,6 @@ class _LateShotUpdate:
         }
 
 
-def _log_fusion_diagnostic(
-    diagnostic_logger,
-    session_uuid: str | None,
-    shot: Shot,
-    *,
-    revision: int,
-    phase: str,
-    outcome: str,
-    reason: str | None = None,
-) -> None:
-    if diagnostic_logger is None or session_uuid is None:
-        return
-    try:
-        snapshot = build_fusion_diagnostic(
-            shot,
-            session_uuid=session_uuid,
-            revision=revision,
-            phase=phase,
-            outcome=outcome,
-            reason=reason,
-        )
-        diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
-
-
 def _enrichment_timing_payload(enrichment: _ShotEnrichmentResult) -> dict[str, object]:
     """Return explicit monotonic stage durations for lifecycle evidence."""
     return {
@@ -485,212 +449,24 @@ def _assign_shot_number(shot: Shot) -> None:
             _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
 
 
-# --- Pi trace hooks (--pi-trace, stage 1b) -------------------------------------------
-# Every hook is a no-op when tracing is off, and every trace call is guarded: a
-# trace error is logged and ignored, so it can never skip, delay or drop an emit
-# or any metric (R-F16; owner rule: 2 s is a goal, not a cutoff).
-# Revisions per trace attempt: each shot-carrying emit (first or late update)
-# advances it; a status notice carries the latest one.
-_trace_revisions: dict[str, int] = {}
-_trace_revisions_lock = threading.Lock()
+def _emit_shot_payload(
+    shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str
+) -> None:
+    """Emit one shot payload inside every extension's emit observer (a trace, say).
 
-
-def _trace_tag(  # pylint: disable=too-many-arguments
-    shot: Shot,
-    *,
-    revision: int | None,
-    final: bool,
-    update_kind: str,
-    core_eligible: bool,
-    core_fields=(),
-) -> dict | None:
-    """Trace identity for one emitted revision; lifecycle (final) and eligibility kept apart.
-
-    ``final`` is True on every emit from ``_finalize_shot_detected``: the shot's first
-    finalized result (``update_kind`` "first") AND every late update after it
-    (``late_update``). It means "a finalized result", not "the last emit"; a later
-    revision may follow a final one. The initial OPS emit (also ``update_kind``
-    "first") and status notices carry False. A reader that needs the newest revision
-    compares ``revision`` numbers, never ``final``.
+    ``final`` is True on every emit from ``_finalize_shot_detected`` (the first
+    finalized result and each late update); ``update_kind`` is "first",
+    "late_update" or "status". An emit error still reaches the caller's handler.
     """
-    if instrumentation.get_recorder() is None or shot.trace_attempt_id is None:
-        return None
-    return {
-        "attempt_id": shot.trace_attempt_id,
-        "revision": revision,
-        "final": final,
-        "update_kind": update_kind,
-        "core_eligible": core_eligible,
-        "core_fields": list(core_fields),
-    }
-
-
-def _trace_gate_edge(edge: GateEvent) -> None:
-    """Record original GATE evidence without reading the pin again."""
-    recorder = instrumentation.get_recorder()
-    if recorder is None:
-        return
-    try:
-        edge_fields = edge.trace_fields()
-        mono_after_ns = edge_fields["mono_after_ns"]
-        recorder.note_edge(
-            monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
-            **edge_fields,
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] GATE edge mark failed; ignored", exc_info=True)
-
-
-def _trace_processor(processor) -> None:
-    """Instance-only marks around analysis and spin (D27: measure spin's Pi cost).
-
-    Wraps once: an instance whose methods are already its own attributes is left as is.
-    The class is never touched, so replay_config and its hash are unchanged.
-    """
-    for name, start_mark, end_mark in (
-        ("process_capture", "ops_analysis_started", "ops_core_ready"),
-        ("detect_spin_multitaper", "ops_spin_started", "ops_spin_done"),
+    with kiosk_extensions.observing_shot_emit(
+        shot, event, payload, final=final, update_kind=update_kind
     ):
-        if name not in vars(processor):
-            instrumentation.trace_method(processor, name, start_mark, end_mark)
-
-
-def _install_pi_trace_hooks() -> None:
-    """Before the OPS monitor starts: trace its processor, and observe BCM17 edges first."""
-    if instrumentation.get_recorder() is None:
-        return
-    try:
-        processor = getattr(monitor, "processor", None)
-        if processor is not None:
-            _trace_processor(processor)
-        capture_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
-        if capture_monitor is not None:
-            warm_edge_reading_cache()
-            capture_monitor.prepend_gate_event_observer(_trace_gate_edge)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
+        socketio.emit(event, payload)
 
 
 def _non_finite_float(value) -> bool:
     """A float that is NaN or infinite (the one check, numeric.finite)."""
     return isinstance(value, float) and not _finite(value)
-
-
-def _json_safe_core(core: dict) -> dict:
-    """The core values as written to the trace: a non-finite float as its exact text.
-
-    Shot payloads are already nulled by shot_to_dict; this only guards a direct
-    _traced_emit caller, so a raw NaN can't fail the trace's strict-JSON write.
-    """
-    return {
-        key: (repr(value) if _non_finite_float(value) else value) for key, value in core.items()
-    }
-
-
-def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str):
-    """Revision, eligibility and tag for one emit; None (and logged) on any trace error."""
-    try:
-        attempt_id = shot.trace_attempt_id
-        revision = None
-        if attempt_id is not None:
-            with _trace_revisions_lock:
-                revision = _trace_revisions.get(attempt_id, 0)
-                if update_kind != "status":
-                    revision += 1
-                    _trace_revisions[attempt_id] = revision
-        verdict = core_eligibility.evaluate(payload["shot"])
-        eligible = verdict["eligible"] and update_kind != "status"
-        reasons = (["status_update"] if update_kind == "status" else []) + verdict["reasons"]
-        tag = _trace_tag(
-            shot,
-            revision=revision,
-            final=final,
-            update_kind=update_kind,
-            core_eligible=eligible,
-            core_fields=verdict["core"].keys(),
-        )
-        if tag is not None:
-            payload["trace"] = tag
-        return {
-            "revision": revision,
-            "final": final,
-            "update_kind": update_kind,
-            "event": event,
-            "core_eligible": eligible,
-            "core_reasons": reasons,
-            "core": _json_safe_core(verdict["core"]),
-            "contract": verdict["contract"],
-        }
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning(
-            "[TRACE] tagging the %s emit failed; emitting untagged", event, exc_info=True
-        )
-        # No revision, but the summary must still see that a result went out (A-M1):
-        # an untagged emit is not measurable, never "no result emitted".
-        return {"update_kind": update_kind, "event": event, "final": final, "tagging_failed": True}
-
-
-def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str) -> None:
-    """Emit one shot payload; when tracing, tag it and mark invoked/returned around it.
-
-    The emit itself is never inside a trace guard: whatever the trace does, the
-    payload is emitted, and an emit error still reaches the caller's handler.
-    """
-    if instrumentation.get_recorder() is None:
-        socketio.emit(event, payload)
-        return
-    trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
-    instrumentation.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
-    error = None
-    try:
-        socketio.emit(event, payload)
-    except BaseException as exc:
-        error = type(exc).__name__
-        raise
-    finally:
-        instrumentation.mark(
-            "server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error
-        )
-
-
-def _start_pi_trace(log_dir: Path | None) -> Path | None:
-    """Open the trace file beside the session logs (--pi-trace); None if it can't open.
-
-    A trace that cannot start is reported loudly and the kiosk runs untraced: the
-    trace must never cost a shot (owner rule).
-    """
-    directory = Path(log_dir).expanduser() if log_dir else Path.home() / "openflight_sessions"
-    path = directory / f"pi_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    with _trace_revisions_lock:
-        _trace_revisions.clear()
-    try:
-        pi_trace.set_recorder(pi_trace.TraceRecorder(path))
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.error(
-            "[SERVER] Pi trace could not start at %s; running untraced", path, exc_info=True
-        )
-        return None
-    return path
-
-
-def _start_browser_trace():
-    """Browser clock pings and post-render reports on the kiosk socket (--pi-trace).
-
-    None when tracing is off or the routes cannot start; the kiosk runs on either way.
-    """
-    try:
-        return register_trace_routes(socketio)
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.error("[SERVER] Pi trace browser trace routes could not start", exc_info=True)
-        return None
-
-
-def _stop_pi_trace() -> None:
-    """Remove and close the recorder; say so when its footer could not be written."""
-    recorder = instrumentation.get_recorder()
-    pi_trace.set_recorder(None)
-    if recorder is not None and not recorder.close():
-        logger.warning("[SERVER] Pi trace closed incomplete: its footer is missing (T1 fails)")
 
 
 def _reset_shot_sequence() -> None:
@@ -748,7 +524,8 @@ def _register_shot_for_finalization(
             diagnostic_session_uuid=diagnostic_session_uuid,
         )
         if needs_watchdog:
-            _log_fusion_diagnostic(
+            kiosk_extensions.call_all(
+                "on_fusion_diagnostic",
                 diagnostic_logger,
                 diagnostic_session_uuid,
                 shot,
@@ -920,7 +697,8 @@ def _shot_finalization_worker_loop() -> None:
                     },
                     exc=error,
                 )
-                _log_fusion_diagnostic(
+                kiosk_extensions.call_all(
+                    "on_fusion_diagnostic",
                     pending.diagnostic_logger,
                     pending.diagnostic_session_uuid,
                     pending.shot,
@@ -1077,7 +855,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
     for connector in sim_connectors:
         _run_shutdown_step(f"simulator connector stop ({connector.name})", connector.stop)
 
-    _run_shutdown_step("pi trace close", _stop_pi_trace)
+    for extension in kiosk_extensions.registered():
+        _run_shutdown_step(f"{extension.name} shutdown", extension.on_shutdown)
     return True
 
 
@@ -6122,7 +5901,8 @@ def _finalize_shot_detected(
             "%.0f" % (shot.spin_peak_freq_hz * 60) if shot.spin_peak_freq_hz is not None else "N/A",
         )
 
-    _log_fusion_diagnostic(
+    kiosk_extensions.call_all(
+        "on_fusion_diagnostic",
         diagnostic_logger,
         diagnostic_session_uuid,
         shot,
@@ -6232,7 +6012,7 @@ def _finalize_shot_detected(
             shot
         )
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             emit_event,
             {"shot": shot_data, "stats": stats},
@@ -6654,7 +6434,7 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         shot_data = shot_to_dict(shot)
         _record_server_publication_invocation(shot)
         shot_data["stage_timing"] = deepcopy(shot.stage_timing)
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             "shot",
             {
@@ -6692,7 +6472,7 @@ def _emit_ops_enrichment_status(shot: Shot, *, status: str, reason: str) -> None
     if camera_capture_runtime is not None:
         hardware.append("camera")
     try:
-        _traced_emit(
+        _emit_shot_payload(
             shot,
             "shot_update",
             {
@@ -7250,9 +7030,9 @@ def start_monitor(
             _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
-        # Before the capture thread starts and before BCM17 is armed, so the
-        # first capture and the first edge are traced too.
-        _install_pi_trace_hooks()
+        # Before the capture thread starts and before BCM17 is armed, so an
+        # extension that observes them sees the first capture and edge too.
+        kiosk_extensions.call_all("before_monitor_start")
         monitor.start(  # pylint: disable=unexpected-keyword-arg
             shot_callback=on_shot_detected,
             live_callback=on_live_reading,
@@ -7943,11 +7723,6 @@ def main():
     )
     parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
-    )
-    parser.add_argument(
-        "--pi-trace",
-        action="store_true",
-        help=("Write the stage 1b host-monotonic trace (pi_trace_*.jsonl) beside the session logs"),
     )
     parser.add_argument(
         "--radar-log", action="store_true", help="Log raw radar data to console (Python logging)"
@@ -8807,13 +8582,7 @@ def main():
         init_session_logger(enabled=False)
         print("Session logging DISABLED")
 
-    if args.pi_trace:
-        trace_path = _start_pi_trace(Path(args.log_dir) if args.log_dir else None)
-        if trace_path is None:
-            print("Pi trace FAILED to start (see log); running WITHOUT a trace")
-        else:
-            print(f"Pi trace enabled: {trace_path}")
-            _start_browser_trace()
+    kiosk_extensions.call_all("on_startup", args)
 
     if ballistics_enabled:
         print("Ballistic carry model: ENABLED (simulator + drag/Magnus)")

@@ -14,7 +14,7 @@ import pytest
 from flask import Flask
 from flask_socketio import SocketIO
 
-from openflight import pi_trace, pi_trace_summary as pts
+from openflight import pi_trace, pi_trace_summary as pts, research_hooks
 from openflight.gate_timing import GateEvent
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
@@ -144,9 +144,9 @@ def test_real_hooks_make_one_anchored_painted_attempt_the_summary_reads(live_rec
     try:
         _clock_sample(client)
         event = GateEvent.observe(_edge_tick_reading, time.time())
-        server._trace_gate_edge(event)  # pylint: disable=protected-access
+        research_hooks._trace_gate_edge(event)  # pylint: disable=protected-access
         processor, capture = _capture(monkeypatch)
-        server._trace_processor(processor)  # pylint: disable=protected-access
+        research_hooks._trace_processor(processor)  # pylint: disable=protected-access
         processor.process_capture(capture)
         shot = Shot(
             ball_speed_mph=120.0,
@@ -219,7 +219,7 @@ def test_a_real_dump_pending_at_wait_start_reaches_the_summary_as_late(live_reco
     """The A-I2 mark's name is the one the summary looks for."""
     server, _emitted = _server(monkeypatch)
     event = GateEvent.observe(_edge_tick_reading, time.time())
-    server._trace_gate_edge(event)  # pylint: disable=protected-access
+    research_hooks._trace_gate_edge(event)  # pylint: disable=protected-access
     _capture(monkeypatch, dump_pending_at_wait_start=True)
     _trace, attempts = _summarize(live_recorder)
     (attempt,) = attempts
@@ -234,7 +234,7 @@ def test_a_real_untagged_emit_reaches_the_summary_as_emit_untagged(live_recorder
     def broken(*_a, **_k):
         raise RuntimeError("trace bug")
 
-    monkeypatch.setattr(server, "_trace_tag", broken)
+    monkeypatch.setattr(research_hooks, "_trace_tag", broken)
     _capture(monkeypatch)
     shot = Shot(ball_speed_mph=120.0, timestamp=datetime.now())
     server._handle_shot_detected(shot)  # pylint: disable=protected-access

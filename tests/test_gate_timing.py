@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import gate_timing, pi_trace, server
+from openflight import gate_timing
 from openflight.camera import capture_runtime
 from openflight.camera.capture_runtime import CameraCaptureRuntime
 from openflight.camera.triggered_buffer import TriggeredCapture
@@ -126,8 +126,7 @@ def test_a_delayed_observer_does_not_cause_the_gpio_to_be_read_again(tmp_path, m
     assert readings == [_reading(age_ns=30_200_000)]
 
 
-@pytest.mark.parametrize("traced", [False, True])
-def test_one_read_is_shared_with_capture_camera_and_trace(tmp_path, monkeypatch, traced):
+def test_one_read_is_shared_with_capture_and_camera(tmp_path, monkeypatch):
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
     camera = CameraCaptureRuntime(output_dir=tmp_path / "camera")
@@ -142,15 +141,6 @@ def test_one_read_is_shared_with_capture_camera_and_trace(tmp_path, monkeypatch,
     )
     reads = []
     monkeypatch.setattr(monitor, "edge_tick_reading", lambda: reads.append(1) or _reading())
-    recorder = (
-        pi_trace.TraceRecorder(tmp_path / "trace.jsonl", temp_reader=lambda: None)
-        if traced
-        else None
-    )
-    pi_trace.set_recorder(recorder)
-    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(capture_monitor=monitor))
-    monkeypatch.setattr(server, "monitor", None)
-    server._install_pi_trace_hooks()
     monitor.start()
     try:
         assert monitor.notify_trigger(10.0)
@@ -158,19 +148,8 @@ def test_one_read_is_shared_with_capture_camera_and_trace(tmp_path, monkeypatch,
         camera_event = camera._trigger_clocks.get_nowait()["gate_event"]
         assert capture.gate_event.to_dict() == camera_event
         assert reads == [1]
-        if recorder is not None:
-            recorder.close()
-            marks = [
-                json.loads(line) for line in recorder.path.read_text(encoding="utf-8").splitlines()
-            ]
-            edge = next(mark for mark in marks if mark.get("name") == "gate_edge_callback")
-            assert edge["gate_event_id"] == camera_event["event_id"]
-            assert edge["mono_before_ns"] == camera_event["mono_before_ns"]
     finally:
         monitor.stop()
-        pi_trace.set_recorder(None)
-        if recorder is not None:
-            recorder.close()
 
 
 def test_busy_iwr_fans_out_new_events_and_debounce_hides_them(tmp_path, monkeypatch):
