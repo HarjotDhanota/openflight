@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import collision_model, core_eligibility, pi_trace, shot_metrics
+from . import collision_model, core_eligibility, instrumentation, pi_trace, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -517,7 +517,7 @@ def _trace_tag(  # pylint: disable=too-many-arguments
     "first") and status notices carry False. A reader that needs the newest revision
     compares ``revision`` numbers, never ``final``.
     """
-    if pi_trace.get_recorder() is None or shot.trace_attempt_id is None:
+    if instrumentation.get_recorder() is None or shot.trace_attempt_id is None:
         return None
     return {
         "attempt_id": shot.trace_attempt_id,
@@ -531,7 +531,7 @@ def _trace_tag(  # pylint: disable=too-many-arguments
 
 def _trace_gate_edge(edge: GateEvent) -> None:
     """Record original GATE evidence without reading the pin again."""
-    recorder = pi_trace.get_recorder()
+    recorder = instrumentation.get_recorder()
     if recorder is None:
         return
     try:
@@ -556,12 +556,12 @@ def _trace_processor(processor) -> None:
         ("detect_spin_multitaper", "ops_spin_started", "ops_spin_done"),
     ):
         if name not in vars(processor):
-            pi_trace.trace_method(processor, name, start_mark, end_mark)
+            instrumentation.trace_method(processor, name, start_mark, end_mark)
 
 
 def _install_pi_trace_hooks() -> None:
     """Before the OPS monitor starts: trace its processor, and observe BCM17 edges first."""
-    if pi_trace.get_recorder() is None:
+    if instrumentation.get_recorder() is None:
         return
     try:
         processor = getattr(monitor, "processor", None)
@@ -576,7 +576,7 @@ def _install_pi_trace_hooks() -> None:
 
 
 def _non_finite_float(value) -> bool:
-    """A float that is NaN or infinite (the one check, on pi_trace._finite)."""
+    """A float that is NaN or infinite (the one check, numeric.finite)."""
     return isinstance(value, float) and not _finite(value)
 
 
@@ -640,11 +640,11 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
     The emit itself is never inside a trace guard: whatever the trace does, the
     payload is emitted, and an emit error still reaches the caller's handler.
     """
-    if pi_trace.get_recorder() is None:
+    if instrumentation.get_recorder() is None:
         socketio.emit(event, payload)
         return
     trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
-    pi_trace.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
+    instrumentation.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
     error = None
     try:
         socketio.emit(event, payload)
@@ -652,7 +652,9 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
         error = type(exc).__name__
         raise
     finally:
-        pi_trace.mark("server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error)
+        instrumentation.mark(
+            "server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error
+        )
 
 
 def _start_pi_trace(log_dir: Path | None) -> Path | None:
@@ -689,7 +691,7 @@ def _start_browser_trace():
 
 def _stop_pi_trace() -> None:
     """Remove and close the recorder; say so when its footer could not be written."""
-    recorder = pi_trace.get_recorder()
+    recorder = instrumentation.get_recorder()
     pi_trace.set_recorder(None)
     if recorder is not None and not recorder.close():
         logger.warning("[SERVER] Pi trace closed incomplete: its footer is missing (T1 fails)")
@@ -845,7 +847,7 @@ def _shot_finalization_worker_loop() -> None:
                 )
                 # Records the first-result timer only: enrichment keeps running and
                 # its late result updates this shot (server_late_update_applied).
-                pi_trace.mark(
+                instrumentation.mark(
                     "server_enrichment_watchdog_fired",
                     registered.shot.trace_attempt_id,
                     reason=diagnostic_reason,
@@ -989,7 +991,7 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         entry.registered.shot.shot_number,
         _SHOT_AWAITING_LATE_CAPACITY,
     )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_result_abandoned",
         entry.registered.shot.trace_attempt_id,
         reason="awaiting_capacity",
@@ -4883,16 +4885,18 @@ def _trace_camera_frames(shot: Shot, camera_capture, camera_archive) -> None:
     Both are CLOCK_MONOTONIC readings the camera runtime took; a clip without them
     gets no mark (no stand-in time).
     """
-    if pi_trace.get_recorder() is None:
+    if instrumentation.get_recorder() is None:
         return
     try:
         metadata = getattr(camera_capture, "metadata", None) or {}
         trigger_ns = metadata.get("trigger_host_timestamp_ns")
         if trigger_ns is not None:
-            pi_trace.mark("camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns))
+            instrumentation.mark(
+                "camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns)
+            )
         host_ns = (camera_archive or {}).get("host_timestamp_ns")
         if host_ns is not None and len(host_ns):
-            pi_trace.mark(
+            instrumentation.mark(
                 "camera_last_frame", shot.trace_attempt_id, monotonic_ns=int(np.max(host_ns))
             )
     except Exception:  # pylint: disable=broad-exception-caught
@@ -5951,7 +5955,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode == "mock" and _mock_enrichment_enabled():
         return _ShotEnrichmentResult(iwr6843_ms=monitor.enrich(shot))
 
-    pi_trace.mark("enrichment_started", shot.trace_attempt_id)
+    instrumentation.mark("enrichment_started", shot.trace_attempt_id)
     enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -5961,9 +5965,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
-    pi_trace.mark("iwr_process_started", shot.trace_attempt_id)
+    instrumentation.mark("iwr_process_started", shot.trace_attempt_id)
     iwr6843_ms = _process_iwr6843_angle(shot)
-    pi_trace.mark("iwr_process_done", shot.trace_attempt_id)
+    instrumentation.mark("iwr_process_done", shot.trace_attempt_id)
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -6170,7 +6174,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     camera_archive = None
     if camera_future is not None:
         camera_wait_started = time.monotonic()
-        pi_trace.mark("camera_wait_started", shot.trace_attempt_id)
+        instrumentation.mark("camera_wait_started", shot.trace_attempt_id)
         try:
             prefetched = camera_future.result()
             camera_capture = prefetched.capture
@@ -6190,7 +6194,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             )
         finally:
             camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
-            pi_trace.mark("camera_ready", shot.trace_attempt_id, matched=camera_capture is not None)
+            instrumentation.mark(
+                "camera_ready", shot.trace_attempt_id, matched=camera_capture is not None
+            )
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -6247,7 +6253,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
-        pi_trace.mark("camera_analysis_done", shot.trace_attempt_id)
+        instrumentation.mark("camera_analysis_done", shot.trace_attempt_id)
     _attach_collision_model(shot)
 
     return _ShotEnrichmentResult(
@@ -6845,7 +6851,7 @@ def _queue_ordered_shot_finalization(
         "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
         shot_number,
     )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_result_unmatched",
         getattr(source_shot, "trace_attempt_id", None),
         reason="shot_not_awaiting_enrichment",
@@ -6916,7 +6922,7 @@ def _publish_late_enrichment(
             },
             exc=error,
         )
-    pi_trace.mark(
+    instrumentation.mark(
         "server_late_update_applied",
         shot.trace_attempt_id,
         state=state,
@@ -7400,12 +7406,12 @@ def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
     shot.stage_timing = clone_stage_timing(shot.stage_timing)
-    if pi_trace.get_recorder() is not None:
+    if instrumentation.get_recorder() is not None:
         # Phase A join: the monitor calls this synchronously in its capture thread,
         # before its next wait, so the current OPS attempt is this shot's (pinned by
         # test_phase_a_join_invariant...; Task 12 replaces it with an explicit ID).
-        shot.trace_attempt_id = pi_trace.current_ops_attempt()
-        pi_trace.mark(
+        shot.trace_attempt_id = instrumentation.current_ops_attempt()
+        instrumentation.mark(
             "server_callback_started",
             shot.trace_attempt_id,
             monotonic_ns=shot.server_callback_started_monotonic_ns,
@@ -7470,7 +7476,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             )
             logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
             ready_light.swing_result("not_counted")
-            pi_trace.mark(
+            instrumentation.mark(
                 "server_shot_rejected", shot.trace_attempt_id, reason="tester_setup_readiness"
             )
             return
@@ -7483,7 +7489,9 @@ def _handle_shot_detected(shot: Shot) -> None:
         shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
         shot.free_play_exposure = _free_play_exposure_at_shot()
         _count_free_play_shot(shot)
-    pi_trace.mark("server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number)
+    instrumentation.mark(
+        "server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number
+    )
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -7553,7 +7561,9 @@ def _handle_shot_detected(shot: Shot) -> None:
                 _SHOT_ENRICHMENT_QUEUE_CAPACITY,
                 shot.shot_number,
             )
-            pi_trace.mark("server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full")
+            instrumentation.mark(
+                "server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full"
+            )
             if emitted:
                 _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
             _queue_shot_finalization(
@@ -7576,7 +7586,7 @@ def _abandon_shot_enrichment(
 ) -> None:
     """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
     reason = "enrichment_backlog_full"
-    pi_trace.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
+    instrumentation.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
     logger.error(
         "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
         "its IWR and camera metrics will not be computed",

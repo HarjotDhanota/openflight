@@ -317,3 +317,16 @@ def test_close_is_idempotent(tmp_path):
     assert rec.close() is True
     rows = read_lines(tmp_path / "trace.jsonl")
     assert [r["type"] for r in rows].count("trace_end") == 1
+
+
+def test_pi_trace_installs_its_recorder_through_the_same_hooks(tmp_path):
+    from openflight import instrumentation
+
+    recorder = pi_trace.TraceRecorder(tmp_path / "t.jsonl", temp_reader=lambda: None)
+    pi_trace.set_recorder(recorder)
+    try:
+        assert instrumentation.get_recorder() is recorder
+    finally:
+        pi_trace.set_recorder(None)
+        recorder.close()
+    assert instrumentation.get_recorder() is None

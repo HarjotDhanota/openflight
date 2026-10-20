@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from . import pi_trace
+from . import instrumentation
 
 SCHEMA_NAME = "openflight.shot_stage_timing"
 SCHEMA_VERSION = 1
@@ -18,13 +18,15 @@ def _open_trace_attempt() -> str | None:
 
     Guarded: a trace error never stops the wait it would have observed (R-F16).
     """
-    recorder = pi_trace.get_recorder()
+    recorder = instrumentation.get_recorder()
     if recorder is None:
         return None
     try:
         return recorder.open_ops_attempt()
     except Exception:  # pylint: disable=broad-exception-caught
-        pi_trace.logger.warning("[TRACE] opening an OPS attempt failed; ignored", exc_info=True)
+        instrumentation.logger.warning(
+            "[TRACE] opening an OPS attempt failed; ignored", exc_info=True
+        )
         return None
 
 
@@ -193,12 +195,12 @@ class OpsCaptureTimer:
         """Record the first valid dump marker before forwarding UI feedback."""
         if self.first_marker_ns is None:
             self.first_marker_ns = time.monotonic_ns()
-            if pi_trace.get_recorder() is not None:
-                pi_trace.mark(
+            if instrumentation.get_recorder() is not None:
+                instrumentation.mark(
                     "ops_first_byte",
                     self.attempt_id,
                     monotonic_ns=self.first_marker_ns,
-                    last_edge_seq=pi_trace.last_edge_seq(),
+                    last_edge_seq=instrumentation.last_edge_seq(),
                 )
         if callback is not None:
             callback()
@@ -206,7 +208,9 @@ class OpsCaptureTimer:
     def response_completed(self) -> None:
         """Record return of the complete UART dump response."""
         self.response_completed_ns = time.monotonic_ns()
-        pi_trace.mark("ops_dump_complete", self.attempt_id, monotonic_ns=self.response_completed_ns)
+        instrumentation.mark(
+            "ops_dump_complete", self.attempt_id, monotonic_ns=self.response_completed_ns
+        )
 
     def ops_section(self, strategy_completed_ns: int | None = None) -> dict:
         """Build the OPS portion of the timing contract."""

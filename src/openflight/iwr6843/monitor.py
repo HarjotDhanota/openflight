@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from openflight import pi_trace
+from openflight import instrumentation
 from openflight.gate_timing import GateEvent, read_edge_tick, warm_edge_reading_cache
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
@@ -242,12 +242,12 @@ class IWR6843CaptureMonitor:
         association candidates. They make an association ambiguous and never qualify
         one. The debounce itself is unchanged.
         """
-        if pi_trace.get_recorder() is None:
+        if instrumentation.get_recorder() is None:
             return
         try:
             fields = event.trace_fields()
             mono_after_ns = fields["mono_after_ns"]
-            pi_trace.mark(
+            instrumentation.mark(
                 "gate_edge_debounced",
                 None,
                 monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
