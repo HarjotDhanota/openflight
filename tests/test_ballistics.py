@@ -367,6 +367,38 @@ class TestW7Coordinates:
         assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
 
 
+class TestSpinAxisCarriesNoRifleSpin:
+    """A tilted axis is the backspin axis turned about the launch direction itself.
+
+    The spin vector stays perpendicular to the launch velocity whatever the launch
+    angle, so a tilted axis adds no spin about the direction of travel.
+    """
+
+    @pytest.mark.parametrize("launch_v", [0.0, 12.0, 30.0])
+    @pytest.mark.parametrize("launch_h", [0.0, 7.0])
+    @pytest.mark.parametrize("axis", [-25.0, 0.0, 15.0])
+    def test_the_spin_vector_is_a_unit_vector_across_the_launch(self, launch_v, launch_h, axis):
+        from openflight.ballistics import launch_relative_spin_axis
+
+        w = launch_relative_spin_axis(axis, launch_h, launch_v)
+        v, h = math.radians(launch_v), math.radians(launch_h)
+        d = (math.cos(v) * math.cos(h), math.cos(v) * math.sin(h), math.sin(v))
+        assert math.hypot(*w) == pytest.approx(1.0, abs=1e-12)
+        assert sum(a * b for a, b in zip(w, d)) == pytest.approx(0.0, abs=1e-12)
+
+    def test_a_level_launch_keeps_the_old_axis(self):
+        from openflight.ballistics import launch_relative_spin_axis
+
+        a = math.radians(10.0)
+        h = math.radians(4.0)
+        expected = (math.cos(a) * math.sin(h), -math.cos(a) * math.cos(h), math.sin(a))
+        assert launch_relative_spin_axis(10.0, 4.0) == pytest.approx(expected, abs=1e-12)
+
+    def test_a_tilt_to_the_right_still_fades(self):
+        assert simulate(_driver(axis=20.0, launch=25.0)).carry_side_yards > 0.0
+        assert simulate(_driver(axis=-20.0, launch=25.0)).carry_side_yards < 0.0
+
+
 # --- E4: total distance; the USGA / R&A 2021 bounce model stays selectable ---
 
 

@@ -236,8 +236,14 @@ def simulate_batch(
     state[4] = v0 * np.cos(la) * np.sin(lh)
     state[5] = v0 * np.sin(la)
     state[6] = np.array([s.spin_rpm for s in shots]) * 2 * np.pi / 60.0
-    tilt = np.cos(axis_deg)
-    axis = np.stack([tilt * np.sin(lh), -tilt * np.cos(lh), np.sin(axis_deg)])
+    c, s_ = np.cos(axis_deg), np.sin(axis_deg)
+    axis = np.stack(
+        [
+            c * np.sin(lh) - s_ * np.sin(la) * np.cos(lh),
+            -c * np.cos(lh) - s_ * np.sin(la) * np.sin(lh),
+            s_ * np.cos(la),
+        ]
+    )
     cd0, cd1, cd2 = model.cd_poly
     cl0, cl1, cl2 = model.cl_poly
     spin_k = model.cm_per_sp * 0.5 * air_density * area * 2.0 * r * r / inertia

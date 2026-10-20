@@ -650,20 +650,28 @@ def _rk4_step(
     return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(n))
 
 
-def launch_relative_spin_axis(spin_axis_deg: float, launch_angle_h_deg: float) -> tuple:
+def launch_relative_spin_axis(
+    spin_axis_deg: float, launch_angle_h_deg: float, launch_angle_v_deg: float = 0.0
+) -> tuple:
     """Unit spin vector for a spin axis tilted against the launch direction (W7).
 
     spin_axis_deg = 0 is pure backspin: the axis is horizontal, perpendicular to
     the horizontal launch direction (cos h, sin h, 0) and pointing to its left, so
-    omega x v lifts. A positive tilt raises the axis's top toward the right of the
-    launch line (fade/slice); a negative one toward the left (draw/hook). The axis
-    turns with the horizontal launch angle h: a spin axis is a tilt of the ball's
-    own rotation, not of a fixed world axis.
+    omega x v lifts. A positive tilt turns the axis about the launch direction so
+    its top leans toward the right of the launch line (fade/slice); a negative one
+    toward the left (draw/hook). The tilt is a rotation about the launch velocity
+    itself, so the spin vector stays perpendicular to it: a tilted axis adds no
+    rifle spin, whatever the vertical launch angle v.
     """
     axis_rad = math.radians(spin_axis_deg)
     h = math.radians(launch_angle_h_deg)
-    tilt = math.cos(axis_rad)
-    return (tilt * math.sin(h), -tilt * math.cos(h), math.sin(axis_rad))
+    v = math.radians(launch_angle_v_deg)
+    c, s = math.cos(axis_rad), math.sin(axis_rad)
+    return (
+        c * math.sin(h) - s * math.sin(v) * math.cos(h),
+        -c * math.cos(h) - s * math.sin(v) * math.sin(h),
+        s * math.cos(v),
+    )
 
 
 def simulate(
@@ -690,7 +698,9 @@ def simulate(
     vz = v0 * math.sin(la_v)
 
     # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
-    axis = launch_relative_spin_axis(conditions.spin_axis_deg, conditions.launch_angle_h)
+    axis = launch_relative_spin_axis(
+        conditions.spin_axis_deg, conditions.launch_angle_h, conditions.launch_angle_v
+    )
 
     # rpm → rad/s; integrated with the flight (Ferguson 2022's Eq. 4 spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
