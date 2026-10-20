@@ -117,6 +117,19 @@ def test_curve_is_the_d37_definition_of_the_same_flight():
     assert metrics["curve"]["value"] < -1.0  # a draw axis curves left of the launch line
 
 
+def test_curve_is_trackmans_definition_on_the_straight_line_carry():
+    shot = _shot(spin_axis_deg=-6.0, launch_angle_horizontal=3.0)
+    metrics = _fusion(shot)["as_measured"]["metrics"]
+    traj = simulate(resolve_launch(shot, substitutes=False), air_density=AIR_DENSITY_STD)
+    side, launch = traj.carry_side_yards, math.radians(3.0)
+    downrange = math.sqrt(traj.carry_yards**2 - side**2)
+    assert downrange == pytest.approx(traj.downrange_yards)
+    expected = side * math.cos(launch) - downrange * math.sin(launch)
+    assert metrics["curve"]["value"] == pytest.approx(expected)
+    assert "TrackMan curve" in metrics["curve"]["source"]
+    assert "launch-direction line" in metrics["curve"]["source"]
+
+
 @pytest.mark.parametrize(
     "overrides, reason",
     [

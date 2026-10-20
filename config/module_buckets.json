@@ -39,6 +39,7 @@
   "tests/test_metric_definitions.py",
   "tests/test_server_club_arc.py",
   "tests/test_shot_metrics.py",
+  "tests/tm_owner_export.py",
   "tests/test_v_formulas_consistency.py",
   "tests/test_v_formulas_fixes.py",
   "tests/test_v_formulas_known_answer.py"
@@ -946,6 +947,7 @@
   "tests/test_v_formulas_fixes.py": "FUSION",
   "tests/test_v_formulas_known_answer.py": "FUSION",
   "tests/test_validate_camera_timing.py": "RESEARCH",
+  "tests/tm_owner_export.py": "FUSION",
   "tests/worker_probe.py": "TESTER",
   "ui/.gitignore": "PRODUCT",
   "ui/.prettierignore": "PRODUCT",

@@ -12,6 +12,7 @@ import random
 import pytest
 
 from openflight import metric_definitions as md
+from tests.tm_owner_export import number, owner_shots
 
 NON_FINITE = [math.nan, math.inf, -math.inf]
 
@@ -220,6 +221,15 @@ class TestDPlaneTilt:
 
 
 class TestCurve:
+    def test_the_owner_export_curve_is_reproduced(self):
+        """TM4's Curve (ft) from its flat carry and carry side (yd) and launch direction."""
+        shots = owner_shots()
+        for shot in shots:
+            carry, side = number(shot, "Carry Flat - Length"), number(shot, "Carry Flat - Side")
+            got = md.curve(carry, side, number(shot, "Launch Direction")) * 3.0
+            assert got == pytest.approx(number(shot, "Curve"), abs=1e-9)
+        assert len(shots) == 24
+
     def test_straight_at_the_target_is_zero(self):
         assert md.curve(200.0, 0.0, 0.0) == pytest.approx(0.0)
 

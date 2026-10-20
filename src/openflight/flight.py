@@ -469,8 +469,10 @@ def _source(
         )
     if name == "curve":
         return (
-            f"{status} (model: D37 curve() of this flight's carry, carry side and launch "
-            f"direction; flight: {FLIGHT_MODEL_LABEL}; air: {air})"
+            f"{status} (model: TrackMan curve, the landing point's distance from the "
+            "launch-direction line with carry as the straight-line distance, from this "
+            f"flight's carry, carry side and launch direction; flight: {FLIGHT_MODEL_LABEL}; "
+            f"air: {air})"
         )
     return f"{status} (model: {FLIGHT_MODEL_LABEL}; air: {air})"
 
