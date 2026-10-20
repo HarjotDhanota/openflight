@@ -54,6 +54,14 @@
   font-weight: 700;
 }
 
+/* Stop & package while recording is a live action, never a grey "disabled" look
+   (19 Oct): the accent fill the kiosk's other actions use */
+.free-play button.free-play__stop:enabled {
+  border: 2px solid var(--color-accent-block);
+  background: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
 /* the exposure study's line reads in full: it may take two short lines, never the
    ready light's room (the band keeps its height) */
 /* while recording, the notes under the state are a size smaller and set close:

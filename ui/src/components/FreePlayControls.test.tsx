@@ -19,23 +19,29 @@ describe('Free-play status', () => {
     expect(html).toContain('disabled');
     expect(html).toContain('Stopping and packaging');
   });
-  it('shows the completed bundle path and a Done action', () => {
+  it('says where to send the finished package, and offers Done', () => {
     const html = renderToString(
       <FreePlayStatus
-        state={{ enabled: true, phase: 'ready', bundle: { name: 'session.zip', path: '/captures/session.zip' } }}
+        state={{ enabled: true, phase: 'ready', bundle: { name: 'session.zip', path: '/home/someone/captures/session.zip' } }}
         onAction={noop}
       />
     );
-    expect(html).toContain('Package ready: session.zip');
-    expect(html).toContain('/captures/session.zip');
+    // decision 3 (19 Oct): the tester sends it from the tester page's step 8
+    expect(html).toContain('Package ready: session.zip · send it from the tester page (step 8)');
+    // the unit's own folders are never shown on the scoreboard
+    expect(html).not.toContain('/home/someone');
     expect(html).toContain('>Done</button>');
     expect(html).not.toContain('disabled');
+  });
+  it('gives Stop & package an active look while recording', () => {
+    const html = renderToString(<FreePlayStatus state={{ enabled: true, phase: 'recording' }} onAction={noop} />);
+    expect(html).toMatch(/<button[^>]*class="free-play__stop"[^>]*>Stop &amp; package<\/button>/);
   });
   it('names the bundle even when only its name is known', () => {
     const html = renderToString(
       <FreePlayStatus state={{ enabled: true, phase: 'ready', bundle: { name: 'session.zip' } }} onAction={noop} />
     );
-    expect(html).toContain('Package ready: session.zip');
+    expect(html).toContain('Package ready: session.zip · send it from the tester page (step 8)');
   });
   it('takes the whole band once acquisition stops: the ready light no longer applies', () => {
     const recording = renderToString(<FreePlayStatus state={{ enabled: true, phase: 'recording' }} onAction={noop} />);

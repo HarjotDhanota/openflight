@@ -17,6 +17,9 @@ interface FreePlayState {
   exposure_study?: ExposureStudy | null;
 }
 
+// decision 3 (19 Oct): the tester sends the package from the tester page, never from here
+const SEND_FROM = 'send it from the tester page (step 8)';
+
 export function FreePlayStatus({
   state,
   busy = false,
@@ -38,8 +41,8 @@ export function FreePlayStatus({
         <strong className={ready ? 'free-play__ready' : undefined}>
           {ready
             ? state.bundle?.name
-              ? `Package ready: ${state.bundle.name}`
-              : 'Package ready'
+              ? `Package ready: ${state.bundle.name} · ${SEND_FROM}`
+              : `Package ready · ${SEND_FROM}`
             : state.phase === 'recording'
               ? 'Free play: recording'
               : waiting
@@ -51,14 +54,14 @@ export function FreePlayStatus({
         {state.exposure_study?.text && !finished ? (
           <span className="free-play__study">{state.exposure_study.text}</span>
         ) : null}
-        {ready && state.bundle?.path ? (
-          <span className="free-play__path" title={state.bundle.path}>
-            {state.bundle.path}
-          </span>
-        ) : null}
         {state.error ? <span role="alert">{state.error}</span> : null}
       </div>
-      <button type="button" disabled={waiting} onClick={() => onAction(ready ? 'close' : 'stop')}>
+      <button
+        type="button"
+        className={ready ? undefined : 'free-play__stop'}
+        disabled={waiting}
+        onClick={() => onAction(ready ? 'close' : 'stop')}
+      >
         {busy ? 'Please wait…' : ready ? 'Done' : state.phase === 'error' ? 'Try again' : 'Stop & package'}
       </button>
     </div>

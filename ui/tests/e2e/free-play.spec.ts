@@ -66,6 +66,22 @@ for (const viewport of KIOSK_VIEWPORTS) {
       expect(box).not.toBeNull();
       expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
       expect(box!.height).toBeGreaterThanOrEqual(44);
+      // an active action while recording, never the grey of a disabled one (19 Oct)
+      await expect(stop).toBeEnabled();
+      const fill = (selector: string) =>
+        page.locator(selector).first().evaluate((node) => getComputedStyle(node).backgroundColor);
+      const stopFill = await stop.evaluate((node) => getComputedStyle(node).backgroundColor);
+      expect(stopFill).not.toBe(await fill('.free-play'));
+      expect(stopFill).toBe(
+        await page.evaluate(() => {
+          const probe = document.createElement('div');
+          probe.style.background = 'var(--color-accent-block)';
+          document.body.append(probe);
+          const value = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return value;
+        })
+      );
       await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
       // the controls sit inside the ready light's band: the tiles get exactly the
       // room they have in a swings kiosk, so free play needs no tile overrides
@@ -102,9 +118,12 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await shot('packaging');
 
       phase = 'ready';
-      const ready = page.getByText(`Package ready: ${bundle.name}`, { exact: true });
+      const ready = page.getByText(`Package ready: ${bundle.name} · send it from the tester page (step 8)`, {
+        exact: true,
+      });
       await expect(ready).toBeVisible();
-      await expect(page.getByText(bundle.path)).toBeVisible();
+      // the unit's own folders stay off the scoreboard (decision 3, 19 Oct)
+      await expect(page.getByText(bundle.path)).toHaveCount(0);
       const done = page.getByRole('button', { name: 'Done', exact: true });
       await expect(done).toBeEnabled();
       const panel = await page.locator('.free-play').boundingBox();
