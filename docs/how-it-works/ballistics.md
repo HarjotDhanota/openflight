@@ -222,13 +222,15 @@ $$
   lift.
 - **No spin, no lift:** $C_l(0) = 0$.
 
-Two sets of constants are in the code (`ballistics.AERO_MODELS`). The active one
-is `flight-fit-v1`; `simulate(..., aero=FERGUSON_2022)` flies the other.
+Three models are in the code (`ballistics.AERO_MODELS`). The active one is
+`flight-fit-v1`; `simulate(..., aero=FERGUSON_2022)` or `aero=FLIGHT_FIT_V2`
+flies another.
 
 | Model | $a, b, c$ ($C_d$) | $d, e, f$ ($C_l$) | $g$ |
 | --- | --- | --- | --- |
 | `ferguson-2022` (published) | 0.1304, 0.9287, −0.8259 | 0.0504, 1.2031, −1.1490 | 0.010 |
 | **`flight-fit-v1`** (active) | 0.1459, 0.8331, −0.5549 | 0.0646, 1.1261, −0.8869 | 0.010 |
+| `flight-fit-v2` (selectable, plus a descent term) | 0.1510, 0.8274, −0.5778 | 0.0715, 1.1250, −0.9015 | 0.0117 |
 
 Ferguson fitted their constants to 1,040 shots: GCQuad launch conditions;
 FlightScope X3 carry, offline and apex; 2021 Pro V1; 190 m above sea level.
@@ -432,6 +434,45 @@ uv run python scripts/analysis/fit_flight_model.py --loo --plots --output-dir ou
   `scripts/analysis/validate_ballistics.py --aero ferguson-2022` (or
   `flight-fit-v1`).
 
+### flight-fit-v2: a descent term (selectable)
+
+flight-fit-v2 keeps Ferguson's quadratics on the way up. While the ball
+descends, both coefficients are scaled by a smooth factor of the descent angle
+$\gamma$:
+
+$$
+C_d \to C_d\,e^{-k_d \sin^n\gamma}
+\qquad
+C_l \to C_l\,e^{-k_l \sin^n\gamma}
+\qquad
+k_d = 4.99,\; k_l = 4.90,\; n = 8.03
+$$
+
+The term is empirical. It is motivated by the published dependence of a sphere's
+force coefficients on whether the flow around it accelerates (Odar & Hamilton,
+"Forces on a sphere accelerating in a viscous fluid", *J. Fluid Mech.* 18,
+302–314, 1964): a falling ball speeds up, and $\sin\gamma$ is the share of
+gravity along its path. Under 30° of descent it changes little; by 60° it takes
+most of both coefficients away, so a steep wedge lands steeper and faster.
+
+Its constants were fitted by the maintainer (flight-fit-v2) over 11,264
+launches (ball speed 40–190 mph, launch 0–45°, spin 500–12,000 rpm, spin axis
+±30°, launch direction ±10°) on carry, apex, apex distance, landing angle,
+landing speed, hang time, curve and landing spin. RMSE on the held-out 20 % and
+on the 67 export shots (all held out for flight-fit-v2; in-sample for
+flight-fit-v1):
+
+| | flight-fit-v1 | flight-fit-v2 |
+| --- | --- | --- |
+| Grid hold-out: carry yd / apex ft / landing ° / hang s | 5.75 / 2.09 / 5.98 / 0.25 | 1.72 / 1.81 / 1.10 / 0.06 |
+| Grid hold-out: curve yd / landing speed mph | 0.96 / 10.52 | 0.57 / 2.13 |
+| Export shots: carry yd / apex ft / landing ° / hang s | 0.84 / 0.68 / 0.63 / 0.06 | 1.06 / 1.40 / 0.46 / 0.07 |
+| Export shots: driver carry yd / apex ft (8 shots) | 1.20 / 0.80 | 2.71 / 2.76 |
+
+flight-fit-v2 is far ahead across the launch grid, but behind flight-fit-v1 on
+carry and apex on the export shots, mostly on the low-spin drives. So it is not
+active: `flight-fit-v1` stays the default until a model is ahead on both.
+
 ### Spin decay
 
 Spin decays by Ferguson's moment coefficient, Eq. (4), $C_M = g\,S_p$, with
@@ -561,6 +602,7 @@ themselves from speed, launch and spin.
 | `SP_FIT_MAX` | 0.75 | Top of the fitted $S_p$ range; curves held beyond it |
 | `CM_PER_SP` | 0.010 | The active model's spin-down moment per unit $S_p$ (Eq. 4) |
 | `FERGUSON_2022` | (0.1304, 0.9287, -0.8259), (0.0504, 1.2031, -1.1490), 0.01 | Ferguson's published constants, selectable |
+| `FLIGHT_FIT_V2` | (0.1510, 0.8274, -0.5778), (0.0715, 1.1250, -0.9015), 0.0117; descent 4.99, 4.90, 8.03 | Selectable, not active |
 | `GRAVITY` | 9.81 m/s² | |
 | `DT_SECONDS` | 0.002 | 500 Hz integration |
 | `RANGE_DT_SECONDS` | 0.02 | Range sweep only |
