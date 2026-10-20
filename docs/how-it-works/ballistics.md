@@ -7,9 +7,9 @@ icon: lucide/trending-up
 Carry and the rest of the flight are not measured: they are **calculated**.
 OpenFlight integrates the ball's trajectory from the shot's own launch
 conditions with a published aerodynamic model form whose constants are fitted to
-TrackMan 4 exports (flight-fit-v1), then adds bounce and roll from a turf bounce-and-roll
-model. Every output says what it is, where it came from and how
-uncertain it is.
+TrackMan 4 exports (flight-fit-v1), then adds bounce and roll from a published
+turf-bounce form (Penner 2002) with fitted constants. Every output says what it
+is, where it came from and how uncertain it is.
 
 Implemented in `src/openflight/ballistics.py` (the physics) and
 `src/openflight/flight.py` (the labelled outputs).
