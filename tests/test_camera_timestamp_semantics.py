@@ -7,6 +7,7 @@ capture-mode context id is the sha256 of the whole startup snapshot, so it chang
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,10 +18,13 @@ from openflight.camera import timestamp_semantics as ts
 from openflight.camera.timing_validation import cadence_summary
 
 ROOT = Path(__file__).resolve().parents[1]
-TEST7 = Path(
-    "/Users/harjotdhanota/Desktop/Coding/Openflight Test Bench/openflight-test-bench/"
-    "sessions/Outdoors-test-7/arm5/paired/run-01/arm5/camera"
+BENCH = Path(
+    os.environ.get(
+        "OPENFLIGHT_BENCH_ROOT",
+        Path.home() / "Desktop/Coding/Openflight Test Bench/openflight-test-bench",
+    )
 )
+TEST7 = BENCH / "sessions/Outdoors-test-7/arm5/paired/run-01/arm5/camera"
 PERIOD_120 = 8_333_333
 EXPOSURES = (100, 300, 1000, 3000)
 

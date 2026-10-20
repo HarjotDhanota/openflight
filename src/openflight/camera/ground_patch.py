@@ -39,7 +39,7 @@ PATCH_SIZE_M = 0.61
 PATCH_CENTRE_DISTANCE_M = (0.8, 3.0)
 PATCH_DEFAULT_DISTANCE_M = 1.25
 # The camera's vertical (pitch plus principal-point row) is uncertain by about 3 deg
-# until P8-5 calibrates it: harjot-indoor-test-1 put the floor 2-4 deg below where
+# until P8-5 calibrates it: indoor-test-1 put the floor 2-4 deg below where
 # the level, nominal-centre model puts it. The pad covers that with a margin.
 UNCALIBRATED_TILT_PAD_DEG = 4.0
 # Once calibrated, what is left: the LIS3DH's settling, a mat under the ball but

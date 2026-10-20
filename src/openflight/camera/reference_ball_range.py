@@ -1036,7 +1036,7 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     width, height = camera.image_width_px, camera.image_height_px
     # the region holds the whole of the largest ball whose centre lies in the outline:
     # a centre near the edge needs its disk, not only the seed grid's margin
-    # (harjot-indoor-test-2: the ball's centre 2 rows inside the fixed box's edge)
+    # (indoor-test-2: the ball's centre 2 rows inside the fixed box's edge)
     bounds = search.bounds_px(
         width, height, PATCH_SEED_MARGIN_PX + float(search.diameter_px[1]) / 2.0
     )

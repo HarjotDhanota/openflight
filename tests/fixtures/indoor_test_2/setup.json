@@ -1,6 +1,6 @@
 {
  "schema": "openflight.test_fixture.indoor_test_2.v1",
- "note": "harjot-indoor-test-2 (30 Sept 2026, epoch setup-20261001-d35001f77f5e): the 1280x800 Save frame (the median of the camera step's frames) and both static radar captures, their per-channel means derived from the saved dumps. The ball was taped at about 1.2 m from the radar; a door stands at 1.575 m.",
+ "note": "indoor-test-2 (30 Sept 2026, epoch setup-20261001-d35001f77f5e): the 1280x800 Save frame (the median of the camera step's frames) and both static radar captures, their per-channel means derived from the saved dumps. The ball was taped at about 1.2 m from the radar; a door stands at 1.575 m.",
  "epoch_id": "setup-20261001-d35001f77f5e",
  "orientation_at_start": {
   "camera_pitch_deg": 1.68,
@@ -27,19 +27,19 @@
   "usable": true,
   "inputs": {
    "calibration": {
-    "path": "/home/harjot-openflight/openflight/config/iwr6843_calibration_reference.json",
+    "path": "/home/openflight/openflight/config/iwr6843_calibration_reference.json",
     "sha256": "a93b6df424021c41d02bcd21a7da320bb090609c3610e8f59239a2598ce2b8c5"
    },
    "firmware": {
-    "path": "/home/harjot-openflight/openflight/firmware/releases/l3_dump_configurable_capture_20260818.bin",
+    "path": "/home/openflight/openflight/firmware/releases/l3_dump_configurable_capture_20260818.bin",
     "sha256": "823ddd18a231d0004020de6262160d6863384cccac6674bae6f7d0fcea58f955"
    },
    "radar_config": {
-    "path": "/home/harjot-openflight/openflight/config/iwr6843_static_range_24f3ms_53bin_iq16.cfg",
+    "path": "/home/openflight/openflight/config/iwr6843_static_range_24f3ms_53bin_iq16.cfg",
     "sha256": "6971eab3c03b9ced969f2ba80032f8d443b151505b835ae6c29a288223475b79"
    },
    "rig_geometry": {
-    "path": "/home/harjot-openflight/openflight/config/enclosure_v3_rig_geometry.json",
+    "path": "/home/openflight/openflight/config/enclosure_v3_rig_geometry.json",
     "sha256": "995c89c15942370e21648fdffdf369e5f89410ea884af263a928e8667fc5589c"
    }
   },
@@ -1467,19 +1467,19 @@
   "usable": true,
   "inputs": {
    "calibration": {
-    "path": "/home/harjot-openflight/openflight/config/iwr6843_calibration_reference.json",
+    "path": "/home/openflight/openflight/config/iwr6843_calibration_reference.json",
     "sha256": "a93b6df424021c41d02bcd21a7da320bb090609c3610e8f59239a2598ce2b8c5"
    },
    "firmware": {
-    "path": "/home/harjot-openflight/openflight/firmware/releases/l3_dump_configurable_capture_20260818.bin",
+    "path": "/home/openflight/openflight/firmware/releases/l3_dump_configurable_capture_20260818.bin",
     "sha256": "823ddd18a231d0004020de6262160d6863384cccac6674bae6f7d0fcea58f955"
    },
    "radar_config": {
-    "path": "/home/harjot-openflight/openflight/config/iwr6843_static_range_24f3ms_53bin_iq16.cfg",
+    "path": "/home/openflight/openflight/config/iwr6843_static_range_24f3ms_53bin_iq16.cfg",
     "sha256": "6971eab3c03b9ced969f2ba80032f8d443b151505b835ae6c29a288223475b79"
    },
    "rig_geometry": {
-    "path": "/home/harjot-openflight/openflight/config/enclosure_v3_rig_geometry.json",
+    "path": "/home/openflight/openflight/config/enclosure_v3_rig_geometry.json",
     "sha256": "995c89c15942370e21648fdffdf369e5f89410ea884af263a928e8667fc5589c"
    }
   },

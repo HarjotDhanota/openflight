@@ -57,7 +57,7 @@ def test_a_known_offset_is_recovered_from_one_ball():
 
 
 def test_the_indoor_pair_gives_about_two_degrees():
-    """harjot-indoor-test-1: the ball at (744, 518), the pair's 1.18 m, LIS3DH 1.72 deg."""
+    """indoor-test-1: the ball at (744, 518), the pair's 1.18 m, LIS3DH 1.72 deg."""
     solved = camera_tilt.solve_vertical_offset(
         v3_at, (744.0, 518.0), radar_range_m=1.176, radar_uncertainty_m=0.026, lis3dh_pitch_deg=1.72
     )

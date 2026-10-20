@@ -237,7 +237,7 @@ def project_fixed_box(
     tolerance = ground_patch.SIZE_TOLERANCE
     # a ball's size does not move with the camera's pitch: the smallest the box looks
     # for stands just past the window, not where a padded row meets the horizon (a
-    # 4 m, 8 px floor let small clutter use up the fits, harjot-indoor-test-2)
+    # 4 m, 8 px floor let small clutter use up the fits, indoor-test-2)
     size_far = min(farthest_lens, config.placement_window_m[1] + config.size_far_margin_m)
     _nominal_lens, nominal_slant = ground_patch._ball_plane_distances(  # noqa: SLF001
         camera, ball, ground_patch.BALL_CENTER_HEIGHT_M
