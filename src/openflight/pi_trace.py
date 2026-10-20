@@ -22,7 +22,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from openflight.numeric import finite as _finite  # noqa: F401  re-exported for trace readers
+# Re-exported for trace readers: both now live in product modules.
+from openflight.clock_mapping import BracketedPair  # noqa: F401
+from openflight.numeric import finite as _finite  # noqa: F401
 
 logger = logging.getLogger("openflight.pi_trace")
 
@@ -51,26 +53,6 @@ class ClockTriple:
         boot_clock = getattr(time, "CLOCK_BOOTTIME", None)
         boot = time.clock_gettime_ns(boot_clock) if boot_clock is not None else None
         return cls(mono, real, boot)
-
-
-@dataclass(frozen=True)
-class BracketedPair:
-    """A wall reading between two monotonic readings: bounds wall − monotonic honestly."""
-
-    mono_before_ns: int
-    realtime_ns: int
-    mono_after_ns: int
-
-    @classmethod
-    def now(cls) -> "BracketedPair":
-        """monotonic, wall, monotonic."""
-        before = time.monotonic_ns()
-        real = time.time_ns()
-        return cls(before, real, time.monotonic_ns())
-
-    def wall_minus_mono_bounds_ns(self) -> tuple[int, int]:
-        """(low, high) of wall − monotonic at this instant."""
-        return self.realtime_ns - self.mono_after_ns, self.realtime_ns - self.mono_before_ns
 
 
 def read_cpu_temp_c(path: Path = THERMAL_ZONE) -> Optional[float]:

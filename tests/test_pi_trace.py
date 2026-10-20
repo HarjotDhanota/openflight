@@ -162,9 +162,10 @@ def test_trace_method_marks_end_with_the_error_and_reraises(tmp_path):
     assert done["error"] == "ValueError"
 
 
-def test_bracketed_pair_bounds_contain_the_offset():
-    pair = BracketedPair(mono_before_ns=1_000, realtime_ns=50_000, mono_after_ns=1_200)
-    assert pair.wall_minus_mono_bounds_ns() == (48_800, 49_000)
+def test_bracketed_pair_is_re_exported_from_clock_mapping():
+    from openflight.clock_mapping import BracketedPair as product_pair
+
+    assert BracketedPair is product_pair
 
 
 def test_module_mark_is_a_no_op_without_a_recorder():
