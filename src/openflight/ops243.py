@@ -36,6 +36,7 @@ Speed limits by sample rate:
 import json
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -115,6 +116,32 @@ def _parse_ops_clock(response: str) -> Optional[float]:
         return float(match.group(1))
     except ValueError:
         return None
+
+
+def _kernel_console_devices(kernel_cmdline: Optional[str] = None) -> set:
+    """Device names and paths the kernel console writes to (``console=``).
+
+    Both the alias (``serial0``) and the device it resolves to are returned,
+    so a console named either way is recognised.
+    """
+    if kernel_cmdline is None:
+        try:
+            with open("/proc/cmdline", encoding="ascii", errors="ignore") as handle:
+                kernel_cmdline = handle.read()
+        except OSError:
+            return set()
+    devices = set()
+    for token in kernel_cmdline.split():
+        if not token.startswith("console="):
+            continue
+        name = token.split("=", 1)[1].split(",", 1)[0]
+        if not name:
+            continue
+        devices.add(name)
+        real = os.path.realpath(f"/dev/{name}")
+        devices.add(real)
+        devices.add(os.path.basename(real))
+    return devices
 
 
 def parse_firmware_version(reply: str) -> Optional[str]:
@@ -239,6 +266,14 @@ class OPS243Radar:
     # Common USB identifiers for OPS243
     VENDOR_IDS = [0x0483]  # STMicroelectronics
 
+    # GPIO-header UARTs probed when no USB radar is found (19 Oct). A raw UART
+    # has no descriptors, so a candidate is only used when an OPS243 answers
+    # ``?V`` on it. On a Pi 5 the 40-pin header is ttyAMA0; serial0 is probed
+    # only when it names a different device (older Pis) and never when it
+    # points at ttyAMA10, the Pi 5 debug-header UART.
+    GPIO_UART_PORTS = ("/dev/ttyAMA0", "/dev/serial0")
+    _DEBUG_UART_NAMES = ("ttyAMA10",)
+
     def __init__(
         self,
         port: Optional[str] = None,
@@ -309,6 +344,75 @@ class OPS243Radar:
                 ports.append(port.device)
         return ports
 
+    @classmethod
+    def find_gpio_uart_ports(
+        cls,
+        candidates: Optional[tuple] = None,
+        kernel_cmdline: Optional[str] = None,
+    ) -> List[str]:
+        """Return the GPIO-header UARTs worth an OPS243 ``?V`` probe, in order.
+
+        Skips devices that do not exist, a second name for a device already
+        listed, the Pi 5 debug UART, and any UART the kernel console owns
+        (a probe would type into a login prompt).
+
+        Args:
+            candidates: Device paths to consider; defaults to GPIO_UART_PORTS.
+            kernel_cmdline: The kernel command line; read from /proc/cmdline
+                when None.
+        """
+        if candidates is None:
+            candidates = cls.GPIO_UART_PORTS
+        consoles = _kernel_console_devices(kernel_cmdline)
+        found: List[str] = []
+        seen = set()
+        for candidate in candidates:
+            if not os.path.exists(candidate):
+                continue
+            real = os.path.realpath(candidate)
+            if real in seen or os.path.basename(real) in cls._DEBUG_UART_NAMES:
+                continue
+            if real in consoles or os.path.basename(real) in consoles:
+                continue
+            seen.add(real)
+            found.append(candidate)
+        return found
+
+    def _connect_gpio_uart(self, timeout: float) -> str:
+        """Find an OPS243 on a GPIO-header UART, leaving it open and negotiated.
+
+        Returns the port. Raises ConnectionError, with ``self.port`` back at
+        None and nothing open, when no candidate answers.
+        """
+        tried = []
+        for candidate in self.find_gpio_uart_ports():
+            self.port = candidate
+            try:
+                self.negotiate_uart_baud(timeout=timeout)
+            except (ConnectionError, serial.SerialException, OSError) as exc:
+                logger.info("[OPS] No OPS243 on %s: %s", candidate, exc)
+                tried.append(f"{candidate} ({exc})")
+                self.disconnect()
+                self.port = None
+                self.last_baud_negotiation = None
+                continue
+            logger.info("[OPS] No OPS243 on USB; found one on the GPIO UART %s", candidate)
+            return candidate
+
+        if tried:
+            uart = "or on the GPIO UART (" + "; ".join(tried) + ")"
+        else:
+            uart = (
+                "and no GPIO UART was available to probe "
+                f"({', '.join(self.GPIO_UART_PORTS)} missing or in use by the console)"
+            )
+        raise ConnectionError(
+            f"No OPS243 radar found on USB {uart}. If it is wired to the Pi GPIO "
+            "UART (J3 pins 6/7), enable UART0 and check the wiring, or pass the "
+            "serial port explicitly via your command's port option "
+            "(e.g. /dev/ttyAMA0)."
+        )
+
     def connect(self, timeout: float = DEFAULT_TIMEOUT) -> bool:
         """
         Connect to the radar sensor.
@@ -318,27 +422,30 @@ class OPS243Radar:
         unknown at connect time (19,200 from the factory, or whatever a
         previous session left in flash).
 
+        With no port given, a USB radar is used when one enumerates; otherwise
+        each GPIO-header UART is probed and the first that answers ``?V`` is
+        used. An explicit port is never second-guessed.
+
         Args:
             timeout: Serial read timeout in seconds
 
         Returns:
             True if connection successful
         """
+        probed_uart = False
         if self.port is None:
             ports = self.find_radar_ports()
-            if not ports:
-                raise ConnectionError(
-                    "No OPS243 radar found on USB. If it is wired to the Pi GPIO "
-                    "UART (J3 pins 6/7), pass the serial port explicitly via "
-                    "your command's port option (e.g. /dev/ttyAMA0) — a raw "
-                    "UART has no USB descriptors to auto-detect."
-                )
-            self.port = ports[0]
+            if ports:
+                self.port = ports[0]
+            else:
+                self._connect_gpio_uart(timeout)
+                probed_uart = True
 
         try:
-            self._open_serial(self.baud, timeout)
-            if self._should_negotiate_baud():
-                self.negotiate_uart_baud(timeout=timeout)
+            if not probed_uart:
+                self._open_serial(self.baud, timeout)
+                if self._should_negotiate_baud():
+                    self.negotiate_uart_baud(timeout=timeout)
             self._log_transport()
             # Drain any in-progress dump (e.g. radar triggered while no software was running).
             # Opening the port unblocks the radar's UART TX, so we read until silence.
