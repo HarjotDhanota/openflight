@@ -22,7 +22,13 @@ from __future__ import annotations
 
 import logging
 
-from openflight import collision_model, kiosk_extensions, server
+# model_metrics adds these models' metrics to the shot-metric catalogue on import
+from openflight import (  # noqa: F401  pylint: disable=unused-import
+    collision_model,
+    kiosk_extensions,
+    model_metrics,
+    server,
+)
 from openflight.flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
 from openflight.horizontal_frame import MIXED
 from openflight.launch_monitor import (

@@ -1,12 +1,18 @@
 """Every golf metric of one shot, each with its label, source, range, reason and frame.
 
-TrackMan's metrics plus ours, in one fixed list (``METRICS``). ``from_record``
+TrackMan's metrics plus ours, in one ordered catalogue (``METRICS``). ``from_record``
 turns one shot record (``Shot.to_dict()`` or a logged ``shot_detected`` entry)
-into one record per metric, so the kiosk, the tester page, the session log, the
-session review and the pipeline check all read the same values under the same
-labels. It reads the producers' own outputs (E1 ``club_delivery``, E2
-``collision_model``, E3 full speeds, E4 ``flight``) and the shot's measured
-fields; it never computes a metric itself.
+into one record per metric, so the kiosk, the session log and every reader of
+it read the same values under the same labels. It reads the producers' own
+outputs and the shot's measured fields; it never computes a metric itself.
+
+The catalogue starts with the metrics every unit measures (ball and club speed,
+launch, spin, smash, ball distance, carry, club path and attack angle). A model
+module adds its own metrics in their places (``register_metrics``) and may bring
+a metric's builder (``replace_builder``); the modules declared under the
+``openflight.shot_metrics`` entry point are loaded the first time the catalogue
+is read (``model_metrics``: the full speeds, the collision model's and the arc's
+club metrics, the flight outputs).
 
 Every record has the same keys:
 
@@ -23,18 +29,22 @@ Every record has the same keys:
 - ``note``: a label the value carries (an uncalibrated azimuth, mixed frames);
 - ``normalized``: a flight metric's normalized-air value and range, else None.
 
-A metric that is not built yet (impact location, E5; dynamic lie, E6) is not
-measured, with the item that builds it as its reason.
+A metric that is not built yet is not measured, with the item that builds it as
+its reason (``MetricSpec.pending``).
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import logging
 import math
+import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
-from .collision_model import GYRO_REASON
 from .source_labels import is_calculated_source, is_model_geometry_source
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = "openflight.shot_metrics"
 VERSION = 1
@@ -54,9 +64,7 @@ SMASH_RADIAL_SOURCE = "radial ratio: OPS radial ball speed / OPS radial club spe
 SMASH_SOURCE = "ball speed / club speed (D37)"
 TABLE_CARRY_SOURCE = "ball-speed carry table (OPS-only estimate)"
 COMMITTED_CARRY_SOURCE = "the kiosk's committed carry (no flight record on this shot)"
-NO_COLLISION_MODEL = "collision model did not run on this shot"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
-NO_FULL_SPEED = "full speed not computed on this shot (not finalized)"
 # Where the club path / attack angle the collision model used came from
 # (shot_models.displayed_club_path, displayed_attack_angle).
 _PATH_SOURCES = {
@@ -79,79 +87,34 @@ class MetricSpec:
     pending_reason: Optional[str] = None
 
 
-IMPACT_LOCATION_PENDING = (
-    "pending E5: impact location is not built yet (needs the 6 mm / 8 mm lens and crop mode, "
-    "Tier 0 impact timing and the W9 head model)"
-)
-DYNAMIC_LIE_PENDING = (
-    "pending E6: dynamic lie is not built yet (the lower shaft line from the camera at impact, "
-    "after the lens and crop mode are chosen)"
-)
-
-METRICS: tuple[MetricSpec, ...] = (
+# The metrics every unit measures, in catalogue order. A model module adds its own
+# (``register_metrics``), each after the metric it follows, and may replace a builder.
+_CORE_METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("ball_speed", "Ball speed (radial)", BALL, "mph"),
-    MetricSpec("ball_speed_full", "Ball speed (full)", BALL, "mph"),
     MetricSpec("launch_vertical", "Vertical launch", BALL, "deg"),
     MetricSpec("launch_horizontal", "Horizontal launch", BALL, "deg"),
     MetricSpec("spin_rate", "Spin rate", BALL, "rpm"),
     MetricSpec("spin_axis", "Spin axis", BALL, "deg"),
-    MetricSpec("gyro", "Gyro", BALL, "deg"),
     MetricSpec("smash_factor", "Smash (radial)", BALL, ""),
-    MetricSpec("smash_factor_full", "Smash (full)", BALL, ""),
     MetricSpec("ball_range", "Ball distance", BALL, "m"),
     MetricSpec("carry", "Carry", FLIGHT, "yd"),
-    MetricSpec("carry_side", "Carry side", FLIGHT, "yd"),
-    MetricSpec("total", "Total", FLIGHT, "yd"),
-    MetricSpec("total_side", "Total side", FLIGHT, "yd"),
-    MetricSpec("apex", "Apex", FLIGHT, "yd"),
-    MetricSpec("landing_angle", "Landing angle", FLIGHT, "deg"),
-    MetricSpec("hang_time", "Hang time", FLIGHT, "s"),
-    MetricSpec("curve", "Curve", FLIGHT, "yd"),
     MetricSpec("club_speed", "Club speed (radial)", CLUB, "mph"),
-    MetricSpec("club_speed_full", "Club speed (full)", CLUB, "mph"),
     MetricSpec("club_path", "Club path", CLUB, "deg"),
     MetricSpec("attack_angle", "Attack angle", CLUB, "deg"),
-    MetricSpec("face_angle", "Face angle", CLUB, "deg"),
-    MetricSpec("face_to_path", "Face to path", CLUB, "deg"),
-    MetricSpec("dynamic_loft", "Dynamic loft", CLUB, "deg"),
-    MetricSpec("spin_loft", "Spin loft", CLUB, "deg"),
-    MetricSpec("d_plane_tilt", "D-plane tilt", CLUB, "deg"),
-    MetricSpec("swing_plane", "Swing plane", CLUB, "deg"),
-    MetricSpec("swing_direction", "Swing direction", CLUB, "deg"),
-    MetricSpec("low_point_distance", "Low point distance", CLUB, "mm"),
-    MetricSpec("low_point_height", "Low point height", CLUB, "mm"),
-    MetricSpec("low_point_side", "Low point side", CLUB, "mm"),
-    MetricSpec("impact_offset", "Impact offset", CLUB, "mm", "E5", IMPACT_LOCATION_PENDING),
-    MetricSpec("impact_height", "Impact height", CLUB, "mm", "E5", IMPACT_LOCATION_PENDING),
-    MetricSpec("dynamic_lie", "Dynamic lie", CLUB, "deg", "E6", DYNAMIC_LIE_PENDING),
 )
-METRIC_IDS = tuple(spec.id for spec in METRICS)
-SPECS = {spec.id: spec for spec in METRICS}
+# The entry-point group a model module registers its metrics under.
+ENTRY_POINT_GROUP = "openflight.shot_metrics"
 
-# Collision-model metric names (collision_model.evaluate) per metric id.
-_COLLISION = {
-    "face_angle": "face_angle",
-    "face_to_path": "face_to_path",
-    "dynamic_loft": "dynamic_loft",
-    "spin_loft": "spin_loft",
-    "d_plane_tilt": "d_plane_tilt",
-    "gyro": "gyro",
-}
 # Club-delivery metric names (club_arc.club_delivery_payload) per metric id.
 _DELIVERY = {
     "club_path": "club_path_deg",
     "attack_angle": "attack_angle_deg",
-    "swing_plane": "swing_plane_deg",
-    "swing_direction": "swing_direction_deg",
-    "low_point_distance": "low_point_distance_mm",
-    "low_point_height": "low_point_height_mm",
-    "low_point_side": "low_point_side_mm",
 }
-_FLIGHT_HORIZONTAL = ("carry_side", "total_side", "curve")
 
 
 def catalog() -> dict[str, Any]:
     """The metric list and label vocabulary, for pages that render records by id."""
+    _load_metric_modules()
     return {
         "schema": f"{SCHEMA}.catalog",
         "version": VERSION,
@@ -164,7 +127,7 @@ def catalog() -> dict[str, Any]:
                 "unit": spec.unit,
                 "pending": spec.pending,
             }
-            for spec in METRICS
+            for spec in _metrics
         ],
     }
 
@@ -203,7 +166,7 @@ def _record(  # pylint: disable=too-many-arguments
     normalized: Optional[dict] = None,
 ) -> dict[str, Any]:
     """One record; a missing or non-finite value is not measured, with a reason (D17)."""
-    spec = SPECS[metric_id]
+    spec = _specs[metric_id]
     number = _finite(value)
     if number is None:
         if value is not None:
@@ -266,13 +229,6 @@ def _ball_speed(shot):
         source=_sensor_source(shot, OPS_RADIAL_SOURCE),
         reason="no OPS243 ball speed",
     )
-
-
-def _full_speed(metric_id: str, entry: Any, value_key: str):
-    entry = _mapping(entry)
-    if not entry:
-        return _record(metric_id, None, None, reason=NO_FULL_SPEED)
-    return _from_producer(metric_id, entry, value_key=value_key)
 
 
 def _launch_status(source: Optional[str]) -> str:
@@ -362,17 +318,6 @@ def _spin_axis(shot):
     )
 
 
-def _collision(metric_id: str):
-    def build(shot):
-        entry = _collision_metric(shot, _COLLISION[metric_id])
-        if not entry:
-            reason = GYRO_REASON if metric_id == "gyro" else NO_COLLISION_MODEL
-            return _record(metric_id, None, None, reason=reason)
-        return _from_producer(metric_id, entry)
-
-    return build
-
-
 def _smash(shot):
     radial = shot.get("smash_factor_status") == "radial_ratio"
     club = _finite(shot.get("club_speed_mph"))
@@ -386,17 +331,6 @@ def _smash(shot):
 
 
 # ---------------------------------------------------------------- flight
-
-
-def _flight_entry(shot, block: str, name: str) -> Mapping[str, Any]:
-    flight = _mapping(shot.get("flight"))
-    return _mapping(_mapping(_mapping(flight.get(block)).get("metrics")).get(name))
-
-
-def _no_flight_reason(shot) -> str:
-    if _mock(shot):
-        return "flight model does not run on mock shots"
-    return "flight not computed on this shot (not finalized)"
 
 
 def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]]:
@@ -417,38 +351,10 @@ def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]
     return None, None, None
 
 
-def _flight(metric_id: str):
-    def build(shot):
-        entry = _flight_entry(shot, "as_measured", metric_id)
-        normalized_entry = _flight_entry(shot, "normalized", metric_id)
-        normalized = None
-        if _finite(normalized_entry.get("value")) is not None:
-            normalized = {
-                "value": float(normalized_entry["value"]),
-                "range": _range(normalized_entry.get("range")),
-                "status": normalized_entry.get("status"),
-            }
-        frame = (
-            _mapping(shot.get("flight")).get("frame") if metric_id in _FLIGHT_HORIZONTAL else None
-        )
-        if metric_id == "carry" and _finite(entry.get("value")) is None:
-            value, status, source = _reported_carry(shot)
-            if value is not None:
-                return _record("carry", value, status, source=source)
-        if not entry:
-            return _record(metric_id, None, None, reason=_no_flight_reason(shot))
-        return _record(
-            metric_id,
-            entry.get("value"),
-            entry.get("status"),
-            source=entry.get("source"),
-            range_=entry.get("range"),
-            reason=entry.get("reason"),
-            frame=frame,
-            normalized=normalized,
-        )
-
-    return build
+def _carry(shot):
+    """The carry the kiosk reports (a flight model's builder replaces this one)."""
+    value, status, source = _reported_carry(shot)
+    return _record("carry", value, status, source=source)
 
 
 # ---------------------------------------------------------------- club
@@ -506,23 +412,6 @@ def _path_or_attack(metric_id: str):
         if not shot.get("club_delivery"):
             reasons.append(NO_CLUB_DELIVERY)
         return _record(metric_id, None, None, reason="; ".join(dict.fromkeys(reasons)) or None)
-
-    return build
-
-
-def _delivery(metric_id: str):
-    def build(shot):
-        entry = _delivery_entry(shot, metric_id)
-        if not entry:
-            return _record(metric_id, None, None, reason=NO_CLUB_DELIVERY)
-        return _from_producer(metric_id, entry)
-
-    return build
-
-
-def _pending(metric_id: str):
-    def build(_shot):
-        return _record(metric_id, None, None, reason=SPECS[metric_id].pending_reason)
 
     return build
 
@@ -588,43 +477,108 @@ def _with_prior_label(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dic
     return metrics
 
 
-_BUILDERS: dict[str, Callable[[Mapping[str, Any]], dict]] = {
+Builder = Callable[[Mapping[str, Any]], dict]
+
+_lock = threading.RLock()
+_metrics: list[MetricSpec] = list(_CORE_METRICS)
+_specs: dict[str, MetricSpec] = {spec.id: spec for spec in _CORE_METRICS}
+_builders: dict[str, Builder] = {
     "ball_speed": _ball_speed,
-    "ball_range": _ball_range,
-    "ball_speed_full": lambda shot: _full_speed(
-        "ball_speed_full", shot.get("ball_speed_full"), "value_mph"
-    ),
     "launch_vertical": _launch_vertical,
     "launch_horizontal": _launch_horizontal,
     "spin_rate": _spin_rate,
     "spin_axis": _spin_axis,
-    "gyro": _collision("gyro"),
     "smash_factor": _smash,
-    "smash_factor_full": lambda shot: _full_speed(
-        "smash_factor_full", shot.get("smash_factor_full"), "value"
-    ),
-    **{name: _flight(name) for name in ("carry", "carry_side", "total", "total_side")},
-    **{name: _flight(name) for name in ("apex", "landing_angle", "hang_time", "curve")},
+    "ball_range": _ball_range,
+    "carry": _carry,
     "club_speed": _club_speed,
-    "club_speed_full": lambda shot: _full_speed(
-        "club_speed_full", shot.get("club_speed_full"), "value_mph"
-    ),
     "club_path": _path_or_attack("club_path"),
     "attack_angle": _path_or_attack("attack_angle"),
-    **{name: _collision(name) for name in ("face_angle", "face_to_path", "dynamic_loft")},
-    **{name: _collision(name) for name in ("spin_loft", "d_plane_tilt")},
-    **{name: _delivery(name) for name in ("swing_plane", "swing_direction")},
-    **{name: _delivery(name) for name in ("low_point_distance", "low_point_height")},
-    "low_point_side": _delivery("low_point_side"),
-    **{name: _pending(name) for name in ("impact_offset", "impact_height", "dynamic_lie")},
 }
-assert tuple(sorted(_BUILDERS)) == tuple(sorted(METRIC_IDS)), "every metric needs a builder"
+_modules_loaded = False
+
+
+def register_metrics(metrics: Sequence[tuple[MetricSpec, Builder]], *, after: str) -> None:
+    """Add a model's metrics to the catalogue, in order, right after ``after``.
+
+    A metric already in the catalogue is left as it is.
+    """
+    with _lock:
+        position = [spec.id for spec in _metrics].index(after) + 1
+        for spec, builder in metrics:
+            if spec.id in _specs:
+                continue
+            _metrics.insert(position, spec)
+            _specs[spec.id] = spec
+            _builders[spec.id] = builder
+            position += 1
+
+
+def replace_builder(metric_id: str, builder: Builder) -> None:
+    """Give a catalogue metric the builder a model module brings (carry, say)."""
+    with _lock:
+        if metric_id not in _specs:
+            raise KeyError(metric_id)
+        _builders[metric_id] = builder
+
+
+def _load_metric_modules() -> None:
+    """Import every model module declared under ``ENTRY_POINT_GROUP``, once.
+
+    A module that fails to import is logged and skipped: the catalogue then has
+    the metrics every unit measures, and the others are not reported.
+    """
+    global _modules_loaded  # pylint: disable=global-statement
+    if _modules_loaded:
+        return
+    with _lock:
+        if _modules_loaded:
+            return
+        _modules_loaded = True
+        for entry_point in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP):
+            try:
+                entry_point.load()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.error("[METRICS] %s failed to load", entry_point.value, exc_info=True)
+
+
+def __getattr__(name: str):
+    """METRICS, METRIC_IDS and SPECS: the catalogue as it stands, model metrics included."""
+    if name in ("METRICS", "METRIC_IDS", "SPECS"):
+        _load_metric_modules()
+        with _lock:
+            if name == "METRICS":
+                return tuple(_metrics)
+            if name == "METRIC_IDS":
+                return tuple(spec.id for spec in _metrics)
+            return dict(_specs)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def metric_spec(metric_id: str) -> MetricSpec:
+    """One catalogue metric's spec."""
+    _load_metric_modules()
+    return _specs[metric_id]
+
+
+# The kit a model module builds its records with.
+build_record = _record
+producer_record = _from_producer
+as_mapping = _mapping
+finite_or_none = _finite
+value_range = _range
+is_mock = _mock
+reported_carry = _reported_carry
+collision_metric = _collision_metric
 
 
 def from_record(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Every metric of one shot record, in catalog order, built from its fields."""
+    _load_metric_modules()
     shot = _mapping(shot)
-    return _with_prior_label({spec.id: _BUILDERS[spec.id](shot) for spec in METRICS}, shot)
+    with _lock:
+        built = [(spec.id, _builders[spec.id]) for spec in _metrics]
+    return _with_prior_label({metric_id: build(shot) for metric_id, build in built}, shot)
 
 
 def records(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -633,11 +587,12 @@ def records(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     A logged record missing a metric (a log from before that metric existed) gets
     the rebuilt record for it.
     """
+    _load_metric_modules()
     shot = _mapping(shot)
     logged = _mapping(shot.get("metrics"))
     rebuilt = None
     result = {}
-    for metric_id in METRIC_IDS:
+    for metric_id in [spec.id for spec in _metrics]:
         entry = logged.get(metric_id)
         if isinstance(entry, Mapping):
             result[metric_id] = dict(entry)

@@ -79,6 +79,10 @@ shot_models = "openflight.shot_models:extension"
 tester = "openflight.tester_hooks:extension"
 research = "openflight.research_hooks:extension"
 
+# The shot models' metrics in the shot-metric catalogue (E1-E6), loaded on first use.
+[project.entry-points."openflight.shot_metrics"]
+shot_models = "openflight.model_metrics"
+
 [project.urls]
 Homepage = "https://github.com/open-flight/openflight"
 Repository = "https://github.com/open-flight/openflight"
