@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from .numeric import finite as _finite
 
@@ -31,6 +31,18 @@ MPH_TO_MPS = 0.44704
 M_TO_YD = 1.0 / 0.9144
 MIN_HOP_M = 0.01
 MAX_BOUNCES = 25
+
+HopFlight = Callable[[float, float, float], tuple[float, float, float, float]]
+"""(vx, vz, om) leaving the turf to (distance m, vx, vz, om) at the next touchdown.
+
+vx is along the landing heading, vz up (m/s); om is the spin about the horizontal
+axis, positive rolling forward (rad/s).
+"""
+
+
+def vacuum_hop(vx: float, vz: float, om: float) -> tuple[float, float, float, float]:
+    """A ballistic hop without air: it lands as it left, mirrored."""
+    return vx * 2.0 * vz / GRAVITY, vx, -vz, om
 
 
 @dataclass(frozen=True)
@@ -67,21 +79,34 @@ class TurfRollModel:
     rolling_resistance: float
     turf_drag_per_m: float
     calibration: Optional[RollCalibration] = None
+    aerodynamic_hops: bool = False
 
     def roll_yards(
-        self, landing_angle_deg: float, landing_speed_mph: float, backspin_rpm: float
+        self,
+        landing_angle_deg: float,
+        landing_speed_mph: float,
+        backspin_rpm: float,
+        fly_hop: Optional[HopFlight] = None,
     ) -> Optional[float]:
         """Signed distance (yd) from landing to rest along the landing heading, or None.
 
         None for a non-finite input or a landing angle outside the fitted range.
-        Negative when backspin pulls the ball back past its landing point.
+        Negative when backspin pulls the ball back past its landing point. A model
+        with ``aerodynamic_hops`` flies each hop with ``fly_hop`` (the flight
+        model's, ``ballistics.hop_flight``); otherwise the hops are vacuum arcs.
         """
+        if self.aerodynamic_hops and fly_hop is None:
+            raise ValueError(f"{self.version} flies its hops through the air: pass a hop flight")
         if not all(_finite(x) for x in (landing_angle_deg, landing_speed_mph, backspin_rpm)):
             return None
         low, high = self.landing_angle_range_deg
         if not low <= landing_angle_deg <= high:
             return None
-        return _rest_distance_m(self, landing_speed_mph, landing_angle_deg, backspin_rpm) * M_TO_YD
+        hop = fly_hop if self.aerodynamic_hops else vacuum_hop
+        return (
+            _rest_distance_m(self, landing_speed_mph, landing_angle_deg, backspin_rpm, hop)
+            * M_TO_YD
+        )
 
 
 def _impact(m: TurfRollModel, vx: float, vy: float, om: float) -> tuple[float, float, float]:
@@ -112,7 +137,7 @@ def _impact(m: TurfRollModel, vx: float, vy: float, om: float) -> tuple[float, f
 
 
 def _rest_distance_m(
-    m: TurfRollModel, speed_mph: float, angle_deg: float, spin_rpm: float
+    m: TurfRollModel, speed_mph: float, angle_deg: float, spin_rpm: float, hop: HopFlight
 ) -> float:
     a = math.radians(angle_deg)
     speed = speed_mph * MPH_TO_MPS
@@ -123,8 +148,8 @@ def _rest_distance_m(
         vx, up, om = _impact(m, vx, vy, om)
         if up * up / (2.0 * GRAVITY) < MIN_HOP_M:
             break
-        x += vx * 2.0 * up / GRAVITY
-        vy = -up
+        dx, vx, vy, om = hop(vx, up, om)
+        x += dx
     slip = vx - BALL_RADIUS_M * om
     t_slide = abs(slip) / (3.5 * m.sliding_friction * GRAVITY)
     x += vx * t_slide - 0.5 * m.sliding_friction * GRAVITY * math.copysign(t_slide**2, slip)

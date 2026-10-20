@@ -8,6 +8,7 @@ the known answers below are the model's own outputs, pinned against drift.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -72,3 +73,74 @@ def test_the_model_is_a_frozen_record_of_its_constants():
     with pytest.raises(AttributeError):
         TURF_ROLL_V1.friction = 0.5  # type: ignore[misc]
     assert bounce_roll.ROLL_MODELS["turf-roll-v1"] is TURF_ROLL_V1
+
+
+# --- hops through the air ---
+
+
+def _airborne(model: TurfRollModel = TURF_ROLL_V1) -> TurfRollModel:
+    return dataclasses.replace(model, aerodynamic_hops=True)
+
+
+def test_the_first_model_flies_its_hops_in_a_vacuum():
+    assert TURF_ROLL_V1.aerodynamic_hops is False
+    hop = bounce_roll.vacuum_hop(6.0, 3.0, -50.0)
+    assert hop == pytest.approx((6.0 * 2.0 * 3.0 / bounce_roll.GRAVITY, 6.0, -3.0, -50.0))
+
+
+def test_an_airborne_model_needs_a_hop_flight():
+    with pytest.raises(ValueError, match="hop flight"):
+        _airborne().roll_yards(40.0, 50.0, 3000.0)
+
+
+def test_a_hop_flight_is_used_for_every_hop():
+    calls = []
+
+    def recording(vx, vz, om):
+        calls.append((vx, vz, om))
+        return bounce_roll.vacuum_hop(vx, vz, om)
+
+    airborne = _airborne().roll_yards(38.0, 65.0, 2400.0, fly_hop=recording)
+    assert calls and all(vz > 0.0 for _, vz, _ in calls)
+    assert airborne == pytest.approx(TURF_ROLL_V1.roll_yards(38.0, 65.0, 2400.0), abs=1e-9)
+
+
+def test_without_backspin_a_hop_through_air_lands_shorter_than_in_a_vacuum():
+    from openflight.ballistics import hop_flight
+
+    fly = hop_flight()
+    for om in (0.0, 300.0):
+        dx, vx, vz, _ = fly(12.0, 4.0, om)
+        assert 0.0 < dx < bounce_roll.vacuum_hop(12.0, 4.0, om)[0]
+        assert 0.0 < vx < 12.0 and vz < 0.0
+
+
+def test_backspin_carries_a_hop_further_than_topspin():
+    from openflight.ballistics import hop_flight
+
+    fly = hop_flight()
+    assert fly(12.0, 4.0, -600.0)[0] > fly(12.0, 4.0, 600.0)[0]
+
+
+def test_the_spin_out_of_a_bounce_decays_through_the_hop_and_keeps_its_sense():
+    from openflight.ballistics import hop_flight
+
+    fly = hop_flight()
+    for om in (-400.0, 400.0):
+        landing_om = fly(12.0, 4.0, om)[3]
+        assert 0.0 < landing_om / om < 1.0
+
+
+def test_without_spin_thinner_air_lets_a_hop_fly_further():
+    from openflight.ballistics import hop_flight
+
+    thin, thick = hop_flight(air_density=1.0), hop_flight(air_density=1.3)
+    assert thin(12.0, 4.0, 0.0)[0] > thick(12.0, 4.0, 0.0)[0]
+
+
+def test_air_drag_on_the_hops_shortens_the_roll_of_a_fast_landing():
+    from openflight.ballistics import hop_flight
+
+    vacuum = TURF_ROLL_V1.roll_yards(38.0, 65.0, 2400.0)
+    airborne = _airborne().roll_yards(38.0, 65.0, 2400.0, fly_hop=hop_flight())
+    assert airborne < vacuum
