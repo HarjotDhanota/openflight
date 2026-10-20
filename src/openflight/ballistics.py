@@ -388,6 +388,9 @@ GRAVITY = 9.81
 # 500 Hz integration. RK4 error is O(dt⁵) so this is effectively exact for
 # the timescales involved; larger dt starts to visibly shorten long drives.
 DT_SECONDS = 0.002
+# A hop between bounces lasts a second or less: at 10 ms RK4 lands it within 2 mm of
+# the 2 ms step, at a fifth of the cost.
+HOP_DT_SECONDS = 0.01
 # Safety cap — real shots terminate in 5–9 s; anything longer implies the
 # solver went unstable or physical inputs are pathological.
 MAX_FLIGHT_SECONDS = 15.0
@@ -910,7 +913,7 @@ def _trajectory(
 def hop_flight(
     air_density: float = AIR_DENSITY_STD,
     aero: Optional[AeroModel] = None,
-    dt: float = DT_SECONDS,
+    dt: float = HOP_DT_SECONDS,
 ) -> HopFlight:
     """A bounce_roll.HopFlight that flies each hop through ``simulate``.
 

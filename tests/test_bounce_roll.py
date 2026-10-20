@@ -144,3 +144,13 @@ def test_air_drag_on_the_hops_shortens_the_roll_of_a_fast_landing():
     vacuum = TURF_ROLL_V1.roll_yards(38.0, 65.0, 2400.0)
     airborne = _airborne().roll_yards(38.0, 65.0, 2400.0, fly_hop=hop_flight())
     assert airborne < vacuum
+
+
+def test_the_hop_step_is_within_a_centimetre_of_the_flight_step():
+    from openflight.ballistics import DT_SECONDS, HOP_DT_SECONDS, hop_flight
+
+    assert HOP_DT_SECONDS > DT_SECONDS
+    for om in (-500.0, 0.0, 300.0):
+        coarse = hop_flight()(14.0, 5.0, om)
+        fine = hop_flight(dt=DT_SECONDS)(14.0, 5.0, om)
+        assert coarse[0] == pytest.approx(fine[0], abs=0.01)
