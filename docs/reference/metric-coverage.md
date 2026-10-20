@@ -40,9 +40,12 @@ Details and sources are in `docs/how-it-works/collision-model.md`.
 
 | Metric | Built from | Label |
 |---|---|---|
-| Face angle, dynamic loft | With an accepted measured spin and the full ball speed: the rigid-body relation, ball speed · sin θ = (I / m r) · spin with I / m r = 7.50 mm (Cross & Nathan 2007; Penner 2001). Otherwise the D-plane inversion with the Wood et al. 2018 weights, noted "rigid-body relation not used" with the reason. The model's own spin never feeds them | `calculated`, or the weakest input's label |
+| Face angle, dynamic loft | With an accepted measured spin and the full ball speed: the rigid-body relation, ball speed · sin θ = (I / m r) · spin with I / m r = 7.50 mm (Cross & Nathan 2007; Penner 2001). Otherwise the inversion of the fitted launch model (`collision_forward`), noted "rigid-body relation not used" with the reason; without a vertical launch or attack the face alone from the Wood et al. 2018 horizontal ratio. The model's own spin never feeds them | `calculated`, or the weakest input's label |
 | Spin loft, face to path, D-plane tilt | The exact 3-D definitions (`metric_definitions`) on that face and loft | the same |
-| Spin axis | A measured axis wins. Irons and wedges: tan(axis) = tan(tilt) · (0.81385 + 0.00342 · dynamic loft), a clean-room fit to the owner's TM4 irons. Drivers, woods, hybrids: the D-plane tilt; a gear term only with a measured impact offset (none yet, noted) | `calculated (model: …)` for irons |
+| Spin axis | A measured axis wins. Irons and wedges: tan(axis) = tan(tilt) · (0.81385 + 0.00342 · dynamic loft), a clean-room fit to the owner's irons. Drivers, woods, hybrids: the fitted collision model's centre-strike axis. A gear term from the fitted model only with a measured impact location (none yet, noted) | `calculated (model: …)` for irons |
+| Spin rate (calculated) | The fitted forward collision model (`collision_forward`), centre strike unless an impact location is measured | `calculated`, or the weakest input's label |
+| Spin index, smash index | Measured spin over the expected spin, and ball speed (full) over the expected ball speed, in percent; the spin index needs a measured spin | `calculated`, or the weakest input's label |
+| Low point distance | The arc's geometry plus a per-club offset for the 7-iron, driver and PW, fitted by the maintainer to the owner's export session; other clubs the geometry alone, noted | the arc's label |
 | Curve | TrackMan's definition: the landing point's distance from the launch-direction line, with carry as the straight-line distance (`metric_definitions.curve`). Matches the owner's export to 1e-9 ft | the flight's label |
 
 ## Places
@@ -100,6 +103,8 @@ launch, spin and spin axis, and model geometry only with
 | Face to path | `face_to_path` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Dynamic loft | `dynamic_loft` | ✓ | ✓ | Club | key, all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Spin loft | `spin_loft` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
+| Spin index | `spin_index` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
+| Smash index | `smash_index` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | D-plane tilt | `d_plane_tilt` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Swing plane | `swing_plane` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Swing direction | `swing_direction` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |

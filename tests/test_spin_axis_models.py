@@ -1,8 +1,8 @@
 """Spin axis: the iron model on the D-plane tilt, and the fitted model for the rest.
 
 Irons: tan(spin axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), the
-clean-room fit to the owner's TM4 irons (16 shots, 0.014 deg). Drivers, woods and
-hybrids take the fitted collision model's centre axis; a gear term enters only with a
+clean-room fit to the owner's TM4 irons (16 shots, 0.014 deg). Drivers and woods keep
+the fitted collision model's centre axis (hybrids too); a gear term enters only with a
 measured impact location.
 """
 

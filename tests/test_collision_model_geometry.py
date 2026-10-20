@@ -291,9 +291,9 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
 
 # ---- the shot's spin and spin axis from model-geometry inputs ------------------------
 
-PENNER_MODEL_GEOMETRY = "fitted collision model; club inputs model geometry (D39)"
+SPIN_MODEL_GEOMETRY = "fitted collision model; club inputs model geometry (D39)"
 AXIS_FROM_THE_ARC = (
-    "model geometry (model: D-plane tilt x TM4 iron factor, fitted launch-model inversion; "
+    f"model geometry ({cm.AXIS_BASIS_IRON}, {cm.FACE_BASIS_INVERSION}; "
     "club path from the arc prior, attack angle from the arc prior)"
 )
 
@@ -315,13 +315,13 @@ def test_a_model_geometry_spin_becomes_the_shot_s_spin_under_its_own_label():
     assert shot.spin_rpm_collision is not None
     assert shot.spin_rpm == shot.spin_rpm_collision
     assert shot.spin_source == "model_geometry"
-    assert shot.spin_method == PENNER_MODEL_GEOMETRY
+    assert shot.spin_method == SPIN_MODEL_GEOMETRY
     assert shot.spin_confidence is None
     assert shot.spin_rpm_measured == 900.0
     assert shot.spin_method_measured == "ops_fft"
     payload = server_module.shot_to_dict(shot)
     assert payload["spin_source"] == "model_geometry"
-    assert payload["spin_method"] == PENNER_MODEL_GEOMETRY
+    assert payload["spin_method"] == SPIN_MODEL_GEOMETRY
 
 
 def test_a_model_geometry_spin_axis_becomes_the_shot_s_axis_naming_its_inputs():
@@ -345,7 +345,7 @@ def test_the_axis_source_names_only_the_inputs_that_were_model_geometry():
     _attach(shot)
 
     assert shot.spin_axis_source == (
-        "model geometry (model: D-plane tilt x TM4 iron factor, fitted launch-model inversion; "
+        f"model geometry ({cm.AXIS_BASIS_IRON}, {cm.FACE_BASIS_INVERSION}; "
         "club path from the arc prior)"
     )
 

@@ -1,9 +1,9 @@
 """Collision model for the club-face, spin and index metrics (Part E, item E2).
 
-Every number here comes from a published source, read from the paper itself, from
-the named clean-room fit to the owner's TM4 export, or from the fitted forward model
-(``collision_forward``, constants fitted by the maintainer); the derivations and
-units are in ``docs/how-it-works/collision-model.md``. Each shot
+Every number here comes from a published source, read from the paper itself, or
+from the named clean-room fit to the owner's TM4 export; the derivations and units
+are in ``docs/how-it-works/collision-model.md``. The forward model
+(``collision_forward``) has constants fitted by the maintainer. Each shot
 uses only its own inputs; a model constant is fixed, a shot's input never is. A
 missing input makes every metric built on it "not measured", with the reason.
 
