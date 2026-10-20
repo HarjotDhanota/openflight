@@ -302,7 +302,7 @@ def test_a_spin_loft_beyond_the_rolling_regime_is_not_calculated():
 
 
 def test_without_an_impact_location_the_spin_axis_is_the_d_plane_tilt_with_the_note():
-    result = _evaluate()
+    result = _evaluate(club=ClubType.DRIVER, launch_v=13.0, attack=2.0)
 
     axis = result.metrics["spin_axis"]
     assert axis.value == pytest.approx(result.metrics["d_plane_tilt"].value)

@@ -89,21 +89,31 @@ def test_the_payload_carries_the_collision_values():
         "spin_axis_deg",
     ):
         assert payload[field] is not None, field
-    assert payload["spin_axis_source"] == "calculated (D-plane tilt, Wood et al. 2018 weights)"
-    assert payload["collision_model"]["metrics"]["spin_axis"]["note"] == (
-        "no impact location: gear effect not applied"
-    )
+    assert payload["spin_axis_source"] == cm.SPIN_AXIS_SOURCE_IRON
+    assert payload["collision_model"]["metrics"]["spin_axis"]["source"] == cm.SOURCE_AXIS_IRON
 
 
-def test_the_spin_axis_is_the_d_plane_tilt_not_launch_minus_path():
+def test_an_iron_spin_axis_is_the_iron_model_on_the_d_plane_tilt():
     shot = _delivered_shot()
 
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_axis_deg == pytest.approx(_expected()["d_plane_tilt"].value, abs=0.05)
+    expected = _expected()
+    iron = cm.iron_spin_axis(expected["d_plane_tilt"], expected["dynamic_loft"])
+    assert shot.spin_axis_deg == pytest.approx(iron.value, abs=0.05)
     assert shot.spin_axis_deg != pytest.approx(1.0 - (-2.0))
-    assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
+    assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_IRON
     assert shot.spin_axis_frame == "target_line"
+
+
+def test_a_driver_spin_axis_is_the_d_plane_tilt():
+    shot = _delivered_shot(club=ClubType.DRIVER)
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert shot.spin_axis_deg == pytest.approx(shot.d_plane_tilt_deg, abs=0.05)
+    assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_TILT
+    assert shot.collision_model["metrics"]["spin_axis"]["note"] == cm.NOTE_NO_GEAR
 
 
 def test_without_a_measured_spin_the_calculated_spin_is_used_under_its_label():

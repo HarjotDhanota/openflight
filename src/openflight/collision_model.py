@@ -1,13 +1,27 @@
 """Published collision model for the club-face and spin metrics (Part E, item E2).
 
-Every number here comes from a published source, read from the paper itself; the
-derivations and units are in ``docs/how-it-works/collision-model.md``. Each shot
+Every number here comes from a published source, read from the paper itself, or
+from the named clean-room fit to the owner's TM4 export; the derivations and units
+are in ``docs/how-it-works/collision-model.md``. Each shot
 uses only its own inputs; a model constant is fixed, a shot's input never is. A
 missing input makes every metric built on it "not measured", with the reason.
 
-1. **Face angle and dynamic loft: D-plane inversion with published weights.**
-   Wood, Henrikson & Broadie, "The Influence of Face Angle and Club Path on the
-   Resultant Launch Angle of a Golf Ball", *Proceedings* 2(6):249 (2018),
+1. **Face angle and dynamic loft.** With a measured spin, from the ball and the
+   club's direction by the rigid-body relation (``rigid_body_face``): the face
+   normal lies in the plane of the ball's launch direction and the club's
+   direction, beyond the ball from the club, at an angle theta from the ball with
+
+       ball speed x sin(theta) = c x spin,   c = I / (m r)
+
+   the tangential-impulse identity m v_t r = I omega (Cross & Nathan 2007, below;
+   Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.352 m r^2, r = 21.335 mm), fitted
+   in a clean-room study of the owner's TM4 export. The collision model's own
+   spin is built from face and loft, so it never feeds them: without a measured
+   spin, face and loft come from the D-plane inversion below, and say why.
+
+   **D-plane inversion with published weights.** Wood, Henrikson & Broadie, "The
+   Influence of Face Angle and Club Path on the Resultant Launch Angle of a Golf
+   Ball", *Proceedings* 2(6):249 (2018),
    doi:10.3390/proceedings2060249, define the launch ratios per plane:
 
        horizontal ratio = (launch direction - club path) / (face angle - club path)
@@ -49,12 +63,14 @@ missing input makes every metric built on it "not measured", with the reason.
    ball-face values Henrikson et al. 2020 measured (0.35 surlyn, 0.40 urethane),
    is outside the model and is not calculated.
 
-4. **Spin axis:** the D-plane tilt (TrackMan's public definition: "the expected
-   spin axis disregarding any gear effect"). With a measured impact location (E5)
-   a gear sidespin from R. Cross & A. M. Nathan, "Experimental study of the gear
-   effect in ball collisions", *Am. J. Phys.* 75, 658-664 (2007),
-   doi:10.1119/1.2713788, Eq. (6), tilts it. Without one, the tilt alone, with
-   the note "no impact location: gear effect not applied".
+4. **Spin axis.** Irons and wedges: tan(axis) = tan(D-plane tilt) x (0.81385 +
+   0.00342 x dynamic loft), the clean-room fit to the owner's TM4 irons.
+   Drivers, woods and hybrids: the D-plane tilt (TrackMan's public definition:
+   "the expected spin axis disregarding any gear effect"). With a measured
+   impact offset a gear sidespin from R. Cross & A. M. Nathan, "Experimental
+   study of the gear effect in ball collisions", *Am. J. Phys.* 75, 658-664
+   (2007), doi:10.1119/1.2713788, Eq. (6), tilts it. Without one, the tilt
+   alone, with the note "no impact location: gear effect not applied".
 
 5. **Gyro:** Penner's collision is planar: the spin vector is normal to the D
    plane, so gyro is zero by construction, not a result. It is "not measured".
@@ -67,7 +83,7 @@ which it then inherits. Horizontal outputs carry their inputs' frame
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Optional
 
 from . import metric_definitions
@@ -86,7 +102,7 @@ from .source_labels import (  # noqa: F401  (the predicates are re-exported)
     is_model_geometry_source,
 )
 
-MODEL_VERSION = "e2-2026-10-12"
+MODEL_VERSION = "e2-2026-10-20"
 
 # Input labels (source_labels: measured, calculated, model geometry, estimated) and
 # output statuses.
@@ -102,12 +118,31 @@ SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
 NOTE_NO_GEAR = "no impact location: gear effect not applied"
+NOTE_GEAR_NO_HEAD_MODEL = "measured impact location but no head model: gear effect not applied"
+SOURCE_RIGID_BODY = (
+    "rigid-body relation: ball speed x sin(ball to face normal) = I/(m r) x spin, "
+    "I/(m r) = 7.50 mm (Cross & Nathan 2007; Penner 2001)"
+)
+SOURCE_AXIS_IRON = (
+    "D-plane tilt x (0.81385 + 0.00342 x dynamic loft), clean-room fit to the owner's "
+    "TM4 irons (16 shots, 0.014 deg)"
+)
+FACE_METHOD_RIGID_BODY = "rigid_body"
+FACE_METHOD_INVERSION = "d_plane_inversion"
+NOTE_RIGID_BODY_NOT_USED = "rigid-body relation not used"
+CIRCULAR_SPIN_REASON = (
+    "spin was calculated from face and loft (Penner 2001): using it for them would be circular"
+)
 # Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
 # both start with "calculated"). An axis built on a model-geometry input (D39) starts
 # with "model geometry" instead and names those inputs.
-AXIS_BASIS_TILT = "D-plane tilt, Wood et al. 2018 weights"
+FACE_BASIS_INVERSION = "Wood et al. 2018 weights"
+FACE_BASIS_RIGID_BODY = "rigid-body face"
+AXIS_BASIS_TILT = f"D-plane tilt, {FACE_BASIS_INVERSION}"
+AXIS_BASIS_IRON = "model: D-plane tilt x TM4 iron factor"
 AXIS_BASIS_GEAR = "D-plane + gear effect, Cross & Nathan 2007"
 SPIN_AXIS_SOURCE_TILT = f"calculated ({AXIS_BASIS_TILT})"
+SPIN_AXIS_SOURCE_IRON = f"calculated ({AXIS_BASIS_IRON}, {FACE_BASIS_INVERSION})"
 SPIN_AXIS_SOURCE_GEAR = f"calculated ({AXIS_BASIS_GEAR})"
 # Shot.spin_method for the Penner spin, by the labels of the inputs it was built on.
 SPIN_METHOD_PENNER = "Penner 2001"
@@ -146,6 +181,28 @@ PENNER_INERTIA_FACTOR = 0.4  # I = (2/5) m r^2, uniform solid sphere
 # Henrikson et al. 2020, Sec. 2.2: 0.40 urethane, 0.35 surlyn (sled on a grooved,
 # blasted iron-type plate). The lower one bounds the rolling regime.
 FRICTION_MU_DRY_MIN = 0.35
+
+RIGID_BODY_BALL_RADIUS_M = 0.021335
+RIGID_BODY_C_M = 7.5005e-3
+
+IRON_AXIS_FACTOR_BASE = 0.81385
+IRON_AXIS_FACTOR_PER_LOFT_DEG = 0.00342
+_IRON_AXIS_CLUBS = frozenset(
+    {
+        ClubType.IRON_2,
+        ClubType.IRON_3,
+        ClubType.IRON_4,
+        ClubType.IRON_5,
+        ClubType.IRON_6,
+        ClubType.IRON_7,
+        ClubType.IRON_8,
+        ClubType.IRON_9,
+        ClubType.PW,
+        ClubType.GW,
+        ClubType.SW,
+        ClubType.LW,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -313,6 +370,92 @@ def invert_d_plane(
     return face, loft
 
 
+# ---- rigid-body face from the ball ---------------------------------------------------
+
+
+def spin_built_from_face(spin: Input) -> bool:
+    """Whether a spin input is the collision model's own (Penner) spin, built from face."""
+    return spin.label != LABEL_MEASURED and SPIN_METHOD_PENNER in (spin.source or "")
+
+
+def rigid_body_face(
+    *,
+    ball_speed_mph: Input,
+    spin_rpm: Input,
+    launch_horizontal: Input,
+    launch_vertical: Input,
+    club_path: Input,
+    attack_angle: Input,
+) -> tuple[Metric, Metric]:
+    """(face angle, dynamic loft) from the ball and the club's direction.
+
+    The face normal is ``cos(theta) b + sin(theta) u``: b the ball's launch direction,
+    u the unit vector in the plane of b and the club direction v, normal to b and
+    pointing away from v, and ``sin(theta) = c spin / ball speed``.
+    """
+    inputs = {
+        "ball speed": ball_speed_mph,
+        "spin rate": spin_rpm,
+        "launch direction": launch_horizontal,
+        "vertical launch": launch_vertical,
+        "club path": club_path,
+        "attack angle": attack_angle,
+    }
+
+    def refused(reason: str) -> tuple[Metric, Metric]:
+        return (
+            _not_measured("deg", reason, SOURCE_RIGID_BODY),
+            _not_measured("deg", reason, SOURCE_RIGID_BODY),
+        )
+
+    for name, value in inputs.items():
+        if not value.present:
+            return refused(value.missing_reason(name))
+    if spin_built_from_face(spin_rpm):
+        return refused(CIRCULAR_SPIN_REASON)
+    if ball_speed_mph.value <= 0.0:
+        return refused("ball speed not positive")
+    if spin_rpm.value < 0.0:
+        return refused("spin rate negative")
+    b = metric_definitions.ball_direction(launch_vertical.value, launch_horizontal.value)
+    v = metric_definitions.club_direction(attack_angle.value, club_path.value)
+    if b is None or v is None:
+        return refused("launch or club direction beyond vertical")
+    sin_theta = (
+        RIGID_BODY_C_M * (spin_rpm.value / RAD_S_TO_RPM) / (ball_speed_mph.value * MPH_TO_M_S)
+    )
+    if sin_theta > 1.0:
+        return refused("spin too high for the ball speed: no face satisfies the relation")
+    along = math.fsum(p * q for p, q in zip(v, b))
+    u = [p * along - q for p, q in zip(b, v)]
+    length = math.sqrt(math.fsum(p * p for p in u))
+    if length < 1e-12 and sin_theta > 0.0:
+        return refused("ball launched along the club's direction: no D plane")
+    u = [p / length for p in u] if length >= 1e-12 else [0.0, 0.0, 0.0]
+    cos_theta = math.sqrt(1.0 - sin_theta * sin_theta)
+    normal = [cos_theta * p + sin_theta * q for p, q in zip(b, u)]
+    frame = combined_frame(club_path.frame, launch_horizontal.frame)
+    status = _status_from(*(value.label for value in inputs.values()))
+    reason = _estimated_reason(*inputs.values())
+    face = Metric(
+        value=math.degrees(math.atan2(normal[1], normal[0])),
+        status=status,
+        source=SOURCE_RIGID_BODY,
+        unit="deg",
+        frame=frame,
+        note=_frame_note(frame),
+        reason=reason,
+    )
+    loft = Metric(
+        value=math.degrees(math.asin(max(-1.0, min(1.0, normal[2])))),
+        status=status,
+        source=SOURCE_RIGID_BODY,
+        unit="deg",
+        reason=reason,
+    )
+    return face, loft
+
+
 # ---- Penner 2001 ---------------------------------------------------------------------
 
 
@@ -419,11 +562,40 @@ def cross_nathan_gear_spin_rad_s(
     return -(1.0 + restitution) * cg_depth_m * impact_offset_m * normal_speed_m_s / denominator
 
 
+def uses_iron_axis_model(club: Optional[ClubType]) -> bool:
+    """Irons and wedges take the iron spin-axis model; other clubs the D-plane tilt."""
+    return club in _IRON_AXIS_CLUBS
+
+
+def iron_spin_axis(d_plane_tilt: Metric, dynamic_loft: Metric) -> Metric:
+    """Iron spin axis (deg): tan(axis) = tan(tilt) x (0.81385 + 0.00342 x dynamic loft)."""
+    if not d_plane_tilt.present:
+        return _not_measured(
+            "deg", f"D-plane tilt not measured ({d_plane_tilt.reason})", SOURCE_AXIS_IRON
+        )
+    if not dynamic_loft.present:
+        return _not_measured(
+            "deg", f"dynamic loft not measured ({dynamic_loft.reason})", SOURCE_AXIS_IRON
+        )
+    factor = IRON_AXIS_FACTOR_BASE + IRON_AXIS_FACTOR_PER_LOFT_DEG * dynamic_loft.value
+    value = math.degrees(math.atan(math.tan(math.radians(d_plane_tilt.value)) * factor))
+    return Metric(
+        value=value,
+        status=_status_from(d_plane_tilt.status, dynamic_loft.status),
+        source=SOURCE_AXIS_IRON,
+        unit="deg",
+        frame=d_plane_tilt.frame,
+        note=_frame_note(d_plane_tilt.frame),
+        reason=_estimated_reason(d_plane_tilt, dynamic_loft),
+    )
+
+
 def spin_axis(
     d_plane_tilt: Metric,
     spin_rate: Optional[Metric] = None,
     *,
     gear_sidespin_rpm: Optional[float] = None,
+    no_gear_note: str = NOTE_NO_GEAR,
 ) -> Metric:
     """Spin axis (deg, + = curves right): the D-plane tilt, plus gear effect when given.
 
@@ -439,7 +611,7 @@ def spin_axis(
         )
     frame_note = _frame_note(d_plane_tilt.frame)
     if gear_sidespin_rpm is None:
-        note = NOTE_NO_GEAR if frame_note is None else f"{NOTE_NO_GEAR}; {frame_note}"
+        note = no_gear_note if frame_note is None else f"{no_gear_note}; {frame_note}"
         return Metric(
             value=d_plane_tilt.value,
             status=_status_from(d_plane_tilt.status),
@@ -471,6 +643,9 @@ _INPUT_NAMES = {
     "launch_horizontal": "launch direction",
     "launch_vertical": "vertical launch",
     "club_speed_mph": "club speed",
+    "ball_speed_mph": "ball speed",
+    "spin_rpm": "spin rate",
+    "impact_offset_mm": "impact offset",
 }
 # E1's arc sources (club_arc.ARC_PRIOR_SOURCE, ARC_FIT_SOURCE), in words
 _SOURCE_NAMES = {
@@ -497,17 +672,25 @@ def model_geometry_inputs(inputs: dict) -> list[str]:
     return named
 
 
-def shot_spin_axis_source(axis: Metric, inputs: Optional[dict] = None) -> str:
+def _axis_basis(axis: Metric, face_method: Optional[str]) -> str:
+    if SOURCE_GEAR in (axis.source or ""):
+        return AXIS_BASIS_GEAR
+    face = FACE_BASIS_RIGID_BODY if face_method == FACE_METHOD_RIGID_BODY else FACE_BASIS_INVERSION
+    tilt = AXIS_BASIS_IRON if axis.source == SOURCE_AXIS_IRON else "D-plane tilt"
+    return f"{tilt}, {face}"
+
+
+def shot_spin_axis_source(
+    axis: Metric, inputs: Optional[dict] = None, face_method: Optional[str] = None
+) -> str:
     """The Shot.spin_axis_source string for a calculated or model-geometry spin axis."""
-    gear = SOURCE_GEAR in (axis.source or "")
+    basis = _axis_basis(axis, face_method)
     if axis.status == STATUS_ESTIMATED:
-        basis = AXIS_BASIS_GEAR if gear else AXIS_BASIS_TILT
         return f"{SPIN_AXIS_ESTIMATED_PREFIX} ({basis}; {axis.reason or 'an input estimated'})"
     if axis.status == STATUS_MODEL_GEOMETRY:
-        basis = AXIS_BASIS_GEAR if gear else AXIS_BASIS_TILT
         named = ", ".join(model_geometry_inputs(inputs or {})) or "inputs unnamed"
         return f"{SPIN_AXIS_MODEL_GEOMETRY_PREFIX} ({basis}; {named})"
-    return SPIN_AXIS_SOURCE_GEAR if gear else SPIN_AXIS_SOURCE_TILT
+    return f"calculated ({basis})"
 
 
 def shot_spin_method(status: str, input_labels) -> str:
@@ -543,10 +726,12 @@ class CollisionResult:
     metrics: dict[str, Metric]
     weights: Optional[LaunchWeights]
     inputs: dict[str, Input] = field(default_factory=dict)
+    face_method: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
             "model_version": MODEL_VERSION,
+            "face_method": self.face_method,
             "weights": asdict(self.weights) if self.weights is not None else None,
             "inputs": {name: _input_record(name, value) for name, value in self.inputs.items()},
             "metrics": {name: metric.to_dict() for name, metric in self.metrics.items()},
@@ -599,6 +784,47 @@ def _dynamic_loft(weights: Optional[LaunchWeights], attack: Input, launch_v: Inp
     )
 
 
+def _with_note(metric: Metric, note: str) -> Metric:
+    if not metric.present:
+        return metric
+    return replace(metric, note=f"{note}; {metric.note}" if metric.note else note)
+
+
+def _face_and_loft(
+    weights: Optional[LaunchWeights],
+    inputs: dict[str, Input],
+) -> tuple[Metric, Metric, Optional[str], Optional[str]]:
+    """(face, loft, frame, method): rigid-body with a measured spin, else the inversion."""
+    path, attack = inputs["club_path"], inputs["attack_angle"]
+    launch_h, launch_v = inputs["launch_horizontal"], inputs["launch_vertical"]
+    spin = inputs["spin_rpm"]
+    if spin.present and spin.label == LABEL_MEASURED:
+        face, loft = rigid_body_face(
+            ball_speed_mph=inputs["ball_speed_mph"],
+            spin_rpm=spin,
+            launch_horizontal=launch_h,
+            launch_vertical=launch_v,
+            club_path=path,
+            attack_angle=attack,
+        )
+        if face.present and loft.present:
+            return face, loft, face.frame, FACE_METHOD_RIGID_BODY
+        why = face.reason
+    elif spin.present:
+        why = (
+            CIRCULAR_SPIN_REASON
+            if spin_built_from_face(spin)
+            else f"spin is {spin.label}, not measured"
+        )
+    else:
+        why = spin.missing_reason("spin rate")
+    face, frame = _face_angle(weights, path, launch_h)
+    loft = _dynamic_loft(weights, attack, launch_v)
+    note = f"{NOTE_RIGID_BODY_NOT_USED}: {why}"
+    method = FACE_METHOD_INVERSION if face.present or loft.present else None
+    return _with_note(face, note), _with_note(loft, note), frame, method
+
+
 def evaluate(
     *,
     club: ClubType,
@@ -607,12 +833,39 @@ def evaluate(
     launch_horizontal: Input,
     launch_vertical: Input,
     club_speed_mph: Input,
+    ball_speed_mph: Optional[Input] = None,
+    spin_rpm: Optional[Input] = None,
+    impact_offset_mm: Optional[Input] = None,
     gear_sidespin_rpm: Optional[float] = None,
 ) -> CollisionResult:
-    """Every E2 metric for one shot, from that shot's inputs."""
+    """Every E2 metric for one shot, from that shot's inputs.
+
+    ``spin_rpm`` and ``ball_speed_mph`` (the full speed) feed the rigid-body face when
+    the spin is measured. ``gear_sidespin_rpm`` tilts a driver's or wood's axis only
+    with a measured ``impact_offset_mm``.
+    """
     weights = weights_for_club(club)
-    face, frame = _face_angle(weights, club_path, launch_horizontal)
-    loft = _dynamic_loft(weights, attack_angle, launch_vertical)
+    inputs = {
+        "club_path": club_path,
+        "attack_angle": attack_angle,
+        "launch_horizontal": launch_horizontal,
+        "launch_vertical": launch_vertical,
+        "club_speed_mph": club_speed_mph,
+    }
+    optional = {
+        "ball_speed_mph": ball_speed_mph,
+        "spin_rpm": spin_rpm,
+        "impact_offset_mm": impact_offset_mm,
+    }
+    inputs.update({name: value for name, value in optional.items() if value is not None})
+    face, loft, frame, face_method = _face_and_loft(
+        weights,
+        {
+            **inputs,
+            "ball_speed_mph": ball_speed_mph or Input(None, reason="ball speed not given"),
+            "spin_rpm": spin_rpm or Input(None, reason="spin rate not measured"),
+        },
+    )
 
     if face.present and club_path.present:
         face_to_path = Metric(
@@ -660,7 +913,23 @@ def evaluate(
         tilt = _not_measured("deg", reason, SOURCE_D37)
 
     spin = calculated_spin(club_speed=club_speed_mph, spin_loft=spin_loft)
-    axis = spin_axis(tilt, spin, gear_sidespin_rpm=gear_sidespin_rpm)
+    if uses_iron_axis_model(club):
+        axis = iron_spin_axis(tilt, loft)
+    else:
+        offset_measured = (
+            impact_offset_mm is not None
+            and impact_offset_mm.present
+            and impact_offset_mm.label == LABEL_MEASURED
+        )
+        gear_spin = spin
+        if spin_rpm is not None and spin_rpm.present and spin_rpm.label == LABEL_MEASURED:
+            gear_spin = Metric(spin_rpm.value, _status_from(spin_rpm.label), spin_rpm.source, "rpm")
+        axis = spin_axis(
+            tilt,
+            gear_spin,
+            gear_sidespin_rpm=gear_sidespin_rpm if offset_measured else None,
+            no_gear_note=NOTE_GEAR_NO_HEAD_MODEL if offset_measured else NOTE_NO_GEAR,
+        )
     gyro = _not_measured("deg", GYRO_REASON, SOURCE_PENNER)
 
     return CollisionResult(
@@ -675,11 +944,6 @@ def evaluate(
             "gyro": gyro,
         },
         weights=weights,
-        inputs={
-            "club_path": club_path,
-            "attack_angle": attack_angle,
-            "launch_horizontal": launch_horizontal,
-            "launch_vertical": launch_vertical,
-            "club_speed_mph": club_speed_mph,
-        },
+        inputs=inputs,
+        face_method=face_method,
     )

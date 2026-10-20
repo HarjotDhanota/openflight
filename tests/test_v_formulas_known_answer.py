@@ -98,11 +98,15 @@ def truth_launch(club, speed, path, attack, face, loft):
     launch_v = attack + w_v * (loft - attack)
     theta = spin_loft_deg(loft, face, attack, path)
     ball_speed, spin = penner(speed, theta)
+    tilt = d_plane_tilt_deg(loft, face, attack, path)
+    # irons: the clean-room TM4 iron fit on the D-plane tilt
+    iron_axis = math.degrees(math.atan(math.tan(math.radians(tilt)) * (0.81385 + 0.00342 * loft)))
     return {
         "launch_h": launch_h,
         "launch_v": launch_v,
         "spin_loft": theta,
-        "tilt": d_plane_tilt_deg(loft, face, attack, path),
+        "tilt": tilt,
+        "axis": iron_axis if club is ClubType.IRON_7 else tilt,
         "ball_speed": ball_speed,
         "spin": spin,
         "face_to_path": face - path,
@@ -350,7 +354,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     assert shot.spin_rpm == pytest.approx(truth["spin"], abs=1.0)
     assert shot.spin_source == collision_label
     assert metrics["spin_rate"]["status"] == collision_label
-    assert shot.spin_axis_deg == pytest.approx(truth["tilt"], abs=0.06)
+    assert shot.spin_axis_deg == pytest.approx(truth["axis"], abs=0.06)
     assert metrics["spin_axis"]["status"] == collision_label
     assert metrics["gyro"]["status"] == "not_measured"
 
@@ -376,7 +380,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
                 truth["launch_v"],
                 truth["launch_h"],
                 truth["spin"],
-                truth["tilt"],
+                truth["axis"],
                 "calculated",
             ),
             air_density=density,

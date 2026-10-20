@@ -220,6 +220,16 @@ class TestDPlaneTilt:
 # --- curve ------------------------------------------------------------------
 
 
+class TestBallDirection:
+    def test_it_is_the_spherical_unit_vector_of_the_launch(self):
+        x, y, z = md.ball_direction(30.0, 90.0)
+        assert (x, y, z) == pytest.approx((0.0, math.cos(math.radians(30.0)), 0.5))
+
+    def test_none_and_beyond_vertical_give_none(self):
+        assert md.ball_direction(None, 0.0) is None
+        assert md.ball_direction(91.0, 0.0) is None
+
+
 class TestCurve:
     def test_the_owner_export_curve_is_reproduced(self):
         """TM4's Curve (ft) from its flat carry and carry side (yd) and launch direction."""

@@ -293,7 +293,7 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
 
 PENNER_MODEL_GEOMETRY = "Penner 2001; club inputs model geometry (D39)"
 AXIS_FROM_THE_ARC = (
-    "model geometry (D-plane tilt, Wood et al. 2018 weights; "
+    "model geometry (model: D-plane tilt x TM4 iron factor, Wood et al. 2018 weights; "
     "club path from the arc prior, attack angle from the arc prior)"
 )
 
@@ -345,7 +345,8 @@ def test_the_axis_source_names_only_the_inputs_that_were_model_geometry():
     _attach(shot)
 
     assert shot.spin_axis_source == (
-        "model geometry (D-plane tilt, Wood et al. 2018 weights; club path from the arc prior)"
+        "model geometry (model: D-plane tilt x TM4 iron factor, Wood et al. 2018 weights; "
+        "club path from the arc prior)"
     )
 
 
@@ -391,7 +392,7 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
 
     assert shot.spin_source == "calculated"
     assert shot.spin_method == "Penner 2001; club inputs measured"
-    assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
+    assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_IRON
     assert shot.spin_rpm_measured == 900.0
     assert shot.spin_method_measured == "ops_fft"
 

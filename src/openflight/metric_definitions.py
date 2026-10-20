@@ -123,6 +123,18 @@ def club_direction(
     return _unit_from_angles(attack_angle_deg, club_path_deg)
 
 
+def ball_direction(
+    launch_vertical_deg: Optional[float], launch_horizontal_deg: Optional[float]
+) -> Optional[Vector]:
+    """Unit vector of the ball's launch: elevation = vertical launch, azimuth = launch
+    direction, the same spherical construction as ``club_direction``.
+
+    Returns None for a missing angle or an elevation beyond +-90 deg; NaN
+    components for a non-finite angle.
+    """
+    return club_direction(launch_vertical_deg, launch_horizontal_deg)
+
+
 def face_normal(
     dynamic_loft_deg: Optional[float], face_angle_deg: Optional[float]
 ) -> Optional[Vector]:
