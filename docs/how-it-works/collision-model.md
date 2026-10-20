@@ -50,7 +50,8 @@ pilot) and D38 (fitted physics, published sources first, labelled
 
   `Shot.collision_model["metrics"][name]` holds each value with its `status`,
   `source`, `unit`, `frame`, `reason` and `note`. `collision_model["inputs"]`
-  holds every input with its label and source.
+  holds every input it used with its label and source (the spin and full ball
+  speed only when the rigid-body relation used them).
 
 ## Inputs
 
