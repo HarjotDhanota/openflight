@@ -19,7 +19,7 @@ from openflight.launch_monitor import (
     SPIN_CONFIDENCE_HIGH,
     Shot,
 )
-from openflight.pi_trace import _finite
+from openflight.numeric import finite as _finite
 from openflight.sim.types import (
     IncompleteShotError,
     PlayerState,

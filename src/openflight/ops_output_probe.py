@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
 
 from openflight.clock_mapping import BUFFER_SEGMENTS, SEGMENT_SAMPLES, association_window_ns
-from openflight.pi_trace import _finite
+from openflight.numeric import finite as _finite
 from openflight.pi_trace_summary import OPS_ALLOCATION_MS
 
 UART_BITS_PER_BYTE = 10  # 8N1 framing: start bit, 8 data bits, stop bit

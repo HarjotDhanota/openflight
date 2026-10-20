@@ -11,7 +11,7 @@ from typing import Callable
 
 from openflight import pi_trace
 from openflight.clock_mapping import QUALIFIED_BACKENDS, EdgeObservation
-from openflight.pi_trace import _finite
+from openflight.numeric import finite as _finite
 
 
 @functools.lru_cache(maxsize=None)

@@ -22,7 +22,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from . import pi_trace
-from .pi_trace import _finite
+from .numeric import finite as _finite
 
 logger = logging.getLogger(__name__)
 

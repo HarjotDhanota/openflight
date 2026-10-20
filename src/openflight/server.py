@@ -64,6 +64,7 @@ from .launch_monitor import (
     Shot,
     summarize_shots,
 )
+from .numeric import finite as _finite
 from .ops243 import (
     UART_BAUD_COMMANDS,
     Direction,
@@ -71,7 +72,6 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
-from .pi_trace import _finite
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates

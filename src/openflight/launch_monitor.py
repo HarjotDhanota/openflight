@@ -14,8 +14,8 @@ from typing import List, Optional
 from . import metric_definitions, shot_metrics
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
+from .numeric import finite as _finite
 from .ops243 import SpeedReading
-from .pi_trace import _finite
 
 # Spin confidence threshold for "high" quality — used across modules.
 # Measured spin is trusted for physics simulation only above this level.

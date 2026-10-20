@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional, Sequence
 
-from openflight.pi_trace import _finite
+from openflight.numeric import finite as _finite
 
 SEGMENT_SAMPLES = 128
 BUFFER_SEGMENTS = 32  # 4,096 samples; S#n moves the trigger split among them (AN-027-A p.2)

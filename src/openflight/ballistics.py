@@ -40,7 +40,7 @@ from typing import Literal, Optional
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
-from .pi_trace import _finite
+from .numeric import finite as _finite
 
 MPH_TO_MPS = 0.44704
 MPS_TO_MPH = 1.0 / MPH_TO_MPS

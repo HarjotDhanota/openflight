@@ -64,7 +64,7 @@ from .collision_model import (
     model_geometry_inputs,
 )
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
-from .pi_trace import _finite
+from .numeric import finite as _finite
 
 FLIGHT_METRICS = (
     "carry",

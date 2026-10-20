@@ -13,8 +13,6 @@ import functools
 import itertools
 import json
 import logging
-import math
-import numbers
 import os
 import queue
 import threading
@@ -23,6 +21,8 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from openflight.numeric import finite as _finite  # noqa: F401  re-exported for trace readers
 
 logger = logging.getLogger("openflight.pi_trace")
 
@@ -71,20 +71,6 @@ class BracketedPair:
     def wall_minus_mono_bounds_ns(self) -> tuple[int, int]:
         """(low, high) of wall − monotonic at this instant."""
         return self.realtime_ns - self.mono_after_ns, self.realtime_ns - self.mono_before_ns
-
-
-def _finite(value: Any) -> bool:
-    """True for a finite real number, numpy scalars included (np.float32, np.int64).
-
-    bool (and numpy's bool_, which is not a numbers.Real), None, strings, complex,
-    NaN and inf are not, nor is an int too large for a float (it would overflow).
-    """
-    if not isinstance(value, numbers.Real) or isinstance(value, bool):
-        return False
-    try:
-        return math.isfinite(float(value))
-    except OverflowError:
-        return False
 
 
 def read_cpu_temp_c(path: Path = THERMAL_ZONE) -> Optional[float]:

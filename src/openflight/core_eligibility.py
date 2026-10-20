@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .pi_trace import _finite
+from .numeric import finite as _finite
 
 CONTRACT = "pre_w13_v1"
 MEASURED_LAUNCH_SOURCES = frozenset({"radar", "camera"})
