@@ -491,12 +491,11 @@ def test_a_decision_serialises_with_its_inputs():
 
 
 def test_the_ball_gate_is_the_one_every_other_judge_uses():
-    from openflight.camera import static_exposure, study_ladder
+    from openflight.camera import light_judging
 
-    assert sx.BALL_GATE_DN == study_ladder.BALL_MIN_SIGNAL_DN
-    assert sx.BALL_GATE_DN == static_exposure.TARGET_BALL_SIGNAL_DN / 2.0
-    assert sx.BALL_CLIPPED_MAX_PCT == study_ladder.CLIPPED_MAX_PCT
-    assert sx.BLACK_LEVEL_DN == static_exposure.SENSOR_BLACK_LEVEL_DN
+    assert sx.BALL_GATE_DN == light_judging.BALL_MIN_SIGNAL_DN
+    assert sx.BALL_CLIPPED_MAX_PCT == light_judging.CLIPPED_MAX_PCT
+    assert sx.BLACK_LEVEL_DN == light_judging.SENSOR_BLACK_LEVEL_DN
 
 
 def test_kiosk_would_use_in_today_s_room():

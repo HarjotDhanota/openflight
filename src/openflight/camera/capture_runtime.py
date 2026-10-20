@@ -21,11 +21,10 @@ from typing import Any, Callable, Literal, Mapping
 import numpy as np
 
 from openflight import gate_timing
-from openflight.camera import study_ladder, swing_exposure as sx
+from openflight.camera import light_judging, swing_exposure as sx
 from openflight.camera.auto_exposure import ExposureObservation, measure_exposure
+from openflight.camera.light_judging import SENSOR_BLACK_LEVEL_DN, capture_analysis_eligibility
 from openflight.camera.optical_quality import controls_match, within_armed_profile
-from openflight.camera.static_exposure import SENSOR_BLACK_LEVEL_DN
-from openflight.camera.study_ladder import capture_analysis_eligibility
 from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
@@ -1398,7 +1397,7 @@ class CameraCaptureRuntime:
         ball = self.settings.setup_ball
         if not ball:
             return None, "no ball box or setup ball to find the resting ball by"
-        found = study_ladder.ball_light(np.asarray(images), SENSOR_BLACK_LEVEL_DN, dict(ball))
+        found = light_judging.ball_light(np.asarray(images), SENSOR_BLACK_LEVEL_DN, dict(ball))
         if found is None:
             return None, "no ball at the setup's spot"
         reading = sx.read_ball(

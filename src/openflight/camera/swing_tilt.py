@@ -30,7 +30,7 @@ import numpy as np
 
 SCHEMA = "openflight.camera_swing_tilt_pair.v1"
 METHOD = "median_of_swing_pairs"
-# the resting frames: before the club reaches the box (study_ladder.RESTING_FRAMES)
+# the resting frames: before the club reaches the box (light_judging.RESTING_FRAMES)
 RESTING_FRAMES = 10
 # frames just before the trigger may already hold the club
 TRIGGER_MARGIN_FRAMES = 2
