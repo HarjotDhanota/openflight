@@ -470,8 +470,31 @@ flight-fit-v1):
 | Export shots: driver carry yd / apex ft (8 shots) | 1.20 / 0.80 | 2.71 / 2.76 |
 
 flight-fit-v2 is far ahead across the launch grid, but behind flight-fit-v1 on
-carry and apex on the export shots, mostly on the low-spin drives. So it is not
-active: `flight-fit-v1` stays the default until a model is ahead on both.
+carry and apex on the export shots, mostly on the low-spin drives.
+
+**A fair comparison.** The export rows above are in-sample for flight-fit-v1 and
+held out for flight-fit-v2. Re-scored so that every shot is predicted by a model
+that never saw it, for both forms: Robinante's 36 shots by a model fitted without
+his session, the owner's 16 irons and wedges by one fitted without the owner's
+session, and each of the owner's 8 drives by one fitted without that drive
+(Robinante's session has no driver). RMSE, carry yd / apex ft:
+
+| Held out | flight-fit-v1 recipe (exports) | flight-fit-v2 (grid) | v2 form, exports | v2 form, grid + exports, drives weighted |
+| --- | --- | --- | --- | --- |
+| Driver (8) | **1.46 / 0.92** | 2.71 / 2.76 | 1.64 / 1.11 | 1.35 / 0.83 |
+| Mid iron (25) | 0.33 / 0.62 | 0.40 / 1.32 | 0.40 / 0.58 | 0.52 / 1.36 |
+| Wedge (27) | 0.98 / 0.58 | 0.66 / 0.97 | 0.32 / 0.47 | 0.70 / 1.01 |
+| All (60) | 0.87 / 0.65 | 1.12 / 1.48 | 0.69 / 0.64 | 0.76 / 1.15 |
+| Landing angle, all (°) | 0.69 | 0.48 | 0.35 | 0.39 |
+
+flight-fit-v1's lead on the drives is not only its in-sample advantage: held out,
+it is still ahead of flight-fit-v2. Refitting the v2 form to the exports alone
+wins overall but not on the drives; refitting it to the grid and the exports with
+the drives weighted 500 times a grid launch wins on the drives but leaves the irons' apex
+0.7 ft high, because the form cannot follow the low-spin drives and the rest of
+the grid at once. No candidate is ahead on carry and apex both overall and on
+drives without losing more than 0.3 yd carry or 0.5 ft apex on irons or wedges,
+so `flight-fit-v1` stays active.
 
 ### Spin decay
 

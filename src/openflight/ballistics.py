@@ -264,6 +264,9 @@ FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
         ("Robinante-fit on owner held-out apex RMSE ft", 15.34),
         ("Robinante-fit on owner held-out landing_angle RMSE deg", 4.55),
         ("Robinante-fit on owner held-out hang_time RMSE s", 0.57),
+        # each of the owner's 8 drives flown by a fit to the other 59 shots
+        ("owner drives leave-one-out held-out carry RMSE yd", 1.46),
+        ("owner drives leave-one-out held-out apex RMSE ft", 0.92),
         # ferguson-2022 on the same 60 shots, for comparison
         ("ferguson-2022 carry RMSE yd", 1.73),
         ("ferguson-2022 apex RMSE ft", 2.09),
@@ -290,8 +293,8 @@ FLIGHT_FIT_V1 = AeroModel(
 # form motivated by the published dependence of a sphere's force coefficients on
 # whether the flow around it accelerates (Odar & Hamilton 1964); a falling ball
 # speeds up, so it is keyed to the descent angle, whose sine is the share of gravity
-# along the path. Not active: on the export shots flight-fit-v1 was fitted to it is
-# behind on carry and apex (see its metrics).
+# along the path. Not active: with every export shot held out from both models it
+# is still behind flight-fit-v1 on the drives' carry and apex (see their metrics).
 FLIGHT_FIT_V2_FORM = (
     FERGUSON_FORM + "; times exp(-k_d s^n) on Cd and exp(-k_l s^n) on Cl while descending, "
     "s = sin(descent angle), after Odar & Hamilton 1964, Forces on a sphere accelerating in "
