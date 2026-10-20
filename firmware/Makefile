@@ -9,6 +9,7 @@ XWR68XX_RADARSS_IMAGE_BIN ?= $(TI_ROOT)/sdk/mmwave_sdk_03_06_02_00-LTS/firmware/
 FIRMWARE_DIR ?= iwr6843
 REPO_ROOT := $(abspath $(CURDIR)/..)
 DOCKER_IMAGE ?= openflight-iwr-sdk:latest
+GATE_INPUT ?= 0
 RELEASE_DIR ?= releases
 # The default never names a release: releases/ holds the rollback image
 # (l3_dump_configurable_capture_20260818.bin). Name a release explicitly, e.g.
@@ -160,7 +161,7 @@ check-release-target:
 
 build-native: check-release-target check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
-	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
+	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin GATE_INPUT="$(GATE_INPUT)" L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
 	mkdir -p "$(RELEASE_DIR)"
 	cp "$(FIRMWARE_DIR)/l3_dump.bin" "$(RELEASE_DIR)/$(RELEASE_NAME)"
 	sha256sum "$(RELEASE_DIR)/$(RELEASE_NAME)"
@@ -235,7 +236,7 @@ docker-build: check-release-target
 	docker run --rm --platform linux/amd64 \
 		-v "$(REPO_ROOT):/work" -w /work \
 		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)" \
-		OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)"
+		OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)" GATE_INPUT="$(GATE_INPUT)"
 
 
 docker-shell:

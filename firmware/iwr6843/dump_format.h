@@ -53,6 +53,12 @@
 #define L3_DUMP_VERSION_CAPTURE_TEMPERATURE 7
 #define L3_DUMP_VERSION_EVIDENCE_TEMPERATURE 8
 #define L3_DUMP_VERSION_EVIDENCE 9
+#define L3_DUMP_VERSION_GATE_TEMPERATURE 12
+#define L3_DUMP_VERSION_GATE 13
+/* v12/v13 insert l3_gate_evidence_t after ILE1, before the frame records. */
+#define L3_GATE_EVIDENCE_MAGIC "ILG1"
+#define L3_GATE_FLAG_LATCHED 0x01U
+#define L3_GATE_FLAG_FROZEN 0x02U
 #define L3_CAPTURE_EVIDENCE_MAGIC "ILE1"
 #define L3_DUMP_TRAILER_MAGIC "ILT1"
 #define L3_FRAME_FLAG_ASSOCIATED 0x01U
@@ -115,6 +121,17 @@ typedef struct __attribute__((packed)) {
     uint8_t  flags;               /* L3_CAPTURE_FLAG_* */
     uint8_t  reserved;
 } l3_capture_evidence_t;          /* sizeof == 40 */
+
+typedef struct __attribute__((packed)) {
+    char magic[4];
+    uint32_t arm_seq;
+    uint32_t edge_seq;
+    uint32_t edge_tick;
+    uint32_t frame_seq;
+    uint32_t freeze_tick;
+    uint32_t ignored_edges;
+    uint32_t flags;
+} l3_gate_evidence_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t seq;                 /* frame-start count of the armed frame, or L3_FRAME_NO_STAMP */

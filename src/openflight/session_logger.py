@@ -622,6 +622,7 @@ class SessionLogger:
         launch_range: Optional[Dict[str, Any]] = None,
         ball_range: Optional[Dict[str, Any]] = None,
         gate_event: Optional[Dict[str, Any]] = None,
+        hardware_gate_evidence: Optional[Dict[str, int]] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence.
 
@@ -654,6 +655,7 @@ class SessionLogger:
                 "launch_range": launch_range,
                 "ball_range": ball_range,
                 "gate_event": gate_event,
+                "hardware_gate_evidence": hardware_gate_evidence,
                 "runtime_config_sha256": runtime_config_sha256,
             },
         )

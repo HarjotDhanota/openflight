@@ -25,6 +25,9 @@ include $(MMWAVE_SDK_INSTALL_PATH)/ti/common/mmwave_sdk.mak
 #   make L3_VARIANT_DEFS="--define=LOOPS=16 --define=RING_FRAMES=12"     # B
 #   make L3_VARIANT_DEFS="--define=N_SAMPLES=64 --define=RING_FRAMES=12" # C
 R4F_CFLAGS += $(L3_VARIANT_DEFS)
+ifeq ($(GATE_INPUT),1)
+R4F_CFLAGS += --define=L3_GATE_INPUT=1
+endif
 
 APPNAME = l3_dump
 
@@ -63,6 +66,11 @@ L3_LOC_LIBS = $(R4F_COMMON_LOC_LIB)                                        \
         -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/mailbox/lib                \
         -i$(MMWAVE_SDK_INSTALL_PATH)/ti/control/mmwavelink/lib             \
         -i$(MMWAVE_SDK_INSTALL_PATH)/ti/control/mmwave/lib
+
+ifeq ($(GATE_INPUT),1)
+L3_STD_LIBS += -llibgpio_$(MMWAVE_SDK_DEVICE_TYPE).$(R4F_LIB_EXT)
+L3_LOC_LIBS += -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/gpio/lib
+endif
 
 CFG        = mss.cfg
 CONFIGPKG  = mss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)

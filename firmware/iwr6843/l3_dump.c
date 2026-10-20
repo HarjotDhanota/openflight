@@ -50,6 +50,14 @@
 
 #include "dump_format.h"
 #include "l3_evidence.h"
+#ifdef L3_GATE_INPUT
+#include <ti/drivers/gpio/gpio.h>
+#include <ti/sysbios/knl/Clock.h>
+#include "l3_gate.h"
+#if !defined(CONFIGURABLE_CAPTURE) || !defined(HYBRID_CADENCE_CAPTURE) || !defined(HWA_CHAINED_SNAPSHOT_RING)
+#error "L3_GATE_INPUT requires the configurable HWA evidence build"
+#endif
+#endif
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -406,6 +414,13 @@ static volatile uint32_t gHwaFreezeRequests;
 static volatile uint32_t gHwaFreezeCompletions;
 static volatile uint32_t gHwaFreezeTimeouts;
 static volatile uint32_t gHwaFreezeRestarts;
+static void l3_requestHwaPostFrames(void);
+#ifdef L3_GATE_INPUT
+static volatile l3_gate_state_t gGate;
+static uint8_t gGateEnabled;
+static uint8_t gGateConfigured;
+static uint32_t gGateClockTick;
+#endif
 #ifdef CONFIGURABLE_CAPTURE
 static volatile uint32_t gPreFramesCaptured;
 static volatile uint32_t gPostFramesCaptured;
@@ -639,6 +654,79 @@ static void l3_sampleHeap(void)
     }
 }
 /* W4A-EVIDENCE-END */
+#ifdef L3_GATE_INPUT
+static void l3_gateCallback(uint32_t index)
+{
+    uint32_t tick = l3_ticks();
+    uintptr_t key = Hwi_disable();
+    (void)index;
+    if (l3_gateLatch(&gGate, tick, gNumFrame,
+                     gCaptureActive && !gHwaShutdownRequested && !gHwaFreezeRequested)) {
+        gGateClockTick = Clock_getTicks();
+        l3_requestHwaPostFrames();
+    }
+    Hwi_restore(key);
+}
+
+static void l3_gateBoundary(void)
+{
+    uintptr_t key = Hwi_disable();
+    l3_gateComplete(&gGate, l3_ticks());
+    Hwi_restore(key);
+}
+
+static void l3_gateBeginCapture(void)
+{
+    uintptr_t key;
+    if (!gGateEnabled) {
+        return;
+    }
+    GPIO_disableInt(SOC_XWR68XX_GPIO_28);
+    GPIO_clearInt(SOC_XWR68XX_GPIO_28);
+    while (Semaphore_pend(gHwaFreezeSemaphore, BIOS_NO_WAIT)) { }
+    key = Hwi_disable();
+    l3_gateArm(&gGate);
+    Hwi_restore(key);
+    GPIO_enableInt(SOC_XWR68XX_GPIO_28);
+}
+
+static void l3_gateEndCapture(void)
+{
+    uintptr_t key;
+    if (!gGateEnabled) {
+        return;
+    }
+    GPIO_disableInt(SOC_XWR68XX_GPIO_28);
+    key = Hwi_disable();
+    l3_gateDisarm(&gGate);
+    Hwi_restore(key);
+}
+
+static int32_t l3_cli_gateCfg(int32_t argc, char *argv[])
+{
+    if (argc != 2 || (strcmp(argv[1], "0") && strcmp(argv[1], "1")) ||
+        gCaptureActive || gHwaFreezeRequested || gGate.armed) {
+        CLI_write("Error: gateCfg 0|1 requires a stopped sensor\n");
+        return -1;
+    }
+    if (!strcmp(argv[1], "1") && !gGateConfigured) {
+        if (Pinmux_Set_OverrideCtrl(SOC_XWR68XX_PINP4_PADBB,
+                PINMUX_OUTEN_RETAIN_HW_CTRL, PINMUX_INPEN_RETAIN_HW_CTRL) < 0 ||
+            Pinmux_Set_FuncSel(SOC_XWR68XX_PINP4_PADBB,
+                SOC_XWR68XX_PINP4_PADBB_GPIO_28) < 0) {
+            CLI_write("Error: GATE pinmux failed\n");
+            return -1;
+        }
+        GPIO_setConfig(SOC_XWR68XX_GPIO_28,
+            GPIO_CFG_INPUT | GPIO_CFG_IN_INT_RISING | GPIO_CFG_IN_INT_LOW);
+        GPIO_setCallback(SOC_XWR68XX_GPIO_28, l3_gateCallback);
+        GPIO_disableInt(SOC_XWR68XX_GPIO_28);
+        gGateConfigured = 1U;
+    }
+    gGateEnabled = !strcmp(argv[1], "1");
+    return 0;
+}
+#endif
 #endif
 
 /* Config pulled from the CLI mmWave extension (kept off the stack -- large). */
@@ -1397,6 +1485,9 @@ static void l3_hwaMaybeQueueRearm(void)
     }
     Hwi_restore(key);
     if (freeze && gHwaFreezeSemaphore != NULL) {
+#ifdef L3_GATE_INPUT
+        l3_gateBoundary();
+#endif
         Semaphore_post(gHwaFreezeSemaphore);
     } else if (queue && gHwaRearmSemaphore != NULL) {
         Semaphore_post(gHwaRearmSemaphore);
@@ -2169,22 +2260,29 @@ static int32_t l3_freezeHwaAfterPostFrames(void)
     if (gHwaFreezeSemaphore == NULL) {
         return -1;
     }
+#ifdef L3_GATE_INPUT
+    if (gGateEnabled) {
+        if (!gGate.armed || !(gGate.evidence.flags & L3_GATE_FLAG_LATCHED)) {
+            CLI_write("Error: no latched GATE; serial fallback refused\n");
+            return -1;
+        }
+        if (!l3_gateFresh(Clock_getTicks() - gGateClockTick, Clock_tickPeriod)) {
+            CLI_write("Error: stale GATE; stop/start required\n");
+            return -1;
+        }
+        if (!(gGate.evidence.flags & L3_GATE_FLAG_FROZEN) &&
+            !Semaphore_pend(gHwaFreezeSemaphore, 250U)) {
+            gHwaFreezeTimeouts++;
+            return -1;
+        }
+        return (gGate.evidence.flags & L3_GATE_FLAG_FROZEN) ? 0 : -1;
+    }
+#endif
     while (Semaphore_pend(gHwaFreezeSemaphore, BIOS_NO_WAIT)) {
         /* Discard a stale completion before issuing a new request. */
     }
     key = Hwi_disable();
-    gHwaFreezeRequested = 1U;
-    gHwaFreezeRequestFrame = gRingFrame;
-#ifdef CONFIGURABLE_CAPTURE
-    gPostCaptureStarted = 0U;
-    gPostFramesCaptured = 0U;
-    gPostFramesObserved = 0U;
-    gActiveFrameShouldKeep = 1U;
-    gHwaFreezeTargetFrame = 0U;
-#else
-    gHwaFreezeTargetFrame = gRingFrame + HWA_POST_TRIGGER_FRAMES;
-#endif
-    gHwaFreezeRequests++;
+    l3_requestHwaPostFrames();
     Hwi_restore(key);
     /* Allow the configured post-trigger frames plus scheduling/stop margin. */
     if (!Semaphore_pend(gHwaFreezeSemaphore, 250U)) {
@@ -2211,6 +2309,10 @@ static int32_t l3_freezeHwaForShutdown(void)
         /* Discard a stale completion before issuing a new request. */
     }
     key = Hwi_disable();
+    if (!gCaptureActive) {
+        Hwi_restore(key);
+        return 0;
+    }
     gHwaFreezeRequested = 0U;
     gHwaShutdownRequested = 1U;
     Hwi_restore(key);
@@ -2248,13 +2350,37 @@ static int32_t l3_finishCaptureStop(void)
     (void)EDMA_disableChannel(gEdmaHandle, L3_EDMA_CHANNEL, EDMA3_CHANNEL_TYPE_DMA);
 #endif
     gCaptureActive = 0U;
+#ifdef L3_GATE_INPUT
+    l3_gateEndCapture();
+#endif
     return 0;
+}
+
+/* Adapted 2026-10-19 from Cormac McGrath's freeze handshake; see docs/iwr6843/gate-input.md. */
+static void l3_requestHwaPostFrames(void)
+{
+    gHwaFreezeRequested = 1U;
+    gHwaFreezeRequestFrame = gRingFrame;
+#ifdef CONFIGURABLE_CAPTURE
+    gPostCaptureStarted = 0U;
+    gPostFramesCaptured = 0U;
+    gPostFramesObserved = 0U;
+    gActiveFrameShouldKeep = 1U;
+    gHwaFreezeTargetFrame = 0U;
+#else
+    gHwaFreezeTargetFrame = gRingFrame + HWA_POST_TRIGGER_FRAMES;
+#endif
+    gHwaFreezeRequests++;
 }
 
 /* Shot dumps preserve the configured post-impact movie before stopping. */
 static int32_t l3_stopCaptureAtBoundary(void)
 {
-    if (!gCaptureActive) {
+    if (!gCaptureActive
+#ifdef L3_GATE_INPUT
+        && !(gGateEnabled && gGate.armed && (gGate.evidence.flags & L3_GATE_FLAG_LATCHED))
+#endif
+    ) {
         return 0;
     }
 #ifdef HWA_CHAINED_SNAPSHOT_RING
@@ -2279,6 +2405,11 @@ static int32_t l3_stopCaptureAtBoundary(void)
 static int32_t l3_stopCaptureForShutdown(void)
 {
     if (!gCaptureActive) {
+#ifdef L3_GATE_INPUT
+        if (gGateEnabled && gGate.armed) {
+            return l3_finishCaptureStop();
+        }
+#endif
         return 0;
     }
 #ifdef HWA_CHAINED_SNAPSHOT_RING
@@ -2468,6 +2599,9 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #endif
 #endif
                 if (gHwaFreezeSemaphore != NULL) {
+#ifdef L3_GATE_INPUT
+                    l3_gateBoundary();
+#endif
                     Semaphore_post(gHwaFreezeSemaphore);
                 }
                 key = Hwi_disable();
@@ -2621,6 +2755,11 @@ static void l3_writeCaptureEvidence(uint32_t actualPre, uint32_t actualPost,
     evidence.flags = 0U;
 #endif
     UART_writePolling(gDataUart, (uint8_t *)&evidence, sizeof(evidence));
+#ifdef L3_GATE_INPUT
+    if (gGateEnabled) {
+        UART_writePolling(gDataUart, (uint8_t *)&gGate.evidence, sizeof(gGate.evidence));
+    }
+#endif
 }
 
 static void l3_writeFrameEvidence(uint32_t slot)
@@ -2829,7 +2968,11 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 #endif
     (void)argc; (void)argv;
 
-    if (!gCaptureActive) {
+    if (!gCaptureActive
+#ifdef L3_GATE_INPUT
+        && !(gGateEnabled && gGate.armed && (gGate.evidence.flags & L3_GATE_FLAG_LATCHED))
+#endif
+    ) {
         return -1;
     }
 #ifdef L3_CAPTURE_EVIDENCE
@@ -2881,6 +3024,12 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 #ifdef L3_CAPTURE_EVIDENCE
         h.version = (tempStatus == 0) ? L3_DUMP_VERSION_EVIDENCE_TEMPERATURE
                                       : L3_DUMP_VERSION_EVIDENCE;
+#ifdef L3_GATE_INPUT
+        if (gGateEnabled) {
+            h.version = (tempStatus == 0) ? L3_DUMP_VERSION_GATE_TEMPERATURE
+                                          : L3_DUMP_VERSION_GATE;
+        }
+#endif
         headerTick = l3_ticks();
 #endif
         UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));
@@ -3058,6 +3207,9 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         gCaptureActive = 0U;
         return -1;
     }
+#ifdef L3_GATE_INPUT
+    l3_gateBeginCapture();
+#endif
     if (dumpCancelled) {
         UART_writePolling(gDataUart, L3_DUMP_CANCEL_ACK, L3_DUMP_CANCEL_ACK_BYTES);
     }
@@ -3692,6 +3844,13 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     int32_t               errCode;
     (void)argc; (void)argv;
 
+#ifdef L3_GATE_INPUT
+    if (gGateEnabled && (gCaptureActive || gGate.armed)) {
+        CLI_write("Error: stop or read the current capture before sensorStart\n");
+        return -1;
+    }
+#endif
+
     if (!gSensorOpened) {
         /* Demo sends this before the first MMWave_open (board PA supply cfg);
          * values mirror the mmw demo's gRFLdoBypassCfg for this EVM class. */
@@ -3837,12 +3996,26 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
         CLI_write("Error: MMWave_start failed\n");
         return -1;
     }
+#ifdef L3_GATE_INPUT
+    l3_gateBeginCapture();
+#endif
     return 0;
 }
 
 static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
 {
     (void)argc; (void)argv;
+#ifdef L3_GATE_INPUT
+    if (gGateEnabled) {
+        int32_t status;
+        GPIO_disableInt(SOC_XWR68XX_GPIO_28);
+        status = l3_stopCaptureForShutdown();
+        if (status == 0) {
+            gGate.evidence.flags = 0U;
+        }
+        return status;
+    }
+#endif
     if (!gCaptureActive) {
         return 0;
     }
@@ -3871,6 +4044,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
 #ifdef L3_CAPTURE_EVIDENCE
     l3_cycleCounterInit();
+#endif
+#ifdef L3_GATE_INPUT
+    GPIO_init();
 #endif
     UART_init();
     Pinmux_Set_FuncSel(SOC_XWR68XX_PINN5_PADBE, SOC_XWR68XX_PINN5_PADBE_MSS_UARTA_TX);
@@ -4073,6 +4249,11 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[12].cmd           = "l3bench";
     cliCfg.tableEntry[12].helpString    = "Time one pass over the stopped ring";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_bench;
+#endif
+#ifdef L3_GATE_INPUT
+    cliCfg.tableEntry[13].cmd = "gateCfg";
+    cliCfg.tableEntry[13].helpString = "gateCfg 0|1: serial or GPIO28 freeze (stopped only)";
+    cliCfg.tableEntry[13].cmdHandlerFxn = l3_cli_gateCfg;
 #endif
     CLI_open(&cliCfg);
 #ifdef L3_CAPTURE_EVIDENCE

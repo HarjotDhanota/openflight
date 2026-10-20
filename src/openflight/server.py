@@ -4631,6 +4631,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     if capture is not None and getattr(capture, "gate_event", None) is not None
                     else None
                 ),
+                hardware_gate_evidence=getattr(capture, "hardware_gate_evidence", None),
                 runtime_config_sha256=(
                     iwr_runtime_config_snapshot["sha256"]
                     if iwr_runtime_config_snapshot is not None

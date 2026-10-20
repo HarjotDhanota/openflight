@@ -56,6 +56,7 @@ class IWR6843Capture:
     dump_duration_ns: int | None = None
     uart_transport_duration_ns: int | None = None
     gate_event: GateEvent | None = None
+    hardware_gate_evidence: dict[str, int] | None = None
 
     @property
     def valid(self) -> bool:
@@ -381,6 +382,9 @@ class IWR6843CaptureMonitor:
                     else None
                 ),
                 gate_event=event,
+                hardware_gate_evidence=(
+                    metadata.get("gate_evidence") if metadata is not None else None
+                ),
             )
             with self._condition:
                 # the duration first: the ready light reads these without the lock

@@ -31,6 +31,9 @@ sequence number, frame-start and HWA-output ticks, IQ8 pre-narrowing overflow co
 maximum magnitude, flags); after the payload comes an 8-byte trailer ("ILT1", the tick when
 the last payload byte was handed to the UART). Descriptor deltas stay the firmware's plan:
 ``frame_time_source`` says so. Older dumps carry no evidence and report None.
+Fork versions 12/13 add a 32-byte ILG1 GATE record between the capture block and
+frame records. They retain the existing timestamp meanings and do not establish
+a Pi clock map. Versions 10/11 are divergent and remain unsupported.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from openflight.iwr6843.music import est_music_fbss, steer
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
 TEMP_REPORT = struct.Struct("<Ihhhhhhhhhh")
-MAX_SUPPORTED_DUMP_VERSION = 9
+MAX_SUPPORTED_DUMP_VERSION = 13
 # TI mmWaveLink rlRfTempData_t temperature fields are signed, 1 LSB = 1 deg C.
 TEMP_REPORT_KEYS = (
     "device_time_ms",
@@ -68,7 +71,21 @@ SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED = 5
 TIMED_FRAME_DESCRIPTOR = struct.Struct("<BBH")
 DUMP_VERSION_EVIDENCE_TEMPERATURE = 8
 DUMP_VERSION_EVIDENCE = 9
-EVIDENCE_VERSIONS = (DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_EVIDENCE)
+GATE_VERSIONS = (12, 13)
+EVIDENCE_VERSIONS = (DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_EVIDENCE, *GATE_VERSIONS)
+GATE_EVIDENCE = struct.Struct("<4s7I")
+GATE_EVIDENCE_MAGIC = b"ILG1"
+GATE_EVIDENCE_KEYS = (
+    "arm_seq",
+    "edge_seq",
+    "edge_tick",
+    "frame_seq",
+    "freeze_tick",
+    "ignored_edges",
+    "flags",
+)
+GATE_FLAG_LATCHED = 0x01
+GATE_FLAG_FROZEN = 0x02
 # Mirrors firmware/iwr6843/dump_format.h l3_capture_evidence_t (40 B); its last byte is
 # the reserved pad ("x"): ten named fields follow the magic and the two sizes.
 CAPTURE_EVIDENCE = struct.Struct("<4sHHIIIIIIIBBBx")
@@ -111,13 +128,13 @@ _TIMED_SAMPLE_FORMATS = (
 
 def _has_temperature_extension(version: int, sample_fmt: int) -> bool:
     """Identify schemas that append the temperature report after the header."""
-    return version in (7, DUMP_VERSION_EVIDENCE_TEMPERATURE) or (
+    return version in (7, DUMP_VERSION_EVIDENCE_TEMPERATURE, 12) or (
         version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS
     )
 
 
 def _has_evidence(version: int) -> bool:
-    """Versions 8 and 9 carry the observed evidence block and trailer."""
+    """Identify the fork's observed-evidence schemas."""
     return version in EVIDENCE_VERSIONS
 
 
@@ -177,11 +194,24 @@ def _parse_evidence(raw: bytes, meta: dict, offset: int) -> None:
             f"do not add up to the header's {meta['n_frames']} frames"
         )
     start = offset + CAPTURE_EVIDENCE.size
+    if meta["version"] in GATE_VERSIONS:
+        gate_magic, *gate_values = GATE_EVIDENCE.unpack_from(raw, start)
+        if gate_magic != GATE_EVIDENCE_MAGIC:
+            raise ValueError(f"bad GATE evidence magic {gate_magic!r}")
+        gate = dict(zip(GATE_EVIDENCE_KEYS, gate_values, strict=True))
+        _validate_gate_evidence(gate)
+        meta["gate_evidence"] = gate
+        start += GATE_EVIDENCE.size
     stop = start + FRAME_EVIDENCE.size * meta["n_frames"]
     meta["capture_evidence"] = capture
     meta["frame_evidence"] = tuple(
         _frame_record(*values) for values in FRAME_EVIDENCE.iter_unpack(raw[start:stop])
     )
+
+
+def _validate_gate_evidence(gate: dict) -> None:
+    if gate["flags"] != GATE_FLAG_LATCHED | GATE_FLAG_FROZEN:
+        raise ValueError("GATE evidence needs a latched edge and completed freeze")
 
 
 def _frame_record(seq, start_tick, done_tick, overflow, max_abs, flags) -> dict:
@@ -216,6 +246,7 @@ def pack_dump(
     capture_evidence: dict | None = None,
     frame_evidence: tuple[dict, ...] | list[dict] | None = None,
     dump_trailer: dict | None = None,
+    gate_evidence: dict | None = None,
 ) -> bytes:
     """Complex cube [n_frames, chirps_per_frame, n_rx, n_samples] -> dump bytes.
 
@@ -301,14 +332,30 @@ def pack_dump(
     evidence_given = (capture_evidence, frame_evidence, dump_trailer) != (None, None, None)
     if _has_evidence(version):
         if sample_fmt not in _TIMED_SAMPLE_FORMATS:
-            raise ValueError("dump version 8 or 9 needs a timed sample format")
+            raise ValueError("dump version 8 or 9, or 12 or 13, needs a timed sample format")
         if capture_evidence is None or frame_evidence is None or dump_trailer is None:
-            raise ValueError("a version 8 or 9 dump needs its evidence block and trailer")
+            raise ValueError(
+                "a version 8 or 9, or 12 or 13, dump needs its evidence block and trailer"
+            )
         evidence_prefix, trailer_suffix = _evidence_bytes(
             capture_evidence, frame_evidence, dump_trailer, n_frames
         )
+        if version in GATE_VERSIONS:
+            if gate_evidence is None:
+                raise ValueError("GATE dump needs its GATE evidence")
+            _validate_gate_evidence(gate_evidence)
+            gate_bytes = GATE_EVIDENCE.pack(
+                GATE_EVIDENCE_MAGIC, *(int(gate_evidence[key]) for key in GATE_EVIDENCE_KEYS)
+            )
+            evidence_prefix = (
+                evidence_prefix[: CAPTURE_EVIDENCE.size]
+                + gate_bytes
+                + evidence_prefix[CAPTURE_EVIDENCE.size :]
+            )
     elif evidence_given:
-        raise ValueError("evidence requires dump version 8 or 9")
+        raise ValueError("evidence requires dump version 8 or 9, or 12 or 13")
+    if gate_evidence is not None and version not in GATE_VERSIONS:
+        raise ValueError("GATE evidence requires dump version 12 or 13")
     pad = range_bin_start if sample_fmt == SAMPLE_RANGE_FFT_IQ16 else 0
     hdr = HEADER.pack(
         MAGIC,
@@ -371,7 +418,7 @@ def parse_header(raw: bytes) -> dict:
     (magic, ver, nf, cpf, ntx, nrx, ns, fmt, _pad, trig, period_us) = HEADER.unpack_from(raw, 0)
     if magic != MAGIC:
         raise ValueError(f"bad magic {magic!r} (expected {MAGIC!r})")
-    if ver > MAX_SUPPORTED_DUMP_VERSION:
+    if ver > MAX_SUPPORTED_DUMP_VERSION or ver in (10, 11):
         raise ValueError(
             f"unsupported dump version {ver}; max supported is {MAX_SUPPORTED_DUMP_VERSION}"
         )
@@ -407,6 +454,8 @@ def parse_header(raw: bytes) -> dict:
     if evidence and fmt not in _TIMED_SAMPLE_FORMATS:
         raise ValueError(f"dump version {ver} needs a timed sample format, got {fmt}")
     evidence_nbytes = CAPTURE_EVIDENCE.size + FRAME_EVIDENCE.size * nf if evidence else 0
+    if ver in GATE_VERSIONS:
+        evidence_nbytes += GATE_EVIDENCE.size
     return dict(
         version=ver,
         n_frames=nf,
@@ -424,6 +473,7 @@ def parse_header(raw: bytes) -> dict:
         trailer_nbytes=DUMP_TRAILER.size if evidence else 0,
         frame_time_source=(FRAME_TIME_SOURCE_PLANNED if fmt in _TIMED_SAMPLE_FORMATS else None),
         capture_evidence=None,
+        gate_evidence=None,
         frame_evidence=None,
         dump_trailer=None,
         header_nbytes=header_nbytes,

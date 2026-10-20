@@ -45,3 +45,8 @@ trace, server, logging, OPS trigger and provenance paths; four skipped because
 Linux CLOCK_BOOTTIME or historical capture fixtures were unavailable. Ruff passed
 on changed Python files; backend pylint passed its 9.0 threshold (9.77/10).
 No real sensor hardware was exercised.
+
+The experimental [IWR GATE-input path](../iwr6843/gate-input.md) adds opt-in
+GPIO28 retention and a separate device-clock evidence record. It requires a
+GPIO-capable firmware build, pin verification and physical qualification; it
+does not install a calibrated common clock.
