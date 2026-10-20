@@ -3,7 +3,7 @@
 ``openflight.shot_metrics`` holds the catalogue and the metrics every unit
 measures. This module adds, in their places in the catalogue, the metrics the
 shot models produce: the full speeds (E3), the collision model's face, loft,
-spin loft, face to path, D-plane tilt and gyro (E2), the arc's swing plane,
+spin loft, spin and smash indices, face to path, D-plane tilt and gyro (E2), the arc's swing plane,
 direction and low point (E1), every flight output (E4), and the metrics not
 built yet (impact location, E5; dynamic lie, E6). It also gives carry its
 flight-model builder. It is loaded through the ``openflight.shot_metrics``
@@ -36,6 +36,8 @@ _COLLISION = {
     "face_to_path": "face_to_path",
     "dynamic_loft": "dynamic_loft",
     "spin_loft": "spin_loft",
+    "spin_index": "spin_index",
+    "smash_index": "smash_index",
     "d_plane_tilt": "d_plane_tilt",
     "gyro": "gyro",
 }
@@ -188,6 +190,8 @@ sm.register_metrics(
         (Spec("face_to_path", "Face to path", CLUB, "deg"), _collision("face_to_path")),
         (Spec("dynamic_loft", "Dynamic loft", CLUB, "deg"), _collision("dynamic_loft")),
         (Spec("spin_loft", "Spin loft", CLUB, "deg"), _collision("spin_loft")),
+        (Spec("spin_index", "Spin index", CLUB, "%"), _collision("spin_index")),
+        (Spec("smash_index", "Smash index", CLUB, "%"), _collision("smash_index")),
         (Spec("d_plane_tilt", "D-plane tilt", CLUB, "deg"), _collision("d_plane_tilt")),
         (Spec("swing_plane", "Swing plane", CLUB, "deg"), _arc_delivery("swing_plane")),
         (Spec("swing_direction", "Swing direction", CLUB, "deg"), _arc_delivery("swing_direction")),

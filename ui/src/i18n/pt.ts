@@ -269,6 +269,8 @@ export const pt: Messages = {
   'metricName.face_to_path': 'Face ao path',
   'metricName.dynamic_loft': 'Loft dinâmico',
   'metricName.spin_loft': 'Spin loft',
+  'metricName.spin_index': 'Índice de spin',
+  'metricName.smash_index': 'Índice de smash',
   'metricName.d_plane_tilt': 'Inclinação plano D',
   'metricName.swing_plane': 'Plano do swing',
   'metricName.swing_direction': 'Direção do swing',

@@ -55,6 +55,8 @@ CLUB = (
     "face_to_path",
     "dynamic_loft",
     "spin_loft",
+    "spin_index",
+    "smash_index",
     "d_plane_tilt",
     "swing_plane",
     "swing_direction",
@@ -153,6 +155,7 @@ def fusion_shot(**overrides) -> Shot:
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     shot.ball_speed_full = full_ball_speed()
     shot.ball_speed_full_mph = shot.ball_speed_full["value_mph"]
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
     shot.club_speed_full = evaluate_full_club_speed(
         radial_mph=None,
         head_position_m=None,

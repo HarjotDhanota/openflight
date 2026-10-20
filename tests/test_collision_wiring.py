@@ -348,6 +348,21 @@ def test_the_model_runs_again_once_the_full_ball_speed_is_known(monkeypatch):
     assert shot.collision_model["face_method"] == cm.FACE_METHOD_RIGID_BODY
 
 
+def test_the_full_ball_speed_brings_the_smash_index_on_a_calculated_spin(monkeypatch):
+    shot = _delivered_shot()
+    shot_models.extension.after_enrichment(shot)
+    assert shot.collision_model["metrics"]["smash_index"]["status"] == "not_measured"
+
+    def full_speeds(target):
+        target.ball_speed_full_mph = 118.0
+
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speeds)
+    shot_models.extension.after_speed_contract(shot)
+
+    assert shot.collision_model["metrics"]["smash_index"]["status"] == "calculated"
+    assert shot.spin_source == "calculated"
+
+
 def test_a_rerun_never_builds_the_face_from_the_models_own_spin():
     shot = _delivered_shot(ball_speed_full_mph=124.0)
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access

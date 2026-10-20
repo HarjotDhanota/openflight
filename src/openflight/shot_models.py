@@ -561,12 +561,8 @@ class ShotModelsExtension(kiosk_extensions.KioskExtension):
 
     def after_speed_contract(self, shot) -> None:
         _attach_full_speeds(shot)
-        # the rigid-body face needs the full ball speed, known only now
-        if (
-            shot.collision_model is not None
-            and _accepted_measured_spin(shot)
-            and _finite(shot.ball_speed_full_mph)
-        ):
+        # the rigid-body face and the smash index need the full ball speed, known only now
+        if shot.collision_model is not None and _finite(shot.ball_speed_full_mph):
             _attach_collision_model(shot)
 
     def simulate_carry(self, shot, *, fusion: bool, enabled: bool):
