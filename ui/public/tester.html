@@ -4721,6 +4721,10 @@
         const canonical = display?.canonical;
         const metres = (value) => `${Number(value).toFixed(2)} m`;
         if (phase === 'retryable_failure') return ['Ball range: this try failed, retry it', 'problem'];
+        // the one tap of step 6: say it as soon as the camera has the ball steady
+        if (phase === 'camera_arm5_capturing' && guidedCameraDisplay?.save_ready) {
+          return ['Ball range: ball found and steady, tap Save the ball', 'found'];
+        }
         if (phase === 'resolved' && Number.isFinite(canonical?.range_m)) {
           return [`Ball range: found ${metres(canonical.range_m)} (camera and radar agree)`, 'found'];
         }
