@@ -189,8 +189,7 @@ test('the ball box is step 3: its camera opens by itself, the box is fixed, and 
   await expect(page.locator('#placement-ball-status')).toContainText('No ball in the box yet');
   await expect(page.locator('#placement-check')).toHaveAttribute('display', 'none');
   await expect(page.locator('#placement-confirm')).toBeDisabled();
-  // the hardware check, the light and the ball range wait for the box
-  await expect(page.locator('#step-check')).toBeDisabled();
+  // the light and the ball range wait for the box; the unit check (step 2) came before it
   await expect(page.locator('#step-light')).toBeDisabled();
   await expect(page.locator('#tee-range-action')).toBeDisabled();
   await expect(page.locator('#suite-box-hint')).toBeVisible();
@@ -326,7 +325,7 @@ test('a camera that does not answer is the first camera check, said plainly', as
   await expect(summary).toHaveClass('problem');
   const show = page.locator('#placement-show');
   await expect(show).toBeVisible();
-  await expect(page.locator('#step-check')).toBeDisabled();
+  await expect(page.locator('#step-light')).toBeDisabled();
 
   mocks.setShowFails(null);
   await show.click();

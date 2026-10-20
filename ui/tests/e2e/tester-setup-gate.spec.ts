@@ -122,23 +122,24 @@ test('fails closed with concrete physical and sensor remedies while recovery act
   });
   await page.goto('/tester.html');
 
-  await expect(page.locator('#setup-summary')).toContainText('1 setup blocker');
+  // 19 Oct: plain words up top; the rows and the measured placement fold under Details
+  await expect(page.locator('#setup-summary')).toHaveText('Next: C. tick the box and confirm the setup.');
+  await expect(page.locator('#setup-notes')).not.toHaveAttribute('open', '');
   await expect(page.locator('#setup-checks')).toContainText('LIS3DH identity and stable tilt: pass');
   await expect(page.locator('#setup-checks')).not.toContainText('null');
-  await expect(page.locator('main')).toContainText('physically verify and confirm the measured v3 rig setup');
+  await expect(page.locator('main')).toContainText('This test needs all four sensors working');
   await expect(page.locator('#setup-checks')).toContainText('Remedy: Measure the feet');
   await expect(page.locator('#setup-gate')).toContainText('lens centre 95 mm');
-  await expect(page.locator('#setup-gate')).toContainText('LIS3DH lies flat with +Y toward the back');
+  await expect(page.locator('#setup-gate')).toContainText('the tilt check above finds which way round it is fitted');
   await expect(page.locator('#setup-gate')).toContainText('cannot inspect the enclosure build');
-  await expect(page.locator('#setup-gate')).toContainText('does not count as accepted data');
-  await expect(page.locator('#setup-gate')).toContainText('record it in the independent swing tally');
+  await expect(page.locator('#setup-gate')).toContainText('The admission check is not an attempt');
   await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeDisabled();
   await expect(page.locator('#btn-gain')).toBeDisabled();
   await expect(page.locator('#btn-swings')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Measure the light (both modes)' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Check the hardware' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Check the unit', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Analyse, review & package' })).toBeEnabled();
+  await expect(page.locator('#step-package')).toBeEnabled();
   await page.locator('#btn-swings').evaluate((button: HTMLButtonElement) => button.click());
   expect(acquisitionRequests).toBe(0);
 });
@@ -156,7 +157,7 @@ test('posts exact config-bound attestation and a server restart revokes eligibil
   });
   await page.goto('/tester.html');
   await page.locator('#setup-physical-confirm').check();
-  await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+  await page.getByRole('button', { name: 'Confirm the setup' }).tap();
 
   expect(confirmations).toEqual([
     {
@@ -230,11 +231,11 @@ test('an old confirmation cannot clear the pending state of a newer confirmation
   });
   await page.goto('/tester.html');
   await page.locator('#setup-physical-confirm').check();
-  await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+  await page.getByRole('button', { name: 'Confirm the setup' }).tap();
   await pickTester(page, 'new-tester');
-  await expect(page.locator('#setup-summary')).toContainText('setup blocker');
+  await expect(page.locator('#setup-summary')).toContainText('Next: C.');
   await page.locator('#setup-physical-confirm').check();
-  await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+  await page.getByRole('button', { name: 'Confirm the setup' }).tap();
 
   await page.evaluate(() => (window as Window & { releaseOldSetup?: () => void }).releaseOldSetup?.());
   await page.waitForTimeout(50);
@@ -291,8 +292,8 @@ test('placement warning stays visible after reload without blocking acquisition'
   for (let load = 0; load < 2; load += 1) {
     await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'true');
     await expect(page.locator('#setup-gate')).toHaveAttribute('data-warning', 'true');
-    await expect(page.locator('#setup-summary')).toContainText('Eligible with 1 retained placement warning');
-    await expect(page.locator('#setup-summary')).toContainText('Correction accuracy is not validated');
+    await expect(page.locator('#setup-summary')).toContainText('Note: it leans more than 2°');
+    await expect(page.locator('#setup-checks')).toContainText('correction accuracy is not qualified');
     await expect(page.locator('#setup-checks')).toContainText('LIS3DH identity and stable tilt: warn');
     await expect(page.locator('#setup-checks')).toContainText('Measured pitch 3.25 degrees, roll -2.50 degrees');
     await expect(page.locator('#setup-checks')).toContainText(
@@ -338,7 +339,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
     const gate = page.locator('#setup-gate');
     await gate.scrollIntoViewIfNeeded();
     await page.locator('#setup-physical-confirm').tap();
-    await page.getByRole('button', { name: 'Confirm physical setup' }).tap();
+    await page.getByRole('button', { name: 'Confirm the setup' }).tap();
     await expect(page.getByRole('button', { name: 'Stop all tester activity' })).toBeVisible();
     const automaticRange = page.locator('#automatic-range');
     await automaticRange.scrollIntoViewIfNeeded();

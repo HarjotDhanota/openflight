@@ -1053,6 +1053,99 @@
       .plain-status[data-state='waiting'] {
         color: var(--warn);
       }
+      /* 19 Oct: step 2's four sensors, the tilt check, and step 8's send panel */
+      .unit-sensors {
+        display: grid;
+        gap: 6px;
+        margin: 8px 0;
+        padding: 0;
+        list-style: none;
+      }
+      .unit-sensors li {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 2px 10px;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-left-width: 6px;
+        border-radius: 7px;
+        background: var(--bg);
+      }
+      .unit-sensors li[data-state='ok'] {
+        border-left-color: var(--ok);
+      }
+      .unit-sensors li[data-state='ok'] span {
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .unit-sensors li[data-state='waiting'] {
+        border-left-color: var(--warn);
+      }
+      .unit-sensors li[data-state='problem'] {
+        border-left-color: var(--bad);
+      }
+      .unit-sensors li[data-state='problem'] span {
+        color: var(--bad);
+      }
+      .unit-sensors li small {
+        flex-basis: 100%;
+        color: var(--muted);
+      }
+      .touch-check .hint {
+        display: block;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .lis3dh-check {
+        margin: 4px 0;
+      }
+      .lis3dh-fixes button[data-suggested='true'] {
+        background: var(--warn-bg);
+      }
+      .advanced-package {
+        margin-top: 16px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      .advanced-package > summary {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .send-panel {
+        margin: 8px 0 12px;
+        padding: 12px;
+        border: 2px solid var(--ok);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .download-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 64px;
+        min-width: 220px;
+        padding: 12px 28px;
+        border-radius: 10px;
+        background: var(--ok);
+        color: var(--bg);
+        font-size: 1.35rem;
+        font-weight: 800;
+        text-decoration: none;
+      }
+      .send-steps {
+        margin: 4px 0 0;
+        padding-left: 1.4em;
+      }
+      .send-steps li {
+        margin: 4px 0;
+      }
+      #bundle-size {
+        overflow-wrap: anywhere;
+      }
       /* 1a: the fixed ball box, the ball the camera found, and the floor-meets-net line */
       .box-overlay .ball-box,
       .ball-box {
@@ -1506,54 +1599,87 @@
         <details class="before-start" id="before-start">
           <summary>Before you start</summary>
           <ul>
-            <li>Ball at address, unit placed the way you'll hit. The enclosure geometry comes from the checked-in file.</li>
-            <li>For the 1280×800 exposures: foot powder spray and a cloth, for the impact photos.</li>
+            <li>The unit on its feet on a flat floor, 1.8–2.9 m behind where you hit, pointing down the target line.</li>
+            <li>A ball and your clubs. Nothing to measure and no tape: the unit checks itself.</li>
             <li>Keep the light the same for the whole session. If you change it, start a new tester ID.</li>
           </ul>
         </details>
       </section>
 
       <section class="step" id="step-2" data-step="2">
-        <h2><span class="step-n">2</span> Check the setup</h2>
+        <h2><span class="step-n">2</span> Check the unit</h2>
         <div class="setup-gate" id="setup-gate" data-ready="false">
-          <p class="guide">Before acquisition, physically verify and confirm the measured v3 rig setup for this tester ID.</p>
-          <p id="setup-summary" class="problem">Checking the server-authoritative setup gate…</p>
-          <div class="setup-checks" id="setup-checks"></div>
-          <details class="setup-notes" id="setup-notes" open>
-            <summary>What to check, and what software cannot check</summary>
-            <p class="note">
-              <strong>Required measured v3 placement:</strong> shell level; lens centre 95 mm above the floor at the
-              measured adjustable-feet extension; OPS centre 85 mm target-left, 47 mm forward and 20 mm below the
-              lens; IWR RX-row centre 44 mm forward and 30 mm below the lens. OPS and IWR mounts point 10° up. The
-              LIS3DH lies flat with +Y toward the back (180° yaw).
+          <p class="guide">
+            This test needs all four sensors working: the speed radar, the ranging radar, the camera and the tilt
+            sensor. Three short checks, top to bottom.
+          </p>
+          <p id="setup-summary" class="problem" role="status">Checking the unit…</p>
+
+          <h3 class="sub">A. The sensors</h3>
+          <div class="suite-row">
+            <button type="button" class="primary" id="step-check" disabled>Check the unit</button>
+            <span id="check-verdict" role="status"></span>
+          </div>
+          <ul class="unit-sensors" id="unit-sensors" aria-label="The four sensors"></ul>
+          <label class="setup-confirm touch-check"
+            ><input type="checkbox" id="iwr-reset-pressed" /><span
+              >I pressed RESET on the ranging radar board
+              <small class="hint" id="iwr-reset-hint"
+                >Only when the ranging radar fails its check: press the small RESET button on its board, tick this,
+                then check the unit again.</small
+              ></span
+            ></label
+          >
+
+          <div class="lis3dh-check" id="lis3dh-check" data-state="not_run">
+            <h3 class="sub">B. The tilt sensor's direction</h3>
+            <p class="plain-status" id="lis3dh-status" role="status" data-state="waiting">Not checked yet</p>
+            <p class="guide" id="lis3dh-prompt">
+              Leave the unit standing still on its feet, then tap <b>Start the tilt check</b>.
             </p>
-            <p class="note">
-              Software can verify the selected config, sensor identity and current tilt evidence. It cannot inspect
-              the enclosure build, feet extension, lens vertex, wiring, or physical orientation.
-            </p>
-            <p class="note">
-              Deliberate tilted-placement correction tests may cross the 2 degree flag while keeping the sensor
-              mounts, foot extension and optical configuration fixed. The nominal 95 mm lens height is the
-              level-placement baseline, not proof of the lens height after tilting. Record every placement or
-              ball-setup change. The warning is retained; correction accuracy is not validated.
-            </p>
-            <p class="note">
-              The admission check itself is not an attempt. A setup-gate failure does not count as accepted data or a
-              camera exposure failure. If the operator swung, record it in the independent swing tally.
-            </p>
-          </details>
+            <div class="steps">
+              <button type="button" class="primary" id="lis3dh-start">Start the tilt check</button>
+            </div>
+            <div class="lis3dh-fixes" id="lis3dh-fixes" hidden>
+              <p class="guide" id="lis3dh-fix-prompt">Tap how the sensor is fitted (the marked one is what it read):</p>
+              <div class="steps" role="group" aria-label="How the tilt sensor is fitted">
+                <button type="button" data-correction="turned_around">Turned around (180°)</button>
+                <button type="button" data-correction="quarter_left">Quarter turn left (90°)</button>
+                <button type="button" data-correction="quarter_right">Quarter turn right (90°)</button>
+                <button type="button" data-correction="upside_down">Upside down</button>
+              </div>
+              <p class="note">The fix is saved for this unit only, and the check runs again.</p>
+            </div>
+          </div>
+
+          <h3 class="sub">C. Confirm the setup</h3>
           <label class="setup-confirm touch-check"
             ><input id="setup-physical-confirm" type="checkbox" /><span
-              >I physically checked this tester against those measurements and orientations, including feet, lens
-              reference, radar mounts, LIS3DH orientation and required sensor connections. This confirmation applies
-              only to this tester ID and the exact config hash shown below.</span
+              >The unit is set up as the guide shows: on its feet on a flat floor, nothing loose, every cable in.</span
             ></label
           >
           <div class="steps">
-            <button type="button" id="setup-confirm" disabled>Confirm physical setup</button
-            ><button type="button" id="setup-refresh">Recheck setup</button>
+            <button type="button" class="primary" id="setup-confirm" disabled>Confirm the setup</button
+            ><button type="button" id="setup-refresh">Check again</button>
           </div>
-          <p class="note" id="setup-authority">No server confirmation loaded.</p>
+          <p class="note" id="setup-confirm-hint" hidden></p>
+          <details class="setup-notes" id="setup-notes">
+            <summary>Details (for the maintainer)</summary>
+            <div class="setup-checks" id="setup-checks"></div>
+            <p class="note" id="setup-authority">No server confirmation loaded.</p>
+            <p class="note">
+              <strong>Measured v3 placement:</strong> shell level; lens centre 95 mm above the floor at the
+              measured adjustable-feet extension; OPS centre 85 mm target-left, 47 mm forward and 20 mm below the
+              lens; IWR RX-row centre 44 mm forward and 30 mm below the lens. OPS and IWR mounts point 10° up. The
+              LIS3DH lies flat; the tilt check above finds which way round it is fitted and saves that for this unit
+              (the shared rig file is never changed).
+            </p>
+            <p class="note">
+              Software verifies the selected config, each sensor's answer and the current tilt. It cannot inspect the
+              enclosure build, feet extension, lens vertex or wiring. Deliberately tilted placements may cross the 2°
+              flag: the warning is kept; correction accuracy is not validated. The admission check is not an attempt.
+            </p>
+          </details>
         </div>
       </section>
 
@@ -1649,21 +1775,18 @@
       </section>
 
       <section class="step" id="step-5" data-step="5">
-        <h2><span class="step-n">5</span> Check the hardware and light</h2>
-        <div class="status" id="status" data-state="unavailable">Connecting to the local runner…</div>
-        <p class="problem" id="suite-box-hint" hidden>Confirm the ball in the box (step 3) first: every check works from it.</p>
+        <h2><span class="step-n">5</span> Check the light</h2>
+        <div class="status" id="status" data-state="unavailable" role="status">Connecting to the unit…</div>
+        <p class="problem" id="suite-box-hint" hidden>Confirm the ball in the box (step 3) first: the light is measured on it.</p>
         <div class="suite-row">
-          <button type="button" id="step-check" disabled>Check the hardware</button>
-          <span id="check-verdict"></span>
-        </div>
-        <label class="setup-confirm touch-check"
-          ><input type="checkbox" id="iwr-reset-pressed" /><span>I pressed RESET on the IWR6843 board since the last check</span></label
-        >
-        <div class="suite-row">
-          <button type="button" id="step-light" disabled>Measure the light (both modes)</button>
+          <button type="button" class="primary" id="step-light" disabled>Measure the light (both modes)</button>
           <span id="light-verdict"></span>
         </div>
         <p id="light-age" class="note" hidden></p>
+        <p class="note">
+          Measures the light on the ball at each mode's standard setting. The ball range (step 6) then says which of
+          the exposure study's shorter settings your light also covers.
+        </p>
       </section>
 
       <section class="step" id="step-6" data-step="6">
@@ -1817,26 +1940,41 @@
       </section>
 
       <section class="step" id="step-8" data-step="8">
-        <h2><span class="step-n">8</span> Review and package</h2>
-        <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
-        <button type="button" class="primary" id="step-package">Analyse, review &amp; package</button>
-        <p class="note">
-          Stop the ladder first. This replays every shot on the Pi, then builds one archive you can download and open
-          on any computer. It keeps running if you leave or refresh this page.
+        <h2><span class="step-n">8</span> Send the package</h2>
+        <p class="plain-status" id="package-status" role="status" data-state="waiting">
+          Not packaged yet: tap Stop &amp; package (step 7 or the kiosk) when you finish free play.
         </p>
-        <p class="note" id="package-status" role="status">Not analysed yet.</p>
+        <div class="send-panel" id="send-panel" hidden>
+          <a class="download-button" id="bundle-link" href="#" download>Download</a>
+          <p class="note" id="bundle-size"></p>
+          <p class="note" id="send-folder" role="status"></p>
+          <p class="guide">Then send it:</p>
+          <ol class="send-steps" id="send-steps">
+            <li>Upload the zip to your Google Drive (drive.google.com → New → File upload).</li>
+            <li>Share it: “Anyone with the link”.</li>
+            <li>Send the link to whoever asked you to test.</li>
+          </ol>
+        </div>
         <p id="package-links" hidden>
-          <a id="review-link" href="/session-review.html">Open the session review</a> ·
-          <a id="bundle-link" href="#" download>Download the session bundle</a>
+          <a id="review-link" href="/session-review.html">Open the session review</a>
         </p>
-        <p class="note">
-          To review elsewhere: <a href="/api/tester/review-viewer" download>Download the offline viewer</a>
-          (review.html, also inside every bundle), open it on the other computer, then choose the original bundle .zip.
-        </p>
-        <p>
-          <span id="maintainer-track-tools"><a href="/track-review.html">Annotate saved capture tracks</a> ·</span>
-          <a href="/fusion-diagnostics.html">View live fusion diagnostics</a>
-        </p>
+        <details class="advanced-package" id="advanced-package">
+          <summary>Advanced: analyse and package by hand (maintainer)</summary>
+          <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
+          <button type="button" class="primary" id="step-package">Analyse, review &amp; package</button>
+          <p class="note">
+            For the manual exposure ladder: stop the ladder first. This replays every shot on the unit, then builds
+            one archive. It keeps running if you leave or refresh this page. Free play packages by itself.
+          </p>
+          <p class="note">
+            To review elsewhere: <a href="/api/tester/review-viewer" download>Download the offline viewer</a>
+            (review.html, also inside every bundle), open it on the other computer, then choose the original bundle .zip.
+          </p>
+          <p>
+            <span id="maintainer-track-tools"><a href="/track-review.html">Annotate saved capture tracks</a> ·</span>
+            <a href="/fusion-diagnostics.html">View live fusion diagnostics</a>
+          </p>
+        </details>
       </section>
 
       <div class="aim-full" id="aim-full" role="dialog" aria-modal="true" aria-label="Full-screen aim" hidden>
@@ -2133,6 +2271,85 @@
       const boxConfirmed = () =>
         placementState?.state === 'confirmed' && placementState?.tester_id === el('tester-id').value.trim();
 
+      // step 2 (19 Oct): the unit check's four sensors, in the tester's words
+      const UNIT_SENSORS = [
+        ['ops243', 'Speed radar (OPS243)'],
+        ['camera', 'Camera (OV9281)'],
+        ['iwr6843_cli', 'Ranging radar (IWR6843)'],
+        ['lis3dh', 'Tilt sensor (LIS3DH)'],
+      ];
+      const HARDWARE_CHECKS = ['ops243', 'camera', 'iwr6843_cli'];
+      // what must pass before the setup can be confirmed: A (sensors) and B (tilt check)
+      const BEFORE_CONFIRM = [...HARDWARE_CHECKS, 'lis3dh', 'lis3dh_orientation'];
+      const LIS3DH_PLAIN = {
+        off: 'not answering: check its cable',
+        sensor_error: 'not answering: check its cable',
+        moving: 'reading, keep the unit still',
+        no_stable_preimpact_reading: 'reading, keep the unit still',
+        stale: 'reading, keep the unit still',
+      };
+
+      function setupBlocking(ids) {
+        return (setupEligibility?.blockers || []).filter((blocker) => ids.includes(blocker.id));
+      }
+
+      function sensorLine(check) {
+        if (check.status === 'pass' || check.status === 'warn') return ['ready', 'ok'];
+        if (check.reason === 'not checked yet') return ['not checked yet', 'waiting'];
+        if (check.id === 'lis3dh') {
+          const reading = String(check.reason || '');
+          const plain = Object.entries(LIS3DH_PLAIN).find(([key]) => reading.includes(key));
+          if (/upside down/.test(reading)) return ['reads upside down: run the tilt check (B)', 'problem'];
+          return [plain ? plain[1] : `not ready: ${reading}`, 'problem'];
+        }
+        // the row already names the sensor: its line says only what is wrong
+        const reason = String(check.reason || 'not ready').replace(/^.*? is missing or not answering(: )?/, 'not answering: ');
+        return [reason.replace(/: $/, ''), 'problem'];
+      }
+
+      function renderUnitSensors() {
+        const list = el('unit-sensors');
+        const checks = setupEligibility?.checks || [];
+        const rows = UNIT_SENSORS.map(([id, name]) => [name, checks.find((check) => check.id === id)]).filter(
+          ([, check]) => check
+        );
+        list.hidden = !rows.length;
+        list.replaceChildren(
+          ...rows.map(([name, check]) => {
+            const [text, state] = sensorLine(check);
+            const item = document.createElement('li');
+            item.dataset.state = state;
+            item.innerHTML = `<b>${escapeHtml(name)}</b> <span>${escapeHtml(text)}</span>`;
+            if (state === 'problem' && check.remedy) {
+              const remedy = document.createElement('small');
+              remedy.textContent = check.remedy;
+              item.append(remedy);
+            }
+            return item;
+          })
+        );
+      }
+
+      function setupSummaryText(ready, warnings) {
+        if (ready) {
+          return warnings.length
+            ? 'The unit is checked and confirmed. Note: it leans more than 2°; see Details if that was not on purpose.'
+            : 'The unit is checked and confirmed: all four sensors answer.';
+        }
+        const missing = setupEligibility.hardware?.missing || [];
+        if (missing.length) {
+          return `This test needs all four sensors. Missing or not answering: ${missing.join(', ')}. Fix it, then tap Check the unit again.`;
+        }
+        if (setupBlocking(HARDWARE_CHECKS).length) return 'Next: A. tap Check the unit.';
+        if (setupBlocking(['lis3dh']).length) return 'Waiting for a steady tilt sensor reading: keep the unit still.';
+        if (setupBlocking(['lis3dh_orientation']).length) return 'Next: B. the tilt sensor check.';
+        if (setupBlocking(['operator_confirmation', 'operator_physical_setup']).length) {
+          return 'Next: C. tick the box and confirm the setup.';
+        }
+        const other = setupEligibility.blockers[0];
+        return other ? `Not ready: ${String(other.reason || other.id).replace(/\.$/, '')}.` : 'Checking the unit…';
+      }
+
       function renderSetupEligibility() {
         const ready = setupReady();
         const warnings = setupEligibility
@@ -2140,28 +2357,26 @@
           : [];
         el('setup-gate').dataset.ready = String(ready);
         el('setup-gate').dataset.warning = String(Boolean(warnings.length));
-        // (11) the notes fold away once the setup is confirmed, and open again if it is lost
-        if (setupNotesReady !== ready) {
-          setupNotesReady = ready;
-          el('setup-notes').open = !ready;
-        }
         el('btn-gain').disabled = !ready;
         el('btn-swings').disabled = !ready;
+        // A runs any time a tester is chosen: the unit check needs nothing else
+        el('step-check').disabled = !currentTester() || unitCheckRunning;
         renderPlacement(); // the box step, and the steps that wait for it
         if (photoTarget) renderPhotoHandoff();
+        renderLis3dhCheck();
         if (!setupEligibility) {
-          el('setup-summary').textContent = 'Setup eligibility is unknown. Recheck the server before acquisition.';
+          el('setup-summary').className = 'problem';
+          el('setup-summary').textContent = currentTester() ? 'Checking the unit…' : 'Pick your tester ID in step 1 first.';
           el('setup-checks').innerHTML = '';
+          el('unit-sensors').hidden = true;
           el('setup-authority').textContent = 'No server confirmation loaded. Acquisition controls remain blocked.';
           el('setup-confirm').disabled = true;
           return;
         }
         el('setup-summary').className = ready ? (warnings.length ? 'setup-warning' : 'note') : 'problem';
-        el('setup-summary').textContent = ready
-          ? warnings.length
-            ? `Eligible with ${warnings.length} retained placement warning${warnings.length === 1 ? '' : 's'}. Correction accuracy is not validated.`
-            : 'Eligible for the tester admission stage. Live acquisition still verifies its runtime requirements.'
-          : `${setupEligibility.blockers.length} setup blocker${setupEligibility.blockers.length === 1 ? '' : 's'} must be resolved.`;
+        el('setup-summary').textContent = setupSummaryText(ready, warnings);
+        renderUnitSensors();
+        // the full rows, for the maintainer: folded away under Details
         el('setup-checks').innerHTML = setupEligibility.checks
           .map(
             (check) => {
@@ -2183,10 +2398,13 @@
           `Config ${setupEligibility.config_hash} · confirmation authority ${confirmation.authority} · ` +
           `${confirmation.confirmed ? `confirmed ${confirmation.confirmed_at}` : 'not confirmed'} · ` +
           `runtime sensors: ${setupEligibility.runtime_requirements.join(', ')}.`;
-        el('setup-confirm').disabled = ready || !physicalConfirmationDraft;
+        // C follows A and B: the setup is confirmed once the unit itself is right
+        const first = setupBlocking(BEFORE_CONFIRM).length > 0 && !confirmation.confirmed;
+        el('setup-confirm').disabled = ready || first || !physicalConfirmationDraft;
+        el('setup-confirm-hint').hidden = !first;
+        el('setup-confirm-hint').textContent = first ? 'Finish A and B first.' : '';
       }
 
-      let setupNotesReady = null;
       function invalidateSetupEligibility(message) {
         setupEligibility = null;
         physicalConfirmationDraft = false;
@@ -2242,6 +2460,115 @@
           }
         }
       }
+
+      // B (19 Oct): which way round the LIS3DH is fitted. Gravity says upside down or not;
+      // lifting the FRONT says which way it faces. A wrong reading offers the fix by tap.
+      let lis3dhState = null;
+      let lis3dhAvailable = true;
+      let lis3dhPending = false;
+      let lis3dhRequestRunning = false;
+      const LIS3DH_TEXT = {
+        not_run: ['Not checked yet', 'waiting', 'Leave the unit standing still on its feet, then tap <b>Start the tilt check</b>.'],
+        level: ['Reading the tilt sensor…', 'waiting', 'Keep the unit still on its feet.'],
+        lift: [
+          'Lift the FRONT of the unit about 2 cm and hold it still',
+          'waiting',
+          'Lift the front edge (the end the camera looks out of), in the middle, about two fingers high. Hold it until this changes.',
+        ],
+        passed: ['Tilt sensor checked: the front reads up', 'found', 'Put the unit back down on its feet.'],
+        needs_correction: [
+          'The front read the wrong way: the sensor is fitted another way round',
+          'problem',
+          'Put the unit back down, then tap the fix below.',
+        ],
+        upside_down: ['The tilt sensor reads upside down', 'problem', 'Tap <b>Upside down</b> below.'],
+        not_flat: [
+          'The tilt sensor reads the unit on its side',
+          'problem',
+          'Stand the unit on its feet and try again. If it already is, the sensor board is fitted upright: ask the maintainer.',
+        ],
+        unclear: [
+          'The lift was not clear',
+          'problem',
+          'Lift the middle of the front edge, not a corner, and try again.',
+        ],
+        no_lift: ['No lift seen', 'problem', 'Try again, and lift the front a little higher (about 2 cm).'],
+        no_reading: [
+          'The tilt sensor gave no steady reading',
+          'problem',
+          'Keep the unit still and try again. If it repeats, check the tilt sensor cable.',
+        ],
+      };
+
+      function renderLis3dhCheck() {
+        const box = el('lis3dh-check');
+        box.hidden = !lis3dhAvailable || !currentTester();
+        const state = lis3dhState?.state || 'not_run';
+        const [status, tone, prompt] = LIS3DH_TEXT[state] || [state, 'waiting', ''];
+        box.dataset.state = state;
+        el('lis3dh-status').textContent = status;
+        el('lis3dh-status').dataset.state = tone;
+        el('lis3dh-prompt').innerHTML = prompt;
+        const fixing = ['needs_correction', 'upside_down'].includes(state);
+        el('lis3dh-fixes').hidden = !fixing;
+        for (const button of el('lis3dh-fixes').querySelectorAll('button[data-correction]')) {
+          const suggested = fixing && button.dataset.correction === lis3dhState?.suggestion;
+          button.classList.toggle('primary', suggested);
+          button.dataset.suggested = String(suggested);
+          button.disabled = lis3dhPending;
+        }
+        const start = el('lis3dh-start');
+        start.hidden = ['level', 'lift'].includes(state) || fixing;
+        start.textContent = state === 'not_run' ? 'Start the tilt check' : state === 'passed' ? 'Check it again' : 'Try again';
+        start.classList.toggle('primary', state !== 'passed');
+        start.disabled = lis3dhPending || !currentTester();
+      }
+
+      async function refreshLis3dhCheck() {
+        if (!lis3dhAvailable || lis3dhRequestRunning || lis3dhPending || !currentTester()) return;
+        lis3dhRequestRunning = true;
+        try {
+          const response = await fetchWithTimeout('/api/tester/lis3dh-check', { cache: 'no-store' });
+          if (response.status === 404) {
+            lis3dhAvailable = false;
+          } else {
+            const body = await readJson(response);
+            if (response.ok && typeof body.state === 'string') {
+              const before = lis3dhState?.state;
+              lis3dhState = body;
+              // a pass or a fix changes the setup's rows: read them now
+              if (before && before !== body.state) refreshSetupEligibility();
+            }
+          }
+        } catch {
+          // the next poll tries again
+        } finally {
+          lis3dhRequestRunning = false;
+          renderLis3dhCheck();
+        }
+      }
+
+      async function submitLis3dhCheck(body) {
+        if (lis3dhPending) return;
+        lis3dhPending = true;
+        renderLis3dhCheck();
+        try {
+          lis3dhState = await post('/api/tester/lis3dh-check', body);
+        } catch (error) {
+          el('lis3dh-status').textContent = `The tilt check could not run: ${error.message}`;
+          el('lis3dh-status').dataset.state = 'problem';
+          lis3dhPending = false;
+          return;
+        }
+        lis3dhPending = false;
+        renderLis3dhCheck();
+        refreshSetupEligibility();
+      }
+      el('lis3dh-start').addEventListener('click', () => submitLis3dhCheck({ action: 'start' }));
+      el('lis3dh-fixes').addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-correction]');
+        if (button && !button.disabled) submitLis3dhCheck({ action: 'correct', correction: button.dataset.correction });
+      });
 
       async function requireSetupEligibility() {
         if (setupReady()) return true;
@@ -2351,8 +2678,11 @@
           el('status').dataset.state = 'error';
           el('status').textContent = body.failed;
         } else if (body.job) {
-          el('status').dataset.state = body.job.state;
-          el('status').textContent = `${body.job.message} (${body.job.state})`;
+          // step 2's own line reports Check the unit; this one is the light and what follows
+          if (body.job.action !== 'preflight') {
+            el('status').dataset.state = body.job.state;
+            el('status').textContent = jobStatusText(body.job);
+          }
           if (body.job.output && body.job.output.length) {
             el('log').textContent = body.job.output.join('\n');
             el('log').scrollTop = el('log').scrollHeight;
@@ -2379,14 +2709,41 @@
         renderSteps();
       }
 
+      // one plain line for whatever the unit is doing (19 Oct: never “Complete (complete)”)
+      const JOB_WORDS = {
+        preflight: 'Checking the unit',
+        gain: 'Measuring the light',
+        tee_range: 'Ball range',
+        free_play: 'Free play',
+        ladder: 'Exposure ladder',
+        swings: 'Swings',
+        analyze: 'Packaging',
+      };
+      function jobStatusText(job) {
+        const what = JOB_WORDS[job.action] || job.message || 'The unit';
+        if (job.state === 'idle') return 'Ready.';
+        if (job.state === 'running') return `${what}…`;
+        if (job.state === 'complete') return `${what}: done.`;
+        if (job.state === 'stopped') return `${what}: stopped.`;
+        return `${what}: ${job.message || job.state}.`;
+      }
+
       const ANALYSIS_TEXT = {
-        never_run: 'Not analysed yet.',
-        running: 'Analysing',
-        complete: 'Analysed and packaged',
+        never_run: 'Not packaged yet: tap Stop & package (step 7 or the kiosk) when you finish free play.',
+        running: 'Packaging',
+        complete: 'Packaged: ready to send',
         failed: 'The analysis failed',
         stopped: 'The analysis was stopped; press D again to resume.',
         interrupted: 'The analysis was interrupted',
       };
+
+      function formatBytes(bytes) {
+        const n = Number(bytes);
+        if (!Number.isFinite(n) || n < 0) return '';
+        if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+        if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+        return `${Math.max(1, Math.round(n / 1e3))} kB`;
+      }
 
       function renderAnalysis(analysis) {
         if (!analysis) return;
@@ -2394,24 +2751,43 @@
         const progress = job.progress || {};
         let text = ANALYSIS_TEXT[analysis.state] || analysis.state;
         if (analysis.state === 'running') {
-          text += ` (${job.phase || 'starting'}) ${progress.done ?? 0} of ${progress.total ?? '?'}`;
+          const done = progress.unit === 'bytes' ? formatBytes(progress.done ?? 0) : progress.done ?? 0;
+          const total = progress.unit === 'bytes' ? formatBytes(progress.total) : progress.total ?? '?';
+          text += ` (${job.phase || 'starting'}) ${done} of ${total}`;
         } else if (analysis.reason) {
           text += `: ${analysis.reason}`;
         } else if (analysis.state === 'failed' && (job.errors || []).length) {
           text += `: ${job.errors[job.errors.length - 1]}`;
         }
-        el('package-status').textContent = text;
-        const testerId = el('tester-id').value.trim();
         const latest = analysis.latest_bundle;
+        el('package-status').textContent = text;
+        el('package-status').dataset.state =
+          analysis.state === 'failed' ? 'problem' : latest && analysis.state !== 'running' ? 'found' : 'waiting';
+        const testerId = el('tester-id').value.trim();
         el('package-links').hidden = !analysis.review_ready;
         el('review-link').href = `/session-review.html?${new URLSearchParams({ tester_id: testerId })}`;
-        el('bundle-link').hidden = !latest;
+        // decision 3 (19 Oct): Download saves the zip to this device; the unit keeps a
+        // copy in its visible send folder; the tester sends it from their own Drive
+        el('send-panel').hidden = !latest;
         el('download').hidden = !latest;
         if (latest) {
           const href = `/api/tester/bundle?${new URLSearchParams({ tester_id: testerId, name: latest.name })}`;
           el('bundle-link').href = href;
-          el('bundle-link').textContent = `Download ${latest.name}`;
+          el('bundle-link').textContent = 'Download';
+          el('bundle-link').setAttribute('aria-label', `Download ${latest.name}`);
           el('download').href = href;
+          const size = formatBytes(latest.size_bytes);
+          el('bundle-size').textContent = `${latest.name}${size ? ` · ${size}` : ''}`;
+          const copy = analysis.send_copy;
+          const folder = copy?.folder || analysis.send_folder;
+          const line = el('send-folder');
+          line.className = copy?.error ? 'problem' : 'note';
+          line.textContent = copy?.error
+            ? `The copy in ${folder}/ could not be made (${copy.error}). Use Download above.`
+            : folder
+              ? `Also saved on the unit in ${folder}/`
+              : '';
+          line.hidden = !line.textContent;
         }
       }
 
@@ -2438,7 +2814,7 @@
         } catch {
           if (version === statusRequestVersion && testerId === el('tester-id').value.trim()) {
             el('status').dataset.state = 'unavailable';
-            el('status').textContent = 'Local runner is not reachable. Start scripts/start-tester.sh.';
+            el('status').textContent = 'The unit is not answering. Start it with scripts/start-tester.sh.';
           }
         } finally {
           statusRequestRunning = false;
@@ -2697,11 +3073,15 @@
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
+      let unitCheckRunning = false;
       el('step-check').addEventListener('click', async () => {
-        if (!boxConfirmed()) return;
+        if (!currentTester() || unitCheckRunning) return;
         const context = suiteContext();
         const version = ++suiteActionVersion;
-        el('check-verdict').textContent = 'checking…';
+        unitCheckRunning = true;
+        el('step-check').disabled = true;
+        el('check-verdict').className = '';
+        el('check-verdict').textContent = 'Checking the sensors… (about 20 s)';
         try {
           await post('/api/tester/run', {
             ...suiteBody('arm5', context),
@@ -2710,12 +3090,32 @@
           });
           el('iwr-reset-pressed').checked = false;
           const job = await waitJob(context, version);
-          // The IWR6843 CLI probe runs last and prints one line saying which port answered or why not.
-          const detail = [...(job.output || [])].reverse().find((line) => line.trim());
-          const suffix = detail ? ` — ${detail}` : '';
-          el('check-verdict').textContent = job.state === 'complete' ? `ready${suffix}` : `failed: ${job.message}${suffix}`;
+          await refreshSetupEligibility();
+          const hardware = setupEligibility?.hardware;
+          if (!hardware) {
+            // a server without per-sensor rows: the job's own last line says what answered
+            const detail = [...(job.output || [])].reverse().find((line) => line.trim());
+            const suffix = detail ? ` — ${detail}` : '';
+            el('check-verdict').className = job.state === 'complete' ? '' : 'problem';
+            el('check-verdict').textContent =
+              job.state === 'complete' ? `ready${suffix}` : `failed: ${job.message}${suffix}`;
+            return;
+          }
+          // the rows say which sensor answered; the verdict says it in one line
+          const missing = hardware.missing || [];
+          const waiting = setupBlocking(HARDWARE_CHECKS).length > 0;
+          el('check-verdict').className = missing.length || waiting ? 'problem' : '';
+          el('check-verdict').textContent = missing.length
+            ? `Missing or not answering: ${missing.join(', ')}`
+            : waiting
+              ? 'The check did not finish: tap Check the unit again.'
+              : 'All four sensors answer.';
         } catch (e) {
-          el('check-verdict').textContent = e.message;
+          el('check-verdict').className = 'problem';
+          el('check-verdict').textContent = `The check could not run: ${e.message}`;
+        } finally {
+          unitCheckRunning = false;
+          el('step-check').disabled = !currentTester();
         }
       });
       el('step-light').addEventListener('click', async () => {
@@ -2939,7 +3339,7 @@
         } else if (!placementState) {
           text = 'Checking the ball box…';
         } else if (state === 'setup_not_confirmed') {
-          text = 'Confirm the physical setup (step 2) first; the camera then opens here.';
+          text = 'Finish step 2 (Check the unit) first; the camera then opens here.';
         } else if (state === 'unavailable') {
           text = `The ball box can't be shown yet: ${placementState.reason || 'the camera model is unavailable'}.`;
           problem = true;
@@ -2954,7 +3354,7 @@
           const range = ball?.range_m ?? placementState.box?.distance_m;
           text =
             `Ball box confirmed${when ? ` at ${clockTime(when)}` : ''}${Number.isFinite(range) ? `: ball ${Number(range).toFixed(2)} m from the unit` : ''}. ` +
-            'The hardware check, the light and the ball range work from it.' +
+            'The light and the ball range work from it.' +
             (placementNotice ? ` ${placementNotice}` : '');
         }
         el('placement-summary').className = problem ? 'problem' : 'note';
@@ -2971,9 +3371,8 @@
         status.textContent = placing ? ballStatusText(ball) : '';
         el('placement-net-status').textContent = placing ? netLineText(placementState?.net_line) : '';
         el('placement-distance').textContent = placing ? placementState?.distance_note || '' : '';
-        // the hardware check, the light, the ball range and the ladder wait for the box
+        // the light, the ball range and the ladder wait for the box
         el('suite-box-hint').hidden = confirmed;
-        el('step-check').disabled = !confirmed;
         el('step-light').disabled = !setupReady() || !confirmed;
         syncPlacementPreview();
         renderPlacementOverlay();
@@ -3412,7 +3811,7 @@
         } else if (!aimState || !aimForTester()) {
           text = 'Checking the aim point…';
         } else if (state === 'setup_not_confirmed') {
-          text = 'Confirm the physical setup (step 2) first.';
+          text = 'Finish step 2 (Check the unit) first.';
         } else if (state === 'needs_patch') {
           text = 'Confirm the ball in the box (step 3) first: the target line starts at the ball.';
         } else if (state === 'unavailable') {
@@ -3885,12 +4284,12 @@
         },
         needs_camera_arm5: {
           label: 'Open the camera',
-          prompt: 'Put one ball in the box, on the hitting surface, then open the camera: it finds the ball and a coarse distance from its size. The radar measures the distance on each swing.',
+          prompt: 'Put one ball in the box, on the hitting surface. The camera opens by itself, finds the ball and a coarse distance from its size; the radar measures the distance on each swing.',
           action: 'start_camera_arm5',
         },
         camera_arm5_capturing: {
           label: 'Save the ball',
-          prompt: 'The camera is live. When the ball in the box is found and steady, save it.',
+          prompt: 'The camera is live. When the ball in the box is found and steady, tap Save the ball.',
           action: 'evaluate_camera_arm5',
         },
         camera_arm5_evaluating: { label: 'Evaluating 1280×800…', prompt: 'Checking the saved reference frame.' },
@@ -3914,11 +4313,11 @@
         resolved: { label: 'Automatic range complete', prompt: 'The qualified camera and radar evidence agree.' },
         experimental: {
           label: 'Setup saved — ball found',
-          prompt: 'The camera found the ball in the box. Its distance from the ball’s size is coarse and only sizes the radar’s search: each swing’s radar measures the ball’s distance. The ladder can start.',
+          prompt: 'The camera found the ball in the box. Its distance from the ball’s size is coarse and only sizes the radar’s search: each swing’s radar measures the ball’s distance. Free play (step 7) is next.',
         },
         raw_only: {
           label: 'Setup saved — no ball distance',
-          prompt: 'No distance was saved; the reason is above. Fix it and start over, or let the ladder continue: each swing’s radar still measures the ball’s distance when it can.',
+          prompt: 'No distance was saved; the reason is above. Fix it and start over, or carry on to free play (step 7): each swing’s radar still measures the ball’s distance when it can.',
         },
       };
 
@@ -4354,6 +4753,46 @@
         return [waiting || `Ball range: ${String(phase).replaceAll('_', ' ')}`, 'waiting'];
       }
 
+      // step 5 measures each mode's standard setting; this is the exposure study's
+      // shorter settings, measured on the still ball: say which, so the two agree (19 Oct)
+      function studyLightText(light) {
+        const rungs = Array.isArray(light.rungs) ? light.rungs : [];
+        if (!rungs.length) return `Light: ${light.message}`;
+        const size = (rung) => (rung.arm_id === 'arm6' ? '640×400' : '1280×800');
+        const list = (items) => {
+          const groups = {};
+          for (const rung of items) (groups[size(rung)] ||= []).push(rung.exposure_us);
+          return Object.entries(groups)
+            .map(([mode, values]) => `${mode} at ${values.join(', ')} µs`)
+            .join('; ');
+        };
+        const supported = rungs.filter((rung) => rung.supported);
+        const short = rungs.filter((rung) => !rung.supported);
+        if (!short.length) return 'Light for the exposure study: enough for every setting.';
+        const need = Math.min(...short.map((rung) => Number(rung.light_needed_factor)).filter(Number.isFinite));
+        const factor = Number.isFinite(need) ? ` about ${need.toFixed(2)}× more light` : ' more light';
+        return (
+          `Light for the exposure study: enough for ${supported.length ? list(supported) : 'none of its settings'}. ` +
+          `Its shortest settings (${list(short)}) need${factor}: they are still recorded, but will read dark. ` +
+          'Step 5’s “light sufficient” is for each mode’s standard setting.'
+        );
+      }
+
+      // the ball range opens its camera by itself once it is the current step: the
+      // tester's one tap is Save the ball (19 Oct). Each automatic action runs once.
+      let rangeAutoKey = null;
+      function maybeAutoStartRange() {
+        if (teeRangeRequestRunning || !teeRangeKnown() || !boxConfirmed() || !setupReady()) return;
+        if (currentStep() !== 6) return;
+        const phase = teeRangeState?.phase;
+        const action = !teeRangeState ? 'start' : phase === 'needs_camera_arm5' ? 'start_camera_arm5' : null;
+        if (!action) return;
+        const key = `${currentTester()}|${teeRangeState?.epoch_id ?? 'new'}|${action}`;
+        if (rangeAutoKey === key) return;
+        rangeAutoKey = key;
+        queueMicrotask(() => submitTeeRange(action));
+      }
+
       function renderTeeRange() {
         const state = teeRangeState;
         const phase = state?.phase;
@@ -4388,8 +4827,8 @@
         const lightWarning = el('tee-range-light-warning');
         const light = teeRangeDisplay?.light_warning;
         lightWarning.hidden = !(light?.status === 'measured' && light.message);
-        lightWarning.textContent = lightWarning.hidden ? '' : `Light: ${light.message}`;
-        lightWarning.className = light?.unsupported?.length ? 'problem' : 'note';
+        lightWarning.textContent = lightWarning.hidden ? '' : studyLightText(light);
+        lightWarning.className = light?.unsupported?.length ? 'setup-warning' : 'note';
         const diagnostic = el('tee-range-diagnostic');
         diagnostic.hidden = !diagnosticArm;
         diagnostic.disabled = teeRangeRequestRunning || !diagnosticArm;
@@ -4507,6 +4946,7 @@
         renderPlacementBox();
         renderLadderControls();
         renderSteps();
+        maybeAutoStartRange();
       }
 
       async function refreshTeeRange() {
@@ -4551,10 +4991,10 @@
           const confirmationMissing = !setupEligibility?.operator_confirmation?.confirmed;
           const iwrCheckMissing = setupEligibility?.blockers?.some((blocker) => blocker.id === 'iwr6843_cli');
           setTeeRangeActionError(teeRangeState && confirmationMissing
-            ? `The tester restarted. ${iwrCheckMissing ? 'Run Check the hardware and ' : ''}reconfirm the physical setup, then start this automatic range over.`
+            ? `The tester restarted. ${iwrCheckMissing ? 'Check the unit again and ' : ''}confirm the setup (step 2), then start this ball range over.`
             : iwrCheckMissing
-              ? 'IWR6843 CLI readiness was invalidated by the failed capture. Press RESET if needed, run Check the hardware, then Retry this step.'
-              : 'Confirm the physical setup and pass every hardware check before starting automatic range.');
+              ? 'The ranging radar stopped answering during a capture. Press RESET on its board if needed, check the unit again (step 2), then retry this step.'
+              : 'Finish step 2 (Check the unit) before the ball range.');
           renderTeeRange();
           return;
         }
@@ -5069,7 +5509,7 @@
         el('free-play-stop').disabled = freePlayPending || ['stopping', 'packaging'].includes(phase);
         renderFreePlayStudy(state);
         el('free-play-status').textContent = ['ready', 'closed'].includes(phase)
-          ? `Package ready: ${state.bundle?.path || state.bundle?.name}. Download it below.${phase === 'ready' ? ' Then tap Done on the scoreboard.' : ''}`
+          ? `Package ready: ${state.bundle?.name}. Send it from step 8 below.${phase === 'ready' ? ' Then tap Done on the kiosk.' : ''}`
           : phase === 'recording' ? `Free play is recording.${state.geometry_unverified ? ' Geometry unverified.' : ''}`
           : phase ? `${phase}${state.error ? ': ' + state.error : ''}` : '';
         renderLadderControls();
@@ -5976,9 +6416,26 @@
         );
         lensState = { ...lensState, lenses, lens_id: body?.lens_id ?? lensState?.lens_id ?? lensId };
       }
+      // what this tester has set that a new lens resets: only those are named (19 Oct)
+      function setupItemsSet() {
+        const box = boxConfirmed();
+        const aim = aimConfirmed() || aimSkipped();
+        const tilt = lensState?.camera_tilt?.status && lensState.camera_tilt.status !== 'uncalibrated';
+        return {
+          placement_box: box,
+          box,
+          aim_point: aim,
+          aim,
+          camera_tilt: Boolean(tilt),
+          tilt: Boolean(tilt),
+          tilt_calibration: Boolean(tilt),
+          tee_range: Boolean(teeRangeState),
+        };
+      }
       async function selectLens(lensId) {
         if (lensPending) return;
         const testerId = currentTester();
+        const wasSet = setupItemsSet();
         lensPending = true;
         lensChoice = null;
         renderLens();
@@ -5987,7 +6444,7 @@
           if (testerId !== currentTester()) return;
           mergeLensResponse(body, lensId);
           if (!Array.isArray(body?.lenses)) lensState.lens_id = body?.lens_id ?? lensId;
-          const reset = Array.isArray(body?.reset) ? body.reset : [];
+          const reset = (Array.isArray(body?.reset) ? body.reset : []).filter((item) => wasSet[item] !== false);
           const names = [...new Set(reset.map((item) => RESET_NAMES[item] || String(item).replaceAll('_', ' ')))];
           lensNotice = names.length
             ? `Lens set to ${selectedLens()?.label || lensId}. Set again: ${names.join(', ')}.`
@@ -6187,13 +6644,13 @@
       let ladderFinished = false;
       const STEP_TITLES = {
         1: 'Tester and lens',
-        2: 'Check the setup',
+        2: 'Check the unit',
         3: 'Ball in the box',
         4: 'Aim at your target',
-        5: 'Hardware and light',
+        5: 'Check the light',
         6: 'Ball range',
         7: 'Free play',
-        8: 'Review and package',
+        8: 'Send the package',
       };
       function stepDone(step) {
         switch (step) {
@@ -6239,8 +6696,16 @@
         document.body.dataset.step = String(now);
         document.body.dataset.stepTitle = STEP_TITLES[now];
         document.body.dataset.stepLabel = label;
+        // the band shows the kiosk's light only while something records (19 Oct)
+        const recording =
+          ladderRunning || ['recording', 'stopping', 'packaging', 'error'].includes(freePlayState?.phase);
+        const capture = recording ? 'running' : ['ready', 'closed'].includes(freePlayState?.phase) ? 'finished' : 'idle';
+        const captureChanged = document.body.dataset.capture !== capture;
+        document.body.dataset.capture = capture;
         // the band redraws now, not on its next kiosk poll, so the two never disagree
-        if (changed) document.dispatchEvent(new CustomEvent('tester-step', { detail: { step: now, label } }));
+        if (changed || captureChanged) {
+          document.dispatchEvent(new CustomEvent('tester-step', { detail: { step: now, label } }));
+        }
         if (now !== revealedStep) {
           const first = revealedStep === null;
           revealedStep = now;
@@ -6344,6 +6809,8 @@
       // the status poll carries the live numbers, the kiosk's progress and the ball at address
       setInterval(refresh, 1500);
       setInterval(refreshSetupEligibility, 2000);
+      refreshLis3dhCheck();
+      setInterval(refreshLis3dhCheck, 1000);
       setInterval(refreshTeeRange, 1000);
       setInterval(guidedCameraTick, 350);
       // the ball box's ball state changes as the tester places the ball: poll it briskly
@@ -6391,6 +6858,24 @@
             setText(swingText, '');
             flash.classList.remove('ready-light__flash--on');
             // a swing heard during setup must not flash once the swing step opens
+            if (light?.swing) lastSwingId = light.swing.id;
+            return;
+          }
+          const capture = document.body.dataset.capture;
+          if (capture !== 'running') {
+            // free play not started, or finished: nothing records, so nothing is
+            // ready or not ready; a neutral line says what comes next (19 Oct)
+            band.dataset.state = 'setup';
+            band.classList.add('ready-light--compact');
+            setText(word, capture === 'finished' ? 'FINISHED' : 'NOT STARTED');
+            setText(
+              cause,
+              capture === 'finished'
+                ? 'Free play is packaged · send it from step 8'
+                : 'Free play starts at step 7: tap Start free play'
+            );
+            setText(swingText, '');
+            flash.classList.remove('ready-light__flash--on');
             if (light?.swing) lastSwingId = light.swing.id;
             return;
           }

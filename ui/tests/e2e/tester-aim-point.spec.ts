@@ -172,12 +172,12 @@ test('right after the box the aim step opens its camera; the dragged yellow line
   const mocks = await aimStep(page);
   await page.goto('/tester.html');
 
-  // the aim step sits after the ball box and before the hardware check
+  // the aim step sits after the ball box and before the light (19 Oct: the unit check is step 2)
   const order = await page.evaluate(() => {
     const at = (id: string) => document.getElementById(id) as HTMLElement;
     const follows = (a: string, b: string) =>
       Boolean(at(a).compareDocumentPosition(at(b)) & Node.DOCUMENT_POSITION_FOLLOWING);
-    return [follows('placement', 'aim'), follows('aim', 'step-check')];
+    return [follows('placement', 'aim'), follows('aim', 'step-light')];
   });
   expect(order).toEqual([true, true]);
   const overlay = page.locator('#aim-overlay');

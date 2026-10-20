@@ -641,11 +641,12 @@ test('guides reconfirmation after restart and retains the start-over response', 
   const fixture = await base(page, retryable);
   await page.unroute('**/api/tester/setup-eligibility?**');
   let confirmed = false;
+  let checked = false;
   await page.route('**/api/tester/setup-eligibility?**', (route) =>
     json(route, {
       ...eligibility(),
       eligible: confirmed,
-      blockers: confirmed ? [] : [{ id: 'iwr6843_cli' }],
+      blockers: [...(checked ? [] : [{ id: 'iwr6843_cli' }]), ...(confirmed ? [] : [{ id: 'operator_confirmation' }])],
       operator_confirmation: { confirmed },
     })
   );
@@ -653,13 +654,21 @@ test('guides reconfirmation after restart and retains the start-over response', 
     confirmed = true;
     return json(route, eligibility());
   });
+  await page.route('**/api/tester/run', (route) => {
+    checked = true;
+    return json(route, { job: { state: 'complete', action: 'preflight', message: 'Complete', output: [] } }, 202);
+  });
   await page.goto('/tester.html');
 
   await page.locator('#tee-range-action').tap();
   await expect(page.locator('#automatic-range-summary')).toContainText(
-    'The tester restarted. Run Check the hardware and reconfirm the physical setup, then start this automatic range over.'
+    'The tester restarted. Check the unit again and confirm the setup (step 2), then start this ball range over.'
   );
 
+  // 19 Oct: step 2 in order: A, the unit check, before C, the confirmation
+  await expect(page.locator('#setup-confirm-hint')).toHaveText('Finish A and B first.');
+  await page.locator('#step-check').tap();
+  await expect(page.locator('#setup-confirm-hint')).toBeHidden();
   await page.locator('#setup-physical-confirm').check();
   await page.locator('#setup-confirm').tap();
   fixture.setPostFailure({
@@ -1483,7 +1492,7 @@ test('the step headings are numbered once', async ({ page }) => {
   // (10) one sequence, 1 to 8, and no lettered buttons beside it
   await expect(page.getByRole('heading', { level: 2, name: '6 Ball range' })).toBeVisible();
   await expect(page.locator('section.step .step-n')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8']);
-  for (const name of ['Check the hardware', 'Measure the light (both modes)', 'Start free play']) {
+  for (const name of ['Check the unit', 'Measure the light (both modes)', 'Start free play']) {
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: /^[A-D]\. / })).toHaveCount(0);

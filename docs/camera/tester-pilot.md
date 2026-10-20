@@ -3,9 +3,43 @@
 ## Free play for outside testers
 
 Free play is implemented on the local `feat/tester-free-play` branch. It still
-needs the Pi checks below before a tester release. Start `scripts/start-tester.sh`,
-open `http://<pi-address>:8765/`, choose the tester and fitted lens, and complete
-setup steps 1–6. In step 7 tap the session's **resolution**, **1280×800** or
+needs the Pi checks below before a tester release. **The test is only for units
+with all four sensors**: the OPS243 speed radar, the IWR6843 ranging radar, the
+OV9281 camera and the LIS3DH tilt sensor. Start `scripts/start-tester.sh`, open
+`http://<pi-address>:8765/`, and work down the steps:
+
+1. **Tester and lens.** Tap your tester ID (or **New tester**), **Indoors** or
+   **Outdoors**, and the lens fitted to the unit.
+2. **Check the unit.** A. Tap **Check the unit**: the speed radar, the camera and
+   the ranging radar each answer, and the tilt sensor is read all the time. A
+   missing sensor is named ("Missing or not answering: Camera (OV9281)") and setup
+   stops there. Tick **I pressed RESET on the ranging radar board** only when the
+   ranging radar fails its check and you pressed its RESET. B. Tap **Start the
+   tilt check**, then lift the FRONT of the unit about 2 cm and hold it until the
+   line says **Tilt sensor checked: the front reads up**. If the sensor is fitted
+   another way round the page offers **Turned around (180°)**, **Quarter turn left
+   (90°)**, **Quarter turn right (90°)** or **Upside down**, with the one it read
+   marked: tap it, and the check runs again. The fix is saved for this unit
+   (`~/.config/openflight/lis3dh-mount.json`), never in the shared rig file, and
+   the tester, the camera tilt and the kiosk all read the sensor with it; the
+   check and every fix are recorded in `session_start`. C. Tick the setup box and
+   tap **Confirm the setup**. **Details (for the maintainer)** holds the raw rows.
+3. **Ball in the box**, 4. **Aim at your target** (or **Skip for now**).
+5. **Check the light**: **Measure the light (both modes)**.
+6. **Ball range**: the camera opens by itself; tap **Save the ball** once the
+   ball in the box is found and steady.
+7. **Free play** (below).
+8. **Send the package**: the big **Download** button saves the zip to the device
+   the page is open on; the unit also keeps a copy in `~/OpenFlight-to-send/`
+   (its path and size are shown). Then upload the zip to your Google Drive
+   (drive.google.com → New → File upload), share it as "Anyone with the link",
+   and send the link to whoever asked you to test.
+
+The band at the top stays neutral until free play records: "SETTING UP · Step 4 ·
+Aim at your target · free play starts at step 7" during setup, "NOT STARTED" on
+step 7 before **Start free play**, "FINISHED" once packaged.
+
+In step 7 tap the session's **resolution**, **1280×800** or
 **640×400** (the maintainer tells each tester which one), then tap **Start free
 play**. The lens's default resolution is marked "(lens default)" but is never
 assumed: Start stays off until one is tapped. A resolution the lens settings
@@ -68,9 +102,10 @@ The advanced ladder retains its approved-enclosure requirement.
 
 Tap **Stop & package** on the scoreboard or tester page. Accepted shots finish
 writing before the session closes and analysis/packages start. Keep the scoreboard
-open until **Package ready: <file>.zip** shows, with its full path; once the run
-stops, that message and the **Done** button take the ready light's band. Download
-the zip from step 8 on the tester page. Send that zip and a short description of the lighting and enclosure.
+open until **Package ready: <file>.zip · send it from the tester page (step 8)**
+shows; once the run stops, that message and the **Done** button take the ready
+light's band. Send the zip from step 8 on the tester page (see above), with a short
+description of the lighting and enclosure. Sessions can be about 1 GB.
 Tap **Done** on the scoreboard to close the window. This keeps progress visible
 after acquisition stops. The bundle includes every shot's exposure decision,
 brightness, light index, lens/mode and blur ceiling, or an explicit missing-capture
@@ -263,10 +298,10 @@ speed, **No radar shot** or **Not a shot**. Wait for SWING before each swing;
 a swing on amber or red may not count.
 
 Work down the numbered steps for a normal collection: **1. Tester and lens**,
-**2. Check the setup**, **3. Ball in the box**, **4. Aim at your target**,
-**5. Check the hardware and light**, **6. Ball range**, **7. Swing: the exposure
-ladder**, then **8. Review and package**. A bar pinned under the ready light says
-where you are ("You are here: Step 5 · Hardware and light"); tap it to scroll to
+**2. Check the unit**, **3. Ball in the box**, **4. Aim at your target**,
+**5. Check the light**, **6. Ball range**, **7. Free play** (the exposure ladder is
+its maintainer section), then **8. Send the package**. A bar pinned under the
+ready light says where you are ("You are here: Step 5 · Check the light"); tap it to scroll to
 that step. The same bar holds **Kiosk view** and **Stop**. **Advanced: manual
 single-arm tools** is for a maintainer-directed investigation of one mode; it is
 not the normal pilot and does not replace the ladder.
@@ -281,9 +316,10 @@ settings: the modes it runs, the default mode, and the exposure-ladder settings.
 each exposure from the allowed list. Changing the lens asks first, because the
 ball box, the aim point and the camera tilt are set again for the new lens.
 
-**Step 2: check the setup.** Confirm the physical setup. Once it is confirmed the
-notes about what software can and cannot check fold away; tap them to read them
-again.
+**Step 2: check the unit.** A: **Check the unit** reads all four sensors (the
+box, light and range wait for it). B: the tilt check, by one lift of the front.
+C: confirm the setup. The engineering rows and notes are folded under **Details
+(for the maintainer)**.
 
 **Step 3: the ball box.** Set the unit 1.8–2.9 m behind the ball, pointing down
 the target line. The live picture opens by itself with a yellow box drawn on it:
@@ -292,8 +328,8 @@ camera finds it, with its distance (the IWR radar's distance in the camera's
 direction to the ball, the ball's size checking it). Then drag the blue line to
 where the floor meets the net or screen: the far range window. Press **Confirm the
 ball in the box**. Everything after it works from the box, and stays locked until
-it is confirmed: the hardware check, the light measurement, which is judged inside
-it, the ball range and the ladder. The box step is also the camera's first check:
+it is confirmed: the light measurement, which is judged inside it, the ball range
+and the ladder. The box itself waits for step 2. The box step is also the camera's first check:
 if the picture does not open, the step says the camera did not answer and offers
 **Show the camera**.
 
@@ -314,12 +350,13 @@ the camera from the ball range.
 
 ## Test suite
 
-On the study page, pick your tester ID and lens (step 1), confirm the physical
-setup (step 2), put the ball in the box (step 3) and set or skip the aim point
-(step 4), then:
+On the study page, pick your tester ID and lens (step 1), check the unit
+(step 2: **Check the unit**, the tilt check, then confirm), put the ball in the box
+(step 3) and set or skip the aim point (step 4), then:
 
-1. **Check the hardware** (step 5). Ready means the software and camera answered.
-   Tick the RESET row if you pressed RESET on the IWR6843 board since the last check.
+1. (Moved to step 2 on 19 Oct: **Check the unit** reads the OPS243, the camera and
+   the IWR6843 each. Tick the RESET row if you pressed RESET on the IWR6843 board
+   since the last check.)
 2. **Measure the light** (step 5). Runs the camera's light screen at both modes, about
    a minute each. Keep the room as you will hit in; it also proves each camera
    mode streams. The light is judged inside the ball box you confirmed (halved for
@@ -870,7 +907,7 @@ every earlier frame and failure record for review.
 
 | What you see | Cause | Fix |
 | --- | --- | --- |
-| `IWR6843 did not acknowledge '<config line>'`, at a different line each time, and RESET does not help | The radar board's CP2105 USB bridge stopped answering; `dmesg` shows `cp210x ttyUSB0: failed set request 0x12 status: -110` at each failure. RESET restarts the radar, not the bridge | Unplug the radar's USB cable for 5 s, plug it back in, run **Check the hardware**, then retry. If it keeps happening, try a short thick cable or a powered USB hub |
+| `IWR6843 did not acknowledge '<config line>'`, at a different line each time, and RESET does not help | The radar board's CP2105 USB bridge stopped answering; `dmesg` shows `cp210x ttyUSB0: failed set request 0x12 status: -110` at each failure. RESET restarts the radar, not the bridge | Unplug the radar's USB cable for 5 s, plug it back in, run **Check the unit** (step 2), then retry. If it keeps happening, try a short thick cable or a powered USB hub |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |
 | Find gain fails with `IndexError: list index out of range` in `Picamera2()`, or `rpicam-hello --list-cameras` has no `320x200` | The camera or its high-speed driver is not set up on this Pi | Follow the [camera README](README.md#raspberry-pi-packages) setup, then reboot |
@@ -884,7 +921,7 @@ every earlier frame and failure record for review.
 | Stopped mid-arm | Nothing is lost | Press **Capture swings** again; runs are kept separately and counted together |
 | The page is slow, frozen, or disconnects | The browser, tester service, Wi-Fi, or Pi may have stalled independently | Preserve the session and run `tail -n 250 ~/openflight_sessions/tester_pilot/tester-server.log`; packaged data now carries this log automatically |
 | Refreshing the page shows a held photo step | The ladder restored its durable boundary-photo checkpoint | Do not swing; use **Photograph face**, **Skip photo**, or **Resume ladder** if it says the ladder is stopped |
-| Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **Check the hardware** again |
+| Ladder verdict red: `frames: ... fps delivered` or `gap(s)` | The Pi could not keep up with the camera mode | Close other programs, check the power supply, run **Check the unit** (step 2) again |
 | Ladder verdict red: `controls: exposure ...` or `gain ...` | The camera did not take the exposure's setting | Press **Start the exposure ladder** again; the ladder carries on where it stopped |
 | An exposure reads `failed … — 3 red swings`, or a shorter one `skipped … — full-300 failed: 3 red swings` | Three of its swings went red, whatever the order, so the ladder moved on rather than wait for 5 good ones | Read the red swings' reasons; the ladder continues on its own. A red for darkness also skips the shorter exposures of that mode |
 | An exposure reads `failed … — 2 dark red swings in a row` | The light fell during the exposure (dusk, a cloud) | The shorter exposures of that mode are skipped; add light and measure it again (**Measure the light**) before another ladder |
@@ -920,7 +957,7 @@ every earlier frame and failure record for review.
 | `No ball found in the box. The ball may be outside it: move it into the box` during the camera step | The camera looks only inside the box's dashed outline, and nothing ball-sized for that distance is there, in a box lit well enough to see one | Move the ball into the box. If the box is in the wrong place, press **Move the box** in step 1 and drag it over the ball (the ball range then starts over) |
 | `The OpenFlight kiosk service (openflight.service) is running or starting.` when starting the tester | The boot service owns the camera and radars and its starts sync the Python environment | Run `sudo systemctl stop openflight.service`, then start the tester again |
 | `Several ball-like things are in the box: keep only the ball in it` | Two things in the box fit a lit ball about equally well (a spare ball, a tee, a white tuft or a logo) | Take everything but the ball out of the box; the step looks again at the same brightness |
-| **Confirm the ball in the box** stays greyed out, or `The camera is not showing here` | The live picture is not running, or the camera has not found the ball in the box yet | Press **Show the camera**; if it still fails, run **Check the hardware**. With the picture showing, see the two ball-in-the-box rows below |
+| **Confirm the ball in the box** stays greyed out, or `The camera is not showing here` | The live picture is not running, or the camera has not found the ball in the box yet | Press **Show the camera**; if it still fails, run **Check the unit** (step 2). With the picture showing, see the two ball-in-the-box rows below |
 | **Aim at your target** says `Confirm the ball in the box (step 3) first: the target line starts at the ball.` | The target line starts at the ball in the box | Confirm the ball in the box (step 3); the aim point's picture then opens by itself |
 | The target can't be seen in the aim point's picture | At 95 mm the camera sees about 23° above the horizon: a mark more than about 1.8 m up a net 4 m from the unit is out of the picture, and a target far to one side is outside its width | Use a mark lower down, near where the screen meets the floor, and turn the unit to face the target |
 | `The target is … deg right (or left) of where the unit points: turn the unit …` | The cross is far from the picture's middle, where the lens is least known | Turn the unit to face the target, confirm the physical setup again, then set the box and the aim point |

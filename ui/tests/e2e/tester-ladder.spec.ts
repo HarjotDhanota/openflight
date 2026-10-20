@@ -201,7 +201,7 @@ test('ignores a delayed status response for the previous tester ID', async ({ pa
   await pickTester(page, 'new-tester');
   releaseOld();
 
-  await expect(page.locator('#status')).toHaveText('new-tester (complete)');
+  await expect(page.locator('#status')).toHaveText('new-tester: done.');
   await expect(page.locator('#status')).not.toContainText('20260922-name');
 });
 
@@ -396,6 +396,8 @@ test('analyse-and-package keeps its original tester context and ignores a duplic
     );
   });
   await page.goto('/tester.html');
+  // 19 Oct: packaging by hand is the maintainer's, folded under step 8
+  await page.locator('#advanced-package > summary').click();
   await page.locator('#comparator-file').setInputFiles({
     name: 'comparison.json',
     mimeType: 'application/json',
@@ -429,7 +431,7 @@ test('a finished analysis offers the review and the bundle download', async ({ p
     })
   );
   await page.goto('/tester.html');
-  await expect(page.locator('#package-status')).toContainText('Analysed and packaged');
+  await expect(page.locator('#package-status')).toContainText('Packaged: ready to send');
   await expect(page.getByRole('link', { name: 'Open the session review' })).toHaveAttribute(
     'href',
     '/session-review.html?tester_id=20260922-name'
@@ -954,10 +956,10 @@ test('the hardware check records whether RESET was pressed', async ({ page }) =>
   const reset = page.locator('#iwr-reset-pressed');
 
   await reset.check();
-  await page.getByRole('button', { name: 'Check the hardware' }).tap();
+  await page.getByRole('button', { name: 'Check the unit' }).tap();
   await expect(page.locator('#check-verdict')).toContainText('ready');
   await expect(reset).not.toBeChecked();
-  await page.getByRole('button', { name: 'Check the hardware' }).tap();
+  await page.getByRole('button', { name: 'Check the unit' }).tap();
   await expect.poll(() => runBodies.length).toBe(2);
 
   expect(runBodies.map((body) => body.operator_reset)).toEqual([true, false]);

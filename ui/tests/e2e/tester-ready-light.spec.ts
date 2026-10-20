@@ -87,7 +87,7 @@ test('during setup (steps 1-6) the band never says ready, whatever the kiosk say
   const band = page.locator('#ready-light');
   await expect(band).toHaveAttribute('data-state', 'setup');
   await expect(band).toContainText('SETTING UP');
-  await expect(band).toContainText('Step 2 · Check the setup');
+  await expect(band).toContainText('Step 2 · Check the unit');
   await expect(band).not.toContainText('SWING');
   await expect(band).toHaveClass(/ready-light--compact/);
   // a swing the kiosk hears during setup neither flashes nor shows

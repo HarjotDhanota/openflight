@@ -206,7 +206,7 @@ for (const viewport of VIEWPORTS) {
       await mockWorld(page, world);
       await page.goto('/tester.html');
 
-      await expectAgreeAt(page, 2, 'Check the setup');
+      await expectAgreeAt(page, 2, 'Check the unit');
       await page.screenshot({ path: shotPath(`band-step2-${viewport.width}x${viewport.height}.png`) });
 
       world.eligible = true;
@@ -214,7 +214,7 @@ for (const viewport of VIEWPORTS) {
       await page.screenshot({ path: shotPath(`band-step4-${viewport.width}x${viewport.height}.png`) });
 
       world.aim = 'skipped';
-      await expectAgreeAt(page, 5, 'Hardware and light');
+      await expectAgreeAt(page, 5, 'Check the light');
 
       // free play recording is the swing step: the band stops saying it is setting up
       world.freePlay = {

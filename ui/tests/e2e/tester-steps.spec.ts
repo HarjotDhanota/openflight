@@ -54,13 +54,13 @@ test('the page is the OpenFlight Tester, with one numbered sequence', async ({ p
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('OpenFlight Tester');
   await expect(page.locator('section.step h2')).toHaveText([
     '1 Tester and lens',
-    '2 Check the setup',
+    '2 Check the unit',
     '3 Ball in the box',
     '4 Aim at your target',
-    '5 Check the hardware and light',
+    '5 Check the light',
     '6 Ball range',
     '7 Free play',
-    '8 Review and package',
+    '8 Send the package',
   ].map((text) => new RegExp(`^${text}`)));
 });
 
@@ -109,7 +109,7 @@ test('a tester list the server cannot give still offers a new ID by touch', asyn
   await expect(page.locator('#tester-current-id')).toHaveText(/^tester-\d{4}-\d{2}-\d{2}-1$/);
 });
 
-test('where is two buttons, sent with the hardware check', async ({ page }) => {
+test('where is two buttons, sent with the unit check', async ({ page }) => {
   await useTester(page);
   await mockBase(page);
   const bodies: Record<string, unknown>[] = [];
@@ -121,7 +121,7 @@ test('where is two buttons, sent with the hardware check', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Indoors' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Outdoors' }).tap();
   await expect(page.getByRole('button', { name: 'Outdoors' })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Check the hardware' }).tap();
+  await page.getByRole('button', { name: 'Check the unit' }).tap();
   await expect.poll(() => bodies[0]?.environment).toBe('outdoors');
 });
 
@@ -181,7 +181,8 @@ test('the lens is picked by touch, its settings shown, and a change warns before
   await page.getByRole('button', { name: 'Change lens' }).tap();
   await expect.poll(() => posts).toEqual([{ tester_id: DEFAULT_TESTER, action: 'select', lens_id: '6mm' }]);
   await expect(page.locator('#lens-status')).toHaveText(
-    'Lens set to 6 mm. Set again: the ball box, the aim point, the camera tilt.'
+    // 19 Oct: only what this tester had set is named (the camera tilt was never calibrated)
+    'Lens set to 6 mm. Set again: the ball box, the aim point.'
   );
   await expect(cards.nth(1)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#lens-settings')).toContainText('Focal length 2000 px at 1280×800, 1000 px at 640×400');
@@ -237,7 +238,7 @@ test('the sticky bar says where you are and scrolls to the next open step', asyn
   await mockLens(page);
   await page.goto('/tester.html');
   // tester, lens, setup, box and aim (skipped) are done: the light is next
-  await expect(page.locator('#stepbar-step')).toHaveText('Step 5 · Hardware and light');
+  await expect(page.locator('#stepbar-step')).toHaveText('Step 5 · Check the light');
   await expect(page.locator('#step-1')).toHaveAttribute('data-state', 'done');
   await expect(page.locator('#step-4')).toHaveAttribute('data-state', 'done');
   await expect(page.locator('#step-5')).toHaveAttribute('data-state', 'current');
@@ -254,11 +255,13 @@ test('the sticky bar says where you are and scrolls to the next open step', asyn
   expect((await page.locator('#sticky-top').boundingBox())?.height ?? 999).toBeLessThanOrEqual(112);
 });
 
-test('the setup notes fold away once the setup is confirmed', async ({ page }) => {
+test('the setup notes stay folded away, before and after the setup is confirmed', async ({ page }) => {
   await useTester(page);
   await mockBase(page, { eligible: false });
   await page.goto('/tester.html');
-  await expect(page.locator('#setup-notes')).toHaveAttribute('open', '');
+  // 19 Oct: the engineering detail is the maintainer's, closed by default
+  await expect(page.locator('#setup-notes summary')).toHaveText('Details (for the maintainer)');
+  await expect(page.locator('#setup-notes')).not.toHaveAttribute('open', '');
   await page.unroute('**/api/tester/setup-eligibility?**');
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility(DEFAULT_TESTER, true)));
   await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'true', { timeout: 4000 });
