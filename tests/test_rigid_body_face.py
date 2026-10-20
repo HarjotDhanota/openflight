@@ -235,6 +235,7 @@ def test_without_a_spin_the_published_inversion_is_kept_and_says_why():
     face = result.metrics["face_angle"]
     assert result.face_method == cm.FACE_METHOD_INVERSION
     assert face.source == cm.SOURCE_INVERSION
+    assert "spin_rpm" not in result.inputs and "ball_speed_mph" not in result.inputs
     assert "rigid-body relation not used" in face.note
     assert "spin" in face.note
     assert "rigid-body relation not used" in result.metrics["dynamic_loft"].note
@@ -247,6 +248,7 @@ def test_a_calculated_spin_keeps_the_published_inversion():
 
     assert result.face_method == cm.FACE_METHOD_INVERSION
     assert "not measured" in result.metrics["face_angle"].note
+    assert "spin_rpm" not in result.inputs
 
 
 def test_the_collision_models_own_spin_never_feeds_face_and_loft():

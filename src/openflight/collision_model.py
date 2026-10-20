@@ -852,20 +852,13 @@ def evaluate(
         "launch_vertical": launch_vertical,
         "club_speed_mph": club_speed_mph,
     }
-    optional = {
-        "ball_speed_mph": ball_speed_mph,
-        "spin_rpm": spin_rpm,
-        "impact_offset_mm": impact_offset_mm,
+    rigid_inputs = {
+        "ball_speed_mph": ball_speed_mph or Input(None, reason="ball speed not given"),
+        "spin_rpm": spin_rpm or Input(None, reason="spin rate not measured"),
     }
-    inputs.update({name: value for name, value in optional.items() if value is not None})
-    face, loft, frame, face_method = _face_and_loft(
-        weights,
-        {
-            **inputs,
-            "ball_speed_mph": ball_speed_mph or Input(None, reason="ball speed not given"),
-            "spin_rpm": spin_rpm or Input(None, reason="spin rate not measured"),
-        },
-    )
+    face, loft, frame, face_method = _face_and_loft(weights, {**inputs, **rigid_inputs})
+    if face_method == FACE_METHOD_RIGID_BODY:
+        inputs.update(rigid_inputs)
 
     if face.present and club_path.present:
         face_to_path = Metric(
@@ -930,6 +923,8 @@ def evaluate(
             gear_sidespin_rpm=gear_sidespin_rpm if offset_measured else None,
             no_gear_note=NOTE_GEAR_NO_HEAD_MODEL if offset_measured else NOTE_NO_GEAR,
         )
+        if offset_measured:
+            inputs["impact_offset_mm"] = impact_offset_mm
     gyro = _not_measured("deg", GYRO_REASON, SOURCE_PENNER)
 
     return CollisionResult(

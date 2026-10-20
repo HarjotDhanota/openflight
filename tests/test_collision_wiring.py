@@ -319,7 +319,7 @@ def test_a_low_confidence_measured_spin_is_not_used_for_the_face():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.collision_model["face_method"] == cm.FACE_METHOD_INVERSION
-    assert "confidence" in shot.collision_model["inputs"]["spin_rpm"]["reason"]
+    assert "confidence" in shot.collision_model["metrics"]["face_angle"]["note"]
 
 
 def test_without_a_full_ball_speed_the_inversion_says_why():
@@ -369,3 +369,19 @@ def test_a_measured_spin_axis_is_never_replaced():
     assert shot.spin_axis_deg == 4.2
     assert shot.spin_axis_source == "measured (camera)"
     assert shot.collision_model["metrics"]["spin_axis"]["value"] is not None
+
+
+def test_a_rerun_over_a_model_geometry_spin_names_only_the_arc_inputs():
+    """The model's own spin is not an input to the inversion, so no source names it."""
+    shot = _delivered_shot(
+        experimental_fused_club_path_deg=None,
+        experimental_fused_status=None,
+        spin_rpm=5000.0,
+        spin_source="model_geometry",
+        spin_method=cm.SPIN_METHOD_MODEL_GEOMETRY,
+    )
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert "spin_rpm" not in shot.collision_model["inputs"]
+    assert "spin rate" not in (shot.spin_axis_source or "")

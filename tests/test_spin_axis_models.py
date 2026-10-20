@@ -115,14 +115,16 @@ def test_a_driver_keeps_the_d_plane_tilt_and_labels_the_missing_gear_term():
 
 
 def test_a_gear_sidespin_without_a_measured_impact_offset_is_not_applied():
-    metrics = _evaluate(
+    result = _evaluate(
         ClubType.DRIVER,
         gear_sidespin_rpm=400.0,
         impact_offset_mm=cm.Input(12.0, cm.LABEL_MODEL_GEOMETRY, "assumed"),
-    ).metrics
+    )
+    metrics = result.metrics
 
     assert metrics["spin_axis"].value == pytest.approx(metrics["d_plane_tilt"].value)
     assert metrics["spin_axis"].note == cm.NOTE_NO_GEAR
+    assert "impact_offset_mm" not in result.inputs
 
 
 def test_a_measured_offset_without_a_gear_sidespin_says_so():
