@@ -88,7 +88,8 @@ def test_every_flight_output_is_present_with_its_label(block):
         assert low <= metric["value"] <= high, name
     assert "Ferguson" in metrics["carry"]["source"]
     assert "flight-fit-v1" in metrics["carry"]["source"]  # E8a: the source names the fit
-    assert "USGA" in metrics["total"]["source"] and "R&A" in metrics["total"]["source"]
+    assert "turf-roll-v1" in metrics["total"]["source"]
+    assert "Penner" in metrics["total"]["source"]
     assert "surface assumed: fairway, normal firmness" in metrics["total"]["source"]
     assert "surface assumed: fairway, normal firmness" in metrics["total_side"]["source"]
     assert "curve" in metrics["curve"]["source"]
@@ -275,17 +276,17 @@ def test_the_range_propagates_the_stated_input_uncertainties():
 
 
 def test_a_landing_outside_the_bounce_data_gives_a_total_not_measured():
-    # a lob wedge lands steeper than the model's 50 deg data range
+    # a lob launched near vertical lands steeper than the model's 65 deg range
     shot = _shot(
         ball_speed_mph=70.0,
         club=ClubType.LW,
-        launch_angle_vertical=45.0,
+        launch_angle_vertical=75.0,
         spin_rpm=10000.0,
         spin_axis_deg=0.0,
         launch_angle_horizontal=0.0,
     )
     metrics = _fusion(shot)["as_measured"]["metrics"]
-    assert metrics["landing_angle"]["value"] > 50.0
+    assert metrics["landing_angle"]["value"] > 65.0
     assert metrics["carry"]["status"] == "calculated"
     for name in ("total", "total_side"):
         assert metrics[name]["status"] == "not_measured"

@@ -22,8 +22,10 @@ W7 (E4) frames:
                  so the spin vector turns with the horizontal launch angle and a
                  pure-backspin shot launched right flies the straight shot, rotated.
 
-Total (carry plus bounce and roll) uses the USGA / R&A 2021 linear bounce model
-(`bounce_and_roll_yards`) on assumed fairway turf; see BOUNCE_MODELS.
+Total (carry plus bounce and roll) uses the turf bounce-and-roll model
+(``bounce_roll.TURF_ROLL_V1``) from the landing angle, speed and backspin on
+assumed fairway turf; the USGA / R&A 2021 linear model stays selectable. See
+BOUNCE_MODELS and ROLL_MODELS.
 
 Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
 parameter Sp = r*omega / v in the form of Ferguson, McNally & McPhee (2022) Eqs.
@@ -37,6 +39,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .bounce_roll import TURF_ROLL_V1, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
@@ -315,6 +318,21 @@ class BounceModel:
     intercept_yards: float
     slope_yards_per_deg: float
     landing_angle_range_deg: tuple[float, float]
+    version: str = "usga-ra-2021"
+
+    def roll_yards(
+        self,
+        landing_angle_deg: float,
+        landing_speed_mph: Optional[float] = None,
+        backspin_rpm: Optional[float] = None,
+    ) -> Optional[float]:
+        """The linear model's roll (yd) from the landing angle alone, clamped at 0."""
+        if not _finite(landing_angle_deg):
+            return None
+        low, high = self.landing_angle_range_deg
+        if not low <= landing_angle_deg <= high:
+            return None
+        return max(0.0, self.intercept_yards + self.slope_yards_per_deg * landing_angle_deg)
 
 
 # USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in Evaluating
@@ -346,31 +364,43 @@ ROLL_CLAMP_NOTE = "roll clamped at 0: Eq. 1 is negative above 49.4°"
 
 FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
-BOUNCE_MODELS: dict[str, BounceModel] = {FAIRWAY_NORMAL: USGA_RA_2021_BOUNCE_MODEL}
+RollModel = BounceModel | TurfRollModel
+ROLL_MODELS: dict[str, RollModel] = {
+    m.version: m for m in (USGA_RA_2021_BOUNCE_MODEL, TURF_ROLL_V1)
+}
+ACTIVE_ROLL_MODEL: RollModel = TURF_ROLL_V1
+BOUNCE_MODELS: dict[str, RollModel] = {FAIRWAY_NORMAL: ACTIVE_ROLL_MODEL}
 
 
 def bounce_and_roll_yards(
-    landing_angle_deg: float, surface: str = DEFAULT_SURFACE
+    landing_angle_deg: float,
+    surface: str = DEFAULT_SURFACE,
+    landing_speed_mph: Optional[float] = None,
+    backspin_rpm: Optional[float] = None,
+    model: Optional[RollModel] = None,
 ) -> Optional[float]:
-    """Distance from landing to rest (yards) by the surface's published model, or None.
+    """Distance from landing to rest (yards) by the surface's model, or None.
 
-    None for a surface with no published model, a non-finite angle, or a landing
-    angle outside the model's data range (no extrapolation). Inside the range, a
-    negative value of the linear model is clamped at 0 (``ROLL_CLAMP_NOTE``).
+    ``model`` overrides the surface's (``ROLL_MODELS``). None for a surface with
+    no model, a missing or non-finite input the model needs, or a landing angle
+    outside the model's data range (no extrapolation). The turf model needs the
+    landing speed and backspin; the USGA / R&A line clamps a negative roll at 0
+    (``ROLL_CLAMP_NOTE``).
     """
-    model = BOUNCE_MODELS.get(surface)
-    if model is None or not _finite(landing_angle_deg):
+    model = BOUNCE_MODELS.get(surface) if model is None else model
+    if model is None:
         return None
-    low, high = model.landing_angle_range_deg
-    if not low <= landing_angle_deg <= high:
+    if isinstance(model, TurfRollModel) and (landing_speed_mph is None or backspin_rpm is None):
         return None
-    return max(0.0, model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg)
+    return model.roll_yards(landing_angle_deg, landing_speed_mph, backspin_rpm)
 
 
-def roll_clamped(landing_angle_deg: float, surface: str = DEFAULT_SURFACE) -> bool:
-    """Whether the surface's model gave a negative roll here that was clamped at 0."""
-    model = BOUNCE_MODELS.get(surface)
-    if model is None or bounce_and_roll_yards(landing_angle_deg, surface) is None:
+def roll_clamped(
+    landing_angle_deg: float, surface: str = DEFAULT_SURFACE, model: Optional[RollModel] = None
+) -> bool:
+    """Whether the USGA / R&A line gave a negative roll here that was clamped at 0."""
+    model = BOUNCE_MODELS.get(surface) if model is None else model
+    if not isinstance(model, BounceModel) or model.roll_yards(landing_angle_deg) is None:
         return False
     return model.intercept_yards + model.slope_yards_per_deg * landing_angle_deg < 0.0
 
@@ -416,20 +446,30 @@ class Trajectory:
     landing_angle_deg: float
     downrange_yards: float = 0.0
     landing_heading_deg: float = 0.0
+    landing_backspin_rpm: float = 0.0
 
     @property
     def carry_side_yards(self) -> float:
         """Signed side of the landing point from the x axis, positive right."""
         return self.lateral_yards
 
-    def rest_point(self, surface: str = DEFAULT_SURFACE) -> Optional[tuple[float, float]]:
+    def rest_point(
+        self, surface: str = DEFAULT_SURFACE, model: Optional[RollModel] = None
+    ) -> Optional[tuple[float, float]]:
         """(x, y) yards where the ball stops, or None where the model gives no value.
 
-        The landing point plus the surface's bounce-and-roll distance along the
-        landing heading. Rolling on along the heading is an assumption: the model
-        gives a distance, not a direction, and no sideways kick is modelled.
+        The landing point plus the surface's (or ``model``'s) bounce-and-roll
+        distance along the landing heading. Rolling on along the heading is an
+        assumption: the model gives a distance, not a direction, and no sideways
+        kick is modelled.
         """
-        roll = bounce_and_roll_yards(self.landing_angle_deg, surface)
+        roll = bounce_and_roll_yards(
+            self.landing_angle_deg,
+            surface,
+            self.landing_speed_mph,
+            self.landing_backspin_rpm,
+            model,
+        )
         if roll is None:
             return None
         heading = math.radians(self.landing_heading_deg)
@@ -654,6 +694,7 @@ def simulate(
 
     # rpm → rad/s; integrated with the flight (Ferguson 2022's Eq. 4 spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
+    backspin_share = math.cos(math.radians(conditions.spin_axis_deg))
 
     points: list[TrajectoryPoint] = [
         TrajectoryPoint(0.0, 0.0, 0.0, 0.0, conditions.ball_speed_mph, conditions.spin_rpm)
@@ -695,7 +736,7 @@ def simulate(
                     omega * 60 / (2 * math.pi),
                 )
             )
-            return _trajectory(points, final, max_z, t_hit)
+            return _trajectory(points, final, max_z, t_hit, backspin_share)
 
         state = new_state
 
@@ -715,11 +756,17 @@ def simulate(
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
-    return _trajectory(points, state, max_z, t)
+    return _trajectory(points, state, max_z, t, backspin_share)
 
 
-def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Trajectory:
-    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7)."""
+def _trajectory(
+    points: list, final: tuple, max_z: float, t_end: float, backspin_share: float = 1.0
+) -> Trajectory:
+    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7).
+
+    ``backspin_share`` is the cosine of the spin axis tilt: the part of the spin
+    about the horizontal axis, which is what bounces and rolls.
+    """
     fx, fy, _, fvx, fvy, fvz = final[:6]
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
     horizontal = math.sqrt(fvx * fvx + fvy * fvy)
@@ -733,4 +780,5 @@ def _trajectory(points: list, final: tuple, max_z: float, t_end: float) -> Traje
         landing_angle_deg=math.degrees(math.atan2(-fvz, horizontal)),
         downrange_yards=fx * M_TO_YD,
         landing_heading_deg=math.degrees(math.atan2(fvy, fvx)),
+        landing_backspin_rpm=final[6] * backspin_share * 60 / (2 * math.pi),
     )
