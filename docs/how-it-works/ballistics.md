@@ -494,7 +494,7 @@ on FIFA footballs with no spin decay in it.
 
 ## Total: bounce and roll
 
-Total is carry plus bounce and roll from **turf-roll-v1**
+Total is carry plus bounce and roll from **turf-roll-v2**
 (`src/openflight/bounce_roll.py`), from the landing angle, landing speed and
 landing backspin (the spin times the cosine of the spin axis tilt):
 
@@ -509,18 +509,37 @@ landing backspin (the spin times the cosine of the spin axis tilt):
   it leaves rolling. The normal restitution falls with the normal impact speed,
   \(e = e_0 / (1 + v_n / v_e)\), and the turf caps the speed kept along the
   surface, \(v_t / \sqrt{1 + (v_t / v_c)^2}\) with \(v_c\) falling with \(v_n\).
-- **Hops** are ballistic; once a hop is under 1 cm the ball slides until it
-  rolls, then rolls out against a constant resistance plus a speed-squared turf
-  drag, \(\dot v = -(g c_0 + k v^2)\), which integrates in closed form. Heavy
-  backspin on a steep landing can bring the ball back past where it landed.
+- **Hops** between bounces fly through the flight model (`ballistics.hop_flight`):
+  drag, Magnus lift and spin decay as in flight, in the flight's own air,
+  carrying the spin out of each bounce (backspin lifts a hop, topspin pushes it
+  down). RK4 at 10 ms lands a hop within 2 mm of the 2 ms flight step. Once a hop
+  is under 1 cm the ball slides until it rolls, then rolls out against a constant
+  resistance plus a speed-squared turf drag, \(\dot v = -(g c_0 + k v^2)\),
+  which integrates in closed form. Heavy backspin on a steep landing can bring the
+  ball back past where it landed.
 
-The twelve constants were fitted by the maintainer (flight-fit-v2) for fairway
-turf of normal firmness over landing speeds 18–100 mph, landing angles 5–65° and
-backspin 0–11,000 rpm. On the 60 export shots (of the 67 flight-fit-v1 was
-fitted to) that land inside both models' ranges, flight-fit-v1's carry plus this
-roll is within 1.71 yd RMSE of the exports' estimated total (driver 3.48, mid
-irons 1.56, wedges 0.80), against 5.90 yd for the USGA / R&A line below (driver
-5.58, mid irons 4.42, wedges 7.07).
+The twelve constants were fitted by the maintainer (turf-roll-v2) for fairway
+turf of normal firmness, with the hops flown by flight-fit-v1 in normalized air.
+The fit covered 4,096 landing states (landing speeds 18–100 mph, landing angles
+5–65°, backspin 0–11,000 rpm) plus the landings of 3,072 club-typical launches
+(driver and woods, mid irons, wedges), with a random 20 % of each held out.
+
+turf-roll-v1, the same bounce with vacuum hops, stays selectable. A vacuum hop
+flies too far after a fast, shallow landing, which is where drives land. RMSE
+(yd), turf-roll-v1 → turf-roll-v2:
+
+| | All | Driver / wood | Mid iron | Wedge |
+| --- | --- | --- | --- | --- |
+| Roll, held-out landing states | 1.765 → 1.759 | | | |
+| Roll, held-out club-typical landings | 1.23 → 1.08 | 1.50 → 1.23 | 0.96 → 0.82 | 1.16 → 1.16 |
+| Total, held-out club-typical launches (flight-fit-v1 carry) | | 3.55 → 3.40 | 2.08 → 2.13 | 1.78 → 1.84 |
+| Total, 62 export shots vs their estimated total (flight-fit-v1 carry) | 1.70 → 1.31 | 3.48 → 2.08 | 1.56 → 1.34 | 0.80 → 0.94 |
+
+The export shots are the 67 flight-fit-v1 was fitted to, less the five that land
+outside 5–65°. On the 60 that land inside both models' ranges, the USGA / R&A
+line below is at 5.90 yd (driver 5.58, mid irons 4.42, wedges 7.07). Part of the
+remaining total error is the flight's: flight-fit-v1 carries wedges 0.8 yd short
+on the export shots, which turf-roll-v1's longer roll had partly hidden.
 
 OpenFlight applies it as follows:
 
@@ -534,8 +553,8 @@ OpenFlight applies it as follows:
   gives `total_side`.
 
 The **USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in
-Evaluating Optimum Overall Distance"**, Eq. 1, stays selectable
-(`USGA_RA_2021_BOUNCE_MODEL`, `ROLL_MODELS`, or `model=` on
+Evaluating Optimum Overall Distance"**, Eq. 1, also stays selectable
+(`USGA_RA_2021_BOUNCE_MODEL`, `TURF_ROLL_V1`, `ROLL_MODELS`, or `model=` on
 `bounce_and_roll_yards` and `Trajectory.rest_point`):
 
 $$
@@ -608,7 +627,9 @@ themselves from speed, launch and spin.
 | `RANGE_DT_SECONDS` | 0.02 | Range sweep only |
 | `MAX_FLIGHT_SECONDS` | 15.0 | Safety cap |
 | `SAMPLE_INTERVAL_S` | 0.05 | Cadence of returned trajectory points |
-| `TURF_ROLL_V1` | twelve fitted constants, landing angle 5–65° | Fairway bounce and roll (active) |
+| `HOP_DT_SECONDS` | 0.01 | Step for the hops between bounces |
+| `TURF_ROLL_V2` | twelve fitted constants, landing angle 5–65°, hops through the air | Fairway bounce and roll (active) |
+| `TURF_ROLL_V1` | twelve fitted constants, landing angle 5–65°, vacuum hops | Fairway bounce and roll (selectable) |
 | `USGA_RA_2021_BOUNCE_MODEL` | 79.1 yd, −1.6 yd/°, 10–50° | Fairway bounce and roll (selectable) |
 
 !!! note "Why the maximum-conforming ball"
