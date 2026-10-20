@@ -117,6 +117,14 @@ def test_tester_refuses_to_race_the_kiosk_service_with_the_exact_command(tmp_pat
     assert "sudo systemctl stop openflight.service" in result.stderr
 
 
+def test_tester_refusal_also_says_how_to_keep_the_service_off_after_a_reboot(tmp_path):
+    """`stop` lasts until the next boot; a tester unit wants autostart off for good."""
+    result = _run(tmp_path, "refuse_while_kiosk_service_runs", service_state="active")
+
+    assert result.returncode != 0
+    assert "sudo systemctl disable --now openflight.service" in result.stderr
+
+
 def test_a_venv_with_system_site_packages_pins_the_system_python(tmp_path):
     _venv(tmp_path, system_site=True)
 

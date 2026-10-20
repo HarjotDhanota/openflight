@@ -31,6 +31,9 @@ refuse_while_kiosk_service_runs() {
         echo "It owns the camera and radars and rebuilds the Python environment." >&2
         echo "Stop it first, then start the tester again:" >&2
         echo "  sudo systemctl stop openflight.service" >&2
+        echo "On a unit used with the tester, also keep it from starting at boot" >&2
+        echo "(this stops it now as well):" >&2
+        echo "  sudo systemctl disable --now openflight.service" >&2
         return 1
     fi
     return 0
