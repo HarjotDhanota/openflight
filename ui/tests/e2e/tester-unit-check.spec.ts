@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, mockLens, placementBoxState, useTester } from './helpers';
+import { DEFAULT_TESTER, mockLens, placementBoxState } from './helpers';
 
 // 19 Oct: the tester flow for outside testers. Step 2 checks the unit (all four
 // sensors, then the tilt sensor's direction by one lift of the front, then the setup);
@@ -117,8 +117,9 @@ interface Stage {
   status?: () => object;
 }
 
-async function useStage(page: Page, o: Stage) {
-  await useTester(page);
+async function stage(page: Page, o: Stage) {
+  // the tester already chosen, as a returning tester's page has it (helpers' useTester)
+  await page.addInitScript((id) => localStorage.setItem('openflight-tester-id', id), DEFAULT_TESTER);
   await mockLens(page);
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, (o.setup ?? (() => READY))()));
   await page.route('**/api/tester/lis3dh-check', (route) =>
@@ -155,7 +156,7 @@ for (const viewport of VIEWPORTS) {
     test('step 2 checks the unit in plain words, with its Check the unit button on screen', async ({ page }) => {
       let setup = eligibility();
       const runs: object[] = [];
-      await useStage(page, { setup: () => setup, tilt: () => tilt('not_run') });
+      await stage(page, { setup: () => setup, tilt: () => tilt('not_run') });
       await page.route('**/api/tester/run', (route) => {
         runs.push(route.request().postDataJSON());
         setup = eligibility({ checked: true, missing: ['Camera (OV9281)'] });
@@ -200,7 +201,7 @@ for (const viewport of VIEWPORTS) {
     test('the tilt check: lift the front, and a wrong reading offers its fix by tap', async ({ page }) => {
       let state = tilt('not_run');
       const posts: object[] = [];
-      await useStage(page, { setup: () => eligibility({ checked: true }), tilt: () => state });
+      await stage(page, { setup: () => eligibility({ checked: true }), tilt: () => state });
       await page.route('**/api/tester/lis3dh-check', (route) => {
         if (route.request().method() !== 'POST') return route.fallback();
         const body = route.request().postDataJSON();
@@ -239,7 +240,7 @@ for (const viewport of VIEWPORTS) {
     });
 
     test('an upside-down board is caught by gravity alone', async ({ page }) => {
-      await useStage(page, {
+      await stage(page, {
         setup: () => eligibility({ checked: true, lis3dh: 'LIS3DH reports the enclosure is upside down' }),
         tilt: () => tilt('upside_down', { suggestion: 'upside_down' }),
       });
@@ -254,7 +255,7 @@ for (const viewport of VIEWPORTS) {
       let box = 'needs_confirmation';
       let aim = 'needs_patch';
       let light = false;
-      await useStage(page, {
+      await stage(page, {
         setup: () => setup,
         status: () => ({ study: { arms: light ? STUDY_ARMS : [] } }),
       });
@@ -286,7 +287,7 @@ for (const viewport of VIEWPORTS) {
     });
 
     test('free play not started: the band is neutral, never a red NOT READY', async ({ page }) => {
-      await useStage(page, {
+      await stage(page, {
         range: () => ({ epoch_id: 'e1', phase: 'experimental', reason: 'camera_prior_saved' }),
         status: () => ({ study: { arms: STUDY_ARMS }, free_play: { enabled: false } }),
       });
@@ -300,7 +301,7 @@ for (const viewport of VIEWPORTS) {
     test('step 6 opens the camera by itself: one tap, Save the ball', async ({ page }) => {
       let range: object | null = null;
       const actions: string[] = [];
-      await useStage(page, { range: () => range, status: () => ({ study: { arms: STUDY_ARMS } }) });
+      await stage(page, { range: () => range, status: () => ({ study: { arms: STUDY_ARMS } }) });
       await page.route('**/api/tester/tee-range', (route) => {
         const { action } = route.request().postDataJSON();
         actions.push(action);
@@ -319,7 +320,7 @@ for (const viewport of VIEWPORTS) {
     });
 
     test('step 6 says free play is next, and how its light note differs from step 5', async ({ page }) => {
-      await useStage(page, {
+      await stage(page, {
         range: () => ({ epoch_id: 'e1', phase: 'experimental', reason: 'camera_prior_saved' }),
         status: () => ({ study: { arms: STUDY_ARMS } }),
       });
@@ -352,7 +353,7 @@ for (const viewport of VIEWPORTS) {
 
     test('step 8: a big Download, the send folder and size, and three plain steps to send it', async ({ page }) => {
       const bundle = { name: 'demo-tester-session-bundle-20261019T183012Z.zip', size_bytes: 1_234_567_890, sha256: 'a'.repeat(64) };
-      await useStage(page, {
+      await stage(page, {
         range: () => ({ epoch_id: 'e1', phase: 'experimental', reason: 'camera_prior_saved' }),
         status: () => ({
           study: { arms: STUDY_ARMS },
@@ -396,7 +397,7 @@ for (const viewport of VIEWPORTS) {
 }
 
 test('step 1 asks for no photo spray, and a first lens pick names nothing to set again', async ({ page }) => {
-  await useStage(page, { setup: () => eligibility(), tilt: () => tilt('not_run'), box: 'setup_not_confirmed', aim: 'needs_patch' });
+  await stage(page, { setup: () => eligibility(), tilt: () => tilt('not_run'), box: 'setup_not_confirmed', aim: 'needs_patch' });
   await page.unroute('**/api/tester/lens?**');
   await mockLens(page, null);
   await page.route('**/api/tester/lens', (route) =>
