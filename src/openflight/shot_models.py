@@ -246,7 +246,7 @@ def _collision_inputs(shot: Shot) -> dict:
 
 
 def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
-    """The full ball speed (E3), calculated; the radial speed never stands in for it."""
+    """The full ball speed, calculated; the radial speed never stands in for it."""
     speed = shot.ball_speed_full_mph
     if _finite(speed) and speed > 0:
         return collision_model.Input(
