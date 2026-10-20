@@ -1,8 +1,9 @@
-"""Published collision model for the club-face and spin metrics (Part E, item E2).
+"""Collision model for the club-face, spin and index metrics (Part E, item E2).
 
 Every number here comes from a published source, read from the paper itself, or
 from the named clean-room fit to the owner's TM4 export; the derivations and units
-are in ``docs/how-it-works/collision-model.md``. Each shot
+are in ``docs/how-it-works/collision-model.md``. The forward model
+(``collision_forward``) has constants fitted by the maintainer. Each shot
 uses only its own inputs; a model constant is fixed, a shot's input never is. A
 missing input makes every metric built on it "not measured", with the reason.
 
@@ -17,9 +18,13 @@ missing input makes every metric built on it "not measured", with the reason.
    Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.352 m r^2, r = 21.335 mm), fitted
    in a clean-room study of the owner's TM4 export. The collision model's own
    spin is built from face and loft, so it never feeds them: without a measured
-   spin, face and loft come from the D-plane inversion below, and say why.
+   spin, face and loft come from the inverse of the fitted launch model
+   (``collision_forward.face_and_loft_from_launch``), and say why. Without the
+   horizontal launch or path, the loft alone comes from the vertical plane;
+   without the vertical launch or attack, the face alone from the published
+   horizontal ratio below.
 
-   **D-plane inversion with published weights.** Wood, Henrikson & Broadie, "The
+   **Published launch ratios (kept as a reference).** Wood, Henrikson & Broadie, "The
    Influence of Face Angle and Club Path on the Resultant Launch Angle of a Golf
    Ball", *Proceedings* 2(6):249 (2018),
    doi:10.3390/proceedings2060249, define the launch ratios per plane:
@@ -40,11 +45,15 @@ missing input makes every metric built on it "not measured", with the reason.
    and Henrikson, Wood, Broadie & Nuttall 2020, *Proceedings* 49(1):27,
    doi:10.3390/proceedings2020049027 (Fig. 6: "the launch ratio monotonically
    decreases for increasing loft" for dry contact). The linear shape between
-   anchors is our choice, not the paper's; E8 refits it to TM4.
+   anchors is our choice, not the paper's. The fitted launch model's inverse
+   replaced these ratios: on the fitting hold-out its face is 0.002-0.015 deg RMS
+   off, the ratios' 0.8-1.0 deg.
 
 2. **Spin loft, face to path, D-plane tilt:** ``metric_definitions`` (D37).
 
-3. **Calculated spin rate: Penner 2001.** A. R. Penner, "The physics of golf: The
+3. **Calculated spin rate: the fitted forward model** (``collision_forward``), at the
+   face centre unless an impact location is measured. Penner's own model below is
+   kept as the published baseline. A. R. Penner, "The physics of golf: The
    optimum loft of a driver", *Am. J. Phys.* 69, 563-568 (2001),
    doi:10.1119/1.1344164. Clubhead a free flat plate of mass M, ball a uniform
    solid sphere (I = 2/5 m r^2), ball rolling when it leaves the face. Eqs. (5),
@@ -65,15 +74,18 @@ missing input makes every metric built on it "not measured", with the reason.
 
 4. **Spin axis.** Irons and wedges: tan(axis) = tan(D-plane tilt) x (0.81385 +
    0.00342 x dynamic loft), the clean-room fit to the owner's TM4 irons.
-   Drivers, woods and hybrids: the D-plane tilt (TrackMan's public definition:
-   "the expected spin axis disregarding any gear effect"). With a measured
-   impact offset a gear sidespin from R. Cross & A. M. Nathan, "Experimental
-   study of the gear effect in ball collisions", *Am. J. Phys.* 75, 658-664
-   (2007), doi:10.1119/1.2713788, Eq. (6), tilts it. Without one, the tilt
-   alone, with the note "no impact location: gear effect not applied".
+   Drivers, woods and hybrids: the fitted forward model's centre axis. With a
+   measured impact location the forward model's gear effect (after R. Cross &
+   A. M. Nathan, "Experimental study of the gear effect in ball collisions",
+   *Am. J. Phys.* 75, 658-664 (2007), doi:10.1119/1.2713788) adds its back and
+   side spin. Without one, the face centre, with the note ``NOTE_NO_GEAR``.
 
 5. **Gyro:** Penner's collision is planar: the spin vector is normal to the D
    plane, so gyro is zero by construction, not a result. It is "not measured".
+
+6. **Spin index and smash index:** the shot's measured spin over the expected spin,
+   and its ball speed over the expected ball speed, in percent
+   (``collision_forward.expected_spin_rpm``, ``expected_ball_speed_mph``).
 
 Labels: an output is ``calculated`` unless an input is ``model_geometry`` (D39),
 which it then inherits. Horizontal outputs carry their inputs' frame
@@ -86,7 +98,7 @@ import math
 from dataclasses import asdict, dataclass, field, replace
 from typing import Optional
 
-from . import metric_definitions
+from . import collision_forward, metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .horizontal_frame import MIXED, combined_frame
@@ -102,7 +114,7 @@ from .source_labels import (  # noqa: F401  (the predicates are re-exported)
     is_model_geometry_source,
 )
 
-MODEL_VERSION = "e2-2026-10-20"
+MODEL_VERSION = "e2-2026-10-20-fitted"
 
 # Input labels (source_labels: measured, calculated, model geometry, estimated) and
 # output statuses.
@@ -112,13 +124,21 @@ STATUS_ESTIMATED = "estimated"
 STATUS_NOT_MEASURED = "not_measured"
 _INPUT_LABELS = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
 
-SOURCE_INVERSION = "D-plane inversion, Wood et al. 2018 weights"
+SOURCE_INVERSION = "D-plane inversion of the fitted launch model"
 SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and loft"
 SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
+SOURCE_SPIN = (
+    "fitted collision model (Penner 2001 rolling and sliding; constants fitted by the maintainer)"
+)
+SOURCE_AXIS_MODEL = "fitted collision model: D-plane tilt, centre-face strike"
+SOURCE_SPIN_INDEX = "measured spin / expected spin (fitted collision model)"
+SOURCE_SMASH_INDEX = "ball speed / expected ball speed (fitted collision model)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
-NOTE_NO_GEAR = "no impact location: gear effect not applied"
-NOTE_GEAR_NO_HEAD_MODEL = "measured impact location but no head model: gear effect not applied"
+NOTE_NO_GEAR = "no impact location: centre-face strike assumed, no gear effect"
+NOTE_VERTICAL_PLANE = "no horizontal launch or path: loft from the vertical plane alone"
+NOTE_HORIZONTAL_RATIO = "no vertical launch or attack: face from the horizontal ratio alone"
+SOURCE_HORIZONTAL_RATIO = "D-plane horizontal launch ratio, Wood et al. 2018 weights"
 SOURCE_RIGID_BODY = (
     "rigid-body relation: ball speed x sin(ball to face normal) = I/(m r) x spin, "
     "I/(m r) = 7.50 mm (Cross & Nathan 2007; Penner 2001)"
@@ -131,23 +151,25 @@ FACE_METHOD_RIGID_BODY = "rigid_body"
 FACE_METHOD_INVERSION = "d_plane_inversion"
 NOTE_RIGID_BODY_NOT_USED = "rigid-body relation not used"
 CIRCULAR_SPIN_REASON = (
-    "spin was calculated from face and loft (Penner 2001): using it for them would be circular"
+    "spin was calculated from face and loft (collision model): using it for them would be circular"
 )
 # Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
 # both start with "calculated"). An axis built on a model-geometry input (D39) starts
 # with "model geometry" instead and names those inputs.
-FACE_BASIS_INVERSION = "Wood et al. 2018 weights"
+FACE_BASIS_INVERSION = "fitted launch-model inversion"
 FACE_BASIS_RIGID_BODY = "rigid-body face"
-AXIS_BASIS_TILT = f"D-plane tilt, {FACE_BASIS_INVERSION}"
 AXIS_BASIS_IRON = "model: D-plane tilt x TM4 iron factor"
-AXIS_BASIS_GEAR = "D-plane + gear effect, Cross & Nathan 2007"
-SPIN_AXIS_SOURCE_TILT = f"calculated ({AXIS_BASIS_TILT})"
+AXIS_BASIS_MODEL = "fitted collision model, centre-face strike"
+AXIS_BASIS_GEAR = "fitted collision model + gear effect, Cross & Nathan 2007"
+SPIN_AXIS_SOURCE_MODEL = f"calculated ({AXIS_BASIS_MODEL}, {FACE_BASIS_INVERSION})"
 SPIN_AXIS_SOURCE_IRON = f"calculated ({AXIS_BASIS_IRON}, {FACE_BASIS_INVERSION})"
 SPIN_AXIS_SOURCE_GEAR = f"calculated ({AXIS_BASIS_GEAR})"
-# Shot.spin_method for the Penner spin, by the labels of the inputs it was built on.
+# Shot.spin_method for the model's spin, by the labels of its inputs; an older
+# record names Penner 2001.
 SPIN_METHOD_PENNER = "Penner 2001"
-SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_PENNER}; club inputs model geometry (D39)"
-SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_PENNER}; an input estimated"
+SPIN_METHOD_MODEL = "fitted collision model"
+SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_MODEL}; club inputs model geometry (D39)"
+SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_MODEL}; an input estimated"
 
 MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
@@ -374,8 +396,11 @@ def invert_d_plane(
 
 
 def spin_built_from_face(spin: Input) -> bool:
-    """Whether a spin input is the collision model's own (Penner) spin, built from face."""
-    return spin.label != LABEL_MEASURED and SPIN_METHOD_PENNER in (spin.source or "")
+    """Whether a spin input is the collision model's own spin, built from face and loft."""
+    source = spin.source or ""
+    return spin.label != LABEL_MEASURED and (
+        SPIN_METHOD_MODEL in source or SPIN_METHOD_PENNER in source
+    )
 
 
 def rigid_body_face(
@@ -646,6 +671,7 @@ _INPUT_NAMES = {
     "ball_speed_mph": "ball speed",
     "spin_rpm": "spin rate",
     "impact_offset_mm": "impact offset",
+    "impact_height_mm": "impact height",
 }
 # E1's arc sources (club_arc.ARC_PRIOR_SOURCE, ARC_FIT_SOURCE), in words
 _SOURCE_NAMES = {
@@ -676,8 +702,11 @@ def _axis_basis(axis: Metric, face_method: Optional[str]) -> str:
     if SOURCE_GEAR in (axis.source or ""):
         return AXIS_BASIS_GEAR
     face = FACE_BASIS_RIGID_BODY if face_method == FACE_METHOD_RIGID_BODY else FACE_BASIS_INVERSION
-    tilt = AXIS_BASIS_IRON if axis.source == SOURCE_AXIS_IRON else "D-plane tilt"
-    return f"{tilt}, {face}"
+    if axis.source == SOURCE_AXIS_IRON:
+        return f"{AXIS_BASIS_IRON}, {face}"
+    if axis.source == SOURCE_AXIS_MODEL:
+        return f"{AXIS_BASIS_MODEL}, {face}"
+    return f"D-plane tilt, {face}"
 
 
 def shot_spin_axis_source(
@@ -694,13 +723,13 @@ def shot_spin_axis_source(
 
 
 def shot_spin_method(status: str, input_labels) -> str:
-    """The Shot.spin_method string for the Penner spin, naming its inputs' weakest label."""
+    """The Shot.spin_method string for the model's spin, naming its inputs' weakest label."""
     if status == STATUS_ESTIMATED:
         return SPIN_METHOD_ESTIMATED
     if status == STATUS_MODEL_GEOMETRY:
         return SPIN_METHOD_MODEL_GEOMETRY
     weakest = LABEL_CALCULATED if LABEL_CALCULATED in set(input_labels) else LABEL_MEASURED
-    return f"{SPIN_METHOD_PENNER}; club inputs {weakest}"
+    return f"{SPIN_METHOD_MODEL}; club inputs {weakest}"
 
 
 GYRO_REASON = (
@@ -727,6 +756,7 @@ class CollisionResult:
     weights: Optional[LaunchWeights]
     inputs: dict[str, Input] = field(default_factory=dict)
     face_method: Optional[str] = None
+    forward: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -735,53 +765,8 @@ class CollisionResult:
             "weights": asdict(self.weights) if self.weights is not None else None,
             "inputs": {name: _input_record(name, value) for name, value in self.inputs.items()},
             "metrics": {name: metric.to_dict() for name, metric in self.metrics.items()},
+            "forward": self.forward,
         }
-
-
-def _face_angle(
-    weights: Optional[LaunchWeights], path: Input, launch_h: Input
-) -> tuple[Metric, Optional[str]]:
-    frame = combined_frame(path.frame, launch_h.frame)
-    if weights is None:
-        return _not_measured("deg", "no club category: club unknown", SOURCE_INVERSION), frame
-    if not launch_h.present:
-        return _not_measured(
-            "deg", launch_h.missing_reason("launch direction"), SOURCE_INVERSION
-        ), frame
-    if not path.present:
-        return _not_measured("deg", path.missing_reason("club path"), SOURCE_INVERSION), frame
-    face = path.value + (launch_h.value - path.value) / weights.horizontal
-    return (
-        Metric(
-            value=face,
-            status=_status_from(path.label, launch_h.label),
-            source=SOURCE_INVERSION,
-            unit="deg",
-            frame=frame,
-            note=_frame_note(frame),
-            reason=_estimated_reason(path, launch_h),
-        ),
-        frame,
-    )
-
-
-def _dynamic_loft(weights: Optional[LaunchWeights], attack: Input, launch_v: Input) -> Metric:
-    if weights is None:
-        return _not_measured("deg", "no club category: club unknown", SOURCE_INVERSION)
-    if not launch_v.present:
-        return _not_measured("deg", launch_v.missing_reason("vertical launch"), SOURCE_INVERSION)
-    if not attack.present:
-        return _not_measured("deg", attack.missing_reason("attack angle"), SOURCE_INVERSION)
-    loft = attack.value + (launch_v.value - attack.value) / weights.vertical
-    if not -90.0 < loft < 90.0:
-        return _not_measured("deg", "inverted loft beyond vertical", SOURCE_INVERSION)
-    return Metric(
-        value=loft,
-        status=_status_from(attack.label, launch_v.label),
-        source=SOURCE_INVERSION,
-        unit="deg",
-        reason=_estimated_reason(attack, launch_v),
-    )
 
 
 def _with_note(metric: Metric, note: str) -> Metric:
@@ -790,8 +775,67 @@ def _with_note(metric: Metric, note: str) -> Metric:
     return replace(metric, note=f"{note}; {metric.note}" if metric.note else note)
 
 
+def _inverted_face_and_loft(
+    club: ClubType, inputs: dict[str, Input]
+) -> tuple[Metric, Metric, Optional[str]]:
+    """(face, loft, frame) from the fitted launch model's inverse, each labelled."""
+    path, attack = inputs["club_path"], inputs["attack_angle"]
+    launch_h, launch_v = inputs["launch_horizontal"], inputs["launch_vertical"]
+    frame = combined_frame(path.frame, launch_h.frame)
+    if collision_forward.club_category(club) is None:
+        gone = _not_measured("deg", "no club category: club unknown", SOURCE_INVERSION)
+        return gone, gone, frame
+    vertical = {"vertical launch": launch_v, "attack angle": attack}
+    horizontal = {"launch direction": launch_h, "club path": path}
+    absent = [value.missing_reason(name) for name, value in vertical.items() if not value.present]
+    if absent:
+        loft = _not_measured("deg", "; ".join(absent), SOURCE_INVERSION)
+        if not (launch_h.present and path.present):
+            return loft, loft, frame
+        face = path.value + (launch_h.value - path.value) / weights_for_club(club).horizontal
+        status = _status_from(path.label, launch_h.label)
+        reason = _estimated_reason(path, launch_h)
+        note = (
+            NOTE_HORIZONTAL_RATIO
+            if frame != MIXED
+            else f"{NOTE_HORIZONTAL_RATIO}; {_frame_note(frame)}"
+        )
+        return (
+            Metric(face, status, SOURCE_HORIZONTAL_RATIO, "deg", frame, reason, note),
+            loft,
+            frame,
+        )
+    missing = [
+        value.missing_reason(name) for name, value in horizontal.items() if not value.present
+    ]
+    solved = collision_forward.face_and_loft_from_launch(
+        club=club,
+        launch_vertical_deg=launch_v.value,
+        launch_horizontal_deg=launch_h.value if not missing else 0.0,
+        club_path_deg=path.value if not missing else 0.0,
+        attack_angle_deg=attack.value,
+    )
+    if solved is None:
+        gone = _not_measured(
+            "deg", "launch along the club's direction: no D plane", SOURCE_INVERSION
+        )
+        return gone, gone, frame
+    face_value, loft_value = solved
+    used = {**vertical, **({} if missing else horizontal)}
+    status = _status_from(*(value.label for value in used.values()))
+    reason = _estimated_reason(*used.values())
+    loft = Metric(loft_value, status, SOURCE_INVERSION, "deg", reason=reason)
+    if missing:
+        face = _not_measured("deg", "; ".join(missing), SOURCE_INVERSION)
+        return face, _with_note(loft, NOTE_VERTICAL_PLANE), frame
+    face = Metric(
+        face_value, status, SOURCE_INVERSION, "deg", frame, reason=reason, note=_frame_note(frame)
+    )
+    return face, loft, frame
+
+
 def _face_and_loft(
-    weights: Optional[LaunchWeights],
+    club: ClubType,
     inputs: dict[str, Input],
 ) -> tuple[Metric, Metric, Optional[str], Optional[str]]:
     """(face, loft, frame, method): rigid-body with a measured spin, else the inversion."""
@@ -818,11 +862,205 @@ def _face_and_loft(
         )
     else:
         why = spin.missing_reason("spin rate")
-    face, frame = _face_angle(weights, path, launch_h)
-    loft = _dynamic_loft(weights, attack, launch_v)
+    face, loft, frame = _inverted_face_and_loft(club, inputs)
     note = f"{NOTE_RIGID_BODY_NOT_USED}: {why}"
     method = FACE_METHOD_INVERSION if face.present or loft.present else None
     return _with_note(face, note), _with_note(loft, note), frame, method
+
+
+def _measured(value: Optional[Input]) -> bool:
+    return value is not None and value.present and value.label == LABEL_MEASURED
+
+
+def _delivery_metrics(face, loft, attack_angle, club_path, frame):
+    """(spin loft, D-plane tilt) of the delivery, or not measured with the reason."""
+    if not (face.present and loft.present and attack_angle.present and club_path.present):
+        missing = face if not face.present else loft
+        reason = missing.reason if not missing.present else "club delivery not measured"
+        return _not_measured("deg", reason, SOURCE_D37), _not_measured("deg", reason, SOURCE_D37)
+    status = _status_from(face.status, loft.status, attack_angle.label, club_path.label)
+    why = _estimated_reason(face, loft, attack_angle, club_path)
+    args = (loft.value, face.value, attack_angle.value, club_path.value)
+    loft_value = metric_definitions.spin_loft_deg(*args)
+    tilt_value = metric_definitions.d_plane_tilt_deg(*args)
+    note = _frame_note(frame)
+    spin_loft = (
+        Metric(loft_value, status, SOURCE_D37, "deg", frame, reason=why, note=note)
+        if loft_value is not None and math.isfinite(loft_value)
+        else _not_measured("deg", "spin loft undefined for this delivery", SOURCE_D37)
+    )
+    tilt = (
+        Metric(tilt_value, status, SOURCE_D37, "deg", frame, reason=why, note=note)
+        if tilt_value is not None and math.isfinite(tilt_value)
+        else _not_measured(
+            "deg", "no D plane: club direction parallel to the face normal", SOURCE_D37
+        )
+    )
+    return spin_loft, tilt
+
+
+def _forward_impact(club, club_speed, attack, path, face, loft, location, handedness):
+    if not (club_speed.present and club_speed.value > 0.0 and face.present and loft.present):
+        return None
+    return collision_forward.forward(
+        club=club,
+        club_speed_mph=club_speed.value,
+        attack_angle_deg=attack.value,
+        club_path_deg=path.value,
+        face_angle_deg=face.value,
+        dynamic_loft_deg=loft.value,
+        impact_offset_mm=location.get("impact_offset_mm"),
+        impact_height_mm=location.get("impact_height_mm"),
+        handedness=handedness,
+    )
+
+
+def _spin_metric(impact, centre: Metric, club_speed: Input, spin_loft: Metric, located: bool):
+    if not spin_loft.present:
+        return _not_measured("rpm", f"spin loft not measured ({spin_loft.reason})", SOURCE_SPIN)
+    if not club_speed.present:
+        return _not_measured("rpm", club_speed.missing_reason("club speed"), SOURCE_SPIN)
+    if impact is None:
+        reason = (
+            "club speed not positive" if club_speed.value <= 0.0 else "delivery outside the model"
+        )
+        return _not_measured("rpm", reason, SOURCE_SPIN)
+    value = impact.spin_rpm
+    if located and centre.present:
+        value, _ = collision_forward.combine_spin(
+            impact.centre_spin_rpm, centre.value, impact.gear_back_rpm, impact.gear_side_rpm
+        )
+    note = _frame_note(spin_loft.frame)
+    if not located:
+        note = NOTE_NO_GEAR if note is None else f"{NOTE_NO_GEAR}; {note}"
+    return Metric(
+        value=value,
+        status=_status_from(club_speed.label, spin_loft.status),
+        source=SOURCE_SPIN,
+        unit="rpm",
+        frame=spin_loft.frame,
+        note=note,
+        reason=_estimated_reason(club_speed, spin_loft),
+    )
+
+
+def _centre_axis(club, tilt: Metric, loft: Metric, attack, path, face) -> Metric:
+    if uses_iron_axis_model(club):
+        return iron_spin_axis(tilt, loft)
+    if not tilt.present:
+        return _not_measured("deg", f"D-plane tilt not measured ({tilt.reason})", SOURCE_AXIS_MODEL)
+    impact = collision_forward.forward(
+        club=club,
+        club_speed_mph=1.0,
+        attack_angle_deg=attack.value,
+        club_path_deg=path.value,
+        face_angle_deg=face.value,
+        dynamic_loft_deg=loft.value,
+    )
+    if impact is None:
+        return _not_measured("deg", "delivery outside the model", SOURCE_AXIS_MODEL)
+    return Metric(
+        value=impact.centre_spin_axis_deg,
+        status=_status_from(tilt.status, loft.status),
+        source=SOURCE_AXIS_MODEL,
+        unit="deg",
+        frame=tilt.frame,
+        note=_frame_note(tilt.frame),
+        reason=_estimated_reason(tilt, loft),
+    )
+
+
+def _axis_metric(centre: Metric, impact, spin: Metric, located: bool) -> Metric:
+    if not centre.present:
+        return centre
+    if not located:
+        note = NOTE_NO_GEAR if centre.note is None else f"{NOTE_NO_GEAR}; {centre.note}"
+        return replace(centre, note=note)
+    if impact is None or not spin.present:
+        return _not_measured("deg", "gear effect needs the calculated spin rate", centre.source)
+    _, value = collision_forward.combine_spin(
+        impact.centre_spin_rpm, centre.value, impact.gear_back_rpm, impact.gear_side_rpm
+    )
+    return Metric(
+        value=value,
+        status=_status_from(centre.status, spin.status),
+        source=f"{centre.source} plus {SOURCE_GEAR}",
+        unit="deg",
+        frame=centre.frame,
+        note=_frame_note(centre.frame),
+        reason=_estimated_reason(centre, spin),
+    )
+
+
+def _spin_index(club, spin_rpm: Input, club_speed: Input, spin_loft: Metric) -> Metric:
+    if not _measured(spin_rpm):
+        why = spin_rpm.missing_reason("spin rate") if not spin_rpm.present else spin_rpm.label
+        return _not_measured(
+            "%", f"the index needs a measured spin (spin: {why})", SOURCE_SPIN_INDEX
+        )
+    if not spin_loft.present:
+        return _not_measured("%", f"spin loft not measured ({spin_loft.reason})", SOURCE_SPIN_INDEX)
+    if not club_speed.present:
+        return _not_measured("%", club_speed.missing_reason("club speed"), SOURCE_SPIN_INDEX)
+    expected = collision_forward.expected_spin_rpm(
+        club=club, club_speed_mph=club_speed.value, spin_loft_deg=spin_loft.value
+    )
+    if not expected:
+        return _not_measured("%", "no expected spin for this club or delivery", SOURCE_SPIN_INDEX)
+    return Metric(
+        value=100.0 * spin_rpm.value / expected,
+        status=_status_from(spin_rpm.label, club_speed.label, spin_loft.status),
+        source=SOURCE_SPIN_INDEX,
+        unit="%",
+        reason=_estimated_reason(spin_rpm, club_speed, spin_loft),
+    )
+
+
+def _smash_index(club, ball_speed: Input, club_speed: Input, spin_loft, face, loft, inputs):
+    if not ball_speed.present:
+        return _not_measured("%", ball_speed.missing_reason("ball speed"), SOURCE_SMASH_INDEX)
+    if not club_speed.present:
+        return _not_measured("%", club_speed.missing_reason("club speed"), SOURCE_SMASH_INDEX)
+    if not (spin_loft.present and face.present and loft.present):
+        missing = next(metric for metric in (face, loft, spin_loft) if not metric.present)
+        return _not_measured(
+            "%", f"club delivery not measured ({missing.reason})", SOURCE_SMASH_INDEX
+        )
+    launch_v, launch_h = inputs["launch_vertical"], inputs["launch_horizontal"]
+    expected = collision_forward.expected_ball_speed_mph(
+        club=club,
+        club_speed_mph=club_speed.value,
+        spin_loft_deg=spin_loft.value,
+        face_angle_deg=face.value,
+        dynamic_loft_deg=loft.value,
+        launch_vertical_deg=launch_v.value,
+        launch_horizontal_deg=launch_h.value,
+    )
+    if not expected:
+        return _not_measured(
+            "%", "no expected ball speed for this club or delivery", SOURCE_SMASH_INDEX
+        )
+    return Metric(
+        value=100.0 * ball_speed.value / expected,
+        status=_status_from(ball_speed.label, club_speed.label, spin_loft.status, face.status),
+        source=SOURCE_SMASH_INDEX,
+        unit="%",
+        reason=_estimated_reason(ball_speed, club_speed, spin_loft, face),
+    )
+
+
+def _forward_record(impact) -> Optional[dict]:
+    if impact is None:
+        return None
+    return {
+        "model": collision_forward.MODEL_NAME,
+        "ball_speed_mph": impact.ball_speed_mph,
+        "launch_vertical_deg": impact.launch_vertical_deg,
+        "launch_horizontal_deg": impact.launch_horizontal_deg,
+        "spin_rpm": impact.spin_rpm,
+        "spin_axis_deg": impact.spin_axis_deg,
+        "impact_location": impact.impact_location,
+    }
 
 
 def evaluate(
@@ -836,15 +1074,16 @@ def evaluate(
     ball_speed_mph: Optional[Input] = None,
     spin_rpm: Optional[Input] = None,
     impact_offset_mm: Optional[Input] = None,
-    gear_sidespin_rpm: Optional[float] = None,
+    impact_height_mm: Optional[Input] = None,
+    handedness: Optional[str] = None,
 ) -> CollisionResult:
     """Every E2 metric for one shot, from that shot's inputs.
 
     ``spin_rpm`` and ``ball_speed_mph`` (the full speed) feed the rigid-body face when
-    the spin is measured. ``gear_sidespin_rpm`` tilts a driver's or wood's axis only
-    with a measured ``impact_offset_mm``.
+    the spin is measured; ``ball_speed_mph`` also feeds the smash index. A measured
+    impact location (+ toe, + up, mm) drives the gear effect; ``handedness`` is
+    right-handed unless "LH".
     """
-    weights = weights_for_club(club)
     inputs = {
         "club_path": club_path,
         "attack_angle": attack_angle,
@@ -852,13 +1091,13 @@ def evaluate(
         "launch_vertical": launch_vertical,
         "club_speed_mph": club_speed_mph,
     }
-    rigid_inputs = {
-        "ball_speed_mph": ball_speed_mph or Input(None, reason="ball speed not given"),
-        "spin_rpm": spin_rpm or Input(None, reason="spin rate not measured"),
-    }
-    face, loft, frame, face_method = _face_and_loft(weights, {**inputs, **rigid_inputs})
+    ball_speed = ball_speed_mph or Input(None, reason="ball speed not given")
+    spin_input = spin_rpm or Input(None, reason="spin rate not measured")
+    face, loft, frame, face_method = _face_and_loft(
+        club, {**inputs, "ball_speed_mph": ball_speed, "spin_rpm": spin_input}
+    )
     if face_method == FACE_METHOD_RIGID_BODY:
-        inputs.update(rigid_inputs)
+        inputs.update({"ball_speed_mph": ball_speed, "spin_rpm": spin_input})
 
     if face.present and club_path.present:
         face_to_path = Metric(
@@ -873,58 +1112,38 @@ def evaluate(
     else:
         face_to_path = _not_measured("deg", f"face angle not measured ({face.reason})", SOURCE_D37)
 
-    delivery_present = face.present and loft.present and attack_angle.present and club_path.present
-    if delivery_present:
-        status = _status_from(face.status, loft.status, attack_angle.label, club_path.label)
-        why = _estimated_reason(face, loft, attack_angle, club_path)
-        loft_value = metric_definitions.spin_loft_deg(
-            loft.value, face.value, attack_angle.value, club_path.value
+    spin_loft, tilt = _delivery_metrics(face, loft, attack_angle, club_path, frame)
+    location = {
+        name: value.value
+        for name, value in (
+            ("impact_offset_mm", impact_offset_mm),
+            ("impact_height_mm", impact_height_mm),
         )
-        tilt_value = metric_definitions.d_plane_tilt_deg(
-            loft.value, face.value, attack_angle.value, club_path.value
+        if _measured(value)
+    }
+    impact = (
+        _forward_impact(
+            club, club_speed_mph, attack_angle, club_path, face, loft, location, handedness
         )
-        spin_loft = (
-            Metric(
-                loft_value, status, SOURCE_D37, "deg", frame, reason=why, note=_frame_note(frame)
-            )
-            if loft_value is not None and math.isfinite(loft_value)
-            else _not_measured("deg", "spin loft undefined for this delivery", SOURCE_D37)
-        )
-        tilt = (
-            Metric(
-                tilt_value, status, SOURCE_D37, "deg", frame, reason=why, note=_frame_note(frame)
-            )
-            if tilt_value is not None and math.isfinite(tilt_value)
-            else _not_measured(
-                "deg", "no D plane: club direction parallel to the face normal", SOURCE_D37
-            )
-        )
-    else:
-        missing = face if not face.present else loft
-        reason = missing.reason if not missing.present else "club delivery not measured"
-        spin_loft = _not_measured("deg", reason, SOURCE_D37)
-        tilt = _not_measured("deg", reason, SOURCE_D37)
-
-    spin = calculated_spin(club_speed=club_speed_mph, spin_loft=spin_loft)
-    if uses_iron_axis_model(club):
-        axis = iron_spin_axis(tilt, loft)
-    else:
-        offset_measured = (
-            impact_offset_mm is not None
-            and impact_offset_mm.present
-            and impact_offset_mm.label == LABEL_MEASURED
-        )
-        gear_spin = spin
-        if spin_rpm is not None and spin_rpm.present and spin_rpm.label == LABEL_MEASURED:
-            gear_spin = Metric(spin_rpm.value, _status_from(spin_rpm.label), spin_rpm.source, "rpm")
-        axis = spin_axis(
-            tilt,
-            gear_spin,
-            gear_sidespin_rpm=gear_sidespin_rpm if offset_measured else None,
-            no_gear_note=NOTE_GEAR_NO_HEAD_MODEL if offset_measured else NOTE_NO_GEAR,
-        )
-        if offset_measured:
-            inputs["impact_offset_mm"] = impact_offset_mm
+        if spin_loft.present
+        else None
+    )
+    centre = (
+        _centre_axis(club, tilt, loft, attack_angle, club_path, face)
+        if tilt.present
+        else _not_measured("deg", f"D-plane tilt not measured ({tilt.reason})", SOURCE_AXIS)
+    )
+    spin = _spin_metric(impact, centre, club_speed_mph, spin_loft, bool(location))
+    axis = _axis_metric(centre, impact, spin, bool(location))
+    if location and axis.present:
+        given = {"impact_offset_mm": impact_offset_mm, "impact_height_mm": impact_height_mm}
+        inputs.update({name: given[name] for name in location})
+    spin_index = _spin_index(club, spin_input, club_speed_mph, spin_loft)
+    smash_index = _smash_index(club, ball_speed, club_speed_mph, spin_loft, face, loft, inputs)
+    if spin_index.present:
+        inputs["spin_rpm"] = spin_input
+    if smash_index.present:
+        inputs["ball_speed_mph"] = ball_speed
     gyro = _not_measured("deg", GYRO_REASON, SOURCE_PENNER)
 
     return CollisionResult(
@@ -937,8 +1156,11 @@ def evaluate(
             "spin_rate": spin,
             "spin_axis": axis,
             "gyro": gyro,
+            "spin_index": spin_index,
+            "smash_index": smash_index,
         },
-        weights=weights,
+        weights=weights_for_club(club),
         inputs=inputs,
         face_method=face_method,
+        forward=_forward_record(impact),
     )

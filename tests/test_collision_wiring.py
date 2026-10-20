@@ -66,7 +66,7 @@ def test_every_collision_value_lands_on_the_shot_with_status_source_and_frame():
     assert shot.spin_rpm_collision == pytest.approx(expected["spin_rate"].value, abs=0.5)
     metrics = shot.collision_model["metrics"]
     assert metrics["face_angle"]["status"] == "calculated"
-    assert metrics["face_angle"]["source"] == "D-plane inversion, Wood et al. 2018 weights"
+    assert metrics["face_angle"]["source"] == "D-plane inversion of the fitted launch model"
     assert metrics["face_angle"]["frame"] == "target_line"
     assert metrics["gyro"]["status"] == "not_measured"
     assert shot.collision_model["inputs"]["club_path"]["source"] == "camera_fused_chained"
@@ -106,13 +106,13 @@ def test_an_iron_spin_axis_is_the_iron_model_on_the_d_plane_tilt():
     assert shot.spin_axis_frame == "target_line"
 
 
-def test_a_driver_spin_axis_is_the_d_plane_tilt():
+def test_a_driver_spin_axis_is_the_fitted_centre_strike_axis():
     shot = _delivered_shot(club=ClubType.DRIVER)
 
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_axis_deg == pytest.approx(shot.d_plane_tilt_deg, abs=0.05)
-    assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_TILT
+    assert 0.0 < shot.spin_axis_deg < shot.d_plane_tilt_deg
+    assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_MODEL
     assert shot.collision_model["metrics"]["spin_axis"]["note"] == cm.NOTE_NO_GEAR
 
 
@@ -346,6 +346,21 @@ def test_the_model_runs_again_once_the_full_ball_speed_is_known(monkeypatch):
     shot_models.extension.after_speed_contract(shot)
 
     assert shot.collision_model["face_method"] == cm.FACE_METHOD_RIGID_BODY
+
+
+def test_the_full_ball_speed_brings_the_smash_index_on_a_calculated_spin(monkeypatch):
+    shot = _delivered_shot()
+    shot_models.extension.after_enrichment(shot)
+    assert shot.collision_model["metrics"]["smash_index"]["status"] == "not_measured"
+
+    def full_speeds(target):
+        target.ball_speed_full_mph = 118.0
+
+    monkeypatch.setattr(shot_models, "_attach_full_speeds", full_speeds)
+    shot_models.extension.after_speed_contract(shot)
+
+    assert shot.collision_model["metrics"]["smash_index"]["status"] == "calculated"
+    assert shot.spin_source == "calculated"
 
 
 def test_a_rerun_never_builds_the_face_from_the_models_own_spin():

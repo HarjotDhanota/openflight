@@ -8,7 +8,13 @@ from datetime import datetime
 
 import pytest
 
-from openflight import ballistics, collision_model as cm, full_speed, metric_definitions as md
+from openflight import (
+    ballistics,
+    collision_forward,
+    collision_model as cm,
+    full_speed,
+    metric_definitions as md,
+)
 from openflight.ballistics import LaunchConditions, simulate
 from openflight.clubs import ClubType
 from openflight.flight import AIR_DENSITY_NORMALIZED, compute_flight
@@ -66,16 +72,24 @@ def test_the_collision_model_inverts_its_own_forward_launch(club, path, attack, 
         weights=weights,
     )
     assert back == pytest.approx((face, loft), abs=1e-9)
+    impact = collision_forward.forward(
+        club=club,
+        club_speed_mph=90.0,
+        attack_angle_deg=attack,
+        club_path_deg=path,
+        face_angle_deg=face,
+        dynamic_loft_deg=loft,
+    )
     result = cm.evaluate(
         club=club,
         club_path=cm.Input(path, frame="target_line"),
         attack_angle=cm.Input(attack),
-        launch_horizontal=cm.Input(launch_h, frame="target_line"),
-        launch_vertical=cm.Input(launch_v),
+        launch_horizontal=cm.Input(impact.launch_horizontal_deg, frame="target_line"),
+        launch_vertical=cm.Input(impact.launch_vertical_deg),
         club_speed_mph=cm.Input(90.0),
     ).metrics
-    assert result["face_angle"].value == pytest.approx(face, abs=1e-9)
-    assert result["dynamic_loft"].value == pytest.approx(loft, abs=1e-9)
+    assert result["face_angle"].value == pytest.approx(face, abs=1e-6)
+    assert result["dynamic_loft"].value == pytest.approx(loft, abs=1e-6)
     # D37's spin loft and tilt are the ones E2 reports, from the same four angles
     assert result["spin_loft"].value == pytest.approx(md.spin_loft_deg(loft, face, attack, path))
     tilt = md.d_plane_tilt_deg(loft, face, attack, path)
@@ -134,7 +148,7 @@ def _fusion_shot(**overrides):
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
-        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         ball_speed_contract="full",
     )
     values.update(overrides)
@@ -182,11 +196,12 @@ def test_penner_spin_matches_the_paper_s_equations():
 
 
 _RANK = {"model_geometry": 0, "calculated": 1, "measured": 2}
-# each output's own inputs (launch angles and club speed are measured here)
+# each output's own inputs (launch angles and club speed are measured here); the
+# D-plane inversion takes face and loft together from all four angles
 _DEPENDS = {
-    "face_angle": ("path",),
-    "face_to_path": ("path",),
-    "dynamic_loft": ("attack",),
+    "face_angle": ("path", "attack"),
+    "face_to_path": ("path", "attack"),
+    "dynamic_loft": ("path", "attack"),
     "spin_loft": ("path", "attack"),
     "d_plane_tilt": ("path", "attack"),
     "spin_rate": ("path", "attack"),

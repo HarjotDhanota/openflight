@@ -152,3 +152,24 @@ describe('MetricGroupPanel', () => {
     expect(formatMetricValue(record({ value: null, unit: 'mm' }), 'imperial')).toEqual(['—', '']);
   });
 });
+
+describe('spin and smash index', () => {
+  it('shows both on the Club panel right after spin loft, in percent', () => {
+    const html = render('club');
+    const loft = html.indexOf('data-metric="spin_loft"');
+    const spin = html.indexOf('data-metric="spin_index"');
+    const smash = html.indexOf('data-metric="smash_index"');
+    expect(loft).toBeGreaterThan(-1);
+    expect(spin).toBeGreaterThan(loft);
+    expect(smash).toBeGreaterThan(spin);
+    expect(html).toContain('Spin index');
+    expect(html).toContain('Smash index');
+  });
+
+  it('formats an index as a percentage to one decimal', () => {
+    expect(formatMetricValue(record({ unit: '%', value: 98.94, status: 'calculated' }), 'imperial')).toEqual([
+      '98.9',
+      '%',
+    ]);
+  });
+});

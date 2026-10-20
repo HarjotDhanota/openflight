@@ -1,8 +1,9 @@
-"""Spin axis: the iron model on the D-plane tilt, and the gear-effect hook for woods.
+"""Spin axis: the iron model on the D-plane tilt, and the fitted model for the rest.
 
 Irons: tan(spin axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), the
 clean-room fit to the owner's TM4 irons (16 shots, 0.014 deg). Drivers and woods keep
-the D-plane tilt; a gear term enters only with a measured impact offset.
+the fitted collision model's centre axis (hybrids too); a gear term enters only with a
+measured impact location.
 """
 
 from __future__ import annotations
@@ -107,58 +108,41 @@ def test_an_iron_shot_gets_the_iron_axis_inside_the_model():
     assert abs(metrics["spin_axis"].value) < abs(metrics["d_plane_tilt"].value)
 
 
-def test_a_driver_keeps_the_d_plane_tilt_and_labels_the_missing_gear_term():
+def test_a_driver_takes_the_fitted_centre_axis_and_labels_the_missing_impact_location():
     metrics = _evaluate(ClubType.DRIVER).metrics
 
-    assert metrics["spin_axis"].value == pytest.approx(metrics["d_plane_tilt"].value)
+    assert 0.0 < metrics["spin_axis"].value < metrics["d_plane_tilt"].value
+    assert metrics["spin_axis"].source == cm.SOURCE_AXIS_MODEL
     assert metrics["spin_axis"].note == cm.NOTE_NO_GEAR
 
 
-def test_a_gear_sidespin_without_a_measured_impact_offset_is_not_applied():
+def test_an_impact_offset_that_is_not_measured_is_not_applied():
     result = _evaluate(
-        ClubType.DRIVER,
-        gear_sidespin_rpm=400.0,
-        impact_offset_mm=cm.Input(12.0, cm.LABEL_MODEL_GEOMETRY, "assumed"),
+        ClubType.DRIVER, impact_offset_mm=cm.Input(12.0, cm.LABEL_MODEL_GEOMETRY, "assumed")
     )
-    metrics = result.metrics
 
-    assert metrics["spin_axis"].value == pytest.approx(metrics["d_plane_tilt"].value)
-    assert metrics["spin_axis"].note == cm.NOTE_NO_GEAR
+    assert result.metrics["spin_axis"].note == cm.NOTE_NO_GEAR
     assert "impact_offset_mm" not in result.inputs
 
 
-def test_a_measured_offset_without_a_gear_sidespin_says_so():
-    metrics = _evaluate(
+def test_a_measured_toe_offset_draws_a_right_handed_driver():
+    centre = _evaluate(ClubType.DRIVER).metrics["spin_axis"]
+    toe = _evaluate(
         ClubType.DRIVER, impact_offset_mm=cm.Input(12.0, M, "camera impact location")
-    ).metrics
+    ).metrics["spin_axis"]
 
-    assert metrics["spin_axis"].value == pytest.approx(metrics["d_plane_tilt"].value)
-    assert metrics["spin_axis"].note == cm.NOTE_GEAR_NO_HEAD_MODEL
-
-
-def test_a_measured_offset_and_gear_sidespin_tilt_a_driver_axis():
-    metrics = _evaluate(
-        ClubType.DRIVER,
-        gear_sidespin_rpm=400.0,
-        impact_offset_mm=cm.Input(12.0, M, "camera impact location"),
-    ).metrics
-
-    tilt, spin = metrics["d_plane_tilt"].value, metrics["spin_rate"].value
-    expected = math.degrees(
-        math.atan2(spin * math.sin(math.radians(tilt)) + 400.0, spin * math.cos(math.radians(tilt)))
-    )
-    assert metrics["spin_axis"].value == pytest.approx(expected)
-    assert cm.SOURCE_GEAR in metrics["spin_axis"].source
+    assert toe.value < centre.value
+    assert cm.SOURCE_GEAR in toe.source
 
 
-def test_irons_take_no_gear_term():
-    metrics = _evaluate(
-        ClubType.IRON_7,
-        gear_sidespin_rpm=400.0,
-        impact_offset_mm=cm.Input(12.0, M, "camera impact location"),
-    ).metrics
+def test_an_iron_keeps_the_iron_axis_with_a_small_gear_term():
+    centre = _evaluate(ClubType.IRON_7).metrics["spin_axis"]
+    toe = _evaluate(
+        ClubType.IRON_7, impact_offset_mm=cm.Input(12.0, M, "camera impact location")
+    ).metrics["spin_axis"]
 
-    assert metrics["spin_axis"].source == cm.SOURCE_AXIS_IRON
+    assert toe.source == f"{cm.SOURCE_AXIS_IRON} plus {cm.SOURCE_GEAR}"
+    assert abs(toe.value - centre.value) < 0.5
 
 
 def test_the_shot_source_names_the_iron_model():

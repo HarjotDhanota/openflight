@@ -112,6 +112,15 @@ head's geometric centre at impact.
 TrackMan's support pages refused automated access, so their wording above comes
 from search-result quotations and should be checked by hand.
 
+**Per-club low point offset.** On the owner's export session the reported low
+point distance is the arc's geometry plus a constant per club, fitted by the
+maintainer: +2.3 mm 7-iron (9 shots), −28.3 mm driver (8), +5.5 mm pitching wedge
+(7); 1.5 mm RMS after the offset. `club_delivery_payload` adds it to
+`low_point_distance_mm` and keeps the geometry (`geometry_value`) and the offset
+(`offset_mm`), with a note. Other clubs have no fitted offset yet and report the
+geometry alone, with the note "arc geometry only: no per-club offset fitted for
+this club".
+
 The fit also records the low point relative to the resting ball
 (`arc.low_point_from_ball_mm`). It differs from TrackMan's figure by the head
 point's offset from the ball.

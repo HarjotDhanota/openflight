@@ -3748,7 +3748,7 @@ def _apply_calculated_spin(shot: Shot) -> bool:
 
     This formula is empirical, not a published collision model (E2). Its value
     is always recorded in spin_rpm_calculated_empirical; when the published
-    collision model (Penner 2001) produced a calculated spin for this shot,
+    collision model (collision_model) produced a calculated spin for this shot,
     that one is the spin used.
     """
     if shot.launch_angle_vertical is None:

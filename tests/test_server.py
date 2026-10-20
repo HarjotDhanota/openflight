@@ -3560,7 +3560,7 @@ class OnShotDetectedHelpers:
 
     @staticmethod
     def _expected_spin_axis():
-        """E2: the collision model's D-plane tilt, not horizontal launch minus path."""
+        """E2: the collision model's centre-strike axis, not horizontal launch minus path."""
         return (
             collision_model.evaluate(
                 club=ClubType.DRIVER,
@@ -5492,7 +5492,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
         assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.spin_axis_source == "calculated (D-plane tilt, Wood et al. 2018 weights)"
+        assert shot.spin_axis_source == collision_model.SPIN_AXIS_SOURCE_MODEL
 
     def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
         """D36 item 2: face to path cancels the horizontal offset only within one frame."""

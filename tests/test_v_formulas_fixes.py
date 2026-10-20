@@ -26,7 +26,7 @@ def _fusion_shot(**overrides):
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
-        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         ball_speed_full_mph=155.0,
     )
     values.update(overrides)
@@ -244,8 +244,8 @@ def test_outputs_built_on_a_weak_horizontal_launch_are_estimated(overrides, reas
         assert metrics[name]["value"] is not None, name
         assert metrics[name]["status"] == "estimated", name
         assert reason in metrics[name]["reason"], name
-    # dynamic loft does not use the horizontal launch
-    assert metrics["dynamic_loft"]["status"] == "calculated"
+    # the D-plane inversion takes the loft from the horizontal launch too
+    assert metrics["dynamic_loft"]["status"] == "estimated"
     assert shot.collision_model["inputs"]["launch_horizontal"]["label"] == "estimated"
     # the spin axis is no longer withheld: estimated, with the reason
     assert shot.spin_axis_deg == pytest.approx(metrics["spin_axis"]["value"], abs=0.05)
@@ -303,7 +303,7 @@ def test_estimated_is_the_weakest_collision_input_label():
     ).metrics
     assert metrics["face_angle"].status == "estimated"
     assert metrics["spin_axis"].status == "estimated"
-    assert metrics["dynamic_loft"].status == "calculated"
+    assert metrics["dynamic_loft"].status == "estimated"
 
 
 # ---- C4: spin decays by Ferguson 2022's own moment model ------------------------------
@@ -439,7 +439,7 @@ def _sim_shot(**overrides):
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
-        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         carry_spin_adjusted=250.0,
         carry_status="calculated",
     )

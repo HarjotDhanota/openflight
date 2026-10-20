@@ -170,16 +170,12 @@ def test_2d_limit_loft_equals_attack_leaves_only_the_horizontal_obliqueness():
     # launch_v == attack means the face's loft equals the attack angle
     result = _evaluate(path=0.0, launch_h=3.0, attack=2.0, launch_v=2.0)
 
-    assert result.metrics["dynamic_loft"].value == pytest.approx(2.0)
+    loft = result.metrics["dynamic_loft"].value
     face = result.metrics["face_angle"].value
-    # with loft == attack, the 3D spin loft is the horizontal angle at that elevation
-    expected = math.degrees(
-        math.acos(
-            math.cos(math.radians(2.0)) ** 2 * math.cos(math.radians(face))
-            + math.sin(math.radians(2.0)) ** 2
-        )
-    )
-    assert result.metrics["spin_loft"].value == pytest.approx(expected)
+    # the D plane is near horizontal: the loft stays at the attack angle to 0.001 deg
+    assert loft == pytest.approx(2.0, abs=1e-3)
+    assert face > 3.0
+    assert result.metrics["spin_loft"].value == pytest.approx(spin_loft_deg(loft, face, 2.0, 0.0))
 
 
 def test_a_weight_of_one_makes_the_face_the_launch_direction():
@@ -301,12 +297,12 @@ def test_a_spin_loft_beyond_the_rolling_regime_is_not_calculated():
 # ---- spin axis and gear effect ------------------------------------------------------
 
 
-def test_without_an_impact_location_the_spin_axis_is_the_d_plane_tilt_with_the_note():
+def test_without_an_impact_location_the_spin_axis_is_the_centre_strike_axis_with_the_note():
     result = _evaluate(club=ClubType.DRIVER, launch_v=13.0, attack=2.0)
 
     axis = result.metrics["spin_axis"]
-    assert axis.value == pytest.approx(result.metrics["d_plane_tilt"].value)
-    assert axis.note == "no impact location: gear effect not applied"
+    assert 0.0 < axis.value < result.metrics["d_plane_tilt"].value
+    assert axis.note == "no impact location: centre-face strike assumed, no gear effect"
     assert axis.status == cm.STATUS_CALCULATED
 
 
@@ -377,8 +373,8 @@ def test_every_output_is_labelled_calculated_with_its_source():
 
     for name in ("face_angle", "dynamic_loft"):
         assert result.metrics[name].status == cm.STATUS_CALCULATED
-        assert result.metrics[name].source == "D-plane inversion, Wood et al. 2018 weights"
-    assert "Penner 2001" in result.metrics["spin_rate"].source
+        assert result.metrics[name].source == "D-plane inversion of the fitted launch model"
+    assert result.metrics["spin_rate"].source == cm.SOURCE_SPIN
     for name in ("spin_loft", "face_to_path", "d_plane_tilt", "spin_rate", "spin_axis"):
         assert result.metrics[name].status == cm.STATUS_CALCULATED
 
@@ -388,6 +384,7 @@ def test_a_model_geometry_path_makes_every_value_built_on_it_model_geometry():
 
     for name in (
         "face_angle",
+        "dynamic_loft",
         "face_to_path",
         "spin_loft",
         "d_plane_tilt",
@@ -395,8 +392,6 @@ def test_a_model_geometry_path_makes_every_value_built_on_it_model_geometry():
         "spin_axis",
     ):
         assert result.metrics[name].status == cm.STATUS_MODEL_GEOMETRY, name
-    # dynamic loft uses only the vertical inputs, which are measured
-    assert result.metrics["dynamic_loft"].status == cm.STATUS_CALCULATED
 
 
 @pytest.mark.parametrize(
@@ -483,7 +478,10 @@ def test_the_result_serialises_every_metric_with_status_source_and_frame():
         "spin_rate",
         "spin_axis",
         "gyro",
+        "spin_index",
+        "smash_index",
     }
+    assert payload["forward"]["model"] == "fitted collision model"
     for metric in payload["metrics"].values():
         assert set(metric) >= {"value", "status", "source", "unit", "frame", "reason", "note"}
     assert payload["weights"]["horizontal"] == pytest.approx(0.69)
@@ -491,11 +489,16 @@ def test_the_result_serialises_every_metric_with_status_source_and_frame():
 
 
 def test_the_spin_axis_source_strings_name_the_model():
-    assert cm.SPIN_AXIS_SOURCE_TILT == "calculated (D-plane tilt, Wood et al. 2018 weights)"
-    assert cm.SPIN_AXIS_SOURCE_GEAR == "calculated (D-plane + gear effect, Cross & Nathan 2007)"
+    assert cm.SPIN_AXIS_SOURCE_MODEL == (
+        "calculated (fitted collision model, centre-face strike, fitted launch-model inversion)"
+    )
+    assert cm.SPIN_AXIS_SOURCE_GEAR == (
+        "calculated (fitted collision model + gear effect, Cross & Nathan 2007)"
+    )
     tilt = cm.Metric(value=2.0, status=cm.STATUS_CALCULATED, source="D-plane", unit="deg")
     spin = cm.Metric(value=3000.0, status=cm.STATUS_CALCULATED, source="Penner", unit="rpm")
-    assert cm.shot_spin_axis_source(cm.spin_axis(tilt, spin)) == cm.SPIN_AXIS_SOURCE_TILT
+    model_axis = cm.Metric(2.0, cm.STATUS_CALCULATED, cm.SOURCE_AXIS_MODEL, "deg")
+    assert cm.shot_spin_axis_source(model_axis) == cm.SPIN_AXIS_SOURCE_MODEL
     assert (
         cm.shot_spin_axis_source(cm.spin_axis(tilt, spin, gear_sidespin_rpm=100.0))
         == cm.SPIN_AXIS_SOURCE_GEAR

@@ -101,6 +101,24 @@ def test_the_fusion_shot_labels_follow_their_producers():
     assert status["smash_factor_full"] == "not_measured"
 
 
+def test_the_fusion_shot_has_a_spin_index_and_a_smash_index():
+    metrics = fusion_shot().to_dict()["metrics"]
+
+    for name in ("spin_index", "smash_index"):
+        assert metrics[name]["status"] == "calculated", name
+        assert metrics[name]["unit"] == "%", name
+        assert 60.0 < metrics[name]["value"] < 140.0, name
+        assert "expected" in metrics[name]["source"], name
+    assert shot_metrics.metric_spec("spin_index").group == shot_metrics.CLUB
+
+
+def test_an_index_without_the_collision_model_says_why():
+    record = shot_metrics.from_record({"ball_speed_mph": 120.0})["smash_index"]
+
+    assert record["status"] == "not_measured"
+    assert record["reason"] == "collision model did not run on this shot"
+
+
 @pytest.mark.parametrize("metric_id", PENDING_METRIC_IDS)
 def test_unbuilt_metrics_are_not_measured_with_the_item_that_builds_them(metric_id):
     record = fusion_shot().to_dict()["metrics"][metric_id]

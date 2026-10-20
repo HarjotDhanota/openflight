@@ -483,3 +483,51 @@ def test_payload_without_a_delivery_is_not_measured():
 def test_label_rank_orders_measured_over_calculated_over_model_geometry():
     rank = club_arc.LABEL_RANK
     assert rank["measured"] > rank[CALCULATED] > rank[MODEL_GEOMETRY] > rank[NOT_MEASURED]
+
+
+# ---- low point: the per-club offset --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("club", "offset"),
+    [(ClubType.IRON_7, 2.3), (ClubType.DRIVER, -28.3), (ClubType.PW, 5.5)],
+)
+def test_the_low_point_distance_adds_the_clubs_fitted_offset_to_the_arc(club, offset):
+    positions, _truth = _synthetic_swing(n_points=4, noise_m=0.002)
+
+    payload = club_delivery_payload(_delivery(positions), club=club, handedness="RH")
+
+    entry = payload["metrics"]["low_point_distance_mm"]
+    geometry = payload["arc"]["low_point_distance_mm"]
+    assert entry["geometry_value"] == pytest.approx(geometry)
+    assert entry["offset_mm"] == offset
+    assert entry["value"] == pytest.approx(geometry + offset, abs=0.01)
+    low, high = entry["range"]
+    arc_low, arc_high = payload["arc"]["ranges"]["low_point_distance_mm"]
+    assert (low, high) == pytest.approx((arc_low + offset, arc_high + offset), abs=0.01)
+    assert f"{offset:+.1f} mm" in entry["note"]
+    assert payload["metrics"]["low_point_height_mm"]["value"] == pytest.approx(
+        payload["arc"]["low_point_height_mm"]
+    )
+
+
+@pytest.mark.parametrize("club", [ClubType.IRON_5, ClubType.WOOD_3, ClubType.SW, ClubType.UNKNOWN])
+def test_a_club_without_a_fitted_offset_keeps_the_arc_and_says_so(club):
+    positions, _truth = _synthetic_swing(n_points=6, noise_m=0.0005)
+
+    payload = club_delivery_payload(_delivery(positions), club=club, handedness="RH")
+
+    entry = payload["metrics"]["low_point_distance_mm"]
+    if entry["value"] is None:
+        return
+    assert entry["value"] == pytest.approx(payload["arc"]["low_point_distance_mm"])
+    assert entry["offset_mm"] is None
+    assert entry["note"] == club_arc.NOTE_NO_LOW_POINT_OFFSET
+
+
+def test_a_missing_low_point_gets_no_offset():
+    payload = club_delivery_payload(None, club=ClubType.DRIVER, handedness="RH")
+
+    entry = payload["metrics"]["low_point_distance_mm"]
+    assert entry["value"] is None
+    assert entry["status"] == NOT_MEASURED

@@ -267,6 +267,8 @@ export const en = {
   'metricName.face_to_path': 'Face to path',
   'metricName.dynamic_loft': 'Dynamic loft',
   'metricName.spin_loft': 'Spin loft',
+  'metricName.spin_index': 'Spin index',
+  'metricName.smash_index': 'Smash index',
   'metricName.d_plane_tilt': 'D-plane tilt',
   'metricName.swing_plane': 'Swing plane',
   'metricName.swing_direction': 'Swing direction',

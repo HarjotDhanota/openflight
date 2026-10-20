@@ -192,6 +192,20 @@
       "pending": null
     },
     {
+      "id": "spin_index",
+      "label": "Spin index",
+      "group": "club",
+      "unit": "%",
+      "pending": null
+    },
+    {
+      "id": "smash_index",
+      "label": "Smash index",
+      "group": "club",
+      "unit": "%",
+      "pending": null
+    },
+    {
       "id": "d_plane_tilt",
       "label": "D-plane tilt",
       "group": "club",

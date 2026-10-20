@@ -39,8 +39,9 @@ each stage.
 
 - :material-vector-triangle: **[Collision model](collision-model.md)**
 
-    Face angle, dynamic loft, spin loft and a calculated spin from published
-    physics (Wood et al. 2018, Penner 2001), labelled calculated.
+    Face angle, dynamic loft, spin loft, a calculated spin and axis, and the
+    spin and smash indices from published physics (Penner 2001, Cross & Nathan
+    2007) with constants fitted by the maintainer, labelled calculated.
 
 - :material-map-marker-radius-outline: **[Radar positioning](positioning.md)**
 
