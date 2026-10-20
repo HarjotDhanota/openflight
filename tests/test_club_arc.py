@@ -485,9 +485,7 @@ def test_label_rank_orders_measured_over_calculated_over_model_geometry():
     assert rank["measured"] > rank[CALCULATED] > rank[MODEL_GEOMETRY] > rank[NOT_MEASURED]
 
 
-# ---------------------------------------------------------------------------
-# Low point: the per-club offset to the reported reference point
-# ---------------------------------------------------------------------------
+# ---- low point: the per-club offset --------------------------------------------
 
 
 @pytest.mark.parametrize(
