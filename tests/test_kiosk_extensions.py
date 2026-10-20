@@ -65,7 +65,7 @@ def test_a_plain_kiosk_has_no_extensions_and_every_answer_is_the_default(isolate
 
 def test_the_base_extension_does_nothing():
     base = ke.KioskExtension()
-    assert base.diagnostic_camera() is False and base.iwr_optional() is False
+    assert base.diagnostic_camera() is False and base.iwr_optional() is None
     assert base.trigger_evidence_provider() is None
     assert base.admit_shot(object()) is True
     assert base.ready_light_states("unchanged") == "unchanged"
@@ -90,6 +90,17 @@ def test_hooks_reach_every_extension_in_order(isolated):
     ke.call_all("on_shot_accepted", "shot-1")
     assert first.calls == [("accepted", "shot-1")] and second.calls == first.calls
     assert ke.adjust_ready_light(()) == ("a", "b")
+
+
+def test_an_extension_can_switch_the_ready_light_off(isolated):
+    class Off(ke.KioskExtension):
+        def ready_light_states(self, states):
+            return None
+
+    ke.register(Off())
+    later = ke.register(Recorder("later"))
+    assert ke.adjust_ready_light(("states",)) is None
+    assert later.calls == []
 
 
 def test_one_refusal_refuses_the_shot_and_later_extensions_are_not_asked(isolated):

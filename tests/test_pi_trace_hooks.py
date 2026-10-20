@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 import serial
 
-from openflight import pi_trace
+from openflight import pi_trace, tester_hooks
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
@@ -593,10 +593,10 @@ def _setup_rejecting_server(monkeypatch):
             swing_results.append(result)
 
     assigned = []
-    monkeypatch.setattr(server, "tester_setup_required", True)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
     monkeypatch.setattr(server, "camera_capture_runtime", Camera())
-    monkeypatch.setattr(server, "_tester_trigger_evidence_problem", lambda _r: "blocked")
-    monkeypatch.setattr(server, "_tester_trigger_hard_stop", lambda _r: "hard")
+    monkeypatch.setattr(tester_hooks, "_tester_trigger_evidence_problem", lambda _r: "blocked")
+    monkeypatch.setattr(tester_hooks, "_tester_trigger_hard_stop", lambda _r: "hard")
     monkeypatch.setattr(server, "log_session_error", lambda *a, **k: None)
     monkeypatch.setattr(server, "ready_light", Light())
     monkeypatch.setattr(server, "_assign_shot_number", assigned.append)
@@ -626,7 +626,6 @@ def test_callback_joins_the_current_attempt_and_marks_acceptance(recorder, monke
 
     attempt = recorder.open_ops_attempt()
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
-    monkeypatch.setattr(server, "tester_setup_required", False)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
     monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
@@ -646,7 +645,6 @@ def test_untraced_callback_leaves_the_shot_without_an_attempt(monkeypatch):
 
     pi_trace.set_recorder(None)
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
-    monkeypatch.setattr(server, "tester_setup_required", False)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
     monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
@@ -907,7 +905,6 @@ def _admission_server(monkeypatch, defer):
     from openflight import server
 
     statuses, queued = [], []
-    monkeypatch.setattr(server, "tester_setup_required", False)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: True)
     monkeypatch.setattr(server, "_emit_initial_ops_shot", lambda _shot: True)
     monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
@@ -1111,7 +1108,6 @@ def test_shot_callback_survives_raising_accessors(raising_recorder, monkeypatch)
     from openflight import server
 
     assigned = []
-    monkeypatch.setattr(server, "tester_setup_required", False)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
     monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)

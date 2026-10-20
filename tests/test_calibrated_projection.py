@@ -444,7 +444,6 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
     )
     monkeypatch.setattr(server_module, "camera_optical_calibration", artifact)
     monkeypatch.setattr(server_module, "camera_placement", placement)
-    monkeypatch.setattr(server_module, "tester_setup_required", False)
     monkeypatch.setattr(
         server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
     )

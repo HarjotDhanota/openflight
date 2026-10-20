@@ -193,7 +193,6 @@ def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
             "--camera-capture-manual-exposure",
             "--rig-geometry",
             "config/enclosure_v3_rig_geometry.json",
-            "--study-mode",
             "--no-logging",
             "--profiles-path",
             str(tmp_path / "profiles.json"),

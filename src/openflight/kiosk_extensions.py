@@ -39,8 +39,8 @@ class KioskExtension:  # pylint: disable=unused-argument
     def on_startup(self, args) -> None:
         """After session logging starts and before any sensor is opened."""
 
-    def on_camera_started(self) -> None:
-        """After the high-speed camera started (only when it did)."""
+    def after_camera_setup(self) -> None:
+        """After the high-speed camera was set up (or skipped), before any shot."""
 
     def before_monitor_start(self) -> None:
         """Before the OPS monitor's capture thread starts and the GATE is armed."""
@@ -59,9 +59,10 @@ class KioskExtension:  # pylint: disable=unused-argument
         """A readiness reader the camera stamps on each trigger, or None."""
         return None
 
-    def iwr_optional(self) -> bool:
-        """True when the run continues without a requested IWR6843 that failed to start."""
-        return False
+    def iwr_optional(self) -> Optional[str]:
+        """Why the run continues without a requested IWR6843 that failed to start, or
+        None (the kiosk then exits)."""
+        return None
 
     # --- per-session and per-shot ------------------------------------------------------
 
@@ -69,7 +70,7 @@ class KioskExtension:  # pylint: disable=unused-argument
         """Add this extension's keys to the configuration recorded at session start."""
 
     def ready_light_states(self, states):
-        """Return the ready light's sensor states, adjusted for this extension."""
+        """Return the ready light's sensor states adjusted for this extension (None: off)."""
         return states
 
     def admit_shot(self, shot) -> bool:
@@ -177,6 +178,8 @@ def all_admit(shot) -> bool:
 def adjust_ready_light(states):
     """The ready light's states after every extension adjusted them."""
     for extension in registered():
+        if states is None:
+            break
         states = extension.ready_light_states(states)
     return states
 

@@ -15,7 +15,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight import collision_model, flight as flight_module, server as server_module
+from openflight import (
+    collision_model,
+    flight as flight_module,
+    server as server_module,
+    tester_hooks,
+)
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
@@ -1799,7 +1804,6 @@ class TestShotToDict:
                 "forward_offset_m": 0.03,
             },
         )
-        monkeypatch.setattr(server_module, "tester_setup_required", False)
         shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
         shot.camera_fusion_session_uuid = "session-a"
 
@@ -1838,7 +1842,6 @@ class TestShotToDict:
             "camera_capture_config",
             {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
         )
-        monkeypatch.setattr(server_module, "tester_setup_required", False)
         shot = Shot(
             ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now(), shot_number=4
         )
@@ -3623,9 +3626,9 @@ class TestOnShotDetected:
                 raise OSError("camera disconnected")
 
         monkeypatch.setattr(
-            server_module, "free_play_config", {"enabled": True, "run_id": "free-run"}
+            tester_hooks, "free_play_config", {"enabled": True, "run_id": "free-run"}
         )
-        monkeypatch.setattr(server_module, "tester_setup_required", True)
+        monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
         monkeypatch.setattr(server_module, "camera_capture_runtime", FailedCamera())
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
@@ -3675,7 +3678,7 @@ class TestOnShotDetected:
                 return None
 
         monkeypatch.setattr(
-            server_module, "free_play_config", {"enabled": True, "run_id": "free-run"}
+            tester_hooks, "free_play_config", {"enabled": True, "run_id": "free-run"}
         )
         monkeypatch.setattr(server_module, "camera_capture_runtime", NoClipCamera())
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
@@ -3741,7 +3744,7 @@ class TestOnShotDetected:
             capture_for_shot=lambda *_a, **_kw: capture,
             auto_exposure_status=lambda: {"setting": {"exposure_us": 200}},
         )
-        monkeypatch.setattr(server_module, "free_play_config", {"enabled": True})
+        monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True})
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda *_: None)
@@ -5876,56 +5879,6 @@ class TestIwrTeeRangeConfiguration:
 
         assert exc_info.value.code == 2
         assert message in capsys.readouterr().err
-
-    def test_study_mode_capture_is_diagnostic_under_an_armed_profile(self, monkeypatch, tmp_path):
-        path = tmp_path / "armed.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "schema": "openflight.camera.armed_exposure_profile.v1",
-                    "qualified": True,
-                    "exposure_ceiling_us": 400,
-                    "gain_ceiling": 12.0,
-                }
-            ),
-            encoding="utf-8",
-        )
-        received = {}
-
-        class StopAfterCameraInit(Exception):
-            pass
-
-        def fake_init_camera_capture(**kwargs):
-            received.update(kwargs)
-            raise StopAfterCameraInit
-
-        monkeypatch.setattr(server_module, "init_camera_capture", fake_init_camera_capture)
-        monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
-        monkeypatch.setattr(server_module, "profile_store", None)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "openflight-server",
-                "--camera-capture",
-                "--rig-geometry",
-                "config/enclosure_v3_rig_geometry.json",
-                "--study-mode",
-                "--no-logging",
-                "--profiles-path",
-                str(tmp_path / "profiles.json"),
-                "--camera-capture-exposure-us",
-                "1250",
-                "--camera-armed-profile",
-                str(path),
-            ],
-        )
-
-        with pytest.raises(StopAfterCameraInit):
-            server_module.main()
-
-        assert received["diagnostic_capture"] is True
-        assert received["armed_profile"]["exposure_ceiling_us"] == 400
 
     def test_init_iwr6843_records_unresolved_tee_range(self, monkeypatch, tmp_path):
         class FakeCaptureMonitor:

@@ -285,8 +285,10 @@ def test_a_clip_judged_on_the_setup_ball_records_the_box_zone(tmp_path):
 
 
 def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
-    from openflight import server as server_module  # noqa: PLC0415
+    from openflight import server as server_module, tester_hooks  # noqa: PLC0415
 
+    # --study-mode below turns the tester's study mode on: restored after the test
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", tester_hooks.study_mode_enabled)
     received = {}
 
     class StopAfterCameraInit(Exception):

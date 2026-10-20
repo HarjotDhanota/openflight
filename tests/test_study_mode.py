@@ -1,12 +1,15 @@
 """The kiosk's study mode: the tester page sets exposure and gain live and reads raw frames."""
 
 import io
+import json
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import openflight.server as server_module
+from openflight import tester_hooks
 
 
 class FakeRuntime:
@@ -37,7 +40,7 @@ class FakeRuntime:
 def fixture_client(monkeypatch):
     runtime = FakeRuntime()
     monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
-    monkeypatch.setattr(server_module, "study_mode_enabled", True, raising=False)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True, raising=False)
     return server_module.app.test_client(), runtime
 
 
@@ -76,7 +79,7 @@ def test_raw_frames_come_back_with_their_controls(client):
 
 def test_nothing_exists_without_study_mode(monkeypatch):
     monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime())
-    monkeypatch.setattr(server_module, "study_mode_enabled", False, raising=False)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", False, raising=False)
     test_client = server_module.app.test_client()
     response = test_client.post(
         "/api/camera/study/controls", json={"exposure_us": 150, "gain": 8.0}
@@ -87,7 +90,7 @@ def test_nothing_exists_without_study_mode(monkeypatch):
 
 def test_automatic_exposure_refuses_the_page(monkeypatch):
     monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime(auto_exposure=True))
-    monkeypatch.setattr(server_module, "study_mode_enabled", True, raising=False)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True, raising=False)
     response = server_module.app.test_client().post(
         "/api/camera/study/controls", json={"exposure_us": 150, "gain": 8.0}
     )
@@ -117,3 +120,55 @@ def test_recent_frames_are_distinct():
     runtime._ring = Ring()  # pylint: disable=protected-access
     frames = runtime.recent_frames(3, timeout_s=1.0)
     assert [f.sensor_timestamp_ns for f in frames] == [1, 2, 3]
+
+
+def test_study_mode_capture_is_diagnostic_under_an_armed_profile(monkeypatch, tmp_path):
+    path = tmp_path / "armed.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "openflight.camera.armed_exposure_profile.v1",
+                "qualified": True,
+                "exposure_ceiling_us": 400,
+                "gain_ceiling": 12.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    received = {}
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", tester_hooks.study_mode_enabled)
+
+    class StopAfterCameraInit(Exception):
+        pass
+
+    def fake_init_camera_capture(**kwargs):
+        received.update(kwargs)
+        raise StopAfterCameraInit
+
+    monkeypatch.setattr(server_module, "init_camera_capture", fake_init_camera_capture)
+    monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
+    monkeypatch.setattr(server_module, "profile_store", None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--camera-capture",
+            "--rig-geometry",
+            "config/enclosure_v3_rig_geometry.json",
+            "--study-mode",
+            "--no-logging",
+            "--profiles-path",
+            str(tmp_path / "profiles.json"),
+            "--camera-capture-exposure-us",
+            "1250",
+            "--camera-armed-profile",
+            str(path),
+        ],
+    )
+
+    with pytest.raises(StopAfterCameraInit):
+        server_module.main()
+
+    assert received["diagnostic_capture"] is True
+    assert received["armed_profile"]["exposure_ceiling_us"] == 400

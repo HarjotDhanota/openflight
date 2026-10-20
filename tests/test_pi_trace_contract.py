@@ -83,7 +83,6 @@ def _server(monkeypatch):
         SimpleNamespace(capture_monitor=SimpleNamespace(edge_tick_reading=_edge_tick_reading)),
     )
     monkeypatch.setattr(server, "camera_capture_runtime", None)
-    monkeypatch.setattr(server, "tester_setup_required", False)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda _shot: False)
     monkeypatch.setattr(server, "_register_shot_for_finalization", lambda *a, **k: None)
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)

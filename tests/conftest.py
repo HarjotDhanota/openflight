@@ -16,8 +16,17 @@ import pytest
 # Add tests directory to sys.path for importing test utilities like spin_synth
 sys.path.insert(0, str(Path(__file__).parent))
 
+from openflight import kiosk_extensions  # noqa: E402  pylint: disable=wrong-import-position
+
 # The process-wide Pi trace recorder fixture, defined once (R-F14).
-from tests.pi_trace_helpers import recorder  # noqa: E402,F401  pylint: disable=wrong-import-position,unused-import
+from tests.pi_trace_helpers import (  # noqa: E402,F401  pylint: disable=wrong-import-position,unused-import
+    recorder,
+)
+
+# The kiosk extensions this install declares, loaded once the way openflight-server
+# loads them at start-up, so every test sees the same hooks however the run is
+# ordered. A plain install declares none.
+kiosk_extensions.load_installed()
 
 
 class MockSimServer:

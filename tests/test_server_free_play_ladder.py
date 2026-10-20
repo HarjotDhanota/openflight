@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from flask import Flask
 
-from openflight import free_play, server
+from openflight import free_play, kiosk_extensions, server, tester_hooks
 from openflight.camera import free_play_ladder as fpl
 from openflight.launch_monitor import Shot
 from tests.test_free_play_ladder import BALL, _clip
@@ -59,14 +59,14 @@ def kiosk(monkeypatch, tmp_path):
     runtime = Runtime()
     monkeypatch.setattr(server, "camera_capture_runtime", runtime)
     monkeypatch.setattr(
-        server,
+        tester_hooks,
         "free_play_config",
         {"enabled": True, "tester_id": "tester", "run_id": "run-one", "phase": "recording"},
     )
-    monkeypatch.setattr(server, "free_play_plan", None)
-    monkeypatch.setattr(server, "free_play_study", None)
-    server.load_free_play_plan(plan_path)
-    study = server.init_free_play_study(run_async=lambda work: work(), settle_s=0.0)
+    monkeypatch.setattr(tester_hooks, "free_play_plan", None)
+    monkeypatch.setattr(tester_hooks, "free_play_study", None)
+    tester_hooks.load_free_play_plan(plan_path)
+    study = tester_hooks.init_free_play_study(run_async=lambda work: work(), settle_s=0.0)
     return SimpleNamespace(plan=plan, runtime=runtime, study=study, run_dir=tmp_path)
 
 
@@ -96,7 +96,7 @@ def test_the_study_is_written_beside_the_plan(kiosk):
 def test_each_real_shot_is_counted_and_carries_its_ladder_record(kiosk):
     shot = _shot(1)
 
-    server._count_free_play_shot(shot)
+    tester_hooks._count_free_play_shot(shot)
 
     record = shot.to_dict()["free_play"]["exposure_study"]
     assert record["schema"] == fpl.SHOT_SCHEMA
@@ -109,32 +109,32 @@ def test_each_real_shot_is_counted_and_carries_its_ladder_record(kiosk):
 
 def test_the_fifth_shot_moves_the_camera_to_the_next_rung_live(kiosk):
     for number in range(1, 6):
-        server._count_free_play_shot(_shot(number))
+        tester_hooks._count_free_play_shot(_shot(number))
 
     assert kiosk.runtime.applied == [(150, 4.0)]
     sixth = _shot(6)
-    server._count_free_play_shot(sixth)
+    tester_hooks._count_free_play_shot(sixth)
     assert sixth.free_play_exposure_study["rung_id"] == "full-150"
 
 
 def test_after_the_last_rung_the_camera_runs_automatic(kiosk):
     for number in range(1, 11):
-        server._count_free_play_shot(_shot(number))
+        tester_hooks._count_free_play_shot(_shot(number))
 
     assert kiosk.runtime.automatic == 1
     after = _shot(11)
-    server._count_free_play_shot(after)
+    tester_hooks._count_free_play_shot(after)
     assert after.free_play_exposure_study["ladder_phase"] == "automatic"
     assert after.free_play_exposure_study["exposure_us"] == 150
 
 
 def test_a_matched_clip_gets_the_picture_verdict_on_the_shot_and_its_rung(kiosk, tmp_path):
     shot = _shot(1)
-    server._count_free_play_shot(shot)
+    tester_hooks._count_free_play_shot(shot)
     clip = _clip(tmp_path / "camera" / "camera_001", exposure_us=300, gain=2.0)
     capture = SimpleNamespace(path=clip, error=None, metadata={}, valid=True)
 
-    server._judge_free_play_clip(shot, capture)
+    tester_hooks._judge_free_play_clip(shot, capture)
 
     verdict = shot.to_dict()["free_play"]["exposure_study"]["verdict"]
     assert verdict["status"] == "judged"
@@ -147,10 +147,10 @@ def test_a_matched_clip_gets_the_picture_verdict_on_the_shot_and_its_rung(kiosk,
 
 def test_a_failed_clip_save_is_labelled_not_judged(kiosk):
     shot = _shot(1)
-    server._count_free_play_shot(shot)
+    tester_hooks._count_free_play_shot(shot)
     capture = SimpleNamespace(path=None, error="disk full", metadata={}, valid=False)
 
-    server._judge_free_play_clip(shot, capture)
+    tester_hooks._judge_free_play_clip(shot, capture)
 
     verdict = shot.free_play_exposure_study["verdict"]
     assert verdict["status"] == "no_capture"
@@ -160,7 +160,7 @@ def test_a_failed_clip_save_is_labelled_not_judged(kiosk):
 def test_the_kiosk_band_reads_the_study_progress(kiosk, monkeypatch):
     app = Flask(__name__)
     free_play.register_kiosk_routes(
-        app, server.free_play_config, lambda: None, progress=server._free_play_progress
+        app, tester_hooks.free_play_config, lambda: None, progress=tester_hooks._free_play_progress
     )
 
     body = app.test_client().get("/api/free-play").get_json()
@@ -172,7 +172,7 @@ def test_the_kiosk_band_reads_the_study_progress(kiosk, monkeypatch):
 
 
 def test_the_ready_light_hears_the_ladder(kiosk, monkeypatch):
-    monkeypatch.setattr(server, "tester_setup_required", True)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
     monkeypatch.setattr(server, "monitor", None)
     monkeypatch.setattr(server, "iwr6843_runtime", None)
     kiosk.runtime.ready_snapshot = lambda: {"running": True}
@@ -184,7 +184,7 @@ def test_the_ready_light_hears_the_ladder(kiosk, monkeypatch):
 
 def test_stop_and_package_records_a_partial_ladder(kiosk, monkeypatch):
     for number in range(1, 4):
-        server._count_free_play_shot(_shot(number))
+        tester_hooks._count_free_play_shot(_shot(number))
     kiosk.runtime.stop = lambda: None
     kiosk.runtime._worker = None
     monkeypatch.setattr(server, "monitor", None)
@@ -192,7 +192,7 @@ def test_stop_and_package_records_a_partial_ladder(kiosk, monkeypatch):
     monkeypatch.setattr(server, "inclinometer_service", None)
     monkeypatch.setattr(server, "get_session_logger", lambda: None)
 
-    server._finish_free_play_capture(timeout_s=0)
+    tester_hooks._finish_free_play_capture(timeout_s=0)
 
     saved = json.loads((kiosk.run_dir / fpl.STATE_NAME).read_text())
     assert saved["ladder_status"] == "partial"
@@ -204,25 +204,25 @@ def test_without_a_camera_the_shots_say_so(monkeypatch, tmp_path):
     plan_path = tmp_path / fpl.PLAN_NAME
     fpl.write_json(plan_path, _plan())
     monkeypatch.setattr(server, "camera_capture_runtime", None)
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True, "run_id": "run-one"})
-    monkeypatch.setattr(server, "free_play_plan", None)
-    monkeypatch.setattr(server, "free_play_study", None)
-    server.load_free_play_plan(plan_path)
-    server.init_free_play_study()
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True, "run_id": "run-one"})
+    monkeypatch.setattr(tester_hooks, "free_play_plan", None)
+    monkeypatch.setattr(tester_hooks, "free_play_study", None)
+    tester_hooks.load_free_play_plan(plan_path)
+    tester_hooks.init_free_play_study()
     shot = _shot(1)
 
-    server._count_free_play_shot(shot)
+    tester_hooks._count_free_play_shot(shot)
 
     assert shot.free_play_exposure_study["ladder_phase"] == "camera_unavailable"
 
 
 def test_free_play_without_a_plan_records_no_study(monkeypatch):
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True, "run_id": "run-one"})
-    monkeypatch.setattr(server, "free_play_plan", None)
-    monkeypatch.setattr(server, "free_play_study", None)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True, "run_id": "run-one"})
+    monkeypatch.setattr(tester_hooks, "free_play_plan", None)
+    monkeypatch.setattr(tester_hooks, "free_play_study", None)
     shot = _shot(1)
 
-    server._count_free_play_shot(shot)
+    tester_hooks._count_free_play_shot(shot)
 
     assert shot.free_play_exposure_study is None
     assert "exposure_study" not in shot.to_dict()["free_play"]
@@ -233,21 +233,26 @@ def test_an_unreadable_plan_refuses_to_start(tmp_path):
     path.write_text("{not json")
 
     with pytest.raises(ValueError, match="plan"):
-        server.load_free_play_plan(path)
+        tester_hooks.load_free_play_plan(path)
 
 
-def _function_source(name):
-    source = Path(server.__file__).read_text(encoding="utf-8")
+def _function_source(module, name):
+    source = Path(module.__file__).read_text(encoding="utf-8")
     body = source[source.index(f"def {name}(") :]
-    return body[: body.index("\ndef ", 1)]
+    return body[: body.index("\n\n\n")]  # up to the next top-level statement
 
 
 def test_the_shot_and_clip_hooks_are_wired():
     # counted in the serialized shot callback, judged where the clip is matched
-    assert "_count_free_play_shot(shot)" in _function_source("_handle_shot_detected")
-    assert "_judge_free_play_clip(shot, camera_capture)" in _function_source(
-        "_enrich_shot_from_optional_hardware"
+    assert 'call_all("on_shot_accepted", shot)' in _function_source(server, "_handle_shot_detected")
+    assert 'call_all("on_camera_capture", shot, camera_capture)' in _function_source(
+        server, "_enrich_shot_from_optional_hardware"
     )
+    assert "_count_free_play_shot(shot)" in _function_source(tester_hooks, "_on_shot_accepted")
+    assert "_judge_free_play_clip(shot, camera_capture)" in _function_source(
+        tester_hooks, "_on_camera_capture"
+    )
+    assert tester_hooks.extension in kiosk_extensions.registered()
 
 
 def test_main_loads_the_plan_and_starts_the_study_before_the_radar(monkeypatch, tmp_path):
@@ -259,7 +264,7 @@ def test_main_loads_the_plan_and_starts_the_study_before_the_radar(monkeypatch, 
     seen = {}
 
     def start_ops(**_kwargs):
-        seen["study"] = server.free_play_study
+        seen["study"] = tester_hooks.free_play_study
         raise ReachedOps
 
     plan_path = tmp_path / "run-01" / fpl.PLAN_NAME
@@ -268,17 +273,13 @@ def test_main_loads_the_plan_and_starts_the_study_before_the_radar(monkeypatch, 
     monkeypatch.setattr(server, "init_session_logger", lambda **_kw: None)
     monkeypatch.setattr(server, "start_monitor", start_ops)
     monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
-    monkeypatch.setattr(server, "free_play_config", {})
-    monkeypatch.setattr(server, "free_play_plan", None)
-    monkeypatch.setattr(server, "free_play_study", None)
-    for name in (
-        "tester_setup_required",
-        "tester_config_hash",
-        "study_mode_enabled",
-        "ball_speed_correction_enabled",
-        "ballistics_enabled",
-    ):
+    monkeypatch.setattr(tester_hooks, "free_play_config", {})
+    monkeypatch.setattr(tester_hooks, "free_play_plan", None)
+    monkeypatch.setattr(tester_hooks, "free_play_study", None)
+    for name in ("ball_speed_correction_enabled", "ballistics_enabled"):
         monkeypatch.setattr(server, name, getattr(server, name))
+    for name in ("tester_setup_required", "tester_config_hash", "study_mode_enabled"):
+        monkeypatch.setattr(tester_hooks, name, getattr(tester_hooks, name))
     monkeypatch.setattr(server, "profile_store", None)
     monkeypatch.setattr(
         sys,
@@ -306,7 +307,7 @@ def test_main_loads_the_plan_and_starts_the_study_before_the_radar(monkeypatch, 
     with pytest.raises(ReachedOps):
         server.main()
 
-    assert server.free_play_plan["resolution"]["arm_id"] == "arm5"
+    assert tester_hooks.free_play_plan["resolution"]["arm_id"] == "arm5"
     assert seen["study"] is not None
     # no camera was started in this test: the study says so instead of guessing
     assert seen["study"].progress()["phase"] == "camera_unavailable"

@@ -126,7 +126,6 @@ def test_live_camera_fusion_attaches_the_arc_from_the_shared_core(monkeypatch, t
         "camera_capture_config",
         {"mount_height_m": 0.095, "width": 8, "height": 6, "forward_offset_m": 0.03},
     )
-    monkeypatch.setattr(server_module, "tester_setup_required", False)
     calls = []
     monkeypatch.setattr(
         server_module,

@@ -71,6 +71,10 @@ ble = [
 openflight-server = "openflight.server:main"
 openflight-cloud = "openflight.cloud.cli:main"
 
+# Fork-only kiosk extensions: the tester's hooks, loaded by openflight-server at start-up.
+[project.entry-points."openflight.kiosk_extensions"]
+tester = "openflight.tester_hooks:extension"
+
 [project.urls]
 Homepage = "https://github.com/open-flight/openflight"
 Repository = "https://github.com/open-flight/openflight"

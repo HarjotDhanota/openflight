@@ -8,13 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import server
+from openflight import server, tester_hooks
 from openflight.launch_monitor import Shot
-from openflight.ready_light import ReadyLight
+from openflight.ready_light import ReadyLight, SensorStates, compute_state
 from openflight.rig_geometry import geometry_fingerprint
 
 ALIVE = SimpleNamespace(is_alive=lambda: True)
-SETUP_PROBLEMS = server._ready_light_setup_problems
+SETUP_PROBLEMS = tester_hooks._ready_light_setup_problems
 DEAD = SimpleNamespace(is_alive=lambda: False)
 
 
@@ -70,9 +70,9 @@ class _Sensors:
         monkeypatch.setattr(server, "monitor", self.monitor)
         monkeypatch.setattr(server, "mock_mode", False)
         # a tester's plain swings kiosk: setup required, no study mode
-        monkeypatch.setattr(server, "study_mode_enabled", False)
-        monkeypatch.setattr(server, "tester_setup_required", True)
-        monkeypatch.setattr(server, "_ready_light_setup_problems", lambda: [])
+        monkeypatch.setattr(tester_hooks, "study_mode_enabled", False)
+        monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
+        monkeypatch.setattr(tester_hooks, "_ready_light_setup_problems", lambda: [])
         monkeypatch.setattr(
             server,
             "iwr6843_runtime",
@@ -169,10 +169,10 @@ def test_a_camera_that_failed_to_start_is_red(sensors, monkeypatch):
 
 
 def test_the_light_is_off_outside_a_testers_kiosk(sensors, monkeypatch):
-    monkeypatch.setattr(server, "tester_setup_required", False)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", False)
     assert sensors.light()["state"] == "off"
 
-    monkeypatch.setattr(server, "study_mode_enabled", True)  # the ladder's kiosk
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)  # the ladder's kiosk
     assert sensors.light()["state"] == "green"
 
 
@@ -193,8 +193,8 @@ def _admitted(monkeypatch, *, admitted_hash=None, stable=True):
             "inclinometer": {"i2c_bus": 1, "i2c_address": "0x18", "zero_offset_deg": 0.0},
         }
     )
-    monkeypatch.setattr(server, "_ready_light_setup_problems", SETUP_PROBLEMS)
-    monkeypatch.setattr(server, "tester_config_hash", admitted_hash or config_hash)
+    monkeypatch.setattr(tester_hooks, "_ready_light_setup_problems", SETUP_PROBLEMS)
+    monkeypatch.setattr(tester_hooks, "tester_config_hash", admitted_hash or config_hash)
     monkeypatch.setattr(server, "rig_geometry_config", {"snapshot": {"sha256": rig_hash}})
     monkeypatch.setattr(
         server,
@@ -246,7 +246,7 @@ def test_free_play_automatic_exposure_drives_the_light(
     sensors, monkeypatch, status, reason, state, cause
 ):
     _admitted(monkeypatch)
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True}, raising=False)
     server.camera_capture_runtime.settings.auto_exposure = True
     sensors.camera["auto_exposure"] = {"enabled": True, "status": status, "reason": reason}
     light = sensors.light()
@@ -257,7 +257,7 @@ def test_free_play_automatic_exposure_drives_the_light(
 def test_free_play_exposure_unavailable_is_green_with_its_cause_named(sensors, monkeypatch):
     """No exposure limits from the camera: measure and label, never a permanent red."""
     _admitted(monkeypatch)
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True}, raising=False)
     server.camera_capture_runtime.settings.auto_exposure = True
     sensors.camera["auto_exposure"] = {
         "enabled": True,
@@ -274,7 +274,7 @@ def test_free_play_exposure_unavailable_is_green_with_its_cause_named(sensors, m
 
 def test_free_play_exposure_unavailable_without_a_message_still_names_it(sensors, monkeypatch):
     _admitted(monkeypatch)
-    monkeypatch.setattr(server, "free_play_config", {"enabled": True}, raising=False)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True}, raising=False)
     server.camera_capture_runtime.settings.auto_exposure = True
     sensors.camera["auto_exposure"] = {"enabled": True, "status": "unavailable"}
     light = sensors.light()
@@ -284,7 +284,7 @@ def test_free_play_exposure_unavailable_without_a_message_still_names_it(sensors
 
 def test_free_play_does_not_relax_manual_exposure_for_the_ladder(sensors, monkeypatch):
     _admitted(monkeypatch)
-    monkeypatch.setattr(server, "free_play_config", {}, raising=False)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {}, raising=False)
     server.camera_capture_runtime.settings.auto_exposure = True
     assert "camera exposure is automatic" in sensors.light()["cause"]
 
@@ -311,7 +311,7 @@ def test_hold_is_refused_outside_study_mode(sensors):
 
 
 def test_the_tester_page_holds_the_light_red_and_releases_it(sensors, monkeypatch):
-    monkeypatch.setattr(server, "study_mode_enabled", True)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)
     client = server.app.test_client()
 
     held = client.post("/api/ready-light/hold", json={"cause": "ladder light check running"})
@@ -328,7 +328,7 @@ def test_the_tester_page_holds_the_light_red_and_releases_it(sensors, monkeypatc
 
 @pytest.mark.parametrize("body", [{"cause": 5}, {"cause": "  "}, {"cause": "x" * 200}, [1]])
 def test_a_bad_hold_is_refused(sensors, monkeypatch, body):
-    monkeypatch.setattr(server, "study_mode_enabled", True)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)
 
     response = server.app.test_client().post("/api/ready-light/hold", json=body)
 
@@ -372,8 +372,8 @@ def test_a_trigger_edge_and_the_ops_dump_flash_once(sensors):
 
 def test_the_shot_reaches_the_light(sensors, monkeypatch):
     # the ladder's kiosk, so the tester trigger-evidence gate is not in the way
-    monkeypatch.setattr(server, "tester_setup_required", False)
-    monkeypatch.setattr(server, "study_mode_enabled", True)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", False)
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)
     monkeypatch.setattr(
         server,
         "get_profile_store",
@@ -450,3 +450,80 @@ def test_a_shot_the_tester_gate_refuses_says_it_was_not_counted(sensors, monkeyp
     )
 
     assert sensors.light()["swing"]["result"]["text"] == "Not counted: setup not ready"
+
+
+# --- free play's exposure ladder (19 Oct) ---------------------------------------------------
+
+NOW = 1_790_800_000.0
+
+
+def _free_play_light(camera):
+    """The light a free-play kiosk shows: the tester's camera rule and green note applied."""
+    states = SensorStates(
+        ops={"running": True, "serial_open": True, "phase": "armed", "phase_since": NOW - 5.0},
+        camera=camera,
+        camera_rule=tester_hooks._free_play_camera_rule,
+        green_note=tester_hooks._free_play_note(camera),
+    )
+    return compute_state(states, NOW)
+
+
+def _free_play_camera(study, **policy):
+    return _camera_snapshot(
+        free_play=True,
+        exposure_study=study,
+        auto_exposure={
+            "status": "unavailable",
+            "message": "Waiting for the camera's exposure limits",
+        }
+        | policy,
+    )
+
+
+def test_free_play_is_amber_while_the_ladder_changes_its_setting():
+    camera = _free_play_camera({"phase": "ladder", "changing": True})
+
+    light = _free_play_light(camera)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "changing the camera setting"
+
+
+def test_free_play_on_a_held_rung_is_green_without_an_exposure_note():
+    # the rung's controls are held: the automatic policy is not running, so its
+    # idle "unavailable" decision is not a camera problem
+    camera = _free_play_camera({"phase": "ladder", "changing": False})
+
+    light = _free_play_light(camera)
+
+    assert light["state"] == "green"
+    assert light["cause"] == "Ready for a swing"
+
+
+def test_free_play_is_amber_while_the_automatic_exposure_takes_over():
+    camera = _free_play_camera({"phase": "automatic", "changing": True}, status="seeded")
+
+    light = _free_play_light(camera)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "changing the camera setting"
+
+
+def test_free_play_after_the_ladder_reads_the_automatic_exposure_as_before():
+    camera = _free_play_camera(
+        {"phase": "automatic", "changing": False}, status="too_dark", message="too dark"
+    )
+
+    light = _free_play_light(camera)
+
+    assert light["state"] == "green"
+    assert light["cause"] == "Ready for a swing; too dark"
+
+
+def test_a_clip_saving_outranks_a_setting_change_in_the_wait_cause():
+    camera = _free_play_camera({"phase": "ladder", "changing": True}) | {"saving": True}
+
+    light = _free_play_light(camera)
+
+    assert light["state"] == "amber"
+    assert light["cause"] == "camera saving a clip"

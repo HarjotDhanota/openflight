@@ -347,14 +347,18 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
         matched=bool(iwr_event) and not iwr_event.get("capture_error"),
     )
     tester_required = bool(mapping(metadata.get("tester_setup")).get("required"))
-    with _kiosk(
-        server,
-        iwr6843_runtime=runtime,
-        camera_capture_runtime=None,
-        camera_capture_config=camera_config,
-        camera_optical_calibration=None,
-        camera_placement=None,
-        tester_setup_required=tester_required,
+    from openflight import tester_hooks  # noqa: PLC0415  (the tester's gate state)
+
+    with (
+        _kiosk(
+            server,
+            iwr6843_runtime=runtime,
+            camera_capture_runtime=None,
+            camera_capture_config=camera_config,
+            camera_optical_calibration=None,
+            camera_placement=None,
+        ),
+        _kiosk(tester_hooks, tester_setup_required=tester_required),
     ):
         server._process_iwr6843_angle(shot)  # pylint: disable=protected-access
         server._fuse_camera_measurements(shot, capture, archive)  # pylint: disable=protected-access
