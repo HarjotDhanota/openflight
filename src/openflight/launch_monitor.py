@@ -354,13 +354,13 @@ class Shot:
     spin_loft_deg: Optional[float] = None
     face_to_path_deg: Optional[float] = None
     d_plane_tilt_deg: Optional[float] = None
-    # Penner 2001 spin, recorded whenever it runs; spin_rpm takes it only without an
+    # the collision model's spin, recorded whenever it runs; spin_rpm takes it only without an
     # accepted measured spin. The --calculated-spin formula's value, likewise recorded.
     spin_rpm_collision: Optional[float] = None
     spin_rpm_calculated_empirical: Optional[float] = None
-    # "calculated (D-plane tilt, Wood et al. 2018 weights)" from the collision model
-    # (or "calculated (D-plane + gear effect, Cross & Nathan 2007)"); "model geometry
-    # (D-plane tilt, ...; club path from the arc prior)" when built on model geometry
+    # "calculated (fitted collision model, ...)" from the collision model (or
+    # "calculated (... + gear effect, Cross & Nathan 2007)"); "model geometry
+    # (...; club path from the arc prior)" when built on model geometry
     # (D39); None otherwise
     spin_axis_source: Optional[str] = None
     collision_model: Optional[dict] = None

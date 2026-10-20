@@ -213,7 +213,7 @@ def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
 # ---- simulators: measured or calculated only (D31); model geometry behind one switch ---
 
 MODEL_GEOMETRY_AXIS_SOURCE = (
-    "model geometry (D-plane tilt, Wood et al. 2018 weights; club path from the arc prior)"
+    "model geometry (D-plane tilt, fitted launch-model inversion; club path from the arc prior)"
 )
 
 
@@ -230,7 +230,7 @@ def _model_geometry_shot(**overrides):
         "launch_angle_vertical_source": "radar",
         "spin_rpm": 6400.0,
         "spin_source": "model_geometry",
-        "spin_method": "Penner 2001; club inputs model geometry (D39)",
+        "spin_method": "fitted collision model; club inputs model geometry (D39)",
         "spin_axis_deg": 3.0,
         "spin_axis_source": MODEL_GEOMETRY_AXIS_SOURCE,
         "carry_spin_adjusted": 150.0,
@@ -291,9 +291,9 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
 
 # ---- the shot's spin and spin axis from model-geometry inputs ------------------------
 
-PENNER_MODEL_GEOMETRY = "Penner 2001; club inputs model geometry (D39)"
+PENNER_MODEL_GEOMETRY = "fitted collision model; club inputs model geometry (D39)"
 AXIS_FROM_THE_ARC = (
-    "model geometry (model: D-plane tilt x TM4 iron factor, Wood et al. 2018 weights; "
+    "model geometry (model: D-plane tilt x TM4 iron factor, fitted launch-model inversion; "
     "club path from the arc prior, attack angle from the arc prior)"
 )
 
@@ -345,7 +345,7 @@ def test_the_axis_source_names_only_the_inputs_that_were_model_geometry():
     _attach(shot)
 
     assert shot.spin_axis_source == (
-        "model geometry (model: D-plane tilt x TM4 iron factor, Wood et al. 2018 weights; "
+        "model geometry (model: D-plane tilt x TM4 iron factor, fitted launch-model inversion; "
         "club path from the arc prior)"
     )
 
@@ -391,7 +391,7 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
     _attach(shot)
 
     assert shot.spin_source == "calculated"
-    assert shot.spin_method == "Penner 2001; club inputs measured"
+    assert shot.spin_method == "fitted collision model; club inputs measured"
     assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_IRON
     assert shot.spin_rpm_measured == 900.0
     assert shot.spin_method_measured == "ops_fft"
@@ -432,7 +432,7 @@ def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
 # ---- flight: every output inherits the weakest input label ---------------------------
 
 ALL_MODEL_GEOMETRY_INPUTS = (
-    "model-geometry inputs: spin (Penner 2001; club inputs model geometry (D39)), spin axis, "
+    "model-geometry inputs: spin (fitted collision model; club inputs model geometry (D39)), spin axis, "
     "club path from the arc prior, attack angle from the arc prior"
 )
 
@@ -474,13 +474,13 @@ def test_a_model_geometry_flight_labels_every_output_model_geometry(block):
         assert ALL_MODEL_GEOMETRY_INPUTS in metric["source"], name
         assert metric["reason"] is None, name
     assert payload["model_geometry_inputs"] == [
-        "spin (Penner 2001; club inputs model geometry (D39))",
+        "spin (fitted collision model; club inputs model geometry (D39))",
         "spin axis",
         "club path from the arc prior",
         "attack angle from the arc prior",
     ]
     assert payload["inputs"]["spin"]["label"] == (
-        "model geometry (Penner 2001; club inputs model geometry (D39))"
+        "model geometry (fitted collision model; club inputs model geometry (D39))"
     )
     assert payload["inputs"]["spin_axis"]["label"] == AXIS_FROM_THE_ARC
 
@@ -608,7 +608,7 @@ def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
-        spin_axis_source=cm.SPIN_AXIS_SOURCE_TILT,
+        spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         mode="rolling-buffer",
     )
 

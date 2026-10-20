@@ -1,17 +1,14 @@
 """Known-answer shots through the kiosk's own shot assembly (V-formulas audit).
 
 A known club delivery (club, club speed, path, attack, face, loft, handedness) is
-turned into a known ball launch by the published forward model, written out here
-independently of the modules under test:
+turned into a known ball launch:
 
-- launch direction and vertical launch from Wood, Henrikson & Broadie 2018's
-  launch ratios (Table 1: horizontal 0.76 driver / 0.69 7-iron, vertical 0.83 /
-  0.81), ``launch = club direction + ratio x (face - club direction)`` per plane;
-- spin from Penner 2001 (Am. J. Phys. 69, 563), Eqs. (5), (8), (11), at the spin
-  loft (the 3-D angle between the head's direction and the face normal);
-- spin axis from the D-plane tilt (TrackMan: "the expected spin axis disregarding
-  any gear effect");
-- ball speed from Penner's normal and parallel launch speeds;
+- launch direction, vertical launch, spin and a driver's spin axis from the fitted
+  forward collision model (``collision_forward``, tested on its own); the kiosk
+  must invert that launch back to the delivery;
+- a 7-iron's spin axis from the clean-room iron fit on the D-plane tilt;
+- ball speed from Penner 2001's normal and parallel launch speeds (Am. J. Phys.
+  69, 563, Eqs. (5), (7), (8)), written out here;
 - the head's last positions on a circular arc in a plane (E1's model) with the
   given path and attack at impact, and the OPS's radial readings of that ball
   from the rig's own OPS position.
@@ -34,7 +31,7 @@ import numpy as np
 import pytest
 
 import openflight.server as server_module
-from openflight import shot_models
+from openflight import collision_forward, shot_models
 from openflight.ballistics import AIR_DENSITY_STD, LaunchConditions, simulate
 from openflight.club_arc import prior_for_club
 from openflight.clubs import ClubType
@@ -48,7 +45,6 @@ MPH = 0.44704
 
 # ---- independent forward model ------------------------------------------------------
 
-WOOD_2018 = {ClubType.DRIVER: (0.76, 0.83), ClubType.IRON_7: (0.69, 0.81)}
 # Penner 2001 Sec. II A: ball 45.9 g, 4.27 cm; head 200 g; I = 2/5 m r^2
 PENNER_M, PENNER_D, PENNER_HEAD = 0.0459, 0.0427, 0.200
 
@@ -93,11 +89,21 @@ def penner(club_speed_mph, theta_deg):
 
 
 def truth_launch(club, speed, path, attack, face, loft):
-    w_h, w_v = WOOD_2018[club]
-    launch_h = path + w_h * (face - path)
-    launch_v = attack + w_v * (loft - attack)
+    impact = collision_forward.forward(
+        club=club,
+        club_speed_mph=speed,
+        attack_angle_deg=attack,
+        club_path_deg=path,
+        face_angle_deg=face,
+        dynamic_loft_deg=loft,
+    )
+    launch_h, launch_v, spin = (
+        impact.launch_horizontal_deg,
+        impact.launch_vertical_deg,
+        impact.spin_rpm,
+    )
     theta = spin_loft_deg(loft, face, attack, path)
-    ball_speed, spin = penner(speed, theta)
+    ball_speed, _ = penner(speed, theta)
     tilt = d_plane_tilt_deg(loft, face, attack, path)
     # irons: the clean-room TM4 iron fit on the D-plane tilt
     iron_axis = math.degrees(math.atan(math.tan(math.radians(tilt)) * (0.81385 + 0.00342 * loft)))
@@ -106,7 +112,7 @@ def truth_launch(club, speed, path, attack, face, loft):
         "launch_v": launch_v,
         "spin_loft": theta,
         "tilt": tilt,
-        "axis": iron_axis if club is ClubType.IRON_7 else tilt,
+        "axis": iron_axis if club is ClubType.IRON_7 else impact.centre_spin_axis_deg,
         "ball_speed": ball_speed,
         "spin": spin,
         "face_to_path": face - path,

@@ -311,7 +311,7 @@ def _collision_spin_feeds(shot: Shot) -> bool:
     return _collision_spin_status(shot) == "calculated"
 
 
-_PENNER_INPUTS = (
+_SPIN_INPUTS = (
     "club_path",
     "attack_angle",
     "launch_horizontal",
@@ -321,12 +321,12 @@ _PENNER_INPUTS = (
 
 
 def _collision_spin_method(shot: Shot) -> str:
-    """Shot.spin_method for the collision spin: Penner 2001 and its inputs' label."""
+    """Shot.spin_method for the collision spin: the fitted model and its inputs' label."""
     inputs = (shot.collision_model or {}).get("inputs", {})
     labels = [
         record.get("label")
         for name, record in inputs.items()
-        if name in _PENNER_INPUTS and record.get("value") is not None
+        if name in _SPIN_INPUTS and record.get("value") is not None
     ]
     return collision_model.shot_spin_method(_collision_spin_status(shot) or "", labels)
 
@@ -367,7 +367,9 @@ def _attach_collision_model(shot: Shot) -> None:
     proxy with ``collision_model`` (published sources, labelled calculated). Each run
     starts from scratch, so a late re-run never keeps an earlier run's values.
     """
-    result = collision_model.evaluate(club=shot.club, **_collision_inputs(shot))
+    result = collision_model.evaluate(
+        club=shot.club, handedness=server.sim_player_state.handed, **_collision_inputs(shot)
+    )
     metrics = result.metrics
     shot.collision_model = result.to_dict()
     shot.face_angle_deg = _round_or_none(metrics["face_angle"].value, 1)
