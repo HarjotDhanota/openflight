@@ -516,11 +516,11 @@ landing backspin (the spin times the cosine of the spin axis tilt):
 
 The twelve constants were fitted by the maintainer (flight-fit-v2) for fairway
 turf of normal firmness over landing speeds 18–100 mph, landing angles 5–65° and
-backspin 0–11,000 rpm. On the 67 export shots flight-fit-v1 was fitted to,
-flight-fit-v1's carry plus this roll is within 1.74 yd RMSE of the exports'
-estimated total (driver 3.47, mid irons 1.64, wedges 0.80), against 5.90 yd for
-the USGA / R&A line below (driver 5.58, mid irons 4.42, wedges 7.07) on the shots
-inside its range.
+backspin 0–11,000 rpm. On the 60 export shots (of the 67 flight-fit-v1 was
+fitted to) that land inside both models' ranges, flight-fit-v1's carry plus this
+roll is within 1.71 yd RMSE of the exports' estimated total (driver 3.48, mid
+irons 1.56, wedges 0.80), against 5.90 yd for the USGA / R&A line below (driver
+5.58, mid irons 4.42, wedges 7.07).
 
 OpenFlight applies it as follows:
 

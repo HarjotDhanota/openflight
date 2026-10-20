@@ -143,18 +143,18 @@ TURF_ROLL_V1 = TurfRollModel(
         "out; constants fitted by the maintainer (flight-fit-v2)"
     ),
     landing_angle_range_deg=(5.0, 65.0),
-    tilt_max_rad=0.602,
-    tilt_speed_mps=25.2,
+    tilt_max_rad=0.595,
+    tilt_speed_mps=24.8,
     tilt_peak_rad=0.768,
-    tilt_width_rad=0.337,
-    restitution=0.445,
-    restitution_speed_mps=59.6,
+    tilt_width_rad=0.338,
+    restitution=0.437,
+    restitution_speed_mps=65.5,
     friction=0.135,
-    tangential_cap_mps=22.3,
-    tangential_cap_normal_mps=24.6,
-    sliding_friction=0.353,
-    rolling_resistance=0.0979,
-    turf_drag_per_m=0.0407,
+    tangential_cap_mps=22.4,
+    tangential_cap_normal_mps=24.5,
+    sliding_friction=0.355,
+    rolling_resistance=0.0971,
+    turf_drag_per_m=0.0414,
     calibration=RollCalibration(
         version="flight-fit-v2",
         source="fitted by the maintainer (flight-fit-v2) on fairway turf, normal firmness",
@@ -165,10 +165,11 @@ TURF_ROLL_V1 = TurfRollModel(
             "4096 landing states, a random 20 % held out"
         ),
         method=(
-            "scipy least_squares (soft L1, 2 yd) on the distance to rest, twelve "
-            "constants, rounded to three significant figures"
+            "scipy least_squares (soft L1, 2 yd) on the distance to rest, eleven "
+            "constants with the tilt maximum held at 0.595 rad, rounded to three "
+            "significant figures"
         ),
-        metrics=(("held-out landing states roll RMSE yd", 1.77),),
+        metrics=(("held-out landing states roll RMSE yd", 1.76),),
     ),
 )
 
