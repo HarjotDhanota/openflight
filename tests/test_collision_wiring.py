@@ -408,8 +408,9 @@ def _spin_record(shot):
     return shot_metrics.records(server_module.shot_to_dict(shot))["spin_rate"]
 
 
-def test_a_calculated_iron_spin_without_a_low_point_carries_the_contact_note():
-    shot = _delivered_shot()
+def test_a_camera_delivery_without_a_low_point_carries_the_contact_note():
+    missing = {"value": None, "status": "not_measured", "reason": "no club-head positions"}
+    shot = _delivered_shot(club_delivery={"metrics": {"low_point_distance_mm": missing}})
 
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
@@ -418,6 +419,21 @@ def test_a_calculated_iron_spin_without_a_low_point_carries_the_contact_note():
     assert record["value"] == pytest.approx(shot.spin_rpm_collision)
     assert record["note"].startswith(cm.NOTE_CONTACT)
     assert "no low point" in record["note"]
+
+
+def test_without_camera_club_data_there_is_no_low_point_to_miss():
+    from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
+
+    no_hook = _delivered_shot()
+    no_camera = _delivered_shot(
+        club_delivery=club_delivery_payload(None, club=ClubType.IRON_7, handedness="RH")
+    )
+
+    for shot in (no_hook, no_camera):
+        shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+        record = _spin_record(shot)
+        assert record["status"] == "calculated"
+        assert cm.NOTE_CONTACT not in (record["note"] or "")
 
 
 def test_the_arcs_low_point_clears_the_contact_note_and_a_shallow_attack_sets_it():

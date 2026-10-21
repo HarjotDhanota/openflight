@@ -319,7 +319,6 @@ def test_a_clean_iron_strike_has_no_contact_note():
         (dict(attack=-1.5), "attack angle -1.5 deg"),
         (dict(club=ClubType.PW, attack=0.5), "attack angle +0.5 deg"),
         (dict(impact_height_mm=_inp(9.0, frame=None)), "impact 9 mm above the face centre"),
-        (dict(low_point=None), "no low point"),
         (dict(low_point=cm.Input(None, reason="arc not fitted")), "no low point"),
     ],
 )
@@ -332,12 +331,12 @@ def test_a_possible_flier_or_heavy_contact_is_noted(kwargs, why):
 
 
 def test_the_contact_note_never_changes_the_spin():
-    assert _contact(low_point=None).value == _contact().value
+    assert _contact(low_point=cm.Input(None, reason="arc not fitted")).value == _contact().value
 
 
 def test_the_contact_flags_are_for_irons_and_wedges_only():
     for club in (ClubType.DRIVER, ClubType.WOOD_3, ClubType.HYBRID_5):
-        spin = _contact(club=club, attack=1.0, low_point=None)
+        spin = _contact(club=club, attack=1.0, low_point=cm.Input(None, reason="arc not fitted"))
         assert spin.present and cm.NOTE_CONTACT not in spin.note
 
 
@@ -348,3 +347,10 @@ def test_a_high_strike_is_flagged_only_from_a_measured_impact_location():
     assert cm.NOTE_CONTACT not in note(_inp(8.0, frame=None))
     assert cm.NOTE_CONTACT in note(_inp(8.5, frame=None))
     assert cm.NOTE_CONTACT not in note(cm.Input(12.0, cm.LABEL_MODEL_GEOMETRY, "assumed"))
+
+
+def test_without_camera_club_data_a_missing_low_point_is_not_flagged():
+    spin = _contact(low_point=None)
+
+    assert spin.present and cm.NOTE_CONTACT not in spin.note
+    assert cm.NOTE_CONTACT in _contact(low_point=None, attack=-1.0).note

@@ -398,7 +398,8 @@ calculated spin, and **its value is not changed**:
 - an iron or wedge (2-iron to lob wedge) with an attack angle of −2° or
   shallower;
 - a measured strike more than 8 mm above the face centre;
-- an iron or wedge shot with no low point (E1's arc gives it).
+- an iron or wedge shot whose camera club delivery gave no low point (E1's
+  arc). Without camera club data there is no low point to miss, and no note.
 
 The note reads "low confidence: possible flier or heavy contact (…)" with the
 reasons, on `collision_model["metrics"]["spin_rate"]` and on the catalogue's

@@ -91,9 +91,9 @@ missing input makes every metric built on it "not measured", with the reason.
 
 7. **Contact quality.** A calculated spin assumes a clean, dry strike. An iron or
    wedge with an attack angle of -2 deg or shallower, a strike more than 8 mm above
-   the face centre, or an iron or wedge shot with no low point may be a flier or a
-   heavy strike, which spins far less: the spin keeps its value, with
-   ``NOTE_CONTACT`` and the reasons.
+   the face centre, or an iron or wedge whose camera club delivery gave no low point
+   may be a flier or a heavy strike, which spins far less: the spin keeps its
+   value, with ``NOTE_CONTACT`` and the reasons.
 
 Labels: an output is ``calculated`` unless an input is ``model_geometry`` (D39),
 which it then inherits. Horizontal outputs carry their inputs' frame
@@ -944,7 +944,7 @@ def contact_flags(
             flags.append(f"attack angle {attack_angle.value:+.1f} deg, not below -2 deg")
     if impact_height_mm is not None and impact_height_mm > CONTACT_HEIGHT_LIMIT_MM:
         flags.append(f"impact {impact_height_mm:.0f} mm above the face centre")
-    if low_point is None or not low_point.present:
+    if low_point is not None and not low_point.present:
         flags.append("no low point")
     return flags
 
@@ -1117,7 +1117,7 @@ def evaluate(
     the spin is measured; ``ball_speed_mph`` also feeds the smash index. A measured
     impact location (+ toe, + up, mm) drives the gear effect; ``handedness`` is
     right-handed unless "LH". ``low_point_distance_mm`` (E1's arc) feeds only the
-    contact note.
+    contact note; None means no camera club data, so no low point to miss.
     """
     inputs = {
         "club_path": club_path,
