@@ -660,6 +660,7 @@ SELECTION_RULE = (
 CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
 ARC_FIT_SOURCE = "club_arc:shot_fit"
+NO_CAMERA_DELIVERY = "no camera club delivery"
 LOW_POINT_OFFSETS_MM = {ClubType.IRON_7: 2.3, ClubType.DRIVER: -28.3, ClubType.PW: 5.5}
 NOTE_NO_LOW_POINT_OFFSET = "arc geometry only: no per-club offset fitted for this club"
 ARC_PRIOR_SOURCE = "club_arc:published_prior"
@@ -740,7 +741,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
     recorded = (data or {}).get("horizontal_offset_deg")
     offset = float(recorded) if recorded is not None else None
     if data is None:
-        arc = _not_measured("no camera club delivery", handedness=handed, frame=frame_for(offset))
+        arc = _not_measured(NO_CAMERA_DELIVERY, handedness=handed, frame=frame_for(offset))
     else:
         positions = [HeadPosition(**dict(item)) for item in data.get("head_positions") or ()]
         if not positions:

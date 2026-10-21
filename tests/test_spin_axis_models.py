@@ -141,8 +141,16 @@ def test_an_iron_keeps_the_iron_axis_with_a_small_gear_term():
         ClubType.IRON_7, impact_offset_mm=cm.Input(12.0, M, "camera impact location")
     ).metrics["spin_axis"]
 
+    driver_centre = _evaluate(ClubType.DRIVER).metrics["spin_axis"].value
+    driver_toe = (
+        _evaluate(ClubType.DRIVER, impact_offset_mm=cm.Input(12.0, M, "camera impact location"))
+        .metrics["spin_axis"]
+        .value
+    )
+
     assert toe.source == f"{cm.SOURCE_AXIS_IRON} plus {cm.SOURCE_GEAR}"
-    assert abs(toe.value - centre.value) < 0.5
+    assert 0.0 < centre.value - toe.value < 2.0
+    assert centre.value - toe.value < 0.5 * (driver_centre - driver_toe)
 
 
 def test_the_shot_source_names_the_iron_model():

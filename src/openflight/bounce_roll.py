@@ -1,7 +1,7 @@
 """Bounce and roll on fairway turf: the distance from the landing point to rest.
 
 The ball lands on turf that dents under it. Penner (2002), "The run of a golf
-ball", Can. J. Phys. 80, 931-940 (doi:10.1139/p02-022), models the dent as a
+ball", Can. J. Phys. 80, 931-940 (doi:10.1139/p02-035), models the dent as a
 local tilt of the impact plane toward the incoming ball; here the tilt grows with
 the landing speed and peaks at a fitted landing angle. Each impact is a rigid
 sphere bouncing with grip-slip friction (Cross 2002, "Grip-slip behavior of a
