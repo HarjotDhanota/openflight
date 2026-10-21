@@ -400,3 +400,37 @@ def test_a_rerun_over_a_model_geometry_spin_names_only_the_arc_inputs():
 
     assert "spin_rpm" not in shot.collision_model["inputs"]
     assert "spin rate" not in (shot.spin_axis_source or "")
+
+
+def _spin_record(shot):
+    from openflight import shot_metrics  # noqa: PLC0415
+
+    return shot_metrics.records(server_module.shot_to_dict(shot))["spin_rate"]
+
+
+def test_a_calculated_iron_spin_without_a_low_point_carries_the_contact_note():
+    shot = _delivered_shot()
+
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    record = _spin_record(shot)
+    assert record["status"] == "calculated"
+    assert record["value"] == pytest.approx(shot.spin_rpm_collision)
+    assert record["note"].startswith(cm.NOTE_CONTACT)
+    assert "no low point" in record["note"]
+
+
+def test_the_arcs_low_point_clears_the_contact_note_and_a_shallow_attack_sets_it():
+    low_point = {"value": 110.0, "status": "calculated", "source": "club_arc"}
+    clean = _delivered_shot(club_delivery={"metrics": {"low_point_distance_mm": low_point}})
+    shallow = _delivered_shot(
+        club_delivery={"metrics": {"low_point_distance_mm": low_point}},
+        experimental_fused_attack_angle_deg=-1.0,
+    )
+
+    for shot in (clean, shallow):
+        shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    assert cm.NOTE_CONTACT not in (_spin_record(clean)["note"] or "")
+    assert cm.NOTE_CONTACT in _spin_record(shallow)["note"]
+    assert "attack angle -1.0 deg" in _spin_record(shallow)["note"]

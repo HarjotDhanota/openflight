@@ -245,6 +245,18 @@ def _collision_inputs(shot: Shot) -> dict:
     }
 
 
+def _low_point_input(shot: Shot) -> collision_model.Input:
+    """E1's low point under its own label (the contact note only), or a missing input."""
+    delivery = shot.club_delivery if isinstance(shot.club_delivery, dict) else {}
+    metrics = delivery.get("metrics") if isinstance(delivery.get("metrics"), dict) else {}
+    entry = metrics.get("low_point_distance_mm")
+    entry = entry if isinstance(entry, dict) else {}
+    value, label = entry.get("value"), entry.get("status")
+    if _finite(value):
+        return collision_model.Input(float(value), label, entry.get("source"))
+    return collision_model.Input(None, reason=entry.get("reason") or "no low point")
+
+
 def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
     """The full ball speed, calculated; the radial speed never stands in for it."""
     speed = shot.ball_speed_full_mph
@@ -368,7 +380,10 @@ def _attach_collision_model(shot: Shot) -> None:
     starts from scratch, so a late re-run never keeps an earlier run's values.
     """
     result = collision_model.evaluate(
-        club=shot.club, handedness=server.sim_player_state.handed, **_collision_inputs(shot)
+        club=shot.club,
+        handedness=server.sim_player_state.handed,
+        low_point_distance_mm=_low_point_input(shot),
+        **_collision_inputs(shot),
     )
     metrics = result.metrics
     shot.collision_model = result.to_dict()

@@ -277,13 +277,22 @@ def _spin_rate(shot):
         or "spin not measured on this shot"
     )
     quality = shot.get("spin_quality")
+    note = f"confidence {quality}" if status == MEASURED and quality else None
+    model_spin = _finite(shot.get("spin_rpm_collision"))
+    if (
+        status != MEASURED
+        and model_spin is not None
+        and model_spin == _finite(shot.get("spin_rpm"))
+    ):
+        # the collision model's own spin: its notes (contact quality, no impact location)
+        note = collision.get("note")
     return _record(
         "spin_rate",
         shot.get("spin_rpm"),
         status,
         source=_sensor_source(shot, shot.get("spin_method") or source),
         reason=reason,
-        note=f"confidence {quality}" if status == MEASURED and quality else None,
+        note=note,
     )
 
 
