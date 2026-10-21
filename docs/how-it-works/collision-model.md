@@ -96,7 +96,7 @@ physics, per club category (driver and woods, irons and hybrids, wedges).
 | --- | --- |
 | Fixed, published | Ball m = 45.9 g, r = 21.35 mm (Penner 2001); κ = 0.4, I = κ m r² (uniform solid sphere); face friction μ = 0.40 (Henrikson et al. 2020, Sec. 2.2: urethane on a dry grooved face); restitution e = 0.86 − 0.0029 v_n for irons, hybrids and wedges (Penner 2001, Eq. (5)) and e = 0.830 − 0.0029 (v_n − 48.77 m/s) for drivers and woods (the USGA/R&A limit of 0.830 at its 48.77 m/s test speed, with Penner's slope), v_n the normal approach speed, held within 0.5–0.95 |
 | Assumed (typical heads) | Head mass, centre-of-mass depth d and moments of inertia, table below |
-| Fitted by the maintainer | The launch (K, s₁, s₂), centre speed S and centre axis (a, b), and the spin gain g and loss scales c_x, c_y: to a dense grid of deliveries (below). The gear gains g_x, g_y: to 38 clean export shots, each capped at 1.5 × its rigid-body value. The index constants (section 6) |
+| Fitted by the maintainer | The launch (K, s₁, s₂), centre speed S and centre axis (a, b), and the spin gain g and loss scales c_x, c_y: to a dense grid of deliveries (below). The gear gains g_x, g_y: to 38 clean export shots, each capped at 1.5 × its rigid-body value. The per-club index constants: to launch-monitor data (section 6) |
 
 The grid: club speed 50–130 mph, attack −8…+6°, path and face ±8°, dynamic
 loft 8–55°, impact offset ±25 mm (toe +) and height ±15 mm (up +); driver,
@@ -595,27 +595,28 @@ in the Club panel after spin loft:
 
 - **Spin index** = measured spin / expected spin × 100. Expected spin =
   `V · k · sin(spin loft)` (Penner 2001, Eq. (11): the rolling spin goes as
-  V sin θ). k is fitted by the maintainer per club where an export has the
-  club: driver 109.50, 7-iron 150.46, pitching wedge 165.13 rpm per mph; other
+  V sin θ). k is fitted by the maintainer to launch-monitor data per club where
+  an export has the club: driver 109.50, 7-iron 150.46, pitching wedge 165.13
+  rpm per mph; other
   clubs take their category's k(L). It needs a **measured** spin: a calculated
   spin is not measured against itself, so on today's kiosk the spin index is
   `not_measured`, with that reason.
 - **Smash index** = ball speed (full) / expected ball speed × 100. Expected
-  ball speed = `V · (a · cos(spin loft) + c)`, fitted by the maintainer per
-  club: driver a = 1.4926, c = 0.0209; 7-iron 1.4903, 0.0388; pitching wedge
-  1.4988, 0.0459. Other clubs take the published normal speed and rolling (or
-  Coulomb-capped) tangential speed, Penner 2001 Eqs. (5), (7), (8) with the
-  heads above, times a category gain matched to the fitted club on its range
+  ball speed = `V · (a · cos(spin loft) + c)`, fitted by the maintainer to
+  launch-monitor data per club: driver a = 1.5059, c = 0.0072; 7-iron 1.4956,
+  0.0321; pitching wedge 1.4682, 0.0716. Other clubs take the published normal
+  speed and rolling (or Coulomb-capped) tangential speed, Penner 2001 Eqs. (5),
+  (7), (8) with the heads above, times a category gain fitted by the maintainer
   (driver and woods 0.997, irons and hybrids 1.022, wedges 1.022). It needs the
   full ball speed, the club speed and the spin loft; the model runs again once
   the full ball speed is known.
 
 Each takes its inputs' weakest label. A club without its own fitted constants
 carries the note "no fitted index for this club: expected value from its
-category". On the owner's export the indices follow the exported ones to 0.45
-(spin) and 0.11 (smash) index points RMS; the narrow spin-loft range of each
-club in it (3–6°) cannot separate a from c, so the constants come from the
-grid, where they extrapolate smoothly.
+category". On the owner's export, to which the per-club constants were fitted,
+the indices follow the exported ones to 0.45 (spin) and 0.05 (smash) index
+points RMS. Each club's shots span only 3–6° of spin loft there, so a and c are
+fitted values for that club's usual deliveries, not a law over all spin lofts.
 
 ## Simulators (D31)
 

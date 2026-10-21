@@ -2,8 +2,9 @@
 
 The export (``session_logs/OpenFlight-Test.Normalized.csv``, 24 shots: driver,
 7-iron, pitching wedge) records each shot's club delivery, impact location, ball
-launch, spin and indices. Only the gear gains saw it (with a second session's
-export); the launch, spin and loss constants did not. The budgets are the model's
+launch, spin and indices. The gear gains (with a second session's export) and
+the per-club expected ball speed were fitted to it; the launch, spin and loss
+constants were not. The budgets are the model's
 own numbers on it with a little room, each against the model it replaced.
 """
 
@@ -134,7 +135,7 @@ def test_face_and_loft_from_the_launch_beat_the_published_ratios():
     assert rms(new_loft) < 0.45 and rms(new_loft) < rms(old_loft)
 
 
-@pytest.mark.parametrize(("column", "limit"), [("Spin Index", 0.5), ("Smash Index", 0.13)])
+@pytest.mark.parametrize(("column", "limit"), [("Spin Index", 0.5), ("Smash Index", 0.06)])
 def test_the_indices_follow_the_exported_indices(column, limit):
     errors = []
     for club, shot, speed, attack, path, face, loft, ball, launch_v, launch_h in SHOTS:

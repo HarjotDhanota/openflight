@@ -312,9 +312,9 @@ def test_expected_spin_is_club_speed_times_sine_spin_loft():
 @pytest.mark.parametrize(
     ("club", "a", "c"),
     [
-        (ClubType.DRIVER, 1.4926, 0.0209),
-        (ClubType.IRON_7, 1.4903, 0.0388),
-        (ClubType.PW, 1.4988, 0.0459),
+        (ClubType.DRIVER, 1.5059, 0.0072),
+        (ClubType.IRON_7, 1.4956, 0.0321),
+        (ClubType.PW, 1.4682, 0.0716),
     ],
 )
 def test_a_data_clubs_expected_ball_speed_is_its_fitted_line_in_cos_spin_loft(club, a, c):

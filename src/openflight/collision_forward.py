@@ -120,9 +120,9 @@ HEAD_MASS_G = {
 # the expected ball speed V (a cos SL + c).
 EXPECTED_SPIN_PER_CLUB = {ClubType.DRIVER: 109.50, ClubType.IRON_7: 150.46, ClubType.PW: 165.13}
 EXPECTED_SPEED_PER_CLUB = {
-    ClubType.DRIVER: (1.4926, 0.0209),
-    ClubType.IRON_7: (1.4903, 0.0388),
-    ClubType.PW: (1.4988, 0.0459),
+    ClubType.DRIVER: (1.5059, 0.0072),
+    ClubType.IRON_7: (1.4956, 0.0321),
+    ClubType.PW: (1.4682, 0.0716),
 }
 
 Pair = Union[float, tuple[float, float]]
