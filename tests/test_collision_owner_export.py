@@ -1,9 +1,10 @@
-"""The fitted collision model against the owner's own export session.
+"""The collision model against the owner's own export session.
 
 The export (``session_logs/OpenFlight-Test.Normalized.csv``, 24 shots: driver,
 7-iron, pitching wedge) records each shot's club delivery, impact location, ball
-launch, spin and indices. The fitted model was not fitted to it, so these are
-independent checks, each against the model it replaced.
+launch, spin and indices. Only the gear gains saw it (with a second session's
+export); the launch, spin and loss constants did not. The budgets are the model's
+own numbers on it with a little room, each against the model it replaced.
 """
 
 from __future__ import annotations
@@ -90,7 +91,7 @@ def test_the_spin_follows_the_measured_spin_better_than_penner():
         spin_loft = md.spin_loft_deg(loft, face, attack, path)
         old.append(cm.penner_impact(speed * cm.MPH_TO_M_S, spin_loft).spin_rpm / spin - 1.0)
 
-    assert rms(new) < 0.12
+    assert rms(new) < 0.09
     assert rms(new) < 0.5 * rms(old)
 
 
@@ -104,7 +105,7 @@ def test_a_driver_axis_with_the_impact_location_follows_the_export():
             )
 
     assert len(errors) == 8
-    assert rms(errors) < 5.0
+    assert rms(errors) < 2.2
 
 
 def test_face_and_loft_from_the_launch_beat_the_published_ratios():
@@ -133,7 +134,7 @@ def test_face_and_loft_from_the_launch_beat_the_published_ratios():
     assert rms(new_loft) < 0.45 and rms(new_loft) < rms(old_loft)
 
 
-@pytest.mark.parametrize(("column", "limit"), [("Spin Index", 0.6), ("Smash Index", 0.2)])
+@pytest.mark.parametrize(("column", "limit"), [("Spin Index", 0.5), ("Smash Index", 0.13)])
 def test_the_indices_follow_the_exported_indices(column, limit):
     errors = []
     for club, shot, speed, attack, path, face, loft, ball, launch_v, launch_h in SHOTS:
@@ -148,13 +149,7 @@ def test_the_indices_follow_the_exported_indices(column, limit):
             errors.append(100.0 * spin / expected - exported)
         else:
             expected = cf.expected_ball_speed_mph(
-                club=club,
-                club_speed_mph=speed,
-                spin_loft_deg=spin_loft,
-                face_angle_deg=face,
-                dynamic_loft_deg=loft,
-                launch_vertical_deg=launch_v,
-                launch_horizontal_deg=launch_h,
+                club=club, club_speed_mph=speed, spin_loft_deg=spin_loft
             )
             errors.append(100.0 * ball / expected - exported)
 

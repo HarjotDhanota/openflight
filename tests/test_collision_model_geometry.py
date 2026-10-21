@@ -230,7 +230,7 @@ def _model_geometry_shot(**overrides):
         "launch_angle_vertical_source": "radar",
         "spin_rpm": 6400.0,
         "spin_source": "model_geometry",
-        "spin_method": "fitted collision model; club inputs model geometry (D39)",
+        "spin_method": "impulse collision model; club inputs model geometry (D39)",
         "spin_axis_deg": 3.0,
         "spin_axis_source": MODEL_GEOMETRY_AXIS_SOURCE,
         "carry_spin_adjusted": 150.0,
@@ -291,7 +291,7 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
 
 # ---- the shot's spin and spin axis from model-geometry inputs ------------------------
 
-SPIN_MODEL_GEOMETRY = "fitted collision model; club inputs model geometry (D39)"
+SPIN_MODEL_GEOMETRY = "impulse collision model; club inputs model geometry (D39)"
 AXIS_FROM_THE_ARC = (
     f"model geometry ({cm.AXIS_BASIS_IRON}, {cm.FACE_BASIS_INVERSION}; "
     "club path from the arc prior, attack angle from the arc prior)"
@@ -391,7 +391,7 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
     _attach(shot)
 
     assert shot.spin_source == "calculated"
-    assert shot.spin_method == "fitted collision model; club inputs measured"
+    assert shot.spin_method == "impulse collision model; club inputs measured"
     assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_IRON
     assert shot.spin_rpm_measured == 900.0
     assert shot.spin_method_measured == "ops_fft"
@@ -432,7 +432,7 @@ def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
 # ---- flight: every output inherits the weakest input label ---------------------------
 
 ALL_MODEL_GEOMETRY_INPUTS = (
-    "model-geometry inputs: spin (fitted collision model; club inputs model geometry (D39)), spin axis, "
+    "model-geometry inputs: spin (impulse collision model; club inputs model geometry (D39)), spin axis, "
     "club path from the arc prior, attack angle from the arc prior"
 )
 
@@ -474,13 +474,13 @@ def test_a_model_geometry_flight_labels_every_output_model_geometry(block):
         assert ALL_MODEL_GEOMETRY_INPUTS in metric["source"], name
         assert metric["reason"] is None, name
     assert payload["model_geometry_inputs"] == [
-        "spin (fitted collision model; club inputs model geometry (D39))",
+        "spin (impulse collision model; club inputs model geometry (D39))",
         "spin axis",
         "club path from the arc prior",
         "attack angle from the arc prior",
     ]
     assert payload["inputs"]["spin"]["label"] == (
-        "model geometry (fitted collision model; club inputs model geometry (D39))"
+        "model geometry (impulse collision model; club inputs model geometry (D39))"
     )
     assert payload["inputs"]["spin_axis"]["label"] == AXIS_FROM_THE_ARC
 

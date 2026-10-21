@@ -130,7 +130,7 @@ def test_the_calculated_spin_is_the_fitted_models_at_the_face_centre():
     assert spin.value == pytest.approx(_forward_for(result, ClubType.IRON_7).spin_rpm)
     assert spin.source == cm.SOURCE_SPIN
     assert spin.status == cm.STATUS_CALCULATED
-    assert spin.note == cm.NOTE_NO_GEAR
+    assert cm.NOTE_NO_GEAR in spin.note
 
 
 def test_a_driver_axis_is_the_fitted_centre_axis_and_an_iron_keeps_the_iron_axis():
@@ -239,13 +239,7 @@ def test_the_smash_index_compares_the_ball_speed_with_the_expected_ball_speed():
     result = _evaluate(ball_speed_mph=_inp(118.0, cm.LABEL_CALCULATED, frame=None))
     metrics = result.metrics
     expected = cf.expected_ball_speed_mph(
-        club=ClubType.IRON_7,
-        club_speed_mph=85.0,
-        spin_loft_deg=metrics["spin_loft"].value,
-        face_angle_deg=metrics["face_angle"].value,
-        dynamic_loft_deg=metrics["dynamic_loft"].value,
-        launch_vertical_deg=18.0,
-        launch_horizontal_deg=1.0,
+        club=ClubType.IRON_7, club_speed_mph=85.0, spin_loft_deg=metrics["spin_loft"].value
     )
 
     assert metrics["smash_index"].value == pytest.approx(100.0 * 118.0 / expected)
@@ -279,3 +273,78 @@ def test_an_index_takes_its_weakest_inputs_label():
     assert result.metrics["smash_index"].status == cm.STATUS_CALCULATED
     assert weak.metrics["smash_index"].status == cm.STATUS_MODEL_GEOMETRY
     assert math.isfinite(weak.metrics["smash_index"].value)
+
+
+def test_a_club_without_fitted_indices_says_so():
+    kw = dict(
+        spin_rpm=_inp(6000.0, frame=None),
+        ball_speed_mph=_inp(118.0, cm.LABEL_CALCULATED, frame=None),
+    )
+    fitted = _evaluate(**kw).metrics
+    fallback = _evaluate(ClubType.IRON_5, **kw).metrics
+
+    for name in ("spin_index", "smash_index"):
+        assert fitted[name].note is None
+        assert fallback[name].present
+        assert fallback[name].note == cm.NOTE_NO_FITTED_INDEX
+
+
+# ---- flier and heavy contact ---------------------------------------------------------
+
+LOW_POINT = _inp(100.0, cm.LABEL_CALCULATED, frame=None)
+
+
+def _contact(club=ClubType.IRON_7, attack=-4.0, low_point=LOW_POINT, **kwargs):
+    return cm.evaluate(
+        club=club,
+        club_path=_inp(-2.0),
+        attack_angle=_inp(attack, frame=None),
+        launch_horizontal=_inp(1.0),
+        launch_vertical=_inp(18.0, frame=None),
+        club_speed_mph=_inp(85.0, frame=None),
+        low_point_distance_mm=low_point,
+        **kwargs,
+    ).metrics["spin_rate"]
+
+
+def test_a_clean_iron_strike_has_no_contact_note():
+    spin = _contact()
+
+    assert spin.present and cm.NOTE_CONTACT not in spin.note
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "why"),
+    [
+        (dict(attack=-1.5), "attack angle -1.5 deg"),
+        (dict(club=ClubType.PW, attack=0.5), "attack angle +0.5 deg"),
+        (dict(impact_height_mm=_inp(9.0, frame=None)), "impact 9 mm above the face centre"),
+        (dict(low_point=None), "no low point"),
+        (dict(low_point=cm.Input(None, reason="arc not fitted")), "no low point"),
+    ],
+)
+def test_a_possible_flier_or_heavy_contact_is_noted(kwargs, why):
+    flagged = _contact(**kwargs)
+
+    assert flagged.note.startswith(cm.NOTE_CONTACT)
+    assert why in flagged.note
+    assert flagged.status == cm.STATUS_CALCULATED
+
+
+def test_the_contact_note_never_changes_the_spin():
+    assert _contact(low_point=None).value == _contact().value
+
+
+def test_the_contact_flags_are_for_irons_and_wedges_only():
+    for club in (ClubType.DRIVER, ClubType.WOOD_3, ClubType.HYBRID_5):
+        spin = _contact(club=club, attack=1.0, low_point=None)
+        assert spin.present and cm.NOTE_CONTACT not in spin.note
+
+
+def test_a_high_strike_is_flagged_only_from_a_measured_impact_location():
+    def note(height):
+        return _contact(impact_height_mm=height).note or ""
+
+    assert cm.NOTE_CONTACT not in note(_inp(8.0, frame=None))
+    assert cm.NOTE_CONTACT in note(_inp(8.5, frame=None))
+    assert cm.NOTE_CONTACT not in note(cm.Input(12.0, cm.LABEL_MODEL_GEOMETRY, "assumed"))

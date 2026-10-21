@@ -2,10 +2,11 @@
 
 Properties come from the published physics the model is built on: the launch lies
 in the D plane between the face normal and the club's direction (Jorgensen 1999;
-Penner 2001), the normal-impulse ball speed (Penner 2001, Eq. (7)), rolling and
-sliding (Penner 2001, Sec. II), and the gear effect's signs (Cross & Nathan 2007).
-The known answers at the end are the fitted model's own outputs, to catch an
-unintended change to a constant.
+Penner 2001), the normal-impulse ball speed (Penner 2001, Eq. (7)), the spin of a
+rigid ball that leaves the face rolling or still sliding (Penner 2001, Sec. II;
+Cross 2002), the off-centre effective mass and the linear gear effect (Cross &
+Nathan 2007). The known answers at the end are the model's own outputs, to catch
+an unintended change to a constant.
 """
 
 import math
@@ -14,6 +15,7 @@ import pytest
 
 from openflight import collision_forward as cf, metric_definitions as md
 from openflight.clubs import ClubType
+from openflight.clubs.physics import get_club_physics
 
 
 def _forward(club=ClubType.IRON_7, speed=85.0, attack=-4.0, path=0.0, face=0.0, loft=22.0, **kw):
@@ -111,14 +113,17 @@ def test_more_spin_loft_means_less_ball_speed():
     assert _forward(loft=40.0).ball_speed_mph < _forward(loft=20.0).ball_speed_mph
 
 
-def test_an_off_centre_strike_loses_ball_speed_and_the_heel_loses_more():
-    centre = _forward(club=ClubType.DRIVER, loft=12.0, attack=2.0)
-    toe = _forward(club=ClubType.DRIVER, loft=12.0, attack=2.0, impact_offset_mm=15.0)
-    heel = _forward(club=ClubType.DRIVER, loft=12.0, attack=2.0, impact_offset_mm=-15.0)
-    high = _forward(club=ClubType.DRIVER, loft=12.0, attack=2.0, impact_height_mm=10.0)
+def test_an_off_centre_strike_loses_ball_speed_with_the_square_of_the_offset():
+    kw = dict(club=ClubType.DRIVER, loft=12.0, attack=2.0)
+    centre = _forward(**kw).ball_speed_mph
 
-    assert heel.ball_speed_mph < toe.ball_speed_mph < centre.ball_speed_mph
-    assert high.ball_speed_mph < centre.ball_speed_mph
+    def loss(**at):
+        return centre / _forward(**kw, **at).ball_speed_mph - 1.0
+
+    assert loss(impact_offset_mm=15.0) == pytest.approx(loss(impact_offset_mm=-15.0))
+    assert loss(impact_offset_mm=20.0) == pytest.approx(4.0 * loss(impact_offset_mm=10.0))
+    assert loss(impact_height_mm=10.0) == pytest.approx(loss(impact_height_mm=-10.0))
+    assert loss(impact_height_mm=10.0) > 0.0 and loss(impact_offset_mm=10.0) > 0.0
 
 
 # ---- spin --------------------------------------------------------------------------
@@ -137,10 +142,55 @@ def test_a_seven_iron_and_a_driver_spin_like_their_clubs():
     assert 1800.0 < driver.spin_rpm < 3200.0
 
 
-def test_spin_rolls_off_at_very_high_spin_loft():
+def _centre_spin(club, sl, speed=None):
+    if speed is None:
+        physics = get_club_physics(club)
+        speed = physics.average_ball_speed_mph / physics.optimal_smash
+    return cf.centre_spin_rpm(club=club, club_speed_mph=speed, spin_loft_deg=sl)
+
+
+def test_the_centre_spin_is_the_forward_models_spin_at_the_face_centre():
+    impact = _forward(path=0.0, face=0.0)
+
+    assert impact.spin_rpm == pytest.approx(
+        cf.centre_spin_rpm(
+            club=ClubType.IRON_7, club_speed_mph=85.0, spin_loft_deg=impact.spin_loft_deg
+        )
+    )
+
+
+@pytest.mark.parametrize("club", [ClubType.DRIVER, ClubType.IRON_7, ClubType.PW, ClubType.SW])
+def test_spin_rises_monotonically_over_spin_loft_with_no_floor(club):
+    spins = [_centre_spin(club, sl / 2.0) for sl in range(0, 91)]
+
+    assert spins[0] == pytest.approx(0.0, abs=1e-9)
+    assert all(b > a for a, b in zip(spins, spins[1:]))
+    # rolling: proportional to sin(spin loft) at small spin loft, no floor
+    assert _centre_spin(club, 2.0) / _centre_spin(club, 8.0) == pytest.approx(
+        math.sin(math.radians(2.0)) / math.sin(math.radians(8.0))
+    )
+
+
+@pytest.mark.parametrize("club", [club for club in ClubType if cf.club_category(club)])
+@pytest.mark.parametrize("scale", [0.8, 1.0, 1.25])
+def test_the_grip_to_slip_corner_is_above_55_deg_spin_loft(club, scale):
+    speed = (
+        scale * get_club_physics(club).average_ball_speed_mph / get_club_physics(club).optimal_smash
+    )
+    spins = [_centre_spin(club, sl, speed) for sl in (50.0, 53.0, 55.0)]
+
+    assert spins[0] < spins[1] < spins[2]
+    # past the corner the ball leaves the face still sliding: the spin falls
+    assert _centre_spin(club, 85.0, speed) < _centre_spin(club, 70.0, speed)
+
+
+def test_the_spin_depends_on_the_club_speeds_normal_and_tangential_parts_only():
+    one = cf.centre_spin_rpm(club=ClubType.PW, club_speed_mph=80.0, spin_loft_deg=30.0)
+    two = cf.centre_spin_rpm(club=ClubType.PW, club_speed_mph=40.0, spin_loft_deg=30.0)
+
+    assert one == pytest.approx(2.0 * two)
     assert (
-        _forward(club=ClubType.SW, loft=70.0, attack=-6.0).spin_rpm
-        < _forward(club=ClubType.SW, loft=45.0, attack=-6.0).spin_rpm
+        cf.centre_spin_rpm(club=ClubType.UNKNOWN, club_speed_mph=80.0, spin_loft_deg=30.0) is None
     )
 
 
@@ -194,6 +244,25 @@ def test_gear_components_are_reported_and_zero_at_the_centre():
     assert toe.gear_side_rpm < 0.0 and toe.gear_back_rpm < 0.0
 
 
+def test_the_gear_effect_is_linear_in_the_offset():
+    kw = dict(club=ClubType.DRIVER, loft=12.0, attack=2.0)
+    side = [_forward(**kw, impact_offset_mm=x).gear_side_rpm for x in (5.0, 10.0, 20.0, -10.0)]
+    back = [_forward(**kw, impact_height_mm=y).gear_back_rpm for y in (5.0, 10.0, 20.0, -10.0)]
+
+    for gear in (side, back):
+        assert gear[0] < 0.0
+        assert gear[1] == pytest.approx(2.0 * gear[0])
+        assert gear[2] == pytest.approx(4.0 * gear[0])
+        assert gear[3] == pytest.approx(-gear[1])
+
+
+def test_without_an_impact_location_there_is_no_gear_effect():
+    impact = _forward(club=ClubType.PW, loft=40.0)
+
+    assert not impact.impact_location
+    assert impact.gear_back_rpm == 0.0 and impact.gear_side_rpm == 0.0
+
+
 # ---- inverse: face and loft from the launch -----------------------------------------
 
 
@@ -240,27 +309,39 @@ def test_expected_spin_is_club_speed_times_sine_spin_loft():
     assert ratio == pytest.approx(math.sin(math.radians(30.0)) / math.sin(math.radians(20.0)))
 
 
-def test_expected_ball_speed_follows_the_normal_impulse():
-    square = cf.expected_ball_speed_mph(
-        club=ClubType.DRIVER,
-        club_speed_mph=100.0,
-        spin_loft_deg=12.0,
-        face_angle_deg=0.0,
-        dynamic_loft_deg=12.0,
-        launch_vertical_deg=12.0,
-        launch_horizontal_deg=0.0,
-    )
-    tilted = cf.expected_ball_speed_mph(
-        club=ClubType.DRIVER,
-        club_speed_mph=100.0,
-        spin_loft_deg=12.0,
-        face_angle_deg=0.0,
-        dynamic_loft_deg=12.0,
-        launch_vertical_deg=9.0,
-        launch_horizontal_deg=0.0,
-    )
+@pytest.mark.parametrize(
+    ("club", "a", "c"),
+    [
+        (ClubType.DRIVER, 1.4926, 0.0209),
+        (ClubType.IRON_7, 1.4903, 0.0388),
+        (ClubType.PW, 1.4988, 0.0459),
+    ],
+)
+def test_a_data_clubs_expected_ball_speed_is_its_fitted_line_in_cos_spin_loft(club, a, c):
+    for speed, spin_loft in ((90.0, 12.0), (70.0, 35.0)):
+        expected = cf.expected_ball_speed_mph(
+            club=club, club_speed_mph=speed, spin_loft_deg=spin_loft
+        )
+        assert expected == pytest.approx(speed * (a * math.cos(math.radians(spin_loft)) + c))
+    assert cf.has_fitted_index(club)
 
-    assert tilted / square == pytest.approx(1.0 / math.cos(math.radians(3.0)))
+
+@pytest.mark.parametrize(
+    ("club", "k"), [(ClubType.DRIVER, 109.50), (ClubType.IRON_7, 150.46), (ClubType.PW, 165.13)]
+)
+def test_a_data_clubs_expected_spin_takes_its_own_constant(club, k):
+    expected = cf.expected_spin_rpm(club=club, club_speed_mph=80.0, spin_loft_deg=20.0)
+
+    assert expected == pytest.approx(80.0 * k * math.sin(math.radians(20.0)))
+
+
+@pytest.mark.parametrize("club", [ClubType.WOOD_3, ClubType.HYBRID_5, ClubType.IRON_5, ClubType.SW])
+def test_a_club_without_data_takes_the_published_normal_impulse_fallback(club):
+    assert not cf.has_fitted_index(club)
+    low = cf.expected_ball_speed_mph(club=club, club_speed_mph=80.0, spin_loft_deg=15.0)
+    high = cf.expected_ball_speed_mph(club=club, club_speed_mph=80.0, spin_loft_deg=40.0)
+
+    assert 1.1 * 80.0 < high < low < 1.6 * 80.0
 
 
 def test_the_indices_are_undefined_for_an_unknown_club_or_no_speed():
@@ -272,55 +353,55 @@ def test_the_indices_are_undefined_for_an_unknown_club_or_no_speed():
     )
 
 
-# ---- known answers (the fitted model's own outputs) --------------------------------
+# ---- known answers (the model's own outputs) --------------------------------------
 
 KNOWN = [
     # club, (speed, attack, path, face, loft, offset, height), (ball, vla, hla, spin, axis)
     (
         ClubType.DRIVER,
         (105.0, 2.0, -2.0, 1.0, 13.0, 0.0, 0.0),
-        (154.8791, 11.5777, 0.6015, 2606.1222, 9.9348),
+        (154.8791, 11.5777, 0.6015, 2623.3318, 9.9348),
     ),
     (
         ClubType.DRIVER,
         (95.0, -1.0, 3.0, -1.5, 11.0, 12.0, 4.0),
-        (136.8379, 9.4437, -0.9033, 2606.284, -22.9922),
+        (136.9428, 9.4437, -0.9033, 2561.7886, -24.578),
     ),
     (
         ClubType.WOOD_3,
         (98.0, -2.0, 1.0, 2.0, 15.0, -8.0, -3.0),
-        (139.0239, 12.1391, 1.8255, 4139.4037, 4.0888),
+        (140.6204, 12.1391, 1.8255, 3867.5483, 7.0069),
     ),
     (
         ClubType.HYBRID_3,
         (90.0, -3.0, -1.0, 0.5, 18.0, 0.0, 0.0),
-        (127.8258, 14.251, 0.218, 5183.3339, 3.1725),
+        (127.8258, 14.251, 0.218, 4845.8684, 3.1725),
     ),
     (
         ClubType.IRON_7,
         (85.0, -4.0, -2.0, 1.5, 21.0, 0.0, 0.0),
-        (117.5499, 16.3491, 0.8014, 5810.6524, 6.2734),
+        (117.5499, 16.3491, 0.8014, 5465.809, 6.2734),
     ),
     (
         ClubType.IRON_7,
         (80.0, -5.0, 4.0, 1.0, 24.0, -10.0, 2.0),
-        (106.204, 18.4771, 1.6258, 6280.6923, -4.6641),
+        (106.5534, 18.4771, 1.6258, 5776.0803, -3.7736),
     ),
     (
         ClubType.PW,
         (75.0, -5.0, 0.0, -2.0, 33.0, 0.0, 0.0),
-        (91.9325, 24.6069, -1.4803, 8281.4287, -2.4098),
+        (91.9325, 24.6069, -1.4803, 7800.2028, -2.4098),
     ),
     (
         ClubType.SW,
         (65.0, -6.0, 2.0, 4.0, 52.0, 0.0, 0.0),
-        (54.5935, 38.4445, 3.298, 6927.2961, 1.4543),
+        (54.5935, 38.4445, 3.298, 9323.1982, 1.4543),
     ),
 ]
 
 
 @pytest.mark.parametrize(("club", "delivery", "expected"), KNOWN)
-def test_the_fitted_model_reproduces_its_known_answers(club, delivery, expected):
+def test_the_model_reproduces_its_known_answers(club, delivery, expected):
     speed, attack, path, face, loft, offset, height = delivery
     impact = _forward(
         club=club,

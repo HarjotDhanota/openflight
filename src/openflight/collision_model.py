@@ -51,9 +51,10 @@ missing input makes every metric built on it "not measured", with the reason.
 
 2. **Spin loft, face to path, D-plane tilt:** ``metric_definitions`` (D37).
 
-3. **Calculated spin rate: the fitted forward model** (``collision_forward``), at the
-   face centre unless an impact location is measured. Penner's own model below is
-   kept as the published baseline. A. R. Penner, "The physics of golf: The
+3. **Calculated spin rate: the impulse model** (``collision_forward``): the ball
+   leaves the face rolling or still sliding (Penner 2001; Cross 2002), at the face
+   centre unless an impact location is measured. Penner's own model below is kept
+   as the published baseline. A. R. Penner, "The physics of golf: The
    optimum loft of a driver", *Am. J. Phys.* 69, 563-568 (2001),
    doi:10.1119/1.1344164. Clubhead a free flat plate of mass M, ball a uniform
    solid sphere (I = 2/5 m r^2), ball rolling when it leaves the face. Eqs. (5),
@@ -85,7 +86,14 @@ missing input makes every metric built on it "not measured", with the reason.
 
 6. **Spin index and smash index:** the shot's measured spin over the expected spin,
    and its ball speed over the expected ball speed, in percent
-   (``collision_forward.expected_spin_rpm``, ``expected_ball_speed_mph``).
+   (``collision_forward.expected_spin_rpm``, ``expected_ball_speed_mph``). A club
+   without fitted indices says so (``NOTE_NO_FITTED_INDEX``).
+
+7. **Contact quality.** A calculated spin assumes a clean, dry strike. An iron or
+   wedge with an attack angle of -2 deg or shallower, a strike more than 8 mm above
+   the face centre, or an iron or wedge shot with no low point may be a flier or a
+   heavy strike, which spins far less: the spin keeps its value, with
+   ``NOTE_CONTACT`` and the reasons.
 
 Labels: an output is ``calculated`` unless an input is ``model_geometry`` (D39),
 which it then inherits. Horizontal outputs carry their inputs' frame
@@ -128,14 +136,19 @@ SOURCE_INVERSION = "D-plane inversion of the fitted launch model"
 SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and loft"
 SOURCE_PENNER = "Penner 2001 collision model (Am. J. Phys. 69, 563)"
 SOURCE_SPIN = (
-    "fitted collision model (Penner 2001 rolling and sliding; constants fitted by the maintainer)"
+    "impulse collision model (Penner 2001 normal impulse; rolling or sliding, Cross 2002; "
+    "gains fitted by the maintainer)"
 )
 SOURCE_AXIS_MODEL = "fitted collision model: D-plane tilt, centre-face strike"
-SOURCE_SPIN_INDEX = "measured spin / expected spin (fitted collision model)"
-SOURCE_SMASH_INDEX = "ball speed / expected ball speed (fitted collision model)"
+SOURCE_SPIN_INDEX = "measured spin / expected spin (club speed x k x sin spin loft)"
+SOURCE_SMASH_INDEX = "ball speed / expected ball speed (normal-impulse index)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
 NOTE_NO_GEAR = "no impact location: centre-face strike assumed, no gear effect"
+NOTE_NO_FITTED_INDEX = "no fitted index for this club: expected value from its category"
+NOTE_CONTACT = "low confidence: possible flier or heavy contact"
+CONTACT_ATTACK_LIMIT_DEG = -2.0
+CONTACT_HEIGHT_LIMIT_MM = 8.0
 NOTE_VERTICAL_PLANE = "no horizontal launch or path: loft from the vertical plane alone"
 NOTE_HORIZONTAL_RATIO = "no vertical launch or attack: face from the horizontal ratio alone"
 SOURCE_HORIZONTAL_RATIO = "D-plane horizontal launch ratio, Wood et al. 2018 weights"
@@ -165,9 +178,10 @@ SPIN_AXIS_SOURCE_MODEL = f"calculated ({AXIS_BASIS_MODEL}, {FACE_BASIS_INVERSION
 SPIN_AXIS_SOURCE_IRON = f"calculated ({AXIS_BASIS_IRON}, {FACE_BASIS_INVERSION})"
 SPIN_AXIS_SOURCE_GEAR = f"calculated ({AXIS_BASIS_GEAR})"
 # Shot.spin_method for the model's spin, by the labels of its inputs; an older
-# record names Penner 2001.
+# record names the earlier fitted model or Penner 2001.
 SPIN_METHOD_PENNER = "Penner 2001"
-SPIN_METHOD_MODEL = "fitted collision model"
+SPIN_METHOD_FITTED = "fitted collision model"
+SPIN_METHOD_MODEL = "impulse collision model"
 SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_MODEL}; club inputs model geometry (D39)"
 SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_MODEL}; an input estimated"
 
@@ -398,8 +412,8 @@ def invert_d_plane(
 def spin_built_from_face(spin: Input) -> bool:
     """Whether a spin input is the collision model's own spin, built from face and loft."""
     source = spin.source or ""
-    return spin.label != LABEL_MEASURED and (
-        SPIN_METHOD_MODEL in source or SPIN_METHOD_PENNER in source
+    return spin.label != LABEL_MEASURED and any(
+        method in source for method in (SPIN_METHOD_MODEL, SPIN_METHOD_FITTED, SPIN_METHOD_PENNER)
     )
 
 
@@ -915,6 +929,26 @@ def _forward_impact(club, club_speed, attack, path, face, loft, location, handed
     )
 
 
+def contact_flags(
+    club: Optional[ClubType],
+    attack_angle: Optional[Input],
+    impact_height_mm: Optional[float],
+    low_point: Optional[Input],
+) -> list[str]:
+    """Why a strike may be a flier or heavy (empty for a clean one); irons and wedges only."""
+    if club not in _IRON_AXIS_CLUBS:
+        return []
+    flags = []
+    if attack_angle is not None and attack_angle.present:
+        if attack_angle.value >= CONTACT_ATTACK_LIMIT_DEG:
+            flags.append(f"attack angle {attack_angle.value:+.1f} deg, not below -2 deg")
+    if impact_height_mm is not None and impact_height_mm > CONTACT_HEIGHT_LIMIT_MM:
+        flags.append(f"impact {impact_height_mm:.0f} mm above the face centre")
+    if low_point is None or not low_point.present:
+        flags.append("no low point")
+    return flags
+
+
 def _spin_metric(impact, centre: Metric, club_speed: Input, spin_loft: Metric, located: bool):
     if not spin_loft.present:
         return _not_measured("rpm", f"spin loft not measured ({spin_loft.reason})", SOURCE_SPIN)
@@ -1013,10 +1047,15 @@ def _spin_index(club, spin_rpm: Input, club_speed: Input, spin_loft: Metric) -> 
         source=SOURCE_SPIN_INDEX,
         unit="%",
         reason=_estimated_reason(spin_rpm, club_speed, spin_loft),
+        note=_index_note(club),
     )
 
 
-def _smash_index(club, ball_speed: Input, club_speed: Input, spin_loft, face, loft, inputs):
+def _index_note(club) -> Optional[str]:
+    return None if collision_forward.has_fitted_index(club) else NOTE_NO_FITTED_INDEX
+
+
+def _smash_index(club, ball_speed: Input, club_speed: Input, spin_loft, face, loft):
     if not ball_speed.present:
         return _not_measured("%", ball_speed.missing_reason("ball speed"), SOURCE_SMASH_INDEX)
     if not club_speed.present:
@@ -1026,15 +1065,8 @@ def _smash_index(club, ball_speed: Input, club_speed: Input, spin_loft, face, lo
         return _not_measured(
             "%", f"club delivery not measured ({missing.reason})", SOURCE_SMASH_INDEX
         )
-    launch_v, launch_h = inputs["launch_vertical"], inputs["launch_horizontal"]
     expected = collision_forward.expected_ball_speed_mph(
-        club=club,
-        club_speed_mph=club_speed.value,
-        spin_loft_deg=spin_loft.value,
-        face_angle_deg=face.value,
-        dynamic_loft_deg=loft.value,
-        launch_vertical_deg=launch_v.value,
-        launch_horizontal_deg=launch_h.value,
+        club=club, club_speed_mph=club_speed.value, spin_loft_deg=spin_loft.value
     )
     if not expected:
         return _not_measured(
@@ -1046,6 +1078,7 @@ def _smash_index(club, ball_speed: Input, club_speed: Input, spin_loft, face, lo
         source=SOURCE_SMASH_INDEX,
         unit="%",
         reason=_estimated_reason(ball_speed, club_speed, spin_loft, face),
+        note=_index_note(club),
     )
 
 
@@ -1076,13 +1109,15 @@ def evaluate(
     impact_offset_mm: Optional[Input] = None,
     impact_height_mm: Optional[Input] = None,
     handedness: Optional[str] = None,
+    low_point_distance_mm: Optional[Input] = None,
 ) -> CollisionResult:
     """Every E2 metric for one shot, from that shot's inputs.
 
     ``spin_rpm`` and ``ball_speed_mph`` (the full speed) feed the rigid-body face when
     the spin is measured; ``ball_speed_mph`` also feeds the smash index. A measured
     impact location (+ toe, + up, mm) drives the gear effect; ``handedness`` is
-    right-handed unless "LH".
+    right-handed unless "LH". ``low_point_distance_mm`` (E1's arc) feeds only the
+    contact note.
     """
     inputs = {
         "club_path": club_path,
@@ -1134,12 +1169,17 @@ def evaluate(
         else _not_measured("deg", f"D-plane tilt not measured ({tilt.reason})", SOURCE_AXIS)
     )
     spin = _spin_metric(impact, centre, club_speed_mph, spin_loft, bool(location))
+    flags = contact_flags(
+        club, attack_angle, location.get("impact_height_mm"), low_point_distance_mm
+    )
+    if spin.present and flags:
+        spin = _with_note(spin, f"{NOTE_CONTACT} ({'; '.join(flags)})")
     axis = _axis_metric(centre, impact, spin, bool(location))
     if location and axis.present:
         given = {"impact_offset_mm": impact_offset_mm, "impact_height_mm": impact_height_mm}
         inputs.update({name: given[name] for name in location})
     spin_index = _spin_index(club, spin_input, club_speed_mph, spin_loft)
-    smash_index = _smash_index(club, ball_speed, club_speed_mph, spin_loft, face, loft, inputs)
+    smash_index = _smash_index(club, ball_speed, club_speed_mph, spin_loft, face, loft)
     if spin_index.present:
         inputs["spin_rpm"] = spin_input
     if smash_index.present:
