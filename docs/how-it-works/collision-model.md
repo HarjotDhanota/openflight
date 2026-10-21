@@ -17,9 +17,11 @@ and two clean-room fits to the owner's own TrackMan 4 export:
 - the spin axis;
 - the spin index and smash index.
 
-A forward collision model whose constants were fitted by the maintainer
-supplies the spin, the wood and hybrid spin axis, and the face and loft when
-the spin is not measured.
+A forward collision model supplies the spin, the wood and hybrid spin axis, and
+the face and loft when the spin is not measured. Its forms are published
+physics; its ball, friction and restitution are published values, its head
+properties are typical values (assumed), and its gains were fitted by the
+maintainer.
 
 Gyro is **not measured**. Every number below was read from the cited paper
 itself.
@@ -77,20 +79,38 @@ arc prior (D39, every shot on today's lens). Every output built on it inherits
 the label, and the kiosk's face status then ends in `_model_geometry`. A
 not-measured arc value is a missing input.
 
-## The fitted forward model
+## The forward model
 
-*Added 20 October 2026. Code: `src/openflight/collision_forward.py`.*
+*Added 20 October 2026; spin, off-centre loss, gear effect and the indices
+rebuilt on rigid-ball impulse physics the same day. Code:
+`src/openflight/collision_forward.py`.*
 
 One forward model takes a club delivery (club speed V, attack angle, club path,
 face angle, dynamic loft) and an impact location to the ball's speed, launch
 angle, launch direction, spin rate and spin axis. Its structure is published
-physics; its constants were **fitted by the maintainer**, per club category
-(driver and woods, irons and hybrids, wedges), to a dense grid of deliveries:
+physics, per club category (driver and woods, irons and hybrids, wedges).
 
-- club speed 50–130 mph, attack −8…+6°, path and face ±8°, dynamic loft 8–55°;
-- impact offset ±25 mm (toe +) and height ±15 mm (up +);
-- driver, 3-wood, 3-hybrid, irons 4–9, pitching and sand wedge;
-- 264,000 deliveries, 20 % held out for the residuals below.
+**Which constants are what.**
+
+| Kind | Constants |
+| --- | --- |
+| Fixed, published | Ball m = 45.9 g, r = 21.35 mm (Penner 2001); κ = 0.4, I = κ m r² (uniform solid sphere); face friction μ = 0.40 (Henrikson et al. 2020, Sec. 2.2: urethane on a dry grooved face); restitution e = 0.86 − 0.0029 v_n for irons, hybrids and wedges (Penner 2001, Eq. (5)) and e = 0.830 − 0.0029 (v_n − 48.77 m/s) for drivers and woods (the USGA/R&A limit of 0.830 at its 48.77 m/s test speed, with Penner's slope), v_n the normal approach speed, held within 0.5–0.95 |
+| Assumed (typical heads) | Head mass, centre-of-mass depth d and moments of inertia, table below |
+| Fitted by the maintainer | The launch (K, s₁, s₂), centre speed S and centre axis (a, b), and the spin gain g and loss scales c_x, c_y: to a dense grid of deliveries (below). The gear gains g_x, g_y: to 38 clean export shots, each capped at 1.5 × its rigid-body value. The index constants (section 6) |
+
+The grid: club speed 50–130 mph, attack −8…+6°, path and face ±8°, dynamic
+loft 8–55°, impact offset ±25 mm (toe +) and height ±15 mm (up +); driver,
+3-wood, 3-hybrid, irons 4–9, pitching and sand wedge; 264,000 deliveries, 20 %
+held out for the launch residuals below.
+
+**Head properties (assumptions, not from a paper).** Only the scaling within a
+category depends on them; each category's gains are fitted.
+
+| Category | Head mass M | CG depth d | I_z (vertical axis: toe-heel) | I_x (horizontal axis: high-low) |
+| --- | --- | --- | --- | --- |
+| Driver, woods | 200 g (Penner 2001's driver); 3-, 5-, 7-wood 212, 218, 224 g | 35 mm | 4500 g·cm² | 2800 g·cm² |
+| Irons, hybrids | 2-iron 233 g to 9-iron 282 g, 7 g per club; hybrids 236–257 g | 6 mm | 2500 g·cm² | 700 g·cm² |
+| Wedges | PW 289, GW 296, SW 303, LW 310 g | 5 mm | 2600 g·cm² | 700 g·cm² |
 
 **Structure.**
 
@@ -105,56 +125,105 @@ physics; its constants were **fitted by the maintainer**, per club category
         tan δ = K(L) · min_p(tan SL, s₁ + (s₂ − s₁)(tan SL − 1)/1.25)
 
 3. **Ball speed: the normal impulse** (Penner 2001, Eq. (7)):
-   `ball speed = V · S(L) · cos SL / cos δ`. An off-centre strike loses speed
-   (Cross & Nathan 2007): `1 − [a·(√(x² + w²) − w) + b·x + c·(√(y² + w²) − w)]`,
-   with x the toe offset, y the height and w = 2 mm, steeper on the heel.
-4. **Spin.** Rises with V and with ψ = SL − δ, the angle between the club's
-   direction and the launch, with a smooth floor at small ψ and a roll-off where
-   the ball slides (Penner 2001, Sec. II):
+   `ball speed = V · S(L) · cos SL / cos δ`. An off-centre strike meets a smaller
+   effective head mass (Cross & Nathan 2007; Penner 2001), with the centre of
+   mass at the face centre, x the toe offset and y the height:
 
-        spin = V · g(L) · ψₑ / (1 + (ψₑ / k(L))ⁿ)^(1/m),   ψₑ = (ψ^4.5 + f(L)^4.5)^(1/4.5)
+        f = (1 + m/M) / (1 + m/M + c_x m x² / I_z + c_y m y² / I_x)
 
+   The loss grows with the square of the offset, the same on toe and heel.
+4. **Spin: a rigid ball leaves gripping or still sliding** (Penner 2001,
+   Eqs. (7)–(11); R. Cross, "Grip-slip behavior of a bouncing ball",
+   *Am. J. Phys.* **70**, 1093–1102 (2002), doi:10.1119/1.1507792). The
+   tangential impulse either brings the ball to rolling (grip) or runs out of
+   friction first (slip); the spin is the smaller:
+
+        v_n  = (1 + e) V cos SL / (1 + m/M)
+        grip = g V sin SL / (κ r K),   K = 1 + 1/κ + m/M + m d² / I_x
+        slip = μ v_n / (κ r)
+        spin = min(grip, slip)
+
+   `m d²/I_x` is the head's rotation about its centre of mass (Penner 2001); g = 1
+   is Penner's rolling ball, and g − 1 plays the part of Cross's tangential
+   restitution. The spin depends on V sin SL and V cos SL only: it goes to zero
+   with the spin loft (no floor), rises with it, and turns from grip to slip at
+   61–68° of spin loft for typical club speeds, above every shot in the exports;
+   past the corner it falls with cos SL.
 5. **Spin axis.** The D-plane tilt T scaled toward zero:
    `tan(axis) = tan(T) · (a(L) + b · launch angle)`.
-6. **Gear effect** (Cross & Nathan 2007, Eq. (6) and Appendix). A toe-heel
-   offset adds a sidespin and a vertical offset removes backspin, both in
-   proportion to the ball speed. The toe-heel response steepens with the offset
-   and saturates (`X·tanh((x + βx|x|)/X)`). A toe strike draws a right-hander and
-   fades a left-hander. Without an impact location the strike is at the face
-   centre, labelled.
+6. **Gear effect** (Cross & Nathan 2007, Eq. (6), linear in the offset). From the
+   same impulse algebra as the spin, with v_n the ball's normal speed (the centre
+   ball speed times cos δ):
+
+        side = −hand · g_x · m d x v_n / (I_z κ r K_z),   K_z = K with I_z
+        back = −g_y · m d y v_n / (I_x κ r K)
+
+   A toe strike draws a right-hander and fades a left-hander; a high strike
+   takes off backspin. Without an impact location there is no gear effect, and
+   the strike is labelled as at the face centre.
 
 L is the club's nominal loft (`clubs.physics`); a hybrid launches like an iron
 11.5° weaker-lofted. A constant that varies with L is stored as its values at
 two anchor lofts, linear between and beyond them.
 
-**Hold-out residuals** (RMS; "typical" is spin loft 8–28° driver/wood, 12–42°
-iron/hybrid, 22–58° wedge), against the models they replace (Penner 2001 speed
-and spin, the published launch ratios, the D-plane tilt or iron fit for the
-axis):
+**Fitted gains.**
 
-| Category | Model | Ball speed | Launch | Direction | Spin | Spin axis |
-| --- | --- | --- | --- | --- | --- | --- |
-| Driver/wood | fitted, all | 0.09 % | 0.05° | 0.01° | 1.7 % | 1.1° |
-| | fitted, typical | 0.09 % | 0.01° | 0.004° | 1.7 % | 1.2° |
-| | replaced | 2.9 % | 0.94° | 0.47° | 10.4 % | 6.6° |
-| Iron/hybrid | fitted, all | 0.07 % | 0.09° | 0.02° | 1.2 % | 0.6° |
-| | fitted, typical | 0.07 % | 0.03° | 0.007° | 0.4 % | 0.5° |
-| | replaced | 4.2 % | 0.74° | 0.35° | 18.8 % | 2.5° |
-| Wedge | fitted, all | 0.04 % | 0.07° | 0.01° | 1.2 % | 0.5° |
-| | fitted, typical | 0.04 % | 0.07° | 0.01° | 0.4 % | 0.14° |
-| | replaced | 5.6 % | 0.93° | 0.70° | 24.0 % | 1.1° |
+| Category | Spin g | Loss c_x | Loss c_y | Gear g_x | Gear g_y |
+| --- | --- | --- | --- | --- | --- |
+| Driver, woods | 0.994 | 1.113 | 2.187 | 0.586 | 0.645 |
+| Irons, hybrids | 1.115 | 0.220 | 0.174 | 0.631 | 0.828 |
+| Wedges | 1.241 | 0.227 | 0.172 | 0.773 | 1.478 |
 
-**On the owner's export session** (23 shots with a delivery; not used in the
-fit; `tests/test_collision_owner_export.py`), with each shot's recorded impact
-location:
+The gear gains come from the clean shots of two export sessions (the owner's,
+and a second tester's): 6 drives, 15 six- and seven-irons and 17 pitching
+wedges. Left out: two drives whose spin the export marks as estimated, two thin
+mishits (launch under 15°), and 17 shots with an attack angle of −2° or
+shallower or a strike above +8 mm (possible fliers or heavy strikes, section 3).
+Each category's two gains were fitted to its spin and spin axis together, within
+0–1.5.
+
+**Launch residuals** (hold-out RMS; "typical" is spin loft 8–28° driver/wood,
+12–42° iron/hybrid, 22–58° wedge), against the models they replace (Penner 2001
+speed, the published launch ratios, the D-plane tilt or iron fit for the axis):
+
+| Category | Model | Centre ball speed | Launch | Direction | Centre spin axis |
+| --- | --- | --- | --- | --- | --- |
+| Driver/wood | fitted, all | 0.09 % | 0.05° | 0.01° | 1.1° |
+| | fitted, typical | 0.09 % | 0.01° | 0.004° | 1.2° |
+| | replaced | 2.9 % | 0.94° | 0.47° | 6.6° |
+| Iron/hybrid | fitted, all | 0.07 % | 0.09° | 0.02° | 0.6° |
+| | fitted, typical | 0.07 % | 0.03° | 0.007° | 0.5° |
+| | replaced | 4.2 % | 0.74° | 0.35° | 2.5° |
+| Wedge | fitted, all | 0.04 % | 0.07° | 0.01° | 0.5° |
+| | fitted, typical | 0.04 % | 0.07° | 0.01° | 0.14° |
+| | replaced | 5.6 % | 0.93° | 0.70° | 1.1° |
+
+**Spin and loss on the grid** (driver, 7-iron, pitching wedge; relative RMS):
+
+| Club | Spin, all | Spin, typical | Spin, SL ≤ 45° | Off-centre loss |
+| --- | --- | --- | --- | --- |
+| Driver | 5.5 % | 2.1 % | 3.6 % | 1.17 % |
+| 7-iron | 15.0 % | 6.7 % | 7.4 % | 0.37 % |
+| Pitching wedge | 13.1 % | 10.3 % | 6.0 % | 0.36 % |
+
+The grid's spin turns over at 47–53° of spin loft. A rigid ball with the
+published 0.40 friction turns at 61–68°; a friction low enough to match would
+be below any measured ball-on-face value. Most of the iron and wedge residual
+lies beyond 45° of spin loft, where no export shot is.
+
+**On the owner's export session** (23 shots with a delivery;
+`tests/test_collision_owner_export.py`), with each shot's recorded impact
+location. Its clean shots are among the 38 the gear gains saw; nothing else was
+fitted to it:
 
 | Model | Ball speed | Launch | Direction | Spin | Spin axis |
 | --- | --- | --- | --- | --- | --- |
-| fitted | 3.4 % | 0.31° | 0.06° | 10.2 % | 2.6° |
-| replaced | 7.1 % | 0.44° | 0.41° | 26.9 % | 13.6° |
+| this model | 3.1 % | 0.31° | 0.06° | 8.2 % | 1.2° |
+| the earlier fitted model | 3.4 % | 0.31° | 0.06° | 10.2 % | 2.6° |
+| Penner 2001 and the D-plane tilt | 7.1 % | 0.44° | 0.41° | 26.9 % | 13.6° |
 
 The iron axis stays the clean-room iron fit (section 4): on the export's irons
-it is 0.13–0.18° RMS; the fitted model's own axis gives 0.75° on the 7-irons.
+it is 0.13–0.18° RMS; the forward model's own axis gives 0.75° on the 7-irons.
 The forward model's ball speed and launch are recorded on the shot
 (`collision_model["forward"]`) beside the measured ones; the kiosk uses its
 spin and axis.
@@ -310,14 +379,31 @@ is loft − attack.
 
 ## 3. Calculated spin rate
 
-The calculated spin is the fitted forward model's (above), at the face centre
-unless a measured impact location is given, with the note "no impact location:
-centre-face strike assumed, no gear effect". Source "fitted collision model
-(Penner 2001 rolling and sliding; constants fitted by the maintainer)";
-`spin_method = "fitted collision model; club inputs measured"` (or
-`calculated`, `model geometry (D39)`, `an input estimated`). An older record's
-"Penner 2001" spin is still recognised as the model's own, so it never feeds
-face and loft.
+The calculated spin is the forward model's impulse spin (above), at the face
+centre unless a measured impact location is given, with the note "no impact
+location: centre-face strike assumed, no gear effect". Source "impulse
+collision model (Penner 2001 normal impulse; rolling or sliding, Cross 2002;
+gains fitted by the maintainer)"; `spin_method = "impulse collision model; club
+inputs measured"` (or `calculated`, `model geometry (D39)`, `an input
+estimated`). An older record's "fitted collision model" or "Penner 2001" spin is
+still recognised as the model's own, so it never feeds face and loft.
+
+### Contact quality: a possible flier or heavy strike
+
+The impulse spin assumes a clean, dry strike. Grass or water between face and
+ball, or a heavy strike, can leave a shot with far less spin than its delivery
+predicts; a shot that looks like one gets a low-confidence note on the
+calculated spin, and **its value is not changed**:
+
+- an iron or wedge (2-iron to lob wedge) with an attack angle of −2° or
+  shallower;
+- a measured strike more than 8 mm above the face centre;
+- an iron or wedge shot with no low point (E1's arc gives it).
+
+The note reads "low confidence: possible flier or heavy contact (…)" with the
+reasons, on `collision_model["metrics"]["spin_rate"]` and on the catalogue's
+spin record when the model's spin is the shot's. On the second export session
+these shots were 40–60 % below the clean-contact spin at the same smash.
 
 ### Penner 2001, the published baseline
 
@@ -390,13 +476,13 @@ is within the reading tolerance of the printed curve.
 The refit in E8 sets the size of this bias.
 
 **Status and source (the shot's spin).** Labelled `calculated`, source the
-fitted model. The value is always recorded in `spin_rpm_collision`. When there is no accepted measured spin (confidence ≥
+impulse model. The value is always recorded in `spin_rpm_collision`. When there is no accepted measured spin (confidence ≥
 `SPIN_CONFIDENCE_HIGH`), it becomes the shot's `spin_rpm` under its own status:
 
-- `calculated`: `spin_source = "calculated"`, `spin_method = "fitted collision
+- `calculated`: `spin_source = "calculated"`, `spin_method = "impulse collision
   model; club inputs measured"` (or `calculated` when an input is);
 - `model_geometry` (an input is model geometry, D39): `spin_source =
-  "model_geometry"`, `spin_method = "fitted collision model; club inputs model
+  "model_geometry"`, `spin_method = "impulse collision model; club inputs model
   geometry (D39)"`. It feeds the flight model (D38) under that label; simulators do not
   get it (D31).
 
@@ -430,7 +516,7 @@ source "fitted collision model: D-plane tilt, centre-face strike".
 **Impact location.** With a **measured** impact offset or height
 (`impact_offset_mm`, + toe; `impact_height_mm`, + up; E5 builds them), the
 forward model's gear back- and sidespin are added to the centre spin at the
-centre axis, for every club (an iron's is small): the source then ends "plus
+centre axis, for every club (an iron's is smaller, its centre of mass shallower): the source then ends "plus
 Cross & Nathan 2007 gear effect". `evaluate` takes the golfer's handedness
 (right-handed unless "LH"): a toe strike draws a right-hander and fades a
 left-hander. Without one, the note reads "no impact location: centre-face
@@ -491,9 +577,10 @@ curves right) tilts the axis:
 where S is the calculated spin and t is the D-plane tilt (`spin_axis(...,
 gear_sidespin_rpm=g)`).
 
-The shot's gear effect comes from the fitted model above, which needs no
-head model; this formula stays as the published reference for its sign and
-its linearity in the offset. The paper's Appendix covers oblique impacts.
+The forward model's gear effect is this formula's small-offset, linear form
+with the typical heads above and the impulse algebra of the spin (κ r K in
+place of 1.4 r [...]), times the fitted gains g_x and g_y. The paper's Appendix
+covers oblique impacts.
 
 ## 5. Gyro
 
@@ -507,20 +594,28 @@ The shot against what its delivery should give, in percent, calculated metrics
 in the Club panel after spin loft:
 
 - **Spin index** = measured spin / expected spin × 100. Expected spin =
-  `V · k(L) · sin(spin loft)` (Penner 2001, Eq. (11): the rolling spin goes as
-  V sin θ), k fitted by the maintainer per category. It needs a **measured**
-  spin: a calculated spin is not measured against itself, so on today's kiosk
-  the spin index is `not_measured`, with that reason.
+  `V · k · sin(spin loft)` (Penner 2001, Eq. (11): the rolling spin goes as
+  V sin θ). k is fitted by the maintainer per club where an export has the
+  club: driver 109.50, 7-iron 150.46, pitching wedge 165.13 rpm per mph; other
+  clubs take their category's k(L). It needs a **measured** spin: a calculated
+  spin is not measured against itself, so on today's kiosk the spin index is
+  `not_measured`, with that reason.
 - **Smash index** = ball speed (full) / expected ball speed × 100. Expected
-  ball speed = `V · E(L) · cos(spin loft) / (n · b)` (Penner 2001, Eq. (7): the
-  normal speed, projected on the launch), with n the face normal and b the launch
-  direction, E fitted per category. It needs the full ball speed, the club speed
-  and the face and loft; the model runs again once the full ball speed is known.
+  ball speed = `V · (a · cos(spin loft) + c)`, fitted by the maintainer per
+  club: driver a = 1.4926, c = 0.0209; 7-iron 1.4903, 0.0388; pitching wedge
+  1.4988, 0.0459. Other clubs take the published normal speed and rolling (or
+  Coulomb-capped) tangential speed, Penner 2001 Eqs. (5), (7), (8) with the
+  heads above, times a category gain matched to the fitted club on its range
+  (driver and woods 0.997, irons and hybrids 1.022, wedges 1.022). It needs the
+  full ball speed, the club speed and the spin loft; the model runs again once
+  the full ball speed is known.
 
-Each takes its inputs' weakest label. Fit hold-out: expected spin 0.005 %,
-0.74 % and 0.001 % RMS and expected ball speed 0.003 %, 0.07 % and 0.005 %
-(driver/wood, iron/hybrid, wedge). On the owner's export the indices follow the
-exported ones to 0.36 (spin) and 0.08 (smash) index points RMS.
+Each takes its inputs' weakest label. A club without its own fitted constants
+carries the note "no fitted index for this club: expected value from its
+category". On the owner's export the indices follow the exported ones to 0.45
+(spin) and 0.11 (smash) index points RMS; the narrow spin-loft range of each
+club in it (3–6°) cannot separate a from c, so the constants come from the
+grid, where they extrapolate smoothly.
 
 ## Simulators (D31)
 
@@ -545,7 +640,11 @@ back spin and side spin take the weaker label.
   (20 October 2026) by the fitted launch model's inversion, and by the
   rigid-body relation when the spin is measured.
 - **The spin.** Penner 2001's rolling spin, replaced by the fitted forward
-  model (20 October 2026). The
+  model, then (also 20 October 2026) by the impulse model: the earlier form had
+  a floor at small spin loft and a roll-off from about 47°, which a rigid ball
+  with the published face friction does not have; its smooth heel-biased loss
+  and saturating gear effect gave way to the effective mass and the linear gear
+  effect. The
   `experimental_face_angle_*` fields mirror the new value so the kiosk tile
   keeps working until the UI pass.
 - **The spin-axis proxy.** Was `spin axis = launch direction − path`. It is
