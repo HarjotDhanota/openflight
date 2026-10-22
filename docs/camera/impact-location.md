@@ -204,11 +204,13 @@ The Club tab opens with a face-impact view:
   right-hander. A left-hander's drawing is mirrored. The proportions are
   illustrative and labelled so. The iron's length sits inside Mizuno's published
   7-iron head lengths (74-87 mm).
-- **The grid.** 10 mm, every number in mm whatever the unit preference, centred on
-  the drawn face's centre. On irons and wedges that is midway between the score
-  lines' common toe and heel ends, and between the lowest and highest line over that
-  point (the upper lines stop about 3 mm under the sloping topline); on woods it is
-  midway between the score lines' heel and toe ends and midway up the face.
+- **The centre lines.** One heel-to-toe and one low-to-high line, clipped to the
+  face, cross at the reading's own face centre: 8 mm toe-ward of the drawn head
+  outline's heel-toe midpoint, and the category's face-centre height above the
+  leading edge (driver 30, fairway 17, hybrid 20, iron 23, wedge 24 mm), as above.
+  The dot sits at the unrounded mm from there; every number is in mm whatever the
+  unit preference. That centre is not the middle of the drawn score lines: it sits
+  about 10 mm toe-ward of it on the driver, fairway, iron and wedge.
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge

@@ -4,6 +4,7 @@
   --face-art-earlier: rgba(240, 242, 245, 0.85);
   --face-art-ferrule: #17181a;
   --face-art-ring: rgba(150, 156, 163, 0.55);
+  --face-art-collar: #7b8188;
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   align-items: center;
@@ -26,8 +27,7 @@
   --face-art-highlight: rgba(255, 255, 255, 0.85);
   --face-art-groove: #3c424a;
   --face-art-shaft: #c9ced4;
-  --face-art-grid: rgba(16, 20, 24, 0.12);
-  --face-art-grid-axis: rgba(16, 20, 24, 0.32);
+  --face-art-centre: rgba(16, 20, 24, 0.55);
 }
 
 /* Satin wedge: softer, greyer steel. */
@@ -43,8 +43,7 @@
   --face-art-highlight: rgba(250, 251, 252, 0.7);
   --face-art-groove: #454b53;
   --face-art-shaft: #c9ced4;
-  --face-art-grid: rgba(16, 20, 24, 0.12);
-  --face-art-grid-axis: rgba(16, 20, 24, 0.32);
+  --face-art-centre: rgba(16, 20, 24, 0.55);
 }
 
 /* Black head, light grey face, painted score lines, graphite shaft. */
@@ -60,8 +59,7 @@
   --face-art-highlight: rgba(220, 225, 230, 0.4);
   --face-art-groove: #eef0f2;
   --face-art-shaft: #26292d;
-  --face-art-grid: rgba(16, 20, 24, 0.12);
-  --face-art-grid-axis: rgba(16, 20, 24, 0.3);
+  --face-art-centre: rgba(16, 20, 24, 0.5);
 }
 
 /* The hybrid's face is dark too, with light grey lines. */
@@ -69,8 +67,7 @@
   --face-art-face-hi: #3e4247;
   --face-art-face-lo: #2b2e32;
   --face-art-groove: #a9afb5;
-  --face-art-grid: rgba(236, 240, 244, 0.1);
-  --face-art-grid-axis: rgba(236, 240, 244, 0.26);
+  --face-art-centre: rgba(236, 240, 244, 0.5);
 }
 
 .face-impact__figure {
@@ -84,22 +81,13 @@
   height: 100%;
 }
 
-.face-impact__grid line {
-  stroke: var(--color-border-soft);
-  stroke-width: 0.35;
+.face-impact__centre-line {
+  stroke: var(--face-art-centre);
+  stroke-width: 0.4;
 }
 
-.face-impact__grid .face-impact__axis {
-  stroke: var(--color-border);
-  stroke-width: 0.5;
-}
-
-.face-impact__grid--on-face line {
-  stroke: var(--face-art-grid);
-}
-
-.face-impact__grid--on-face .face-impact__axis {
-  stroke: var(--face-art-grid-axis);
+.face-impact__collar {
+  fill: var(--face-art-collar);
 }
 
 .face-impact__rim path {

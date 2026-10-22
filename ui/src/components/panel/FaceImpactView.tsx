@@ -2,15 +2,7 @@ import { useId } from 'react';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot } from '../../types/shot';
 import { LabelBadge } from '../ui/LabelBadge';
-import {
-  FACE_SHAPES,
-  faceCategory,
-  formatLength,
-  GRID_STEP_MM,
-  GROOVE_WIDTH_MM,
-  hoselParts,
-  impactReading,
-} from './faceImpact';
+import { FACE_SHAPES, faceCategory, formatLength, GROOVE_WIDTH_MM, hoselParts, impactReading } from './faceImpact';
 import './FaceImpactView.css';
 
 interface FaceImpactViewProps {
@@ -18,14 +10,9 @@ interface FaceImpactViewProps {
   sessionShots: readonly Shot[];
 }
 
-function gridLines(min: number, max: number, step: number): number[] {
-  const lines: number[] = [];
-  for (let k = Math.ceil(min / step); k * step <= max; k += 1) lines.push(Number((k * step).toFixed(3)));
-  return lines;
-}
-
 /** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
- * the club's earlier shots faint, a grid on the face centre; mirrored for a left-hander. */
+ * the club's earlier shots faint, centre lines through the reading's face centre; mirrored for a
+ * left-hander. The dot sits at the unrounded mm values, the svg's units. */
 export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const { t } = useI18n();
   const id = useId();
@@ -40,7 +27,6 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const toeSign = left ? 1 : -1;
   const { minX, maxX, minY, maxY } = shape.bounds;
   const [viewMinX, viewMaxX] = left ? [-maxX, -minX] : [minX, maxX];
-  const step = GRID_STEP_MM;
   const mirror = left ? 'scale(-1 1)' : undefined;
   const earlier = sessionShots
     .filter((other) => other.timestamp !== shot.timestamp && other.club === shot.club)
@@ -59,22 +45,7 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
       ? `${words(reading.height, t('faceImpact.high'), t('faceImpact.low'))} ${formatLength(Math.abs(reading.height))}`
       : null;
   const sigma = (value: number | null) => (value !== null ? ` ± ${formatLength(value)}` : '');
-  const gridText = `${GRID_STEP_MM} mm`;
-  const grid = [
-    ...gridLines(viewMinX, viewMaxX, step).map((x) => (
-      <line key={`x${x}`} className={x === 0 ? 'face-impact__axis' : undefined} x1={x} x2={x} y1={minY} y2={maxY} />
-    )),
-    ...gridLines(minY, maxY, step).map((y) => (
-      <line
-        key={`y${y}`}
-        className={y === 0 ? 'face-impact__axis' : undefined}
-        x1={viewMinX}
-        x2={viewMaxX}
-        y1={y}
-        y2={y}
-      />
-    )),
-  ];
+  const [toeEnd, heelEnd] = left ? [-shape.ends[0], -shape.ends[1]] : shape.ends;
   return (
     <section
       className="face-impact"
@@ -123,9 +94,6 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               <stop className="face-impact__shaft-far" offset="1" />
             </linearGradient>
           </defs>
-          <g className="face-impact__grid" clipPath={`url(#${clipId})`}>
-            {grid}
-          </g>
           <g clipPath={`url(#${clipId})`}>
             <g className="face-impact__outline-group" transform={mirror}>
               <g className="face-impact__rim">
@@ -136,6 +104,7 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               </g>
               <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
               <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
+              {hosel.collar ? <path className="face-impact__collar" d={hosel.collar} /> : null}
               {hosel.rings.map((d) => (
                 <path key={d} className="face-impact__ring" d={d} />
               ))}
@@ -144,8 +113,9 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
               {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
             </g>
-            <g className="face-impact__grid face-impact__grid--on-face" clipPath={`url(#${faceClipId})`}>
-              {grid}
+            <g className="face-impact__centre-lines" clipPath={`url(#${faceClipId})`}>
+              <line className="face-impact__centre-line" x1={viewMinX} x2={viewMaxX} y1={0} y2={0} />
+              <line className="face-impact__centre-line" x1={0} x2={0} y1={minY} y2={maxY} />
             </g>
             <g className="face-impact__face-marks" transform={mirror}>
               {shape.grooves.map((groove) => (
@@ -165,20 +135,10 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
             </g>
           </g>
-          <text
-            className="face-impact__side"
-            x={left ? viewMaxX - 2 : viewMinX + 2}
-            y={minY + 6}
-            textAnchor={left ? 'end' : 'start'}
-          >
+          <text className="face-impact__side" x={toeEnd} y={1.5} textAnchor={left ? 'start' : 'end'}>
             {t('faceImpact.toe')}
           </text>
-          <text
-            className="face-impact__side"
-            x={left ? viewMinX + 2 : viewMaxX - 2}
-            y={maxY - 2}
-            textAnchor={left ? 'start' : 'end'}
-          >
+          <text className="face-impact__side" x={heelEnd} y={1.5} textAnchor={left ? 'end' : 'start'}>
             {t('faceImpact.heel')}
           </text>
           {earlier.map((other, index) => (
@@ -254,7 +214,7 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
           </p>
         ) : null}
         <p className="face-impact__caption">
-          {t('faceImpact.illustrative', { grid: gridText })}
+          {t('faceImpact.illustrative')}
           {earlier.length ? ` · ${t('faceImpact.earlier', { count: String(earlier.length) })}` : ''}
         </p>
       </div>

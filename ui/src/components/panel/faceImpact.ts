@@ -42,8 +42,10 @@ export interface Hosel {
   ferruleLength: number;
   shaftTo: number;
   shaftWidth: number;
-  /** Adjustable-sleeve joints across the tube, mm up the axis. */
+  /** Adjustable-sleeve joints across the tube, mm up the axis, and a grey ring this long where
+   * the sleeve meets the head. */
   rings: readonly number[];
+  collar: number;
 }
 
 export interface Groove {
@@ -68,6 +70,8 @@ export interface FaceShape {
   hosel: Hosel;
   grooves: readonly Groove[];
   mark: string | null;
+  /** Where the TOE and HEEL labels sit on the heel-toe centre line, just outside the club. */
+  ends: readonly [number, number];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
@@ -98,6 +102,7 @@ export function hoselParts(hosel: Hosel): {
   ferrule: string;
   shaft: string;
   rings: string[];
+  collar: string | null;
   shaftLine: [Point, Point];
 } {
   const { up, right } = axes(hosel);
@@ -119,6 +124,14 @@ export function hoselParts(hosel: Hosel): {
       at(collar - 0.5, hosel.shaftWidth, 1),
     ]),
     rings: hosel.rings.map((s) => `M ${pt(edge(hosel, s, -1))} L ${pt(edge(hosel, s, 1))}`),
+    collar: hosel.collar
+      ? quad([
+          edge(hosel, hosel.from, -1, 0.3),
+          edge(hosel, hosel.from + hosel.collar, -1, 0.3),
+          edge(hosel, hosel.from + hosel.collar, 1, 0.3),
+          edge(hosel, hosel.from, 1, 0.3),
+        ])
+      : null,
     shaftLine: [add(hosel.ground, up, collar), add(hosel.ground, up, hosel.shaftTo)],
   };
 }
@@ -176,6 +189,8 @@ function cross(polygon: Point[], at: number, vertical: boolean): number[] {
   return hits.sort((p, q) => p - q);
 }
 
+const UNFRAMED: FaceShape['bounds'] = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+
 function movePath(d: string, dx: number, dy: number): string {
   let k = 0;
   return d.replace(/-?\d*\.?\d+/g, (n) => fmt(Number(n) + (k++ % 2 ? dy : dx)));
@@ -197,6 +212,7 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
       to: Number(fmt(g.to + dx)),
     })),
     mark: shape.mark && movePath(shape.mark, dx, dy),
+    ends: [shape.ends[0] + dx, shape.ends[1] + dx],
     bounds: { minX: minX + dx, maxX: maxX + dx, minY: minY + dy, maxY: maxY + dy },
   };
 }
@@ -218,6 +234,8 @@ interface Blade {
   /** The face's heel side, and the radius the topline sweeps up into the hosel with. */
   side: number;
   sweep: number;
+  /** The radius the face's heel side rounds into the topline with. */
+  shoulder: number;
   hosel: Hosel;
 }
 
@@ -236,7 +254,7 @@ interface GrooveBlock {
 
 /** Iron and wedge: a toe rounding down from a topline that falls to the hosel, a leading edge
  * that bows slightly, a milled scoring area; drawn around the centre of its score lines. */
-function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceShape {
+function blade(o: Blade, block: GrooveBlock): FaceShape {
   const { up } = axes(o.hosel);
   const corner = edge(o.hosel, o.crotch, -1);
   const slope = (corner[1] - o.peak[1]) / (corner[0] - o.peak[0]);
@@ -269,7 +287,7 @@ function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceS
   const inset = 1.4;
   const inner = toe(inset, o.le);
   const lift = o.bow * 0.5;
-  const shoulder = fillet([o.side, o.le - lift - 4], [o.side, lineY(o.side, inset)], inner.a, 2.5);
+  const shoulder = fillet([o.side, o.le - lift - 4], [o.side, lineY(o.side, inset)], inner.a, o.shoulder);
   const face =
     `M ${pt([o.toe[0] + 17, o.le])} ${leadingEdge(o.le, o.side - 3)} ` +
     `C ${pt([o.side - 1, o.le - lift])} ${pt([o.side, o.le - lift - 1.5])} ${pt([o.side, o.le - lift - 4])} ` +
@@ -311,7 +329,8 @@ function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceS
       hosel: o.hosel,
       grooves: lines,
       mark: null,
-      bounds,
+      ends: [0, 0],
+      bounds: UNFRAMED,
     },
     [-centreX, -centreY]
   );
@@ -321,8 +340,6 @@ function rows(centre: number, step: number, count: number, from: number, to: num
   const first = centre + ((count - 1) * step) / 2;
   return Array.from({ length: count }, (_, k) => ({ y: Number((first - k * step).toFixed(2)), from, to }));
 }
-
-const scale = (points: Point[], sx: number, sy: number): Point[] => points.map(([x, y]) => [x * sx, y * sy]);
 
 interface WoodLines {
   /** Heel and toe blocks: rows at a pitch, `margin` in from the face edge, inner ends `inner`
@@ -338,13 +355,7 @@ interface WoodLines {
 
 /** Driver and fairway: a dark head framing a light face, heel and toe blocks of score lines and
  * a plain centre with short bars and a small cross, centred on the scoring area. */
-function wood(
-  facePoints: Point[],
-  headPoints: Point[],
-  hosel: Hosel,
-  spec: WoodLines,
-  bounds: FaceShape['bounds']
-): FaceShape {
+function wood(facePoints: Point[], headPoints: Point[], hosel: Hosel, spec: WoodLines): FaceShape {
   const face = smooth(facePoints);
   const polygon = flatten(face);
   const middle = (x: number) => {
@@ -384,10 +395,105 @@ function wood(
         to: Number(fmt(g.to)),
       })),
       mark: `M ${pt([cx, cy - 1.8])} L ${pt([cx, cy + 1.8])}`,
-      bounds,
+      ends: [0, 0],
+      bounds: UNFRAMED,
     },
     [-cx, -cy]
   );
+}
+
+/** Fairway: score lines across the face, each ending `toe` and `heel` mm in from the face
+ * outline and at least `clearance` mm from it anywhere, so the lower lines shorten. */
+interface FullLines {
+  rows: number;
+  pitch: number;
+  toe: number;
+  heel: number;
+  clearance: number;
+}
+
+function distance(polygon: Point[], [x, y]: Point): number {
+  return Math.min(
+    ...polygon.map((a, k) => {
+      const b = polygon[(k + 1) % polygon.length];
+      const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
+    })
+  );
+}
+
+function fullWood(facePoints: Point[], headPoints: Point[], hosel: Hosel, spec: FullLines): FaceShape {
+  const face = smooth(facePoints);
+  const polygon = flatten(face);
+  const middle = (x: number) => {
+    const ys = cross(polygon, x, true);
+    return (ys[0] + ys[ys.length - 1]) / 2;
+  };
+  const line = (y: number): Groove => {
+    const xs = cross(polygon, y, false);
+    let [from, to] = [xs[0] + spec.toe, xs[xs.length - 1] - spec.heel];
+    while (from < to && distance(polygon, [from, y]) < spec.clearance) from += 0.1;
+    while (to > from && distance(polygon, [to, y]) < spec.clearance) to -= 0.1;
+    return { y: Number(fmt(y)), from: Number(fmt(from)), to: Number(fmt(to)) };
+  };
+  let [cx, cy] = [0, middle(0)];
+  let grooves: Groove[] = [];
+  for (let pass = 0; pass < 3; pass += 1) {
+    grooves = rows(cy, spec.pitch, spec.rows, 0, 0).map((row) => line(row.y));
+    cx = (Math.min(...grooves.map((g) => g.from)) + Math.max(...grooves.map((g) => g.to))) / 2;
+    cy = middle(cx);
+  }
+  return centred(
+    {
+      finish: 'black',
+      head: smooth(headPoints),
+      face,
+      scoring: null,
+      edges: [],
+      hosel,
+      grooves,
+      mark: null,
+      ends: [0, 0],
+      bounds: UNFRAMED,
+    },
+    [-cx, -cy]
+  );
+}
+
+/** impact_location.py's reading centre, which the impact numbers are measured from: heel-toe
+ * 8 mm toe-ward of the head outline's heel-toe midpoint (FACE_CENTRE_TOEWARD_MM), and up the face
+ * from the leading edge by the category's face_centre_height prior (CATEGORY_PRIORS). */
+export const READING_CENTRE = {
+  toewardMm: 8,
+  heightMm: { driver: 30, fairway: 17, hybrid: 20, iron: 23, wedge: 24 },
+} as const;
+
+/** Moves a drawing onto the reading centre and frames it with room for the TOE and HEEL labels. */
+function onReadingCentre(shape: FaceShape, category: FaceCategory): FaceShape {
+  const outline = flatten(shape.head).map((point) => point[0]);
+  const x = (Math.min(...outline) + Math.max(...outline)) / 2 - READING_CENTRE.toewardMm;
+  const bottom = cross(flatten(shape.face), x, true);
+  const moved = centred(shape, [-x, -(bottom[bottom.length - 1] - READING_CENTRE.heightMm[category])]);
+  const head = flatten(moved.head);
+  const parts = hoselParts(moved.hosel);
+  const tube = flatten(parts.tube);
+  const club = [...head, ...tube, ...flatten(parts.ferrule)];
+  const across = [...cross(head, 0, false), ...cross(tube, 0, false)];
+  const ends: [number, number] = [Math.min(...across) - 2, Math.max(...across) + 2];
+  const minY = Math.min(...club.map((point) => point[1])) - 5;
+  const { up } = axes(moved.hosel);
+  const shaftX = moved.hosel.ground[0] + ((minY - moved.hosel.ground[1]) / up[1]) * up[0] + moved.hosel.shaftWidth;
+  return {
+    ...moved,
+    ends,
+    bounds: {
+      minX: Math.min(...head.map((point) => point[0]), ends[0] - 12) - 1,
+      maxX: Math.max(...club.map((point) => point[0]), shaftX, ends[1] + 15) + 1,
+      minY,
+      maxY: Math.max(...head.map((point) => point[1])) + 2,
+    },
+  };
 }
 
 const DRIVER_FACE: Point[] = [
@@ -399,9 +505,9 @@ const DRIVER_FACE: Point[] = [
   [50.5, -20.5],
   [54.2, -11.5],
   [54.8, 0.5],
-  [51.7, 12.9],
-  [42, 24],
-  [32, 28.5],
+  [51, 10],
+  [41, 21],
+  [31, 27.5],
   [1.7, 29.6],
   [-17, 28.3],
   [-33, 22.5],
@@ -410,21 +516,65 @@ const DRIVER_FACE: Point[] = [
 ];
 
 const DRIVER_HEAD: Point[] = [
-  [-64, -16],
-  [-52, -26.4],
-  [-28.6, -32.8],
-  [1.7, -34],
-  [32, -32.8],
-  [54, -28.3],
-  [60.5, -23],
-  [58.2, -12],
-  [55, 8.5],
-  [45.5, 21.5],
-  [27, 30.6],
-  [1.7, 33.2],
-  [-26, 30.6],
-  [-46, 20.5],
-  [-58, 3],
+  [-61, -15],
+  [-57.5, -23],
+  [-48, -28.5],
+  [-28, -31],
+  [1.7, -31.4],
+  [32, -30.6],
+  [52, -27.2],
+  [59, -22.5],
+  [58.5, -12],
+  [57, 2],
+  [52.5, 12.5],
+  [43.5, 23],
+  [27, 31.2],
+  [1.7, 34],
+  [-20, 32.5],
+  [-38, 26],
+  [-52, 13],
+  [-58.5, -1],
+  [-60.5, -9],
+];
+
+const FAIRWAY_FACE: Point[] = [
+  [-43.5, -16.2],
+  [-25, -17.7],
+  [-6, -17.9],
+  [21, -17.6],
+  [40.5, -16.9],
+  [47.6, -12.6],
+  [47.5, -6],
+  [46.5, 2],
+  [41, 10.5],
+  [28, 16.2],
+  [0.7, 17.6],
+  [-22.7, 16.5],
+  [-36, 12],
+  [-44, 5],
+  [-47.5, -3.5],
+  [-46.5, -10.5],
+];
+
+const FAIRWAY_HEAD: Point[] = [
+  [-55, -5],
+  [-50.5, -12.5],
+  [-38, -19.2],
+  [-22, -21],
+  [-6, -21.3],
+  [21, -21.2],
+  [40.6, -19.6],
+  [47, -17.6],
+  [53.5, -12],
+  [54, -4],
+  [51, 6.5],
+  [45, 13.5],
+  [35, 19.4],
+  [7.6, 22.6],
+  [-20, 21.3],
+  [-37, 17.5],
+  [-48, 9.5],
+  [-54, 0],
 ];
 
 const IRON_HOSEL: Hosel = {
@@ -437,6 +587,7 @@ const IRON_HOSEL: Hosel = {
   shaftTo: 110,
   shaftWidth: 9,
   rings: [],
+  collar: 0,
 };
 
 const SLEEVE: Hosel = {
@@ -449,22 +600,21 @@ const SLEEVE: Hosel = {
   shaftTo: 80,
   shaftWidth: 8.6,
   rings: [11, 21],
+  collar: 0,
 };
 
-export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
+const DRAWN: Record<FaceCategory, FaceShape> = {
   driver: wood(
     DRIVER_FACE,
     DRIVER_HEAD,
-    { ...SLEEVE, ferruleAt: 27, rings: [10, 19] },
-    { rows: 8, pitch: 4.8, margin: 6, inner: 21, bars: [10, 16, 10], barPitch: 7.5 },
-    { minX: -70, maxX: 92, minY: -52, maxY: 40 }
+    { ...SLEEVE, ground: [53.5, -19.5], ferruleAt: 27, rings: [10, 19] },
+    { rows: 8, pitch: 4.8, margin: 6, inner: 21, bars: [10, 16, 10], barPitch: 7.5 }
   ),
-  fairway: wood(
-    scale(DRIVER_FACE, 0.88, 0.66),
-    scale(DRIVER_HEAD, 0.88, 0.7),
-    { ...SLEEVE, ground: [47.5, -12.5], rings: [10], ferruleAt: 24 },
-    { rows: 5, pitch: 4.6, margin: 5, inner: 19, bars: [12], barPitch: 0 },
-    { minX: -62, maxX: 80, minY: -44, maxY: 28 }
+  fairway: fullWood(
+    FAIRWAY_FACE,
+    FAIRWAY_HEAD,
+    { ...SLEEVE, ground: [52.5, -15], lieDeg: 58, ferruleAt: 22, rings: [13], collar: 2.6 },
+    { rows: 6, pitch: 4.3, toe: 9, heel: 7, clearance: 3 }
   ),
   hybrid: centred(
     {
@@ -508,7 +658,8 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       hosel: { ...SLEEVE, ground: [46, -14], lieDeg: 58, ferruleAt: 32, rings: [22, 27] },
       grooves: [...rows(-1.95, 3.9, 6, -35, 22), { y: 11.7, from: -22, to: 9 }],
       mark: null,
-      bounds: { minX: -54, maxX: 82, minY: -50, maxY: 24 },
+      ends: [0, 0],
+      bounds: UNFRAMED,
     },
     [6.5, 0]
   ),
@@ -524,10 +675,10 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       crotch: 30,
       side: 40,
       sweep: 8,
+      shoulder: 2.5,
       hosel: IRON_HOSEL,
     },
-    { lowest: 4, pitch: 3.2, from: -17, to: 37, clearance: 3, margin: 1.5 },
-    { minX: -42, maxX: 84, minY: -54, maxY: 30 }
+    { lowest: 4, pitch: 3.2, from: -17, to: 37, clearance: 3, margin: 1.5 }
   ),
   wedge: blade(
     {
@@ -541,12 +692,16 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       crotch: 21,
       side: 39,
       sweep: 10,
+      shoulder: 13,
       hosel: { ...IRON_HOSEL, ground: [35, 24], lieDeg: 63, ferruleAt: 70 },
     },
-    { lowest: 4, pitch: 3.1, from: -17, to: 36, clearance: 3, margin: 1.5 },
-    { minX: -42, maxX: 84, minY: -58, maxY: 34 }
+    { lowest: 4, pitch: 3.1, from: -17, to: 34, clearance: 3, margin: 1.5 }
   ),
 };
+
+export const FACE_SHAPES = Object.fromEntries(
+  (Object.keys(DRAWN) as FaceCategory[]).map((category) => [category, onReadingCentre(DRAWN[category], category)])
+) as Record<FaceCategory, FaceShape>;
 
 export function faceCategory(club: string | null | undefined): FaceCategory {
   const name = (club ?? '').trim().toLowerCase();
@@ -556,8 +711,6 @@ export function faceCategory(club: string | null | undefined): FaceCategory {
   if (['pw', 'gw', 'sw', 'lw'].includes(name)) return 'wedge';
   return 'iron';
 }
-
-export const GRID_STEP_MM = 10;
 
 export interface ImpactReading {
   offset: number | null;
