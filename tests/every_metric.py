@@ -68,8 +68,8 @@ CLUB = (
     "dynamic_lie",
 )
 EXPECTED_METRIC_IDS = BALL + FLIGHT + CLUB
-# Not built yet: shown as not measured, with the item that builds them (E5, E6).
-PENDING_METRIC_IDS = ("impact_offset", "impact_height", "dynamic_lie")
+# Not built yet: shown as not measured, with the item that builds it (E6).
+PENDING_METRIC_IDS = ("dynamic_lie",)
 LABELS = (
     "measured",
     "calculated",

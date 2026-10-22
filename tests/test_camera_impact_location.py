@@ -314,13 +314,13 @@ def test_face_inputs_priors_are_labelled_and_wide_for_an_unanchored_club():
     assert il.FaceInputs.priors("driver").face_centre_height.value > 25.0
 
 
-def test_the_kiosk_still_reports_impact_location_as_pending():
+def test_the_kiosk_reads_impact_location_only_into_its_own_experimental_records():
     from openflight import model_metrics
 
-    assert "pending E5" in model_metrics.IMPACT_LOCATION_PENDING
+    assert "impact_location" in Path(model_metrics.__file__).read_text(encoding="utf-8")
     folder = Path(model_metrics.__file__).parent
-    for name in ("model_metrics.py", "server.py", "shot_models.py"):
-        assert "impact_location" not in (folder / name).read_text(encoding="utf-8")
+    for name in ("server.py", "shot_models.py"):
+        assert "impact_location" not in (folder / name).read_text(encoding="utf-8"), name
 
 
 def test_a_ball_with_no_contrast_names_why_its_departure_cannot_be_seen():

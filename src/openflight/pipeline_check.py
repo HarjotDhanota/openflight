@@ -67,7 +67,7 @@ GATES = {
     "club_arc": "club_arc.py::club_delivery_payload (E1)",
     "collision": "collision_model.py::evaluate / server.py::_attach_collision_model (E2)",
     "flight": "flight.py::compute_flight (E4)",
-    "impact_location": "E5: impact location (not built)",
+    "impact_location": "camera/impact_live.py: experimental impact location, after the shot",
     "dynamic_lie": "E6: dynamic lie (not built)",
 }
 
@@ -1274,7 +1274,7 @@ def kiosk_metric_stage(
 
     A labelled value (calculated, model geometry, estimated) is ``labelled``; a
     measured one passes. Not measured is ``PENDING`` when the item that builds it
-    is not done (impact location E5, dynamic lie E6, the full club speed), blocked
+    is not done (dynamic lie E6, the full club speed), blocked
     when every stage it stands on failed, and ``DATA`` otherwise. A record that
     breaks the label contract (an unknown label, a value under "not measured", no
     value under a label, no reason) is ``CODE``.

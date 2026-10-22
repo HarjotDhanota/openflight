@@ -253,14 +253,14 @@
       "label": "Impact offset",
       "group": "club",
       "unit": "mm",
-      "pending": "E5"
+      "pending": null
     },
     {
       "id": "impact_height",
       "label": "Impact height",
       "group": "club",
       "unit": "mm",
-      "pending": "E5"
+      "pending": null
     },
     {
       "id": "dynamic_lie",

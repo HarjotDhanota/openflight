@@ -124,9 +124,8 @@ def test_unbuilt_metrics_are_not_measured_with_the_item_that_builds_them(metric_
     record = fusion_shot().to_dict()["metrics"][metric_id]
     assert record["value"] is None
     assert record["status"] == "not_measured"
-    item = "E5" if metric_id.startswith("impact") else "E6"
-    assert item in record["reason"]
-    assert shot_metrics.SPECS[metric_id].pending == item
+    assert "E6" in record["reason"]
+    assert shot_metrics.SPECS[metric_id].pending == "E6"
 
 
 def test_a_model_geometry_spin_and_carry_keep_their_label():
@@ -248,3 +247,70 @@ def test_the_camera_prior_never_relabels_an_experimental_value():
         metrics, {"ball_range_source": "camera_prior"}
     )
     assert metrics["impact_offset"]["status"] == "experimental"
+
+
+def _impact(**changes) -> dict:
+    """A live impact reading in the shape openflight.camera.impact_live leaves on the shot."""
+    entry = {
+        "status": "ok",
+        "reason": None,
+        "impact_offset_mm": 6.0,
+        "impact_offset_sigma_mm": 4.0,
+        "height_status": "ok",
+        "height_reason": None,
+        "impact_height_mm": -3.0,
+        "impact_height_sigma_mm": 5.0,
+        "handedness": "right",
+    }
+    entry.update(changes)
+    return entry
+
+
+def test_impact_location_is_built_and_not_measured_without_a_reading():
+    metrics = fusion_shot().to_dict()["metrics"]
+    for name in ("impact_offset", "impact_height"):
+        assert shot_metrics.SPECS[name].pending is None
+        assert metrics[name]["status"] == "not_measured"
+        assert "camera clip" in metrics[name]["reason"]
+
+
+def test_an_accepted_impact_reading_is_experimental_with_its_one_sigma_range():
+    metrics = fusion_shot(impact_location=_impact()).to_dict()["metrics"]
+    offset, height = metrics["impact_offset"], metrics["impact_height"]
+    assert (offset["value"], offset["status"], offset["range"]) == (
+        6.0,
+        "experimental",
+        [2.0, 10.0],
+    )
+    assert (height["value"], height["status"], height["range"]) == (
+        -3.0,
+        "experimental",
+        [-8.0, 2.0],
+    )
+    assert "not validated" in offset["note"]
+    assert "experimental" in offset["source"]
+
+
+def test_a_refused_height_keeps_the_offset_and_names_its_own_reason():
+    reading = _impact(height_status="rejected", height_reason="no sole line at contact")
+    metrics = fusion_shot(impact_location=reading).to_dict()["metrics"]
+    assert metrics["impact_offset"]["status"] == "experimental"
+    assert metrics["impact_height"]["status"] == "not_measured"
+    assert metrics["impact_height"]["reason"] == "no sole line at contact"
+
+
+def test_a_refused_reading_names_its_reason_on_both_axes():
+    reason = "building the head outline: 3 of 5 swings with this club"
+    reading = _impact(
+        status="rejected", reason=reason, height_status="rejected", height_reason=None
+    )
+    metrics = fusion_shot(impact_location=reading).to_dict()["metrics"]
+    for name in ("impact_offset", "impact_height"):
+        assert metrics[name]["value"] is None
+        assert metrics[name]["reason"] == reason
+
+
+def test_a_non_finite_impact_value_is_not_measured():
+    reading = _impact(impact_offset_mm=float("nan"))
+    record = fusion_shot(impact_location=reading).to_dict()["metrics"]["impact_offset"]
+    assert record["status"] == "not_measured"
