@@ -384,3 +384,45 @@ def test_the_worker_process_reads_a_clip_and_stops(tmp_path):
     assert results[0]["job_id"] == 1
     assert results[0]["reading"]["status"] == "ok", results[0]["reading"]["reason"]
     assert not runner.alive()
+
+
+def test_a_worker_that_exits_fails_only_its_own_readings_and_a_new_one_starts(monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        server_module,
+        "publish_shot_update",
+        lambda shot, *, update, session_uuid: published.append(shot.shot_number) or True,
+    )
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    runners = []
+
+    def factory(on_result):
+        runners.append(FakeRunner())
+        return runners[-1]
+
+    dispatcher = live.ImpactLiveExtension(runner_factory=factory).dispatcher
+    first, second = _kiosk_shot(1), _kiosk_shot(2)
+    dispatcher.submit(first, {"session_uuid": "session-a", "shot_number": 1})
+    dispatcher.on_result({"type": "worker_exited", "runner": runners[0]})
+    assert first.impact_location["reason"] == live.STOPPED_REASON
+    dispatcher.submit(second, {"session_uuid": "session-a", "shot_number": 2})
+    assert len(runners) == 2
+    dispatcher.on_result({"type": "worker_exited", "runner": runners[0]})
+    assert second.impact_location is None
+    assert published == [1]
+
+
+def test_a_worker_that_cannot_start_refuses_the_shot_by_name(monkeypatch):
+    monkeypatch.setattr(
+        server_module, "publish_shot_update", lambda shot, *, update, session_uuid: True
+    )
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+    def broken(on_result):
+        raise OSError("no python")
+
+    extension = live.ImpactLiveExtension(runner_factory=broken)
+    extension.dispatcher.warm()
+    shot = _kiosk_shot(1)
+    extension.dispatcher.submit(shot, {"session_uuid": "session-a", "shot_number": 1})
+    assert shot.impact_location["reason_code"] == "analysis_failed_worker_unavailable"

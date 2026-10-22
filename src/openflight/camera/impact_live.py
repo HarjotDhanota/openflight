@@ -410,7 +410,7 @@ class ProcessRunner:
                 continue
             if message.get("type") == "result":
                 self._on_result(message)
-        self._on_result({"type": "worker_exited"})
+        self._on_result({"type": "worker_exited", "runner": self})
 
     @staticmethod
     def _write(process: subprocess.Popen, command: dict) -> None:
@@ -425,7 +425,7 @@ class ProcessRunner:
         """Queue one shot's job; raises OSError when the worker cannot take it."""
         with self._lock:
             if not self.alive():
-                self._start()
+                raise OSError("the impact worker is not running")
             self._write(self._process, {"type": "job", **job})
 
     def cancel_through(self, job_id: int) -> None:
@@ -460,6 +460,7 @@ class _OpenJob:
     shot: Any
     session_uuid: str | None
     submitted: float
+    runner: Any = None
 
 
 class Dispatcher:
@@ -481,21 +482,31 @@ class Dispatcher:
 
     def warm(self) -> None:
         """Start the worker now, so its imports are done before the first shot."""
-        with self._lock:
-            self._ensure_runner()
+        try:
+            with self._lock:
+                self._ensure_runner()
+        except OSError as error:
+            logger.warning("[IMPACT] the impact worker did not start: %s", error)
 
     def submit(self, shot, body: dict) -> int:
         """Send one shot's clip to the worker; its reading arrives in ``on_result``."""
         with self._lock:
             self._next_id += 1
             job_id = self._next_id
-            session_uuid = body.get("session_uuid")
-            self._open[job_id] = _OpenJob(shot, session_uuid, time.monotonic())
-            runner = self._ensure_runner()
+            try:
+                runner = self._ensure_runner()
+            except OSError:
+                runner = None
+            self._open[job_id] = _OpenJob(shot, body.get("session_uuid"), time.monotonic(), runner)
         try:
+            if runner is None:
+                raise OSError("the impact worker did not start")
             runner.submit({"job_id": job_id, **body})
         except OSError as error:
             logger.warning("[IMPACT] the worker did not take shot #%s: %s", shot.shot_number, error)
+            with self._lock:
+                if self._runner is runner:
+                    self._runner = None
             self._finish(job_id, _refused("analysis_failed_worker_unavailable"))
         return job_id
 
@@ -514,9 +525,11 @@ class Dispatcher:
     def on_result(self, message: dict) -> None:
         """A reading from the worker, or word that it exited."""
         if message.get("type") == "worker_exited":
+            runner = message.get("runner")
             with self._lock:
-                orphans = sorted(self._open)
-                self._runner = None
+                orphans = sorted(k for k, job in self._open.items() if job.runner is runner)
+                if self._runner is runner:
+                    self._runner = None
             for job_id in orphans:
                 self._finish(job_id, {**_refused("worker_stopped"), "reason": STOPPED_REASON})
             return
