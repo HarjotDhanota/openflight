@@ -69,6 +69,7 @@ from . import metric_definitions as md
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .constants import FLIGHT_BALL_RADIUS_M as BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
+from .numeric import finite
 
 DRIVER_WOOD = "driver_wood"
 IRON_HYBRID = "iron_hybrid"
@@ -258,7 +259,7 @@ def _model(club: Optional[ClubType]) -> Optional[tuple[CategoryConstants, float]
 
 
 def _finite(*values: float) -> bool:
-    return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+    return all(finite(v) for v in values)
 
 
 def _p_min(a: float, b: float, p: float) -> float:

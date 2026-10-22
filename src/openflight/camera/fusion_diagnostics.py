@@ -13,6 +13,8 @@ from typing import Any, Mapping
 
 from flask import Flask, Response, request, send_file
 
+from openflight.numeric import finite_float as _finite
+
 SCHEMA_VERSION = 1
 MAX_READ_BYTES_PER_POLL = 1024 * 1024
 MAX_SHOTS_PER_SESSION = 100
@@ -25,13 +27,6 @@ _ACCEPTED_CAMERA_STATUSES = (
     "camera_experimental_no_iwr",
     "camera_only_experimental",
 )
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
 
 
 def _metric(

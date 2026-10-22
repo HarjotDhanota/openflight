@@ -9,14 +9,9 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
+from .numeric import finite_float as _finite
+
 SCHEMA_VERSION = 1
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    value = float(value)
-    return value if math.isfinite(value) else None
 
 
 def _wilson(successes: int, total: int) -> dict[str, Any]:
