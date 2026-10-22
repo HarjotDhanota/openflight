@@ -52,6 +52,7 @@ RESULT_TEXT = {
     "not_a_shot": "Not a shot",
     # an OPS shot an extension's gate refused: the setup dropped at the trigger
     "not_counted": "Not counted: setup not ready",
+    "paused": "Not counted: paused",
 }
 
 
@@ -66,7 +67,7 @@ class SensorStates:
 
     ``setup_problems`` are red causes an extension adds ahead of the sensors';
     ``camera_rule`` and ``green_note`` let it judge the camera further and note
-    something on a green light.
+    something on a green light; ``amber_causes`` are waits it names (a paused run).
     """
 
     ops: Mapping | None
@@ -75,6 +76,7 @@ class SensorStates:
     setup_problems: Sequence[str] = ()
     camera_rule: CameraRule | None = None
     green_note: str | None = None
+    amber_causes: Sequence[str] = ()
 
 
 def _left(typical: float | None, since: float | None, now: float) -> float | None:
@@ -175,6 +177,7 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
         _iwr(states.iwr, now, red, amber)
     if states.camera is not None:
         _camera(states.camera, now, red, amber, states.camera_rule)
+    amber.extend((cause, None) for cause in states.amber_causes)
     if red:
         return {
             "state": "red",

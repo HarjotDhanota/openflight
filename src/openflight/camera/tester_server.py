@@ -1543,15 +1543,9 @@ def tee_range_handoff(
     # D34: the target line's yaw, one value for both flags (the rig file gives the
     # camera and the IWR one boresight). A direction's parallax is bounded at the
     # net's distance beyond the ball: the measured net, or the swing server's default.
-    net_m = net["net_range_m"] if measured_net else DEFAULT_NET_RANGE_M
+    distance_m, distance_basis = target_line_distance(net, tee_m)
     line_args, line = target_line.handoff(
-        target_line_record,
-        target_distance_m=max(net_m - (tee_m or 0.0), 0.5),
-        distance_basis=(
-            "net_range_from_empty_static_capture_less_tee_range"
-            if measured_net
-            else "default_net_range_not_measured_less_tee_range"
-        ),
+        target_line_record, target_distance_m=distance_m, distance_basis=distance_basis
     )
     args += line_args
     if lens is not None and lens.lens_id is not None:
@@ -1646,6 +1640,18 @@ def tee_range_handoff(
         "cli_args": args,
     }
     return args, record
+
+
+def target_line_distance(net: Mapping | None, tee_m: float | None) -> tuple[float, str]:
+    """How far beyond the ball an aim's target is taken to be, for its parallax, and why."""
+    measured = isinstance(net, Mapping) and net.get("status") == "measured"
+    net_m = float(net["net_range_m"]) if measured else DEFAULT_NET_RANGE_M
+    basis = (
+        "net_range_from_empty_static_capture_less_tee_range"
+        if measured
+        else "default_net_range_not_measured_less_tee_range"
+    )
+    return max(net_m - (tee_m or 0.0), 0.5), basis
 
 
 def _tee_range_cli_args(
@@ -8598,6 +8604,44 @@ def create_app(
             for arm_id in sorted(PLACEMENT_BOX_REQUIRED_ARMS)
         }
 
+    def free_play_recording(tester_id: str) -> dict | None:
+        """This tester's free-play run while it records, else None."""
+        run = free_play.status()
+        if run.get("tester_id") == tester_id and run.get("phase") == "recording":
+            return run
+        return None
+
+    def push_aim_to_free_play(tester_id: str, eligibility: Mapping) -> dict | None:
+        """Hand the aim just saved to this tester's running kiosk: the next shot uses it."""
+        run = free_play_recording(tester_id)
+        if run is None:
+            return None
+        arm_id = (run.get("resolution") or {}).get("arm_id")
+        arm_state = read_arm_state(sessions_root, tester_id, arm_id) if arm_id else {}
+        handed = arm_state.get("handed_to_swings")
+        distance_m, basis = target_line_distance(
+            (handed or {}).get("net_range"), (handed or {}).get("tee_m")
+        )
+        _args, line = target_line.handoff(
+            current_target_line(tester_id, eligibility),
+            target_distance_m=distance_m,
+            distance_basis=basis,
+        )
+        try:
+            answered = free_play.to_kiosk(tester_id, "/target-line", {"target_line": line})
+        except OSError as exc:
+            return {"applied": False, "error": f"the kiosk did not answer: {exc}"}
+        if answered is None:
+            return None
+        status, answer = answered
+        if status != 200:
+            return {"applied": False, "error": answer.get("error") or f"kiosk answered {status}"}
+        if isinstance(handed, Mapping):
+            params = TesterParameters(tester_id, arm_id, arm_state.get("environment") or "indoors")
+            write_arm_state(sessions_root, params, handed_to_swings={**handed, "target_line": line})
+        logger.info("Free play's kiosk now measures from target line %s", answer.get("target_line"))
+        return {"applied": True, "target_line": answer.get("target_line")}
+
     def aim_point_status(tester_id: str, eligibility: Mapping) -> dict:
         """The aim step: confirmed for this setup and patch, or where its drag starts (D34)."""
         root = tester_root(sessions_root, tester_id)
@@ -8605,13 +8649,18 @@ def create_app(
         patch = confirmed_placement_box(root, eligibility)
         last = read_last_target_line(root)
         confirmed = confirmed_target_line(root, eligibility, patch)
+        kiosk_view = ((free_play_recording(tester_id) or {}).get("paused") or {}).get(
+            "cause"
+        ) == "aim"
         payload = {
             "tester_id": tester_id,
-            "previewing": bool(
+            "previewing": kiosk_view
+            or bool(
                 owner
                 and owner.get("kind") == AIM_POINT_PREVIEW_KIND
                 and owner.get("tester_id") == tester_id
             ),
+            "preview_source": "kiosk" if kiosk_view else "tester",
             "setup_blockers": placement_box_setup_blockers(eligibility),
             "runs": target_line_runs(tester_id, confirmed),
             "policy": target_line.target_line_policy(),
@@ -8751,6 +8800,12 @@ def create_app(
                 root = tester_root(sessions_root, tester_id)
                 if confirmed_placement_box(root, eligibility) is None:
                     return jsonify({"error": AIM_POINT_PATCH_REQUIRED}), 409
+                if action == "show" and free_play_recording(tester_id) is not None:
+                    # free play's kiosk has the camera: it pauses and shows the target
+                    status_code, answer = free_play.to_kiosk(tester_id, "/pause", {"cause": "aim"})
+                    if status_code != 200:
+                        raise RuntimeError(answer.get("error") or "the kiosk did not pause")
+                    return jsonify(aim_point_status(tester_id, eligibility))
                 if action == "show":
                     start_box_preview(tester_id, take_over=True, kind=AIM_POINT_PREVIEW_KIND)
                     return jsonify(aim_point_status(tester_id, eligibility))
@@ -8762,11 +8817,19 @@ def create_app(
                         root, placement_box_binding(eligibility), request_id=request_id
                     )
                     stop_box_preview(tester_id, AIM_POINT_PREVIEW_KIND)
+                    pushed = push_aim_to_free_play(tester_id, eligibility)
                     return jsonify(
-                        {**aim_point_status(tester_id, eligibility), "change": "skipped"}
+                        {
+                            **aim_point_status(tester_id, eligibility),
+                            "change": "skipped",
+                            "free_play": pushed,
+                        }
                     )
                 result = _confirm_aim(tester_id, eligibility, request_id, payload)
-                return jsonify({**aim_point_status(tester_id, eligibility), **result})
+                pushed = push_aim_to_free_play(tester_id, eligibility)
+                return jsonify(
+                    {**aim_point_status(tester_id, eligibility), **result, "free_play": pushed}
+                )
         except LookupError as exc:
             return jsonify({"error": str(exc.args[0] if exc.args else exc)}), 409
         except RuntimeError as exc:

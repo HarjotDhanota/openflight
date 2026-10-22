@@ -10,7 +10,8 @@ adds the tester's routes and flags:
 - ``--tester-setup-required`` / ``--tester-config-hash``: the readiness gate every
   shot's trigger evidence must pass, and the setup problems on the ready light;
 - ``--tester-free-play`` (with ``--free-play-ladder``): run-bound free play, its
-  exposure ladder and the Stop & package proxy (``/api/free-play``).
+  exposure ladder and the Stop & package proxy (``/api/free-play``), and its pauses
+  for a face photo or a new aim (``/api/free-play/pause``, ``photo``, ``target-line``).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import dataclasses
 import json
 import logging
 import platform
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -26,7 +28,7 @@ from typing import Mapping
 
 from flask import Response, jsonify, request
 
-from openflight import instrumentation, kiosk_extensions, server
+from openflight import free_play, instrumentation, kiosk_extensions, server
 from openflight.free_play import register_kiosk_routes
 from openflight.launch_monitor import Shot
 
@@ -47,6 +49,11 @@ free_play_plan_path: Path | None = None
 free_play_study = None
 tester_setup_required = False
 tester_config_hash: str | None = None
+# A paused free play: {"cause", "since", "controls"}, empty while recording.
+free_play_pause: dict = {}
+_pause_lock = threading.RLock()
+PAUSE_CAUSES = {"photo": "taking a face photo", "aim": "moving the aim"}
+FACE_PHOTO_DIR = "face-photos"
 
 
 def _study_runtime():
@@ -608,6 +615,7 @@ def _free_play_exposure_at_shot() -> dict:
 
 def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
     """Close acquisition only after accepted shots have finished writing."""
+    resume_free_play()
     if server.monitor is not None:
         server.monitor.stop()
         capture_thread = getattr(server.monitor, "_capture_thread", None)
@@ -648,7 +656,14 @@ def _admit_shot(shot) -> bool:
 
     D15: measure and label. Missing camera evidence or a blocked setup is noted on
     the shot; only a hard stop (a sensor gone, a moved rig, another session) refuses it.
+    A paused free play counts no shot.
     """
+    paused = free_play_pause.get("cause")
+    if paused:
+        server.ready_light.swing_result("paused")
+        _log_event("free_play_shot_not_counted", {"cause": paused, "mph": shot.ball_speed_mph})
+        logger.warning("[SERVER] Shot not counted: free play is paused (%s)", paused)
+        return False
     if not tester_setup_required:
         return True
     try:
@@ -837,7 +852,7 @@ def _ready_light_states(states):
     Outside a tester's kiosk (the ladder or plain swings) the light is the plain
     kiosk's: the sensors alone decide it.
     """
-    if states is None or not (tester_setup_required or study_mode_enabled):
+    if states is None or not (tester_setup_required or study_mode_enabled or free_play_pause):
         return states
     camera = states.camera
     if server.camera_capture_runtime is not None and camera is not None:
@@ -856,6 +871,10 @@ def _ready_light_states(states):
         setup_problems=(*states.setup_problems, *problems),
         camera_rule=_free_play_camera_rule,
         green_note=_free_play_note(camera),
+        amber_causes=(
+            *states.amber_causes,
+            *((PAUSE_CAUSES[free_play_pause["cause"]],) if free_play_pause else ()),
+        ),
     )
 
 
@@ -930,6 +949,232 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
         _on_camera_capture(shot, camera_capture)
 
 
+def _log_event(kind: str, data: dict) -> None:
+    session = server.get_session_logger()
+    if session is not None:
+        session.log_event(kind, data)
+
+
+def _latest_shot_number() -> int | None:
+    with server._shot_sequence_lock:
+        return server._shot_sequence_number or None
+
+
+def _pause_state() -> dict | None:
+    return dict(free_play_pause) if free_play_pause else None
+
+
+def _tell_tester() -> None:
+    """Tell the tester page (through its server) that free play paused or resumed."""
+    config, paused = dict(free_play_config), _pause_state()
+
+    def send():
+        try:
+            free_play.tester_request(config, "/paused", {"paused": paused})
+        except (OSError, ValueError):
+            logger.warning("[FREE PLAY] The tester page did not hear the pause", exc_info=True)
+
+    threading.Thread(target=send, daemon=True, name="free-play-paused").start()
+
+
+def _view_controls(runtime) -> tuple[int, float]:
+    """The ladder's still-photo controls, from the light index or the swing's brightness."""
+    from openflight.camera.light_judging import SENSOR_BLACK_LEVEL_DN  # noqa: PLC0415
+    from openflight.camera.study_ladder import photo_controls  # noqa: PLC0415
+
+    settings = runtime.settings
+    light = getattr(settings, "light_index_dn_per_us_gain", None)
+    return photo_controls(
+        float(light) if light else None,
+        SENSOR_BLACK_LEVEL_DN,
+        settings.fps,
+        rung_exposure_us=settings.exposure_us,
+        rung_gain=settings.gain,
+    )
+
+
+def pause_free_play(cause: str) -> dict:
+    """Stop counting shots and show the face or the target at still-photo controls."""
+    if cause not in PAUSE_CAUSES:
+        raise ValueError("free play pauses for a face photo or a new aim")
+    with _pause_lock:
+        if free_play_config.get("phase") != "recording":
+            raise RuntimeError("free play is not recording")
+        if free_play_pause:
+            if free_play_pause["cause"] == cause:
+                return _pause_state()
+            raise RuntimeError(f"free play is paused: {PAUSE_CAUSES[free_play_pause['cause']]}")
+        runtime = server.camera_capture_runtime
+        controls = runtime.hold_still_controls(*_view_controls(runtime)) if runtime else None
+        free_play_pause.update(cause=cause, since=time.time(), controls=controls)
+        _log_event(
+            "free_play_paused",
+            {"cause": cause, "controls": controls, "after_shot": _latest_shot_number()},
+        )
+    _tell_tester()
+    return _pause_state()
+
+
+def resume_free_play() -> None:
+    """Put the swing controls back and count shots again."""
+    with _pause_lock:
+        if not free_play_pause:
+            return
+        runtime = server.camera_capture_runtime
+        restored = runtime.release_still_controls() if runtime is not None else None
+        cause = free_play_pause["cause"]
+        free_play_pause.clear()
+        _log_event("free_play_resumed", {"cause": cause, "controls": restored})
+    _tell_tester()
+
+
+def _paused_frame(runtime):
+    """The newest frame taken at the paused controls."""
+    from openflight.camera.optical_quality import controls_match  # noqa: PLC0415
+
+    held = free_play_pause.get("controls") or {}
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        frames = runtime.recent_frames(1, timeout_s=0.5)
+        if frames and controls_match(
+            held.get("exposure_us"),
+            held.get("gain"),
+            frames[-1].exposure_us,
+            frames[-1].analogue_gain,
+        ):
+            return frames[-1]
+    raise RuntimeError("the camera did not deliver a picture")
+
+
+def take_face_photo() -> dict:
+    """Save the face against the latest shot, then resume free play."""
+    from openflight.camera.study_ladder import write_pgm  # noqa: PLC0415
+
+    with _pause_lock:
+        if free_play_pause.get("cause") != "photo":
+            raise RuntimeError("tap Photograph the face first")
+        runtime, session = server.camera_capture_runtime, server.get_session_logger()
+        if runtime is None or session is None:
+            raise RuntimeError("the camera or the session log is not running")
+        frame = _paused_frame(runtime)
+        shot = _latest_shot_number()
+        run_dir = Path(session.log_dir).expanduser()
+        folder = run_dir / FACE_PHOTO_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = f"shot-{shot:04d}" if shot else "before-first-shot"
+        path, copy = folder / f"{stem}.pgm", 2
+        while path.exists():
+            path, copy = folder / f"{stem}-{copy}.pgm", copy + 1
+        write_pgm(path, frame.image)
+        record = {
+            "shot_number": shot,
+            "path": path.relative_to(run_dir).as_posix(),
+            "exposure_us": frame.exposure_us,
+            "gain": frame.analogue_gain,
+            "taken_at": time.time(),
+        }
+        _log_event("face_photo", record)
+    resume_free_play()
+    return record
+
+
+def _free_play_request():
+    """This run's request body, or the response refusing it."""
+    if not free_play_config.get("enabled"):
+        return None, (jsonify({"error": "free play is not running"}), 404)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return None, (jsonify({"error": "request body must be an object"}), 400)
+    if any(
+        payload.get(key, free_play_config.get(key)) != free_play_config.get(key)
+        for key in ("tester_id", "run_id")
+    ):
+        return None, (jsonify({"error": "free-play request belongs to another run"}), 409)
+    return payload, None
+
+
+def _answer(action):
+    """Run ``action`` on this run's request; every answer carries the pause."""
+    payload, refusal = _free_play_request()
+    if refusal is not None:
+        return refusal
+    try:
+        return jsonify({**action(payload), "paused": _pause_state()})
+    except ValueError as error:
+        return jsonify({"error": str(error), "paused": _pause_state()}), 400
+    except (OSError, RuntimeError) as error:
+        return jsonify({"error": str(error), "paused": _pause_state()}), 409
+
+
+@server.app.post("/api/free-play/pause")
+def free_play_pause_route():
+    """Pause free play: ``cause`` is ``photo`` or ``aim``."""
+    return _answer(lambda body: {"pause": pause_free_play(body.get("cause"))})
+
+
+@server.app.post("/api/free-play/resume")
+def free_play_resume_route():
+    """Count shots again at the swing controls."""
+    return _answer(lambda _body: resume_free_play() or {})
+
+
+@server.app.post("/api/free-play/photo")
+def free_play_photo_route():
+    """Photograph the face (``capture``) or go on without it (``skip``), then resume."""
+
+    def act(body):
+        if body.get("action") == "skip":
+            if free_play_pause.get("cause") != "photo":
+                raise RuntimeError("tap Photograph the face first")
+            _log_event("face_photo_skipped", {"shot_number": _latest_shot_number()})
+            resume_free_play()
+            return {"photo": None}
+        if body.get("action") != "capture":
+            raise ValueError("photo action must be capture or skip")
+        return {"photo": take_face_photo()}
+
+    return _answer(act)
+
+
+@server.app.post("/api/free-play/target-line")
+def free_play_target_line_route():
+    """The aim the tester just set: the next shot is measured from it."""
+
+    def act(body):
+        line = server.apply_target_line(body.get("target_line"))
+        if free_play_pause.get("cause") == "aim":
+            resume_free_play()
+        return {"target_line": line}
+
+    return _answer(act)
+
+
+@server.app.get("/api/free-play/view.jpg")
+def free_play_view():
+    """The camera at the paused controls, for the tester page's face photo or aim."""
+    import cv2  # pylint: disable=import-error,import-outside-toplevel
+
+    runtime = server.camera_capture_runtime
+    if not free_play_pause or runtime is None:
+        return jsonify({"error": "free play is not paused"}), 409
+    frames = runtime.recent_frames(1, timeout_s=1.0)
+    if not frames:
+        return jsonify({"error": "the camera did not deliver a picture"}), 503
+    quality = [int(cv2.IMWRITE_JPEG_QUALITY), 85]  # pylint: disable=no-member
+    ok, encoded = cv2.imencode(".jpg", frames[-1].image, quality)  # pylint: disable=no-member
+    if not ok:
+        return jsonify({"error": "the picture could not be encoded"}), 500
+    return Response(encoded.tobytes(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+def _free_play_extra() -> dict:
+    host = (request.host or "localhost").split(":")[0] or "localhost"
+    return {
+        "paused": _pause_state(),
+        "tester_url": f"http://{host}:{int(free_play_config.get('control_port') or 8765)}/",
+    }
+
+
 extension = kiosk_extensions.register(TesterKioskExtension())
 
 # late-bound, so a test can replace either function on this module
@@ -938,4 +1183,5 @@ register_kiosk_routes(
     free_play_config,
     lambda: _finish_free_play_capture(),  # pylint: disable=unnecessary-lambda
     progress=lambda: _free_play_progress(),  # pylint: disable=unnecessary-lambda
+    extra=_free_play_extra,
 )

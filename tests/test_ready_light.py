@@ -324,3 +324,20 @@ def test_a_shot_replaces_an_earlier_non_shot_result_for_the_same_swing():
     light.swing_result("shot", ball_speed_mph=99.0, at=NOW + 1.5)
 
     assert light.update(_states(), now=NOW + 2.0)["swing"]["result"]["kind"] == "shot"
+
+
+def test_a_wait_an_extension_names_is_amber_and_red_still_outranks_it():
+    light = compute_state(_states(amber_causes=("taking a face photo",)), NOW)
+    assert (light["state"], light["word"], light["cause"]) == (
+        "amber",
+        "WAIT",
+        "taking a face photo",
+    )
+    red = compute_state(_states(amber_causes=("taking a face photo",), setup_problems=("x",)), NOW)
+    assert red["state"] == "red"
+
+
+def test_a_swing_during_a_pause_says_it_was_not_counted():
+    light = ReadyLight()
+    light.swing_result("paused", at=NOW)
+    assert light.update(_states(), now=NOW)["swing"]["result"]["text"] == "Not counted: paused"

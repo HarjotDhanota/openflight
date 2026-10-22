@@ -693,3 +693,43 @@ def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, mon
         assert ("set_controls", seeded) in _StartCamera.calls
     finally:
         runtime.stop()
+
+
+# --- a paused free play's still photo --------------------------------------------------------
+
+
+def test_still_controls_hold_off_the_automatic_exposure_until_released(tmp_path):
+    runtime = _runtime(tmp_path, exposure_us=300, gain=12.0)
+
+    held = runtime.hold_still_controls(4000, 2.0)
+
+    assert held == {"exposure_us": 4000, "gain": 2.0}
+    assert runtime._camera.controls[-1] == {"ExposureTime": 4000, "AnalogueGain": 2.0}
+    assert runtime.auto_exposure_status()["controls_purpose"] == "still_photo"
+    _add_frames(runtime, 250)
+    assert runtime._run_auto_exposure_cycle() is None  # the photo's light is never metered
+    assert runtime._camera.controls[-1] == {"ExposureTime": 4000, "AnalogueGain": 2.0}
+
+    restored = runtime.release_still_controls()
+
+    assert restored == {"exposure_us": 300, "gain": 12.0}
+    assert runtime._camera.controls[-1] == {"ExposureTime": 300, "AnalogueGain": 12.0}
+    assert runtime.auto_exposure_status()["controls_purpose"] == "capture"
+    assert runtime.release_still_controls() is None
+
+
+def test_holding_twice_restores_the_swing_controls_not_the_first_photo(tmp_path):
+    runtime = _runtime(tmp_path, auto_exposure=False, exposure_us=150, gain=4.0)
+    runtime.hold_still_controls(4000, 2.0)
+    runtime.hold_still_controls(3000, 1.5)
+    assert runtime.release_still_controls() == {"exposure_us": 150, "gain": 4.0}
+
+
+def test_still_controls_wait_for_a_clip_being_collected(tmp_path):
+    runtime = _runtime(tmp_path, auto_exposure=False, exposure_us=300, gain=2.0)
+    _add_frames(runtime, 53)
+    assert runtime._ring.trigger()
+    with pytest.raises(RuntimeError, match="clip"):
+        runtime.hold_still_controls(4000, 2.0, timeout_s=0.05)
+    assert runtime.settings.exposure_us == 300
+    assert runtime.release_still_controls() is None

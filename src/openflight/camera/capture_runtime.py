@@ -445,6 +445,7 @@ class CameraCaptureRuntime:
         self._admission_evidence: list[tuple[float, dict | None]] = []
         self._camera_control_lock = threading.Lock()
         self._controls_purpose = "capture"
+        self._still_hold: tuple[int, float, str] | None = None
         self._trigger_exposure_lock = threading.Lock()
         # Serializes whole triggers so their records queue in ring order while the
         # frame lock above is held only to freeze the ring (P6-7).
@@ -1329,6 +1330,42 @@ class CameraCaptureRuntime:
             "the new setting",
         )
 
+    def hold_still_controls(self, exposure_us: int, gain: float, *, timeout_s: float = 3.0) -> dict:
+        """Hold still-photo controls live until ``release_still_controls``.
+
+        The swing exposure is not metered or moved meanwhile; a clip taken now
+        records the ``still_photo`` purpose, so its metrics are withheld.
+        """
+
+        def hold() -> dict:
+            if self._still_hold is None:
+                self._still_hold = (
+                    self.settings.exposure_us,
+                    self.settings.gain,
+                    self._controls_purpose,
+                )
+            return self.update_image_controls(
+                exposure_us=exposure_us, gain=gain, purpose="still_photo"
+            )
+
+        return self._while_no_clip_is_collected(hold, timeout_s, "the still photo")
+
+    def release_still_controls(self, *, timeout_s: float = 3.0) -> dict | None:
+        """Put back the controls a still photo replaced, or None when none is held."""
+        held = self._still_hold
+        if held is None:
+            return None
+        exposure_us, gain, purpose = held
+
+        def release() -> dict:
+            applied = self.update_image_controls(
+                exposure_us=exposure_us, gain=gain, purpose=purpose
+            )
+            self._still_hold = None
+            return applied
+
+        return self._while_no_clip_is_collected(release, timeout_s, "the swing setting")
+
     def begin_automatic_exposure(self, *, timeout_s: float = 3.0) -> dict:
         """Hand the controls to the swing exposure policy mid-session, seeded from the light.
 
@@ -1418,7 +1455,7 @@ class CameraCaptureRuntime:
         trigger never lands between them.
         """
         policy = self._swing_policy
-        if policy is None or not self.settings.auto_exposure:
+        if policy is None or not self.settings.auto_exposure or self._still_hold is not None:
             return None  # held controls (the tester ladder) are never metered or swept
         frames = self._ring.recent(SWING_EXPOSURE_FRAMES)
         if not frames:
