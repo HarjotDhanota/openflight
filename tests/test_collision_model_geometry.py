@@ -187,7 +187,7 @@ def test_a_missing_arc_path_is_still_not_measured(entry):
 
 def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
     """The real E1 payload: a rejected chained path, the arc on its prior."""
-    monkeypatch.setattr(server_module.sim_player_state, "handed", "RH")
+    monkeypatch.setattr(server_module, "golfer_handed", "RH")
     shot = _arc_shot(club_delivery=None)
     shot_models._attach_club_arc(  # pylint: disable=protected-access
         shot,
