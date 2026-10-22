@@ -1,5 +1,10 @@
 /* Face impact (experimental): our own illustrative face drawing beside its numbers. */
 .face-impact {
+  --face-art-ink: #0e0f10;
+  --face-art-earlier: rgba(240, 242, 245, 0.85);
+  --face-art-ferrule: #17181a;
+  --face-art-ring: rgba(150, 156, 163, 0.55);
+  --face-art-collar: #7b8188;
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   align-items: center;
@@ -9,9 +14,65 @@
   outline: 1px solid var(--color-border);
 }
 
+/* Polished chrome blade, a milled scoring area and dark score lines. */
+.face-impact[data-finish='chrome'] {
+  --face-art-steel-hi: #f1f3f5;
+  --face-art-steel-mid: #a9b0b8;
+  --face-art-steel-lo: #6e757d;
+  --face-art-face-hi: #e3e6ea;
+  --face-art-face-lo: #b8bec5;
+  --face-art-face-edge: rgba(60, 66, 74, 0.45);
+  --face-art-scoring: rgba(150, 157, 166, 0.42);
+  --face-art-rim: rgba(255, 255, 255, 0.9);
+  --face-art-highlight: rgba(255, 255, 255, 0.85);
+  --face-art-groove: #3c424a;
+  --face-art-shaft: #c9ced4;
+  --face-art-centre: rgba(16, 20, 24, 0.55);
+}
+
+/* Satin wedge: softer, greyer steel. */
+.face-impact[data-finish='satin'] {
+  --face-art-steel-hi: #d9dde1;
+  --face-art-steel-mid: #9aa1a9;
+  --face-art-steel-lo: #686f77;
+  --face-art-face-hi: #c9ced3;
+  --face-art-face-lo: #a3a9b0;
+  --face-art-face-edge: rgba(60, 66, 74, 0.45);
+  --face-art-scoring: rgba(232, 235, 238, 0.32);
+  --face-art-rim: rgba(245, 247, 249, 0.85);
+  --face-art-highlight: rgba(250, 251, 252, 0.7);
+  --face-art-groove: #454b53;
+  --face-art-shaft: #c9ced4;
+  --face-art-centre: rgba(16, 20, 24, 0.55);
+}
+
+/* Black head, light grey face, painted score lines, graphite shaft. */
+.face-impact[data-finish='black'] {
+  --face-art-steel-hi: #3d4248;
+  --face-art-steel-mid: #212428;
+  --face-art-steel-lo: #121416;
+  --face-art-face-hi: #a3a9af;
+  --face-art-face-lo: #81878e;
+  --face-art-face-edge: rgba(8, 9, 10, 0.6);
+  --face-art-scoring: transparent;
+  --face-art-rim: rgba(196, 202, 209, 0.6);
+  --face-art-highlight: rgba(220, 225, 230, 0.4);
+  --face-art-groove: #eef0f2;
+  --face-art-shaft: #26292d;
+  --face-art-centre: rgba(16, 20, 24, 0.5);
+}
+
+/* The hybrid's face is dark too, with light grey lines. */
+.face-impact[data-face='hybrid'] {
+  --face-art-face-hi: #3e4247;
+  --face-art-face-lo: #2b2e32;
+  --face-art-groove: #a9afb5;
+  --face-art-centre: rgba(236, 240, 244, 0.5);
+}
+
 .face-impact__figure {
   min-width: 0;
-  height: clamp(5.5rem, 27vh, 10.5rem);
+  height: clamp(5.5rem, 30vh, 11.5rem);
 }
 
 .face-impact__svg {
@@ -20,29 +81,84 @@
   height: 100%;
 }
 
-.face-impact__grid line {
-  stroke: var(--color-border-soft);
+.face-impact__centre-line {
+  stroke: var(--face-art-centre);
+  stroke-width: 0.4;
+}
+
+.face-impact__collar {
+  fill: var(--face-art-collar);
+}
+
+.face-impact__rim path {
+  fill: none;
+  stroke: var(--face-art-rim);
+  stroke-width: 0.9;
+  stroke-linejoin: round;
+}
+
+.face-impact__steel-hi {
+  stop-color: var(--face-art-steel-hi);
+}
+
+.face-impact__steel-mid {
+  stop-color: var(--face-art-steel-mid);
+}
+
+.face-impact__steel-lo {
+  stop-color: var(--face-art-steel-lo);
+}
+
+.face-impact__face-hi {
+  stop-color: var(--face-art-face-hi);
+}
+
+.face-impact__face-lo {
+  stop-color: var(--face-art-face-lo);
+}
+
+.face-impact__shaft-near {
+  stop-color: var(--face-art-shaft);
+}
+
+.face-impact__shaft-far {
+  stop-color: var(--face-art-shaft);
+  stop-opacity: 0;
+}
+
+.face-impact__ferrule {
+  fill: var(--face-art-ferrule);
+}
+
+.face-impact__ring {
+  stroke: var(--face-art-ring);
+  stroke-width: 0.45;
+}
+
+.face-impact__scoring {
+  fill: var(--face-art-scoring);
+}
+
+.face-impact__face {
+  stroke: var(--face-art-face-edge);
   stroke-width: 0.35;
 }
 
-.face-impact__grid .face-impact__axis {
-  stroke: var(--color-border);
-  stroke-width: 0.5;
-}
-
-.face-impact__outline,
-.face-impact__hosel {
-  fill: none;
-  stroke: var(--color-text-muted);
-  stroke-width: 1;
-  stroke-linejoin: round;
+.face-impact__groove,
+.face-impact__mark {
+  stroke: var(--face-art-groove);
   stroke-linecap: round;
 }
 
-.face-impact__groove {
-  stroke: var(--color-text-faint);
-  stroke-width: 0.5;
-  stroke-dasharray: 1.6 1.2;
+.face-impact__mark {
+  stroke-width: 0.55;
+}
+
+.face-impact__edge {
+  fill: none;
+  stroke: var(--face-art-highlight);
+  stroke-width: 0.6;
+  stroke-linecap: round;
 }
 
 .face-impact__side {
@@ -54,13 +170,22 @@
 }
 
 .face-impact__earlier {
-  fill: var(--color-text-faint);
-  opacity: 0.55;
+  fill: var(--face-art-earlier);
+  stroke: var(--face-art-ink);
+  stroke-width: 0.5;
+  opacity: 0.7;
+}
+
+.face-impact__halo {
+  fill: none;
+  stroke: var(--face-art-ink);
+  stroke-width: 1.3;
+  stroke-opacity: 0.55;
 }
 
 .face-impact__ellipse {
   fill: var(--color-experimental);
-  fill-opacity: 0.16;
+  fill-opacity: 0.2;
   stroke: var(--color-experimental);
   stroke-width: 0.6;
   stroke-dasharray: 1.4 1;
@@ -73,7 +198,7 @@
 
 .face-impact__dot {
   fill: var(--color-accent);
-  stroke: var(--color-bg);
+  stroke: var(--face-art-ink);
   stroke-width: 0.6;
 }
 

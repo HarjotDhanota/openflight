@@ -293,7 +293,7 @@ export const fr: Messages = {
   'faceImpact.low': 'Bas',
   'faceImpact.centre': 'Centre',
   'faceImpact.heightNotMeasured': 'Haut/bas non mesuré : {reason}',
-  'faceImpact.illustrative': 'Face illustrative · grille {grid}',
+  'faceImpact.illustrative': 'Face illustrative',
   'faceImpact.earlier': '{count} précédents avec ce club',
   'live.targetLineSet': 'Ligne de cible fixée {yaw} ±{spread}',
   'live.targetLineSetNoSpread': 'Ligne de cible fixée {yaw}',
