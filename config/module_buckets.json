@@ -914,6 +914,7 @@
   "tests/test_shot_ball_range.py": "FUSION",
   "tests/test_shot_metrics.py": "FUSION",
   "tests/test_shot_metrics_registry.py": "PRODUCT",
+  "tests/test_shot_update_publish.py": "PRODUCT",
   "tests/test_shot_update_readers.py": "RESEARCH",
   "tests/test_shot_updates.py": "PRODUCT",
   "tests/test_sim_concurrent.py": "PRODUCT",
