@@ -51,8 +51,9 @@ def write_session(
     truth_mm: float = 8.0,
     mirror_pixels: bool = False,
     range_source: str = "iwr_post_impact",
+    render: dict | None = None,
 ) -> Path:
-    frames, _ball = synthetic.render_swing(truth_mm=truth_mm)
+    frames, _ball = synthetic.render_swing(truth_mm=truth_mm, **(render or {}))
     if mirror_pixels:
         frames = np.ascontiguousarray(frames[:, :, ::-1])
     run = tmp_path / "tester" / "arm6" / "paired" / "run-01"
@@ -221,3 +222,22 @@ def test_a_named_lens_takes_its_focal_length_from_the_lens_profiles():
     assert six[0] == pytest.approx(stock[0] * 6.0 / 2.8)
     recorded = {"config": {"rig_geometry": {"lens": {"focal_px_by_arm": {"arm5": 1500.0}}}}}
     assert session.focal_px(recorded, rig, 1280, lens_id="6mm")[1] == "session_lens_nominal"
+
+
+WIDE = {"width": 1280, "height": 800, "focal": 2.0 * synthetic.FOCAL}
+
+
+def test_a_wide_clip_is_binned_to_the_analysis_width_and_read_the_same(tmp_path):
+    root = write_session(tmp_path, render=WIDE)
+    row = session.analyse_session(root, session.Options(analysis_max_width=640))["rows"][0]
+    assert row["frame_size"] == "640x400"
+    assert row["status"] == "ok", row["reason"]
+    assert row["impact_offset_mm"] == pytest.approx(8.0, abs=2.5)
+
+
+def test_without_an_analysis_width_the_clip_keeps_its_size():
+    frames = np.arange(2 * 4 * 6, dtype=np.uint8).reshape(2, 4, 6)
+    assert session.bin_frames(frames, 1) is frames
+    binned = session.bin_frames(frames, 2)
+    assert binned.shape == (2, 2, 3) and binned.dtype == np.uint8
+    assert binned[0, 0, 0] == round(np.mean(frames[0, :2, :2]))

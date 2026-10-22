@@ -363,3 +363,20 @@ def test_a_head_too_dim_to_segment_says_so_in_the_refusal():
     assert (
         result.reason == "no_template_for_this_club_no_head_mask_no_moving_component_near_the_ball"
     )
+
+
+def test_a_template_build_stops_when_asked_and_says_so():
+    frames, ball = render_swing(truth_mm=4.0)
+    shot = il.prepare_shot(
+        frames,
+        ball,
+        fps=FPS,
+        camera=camera(),
+        club_speed_mps=CLUB_SPEED,
+        ball_range_mm=BALL_RANGE_MM,
+    )
+    assert il.build_self_template([shot], should_stop=lambda: True) == (None, "stopped")
+    calls = iter(range(100))
+    template, reason = il.build_self_template([shot], should_stop=lambda: next(calls) >= 2)
+    assert (template, reason) == (None, "stopped")
+    assert il.build_self_template([shot], should_stop=lambda: False)[1] == "ok"
