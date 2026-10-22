@@ -212,9 +212,10 @@ The Club tab opens with a face-impact view:
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge
-  separation at least 3 widths and 1.905 mm (5c); driver and fairway score lines
-  outside the central 42.67 mm impact strip (interpretation 5.b(1)); the centre mark
-  inside a 9.53 mm square (5d); wood heads at most 127 mm heel to toe and 71.12 mm
+  separation at least 3 widths and 1.905 mm (5c); driver and fairway heel and toe
+  blocks outside the central 42.67 mm impact strip (interpretation 5.b(1)), and the
+  short centre bars inside it drawn as score lines that meet 5c; the small centre
+  cross inside a 9.53 mm square (5d); wood heads at most 127 mm heel to toe and 71.12 mm
   sole to crown (4b); the shaft fixed at the heel with the neck top at most 127 mm
   from the sole (2c). Groove depth, cross-section, edge radius and face-to-back
   depth are not visible face-on. Sources:

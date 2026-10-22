@@ -81,6 +81,7 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
       aria-label={t('faceImpact.title')}
       data-face={category}
       data-handed={reading.handedness}
+      data-finish={shape.finish}
     >
       <div className="face-impact__figure">
         <svg
@@ -135,9 +136,13 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               </g>
               <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
               <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
+              {hosel.rings.map((d) => (
+                <path key={d} className="face-impact__ring" d={d} />
+              ))}
               <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
               <path className="face-impact__ferrule" d={hosel.ferrule} />
               <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
+              {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
             </g>
             <g className="face-impact__grid face-impact__grid--on-face" clipPath={`url(#${faceClipId})`}>
               {grid}
@@ -186,13 +191,22 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
             />
           ))}
           {read && reading.offsetSigma !== null && reading.heightSigma !== null && reading.height !== null ? (
-            <ellipse
-              className="face-impact__ellipse"
-              cx={cx}
-              cy={cy}
-              rx={reading.offsetSigma}
-              ry={reading.heightSigma}
-            />
+            <g>
+              <ellipse
+                className="face-impact__halo"
+                cx={cx}
+                cy={cy}
+                rx={reading.offsetSigma}
+                ry={reading.heightSigma}
+              />
+              <ellipse
+                className="face-impact__ellipse"
+                cx={cx}
+                cy={cy}
+                rx={reading.offsetSigma}
+                ry={reading.heightSigma}
+              />
+            </g>
           ) : null}
           {read && reading.height === null && reading.offsetSigma !== null ? (
             <line
