@@ -17,6 +17,7 @@ import { kioskRestartingLight } from '../utils/readyLight';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSessionClub } from './sessionClubSync';
+import { ingestHandedness } from '../utils/handedness';
 import { answerClockPing, noteShotReceived } from './paintTrace';
 import { remainingShotsAfterClear } from './sessionClear';
 import { useProfileStore } from '../stores/useProfileStore';
@@ -133,6 +134,8 @@ class SocketService {
     this.socket.on('club_changed', (data: { club: string }) => {
       ingestSessionClub(data.club);
     });
+
+    this.socket.on('handedness', ingestHandedness);
 
     this.socket.on('profiles', (data: ProfilesSnapshot) => {
       useProfileStore.getState().applySnapshot(data);

@@ -3,6 +3,8 @@ import type { PowerStatus } from '../types/power';
 import type { ReadyLight } from '../types/readyLight';
 import type { SimShotInfo, SimShotNotSent, SimStatus } from '../types/socket';
 
+export type Handed = 'RH' | 'LH';
+
 interface SystemState {
   connected: boolean;
   mockMode: boolean;
@@ -14,6 +16,7 @@ interface SystemState {
   /** The latest shot withheld from the simulators, if any (D31). */
   simShotNotSent: SimShotNotSent | null;
   serverClub: string | null;
+  handed: Handed | null;
   powerStatus: PowerStatus | null;
   readyLight: ReadyLight | null;
   setConnected: (connected: boolean) => void;
@@ -24,6 +27,7 @@ interface SystemState {
   setLatestSimShot: (shot: SimShotInfo) => void;
   setSimShotNotSent: (notSent: SimShotNotSent | null) => void;
   setServerClub: (club: string | null) => void;
+  setHanded: (handed: Handed | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
   setReadyLight: (light: ReadyLight | null) => void;
 }
@@ -38,6 +42,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   latestSimShots: {},
   simShotNotSent: null,
   serverClub: null,
+  handed: null,
   powerStatus: null,
   readyLight: null,
   setConnected: (connected) => set({ connected }),
@@ -54,6 +59,7 @@ export const useSystemStore = create<SystemState>((set) => ({
     })),
   setSimShotNotSent: (simShotNotSent) => set({ simShotNotSent }),
   setServerClub: (serverClub) => set({ serverClub }),
+  setHanded: (handed) => set({ handed }),
   setPowerStatus: (status) => set({ powerStatus: status }),
   setReadyLight: (readyLight) => set({ readyLight }),
 }));

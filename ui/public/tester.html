@@ -887,6 +887,33 @@
         color: var(--bg);
         font-weight: 700;
       }
+      .free-play-photo__view {
+        position: relative;
+        width: 640px;
+        max-width: 100%;
+        margin-bottom: 8px;
+      }
+      .free-play-photo__view img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        background: #000;
+      }
+      .free-play-photo__box {
+        position: absolute;
+        left: 45%;
+        top: 35%;
+        width: 10%;
+        height: 22%;
+        border: 2px dashed #ffd400;
+      }
+      .first-club__group {
+        margin: 4px 0 0;
+        font-size: 0.85rem;
+      }
+      .first-club .chips {
+        margin: 4px 0;
+      }
       /* free play's exposure study: progress only, the tester never acts on it */
       .free-play-study {
         margin: 8px 0 4px;
@@ -1568,6 +1595,14 @@
           </div>
           <input type="hidden" id="environment" value="indoors" />
         </div>
+        <div class="field-row">
+          <span class="field-row__label" id="handed-label">Hand</span>
+          <div class="seg" role="group" aria-labelledby="handed-label" id="handed-choice">
+            <button type="button" data-handed="RH" aria-pressed="true">Right-handed</button>
+            <button type="button" data-handed="LH" aria-pressed="false">Left-handed</button>
+          </div>
+          <span class="problem" id="handed-error" role="alert" hidden></span>
+        </div>
         <div class="lens" id="lens" data-ready="false">
           <h3>Lens on the unit</h3>
           <div class="lens-list" id="lens-list" role="group" aria-label="Lens"></div>
@@ -1845,9 +1880,34 @@
           </div>
           <span class="note" id="free-play-resolution-hint">Tap the resolution for this session.</span>
         </div>
+        <div class="first-club" id="first-club-row">
+          <p class="field-row__label" id="first-club-label">Which club will you hit first?</p>
+          <div id="first-club" role="group" aria-labelledby="first-club-label"></div>
+          <span class="note" id="first-club-hint">Tap a club. Change it any time on the kiosk.</span>
+        </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
-        <p class="note" id="free-play-status" role="status">Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
+        <p class="note" id="free-play-status" role="status"></p>
+        <p class="note" id="free-play-note">
+          Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure.
+          No marks or grading needed. Face photos aren't required, but they help: tap Photograph the face after a
+          swing. Stop and package when finished.
+        </p>
+        <button type="button" id="free-play-photo-start" hidden>Photograph the face</button>
+        <div class="photo-handoff" id="free-play-photo" hidden>
+          <div class="free-play-photo__view">
+            <img id="free-play-photo-view" alt="The kiosk camera, for the face photo" />
+            <div class="free-play-photo__box" id="free-play-photo-box" aria-hidden="true"></div>
+          </div>
+          <p>Free play is paused. Hold the face about 0.5 m from the lens, inside the dashed box.</p>
+          <p class="problem" id="free-play-photo-error" role="alert" hidden></p>
+          <div class="photo-actions">
+            <button type="button" class="primary" id="free-play-photo-take">Photograph face</button>
+            <button type="button" id="free-play-photo-skip">Skip</button>
+          </div>
+        </div>
+        <button type="button" id="free-play-resume" hidden>Resume free play</button>
+        <p class="note" id="free-play-photo-note" role="status" hidden></p>
         <p class="free-play-study" id="free-play-study" role="status" hidden></p>
         <ul class="free-play-rungs" id="free-play-rungs" aria-label="Exposure study settings" hidden></ul>
         <p class="address" id="address-status" data-state="unknown" role="status"></p>
@@ -1958,6 +2018,13 @@
         <p id="package-links" hidden>
           <a id="review-link" href="/session-review.html">Open the session review</a>
         </p>
+        <div class="launch-monitor">
+          <label for="launch-monitor-file" id="launch-monitor-label"
+            >Hit beside a TrackMan or another launch monitor? Attach its export (CSV)</label
+          >
+          <input type="file" id="launch-monitor-file" accept=".csv,text/csv" />
+          <p class="note" id="launch-monitor-status" role="status" hidden></p>
+        </div>
         <details class="advanced-package" id="advanced-package">
           <summary>Advanced: analyse and package by hand (maintainer)</summary>
           <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
@@ -2081,6 +2148,9 @@
       </details>
     </main>
 
+    <script type="application/json" id="kiosk-clubs">
+      {"Irons": [{"id": "2-iron", "label": "2i", "name": "2 Iron"}, {"id": "3-iron", "label": "3i", "name": "3 Iron"}, {"id": "4-iron", "label": "4i", "name": "4 Iron"}, {"id": "5-iron", "label": "5i", "name": "5 Iron"}, {"id": "6-iron", "label": "6i", "name": "6 Iron"}, {"id": "7-iron", "label": "7i", "name": "7 Iron"}, {"id": "8-iron", "label": "8i", "name": "8 Iron"}, {"id": "9-iron", "label": "9i", "name": "9 Iron"}, {"id": "pw", "label": "PW", "name": "Pitching Wedge"}, {"id": "gw", "label": "GW", "name": "Gap Wedge"}, {"id": "sw", "label": "SW", "name": "Sand Wedge"}, {"id": "lw", "label": "LW", "name": "Lob Wedge"}], "Hybrids": [{"id": "3-hybrid", "label": "3H", "name": "3 Hybrid"}, {"id": "5-hybrid", "label": "5H", "name": "5 Hybrid"}, {"id": "7-hybrid", "label": "7H", "name": "7 Hybrid"}, {"id": "9-hybrid", "label": "9H", "name": "9 Hybrid"}], "Woods": [{"id": "driver", "label": "DR", "name": "Driver"}, {"id": "3-wood", "label": "3W", "name": "3 Wood"}, {"id": "5-wood", "label": "5W", "name": "5 Wood"}, {"id": "7-wood", "label": "7W", "name": "7 Wood"}]}
+    </script>
     <script>
       const el = (id) => document.getElementById(id);
       let currentArm = 'arm1';
@@ -3912,8 +3982,12 @@
           aimPendingFrame = null;
           aimFrameLoading = false;
         });
-        frame.src = `/api/tester/live.png?sequence=${Date.now()}`;
+        frame.src = aimFromKiosk()
+          ? `/api/tester/free-play/view.jpg?${new URLSearchParams({ tester_id: currentTester(), sequence: Date.now() })}`
+          : `/api/tester/live.png?sequence=${Date.now()}`;
       }
+      // during free play the kiosk has the camera: it pauses and shows the target itself
+      const aimFromKiosk = () => aimForTester() && aimState?.preview_source === 'kiosk' && aimState?.previewing;
 
       async function aimTick() {
         if (!aimPlacing() || aimTickRunning) return;
@@ -3921,6 +3995,12 @@
         const testerId = currentTester();
         aimTickRunning = true;
         try {
+          if (aimFromKiosk()) {
+            aimPreviewShowing = true;
+            aimCameraStatus('Live view from the kiosk camera: drag the yellow line onto your target. Shots wait until you confirm.');
+            if (!aimFrameLoading) loadAimFrame(version);
+            return;
+          }
           const status = await request('/api/tester/live');
           if (version !== aimPreviewVersion || testerId !== currentTester()) return;
           const owner = status.owner;
@@ -4049,6 +4129,15 @@
                   : body.change === 'unchanged'
                     ? 'Same aim point as before: nothing changed.'
                     : null;
+            const live = body.free_play;
+            if (live?.applied === false) {
+              aimNotice = `Saved, but the kiosk did not take it (${live.error}). Set it again in a moment.`;
+            } else if (live?.applied) {
+              aimNotice =
+                action === 'skip'
+                  ? 'The next shot is measured from where the unit points.'
+                  : 'The next shot is measured from the new target line.';
+            }
           }
         } catch (error) {
           if (testerId !== currentTester()) return;
@@ -5431,9 +5520,52 @@
           ladderRunning ||
           freePlayPending ||
           !freePlayResolution ||
+          !firstClub ||
           ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
         renderFreePlayResolution();
+        renderFirstClub();
       }
+
+      // the kiosk's club grid (ui/src/data/clubs.ts), asked once before free play starts
+      const KIOSK_CLUBS = JSON.parse(el('kiosk-clubs').textContent);
+      let firstClub = null;
+      function renderFirstClub() {
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(freePlayState?.phase);
+        el('first-club-row').hidden = active;
+        if (!el('first-club').childElementCount) {
+          for (const [group, clubs] of Object.entries(KIOSK_CLUBS)) {
+            const title = document.createElement('p');
+            title.className = 'first-club__group';
+            title.textContent = group;
+            const row = document.createElement('div');
+            row.className = 'chips';
+            for (const club of clubs) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = 'chip';
+              button.dataset.club = club.id;
+              button.textContent = club.label;
+              button.title = club.name;
+              row.append(button);
+            }
+            el('first-club').append(title, row);
+          }
+        }
+        for (const button of el('first-club').querySelectorAll('button')) {
+          button.setAttribute('aria-pressed', String(button.dataset.club === firstClub));
+          button.disabled = freePlayPending;
+        }
+        const chosen = Object.values(KIOSK_CLUBS).flat().find((club) => club.id === firstClub);
+        el('first-club-hint').textContent = chosen
+          ? `Free play starts on the ${chosen.name}.`
+          : 'Tap a club. Change it any time on the kiosk.';
+      }
+      el('first-club').addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-club]');
+        if (!button || button.disabled) return;
+        firstClub = button.dataset.club;
+        renderLadderControls();
+      });
 
       // One resolution per session, tapped by the tester (19 Oct). The lens's default
       // is marked but must still be tapped; a mode the lens disables is not offered.
@@ -5512,12 +5644,86 @@
         el('free-play-stop').hidden = !['recording', 'stopping', 'packaging', 'error'].includes(phase);
         el('free-play-stop').disabled = freePlayPending || ['stopping', 'packaging'].includes(phase);
         renderFreePlayStudy(state);
+        renderFreePlayPhoto();
         el('free-play-status').textContent = ['ready', 'closed'].includes(phase)
           ? `Package ready: ${state.bundle?.name}. Send it from step 8 below.${phase === 'ready' ? ' Then tap Done on the kiosk.' : ''}`
+          : phase === 'recording' && state.paused
+            ? `Free play is paused: ${state.paused.cause === 'aim' ? 'moving the aim' : 'taking a face photo'}. Shots are not counted.`
           : phase === 'recording' ? `Free play is recording.${state.geometry_unverified ? ' Geometry unverified.' : ''}`
           : phase ? `${phase}${state.error ? ': ' + state.error : ''}` : '';
         renderLadderControls();
       }
+      // a face photo during free play: the kiosk pauses, this page shows its camera in the box
+      let freePlayPhotoPending = false;
+      let freePlayPhotoTimer = null;
+      function renderFreePlayPhoto() {
+        const recording = freePlayState?.phase === 'recording';
+        const paused = recording ? freePlayState.paused?.cause || null : null;
+        el('free-play-photo-start').hidden = !recording || Boolean(paused);
+        el('free-play-photo').hidden = paused !== 'photo';
+        el('free-play-resume').hidden = paused !== 'aim';
+        for (const id of ['free-play-photo-start', 'free-play-photo-take', 'free-play-photo-skip', 'free-play-resume']) {
+          el(id).disabled = freePlayPhotoPending;
+        }
+        if (paused === 'photo' && !freePlayPhotoTimer) {
+          refreshFreePlayView();
+          freePlayPhotoTimer = setInterval(refreshFreePlayView, 700);
+        } else if (paused !== 'photo' && freePlayPhotoTimer) {
+          clearInterval(freePlayPhotoTimer);
+          freePlayPhotoTimer = null;
+        }
+      }
+      function refreshFreePlayView() {
+        const query = new URLSearchParams({ tester_id: freePlayState?.tester_id || currentTester(), t: Date.now() });
+        el('free-play-photo-view').src = `/api/tester/free-play/view.jpg?${query}`;
+      }
+      function freePlayPhotoNote(text) {
+        el('free-play-photo-note').hidden = !text;
+        el('free-play-photo-note').textContent = text || '';
+      }
+      async function freePlayAct(path, body) {
+        const state = freePlayState;
+        if (!state?.tester_id || freePlayPhotoPending) return null;
+        freePlayPhotoPending = true;
+        el('free-play-photo-error').hidden = true;
+        renderFreePlayPhoto();
+        try {
+          const result = await post(path, { tester_id: state.tester_id, ...body });
+          freePlayPhotoPending = false;
+          renderFreePlay({ ...freePlayState, paused: result.paused ?? null });
+          return result;
+        } catch (error) {
+          el('free-play-photo-error').textContent = error.message;
+          el('free-play-photo-error').hidden = false;
+          freePlayPhotoNote(`Not done: ${error.message}`);
+          return null;
+        } finally {
+          freePlayPhotoPending = false;
+          renderFreePlayPhoto();
+        }
+      }
+      el('free-play-photo-start').addEventListener('click', async () => {
+        freePlayPhotoNote(null);
+        await freePlayAct('/api/tester/free-play/pause', { cause: 'photo' });
+      });
+      async function finishFreePlayPhoto(action) {
+        const result = await freePlayAct('/api/tester/free-play/photo', { action });
+        if (!result) return;
+        const shot = result.photo?.shot_number;
+        freePlayPhotoNote(
+          action === 'skip'
+            ? 'No photo this time.'
+            : shot
+              ? `Photo saved for shot ${shot}.`
+              : 'Photo saved (before the first shot).'
+        );
+        // opened from the scoreboard on the unit's own screen: go back to it
+        if (location.hash === '#free-play-photo' && !window.opener && kioskViewUrl()) location.assign(kioskViewUrl());
+      }
+      el('free-play-photo-take').addEventListener('click', () => finishFreePlayPhoto('capture'));
+      el('free-play-photo-skip').addEventListener('click', () => finishFreePlayPhoto('skip'));
+      el('free-play-resume').addEventListener('click', () => freePlayAct('/api/tester/free-play/resume', {}));
+
       el('free-play-stop').addEventListener('click', async () => {
         const state = freePlayState;
         if (!state?.run_id || freePlayPending) return;
@@ -5851,7 +6057,7 @@
       }
       el('kiosk-view').addEventListener('click', () => {
         const url = kioskViewUrl();
-        if (url) window.open(url, 'openflight-kiosk');
+        if (url && !window.open(url, 'openflight-kiosk')) location.assign(url);
       });
 
       // live numbers while the ladder runs (status.live_metrics)
@@ -6057,10 +6263,12 @@
           if (!(await requireSetupEligibility())) return;
           liveShown(false);
           if (!freePlayResolution) throw new Error('Tap a resolution for this session first.');
+          if (!firstClub) throw new Error('Tap the club you will hit first.');
           const result = await post('/api/tester/run', {
             ...payload(),
             action: 'free_play',
             resolution: freePlayResolution,
+            club: firstClub,
           });
           renderFreePlay(result.free_play);
           if (!result.free_play?.run_id) throw new Error('Free play did not return its session identity.');
@@ -6282,6 +6490,7 @@
           refreshAim();
           refreshTeeRange();
           refreshLens();
+          refreshHanded();
           refresh();
         }, 300);
       }
@@ -6298,6 +6507,46 @@
           renderEnvironment();
         });
       }
+
+      // the tester's hand, kept per tester; right-handed unless they tap left
+      let handed = 'RH';
+      let handedPending = false;
+      function renderHanded() {
+        for (const button of el('handed-choice').querySelectorAll('button')) {
+          button.setAttribute('aria-pressed', String(button.dataset.handed === handed));
+          button.disabled = handedPending || !currentTester();
+        }
+      }
+      async function refreshHanded() {
+        const testerId = currentTester();
+        handed = 'RH';
+        renderHanded();
+        if (!testerId) return;
+        try {
+          const body = await request('/api/tester/handedness?' + new URLSearchParams({ tester_id: testerId }));
+          if (testerId === currentTester() && ['RH', 'LH'].includes(body.handed)) handed = body.handed;
+        } catch {
+          handed = 'RH';
+        }
+        renderHanded();
+      }
+      el('handed-choice').addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-handed]');
+        if (!button || button.disabled) return;
+        handedPending = true;
+        el('handed-error').hidden = true;
+        renderHanded();
+        try {
+          const body = await post('/api/tester/handedness', { tester_id: currentTester(), handed: button.dataset.handed });
+          handed = body.handed;
+        } catch (error) {
+          el('handed-error').textContent = `Not saved: ${error.message}`;
+          el('handed-error').hidden = false;
+        } finally {
+          handedPending = false;
+          renderHanded();
+        }
+      });
 
       // --- step 1: the lens on the unit (13 Oct), by touch, with settings kept per lens ---
       let lensState = null;
@@ -6795,6 +7044,32 @@
         }
       });
 
+      // step 8: a launch monitor's export, into the package or beside one already made
+      el('launch-monitor-file').addEventListener('change', async () => {
+        const file = el('launch-monitor-file').files[0];
+        const status = el('launch-monitor-status');
+        if (!file) return;
+        status.hidden = false;
+        status.className = 'note';
+        status.textContent = `Attaching ${file.name}…`;
+        try {
+          const form = new FormData();
+          form.append('tester_id', currentTester());
+          form.append('file', file);
+          const response = await fetchWithTimeout('/api/tester/comparator', { method: 'POST', body: form }, PACKAGE_TIMEOUT_MS);
+          const saved = await readJson(response);
+          if (!response.ok) throw new Error(saved.error || `request failed (${response.status})`);
+          status.textContent = saved.beside
+            ? `Attached ${file.name}: saved beside the package in ${saved.beside.folder} as ${saved.beside.file}. Send both.`
+            : `Attached ${file.name}: it goes into the package.`;
+        } catch (error) {
+          status.className = 'problem';
+          status.textContent = `Not attached: ${error.message}`;
+        } finally {
+          el('launch-monitor-file').value = '';
+        }
+      });
+
       renderEnvironment();
       renderTesterPicker();
       buildLadderControls();
@@ -6802,6 +7077,7 @@
       renderSteps();
       refreshTesters();
       refreshLens();
+      refreshHanded();
       refresh();
       refreshSetupEligibility();
       refreshPlacement();

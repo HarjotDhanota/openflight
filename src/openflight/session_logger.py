@@ -658,6 +658,11 @@ class SessionLogger:
             },
         )
 
+    def log_event(self, entry_type: str, data: Dict[str, Any]) -> None:
+        """Log one named event with its data (a target line moving, a face photo)."""
+        if self.enabled:
+            self._write_entry(entry_type, data)
+
     def log_config_change(self, config: Dict[str, Any], source: str = "user"):
         """Log a radar configuration change."""
         if not self.enabled:

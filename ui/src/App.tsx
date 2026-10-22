@@ -17,7 +17,7 @@ import { SimShotBadges } from './components/SimShotBadges';
 import { SimNotSentNotice } from './components/SimNotSentNotice';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ReadyLightBar } from './components/ReadyLight';
-import { FreePlayControls } from './components/FreePlayControls';
+import { FreePlayActions, FreePlayControls } from './components/FreePlayControls';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
@@ -42,6 +42,7 @@ import {
 import { filterShotsByProfile } from './types/shot';
 import type { Profile } from './types/profile';
 import { getClubName } from './data/clubs';
+import { clubWithHand } from './utils/handedness';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
 import { isLiveResultCovered } from './utils/liveResultCover';
@@ -55,7 +56,7 @@ function AppContent() {
   const { t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub } = useSystemStore(
+  const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub, handed } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
@@ -63,6 +64,7 @@ function AppContent() {
       latestSimShots: state.latestSimShots,
       simShotNotSent: state.simShotNotSent,
       serverClub: state.serverClub,
+      handed: state.handed,
     }))
   );
   const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
@@ -150,7 +152,7 @@ function AppContent() {
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
   const activeImplementLabel = isSwingSpeedMode
     ? getTrainingImplementLabel(selectedTrainingImplement)
-    : getClubName(selectedClub);
+    : clubWithHand(getClubName(selectedClub), handed);
 
   useEffect(() => {
     return socketService.onSessionCleared(() => {
@@ -266,6 +268,7 @@ function AppContent() {
           {t('replay.open')}
         </PanelAction>
       ) : null}
+      <FreePlayActions />
       {changeClubAction}
     </>
   );

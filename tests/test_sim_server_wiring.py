@@ -308,3 +308,45 @@ def test_a_non_finite_launch_confidence_still_sends_the_measured_shot(server, ba
     with_bad, with_none = connector.sent
     assert with_bad.carry_yards == with_none.carry_yards
     assert with_bad.vla == 12.0 and with_bad.provenance["vla"] == "measured"
+
+
+@pytest.mark.parametrize(
+    "setup,sim,connected,expected",
+    [
+        (None, None, False, {"handed": "RH", "source": "default"}),
+        ("LH", None, False, {"handed": "LH", "source": "setup"}),
+        ("LH", None, True, {"handed": "LH", "source": "setup"}),
+        ("LH", "RH", True, {"handed": "RH", "source": "simulator"}),
+        ("RH", "LH", True, {"handed": "LH", "source": "simulator"}),
+        ("LH", "RH", False, {"handed": "LH", "source": "setup"}),
+    ],
+)
+def test_a_connected_simulators_hand_wins_else_the_setups(
+    server, monkeypatch, setup, sim, connected, expected
+):
+    monkeypatch.setattr(server, "golfer_handed", setup)
+    server.sim_connectors = [_FakeConnector("gspro", connected=connected)]
+    if sim:
+        server._sim_on_inbound("gspro", PlayerUpdate(handed=sim))
+    assert server.golfer_handedness() == expected
+
+
+def test_a_simulators_club_alone_leaves_the_setups_hand(server, monkeypatch):
+    monkeypatch.setattr(server, "golfer_handed", "LH")
+    monkeypatch.setattr(server, "monitor", None)
+    server.sim_connectors = [_FakeConnector("gspro")]
+    server._sim_on_inbound("gspro", PlayerUpdate(club=ClubType.IRON_7))
+    assert server.golfer_handedness() == {"handed": "LH", "source": "setup"}
+
+
+def test_the_scoreboard_hears_the_hand_when_a_simulator_changes_it(server, monkeypatch):
+    monkeypatch.setattr(server, "golfer_handed", None)
+    server.sim_connectors = [_FakeConnector("gspro")]
+    server._sim_on_inbound("gspro", PlayerUpdate(handed="LH"))
+    sent = [a_[1] for a_, _k in server._emitted if a_[0] == "handedness"]
+    assert sent == [{"handed": "LH", "source": "simulator"}]
+
+
+def test_the_session_log_records_the_hand(server, monkeypatch):
+    monkeypatch.setattr(server, "golfer_handed", "LH")
+    assert server._session_start_config()["golfer"] == {"handed": "LH", "source": "setup"}

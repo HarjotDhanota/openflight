@@ -220,7 +220,7 @@ def kiosk(monkeypatch):
     def set_up(*, yaw, handed):
         offset = offset_from_target_yaw(yaw) if yaw else None
         monkeypatch.setattr(server_module, "horizontal_offset_deg", offset)
-        monkeypatch.setattr(server_module.sim_player_state, "handed", handed)
+        monkeypatch.setattr(server_module, "golfer_handed", handed)
         return rig, radar_h, offset
 
     return set_up

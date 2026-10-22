@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from flask import jsonify, request
+from flask import Response, jsonify, request
 
 from openflight import session_bundle
 from openflight.camera import session_review_routes as review
@@ -55,6 +55,7 @@ class FreePlayController:
                 "geometry_unverified": geometry_unverified,
                 "resolution": resolution,
                 "error": None,
+                "paused": None,
             }
             self._save()
 
@@ -90,6 +91,44 @@ class FreePlayController:
             except (OSError, ValueError, KeyError, TypeError) as error:
                 return {"phase": "unreadable", "text": f"Exposure study unreadable: {error}"}
         return None
+
+    def _kiosk(self, path, payload=None):
+        """(status, body bytes) from the kiosk's ``/api/free-play`` route ``path``."""
+        query = urllib.request.Request(
+            f"http://127.0.0.1:{self.kiosk_port}/api/free-play{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(query, timeout=10.0) as response:
+                return 200, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+
+    def to_kiosk(self, tester_id, path, payload=None):
+        """Ask this tester's recording kiosk to act; (status, answer), or None without one."""
+        with self.lock:
+            run = self.run
+            if run is None or run["tester_id"] != tester_id or run["phase"] != "recording":
+                return None
+            identity = {"tester_id": run["tester_id"], "run_id": run["run_id"]}
+        status, raw = self._kiosk(path, {**(payload or {}), **identity})
+        try:
+            answer = json.loads(raw)
+        except ValueError:
+            answer = {"error": f"the kiosk answered {status}"}
+        if isinstance(answer, dict) and "paused" in answer:
+            self.set_paused(identity["run_id"], answer["paused"])
+        return status, answer
+
+    def set_paused(self, run_id, paused):
+        """Record the kiosk's pause (a face photo or a new aim), or its end."""
+        with self.lock:
+            if self.run is None or self.run["run_id"] != run_id:
+                raise ValueError("free-play request belongs to another run")
+            if self.run.get("paused") != paused:
+                self.run["paused"] = paused
+                self._save()
 
     def capture_finished(self, run_id, returncode):
         """Release recording state after an exit, retaining any finished bundle."""
@@ -220,6 +259,63 @@ class FreePlayController:
             except (OSError, ValueError) as error:
                 return jsonify(error=str(error)), 409
 
+        def relay(path, payload):
+            tester_id = str(payload.get("tester_id", "")) if isinstance(payload, dict) else ""
+            try:
+                answered = self.to_kiosk(tester_id, path, payload)
+            except OSError as error:
+                return jsonify(error=f"the kiosk did not answer: {error}"), 503
+            if answered is None:
+                return jsonify(error="free play is not recording for this tester"), 409
+            return jsonify(answered[1]), answered[0]
+
+        @app.post("/api/tester/free-play/pause")
+        def free_play_pause():
+            payload = request.get_json(silent=True) or {}
+            return relay(
+                "/pause", {"tester_id": payload.get("tester_id"), "cause": payload.get("cause")}
+            )
+
+        @app.post("/api/tester/free-play/resume")
+        def free_play_resume():
+            return relay(
+                "/resume", {"tester_id": (request.get_json(silent=True) or {}).get("tester_id")}
+            )
+
+        @app.post("/api/tester/free-play/photo")
+        def free_play_photo():
+            payload = request.get_json(silent=True) or {}
+            return relay(
+                "/photo", {"tester_id": payload.get("tester_id"), "action": payload.get("action")}
+            )
+
+        @app.post("/api/tester/free-play/paused")
+        def free_play_paused():
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or not payload.get("run_id"):
+                return jsonify(error="run identity is required"), 400
+            try:
+                self.status(payload.get("tester_id"), payload["run_id"])
+                self.set_paused(payload["run_id"], payload.get("paused"))
+            except ValueError as error:
+                return jsonify(error=str(error)), 409
+            return jsonify(self.status())
+
+        @app.get("/api/tester/free-play/view.jpg")
+        def free_play_view():
+            with self.lock:
+                run = self.run
+                recording = bool(run) and run["phase"] == "recording"
+                if not recording or run["tester_id"] != request.args.get("tester_id"):
+                    return jsonify(error="free play is not recording for this tester"), 409
+            try:
+                status, raw = self._kiosk("/view.jpg")
+            except OSError as error:
+                return jsonify(error=f"the kiosk did not answer: {error}"), 503
+            if status != 200:
+                return Response(raw, status=status, mimetype="application/json")
+            return Response(raw, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
         @app.get("/api/tester/free-play")
         def free_play_status():
             try:
@@ -282,15 +378,16 @@ def tester_request(config, path, payload=None):
         return json.load(response)
 
 
-def register_kiosk_routes(app, config, finish_capture, progress=None):
+def register_kiosk_routes(app, config, finish_capture, progress=None, extra=None):
     """Stop acquisition, keep its UI alive, then ask the tester to package.
 
-    ``progress`` returns the exposure study's line for the band (19 Oct), or None.
+    ``progress`` returns the exposure study's line for the band, or None;
+    ``extra`` adds its keys to every answer (the pause and the tester page's address).
     """
     lock = threading.Lock()
 
-    def body(extra=None):
-        payload = {**config, **(extra or {})}
+    def body(more=None):
+        payload = {**config, **(extra() if extra is not None else {}), **(more or {})}
         if progress is not None:
             try:
                 payload["exposure_study"] = progress()

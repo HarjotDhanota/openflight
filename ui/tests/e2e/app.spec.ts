@@ -76,6 +76,12 @@ test('supports club selection choose and dismiss flows against mock backend', as
   await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
 });
 
+test('the header names the golfer hand next to the club, right-handed by default', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+  await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
+});
+
 test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);

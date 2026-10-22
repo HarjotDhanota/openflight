@@ -346,6 +346,23 @@ def starting_gain(
     }
 
 
+def write_pgm(path: Path, image, *, before_replace=None) -> None:
+    """Write an 8-bit still atomically; ``before_replace`` may refuse it at the last step."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp", dir=path.parent) as handle:
+            temporary = Path(handle.name)
+            handle.write(f"P5\n{image.shape[1]} {image.shape[0]}\n255\n".encode("ascii"))
+            handle.write(np.asarray(image, dtype=np.uint8).tobytes())
+        if before_replace is not None:
+            before_replace()
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def photo_controls(
     light_index: float | None,
     black_floor: float,
@@ -1645,30 +1662,20 @@ class LadderRunner:  # pylint: disable=too-many-instance-attributes
             name = capture
             self.photo_dir.mkdir(parents=True, exist_ok=True)
             path = self.photo_dir / f"{name}.pgm"
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".tmp", dir=self.photo_dir
-                ) as handle:
-                    temporary = Path(handle.name)
-                    handle.write(f"P5\n{image.shape[1]} {image.shape[0]}\n255\n".encode("ascii"))
-                    handle.write(np.asarray(image, dtype=np.uint8).tobytes())
-                if self.stopped:
-                    raise RuntimeError("the ladder is stopped")
-                os.replace(temporary, path)
-                temporary = None
-                # relative to the tester folder, so ladder.json stays valid off the Pi
-                recorded = path.relative_to(self.photo_dir.parent).as_posix()
-                pending = self._pending_photo() is not None
-                if pending:
-                    self.state.finish_photo(name, rung_id, recorded)
-                    self._on_mode_done(rung.arm_id)
-                else:
-                    self.state.record_photo(name, rung_id, recorded)
-                return path
-            finally:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
+            write_pgm(path, image, before_replace=self._raise_if_stopped)
+            # relative to the tester folder, so ladder.json stays valid off the Pi
+            recorded = path.relative_to(self.photo_dir.parent).as_posix()
+            pending = self._pending_photo() is not None
+            if pending:
+                self.state.finish_photo(name, rung_id, recorded)
+                self._on_mode_done(rung.arm_id)
+            else:
+                self.state.record_photo(name, rung_id, recorded)
+            return path
+
+    def _raise_if_stopped(self) -> None:
+        if self.stopped:
+            raise RuntimeError("the ladder is stopped")
 
     def skip_photo(self, capture: str, rung_id: str) -> None:
         with self._lock:

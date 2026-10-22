@@ -20,7 +20,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -173,6 +173,9 @@ camera_placement: dict | None = None
 # boresight points right of the target line, added to every horizontal angle.
 # None until a flag sets it.
 horizontal_offset_deg: float | None = None
+# How many times the target line moved this session, and when it last did.
+_target_line_revision = 0
+_target_line_since: str | None = None
 
 
 def _horizontal_frame() -> str:
@@ -183,6 +186,87 @@ def _horizontal_frame() -> str:
 def _reported_horizontal_deg(angle_from_boresight_deg: float) -> float:
     """An angle from the unit boresight, reported with the one horizontal offset."""
     return float(to_reported_deg(angle_from_boresight_deg, horizontal_offset_deg))
+
+
+def target_line_in_force() -> dict:
+    """The target line every horizontal angle is measured from now, with its revision."""
+    line = setup_handoff_config.get("target_line") or {}
+    status = line.get("status") or "not_set"
+    return {
+        "revision": _target_line_revision,
+        "status": status,
+        "yaw_deg": line.get("yaw_deg") if status == "set" else None,
+        "horizontal_offset_deg": horizontal_offset_deg,
+        "frame": _horizontal_frame(),
+        "since": _target_line_since,
+    }
+
+
+def _finite_number(value, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a number") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
+    """Move every horizontal angle to a new target line between two shots.
+
+    ``line`` is the aim step's hand-off: ``set`` with ``yaw_deg`` and
+    ``kiosk_offset_deg``, or ``skipped`` (the unit boresight). The swap waits until
+    no accepted shot is still being processed and holds new shots off while every
+    consumer takes the offset, so each shot is wholly in one frame.
+    """
+    global horizontal_offset_deg, _target_line_revision, _target_line_since  # pylint: disable=global-statement
+    status = line.get("status") if isinstance(line, dict) else None
+    if status == "set":
+        yaw = _finite_number(line.get("yaw_deg"), "yaw_deg")
+        offset = _finite_number(line.get("kiosk_offset_deg"), "kiosk_offset_deg")
+        handed = {
+            "status": "set",
+            "yaw_deg": yaw,
+            "total_uncertainty_deg": line.get("total_uncertainty_deg"),
+            "source": line.get("source") or "aim_point",
+        }
+    elif status == "skipped":
+        offset = None
+        handed = {
+            "status": "skipped",
+            "yaw_deg": None,
+            "total_uncertainty_deg": None,
+            "source": None,
+        }
+    else:
+        raise ValueError("a target line is set (with its yaw and offset) or skipped")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        with _shot_callback_lock:
+            if not shot_processing_pending():
+                previous = target_line_in_force()
+                horizontal_offset_deg = offset
+                if "horizontal_offset_deg" in camera_capture_config:
+                    camera_capture_config["horizontal_offset_deg"] = offset
+                if iwr6843_runtime is not None:
+                    iwr6843_runtime.azimuth_offset_deg = offset
+                if iwr6843_runtime_config.get("enabled"):
+                    iwr6843_runtime_config["azimuth_offset_deg"] = offset
+                setup_handoff_config["target_line"] = handed
+                _target_line_revision += 1
+                _target_line_since = datetime.now(timezone.utc).isoformat()
+                record = target_line_in_force()
+                session = get_session_logger()
+                if session is not None:
+                    session.log_event(
+                        "target_line_changed", {"previous": previous, "target_line": record}
+                    )
+                logger.info("[SERVER] Target line now %s", record)
+                return record
+        if time.monotonic() >= deadline:
+            raise RuntimeError("a shot is still being processed; try again in a moment")
+        time.sleep(0.05)
 
 
 # The ready light (P7-14): one readiness state from what the sensors report,
@@ -230,6 +314,8 @@ sim_connectors: List = []
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
+# The golfer's hand from the setup (--handed); a connected simulator's wins.
+golfer_handed: str | None = None
 
 # Optional Bluetooth Low Energy publisher for the iOS app.
 ble_publisher = None
@@ -1793,6 +1879,8 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["golfer"] = golfer_handedness()
+    config["target_line"] = target_line_in_force()
     config["rig_geometry"] = deepcopy(rig_geometry_config)
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
@@ -2004,6 +2092,14 @@ def apply_club_selection(payload):
         _broadcast_club_selection(club)
     logger.info("[SERVER] Club changed to %s", club.value)
     return response, 200
+
+
+def apply_startup_club(club: str | None) -> None:
+    """Start on ``--club``: the monitor, the scoreboard and the phone all see it."""
+    if club:
+        response, status = apply_club_selection({"club": club})
+        if status != 200:
+            raise ValueError(response["error"])
 
 
 def current_club_selection(_payload=None):
@@ -3186,6 +3282,7 @@ def handle_connect():
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
     socketio.emit("club_changed", {"club": active_club.value})
+    socketio.emit("handedness", golfer_handedness())
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -3692,6 +3789,15 @@ def _sim_on_status(target: str, event) -> None:
         )
 
 
+def golfer_handedness() -> dict:
+    """The hand every model uses: a connected simulator's, else the setup's, else RH."""
+    if sim_player_state.handed_reported and any(c.is_connected() for c in sim_connectors):
+        return {"handed": sim_player_state.handed, "source": "simulator"}
+    if golfer_handed in ("RH", "LH"):
+        return {"handed": golfer_handed, "source": "setup"}
+    return {"handed": "RH", "source": "default"}
+
+
 def _sim_on_inbound(target: str, event) -> None:
     """Apply an inbound simulator event (player/club update, error, ack)."""
     global active_club  # pylint: disable=global-statement
@@ -3706,6 +3812,8 @@ def _sim_on_inbound(target: str, event) -> None:
         sl = get_session_logger()
         if sl:
             sl.log_sim_player(target=target, handed=sim_player_state.handed, club=club_value)
+        if event.handed is not None:
+            socketio.emit("handedness", golfer_handedness())
         # The monitor owns current-club state for shot tagging and carry/spin
         # model selection; keep it in sync with the sim's canonical club.
         with club_selection_lock:
@@ -6212,6 +6320,7 @@ def _handle_shot_detected(shot: Shot) -> None:
     _open_carry_status(shot)
     _open_smash_factor_status(shot)
     _assign_shot_number(shot)
+    shot.target_line = target_line_in_force()
     kiosk_extensions.call_all("on_shot_accepted", shot)
     instrumentation.mark(
         "server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number
@@ -7883,9 +7992,17 @@ def main():
         default=0.0,
         help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
     )
+    parser.add_argument(
+        "--handed",
+        choices=["RH", "LH"],
+        default=None,
+        help="The golfer's hand when no simulator says (default: right-handed)",
+    )
     kiosk_extensions.call_all("add_arguments", parser)
     args = parser.parse_args()
     kiosk_extensions.call_all("configure", args, parser)
+    global golfer_handed  # pylint: disable=global-statement
+    golfer_handed = args.handed
     _apply_kld7_device_defaults(args)
     # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
@@ -8432,8 +8549,7 @@ def main():
             ops_baud=args.ops_baud,
             mock_enrichment_ms=args.mock_enrichment_ms,
         )
-        if args.club:
-            monitor.set_club(ClubType(args.club))
+        apply_startup_club(args.club)
     except Exception:
         monitor_recovery = (
             "Relaunch OpenFlight and check the terminal log."

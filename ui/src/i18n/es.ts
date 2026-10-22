@@ -153,6 +153,8 @@ export const es: Messages = {
 
   'app.changeImplement': 'Cambiar implemento',
   'app.changeClub': 'Cambiar palo',
+  'app.rightHanded': 'Diestro',
+  'app.leftHanded': 'Zurdo',
   'app.clearSession': 'Borrar sesión',
   'clearSession.confirm': '¿Borrar la sesión de {name}?',
   'clearSession.detail': 'Esto elimina los golpes de {name}. Los demás perfiles se conservan.',

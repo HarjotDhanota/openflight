@@ -76,7 +76,7 @@ def test_attach_reads_the_fused_delivery_with_the_shot_s_club(monkeypatch):
 
 
 def test_attach_takes_the_golfer_s_handedness(monkeypatch):
-    monkeypatch.setattr(server_module.sim_player_state, "handed", "LH")
+    monkeypatch.setattr(server_module, "golfer_handed", "LH")
     shot = _shot()
 
     shot_models._attach_club_arc(shot, None)
