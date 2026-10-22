@@ -5,24 +5,26 @@ import './LabelBadge.css';
 
 interface LabelBadgeProps {
   status: MetricLabel | null | undefined;
-  /** Short text (MEAS / CALC / MODEL / EST) for a tight tile; the full name is its title. */
+  /** Short text (MEAS / CALC / MODEL / EST / EXP) for a tight tile; the full name is its title. */
   compact?: boolean;
 }
 
 /**
  * One badge per label, each visibly different (D38, D39):
  * measured is a plain outline, calculated a solid accent outline, model geometry
- * a dashed accent outline, and estimated a filled accent block with the ≈ mark.
+ * a dashed accent outline, estimated a filled accent block with the ≈ mark, and
+ * experimental a dotted outline in its own colour, titled "not yet validated".
  * Not measured has no badge: the metric shows why instead.
  */
 export function LabelBadge({ status, compact = false }: LabelBadgeProps) {
   if (!isValueLabel(status)) return null;
   const name = t(`label.${status}` as MessageKey);
   const text = compact ? t(`labelShort.${status}` as MessageKey) : name;
+  const title = status === 'experimental' ? `${name} (${t('label.experimentalHint')})` : name;
   return (
     <span
       className={`label-badge label-badge--${status}${compact ? ' label-badge--compact' : ''}`}
-      title={name}
+      title={title}
       data-label={status}
     >
       {status === 'estimated' ? (
@@ -34,7 +36,7 @@ export function LabelBadge({ status, compact = false }: LabelBadgeProps) {
       <span className="label-badge__text" aria-hidden={compact ? 'true' : undefined}>
         {text}
       </span>
-      {compact ? <span className="label-badge__sr">{name}</span> : null}
+      {compact ? <span className="label-badge__sr">{title}</span> : null}
     </span>
   );
 }

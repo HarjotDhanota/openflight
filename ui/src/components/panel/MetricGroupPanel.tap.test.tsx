@@ -85,6 +85,6 @@ describe('MetricGroupPanel taps', () => {
     expect(list.hidden).toBe(true);
     act(() => later.click());
     expect(list.hidden).toBe(false);
-    expect(list.textContent).toContain('Impact offset: no input');
+    expect(list.textContent).toContain('Dynamic lie: no input');
   });
 });

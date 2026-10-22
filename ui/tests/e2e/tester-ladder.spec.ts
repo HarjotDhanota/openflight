@@ -970,7 +970,7 @@ test('shows the kiosk shot beside the swing verdict, every metric with its label
   const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
     metrics: Array<{ id: string; label: string; unit: string }>;
   };
-  const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'not_measured'];
+  const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental', 'not_measured'];
   const metrics = Object.fromEntries(
     catalog.metrics.map((spec, index) => {
       const status = cycle[index % cycle.length];

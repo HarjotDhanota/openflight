@@ -21,7 +21,14 @@ function record(overrides: Partial<ShotMetric>): ShotMetric {
   };
 }
 
-const LABEL_CYCLE: MetricLabel[] = ['measured', 'calculated', 'model_geometry', 'estimated', 'not_measured'];
+const LABEL_CYCLE: MetricLabel[] = [
+  'measured',
+  'calculated',
+  'model_geometry',
+  'estimated',
+  'experimental',
+  'not_measured',
+];
 
 /** A shot whose metrics cycle through every label, so every badge renders. */
 function everyMetricShot(): Shot {
@@ -92,16 +99,15 @@ describe('MetricGroupPanel', () => {
     }
   });
 
-  it('gives each of the four labels its own badge', () => {
+  it('gives each of the five labels its own badge', () => {
     const html = render('club') + render('flight');
-    for (const status of ['measured', 'calculated', 'model_geometry', 'estimated']) {
+    for (const status of ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental']) {
       expect(html).toContain(`label-badge--${status}`);
     }
   });
 
   it('names the item that builds an unbuilt metric (in the Coming later detail)', () => {
     const html = render('club');
-    expect(html).toContain('pending E5: not built yet');
     expect(html).toContain('pending E6: not built yet');
   });
 
@@ -109,17 +115,36 @@ describe('MetricGroupPanel', () => {
     const html = render('club');
     expect(html.match(/data-metric="coming-later"/g)).toHaveLength(1);
     expect(html).toContain('Coming later');
-    for (const id of ['impact_offset', 'impact_height', 'dynamic_lie']) {
-      expect(html).not.toMatch(new RegExp(`data-metric="${id}"`));
-    }
-    expect(html).toMatch(/Impact offset, Impact height, Dynamic lie/);
+    expect(html).not.toMatch(/data-metric="dynamic_lie"/);
+    expect(html).toMatch(/Dynamic lie/);
   });
 
-  it('shows a not-built metric in its own cell once it has a value', () => {
+  it('gives impact location its own cells, with the reason when it was not read', () => {
     const shot = everyMetricShot();
-    shot.metrics!.impact_offset = record({ unit: 'mm', status: 'calculated', value: 4, reason: null });
+    const reason = 'building the head outline: 3 of 5 swings with this club';
+    shot.metrics!.impact_offset = record({ unit: 'mm', reason });
+    shot.metrics!.impact_height = record({ unit: 'mm', reason });
     const html = render('club', shot);
-    expect(html).toMatch(/data-metric="impact_offset"/);
+    expect(html).toMatch(/data-metric="impact_offset"[^>]*data-status="not_measured"/);
+    expect(html).toMatch(/data-metric="impact_height"[^>]*data-status="not_measured"/);
+    expect(html).toContain('building the head outline');
+  });
+
+  it('shows an experimental reading with the EXP badge, its range and that it is not validated', () => {
+    const shot = everyMetricShot();
+    shot.metrics!.impact_offset = record({
+      unit: 'mm',
+      status: 'experimental',
+      value: 6,
+      range: [2, 10],
+      reason: null,
+      note: 'not validated yet: compare it with the face spray marks',
+    });
+    const html = render('club', shot);
+    const cell = html.slice(html.indexOf('data-metric="impact_offset"'));
+    expect(cell).toMatch(/label-badge--experimental[^>]*title="Experimental \(not yet validated\)"/);
+    expect(cell).toContain('+6');
+    expect(cell).toContain('range 2 to 10');
   });
 
   it('shows a short reason, with the full one a tap away', () => {
@@ -150,6 +175,8 @@ describe('MetricGroupPanel', () => {
     expect(formatMetricValue(record({ value: 5.432, unit: 's' }), 'imperial')).toEqual(['5.43', 's']);
     expect(formatMetricValue(record({ value: 41.6, unit: 'mm' }), 'imperial')).toEqual(['42', 'mm']);
     expect(formatMetricValue(record({ value: null, unit: 'mm' }), 'imperial')).toEqual(['—', '']);
+    expect(formatMetricValue(record({ value: 6.2, unit: 'mm' }), 'imperial', 'impact_offset')).toEqual(['+6', 'mm']);
+    expect(formatMetricValue(record({ value: -3, unit: 'mm' }), 'imperial', 'impact_height')).toEqual(['-3', 'mm']);
   });
 });
 

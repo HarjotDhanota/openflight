@@ -287,6 +287,17 @@
         background: #d8a400;
         color: #14140f;
       }
+      .kiosk-label.l-experimental {
+        border-style: dotted;
+        border-color: #1d5c9c;
+        color: #1d5c9c;
+      }
+      @media (prefers-color-scheme: dark) {
+        .kiosk-label.l-experimental {
+          border-color: #8cc8ff;
+          color: #8cc8ff;
+        }
+      }
       .kiosk-shot table {
         border-collapse: collapse;
         font-size: 0.82rem;
@@ -6112,6 +6123,7 @@
         calculated: 'calculated',
         model_geometry: 'model geometry',
         estimated: 'estimated',
+        experimental: 'experimental (not yet validated)',
         not_measured: 'not measured',
       };
       // radial and full in the tester's words (9)
