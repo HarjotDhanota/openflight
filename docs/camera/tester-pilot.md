@@ -1,44 +1,22 @@
-# Camera mode study — tester guide
+# Camera mode study — technical reference
+
+**Testers: follow the [tester guide](../tester-guide/README.md)**, the step-by-step setup and
+free play with pictures. This page is the maintainer's technical reference behind it.
 
 ## Free play for outside testers
 
-Free play is implemented on the local `feat/tester-free-play` branch. It still
-needs the Pi checks below before a tester release. **The test is only for units
-with all four sensors**: the OPS243 speed radar, the IWR6843 ranging radar, the
-OV9281 camera and the LIS3DH tilt sensor. Start `scripts/start-tester.sh`, open
-`http://<pi-address>:8765/`, and work down the steps:
+**The test is only for units with all four sensors**: the OPS243 speed radar, the IWR6843
+ranging radar, the OV9281 camera and the LIS3DH tilt sensor. The hardware checks on a real
+Pi are still pending before the tester release. Notes behind the guide's setup steps:
 
-1. **Tester and lens.** Tap your tester ID (or **New tester**), **Indoors** or
-   **Outdoors**, **Right-handed** or **Left-handed**, and the lens fitted to the
-   unit. The hand is kept per tester (right-handed until you tap left) and given to
-   the kiosk at start; a connected simulator's hand wins over it. The scoreboard
-   header shows it beside the club ("7 Iron · Right-handed").
-2. **Check the unit.** A. Tap **Check the unit**: the speed radar, the camera and
-   the ranging radar each answer, and the tilt sensor is read all the time. A
-   missing sensor is named ("Missing or not answering: Camera (OV9281)") and setup
-   stops there. Tick **I pressed RESET on the ranging radar board** only when the
-   ranging radar fails its check and you pressed its RESET. B. Tap **Start the
-   tilt check**, then lift the FRONT of the unit about 2 cm and hold it until the
-   line says **Tilt sensor checked: the front reads up**. If the sensor is fitted
-   another way round the page offers **Turned around (180°)**, **Quarter turn left
-   (90°)**, **Quarter turn right (90°)** or **Upside down**, with the one it read
-   marked: tap it, and the check runs again. The fix is saved for this unit
-   (`~/.config/openflight/lis3dh-mount.json`), never in the shared rig file, and
-   the tester, the camera tilt and the kiosk all read the sensor with it; the
-   check and every fix are recorded in `session_start`. C. Tick the setup box and
-   tap **Confirm the setup**. **Details (for the maintainer)** holds the raw rows.
-3. **Ball in the box**, 4. **Aim at your target** (or **Skip for now**).
-5. **Check the light**: **Measure the light (both modes)**.
-6. **Ball range**: the camera opens by itself; tap **Save the ball** once the
-   ball in the box is found and steady.
-7. **Free play** (below).
-8. **Send the package**: the big **Download** button saves the zip to the device
-   the page is open on; the unit also keeps a copy in `~/OpenFlight-to-send/`
-   (its path and size are shown). Then upload the zip to your Google Drive
-   (drive.google.com → New → File upload), share it as "Anyone with the link",
-   and send the link to whoever asked you to test. Hit beside a TrackMan or
-   another launch monitor? Put its export in the same Google Drive folder as the
-   zip and share the folder.
+- **Hand** (step 1) is kept per tester (right-handed until they tap left) and given to the
+  kiosk at start; a connected simulator's hand wins over it.
+- **Tilt check** (step 2 B): a fix is saved for this unit
+  (`~/.config/openflight/lis3dh-mount.json`), never in the shared rig file, and the tester,
+  the camera tilt and the kiosk all read the sensor with it; the check and every fix are
+  recorded in `session_start`. **Details (for the maintainer)** holds the raw rows.
+- **Package** (step 8): the unit also keeps a copy in `~/OpenFlight-to-send/`. A launch
+  monitor's export travels in the same Google Drive folder as the zip, never through the unit.
 
 The band at the top stays neutral until free play records: "SETTING UP · Step 4 ·
 Aim at your target · free play starts at step 7" during setup, "NOT STARTED" on
