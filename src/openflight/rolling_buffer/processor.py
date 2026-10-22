@@ -1920,6 +1920,23 @@ class RollingBufferProcessor:
                     diagnostic.review_candidate_mph,
                     diagnostic.ball_trigger_delay_ms, diagnostic.tracker_points,
                 )
+                from .club_speed_stage4 import classify as classify_recovery
+
+                decision = classify_recovery({
+                    "current_mph": diagnostic.current_mph,
+                    "measured_ball_mph": ball_speed_mph,
+                    "legacy_mph": diagnostic.legacy_mph,
+                    "tracker_mph": diagnostic.tracker_mph,
+                    "transition_mph": diagnostic.impact_transition_mph,
+                    "ball_trigger_delay_ms": diagnostic.ball_trigger_delay_ms,
+                })
+                logger.info(
+                    "[CLUB-STAGE4] classification=%s evidence=%s candidate=%s "
+                    "terminal=%s delta=%s three_way=%s (advisory only)",
+                    decision.classification, decision.evidence,
+                    decision.candidate_mph, decision.terminal_agreement,
+                    decision.terminal_difference_mph, decision.three_way_agreement,
+                )
             except Exception:
                 logger.exception("[CLUB-SHADOW] diagnostic failed; original speed unchanged")
 
