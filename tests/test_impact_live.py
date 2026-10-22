@@ -426,3 +426,49 @@ def test_a_worker_that_cannot_start_refuses_the_shot_by_name(monkeypatch):
     shot = _kiosk_shot(1)
     extension.dispatcher.submit(shot, {"session_uuid": "session-a", "shot_number": 1})
     assert shot.impact_location["reason_code"] == "analysis_failed_worker_unavailable"
+
+
+def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, monkeypatch):
+    from openflight import kiosk_extensions  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+
+    emitted = []
+    monkeypatch.setattr(
+        server_module.socketio,
+        "emit",
+        lambda event, payload=None, **_: emitted.append((event, payload)),
+    )
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    extension = live.ImpactLiveExtension(
+        runner_factory=lambda on_result: live.ProcessRunner(
+            on_result, settings={"swings_needed": 1}
+        )
+    )
+    extension.session_start_config(START)
+    kiosk_extensions.register(extension)
+    try:
+        shot = Shot(
+            ball_speed_mph=110.0,
+            club_speed_mph=synthetic.CLUB_SPEED / 0.44704,
+            club=ClubType.IRON_7,
+            timestamp=datetime(2026, 10, 22, 9, 30),
+            shot_number=1,
+            ball_range_m=_slant_m(),
+            ball_range_source="iwr_post_impact",
+            ball_range_uncertainty_m=0.03,
+        )
+        extension.on_camera_capture(shot, _capture(str(write_clip(tmp_path / "camera_001"))))
+        server_module._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
+        deadline = time.monotonic() + 120.0
+        while (
+            not any(event == "shot_update" for event, _ in emitted) and time.monotonic() < deadline
+        ):
+            time.sleep(0.1)
+    finally:
+        kiosk_extensions.unregister(extension)
+        extension.on_shutdown()
+    assert [event for event, _ in emitted] == ["shot", "shot_update"]
+    update = emitted[-1][1]["shot"]
+    assert update["impact_location"]["status"] == "ok", update["impact_location"]["reason"]
+    assert update["metrics"]["impact_offset"]["status"] == "experimental"
+    assert update["metrics"]["impact_offset"]["value"] == pytest.approx(8.0, abs=2.5)
