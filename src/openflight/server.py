@@ -20,7 +20,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -173,6 +173,9 @@ camera_placement: dict | None = None
 # boresight points right of the target line, added to every horizontal angle.
 # None until a flag sets it.
 horizontal_offset_deg: float | None = None
+# How many times the target line moved this session, and when it last did.
+_target_line_revision = 0
+_target_line_since: str | None = None
 
 
 def _horizontal_frame() -> str:
@@ -183,6 +186,87 @@ def _horizontal_frame() -> str:
 def _reported_horizontal_deg(angle_from_boresight_deg: float) -> float:
     """An angle from the unit boresight, reported with the one horizontal offset."""
     return float(to_reported_deg(angle_from_boresight_deg, horizontal_offset_deg))
+
+
+def target_line_in_force() -> dict:
+    """The target line every horizontal angle is measured from now, with its revision."""
+    line = setup_handoff_config.get("target_line") or {}
+    status = line.get("status") or "not_set"
+    return {
+        "revision": _target_line_revision,
+        "status": status,
+        "yaw_deg": line.get("yaw_deg") if status == "set" else None,
+        "horizontal_offset_deg": horizontal_offset_deg,
+        "frame": _horizontal_frame(),
+        "since": _target_line_since,
+    }
+
+
+def _finite_number(value, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a number") from error
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
+    """Move every horizontal angle to a new target line between two shots.
+
+    ``line`` is the aim step's hand-off: ``set`` with ``yaw_deg`` and
+    ``kiosk_offset_deg``, or ``skipped`` (the unit boresight). The swap waits until
+    no accepted shot is still being processed and holds new shots off while every
+    consumer takes the offset, so each shot is wholly in one frame.
+    """
+    global horizontal_offset_deg, _target_line_revision, _target_line_since  # pylint: disable=global-statement
+    status = line.get("status") if isinstance(line, dict) else None
+    if status == "set":
+        yaw = _finite_number(line.get("yaw_deg"), "yaw_deg")
+        offset = _finite_number(line.get("kiosk_offset_deg"), "kiosk_offset_deg")
+        handed = {
+            "status": "set",
+            "yaw_deg": yaw,
+            "total_uncertainty_deg": line.get("total_uncertainty_deg"),
+            "source": line.get("source") or "aim_point",
+        }
+    elif status == "skipped":
+        offset = None
+        handed = {
+            "status": "skipped",
+            "yaw_deg": None,
+            "total_uncertainty_deg": None,
+            "source": None,
+        }
+    else:
+        raise ValueError("a target line is set (with its yaw and offset) or skipped")
+    deadline = time.monotonic() + timeout_s
+    while True:
+        with _shot_callback_lock:
+            if not shot_processing_pending():
+                previous = target_line_in_force()
+                horizontal_offset_deg = offset
+                if "horizontal_offset_deg" in camera_capture_config:
+                    camera_capture_config["horizontal_offset_deg"] = offset
+                if iwr6843_runtime is not None:
+                    iwr6843_runtime.azimuth_offset_deg = offset
+                if iwr6843_runtime_config.get("enabled"):
+                    iwr6843_runtime_config["azimuth_offset_deg"] = offset
+                setup_handoff_config["target_line"] = handed
+                _target_line_revision += 1
+                _target_line_since = datetime.now(timezone.utc).isoformat()
+                record = target_line_in_force()
+                session = get_session_logger()
+                if session is not None:
+                    session.log_event(
+                        "target_line_changed", {"previous": previous, "target_line": record}
+                    )
+                logger.info("[SERVER] Target line now %s", record)
+                return record
+        if time.monotonic() >= deadline:
+            raise RuntimeError("a shot is still being processed; try again in a moment")
+        time.sleep(0.05)
 
 
 # The ready light (P7-14): one readiness state from what the sensors report,
@@ -1796,6 +1880,7 @@ def _session_start_config() -> dict:
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
     config["golfer"] = golfer_handedness()
+    config["target_line"] = target_line_in_force()
     config["rig_geometry"] = deepcopy(rig_geometry_config)
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
@@ -6235,6 +6320,7 @@ def _handle_shot_detected(shot: Shot) -> None:
     _open_carry_status(shot)
     _open_smash_factor_status(shot)
     _assign_shot_number(shot)
+    shot.target_line = target_line_in_force()
     kiosk_extensions.call_all("on_shot_accepted", shot)
     instrumentation.mark(
         "server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number

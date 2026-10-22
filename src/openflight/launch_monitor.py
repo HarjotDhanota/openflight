@@ -412,6 +412,8 @@ class Shot:
     # What blocked or mismatched trigger evidence said about a tester shot the
     # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
     trigger_evidence_notes: Optional[list] = None
+    # server.target_line_in_force() when the shot was accepted
+    target_line: Optional[dict] = None
     free_play_run_id: Optional[str] = None
     free_play_exposure: Optional[dict] = None
     # Free play's exposure ladder record for this shot: its rung (or the automatic
@@ -693,6 +695,7 @@ class Shot:
             "carry_status": self.carry_status,
             "air_density_kg_m3": self.air_density_kg_m3,
             "flight": deepcopy(self.flight),
+            "target_line": deepcopy(self.target_line),
         }
         data["metrics"] = shot_metrics.from_record(data)
         if self.free_play_run_id:

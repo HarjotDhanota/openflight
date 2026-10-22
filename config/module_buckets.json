@@ -830,6 +830,7 @@
   "tests/test_light_judging.py": "FUSION",
   "tests/test_light_warning.py": "TESTER",
   "tests/test_lis3dh_orientation_check.py": "FUSION",
+  "tests/test_live_target_line.py": "FUSION",
   "tests/test_metric_coverage.py": "TESTER",
   "tests/test_metric_definitions.py": "FUSION",
   "tests/test_mlm2pro_adapter.py": "PRODUCT",
