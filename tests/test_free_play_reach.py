@@ -424,6 +424,16 @@ class TestMovingTheAimDuringFreePlay:
         assert response.get_json()["preview_source"] == "kiosk"
         assert aiming.client.get("/api/tester/live").get_json()["owner"] is None
 
+    def test_a_kiosk_that_will_not_pause_says_why(self, aiming):
+        aiming.kiosk.replies["/pause"] = (
+            409,
+            {"error": "free play is paused: taking a face photo"},
+        )
+        body = {"tester_id": aiming.tester, "action": "show"}
+        response = aiming.client.post("/api/tester/aim-point", json=body)
+        assert response.status_code == 409
+        assert response.get_json()["error"] == "free play is paused: taking a face photo"
+
     def test_a_moved_aim_reaches_the_running_kiosk_for_the_next_shot(self, aiming):
         aiming.kiosk.replies["/target-line"] = (
             200,

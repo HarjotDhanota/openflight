@@ -8803,9 +8803,10 @@ def create_app(
                     return jsonify({"error": AIM_POINT_PATCH_REQUIRED}), 409
                 if action == "show" and free_play_recording(tester_id) is not None:
                     # free play's kiosk has the camera: it pauses and shows the target
-                    status_code, answer = free_play.to_kiosk(tester_id, "/pause", {"cause": "aim"})
-                    if status_code != 200:
-                        raise RuntimeError(answer.get("error") or "the kiosk did not pause")
+                    answered = free_play.to_kiosk(tester_id, "/pause", {"cause": "aim"})
+                    if answered is None or answered[0] != 200:
+                        error = (answered or (0, {}))[1].get("error")
+                        raise RuntimeError(error or "the kiosk did not pause")
                     return jsonify(aim_point_status(tester_id, eligibility))
                 if action == "show":
                     start_box_preview(tester_id, take_over=True, kind=AIM_POINT_PREVIEW_KIND)
