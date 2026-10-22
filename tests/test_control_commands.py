@@ -85,3 +85,25 @@ def test_control_dispatch_returns_authoritative_club(monkeypatch):
 
     assert status == 200
     assert response == {"status": "current", "club": "5-wood"}
+
+
+def test_the_startup_club_is_the_scoreboard_club_as_well_as_the_monitor_club(monkeypatch):
+    monitor = _Monitor()
+    monkeypatch.setattr(server_module, "monitor", monitor)
+
+    server_module.apply_startup_club("pw")
+
+    assert monitor.clubs == [ClubType.PW]
+    assert server_module.active_club is ClubType.PW
+    assert server_module.current_club_selection() == ({"status": "current", "club": "pw"}, 200)
+
+
+def test_no_startup_club_keeps_driver_and_an_unknown_one_is_refused(monkeypatch):
+    monitor = _Monitor()
+    monkeypatch.setattr(server_module, "monitor", monitor)
+
+    server_module.apply_startup_club(None)
+    assert server_module.active_club is ClubType.DRIVER
+    with pytest.raises(ValueError, match="Unknown club"):
+        server_module.apply_startup_club("putter")
+    assert monitor.clubs == []

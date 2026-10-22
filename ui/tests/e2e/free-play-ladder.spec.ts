@@ -133,6 +133,8 @@ for (const viewport of VIEWPORTS) {
       await half.tap();
       await expect(half).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('#free-play-resolution-hint')).toHaveText('This session records at 640×400.');
+      await expect(start).toBeDisabled();
+      await page.locator('#first-club button[data-club="7-iron"]').tap();
       await expect(start).toBeEnabled();
       await page.screenshot({
         path: test.info().outputPath(`tester-resolution-${viewport.width}x${viewport.height}.png`),
@@ -140,7 +142,12 @@ for (const viewport of VIEWPORTS) {
 
       await start.tap();
       await expect.poll(() => starts.length).toBe(1);
-      expect(starts[0]).toMatchObject({ action: 'free_play', resolution: 'arm6', tester_id: DEFAULT_TESTER });
+      expect(starts[0]).toMatchObject({
+        action: 'free_play',
+        resolution: 'arm6',
+        club: '7-iron',
+        tester_id: DEFAULT_TESTER,
+      });
 
       const line = page.locator('#free-play-study');
       await expect(line).toHaveText('Exposure study: 300 µs · swing 3 of 5 · setting 1 of 2');

@@ -230,6 +230,8 @@ sim_connectors: List = []
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
+# The golfer's hand from the setup (--handed); a connected simulator's wins.
+golfer_handed: str | None = None
 
 # Optional Bluetooth Low Energy publisher for the iOS app.
 ble_publisher = None
@@ -1793,6 +1795,7 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["golfer"] = golfer_handedness()
     config["rig_geometry"] = deepcopy(rig_geometry_config)
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
@@ -2004,6 +2007,14 @@ def apply_club_selection(payload):
         _broadcast_club_selection(club)
     logger.info("[SERVER] Club changed to %s", club.value)
     return response, 200
+
+
+def apply_startup_club(club: str | None) -> None:
+    """Start on ``--club``: the monitor, the scoreboard and the phone all see it."""
+    if club:
+        response, status = apply_club_selection({"club": club})
+        if status != 200:
+            raise ValueError(response["error"])
 
 
 def current_club_selection(_payload=None):
@@ -3186,6 +3197,7 @@ def handle_connect():
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
     socketio.emit("club_changed", {"club": active_club.value})
+    socketio.emit("handedness", golfer_handedness())
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -3692,6 +3704,15 @@ def _sim_on_status(target: str, event) -> None:
         )
 
 
+def golfer_handedness() -> dict:
+    """The hand every model uses: a connected simulator's, else the setup's, else RH."""
+    if sim_player_state.handed_reported and any(c.is_connected() for c in sim_connectors):
+        return {"handed": sim_player_state.handed, "source": "simulator"}
+    if golfer_handed in ("RH", "LH"):
+        return {"handed": golfer_handed, "source": "setup"}
+    return {"handed": "RH", "source": "default"}
+
+
 def _sim_on_inbound(target: str, event) -> None:
     """Apply an inbound simulator event (player/club update, error, ack)."""
     global active_club  # pylint: disable=global-statement
@@ -3706,6 +3727,8 @@ def _sim_on_inbound(target: str, event) -> None:
         sl = get_session_logger()
         if sl:
             sl.log_sim_player(target=target, handed=sim_player_state.handed, club=club_value)
+        if event.handed is not None:
+            socketio.emit("handedness", golfer_handedness())
         # The monitor owns current-club state for shot tagging and carry/spin
         # model selection; keep it in sync with the sim's canonical club.
         with club_selection_lock:
@@ -7883,9 +7906,17 @@ def main():
         default=0.0,
         help="K-LD7 horizontal angle offset in degrees (default: 0.0)",
     )
+    parser.add_argument(
+        "--handed",
+        choices=["RH", "LH"],
+        default=None,
+        help="The golfer's hand when no simulator says (default: right-handed)",
+    )
     kiosk_extensions.call_all("add_arguments", parser)
     args = parser.parse_args()
     kiosk_extensions.call_all("configure", args, parser)
+    global golfer_handed  # pylint: disable=global-statement
+    golfer_handed = args.handed
     _apply_kld7_device_defaults(args)
     # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
@@ -8432,8 +8463,7 @@ def main():
             ops_baud=args.ops_baud,
             mock_enrichment_ms=args.mock_enrichment_ms,
         )
-        if args.club:
-            monitor.set_club(ClubType(args.club))
+        apply_startup_club(args.club)
     except Exception:
         monitor_recovery = (
             "Relaunch OpenFlight and check the terminal log."

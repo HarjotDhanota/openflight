@@ -153,6 +153,8 @@ export const fr: Messages = {
 
   'app.changeImplement': 'Changer d’outil',
   'app.changeClub': 'Changer de club',
+  'app.rightHanded': 'Droitier',
+  'app.leftHanded': 'Gaucher',
   'app.clearSession': 'Effacer la session',
   'clearSession.confirm': 'Effacer la session de {name} ?',
   'clearSession.detail': 'Cela supprime les coups de {name}. Les autres profils sont conservés.',

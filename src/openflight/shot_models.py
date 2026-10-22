@@ -54,7 +54,7 @@ def _attach_club_arc(shot: Shot, delivery) -> None:
     from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
 
     shot.club_delivery = club_delivery_payload(
-        delivery, club=shot.club, handedness=server.sim_player_state.handed
+        delivery, club=shot.club, handedness=server.golfer_handedness()["handed"]
     )
 
 
@@ -385,7 +385,7 @@ def _attach_collision_model(shot: Shot) -> None:
     """
     result = collision_model.evaluate(
         club=shot.club,
-        handedness=server.sim_player_state.handed,
+        handedness=server.golfer_handedness()["handed"],
         low_point_distance_mm=_low_point_input(shot),
         **_collision_inputs(shot),
     )

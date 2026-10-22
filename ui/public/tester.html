@@ -887,6 +887,13 @@
         color: var(--bg);
         font-weight: 700;
       }
+      .first-club__group {
+        margin: 4px 0 0;
+        font-size: 0.85rem;
+      }
+      .first-club .chips {
+        margin: 4px 0;
+      }
       /* free play's exposure study: progress only, the tester never acts on it */
       .free-play-study {
         margin: 8px 0 4px;
@@ -1568,6 +1575,14 @@
           </div>
           <input type="hidden" id="environment" value="indoors" />
         </div>
+        <div class="field-row">
+          <span class="field-row__label" id="handed-label">Hand</span>
+          <div class="seg" role="group" aria-labelledby="handed-label" id="handed-choice">
+            <button type="button" data-handed="RH" aria-pressed="true">Right-handed</button>
+            <button type="button" data-handed="LH" aria-pressed="false">Left-handed</button>
+          </div>
+          <span class="problem" id="handed-error" role="alert" hidden></span>
+        </div>
         <div class="lens" id="lens" data-ready="false">
           <h3>Lens on the unit</h3>
           <div class="lens-list" id="lens-list" role="group" aria-label="Lens"></div>
@@ -1845,6 +1860,11 @@
           </div>
           <span class="note" id="free-play-resolution-hint">Tap the resolution for this session.</span>
         </div>
+        <div class="first-club" id="first-club-row">
+          <p class="field-row__label" id="first-club-label">Which club will you hit first?</p>
+          <div id="first-club" role="group" aria-labelledby="first-club-label"></div>
+          <span class="note" id="first-club-hint">Tap a club. Change it any time on the kiosk.</span>
+        </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
         <p class="note" id="free-play-status" role="status">Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure. No marks, photos or grading needed. Stop and package when finished.</p>
@@ -2081,6 +2101,9 @@
       </details>
     </main>
 
+    <script type="application/json" id="kiosk-clubs">
+      {"Irons": [{"id": "2-iron", "label": "2i", "name": "2 Iron"}, {"id": "3-iron", "label": "3i", "name": "3 Iron"}, {"id": "4-iron", "label": "4i", "name": "4 Iron"}, {"id": "5-iron", "label": "5i", "name": "5 Iron"}, {"id": "6-iron", "label": "6i", "name": "6 Iron"}, {"id": "7-iron", "label": "7i", "name": "7 Iron"}, {"id": "8-iron", "label": "8i", "name": "8 Iron"}, {"id": "9-iron", "label": "9i", "name": "9 Iron"}, {"id": "pw", "label": "PW", "name": "Pitching Wedge"}, {"id": "gw", "label": "GW", "name": "Gap Wedge"}, {"id": "sw", "label": "SW", "name": "Sand Wedge"}, {"id": "lw", "label": "LW", "name": "Lob Wedge"}], "Hybrids": [{"id": "3-hybrid", "label": "3H", "name": "3 Hybrid"}, {"id": "5-hybrid", "label": "5H", "name": "5 Hybrid"}, {"id": "7-hybrid", "label": "7H", "name": "7 Hybrid"}, {"id": "9-hybrid", "label": "9H", "name": "9 Hybrid"}], "Woods": [{"id": "driver", "label": "DR", "name": "Driver"}, {"id": "3-wood", "label": "3W", "name": "3 Wood"}, {"id": "5-wood", "label": "5W", "name": "5 Wood"}, {"id": "7-wood", "label": "7W", "name": "7 Wood"}]}
+    </script>
     <script>
       const el = (id) => document.getElementById(id);
       let currentArm = 'arm1';
@@ -5431,9 +5454,52 @@
           ladderRunning ||
           freePlayPending ||
           !freePlayResolution ||
+          !firstClub ||
           ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
         renderFreePlayResolution();
+        renderFirstClub();
       }
+
+      // the kiosk's club grid (ui/src/data/clubs.ts), asked once before free play starts
+      const KIOSK_CLUBS = JSON.parse(el('kiosk-clubs').textContent);
+      let firstClub = null;
+      function renderFirstClub() {
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(freePlayState?.phase);
+        el('first-club-row').hidden = active;
+        if (!el('first-club').childElementCount) {
+          for (const [group, clubs] of Object.entries(KIOSK_CLUBS)) {
+            const title = document.createElement('p');
+            title.className = 'first-club__group';
+            title.textContent = group;
+            const row = document.createElement('div');
+            row.className = 'chips';
+            for (const club of clubs) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = 'chip';
+              button.dataset.club = club.id;
+              button.textContent = club.label;
+              button.title = club.name;
+              row.append(button);
+            }
+            el('first-club').append(title, row);
+          }
+        }
+        for (const button of el('first-club').querySelectorAll('button')) {
+          button.setAttribute('aria-pressed', String(button.dataset.club === firstClub));
+          button.disabled = freePlayPending;
+        }
+        const chosen = Object.values(KIOSK_CLUBS).flat().find((club) => club.id === firstClub);
+        el('first-club-hint').textContent = chosen
+          ? `Free play starts on the ${chosen.name}.`
+          : 'Tap a club. Change it any time on the kiosk.';
+      }
+      el('first-club').addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-club]');
+        if (!button || button.disabled) return;
+        firstClub = button.dataset.club;
+        renderLadderControls();
+      });
 
       // One resolution per session, tapped by the tester (19 Oct). The lens's default
       // is marked but must still be tapped; a mode the lens disables is not offered.
@@ -6057,10 +6123,12 @@
           if (!(await requireSetupEligibility())) return;
           liveShown(false);
           if (!freePlayResolution) throw new Error('Tap a resolution for this session first.');
+          if (!firstClub) throw new Error('Tap the club you will hit first.');
           const result = await post('/api/tester/run', {
             ...payload(),
             action: 'free_play',
             resolution: freePlayResolution,
+            club: firstClub,
           });
           renderFreePlay(result.free_play);
           if (!result.free_play?.run_id) throw new Error('Free play did not return its session identity.');
@@ -6282,6 +6350,7 @@
           refreshAim();
           refreshTeeRange();
           refreshLens();
+          refreshHanded();
           refresh();
         }, 300);
       }
@@ -6298,6 +6367,46 @@
           renderEnvironment();
         });
       }
+
+      // the tester's hand, kept per tester; right-handed unless they tap left
+      let handed = 'RH';
+      let handedPending = false;
+      function renderHanded() {
+        for (const button of el('handed-choice').querySelectorAll('button')) {
+          button.setAttribute('aria-pressed', String(button.dataset.handed === handed));
+          button.disabled = handedPending || !currentTester();
+        }
+      }
+      async function refreshHanded() {
+        const testerId = currentTester();
+        handed = 'RH';
+        renderHanded();
+        if (!testerId) return;
+        try {
+          const body = await request('/api/tester/handedness?' + new URLSearchParams({ tester_id: testerId }));
+          if (testerId === currentTester() && ['RH', 'LH'].includes(body.handed)) handed = body.handed;
+        } catch {
+          handed = 'RH';
+        }
+        renderHanded();
+      }
+      el('handed-choice').addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-handed]');
+        if (!button || button.disabled) return;
+        handedPending = true;
+        el('handed-error').hidden = true;
+        renderHanded();
+        try {
+          const body = await post('/api/tester/handedness', { tester_id: currentTester(), handed: button.dataset.handed });
+          handed = body.handed;
+        } catch (error) {
+          el('handed-error').textContent = `Not saved: ${error.message}`;
+          el('handed-error').hidden = false;
+        } finally {
+          handedPending = false;
+          renderHanded();
+        }
+      });
 
       // --- step 1: the lens on the unit (13 Oct), by touch, with settings kept per lens ---
       let lensState = null;
@@ -6802,6 +6911,7 @@
       renderSteps();
       refreshTesters();
       refreshLens();
+      refreshHanded();
       refresh();
       refreshSetupEligibility();
       refreshPlacement();

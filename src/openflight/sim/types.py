@@ -194,6 +194,8 @@ class PlayerState:
     handed: str = "RH"
     club: ClubType = ClubType.DRIVER
     shot_counter: int = 0
+    # True once a simulator said which hand: until then ``handed`` is only the default
+    handed_reported: bool = False
     _lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
@@ -208,5 +210,6 @@ class PlayerState:
         with self._lock:
             if update.handed is not None:
                 self.handed = update.handed
+                self.handed_reported = True
             if update.club is not None:
                 self.club = update.club

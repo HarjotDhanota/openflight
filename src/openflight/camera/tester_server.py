@@ -93,6 +93,7 @@ from openflight.camera.tee_range_flow import (
 )
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
+from openflight.clubs.types import ClubType
 from openflight.inclinometer import orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
@@ -2354,6 +2355,8 @@ def action_commands(
     ball_box: Sequence[int] | None = None,
     light_index_dn_per_us_gain: float | None = None,
     free_play_plan: Mapping | None = None,
+    club: str = CLUB,
+    handed: str = "RH",
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
@@ -2476,7 +2479,7 @@ def action_commands(
                 "--radar-port",
                 radar_port,
                 "--club",
-                CLUB,
+                club,
                 *(["--camera-capture-manual-exposure"] if held else []),
                 "--debug",
                 "--iwr6843",
@@ -2504,6 +2507,7 @@ def action_commands(
     if action in {"ladder", "swings", "free_play"}:
         if not tester_setup or not tester_setup.get("config_hash"):
             raise ValueError("tester setup evidence is required for capture")
+        commands[0].extend(["--handed", handed])
         # the tester page stays on screen: no fullscreen kiosk window (2a); the page's
         # "Kiosk view" button opens the kiosk UI in a normal window or tab
         if action == "free_play":
@@ -3786,6 +3790,40 @@ def remember_target_line(root: Path, record: Mapping) -> None:
             "utf-8"
         ),
     )
+
+
+HANDEDNESS_FILE = "handedness.json"
+HANDEDNESS = ("RH", "LH")
+
+
+def read_handedness(root: Path) -> dict:
+    """The tester's hand: right-handed unless they chose left."""
+    try:
+        handed = json.loads((root / HANDEDNESS_FILE).read_text(encoding="utf-8"))["handed"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"handed": "RH", "source": "default"}
+    if handed not in HANDEDNESS:
+        return {"handed": "RH", "source": "default"}
+    return {"handed": handed, "source": "tester"}
+
+
+def save_handedness(root: Path, handed: object) -> dict:
+    if handed not in HANDEDNESS:
+        raise ValueError("handed must be RH or LH")
+    root.mkdir(parents=True, exist_ok=True)
+    atomic_write(root / HANDEDNESS_FILE, (json.dumps({"handed": handed}) + "\n").encode("utf-8"))
+    return read_handedness(root)
+
+
+def first_club(payload: Mapping | None) -> str:
+    """The club free play starts on: the one the tester tapped, else the kiosk's old default."""
+    club = (payload or {}).get("club")
+    if club in (None, ""):
+        return CLUB
+    known = {item.value for item in ClubType if item is not ClubType.UNKNOWN}
+    if club not in known:
+        raise ValueError(f"unknown club {club!r}: tap one of the clubs shown")
+    return str(club)
 
 
 def _patch_centre(patch: Mapping | None) -> list[float] | None:
@@ -10414,6 +10452,7 @@ def create_app(
                 lens_id = lens_store.selected() or lens_catalogue.reference_lens_id
                 lens_settings = lens_store.settings(lens_id)
                 params = replace(params, arm_id=free_play_resolution(payload, lens_settings))
+            club = first_club(payload) if action == "free_play" else CLUB
             operator_reset = (payload or {}).get("operator_reset")
             if operator_reset is not None and not isinstance(operator_reset, bool):
                 raise ValueError("operator_reset must be true, false or absent")
@@ -10490,6 +10529,8 @@ def create_app(
                 if action in {"swings", "free_play"}
                 else None,
                 free_play_plan=plan,
+                club=club,
+                handed=read_handedness(tester_root(sessions_root, params.tester_id))["handed"],
             )
             run_id = None
             if action == "free_play":
@@ -11415,6 +11456,24 @@ def create_app(
                 "stopped": runner.stopped,
             }
         )
+
+    @app.route("/api/tester/handedness", methods=["GET", "POST"])
+    def handedness_route():
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload if isinstance(payload, Mapping) else {}
+        tester_id = str(payload.get("tester_id", "")).strip()
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        root = tester_root(sessions_root, tester_id)
+        try:
+            hand = (
+                save_handedness(root, payload.get("handed"))
+                if request.method == "POST"
+                else read_handedness(root)
+            )
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"tester_id": tester_id, **hand})
 
     @app.post("/api/tester/comparator")
     def comparator_upload():

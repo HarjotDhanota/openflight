@@ -153,6 +153,8 @@ export const pt: Messages = {
 
   'app.changeImplement': 'Trocar implemento',
   'app.changeClub': 'Trocar taco',
+  'app.rightHanded': 'Destro',
+  'app.leftHanded': 'Canhoto',
   'app.clearSession': 'Limpar sessão',
   'clearSession.confirm': 'Limpar a sessão de {name}?',
   'clearSession.detail': 'Isto remove as tacadas de {name}. Os outros perfis são mantidos.',

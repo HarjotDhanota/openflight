@@ -151,6 +151,8 @@ export const en = {
 
   'app.changeImplement': 'Change implement',
   'app.changeClub': 'Change club',
+  'app.rightHanded': 'Right-handed',
+  'app.leftHanded': 'Left-handed',
   'app.clearSession': 'Clear session',
   'clearSession.confirm': "Clear {name}'s session?",
   'clearSession.detail': "This removes {name}'s shots. Other profiles are kept.",
