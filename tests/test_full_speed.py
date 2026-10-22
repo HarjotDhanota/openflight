@@ -8,6 +8,7 @@ and the smash labels.
 
 from __future__ import annotations
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -111,6 +112,35 @@ def _evaluate(track, **overrides):
 
 
 # ---------------------------------------------------------------- recovery
+
+
+@pytest.mark.parametrize(
+    ("vertical", "expected"),
+    [
+        (16.0, CALCULATED),
+        (np.float32(16.0), CALCULATED),
+        (np.int64(16), CALCULATED),
+        (True, NOT_MEASURED),
+        (np.bool_(True), NOT_MEASURED),
+        (math.nan, NOT_MEASURED),
+        (math.inf, NOT_MEASURED),
+        (10**400, NOT_MEASURED),
+    ],
+)
+def test_full_speed_admission_accepts_finite_real_scalars(vertical, expected):
+    track = {
+        "impact_ms": 40.0,
+        "impact_source": "ops_transition",
+        "impact_uncertainty_ms": 0.6,
+        "window_ms": WINDOW_MS,
+        "outbound": [[44.0, 115.0]],
+        "canonical_radial_mph": 115.0,
+    }
+
+    result = _evaluate(track, vertical_deg=vertical)
+
+    assert result["status"] == expected
+    json.dumps(result, allow_nan=False)
 
 
 @pytest.mark.parametrize(

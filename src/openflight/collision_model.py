@@ -110,6 +110,7 @@ from . import collision_forward, metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .horizontal_frame import MIXED, combined_frame
+from .numeric import finite as _finite
 from .source_labels import (  # noqa: F401  (the predicates are re-exported)
     LABEL_CALCULATED,
     LABEL_ESTIMATED,
@@ -255,19 +256,16 @@ class Input:
     frame: Optional[str] = None
     reason: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        if _finite(self.value):
+            object.__setattr__(self, "value", float(self.value))
+
     @property
     def present(self) -> bool:
-        return (
-            self.value is not None
-            and isinstance(self.value, (int, float))
-            and math.isfinite(self.value)
-            and self.label in _INPUT_LABELS
-        )
+        return _finite(self.value) and self.label in _INPUT_LABELS
 
     def missing_reason(self, name: str) -> str:
-        if self.value is not None and not (
-            isinstance(self.value, (int, float)) and math.isfinite(self.value)
-        ):
+        if self.value is not None and not _finite(self.value):
             return f"{name} not finite"
         if self.value is not None and self.label not in _INPUT_LABELS:
             return f"{name} is {self.label}, not measured or calculated"

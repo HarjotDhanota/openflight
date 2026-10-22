@@ -19,3 +19,8 @@ def finite(value: Any) -> bool:
         return math.isfinite(float(value))
     except OverflowError:
         return False
+
+
+def finite_float(value: Any) -> float | None:
+    """A finite real scalar as a JSON-compatible float, or None."""
+    return float(value) if finite(value) else None

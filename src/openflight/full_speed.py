@@ -64,6 +64,7 @@ from .ballistics import (
 )
 from .horizontal_frame import TARGET_LINE, UNIT_BORESIGHT, to_boresight_deg
 from .metric_definitions import smash_factor
+from .numeric import finite as _finite, finite_float
 from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     MAX_REFERRAL_MS,
     MPH_TO_MPS,
@@ -193,14 +194,6 @@ def _solve_ball(
 
 
 # ---------------------------------------------------------------- inputs
-
-
-def _finite(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def _vector(value: Any) -> Optional[np.ndarray]:
@@ -359,18 +352,18 @@ def evaluate_full_ball_speed(
     when it is larger than the stated 5 cm, and ``tee_range_source`` is recorded.
     """
     inputs = {
-        "vertical_deg": vertical_deg if _finite(vertical_deg) else None,
+        "vertical_deg": finite_float(vertical_deg),
         "vertical_source": vertical_source,
-        "horizontal_deg": horizontal_deg if _finite(horizontal_deg) else None,
+        "horizontal_deg": finite_float(horizontal_deg),
         "horizontal_source": horizontal_source,
         "horizontal_frame": horizontal_frame,
-        "horizontal_offset_deg": horizontal_offset_deg,
-        "tee_range_m": tee_range_m,
-        "tee_range_uncertainty_m": tee_range_uncertainty_m,
+        "horizontal_offset_deg": finite_float(horizontal_offset_deg),
+        "tee_range_m": finite_float(tee_range_m),
+        "tee_range_uncertainty_m": finite_float(tee_range_uncertainty_m),
         "tee_range_source": tee_range_source,
-        "tee_side_offset_m": tee_side_offset_m,
-        "radar_height_m": radar_height_m,
-        "ball_height_m": ball_height_m,
+        "tee_side_offset_m": finite_float(tee_side_offset_m),
+        "radar_height_m": finite_float(radar_height_m),
+        "ball_height_m": finite_float(ball_height_m),
     }
     if not _finite(vertical_deg) or abs(float(vertical_deg)) >= 90.0:
         return _not_measured("vertical launch is not measured", inputs=inputs)

@@ -37,11 +37,11 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
-import math
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from .numeric import finite_float as _finite
 from .source_labels import is_calculated_source, is_measured_source, is_model_geometry_source
 
 logger = logging.getLogger(__name__)
@@ -133,13 +133,6 @@ def catalog() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- helpers
-
-
-def _finite(value: Any) -> Optional[float]:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

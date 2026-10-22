@@ -12,8 +12,10 @@ Published numbers checked here come from the papers themselves:
   (doi:10.1119/1.2713788).
 """
 
+import json
 import math
 
+import numpy as np
 import pytest
 
 from openflight import collision_model as cm
@@ -21,6 +23,27 @@ from openflight.clubs import ClubType
 from openflight.metric_definitions import d_plane_tilt_deg, spin_loft_deg
 
 M = cm.LABEL_MEASURED
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1.5, True),
+        (np.float32(1.5), True),
+        (np.int64(2), True),
+        (True, False),
+        (np.bool_(True), False),
+        (math.nan, False),
+        (math.inf, False),
+        (10**400, False),
+    ],
+)
+def test_input_admission_accepts_finite_real_scalars(value, expected):
+    observation = cm.Input(value)
+
+    assert observation.present is expected
+    if not expected:
+        assert observation.missing_reason("angle") == "angle not finite"
 
 
 def _inp(value, label=M, source="test", frame="target_line"):
@@ -50,6 +73,13 @@ def _evaluate(
         launch_vertical=_inp(launch_v, labels.get("launch_v", M), frame=None),
         club_speed_mph=_inp(club_speed, labels.get("club_speed", M), frame=None),
     )
+
+
+@pytest.mark.parametrize("scalar", [np.float32, np.int64])
+def test_numpy_inputs_produce_a_json_serializable_collision(scalar):
+    result = _evaluate(path=scalar(-2), attack=scalar(-4), club_speed=scalar(85)).to_dict()
+
+    assert json.loads(json.dumps(result, allow_nan=False))["inputs"]["club_path"]["value"] == -2.0
 
 
 # ---- published weights (Wood et al. 2018, Table 1) ------------------------------------

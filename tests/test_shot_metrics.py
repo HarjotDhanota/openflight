@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+import numpy as np
 import pytest
 
 from openflight import shot_metrics
@@ -39,6 +40,25 @@ RECORD_KEYS = {
     "note",
     "normalized",
 }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (np.float32(120.5), 120.5),
+        (np.int64(120), 120.0),
+        (True, None),
+        (np.bool_(True), None),
+        (math.nan, None),
+        (math.inf, None),
+        (10**400, None),
+    ],
+)
+def test_metric_records_accept_only_finite_real_scalars(value, expected):
+    metric = shot_metrics.from_record({"ball_speed_mph": value})["ball_speed"]
+
+    assert metric["value"] == expected
+    assert metric["status"] == ("measured" if expected is not None else "not_measured")
 
 
 def test_the_catalog_is_the_owner_s_metric_list_in_order():
