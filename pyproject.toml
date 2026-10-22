@@ -73,11 +73,13 @@ openflight-cloud = "openflight.cloud.cli:main"
 
 # Kiosk extensions, loaded by openflight-server at start-up: the shot models (club
 # arc, collision model, full speeds, flight: E1-E4) and, fork-only, the tester's
-# hooks and the research hooks (the Pi trace and the fusion diagnostic snapshots).
+# hooks, the research hooks (the Pi trace and the fusion diagnostic snapshots) and the
+# experimental impact location read after each shot.
 [project.entry-points."openflight.kiosk_extensions"]
 shot_models = "openflight.shot_models:extension"
 tester = "openflight.tester_hooks:extension"
 research = "openflight.research_hooks:extension"
+impact_live = "openflight.camera.impact_live:extension"
 
 # The shot models' metrics in the shot-metric catalogue (E1-E6), loaded on first use.
 [project.entry-points."openflight.shot_metrics"]

@@ -52,7 +52,7 @@
  ],
  "decisions": {
   "pi_trace": "The trace marks are product instrumentation: openflight/instrumentation.py holds the hooks (mark, current_ops_attempt, trace_method...), cheap no-ops until a recorder is installed and never raising into the caller. pi_trace.py (the JSONL TraceRecorder), pi_trace_summary.py, trace_routes.py and core_eligibility.py stay RESEARCH; research_hooks.py installs the recorder for --pi-trace.",
-  "kiosk_extensions": "The one registration point for kiosk add-ons is openflight/kiosk_extensions.py: a KioskExtension overrides only the hooks it needs and is declared under the openflight.kiosk_extensions entry point. tester_hooks (TESTER), research_hooks (RESEARCH) and shot_models (Part E) are the fork's three; server.py names none.",
+  "kiosk_extensions": "The one registration point for kiosk add-ons is openflight/kiosk_extensions.py: a KioskExtension overrides only the hooks it needs and is declared under the openflight.kiosk_extensions entry point. tester_hooks (TESTER), research_hooks (RESEARCH), camera/impact_live (RESEARCH: the experimental impact location, read after each shot) and shot_models (Part E) are the fork's four; server.py names none.",
   "part_e": "Part E is the shot models: club_arc, collision_model, full_speed, flight (flight-fit), metric_definitions, their kiosk hooks (shot_models) and their catalogue metrics (model_metrics, under the openflight.shot_metrics entry point). Without them a kiosk measures and publishes; an OPS-only unit takes the table carry and a fusion unit has no carry (D17).",
   "ready_light": "A plain kiosk's ready light runs on the sensors alone (OPS armed, IWR idle, camera ring full); the tester adds its setup problems, free play's camera rule and the page hold only on a tester's kiosk."
  },
@@ -446,6 +446,7 @@
   "src/openflight/camera/geometry.py": "FUSION",
   "src/openflight/camera/geometry_contract.py": "FUSION",
   "src/openflight/camera/ground_patch.py": "FUSION",
+  "src/openflight/camera/impact_live.py": "RESEARCH",
   "src/openflight/camera/impact_location.py": "RESEARCH",
   "src/openflight/camera/impact_session.py": "RESEARCH",
   "src/openflight/camera/launch_angle.py": "FUSION",
@@ -777,6 +778,7 @@
   "tests/test_hardware_trigger.py": "FUSION",
   "tests/test_horizontal_frame.py": "FUSION",
   "tests/test_impact_isolation.py": "FUSION",
+  "tests/test_impact_live.py": "RESEARCH",
   "tests/test_impact_session.py": "RESEARCH",
   "tests/test_import_boundaries.py": "TESTER",
   "tests/test_inclinometer.py": "FUSION",
