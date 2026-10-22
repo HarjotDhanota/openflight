@@ -69,6 +69,7 @@ def render_swing(  # pylint: disable=too-many-locals
     exposure_ms: float = 0.0,
     subframes: int = 1,
     ball_level: float = 225.0,
+    head_level: float = 35.0,
 ) -> tuple[np.ndarray, il.RestingBall]:
     """Frames of one swing and the resting ball, right-handed, unmirrored.
 
@@ -121,7 +122,9 @@ def render_swing(  # pylint: disable=too-many-locals
                     points = np.array(
                         [_project(x, h, depth, **project) for x, h in _head_polygon(heel, lift_mm)]
                     )
-                    cv2.fillPoly(image, [np.round(points * 16).astype(np.int32)], 35.0, shift=4)
+                    cv2.fillPoly(
+                        image, [np.round(points * 16).astype(np.int32)], head_level, shift=4
+                    )
             stack.append(image)
         frame = np.mean(stack, axis=0) + rng.normal(0.0, 1.5, background.shape)
         clip[index] = np.clip(frame, 0, 255).astype(np.uint8)
@@ -351,3 +354,12 @@ def test_a_ball_clock_stands_in_when_no_witness_can_see_the_ball_leave():
     assert result.last_rest_frame == 10
     assert result.diagnostics["contact_fraction"] == pytest.approx(0.4)
     assert result.impact_offset_mm == pytest.approx(6.0, abs=2.5)
+
+
+def test_a_head_too_dim_to_segment_says_so_in_the_refusal():
+    frames, ball = render_swing(truth_mm=0.0, head_level=72.0, ball_level=72.0)
+    result = analyse(frames, ball, ball_clock_frames=10.5)
+    assert result.status == "rejected"
+    assert (
+        result.reason == "no_template_for_this_club_no_head_mask_no_moving_component_near_the_ball"
+    )

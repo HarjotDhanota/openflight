@@ -86,6 +86,7 @@ no sign change, so + is toward the toe for either hand.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -2142,9 +2143,12 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
             "height: face-centre height above the leading edge"
         )
     if template is None:
-        return ImpactLocation(
-            "rejected", "no_template_for_this_club", diagnostics=diagnostics, **common
-        )
+        reason = "no_template_for_this_club"
+        if shot.masks is not None and not shot.masks.masks and shot.masks.reasons:
+            common_reason = Counter(shot.masks.reasons.values()).most_common(1)[0][0]
+            reason = f"{reason}_no_head_mask_{common_reason}"
+        diagnostics["mask_reasons"] = dict(shot.masks.reasons) if shot.masks else {}
+        return ImpactLocation("rejected", reason, diagnostics=diagnostics, **common)
     diagnostics["template"] = template.summary()
     accepted, rejected, alignments = align_shot(shot, template)
     diagnostics["frames"] = {
