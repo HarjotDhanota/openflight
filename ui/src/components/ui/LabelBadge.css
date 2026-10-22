@@ -1,7 +1,6 @@
 /*
  * Metric label badges: five labels, five looks (measured, calculated, model
- * geometry, estimated, experimental). Text always says the label, so colour is
- * never the only cue.
+ * geometry, estimated, experimental). Text always says the label, so colour is never the only cue.
  */
 .label-badge {
   position: relative;

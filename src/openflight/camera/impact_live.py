@@ -114,9 +114,6 @@ def _number(value: Any, digits: int = 2) -> float | None:
     return round(number, digits) if math.isfinite(number) else None
 
 
-# ---------------------------------------------------------------- the analyser (worker side)
-
-
 @dataclass
 class _Pool:
     """One (club, frame size)'s swings with a head in them, and the outline built from them."""
@@ -377,9 +374,6 @@ def worker_main(argv: list[str]) -> int:
             reading = _refused(f"analysis_failed_{type(error).__name__}")
         message = {"type": "result", "job_id": job_id, "reading": reading}
         os.write(protocol, (json.dumps(message) + "\n").encode("utf-8"))
-
-
-# ---------------------------------------------------------------- the kiosk side
 
 
 class ProcessRunner:

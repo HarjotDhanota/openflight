@@ -5,7 +5,7 @@ import './LabelBadge.css';
 
 interface LabelBadgeProps {
   status: MetricLabel | null | undefined;
-  /** Short text (MEAS / CALC / MODEL / EST / EXP) for a tight tile; the full name is its title. */
+  /** Short text (MEAS / CALC / MODEL / EST) for a tight tile; the full name is its title. */
   compact?: boolean;
 }
 

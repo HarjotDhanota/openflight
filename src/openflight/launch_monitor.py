@@ -403,8 +403,7 @@ class Shot:
     iwr_launch_range: Optional[dict] = None
     # this swing's camera-tilt pair (13 Oct, Build C; openflight.camera.swing_tilt)
     camera_tilt_swing_pair: Optional[dict] = None
-    # the camera's experimental impact location, read after the shot; nothing reads it
-    # back but its own metric records (impact_offset, impact_height)
+    # the camera's experimental impact reading: only its own two metric records read it
     impact_location: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot

@@ -116,9 +116,6 @@ class Session:
         }
 
 
-# ---------------------------------------------------------------- the analyser
-
-
 def test_the_first_swings_build_the_outline_and_say_how_far_along(tmp_path):
     analyser, session = live.LiveAnalyser(), Session(tmp_path)
     for done in (1, 2):
@@ -248,9 +245,6 @@ def test_refusal_codes_read_as_plain_words(code, words):
     assert words in live.plain_reason(code)
 
 
-# ---------------------------------------------------------------- the kiosk side
-
-
 class FakeRunner:
     def __init__(self):
         self.jobs, self.cancelled, self.stopped = [], [], False
@@ -374,9 +368,6 @@ def test_a_left_handed_golfer_is_sent_as_left(kiosk, monkeypatch):
     kiosk.extension.on_camera_capture(shot, _capture())
     kiosk.extension.after_shot_published(shot, update_kind="first")
     assert kiosk.runner.jobs[0]["handedness"] == "left"
-
-
-# ---------------------------------------------------------------- the worker process
 
 
 def test_the_worker_process_reads_a_clip_and_stops(tmp_path):

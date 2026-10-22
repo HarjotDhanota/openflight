@@ -41,7 +41,6 @@ describe('isComingLater', () => {
     );
     expect(isComingLater({ id: 'gyro', pending: null }, { status: 'not_measured', value: null })).toBe(true);
     expect(isComingLater({ id: 'dynamic_lie', pending: 'E6' }, undefined)).toBe(true);
-    // impact location is read live now: a shot without a reading says why in its own cell
     expect(isComingLater({ id: 'impact_offset', pending: null }, { status: 'not_measured', value: null })).toBe(
       false
     );
