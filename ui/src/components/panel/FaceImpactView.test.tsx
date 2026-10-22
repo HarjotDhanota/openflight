@@ -186,12 +186,16 @@ describe('faceImpact', () => {
     }
   );
 
-  it.each(['iron', 'wedge'] as const)('puts the %s origin on the centre of its groove block', (category) => {
-    const grooves = FACE_SHAPES[category].grooves;
-    const ys = grooves.map((groove) => groove.y);
-    expect(Math.abs((Math.min(...ys) + Math.max(...ys)) / 2)).toBeLessThanOrEqual(0.5);
-    for (const groove of grooves) expect(Math.abs((groove.from + groove.to) / 2)).toBeLessThanOrEqual(0.5);
-  });
+  it.each(['iron', 'wedge'] as const)(
+    'puts the %s origin midway between the common line ends and between the lowest and highest line over it',
+    (category) => {
+      const grooves = [...FACE_SHAPES[category].grooves].sort((a, b) => b.y - a.y);
+      const heelEnd = Math.max(...grooves.map((groove) => groove.to));
+      expect(Math.abs((grooves[0].from + heelEnd) / 2)).toBeLessThanOrEqual(0.5);
+      const over = grooves.filter((groove) => groove.from <= 0 && groove.to >= 0);
+      expect(Math.abs((over[0].y + over[over.length - 1].y) / 2)).toBeLessThanOrEqual(0.5);
+    }
+  );
 
   it.each(['iron', 'wedge'] as const)(
     'draws the %s as a blade: tallest at the toe, topline falling to the heel',
@@ -214,14 +218,16 @@ describe('faceImpact', () => {
   });
 
   it.each([
-    ['iron', [8, 9]],
-    ['wedge', [10, 12]],
+    ['iron', [12, 14]],
+    ['wedge', [15, 17]],
   ] as const)('lays the %s score lines out like a real club', (category, count) => {
     const shape = FACE_SHAPES[category];
     const face = polygon(shape.face);
     const grooves = [...shape.grooves].sort((a, b) => b.y - a.y);
     expect(grooves.length).toBeGreaterThanOrEqual(count[0]);
     expect(grooves.length).toBeLessThanOrEqual(count[1]);
+    const toeEnds = grooves.map((groove) => groove.from);
+    expect(Math.max(...toeEnds) - Math.min(...toeEnds)).toBeLessThanOrEqual(0.1);
     const pitches = grooves.slice(1).map((groove, k) => grooves[k].y - groove.y);
     for (const pitch of pitches) {
       expect(Math.abs(pitch - pitches[0])).toBeLessThanOrEqual(0.05);
@@ -232,16 +238,23 @@ describe('faceImpact', () => {
     expect(lowest).toBeGreaterThanOrEqual(4);
     expect(lowest).toBeLessThanOrEqual(5);
     const top = grooves[grooves.length - 1];
-    expect(top.y - span(face, top.to)[0]).toBeGreaterThanOrEqual(3);
+    const underTopAtToe = top.y - span(face, top.from)[0];
+    expect(underTopAtToe).toBeGreaterThanOrEqual(2.5);
+    expect(underTopAtToe).toBeLessThanOrEqual(3 + pitches[0]);
+    const heelEnd = Math.max(...grooves.map((groove) => groove.to));
+    expect(grooves.filter((groove) => groove.to < heelEnd - 0.05).length).toBeGreaterThanOrEqual(2);
     for (const groove of grooves) {
-      expect(groove.to - groove.from).toBeGreaterThanOrEqual(58);
-      expect(groove.to - groove.from).toBeLessThanOrEqual(62);
-      const across = crossings(face, groove.y);
-      expect(groove.from - across[0]).toBeGreaterThanOrEqual(8);
-      expect(groove.from - across[0]).toBeLessThanOrEqual(10);
-      expect(across[across.length - 1] - groove.to).toBeGreaterThanOrEqual(4);
-      expect(across[across.length - 1] - groove.to).toBeLessThanOrEqual(6);
+      const clearance = groove.y - span(face, groove.to)[0];
+      expect(clearance).toBeGreaterThanOrEqual(2.5);
+      if (groove.to < heelEnd - 0.05) expect(clearance).toBeLessThanOrEqual(3.5);
     }
+    expect(heelEnd - grooves[0].from).toBeGreaterThanOrEqual(58);
+    expect(heelEnd - grooves[0].from).toBeLessThanOrEqual(62);
+    const across = crossings(face, grooves[0].y);
+    expect(grooves[0].from - across[0]).toBeGreaterThanOrEqual(8);
+    expect(grooves[0].from - across[0]).toBeLessThanOrEqual(10);
+    expect(across[across.length - 1] - heelEnd).toBeGreaterThanOrEqual(4);
+    expect(across[across.length - 1] - heelEnd).toBeLessThanOrEqual(6);
     expect(FACE_SHAPES.wedge.grooves.length).toBeGreaterThan(FACE_SHAPES.iron.grooves.length);
   });
 
@@ -306,12 +319,12 @@ describe('the drawings against the USGA Equipment Rules', () => {
   });
 
   it.each(CATEGORIES)(
-    'keeps the %s score lines straight, parallel, evenly pitched and far enough apart',
+    'keeps the %s score lines straight and parallel, "width, spacing and cross-section ... consistent" (5c), lengths free',
     (category) => {
       const sets = new Map<string, number[]>();
       for (const groove of FACE_SHAPES[category].grooves) {
         expect(groove.to).toBeGreaterThan(groove.from);
-        const key = `${groove.from}:${groove.to}`;
+        const key = String(groove.from);
         sets.set(key, [...(sets.get(key) ?? []), groove.y]);
       }
       for (const ys of sets.values()) {

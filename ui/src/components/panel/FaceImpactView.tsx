@@ -138,6 +138,11 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
               <path className="face-impact__ferrule" d={hosel.ferrule} />
               <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
+            </g>
+            <g className="face-impact__grid face-impact__grid--on-face" clipPath={`url(#${faceClipId})`}>
+              {grid}
+            </g>
+            <g className="face-impact__face-marks" transform={mirror}>
               {shape.grooves.map((groove) => (
                 <line
                   key={`${groove.y}:${groove.from}`}
@@ -153,9 +158,6 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
                 <path key={d} className="face-impact__edge" d={d} />
               ))}
               {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
-            </g>
-            <g className="face-impact__grid face-impact__grid--on-face" clipPath={`url(#${faceClipId})`}>
-              {grid}
             </g>
           </g>
           <text

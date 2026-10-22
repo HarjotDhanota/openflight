@@ -138,13 +138,42 @@ interface Blade {
   hosel: Hosel;
 }
 
-/** Equal score lines at a constant pitch, the lowest `lowest` mm above the leading edge. */
+/** Score lines at a constant pitch from `lowest` mm above the leading edge, all starting at
+ * `from`; each runs to `to` or stops `clearance` mm under the topline, and the lines go on up the
+ * face while the topline is `clearance` above them at `from`. */
 interface GrooveBlock {
   lowest: number;
   pitch: number;
-  count: number;
   from: number;
   to: number;
+  clearance: number;
+}
+
+function cubic(p0: Point, p1: Point, p2: Point, p3: Point, steps = 32): Point[] {
+  return Array.from({ length: steps }, (_, k) => {
+    const t = (k + 1) / steps;
+    const [a, b, c, d] = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3];
+    return [a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]];
+  });
+}
+
+/** The lines under a face top given as `top(x)` (svg y), with the heel-ward ends stepped down
+ * the topline; `tip` is where the top is highest. */
+function scoreLines(block: GrooveBlock, le: number, tip: number, top: (x: number) => number): Groove[] {
+  const lines: Groove[] = [];
+  const room = (y: number, x: number) => y - top(x) - block.clearance;
+  for (let y = le - block.lowest; room(y, block.from) >= 0; y -= block.pitch) {
+    let [low, high] = [Math.max(block.from, tip), block.to];
+    if (room(y, high) < 0) {
+      for (let k = 0; k < 40; k += 1) {
+        const mid = (low + high) / 2;
+        if (room(y, mid) >= 0) low = mid;
+        else high = mid;
+      }
+    } else low = high;
+    lines.push({ y: Number(y.toFixed(2)), from: block.from, to: Number(low.toFixed(2)) });
+  }
+  return lines;
 }
 
 /** Iron and wedge: straight leading edge, rounded toe, topline falling to a hosel at lie,
@@ -157,12 +186,21 @@ function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceS
     const round = fillet(edge(o.hosel, o.crotch + (concave ? 10 : -10), -1, inset), corner, along, concave ? 3 : 5);
     const run = Math.hypot(along[0] - corner[0], along[1] - corner[1]);
     const ahead = lerp(along, corner, (-o.round * 0.4) / run);
-    const line =
-      `L ${pt(along)} C ${pt(ahead)} ` +
-      `${pt([o.topX + o.round * 0.2, o.top + inset])} ${pt([o.topX, o.top + inset])} ` +
-      `C ${pt([o.topX - o.round * 0.6, o.top + inset])} ${pt([o.toe + inset, o.top + o.round * 0.3 + inset * 0.5])} ` +
-      `${pt([o.toe + inset, o.top + o.round])}`;
-    return { start: round.start, end: round.end, path: `${round.path} ${line}`, line, corner, along };
+    const tip: Point = [o.topX, o.top + inset];
+    const arc: Point[] = [along, ahead, [o.topX + o.round * 0.2, o.top + inset], tip];
+    const toeArc: Point[] = [
+      tip,
+      [o.topX - o.round * 0.6, o.top + inset],
+      [o.toe + inset, o.top + o.round * 0.3 + inset * 0.5],
+      [o.toe + inset, o.top + o.round],
+    ];
+    const line = `L ${pt(along)} C ${arc.slice(1).map(pt).join(' ')} C ${toeArc.slice(1).map(pt).join(' ')}`;
+    const curve = [
+      along,
+      ...cubic(arc[0], arc[1], arc[2], arc[3]),
+      ...cubic(toeArc[0], toeArc[1], toeArc[2], toeArc[3]),
+    ];
+    return { start: round.start, end: round.end, path: `${round.path} ${line}`, line, corner, along, tip, curve };
   };
   const toeDown = (inset: number, bottom: number) =>
     `C ${pt([o.toe - 0.8 + inset, o.top + o.round + 12])} ${pt([o.toe - 0.3 + inset, o.le - 7])} ${pt([o.toe + 1.3 + inset, o.le - 2])} ` +
@@ -183,18 +221,19 @@ function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceS
     `C ${pt([o.heelX + 5.5, o.le])} ${pt([side, o.le - 2.5])} ${pt([side, o.le - 9])} ` +
     `L ${pt(shoulder.start)} ${shoulder.path} ${inner.line} ${toeDown(1.4, o.le)}`;
   const topline = top(0.7, false);
-  const middle = o.le - block.lowest - ((block.count - 1) * block.pitch) / 2;
+  const faceTop = (x: number) => {
+    if (x >= inner.along[0]) return inner.along[1] + (x - inner.along[0]) * slope;
+    const k = inner.curve.findIndex((point) => point[0] <= x);
+    const [a, b] = [inner.curve[Math.max(0, k - 1)], inner.curve[Math.max(0, k)]];
+    return a[0] === b[0] ? a[1] : a[1] + ((x - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
+  };
+  const grooves = scoreLines(block, o.le, inner.tip[0], faceTop);
+  const centreX = (block.from + block.to) / 2;
+  const crossing = grooves.filter((groove) => groove.to >= centreX);
+  const centreY = (grooves[0].y + crossing[crossing.length - 1].y) / 2;
   return centred(
-    {
-      head,
-      face,
-      edges: [`M ${pt(topline.end)} ${topline.line}`],
-      hosel: o.hosel,
-      grooves: rows(middle, block.pitch, block.count, block.from, block.to),
-      mark: null,
-      bounds,
-    },
-    [-(block.from + block.to) / 2, -middle]
+    { head, face, edges: [`M ${pt(topline.end)} ${topline.line}`], hosel: o.hosel, grooves, mark: null, bounds },
+    [-centreX, -centreY]
   );
 }
 
@@ -222,7 +261,11 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
     face: movePath(shape.face, dx, dy),
     edges: shape.edges.map((d) => movePath(d, dx, dy)),
     hosel: { ...shape.hosel, ground: add(shape.hosel.ground, [dx, dy]) },
-    grooves: shape.grooves.map((g) => ({ y: g.y + dy, from: g.from + dx, to: g.to + dx })),
+    grooves: shape.grooves.map((g) => ({
+      y: Number(fmt(g.y + dy)),
+      from: Number(fmt(g.from + dx)),
+      to: Number(fmt(g.to + dx)),
+    })),
     mark: shape.mark && movePath(shape.mark, dx, dy),
     bounds: { minX: minX + dx, maxX: maxX + dx, minY: minY + dy, maxY: maxY + dy },
   };
@@ -343,7 +386,7 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       heelX: 37,
       hosel: IRON_HOSEL,
     },
-    { lowest: 4.5, pitch: 3.6, count: 8, from: -23.5, to: 37.7 },
+    { lowest: 4.5, pitch: 3.6, from: -23.5, to: 37.7, clearance: 3 },
     { minX: -40, maxX: 84, minY: -50, maxY: 29 }
   ),
   wedge: blade(
@@ -351,7 +394,7 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       le: 24,
       band: 5,
       toe: -33,
-      top: -34.2,
+      top: -36.6,
       topX: -14,
       round: 24,
       drop: 5,
@@ -359,7 +402,7 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
       heelX: 36,
       hosel: WEDGE_HOSEL,
     },
-    { lowest: 4.5, pitch: 3.6, count: 11, from: -22.3, to: 37.7 },
+    { lowest: 4, pitch: 3.5, from: -22.3, to: 37.7, clearance: 3 },
     { minX: -40, maxX: 82, minY: -54, maxY: 32 }
   ),
 };

@@ -205,8 +205,10 @@ The Club tab opens with a face-impact view:
   illustrative and labelled so. The iron's length sits inside Mizuno's published
   7-iron head lengths (74-87 mm).
 - **The grid.** 10 mm, every number in mm whatever the unit preference, centred on
-  the drawn face's centre: the middle of the groove block on irons and wedges, and
-  on woods midway between the score lines' heel and toe ends and midway up the face.
+  the drawn face's centre. On irons and wedges that is midway between the score
+  lines' common toe and heel ends, and between the lowest and highest line over that
+  point (the upper lines stop about 3 mm under the sloping topline); on woods it is
+  midway between the score lines' heel and toe ends and midway up the face.
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge
