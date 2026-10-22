@@ -68,6 +68,7 @@ def render_swing(  # pylint: disable=too-many-locals
     focal: float = FOCAL,
     exposure_ms: float = 0.0,
     subframes: int = 1,
+    ball_level: float = 225.0,
 ) -> tuple[np.ndarray, il.RestingBall]:
     """Frames of one swing and the resting ball, right-handed, unmirrored.
 
@@ -112,7 +113,7 @@ def render_swing(  # pylint: disable=too-many-locals
                         image,
                         (int(round(x * 16)), int(round(y * 16))),
                         int(round(radius * 16)),
-                        225.0,
+                        ball_level,
                         -1,
                         shift=4,
                     )
@@ -316,3 +317,24 @@ def test_the_kiosk_still_reports_impact_location_as_pending():
     folder = Path(model_metrics.__file__).parent
     for name in ("model_metrics.py", "server.py", "shot_models.py"):
         assert "impact_location" not in (folder / name).read_text(encoding="utf-8")
+
+
+def test_a_ball_with_no_contrast_names_why_its_departure_cannot_be_seen():
+    frames, ball = render_swing(truth_mm=0.0, ball_level=72.0)
+    result = analyse(frames, ball)
+    assert result.status == "rejected"
+    assert result.reason.startswith("resting_ball_contrast_")
+
+
+def test_a_saturated_view_of_the_ball_is_named():
+    frames, ball = render_swing(truth_mm=0.0)
+    frames[:] = 255
+    assert analyse(frames, ball).reason == "frames_saturated_around_the_resting_ball"
+
+
+def test_frames_that_saturate_after_contact_are_named():
+    frames, ball = render_swing(truth_mm=0.0)
+    frames[11:] = 255
+    result = analyse(frames, ball)
+    assert result.status == "rejected"
+    assert result.reason == "frames_saturate_around_the_ball_from_frame_11"

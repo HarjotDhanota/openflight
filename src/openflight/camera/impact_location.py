@@ -573,6 +573,54 @@ def _within(frame: int | None, anchor: int, window: tuple[int, int]) -> bool:
     return frame is not None and anchor + window[0] <= frame <= anchor + window[1]
 
 
+SATURATED_DN = 250.0
+SATURATED_FRACTION = 0.9
+SATURATION_BOX_DIAMETERS = 2.0
+CONTRAST_ANNULUS = (1.3, 2.0)
+
+
+def _saturated(image: np.ndarray, ball: RestingBall) -> bool:
+    half = SATURATION_BOX_DIAMETERS * ball.diameter_px
+    y0, y1 = max(0, int(ball.y - half)), min(image.shape[0], int(ball.y + half) + 1)
+    x0, x1 = max(0, int(ball.x - half)), min(image.shape[1], int(ball.x + half) + 1)
+    patch = image[y0:y1, x0:x1]
+    return bool(patch.size) and float(np.mean(patch >= SATURATED_DN)) >= SATURATED_FRACTION
+
+
+def ball_contrast_dn(reference: np.ndarray, ball: RestingBall) -> float:
+    """The resting ball's mean against a ring just outside it, in DN."""
+    radius = ball.diameter_px / 2.0
+    grid_y, grid_x = np.mgrid[0 : reference.shape[0], 0 : reference.shape[1]]
+    distance = np.hypot(grid_x - ball.x, grid_y - ball.y)
+    disk = reference[distance <= 0.8 * radius]
+    ring = reference[
+        (distance >= CONTRAST_ANNULUS[0] * radius) & (distance <= CONTRAST_ANNULUS[1] * radius)
+    ]
+    if disk.size == 0 or ring.size == 0:
+        return 0.0
+    return float(disk.mean() - ring.mean())
+
+
+def why_departure_unseen(
+    frames: np.ndarray, ball: RestingBall, reference: np.ndarray, start: int
+) -> str | None:
+    """Why no witness could see this ball leave, when the pixels say so; else None.
+
+    A saturated view of the ball before or after the swing, or a ball no
+    brighter or darker than what surrounds it, is named rather than read as a
+    ball that never moved.
+    """
+    if _saturated(reference, ball):
+        return "frames_saturated_around_the_resting_ball"
+    for index in range(start, int(frames.shape[0])):
+        if _saturated(frames[index], ball):
+            return f"frames_saturate_around_the_ball_from_frame_{index}"
+    contrast = ball_contrast_dn(reference, ball)
+    if abs(contrast) < CAP_FLOOR_DN:
+        return f"resting_ball_contrast_{abs(contrast):.0f}_dn_too_low_to_see_it_leave"
+    return None
+
+
 def find_contact(  # pylint: disable=too-many-branches
     frames: np.ndarray, ball: RestingBall
 ) -> ContactEstimate:
@@ -590,6 +638,9 @@ def find_contact(  # pylint: disable=too-many-branches
     reference_count = min(REFERENCE_FRAMES_MAX, max(3, count // 4))
     reference_stack = frames[:reference_count].astype(np.float32)
     reference = np.median(reference_stack, axis=0)
+    unseen = why_departure_unseen(frames, ball, reference, reference_count)
+    if unseen is not None:
+        return ContactEstimate("rejected", unseen, reference_frames=reference_count)
 
     edge_available, rises = _edge_witness(frames, ball, reference_count)
     edge_frame = (
