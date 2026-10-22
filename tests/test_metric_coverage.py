@@ -12,6 +12,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,3 +179,14 @@ def test_the_coverage_matrix_names_every_metric():
     matrix = (REPO / "docs" / "reference" / "metric-coverage.md").read_text(encoding="utf-8")
     for metric_id in EXPECTED_METRIC_IDS:
         assert f"`{metric_id}`" in matrix, metric_id
+
+
+def test_the_documented_command_regenerates_the_ui_catalog():
+    result = subprocess.run(
+        [sys.executable, "-m", "openflight.shot_metrics"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO,
+    )
+    assert json.loads(result.stdout) == shot_metrics.catalog()
