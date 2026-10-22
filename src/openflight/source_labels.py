@@ -3,7 +3,9 @@
 - ``measured``: a sensor saw it;
 - ``calculated``: a named model on measured or calculated inputs;
 - ``model_geometry``: it rests on assumed swing geometry;
-- ``estimated``: it is built on a weak input, or is an OPS-only stand-in.
+- ``estimated``: it is built on a weak input, or is an OPS-only stand-in;
+- ``experimental``: a camera reading shown to testers that is not yet validated;
+  it never feeds another metric.
 
 A Shot's source text for a value a model built (``spin_axis_source``, say)
 starts with the word of its label, so these predicates can read the label back
@@ -20,6 +22,7 @@ LABEL_MODEL_GEOMETRY = "model_geometry"
 # a measured input too weak to stand as one (e.g. a low-coherence horizontal launch):
 # every output built on it is "estimated", with the input's reason (V-formulas C2)
 LABEL_ESTIMATED = "estimated"
+LABEL_EXPERIMENTAL = "experimental"
 
 # The labels of a value a model built (calculated, model geometry, or estimated on an
 # estimated input); none is ever measured. Shot.spin_source holds one for a model's spin.

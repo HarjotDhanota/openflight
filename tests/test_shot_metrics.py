@@ -45,7 +45,7 @@ def test_the_catalog_is_the_owner_s_metric_list_in_order():
     assert shot_metrics.METRIC_IDS == EXPECTED_METRIC_IDS
 
 
-def test_the_label_vocabulary_is_the_five_labels():
+def test_the_label_vocabulary_is_the_six_labels():
     assert shot_metrics.LABELS == LABELS
 
 
@@ -232,3 +232,19 @@ def test_a_measured_spin_axis_is_labelled_measured():
     record = shot.to_dict()["metrics"]["spin_axis"]
     assert record["status"] == "measured"
     assert record["source"] == "measured (camera)"
+
+
+def test_an_experimental_value_keeps_its_label_and_its_range():
+    record = shot_metrics.build_record(
+        "impact_offset", 6.0, shot_metrics.EXPERIMENTAL, range_=[1.0, 11.0], note="not validated"
+    )
+    assert record["status"] == "experimental"
+    assert record["range"] == [1.0, 11.0]
+
+
+def test_the_camera_prior_never_relabels_an_experimental_value():
+    metrics = {"impact_offset": {"status": shot_metrics.EXPERIMENTAL, "value": 4.0, "note": None}}
+    shot_metrics._with_prior_label(  # pylint: disable=protected-access
+        metrics, {"ball_range_source": "camera_prior"}
+    )
+    assert metrics["impact_offset"]["status"] == "experimental"

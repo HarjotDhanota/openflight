@@ -74,3 +74,10 @@ def test_a_record_that_breaks_the_label_contract_is_code(record, evidence):
     row = check.kiosk_metric_stage("face_angle", record, {})
     assert (row["status"], row["cause"]) == (check.FAIL, "CODE")
     assert evidence in row["evidence"]
+
+
+def test_an_experimental_value_is_labelled_never_passed(records):
+    record = dict(records["impact_offset"], value=6.0, status="experimental", reason=None)
+    row = check.kiosk_metric_stage("impact_offset", record, {})
+    assert row["status"] == check.LABELLED
+    assert "[experimental]" in row["value"]

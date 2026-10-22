@@ -39,3 +39,8 @@ def test_the_label_words_are_the_shared_vocabulary():
         labels.LABEL_MODEL_GEOMETRY,
         labels.LABEL_ESTIMATED,
     ) == ("measured", "calculated", "model_geometry", "estimated")
+
+
+def test_experimental_is_a_label_word_but_never_a_model_label():
+    assert labels.LABEL_EXPERIMENTAL == "experimental"
+    assert labels.LABEL_EXPERIMENTAL not in labels.MODEL_LABELS

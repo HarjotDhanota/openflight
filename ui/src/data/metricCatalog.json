@@ -6,6 +6,7 @@
     "calculated",
     "model_geometry",
     "estimated",
+    "experimental",
     "not_measured"
   ],
   "metrics": [
