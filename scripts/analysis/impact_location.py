@@ -108,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--truth", type=Path, default=None)
     parser.add_argument("--handedness", choices=il.HANDEDNESS, default=None)
     parser.add_argument("--club", default=None, help="override the club for every clip")
+    parser.add_argument(
+        "--lens-id",
+        default=None,
+        help="config/lenses.json lens when the session has no lens record",
+    )
     parser.add_argument("--club-speed-mps", type=float, default=None)
     parser.add_argument(
         "--range-m", type=float, default=None, help="IWR slant range when the session has none"
@@ -137,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         face_centre_toeward_mm=args.face_centre_offset_mm,
         shots=tuple(args.shot),
         template_scope=args.template_scope,
+        lens_id=args.lens_id,
     )
     report = session.analyse_session(
         root, options, overlays=None if args.no_overlays else args.out / "overlays"

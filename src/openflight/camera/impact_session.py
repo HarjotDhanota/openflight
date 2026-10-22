@@ -253,18 +253,32 @@ def session_rig(start: Mapping[str, Any]):
     return RigGeometry.from_json(default), "repo_rig_file_enclosure_v3"
 
 
-def focal_px(start: Mapping[str, Any], rig, width: int) -> tuple[float, str]:
-    """The lens's focal length for this saved width: the session's lens record, else the rig's."""
+def focal_px(
+    start: Mapping[str, Any], rig, width: int, *, lens_id: str | None = None
+) -> tuple[float, str]:
+    """The lens's focal length for this saved width and its source.
+
+    The session's lens record first; else the named lens from ``config/lenses.json``
+    (nominal, or its checkerboard calibration when one is kept); else the rig file's.
+    """
+    from openflight.camera import lens_profiles  # noqa: PLC0415
     from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
-    from openflight.camera.lens_profiles import ARM_SIZES  # noqa: PLC0415
 
     lens = ((start.get("config") or {}).get("rig_geometry") or {}).get("lens") or {}
     by_arm = lens.get("focal_px_by_arm") if isinstance(lens, dict) else None
     if isinstance(by_arm, dict):
-        for arm, (arm_width, _height) in ARM_SIZES.items():
+        for arm, (arm_width, _height) in lens_profiles.ARM_SIZES.items():
             value = _number(by_arm.get(arm))
             if arm_width == width and value:
                 return value, f"session_lens_{lens.get('intrinsics', 'nominal')}"
+    if lens_id is not None:
+        active = lens_profiles.active_lens(
+            rig,
+            lens_profiles.load_catalogue(),
+            lens_id,
+            [lens_profiles.default_calibration_dir()],
+        )
+        return active.focal_px(width), f"lens_profile_{lens_id}_{active.intrinsics}"
     return mode_focal_px(width, rig), "rig_file_lens_nominal"
 
 
@@ -387,6 +401,7 @@ class Options:  # pylint: disable=too-many-instance-attributes
     face_centre_toeward_mm: float = il.FACE_CENTRE_TOEWARD_MM
     shots: tuple[str, ...] = ()
     template_scope: str = "club"
+    lens_id: str | None = None
 
 
 def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
@@ -483,7 +498,7 @@ def prepare_clip(  # pylint: disable=too-many-locals
         return
     rig, rig_source = session_rig(run.start)
     height, width = frames.shape[1:]
-    focal, focal_source = focal_px(run.start, rig, int(width))
+    focal, focal_source = focal_px(run.start, rig, int(width), lens_id=options.lens_id)
     camera = il.ImpactCamera(focal, ((width - 1) / 2.0, (height - 1) / 2.0), focal_source)
     clip.extra["rig_source"] = rig_source
     range_m, sigma_m, clip.range_source = shot_range_m(shot, run, options.range_m)

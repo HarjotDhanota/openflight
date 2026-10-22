@@ -210,3 +210,14 @@ def test_anchors_must_carry_their_schema(tmp_path):
     path.write_text(json.dumps({"schema": "other", "clubs": {}}), encoding="utf-8")
     with pytest.raises(ValueError):
         session.read_anchors(path)
+
+
+def test_a_named_lens_takes_its_focal_length_from_the_lens_profiles():
+    rig, _source = session.session_rig({})
+    stock = session.focal_px({}, rig, 1280)
+    six = session.focal_px({}, rig, 1280, lens_id="6mm")
+    assert stock[1] == "rig_file_lens_nominal"
+    assert six[1] == "lens_profile_6mm_nominal"
+    assert six[0] == pytest.approx(stock[0] * 6.0 / 2.8)
+    recorded = {"config": {"rig_geometry": {"lens": {"focal_px_by_arm": {"arm5": 1500.0}}}}}
+    assert session.focal_px(recorded, rig, 1280, lens_id="6mm")[1] == "session_lens_nominal"
