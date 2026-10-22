@@ -3,11 +3,14 @@
 Status: **experimental_unqualified**. Nothing here is validated. No reading has been
 scored against a strike reference, because none of the recorded shots with marked face
 photos could be read (see "Results so far"). It runs after a session on its recorded
-clips. The kiosk still reports impact offset and height as "pending E5".
+clips, and live on the kiosk after each shot (see "Live on the kiosk"), so testers can
+judge it against their own spray marks. On the kiosk it is labelled `experimental`
+(badge **EXP**, "not yet validated") and it feeds no other metric.
 
 Code: `src/openflight/camera/impact_location.py` (one shot),
-`src/openflight/camera/impact_session.py` (a session), and the CLI
-`scripts/analysis/impact_location.py`. All three are research code
+`src/openflight/camera/impact_session.py` (a session), the CLI
+`scripts/analysis/impact_location.py`, and the kiosk's live reading
+`src/openflight/camera/impact_live.py`. All four are research code
 (`config/module_buckets.json`: RESEARCH).
 
 ## What it reports
@@ -147,6 +150,90 @@ uv run python scripts/analysis/impact_location.py SESSION --out OUT \
   head mask, orange the placed outline (red when a frame failed a gate), blue heel and
   toe, yellow the resting ball, and magenta heel, toe, face centre and sole at contact.
 
+## Live on the kiosk
+
+`impact_live.py` is a kiosk extension (entry point `impact_live`; `--no-impact-live`
+turns it off). It does the same reading, one shot at a time:
+
+1. **When.** Once a shot with a saved camera clip has been shown, its clip, its shot
+   record and the session's start record go to a worker process. The worker is
+   `python -m openflight.camera.impact_live --worker`, started when the camera is set
+   up. It runs at low priority (nice 10, or below-normal on Windows) with one thread
+   for its maths. It is a separate process, so it never holds the kiosk's Python
+   threads, the next shot, the ready light or the camera.
+2. **The head outline.** The worker keeps a running outline per (club, frame size)
+   from this session's swings so far. Only swings with a head in their clip count,
+   and the latest 8 are kept. The swings pool their shape only; every reading is the
+   shot's own. Until a club has 5 such swings, a shot is not measured with the
+   reason "building the head outline: 3 of 5 swings with this club". The fifth swing
+   builds the outline before it is read. Later shots read the current outline. While
+   the worker is idle, it rebuilds the outline with the swings that arrived since.
+   A new shot interrupts that rebuild, and the old outline stays in use. A new
+   session starts the outlines again.
+3. **Analysis width.** A clip wider than 640 pixels is averaged down to 640x400 by
+   2x2 blocks and read with that mode's focal length. This keeps a reading to about
+   a second on a desktop. One pixel of alignment noise is then about 1.7 mm at
+   1.5 m, and the reading's 1-sigma says so.
+4. **The reading.** The result goes on `Shot.impact_location` and out as a shot
+   update (`server.publish_shot_update`: the UI replaces the shot in place, and the
+   session log gets a `shot_updated` entry). Simulators and phones are not sent it
+   again. `impact_offset` and `impact_height` become `experimental` records with
+   their 1-sigma range, or `not_measured` with the reason in plain words: no radar
+   distance to the ball, glare, the camera never saw the ball leave, the club head
+   did not show in the clip, and so on. The code stays in `reason_code`.
+5. **Dropped.** A reading still open when the next shot arrives is dropped, and the
+   worker stops on it. Its reason is "dropped: the next shot arrived before this one
+   was read". If the worker had already read its clip, the swing still joins the outline.
+6. **Logged.** Every reading, refusal and drop is an `impact_location` entry in the
+   session log, with its stage times (`stages_ms`, `analysis_ms`) and the time from
+   hand-off to result (`latency_ms`).
+
+### It feeds nothing else
+
+The collision model never receives it. `shot_models` passes no impact location, and
+the model's gear effect accepts only a `measured` one. Spin, spin axis, face, loft,
+flight and every other metric are the same with or without a reading
+(`tests/test_impact_isolation.py`).
+
+### The face view
+
+The Club tab opens with a face-impact view:
+
+- **The face.** Our own line drawing of the shot's club category (driver, fairway
+  wood, hybrid, iron, wedge), seen from the target, with the toe on the left for a
+  right-hander. A left-hander's drawing is mirrored. The proportions are
+  illustrative and labelled so. The iron's length sits inside Mizuno's published
+  7-iron head lengths (74-87 mm); the woods sit inside the USGA 127 x 71 mm limit.
+- **The grid.** Centred on the face centre: 10 mm, or a quarter inch with imperial
+  units.
+- **The dots.** The shot's dot with its 1-sigma ellipse, and this session's earlier
+  shots with the same club as faint dots.
+- **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:
+  reason".
+
+Code: `ui/src/components/panel/FaceImpactView.tsx` and `faceImpact.ts`.
+
+### Time per shot
+
+`scripts/analysis/impact_live_benchmark.py` runs the worker's analyser shot by
+shot. Use `--synthetic N` for synthetic swings, or give a recorded session. Run it on
+a Pi to replace the estimates below. Measured on an AMD Ryzen 7 5800X (Windows,
+22 Oct 2026), with 1280x800 clips read at 640x400:
+
+| Step | Desktop | Pi 5, estimated (x3-4) |
+|---|---|---|
+| A refused real outdoor clip (Outdoors-test-7) | 0.6-0.9 s | 2-4 s |
+| A synthetic swing while the outline builds | 0.3-0.45 s | 1-2 s |
+| A reading with the outline ready | 0.8-1.0 s | 2.5-4 s |
+| The fifth swing (builds the outline first) | 7.0 s | 20-30 s |
+| An idle outline rebuild, 6-8 swings | 6-8 s | 20-30 s, interruptible |
+| Worker start (imports) | about 1.5 s | 5-8 s, at kiosk start |
+
+The Pi factor is single-core Geekbench 6 (a Pi 5 scores about 0.4 of a 5800X), widened
+for numpy and scipy FFTs on 128-bit NEON against AVX2. At 1280x800 without averaging
+down, a reading takes about 1.1 s refused and 3 s read on the desktop, and the
+outline takes 26-40 s.
+
 ## Results so far
 
 The test bench graded it on the 8 confirmed spray marks of Outdoors-test-1, -5 and -7.
@@ -177,3 +264,5 @@ r = 0.97) are not in the bench, so that regression was not run.
   scale rests on a groove-length prior (±13 %) until a club's groove length is
   measured.
 - **Lens.** The stock lens is uncalibrated and about 16 % barrel at the edge.
+- **Live width.** The kiosk reads at 640x400 to keep up. The 1280x800 detail is lost
+  to the averaging until the reading is fast enough at full size.
