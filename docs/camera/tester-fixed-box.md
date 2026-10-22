@@ -192,7 +192,10 @@ aim point, the tilt in use and the range.
   offered by default; it is still accepted.
 - `{action: "skip"}`: swings measure from the unit's boresight, labelled.
 
-The kiosk serves the line at `GET /api/target-line`.
+The kiosk serves the line at `GET /api/target-line`. During free play a confirmed or
+skipped aim goes to the running kiosk (`POST /api/free-play/target-line`), which
+moves every horizontal angle to it between two shots; `GET /api/target-line` then
+serves the new line.
 
 ## The kiosk window (2a, 3a)
 
@@ -211,7 +214,10 @@ covers the tester page; the page's "Kiosk view" button opens the kiosk UI at
 | `GET\|POST /api/tester/lens` | the lenses, the selection, each lens's settings, `allowed_ladder_us`; `select`, `settings`, `reset_tilt` |
 | `GET /api/tester/testers` | `testers`, `suggested_new` |
 | `GET /api/tester/status` | adds `lens_id`, `kiosk`, `ball_at_address`, `live_metrics` |
-| `GET\|POST /api/tester/aim-point` | `display_scale`, `skip`, `total_uncertainty_deg` |
+| `GET\|POST /api/tester/aim-point` | `display_scale`, `skip`, `total_uncertainty_deg`; during free play `preview_source: kiosk` and `free_play {applied, error}` |
+| `GET\|POST /api/tester/handedness` | the tester's `handed` (`RH` or `LH`) and its `source` |
+| `POST /api/tester/free-play/pause\|resume\|photo`, `GET .../view.jpg` | free play's pause (`cause` `photo` or `aim`), the face photo (`capture` or `skip`) and the kiosk camera while paused |
+| `POST /api/tester/comparator` | a launch monitor export: `in_package`, or `beside` an existing package |
 | kiosk `GET /api/target-line` | `status`, `yaw_deg`, `total_uncertainty_deg`, `source` |
 | kiosk `GET /api/ball-at-address` | the latest resting-ball look |
 

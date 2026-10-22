@@ -1155,8 +1155,10 @@ def free_play_view():
     import cv2  # pylint: disable=import-error,import-outside-toplevel
 
     runtime = server.camera_capture_runtime
-    if not free_play_pause or runtime is None:
+    if not free_play_pause:
         return jsonify({"error": "free play is not paused"}), 409
+    if runtime is None:
+        return jsonify({"error": "the camera is not running"}), 503
     frames = runtime.recent_frames(1, timeout_s=1.0)
     if not frames:
         return jsonify({"error": "the camera did not deliver a picture"}), 503

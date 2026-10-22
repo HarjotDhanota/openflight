@@ -381,7 +381,7 @@ def tester_request(config, path, payload=None):
 def register_kiosk_routes(app, config, finish_capture, progress=None, extra=None):
     """Stop acquisition, keep its UI alive, then ask the tester to package.
 
-    ``progress`` returns the exposure study's line for the band (19 Oct), or None;
+    ``progress`` returns the exposure study's line for the band, or None;
     ``extra`` adds its keys to every answer (the pause and the tester page's address).
     """
     lock = threading.Lock()

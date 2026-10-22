@@ -114,7 +114,6 @@ test.describe('the tester page around free play', () => {
     await start.tap();
     await expect.poll(() => starts.length).toBe(1);
     expect(starts[0]).toMatchObject({ action: 'free_play', resolution: 'arm5', club: 'pw' });
-    // once free play runs the kiosk's own CHANGE CLUB takes over
     await expect(page.locator('#first-club-row')).toBeHidden();
   });
 });

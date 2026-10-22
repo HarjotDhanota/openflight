@@ -507,5 +507,4 @@ class TestLaunchMonitorExport:
             "file": beside.name,
             "folder": session_bundle.display_path(send),
         }
-        # a later package still carries it
         assert (tmp_path / "sessions" / TESTER / "comparator" / "Trackman_Export_1_.csv").is_file()

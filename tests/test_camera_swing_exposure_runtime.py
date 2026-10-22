@@ -695,9 +695,6 @@ def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, mon
         runtime.stop()
 
 
-# --- a paused free play's still photo --------------------------------------------------------
-
-
 def test_still_controls_hold_off_the_automatic_exposure_until_released(tmp_path):
     runtime = _runtime(tmp_path, exposure_us=300, gain=12.0)
 

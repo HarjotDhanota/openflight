@@ -9,7 +9,10 @@ OV9281 camera and the LIS3DH tilt sensor. Start `scripts/start-tester.sh`, open
 `http://<pi-address>:8765/`, and work down the steps:
 
 1. **Tester and lens.** Tap your tester ID (or **New tester**), **Indoors** or
-   **Outdoors**, and the lens fitted to the unit.
+   **Outdoors**, **Right-handed** or **Left-handed**, and the lens fitted to the
+   unit. The hand is kept per tester (right-handed until you tap left) and given to
+   the kiosk at start; a connected simulator's hand wins over it. The scoreboard
+   header shows it beside the club ("7 Iron · Right-handed").
 2. **Check the unit.** A. Tap **Check the unit**: the speed radar, the camera and
    the ranging radar each answer, and the tilt sensor is read all the time. A
    missing sensor is named ("Missing or not answering: Camera (OV9281)") and setup
@@ -33,16 +36,21 @@ OV9281 camera and the LIS3DH tilt sensor. Start `scripts/start-tester.sh`, open
    the page is open on; the unit also keeps a copy in `~/OpenFlight-to-send/`
    (its path and size are shown). Then upload the zip to your Google Drive
    (drive.google.com → New → File upload), share it as "Anyone with the link",
-   and send the link to whoever asked you to test.
+   and send the link to whoever asked you to test. Hit beside a TrackMan or
+   another launch monitor? Attach its export (CSV) on the line in step 8: before
+   the package is made it goes into the package; once the package exists it is
+   saved beside it in `~/OpenFlight-to-send/` (named after the package): send both.
 
 The band at the top stays neutral until free play records: "SETTING UP · Step 4 ·
 Aim at your target · free play starts at step 7" during setup, "NOT STARTED" on
 step 7 before **Start free play**, "FINISHED" once packaged.
 
 In step 7 tap the session's **resolution**, **1280×800** or
-**640×400** (the maintainer tells each tester which one), then tap **Start free
-play**. The lens's default resolution is marked "(lens default)" but is never
-assumed: Start stays off until one is tapped. A resolution the lens settings
+**640×400** (the maintainer tells each tester which one), answer **Which club
+will you hit first?** from the kiosk's club grid, then tap **Start free play**.
+The kiosk starts on that club; **CHANGE CLUB** on the scoreboard changes it as
+usual. The lens's default resolution is marked "(lens default)" but is never
+assumed: Start stays off until a resolution and a club are tapped. A resolution the lens settings
 disable is not offered, and there is no switch mid-session. The manual exposure
 ladder and its per-swing verdict card sit in the closed **Advanced: manual
 exposure ladder (maintainer)** section under free play: leave it closed. While
@@ -51,8 +59,29 @@ e.g. "SETTING UP · Step 4 · Aim at your target · free play starts at step 7".
 
 Hit normally while the full-screen scoreboard records camera clips, distance-radar
 dumps, speed-radar data and exposure decisions. There is no swing limit, per-shot
-prompt, face photograph or annotation step. Testers collect and send data; the
-maintainer handles any reference marking and accuracy grading.
+prompt or annotation step. Face photos aren't required, but they help (below).
+Testers collect and send data; the maintainer handles any reference marking and
+accuracy grading.
+
+### During free play: Setup, face photos and the aim
+
+- **Setup** in the scoreboard's Live header brings the tester page back: the
+  window that opened the scoreboard, or (on the unit's own screen, where the
+  scoreboard covers everything) the tester page in the same window. **Kiosk view**
+  goes back to the scoreboard.
+- **Face photo** (scoreboard) or **Photograph the face** (step 7) pauses free
+  play: the light shows amber **WAIT · taking a face photo**, swings are not
+  counted ("Not counted: paused"), and the camera holds the ladder's still-photo
+  exposure. The tester page shows the camera with the dashed box: hold the face
+  about 0.5 m from the lens inside it and tap **Photograph face**, or **Skip**.
+  The photo is saved against the latest shot number, and free play resumes.
+  **Resume** on the scoreboard ends a pause without a photo.
+- **Move the aim point** (step 4) works during free play without a restart: the
+  kiosk pauses (**WAIT · moving the aim**) and its camera shows the target.
+  Confirming (or skipping) hands the new target line to the running kiosk; the
+  next shot is measured from it, and shots before it keep the line they used. If
+  the kiosk is still processing a shot, the page says so: set it again in a moment.
+  **Resume free play** in step 7 ends an aim pause left open.
 
 ### The exposure study runs by itself
 
@@ -128,7 +157,19 @@ In the run folder (`<tester>/<arm>/paired/run-NN/`):
   (`shot_number`, `verdict`) and verdict `counts`, and the `automatic` hand-over
   with the policy's seed decision.
 - `session_start.config.free_play` carries `resolution` and the whole
-  `exposure_plan`.
+  `exposure_plan`; `session_start.config.golfer` the hand used and its source
+  (`simulator`, `setup` or `default`); `session_start.config.target_line` the
+  target line in force at the start (revision 0).
+- Every shot carries `target_line`: the `revision`, `status`, `yaw_deg`,
+  `horizontal_offset_deg`, `frame` and `since` of the target line it was measured
+  from. Each move is a `target_line_changed` entry with its time, the previous line
+  and the new one.
+- Face photos are `face-photos/shot-NNNN.pgm` in the run folder (a second photo of
+  the same shot gets `-2`), each with a `face_photo` entry (`shot_number`, `path`,
+  `exposure_us`, `gain`, `taken_at`); skips are `face_photo_skipped`. Pauses are
+  `free_play_paused` / `free_play_resumed` entries; a swing during one is
+  `free_play_shot_not_counted`.
+- A launch monitor's export is kept in `<tester>/comparator/`.
 - Every shot entry carries `free_play.exposure_study`
   (`openflight.free_play_exposure_study_shot.v1`): `ladder_phase`, `resolution`,
   `rung_id`, `setting_index`, `settings_total`, `swing_of_rung`,
@@ -141,7 +182,8 @@ In the run folder (`<tester>/<arm>/paired/run-NN/`):
 
 | Symptom | Action |
 |---|---|
-| Start free play stays off | Tap a resolution first, then check the setup steps are complete. |
+| Start free play stays off | Tap a resolution and the first club, then check the setup steps are complete. |
+| WAIT · taking a face photo / moving the aim | Free play is paused: finish the photo or the aim on the tester page, or tap **Resume**. |
 | Finding the ball | Keep a ball inside the confirmed box and wait for the search. |
 | No ball in the box | Re-tee inside the box; add light if the ball is hard to see. |
 | Changing the camera setting | Wait for green: the study is moving to its next setting. |
@@ -647,6 +689,8 @@ uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
   swing server's 4.6 m when no net was measured). `total_deg` adds them in
   quadrature.
 - **Moving it.** Press **Move the aim point**, drag the line and confirm it.
+  During free play the kiosk's camera shows the target and the running kiosk
+  takes the new line for its next shot (see "During free play" above).
   Confirming within 4 px of the last aim point, with the same ball box,
   changes nothing. A moved aim point, or one set after swings were started without
   it, marks those swings stale: the step says which mode's swings measured from
