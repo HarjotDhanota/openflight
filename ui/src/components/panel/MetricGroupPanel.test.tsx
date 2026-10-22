@@ -1,6 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { METRIC_CATALOG } from '../../data/metricCatalog';
+import { METRIC_LABELS } from '../../types/shot';
 import type { MetricLabel, Shot, ShotMetric } from '../../types/shot';
 import { isComingLater } from '../../utils/plainReason';
 import { MetricGroupPanel } from './MetricGroupPanel';
@@ -21,14 +22,7 @@ function record(overrides: Partial<ShotMetric>): ShotMetric {
   };
 }
 
-const LABEL_CYCLE: MetricLabel[] = [
-  'measured',
-  'calculated',
-  'model_geometry',
-  'estimated',
-  'experimental',
-  'not_measured',
-];
+const LABEL_CYCLE: readonly MetricLabel[] = METRIC_LABELS;
 
 /** A shot whose metrics cycle through every label, so every badge renders. */
 function everyMetricShot(): Shot {
@@ -101,7 +95,7 @@ describe('MetricGroupPanel', () => {
 
   it('gives each of the five labels its own badge', () => {
     const html = render('club') + render('flight');
-    for (const status of ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental']) {
+    for (const status of METRIC_LABELS.filter((label) => label !== 'not_measured')) {
       expect(html).toContain(`label-badge--${status}`);
     }
   });

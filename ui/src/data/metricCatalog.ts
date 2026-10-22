@@ -1,4 +1,5 @@
 import catalogJson from './metricCatalog.json';
+import { METRIC_LABELS } from '../types/shot';
 import type { MetricLabel, Shot, ShotMetric } from '../types/shot';
 
 /**
@@ -31,11 +32,5 @@ export function shotMetric(shot: Shot | null | undefined, id: string): ShotMetri
 export type ValueLabel = Exclude<MetricLabel, 'not_measured'>;
 
 export function isValueLabel(status: string | null | undefined): status is ValueLabel {
-  return (
-    status === 'measured' ||
-    status === 'calculated' ||
-    status === 'model_geometry' ||
-    status === 'estimated' ||
-    status === 'experimental'
-  );
+  return status !== 'not_measured' && (METRIC_LABELS as readonly (string | null | undefined)[]).includes(status);
 }
