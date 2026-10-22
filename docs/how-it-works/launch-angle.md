@@ -7,7 +7,7 @@ icon: lucide/angle
 *Field report — updated 22 July 2026.*
 
 **How we measure launch angle with a 60 GHz radar.** A plain-language guide to
-the OPS243 + TI IWR6843 pipeline, the late-flight algorithm we call LCMF-v1,
+the OPS243 + TI IWR6843 pipeline, the late-flight algorithm we call LCMF,
 what three TrackMan sessions taught us, and how we plan to improve coverage
 without hiding quality.
 
@@ -15,8 +15,18 @@ without hiding quality.
 | --- | --- |
 | Angle sensor | **TI IWR6843** |
 | Speed sensor | **OPS243** |
-| Estimator | **LCMF-v1** |
-| Validation | **Three indoor TrackMan sessions** |
+| Estimator | **LCMF-v2** (per-antenna paths) |
+| Validation | **Three indoor TrackMan sessions** (LCMF-v1) |
+
+!!! warning "LCMF-v2 replaced LCMF-v1 on 30 September 2026"
+
+    The running estimator is LCMF-v2 (`lcmf_v2_per_antenna`). It places each
+    IWR6843LEVM antenna (RX1–RX4, TX1, TX3) from the enclosure's rig file
+    (`--rig-geometry`) and fits exact direct and floor-bounced path lengths for
+    every TX/RX pair, instead of one radar height on idealised element positions.
+    Its gates, angle grid and five component models are LCMF-v1's. The TrackMan
+    results on this page were measured with LCMF-v1 on the July rig; LCMF-v2 has
+    no paired TrackMan session yet.
 
 **Explain it like I’m five**
 
@@ -102,7 +112,7 @@ The custom firmware saves a compact, high-detail radar movie: 12 snapshots of th
 
 *Rolling buffer mental model.* The radar is not trying to decide launch angle from one echo. It stores a short radio movie, then LCMF looks for the portion where the ball has separated from the impact mess but has not yet reached the net or screen.
 
-**LCMF-v1**
+**LCMF**
 
 ## What the algorithm actually does
 
@@ -246,7 +256,7 @@ The product answer should not be “lower the bar and call everything high confi
 
 ### Recommended confidence contract
 
-1. **Strict pass:** if normal LCMF-v1 accepts, show the radar launch angle as the primary measured value with full confidence.
+1. **Strict pass:** if normal LCMF accepts, show the radar launch angle as the primary measured value with full confidence.
 2. **Relaxed pass:** if strict LCMF no-reads but a relaxed replay passes RMS, snapshot, frame, component-spread, and OPS-speed checks, show the radar angle with a two-dot confidence marker.
 3. **Estimate:** if both radar passes fail, show the club/speed estimate exactly as we do today.
 
@@ -401,7 +411,7 @@ LCMF does not trust a single angle estimate. It asks five models with different 
 
 ### Deeper model notes
 
-All five models sweep candidate launch angles through the same geometry: measured tee range, radar height, ball height, mount tilt, OPS ball speed, and the tracked TI range samples. For each candidate angle, the software predicts where the direct ball echo and the floor-reflected “image ball” echo should appear. The models differ in which part of the raw radar evidence they trust most.
+All five models sweep candidate launch angles through the same geometry: each antenna's position from the rig file, measured tee range, ball height, mount tilt, OPS ball speed, and the tracked TI range samples. For each candidate angle, the software predicts, for every TX/RX pair, where the direct ball echo and the floor-reflected “image ball” echo should appear. The models differ in which part of the raw radar evidence they trust most.
 
 - channel_two8**Two-source vertical-array model.** This is the simplest complex antenna model. It treats each selected snapshot as a mixture of two steering vectors across the eight virtual vertical channels: the direct path from the real ball and the image path from the floor reflection. The nuisance coefficients are complex, so amplitude and phase of each path are allowed to float. The candidate angle wins when those two columns predict the observed eight-channel vector with low leave-one-channel-out error. This is useful because it asks, “does the array phase look like this launch angle?” without needing the range-bin shape to be perfect.
 - channel_four4_path_tdm**Four-path transmit/receive manifold model.** The floor reflection can happen on transmit, receive, or both, so the full dictionary has four path products: direct-direct, direct-ground, ground-direct, and ground-ground. Because the IWR6843 is time-division multiplexed, the later TX block sees a slightly different path phase when direct and reflected components have different radial velocities. This model includes that TDM residual phase. It is more physically complete than the two-source model, but also has more nuisance freedom, so it is paired with leave-one-channel-out scoring to avoid simply overfitting noise.
@@ -422,7 +432,7 @@ The fusion step is deliberately boring: take the five component launch angles an
 
 ### How it connects to OpenFlight
 
-The server flag --iwr6843 enables the TI capture monitor alongside the existing OPS rolling-buffer monitor. OPS still creates the shot and owns speed/carry inputs. The TI monitor captures and processes the raw IWR6843 dump, then the server merges a measured launch angle into the shot when LCMF passes quality gates. When TI does not pass, the shot still appears using the existing estimated launch angle path.
+The server flag --iwr6843 (with --rig-geometry) enables the TI capture monitor alongside the existing OPS rolling-buffer monitor. OPS still creates the shot and owns speed/carry inputs. The TI monitor captures and processes the raw IWR6843 dump, then the server merges a measured launch angle into the shot when LCMF passes quality gates. When TI does not pass, the shot still appears using the existing estimated launch angle path.
 
 This split is intentional: OPS provides the stable product backbone, while TI adds measured ball-angle evidence without forcing the whole launch monitor to depend on one chip.
 
