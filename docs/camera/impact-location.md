@@ -205,12 +205,28 @@ The Club tab opens with a face-impact view:
   illustrative and labelled so. The iron's length sits inside Mizuno's published
   7-iron head lengths (74-87 mm).
 - **The centre lines.** One heel-to-toe and one low-to-high line, clipped to the
-  face, cross at the reading's own face centre: 8 mm toe-ward of the drawn head
-  outline's heel-toe midpoint, and the category's face-centre height above the
-  leading edge (driver 30, fairway 17, hybrid 20, iron 23, wedge 24 mm), as above.
-  The dot sits at the unrounded mm from there; every number is in mm whatever the
-  unit preference. That centre is not the middle of the drawn score lines: it sits
-  about 10 mm toe-ward of it on the driver, fairway, iron and wedge.
+  face, cross at the drawn face centre: the middle of the groove block on irons and
+  wedges (midway between the lines' common toe and heel ends, and between the lowest
+  and highest line over that point), and on woods midway between the score lines'
+  heel and toe ends and midway up the face. The dot sits at the unrounded mm from
+  there; every number is in mm whatever the unit preference.
+- **The face view draws the payload against the scoring-area centre; the backend's
+  heel-toe origin is an uncalibrated convention.** Where that convention (outline
+  midpoint + 8 mm toe-ward, the category height above the leading edge) lands on
+  each drawing, assuming the camera's head outline matches the drawn head outline
+  including the lower neck on irons and wedges and excluding a wood's sleeve:
+
+  | Club | Toe-ward of the drawn centre | Above it |
+  | --- | --- | --- |
+  | Driver | 10.0 mm | 1.5 mm |
+  | Fairway | 9.8 mm | -0.7 mm |
+  | Hybrid | -1.2 mm | 2.6 mm |
+  | Iron | 10.1 mm | 2.8 mm |
+  | Wedge | 10.7 mm | 4.0 mm |
+
+  A shot read at the convention's zero therefore shows about 10 mm toe-ward of the
+  drawn centre on most clubs; testers' face marks will show whether the convention
+  or the assumption is off. Calibration belongs in the backend.
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge

@@ -461,20 +461,8 @@ function fullWood(facePoints: Point[], headPoints: Point[], hosel: Hosel, spec: 
   );
 }
 
-/** impact_location.py's reading centre, which the impact numbers are measured from: heel-toe
- * 8 mm toe-ward of the head outline's heel-toe midpoint (FACE_CENTRE_TOEWARD_MM), and up the face
- * from the leading edge by the category's face_centre_height prior (CATEGORY_PRIORS). */
-export const READING_CENTRE = {
-  toewardMm: 8,
-  heightMm: { driver: 30, fairway: 17, hybrid: 20, iron: 23, wedge: 24 },
-} as const;
-
-/** Moves a drawing onto the reading centre and frames it with room for the TOE and HEEL labels. */
-function onReadingCentre(shape: FaceShape, category: FaceCategory): FaceShape {
-  const outline = flatten(shape.head).map((point) => point[0]);
-  const x = (Math.min(...outline) + Math.max(...outline)) / 2 - READING_CENTRE.toewardMm;
-  const bottom = cross(flatten(shape.face), x, true);
-  const moved = centred(shape, [-x, -(bottom[bottom.length - 1] - READING_CENTRE.heightMm[category])]);
+/** Frames a drawing, already centred on its scoring area, with room for the TOE and HEEL labels. */
+function framed(moved: FaceShape): FaceShape {
   const head = flatten(moved.head);
   const parts = hoselParts(moved.hosel);
   const tube = flatten(parts.tube);
@@ -700,7 +688,7 @@ const DRAWN: Record<FaceCategory, FaceShape> = {
 };
 
 export const FACE_SHAPES = Object.fromEntries(
-  (Object.keys(DRAWN) as FaceCategory[]).map((category) => [category, onReadingCentre(DRAWN[category], category)])
+  (Object.keys(DRAWN) as FaceCategory[]).map((category) => [category, framed(DRAWN[category])])
 ) as Record<FaceCategory, FaceShape>;
 
 export function faceCategory(club: string | null | undefined): FaceCategory {

@@ -8,7 +8,6 @@ import {
   GROOVE_WIDTH_MM,
   hoselParts,
   impactReading,
-  READING_CENTRE,
   USGA,
   type FaceCategory,
 } from './faceImpact';
@@ -181,13 +180,23 @@ describe('faceImpact', () => {
     expect(face.maxY - face.minY).toBeLessThanOrEqual(height[1]);
   });
 
-  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
-    "puts the %s centre lines on the backend's reading centre: 8 mm toe-ward of the head's heel-toe midpoint, the category height above the leading edge",
+  it.each(['driver', 'fairway', 'hybrid'] as const)(
+    'puts the %s centre lines on the scoring-area centre: midway between the score-line ends, midway up the face',
     (category) => {
-      const shape = FACE_SHAPES[category];
-      const head = extent(polygon(shape.head));
-      expect(Math.abs((head.minX + head.maxX) / 2 - READING_CENTRE.toewardMm)).toBeLessThanOrEqual(0.1);
-      expect(span(polygon(shape.face), 0)[1]).toBeCloseTo(READING_CENTRE.heightMm[category], 1);
+      const [x, y] = scoringCentre(category);
+      expect(Math.abs(x)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(y)).toBeLessThanOrEqual(0.5);
+    }
+  );
+
+  it.each(['iron', 'wedge'] as const)(
+    'puts the %s centre lines on the groove-block centre: midway between the common line ends and the lowest and highest line over it',
+    (category) => {
+      const grooves = [...FACE_SHAPES[category].grooves].sort((a, b) => b.y - a.y);
+      const heelEnd = Math.max(...grooves.map((groove) => groove.to));
+      expect(Math.abs((grooves[0].from + heelEnd) / 2)).toBeLessThanOrEqual(0.5);
+      const over = grooves.filter((groove) => groove.from <= 0 && groove.to >= 0);
+      expect(Math.abs((over[0].y + over[over.length - 1].y) / 2)).toBeLessThanOrEqual(0.5);
     }
   );
 
