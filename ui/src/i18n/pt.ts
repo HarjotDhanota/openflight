@@ -75,7 +75,6 @@ export const pt: Messages = {
   'metric.swingsCount': '{count} swings',
   'metric.readingsCount': '{count} leituras',
   'metric.trigger': 'limite {speed} {unit}',
-  'metric.estimated': 'Estimado',
   'shape.fade': 'Fade',
   'shape.draw': 'Draw',
   'shape.straight': 'Reto',

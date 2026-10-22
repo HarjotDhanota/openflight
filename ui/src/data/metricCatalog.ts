@@ -19,12 +19,7 @@ export interface MetricSpec {
   pending: string | null;
 }
 
-export const METRIC_LABELS = catalogJson.labels as MetricLabel[];
 export const METRIC_CATALOG: readonly MetricSpec[] = catalogJson.metrics as MetricSpec[];
-
-export function metricsInGroup(group: MetricGroup): MetricSpec[] {
-  return METRIC_CATALOG.filter((spec) => spec.group === group);
-}
 
 /** The shot's record for one metric, or null for a shot from before `metrics` existed. */
 export function shotMetric(shot: Shot | null | undefined, id: string): ShotMetric | null {

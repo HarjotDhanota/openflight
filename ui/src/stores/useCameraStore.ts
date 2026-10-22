@@ -45,15 +45,9 @@ export type SwingExposureStatus =
   | 'unavailable'
   | 'manual';
 
-export interface SwingExposureSetting {
-  exposure_us: number;
-  gain: number;
-}
-
 export interface CameraAutoExposureStatus {
   enabled: boolean;
   status: SwingExposureStatus;
-  reason?: string;
   analysis_eligible: boolean;
   message: string;
   frame_label?: string | null;
@@ -61,7 +55,6 @@ export interface CameraAutoExposureStatus {
   exposure_us?: number;
   gain?: number;
   blur_ceiling_us?: number | null;
-  target?: SwingExposureSetting | null;
   sensor_limits?: {
     exposure_min_us: number;
     exposure_max_us: number | null;
@@ -84,7 +77,6 @@ export interface CameraAutoExposureStatus {
     exposure_ceiling_us: number;
     target_peak_fraction: number;
   } | null;
-  last_check_timestamp?: number | null;
   observation?: {
     sample_available: boolean;
     status: 'good' | 'too_dark' | 'too_bright' | 'marginal' | 'unavailable';

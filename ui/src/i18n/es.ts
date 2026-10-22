@@ -75,7 +75,6 @@ export const es: Messages = {
   'metric.swingsCount': '{count} swings',
   'metric.readingsCount': '{count} lecturas',
   'metric.trigger': 'umbral {speed} {unit}',
-  'metric.estimated': 'Estimado',
   'shape.fade': 'Fade',
   'shape.draw': 'Draw',
   'shape.straight': 'Recto',
