@@ -28,6 +28,7 @@ point; ``--no-impact-live`` turns it off. The worker is this module run with
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import math
@@ -331,13 +332,8 @@ def worker_main(argv: list[str]) -> int:
     analyser = LiveAnalyser(**settings)
     # Everything the analysis imports is loaded before stdin is read: on Windows an
     # import that looks at stdin waits for a pending pipe read on another thread.
-    import cv2  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
-    from openflight.camera import (
-        impact_session,  # noqa: F401,PLC0415  # pylint: disable=unused-import
-    )
-
-    cv2.setNumThreads(1)  # pylint: disable=no-member
+    importlib.import_module("openflight.camera.impact_session")
+    importlib.import_module("cv2").setNumThreads(1)
     jobs: queue.Queue = queue.Queue()
     cancelled = {"through": 0}
 
