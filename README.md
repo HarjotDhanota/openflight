@@ -313,7 +313,7 @@ Areas of interest:
 
 - **Better spin detection**: A dechirped Doppler-sideband estimator is in development (`scripts/analysis/replay_spin_dechirp.py`) — help validating it against launch-monitor truth data is especially welcome
 - **Mobile app**: Bluetooth connection to phone
-- **Camera/radar test captures**: if you have the v3 enclosure and the full sensor set, the [camera mode study](docs/camera/tester-pilot.md) walks you through collecting a paired dataset
+- **Camera/radar test captures**: if you have the full sensor set, the [tester guide](docs/tester-guide/README.md) walks you through setup and free play, and the [technical reference](docs/camera/tester-pilot.md) covers what it records
 - **IWR6843 self-trigger testers**: Experimental IWR6843 firmware that triggers on the shot by itself needs testing on real OpenFlight rigs. If you have a working build with an IWR6843, say so on [Discord](https://discord.gg/w8hhG4WVMN)
 
 
