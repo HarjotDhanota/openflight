@@ -103,12 +103,12 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
                 <path d={shape.head} />
               </g>
               <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
+              <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
               <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
               {hosel.collar ? <path className="face-impact__collar" d={hosel.collar} /> : null}
               {hosel.rings.map((d) => (
                 <path key={d} className="face-impact__ring" d={d} />
               ))}
-              <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
               <path className="face-impact__ferrule" d={hosel.ferrule} />
               <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
               {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
