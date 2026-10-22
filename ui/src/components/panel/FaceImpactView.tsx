@@ -2,7 +2,15 @@ import { useId } from 'react';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot } from '../../types/shot';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FACE_SHAPES, faceCategory, formatLength, GRID_STEP_MM, hoselParts, impactReading } from './faceImpact';
+import {
+  FACE_SHAPES,
+  faceCategory,
+  formatLength,
+  GRID_STEP_MM,
+  GROOVE_WIDTH_MM,
+  hoselParts,
+  impactReading,
+} from './faceImpact';
 import './FaceImpactView.css';
 
 interface FaceImpactViewProps {
@@ -134,6 +142,7 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
                 <line
                   key={`${groove.y}:${groove.from}`}
                   className="face-impact__groove"
+                  strokeWidth={GROOVE_WIDTH_MM}
                   x1={groove.from}
                   x2={groove.to}
                   y1={groove.y}

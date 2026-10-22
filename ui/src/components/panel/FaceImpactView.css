@@ -101,8 +101,11 @@
 .face-impact__groove,
 .face-impact__mark {
   stroke: var(--face-art-groove);
-  stroke-width: 0.55;
   stroke-linecap: round;
+}
+
+.face-impact__mark {
+  stroke-width: 0.55;
 }
 
 .face-impact__edge {

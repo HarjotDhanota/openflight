@@ -199,13 +199,27 @@ flight and every other metric are the same with or without a reading
 
 The Club tab opens with a face-impact view:
 
-- **The face.** Our own line drawing of the shot's club category (driver, fairway
+- **The face.** Our own drawing of the shot's club category (driver, fairway
   wood, hybrid, iron, wedge), seen from the target, with the toe on the left for a
   right-hander. A left-hander's drawing is mirrored. The proportions are
   illustrative and labelled so. The iron's length sits inside Mizuno's published
-  7-iron head lengths (74-87 mm); the woods sit inside the USGA 127 x 71 mm limit.
-- **The grid.** Centred on the face centre: 10 mm, and every number in mm, whatever
-  the unit preference.
+  7-iron head lengths (74-87 mm).
+- **The grid.** 10 mm, every number in mm whatever the unit preference, centred on
+  the drawn face's centre: the middle of the groove block on irons and wedges, and
+  on woods midway between the score lines' heel and toe ends and midway up the face.
+- **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
+  Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
+  pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge
+  separation at least 3 widths and 1.905 mm (5c); driver and fairway score lines
+  outside the central 42.67 mm impact strip (interpretation 5.b(1)); the centre mark
+  inside a 9.53 mm square (5d); wood heads at most 127 mm heel to toe and 71.12 mm
+  sole to crown (4b); the shaft fixed at the heel with the neck top at most 127 mm
+  from the sole (2c). Groove depth, cross-section, edge radius and face-to-back
+  depth are not visible face-on. Sources:
+  [Part 2 Rule 2 (shaft)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-3.html),
+  [Rule 4 (clubhead)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-5.html),
+  [Rule 5 (club face)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6.html)
+  and [its interpretations](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6-interpretations.html).
 - **The dots.** The shot's dot with its 1-sigma ellipse, and this session's earlier
   shots with the same club as faint dots.
 - **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:

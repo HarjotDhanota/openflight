@@ -2,7 +2,16 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { FaceImpactView } from './FaceImpactView';
-import { FACE_SHAPES, faceCategory, GRID_STEP_MM, hoselParts, impactReading, type FaceCategory } from './faceImpact';
+import {
+  FACE_SHAPES,
+  faceCategory,
+  GRID_STEP_MM,
+  GROOVE_WIDTH_MM,
+  hoselParts,
+  impactReading,
+  USGA,
+  type FaceCategory,
+} from './faceImpact';
 import { MetricGroupPanel } from './MetricGroupPanel';
 
 function record(overrides: Partial<ShotMetric>): ShotMetric {
@@ -288,6 +297,73 @@ describe('faceImpact', () => {
   });
 });
 
+const CATEGORIES = Object.keys(FACE_SHAPES) as FaceCategory[];
+const WOODS = ['driver', 'fairway', 'hybrid'] as const;
+
+describe('the drawings against the USGA Equipment Rules', () => {
+  it('draws score lines no wider than the groove limit', () => {
+    expect(GROOVE_WIDTH_MM).toBeLessThanOrEqual(USGA.grooveMaxWidthMm);
+  });
+
+  it.each(CATEGORIES)(
+    'keeps the %s score lines straight, parallel, evenly pitched and far enough apart',
+    (category) => {
+      const sets = new Map<string, number[]>();
+      for (const groove of FACE_SHAPES[category].grooves) {
+        expect(groove.to).toBeGreaterThan(groove.from);
+        const key = `${groove.from}:${groove.to}`;
+        sets.set(key, [...(sets.get(key) ?? []), groove.y]);
+      }
+      for (const ys of sets.values()) {
+        ys.sort((a, b) => a - b);
+        const pitches = ys.slice(1).map((y, k) => y - ys[k]);
+        for (const pitch of pitches) {
+          expect(Math.abs(pitch - pitches[0])).toBeLessThanOrEqual(0.05);
+          const separation = pitch - GROOVE_WIDTH_MM;
+          expect(separation).toBeGreaterThanOrEqual(USGA.grooveSeparationPerWidth * GROOVE_WIDTH_MM);
+          expect(separation).toBeGreaterThanOrEqual(USGA.grooveMinSeparationMm);
+        }
+      }
+    }
+  );
+
+  it.each(['driver', 'fairway'] as const)(
+    'keeps the %s heel and toe score lines out of the central impact strip',
+    (category) => {
+      const half = USGA.woodImpactStripMm / 2;
+      for (const groove of FACE_SHAPES[category].grooves) {
+        const inner = groove.to < 0 ? -groove.to : groove.from;
+        expect(half - inner).toBeLessThan(USGA.impactAreaEncroachMm);
+      }
+    }
+  );
+
+  it.each(['driver', 'fairway'] as const)('keeps the %s centre mark inside the decorative square', (category) => {
+    const half = USGA.centreMarkSquareMm / 2;
+    for (const [x, y] of polygon(FACE_SHAPES[category].mark!)) {
+      expect(Math.abs(x)).toBeLessThanOrEqual(half);
+      expect(Math.abs(y)).toBeLessThanOrEqual(half);
+    }
+  });
+
+  it.each(WOODS)('keeps the %s head inside the wood heel-to-toe and sole-to-crown limits', (category) => {
+    const head = extent(polygon(FACE_SHAPES[category].head));
+    expect(head.maxX - head.minX).toBeLessThanOrEqual(USGA.woodHeelToToeMaxMm);
+    expect(head.maxY - head.minY).toBeLessThanOrEqual(USGA.woodSoleToCrownMaxMm);
+  });
+
+  it.each(CATEGORIES)('fixes the %s shaft at the heel through a neck no longer than the limit', (category) => {
+    const shape = FACE_SHAPES[category];
+    const { hosel } = shape;
+    const lie = (hosel.lieDeg * Math.PI) / 180;
+    const joint = hosel.ground[0] + hosel.from * Math.cos(lie);
+    expect(joint).toBeGreaterThan(Math.max(...shape.grooves.map((groove) => groove.to)));
+    const sole = extent(polygon(shape.head)).maxY;
+    const neck = hosel.ferruleAt + hosel.ferruleLength + (sole - hosel.ground[1]) / Math.sin(lie);
+    expect(neck).toBeLessThanOrEqual(USGA.neckToSoleMaxMm);
+  });
+});
+
 describe('FaceImpactView', () => {
   it('draws the shot on its club face with the EXP badge and toe and high callouts', () => {
     const html = render(shot());
@@ -308,6 +384,7 @@ describe('FaceImpactView', () => {
     const html = render(shot());
     for (const part of ['head', 'face', 'hosel', 'ferrule', 'shaft']) expect(html).toContain(`face-impact__${part}"`);
     expect(html.match(/face-impact__groove"/g)).toHaveLength(FACE_SHAPES.iron.grooves.length);
+    expect(attr(html, 'face-impact__groove"', 'stroke-width')).toBe(String(GROOVE_WIDTH_MM));
     const fill = attr(html, 'face-impact__head"', 'fill');
     expect(fill).toMatch(/^url\(#.+\)$/);
     expect(html).toContain(`id="${fill!.slice(5, -1)}"`);

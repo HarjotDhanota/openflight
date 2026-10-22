@@ -5,6 +5,31 @@ export type FaceCategory = 'driver' | 'fairway' | 'hybrid' | 'iron' | 'wedge';
 
 type Point = readonly [number, number];
 
+/** USGA/R&A Equipment Rules, Part 2 (Rules for Clubs), the limits a face-on drawing can show:
+ * 2c shaft attachment, 4b(i) wood head dimensions, 5c(i) grooves, 5d decorative markings and
+ * interpretation 5.b(1) impact area (usga.org/equipment-standards/equipment-rules-2019). */
+export const USGA = {
+  /** 5c(i): groove width W at most 0.035 in. */
+  grooveMaxWidthMm: 0.9,
+  /** 5c(i): edge-to-edge separation S at least 3 W and at least 0.075 in. */
+  grooveSeparationPerWidth: 3,
+  grooveMinSeparationMm: 1.905,
+  /** 5.b(1): a wood's impact area is the central 1.68 in strip of the face; grooves encroaching
+   * its heel or toe side by less than 0.25 in are not in it. */
+  woodImpactStripMm: 42.67,
+  impactAreaEncroachMm: 6.35,
+  /** 5d: the centre of the impact area may be marked within a 0.375 in square. */
+  centreMarkSquareMm: 9.53,
+  /** 4b(i): wood heel to toe at most 5 in, sole to crown at most 2.8 in. */
+  woodHeelToToeMaxMm: 127,
+  woodSoleToCrownMaxMm: 71.12,
+  /** 2c: shaft fixed at the heel, the top of the neck or socket at most 5 in from the sole. */
+  neckToSoleMaxMm: 127,
+} as const;
+
+/** Drawn score-line width, inside the USGA groove limit. */
+export const GROOVE_WIDTH_MM = 0.6;
+
 export interface Hosel {
   /** A point on the hosel axis at the leading-edge height. */
   ground: Point;
@@ -262,7 +287,7 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
         'C -47 -26 -52.5 -16 -52.5 -6 C -53 6 -50 18 -44 25 C -34.5 32.5 -18 33.5 0 33.5 Z',
       {
         grooves: sides(1.06, 5, 6, [-38, -24], [36.5, 50.5]),
-        mark: 'M 6.25 -25 L 6.25 -21',
+        mark: 'M 6.25 -3.4 L 6.25 -0.4',
         edges: ['M 30 -28 C 18 -30.9 4 -32 -12 -32 C -30 -31.8 -43 -26.5 -48.5 -14'],
         bounds: { minX: -58, maxX: 92, minY: -48, maxY: 38 },
       }
@@ -280,7 +305,7 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
         'C -40 -19.5 -44.5 -12 -44.5 -4 C -45 6 -42 12 -38 15 C -31 19.5 -16 19.5 0 19.5 Z',
       {
         grooves: sides(-1.47, 3.6, 6, [-33, -22], [32.5, 43.5]),
-        mark: 'M 5.25 -17.5 L 5.25 -14',
+        mark: 'M 5.25 -5.47 L 5.25 -2.47',
         edges: ['M 22 -22.4 C 12 -23.6 0 -23.8 -12 -23.6 C -28 -23.2 -39 -19 -42.5 -10'],
         bounds: { minX: -50, maxX: 80, minY: -45, maxY: 24 },
       }
