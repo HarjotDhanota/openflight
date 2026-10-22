@@ -201,32 +201,51 @@ The Club tab opens with a face-impact view:
 
 - **The face.** Our own drawing of the shot's club category (driver, fairway
   wood, hybrid, iron, wedge), seen from the target, with the toe on the left for a
-  right-hander. A left-hander's drawing is mirrored. The proportions are
-  illustrative and labelled so. The iron's length sits inside Mizuno's published
-  7-iron head lengths (74-87 mm).
+  right-hander. A left-hander's drawing is mirrored. Each drawing is our own vector
+  outline (16-18 nodes, smooth Béziers) fitted by measurement to one reference photo
+  per category, with no lettering or logos. Each photo was levelled on its score lines
+  and scaled to one dimension the tests already hold. Irons and wedges were scaled to
+  76.6 mm from the toe to the heel end of the flat face (inside Mizuno's published
+  7-iron head lengths, 74-87 mm). Woods were scaled to the middle of their face-width
+  test: driver 110, fairway 95 and hybrid 85 mm. After scaling, the head and neck
+  outlines follow the photo silhouette to a mean of 0.05 mm or less and at most 0.6 mm.
+  The face outlines are within 0.13 mm mean and 1.2 mm at most. Score-line counts
+  match the photo exactly (driver 7 + 7 + 3 bars, fairway 6, hybrid 7, iron 13,
+  wedge 17), and the line ends are within 0.7 mm. The fit scripts and photos stay
+  out of the repository.
 - **The centre lines.** One heel-to-toe and one low-to-high line, clipped to the
-  face, cross at the drawn face centre: the middle of the groove block on irons and
-  wedges (midway between the lines' common toe and heel ends, and between the lowest
-  and highest line over that point), and on woods midway between the score lines'
-  heel and toe ends and midway up the face. The dot sits at the unrounded mm from
-  there; every number is in mm whatever the unit preference.
-- **The face view draws the payload against the scoring-area centre; the backend's
-  heel-toe origin is an uncalibrated convention.** Where that convention (outline
-  midpoint + 8 mm toe-ward, the category height above the leading edge) lands on
-  each drawing, assuming the camera's head outline matches the drawn head outline
-  including the lower neck on irons and wedges and excluding a wood's sleeve:
+  face, cross at the face centre. `faceCentre(category, shape)` computes it from the
+  drawn geometry, following the R&A/USGA centre-template idea (TPX3004): the
+  distances from the centre to the face edges are equal heel-toe and equal
+  sole-crown.
+  - Woods and hybrids: start at the middle of the face outline's box. Then
+    alternately move to the middle of the heel-toe chord (parallel to the score
+    lines) and of the sole-crown chord through the point, until the point moves less
+    than 0.01 mm.
+  - Irons and wedges: heel-toe at the middle of the longest score line. The milled
+    area's toe and heel edges sit within 0.6 mm of its ends, so they agree to 0.1 mm.
+    Up the face, the centre is midway between the leading edge and the top line, on
+    the line through that point.
 
-  | Club | Toe-ward of the drawn centre | Above it |
+  The dot sits at the unrounded mm from there; every number is in mm whatever the
+  unit preference. The driver's centre cross stays where the photo has it, 1.7 mm
+  from the computed centre (1.5 mm heel-ward, 0.9 mm up).
+- **The backend's heel-toe origin is still an uncalibrated convention.** The table
+  shows where that convention lands on each drawing: outline midpoint + 8 mm
+  toe-ward, and the category height above the head outline's lowest point. It
+  assumes the camera's head outline matches the drawn head outline, including the
+  neck up to the hosel or sleeve.
+
+  | Club | Toe-ward of the face centre | Above it |
   | --- | --- | --- |
-  | Driver | 10.0 mm | 1.5 mm |
-  | Fairway | 9.8 mm | -0.7 mm |
-  | Hybrid | -1.2 mm | 2.6 mm |
-  | Iron | 10.1 mm | 2.8 mm |
-  | Wedge | 10.7 mm | 4.0 mm |
+  | Driver | 8.2 mm | 0.4 mm |
+  | Fairway | 9.3 mm | -3.2 mm |
+  | Hybrid | 6.7 mm | 1.4 mm |
+  | Iron | 2.0 mm | 0.9 mm |
+  | Wedge | -0.1 mm | -2.7 mm |
 
-  A shot read at the convention's zero therefore shows about 10 mm toe-ward of the
-  drawn centre on most clubs; testers' face marks will show whether the convention
-  or the assumption is off. Calibration belongs in the backend.
+  Testers' face marks will show whether the convention or the assumption is off.
+  Calibration belongs in the backend.
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge
