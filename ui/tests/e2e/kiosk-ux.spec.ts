@@ -83,15 +83,16 @@ test('the Club tab folds the metrics not built yet into one Coming later row; a 
   const later = page.locator('[data-metric="coming-later"]');
   await expect(later).toHaveCount(1);
   await expect(later).toContainText('Coming later');
-  await expect(later).toContainText('Impact offset');
-  for (const id of ['impact_offset', 'impact_height', 'dynamic_lie']) {
-    await expect(page.locator(`[data-metric="${id}"]`)).toHaveCount(0);
+  await expect(later).toContainText('Dynamic lie');
+  await expect(page.locator('[data-metric="dynamic_lie"]')).toHaveCount(0);
+  for (const id of ['impact_offset', 'impact_height']) {
+    await expect(page.locator(`[data-metric="${id}"]`)).toHaveAttribute('data-status', 'not_measured');
   }
   const list = later.locator('.metric-cell__later-list');
   await expect(list).toBeHidden();
   await later.tap();
   await expect(list).toBeVisible();
-  await expect(list).toContainText('Impact offset:');
+  await expect(list).toContainText('Dynamic lie:');
   const box = await later.boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
