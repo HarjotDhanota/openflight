@@ -141,6 +141,48 @@ for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
   });
 }
 
+async function inFace(page: Page): Promise<{ origin: boolean; dot: boolean }> {
+  return page.locator('.face-impact').evaluate((view) => {
+    const face = view.querySelector('.face-impact__face') as SVGGeometryElement;
+    const dot = view.querySelector('.face-impact__dot') as SVGCircleElement;
+    const mirror = view.getAttribute('data-handed') === 'left' ? -1 : 1;
+    const inside = (x: number, y: number) => face.isPointInFill(new DOMPoint(mirror * x, y));
+    return { origin: inside(0, 0), dot: inside(dot.cx.baseVal.value, dot.cy.baseVal.value) };
+  });
+}
+
+test.describe('face impact drawings', () => {
+  test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
+
+  for (const [club, category] of [
+    ['driver', 'driver'],
+    ['3-wood', 'fairway'],
+    ['5-hybrid', 'hybrid'],
+    ['7-iron', 'iron'],
+    ['sw', 'wedge'],
+  ] as const) {
+    test(`draws the ${category} face with the centre strike and an off-centre strike on it`, async ({ page }) => {
+      await openClubPanel(page, 2, club);
+      await setReadings(page, [
+        { offset: 0, height: 0 },
+        { offset: 9, height: 4, sigma: [4, 5] },
+      ]);
+      const view = page.locator('.face-impact');
+      await expect(view).toHaveAttribute('data-face', category);
+      await expect(view.locator('.face-impact__head')).toHaveCount(1);
+      await expect(view.locator('.face-impact__dot')).toHaveCount(1);
+      await expect(view.locator('.face-impact__earlier')).toHaveCount(1);
+      expect(await inFace(page)).toEqual({ origin: true, dot: true });
+      expect(await overflowing(page)).toEqual([]);
+      await keep(page, `face-impact-${category}-1024x600`);
+      if (OUT)
+        await view
+          .locator('.face-impact__figure')
+          .screenshot({ path: join(OUT, `face-impact-${category}-figure.png`) });
+    });
+  }
+});
+
 test.describe('face impact states', () => {
   test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
 
@@ -161,6 +203,7 @@ test.describe('face impact states', () => {
     await expect(view).toHaveAttribute('data-face', 'driver');
     await expect(view).toHaveAttribute('data-handed', 'left');
     await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
+    expect(await inFace(page)).toEqual({ origin: true, dot: true });
     expect(await overflowing(page)).toEqual([]);
     await keep(page, 'face-impact-driver-left-1024x600');
   });
