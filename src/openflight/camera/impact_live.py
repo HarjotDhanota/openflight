@@ -552,12 +552,15 @@ class Dispatcher:
 
 
 class ImpactLiveExtension(kiosk_extensions.KioskExtension):
-    """The kiosk's hooks: note each shot's clip, send it once shown, drop on the next shot."""
+    """The kiosk's hooks: note each shot's clip, send it once shown, drop on the next shot.
+
+    Off until the kiosk configures it (``configure``), so importing it changes nothing.
+    """
 
     name = "impact_live"
 
     def __init__(self, runner_factory=None):
-        self.enabled = True
+        self.enabled = False
         self._start: dict[str, Any] = {}
         self._clips: dict[tuple, str] = {}
         self.dispatcher = Dispatcher(

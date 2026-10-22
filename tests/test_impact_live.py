@@ -444,6 +444,7 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
             on_result, settings={"swings_needed": 1}
         )
     )
+    extension.configure(SimpleNamespace(no_impact_live=False), parser=None)
     extension.session_start_config(START)
     kiosk_extensions.register(extension)
     try:
@@ -472,3 +473,12 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
     assert update["impact_location"]["status"] == "ok", update["impact_location"]["reason"]
     assert update["metrics"]["impact_offset"]["status"] == "experimental"
     assert update["metrics"]["impact_offset"]["value"] == pytest.approx(8.0, abs=2.5)
+
+
+def test_the_extension_is_off_until_the_kiosk_configures_it(kiosk):
+    unconfigured = live.ImpactLiveExtension(runner_factory=lambda on_result: kiosk.runner)
+    shot = _kiosk_shot(1)
+    unconfigured.on_camera_capture(shot, _capture())
+    unconfigured.after_shot_published(shot, update_kind="first")
+    assert not kiosk.runner.jobs
+    assert not live.extension.enabled
