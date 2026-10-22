@@ -327,6 +327,7 @@
   "scripts/analysis/fit_flight_model.py": "RESEARCH",
   "scripts/analysis/grade_launch_range.py": "RESEARCH",
   "scripts/analysis/illustrate_centroid_vs_peak.py": "PRODUCT",
+  "scripts/analysis/impact_live_benchmark.py": "RESEARCH",
   "scripts/analysis/impact_location.py": "RESEARCH",
   "scripts/analysis/kld7_radc_lib.py": "PRODUCT",
   "scripts/analysis/kld7_timing_shift_visualizer.html": "PRODUCT",
