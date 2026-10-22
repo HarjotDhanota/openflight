@@ -9,7 +9,7 @@ import pytest
 
 from openflight import server as server_module
 from openflight.camera import capture_runtime
-from openflight.camera.capture_runtime import CameraCaptureRuntime
+from openflight.camera.capture_runtime import CameraCaptureRuntime, SavedCameraCapture
 from openflight.camera.triggered_buffer import TriggeredFrameBuffer
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
@@ -58,6 +58,58 @@ def test_a_shot_claims_the_refused_trigger_nearest_its_impact_once(tmp_path):
     assert runtime.trigger_rejection_for_shot(10.2) is None
     assert runtime.trigger_rejection_for_shot(30.0) is None
     assert runtime.trigger_rejection_for_shot(None) is None
+
+
+@pytest.mark.parametrize(
+    ("timestamps", "impact", "selected"),
+    [((99.0, 100.0, 100.4), 100.4, 100.4), ((100.0, 100.4), 100.3, 100.4)],
+)
+def test_capture_and_evidence_choose_the_same_nearest_trigger(
+    tmp_path, timestamps, impact, selected
+):
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    runtime._captures = [
+        SavedCameraCapture(i, stamp, stamp + 0.1, tmp_path, {"trigger": stamp})
+        for i, stamp in enumerate(timestamps)
+    ]
+    runtime._admission_evidence = [(stamp, {"trigger": stamp}) for stamp in timestamps]
+
+    capture = runtime.capture_for_shot(impact, timeout_s=0.0)
+    evidence = runtime.trigger_evidence_for_shot(impact)
+
+    assert capture.trigger_timestamp == selected
+    assert evidence == capture.metadata
+    assert runtime.capture_for_shot(100.0, timeout_s=0.0).trigger_timestamp == 100.0
+
+
+@pytest.mark.parametrize("method", ["capture", "evidence"])
+def test_equal_distance_triggers_are_not_consumed_as_a_match(tmp_path, method):
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    runtime._captures = [
+        SavedCameraCapture(i, stamp, stamp + 0.1, tmp_path, {"trigger": stamp})
+        for i, stamp in enumerate((100.0, 100.5))
+    ]
+    runtime._admission_evidence = [(stamp, {"trigger": stamp}) for stamp in (100.0, 100.5)]
+
+    if method == "capture":
+        assert runtime.capture_for_shot(100.25, timeout_s=0.0) is None
+        assert runtime.capture_for_shot(100.5, timeout_s=0.0).trigger_timestamp == 100.5
+    else:
+        assert runtime.trigger_evidence_for_shot(100.25) is None
+        assert runtime.trigger_evidence_for_shot(100.5) == {"trigger": 100.5}
+
+
+def test_capture_matching_keeps_future_clips_and_timestamp_free_fifo(tmp_path):
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    runtime._captures = [
+        SavedCameraCapture(i, stamp, stamp + 0.1, tmp_path, {})
+        for i, stamp in enumerate((99.0, 101.0, 102.0))
+    ]
+
+    assert runtime.capture_for_shot(100.0, timeout_s=0.0) is None
+    assert runtime.capture_for_shot(None, timeout_s=0.0).trigger_timestamp == 101.0
+    assert runtime.capture_for_shot(None, timeout_s=0.0).trigger_timestamp == 102.0
+    assert runtime.capture_for_shot(None, timeout_s=0.0) is None
 
 
 class _SessionLog:

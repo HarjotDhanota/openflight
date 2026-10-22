@@ -212,6 +212,20 @@ def parse_hitting_zone(value: str | None) -> tuple[int, int, int, int] | None:
     return x0, y0, x1, y1
 
 
+def _nearest_trigger_index(timestamps: list[float], impact: float, tolerance: float) -> int | None:
+    candidates = [
+        (abs(timestamp - impact), index)
+        for index, timestamp in enumerate(timestamps)
+        if abs(timestamp - impact) <= tolerance
+    ]
+    if not candidates:
+        return None
+    distance, index = min(candidates)
+    if sum(math.isclose(delta, distance) for delta, _ in candidates) != 1:
+        return None
+    return index
+
+
 def _save_pgm(path: Path, image: np.ndarray) -> None:
     """Save a dependency-free grayscale preview."""
     with path.open("wb") as handle:
@@ -1056,16 +1070,14 @@ class CameraCaptureRuntime:
             self._admission_evidence = [
                 item for item in self._admission_evidence if item[0] >= cutoff
             ]
-            if not self._admission_evidence:
-                return None
-            index = min(
-                range(len(self._admission_evidence)),
-                key=lambda item: abs(self._admission_evidence[item][0] - impact_timestamp),
+            index = _nearest_trigger_index(
+                [item[0] for item in self._admission_evidence],
+                impact_timestamp,
+                self.settings.match_tolerance_s,
             )
-            timestamp, evidence = self._admission_evidence[index]
-            if abs(timestamp - impact_timestamp) > self.settings.match_tolerance_s:
+            if index is None:
                 return None
-            self._admission_evidence.pop(index)
+            _, evidence = self._admission_evidence.pop(index)
             return deepcopy(evidence)
 
     def capture_for_shot(
@@ -1091,12 +1103,13 @@ class CameraCaptureRuntime:
                             stale.trigger_timestamp,
                             impact_timestamp,
                         )
-                    if (
-                        self._captures
-                        and abs(self._captures[0].trigger_timestamp - impact_timestamp)
-                        <= self.settings.match_tolerance_s
-                    ):
-                        return self._captures.pop(0)
+                    index = _nearest_trigger_index(
+                        [capture.trigger_timestamp for capture in self._captures],
+                        impact_timestamp,
+                        self.settings.match_tolerance_s,
+                    )
+                    if index is not None:
+                        return self._captures.pop(index)
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
