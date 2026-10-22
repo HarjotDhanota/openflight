@@ -63,7 +63,7 @@ The supported angle radar.
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle. Requires `--rig-geometry`. |
+| `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v2 vertical launch angle (per-antenna paths from the rig file). Requires `--rig-geometry`. |
 | `--rig-geometry` | path; no default in the server | Enclosure rig file; the radar's height, tilt and offset and the camera's height come only from it. `start-kiosk.sh` passes `config/enclosure_v3_rig_geometry.json` unless another file is given. |
 | `--iwr6843-port` | — | TI serial port (auto-detect by default) |
 | `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | TI RF config matching the flashed L3 firmware |

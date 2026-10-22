@@ -75,7 +75,6 @@ export const fr: Messages = {
   'metric.swingsCount': '{count} swings',
   'metric.readingsCount': '{count} lectures',
   'metric.trigger': 'seuil {speed} {unit}',
-  'metric.estimated': 'Estimé',
   'shape.fade': 'Fade',
   'shape.draw': 'Draw',
   'shape.straight': 'Droit',

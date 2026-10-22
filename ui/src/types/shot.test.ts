@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import catalogJson from '../data/metricCatalog.json';
+import { isValueLabel } from '../data/metricCatalog';
 import type { Shot, ShotMetric } from './shot';
 import {
+  METRIC_LABELS,
   computeStats,
   computeSwingSpeedStats,
   excludeShotsByProfile,
@@ -228,5 +231,20 @@ describe('a shot whose core metrics the server nulled', () => {
       best_speed_mph: 90,
       avg_speed_mph: 85,
     });
+  });
+});
+
+describe('METRIC_LABELS', () => {
+  it('matches the server catalogue labels, in order', () => {
+    expect([...METRIC_LABELS]).toEqual(catalogJson.labels);
+  });
+
+  it('gives every label but not_measured a value badge', () => {
+    expect(METRIC_LABELS.filter((label) => isValueLabel(label))).toEqual(
+      METRIC_LABELS.filter((label) => label !== 'not_measured')
+    );
+    expect(isValueLabel(null)).toBe(false);
+    expect(isValueLabel(undefined)).toBe(false);
+    expect(isValueLabel('bogus')).toBe(false);
   });
 });

@@ -25,8 +25,8 @@ each stage.
 
 - :material-angle-acute: **[Launch angle](launch-angle.md)**
 
-    LCMF-v1 over the IWR6843 raw radar cube, and the July 2026 TrackMan
-    baseline.
+    LCMF-v2 over the IWR6843 raw radar cube, and the July 2026 TrackMan
+    baseline (LCMF-v1).
 
 - :material-chart-bell-curve: **[Ballistics & carry](ballistics.md)**
 
@@ -55,7 +55,7 @@ A sound detector hears the strike and sends one electrical edge to two places at
 once: the OPS243's `HOST_INT` pin, which freezes its rolling buffer of raw I/Q
 samples, and the Pi's BCM17, which asks the IWR6843 to dump its rolling frame
 ring. OpenFlight then does its own signal processing on both captures — an FFT
-over short windows for speed, and LCMF-v1 over the radar cube for angle — merges
+over short windows for speed, and LCMF-v2 over the radar cube for angle — merges
 them on the OPS impact timestamp, and runs the result through a ballistic
 simulation to get carry.
 

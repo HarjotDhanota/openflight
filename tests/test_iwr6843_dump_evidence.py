@@ -27,15 +27,12 @@ from openflight.iwr6843.dump import (
 )
 
 TEMPERATURE = {key: 40 for key in dump.TEMP_REPORT_KEYS}
-BENCH = Path(
-    os.environ.get(
-        "OPENFLIGHT_BENCH_ROOT",
-        Path.home() / "Desktop/Coding/Openflight Test Bench/openflight-test-bench",
-    )
-)
+BENCH_ROOT = os.environ.get("OPENFLIGHT_BENCH_ROOT")
 RECORDED_V7 = (
-    BENCH / "sessions/Outdoors-test-7/arm5/paired/run-01/iwr6843/"
+    Path(BENCH_ROOT) / "sessions/Outdoors-test-7/arm5/paired/run-01/iwr6843/"
     "iwr6843_20260930_101810_278_001.l3dump"
+    if BENCH_ROOT
+    else None
 )
 
 
@@ -171,7 +168,10 @@ def test_a_full_size_profile_c_dump_has_the_gate_length():
     assert len(raw) == 550_532
 
 
-@pytest.mark.skipif(not RECORDED_V7.exists(), reason=f"recorded dump not here: {RECORDED_V7}")
+@pytest.mark.skipif(
+    RECORDED_V7 is None or not RECORDED_V7.exists(),
+    reason="recorded dump not here: set OPENFLIGHT_BENCH_ROOT to the test-bench checkout",
+)
 def test_v7_recorded_dump_parses_unchanged_and_has_no_evidence():
     raw = RECORDED_V7.read_bytes()
 

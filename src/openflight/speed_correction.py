@@ -34,6 +34,8 @@ from typing import Any
 
 import numpy as np
 
+from .numeric import finite_float as finite_number
+
 MPH_TO_FTS = 1.4666667
 DRAG_MPH_PER_MS = 0.027  # iron-speed drag deceleration of the ball
 EXPERIMENTAL_MODEL = "legacy_peak_radial_v1"
@@ -248,12 +250,6 @@ def evaluate_experimental_total_speed(
     ops_ball_lateral_ft: Any = 0.0,
 ) -> dict[str, Any]:
     """Evaluate the historical peak-radial model without changing canonical speed."""
-
-    def finite_number(value: Any) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        number = float(value)
-        return number if math.isfinite(number) else None
 
     inputs = {
         "ops_radial_speed_mph": finite_number(ops_radial_speed_mph),

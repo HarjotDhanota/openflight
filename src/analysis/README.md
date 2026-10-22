@@ -10,5 +10,5 @@ uv run python src/analysis/analyze_capture.py \
 ```
 
 The radar must first be configured for persistent rolling-buffer mode; see
-[`docs/rolling_buffer_spin_detection.md`](../../docs/rolling_buffer_spin_detection.md).
+[`docs/setup/rolling-buffer.md`](../../docs/setup/rolling-buffer.md).
 More focused replay and comparison tools live in `scripts/analysis/`.

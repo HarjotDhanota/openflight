@@ -724,10 +724,6 @@ class SwingExposurePolicy:
         self._sweep_index = 0
         self._sweep_ended_at = None
 
-    @property
-    def searching(self) -> bool:
-        return self._sweep is not None
-
     def _hysteresis(self) -> dict:
         return {
             "band": list(HOLD_BAND),

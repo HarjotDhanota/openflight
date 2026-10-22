@@ -73,7 +73,6 @@ export const en = {
   'metric.swingsCount': '{count} swings',
   'metric.readingsCount': '{count} readings',
   'metric.trigger': '{speed} {unit} trigger',
-  'metric.estimated': 'Estimated',
   'shape.fade': 'Fade',
   'shape.draw': 'Draw',
   'shape.straight': 'Straight',

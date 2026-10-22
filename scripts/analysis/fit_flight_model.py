@@ -26,7 +26,7 @@ a SwingSync export; detected from the header)::
 
 With no arguments it uses the exports flight-fit-v1 was fitted to: the in-repo
 ``session_logs/OpenFlight-Test.Normalized.csv`` and, when present beside the
-checkout, ``../tm-exports/robinante-swingsync-2026-10-12.csv`` (someone else's
+checkout, ``../tm-exports/tm4-public-swingsync-2026-10-12.csv`` (someone else's
 public data: read from there, never copied into the repo). A missing external
 export is skipped with a message, never an error. ``--no-defaults`` uses only the
 exports named on the command line.
@@ -77,7 +77,7 @@ from openflight.ballistics import (  # noqa: E402
 from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
 
 IN_REPO_EXPORT = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
-EXTERNAL_EXPORT = _REPO_ROOT.parent / "tm-exports" / "robinante-swingsync-2026-10-12.csv"
+EXTERNAL_EXPORT = _REPO_ROOT.parent / "tm-exports" / "tm4-public-swingsync-2026-10-12.csv"
 DEFAULT_EXPORTS = (IN_REPO_EXPORT, EXTERNAL_EXPORT)
 
 OUTPUTS = ("carry", "apex", "landing_angle", "hang_time")

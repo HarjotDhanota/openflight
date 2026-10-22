@@ -6,15 +6,9 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
+from .numeric import finite_float as _finite
 from .shot_updates import apply_shot_updates
 from .timing import SCHEMA_NAME, SCHEMA_VERSION
-
-
-def _finite(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    numeric = float(value)
-    return numeric if math.isfinite(numeric) else None
 
 
 def _summary(values: list[float]) -> dict[str, Any]:

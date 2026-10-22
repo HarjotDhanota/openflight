@@ -18,7 +18,7 @@ export interface CameraReplay {
  * `measured` appears only in older logs. An OPS-only unit reports
  * `estimated`. Missing or null: a shot that never reached finalization.
  */
-export type CarryStatus = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'not_measured';
+export type CarryStatus = Exclude<MetricLabel, 'experimental'>;
 
 /**
  * A metric's label (openflight.shot_metrics.LABELS): `measured` (a sensor saw it),
@@ -27,7 +27,15 @@ export type CarryStatus = 'measured' | 'calculated' | 'model_geometry' | 'estima
  * install's labelled stand-in), `experimental` (shown before it is validated; it feeds
  * no other metric), `not_measured` (no value; the reason says why, D17).
  */
-export type MetricLabel = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'experimental' | 'not_measured';
+export const METRIC_LABELS = [
+  'measured',
+  'calculated',
+  'model_geometry',
+  'estimated',
+  'experimental',
+  'not_measured',
+] as const;
+export type MetricLabel = (typeof METRIC_LABELS)[number];
 
 /** One metric of one shot, as the server reports it in `Shot.metrics`. */
 export interface ShotMetric {
@@ -103,7 +111,7 @@ export interface Shot {
   spin_rpm: number | null;
   spin_confidence: number | null;
   spin_quality: SpinQuality | null;
-  spin_source: 'measured' | 'calculated' | 'model_geometry' | 'estimated' | null;
+  spin_source: Exclude<MetricLabel, 'experimental' | 'not_measured'> | null;
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;

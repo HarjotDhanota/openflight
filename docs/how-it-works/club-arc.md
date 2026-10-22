@@ -112,7 +112,7 @@ head's geometric centre at impact.
 TrackMan's support pages refused automated access, so their wording above comes
 from search-result quotations and should be checked by hand.
 
-**Per-club low point offset.** On the owner's export session the reported low
+**Per-club low point offset.** On a TM4 normalized export, 6 May 2026, the reported low
 point distance is the arc's geometry plus a constant per club, fitted by the
 maintainer: +2.3 mm 7-iron (9 shots), −28.3 mm driver (8), +5.5 mm pitching wedge
 (7); 1.5 mm RMS after the offset. `club_delivery_payload` adds it to
@@ -211,5 +211,5 @@ near 1°, because their direction comes from the shot's own points.
 - With the stock lens and 2 ms frames (a 5 mm floor, 5 pre-impact frames), every
   shot is model geometry. Calculated values need more frames or less noise:
   the new lenses and crop modes.
-- The priors are refitted to the owner's TM4 exports after the pilot (E8). Low
+- The priors are refitted to TM4 exports after the pilot (E8). Low
   point and swing plane have no accuracy goal until that data exists.

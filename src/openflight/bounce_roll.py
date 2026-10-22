@@ -26,11 +26,9 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .constants import FLIGHT_BALL_RADIUS_M as BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .numeric import finite as _finite
 
-GRAVITY = 9.81
-BALL_RADIUS_M = 0.02135
-MPH_TO_MPS = 0.44704
 M_TO_YD = 1.0 / 0.9144
 MIN_HOP_M = 0.01
 MAX_BOUNCES = 25

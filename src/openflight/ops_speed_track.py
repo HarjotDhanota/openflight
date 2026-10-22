@@ -9,10 +9,10 @@ this track; it holds no model of its own.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Optional
 
-MPH_TO_MPS = 0.44704
+from .constants import MPH_TO_MPS
+from .numeric import finite as _finite
 
 # Readings later than this after impact are not used: the referral and the
 # ball's straight-line position both grow with time, and an early reading is
@@ -23,14 +23,6 @@ MAX_REFERRAL_MS = 30.0
 # walk-back: the trigger's own jitter and detector latency are not measured on
 # this rig, so the tolerance is stated wide.
 SOUND_TRIGGER_IMPACT_TOLERANCE_MS = 3.0
-
-
-def _finite(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
 
 
 def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS) -> Optional[dict]:

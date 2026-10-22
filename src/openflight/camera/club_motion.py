@@ -16,13 +16,13 @@ from scipy import ndimage
 
 from openflight.camera import ball_pixels
 from openflight.camera.ball_model import fit_lit_ball
+from openflight.constants import BALL_DIAMETER_MM
 
 # (x_px, y_px, diameter_px) arrays -> which seeds a resting ball could be
 SeedFilter = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
 
 # OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
-BALL_DIAMETER_MM = 42.67
 IMPACT_BALL_PATCH_RADIUS_FRAC = 0.4
 IMPACT_BALL_PRESENT_DELTA = 30.0
 IMPACT_PRE_TRIGGER_MAX = 8

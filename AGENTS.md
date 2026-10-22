@@ -17,7 +17,7 @@ OpenFlight is a DIY golf launch monitor using the OPS243-A Doppler radar and K-L
 
 ## Scope and Reviewability
 
-For radar-camera fusion and testing-suite work, start from the master plan in the [openflight-test-bench](https://github.com/HarjotDhanota/openflight-test-bench) repository:
+For radar-camera fusion and testing-suite work, start from the master plan in the separate test-bench repository:
 it holds the current order, workstreams, ownership and decisions. The fork's
 `docs/development/fusion-master-plan.md` and `2026-10-04-fusion-method-plan.md`
 are history up to 5 October 2026; don't update their checkpoints. User instructions

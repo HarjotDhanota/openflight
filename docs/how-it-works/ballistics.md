@@ -92,13 +92,13 @@ exports the same split).
 
 **The normalized reference is TrackMan's.** TrackMan's normalization page says
 "Default values are 77°F and sea level (0 feet altitude)", its help pages give
-"77°F (25°C) Sea level No wind", and the owner's export says "normalized to no
+"77°F (25°C) Sea level No wind", and a TM4 normalized export says "normalized to no
 wind conditions at 0 ft altitude, 77 °F". Sea level is taken as the standard
 atmosphere's 1013.25 hPa (29.92 inHg).
 
 **Humidity is not published.** No public TrackMan page gives the humidity it
 normalizes to, so it is a named assumption, `NORMALIZED_REFERENCE_RH_PCT` = 50 %
-(as the owner's August research took it). The density is computed, not typed:
+(as earlier OpenFlight research took it). The density is computed, not typed:
 dry air and water vapour as ideal gases (287.05 and 461.495 J/(kg·K)), with the
 vapour pressure RH × e_s(T) from **Buck (1981)**, *J. Appl. Meteorol.* 20,
 1527–1532: e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa (his enhancement
@@ -125,8 +125,8 @@ The carry the kiosk shows (`carry_spin_adjusted`) is the as-measured carry.
 
 !!! note "The density hook"
 
-    OpenFlight does not measure the weather here. A density source (the owner's
-    BME280 work) sets `Shot.air_density_kg_m3`, in kg/m³, on each shot before
+    OpenFlight does not measure the weather here. A density source (such as a
+    BME280 sensor) sets `Shot.air_density_kg_m3`, in kg/m³, on each shot before
     finalization. Unset, the as-measured flight uses ISA and says so. A supplied
     value that is not finite or lies outside 0.6–1.6 kg/m³ (a units or wiring
     error, not weather) is never replaced by ISA: that flight is not measured,
@@ -259,8 +259,8 @@ time normalized to 77 °F, sea level, no wind and a premium ball.
 
 | Export | Shots | In the fit | sha256 |
 | --- | --- | --- | --- |
-| `session_logs/OpenFlight-Test.Normalized.csv`: the owner's, TrackMan format, in the repo | 24: 9 7-iron, 8 driver, 7 PW | 24 | `df84641f…f3726e072` |
-| `robinante-swingsync-2026-10-12.csv`: Robinante's public TM4 session (GitHub release `trackman_session_10_12_26`), SwingSync format | 43: 22 PW, 15 7-iron, 6 6-iron | 36 | `d4dbf8e6…bcb000ee60` |
+| `session_logs/OpenFlight-Test.Normalized.csv`: a TM4 normalized export, 6 May 2026, TrackMan format, in the repo | 24: 9 7-iron, 8 driver, 7 PW | 24 | `df84641f…f3726e072` |
+| `tm4-public-swingsync-2026-10-12.csv`: a second, public TM4 session, 12 Oct 2026 (GitHub release `trackman_session_10_12_26`), SwingSync format | 43: 22 PW, 15 7-iron, 6 6-iron | 36 | `d4dbf8e6…bcb000ee60` |
 
 The second export is someone else's data. It is read from `../tm-exports/`
 beside the checkout and never copied into the repo; its path and full hash are
@@ -275,7 +275,7 @@ in the calibration record.
 **Domain.** The domain is decided on inputs alone, before any residual is
 looked at: ball speed ≥ 50 mph, vertical launch ≥ 5°, no topspin.
 
-- **Out:** 7 shots, all Robinante's tops and grounders (carry 0.5–31 yd). Both
+- **Out:** 7 shots, all tops and grounders from the public session (carry 0.5–31 yd). Both
   models fly them within 0.5 yd, so they carry no aerodynamic information. They
   are reported separately so they do not flatter the RMSE.
 - **In:** 60 shots, ball speed 56–163 mph, $S_p$ at launch 0.05–0.63.
@@ -303,21 +303,21 @@ in the fit that flew it.
 | flight-fit-v1 in-sample, all 60 | −0.46 / 0.89 / 1.87 | +0.24 / 0.74 / 1.59 | −0.41 / 0.64 / 1.73 | +0.02 / 0.06 / 0.15 |
 | 10-fold held out, all 60 | −0.44 / 0.93 / 2.00 | +0.25 / 0.79 / 1.73 | −0.41 / 0.65 / 1.75 | +0.02 / 0.06 / 0.16 |
 | leave-one-shot-out, all 60 | −0.43 / 0.94 / 1.98 | +0.25 / 0.78 / 1.67 | −0.41 / 0.65 / 1.75 | +0.02 / 0.06 / 0.16 |
-| fit on owner, flown on Robinante (36) | −0.38 / 0.73 / 1.33 | +0.05 / 0.62 / 1.13 | −0.25 / 0.46 / 0.99 | +0.01 / 0.05 / 0.08 |
-| ferguson-2022 on Robinante (36) | +0.28 / 0.71 / 2.17 | −0.97 / 1.16 / 2.53 | −1.47 / 1.69 / 3.41 | −0.07 / 0.10 / 0.24 |
-| fit on Robinante, flown on owner (24) | +4.12 / 10.13 / 30.19 | +9.06 / 15.34 / 33.37 | +1.80 / 4.55 / 10.28 | +0.35 / 0.57 / 1.40 |
-| ferguson-2022 on owner (24) | +1.72 / 2.60 / 4.99 | −2.75 / 2.99 / 5.63 | −2.65 / 2.80 / 4.34 | −0.15 / 0.18 / 0.32 |
+| fit on 6 May, flown on 12 Oct (36) | −0.38 / 0.73 / 1.33 | +0.05 / 0.62 / 1.13 | −0.25 / 0.46 / 0.99 | +0.01 / 0.05 / 0.08 |
+| ferguson-2022 on 12 Oct (36) | +0.28 / 0.71 / 2.17 | −0.97 / 1.16 / 2.53 | −1.47 / 1.69 / 3.41 | −0.07 / 0.10 / 0.24 |
+| fit on 12 Oct, flown on 6 May (24) | +4.12 / 10.13 / 30.19 | +9.06 / 15.34 / 33.37 | +1.80 / 4.55 / 10.28 | +0.35 / 0.57 / 1.40 |
+| ferguson-2022 on 6 May (24) | +1.72 / 2.60 / 4.99 | −2.75 / 2.99 / 5.63 | −2.65 / 2.80 / 4.34 | −0.15 / 0.18 / 0.32 |
 
 Per club, leave-one-shot-out RMSE, with ferguson-2022 in brackets:
 
 | Source / club | n | Carry (yd) | Apex (ft) | Landing (°) | Hang (s) |
 | --- | --- | --- | --- | --- | --- |
-| owner / driver | 8 | 1.41 (1.54) | 0.85 (4.08) | 0.39 (1.96) | 0.08 (0.23) |
-| owner / 7-iron | 9 | 0.39 (2.25) | 1.12 (1.74) | 0.76 (2.26) | 0.10 (0.04) |
-| owner / PW | 7 | 1.65 (3.73) | 0.80 (2.77) | 1.25 (4.00) | 0.04 (0.22) |
-| Robinante / 6-iron | 2 | 0.48 (0.85) | 1.12 (1.36) | 0.65 (1.15) | 0.06 (0.07) |
-| Robinante / 7-iron | 14 | 0.44 (0.53) | 0.67 (1.03) | 0.45 (1.00) | 0.05 (0.05) |
-| Robinante / PW | 20 | 0.82 (0.80) | 0.54 (1.23) | 0.46 (2.08) | 0.04 (0.12) |
+| 6 May / driver | 8 | 1.41 (1.54) | 0.85 (4.08) | 0.39 (1.96) | 0.08 (0.23) |
+| 6 May / 7-iron | 9 | 0.39 (2.25) | 1.12 (1.74) | 0.76 (2.26) | 0.10 (0.04) |
+| 6 May / PW | 7 | 1.65 (3.73) | 0.80 (2.77) | 1.25 (4.00) | 0.04 (0.22) |
+| 12 Oct / 6-iron | 2 | 0.48 (0.85) | 1.12 (1.36) | 0.65 (1.15) | 0.06 (0.07) |
+| 12 Oct / 7-iron | 14 | 0.44 (0.53) | 0.67 (1.03) | 0.45 (1.00) | 0.05 (0.05) |
+| 12 Oct / PW | 20 | 0.82 (0.80) | 0.54 (1.23) | 0.46 (2.08) | 0.04 (0.12) |
 
 What these say:
 
@@ -326,19 +326,19 @@ What these say:
   angle 2.20 → 0.65°, hang time 0.14 → 0.06 s. The held-out error is within
   0.05 of the in-sample error, so seven constants are not over-fitting 240
   residuals.
-- **Across sources.** Fitted to the owner's export alone, it flies Robinante's
+- **Across sources.** Fitted to the 6 May export alone, it flies the 12 Oct
   shots (a different player, 56–98 mph, a different export path) with the
   carry error of Ferguson's constants (0.73 against 0.71 yd). Its apex,
   landing-angle and hang-time errors are about half of Ferguson's. The
   per-source tables show no offset between the two sources, which supports
-  treating Robinante's values as normalized.
-- **The reverse split fails on the driver, as it should.** Robinante has no
-  driver. Fitted to their irons alone, the model never sees $S_p$ below 0.13,
-  and it flies the owner's drivers ($S_p$ 0.05–0.08) 13 yd long. Its irons
-  transfer: owner 7-iron carry RMSE 0.17 yd, PW 1.07 yd. A fit is only good
+  treating the 12 Oct values as normalized.
+- **The reverse split fails on the driver, as it should.** The 12 Oct session
+  has no driver. Fitted to its irons alone, the model never sees $S_p$ below 0.13,
+  and it flies the 6 May drivers ($S_p$ 0.05–0.08) 13 yd long. Its irons
+  transfer: 6 May 7-iron carry RMSE 0.17 yd, PW 1.07 yd. A fit is only good
   over the $S_p$ range its data cover.
-- **What is left.** In every split, the owner's PW is 1.6 yd short and lands
-  1.2° shallow, and the owner's 7-iron peaks 1.0 ft high and hangs 0.10 s long.
+- **What is left.** In every split, the 6 May PW is 1.6 yd short and lands
+  1.2° shallow, and the 6 May 7-iron peaks 1.0 ft high and hangs 0.10 s long.
   That 7-iron hang time is the one per-club number that got worse
   (0.04 → 0.10 s).
 - **Driver confidence: moderate at best.** The low-$S_p$ end of both curves is
@@ -372,7 +372,7 @@ The refit is plausible here, with one caveat:
   averages are normalized (its older table said the conditions "have not been
   taken into consideration"), and an average of carries is not the carry of the
   average launch. TM4's own normalized export disagrees with them as well. The
-  owner's PW at 105.3 mph, 21.9° and 8,468 rpm carries 135.4 yd normalized,
+  6 May PW at 105.3 mph, 21.9° and 8,468 rpm carries 135.4 yd normalized,
   yet the Tour PW, slower and with more spin and launch, is listed at 142 yd.
 
 **Fitted coefficients against the published curve.**
@@ -400,8 +400,8 @@ The refit is plausible here, with one caveat:
 
 **Provenance (D38).** `FLIGHT_FIT_V1.calibration` records:
 
-- the version and the source ("fitted to TM4 normalized exports: the owner's …
-  and Robinante's …");
+- the version and the source ("fitted to TM4 normalized exports: a TM4 normalized
+  export, 6 May 2026 … and a second, public TM4 session …");
 - the form and its citation, and the date (2026-10-13);
 - each export's path and sha256, and the domain;
 - the reference density, the residual scales and the method;
@@ -474,10 +474,10 @@ carry and apex on the export shots, mostly on the low-spin drives.
 
 **A fair comparison.** The export rows above are in-sample for flight-fit-v1 and
 held out for flight-fit-v2. Re-scored so that every shot is predicted by a model
-that never saw it, for both forms: Robinante's 36 shots by a model fitted without
-his session, the owner's 16 irons and wedges by one fitted without the owner's
-session, and each of the owner's 8 drives by one fitted without that drive
-(Robinante's session has no driver). RMSE, carry yd / apex ft:
+that never saw it, for both forms: the 12 Oct session's 36 shots by a model fitted
+without that session, the 6 May session's 16 irons and wedges by one fitted without
+the 6 May session, and each of its 8 drives by one fitted without that drive (the
+12 Oct session has no driver). RMSE, carry yd / apex ft:
 
 | Held out | flight-fit-v1 recipe (exports) | flight-fit-v2 (grid) | v2 form, exports | v2 form, grid + exports, drives weighted |
 | --- | --- | --- | --- | --- |

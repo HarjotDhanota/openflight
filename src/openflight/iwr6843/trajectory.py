@@ -135,14 +135,6 @@ def _two_ray_solve(
     return (float(grid_m[k]), float(expl[k]), float(p_b / (p_a + p_b + 1e-12)))
 
 
-def _two_ray_height(
-    snapshot: np.ndarray, x_m: float, radar_height_m: float, tilt_rad: float, grid_m: np.ndarray
-) -> tuple[float, float]:
-    """Back-compat wrapper: (height_m, explained_fraction)."""
-    h_b, expl, _imf = _two_ray_solve(snapshot, x_m, radar_height_m, tilt_rad, grid_m)
-    return h_b, expl
-
-
 def fit_two_ray(
     snap_points: list[tuple[float, float, np.ndarray]],
     cal: Calibration,

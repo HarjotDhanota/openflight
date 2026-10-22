@@ -5,7 +5,6 @@ Statuses follow each estimator's own acceptance rule; nothing here judges accura
 
 from __future__ import annotations
 
-import math
 from typing import Any, Mapping
 
 from openflight.camera.ball_flight import (
@@ -14,6 +13,7 @@ from openflight.camera.ball_flight import (
     REFERENCE_BALL_Y_FRACTION,
 )
 from openflight.camera.geometry_contract import NO_TEE_RANGE
+from openflight.numeric import finite_float as finite
 
 STATUSES = (
     "accepted",
@@ -50,14 +50,6 @@ _ABSENT_INPUT_MARKERS = (
     "no OPS ball speed",
     "no tee range",
 )
-
-
-def finite(value: Any) -> float | None:
-    """A finite float, or None for anything else (bools included)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
 
 
 def mapping(value: Any) -> Mapping[str, Any]:

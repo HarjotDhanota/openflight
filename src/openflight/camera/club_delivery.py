@@ -32,6 +32,7 @@ from openflight.camera.geometry import (
 )
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
+from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
 
@@ -111,7 +112,6 @@ APPROACH_MEDIUM_SPEED_RATIO_RANGE = (0.6, 1.4)
 APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
 PREFERRED_PATH_OFFSETS = ((-2, 1), (-4, -1))
 APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1), (-3, 0))
-GOLF_BALL_DIAMETER_M = 0.04267
 
 
 def _image_scale(shape: tuple[int, ...]) -> float:

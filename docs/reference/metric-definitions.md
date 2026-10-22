@@ -149,7 +149,7 @@ curve uses the flight model's landing point.
     - With t = 0, curve equals carry side.
     - A ball launched 5° right that lands on the target line at 200 yd curved
       200 sin 5° = 17.4 yd left.
-    - The owner's TM4 export: the formula on its flat carry, carry side and
+    - A TM4 normalized export, 6 May 2026: the formula on its flat carry, carry side and
       launch direction gives its Curve column on all 24 shots, to 1e-9 ft.
 - **Domain:** None for a non-positive carry, |S| > C, or a launch direction
   that is not downrange (|t| ≥ 90°).

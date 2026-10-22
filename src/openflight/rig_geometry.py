@@ -18,7 +18,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Mapping
 
-BALL_DIAMETER_MM = 42.67
+from .constants import BALL_DIAMETER_MM
+
 SPEED_OF_SOUND_M_S = 343.0  # 20 C; the acoustic walk-back's default
 # Below this the range solve is too soft to trust: at 8 px, one pixel of
 # diameter error is 12 % of range. It still runs; the warning names it.

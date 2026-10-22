@@ -1,6 +1,6 @@
 # OPS-Guided Vertical Recovery
 
-The production runtime keeps frozen LCMF-v1 as its first pass, then performs a
+The production runtime keeps LCMF-v2 as its first pass, then performs a
 bounded second pass when the selected TI range track differs from OPS ball
 speed by more than 15% or LCMF withholds an angle. Speed-consistent first-pass
 results are never revisited.

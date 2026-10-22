@@ -123,7 +123,7 @@ def test_a_missing_export_is_skipped_cleanly(tmp_path, capsys):
 
 def test_the_default_exports_are_the_calibration_s():
     assert ffm.DEFAULT_EXPORTS[0] == ffm.IN_REPO_EXPORT
-    assert ffm.DEFAULT_EXPORTS[1].name == "robinante-swingsync-2026-10-12.csv"
+    assert ffm.DEFAULT_EXPORTS[1].name == "tm4-public-swingsync-2026-10-12.csv"
     recorded = {d.name for d in FLIGHT_FIT_V1.calibration.data}
     assert {p.name for p in ffm.DEFAULT_EXPORTS} == recorded
 

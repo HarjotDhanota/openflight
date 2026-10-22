@@ -25,8 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (P7-1). `--camera-shot-analysis` is refused: it takes ball distance from pixel
   size, against the fixed sensor roles. Phones get a shot whose IWR or camera
   result is still coming as provisional, and the late result as its final
-  version. Ballistics now use upstream's Ferguson (2022) quadratic Cd/Cl. See
-  `MERGE-NOTES.md`.
+  version. Ballistics now use upstream's Ferguson (2022) quadratic Cd/Cl.
 - **IWR vertical launch: per-antenna floor-bounce model (LCMF-v2).** The
   estimator now places each IWR6843LEVM antenna (RX1-RX4, TX1, TX3) from the
   enclosure's rig file -- board rotation, aim, RX-row position, camera height

@@ -1,4 +1,5 @@
 import catalogJson from './metricCatalog.json';
+import { METRIC_LABELS } from '../types/shot';
 import type { MetricLabel, Shot, ShotMetric } from '../types/shot';
 
 /**
@@ -19,12 +20,7 @@ export interface MetricSpec {
   pending: string | null;
 }
 
-export const METRIC_LABELS = catalogJson.labels as MetricLabel[];
 export const METRIC_CATALOG: readonly MetricSpec[] = catalogJson.metrics as MetricSpec[];
-
-export function metricsInGroup(group: MetricGroup): MetricSpec[] {
-  return METRIC_CATALOG.filter((spec) => spec.group === group);
-}
 
 /** The shot's record for one metric, or null for a shot from before `metrics` existed. */
 export function shotMetric(shot: Shot | null | undefined, id: string): ShotMetric | null {
@@ -36,11 +32,5 @@ export function shotMetric(shot: Shot | null | undefined, id: string): ShotMetri
 export type ValueLabel = Exclude<MetricLabel, 'not_measured'>;
 
 export function isValueLabel(status: string | null | undefined): status is ValueLabel {
-  return (
-    status === 'measured' ||
-    status === 'calculated' ||
-    status === 'model_geometry' ||
-    status === 'estimated' ||
-    status === 'experimental'
-  );
+  return status !== 'not_measured' && (METRIC_LABELS as readonly (string | null | undefined)[]).includes(status);
 }
