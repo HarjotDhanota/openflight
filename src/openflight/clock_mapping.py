@@ -124,11 +124,6 @@ class ClockMapping:  # pylint: disable=too-many-instance-attributes
         """Whether the mapping may time OPS windows against other sensors."""
         return self.status in _QUALIFIED
 
-    @property
-    def trigger_wall_s_lower_bound(self) -> Optional[float]:
-        """The interval's low end."""
-        return self.trigger_wall_s_low
-
     def to_dict(self) -> dict:
         """JSON-safe form for logs and the trace."""
         return asdict(self)

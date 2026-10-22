@@ -395,36 +395,6 @@ def ray_to_ball_center_plane(
     )
 
 
-def _floor_range_uncertainty(
-    camera: BallPlaneCamera,
-    ball: ReferenceBall,
-    ball_center_height_m: float,
-    center: BallPlaneIntersection,
-) -> float | None:
-    pixel_uncertainty = max(
-        1.0,
-        0.03 * ball.diameter_px,
-        camera.focal_size_px * math.tan(math.radians(camera.angular_uncertainty_deg)),
-    )
-    ranges = [center.radar_slant_range_m]
-    for dx, dy in (
-        (-pixel_uncertainty, 0.0),
-        (pixel_uncertainty, 0.0),
-        (0.0, -pixel_uncertainty),
-        (0.0, pixel_uncertainty),
-    ):
-        try:
-            shifted = ray_to_ball_center_plane(
-                camera,
-                (ball.x + dx, ball.y + dy),
-                ball_center_height_m=ball_center_height_m,
-            )
-        except ValueError:
-            return None
-        ranges.append(shifted.radar_slant_range_m)
-    return max(abs(value - center.radar_slant_range_m) for value in ranges)
-
-
 def _local_focal_size(camera: BallPlaneCamera, x_px: float, y_px: float) -> float:
     """Infer local pixels per radian from adjacent rays, including distortion."""
     axes = []
