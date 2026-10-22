@@ -3,23 +3,11 @@
  */
 
 import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
-import { reportedCarryYards } from '../src/types/shot.js';
+import { computeStats } from '../src/types/shot.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { Profile } from '../src/types/profile.js';
 import { generateShot } from './shotGenerator.js';
 import { isMeasured } from '../src/utils/units.js';
-
-function mean(values: number[]): number {
-  if (values.length === 0) return 0;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-function stdDev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const avg = mean(values);
-  const variance = mean(values.map((v) => (v - avg) ** 2));
-  return Math.sqrt(variance);
-}
 
 export function computeSessionStats(shots: Shot[]): SessionStats {
   if (shots.length === 0) {
@@ -34,24 +22,11 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
     };
   }
 
-  const ballSpeeds = shots.map((s) => s.ball_speed_mph).filter(isMeasured);
-  // only reported carries: a fusion shot's missing carry is not averaged in
-  const carries = shots.map(reportedCarryYards).filter(isMeasured);
-  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter(isMeasured);
-  const smashFactors = shots.map((s) => s.smash_factor).filter(isMeasured);
   const spinRpms = shots.map((s) => s.spin_rpm).filter(isMeasured);
-
   return {
-    shot_count: shots.length,
-    avg_ball_speed: ballSpeeds.length ? mean(ballSpeeds) : null,
-    max_ball_speed: ballSpeeds.length ? Math.max(...ballSpeeds) : null,
-    min_ball_speed: ballSpeeds.length ? Math.min(...ballSpeeds) : null,
-    std_dev: stdDev(ballSpeeds),
-    avg_club_speed: clubSpeeds.length ? mean(clubSpeeds) : null,
-    avg_smash_factor: smashFactors.length ? mean(smashFactors) : null,
-    avg_carry_est: carries.length ? mean(carries) : null,
-    avg_spin_rpm: spinRpms.length ? mean(spinRpms) : null,
-    spin_detection_rate: shots.length ? spinRpms.length / shots.length : 0,
+    ...computeStats(shots),
+    avg_spin_rpm: spinRpms.length ? spinRpms.reduce((a, b) => a + b, 0) / spinRpms.length : null,
+    spin_detection_rate: spinRpms.length / shots.length,
     mode: 'rolling-buffer',
   };
 }
