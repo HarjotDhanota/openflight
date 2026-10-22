@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot } from '../../types/shot';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FACE_SHAPES, faceCategory, formatLength, GRID_STEP_MM, impactReading } from './faceImpact';
+import { FACE_SHAPES, faceCategory, formatLength, GRID_STEP_MM, hoselParts, impactReading } from './faceImpact';
 import './FaceImpactView.css';
 
 interface FaceImpactViewProps {
@@ -20,15 +20,20 @@ function gridLines(min: number, max: number, step: number): number[] {
  * the club's earlier shots faint, a grid on the face centre; mirrored for a left-hander. */
 export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const { t } = useI18n();
-  const clipId = useId();
+  const id = useId();
+  const [clipId, faceClipId, steelId, faceId, shaftId] = ['clip', 'face-clip', 'steel', 'face', 'shaft'].map(
+    (part) => `${id}${part}`
+  );
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
+  const hosel = hoselParts(shape.hosel);
   const reading = impactReading(shot);
   const left = reading.handedness === 'left';
   const toeSign = left ? 1 : -1;
   const { minX, maxX, minY, maxY } = shape.bounds;
   const [viewMinX, viewMaxX] = left ? [-maxX, -minX] : [minX, maxX];
   const step = GRID_STEP_MM;
+  const mirror = left ? 'scale(-1 1)' : undefined;
   const earlier = sessionShots
     .filter((other) => other.timestamp !== shot.timestamp && other.club === shot.club)
     .map(impactReading)
@@ -47,6 +52,21 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
       : null;
   const sigma = (value: number | null) => (value !== null ? ` ± ${formatLength(value)}` : '');
   const gridText = `${GRID_STEP_MM} mm`;
+  const grid = [
+    ...gridLines(viewMinX, viewMaxX, step).map((x) => (
+      <line key={`x${x}`} className={x === 0 ? 'face-impact__axis' : undefined} x1={x} x2={x} y1={minY} y2={maxY} />
+    )),
+    ...gridLines(minY, maxY, step).map((y) => (
+      <line
+        key={`y${y}`}
+        className={y === 0 ? 'face-impact__axis' : undefined}
+        x1={viewMinX}
+        x2={viewMaxX}
+        y1={y}
+        y2={y}
+      />
+    )),
+  ];
   return (
     <section
       className="face-impact"
@@ -70,42 +90,64 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
             <clipPath id={clipId}>
               <rect x={viewMinX} y={minY} width={viewMaxX - viewMinX} height={maxY - minY} />
             </clipPath>
+            <clipPath id={faceClipId}>
+              <path d={shape.face} transform={mirror} />
+            </clipPath>
+            <linearGradient id={steelId} gradientUnits="userSpaceOnUse" x1={minX} y1={minY} x2={maxX} y2={maxY}>
+              <stop className="face-impact__steel-hi" offset="0" />
+              <stop className="face-impact__steel-mid" offset="0.55" />
+              <stop className="face-impact__steel-lo" offset="1" />
+            </linearGradient>
+            <linearGradient id={faceId} gradientUnits="userSpaceOnUse" x1="0" y1={minY} x2="0" y2={maxY}>
+              <stop className="face-impact__face-hi" offset="0" />
+              <stop className="face-impact__face-lo" offset="1" />
+            </linearGradient>
+            <linearGradient
+              id={shaftId}
+              gradientUnits="userSpaceOnUse"
+              x1={hosel.shaftLine[0][0]}
+              y1={hosel.shaftLine[0][1]}
+              x2={hosel.shaftLine[1][0]}
+              y2={hosel.shaftLine[1][1]}
+            >
+              <stop className="face-impact__shaft-near" offset="0" />
+              <stop className="face-impact__shaft-far" offset="1" />
+            </linearGradient>
           </defs>
           <g className="face-impact__grid" clipPath={`url(#${clipId})`}>
-            {gridLines(viewMinX, viewMaxX, step).map((x) => (
-              <line
-                key={`x${x}`}
-                className={x === 0 ? 'face-impact__axis' : undefined}
-                x1={x}
-                x2={x}
-                y1={minY}
-                y2={maxY}
-              />
-            ))}
-            {gridLines(minY, maxY, step).map((y) => (
-              <line
-                key={`y${y}`}
-                className={y === 0 ? 'face-impact__axis' : undefined}
-                x1={viewMinX}
-                x2={viewMaxX}
-                y1={y}
-                y2={y}
-              />
-            ))}
+            {grid}
           </g>
-          <g className="face-impact__outline-group" transform={left ? 'scale(-1 1)' : undefined}>
-            <path className="face-impact__outline" d={shape.outline} />
-            {shape.hosel ? <path className="face-impact__hosel" d={shape.hosel} /> : null}
-            {shape.grooves.map((y) => (
-              <line
-                key={y}
-                className="face-impact__groove"
-                x1={shape.grooveSpan[0]}
-                x2={shape.grooveSpan[1]}
-                y1={y}
-                y2={y}
-              />
-            ))}
+          <g clipPath={`url(#${clipId})`}>
+            <g className="face-impact__outline-group" transform={mirror}>
+              <g className="face-impact__rim">
+                <path d={hosel.shaft} />
+                <path d={hosel.ferrule} />
+                <path d={hosel.tube} />
+                <path d={shape.head} />
+              </g>
+              <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
+              <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
+              <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
+              <path className="face-impact__ferrule" d={hosel.ferrule} />
+              <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
+              {shape.grooves.map((groove) => (
+                <line
+                  key={`${groove.y}:${groove.from}`}
+                  className="face-impact__groove"
+                  x1={groove.from}
+                  x2={groove.to}
+                  y1={groove.y}
+                  y2={groove.y}
+                />
+              ))}
+              {shape.edges.map((d) => (
+                <path key={d} className="face-impact__edge" d={d} />
+              ))}
+              {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
+            </g>
+            <g className="face-impact__grid face-impact__grid--on-face" clipPath={`url(#${faceClipId})`}>
+              {grid}
+            </g>
           </g>
           <text
             className="face-impact__side"

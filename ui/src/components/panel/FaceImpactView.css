@@ -1,5 +1,20 @@
 /* Face impact (experimental): our own illustrative face drawing beside its numbers. */
 .face-impact {
+  --face-art-steel-hi: #8c949d;
+  --face-art-steel-mid: #555c64;
+  --face-art-steel-lo: #2b2f34;
+  --face-art-face-hi: #6f7780;
+  --face-art-face-lo: #5a6169;
+  --face-art-face-edge: rgba(18, 20, 23, 0.55);
+  --face-art-rim: rgba(214, 221, 228, 0.75);
+  --face-art-highlight: rgba(232, 237, 242, 0.5);
+  --face-art-groove: rgba(22, 25, 29, 0.6);
+  --face-art-ferrule: #18191b;
+  --face-art-shaft: #aab1b9;
+  --face-art-earlier: rgba(240, 242, 245, 0.8);
+  --face-art-ink: #0e0f10;
+  --face-art-grid: rgba(236, 240, 244, 0.1);
+  --face-art-grid-axis: rgba(236, 240, 244, 0.26);
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   align-items: center;
@@ -11,7 +26,7 @@
 
 .face-impact__figure {
   min-width: 0;
-  height: clamp(5.5rem, 27vh, 10.5rem);
+  height: clamp(5.5rem, 30vh, 11.5rem);
 }
 
 .face-impact__svg {
@@ -30,19 +45,71 @@
   stroke-width: 0.5;
 }
 
-.face-impact__outline,
-.face-impact__hosel {
+.face-impact__grid--on-face line {
+  stroke: var(--face-art-grid);
+}
+
+.face-impact__grid--on-face .face-impact__axis {
+  stroke: var(--face-art-grid-axis);
+}
+
+.face-impact__rim path {
   fill: none;
-  stroke: var(--color-text-muted);
-  stroke-width: 1;
+  stroke: var(--face-art-rim);
+  stroke-width: 0.9;
   stroke-linejoin: round;
+}
+
+.face-impact__steel-hi {
+  stop-color: var(--face-art-steel-hi);
+}
+
+.face-impact__steel-mid {
+  stop-color: var(--face-art-steel-mid);
+}
+
+.face-impact__steel-lo {
+  stop-color: var(--face-art-steel-lo);
+}
+
+.face-impact__face-hi {
+  stop-color: var(--face-art-face-hi);
+}
+
+.face-impact__face-lo {
+  stop-color: var(--face-art-face-lo);
+}
+
+.face-impact__shaft-near {
+  stop-color: var(--face-art-shaft);
+}
+
+.face-impact__shaft-far {
+  stop-color: var(--face-art-shaft);
+  stop-opacity: 0;
+}
+
+.face-impact__ferrule {
+  fill: var(--face-art-ferrule);
+}
+
+.face-impact__face {
+  stroke: var(--face-art-face-edge);
+  stroke-width: 0.35;
+}
+
+.face-impact__groove,
+.face-impact__mark {
+  stroke: var(--face-art-groove);
+  stroke-width: 0.55;
   stroke-linecap: round;
 }
 
-.face-impact__groove {
-  stroke: var(--color-text-faint);
-  stroke-width: 0.5;
-  stroke-dasharray: 1.6 1.2;
+.face-impact__edge {
+  fill: none;
+  stroke: var(--face-art-highlight);
+  stroke-width: 0.6;
+  stroke-linecap: round;
 }
 
 .face-impact__side {
@@ -54,8 +121,10 @@
 }
 
 .face-impact__earlier {
-  fill: var(--color-text-faint);
-  opacity: 0.55;
+  fill: var(--face-art-earlier);
+  stroke: var(--face-art-ink);
+  stroke-width: 0.5;
+  opacity: 0.7;
 }
 
 .face-impact__ellipse {
@@ -73,7 +142,7 @@
 
 .face-impact__dot {
   fill: var(--color-accent);
-  stroke: var(--color-bg);
+  stroke: var(--face-art-ink);
   stroke-width: 0.6;
 }
 
