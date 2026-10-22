@@ -113,23 +113,35 @@ interface Blade {
   hosel: Hosel;
 }
 
-/** Iron and wedge: straight leading edge, rounded toe, topline falling to a hosel at lie. */
-function blade(o: Blade, grooves: Groove[], bounds: FaceShape['bounds']): FaceShape {
+/** Equal score lines at a constant pitch, the lowest `lowest` mm above the leading edge. */
+interface GrooveBlock {
+  lowest: number;
+  pitch: number;
+  count: number;
+  from: number;
+  to: number;
+}
+
+/** Iron and wedge: straight leading edge, rounded toe, topline falling to a hosel at lie,
+ * drawn around the centre of its groove block. */
+function blade(o: Blade, block: GrooveBlock, bounds: FaceShape['bounds']): FaceShape {
   const { up } = axes(o.hosel);
   const top = (inset: number, concave: boolean) => {
     const corner = add(edge(o.hosel, o.crotch, -1, inset), [0, inset]);
     const along: Point = [o.topX + o.round, o.top + o.drop + inset];
     const round = fillet(edge(o.hosel, o.crotch + (concave ? 10 : -10), -1, inset), corner, along, concave ? 3 : 5);
+    const run = Math.hypot(along[0] - corner[0], along[1] - corner[1]);
+    const ahead = lerp(along, corner, (-o.round * 0.4) / run);
     const line =
-      `L ${pt(along)} C ${pt([o.topX + o.round * 0.45, o.top + inset])} ` +
+      `L ${pt(along)} C ${pt(ahead)} ` +
       `${pt([o.topX + o.round * 0.2, o.top + inset])} ${pt([o.topX, o.top + inset])} ` +
       `C ${pt([o.topX - o.round * 0.6, o.top + inset])} ${pt([o.toe + inset, o.top + o.round * 0.3 + inset * 0.5])} ` +
       `${pt([o.toe + inset, o.top + o.round])}`;
-    return { start: round.start, end: round.end, path: `${round.path} ${line}`, line };
+    return { start: round.start, end: round.end, path: `${round.path} ${line}`, line, corner, along };
   };
   const toeDown = (inset: number, bottom: number) =>
-    `C ${pt([o.toe - 0.8 + inset, o.top + o.round + 12])} ${pt([o.toe + inset, o.le - 12])} ${pt([o.toe + 3 + inset, o.le - 3])} ` +
-    `C ${pt([o.toe + 5 + inset, bottom - 0.5])} ${pt([o.toe + 12, bottom])} ${pt([o.toe + 21, bottom])} Z`;
+    `C ${pt([o.toe - 0.8 + inset, o.top + o.round + 12])} ${pt([o.toe - 0.3 + inset, o.le - 7])} ${pt([o.toe + 1.3 + inset, o.le - 2])} ` +
+    `C ${pt([o.toe + 3 + inset, bottom - 0.2])} ${pt([o.toe + 10, bottom])} ${pt([o.toe + 21, bottom])} Z`;
   const outer = top(0, true);
   const inner = top(1.4, false);
   const heel = edge(o.hosel, 10, 1);
@@ -138,21 +150,27 @@ function blade(o: Blade, grooves: Groove[], bounds: FaceShape['bounds']): FaceSh
     `M ${pt([o.toe + 21, sole])} L ${pt([heel[0] - 10, sole])} ` +
     `C ${pt([heel[0] - 3, sole])} ${pt(add(heel, up, -5))} ${pt(heel)} ` +
     `L ${pt(edge(o.hosel, 16, 1))} L ${pt(outer.start)} ${outer.path} ${toeDown(0, sole)}`;
+  const side = o.heelX + 6.5;
+  const slope = (inner.corner[1] - inner.along[1]) / (inner.corner[0] - inner.along[0]);
+  const shoulder = fillet([side, o.le - 9], [side, inner.along[1] + (side - inner.along[0]) * slope], inner.along, 4);
   const face =
     `M ${pt([o.toe + 21, o.le])} L ${pt([o.heelX, o.le])} ` +
-    `C ${pt([o.heelX + 4.5, o.le])} ${pt([o.heelX + 6.5, o.le - 5])} ${pt([o.heelX + 6.5, o.le - 13])} ` +
-    `C ${pt([o.heelX + 6.5, o.le - 19])} ${pt(add(inner.start, up, -4))} ${pt(inner.start)} ` +
-    `${inner.path} ${toeDown(1.4, o.le)}`;
+    `C ${pt([o.heelX + 5.5, o.le])} ${pt([side, o.le - 2.5])} ${pt([side, o.le - 9])} ` +
+    `L ${pt(shoulder.start)} ${shoulder.path} ${inner.line} ${toeDown(1.4, o.le)}`;
   const topline = top(0.7, false);
-  return {
-    head,
-    face,
-    edges: [`M ${pt(topline.end)} ${topline.line}`],
-    hosel: o.hosel,
-    grooves,
-    mark: null,
-    bounds,
-  };
+  const middle = o.le - block.lowest - ((block.count - 1) * block.pitch) / 2;
+  return centred(
+    {
+      head,
+      face,
+      edges: [`M ${pt(topline.end)} ${topline.line}`],
+      hosel: o.hosel,
+      grooves: rows(middle, block.pitch, block.count, block.from, block.to),
+      mark: null,
+      bounds,
+    },
+    [-(block.from + block.to) / 2, -middle]
+  );
 }
 
 function rows(centre: number, step: number, count: number, from: number, to: number): Groove[] {
@@ -287,43 +305,37 @@ export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
     ),
     [-7, 0.75]
   ),
-  iron: centred(
-    blade(
-      {
-        le: 23,
-        band: 3,
-        toe: -34,
-        top: -27.3,
-        topX: -18,
-        round: 14,
-        drop: 1.6,
-        crotch: 33,
-        heelX: 37,
-        hosel: IRON_HOSEL,
-      },
-      rows(-0.25, 2.9, 10, -29.5, 26.5),
-      { minX: -40, maxX: 84, minY: -50, maxY: 29 }
-    ),
-    [1.5, 0.25]
+  iron: blade(
+    {
+      le: 23,
+      band: 3,
+      toe: -34,
+      top: -27.3,
+      topX: -18,
+      round: 14,
+      drop: 1.6,
+      crotch: 33,
+      heelX: 37,
+      hosel: IRON_HOSEL,
+    },
+    { lowest: 4.5, pitch: 3.6, count: 8, from: -23.5, to: 37.7 },
+    { minX: -40, maxX: 84, minY: -50, maxY: 29 }
   ),
-  wedge: centred(
-    blade(
-      {
-        le: 24,
-        band: 5,
-        toe: -33,
-        top: -34.2,
-        topX: -14,
-        round: 24,
-        drop: 5,
-        crotch: 40,
-        heelX: 36,
-        hosel: WEDGE_HOSEL,
-      },
-      rows(-3.71, 2.9, 12, -29, 26),
-      { minX: -40, maxX: 82, minY: -54, maxY: 32 }
-    ),
-    [1.5, 3.71]
+  wedge: blade(
+    {
+      le: 24,
+      band: 5,
+      toe: -33,
+      top: -34.2,
+      topX: -14,
+      round: 24,
+      drop: 5,
+      crotch: 45,
+      heelX: 36,
+      hosel: WEDGE_HOSEL,
+    },
+    { lowest: 4.5, pitch: 3.6, count: 11, from: -22.3, to: 37.7 },
+    { minX: -40, maxX: 82, minY: -54, maxY: 32 }
   ),
 };
 
