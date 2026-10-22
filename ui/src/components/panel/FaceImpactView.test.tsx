@@ -157,21 +157,25 @@ describe('faceImpact', () => {
     expect(face.maxY - face.minY).toBeLessThanOrEqual(height[1]);
   });
 
-  it.each([
-    ['driver', 30],
-    ['fairway', 17],
-    ['hybrid', 20],
-    ['iron', 23],
-    ['wedge', 24],
-  ] as const)('centres the %s face on the reading convention', (category, centreHeight) => {
-    const shape = FACE_SHAPES[category];
-    const head = extent(polygon(shape.head));
-    const face = polygon(shape.face);
-    expect(shape.centreHeightMm).toBe(centreHeight);
-    expect((head.minX + head.maxX) / 2).toBeCloseTo(8, 0);
-    expect(span(face, 0)[1]).toBeCloseTo(centreHeight, 0);
-    expect(inside(face, 0, 0)).toBe(true);
-  });
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'puts the %s origin on the centre of its scoring area',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const face = polygon(shape.face);
+      const toeEnd = Math.min(...shape.grooves.map((groove) => groove.from));
+      const heelEnd = Math.max(...shape.grooves.map((groove) => groove.to));
+      expect(Math.abs((toeEnd + heelEnd) / 2)).toBeLessThanOrEqual(0.5);
+      const [top, bottom] = span(face, 0);
+      expect(Math.abs((top + bottom) / 2)).toBeLessThanOrEqual(0.5);
+      if (category === 'iron' || category === 'wedge') {
+        const ys = shape.grooves.map((groove) => groove.y);
+        expect(Math.abs((Math.min(...ys) + Math.max(...ys)) / 2)).toBeLessThanOrEqual(1);
+      } else {
+        const { minX, maxX } = extent(face);
+        expect(Math.abs((minX + maxX) / 2)).toBeLessThanOrEqual(1);
+      }
+    }
+  );
 
   it.each(['iron', 'wedge'] as const)(
     'draws the %s as a blade: tallest at the toe, topline falling to the heel',
@@ -215,7 +219,7 @@ describe('faceImpact', () => {
       const shape = FACE_SHAPES[category];
       expect(shape.grooves.length).toBeGreaterThan(0);
       for (const groove of shape.grooves) expect(groove.to < -15 || groove.from > 15).toBe(true);
-      expect(shape.mark).toBeTruthy();
+      for (const [x] of polygon(shape.mark!)) expect(Math.abs(x)).toBeLessThanOrEqual(0.5);
     }
     expect(FACE_SHAPES.hybrid.grooves.length).toBeGreaterThanOrEqual(3);
     expect(FACE_SHAPES.hybrid.grooves.length).toBeLessThanOrEqual(7);

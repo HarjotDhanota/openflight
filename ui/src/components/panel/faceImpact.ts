@@ -26,12 +26,10 @@ export interface Groove {
 }
 
 /** Our own illustrative drawings, toe left and hosel right as seen from the target
- * (right-handed), svg mm (+x heel, +y down) around the reading's face centre: 8 mm toe-ward of
- * the head's heel-toe midpoint, the category's centre height above the leading edge
- * (impact_location.py). Iron length within Mizuno's published 7-iron head lengths (74-87 mm),
- * woods within the USGA 127 x 71 mm head limit. */
+ * (right-handed), svg mm (+x heel, +y down) around the centre of the scoring area: midway between
+ * the score lines' heel and toe ends, and midway up the face there. Iron length within Mizuno's
+ * published 7-iron head lengths (74-87 mm), woods within the USGA 127 x 71 mm head limit. */
 export interface FaceShape {
-  centreHeightMm: number;
   head: string;
   face: string;
   edges: readonly string[];
@@ -147,7 +145,6 @@ function blade(o: Blade, grooves: Groove[], bounds: FaceShape['bounds']): FaceSh
     `${inner.path} ${toeDown(1.4, o.le)}`;
   const topline = top(0.7, false);
   return {
-    centreHeightMm: o.le,
     head,
     face,
     edges: [`M ${pt(topline.end)} ${topline.line}`],
@@ -158,22 +155,38 @@ function blade(o: Blade, grooves: Groove[], bounds: FaceShape['bounds']): FaceSh
   };
 }
 
-function rows(first: number, step: number, count: number, from: number, to: number): Groove[] {
+function rows(centre: number, step: number, count: number, from: number, to: number): Groove[] {
+  const first = centre + ((count - 1) * step) / 2;
   return Array.from({ length: count }, (_, k) => ({ y: Number((first - k * step).toFixed(2)), from, to }));
 }
 
-function sides(ys: number[], toe: [number, number], heel: [number, number]): Groove[] {
-  return ys.flatMap((y) => [
-    { y, from: toe[0], to: toe[1] },
-    { y, from: heel[0], to: heel[1] },
-  ]);
+function sides(centre: number, step: number, count: number, toe: Point, heel: Point): Groove[] {
+  return [...rows(centre, step, count, toe[0], toe[1]), ...rows(centre, step, count, heel[0], heel[1])];
 }
 
 type Edge = (s: number, side: -1 | 1, along?: number) => string;
 
+function movePath(d: string, dx: number, dy: number): string {
+  let k = 0;
+  return d.replace(/-?\d*\.?\d+/g, (n) => fmt(Number(n) + (k++ % 2 ? dy : dx)));
+}
+
+/** Moves a drawing by (dx, dy) so its scoring-area centre lands on the origin. */
+function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
+  const { minX, maxX, minY, maxY } = shape.bounds;
+  return {
+    head: movePath(shape.head, dx, dy),
+    face: movePath(shape.face, dx, dy),
+    edges: shape.edges.map((d) => movePath(d, dx, dy)),
+    hosel: { ...shape.hosel, ground: add(shape.hosel.ground, [dx, dy]) },
+    grooves: shape.grooves.map((g) => ({ y: g.y + dy, from: g.from + dx, to: g.to + dx })),
+    mark: shape.mark && movePath(shape.mark, dx, dy),
+    bounds: { minX: minX + dx, maxX: maxX + dx, minY: minY + dy, maxY: maxY + dy },
+  };
+}
+
 /** Woods: `head` draws the silhouette with the hosel's edge points to hand. */
 function wood(
-  centre: number,
   face: string,
   hosel: Hosel,
   head: (at: Edge) => string,
@@ -181,7 +194,7 @@ function wood(
 ): FaceShape {
   const { up } = axes(hosel);
   const at: Edge = (s, side, along = 0) => pt(add(edge(hosel, s, side), up, along));
-  return { centreHeightMm: centre, face, head: head(at), hosel, ...extras };
+  return { face, head: head(at), hosel, ...extras };
 }
 
 const IRON_HOSEL: Hosel = {
@@ -220,74 +233,97 @@ const HYBRID_HOSEL: Hosel = {
 };
 
 export const FACE_SHAPES: Record<FaceCategory, FaceShape> = {
-  driver: wood(
-    30,
-    'M 0 30 C 22 30 42 29 53 23 C 60 19 62 8 61 -2 C 60 -10 55 -16 46 -19 C 32 -25 12 -28.5 -10 -28.5 ' +
-      'C -30 -28.5 -44 -23 -47.5 -10 C -50 0 -49 14 -42 22 C -34 28.5 -18 30 0 30 Z',
-    DRIVER_HOSEL,
-    (at) =>
-      `M 0 33.5 C 24 33.5 46 32.5 57 25 C 63 21 65.5 12 65.3 4 C 65.2 1 ${at(44, 1, -2)} ${at(44, 1)} ` +
-      `L ${at(48, 1)} L ${at(56, -1)} C ${at(56, -1, -4)} 44 -26 28 -29.5 C 8 -33 -20 -33.5 -34 -29.5 ` +
-      'C -47 -26 -52.5 -16 -52.5 -6 C -53 6 -50 18 -44 25 C -34.5 32.5 -18 33.5 0 33.5 Z',
-    {
-      grooves: sides([-12.5, -7.5, -2.5, 2.5, 7.5, 12.5], [-41, -26], [28, 44]),
-      mark: 'M 0 -25 L 0 -21',
-      edges: ['M 30 -28 C 18 -30.9 4 -32 -12 -32 C -30 -31.8 -43 -26.5 -48.5 -14'],
-      bounds: { minX: -58, maxX: 92, minY: -48, maxY: 38 },
-    }
+  driver: centred(
+    wood(
+      'M 0 30 C 22 30 42 29 53 23 C 60 19 62 8 61 -2 C 60 -10 55 -16 46 -19 C 32 -25 12 -28.5 -10 -28.5 ' +
+        'C -30 -28.5 -44 -23 -47.5 -10 C -50 0 -49 14 -42 22 C -34 28.5 -18 30 0 30 Z',
+      DRIVER_HOSEL,
+      (at) =>
+        `M 0 33.5 C 24 33.5 46 32.5 57 25 C 63 21 65.5 12 65.3 4 C 65.2 1 ${at(44, 1, -2)} ${at(44, 1)} ` +
+        `L ${at(48, 1)} L ${at(56, -1)} C ${at(56, -1, -4)} 44 -26 28 -29.5 C 8 -33 -20 -33.5 -34 -29.5 ` +
+        'C -47 -26 -52.5 -16 -52.5 -6 C -53 6 -50 18 -44 25 C -34.5 32.5 -18 33.5 0 33.5 Z',
+      {
+        grooves: sides(1.06, 5, 6, [-38, -24], [36.5, 50.5]),
+        mark: 'M 6.25 -25 L 6.25 -21',
+        edges: ['M 30 -28 C 18 -30.9 4 -32 -12 -32 C -30 -31.8 -43 -26.5 -48.5 -14'],
+        bounds: { minX: -58, maxX: 92, minY: -48, maxY: 38 },
+      }
+    ),
+    [-6.25, -1.06]
   ),
-  fairway: wood(
-    17,
-    'M 0 17 C 20 17 38 16.5 47 12 C 52 9 53 2 52 -3 C 51 -8 46 -11 39 -12.5 C 26 -16 8 -21 -10 -21 ' +
-      'C -26 -21 -37 -18 -40.5 -10 C -43 -3 -42 7 -37 12 C -30 16.5 -16 17 0 17 Z',
-    FAIRWAY_HOSEL,
-    (at) =>
-      `M 0 19.5 C 22 19.5 42 19 51 14 C 56 10.5 57.5 4 57 -1 C 56.8 -3 ${at(31, 1, -3)} ${at(31, 1)} ` +
-      `L ${at(35, 1)} L ${at(42, -1)} C ${at(42, -1, -4)} 36 -21.5 20 -23.5 C 6 -24.8 -18 -24.5 -28 -22 ` +
-      'C -40 -19.5 -44.5 -12 -44.5 -4 C -45 6 -42 12 -38 15 C -31 19.5 -16 19.5 0 19.5 Z',
-    {
-      grooves: sides([-7, -3, 1, 5, 9, 13], [-34, -22], [25, 38]),
-      mark: 'M 0 -18 L 0 -14.5',
-      edges: ['M 22 -22.4 C 12 -23.6 0 -23.8 -12 -23.6 C -28 -23.2 -39 -19 -42.5 -10'],
-      bounds: { minX: -50, maxX: 80, minY: -45, maxY: 24 },
-    }
+  fairway: centred(
+    wood(
+      'M 0 17 C 20 17 38 16.5 47 12 C 52 9 53 2 52 -3 C 51 -8 46 -11 39 -12.5 C 26 -16 8 -21 -10 -21 ' +
+        'C -26 -21 -37 -18 -40.5 -10 C -43 -3 -42 7 -37 12 C -30 16.5 -16 17 0 17 Z',
+      FAIRWAY_HOSEL,
+      (at) =>
+        `M 0 19.5 C 22 19.5 42 19 51 14 C 56 10.5 57.5 4 57 -1 C 56.8 -3 ${at(31, 1, -3)} ${at(31, 1)} ` +
+        `L ${at(35, 1)} L ${at(42, -1)} C ${at(42, -1, -4)} 36 -21.5 20 -23.5 C 6 -24.8 -18 -24.5 -28 -22 ` +
+        'C -40 -19.5 -44.5 -12 -44.5 -4 C -45 6 -42 12 -38 15 C -31 19.5 -16 19.5 0 19.5 Z',
+      {
+        grooves: sides(-1.47, 3.6, 6, [-33, -22], [32.5, 43.5]),
+        mark: 'M 5.25 -17.5 L 5.25 -14',
+        edges: ['M 22 -22.4 C 12 -23.6 0 -23.8 -12 -23.6 C -28 -23.2 -39 -19 -42.5 -10'],
+        bounds: { minX: -50, maxX: 80, minY: -45, maxY: 24 },
+      }
+    ),
+    [-5.25, 1.47]
   ),
-  hybrid: wood(
-    20,
-    'M 4 20 C 22 20 37 19.5 44 15 C 49 11 50 3 49 -4 C 48 -10 43 -13 36 -14.5 C 24 -18 8 -22.5 -8 -23 ' +
-      'C -22 -23 -31 -19 -34 -10 C -36.5 -2 -35.5 8 -31 13.5 C -25 19.5 -11 20 4 20 Z',
-    HYBRID_HOSEL,
-    (at) =>
-      `M 4 22.5 C 24 22.5 40 22 48 17 C 53.5 13 55 5 54.5 -1 C 54.3 -3 ${at(34, 1, -3)} ${at(34, 1)} ` +
-      `L ${at(38, 1)} L ${at(46, -1)} C ${at(46, -1, -4)} 26 -21 10 -25 C -2 -26.5 -20 -26 -28 -22.5 ` +
-      'C -36 -19 -38.5 -11 -38.5 -3 C -38.5 6 -36 13 -32 17 C -25.5 22.5 -11 22.5 4 22.5 Z',
-    {
-      grooves: rows(13.5, 5, 6, -20, 32),
-      mark: null,
-      edges: ['M 28 -21.5 C 18 -23.8 6 -25.4 -8 -25.4 C -22 -25.2 -31 -21 -35 -13'],
-      bounds: { minX: -44, maxX: 76, minY: -46, maxY: 27 },
-    }
+  hybrid: centred(
+    wood(
+      'M 4 20 C 22 20 37 19.5 44 15 C 49 11 50 3 49 -4 C 48 -10 43 -13 36 -14.5 C 24 -18 8 -22.5 -8 -23 ' +
+        'C -22 -23 -31 -19 -34 -10 C -36.5 -2 -35.5 8 -31 13.5 C -25 19.5 -11 20 4 20 Z',
+      HYBRID_HOSEL,
+      (at) =>
+        `M 4 22.5 C 24 22.5 40 22 48 17 C 53.5 13 55 5 54.5 -1 C 54.3 -3 ${at(34, 1, -3)} ${at(34, 1)} ` +
+        `L ${at(38, 1)} L ${at(46, -1)} C ${at(46, -1, -4)} 26 -21 10 -25 C -2 -26.5 -20 -26 -28 -22.5 ` +
+        'C -36 -19 -38.5 -11 -38.5 -3 C -38.5 6 -36 13 -32 17 C -25.5 22.5 -11 22.5 4 22.5 Z',
+      {
+        grooves: rows(-0.75, 4.6, 6, -19, 33),
+        mark: null,
+        edges: ['M 28 -21.5 C 18 -23.8 6 -25.4 -8 -25.4 C -22 -25.2 -31 -21 -35 -13'],
+        bounds: { minX: -44, maxX: 76, minY: -46, maxY: 27 },
+      }
+    ),
+    [-7, 0.75]
   ),
-  iron: blade(
-    {
-      le: 23,
-      band: 3,
-      toe: -34,
-      top: -27.3,
-      topX: -18,
-      round: 14,
-      drop: 1.6,
-      crotch: 33,
-      heelX: 37,
-      hosel: IRON_HOSEL,
-    },
-    rows(19.5, 3.15, 11, -26, 32),
-    { minX: -40, maxX: 84, minY: -50, maxY: 29 }
+  iron: centred(
+    blade(
+      {
+        le: 23,
+        band: 3,
+        toe: -34,
+        top: -27.3,
+        topX: -18,
+        round: 14,
+        drop: 1.6,
+        crotch: 33,
+        heelX: 37,
+        hosel: IRON_HOSEL,
+      },
+      rows(-0.25, 2.9, 10, -29.5, 26.5),
+      { minX: -40, maxX: 84, minY: -50, maxY: 29 }
+    ),
+    [1.5, 0.25]
   ),
-  wedge: blade(
-    { le: 24, band: 5, toe: -33, top: -34.2, topX: -14, round: 24, drop: 5, crotch: 40, heelX: 36, hosel: WEDGE_HOSEL },
-    rows(20.5, 3.05, 14, -25, 31),
-    { minX: -40, maxX: 82, minY: -54, maxY: 32 }
+  wedge: centred(
+    blade(
+      {
+        le: 24,
+        band: 5,
+        toe: -33,
+        top: -34.2,
+        topX: -14,
+        round: 24,
+        drop: 5,
+        crotch: 40,
+        heelX: 36,
+        hosel: WEDGE_HOSEL,
+      },
+      rows(-3.71, 2.9, 12, -29, 26),
+      { minX: -40, maxX: 82, minY: -54, maxY: 32 }
+    ),
+    [1.5, 3.71]
   ),
 };
 
