@@ -604,4 +604,58 @@ describe('buildLiveMetrics with the server labels (Shot.metrics)', () => {
     expect(byId(metrics, 'carry')).toMatchObject({ value: NO_VALUE, reason: 'spin not measured on this shot' });
     expect(byId(metrics, 'carry').status).toBeUndefined();
   });
+
+  it('formats every tile from the server value when the shot has none of its own', () => {
+    const server = (id: string, value: number, unit: string) => [id, record({ value, unit, status: 'calculated' })];
+    const shot = makeShot({
+      ball_speed_mph: null as unknown as number,
+      club_speed_mph: null,
+      smash_factor: null,
+      estimated_carry_yards: null,
+      carry_spin_adjusted: null,
+      carry_status: 'not_measured',
+      launch_angle_vertical: null,
+      launch_angle_horizontal: null,
+      launch_angle_horizontal_source: 'camera_only_experimental',
+      club_angle_deg: null,
+      club_path_deg: null,
+      spin_axis_deg: null,
+      spin_rpm: null,
+      metrics: Object.fromEntries([
+        server('ball_speed', 150.26, 'mph'),
+        server('carry', 230.4, 'yd'),
+        server('club_speed', 101.04, 'mph'),
+        server('smash_factor', 1.487, ''),
+        server('launch_vertical', 12.34, 'deg'),
+        server('launch_horizontal', 2, 'deg'),
+        server('spin_rate', 2650.4, 'rpm'),
+        server('spin_axis', -3.44, 'deg'),
+        server('club_path', 0, 'deg'),
+        server('attack_angle', -4.56, 'deg'),
+      ]),
+    });
+    const shown = (unitSystem: 'imperial' | 'metric') =>
+      Object.fromEntries(
+        buildLiveMetrics(shot, unitSystem, emptySwingStats).map((m) => [
+          m.id,
+          [m.value, m.unit, m.status, m.subtext, m.confidence, m.confidenceLabel],
+        ])
+      );
+    expect(shown('imperial')).toEqual({
+      ball_speed: ['150.3', 'mph', 'calculated', undefined, undefined, undefined],
+      carry: ['230', 'yds', 'calculated', undefined, undefined, undefined],
+      club_speed: ['101.0', 'mph', 'calculated', undefined, undefined, undefined],
+      smash: ['1.49', undefined, 'calculated', undefined, undefined, undefined],
+      launch_v: ['12.3', '°', 'calculated', undefined, null, undefined],
+      launch_h: ['+2.0', '°', 'calculated', undefined, null, undefined],
+      spin: ['2,650', 'rpm', 'calculated', undefined, null, undefined],
+      spin_axis: ['-3.4', '°', 'calculated', undefined, null, undefined],
+      club_path: ['+0.0', '°', 'calculated', undefined, null, undefined],
+      club_aoa: ['-4.6', '°', 'calculated', undefined, null, undefined],
+    });
+    const metric = shown('metric');
+    expect(metric.ball_speed.slice(0, 2)).toEqual(['241.8', 'km/h']);
+    expect(metric.carry.slice(0, 2)).toEqual(['211', 'm']);
+    expect(metric.club_speed.slice(0, 2)).toEqual(['162.6', 'km/h']);
+  });
 });

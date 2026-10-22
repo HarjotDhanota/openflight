@@ -1,6 +1,7 @@
-import type { MetricLabel, Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
+import type { MetricLabel, Shot, ShotMetric, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { carryLabel, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
-import { isValueLabel, shotMetric } from '../../data/metricCatalog';
+import { METRIC_CATALOG, isValueLabel, shotMetric } from '../../data/metricCatalog';
+import { formatMetricValue } from './metricFormat';
 import type { UnitSystem } from '../../utils/units';
 import {
   NO_VALUE,
@@ -97,6 +98,8 @@ const TILE_METRIC: Record<string, string> = {
   club_aoa: 'attack_angle',
 };
 
+const METRIC_UNIT: Record<string, string> = Object.fromEntries(METRIC_CATALOG.map((spec) => [spec.id, spec.unit]));
+
 /** A label only for a value that is shown; a missing value has none. */
 function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel | undefined {
   return isMeasured(value) ? status : undefined;
@@ -107,20 +110,26 @@ function spinLabel(shot: Shot): MetricLabel {
   return isValueLabel(shot.spin_source) ? shot.spin_source : 'measured';
 }
 
+/** The horizontal tiles drop the shot's own (experimental) confidence for the server's value. */
+const SERVER_CLEARS_CONFIDENCE = new Set(['launch_h', 'spin_axis', 'club_path', 'club_aoa']);
+
+function fromServer(metric: LiveMetric, record: ShotMetric, unitSystem: UnitSystem): LiveMetric {
+  const id = TILE_METRIC[metric.id];
+  const [value, unit] = formatMetricValue({ ...record, unit: METRIC_UNIT[id] }, unitSystem, id);
+  const shown = { ...metric, value, unit: unit || metric.unit, subtext: undefined, status: record.status };
+  return SERVER_CLEARS_CONFIDENCE.has(metric.id) ? { ...shown, confidence: null, confidenceLabel: undefined } : shown;
+}
+
 /**
  * Put the server's label (and, for a value the tile lacks, its value and reason)
  * on a tile built from the shot's fields. A shot from before `Shot.metrics` keeps
  * the tile exactly as built.
  */
-function withServerLabel(
-  shot: Shot,
-  metric: LiveMetric,
-  formatted: (metric: LiveMetric, value: number) => LiveMetric
-): LiveMetric {
+function withServerLabel(shot: Shot, metric: LiveMetric, unitSystem: UnitSystem): LiveMetric {
   const record = shotMetric(shot, TILE_METRIC[metric.id]);
   if (!record) return metric;
   if (metric.value === NO_VALUE && isMeasured(record.value)) {
-    return { ...formatted(metric, record.value), subtext: undefined, status: record.status };
+    return fromServer(metric, record, unitSystem);
   }
   if (metric.value === NO_VALUE) {
     return { ...metric, status: undefined, reason: record.reason ?? undefined };
@@ -308,30 +317,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       status: isMeasured(shot.club_angle_deg) ? 'measured' : undefined,
     },
   ];
-  const signedAngle = (metric: LiveMetric, value: number): LiveMetric => ({
-    ...metric,
-    value: formatOptionalAngle(value, true),
-    unit: angleUnit(value),
-    confidence: null,
-    confidenceLabel: undefined,
-  });
-  const fromServer: Record<string, (metric: LiveMetric, value: number) => LiveMetric> = {
-    ball_speed: (metric, value) => ({ ...metric, value: formatSpeed(value, unitSystem, 1), unit: speedUnit }),
-    club_speed: (metric, value) => ({ ...metric, value: formatSpeed(value, unitSystem, 1), unit: speedUnit }),
-    carry: (metric, value) => ({
-      ...metric,
-      value: formatDistance(value, unitSystem, 0),
-      unit: getDistanceUnit(unitSystem),
-    }),
-    smash: (metric, value) => ({ ...metric, value: value.toFixed(2) }),
-    launch_v: (metric, value) => ({ ...metric, value: formatOptionalAngle(value), unit: angleUnit(value) }),
-    spin: (metric, value) => ({ ...metric, value: formatSpinRpm(value), unit: 'rpm' }),
-    launch_h: signedAngle,
-    spin_axis: signedAngle,
-    club_path: signedAngle,
-    club_aoa: signedAngle,
-  };
-  return tiles.map((tile) => withServerLabel(shot, tile, fromServer[tile.id]));
+  return tiles.map((tile) => withServerLabel(shot, tile, unitSystem));
 }
 
 function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: UnitSystem): LiveMetric[] {
