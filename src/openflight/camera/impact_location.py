@@ -933,6 +933,26 @@ def toe_speeds(shot: PreparedShot, report: MaskReport) -> dict[int, float]:
     return {frame: float(np.mean(values)) for frame, values in gathered.items()}
 
 
+def _ball_clock_contact(
+    contact: ContactEstimate, clock: float | None, count: int
+) -> ContactEstimate | None:
+    """The contact bracket from a ball clock, when the witnesses saw nothing."""
+    if contact.status == "ok" or clock is None or not math.isfinite(clock):
+        return None
+    last = int(math.floor(clock))
+    if not max(contact.reference_frames, 1) <= last < count - 1:
+        return None
+    return replace(
+        contact,
+        status="ok",
+        reason="ok",
+        contact_frame=last + 1,
+        last_rest_frame=last,
+        source="ball_clock",
+        warning=f"no_witness_saw_the_departure_{contact.reason}",
+    )
+
+
 def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
     frames: np.ndarray,
     ball: RestingBall,
@@ -947,6 +967,7 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
     ball_range_source: str = "given",
     contact_fraction: float | None = None,
     exposure_us: float | None = None,
+    ball_clock_frames: float | None = None,
     name: str = "",
     club: str = "",
 ) -> PreparedShot:
@@ -958,6 +979,9 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
     range through the rig; without it the shot is refused, never ranged from the
     ball's size. ``contact_fraction`` is where inside the bracketing frame gap
     contact fell (a ball clock); without a witness for it, 0.5.
+    ``ball_clock_frames`` (contact in fractional frames, from the ball's own
+    flight fit) stands in for the departure witnesses only when none of them
+    could see the ball leave, and says so in the contact's warning.
     """
     if frames.ndim != 3:
         raise ValueError("frames must have shape (n, height, width)")
@@ -1012,6 +1036,11 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
         )
     else:
         contact = find_contact(cropped, local_ball)
+        clocked = _ball_clock_contact(contact, ball_clock_frames, int(cropped.shape[0]))
+        if clocked is not None:
+            contact = clocked
+            fraction = float(ball_clock_frames) - contact.last_rest_frame
+            fraction_source = "ball_clock"
     shot = PreparedShot(
         frames=cropped,
         ball=local_ball,
@@ -2261,6 +2290,7 @@ def analyse_shot(
     ball_range_sigma_mm: float | None = None,
     contact_fraction: float | None = None,
     exposure_us: float | None = None,
+    ball_clock_frames: float | None = None,
     template: HeadTemplate | None = None,
     face: FaceInputs | None = None,
     face_centre_toeward_mm: float = FACE_CENTRE_TOEWARD_MM,
@@ -2284,6 +2314,7 @@ def analyse_shot(
         ball_range_sigma_mm=ball_range_sigma_mm,
         contact_fraction=contact_fraction,
         exposure_us=exposure_us,
+        ball_clock_frames=ball_clock_frames,
     )
     if template is None and shot.contact.status == "ok":
         template, _reason = build_self_template([shot])

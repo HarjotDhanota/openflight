@@ -339,3 +339,15 @@ def test_frames_that_saturate_after_contact_are_named():
     result = analyse(frames, ball)
     assert result.status == "rejected"
     assert result.reason == "frames_saturate_around_the_ball_from_frame_11"
+
+
+def test_a_ball_clock_stands_in_when_no_witness_can_see_the_ball_leave():
+    frames, ball = render_swing(truth_mm=6.0, ball_level=72.0, contact_time=10.4)
+    result = analyse(frames, ball, ball_clock_frames=10.4)
+    assert result.status == "ok", result.reason
+    contact = result.diagnostics["contact"]
+    assert contact["source"] == "ball_clock"
+    assert contact["warning"].startswith("no_witness_saw_the_departure")
+    assert result.last_rest_frame == 10
+    assert result.diagnostics["contact_fraction"] == pytest.approx(0.4)
+    assert result.impact_offset_mm == pytest.approx(6.0, abs=2.5)
