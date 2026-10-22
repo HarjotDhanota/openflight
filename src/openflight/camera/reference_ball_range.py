@@ -16,8 +16,8 @@ from openflight.camera.club_motion import (
     reference_ball_candidates,
 )
 from openflight.camera.geometry import unit_world_rays
+from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 
-GOLF_BALL_DIAMETER_M = 0.04267
 _DIAMETER_HYPOTHESES = 12
 _AMBIGUITY_SCORE_MARGIN = 0.75
 _FULL_RADAR_RANGE_M = (0.5, 4.0)

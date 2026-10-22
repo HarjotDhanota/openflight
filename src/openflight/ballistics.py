@@ -43,10 +43,10 @@ from typing import Literal, Optional
 from .bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2, HopFlight, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
+from .constants import FLIGHT_BALL_RADIUS_M as BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
 
-MPH_TO_MPS = 0.44704
 MPS_TO_MPH = 1.0 / MPH_TO_MPS
 M_TO_YD = 1.09361
 
@@ -54,7 +54,6 @@ M_TO_YD = 1.09361
 # Using the max — not an average — so carry estimates are upper-bounded by
 # the rules rather than by a guess at the specific ball in play.
 BALL_MASS_KG = 0.04593
-BALL_RADIUS_M = 0.02135
 BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
 AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 
@@ -388,7 +387,6 @@ def spin_acceleration(
     return -torque / _BALL_INERTIA
 
 
-GRAVITY = 9.81
 # 500 Hz integration. RK4 error is O(dt⁵) so this is effectively exact for
 # the timescales involved; larger dt starts to visibly shorten long drives.
 DT_SECONDS = 0.002

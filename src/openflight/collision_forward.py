@@ -68,6 +68,7 @@ from typing import Optional, Union
 from . import metric_definitions as md
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
+from .constants import FLIGHT_BALL_RADIUS_M as BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 
 DRIVER_WOOD = "driver_wood"
 IRON_HYBRID = "iron_hybrid"
@@ -78,13 +79,11 @@ HYBRID_LOFT_SHIFT_DEG = 11.5
 LAUNCH_SHARPNESS = 24.0
 SLIDE_TAN_POINTS = (1.0, 2.25)
 LEFT_HANDED = "LH"
-MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
 
 # Ball (Penner 2001), face friction (Henrikson et al. 2020, urethane on a dry
 # grooved face) and restitution (Penner 2001 Eq. (5); USGA limit at its test speed).
 BALL_MASS_KG = 0.0459
-BALL_RADIUS_M = 0.02135
 KAPPA = 0.4
 FACE_FRICTION = 0.40
 COR_SLOPE = 0.0029

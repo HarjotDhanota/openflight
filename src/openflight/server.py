@@ -44,6 +44,7 @@ from .clubs.physics import (
     get_club_simulation_profile,
     mock_attack_angle_mean_deg,
 )
+from .constants import BALL_DIAMETER_MM
 from .horizontal_frame import (
     frame_for,
     resolve_horizontal_offset,
@@ -69,7 +70,6 @@ from .ops243 import (
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
-from .rig_geometry import BALL_DIAMETER_MM
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (

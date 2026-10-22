@@ -28,7 +28,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-GOLF_BALL_DIAMETER_M = 0.04267
+from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
+
 BALL_CENTER_HEIGHT_M = GOLF_BALL_DIAMETER_M / 2.0
 PATCH_SCHEMA = "openflight.tester_ground_patch.v1"
 # 2 ft x 2 ft (D14)

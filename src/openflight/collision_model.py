@@ -109,6 +109,7 @@ from typing import Optional
 from . import collision_forward, metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
+from .constants import MPH_TO_MPS as MPH_TO_M_S
 from .horizontal_frame import MIXED, combined_frame
 from .numeric import finite as _finite
 from .source_labels import (  # noqa: F401  (the predicates are re-exported)
@@ -186,7 +187,6 @@ SPIN_METHOD_MODEL = "impulse collision model"
 SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_MODEL}; club inputs model geometry (D39)"
 SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_MODEL}; an input estimated"
 
-MPH_TO_M_S = 0.44704
 RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
 
 # ---- Wood, Henrikson & Broadie 2018, Table 1 ----------------------------------------

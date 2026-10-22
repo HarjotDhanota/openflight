@@ -12,7 +12,6 @@ F_C = 62.0e9  # 60-64 GHz chirp center
 LAM = C / F_C  # ~4.84 mm
 D_EL = LAM / 2.0  # lambda/2 element pitch
 RANGE_RES = 0.0375  # c/(2*4GHz) — sim default; real cfg passes its own
-G = 9.81
 
 GRID = np.radians(np.arange(-40.0, 40.001, 0.1))
 _STEER_CACHE = {}

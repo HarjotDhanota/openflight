@@ -95,10 +95,11 @@ import cv2
 import numpy as np
 from scipy import ndimage, signal
 
+from openflight.constants import BALL_DIAMETER_MM
+
 EXPERIMENTAL_LABEL = "experimental_unqualified"
 HANDEDNESS = ("right", "left")
 
-BALL_DIAMETER_MM = 42.67
 BALL_RADIUS_MM = BALL_DIAMETER_MM / 2.0
 
 NOMINAL_FOCAL_PX_1X = 933.3333

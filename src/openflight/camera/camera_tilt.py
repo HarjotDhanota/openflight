@@ -49,6 +49,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
+from openflight.constants import BALL_DIAMETER_M
+
 SCHEMA = "openflight.camera_vertical_offset.v1"
 FILE_NAME = "camera-vertical-offset.json"
 MAX_OFFSET_DEG = 8.0
@@ -140,7 +142,7 @@ def solve_vertical_offset(  # pylint: disable=too-many-arguments
     radar_range_m: float,
     radar_uncertainty_m: float,
     lis3dh_pitch_deg: float,
-    ball_center_height_m: float = 0.04267 / 2.0,
+    ball_center_height_m: float = BALL_DIAMETER_M / 2.0,
 ) -> dict:
     """The camera's vertical offset from one ball the radar's distance confirmed.
 

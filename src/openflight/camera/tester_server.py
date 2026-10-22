@@ -94,6 +94,7 @@ from openflight.camera.tee_range_flow import (
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.clubs.types import ClubType
+from openflight.constants import BALL_DIAMETER_MM
 from openflight.inclinometer import orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
@@ -163,7 +164,6 @@ GUIDED_RANGE_STABLE_SPAN_S = 1.0
 # the picture's own reading of the ball's size, against the size the tape
 # predicts, beyond which the tape or the lens is suspect
 SIZE_CHECK_FRACTION = 0.25
-BALL_DIAMETER_MM = 42.67
 # where a quarter of the rows the ball can rest in is clipped white, a white
 # ball cannot be told from the floor, and the page says so
 CLIPPED_DN = 250

@@ -37,10 +37,10 @@ from typing import Any, Mapping
 import numpy as np
 
 from openflight.camera import impact_location as il
+from openflight.constants import MPH_TO_MPS
 
 SCHEMA = "openflight.impact_location.v2"
 ANCHOR_SCHEMA = "openflight.face_centre_anchors.v1"
-MPH_TO_MPS = 0.44704
 RESTING_FRAMES = 10
 ANGLE_SIGMA_BY_STATUS = {
     "measured": 2.0,

@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-MPH_TO_MPS = 0.44704
+from .constants import MPH_TO_MPS
 
 # Readings later than this after impact are not used: the referral and the
 # ball's straight-line position both grow with time, and an early reading is
