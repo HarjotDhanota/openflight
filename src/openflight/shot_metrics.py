@@ -610,4 +610,7 @@ if __name__ == "__main__":  # pragma: no cover - regenerates ui/src/data/metricC
     import json
     import sys
 
-    sys.stdout.write(json.dumps(catalog(), indent=2) + "\n")
+    from openflight.shot_metrics import catalog as installed_catalog
+
+    # Entry points register into the canonical module, not this __main__ registry.
+    sys.stdout.write(json.dumps(installed_catalog(), indent=2) + "\n")

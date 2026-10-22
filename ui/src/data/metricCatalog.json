@@ -1,13 +1,7 @@
 {
   "schema": "openflight.shot_metrics.catalog",
   "version": 1,
-  "labels": [
-    "measured",
-    "calculated",
-    "model_geometry",
-    "estimated",
-    "not_measured"
-  ],
+  "labels": ["measured", "calculated", "model_geometry", "estimated", "not_measured"],
   "metrics": [
     {
       "id": "ball_speed",

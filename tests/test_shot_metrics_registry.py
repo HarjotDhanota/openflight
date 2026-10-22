@@ -1,7 +1,11 @@
 """The shot-metric catalogue: the metrics every unit measures, and how a model adds its own."""
 
 import importlib.metadata
+import json
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +26,23 @@ CORE_IDS = (
     "club_path",
     "attack_angle",
 )
+
+
+def test_catalog_cli_matches_the_installed_registry():
+    result = subprocess.run(
+        [sys.executable, "-I", "-m", "openflight.shot_metrics"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == sm.catalog()
+
+
+def test_ui_catalog_matches_the_installed_registry():
+    path = Path(__file__).resolve().parents[1] / "ui/src/data/metricCatalog.json"
+
+    assert json.loads(path.read_text(encoding="utf-8")) == sm.catalog()
 
 
 @pytest.fixture
