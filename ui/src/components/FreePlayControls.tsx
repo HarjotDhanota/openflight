@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+import { create } from 'zustand';
+import { PanelAction } from './panel/PanelAction';
+import { openTesterPage } from '../utils/testerPage';
 import './FreePlayControls.css';
 
 // free play's exposure ladder, as the kiosk reports it (free_play_ladder.progress_from_state)
@@ -15,7 +18,13 @@ interface FreePlayState {
   bundle?: { name: string; path?: string } | null;
   error?: string | null;
   exposure_study?: ExposureStudy | null;
+  paused?: { cause: string } | null;
+  tester_url?: string | null;
 }
+
+const useFreePlayStore = create<{ state: FreePlayState | null }>(() => ({ state: null }));
+const setFreePlay = (update: (previous: FreePlayState | null) => FreePlayState | null) =>
+  useFreePlayStore.setState((store) => ({ state: update(store.state) }));
 
 // decision 3 (19 Oct): the tester sends the package from the tester page, never from here
 const SEND_FROM = 'send it from the tester page (step 8)';
@@ -44,7 +53,9 @@ export function FreePlayStatus({
               ? `Package ready: ${state.bundle.name} · ${SEND_FROM}`
               : `Package ready · ${SEND_FROM}`
             : state.phase === 'recording'
-              ? 'Free play: recording'
+              ? state.paused
+                ? 'Free play: paused'
+                : 'Free play: recording'
               : waiting
                 ? 'Stopping and packaging…'
                 : 'Free play needs attention'}
@@ -68,8 +79,85 @@ export function FreePlayStatus({
   );
 }
 
+/** Setup and the face photo, in the Live header beside Change club. */
+export function FreePlayActionsView({
+  state,
+  busy = false,
+  onSetup,
+  onPhoto,
+  onResume,
+}: {
+  state: FreePlayState | null;
+  busy?: boolean;
+  onSetup: () => void;
+  onPhoto: () => void;
+  onResume: () => void;
+}) {
+  if (!state?.enabled) return null;
+  const recording = state.phase === 'recording';
+  return (
+    <>
+      <PanelAction variant="secondary" onClick={onSetup}>
+        Setup
+      </PanelAction>
+      {recording && state.paused ? (
+        <PanelAction variant="secondary" disabled={busy} onClick={onResume}>
+          Resume
+        </PanelAction>
+      ) : recording ? (
+        <PanelAction variant="secondary" disabled={busy} aria-label="Photograph the face" onClick={onPhoto}>
+          Face photo
+        </PanelAction>
+      ) : null}
+    </>
+  );
+}
+
+async function postFreePlay(path: string, body: object, failure: string): Promise<FreePlayState> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
+  });
+  const answer = await response.json();
+  if (!response.ok) throw new Error(answer.error || failure);
+  return answer;
+}
+
+export function FreePlayActions() {
+  const state = useFreePlayStore((store) => store.state);
+  const [busy, setBusy] = useState(false);
+  async function pause(action: 'pause' | 'resume') {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const answer = await postFreePlay(
+        `/api/free-play/${action}`,
+        action === 'pause' ? { cause: 'photo' } : {},
+        'The kiosk did not answer'
+      );
+      setFreePlay((previous) => (previous ? { ...previous, paused: answer.paused ?? null, error: null } : previous));
+      if (action === 'pause') openTesterPage(state?.tester_url, '#free-play-photo');
+    } catch (error) {
+      setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : previous));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <FreePlayActionsView
+      state={state}
+      busy={busy}
+      onSetup={() => openTesterPage(state?.tester_url)}
+      onPhoto={() => void pause('pause')}
+      onResume={() => void pause('resume')}
+    />
+  );
+}
+
 export function FreePlayControls() {
-  const [state, setState] = useState<FreePlayState | null>(null);
+  const state = useFreePlayStore((store) => store.state);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
@@ -83,10 +171,10 @@ export function FreePlayControls() {
         const body: FreePlayState = await response.json();
         if (!active) return;
         if (!response.ok) throw new Error(body.error || 'Session status unavailable');
-        setState(body);
+        setFreePlay(() => body);
         if (!body.enabled) return;
       } catch (error) {
-        if (active) setState((previous) => (previous ? { ...previous, error: String(error) } : null));
+        if (active) setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : null));
       } finally {
         clearTimeout(timeout);
       }
@@ -103,17 +191,10 @@ export function FreePlayControls() {
     if (busy) return;
     setBusy(true);
     try {
-      const response = await fetch('/api/free-play', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-        signal: AbortSignal.timeout(5000),
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || 'Could not finish the session');
-      if (action === 'stop') setState(body);
+      const body = await postFreePlay('/api/free-play', { action }, 'Could not finish the session');
+      if (action === 'stop') setFreePlay(() => body);
     } catch (error) {
-      setState((previous) => (previous ? { ...previous, error: String(error) } : null));
+      setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : null));
     } finally {
       setBusy(false);
     }

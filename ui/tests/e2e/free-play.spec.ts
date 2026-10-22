@@ -167,5 +167,70 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect(page.locator('#free-play-status')).toHaveText('stopping');
       await expect(page.locator('#free-play-stop')).toBeDisabled();
     });
+
+    test('Setup and Face photo in the Live header bring the tester page back', async ({ page }) => {
+      const tester = 'http://127.0.0.1:8765/';
+      let paused: object | null = null;
+      const pauses: object[] = [];
+      await page.route('**/api/free-play', (route) =>
+        route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: tester, paused } })
+      );
+      await page.route('**/api/free-play/pause', async (route) => {
+        pauses.push(route.request().postDataJSON());
+        paused = { cause: 'photo' };
+        await route.fulfill({ json: { pause: paused, paused } });
+      });
+      await page.route(`${tester}**`, (route) => route.fulfill({ contentType: 'text/html', body: 'tester page' }));
+      await gotoApp(page);
+      await page.getByRole('button', { name: 'Close Select club' }).tap();
+
+      const header = page.locator('.panel-header');
+      const setup = header.getByRole('button', { name: 'Setup', exact: true });
+      const photo = header.getByRole('button', { name: 'Photograph the face' });
+      await expect(setup).toBeVisible();
+      await expect(photo).toHaveText('Face photo');
+      // both fit the header beside Change club, clear of the club and hand
+      const club = (await page.locator('.panel-header__club').boundingBox())!;
+      for (const button of [setup, photo, header.getByRole('button', { name: 'Change club' })]) {
+        const box = (await button.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(club.x + club.width);
+        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+      }
+      await page.screenshot({
+        path: test.info().outputPath(`free-play-header-${viewport.width}x${viewport.height}.png`),
+      });
+
+      await setup.tap();
+      await expect(page).toHaveURL(tester);
+      await gotoApp(page);
+      await page.getByRole('button', { name: 'Close Select club' }).tap();
+      await page.locator('.panel-header').getByRole('button', { name: 'Photograph the face' }).tap();
+      await expect(page).toHaveURL(`${tester}#free-play-photo`);
+      expect(pauses).toEqual([{ cause: 'photo' }]);
+    });
   });
 }
+
+test('Setup focuses the tester page that opened the scoreboard', async ({ page }) => {
+  await page.route('**/api/free-play', (route) =>
+    route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: 'http://127.0.0.1:8765/' } })
+  );
+  await gotoApp(page, '/tester-opener-stub');
+  await page.evaluate(() => {
+    (window as unknown as { focused: number }).focused = 0;
+    window.focus = () => {
+      (window as unknown as { focused: number }).focused += 1;
+    };
+  });
+  const [scoreboard] = await Promise.all([
+    page.waitForEvent('popup'),
+    page.evaluate(() => window.open('/', 'openflight-kiosk')),
+  ]);
+  await scoreboard.route('**/api/free-play', (route) =>
+    route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: 'http://127.0.0.1:8765/' } })
+  );
+  await scoreboard.getByRole('button', { name: 'Close Select club' }).click();
+  await scoreboard.locator('.panel-header').getByRole('button', { name: 'Setup', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { focused: number }).focused)).toBe(1);
+  expect(new URL(scoreboard.url()).pathname).toBe('/');
+});

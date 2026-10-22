@@ -1178,6 +1178,7 @@
   "ui/src/utils/serverOrigin.ts": "PRODUCT",
   "ui/src/utils/targetLine.test.ts": "PRODUCT",
   "ui/src/utils/targetLine.ts": "PRODUCT",
+  "ui/src/utils/testerPage.ts": "TESTER",
   "ui/src/utils/units.test.ts": "PRODUCT",
   "ui/src/utils/units.ts": "PRODUCT",
   "ui/src/utils/validationCsv.test.ts": "PRODUCT",

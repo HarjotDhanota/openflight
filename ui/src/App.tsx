@@ -17,7 +17,7 @@ import { SimShotBadges } from './components/SimShotBadges';
 import { SimNotSentNotice } from './components/SimNotSentNotice';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ReadyLightBar } from './components/ReadyLight';
-import { FreePlayControls } from './components/FreePlayControls';
+import { FreePlayActions, FreePlayControls } from './components/FreePlayControls';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
@@ -268,6 +268,7 @@ function AppContent() {
           {t('replay.open')}
         </PanelAction>
       ) : null}
+      <FreePlayActions />
       {changeClubAction}
     </>
   );
