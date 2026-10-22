@@ -116,6 +116,14 @@ export interface Shot {
   camera_replay?: CameraReplay | null;
   /** Every golf metric with its label, by metric id (openflight.shot_metrics). */
   metrics?: Record<string, ShotMetric> | null;
+  /** The camera's experimental impact reading; its values are in `metrics.impact_*`. */
+  impact_location?: ImpactLocationReading | null;
+}
+
+export interface ImpactLocationReading {
+  status?: 'ok' | 'rejected' | 'dropped' | string;
+  handedness?: 'right' | 'left' | string;
+  club_category?: string | null;
 }
 
 export interface SessionStats {

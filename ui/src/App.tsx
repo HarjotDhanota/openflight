@@ -361,6 +361,7 @@ function AppContent() {
           <MetricGroupPanel
             view={currentView}
             shot={profileLatestShot}
+            sessionShots={profileShots}
             profileName={activeProfileName}
             clubLabel={activeImplementLabel}
             unitSystem={unitSystem}
