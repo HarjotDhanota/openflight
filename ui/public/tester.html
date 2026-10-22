@@ -6160,7 +6160,7 @@
         mixed: 'mixed frames',
       };
       // not built yet: one “Coming later” row while they have no value (9)
-      const KIOSK_COMING_LATER = new Set(['club_speed_full', 'gyro', 'impact_offset', 'impact_height', 'dynamic_lie']);
+      const KIOSK_COMING_LATER = new Set(['club_speed_full', 'gyro', 'dynamic_lie']);
       let kioskShotRunning = false;
       const kioskName = (spec) => KIOSK_PLAIN_NAMES[spec.id] || spec.label;
       function kioskValue(record, id) {
