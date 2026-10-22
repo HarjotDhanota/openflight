@@ -776,6 +776,7 @@
   "tests/test_gspro_state.py": "PRODUCT",
   "tests/test_hardware_trigger.py": "FUSION",
   "tests/test_horizontal_frame.py": "FUSION",
+  "tests/test_impact_isolation.py": "FUSION",
   "tests/test_impact_session.py": "RESEARCH",
   "tests/test_import_boundaries.py": "TESTER",
   "tests/test_inclinometer.py": "FUSION",
