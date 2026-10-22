@@ -21,7 +21,8 @@ Every record has the same keys:
 - ``status``: one of ``LABELS``. ``measured`` (a sensor saw it), ``calculated``
   (a named model on measured or calculated inputs, D38), ``model_geometry``
   (rests on assumed swing geometry, D39), ``estimated`` (an OPS-only install's
-  labelled stand-in), ``not_measured`` (no value; ``reason`` says why, D17);
+  labelled stand-in), ``experimental`` (a reading shown before it is validated, which
+  feeds no other metric), ``not_measured`` (no value; ``reason`` says why, D17);
 - ``source``: the sensor or model that produced the value;
 - ``range``: ``[low, high]`` when the producer states one, else None;
 - ``reason``: why a value is not measured (always set then), else None;
@@ -53,8 +54,9 @@ MEASURED = "measured"
 CALCULATED = "calculated"
 MODEL_GEOMETRY = "model_geometry"
 ESTIMATED = "estimated"
+EXPERIMENTAL = "experimental"
 NOT_MEASURED = "not_measured"
-LABELS = (MEASURED, CALCULATED, MODEL_GEOMETRY, ESTIMATED, NOT_MEASURED)
+LABELS = (MEASURED, CALCULATED, MODEL_GEOMETRY, ESTIMATED, EXPERIMENTAL, NOT_MEASURED)
 
 BALL, CLUB, FLIGHT = "ball", "club", "flight"
 

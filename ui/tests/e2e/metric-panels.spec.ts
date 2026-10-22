@@ -8,7 +8,7 @@ const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.js
 
 /** The kiosk sizes plus a phone: every metric must fit wherever the owner looks. */
 const VIEWPORTS = [...KIOSK_VIEWPORTS, { width: 390, height: 844 }] as const;
-const LABELS = ['measured', 'calculated', 'model_geometry', 'estimated', 'not_measured'];
+const LABELS = ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental', 'not_measured'];
 const PANEL_GROUPS: Record<'Club' | 'Flight', string[]> = { Club: ['club'], Flight: ['ball', 'flight'] };
 
 async function dismissPicker(page: Page) {

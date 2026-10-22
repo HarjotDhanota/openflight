@@ -5750,6 +5750,9 @@ def _finalize_shot_detected(
         )
         _publish_phone_shot(shot_data, final=phone_final, enrichment=phone_enrichment)
 
+    if shot_data is not None:
+        _tell_extensions_shot_published(shot, "first" if late_update is None else "late_update")
+
     if late_update is not None:
         # Simulators (GSPro, OpenGolfSim, E6, ...) were sent this shot's first
         # result and have no way to amend a shot: re-sending would play it as a
@@ -5927,6 +5930,43 @@ def _queue_ordered_shot_finalization(
         result_discarded=True,
         enrichment=pending.enrichment,
     )
+
+
+def _tell_extensions_shot_published(shot: Shot, update_kind: str) -> None:
+    """Tell every extension the shot went out; a failing extension never stops it."""
+    try:
+        kiosk_extensions.call_all("after_shot_published", shot, update_kind=update_kind)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] An extension failed after shot #%s: %s", shot.shot_number, error)
+
+
+def publish_shot_update(shot: Shot, *, update: dict, session_uuid: str | None) -> bool:
+    """Send a shot already shown again, after an extension added a late result to it.
+
+    The UI gets a ``shot_update`` (it replaces the shot in place) and the session
+    log a ``shot_updated`` entry with ``update``; simulators and phones are not
+    sent it again. Nothing is sent, and False is returned, once the shot's session
+    has ended.
+    """
+    session_log = get_session_logger()
+    active = getattr(session_log, "active_session_uuid", None) if session_log else None
+    if session_uuid is not None and active != session_uuid:
+        return False
+    record = {**update, "simulators": "not_resent"}
+    if session_log is not None and hasattr(session_log, "log_shot_update"):
+        logged = session_log.log_shot_update(
+            shot, update=record, expected_session_uuid=session_uuid
+        )
+        if logged is False and session_uuid is not None:
+            return False
+    _emit_shot_payload(
+        shot,
+        "shot_update",
+        {"shot": shot_to_dict(shot), "stats": _session_stats()},
+        final=True,
+        update_kind="late_update",
+    )
+    return True
 
 
 def _publish_late_enrichment(

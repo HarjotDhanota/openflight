@@ -42,6 +42,8 @@ const SIGNED = new Set([
   'low_point_distance',
   'low_point_height',
   'low_point_side',
+  'impact_offset',
+  'impact_height',
 ]);
 
 function signed(text: string, value: number, id: string | undefined): string {

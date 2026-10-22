@@ -1,6 +1,6 @@
 /*
- * Metric label badges: four labels, four looks (measured, calculated, model
- * geometry, estimated). Text always says the label, so colour is never the only cue.
+ * Metric label badges: five labels, five looks (measured, calculated, model
+ * geometry, estimated, experimental). Text always says the label, so colour is never the only cue.
  */
 .label-badge {
   position: relative;
@@ -36,6 +36,12 @@
   border-color: var(--color-accent-block);
   background: var(--color-accent-block);
   color: var(--color-accent-fg);
+}
+
+.label-badge--experimental {
+  border-style: dotted;
+  border-color: var(--color-experimental);
+  color: var(--color-experimental);
 }
 
 .label-badge__mark {

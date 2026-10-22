@@ -163,7 +163,7 @@
       .amber {
         color: var(--warn);
       }
-      /* the kiosk's labels: four looks for four labels, not measured muted */
+      /* the kiosk's labels: five looks for five labels, not measured muted */
       .l-measured {
         color: var(--ok);
       }
@@ -177,6 +177,10 @@
       .l-estimated {
         color: var(--warn);
         border-style: dotted;
+      }
+      .l-experimental {
+        color: var(--exp);
+        border-style: double;
       }
       .l-not_measured {
         color: var(--muted);
@@ -322,6 +326,7 @@
               <option value="problems">Attempts with a rejected or failed metric</option>
               <option value="experimental">Attempts with an experimental candidate</option>
               <option value="model_geometry">Shots with a model-geometry value</option>
+              <option value="kiosk_experimental">Shots with an experimental kiosk value</option>
               <option value="triggers">Camera triggers without a shot</option>
             </select></label
           >
@@ -375,6 +380,7 @@
         calculated: 'calculated',
         model_geometry: 'model geometry',
         estimated: 'estimated',
+        experimental: 'experimental (not yet validated)',
         not_measured: 'not measured',
       };
       const labelChip = (status) =>
@@ -987,6 +993,7 @@
         if (filter === 'problems') return statuses.includes('rejected') || statuses.includes('processing_failed');
         if (filter === 'experimental') return statuses.includes('experimental');
         if (filter === 'model_geometry') return (a.kiosk_metrics || []).some((m) => m.status === 'model_geometry');
+        if (filter === 'kiosk_experimental') return (a.kiosk_metrics || []).some((m) => m.status === 'experimental');
         if (filter === 'triggers') return a.kind === 'camera_trigger_without_shot';
         return true;
       }

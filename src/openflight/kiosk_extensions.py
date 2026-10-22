@@ -121,6 +121,13 @@ class KioskExtension:  # pylint: disable=unused-argument
         """
         return None
 
+    def after_shot_published(self, shot, *, update_kind: str) -> None:
+        """A finalized shot went out to the kiosk ("first" result or "late_update").
+
+        Work started here must not hold up the kiosk; a result it finds later goes
+        out with ``server.publish_shot_update``.
+        """
+
     def observe_shot_emit(
         self, shot, event: str, payload: dict, *, final: bool, update_kind: str
     ) -> Optional[ContextManager]:

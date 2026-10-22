@@ -4,9 +4,9 @@
 measures. This module adds, in their places in the catalogue, the metrics the
 shot models produce: the full speeds (E3), the collision model's face, loft,
 spin loft, spin and smash indices, face to path, D-plane tilt and gyro (E2), the arc's swing plane,
-direction and low point (E1), every flight output (E4), and the metrics not
-built yet (impact location, E5; dynamic lie, E6). It also gives carry its
-flight-model builder. It is loaded through the ``openflight.shot_metrics``
+direction and low point (E1), every flight output (E4), the camera's experimental
+impact location (read after the shot; it feeds no other metric), and the metric
+not built yet (dynamic lie, E6). It also gives carry its flight-model builder. It is loaded through the ``openflight.shot_metrics``
 entry point the first time the catalogue is read, and reads only the records
 the models left on the shot.
 """
@@ -21,10 +21,9 @@ from openflight.collision_model import GYRO_REASON
 NO_COLLISION_MODEL = "collision model did not run on this shot"
 NO_FULL_SPEED = "full speed not computed on this shot (not finalized)"
 
-IMPACT_LOCATION_PENDING = (
-    "pending E5: impact location is not built yet (needs the 6 mm / 8 mm lens and crop mode, "
-    "Tier 0 impact timing and the W9 head model)"
-)
+IMPACT_SOURCE = "camera head outline and resting ball, read after the shot (experimental)"
+IMPACT_NOTE = "not validated yet: compare it with the face spray marks"
+NO_IMPACT_READING = "needs this shot's camera clip; impact location is read after the shot"
 DYNAMIC_LIE_PENDING = (
     "pending E6: dynamic lie is not built yet (the lower shaft line from the camera at impact, "
     "after the lens and crop mode are chosen)"
@@ -128,6 +127,31 @@ def _arc_delivery(metric_id: str):
     return build
 
 
+def _impact(metric_id: str):
+    """Heel-toe (+ toe) or height (+ up) from the shot's live impact reading, experimental."""
+    prefix = "" if metric_id == "impact_offset" else "height_"
+
+    def build(shot):
+        entry = sm.as_mapping(shot.get("impact_location"))
+        if not entry:
+            return sm.build_record(metric_id, None, None, reason=NO_IMPACT_READING)
+        if entry.get(f"{prefix}status") != "ok":
+            reason = entry.get(f"{prefix}reason") or entry.get("reason")
+            return sm.build_record(metric_id, None, None, reason=reason or NO_IMPACT_READING)
+        value = sm.finite_or_none(entry.get(f"{metric_id}_mm"))
+        sigma = sm.finite_or_none(entry.get(f"{metric_id}_sigma_mm"))
+        return sm.build_record(
+            metric_id,
+            entry.get(f"{metric_id}_mm"),
+            sm.EXPERIMENTAL,
+            source=IMPACT_SOURCE,
+            range_=[value - sigma, value + sigma] if value is not None and sigma else None,
+            note=IMPACT_NOTE,
+        )
+
+    return build
+
+
 def _pending(metric_id: str):
     def build(_shot):
         return sm.build_record(
@@ -204,14 +228,8 @@ sm.register_metrics(
             _arc_delivery("low_point_height"),
         ),
         (Spec("low_point_side", "Low point side", CLUB, "mm"), _arc_delivery("low_point_side")),
-        (
-            Spec("impact_offset", "Impact offset", CLUB, "mm", "E5", IMPACT_LOCATION_PENDING),
-            _pending("impact_offset"),
-        ),
-        (
-            Spec("impact_height", "Impact height", CLUB, "mm", "E5", IMPACT_LOCATION_PENDING),
-            _pending("impact_height"),
-        ),
+        (Spec("impact_offset", "Impact offset", CLUB, "mm"), _impact("impact_offset")),
+        (Spec("impact_height", "Impact height", CLUB, "mm"), _impact("impact_height")),
         (
             Spec("dynamic_lie", "Dynamic lie", CLUB, "deg", "E6", DYNAMIC_LIE_PENDING),
             _pending("dynamic_lie"),

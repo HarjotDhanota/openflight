@@ -1,0 +1,164 @@
+/* Face impact (experimental): our own illustrative face drawing beside its numbers. */
+.face-impact {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-sm) var(--space-md);
+  padding: 6px 9px;
+  background: var(--color-surface);
+  outline: 1px solid var(--color-border);
+}
+
+.face-impact__figure {
+  min-width: 0;
+  height: clamp(5.5rem, 27vh, 10.5rem);
+}
+
+.face-impact__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.face-impact__grid line {
+  stroke: var(--color-border-soft);
+  stroke-width: 0.35;
+}
+
+.face-impact__grid .face-impact__axis {
+  stroke: var(--color-border);
+  stroke-width: 0.5;
+}
+
+.face-impact__outline,
+.face-impact__hosel {
+  fill: none;
+  stroke: var(--color-text-muted);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.face-impact__groove {
+  stroke: var(--color-text-faint);
+  stroke-width: 0.5;
+  stroke-dasharray: 1.6 1.2;
+}
+
+.face-impact__side {
+  font-size: 4.2px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  fill: var(--color-text-faint);
+}
+
+.face-impact__earlier {
+  fill: var(--color-text-faint);
+  opacity: 0.55;
+}
+
+.face-impact__ellipse {
+  fill: var(--color-experimental);
+  fill-opacity: 0.16;
+  stroke: var(--color-experimental);
+  stroke-width: 0.6;
+  stroke-dasharray: 1.4 1;
+}
+
+.face-impact__bar {
+  stroke: var(--color-experimental);
+  stroke-width: 0.9;
+}
+
+.face-impact__dot {
+  fill: var(--color-accent);
+  stroke: var(--color-bg);
+  stroke-width: 0.6;
+}
+
+.face-impact__dot--offset-only {
+  fill: var(--color-bg);
+  stroke: var(--color-accent);
+  stroke-width: 1;
+}
+
+.face-impact__readout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.face-impact__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.face-impact__numbers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.face-impact__numbers > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.face-impact__numbers dt {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.face-impact__numbers dd {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.face-impact__reason {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+}
+
+.face-impact__caption {
+  margin: 0;
+  font-size: 0.58rem;
+  line-height: 1.3;
+  color: var(--color-text-faint);
+}
+
+@media (max-width: 480px) {
+  .face-impact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-height: 500px) {
+  .face-impact__numbers dt {
+    font-size: 1rem;
+  }
+}

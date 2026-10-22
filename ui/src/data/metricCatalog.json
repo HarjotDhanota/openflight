@@ -1,7 +1,14 @@
 {
   "schema": "openflight.shot_metrics.catalog",
   "version": 1,
-  "labels": ["measured", "calculated", "model_geometry", "estimated", "not_measured"],
+  "labels": [
+    "measured",
+    "calculated",
+    "model_geometry",
+    "estimated",
+    "experimental",
+    "not_measured"
+  ],
   "metrics": [
     {
       "id": "ball_speed",
@@ -246,14 +253,14 @@
       "label": "Impact offset",
       "group": "club",
       "unit": "mm",
-      "pending": "E5"
+      "pending": null
     },
     {
       "id": "impact_height",
       "label": "Impact height",
       "group": "club",
       "unit": "mm",
-      "pending": "E5"
+      "pending": null
     },
     {
       "id": "dynamic_lie",

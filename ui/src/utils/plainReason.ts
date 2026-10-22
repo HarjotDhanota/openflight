@@ -32,8 +32,6 @@ export function shortReason(reason: string | null | undefined): string {
 export const COMING_LATER_METRICS: ReadonlySet<string> = new Set([
   'club_speed_full',
   'gyro',
-  'impact_offset',
-  'impact_height',
   'dynamic_lie',
 ]);
 

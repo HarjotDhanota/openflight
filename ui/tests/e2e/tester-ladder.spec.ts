@@ -970,7 +970,7 @@ test('shows the kiosk shot beside the swing verdict, every metric with its label
   const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
     metrics: Array<{ id: string; label: string; unit: string }>;
   };
-  const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'not_measured'];
+  const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental', 'not_measured'];
   const metrics = Object.fromEntries(
     catalog.metrics.map((spec, index) => {
       const status = cycle[index % cycle.length];
@@ -993,7 +993,7 @@ test('shows the kiosk shot beside the swing verdict, every metric with its label
   // 13 Oct: the ball distance joins the key line
   await expect(box.locator('.kiosk-shot__key [data-kiosk-metric]')).toHaveCount(13);
   // a metric not built yet with no value goes to the one "Coming later" row
-  const comingLater = new Set(['club_speed_full', 'gyro', 'impact_offset', 'impact_height', 'dynamic_lie']);
+  const comingLater = new Set(['club_speed_full', 'gyro', 'dynamic_lie']);
   const later = catalog.metrics.filter(
     (spec, index) => comingLater.has(spec.id) && cycle[index % cycle.length] === 'not_measured'
   );

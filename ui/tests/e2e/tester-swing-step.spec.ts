@@ -38,16 +38,14 @@ const RUNG_IDS = [
 function ladder(current: string | null, statuses: Record<string, string>, verdict: object | null, stopped = false) {
   // the server sends its rungs in any order: alphabetical here, as the audit saw
   const rungs = Object.fromEntries(
-    [...RUNG_IDS]
-      .sort()
-      .map((id) => [
-        id,
-        {
-          status: statuses[id] ?? 'pending',
-          swings: statuses[id] === 'done' ? Array(5).fill({ color: 'green' }) : [],
-          reason: null,
-        },
-      ])
+    [...RUNG_IDS].sort().map((id) => [
+      id,
+      {
+        status: statuses[id] ?? 'pending',
+        swings: statuses[id] === 'done' ? Array(5).fill({ color: 'green' }) : [],
+        reason: null,
+      },
+    ])
   );
   return { ladder: { current, pending_photo: null, rungs }, last_verdict: verdict, photo_target: null, stopped };
 }
@@ -292,7 +290,7 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
       'mph',
       'the OPS club speed is a percentile over 4-18 ms before impact, not the full speed'
     ),
-    impact_offset: notMeasured('mm', 'pending E5: impact location is not built yet (needs the 6 mm / 8 mm lens)'),
+    impact_offset: notMeasured('mm', 'building the head outline: 3 of 5 swings with this club'),
   });
   await swingStep(page, () => ladder(null, {}, RED));
   await page.route('**/api/shots/latest', (route) =>
@@ -347,12 +345,11 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
   await expect(speedRow.locator('summary')).toHaveText('the camera did not see the club ▸');
   // the not-built ones fold into one “Coming later” row
   const later = shot.locator('tr[data-kiosk-metric="coming-later"]');
-  await expect(later).toHaveText(
-    /^Coming later.*Gyro.*Club speed \(total\).*Impact offset.*Impact height.*Dynamic lie/
-  );
-  for (const id of ['gyro', 'club_speed_full', 'impact_offset', 'impact_height', 'dynamic_lie']) {
+  await expect(later).toHaveText(/^Coming later.*Gyro.*Club speed \(total\).*Dynamic lie/);
+  for (const id of ['gyro', 'club_speed_full', 'dynamic_lie']) {
     await expect(shot.locator(`tr[data-kiosk-metric="${id}"]`)).toHaveCount(0);
   }
+  await expect(shot.locator('tr[data-kiosk-metric="impact_offset"]')).toContainText('building the head outline');
   // the source column goes on a narrow screen
   await expect(shot.locator('tr[data-kiosk-metric="ball_speed"] td.src')).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

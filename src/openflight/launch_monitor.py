@@ -403,6 +403,8 @@ class Shot:
     iwr_launch_range: Optional[dict] = None
     # this swing's camera-tilt pair (13 Oct, Build C; openflight.camera.swing_tilt)
     camera_tilt_swing_pair: Optional[dict] = None
+    # the camera's experimental impact reading: only its own two metric records read it
+    impact_location: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
@@ -696,6 +698,7 @@ class Shot:
             "air_density_kg_m3": self.air_density_kg_m3,
             "flight": deepcopy(self.flight),
             "target_line": deepcopy(self.target_line),
+            "impact_location": deepcopy(self.impact_location),
         }
         data["metrics"] = shot_metrics.from_record(data)
         if self.free_play_run_id:

@@ -24,9 +24,10 @@ export type CarryStatus = 'measured' | 'calculated' | 'model_geometry' | 'estima
  * A metric's label (openflight.shot_metrics.LABELS): `measured` (a sensor saw it),
  * `calculated` (a named model on measured or calculated inputs, D38),
  * `model_geometry` (rests on assumed swing geometry, D39), `estimated` (an OPS-only
- * install's labelled stand-in), `not_measured` (no value; the reason says why, D17).
+ * install's labelled stand-in), `experimental` (shown before it is validated; it feeds
+ * no other metric), `not_measured` (no value; the reason says why, D17).
  */
-export type MetricLabel = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'not_measured';
+export type MetricLabel = 'measured' | 'calculated' | 'model_geometry' | 'estimated' | 'experimental' | 'not_measured';
 
 /** One metric of one shot, as the server reports it in `Shot.metrics`. */
 export interface ShotMetric {
@@ -115,6 +116,14 @@ export interface Shot {
   camera_replay?: CameraReplay | null;
   /** Every golf metric with its label, by metric id (openflight.shot_metrics). */
   metrics?: Record<string, ShotMetric> | null;
+  /** The camera's experimental impact reading; its values are in `metrics.impact_*`. */
+  impact_location?: ImpactLocationReading | null;
+}
+
+export interface ImpactLocationReading {
+  status?: 'ok' | 'rejected' | 'dropped' | string;
+  handedness?: 'right' | 'left' | string;
+  club_category?: string | null;
 }
 
 export interface SessionStats {

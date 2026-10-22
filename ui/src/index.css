@@ -50,6 +50,7 @@
   --color-hatch: #101112;
   --color-danger: #ff9b7d;
   --color-danger-border: rgba(255, 120, 90, 0.5);
+  --color-experimental: #8cc8ff;
 }
 
 [data-theme='light'] {
@@ -69,6 +70,7 @@
   --color-hatch: #eae7df;
   --color-danger: #b03a1a;
   --color-danger-border: rgba(176, 58, 26, 0.5);
+  --color-experimental: #1d5c9c;
 }
 
 html {

@@ -1342,6 +1342,7 @@ def build_self_template(
     club: str = "",
     passes: int = SELF_BUILD_PASSES,
     toe_calibration: bool = True,
+    should_stop: Callable[[], bool] | None = None,
 ) -> tuple[HeadTemplate | None, str]:
     """Build a club's outline from the session's OWN swings, with no marks.
 
@@ -1349,8 +1350,12 @@ def build_self_template(
     extremes, then re-read every sample's landmarks off the template placed on
     it, for up to ``passes`` builds; last, pull the toe landmark in by its
     median overhang past the slow frames' own toes. Returns the template (or
-    None) and a reason.
+    None) and a reason. ``should_stop`` is asked before each placement; when it
+    answers True the build gives up with the reason "stopped".
     """
+    stop = should_stop or (lambda: False)
+    if stop():
+        return None, "stopped"
     samples = template_samples(shots)
     if not samples:
         return None, "no_head_masks_to_build_a_template_from"
@@ -1363,6 +1368,8 @@ def build_self_template(
     for _ in range(max(0, passes - 1)):
         refined = []
         for sample in samples:
+            if stop():
+                return None, "stopped"
             alignment = align_frame(sample.shot, template, sample.frame, sample.mask)
             if alignment is None:
                 continue
@@ -1389,19 +1396,24 @@ def build_self_template(
         converged=bool(movement) and movement[-1] <= CONVERGENCE_MM,
     )
     if toe_calibration:
-        template = calibrate_toe_landmark(template, samples)
+        template = calibrate_toe_landmark(template, samples, should_stop=stop)
+        if template is None:
+            return None, "stopped"
     return template, "ok"
 
 
 def calibrate_toe_landmark(
-    template: HeadTemplate, samples: Sequence[TemplateSample]
-) -> HeadTemplate:
+    template: HeadTemplate,
+    samples: Sequence[TemplateSample],
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> HeadTemplate | None:
     """Pull the toe landmark in by its median overhang past the SLOW masks' toes.
 
     ``head_outline.calibrate_toe_landmark``: a mask is the head smeared over
     the exposure, and the averaged template inherits the smear at its toe.
     Stands down (template untouched, ``toe_calibrated`` False) with fewer than
-    ``MIN_TOE_CALIBRATION_FRAMES`` slow frames.
+    ``MIN_TOE_CALIBRATION_FRAMES`` slow frames. None when ``should_stop`` says so.
     """
     slow = [
         sample
@@ -1413,6 +1425,8 @@ def calibrate_toe_landmark(
         return template
     overhangs: list[float] = []
     for sample in slow:
+        if should_stop is not None and should_stop():
+            return None
         alignment = align_frame(sample.shot, template, sample.frame, sample.mask)
         cols = np.flatnonzero(sample.mask.any(axis=0))
         if alignment is None or cols.size == 0:

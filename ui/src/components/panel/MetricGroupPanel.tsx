@@ -9,6 +9,7 @@ import { isMeasured } from '../../utils/units';
 import { isComingLater, shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
+import { FaceImpactView } from './FaceImpactView';
 import { PanelHeader } from './PanelHeader';
 import './MetricGroupPanel.css';
 
@@ -156,15 +157,17 @@ interface MetricGroupPanelProps {
   clubLabel: string;
   unitSystem: UnitSystem;
   headerAction?: ReactNode;
+  sessionShots?: readonly Shot[];
 }
 
 /**
  * Club and Flight panels: every metric of the shot, grouped, each with its label
- * badge, and a not-measured metric with its reason (D15, D17, D38, D39).
+ * badge, a not-measured metric with its reason (D15, D17, D38, D39), and the face view.
  */
 export function MetricGroupPanel({
   view,
   shot,
+  sessionShots = [],
   profileName,
   clubLabel,
   unitSystem,
@@ -200,6 +203,7 @@ export function MetricGroupPanel({
     <div className="panel">
       {header}
       <div className="panel__body metric-groups" data-metric-panel={view}>
+        {view === 'club' ? <FaceImpactView shot={shot} sessionShots={sessionShots} unitSystem={unitSystem} /> : null}
         {PANEL_GROUPS[view].map((group) => (
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>

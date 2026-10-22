@@ -402,6 +402,18 @@ class Options:  # pylint: disable=too-many-instance-attributes
     shots: tuple[str, ...] = ()
     template_scope: str = "club"
     lens_id: str | None = None
+    analysis_max_width: int | None = None
+
+
+def bin_frames(frames: np.ndarray, factor: int) -> np.ndarray:
+    """Each ``factor`` x ``factor`` block of pixels averaged into one (the clip as is for 1)."""
+    if factor <= 1:
+        return frames
+    count, height, width = frames.shape
+    rows, cols = height // factor, width // factor
+    blocks = frames[:, : rows * factor, : cols * factor].reshape(count, rows, factor, cols, factor)
+    total = blocks.sum(axis=(2, 4), dtype=np.uint32)
+    return ((total + factor * factor // 2) // (factor * factor)).astype(np.uint8)
 
 
 def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
@@ -474,6 +486,10 @@ def prepare_clip(  # pylint: disable=too-many-locals
     frames, _metadata = _load_frames(clip)
     if frames is None:
         return
+    if options.analysis_max_width and frames.shape[2] > options.analysis_max_width:
+        clip.extra["recorded_frame_size"] = clip.frame_size
+        frames = bin_frames(frames, math.ceil(frames.shape[2] / options.analysis_max_width))
+        clip.frame_size = f"{frames.shape[2]}x{frames.shape[1]}"
     run = runs.get(clip.run_dir) if clip.run_dir is not None else None
     run = run or RunRecord({}, {}, {}, {}, None)
     clip.shot_number = run.captures.get(clip.shot_id)

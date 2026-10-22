@@ -37,10 +37,13 @@ describe('shortReason', () => {
 describe('isComingLater', () => {
   it('folds the not-built metrics while they have no value', () => {
     expect([...COMING_LATER_METRICS].sort()).toEqual(
-      ['club_speed_full', 'dynamic_lie', 'gyro', 'impact_height', 'impact_offset'].sort()
+      ['club_speed_full', 'dynamic_lie', 'gyro'].sort()
     );
     expect(isComingLater({ id: 'gyro', pending: null }, { status: 'not_measured', value: null })).toBe(true);
-    expect(isComingLater({ id: 'impact_offset', pending: 'E5' }, undefined)).toBe(true);
+    expect(isComingLater({ id: 'dynamic_lie', pending: 'E6' }, undefined)).toBe(true);
+    expect(isComingLater({ id: 'impact_offset', pending: null }, { status: 'not_measured', value: null })).toBe(
+      false
+    );
     expect(isComingLater({ id: 'some_new', pending: 'E9' }, { status: 'not_measured', value: null })).toBe(true);
   });
 

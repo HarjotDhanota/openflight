@@ -68,9 +68,16 @@ CLUB = (
     "dynamic_lie",
 )
 EXPECTED_METRIC_IDS = BALL + FLIGHT + CLUB
-# Not built yet: shown as not measured, with the item that builds them (E5, E6).
-PENDING_METRIC_IDS = ("impact_offset", "impact_height", "dynamic_lie")
-LABELS = ("measured", "calculated", "model_geometry", "estimated", "not_measured")
+# Not built yet: shown as not measured, with the item that builds it (E6).
+PENDING_METRIC_IDS = ("dynamic_lie",)
+LABELS = (
+    "measured",
+    "calculated",
+    "model_geometry",
+    "estimated",
+    "experimental",
+    "not_measured",
+)
 
 
 def arc_positions():

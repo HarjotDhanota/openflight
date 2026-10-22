@@ -36,6 +36,18 @@ def _no_ready_light_thread(monkeypatch):
     monkeypatch.setattr(server, "start_ready_light", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_impact_worker(monkeypatch):
+    """Keep main() from turning on the live impact reading, whose worker is a process.
+
+    Its tests build their own extension; the installed one stays off in every test.
+    """
+    live = sys.modules.get("openflight.camera.impact_live")
+    if live is not None:
+        monkeypatch.setattr(live.extension, "enabled", False)
+        monkeypatch.setattr(live.extension, "configure", lambda args, parser: None)
+
+
 class MockSimServer:
     """Tiny TCP server that records bytes and can send scripted replies."""
 
