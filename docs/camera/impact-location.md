@@ -208,7 +208,7 @@ The Club tab opens with a face-impact view:
   76.6 mm from the toe to the heel end of the flat face (inside Mizuno's published
   7-iron head lengths, 74-87 mm). Woods were scaled to the middle of their face-width
   test: driver 110, fairway 95 and hybrid 85 mm. After scaling, the head and neck
-  outlines follow the photo silhouette to a mean of 0.05 mm or less and at most 0.6 mm.
+  outlines follow the photo silhouette to a mean of 0.06 mm or less and at most 0.7 mm.
   The face outlines are within 0.13 mm mean and 1.2 mm at most. Score-line counts
   match the photo exactly (driver 7 + 7 + 3 bars, fairway 6, hybrid 7, iron 13,
   wedge 17), and the line ends are within 0.7 mm. The fit scripts and photos stay
@@ -239,7 +239,7 @@ The Club tab opens with a face-impact view:
   | Club | Toe-ward of the face centre | Above it |
   | --- | --- | --- |
   | Driver | 8.2 mm | 0.4 mm |
-  | Fairway | 9.3 mm | -3.2 mm |
+  | Fairway | 9.3 mm | -3.3 mm |
   | Hybrid | 6.7 mm | 1.4 mm |
   | Iron | 2.0 mm | 0.9 mm |
   | Wedge | -0.1 mm | -2.7 mm |

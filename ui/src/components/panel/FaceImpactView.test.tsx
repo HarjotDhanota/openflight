@@ -283,12 +283,61 @@ describe('faceImpact', () => {
     const shape = FACE_SHAPES[category];
     const box = extent(polygon(shape.face));
     expect(shape.edges.length).toBeGreaterThan(0);
-    for (const d of shape.edges)
+    for (const { d } of shape.edges)
       for (const [x, y] of polygon(d)) {
         expect(x).toBeLessThanOrEqual(box.maxX + 0.01);
         expect(x).toBeGreaterThanOrEqual(box.minX - 0.01);
         expect(y).toBeGreaterThanOrEqual(box.minY - 0.01);
       }
+  });
+
+  it.each(['iron', 'wedge'] as const)(
+    'fades the %s topline highlight out down the toe instead of cutting it off',
+    (category) => {
+      const { edges } = FACE_SHAPES[category];
+      const tail = edges[edges.length - 1];
+      expect(tail.fade).not.toBeNull();
+      const ends = polygon(tail.d);
+      expect(Math.hypot(ends[0][0] - tail.fade![0][0], ends[0][1] - tail.fade![0][1])).toBeLessThan(0.02);
+      const last = ends[ends.length - 1];
+      expect(Math.hypot(last[0] - tail.fade![1][0], last[1] - tail.fade![1][1])).toBeLessThan(0.02);
+      const main = polygon(edges[0].d);
+      expect(Math.hypot(main.at(-1)![0] - ends[0][0], main.at(-1)![1] - ends[0][1])).toBeLessThan(0.02);
+    }
+  );
+
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'runs the %s outline from the head into the tube without a step',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const numbers = (shape.silhouette.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+      const points: Point[] = [];
+      for (let i = 0; i < numbers.length; i += 2) points.push([numbers[i], numbers[i + 1]]);
+      const tube = polygon(hoselParts(shape.hosel).tube);
+      const n = tube.length / 2;
+      for (const foot of [tube[0], tube[2 * n - 1]]) {
+        // M p0, then C c1 c2 p per segment: an end point sits at index 3j, its handles either side.
+        const k = points.findIndex(
+          (point, i) => i % 3 === 0 && Math.hypot(point[0] - foot[0], point[1] - foot[1]) < 0.02
+        );
+        expect(k).toBeGreaterThan(0);
+        const [before, at, after] = [points[k - 1], points[k], points[k + 1]];
+        const u = [at[0] - before[0], at[1] - before[1]];
+        const v = [after[0] - at[0], after[1] - at[1]];
+        const turn = Math.abs(Math.atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]));
+        expect(turn).toBeLessThan(0.02);
+      }
+    }
+  );
+
+  it('fades the hybrid face into the neck at the heel; the other faces keep a hard edge', () => {
+    const face = extent(polygon(FACE_SHAPES.hybrid.face));
+    const [from, to] = FACE_SHAPES.hybrid.faceFade!;
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeLessThanOrEqual(face.maxX + 0.01);
+    expect(to - from).toBeGreaterThan(8);
+    for (const category of ['driver', 'fairway', 'iron', 'wedge'] as const)
+      expect(FACE_SHAPES[category].faceFade).toBeNull();
   });
 
   it.each(Object.keys(FACE_SHAPES) as FaceCategory[])('keeps every %s score line on the face', (category) => {
@@ -374,7 +423,10 @@ describe('faceImpact', () => {
     const parts = hoselParts(hosel);
     const tube = polygon(parts.tube);
     const band = polygon(parts.collar!);
-    const middle = band.reduce((sum, point) => [sum[0] + point[0] / band.length, sum[1] + point[1] / band.length], [0, 0]);
+    const middle = band.reduce(
+      (sum, point) => [sum[0] + point[0] / band.length, sum[1] + point[1] / band.length],
+      [0, 0]
+    );
     expect(inside(tube, middle[0], middle[1])).toBe(true);
     for (const [x, y] of band.slice(0, 4))
       expect(inside(tube, x + (middle[0] - x) * 0.01, y + (middle[1] - y) * 0.01)).toBe(true);

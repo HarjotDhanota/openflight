@@ -60,11 +60,18 @@ export type Finish = 'chrome' | 'satin' | 'black';
 export interface FaceShape {
   finish: Finish;
   head: string;
+  /** The club's outer edge as one path: the head and the tube up to the ferrule, joined
+   * tangent-on so its outline stroke runs on without a step. */
+  silhouette: string;
   face: string;
+  /** Where the face fades into the head, x from `[0]` (full) to `[1]` (gone): the hybrid's
+   * brushed face runs into the neck with no edge. */
+  faceFade: Point | null;
   /** The milled scoring area of an iron or wedge. */
   scoring: string | null;
-  /** The topline highlight of an iron or wedge, on the face's edge from the heel to the upper toe. */
-  edges: readonly string[];
+  /** The topline highlight of an iron or wedge, on the face's edge from the heel round the top
+   * of the toe; a stretch with `fade` fades out from its first point to its second. */
+  edges: readonly { d: string; fade: readonly [Point, Point] | null }[];
   hosel: Hosel;
   grooves: readonly Groove[];
   mark: string | null;
@@ -138,23 +145,35 @@ export function hoselParts(hosel: Hosel): {
   };
 }
 
+type Tangents = Readonly<Record<number, Point>>;
+
 /** The cubic Béziers of a smooth closed outline through `nodes` (Catmull-Rom). At a node listed
- * in `corners` the curve runs straight at its neighbours instead, a sharp corner. */
-function segments(nodes: readonly Point[], corners: readonly number[]): [Point, Point, Point, Point][] {
+ * in `corners` the curve runs straight at its neighbours instead, a sharp corner; at a node in
+ * `tangents` it runs along that unit direction. */
+function segments(
+  nodes: readonly Point[],
+  corners: readonly number[],
+  tangents: Tangents = {}
+): [Point, Point, Point, Point][] {
   const n = nodes.length;
   const p = (k: number) => nodes[(k + n) % n];
   const sharp = (k: number) => corners.includes((k + n) % n);
   const half = (a: Point, b: Point): Point => [(a[0] - b[0]) / 2, (a[1] - b[1]) / 2];
   return nodes.map((a, k) => {
     const b = p(k + 1);
-    const leave = sharp(k) ? add(b, a, -1) : half(p(k + 1), p(k - 1));
-    const arrive = sharp(k + 1) ? add(b, a, -1) : half(p(k + 2), a);
+    const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const along = (j: number, otherwise: Point): Point => {
+      const t = tangents[(j + n) % n];
+      return t ? [t[0] * chord, t[1] * chord] : otherwise;
+    };
+    const leave = along(k, sharp(k) ? add(b, a, -1) : half(p(k + 1), p(k - 1)));
+    const arrive = along(k + 1, sharp(k + 1) ? add(b, a, -1) : half(p(k + 2), a));
     return [a, add(a, leave, 1 / 3), add(b, arrive, -1 / 3), b];
   });
 }
 
-function outline(nodes: readonly Point[], corners: readonly number[] = []): string {
-  const parts = segments(nodes, corners).map(([, c1, c2, b]) => `C ${pt(c1)} ${pt(c2)} ${pt(b)}`);
+function outline(nodes: readonly Point[], corners: readonly number[] = [], tangents: Tangents = {}): string {
+  const parts = segments(nodes, corners, tangents).map(([, c1, c2, b]) => `C ${pt(c1)} ${pt(c2)} ${pt(b)}`);
   return `M ${pt(nodes[0])} ${parts.join(' ')} Z`;
 }
 
@@ -247,9 +266,14 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
   return {
     ...shape,
     head: movePath(shape.head, dx, dy),
+    silhouette: movePath(shape.silhouette, dx, dy),
     face: movePath(shape.face, dx, dy),
+    faceFade: shape.faceFade && [shape.faceFade[0] + dx, shape.faceFade[1] + dx],
     scoring: shape.scoring && movePath(shape.scoring, dx, dy),
-    edges: shape.edges.map((d) => movePath(d, dx, dy)),
+    edges: shape.edges.map(({ d, fade }) => ({
+      d: movePath(d, dx, dy),
+      fade: fade && [add(fade[0], [dx, dy]), add(fade[1], [dx, dy])],
+    })),
     hosel: { ...shape.hosel, ground: add(shape.hosel.ground, [dx, dy]) },
     grooves: shape.grooves.map((g) => ({
       y: Number(fmt(g.y + dy)),
@@ -260,13 +284,32 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
   };
 }
 
-/** The head outline: `nodes` from the heel side of the neck round the sole, toe and top line
- * back to the neck, where its edges meet the tube's at the tube's foot; it closes 1.5 mm up
- * inside the tube, which covers the overlap, so no seam shows across the neck. */
-function headOutline(nodes: readonly Point[], hosel: Hosel): string {
+/** The head and the club's silhouette. `nodes` run from the heel side of the neck round the
+ * sole, toe and top line back to the neck, where they meet the tube's foot running along its
+ * edges (a fixed tangent there, so no step). The head closes 1.5 mm up inside the tube, which
+ * covers the overlap so no seam shows; the silhouette carries on up the tube to the ferrule. */
+function headAndSilhouette(nodes: readonly Point[], hosel: Hosel): { head: string; silhouette: string } {
   const n = nodes.length;
-  const under = hosel.tube[0][0] + 1.5;
-  return outline([...nodes, edge(hosel, under, -1), edge(hosel, under, 1)], [n, n + 1]);
+  const foot = hosel.tube[0][0];
+  const [footLeft, underLeft, underRight, footRight] = [
+    edge(hosel, foot, -1),
+    edge(hosel, foot + 1.5, -1),
+    edge(hosel, foot + 1.5, 1),
+    edge(hosel, foot, 1),
+  ];
+  const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
+  const [up, down] = [unit(add(underLeft, footLeft, -1)), unit(add(footRight, underRight, -1))];
+  const stations = hosel.tube.slice(1).map(([s]) => s);
+  const sides = [...stations.map((s) => edge(hosel, s, -1)), ...[...stations].reverse().map((s) => edge(hosel, s, 1))];
+  const m = sides.length;
+  return {
+    head: outline([...nodes, footLeft, underLeft, underRight, footRight], [n + 1, n + 2], { [n]: up, [n + 3]: down }),
+    silhouette: outline(
+      [...nodes, footLeft, ...sides, footRight],
+      sides.map((_, k) => n + 1 + k),
+      { [n]: up, [n + 1 + m]: down }
+    ),
+  };
 }
 
 function evenRows(top: number, pitch: number, ends: readonly Point[]): Groove[] {
@@ -280,13 +323,15 @@ interface Drawing {
   hosel: Hosel;
   grooves: Groove[];
   mark?: { at: Point; half: number };
+  faceFade?: Point;
 }
 
 function wood(category: FaceCategory, o: Drawing): FaceShape {
   const shape: FaceShape = {
     finish: o.finish,
-    head: headOutline(o.head, o.hosel),
+    ...headAndSilhouette(o.head, o.hosel),
     face: outline(o.face),
+    faceFade: o.faceFade ?? null,
     scoring: null,
     edges: [],
     hosel: o.hosel,
@@ -334,10 +379,14 @@ function blade(category: FaceCategory, o: Omit<Drawing, 'grooves'>, lines: Blade
   const toeMost = o.face.reduce((best, point, k) => (point[0] < o.face[best][0] ? k : best), 0);
   const shape: FaceShape = {
     finish: o.finish,
-    head: headOutline(o.head, o.hosel),
+    ...headAndSilhouette(o.head, o.hosel),
     face,
+    faceFade: null,
     scoring: `M ${[...top, ...bottom].map(pt).join(' L ')} Z`,
-    edges: [stretch(o.face, [0, last], 0, toeMost - 1)],
+    edges: [
+      { d: stretch(o.face, [0, last], 0, toeMost - 1), fade: null },
+      { d: stretch(o.face, [0, last], toeMost - 1, toeMost), fade: [o.face[toeMost - 1], o.face[toeMost]] },
+    ],
     hosel: o.hosel,
     grooves,
     mark: null,
@@ -378,9 +427,9 @@ const DRIVER: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [58.6, -17.5], [53, -7], [49.7, -0.9], [43.8, 8.5], [33.2, 18.2], [19.6, 25.2], [-0.5, 28.3], [-19.8, 25.6],
-    [-39.6, 14.9], [-57.6, -3.7], [-60.9, -12.6], [-59.2, -19], [-42, -27.8], [-19.9, -32.4], [3.3, -32],
-    [24.6, -27.5], [41.9, -21.8], [46.7, -24.6]
+    [53.4, -7.8], [49.5, -0.5], [43.7, 8.6], [33.1, 18.3], [19.5, 25.3], [-0.7, 28.3], [-20, 25.5], [-39.8, 14.7],
+    [-57.8, -4], [-60.9, -12.8], [-59.8, -18.5], [-47.2, -25.8], [-31.5, -30.7], [-13.3, -32.8], [6.1, -31.6],
+    [22.3, -28.3]
   ],
   // prettier-ignore
   face: [
@@ -432,15 +481,14 @@ const FAIRWAY: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [54.8, -3.1], [45.5, 6.2], [37.9, 11], [25.8, 15.6], [11.3, 18.3], [-3.9, 19.1], [-19.7, 18.5], [-33.2, 15.2],
-    [-45.8, 8.8], [-53.7, -0.1], [-55.9, -10.6], [-47.4, -16.2], [-34.7, -20.4], [-22.6, -22.8], [-8.3, -24.3],
-    [6.9, -24.2], [22.7, -22.3], [40.8, -18.9]
+    [54.8, -3], [45.4, 6.2], [37.9, 11.1], [25.8, 15.6], [11.4, 18.2], [-3.8, 19.1], [-19.7, 18.5], [-33.2, 15.2],
+    [-45.8, 8.8], [-53.7, -0.1], [-55.9, -10.6], [-47.4, -16.2], [-34.7, -20.4], [-22.6, -22.8], [-8.4, -24.3],
+    [8, -24.1], [25.3, -21.9], [38.5, -19.1]
   ],
   // prettier-ignore
   face: [
-    [-42.7, -3.2], [-44.1, -12.5], [-37.4, -16.3], [-17.6, -18.4], [3.9, -18.9], [26.8, -17.6], [45.5, -14.5],
-    [51.4, -10.9], [50, -2.6], [41.8, 6.1], [29.4, 12.1], [14.3, 15.9], [-2.8, 16.8], [-15.3, 16.6], [-22.9, 15.1],
-    [-36.6, 5.5]
+    [-42.6, -3], [-43.5, -13.8], [-30.9, -17.2], [-8.2, -18.8], [14.6, -18.6], [38.8, -15.9], [50.7, -11.9],
+    [50.2, -3.1], [41.5, 6.3], [25.1, 13.6], [7.7, 16.4], [-8.4, 16.7], [-21.5, 15.6], [-35.7, 6.2]
   ],
   hosel: {
     ground: [31.15, 19.17],
@@ -471,9 +519,8 @@ const HYBRID: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [47.2, 4.5], [41, 11.5], [32.5, 15.3], [15, 18.1], [-18.7, 18], [-24.2, 17.5], [-36.3, 14.7], [-46.3, 6.8],
-    [-46.2, -7.4], [-41.3, -15.4], [-29.5, -17.3], [-15.7, -17.6], [-2.9, -16.9], [8.4, -15.3], [21.2, -12.7],
-    [35.2, -10.4]
+    [46.6, 5.4], [39.1, 12.8], [29.3, 16.1], [14.8, 18.1], [-18.1, 18], [-30.7, 16.3], [-39.9, 12.8], [-47, 4.4],
+    [-43.2, -14.1], [-25.8, -17.5], [-14.5, -17.6], [-6.4, -17.2], [5.9, -15.8], [22.6, -12.4], [34.5, -10.3]
   ],
   // prettier-ignore
   face: [
@@ -487,8 +534,8 @@ const HYBRID: Drawing = {
     tube: [
       [40, 14.4],
       [44, 14.2],
-      [52.5, 14.15],
-      [53.2, 12.8],
+      [52.6, 14.15],
+      [52.8, 12.8],
       [62, 11.9],
       [64, 11.45],
       [66.5, 10.5],
@@ -501,6 +548,8 @@ const HYBRID: Drawing = {
   },
   /* A short top line on the toe half (the lettering above it is left out), five long lines and a
    * shorter bottom line. */
+  /* The brushed face runs into the neck with no edge: it fades out over its heel end. */
+  faceFade: [30, 46],
   grooves: evenRows(-10.08, 3.66, [
     [-30.6, 0.4],
     [-30.7, 28.1],
@@ -519,14 +568,14 @@ const IRON = {
   finish: 'chrome',
   // prettier-ignore
   head: [
-    [44.7, 12.2], [34.1, 20.2], [18.9, 23], [4, 23.8], [-12.2, 23.7], [-28.6, 21.8], [-37.3, 17.3], [-42.6, 8.6],
-    [-43.8, -5.4], [-39.6, -18], [-32.1, -25.1], [-21.8, -24.9], [-4.7, -19.2], [12, -13.1], [28.4, -6.6],
-    [38.3, -4.3]
+    [44, 13.1], [33.5, 20.4], [18.7, 23], [4, 23.8], [-12.3, 23.7], [-28.6, 21.8], [-37.3, 17.3], [-42.6, 8.6],
+    [-43.8, -5.4], [-39.6, -18], [-32.2, -25.1], [-21.8, -24.9], [-4.7, -19.2], [12.1, -13], [27.7, -6.9],
+    [37.5, -4.2]
   ],
   // prettier-ignore
   face: [
     [32.6, -2.7], [19.4, -9.1], [-7.7, -19.1], [-25.8, -24.5], [-34.8, -21.6], [-40.7, -10.6], [-41.4, 3],
-    [-37, 13.6], [-25, 19], [-6.5, 20.1], [22.8, 19.4], [32.6, 19.6]
+    [-37, 13.6], [-25, 19], [-6.5, 20.1], [22.8, 19.4], [32.6, 19.2]
   ],
   hosel: {
     ground: [31.08, 23.73],
@@ -547,9 +596,9 @@ const WEDGE = {
   finish: 'satin',
   // prettier-ignore
   head: [
-    [55.5, 6.7], [39.2, 21.4], [25, 25.2], [6.7, 26.4], [-10.3, 26.2], [-28.9, 24.5], [-38.1, 18.8], [-43.7, 7.5],
-    [-44.1, -8.3], [-38.2, -23.1], [-28.6, -30.8], [-16, -30.9], [1.4, -25.2], [17, -17.5], [35.4, -5.7],
-    [46, -4.6]
+    [54.7, 7.5], [39, 21.5], [24.9, 25.2], [6.4, 26.4], [-10.5, 26.2], [-28.8, 24.5], [-38, 18.9], [-43.7, 7.6],
+    [-44.1, -8.3], [-38.2, -23.1], [-28.5, -30.8], [-15.9, -30.9], [1.3, -25.3], [17, -17.5], [34.5, -6.2],
+    [44.9, -4.2]
   ],
   // prettier-ignore
   face: [

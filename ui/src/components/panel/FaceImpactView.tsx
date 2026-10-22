@@ -16,9 +16,14 @@ interface FaceImpactViewProps {
 export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const { t } = useI18n();
   const id = useId();
-  const [clipId, faceClipId, steelId, faceId, shaftId] = ['clip', 'face-clip', 'steel', 'face', 'shaft'].map(
-    (part) => `${id}${part}`
-  );
+  const [clipId, faceClipId, steelId, faceId, shaftId, fadeId] = [
+    'clip',
+    'face-clip',
+    'steel',
+    'face',
+    'shaft',
+    'fade',
+  ].map((part) => `${id}${part}`);
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
   const hosel = hoselParts(shape.hosel);
@@ -93,14 +98,47 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               <stop className="face-impact__shaft-near" offset="0" />
               <stop className="face-impact__shaft-far" offset="1" />
             </linearGradient>
+            {shape.faceFade ? (
+              <>
+                <linearGradient
+                  id={`${fadeId}-ramp`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={shape.faceFade[0]}
+                  y1="0"
+                  x2={shape.faceFade[1]}
+                  y2="0"
+                >
+                  <stop offset="0" stopColor="#fff" />
+                  <stop offset="1" stopColor="#fff" stopOpacity="0" />
+                </linearGradient>
+                <mask id={fadeId} maskUnits="userSpaceOnUse" x={minX} y={minY} width={maxX - minX} height={maxY - minY}>
+                  <rect x={minX} y={minY} width={maxX - minX} height={maxY - minY} fill={`url(#${fadeId}-ramp)`} />
+                </mask>
+              </>
+            ) : null}
+            {shape.edges.map(({ fade }, k) =>
+              fade ? (
+                <linearGradient
+                  key={k}
+                  id={`${fadeId}-edge${k}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={fade[0][0]}
+                  y1={fade[0][1]}
+                  x2={fade[1][0]}
+                  y2={fade[1][1]}
+                >
+                  <stop className="face-impact__highlight-stop" offset="0" />
+                  <stop className="face-impact__highlight-stop face-impact__highlight-stop--end" offset="1" />
+                </linearGradient>
+              ) : null
+            )}
           </defs>
           <g clipPath={`url(#${clipId})`}>
             <g className="face-impact__outline-group" transform={mirror}>
               <g className="face-impact__rim">
                 <path d={hosel.shaft} />
                 <path d={hosel.ferrule} />
-                <path d={hosel.tube} />
-                <path d={shape.head} />
+                <path d={shape.silhouette} />
               </g>
               <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
               <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
@@ -110,7 +148,12 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
                 <path key={d} className="face-impact__ring" d={d} />
               ))}
               <path className="face-impact__ferrule" d={hosel.ferrule} />
-              <path className="face-impact__face" d={shape.face} fill={`url(#${faceId})`} />
+              <path
+                className="face-impact__face"
+                d={shape.face}
+                fill={`url(#${faceId})`}
+                mask={shape.faceFade ? `url(#${fadeId})` : undefined}
+              />
               {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
             </g>
             <g className="face-impact__centre-lines" clipPath={`url(#${faceClipId})`}>
@@ -129,8 +172,13 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
                   y2={groove.y}
                 />
               ))}
-              {shape.edges.map((d) => (
-                <path key={d} className="face-impact__edge" d={d} />
+              {shape.edges.map(({ d, fade }, k) => (
+                <path
+                  key={d}
+                  className="face-impact__edge"
+                  d={d}
+                  style={fade ? { stroke: `url(#${fadeId}-edge${k})` } : undefined}
+                />
               ))}
               {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
             </g>
