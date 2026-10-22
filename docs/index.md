@@ -18,7 +18,7 @@ Everything here is open source, and every part is off the shelf.
 | --- | --- | --- |
 | Ball speed | OPS243-A | Rolling-buffer I/Q, FFT mode extraction |
 | Club speed | OPS243-A | Pre-impact window of the same capture |
-| Launch angle | IWR6843 | LCMF-v1 over the raw radar cube |
+| Launch angle | IWR6843 | LCMF-v2 over the raw radar cube |
 | Launch direction | IWR6843 | Horizontal plane |
 | Club path | IWR6843 | Pre-impact frames |
 | Spin rate | OPS243-A | **Experimental** — not used for carry by default |

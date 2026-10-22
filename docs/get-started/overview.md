@@ -12,7 +12,7 @@ How a swing becomes a row of numbers.
 | --- | --- | --- |
 | Ball speed | OPS243-A rolling-buffer I/Q, FFT mode extraction | Yes |
 | Club speed | Pre-impact window of the same capture | Yes |
-| Launch angle (vertical) | IWR6843, LCMF-v1 over the raw radar cube | Yes |
+| Launch angle (vertical) | IWR6843, LCMF-v2 over the raw radar cube | Yes |
 | Launch direction (horizontal) | IWR6843, horizontal plane | Yes |
 | Club path | IWR6843, pre-impact frames | Reported, experimental |
 | Spin rate | OPS243-A amplitude-envelope demodulation | **No** — experimental |
@@ -30,7 +30,7 @@ flowchart TD
     C --> E[Rolling buffer freezes<br/>4096 I + 4096 Q samples]
     D --> F[IWR6843 dumps its<br/>rolling frame ring]
     E --> G[RollingBufferProcessor<br/>FFT + mode extraction]
-    F --> H[LCMF-v1<br/>angle + club path]
+    F --> H[LCMF-v2<br/>angle + club path]
     G --> I[Ball speed, club speed,<br/>spin candidate]
     H --> J[Launch angle, direction,<br/>club path]
     I --> K[Shot]

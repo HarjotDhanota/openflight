@@ -25,7 +25,7 @@ flowchart LR
 | `ops243.py` | OPS243 driver, rolling-buffer capture, I/Q transfer |
 | `rolling_buffer/processor.py` | FFT, mode-based speed extraction, spin detection |
 | `rolling_buffer/` | Trigger strategies |
-| `iwr6843/` | TI driver, L3 raw dump parser, LCMF-v1 angle and club path |
+| `iwr6843/` | TI driver, L3 raw dump parser, LCMF-v2 angle and club path |
 | `clubs/` | Built-in club types and immutable physics defaults |
 | `launch_monitor.py` | `Shot` dataclass and carry estimation |
 | `ballistics.py` | RK4 trajectory with drag and Magnus |
@@ -55,7 +55,7 @@ flowchart LR
    regions separate club, impact, and ball; the club region is the pre-impact
    window, the ball region is post-impact.
 
-6. **Angle extraction.** LCMF-v1 processes the IWR6843 radar cube for vertical
+6. **Angle extraction.** LCMF-v2 processes the IWR6843 radar cube for vertical
    launch angle, horizontal launch direction, and club path from pre-impact
    frames.
 
