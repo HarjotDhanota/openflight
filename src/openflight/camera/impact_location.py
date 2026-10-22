@@ -691,10 +691,20 @@ def find_contact(  # pylint: disable=too-many-branches
         elif not edge_available:
             contact, source = cap_frame, "cap_departure"
     if contact is None:
-        reason = (
+        base = (
             "ball_never_moved"
             if cap_frame is None and edge_frame is None
             else "ball_departure_witnesses_disagree"
+        )
+        half = SATURATION_BOX_DIAMETERS * ball.diameter_px
+        view = reference[
+            max(0, int(ball.y - half)) : int(ball.y + half) + 1,
+            max(0, int(ball.x - half)) : int(ball.x + half) + 1,
+        ]
+        saturated = 100.0 * float(np.mean(view >= SATURATED_DN)) if view.size else 0.0
+        reason = (
+            f"{base}_ball_contrast_{abs(ball_contrast_dn(reference, ball)):.0f}_dn_"
+            f"view_{saturated:.0f}pct_saturated"
         )
         return ContactEstimate("rejected", reason, **common)
     if contact <= reference_count:

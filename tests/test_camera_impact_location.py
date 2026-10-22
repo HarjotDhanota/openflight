@@ -243,7 +243,8 @@ def test_a_ball_that_never_moves_is_rejected():
     frames, ball = render_swing(truth_mm=0.0, ball_moves=False)
     result = analyse(frames, ball)
     assert result.status == "rejected"
-    assert result.reason == "ball_never_moved"
+    assert result.reason.startswith("ball_never_moved_ball_contrast_")
+    assert result.reason.endswith("pct_saturated")
     assert result.impact_offset_mm is None and result.impact_height_mm is None
 
 
