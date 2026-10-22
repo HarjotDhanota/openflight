@@ -31,6 +31,12 @@ export interface ShotUpdateMessage {
 
 function showPendingHardware(pending: ShotMessage['pending'], timestamp: string) {
   const shotStore = useShotStore.getState();
+  if (
+    shotStore.latestShot?.timestamp !== timestamp ||
+    (shotStore.shotProcessingPhase !== null && shotStore.shotProcessingShotTimestamp !== timestamp)
+  ) {
+    return;
+  }
   if (pending?.iwr6843 && pending?.camera) {
     shotStore.startShotProcessing('hardware_enrichment', timestamp);
   } else if (pending?.iwr6843) {

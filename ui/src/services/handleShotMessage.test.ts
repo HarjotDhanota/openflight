@@ -213,6 +213,50 @@ describe('handleShotMessage', () => {
     expect(state.shots).toEqual([ballShot]);
   });
 
+  it.each(['older', 'unknown', 'capturing', 'calculating'] as const)(
+    'keeps the active processing indicator when a pending update is %s',
+    async (scenario) => {
+      const { handleShotUpdate } = await import('./handleShotMessage');
+      const { useShotStore } = await import('../stores/useShotStore');
+      const latest = { ...ballShot, timestamp: '2026-08-23T12:00:10Z' };
+      useShotStore.getState().setShots([ballShot, latest]);
+      if (scenario === 'capturing' || scenario === 'calculating') {
+        useShotStore.getState().startShotProcessing(scenario);
+      } else {
+        useShotStore.getState().startShotProcessing('camera_processing', latest.timestamp);
+      }
+      const before = useShotStore.getState();
+      const updated = {
+        ...(scenario === 'older' ? ballShot : latest),
+        ...(scenario === 'unknown' ? { timestamp: '2026-08-23T12:00:20Z' } : {}),
+        ball_speed_mph: 155,
+      };
+
+      handleShotUpdate({
+        shot: updated,
+        stats: {
+          shot_count: 2,
+          avg_ball_speed: 150,
+          max_ball_speed: 155,
+          min_ball_speed: 145,
+          avg_club_speed: null,
+          avg_smash_factor: null,
+          avg_carry_est: 0,
+        },
+        pending: { iwr6843: true },
+        enrichment: { status: 'pending', reason: 'queue_full', hardware: ['iwr6843'] },
+      });
+
+      const after = useShotStore.getState();
+      expect(after.shotProcessingPhase).toBe(before.shotProcessingPhase);
+      expect(after.shotProcessingShotTimestamp).toBe(before.shotProcessingShotTimestamp);
+      const stored = after.shots.find((shot) => shot.timestamp === updated.timestamp);
+      expect(stored).toEqual(scenario === 'unknown' ? undefined : updated);
+      expect(after.latestShot?.timestamp).toBe(latest.timestamp);
+      after.clearShots();
+    }
+  );
+
   it('keeps hardware feedback when enrichment is deferred, not skipped', async () => {
     vi.stubGlobal('window', {} as Window & typeof globalThis);
 
