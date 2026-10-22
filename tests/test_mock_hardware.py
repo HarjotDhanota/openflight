@@ -273,3 +273,15 @@ def test_mock_enrichment_flag_is_validated_before_startup(monkeypatch, argv):
         server_module.main()
 
     assert exit_info.value.code == 2
+
+
+def test_simulated_attack_angle_is_the_clubs_typical_one(monkeypatch):
+    from openflight.clubs.physics import mock_attack_angle_mean_deg
+
+    monkeypatch.setattr(server_module.random, "gauss", lambda mean, _sd: mean)
+    monitor = _monitor()
+    monitor.start(shot_callback=lambda _shot: None)
+    for club in (ClubType.DRIVER, ClubType.IRON_7, ClubType.PW):
+        monitor.set_club(club)
+        shot = monitor.simulate_shot()
+        assert shot.club_angle_deg == pytest.approx(round(mock_attack_angle_mean_deg(club), 1))

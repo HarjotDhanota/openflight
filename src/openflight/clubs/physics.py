@@ -105,6 +105,21 @@ CLUB_PHYSICS: Mapping[ClubType, ClubPhysics] = MappingProxyType(
     }
 )
 
+# PGA Tour averages from TrackMan's attack-angle article: driver -0.9 deg, 6-iron -3.7 deg.
+_MOCK_ATTACK_ANCHORS = ((ClubType.DRIVER, -0.9), (ClubType.IRON_6, -3.7))
+
+
+def mock_attack_angle_mean_deg(club) -> float:
+    """A simulated shot's typical attack angle: linear in loft, wedges held at the 9-iron's."""
+    if not isinstance(club, ClubType) or club is ClubType.UNKNOWN:
+        return SHOT_SIMULATION_DEFAULTS.angle_of_attack_mean_deg
+    (low_club, low_aoa), (high_club, high_aoa) = _MOCK_ATTACK_ANCHORS
+    low_loft = CLUB_PHYSICS[low_club].nominal_loft_deg
+    high_loft = CLUB_PHYSICS[high_club].nominal_loft_deg
+    loft = min(CLUB_PHYSICS[club].nominal_loft_deg, CLUB_PHYSICS[ClubType.IRON_9].nominal_loft_deg)
+    return low_aoa + (high_aoa - low_aoa) * (loft - low_loft) / (high_loft - low_loft)
+
+
 CLUB_SIMULATION_PROFILES: Mapping[ClubType, ClubSimulationProfile] = MappingProxyType(
     {
         ClubType.DRIVER: ClubSimulationProfile(12, 1.45, 2700, 400, 2.0),

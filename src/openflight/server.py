@@ -42,6 +42,7 @@ from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
     get_club_physics,
     get_club_simulation_profile,
+    mock_attack_angle_mean_deg,
 )
 from .horizontal_frame import (
     frame_for,
@@ -6905,7 +6906,7 @@ class MockLaunchMonitor:
 
         club_aoa = round(
             random.gauss(
-                defaults.angle_of_attack_mean_deg,
+                mock_attack_angle_mean_deg(self._current_club),
                 defaults.angle_of_attack_std_dev_deg,
             ),
             1,
