@@ -139,6 +139,9 @@ uv run python scripts/analysis/impact_location.py SESSION --out OUT \
 - `SESSION` is a tester session folder, an unzipped bundle or a bundle `.zip`.
 - The golfer's hand comes from the session's `--handed` record; right-handed is the
   default.
+- The focal length comes from the session's lens record; for a session without one,
+  `--lens-id` names the lens in `config/lenses.json`. Otherwise the rig file's stock lens
+  is used, and every row says which.
 - The output is `impact_location.csv` and `.json`, one row per clip.
 - `overlays/` holds the analysed frames. Look at them before any number. Green is the
   head mask, orange the placed outline (red when a frame failed a gate), blue heel and
