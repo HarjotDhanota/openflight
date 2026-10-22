@@ -14,7 +14,6 @@ import os
 import pickle
 import re
 import shlex
-import shutil
 import signal
 import struct
 import subprocess
@@ -11552,24 +11551,7 @@ def create_app(
         folder = tester_root(sessions_root, tester_id) / "comparator"
         folder.mkdir(parents=True, exist_ok=True)
         upload.save(folder / name)
-        # it goes into the next package; one already made gets a copy beside it to send
-        run = free_play.status()
-        packaged = run.get("tester_id") == tester_id and run.get("phase") in {"ready", "closed"}
-        bundle = (run.get("bundle") or {}).get("name") if packaged else None
-        beside = None
-        if bundle:
-            target_dir = (
-                Path(send_dir) if send_dir else session_bundle.bundle_directory(sessions_root)
-            )
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target = target_dir / f"{Path(bundle).stem}-{name}"
-            shutil.copyfile(folder / name, target)
-            beside = {
-                "bundle": bundle,
-                "file": target.name,
-                "folder": session_bundle.display_path(target_dir),
-            }
-        return jsonify({"saved": name, "in_package": beside is None, "beside": beside})
+        return jsonify({"saved": name})
 
     # The ready light (P7-14): the kiosk's light plus the ladder's phase. Its own
     # kiosk client gives up quickly, so a kiosk that is down never stalls a poll.

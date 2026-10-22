@@ -37,9 +37,8 @@ OV9281 camera and the LIS3DH tilt sensor. Start `scripts/start-tester.sh`, open
    (its path and size are shown). Then upload the zip to your Google Drive
    (drive.google.com → New → File upload), share it as "Anyone with the link",
    and send the link to whoever asked you to test. Hit beside a TrackMan or
-   another launch monitor? Attach its export (CSV) on the line in step 8: before
-   the package is made it goes into the package; once the package exists it is
-   saved beside it in `~/OpenFlight-to-send/` (named after the package): send both.
+   another launch monitor? Put its export in the same Google Drive folder as the
+   zip and share the folder.
 
 The band at the top stays neutral until free play records: "SETTING UP · Step 4 ·
 Aim at your target · free play starts at step 7" during setup, "NOT STARTED" on

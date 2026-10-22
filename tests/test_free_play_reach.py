@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from flask import Flask
 
-from openflight import free_play, server, session_bundle, tester_hooks
+from openflight import free_play, server, tester_hooks
 from openflight.camera import tester_server as ts
 from tests.test_free_play import Jobs
 from tests.test_tester_server import eligible_app, setup_saw_ball
@@ -474,47 +474,3 @@ class TestMovingTheAimDuringFreePlay:
         assert response.status_code == 200
         assert aiming.kiosk.requests == []
         assert response.get_json().get("free_play") is None
-
-
-def _upload(client, name="Trackman Export (1).csv"):
-    return client.post(
-        "/api/tester/comparator",
-        data={"tester_id": TESTER, "file": (io.BytesIO(b"Club,Ball Speed\n7i,120\n"), name)},
-        content_type="multipart/form-data",
-    )
-
-
-class TestLaunchMonitorExport:
-    def test_before_the_package_it_goes_into_the_package(self, tmp_path):
-        client = eligible_app(sessions_root=tmp_path, manager=Jobs()).test_client()
-        response = _upload(client)
-        assert response.status_code == 200
-        assert response.get_json() == {
-            "saved": "Trackman_Export_1_.csv",
-            "in_package": True,
-            "beside": None,
-        }
-        assert (tmp_path / TESTER / "comparator" / "Trackman_Export_1_.csv").is_file()
-
-    def test_after_the_package_it_is_saved_beside_it_to_send(self, tmp_path):
-        send = tmp_path / "send"
-        app = eligible_app(sessions_root=tmp_path / "sessions", manager=Jobs(), send_dir=send)
-        controller = app.extensions["openflight_free_play"]
-        (tmp_path / "sessions" / TESTER).mkdir(parents=True)
-        controller.begin(TESTER, "run-1", tmp_path / "sessions" / TESTER)
-        bundle = f"{TESTER}-session-bundle-20261021T120000Z.zip"
-        controller.run.update(phase="ready", bundle={"name": bundle})
-
-        response = _upload(app.test_client())
-
-        assert response.status_code == 200
-        body = response.get_json()
-        assert body["in_package"] is False
-        beside = send / f"{TESTER}-session-bundle-20261021T120000Z-Trackman_Export_1_.csv"
-        assert beside.read_bytes().startswith(b"Club,Ball Speed")
-        assert body["beside"] == {
-            "bundle": bundle,
-            "file": beside.name,
-            "folder": session_bundle.display_path(send),
-        }
-        assert (tmp_path / "sessions" / TESTER / "comparator" / "Trackman_Export_1_.csv").is_file()

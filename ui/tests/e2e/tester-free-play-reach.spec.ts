@@ -296,42 +296,6 @@ test.describe('free play on the tester page', () => {
     );
   });
 
-  test('step 8 takes a launch monitor export in the normal flow', async ({ page }) => {
-    await useTester(page);
-    await mockSetupDone(page, {
-      freePlay: {
-        ...RECORDING,
-        phase: 'ready',
-        bundle: { name: `${DEFAULT_TESTER}-session-bundle-20261021T120000Z.zip` },
-      },
-    });
-    const uploads: string[] = [];
-    await page.route('**/api/tester/comparator', async (route) => {
-      uploads.push(route.request().postData() ?? '');
-      await fulfillJson(route, {
-        saved: 'trackman.csv',
-        in_package: false,
-        beside: { bundle: 'b.zip', file: 'b-trackman.csv', folder: '~/OpenFlight-to-send' },
-      });
-    });
-    await page.goto('/tester.html');
-
-    await expect(page.locator('#launch-monitor-label')).toHaveText(
-      'Hit beside a TrackMan or another launch monitor? Attach its export (CSV)'
-    );
-    await expect(page.locator('#advanced-package')).not.toHaveAttribute('open');
-    await page.locator('#launch-monitor-file').setInputFiles({
-      name: 'trackman.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from('Club,Ball Speed\n7i,120\n'),
-    });
-    await expect(page.locator('#launch-monitor-status')).toHaveText(
-      'Attached trackman.csv: saved beside the package in ~/OpenFlight-to-send as b-trackman.csv. Send both.'
-    );
-    expect(uploads[0]).toContain(`name="tester_id"`);
-    expect(uploads[0]).toContain(DEFAULT_TESTER);
-  });
-
   test('Kiosk view opens the scoreboard in this window when the kiosk shell refuses new windows', async ({ page }) => {
     await useTester(page);
     await mockSetupDone(page, { freePlay: RECORDING });

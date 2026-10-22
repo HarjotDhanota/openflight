@@ -2018,13 +2018,6 @@
         <p id="package-links" hidden>
           <a id="review-link" href="/session-review.html">Open the session review</a>
         </p>
-        <div class="launch-monitor">
-          <label for="launch-monitor-file" id="launch-monitor-label"
-            >Hit beside a TrackMan or another launch monitor? Attach its export (CSV)</label
-          >
-          <input type="file" id="launch-monitor-file" accept=".csv,text/csv" />
-          <p class="note" id="launch-monitor-status" role="status" hidden></p>
-        </div>
         <details class="advanced-package" id="advanced-package">
           <summary>Advanced: analyse and package by hand (maintainer)</summary>
           <label>Comparator export (optional) <input type="file" id="comparator-file" /></label>
@@ -7041,32 +7034,6 @@
         } finally {
           packageActionPending = false;
           el('step-package').disabled = false;
-        }
-      });
-
-      // step 8: a launch monitor's export, into the package or beside one already made
-      el('launch-monitor-file').addEventListener('change', async () => {
-        const file = el('launch-monitor-file').files[0];
-        const status = el('launch-monitor-status');
-        if (!file) return;
-        status.hidden = false;
-        status.className = 'note';
-        status.textContent = `Attaching ${file.name}…`;
-        try {
-          const form = new FormData();
-          form.append('tester_id', currentTester());
-          form.append('file', file);
-          const response = await fetchWithTimeout('/api/tester/comparator', { method: 'POST', body: form }, PACKAGE_TIMEOUT_MS);
-          const saved = await readJson(response);
-          if (!response.ok) throw new Error(saved.error || `request failed (${response.status})`);
-          status.textContent = saved.beside
-            ? `Attached ${file.name}: saved beside the package in ${saved.beside.folder} as ${saved.beside.file}. Send both.`
-            : `Attached ${file.name}: it goes into the package.`;
-        } catch (error) {
-          status.className = 'problem';
-          status.textContent = `Not attached: ${error.message}`;
-        } finally {
-          el('launch-monitor-file').value = '';
         }
       });
 
