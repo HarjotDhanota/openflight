@@ -1,5 +1,4 @@
 import type { Shot, ShotMetric } from '../../types/shot';
-import type { UnitSystem } from '../../utils/units';
 import { isMeasured } from '../../utils/units';
 
 export type FaceCategory = 'driver' | 'fairway' | 'hybrid' | 'iron' | 'wedge';
@@ -90,9 +89,7 @@ export function faceCategory(club: string | null | undefined): FaceCategory {
   return 'iron';
 }
 
-export function gridStepMm(unitSystem: UnitSystem): number {
-  return unitSystem === 'imperial' ? 25.4 / 4 : 10;
-}
+export const GRID_STEP_MM = 10;
 
 export interface ImpactReading {
   offset: number | null;
@@ -126,6 +123,6 @@ export function impactReading(shot: Shot): ImpactReading {
   };
 }
 
-export function formatLength(mm: number, unitSystem: UnitSystem): string {
-  return unitSystem === 'imperial' ? `${(mm / 25.4).toFixed(2)} in` : `${Math.round(mm)} mm`;
+export function formatLength(mm: number): string {
+  return `${Math.round(mm)} mm`;
 }

@@ -204,8 +204,8 @@ The Club tab opens with a face-impact view:
   right-hander. A left-hander's drawing is mirrored. The proportions are
   illustrative and labelled so. The iron's length sits inside Mizuno's published
   7-iron head lengths (74-87 mm); the woods sit inside the USGA 127 x 71 mm limit.
-- **The grid.** Centred on the face centre: 10 mm, or a quarter inch with imperial
-  units.
+- **The grid.** Centred on the face centre: 10 mm, and every number in mm, whatever
+  the unit preference.
 - **The dots.** The shot's dot with its 1-sigma ellipse, and this session's earlier
   shots with the same club as faint dots.
 - **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:

@@ -1,15 +1,13 @@
 import { useId } from 'react';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot } from '../../types/shot';
-import type { UnitSystem } from '../../utils/units';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FACE_SHAPES, faceCategory, formatLength, gridStepMm, impactReading } from './faceImpact';
+import { FACE_SHAPES, faceCategory, formatLength, GRID_STEP_MM, impactReading } from './faceImpact';
 import './FaceImpactView.css';
 
 interface FaceImpactViewProps {
   shot: Shot;
   sessionShots: readonly Shot[];
-  unitSystem: UnitSystem;
 }
 
 function gridLines(min: number, max: number, step: number): number[] {
@@ -20,7 +18,7 @@ function gridLines(min: number, max: number, step: number): number[] {
 
 /** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
  * the club's earlier shots faint, a grid on the face centre; mirrored for a left-hander. */
-export function FaceImpactView({ shot, sessionShots, unitSystem }: FaceImpactViewProps) {
+export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const { t } = useI18n();
   const clipId = useId();
   const category = faceCategory(shot.club);
@@ -30,7 +28,7 @@ export function FaceImpactView({ shot, sessionShots, unitSystem }: FaceImpactVie
   const toeSign = left ? 1 : -1;
   const { minX, maxX, minY, maxY } = shape.bounds;
   const [viewMinX, viewMaxX] = left ? [-maxX, -minX] : [minX, maxX];
-  const step = gridStepMm(unitSystem);
+  const step = GRID_STEP_MM;
   const earlier = sessionShots
     .filter((other) => other.timestamp !== shot.timestamp && other.club === shot.club)
     .map(impactReading)
@@ -41,14 +39,14 @@ export function FaceImpactView({ shot, sessionShots, unitSystem }: FaceImpactVie
   const words = (value: number, plus: string, minus: string) =>
     Math.abs(value) < 0.5 ? t('faceImpact.centre') : value > 0 ? plus : minus;
   const offsetText = read
-    ? `${words(reading.offset as number, t('faceImpact.toe'), t('faceImpact.heel'))} ${formatLength(Math.abs(reading.offset as number), unitSystem)}`
+    ? `${words(reading.offset as number, t('faceImpact.toe'), t('faceImpact.heel'))} ${formatLength(Math.abs(reading.offset as number))}`
     : null;
   const heightText =
     reading.height !== null
-      ? `${words(reading.height, t('faceImpact.high'), t('faceImpact.low'))} ${formatLength(Math.abs(reading.height), unitSystem)}`
+      ? `${words(reading.height, t('faceImpact.high'), t('faceImpact.low'))} ${formatLength(Math.abs(reading.height))}`
       : null;
-  const sigma = (value: number | null) => (value !== null ? ` ± ${formatLength(value, unitSystem)}` : '');
-  const gridText = unitSystem === 'imperial' ? '¼ in' : '10 mm';
+  const sigma = (value: number | null) => (value !== null ? ` ± ${formatLength(value)}` : '');
+  const gridText = `${GRID_STEP_MM} mm`;
   return (
     <section
       className="face-impact"
