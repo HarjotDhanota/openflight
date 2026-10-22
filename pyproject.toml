@@ -118,12 +118,12 @@ ignore = ["E501"]  # Line length handled separately
 combine-as-imports = true
 
 [tool.uv]
-# OpenFlight's declared platforms are Linux (the Pi) and macOS (development).
-# Excluding Windows also keeps Linux-only Bless resolution from traversing its
-# incompatible Windows beta dependency branch.
+# Linux is the Pi, macOS and Windows are development and offline analysis.
+# Bless stays Linux-only, so its Windows beta dependency branch is not resolved.
 environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'darwin'",
+    "sys_platform == 'win32'",
 ]
 
 [tool.pylint.main]
