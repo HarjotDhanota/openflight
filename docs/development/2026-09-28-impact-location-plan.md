@@ -1,6 +1,7 @@
 # Impact Location and Face Angle Plan
 
-Status: planned; nothing here is implemented or validated
+Status: planned; nothing here is implemented or validated. The v2 tool (both axes,
+run after a session) is described in `docs/camera/impact-location.md`.
 
 Date: 2026-09-28
 
