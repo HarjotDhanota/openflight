@@ -194,9 +194,9 @@ FERGUSON_2022 = AeroModel(
 FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
     version="flight-fit-v1",
     source=(
-        "fitted to TM4 normalized exports: the owner's TM4 export (in the repo) and "
-        "Robinante's public TM4 session; TM4's own launch numbers in, its carry, apex, "
-        "landing angle and hang time out"
+        "fitted to TM4 normalized exports: a TM4 normalized export, 6 May 2026 (in the "
+        "repo), and a second, public TM4 session, 12 Oct 2026; TM4's own launch numbers "
+        "in, its carry, apex, landing angle and hang time out"
     ),
     form=FERGUSON_FORM,
     fitted_on="2026-10-13",
@@ -208,17 +208,17 @@ FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
             shots=24,
             fit_shots=24,
             in_repo=True,
-            origin="the owner's TM4 session, 6 May 2026: 9 7-iron, 8 driver, 7 PW",
+            origin="a TM4 normalized export, 6 May 2026: 9 7-iron, 8 driver, 7 PW",
         ),
         CalibrationData(
-            name="robinante-swingsync-2026-10-12.csv",
-            path="../tm-exports/robinante-swingsync-2026-10-12.csv (beside the checkout)",
+            name="tm4-public-swingsync-2026-10-12.csv",
+            path="../tm-exports/tm4-public-swingsync-2026-10-12.csv (beside the checkout)",
             sha256="d4dbf8e6056feed8d4ae3947536c0e8a2607663b245ff49ee16b26bcb000ee60",
             shots=43,
             fit_shots=36,
             in_repo=False,
             origin=(
-                "Robinante's TM4 session, 12 Oct 2026, SwingSync export, public GitHub "
+                "a second, public TM4 session, 12 Oct 2026, SwingSync export, public GitHub "
                 "release trackman_session_10_12_26 (someone else's data: not copied into "
                 "the repo): 22 PW, 15 7-iron, 6 6-iron"
             ),
@@ -252,21 +252,21 @@ FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
         ("pooled leave-one-out held-out apex RMSE ft", 0.78),
         ("pooled leave-one-out held-out landing_angle RMSE deg", 0.65),
         ("pooled leave-one-out held-out hang_time RMSE s", 0.06),
-        # fitted to the owner's export alone, flown on Robinante's 36 shots
-        ("owner-fit on Robinante held-out carry RMSE yd", 0.73),
-        ("owner-fit on Robinante held-out apex RMSE ft", 0.62),
-        ("owner-fit on Robinante held-out landing_angle RMSE deg", 0.46),
-        ("owner-fit on Robinante held-out hang_time RMSE s", 0.05),
-        # fitted to Robinante's irons alone, flown on the owner's 24 shots: the
-        # driver (Sp 0.05-0.08; Robinante goes no lower than 0.13) is extrapolated,
+        # fitted to the 6 May export alone, flown on the 12 Oct session's 36 shots
+        ("6-May-fit on 12-Oct held-out carry RMSE yd", 0.73),
+        ("6-May-fit on 12-Oct held-out apex RMSE ft", 0.62),
+        ("6-May-fit on 12-Oct held-out landing_angle RMSE deg", 0.46),
+        ("6-May-fit on 12-Oct held-out hang_time RMSE s", 0.05),
+        # fitted to the 12 Oct irons alone, flown on the 6 May 24 shots: the
+        # driver (Sp 0.05-0.08; 12 Oct goes no lower than 0.13) is extrapolated,
         # +13 yd carry
-        ("Robinante-fit on owner held-out carry RMSE yd", 10.13),
-        ("Robinante-fit on owner held-out apex RMSE ft", 15.34),
-        ("Robinante-fit on owner held-out landing_angle RMSE deg", 4.55),
-        ("Robinante-fit on owner held-out hang_time RMSE s", 0.57),
-        # each of the owner's 8 drives flown by a fit to the other 59 shots
-        ("owner drives leave-one-out held-out carry RMSE yd", 1.46),
-        ("owner drives leave-one-out held-out apex RMSE ft", 0.92),
+        ("12-Oct-fit on 6-May held-out carry RMSE yd", 10.13),
+        ("12-Oct-fit on 6-May held-out apex RMSE ft", 15.34),
+        ("12-Oct-fit on 6-May held-out landing_angle RMSE deg", 4.55),
+        ("12-Oct-fit on 6-May held-out hang_time RMSE s", 0.57),
+        # each of the 6 May export's 8 drives flown by a fit to the other 59 shots
+        ("6-May drives leave-one-out held-out carry RMSE yd", 1.46),
+        ("6-May drives leave-one-out held-out apex RMSE ft", 0.92),
         # ferguson-2022 on the same 60 shots, for comparison
         ("ferguson-2022 carry RMSE yd", 1.73),
         ("ferguson-2022 apex RMSE ft", 2.09),

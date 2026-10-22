@@ -170,7 +170,7 @@ def test_the_calibration_record_says_what_it_was_fitted_to():
     cal = FLIGHT_FIT_V1.calibration
     assert cal is not None
     assert cal.version == "flight-fit-v1"
-    assert "TM4" in cal.source and "owner" in cal.source
+    assert "TM4" in cal.source and "6 May 2026" in cal.source
     assert cal.fitted_on == "2026-10-13"
     assert "Ferguson" in cal.form and "doi:10.5703/1288284317493" in cal.form
     assert cal.reference_air_density_kg_m3 == pytest.approx(AIR_DENSITY_NORMALIZED, abs=1e-6)
@@ -181,14 +181,22 @@ def test_the_calibration_record_says_what_it_was_fitted_to():
         ("hang_time", "s", 0.1),
     )
     names = [d.name for d in cal.data]
-    assert names == ["OpenFlight-Test.Normalized.csv", "robinante-swingsync-2026-10-12.csv"]
+    assert names == ["OpenFlight-Test.Normalized.csv", "tm4-public-swingsync-2026-10-12.csv"]
+
+
+def test_the_calibration_record_names_its_sources_neutrally():
+    cal = FLIGHT_FIT_V1.calibration
+    assert "owner" not in repr(cal).lower()
+    in_repo, public = cal.data
+    assert in_repo.origin.startswith("a TM4 normalized export, 6 May 2026:")
+    assert public.origin.startswith("a second, public TM4 session, 12 Oct 2026,")
 
 
 def test_the_recorded_hash_is_the_in_repo_export_s():
-    (owner,) = [d for d in FLIGHT_FIT_V1.calibration.data if d.in_repo]
-    assert owner.path == "session_logs/OpenFlight-Test.Normalized.csv"
-    assert owner.sha256 == _sha256(IN_REPO_EXPORT)
-    assert owner.shots == 24
+    (in_repo,) = [d for d in FLIGHT_FIT_V1.calibration.data if d.in_repo]
+    assert in_repo.path == "session_logs/OpenFlight-Test.Normalized.csv"
+    assert in_repo.sha256 == _sha256(IN_REPO_EXPORT)
+    assert in_repo.shots == 24
 
 
 def test_the_external_export_is_recorded_not_copied():

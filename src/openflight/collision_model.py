@@ -1,8 +1,8 @@
 """Collision model for the club-face, spin and index metrics (Part E, item E2).
 
 Every number here comes from a published source, read from the paper itself, or
-from the named clean-room fit to the owner's TM4 export; the derivations and units
-are in ``docs/how-it-works/collision-model.md``. The forward model
+from the named clean-room fit to a TM4 normalized export, 6 May 2026; the
+derivations and units are in ``docs/how-it-works/collision-model.md``. The forward model
 (``collision_forward``) has constants fitted by the maintainer. Each shot
 uses only its own inputs; a model constant is fixed, a shot's input never is. A
 missing input makes every metric built on it "not measured", with the reason.
@@ -16,7 +16,7 @@ missing input makes every metric built on it "not measured", with the reason.
 
    the tangential-impulse identity m v_t r = I omega (Cross & Nathan 2007, below;
    Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.352 m r^2, r = 21.335 mm), fitted
-   in a clean-room study of the owner's TM4 export. The collision model's own
+   in a clean-room study of the 6 May 2026 TM4 export. The collision model's own
    spin is built from face and loft, so it never feeds them: without a measured
    spin, face and loft come from the inverse of the fitted launch model
    (``collision_forward.face_and_loft_from_launch``), and say why. Without the
@@ -74,7 +74,7 @@ missing input makes every metric built on it "not measured", with the reason.
    is outside the model and is not calculated.
 
 4. **Spin axis.** Irons and wedges: tan(axis) = tan(D-plane tilt) x (0.81385 +
-   0.00342 x dynamic loft), the clean-room fit to the owner's TM4 irons.
+   0.00342 x dynamic loft), the clean-room fit to that export's irons.
    Drivers, woods and hybrids: the fitted forward model's centre axis. With a
    measured impact location the forward model's gear effect (after R. Cross &
    A. M. Nathan, "Experimental study of the gear effect in ball collisions",

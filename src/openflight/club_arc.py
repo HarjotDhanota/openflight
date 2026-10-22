@@ -95,8 +95,8 @@ Definitions (TrackMan's public pages, D37)
   (+ after the ball), height (+ above the head at impact), side (+ right).
   The reported low point distance adds a per-club offset for the 7-iron, driver
   and pitching wedge (``LOW_POINT_OFFSETS_MM``): the reported distance is the arc's
-  geometry plus a constant per club, fitted by the maintainer to the owner's export
-  session (``session_logs/OpenFlight-Test.Normalized.csv``; 9, 8 and 7 shots, 1.5 mm
+  geometry plus a constant per club, fitted by the maintainer to a TM4 normalized
+  export, 6 May 2026 (``session_logs/OpenFlight-Test.Normalized.csv``; 9, 8 and 7 shots, 1.5 mm
   RMS after the offset). Other clubs have no fitted offset yet and report the arc's
   geometry alone, with a note.
 

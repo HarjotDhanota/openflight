@@ -9,7 +9,7 @@ wiring: `server._attach_collision_model`.*
 
 OpenFlight's camera can't see the club face. These metrics are therefore
 **calculated** from each shot's own measured inputs, using published physics
-and two clean-room fits to the owner's own TrackMan 4 export:
+and two clean-room fits to a TrackMan 4 normalized export, 6 May 2026:
 
 - face angle and dynamic loft;
 - spin loft, face to path and D-plane tilt;
@@ -174,8 +174,8 @@ two anchor lofts, linear between and beyond them.
 | Irons, hybrids | 1.115 | 0.220 | 0.174 | 0.631 | 0.828 |
 | Wedges | 1.241 | 0.227 | 0.172 | 0.773 | 1.478 |
 
-The gear gains come from the clean shots of two export sessions (the owner's,
-and a second tester's): 6 drives, 15 six- and seven-irons and 17 pitching
+The gear gains come from the clean shots of two export sessions (6 May 2026,
+and a second, public TM4 session): 6 drives, 15 six- and seven-irons and 17 pitching
 wedges. Left out: two drives whose spin the export marks as estimated, two thin
 mishits (launch under 15°), and 17 shots with an attack angle of −2° or
 shallower or a strike above +8 mm (possible fliers or heavy strikes, section 3).
@@ -211,7 +211,7 @@ published 0.40 friction turns at 61–68°; a friction low enough to match would
 be below any measured ball-on-face value. Most of the iron and wedge residual
 lies beyond 45° of spin loft, where no export shot is.
 
-**On the owner's export session** (23 shots with a delivery;
+**On the 6 May 2026 export session** (23 shots with a delivery;
 `tests/test_collision_owner_export.py`), with each shot's recorded impact
 location. Its clean shots are among the 38 the gear gains saw; nothing else was
 fitted to it:
@@ -248,7 +248,7 @@ and dynamic loft are the azimuth and elevation of n (`rigid_body_face`).
 
 **The constant.** c = 7.5005 mm, which is I = 0.352 · m r² for r = 21.335 mm
 (a uniform sphere would be 0.4). It comes from a clean-room study of the
-owner's TM4 export: the relation held for driver, 7-iron and wedge with a
+6 May 2026 TM4 export: the relation held for driver, 7-iron and wedge with a
 relative spread of 2.5 × 10⁻⁴. With it, the code rebuilds TM4's face angle to
 0.024° RMS and dynamic loft to 0.004° RMS on the 21 measured-spin shots
 (`tests/test_rigid_body_face.py` checks this against
@@ -293,7 +293,7 @@ loft to 0.012°, 0.040° and 0.085°; the published ratios below give 0.80°,
 0.61° and 1.01° for face and 0.60°, 0.59° and 1.20° for loft. Refitting the
 ratios per category (constant or linear in launch minus attack) reached only
 0.11–0.33° for face and 0.25–1.27° for loft, so the inversion replaced them.
-On the owner's export it gives face 0.07° and loft 0.41° RMS (the ratios: 0.57°
+On the 6 May 2026 export it gives face 0.07° and loft 0.41° RMS (the ratios: 0.57°
 and 0.54°).
 
 **Partial inputs.** Without the launch direction or path, the loft alone comes
@@ -359,7 +359,7 @@ Why interpolate by loft:
 The straight lines between anchors are **our** choice. Neither paper tabulates
 the curve's shape. The x-axis is nominal loft rather than the shot's own spin
 loft because the anchors' spin lofts are not published. E8 refits both the
-weights and the curve to the owner's TM4 exports.
+weights and the curve to TM4 exports.
 
 **Status and source.** Used only for the face when the vertical launch or
 attack is missing; labelled `calculated` (or the weakest input's label).
@@ -504,7 +504,7 @@ over a model-geometry model spin, the formula's calculated value is used
 source starts with "measured".
 
 **Irons and wedges** (2-iron to lob wedge) take a clean-room fit to the
-owner's TM4 irons, which reproduces them to 0.014° in one session:
+irons of a TM4 normalized export, 6 May 2026, which reproduces them to 0.014° in one session:
 
     tan(spin axis) = tan(D-plane tilt) · (0.81385 + 0.00342 · dynamic loft)
 
@@ -614,7 +614,7 @@ in the Club panel after spin loft:
 
 Each takes its inputs' weakest label. A club without its own fitted constants
 carries the note "no fitted index for this club: expected value from its
-category". On the owner's export, to which the per-club constants were fitted,
+category". On the 6 May 2026 export, to which the per-club constants were fitted,
 the indices follow the exported ones to 0.45 (spin) and 0.05 (smash) index
 points RMS. Each club's shots span only 3–6° of spin loft there, so a and c are
 fitted values for that club's usual deliveries, not a law over all spin lofts.

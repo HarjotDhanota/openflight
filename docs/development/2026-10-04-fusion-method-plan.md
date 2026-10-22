@@ -111,7 +111,7 @@ done when:
 
 **Before stage 2, check the IWR frame times.**
 - **The finding.** In an outside contributor's real-ball TrackMan session
-  (Robinante, 4 Oct; IWR firmware 1.0.2 hybrid cadence, v10 dumps), the dump's frame
+  (4 Oct; IWR firmware 1.0.2 hybrid cadence, v10 dumps), the dump's frame
   times hide a 17–33 ms gap at the first range-window switch (frame 9). Every delta
   reads 2000 µs, but the ball's line only meets the club's line if shifted 17–33 ms.
   That breaks the crossing the IWR distance comes from.

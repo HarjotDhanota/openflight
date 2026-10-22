@@ -72,7 +72,7 @@ TRACKMAN_CSV = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 #
 # E8a (flight-fit-v1): Ferguson's form with its seven constants refitted to TM4's
 # normalized exports on carry, apex, landing angle and hang time jointly (this
-# capture plus Robinante's public 43-shot session; see
+# capture plus a second, public 43-shot TM4 session; see
 # ballistics.FLIGHT_FIT_V1.calibration). Ratcheted DOWN. NOTE: this capture is
 # part of the fit, so these numbers are in-sample; the held-out numbers (pooled
 # 10-fold, leave-one-out, leave-one-source-out) are in the calibration record
