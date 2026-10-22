@@ -2,7 +2,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { FaceImpactView } from './FaceImpactView';
-import { FACE_SHAPES, faceCategory, gridStepMm, impactReading } from './faceImpact';
+import { FACE_SHAPES, faceCategory, GRID_STEP_MM, impactReading } from './faceImpact';
 import { MetricGroupPanel } from './MetricGroupPanel';
 
 function record(overrides: Partial<ShotMetric>): ShotMetric {
@@ -59,8 +59,8 @@ function shot(overrides: Partial<Shot> = {}, metrics: Record<string, ShotMetric>
   };
 }
 
-function render(latest: Shot, earlier: Shot[] = [], unitSystem: 'imperial' | 'metric' = 'metric') {
-  return renderToString(<FaceImpactView shot={latest} sessionShots={[...earlier, latest]} unitSystem={unitSystem} />);
+function render(latest: Shot, earlier: Shot[] = []) {
+  return renderToString(<FaceImpactView shot={latest} sessionShots={[...earlier, latest]} />);
 }
 
 function attr(html: string, selector: string, name: string): string | null {
@@ -95,9 +95,8 @@ describe('faceImpact', () => {
     expect(point).toMatchObject({ offset: 8, offsetSigma: 4, height: 3, heightSigma: 5, handedness: 'right' });
   });
 
-  it('grids in 10 mm, or a quarter inch in imperial', () => {
-    expect(gridStepMm('metric')).toBe(10);
-    expect(gridStepMm('imperial')).toBeCloseTo(6.35);
+  it('grids in 10 mm', () => {
+    expect(GRID_STEP_MM).toBe(10);
   });
 });
 
@@ -137,10 +136,11 @@ describe('FaceImpactView', () => {
     expect(render(shot({ club: 'sw' }))).toContain('data-face="wedge"');
   });
 
-  it('shows inches on a quarter-inch grid when the unit preference is imperial', () => {
-    const html = render(shot(), [], 'imperial');
-    expect(html).toContain('Toe 0.31 in');
-    expect(html).toContain('grid ¼ in');
+  it('always reads in millimetres on a 10 mm grid', () => {
+    const html = render(shot());
+    expect(html).toContain('Toe 8 mm');
+    expect(html).toContain('grid 10 mm');
+    expect(html).not.toContain(' in ');
   });
 
   it('says why when the shot was not read, and draws no dot', () => {

@@ -130,8 +130,8 @@ for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
       await expect(view.locator('.face-impact__dot')).toHaveCount(1);
       await expect(view.locator('.face-impact__ellipse')).toHaveCount(1);
       await expect(view.locator('.face-impact__earlier')).toHaveCount(2);
-      await expect(view).toContainText('Toe 0.35 in');
-      await expect(view).toContainText('High 0.08 in');
+      await expect(view).toContainText('Toe 9 mm');
+      await expect(view).toContainText('High 2 mm');
       const figure = await view.locator('.face-impact__svg').boundingBox();
       expect(figure!.height).toBeGreaterThan(60);
       expect(figure!.y + figure!.height).toBeLessThanOrEqual(viewport.height);

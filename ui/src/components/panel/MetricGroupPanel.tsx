@@ -203,7 +203,7 @@ export function MetricGroupPanel({
     <div className="panel">
       {header}
       <div className="panel__body metric-groups" data-metric-panel={view}>
-        {view === 'club' ? <FaceImpactView shot={shot} sessionShots={sessionShots} unitSystem={unitSystem} /> : null}
+        {view === 'club' ? <FaceImpactView shot={shot} sessionShots={sessionShots} /> : null}
         {PANEL_GROUPS[view].map((group) => (
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>
