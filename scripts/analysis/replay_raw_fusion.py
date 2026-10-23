@@ -26,6 +26,7 @@ from openflight.iwr6843.lcmf import antenna_layout
 from openflight.iwr6843.monitor import tx_order_from_config
 from openflight.iwr6843.replay import build_replay_calibration
 from openflight.iwr6843.runtime import camera_horizontal_input
+from openflight.measured_speed_projection import evaluate_measured_projection_total_speed
 from openflight.moving_range_replay import (
     replay_moving_camera_iwr_anchor,
     replay_moving_iwr_range,
@@ -40,7 +41,6 @@ from openflight.raw_radar_replay import (
 )
 from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.runtime_provenance import source_content_manifest_sha256
-from openflight.speed_correction import evaluate_measured_projection_total_speed
 
 try:
     from scripts.analysis.replay_camera_fusion import replay_frozen_shot
