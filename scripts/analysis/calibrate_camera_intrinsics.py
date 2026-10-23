@@ -29,14 +29,13 @@ class CliError(Exception):
 
 def _core():
     try:
-        from openflight.camera.optical_calibration import (  # pylint: disable=import-outside-toplevel
-            calibrate_checkerboard,
-            validate_mode_profile,
-        )
+        # pylint: disable=import-outside-toplevel
+        from openflight.camera.checkerboard_calibration import calibrate_checkerboard
+        from openflight.camera.optical_calibration import validate_mode_profile
     except (ImportError, ModuleNotFoundError) as exc:
         raise CliError(
             "camera calibration support is unavailable; install the camera dependencies "
-            "and use a checkout containing optical_calibration.py"
+            "and use a checkout containing checkerboard_calibration.py"
         ) from exc
     return validate_mode_profile, calibrate_checkerboard
 

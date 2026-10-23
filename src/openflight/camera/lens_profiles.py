@@ -10,7 +10,7 @@ the shared rig file.
 lens. Another lens's *nominal* focal length is the rig's scaled by
 ``focal_mm / reference_focal_mm``, per mode by the binning ratio as before
 (``ball_pixels.mode_focal_px``). When a checkerboard calibration artifact for the
-lens exists (``optical_calibration.calibrate_checkerboard``, its
+lens exists (``checkerboard_calibration.calibrate_checkerboard``, its
 ``mode_profile.lens_id``), its fitted focal length replaces the nominal one and
 the lens reports ``intrinsics: calibrated``; otherwise ``nominal``, and every
 camera-derived number says so in its label.
