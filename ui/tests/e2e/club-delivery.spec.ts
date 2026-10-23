@@ -33,7 +33,13 @@ async function open(page: Page, club = '7-iron', hand = 'right') {
         face_to_path: -7.4,
         dynamic_loft: loft,
         attack_angle: -4.2,
-        spin_loft: loft + 4.2,
+        spin_loft:
+          (Math.acos(
+            Math.cos((-4.2 * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180) * Math.cos((-7.4 * Math.PI) / 180) +
+              Math.sin((-4.2 * Math.PI) / 180) * Math.sin((loft * Math.PI) / 180)
+          ) *
+            180) /
+          Math.PI,
       };
       const metrics = { ...latest.metrics };
       for (const [key, value] of Object.entries(values))
@@ -154,17 +160,33 @@ for (const viewport of [
             expect(await fit(page, view)).toEqual([]);
             if (view !== 'face') {
               const result = await card.locator('.club-projection').evaluate((svg) => {
-                const group = svg.querySelector('.club-projection__hand')!;
+                const group = svg.querySelector('.club-projection__hand') as SVGGElement;
                 const face = svg.querySelector('.club-projection__arrow--face') as SVGLineElement;
                 const path = svg.querySelector('.club-projection__arrow--path') as SVGLineElement;
+                const matrix = group.getScreenCTM()!;
+                const origin = new DOMPoint(0, 0).matrixTransform(matrix);
+                const target = new DOMPoint(100, 0).matrixTransform(matrix);
+                const sign = Math.sign(target.x - origin.x);
+                const angle = (line: SVGLineElement) => {
+                  const tip = new DOMPoint(line.x2.baseVal.value, line.y2.baseVal.value).matrixTransform(matrix);
+                  const x = tip.x - origin.x,
+                    y = tip.y - origin.y;
+                  return (
+                    (Math.atan2(svg.getAttribute('data-view') === 'top' ? sign * y : -y, sign * x) * 180) / Math.PI
+                  );
+                };
                 return {
-                  mirror: group.getAttribute('transform'),
-                  face: (Math.atan2(face.y2.baseVal.value, face.x2.baseVal.value) * 180) / Math.PI,
-                  path: (Math.atan2(path.y2.baseVal.value, path.x2.baseVal.value) * 180) / Math.PI,
+                  sign,
+                  face: angle(face),
+                  path: angle(path),
+                  displayedFace: Number(face.getAttribute('data-angle')),
+                  displayedPath: Number(path.getAttribute('data-angle')),
                 };
               });
-              expect(result.mirror).toBe(hand === 'left' ? 'scale(-1 1)' : null);
-              expect(result.path).toBeCloseTo(view === 'top' ? 4.23 : 4.2, 5);
+              expect(result.sign).toBe(hand === 'right' ? -1 : 1);
+              expect(result.path).toBeCloseTo(view === 'top' ? 4.23 : -4.2, 5);
+              expect(result.face).toBeCloseTo(result.displayedFace, 5);
+              expect(result.path).toBeCloseTo(result.displayedPath, 5);
               if (view === 'top') expect(result.face).toBeCloseTo(-3.17, 5);
             }
             if (OUT) await page.screenshot({ path: join(OUT, `${club}-${hand}-${view}-${size}.png`) });
