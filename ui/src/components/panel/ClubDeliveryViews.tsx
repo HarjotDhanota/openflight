@@ -3,9 +3,10 @@ import type { MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import type { Shot } from '../../types/shot';
+import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
 import { FaceImpactView } from './FaceImpactView';
-import { FACE_SHAPES, faceCategory, impactReading } from './faceImpact';
+import { FACE_SHAPES, faceCategory, shotHandedness } from './faceImpact';
 import {
   CLUB_PROFILES,
   VIEW_METRICS,
@@ -52,15 +53,16 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   const category = faceCategory(shot.club);
   const p = CLUB_PROFILES[category];
   const paths = clubProfilePaths(category);
-  const left = impactReading(shot).handedness === 'left';
+  const handed = useSystemStore((state) => state.handed);
+  const left = shotHandedness(shot, handed) === 'left';
   const top = view === 'top';
   const face = deliveryValue(shot, top ? 'face_angle' : 'dynamic_loft');
   const path = deliveryValue(shot, top ? 'club_path' : 'attack_angle');
-  const rotation = top ? (face ?? 0) : face === null ? 0 : p.loft - face;
+  const rotation = top ? (face ?? 0) * (left ? 1 : -1) : face === null ? 0 : p.loft - face;
   const [ballX, ballY] = direction(top ? 0 : (face ?? p.loft), 119);
   const head = top ? paths.top : paths.side;
-  const shaftX = !top && !p.depth ? paths.bx - p.progression : -p.progression;
-  const shaftY = top ? paths.heel - 8 : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
+  const shaftX = !p.depth ? paths.bx - p.progression : -p.progression;
+  const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
   const shaftEnd = top ? shaftY + 53 : -103;
   const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
   const extent = top ? 119 : 140;
@@ -137,9 +139,20 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           </marker>
         ))}
       </defs>
-      <g className="club-projection__hand" transform={left ? 'scale(-1 1)' : undefined}>
+      <g className="club-projection__hand" transform={left ? undefined : 'scale(-1 1)'}>
         <line className="club-projection__target" x1="-137" x2="146" y1="0" y2="0" />
         <g className="club-projection__head" transform={`rotate(${rotation})`}>
+          {top && !p.depth ? (
+            <path
+              className="club-projection__blade-shell"
+              d={FACE_SHAPES[category].face}
+              transform={paths.topShellTransform}
+              fill={`url(#${id}metal)`}
+              stroke={`url(#${id}metal)`}
+              strokeWidth="4.8"
+              strokeLinejoin="round"
+            />
+          ) : null}
           <path className="club-projection__outline" d={head} fill={`url(#${id}${p.depth ? 'crown' : 'metal'})`} />
           <path
             d={head}
@@ -157,7 +170,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           {top && !p.depth ? (
             <g clipPath={`url(#${id}face-clip)`}>
               {FACE_SHAPES[category].grooves.map((groove) => {
-                const x = (groove.y - p.faceHeight / 2) * Math.sin((p.loft * Math.PI) / 180);
+                const x = groove.y * Math.sin((p.loft * Math.PI) / 180);
                 return (
                   <line
                     key={groove.y}
@@ -172,6 +185,13 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
                 );
               })}
             </g>
+          ) : null}
+          {top && !p.depth ? (
+            <path
+              className="club-projection__neck"
+              d={`M ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} Z`}
+              fill={`url(#${id}neck)`}
+            />
           ) : null}
           {!top && !p.depth ? (
             <path
@@ -220,7 +240,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           ] as const
         ).map(([kind, value]) => {
           if (value === null) return null;
-          const [x, y] = direction(top ? -value : value);
+          const [x, y] = direction(top && left ? -value : value);
           return (
             <line
               key={kind}

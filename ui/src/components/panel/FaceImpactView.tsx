@@ -1,8 +1,17 @@
 import { useId, type ReactNode } from 'react';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot } from '../../types/shot';
+import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FACE_SHAPES, faceCategory, formatLength, GROOVE_WIDTH_MM, hoselParts, impactReading } from './faceImpact';
+import {
+  FACE_SHAPES,
+  faceCategory,
+  formatLength,
+  GROOVE_WIDTH_MM,
+  hoselParts,
+  impactReading,
+  shotHandedness,
+} from './faceImpact';
 import './FaceImpactView.css';
 import { faceDeliveryRotation } from './clubDelivery';
 
@@ -35,7 +44,8 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
     x: shape.hosel.ground[0] + (side * tubeWidth * Math.sin(lie)) / 2,
     y: shape.hosel.ground[1] + (side * tubeWidth * Math.cos(lie)) / 2,
   });
-  const reading = impactReading(shot);
+  const handed = useSystemStore((state) => state.handed);
+  const reading = { ...impactReading(shot), handedness: shotHandedness(shot, handed) };
   const left = reading.handedness === 'left';
   const toeSign = left ? 1 : -1;
   const { minX, maxX, minY, maxY } = shape.bounds;

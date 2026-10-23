@@ -56,20 +56,34 @@ before owner review. No additional web research was performed this round.
 
 ## Coordinates and shot values
 
-Right-handed top/heel-side views put the target to the right. Top view puts the
-toe above the hosel. A positive face angle/path points below the target line
-(right of target); positive loft/attack points above it. Arrows use their own
-unrounded metrics and a fixed 86 mm vector length. Face-to-path and spin loft
+Right-handed top/heel-side views put the target to the left; left-handed views
+put it to the right. In the top view the golfer and shaft are below the toe.
+Positive face angle/path means right of target for either hand: above the line
+on the RH drawing, below it on the LH drawing. Positive loft/attack is upward
+for either hand. Arrows use their own unrounded metrics and a fixed 86 mm vector
+length. Face-to-path and spin loft
 are displayed directly from the shot, never recomputed from rounded numbers.
-Left-handed mode mirrors the entire illustration horizontally, including the
-ball, target, head and arrows; labels and displayed signed values remain readable.
+The head, ball and target mirror horizontally between hands. Top-view signed
+rotations also reverse before mirroring, so the same physical azimuth retains
+its sign. Labels and displayed signed values never flip. Shot camera metadata
+supplies handedness when present; otherwise all three drawings use the current
+kiosk hand, defaulting to RH only when neither is known. Historical shots without
+hand metadata therefore follow the current kiosk setting.
 
-Top heads rotate by face angle around the face-centre station. Side heads rotate
-by static loft minus dynamic loft around the impact centre. The ball is 42.67 mm
+Blade top faces and score lines project the existing fair face contour by
+`(x, y) -> (y sin(static loft), x)` about its centre. The metal shell adds the
+2.4 mm edge band and a topline that recedes by its thickness times cosine of loft;
+the heel neck is drawn separately from the planar blade. This replaces the first
+round's rectangular blade outlines without changing face-on geometry or wood
+head shapes. Top heads rotate by signed face angle so their normal follows the
+face arrow. Side heads rotate by static loft minus dynamic loft around the
+impact centre. The ball is 42.67 mm
 in diameter and sits beyond the arrows on the target side; its position is
 illustrative, not a measured ball location. The side face normal and loft arrow
-share the same angle. The face-on assembly rotates about its unchanged centre
-by the difference between its static hosel projection and
+share the same angle. Spin loft is the backend's 3D face-normal/path separation,
+not generally dynamic loft minus attack angle. Face-on still looks from the
+target: RH toe left, LH toe right. The face-on assembly rotates about its
+unchanged centre by the difference between its static hosel projection and
 `atan2(sin(dynamic lie) × cos(loft), cos(dynamic lie))`, using dynamic loft
 when available and otherwise the category's static loft.
 

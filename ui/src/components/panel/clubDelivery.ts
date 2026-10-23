@@ -115,6 +115,13 @@ export function faceDeliveryRotation(shot: Shot, category: FaceCategory): number
 const n = (value: number) => Number(value.toFixed(3));
 const point = (x: number, y: number) => `${n(x)} ${n(y)}`;
 
+// The source paths use absolute M/L/C pairs; an affine projection preserves their fair curves.
+function bladePlan(path: string, scale: number, offset = 0): string {
+  return path.replace(/(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g, (_, x: string, y: string) =>
+    point(Number(y) * scale + offset, Number(x))
+  );
+}
+
 export function clubProfilePaths(category: FaceCategory) {
   const p = CLUB_PROFILES[category];
   const wood = p.depth > 0;
@@ -123,12 +130,13 @@ export function clubProfilePaths(category: FaceCategory) {
   const radians = (p.loft * Math.PI) / 180;
   const projection = p.faceHeight * Math.sin(radians);
   const depth = wood ? p.depth : projection + p.topline;
+  const back = p.topline * Math.cos(radians);
   const top = wood
     ? `M 0 0 C 0 ${-toe * 0.65} -5 ${-toe} ${-depth * 0.36} ${-toe} C ${-depth * 0.74} ${-toe} ${-depth} ${-toe * 0.66} ${-depth} 0 C ${-depth} ${heel * 0.72} ${-depth * 0.65} ${heel} ${-depth * 0.34} ${heel} C -6 ${heel} 0 ${heel * 0.56} 0 0 Z`
-    : `M 0 ${-toe + 5} Q 0 ${-toe} -5 ${-toe} L ${-depth + 5} ${-toe} Q ${-depth} ${-toe} ${-depth} ${-toe + 5} L ${-depth} ${heel - 10} Q ${-depth} ${heel} ${-depth + 10} ${heel} L -6 ${heel} Q 0 ${heel} 0 ${heel - 6} Z`;
+    : bladePlan(FACE_SHAPES[category].face, Math.sin(radians) + back / p.faceHeight, -back / 2);
   const topFace = wood
     ? `M 0 0 C 0 ${-toe * 0.55} -3 ${-toe * 0.8} -8 ${-toe * 0.88} L -11 ${-toe * 0.85} C -6 ${-toe * 0.5} -6 ${heel * 0.48} -12 ${heel * 0.84} L -8 ${heel * 0.88} C -3 ${heel * 0.8} 0 ${heel * 0.55} 0 0 Z`
-    : `M -1 ${-toe + 6} Q -1 ${-toe + 1} -6 ${-toe + 1} L ${-projection} ${-toe + 1} L ${-projection} ${heel - 5} L -6 ${heel - 1} Q -1 ${heel - 1} -1 ${heel - 6} Z`;
+    : bladePlan(FACE_SHAPES[category].face, Math.sin(radians));
   const [tx, ty] = [(-Math.sin(radians) * p.faceHeight) / 2, (-Math.cos(radians) * p.faceHeight) / 2];
   const [bx, by] = [-tx, -ty];
   const crown = -p.height + p.faceHeight / 2;
@@ -136,5 +144,18 @@ export function clubProfilePaths(category: FaceCategory) {
   const side = wood
     ? `M ${point(tx, ty)} C ${point(tx - 5, crown)} ${point(-depth * 0.2, crown)} ${point(-depth * 0.4, crown + 3)} C ${point(-depth * 0.7, crown + 7)} ${point(-depth, 0)} ${point(-depth, by - 5)} C ${point(-depth, soleY)} ${point(-depth * 0.3, soleY)} ${point(bx - 4, by + 2)} Q ${point(bx + 1, by + 1)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`
     : `M ${point(tx, ty)} Q ${point(tx - p.topline / 2, ty - 2)} ${point(tx - p.topline, ty)} C ${point(tx - p.topline - 2, ty + 10)} ${point(bx - p.sole - 6, by - 10)} ${point(bx - p.sole, soleY - 2)} Q ${point(bx - p.sole / 2, soleY + 1)} ${point(bx - 2, by + 1)} Q ${point(bx + 1, by)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`;
-  return { top, topFace, side, sideFace: `M ${point(tx, ty)} L ${point(bx, by)}`, depth, heel, tx, ty, bx, by };
+  const topShellTransform = `matrix(0 1 ${Math.sin(radians) + back / p.faceHeight} 0 ${-back / 2} 0)`;
+  return {
+    top,
+    topFace,
+    topShellTransform,
+    side,
+    sideFace: `M ${point(tx, ty)} L ${point(bx, by)}`,
+    depth,
+    heel,
+    tx,
+    ty,
+    bx,
+    by,
+  };
 }

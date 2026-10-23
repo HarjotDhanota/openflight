@@ -755,6 +755,11 @@ function axis(record: ShotMetric | undefined): [number | null, number | null, st
   return [record.value, sigma, null];
 }
 
+export function shotHandedness(shot: Shot, fallback: 'RH' | 'LH' | null = null): 'right' | 'left' {
+  const hand = shot.impact_location?.handedness;
+  return hand === 'right' || hand === 'left' ? hand : fallback === 'LH' ? 'left' : 'right';
+}
+
 export function impactReading(shot: Shot): ImpactReading {
   const [offset, offsetSigma, offsetReason] = axis(shot.metrics?.impact_offset ?? undefined);
   const [height, heightSigma, heightReason] = axis(shot.metrics?.impact_height ?? undefined);
@@ -765,7 +770,7 @@ export function impactReading(shot: Shot): ImpactReading {
     height,
     heightSigma,
     heightReason,
-    handedness: shot.impact_location?.handedness === 'left' ? 'left' : 'right',
+    handedness: shotHandedness(shot),
   };
 }
 
