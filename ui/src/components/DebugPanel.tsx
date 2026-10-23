@@ -369,8 +369,8 @@ export function DebugPanel({
               <div className="debug-panel__section">
                 <h4>Radar Recovery</h4>
                 <p className="debug-panel__hint">
-                  If sound triggering stops responding, reapply the OPS rolling-buffer
-                  settings without restarting OpenFlight. Do not use during a shot.
+                  If sound triggering stops responding, reapply the OPS rolling-buffer settings without restarting
+                  OpenFlight. Do not use during a shot.
                 </p>
                 <button type="button" disabled={recoveryBusy} onClick={requestRecovery}>
                   {recoveryBusy ? 'Reinitialising radar…' : 'Reinitialise Radar'}
