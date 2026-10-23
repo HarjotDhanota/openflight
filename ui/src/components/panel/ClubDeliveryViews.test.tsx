@@ -11,6 +11,9 @@ import { FACE_SHAPES, USGA, type FaceCategory } from './faceImpact';
 
 const clubs = { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid', iron: '7-iron', wedge: 'sw' };
 const categories = Object.keys(clubs) as FaceCategory[];
+const clubHands = categories.flatMap((category) =>
+  (['right', 'left'] as const).map((hand) => [category, hand] as const)
+);
 function metric(value: number | null, status: ShotMetric['status'] = 'measured'): ShotMetric {
   return {
     value,
@@ -121,8 +124,8 @@ describe('club delivery drawings', () => {
     }
   );
 
-  it.each(['right', 'left'] as const)('%s top arrows preserve target-relative right-positive signs', (hand) => {
-    const s = shot('iron', hand);
+  it.each(clubHands)('%s %s top arrows preserve target-relative right-positive signs', (category, hand) => {
+    const s = shot(category, hand);
     for (const degrees of [-12.37, 0, 12.37]) {
       s.metrics!.face_angle = metric(degrees);
       s.metrics!.club_path = metric(degrees);
@@ -136,9 +139,9 @@ describe('club delivery drawings', () => {
     }
   });
 
-  it.each(['right', 'left'] as const)('%s side arrows keep up positive and down negative', (hand) => {
+  it.each(clubHands)('%s %s side arrows keep up positive and down negative', (category, hand) => {
     for (const degrees of [-6.25, 0, 6.25]) {
-      const s = shot('iron', hand);
+      const s = shot(category, hand);
       s.metrics!.dynamic_loft = metric(degrees);
       s.metrics!.attack_angle = metric(degrees);
       const element = svg(s, 'side');
@@ -256,11 +259,11 @@ describe('club delivery drawings', () => {
     expect(element.querySelector('.club-projection__head')!.getAttribute('transform')).toBe('rotate(0)');
   });
 
-  it.each(categories)(
-    'tilts the %s face assembly by projected dynamic lie without modifying pinned geometry',
-    (category) => {
+  it.each(clubHands)(
+    'tilts the %s %s face assembly by projected dynamic lie without modifying pinned geometry',
+    (category, hand) => {
       const before = JSON.stringify(FACE_SHAPES[category]);
-      const s = shot(category);
+      const s = shot(category, hand);
       const rotation = faceDeliveryRotation(s, category);
       const projected = (Math.atan(Math.tan((65 * Math.PI) / 180) * Math.cos((33.34 * Math.PI) / 180)) * 180) / Math.PI;
       expect(FACE_SHAPES[category].hosel.lieDeg - rotation).toBeCloseTo(projected, 9);
@@ -268,7 +271,9 @@ describe('club delivery drawings', () => {
         renderToString(<ClubDeliveryViews shot={s} sessionShots={[s]} />),
         'text/html'
       );
-      expect(doc.querySelector('.face-impact__delivery')!.getAttribute('transform')).toBe(`rotate(${rotation})`);
+      expect(doc.querySelector('.face-impact__delivery')!.getAttribute('transform')).toBe(
+        `rotate(${rotation * (hand === 'left' ? -1 : 1)})`
+      );
       expect(doc.querySelector('.face-impact__face')!.getAttribute('d')).toBe(FACE_SHAPES[category].face);
       expect(JSON.stringify(FACE_SHAPES[category])).toBe(before);
       s.metrics!.dynamic_loft = metric(null);
@@ -279,8 +284,8 @@ describe('club delivery drawings', () => {
     }
   );
 
-  it.each(['right', 'left'] as const)('shows all nine signed values and original provenance for %s', (hand) => {
-    const s = shot('wedge', hand);
+  it.each(clubHands)('shows all nine signed values and original provenance for %s %s', (category, hand) => {
+    const s = shot(category, hand);
     const doc = new DOMParser().parseFromString(
       renderToString(<ClubDeliveryViews shot={s} sessionShots={[s]} />),
       'text/html'

@@ -52,7 +52,7 @@ Hosel-axis progression is 6 mm (assumed hosel radius) minus offset for blades.
 *No published wedge topline value is present. The iron aggregate is a temporary
 visual proxy, not a claimed wedge population measurement. Back profiles and
 small edge rounding are illustrative. Claude should verify these sparse inputs
-before owner review. No additional web research was performed this round.
+before owner review. These aggregates use the existing local research.
 
 ## Coordinates and shot values
 
@@ -96,3 +96,68 @@ badge. The original detailed metric cells remain below the drawings.
 Validation is through unit tests and mock browser captures, not hardware or
 human validation. Review screenshots live outside the repository in the shared
 `research/club-models/codex-rounds/` folder.
+
+## Sign and mathematics audit (23 October 2026)
+
+The same physical reading keeps the same number for either handedness. Changing
+the viewing orientation is not the same operation as reflecting a physical shot.
+The Club header now uses the displayed shot's club and resolved hand, matching
+the drawings even if the kiosk selection has since changed.
+
+| Reading | Positive direction or definition | Handedness effect on the number |
+|---|---|---|
+| Impact height | Above the face centre, along the face | None |
+| Impact offset | Toward the toe, along the face | None |
+| Dynamic lie | Shaft angle above the horizontal | None |
+| Face angle, F | Right of the target | None |
+| Club path, P | Right of the target | None |
+| Face to path | F minus P, using unrounded inputs | None |
+| Dynamic loft, L | Face normal tilted upward | None |
+| Attack angle, A | Club velocity tilted upward | None |
+| Spin loft, S | Unsigned 3D separation of face normal and velocity | None |
+
+The official definitions confirm target-right-positive
+[face angle](https://www.trackman.com/blog/what-is-face-angle),
+[club path](https://www.trackman.com/blog/club-path), and
+[face to path](https://www.trackman.com/blog/face-to-path) for both hands.
+An open face therefore has positive face angle for RH and negative for LH.
+An in-to-out path similarly has positive club path for RH and negative for LH.
+These interpretation words do not introduce an extra sign flip in the data.
+
+With degrees converted to radians for trigonometry, the backend uses:
+
+```text
+face normal n = (cos L cos F, cos L sin F, sin L)
+club direction d = (cos A cos P, cos A sin P, sin A)
+cos S = n dot d = cos L cos A cos(F - P) + sin L sin A
+```
+
+The implementation computes S with the stable equivalent
+`2 asin(min(1, length(n - d) / 2))`, yielding 0 through 180 degrees.
+[Spin loft is a 3D angle](https://www.trackman.com/blog/spin-loft):
+`abs(L - A)` is exact only when the horizontal directions agree in the usual
+golf angle range. Reflecting a physical shot negates F, P and face-to-path,
+while preserving L, A and spin loft. Merely selecting the other handedness does
+not alter any supplied metric. A new backend regression independently checks
+252 combinations against `atan2(length(n cross d), n dot d)` and their mirrors.
+
+For the owner's LH 3-wood example, the unrounded fixture has F = -3.17 degrees,
+P = +4.23 degrees, L = 16.5 degrees and A = -4.2 degrees. It correctly displays
+face angle -3.2, path +4.2, face-to-path -7.4 and spin loft 22.0 degrees.
+The orange top-view arrow above the rightward target line represents target-left,
+so its negative sign is correct. This is an open face for a left-handed golfer.
+
+Face-on impact dots are tested in the rotated face's local axes, not against
+screen horizontal/vertical. Browser checks recover the signed millimetres and
+projected shaft angle from actual screen transforms for every club and hand.
+The SVG viewport now encloses the rotated assembly; additional 45/75-degree
+lie cases catch clipping that the old fixed viewport allowed. The paths, centre,
+rim, grooves and physical scale relative to the impact dot are unchanged.
+
+Dynamic lie remains a pending backend measurement; browser fixtures supply it
+to exercise the renderer. The real unavailable reading stays a dash. Its visual
+projection follows the schematic rule above, not a full shaft-lean reconstruction.
+The top blade uses static category loft, while the side uses dynamic loft: these
+are metric illustrations rather than three camera projections of a fitted 3D
+club pose. This audit verifies signs, arithmetic and rendering against supplied
+readings; it does not validate sensor calibration or the provisional populations.
