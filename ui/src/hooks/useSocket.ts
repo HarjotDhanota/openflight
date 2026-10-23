@@ -20,5 +20,5 @@ export function useSocket() {
     }
   }, []);
 
-    return { shutdown, sleepScreen };
+  return { shutdown, sleepScreen };
 }
