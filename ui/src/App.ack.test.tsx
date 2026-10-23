@@ -24,7 +24,7 @@ vi.mock('./services/socketService', () => {
     {},
     {
       get: (_target, key) => {
-        if (key === 'emitTrace') return emitTrace;
+        if (key === 'emit') return emitTrace;
         if (key === 'onSessionCleared') return () => () => {};
         if (!others.has(key)) others.set(key, vi.fn());
         return others.get(key);
@@ -51,7 +51,7 @@ vi.hoisted(() => {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
 });
 
-const emitTrace = vi.mocked(socketService.emitTrace);
+const emitTrace = vi.mocked(socketService.emit);
 let container: HTMLDivElement;
 let root: Root;
 

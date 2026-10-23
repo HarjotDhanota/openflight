@@ -4,7 +4,7 @@ import { computeSwingSpeedStats, filterShotsByProfile } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
 import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
-import { usePostRenderAck } from '../../hooks/usePostRenderAck';
+import { uiExtensions } from '../../extensions';
 import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric } from './liveMetrics';
@@ -25,11 +25,8 @@ interface LivePanelProps {
   isNewShot?: boolean;
   /** Pinned header control, e.g. Change club. */
   headerAction?: ReactNode;
-  /**
-   * Nothing covers this result (no picker, replay, shutdown, menu or dialog), so its
-   * traced revision may be acknowledged after its frame (stage 1b Pi trace).
-   */
-  acknowledgeable?: boolean;
+  /** Nothing covers this result (no picker, replay, shutdown, menu or dialog). */
+  resultVisible?: boolean;
   /** The kiosk's target line (GET /api/target-line); null draws nothing. */
   targetLine?: TargetLine | null;
 }
@@ -49,14 +46,17 @@ export function LivePanel({
   onSelectMetric,
   isNewShot = false,
   headerAction,
-  acknowledgeable = false,
+  resultVisible = false,
   targetLine = null,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const profileShots = useMemo(() => filterShotsByProfile(shots, profileId), [shots, profileId]);
   const displayedShot = profileShots[profileShots.length - 1] ?? null;
-  usePostRenderAck(displayedShot, acknowledgeable);
+  // the same position in both trees below, so an extension's state survives an empty panel
+  const extensionResults = uiExtensions.map((extension, index) =>
+    extension.LiveResult ? <extension.LiveResult key={index} shot={displayedShot} visible={resultVisible} /> : null
+  );
   const isProfileNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
 
   const swingStats = useMemo(
@@ -97,6 +97,7 @@ export function LivePanel({
   if (!selected) {
     return (
       <div className="panel">
+        {extensionResults}
         {header}
         {target}
         <div className="panel__body panel__body--empty live-panel__empty">
@@ -109,6 +110,7 @@ export function LivePanel({
 
   return (
     <div className="panel">
+      {extensionResults}
       {header}
       {target}
       <div className="panel__body live-panel__body">
