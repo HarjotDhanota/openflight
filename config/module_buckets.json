@@ -1228,6 +1228,7 @@
   "ui/src/utils/validationCsv.ts": "PRODUCT",
   "ui/tests/e2e/app.spec.ts": "PRODUCT",
   "ui/tests/e2e/camera-replay.spec.ts": "PRODUCT",
+  "ui/tests/e2e/club-delivery.spec.ts": "PRODUCT",
   "ui/tests/e2e/face-impact.spec.ts": "PRODUCT",
   "ui/tests/e2e/fixtures/camera-replay.html": "PRODUCT",
   "ui/tests/e2e/fixtures/camera-replay.tsx": "PRODUCT",

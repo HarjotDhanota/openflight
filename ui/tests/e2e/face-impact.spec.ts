@@ -148,7 +148,10 @@ for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
       const view = page.locator('.face-impact');
       await expect(view).toBeVisible();
       await expect(view).toHaveAttribute('data-face', 'iron');
-      await expect(view.locator('.label-badge--experimental')).toBeVisible();
+      await expect(view.locator('.face-impact__title .label-badge--experimental')).toBeVisible();
+      for (const metric of ['impact_height', 'impact_offset']) {
+        await expect(view.locator(`[data-view-metric="${metric}"] .label-badge--experimental`)).toBeVisible();
+      }
       await expect(view.locator('.face-impact__dot')).toHaveCount(1);
       await expect(view.locator('.face-impact__ellipse')).toHaveCount(1);
       await expect(view.locator('.face-impact__earlier')).toHaveCount(2);
