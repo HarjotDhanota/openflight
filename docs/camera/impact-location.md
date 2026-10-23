@@ -101,6 +101,24 @@ behind it projects higher, by about its width × sin(loft). The face's own botto
 1.7–4.5 mm above it on the drawings (the leading edge's radius seen face-on). The table
 gives both; the backend uses the first.
 
+**Marked face photos** (the test bench's strike truth) see the face's bottom edge, its top
+line and the lowest score line, not the leading edge or the face perimeter.
+`face_photo_reference(club)` gives what carries them onto this rule, measured on the same
+drawings and checked by the same vitest file:
+
+| Category | Band: H − H above the face's bottom edge (mm) | Centre toe-ward of the lowest line's middle (mm) | Lowest line: length / above the face's bottom edge (mm) |
+|---|---|---|---|
+| Driver | 4.3 ± 2.2 | +2.6 ± 4.0 | 53.4 / 10.9 |
+| Fairway | 2.1 ± 1.1 | −4.3 ± 3.5 | 44.6 / 7.1 |
+| Hybrid | 3.5 ± 1.7 | −4.5 ± 3.5 | 35.0 / 2.3 |
+| Iron | 4.5 ± 2.3 | 0 (the lowest line is the longest) | 52.6 / 2.6 |
+| Wedge | 1.7 ± 0.8 | 0 (the lowest line is the longest) | 52.5 / 3.9 |
+
+A photo's centre height above the leading edge is its own half-distance from the face's
+bottom edge to the top line plus the band. The lowest line is its whole row, end to end
+across any gap (the driver's two blocks). All are `reference_geometry_*`; the sigmas are
+brackets (half the band; the category's C and H sigmas; a quarter of a line's length).
+
 ## Heel to toe
 
 The ball centre is projected on the interpolated heel-to-toe line and measured from the

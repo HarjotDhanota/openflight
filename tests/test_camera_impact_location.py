@@ -352,6 +352,68 @@ def test_the_reference_file_is_the_one_source_of_every_category_face_centre():
 
 
 @pytest.mark.parametrize("category", sorted(CATEGORY_CLUBS))
+def test_a_face_photo_s_bottom_edge_sits_one_reference_band_above_the_leading_edge(category):
+    entry = REFERENCE["categories"][category]
+    band = entry["centre_above_leading_edge_mm"] - entry["centre_above_face_bottom_mm"]
+
+    photo = il.face_photo_reference(CATEGORY_CLUBS[category])
+
+    assert photo.category == category
+    assert 1.5 < band < 5.0
+    assert photo.leading_edge_band == il.Labelled(
+        pytest.approx(band), pytest.approx(band * il.PHOTO_BAND_SIGMA_FRACTION), il.REFERENCE_BAND
+    )
+
+
+@pytest.mark.parametrize("category", ["iron", "wedge"])
+def test_an_iron_photo_s_lowest_full_length_line_is_the_rule_s_own_line(category):
+    entry = REFERENCE["categories"][category]
+
+    photo = il.face_photo_reference(CATEGORY_CLUBS[category])
+
+    assert entry["lowest_line_is_longest"] is True
+    assert photo.centre_toeward_of_lowest_line_middle == il.Labelled(
+        0.0, 0.0, il.REFERENCE_FACE_CENTRE
+    )
+
+
+@pytest.mark.parametrize("category", ["driver", "fairway", "hybrid"])
+def test_a_wood_photo_s_lowest_line_reaches_the_perimeter_centre_by_reference_geometry(category):
+    entry = REFERENCE["categories"][category]
+
+    photo = il.face_photo_reference(CATEGORY_CLUBS[category])
+
+    assert entry["lowest_line_is_longest"] is False
+    assert photo.centre_toeward_of_lowest_line_middle == il.Labelled(
+        entry["centre_toeward_of_lowest_line_middle_mm"],
+        entry["centre_from_toe_sigma_mm"],
+        il.REFERENCE_FACE_CENTRE,
+    )
+    length = entry["lowest_line_length_mm"]
+    assert photo.lowest_line_length == il.Labelled(
+        length, length * il.PHOTO_LINE_LENGTH_SIGMA_FRACTION, il.REFERENCE_FACE_CENTRE
+    )
+    assert photo.lowest_line_above_face_bottom == il.Labelled(
+        entry["lowest_line_above_face_bottom_mm"],
+        entry["centre_above_leading_edge_sigma_mm"],
+        il.REFERENCE_FACE_CENTRE,
+    )
+
+
+def test_an_unknown_club_s_photo_reference_is_the_iron_s_widened():
+    iron = il.face_photo_reference("7-iron")
+
+    unknown = il.face_photo_reference("unknown")
+
+    assert unknown.category is None
+    for name in ("leading_edge_band", "lowest_line_length", "lowest_line_above_face_bottom"):
+        known, widened = getattr(iron, name), getattr(unknown, name)
+        assert widened.value == known.value
+        assert widened.sigma == pytest.approx(known.sigma * il.UNKNOWN_CLUB_SIGMA_SCALE)
+        assert widened.source == f"{known.source}_unknown_club"
+
+
+@pytest.mark.parametrize("category", sorted(CATEGORY_CLUBS))
 def test_each_category_reads_heel_toe_from_the_toe_and_its_reference_centre(category):
     entry = REFERENCE["categories"][category]
     priors = il.FaceInputs.priors(CATEGORY_CLUBS[category])
