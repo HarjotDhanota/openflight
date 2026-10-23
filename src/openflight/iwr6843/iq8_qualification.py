@@ -22,7 +22,7 @@ from openflight.iwr6843.dump import (
 )
 from openflight.iwr6843.replay import build_replay_calibration
 from openflight.iwr6843.runtime import process_raw_capture
-from openflight.runtime_provenance import source_content_manifest_sha256
+from openflight.runtime_provenance_export import source_content_manifest_sha256
 
 logger = logging.getLogger(__name__)
 

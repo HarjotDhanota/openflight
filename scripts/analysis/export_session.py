@@ -34,7 +34,7 @@ from pathlib import Path
 from openflight.camera import attempt_ledger
 from openflight.capture_facts import trigger_controls
 from openflight.rig_geometry import geometry_fingerprint
-from openflight.runtime_provenance import export_runtime_provenance
+from openflight.runtime_provenance_export import export_runtime_provenance
 from openflight.shot_updates import read_session_jsonl
 
 CONTRACT_VERSION = 1

@@ -17,10 +17,8 @@ from openflight.raw_radar_replay import (
     benchmark_candidate_from_raw_replays,
     locate_recorded_capture,
 )
-from openflight.runtime_provenance import (
-    capture_runtime_provenance,
-    source_content_manifest_sha256,
-)
+from openflight.runtime_provenance import capture_runtime_provenance
+from openflight.runtime_provenance_export import source_content_manifest_sha256
 from scripts.analysis import replay_raw_fusion as cli
 
 PI_RUN = "/home/pi/openflight_sessions/tester_pilot/t1/arm5/paired/run-01"

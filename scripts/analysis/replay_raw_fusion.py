@@ -40,7 +40,7 @@ from openflight.raw_radar_replay import (
     session_shot_events,
 )
 from openflight.rolling_buffer.processor import RollingBufferProcessor
-from openflight.runtime_provenance import source_content_manifest_sha256
+from openflight.runtime_provenance_export import source_content_manifest_sha256
 
 try:
     from scripts.analysis.replay_camera_fusion import replay_frozen_shot
