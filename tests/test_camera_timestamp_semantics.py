@@ -18,13 +18,12 @@ from openflight.camera import timestamp_semantics as ts
 from openflight.camera.timing_validation import cadence_summary
 
 ROOT = Path(__file__).resolve().parents[1]
-BENCH = Path(
-    os.environ.get(
-        "OPENFLIGHT_BENCH_ROOT",
-        Path.home() / "Desktop/Coding/Openflight Test Bench/openflight-test-bench",
-    )
+BENCH_ROOT = os.environ.get("OPENFLIGHT_BENCH_ROOT")
+TEST7 = (
+    Path(BENCH_ROOT) / "sessions/Outdoors-test-7/arm5/paired/run-01/arm5/camera"
+    if BENCH_ROOT
+    else None
 )
-TEST7 = BENCH / "sessions/Outdoors-test-7/arm5/paired/run-01/arm5/camera"
 PERIOD_120 = 8_333_333
 EXPOSURES = (100, 300, 1000, 3000)
 
@@ -209,7 +208,10 @@ def test_one_exposure_cannot_decide(tmp_path):
     assert raw == {"unresolved_single_exposure"}
 
 
-@pytest.mark.skipif(not TEST7.exists(), reason="bench test-7 clips not present on this machine")
+@pytest.mark.skipif(
+    TEST7 is None or not TEST7.exists(),
+    reason="bench test-7 clips not here: set OPENFLIGHT_BENCH_ROOT to the test-bench checkout",
+)
 def test_historical_clips_have_one_exposure_and_cannot_answer():
     dirs = sorted(p for p in TEST7.iterdir() if (p / "frames.npz").exists())[:4]
     result = ts.analyze_clips(dirs)
