@@ -67,6 +67,23 @@ function render(view: 'club' | 'flight', shot: Shot | null = everyMetricShot()) 
 }
 
 describe('MetricGroupPanel', () => {
+  it.each(['right', 'left'] as const)('labels the displayed club shot with its recorded %s hand', (hand) => {
+    const shot = everyMetricShot();
+    shot.impact_location = { handedness: hand };
+    const html = renderToString(
+      <MetricGroupPanel
+        view="club"
+        shot={shot}
+        profileName="Golfer"
+        clubLabel={`Driver · ${hand === 'left' ? 'Right' : 'Left'}-handed`}
+        unitSystem="imperial"
+      />
+    );
+    expect(html.match(/class="panel-header__club">([^<]*)/)?.[1]).toBe(
+      `7 Iron · ${hand === 'left' ? 'Left' : 'Right'}-handed`
+    );
+  });
+
   it('puts every metric in the catalog on the Club or the Flight panel, once', () => {
     const shown = [...PANEL_GROUPS.club, ...PANEL_GROUPS.flight];
     const groups = new Set(METRIC_CATALOG.map((spec) => spec.group));
