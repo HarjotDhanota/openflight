@@ -33,11 +33,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from openflight.iwr6843.driver import (
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.perf_diagnostics import (
     BENCH_REPLY_WINDOW_S,
     PERF_REPLY_WINDOW_S,
-    IWR6843DumpRecoveryError,
-    IWR6843Radar,
     parse_bench,
     parse_perf_stats,
 )
