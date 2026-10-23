@@ -91,6 +91,41 @@ function fairness(d: string): Fairness {
   return { inflections, kinks, minRadius: 1 / Math.max(...curvatures), maxJump };
 }
 
+/** Points along the path, `per` to a segment. */
+function samples(d: string, per = 24): Point[] {
+  return beziers(d).flatMap(([p0, c1, c2, p3]) =>
+    Array.from({ length: per }, (_, k): Point => {
+      const t = k / per;
+      const [a, b, c, e] = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3];
+      return [a * p0[0] + b * c1[0] + c * c2[0] + e * p3[0], a * p0[1] + b * c1[1] + c * c2[1] + e * p3[1]];
+    })
+  );
+}
+
+/** Distance from p to the closed polyline. */
+function distance(p: Point, polyline: Point[]): number {
+  let best = Infinity;
+  polyline.forEach((a, i) => {
+    const b = polyline[(i + 1) % polyline.length];
+    const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+    const t = Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+    best = Math.min(best, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+  });
+  return best;
+}
+
+/* The head rims the face with a band of one width all the way round, as on a real club, except at
+ * the heel end where the band runs into the neck: these polar angles about the face centre (deg,
+ * 0 heel-ward, 90 up; the drawings are centred on it). */
+const NECK_DEG: Record<FaceCategory, [number, number]> = {
+  driver: [-8, 45],
+  fairway: [-2, 43],
+  hybrid: [-6, 39],
+  iron: [-32, 8],
+  wedge: [-42, 12],
+};
+const MAX_BAND_RATIO = 1.25;
+
 const CATEGORIES = Object.keys(FACE_SHAPES) as FaceCategory[];
 const BLADES: readonly FaceCategory[] = ['iron', 'wedge'];
 
@@ -103,6 +138,19 @@ describe('fair outlines', () => {
       expect(fair.maxJump).toBeLessThanOrEqual(MAX_CURVATURE_JUMP);
     }
     expect(fairness(FACE_SHAPES[category].head).kinks).toBe(0);
+  });
+
+  it.each(CATEGORIES)('rims the %s face with an even band, outside the neck', (category) => {
+    const head = samples(FACE_SHAPES[category].head);
+    const [from, to] = NECK_DEG[category];
+    const band = samples(FACE_SHAPES[category].face)
+      .filter(([x, y]) => {
+        const angle = (Math.atan2(-y, x) * 180) / Math.PI;
+        return angle < from || angle > to;
+      })
+      .map((point) => distance(point, head));
+    expect(band.length).toBeGreaterThan(100);
+    expect(Math.max(...band) / Math.min(...band)).toBeLessThanOrEqual(MAX_BAND_RATIO);
   });
 
   it.each(CATEGORIES)('draws the %s face convex, with corners only where designed', (category) => {

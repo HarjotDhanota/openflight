@@ -348,9 +348,8 @@ The Club tab opens with a face-impact view:
 
     The woods' face is the mean of the face perimeter's radius from the template centre
     every 15° (its width stretched to the mean face width, which the 15° sampling cuts
-    at the high toe and heel corners); the head is the mean crown and sole height every
-    10 mm, with a toe nose through the mean toe extreme. The irons' outline is the mean
-    top and bottom contour every 4 mm.
+    at the high toe and heel corners). The irons' head is the mean top and bottom contour
+    every 4 mm, its top lifted (see "Even rim").
   - **7-iron sub-types** (for reference; the drawing is the whole population):
 
     | Sub-type | n | Blade length | C | H | centre above the face bottom | line length | toe margin |
@@ -359,17 +358,38 @@ The Club tab opens with a face-impact view:
     | Players cavity/distance | 23 | 78.0 | 44.0 ± 1.4 | 24.9 ± 1.9 | 22.4 ± 1.4 | 53.2 ± 1.6 | 17.4 ± 0.9 |
     | Game improvement | 15 | 84.0 | 45.8 ± 1.8 | 24.4 ± 1.9 | 22.4 ± 1.4 | 55.3 ± 2.8 | 18.1 ± 1.1 |
 
+  - **Even rim.** As on a real club, the head rims the face with a band of one width all
+    the way round, the category's leading-edge band (driver 4.8, 3-wood 2.9, hybrid 3.3,
+    iron and wedge 2.4 mm), until it runs into the neck at the heel. A wood's head is its
+    face offset outward; the hosel's heel-side edge runs straight down until it is
+    tangent to the band, and at the top heel the band rises through the crotch into the
+    hosel. A blade's face is its head inset by the band, cut by a straight heel edge; the
+    head's top is lifted 2 mm (fading out toward the toe) so the face keeps its mean
+    height at C. Outside the neck the band varies by at most 1.135 : 1 (the iron's top-heel
+    corner) and 1.02–1.06 : 1 elsewhere; `faceFairness.test.ts` fails above 1.25 : 1.
+  - **Drawn and reference C.** The even rim brings a wood's toe in, so its drawn C is
+    shorter than the population's: the reference file keeps the research value, because
+    the backend measures from the real club's toe and the drawing is illustrative.
+
+    | | Driver | 3-wood | Hybrid | 7-iron | Wedge |
+    | --- | --- | --- | --- | --- | --- |
+    | reference C (research) | 66.4 | 56.1 | 52.3 | 44.2 | 45.0 |
+    | drawn C | 61.6 | 48.3 | 45.6 | 44.2 | 45.0 |
+
+    H, the band, the lowest line and the line lengths match the reference on every
+    drawing (`faceCentreReference.test.ts`, within 0.1 mm).
   - **Clean outlines.** Each outline is a few fair curves: C2 cubic splines (chord-length
-    parameter, so curvature is continuous) between designed breaks only, a straight iron
-    top line, the joins into the tube along its edges, and the blades' heel corners. The
-    curves were fitted to the mean contours with a penalty on curvature change and kept
-    convex except at the crotch. `faceFairness.test.ts` samples curvature along every
+    parameter, so curvature is continuous) between designed breaks only: a straight iron
+    top line, the joins into the tube along its edges, a wood's straight heel-side neck,
+    and the blades' heel corners. `faceFairness.test.ts` samples curvature along every
     drawn head and face and fails on unintended inflections (only the crotch's two are
     designed), kinks, a radius under 3 mm, or a curvature jump over 0.01/mm at a smooth
-    join. Against the mean contours the heads lie within 0.1–0.35 mm on average
-    (1.0–1.7 mm at most, at the iron's toe top and the driver's heel neck); the wood faces
-    within 0.2–0.4 mm of the radius table stretched to the mean face width (2–2.5 mm at
-    most, at the high toe and heel corners the 15° sampling cuts).
+    join. The even rim moves the heads off the population's mean contours: 0.9 mm on
+    average for the blades (2–3 mm at most, the lifted top), 1.8–2.2 mm for the woods
+    (5–8 mm at most at the toe and crown, which the population carries farther from the
+    face than an even band). The wood faces lie within 0.2–0.4 mm of the radius table
+    stretched to the mean face width (2–2.5 mm at most, at the high toe and heel corners
+    the 15° sampling cuts).
   - **Look.** Chrome iron, satin wedge, black woods and hybrid; the sleeves, ferrules,
     joints, the wedge's two hosel joints and the fairway's grey band are kept. The
     driver keeps its 7 + 7 block lines with slanted inner ends and 3 centre bars, scaled
