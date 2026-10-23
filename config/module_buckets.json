@@ -51,7 +51,7 @@
   "tests/test_v_formulas_known_answer.py"
  ],
  "decisions": {
-  "pi_trace": "The trace marks are product instrumentation: openflight/instrumentation.py holds the hooks (mark, current_ops_attempt, trace_method...), cheap no-ops until a recorder is installed and never raising into the caller. pi_trace.py (the JSONL TraceRecorder), pi_trace_summary.py, trace_routes.py and core_eligibility.py stay RESEARCH; research_hooks.py installs the recorder for --pi-trace.",
+  "pi_trace": "The Pi trace is RESEARCH end to end: product code carries no trace calls. instrumentation.py holds the recorder hooks, trace_points.py wraps the kiosk's own paths (the OPS wait, re-arm and clock sync, the capture timer, the IWR debounce, the server's enrichment steps) once research_hooks is loaded, and research_hooks installs the recorder for --pi-trace. The product keeps two seams: IWR6843CaptureMonitor.on_debounced_edge and server._await_camera_prefetch, plus the kiosk_extensions on_shot_detected hook and Shot.extras.",
   "kiosk_extensions": "The one registration point for kiosk add-ons is openflight/kiosk_extensions.py: a KioskExtension overrides only the hooks it needs and is declared under the openflight.kiosk_extensions entry point. tester_hooks (TESTER), research_hooks (RESEARCH), camera/impact_live (RESEARCH: the experimental impact location, read after each shot) and shot_models (Part E) are the fork's four; server.py names none.",
   "part_e": "Part E is the shot models: club_arc, collision_model, full_speed, flight (flight-fit), metric_definitions, their kiosk hooks (shot_models) and their catalogue metrics (model_metrics, under the openflight.shot_metrics entry point). Without them a kiosk measures and publishes; an OPS-only unit takes the table carry and a fusion unit has no carry (D17).",
   "ready_light": "A plain kiosk's ready light runs on the sensors alone (OPS armed, IWR idle, camera ring full); the tester adds its setup problems, free play's camera rule and the page hold only on a tester's kiosk."
@@ -540,7 +540,7 @@
   "src/openflight/inclinometer/orientation_check.py": "FUSION",
   "src/openflight/inclinometer/placement.py": "FUSION",
   "src/openflight/inclinometer/service.py": "FUSION",
-  "src/openflight/instrumentation.py": "PRODUCT",
+  "src/openflight/instrumentation.py": "RESEARCH",
   "src/openflight/iwr6843/__init__.py": "FUSION",
   "src/openflight/iwr6843/antennas.py": "FUSION",
   "src/openflight/iwr6843/bootloader.py": "FUSION",
@@ -637,6 +637,7 @@
   "src/openflight/tee_range_setup.py": "TESTER",
   "src/openflight/tester_hooks.py": "TESTER",
   "src/openflight/timing.py": "FUSION",
+  "src/openflight/trace_points.py": "RESEARCH",
   "src/openflight/trace_routes.py": "RESEARCH",
   "src/openflight/unit_check.py": "TESTER",
   "tests/__init__.py": "PRODUCT",
@@ -817,7 +818,7 @@
   "tests/test_inclinometer_placement.py": "FUSION",
   "tests/test_inclinometer_server.py": "FUSION",
   "tests/test_indoor_test_2_regression.py": "RESEARCH",
-  "tests/test_instrumentation.py": "PRODUCT",
+  "tests/test_instrumentation.py": "RESEARCH",
   "tests/test_iwr6843_antennas.py": "FUSION",
   "tests/test_iwr6843_bootloader.py": "PRODUCT",
   "tests/test_iwr6843_calibration_session.py": "FUSION",

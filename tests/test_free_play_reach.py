@@ -189,7 +189,7 @@ class TestKioskPause:
             server.ready_light, "swing_result", lambda kind, **_k: results.append(kind)
         )
         monkeypatch.setattr(tester_hooks, "tester_setup_required", False)
-        swing = SimpleNamespace(ball_speed_mph=120.0, trace_attempt_id=None)
+        swing = SimpleNamespace(ball_speed_mph=120.0, extras={})
         kiosk.client.post("/api/free-play/pause", json=_run(cause="photo"))
         assert tester_hooks._admit_shot(swing) is False
         assert results == ["paused"]

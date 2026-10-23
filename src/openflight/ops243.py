@@ -47,7 +47,6 @@ from typing import Callable, List, Optional
 import serial
 import serial.tools.list_ports
 
-from . import instrumentation
 from .serial_latency import log_usb_serial_latency_timer
 
 # Configure logging for raw radar data
@@ -793,7 +792,6 @@ class OPS243Radar:
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
-        instrumentation.mark("ops_clock_sync_started", instrumentation.current_ops_attempt())
 
         reads: List[dict] = []
 
@@ -943,12 +941,6 @@ class OPS243Radar:
             )
         else:
             logger.warning("[OPS] Clock sync: no valid C? responses (%d attempts)", len(reads))
-        instrumentation.mark(
-            "ops_clock_sync_done",
-            instrumentation.current_ops_attempt(),
-            method=clock_sync_method,
-            usable=usable_for_trigger_timestamps,
-        )
         return summary
 
     def get_info(self) -> dict:
@@ -1752,6 +1744,8 @@ class OPS243Radar:
         outcome = "timeout"
         self.last_hardware_trigger_first_byte_timestamp = None
         self.last_hardware_trigger_missed_edge_timestamp = None
+        # set when a dump was already arriving as this wait began (an edge raced the re-arm)
+        self.last_hardware_trigger_dump_pending_at_start = None
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
         saw_orphan_marker = False
@@ -1766,16 +1760,6 @@ class OPS243Radar:
             previous_phase is not None and previous_phase[0] == "rearming"
         )
         self._set_trigger_phase("rearming" if unconfirmed else "armed")
-        split, split_reason = getattr(
-            self, "_pre_trigger_split", (None, "not_written_this_session")
-        )
-        instrumentation.mark(
-            "ops_wait_armed",
-            instrumentation.current_ops_attempt(),
-            pre_trigger_segments=split,
-            pre_trigger_segments_reason=split_reason,
-            arm_writes_complete=not unconfirmed,
-        )
 
         # Bytes already here can be a dump an edge started during the re-arm.
         pending_at_start = self.serial.in_waiting
@@ -1821,12 +1805,10 @@ class OPS243Radar:
                             "began (%d bytes); an edge raced the re-arm",
                             pending_at_start,
                         )
-                        instrumentation.mark(
-                            "ops_dump_pending_at_wait_start",
-                            instrumentation.current_ops_attempt(),
-                            pending_bytes=pending_at_start,
-                            marker_offset=marker_offset,
-                        )
+                        self.last_hardware_trigger_dump_pending_at_start = {
+                            "pending_bytes": pending_at_start,
+                            "marker_offset": marker_offset,
+                        }
                     first_byte_timestamp = time.time()
 
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
@@ -1951,20 +1933,6 @@ class OPS243Radar:
             pre_trigger_segments: Number of pre-trigger segments (0-32).
                 Each segment = 128 samples = ~4.27ms at 30ksps.
         """
-        attempt_id = instrumentation.current_ops_attempt()
-        instrumentation.mark(
-            "ops_rearm_started",
-            attempt_id,
-            pre_trigger_segments=max(0, min(32, pre_trigger_segments)),
-        )
-        outcome = "exception"
-        try:
-            outcome = self._rearm_rolling_buffer_body(pre_trigger_segments)
-        finally:
-            instrumentation.mark("ops_rearm_done", attempt_id, outcome=outcome)
-
-    def _rearm_rolling_buffer_body(self, pre_trigger_segments: int) -> str:
-        """The re-arm itself; returns "rearmed", or "write_timeout" when the radar is busy."""
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
         self._set_trigger_phase("rearming")
@@ -2041,7 +2009,7 @@ class OPS243Radar:
                 "re-arm will be retried after the next capture cycle"
             )
             self._pre_trigger_split = (None, "rearm_write_timed_out")
-            return "write_timeout"
+            return
 
         # No flush here (P7-1): the first PA restarts sampling, so an edge
         # during the commands above starts a dump whose start marker a flush
@@ -2049,7 +2017,6 @@ class OPS243Radar:
         # Armed, but nobody reads until the next wait: the light still waits.
         self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
-        return "rearmed"
 
     def _write_pre_trigger_split(self, segments: int, write: Callable[[], object]) -> None:
         """Run one S# write and record the split once it returns (R-F9).

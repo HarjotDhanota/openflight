@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import instrumentation, kiosk_extensions, shot_metrics
+from . import kiosk_extensions, shot_metrics
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -701,13 +701,6 @@ def _shot_finalization_worker_loop() -> None:
                 diagnostic_reason = (
                     "enrichment_deadline" if deadline_expired else "coordinator_capacity"
                 )
-                # Records the first-result timer only: enrichment keeps running and
-                # its late result updates this shot (server_late_update_applied).
-                instrumentation.mark(
-                    "server_enrichment_watchdog_fired",
-                    registered.shot.trace_attempt_id,
-                    reason=diagnostic_reason,
-                )
                 logger.warning(
                     "[SERVER] Shot #%d optional enrichment exceeded %s; "
                     "publishing OPS-only now, enrichment continues and will update it",
@@ -861,11 +854,6 @@ def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
         "%d newer OPS-only shots are waiting for theirs",
         entry.registered.shot.shot_number,
         _SHOT_AWAITING_LATE_CAPACITY,
-    )
-    instrumentation.mark(
-        "server_late_result_abandoned",
-        entry.registered.shot.trace_attempt_id,
-        reason="awaiting_capacity",
     )
     _log_shot_enrichment_lifecycle(
         entry.registered.diagnostic_logger,
@@ -4360,30 +4348,6 @@ def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
         return None
 
 
-def _trace_camera_frames(shot: Shot, camera_capture, camera_archive) -> None:
-    """Mark the camera's own host-monotonic trigger and last-frame times, when it has them.
-
-    Both are CLOCK_MONOTONIC readings the camera runtime took; a clip without them
-    gets no mark (no stand-in time).
-    """
-    if instrumentation.get_recorder() is None:
-        return
-    try:
-        metadata = getattr(camera_capture, "metadata", None) or {}
-        trigger_ns = metadata.get("trigger_host_timestamp_ns")
-        if trigger_ns is not None:
-            instrumentation.mark(
-                "camera_trigger", shot.trace_attempt_id, monotonic_ns=int(trigger_ns)
-            )
-        host_ns = (camera_archive or {}).get("host_timestamp_ns")
-        if host_ns is not None and len(host_ns):
-            instrumentation.mark(
-                "camera_last_frame", shot.trace_attempt_id, monotonic_ns=int(np.max(host_ns))
-            )
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[TRACE] camera frame marks failed; ignored", exc_info=True)
-
-
 def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     """Match one completed camera clip and load its archive once."""
     match_started = time.monotonic()
@@ -4395,13 +4359,17 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     archive_started = match_finished
     camera_archive = _load_camera_capture_archive(camera_capture)
     archive_finished = time.monotonic()
-    _trace_camera_frames(shot, camera_capture, camera_archive)
     return _CameraPrefetchResult(
         capture=camera_capture,
         archive=camera_archive,
         match_ms=(match_finished - match_started) * 1000.0,
         archive_load_ms=(archive_finished - archive_started) * 1000.0,
     )
+
+
+def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
+    """Wait for this shot's camera match and archive load (one place an extension can time it)."""
+    return camera_future.result()
 
 
 def _fuse_camera_club_delivery(
@@ -5101,7 +5069,6 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode == "mock" and _mock_enrichment_enabled():
         return _ShotEnrichmentResult(iwr6843_ms=monitor.enrich(shot))
 
-    instrumentation.mark("enrichment_started", shot.trace_attempt_id)
     enrichment_started = time.monotonic()
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -5111,9 +5078,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
-    instrumentation.mark("iwr_process_started", shot.trace_attempt_id)
     iwr6843_ms = _process_iwr6843_angle(shot)
-    instrumentation.mark("iwr_process_done", shot.trace_attempt_id)
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -5320,9 +5285,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     camera_archive = None
     if camera_future is not None:
         camera_wait_started = time.monotonic()
-        instrumentation.mark("camera_wait_started", shot.trace_attempt_id)
         try:
-            prefetched = camera_future.result()
+            prefetched = _await_camera_prefetch(camera_future)
             camera_capture = prefetched.capture
             camera_archive = prefetched.archive
             camera_capture_ms = prefetched.match_ms
@@ -5340,9 +5304,6 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             )
         finally:
             camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
-            instrumentation.mark(
-                "camera_ready", shot.trace_attempt_id, matched=camera_capture is not None
-            )
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -5397,7 +5358,6 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
-        instrumentation.mark("camera_analysis_done", shot.trace_attempt_id)
     # a shot model (an extension's) builds face, loft and spin axis from the inputs
     kiosk_extensions.call_all("after_enrichment", shot)
 
@@ -5914,11 +5874,6 @@ def _queue_ordered_shot_finalization(
         "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
         shot_number,
     )
-    instrumentation.mark(
-        "server_late_result_unmatched",
-        getattr(source_shot, "trace_attempt_id", None),
-        reason="shot_not_awaiting_enrichment",
-    )
     _log_shot_enrichment_lifecycle(
         get_session_logger(),
         getattr(source_shot, "camera_fusion_session_uuid", None),
@@ -6022,13 +5977,6 @@ def _publish_late_enrichment(
             },
             exc=error,
         )
-    instrumentation.mark(
-        "server_late_update_applied",
-        shot.trace_attempt_id,
-        state=state,
-        first_result_reason=awaiting.first_result_reason,
-        late_by_ms=late_by_ms,
-    )
     _log_shot_enrichment_lifecycle(
         registered.diagnostic_logger,
         registered.diagnostic_session_uuid,
@@ -6342,17 +6290,7 @@ def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     shot.server_callback_started_monotonic_ns = time.monotonic_ns()
     shot.stage_timing = clone_stage_timing(shot.stage_timing)
-    if instrumentation.get_recorder() is not None:
-        # Phase A join: the monitor calls this synchronously in its capture thread,
-        # before its next wait, so the current OPS attempt is this shot's (pinned by
-        # test_phase_a_join_invariant...; Task 12 replaces it with an explicit ID).
-        shot.trace_attempt_id = instrumentation.current_ops_attempt()
-        instrumentation.mark(
-            "server_callback_started",
-            shot.trace_attempt_id,
-            monotonic_ns=shot.server_callback_started_monotonic_ns,
-            join="serial_capture_loop",
-        )
+    kiosk_extensions.call_all("on_shot_detected", shot)
     if not kiosk_extensions.all_admit(shot):
         return
     ready_light.swing_result("shot", ball_speed_mph=shot.ball_speed_mph)
@@ -6361,9 +6299,6 @@ def _handle_shot_detected(shot: Shot) -> None:
     _assign_shot_number(shot)
     shot.target_line = target_line_in_force()
     kiosk_extensions.call_all("on_shot_accepted", shot)
-    instrumentation.mark(
-        "server_shot_accepted", shot.trace_attempt_id, shot_number=shot.shot_number
-    )
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -6433,9 +6368,6 @@ def _handle_shot_detected(shot: Shot) -> None:
                 _SHOT_ENRICHMENT_QUEUE_CAPACITY,
                 shot.shot_number,
             )
-            instrumentation.mark(
-                "server_enrichment_deferred", shot.trace_attempt_id, reason="queue_full"
-            )
             if emitted:
                 _emit_ops_enrichment_status(shot, status="pending", reason="queue_full")
             _queue_shot_finalization(
@@ -6458,7 +6390,6 @@ def _abandon_shot_enrichment(
 ) -> None:
     """The deferred backlog is at its hard bound: say so loudly, keep the OPS shot."""
     reason = "enrichment_backlog_full"
-    instrumentation.mark("server_enrichment_abandoned", shot.trace_attempt_id, reason=reason)
     logger.error(
         "[SERVER] Shot #%d enrichment ABANDONED: %d jobs queued and %d deferred already; "
         "its IWR and camera metrics will not be computed",

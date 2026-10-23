@@ -186,7 +186,7 @@ def test_real_hooks_make_one_anchored_painted_attempt_the_summary_reads(live_rec
 
     assert len(attempts) == 1
     attempt = attempts[0]
-    assert attempt["attempt_id"] == shot.trace_attempt_id == tag["attempt_id"]
+    assert attempt["attempt_id"] == shot.extras.get("trace_attempt_id") == tag["attempt_id"]
     assert attempt["pre_trigger_segments"] == SEGMENTS
     assert attempt["anchor_ns"] is not None, attempt["association"]
     assert attempt["edge_seq"] == 1

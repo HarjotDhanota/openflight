@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from openflight import instrumentation
 from openflight.gate_timing import GateEvent, read_edge_tick, warm_edge_reading_cache
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
@@ -193,12 +192,6 @@ class IWR6843CaptureMonitor:
             if observer in self._trigger_observers:
                 self._trigger_observers.remove(observer)
 
-    def prepend_trigger_observer(self, observer: Callable[[float], None]) -> None:
-        """Run ``observer`` before every other observer (trace: read the edge age first)."""
-        with self._condition:
-            if observer not in self._trigger_observers:
-                self._trigger_observers.insert(0, observer)
-
     def edge_tick_reading(self) -> dict:
         """monotonic, gpiozero active_time, monotonic; plus the pin factory and versions.
 
@@ -208,12 +201,6 @@ class IWR6843CaptureMonitor:
         not in this reading and is never estimated.
         """
         return read_edge_tick(self._button)
-
-    def prepend_gate_event_observer(self, observer: Callable[[GateEvent], None]) -> None:
-        """Observe the captured evidence before other event consumers (added once)."""
-        with self._condition:
-            if observer not in self._gate_event_observers:
-                self._gate_event_observers.insert(0, observer)
 
     def ready_snapshot(self) -> dict:
         """What the ready light needs (P7-14), read from flags without the condition lock."""
@@ -234,28 +221,12 @@ class IWR6843CaptureMonitor:
             ),
         }
 
-    def _trace_debounced_edge(self, event: GateEvent, since_last_observed_s: float) -> None:
-        """Record an edge the debounce hides from every observer (Pi trace only).
+    def on_debounced_edge(self, event: GateEvent, since_last_observed_s: float) -> None:
+        """An edge the 0.1 s debounce hid from every observer; does nothing here.
 
         The OPS HOST_INT hears every edge in hardware, so a debounced edge can still
-        start or overlap a dump. TASK 5: treat ``gate_edge_debounced`` marks as
-        association candidates. They make an association ambiguous and never qualify
-        one. The debounce itself is unchanged.
+        start or overlap a dump: an extension may observe it.
         """
-        if instrumentation.get_recorder() is None:
-            return
-        try:
-            fields = event.trace_fields()
-            mono_after_ns = fields["mono_after_ns"]
-            instrumentation.mark(
-                "gate_edge_debounced",
-                None,
-                monotonic_ns=mono_after_ns if mono_after_ns is not None else time.monotonic_ns(),
-                since_last_observed_s=since_last_observed_s,
-                **fields,
-            )
-        except Exception:  # pylint: disable=broad-exception-caught
-            logger.warning("[TRACE] debounced edge mark failed; ignored", exc_info=True)
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
@@ -297,7 +268,7 @@ class IWR6843CaptureMonitor:
                 event_observers = tuple(self._gate_event_observers)
         if since_last_observed_s is not None:
             # Outside the lock, like the observers; the debounce result is unchanged.
-            self._trace_debounced_edge(event, since_last_observed_s)
+            self.on_debounced_edge(event, since_last_observed_s)
             return False
         for observer in event_observers:
             try:

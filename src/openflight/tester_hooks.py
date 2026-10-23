@@ -725,7 +725,9 @@ def _admit_shot(shot) -> bool:
         logger.warning("[SERVER] Tester shot rejected: %s", evidence["blockers"])
         server.ready_light.swing_result("not_counted")
         instrumentation.mark(
-            "server_shot_rejected", shot.trace_attempt_id, reason="tester_setup_readiness"
+            "server_shot_rejected",
+            shot.extras.get("trace_attempt_id"),
+            reason="tester_setup_readiness",
         )
         return False
     return True

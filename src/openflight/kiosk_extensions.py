@@ -85,6 +85,9 @@ class KioskExtension:  # pylint: disable=unused-argument
         """Return the ready light's sensor states adjusted for this extension (None: off)."""
         return states
 
+    def on_shot_detected(self, shot) -> None:
+        """An OPS shot reached the kiosk, before any extension may refuse it."""
+
     def admit_shot(self, shot) -> bool:
         """False to refuse an OPS shot before it is numbered (the extension reports why)."""
         return True

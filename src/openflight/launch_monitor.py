@@ -431,12 +431,8 @@ class Shot:
         repr=False,
         compare=False,
     )
-    # Pi trace attempt this shot belongs to (--pi-trace); transient, never serialized.
-    trace_attempt_id: Optional[str] = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
+    # Values a kiosk extension keeps on this shot; never serialized.
+    extras: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def ball_speed_ms(self) -> float:
