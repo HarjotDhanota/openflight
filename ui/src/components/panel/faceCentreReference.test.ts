@@ -20,6 +20,9 @@ const REFERENCE = JSON.parse(
       centre_toeward_of_lowest_line_middle_mm: number;
       lowest_line_length_mm: number;
       lowest_line_above_face_bottom_mm: number;
+      leading_edge_band_mm: number;
+      longest_line_length_mm: number;
+      toe_margin_mm?: number;
     }
   >;
 };
@@ -72,9 +75,7 @@ describe('the backend face-centre reference', () => {
       const toe = Math.min(...head.map((point) => point[0]));
       expect(Math.abs(x - toe - entry.centre_from_toe_mm)).toBeLessThanOrEqual(0.1);
       expect(Math.abs(bottom(head, x) - y - entry.centre_above_leading_edge_mm)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(bottom(polygon(shape.face), x) - y - entry.centre_above_face_bottom_mm)).toBeLessThanOrEqual(
-        0.1
-      );
+      expect(Math.abs(bottom(polygon(shape.face), x) - y - entry.centre_above_face_bottom_mm)).toBeLessThanOrEqual(0.1);
     }
   );
 
@@ -96,6 +97,25 @@ describe('the backend face-centre reference', () => {
       expect(
         Math.abs(bottom(polygon(shape.face), x) - lowest - entry.lowest_line_above_face_bottom_mm)
       ).toBeLessThanOrEqual(0.1);
+    }
+  );
+
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'matches the %s drawing: leading-edge band, longest line and the lines’ toe margin',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const entry = REFERENCE.categories[category];
+      const [x] = faceCentre(category, shape);
+      const head = polygon(shape.head);
+      const band = bottom(head, x) - bottom(polygon(shape.face), x);
+      expect(Math.abs(band - entry.leading_edge_band_mm)).toBeLessThanOrEqual(0.1);
+      const longest = Math.max(...shape.grooves.map((groove) => groove.to - groove.from));
+      expect(Math.abs(longest - entry.longest_line_length_mm)).toBeLessThanOrEqual(0.1);
+      if (entry.toe_margin_mm !== undefined) {
+        const toe = Math.min(...head.map((point) => point[0]));
+        const margin = Math.min(...shape.grooves.map((groove) => groove.from)) - toe;
+        expect(Math.abs(margin - entry.toe_margin_mm)).toBeLessThanOrEqual(0.1);
+      }
     }
   );
 });

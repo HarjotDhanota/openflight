@@ -1113,6 +1113,7 @@
   "ui/src/components/panel/StatusMenu.test.tsx": "PRODUCT",
   "ui/src/components/panel/StatusMenu.tsx": "PRODUCT",
   "ui/src/components/panel/faceCentreReference.test.ts": "RESEARCH",
+  "ui/src/components/panel/faceFairness.test.ts": "PRODUCT",
   "ui/src/components/panel/faceImpact.ts": "PRODUCT",
   "ui/src/components/panel/index.ts": "PRODUCT",
   "ui/src/components/panel/liveMetrics.test.ts": "PRODUCT",
