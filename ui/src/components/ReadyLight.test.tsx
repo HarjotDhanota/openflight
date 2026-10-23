@@ -14,7 +14,6 @@ const light = (overrides: Partial<ReadyLight> = {}): ReadyLight => ({
   causes: [],
   since: 100,
   checked_at: 110,
-  hold: null,
   swing: null,
   ...overrides,
 });

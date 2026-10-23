@@ -25,6 +25,5 @@ export interface ReadyLight {
   since: number | null;
   /** Kiosk epoch seconds when this light was computed. */
   checked_at: number;
-  hold: string | null;
   swing: ReadyLightSwing | null;
 }
