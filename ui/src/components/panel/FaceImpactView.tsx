@@ -27,6 +27,12 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
   const hosel = hoselParts(shape.hosel);
+  const lie = (shape.hosel.lieDeg * Math.PI) / 180;
+  const tubeWidth = Math.max(...shape.hosel.tube.map(([, width]) => width));
+  const crossTube = (side: number) => ({
+    x: shape.hosel.ground[0] + (side * tubeWidth * Math.sin(lie)) / 2,
+    y: shape.hosel.ground[1] + (side * tubeWidth * Math.cos(lie)) / 2,
+  });
   const reading = impactReading(shot);
   const left = reading.handedness === 'left';
   const toeSign = left ? 1 : -1;
@@ -80,9 +86,85 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
             </clipPath>
             <linearGradient id={steelId} gradientUnits="userSpaceOnUse" x1={minX} y1={minY} x2={maxX} y2={maxY}>
               <stop className="face-impact__steel-hi" offset="0" />
-              <stop className="face-impact__steel-mid" offset="0.55" />
+              <stop className="face-impact__steel-mid" offset="0.28" />
+              <stop className="face-impact__steel-lo" offset="0.46" />
+              <stop className="face-impact__steel-hi" offset="0.54" />
+              <stop className="face-impact__steel-mid" offset="0.68" />
               <stop className="face-impact__steel-lo" offset="1" />
             </linearGradient>
+            <linearGradient
+              id={`${id}tube`}
+              gradientUnits="userSpaceOnUse"
+              x1={crossTube(-1).x}
+              y1={crossTube(-1).y}
+              x2={crossTube(1).x}
+              y2={crossTube(1).y}
+            >
+              <stop className="face-impact__steel-lo" offset="0" />
+              <stop className="face-impact__steel-mid" offset="0.2" />
+              <stop className="face-impact__steel-hi" offset="0.38" />
+              <stop className="face-impact__steel-mid" offset="0.57" />
+              <stop className="face-impact__steel-lo" offset="0.86" />
+              <stop className="face-impact__steel-mid" offset="1" />
+            </linearGradient>
+            <linearGradient
+              id={`${id}ferrule`}
+              gradientUnits="userSpaceOnUse"
+              x1={crossTube(-1).x}
+              y1={crossTube(-1).y}
+              x2={crossTube(1).x}
+              y2={crossTube(1).y}
+            >
+              <stop offset="0" stopColor="#101214" />
+              <stop offset="0.36" stopColor="#62676c" />
+              <stop offset="0.52" stopColor="#292d31" />
+              <stop offset="0.88" stopColor="#0c0e10" />
+              <stop offset="1" stopColor="#363a3e" />
+            </linearGradient>
+            <radialGradient
+              id={`${id}reflection`}
+              cx="32%"
+              cy="15%"
+              r="85%"
+              gradientTransform="translate(0 .08) scale(1 .85)"
+            >
+              <stop offset="0" stopColor="#fff" stopOpacity="0.27" />
+              <stop offset="0.46" stopColor="#fff" stopOpacity="0" />
+              <stop offset="1" stopColor="#080b10" stopOpacity="0.26" />
+            </radialGradient>
+            <linearGradient id={`${id}radius`} x1="0" y1="0" x2="0.18" y2="1">
+              <stop offset="0" stopColor="#fff" stopOpacity="0.55" />
+              <stop offset="0.42" stopColor="#fff" stopOpacity="0.04" />
+              <stop offset="0.75" stopColor="#080b10" stopOpacity="0.45" />
+              <stop offset="1" stopColor="#fff" stopOpacity="0.7" />
+            </linearGradient>
+            <clipPath id={`${id}head-clip`}>
+              <path d={shape.head} />
+            </clipPath>
+            <linearGradient
+              id={`${id}joint-fade`}
+              gradientUnits="userSpaceOnUse"
+              x1={shape.hosel.ground[0]}
+              y1={shape.hosel.ground[1]}
+              x2={hosel.shaftLine[0][0]}
+              y2={hosel.shaftLine[0][1]}
+            >
+              <stop offset="0.35" stopColor="#fff" stopOpacity="0" />
+              <stop offset="0.7" stopColor="#fff" />
+            </linearGradient>
+            <mask
+              id={`${id}joint`}
+              maskUnits="userSpaceOnUse"
+              x={minX}
+              y={minY}
+              width={maxX - minX}
+              height={maxY - minY}
+            >
+              <path d={hosel.tube} fill={`url(#${id}joint-fade)`} />
+            </mask>
+            <pattern id={`${id}grain`} width="1.7" height="0.7" patternUnits="userSpaceOnUse">
+              <path d="M 0 .15 H 1.7 M .3 .48 H 1.2" stroke="#fff" strokeWidth="0.07" opacity="0.08" />
+            </pattern>
             <linearGradient id={faceId} gradientUnits="userSpaceOnUse" x1="0" y1={minY} x2="0" y2={maxY}>
               <stop className="face-impact__face-hi" offset="0" />
               <stop className="face-impact__face-lo" offset="1" />
@@ -142,18 +224,32 @@ export function FaceImpactView({ shot, sessionShots }: FaceImpactViewProps) {
               </g>
               <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
               <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
+              <path className="face-impact__head-reflection" d={shape.head} fill={`url(#${id}reflection)`} />
+              <path
+                className="face-impact__leading-radius"
+                d={shape.head}
+                fill="none"
+                stroke={`url(#${id}radius)`}
+                strokeWidth="1.5"
+                clipPath={`url(#${id}head-clip)`}
+              />
               <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
-              {hosel.collar ? <path className="face-impact__collar" d={hosel.collar} /> : null}
+              <path d={hosel.tube} fill={`url(#${id}tube)`} mask={`url(#${id}joint)`} />
+              {hosel.collar ? <path className="face-impact__collar" d={hosel.collar} fill={`url(#${id}tube)`} /> : null}
               {hosel.rings.map((d) => (
                 <path key={d} className="face-impact__ring" d={d} />
               ))}
-              <path className="face-impact__ferrule" d={hosel.ferrule} />
+              <path className="face-impact__ferrule" d={hosel.ferrule} fill={`url(#${id}ferrule)`} />
               <path
                 className="face-impact__face"
                 d={shape.face}
                 fill={`url(#${faceId})`}
                 mask={shape.faceFade ? `url(#${fadeId})` : undefined}
               />
+              <g mask={shape.faceFade ? `url(#${fadeId})` : undefined}>
+                <path className="face-impact__face-reflection" d={shape.face} fill={`url(#${id}reflection)`} />
+                <path className="face-impact__grain" d={shape.face} fill={`url(#${id}grain)`} />
+              </g>
               {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
             </g>
             <g className="face-impact__centre-lines" clipPath={`url(#${faceClipId})`}>

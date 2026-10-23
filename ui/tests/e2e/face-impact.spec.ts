@@ -112,6 +112,28 @@ async function keep(page: Page, name: string) {
   }
 }
 
+async function keepFigure(page: Page, name: string) {
+  if (!OUT) return;
+  const figure = page.locator('.face-impact__figure');
+  await figure.screenshot({ path: join(OUT, `${name}.png`) });
+  const original = await figure.getAttribute('style');
+  await figure.evaluate((element) => {
+    const { width, height } = element.getBoundingClientRect();
+    element.setAttribute(
+      'style',
+      `position: fixed; top: 0; left: 0; z-index: 9999; width: ${width * 4}px; height: ${height * 4}px; background: var(--color-surface)`
+    );
+  });
+  try {
+    await figure.screenshot({ path: join(OUT, `${name}-4x.png`) });
+  } finally {
+    await figure.evaluate(
+      (element, style) => (style === null ? element.removeAttribute('style') : element.setAttribute('style', style)),
+      original
+    );
+  }
+}
+
 for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
   test.describe(`face impact at ${viewport.width}×${viewport.height}`, () => {
     test.use({ hasTouch: true, viewport });
@@ -237,32 +259,28 @@ for (const viewport of [
         expect(await overflowing(page)).toEqual([]);
         expect(await artefacts(page)).toEqual([]);
         await keep(page, `face-impact-${category}-${size}`);
-        if (OUT)
-          await view
-            .locator('.face-impact__figure')
-            .screenshot({ path: join(OUT, `face-impact-${category}-figure-${size}.png`) });
+        await keepFigure(page, `face-impact-${category}-figure-${size}`);
       });
     }
 
-    test('mirrors the driver face for a left-handed golfer', async ({ page }) => {
-      await openClubPanel(page, 1, 'driver');
-      await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
-      const view = page.locator('.face-impact');
-      await expect(view).toHaveAttribute('data-face', 'driver');
-      await expect(view).toHaveAttribute('data-handed', 'left');
-      await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
-      expect(await inFace(page)).toEqual({ origin: true, dot: true });
-      const mm = await dotMm(page);
-      expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
-      expect(await overflowing(page)).toEqual([]);
-      expect(await artefacts(page)).toEqual([]);
-      await keep(page, `face-impact-driver-left-${size}`);
-      if (OUT)
-        await view
-          .locator('.face-impact__figure')
-          .screenshot({ path: join(OUT, `face-impact-driver-left-figure-${size}.png`) });
-    });
+    for (const [club, category] of DRAWINGS) {
+      test(`mirrors the ${category} face for a left-handed golfer`, async ({ page }) => {
+        await openClubPanel(page, 1, club);
+        await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
+        const view = page.locator('.face-impact');
+        await expect(view).toHaveAttribute('data-face', category);
+        await expect(view).toHaveAttribute('data-handed', 'left');
+        await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
+        expect(await inFace(page)).toEqual({ origin: true, dot: true });
+        const mm = await dotMm(page);
+        expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
+        expect(await overflowing(page)).toEqual([]);
+        expect(await artefacts(page)).toEqual([]);
+        await keep(page, `face-impact-${category}-left-${size}`);
+        await keepFigure(page, `face-impact-${category}-left-figure-${size}`);
+      });
+    }
   });
 }
 

@@ -87,7 +87,7 @@
 }
 
 .face-impact__collar {
-  fill: var(--face-art-collar);
+  filter: brightness(1.65);
 }
 
 .face-impact__rim path {
@@ -124,10 +124,6 @@
 .face-impact__shaft-far {
   stop-color: var(--face-art-shaft);
   stop-opacity: 0;
-}
-
-.face-impact__ferrule {
-  fill: var(--face-art-ferrule);
 }
 
 .face-impact__ring {
