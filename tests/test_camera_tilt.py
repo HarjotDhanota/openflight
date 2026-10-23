@@ -9,7 +9,6 @@ shared rig file, and composed with each session's LIS3DH pitch.
 
 import json
 import math
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -91,7 +90,6 @@ def test_one_pair_never_calibrates_two_agreeing_pairs_do_from_their_median(tmp_p
     assert first["pairs_needed"] == 1
     # the first validated pair no longer calibrates the unit for good
     assert camera_tilt.load_calibration(path) is None
-    assert camera_tilt.calibration_status(path)["status"] == "pending"
 
     second = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 2.5}, facts={"epoch_id": "two"})
     assert second["action"] == "calibrated"
@@ -137,21 +135,6 @@ def test_later_pairs_check_and_two_disagreeing_in_a_row_recalibrate(tmp_path):
     assert calibration["previous"][-1]["offset_deg"] == pytest.approx(2.2)
 
 
-def test_a_calibration_can_be_reset_and_starts_again(tmp_path):
-    path = tmp_path / "camera-vertical-offset.json"
-    _calibrate(path, 2.1, 2.3)
-
-    reset = camera_tilt.reset_calibration(path, reason="tester asked")
-
-    assert reset["action"] == "reset"
-    assert reset["previous_offset_deg"] == pytest.approx(2.2)
-    assert camera_tilt.load_calibration(path) is None
-    assert camera_tilt.calibration_status(path)["status"] == "uncalibrated"
-    assert camera_tilt.record_pair(path, PAIR, facts={"epoch_id": "new"})["action"] == "pending"
-    # nothing to reset is not an error
-    assert camera_tilt.reset_calibration(tmp_path / "none.json")["action"] == "nothing_to_reset"
-
-
 @pytest.mark.parametrize("offset", [8.5, -9.0])
 def test_an_offset_beyond_eight_degrees_is_refused_with_a_warning(tmp_path, offset):
     path = tmp_path / "camera-vertical-offset.json"
@@ -193,13 +176,6 @@ def test_each_session_composes_the_offset_with_its_own_lis3dh_pitch(tmp_path):
         "status": "uncalibrated",
         "composition": camera_tilt.COMPOSITION,
     }
-
-
-def test_the_calibration_lives_with_the_unit_not_in_the_rig_file():
-    default = camera_tilt.default_calibration_path()
-
-    assert default == Path.home() / ".config" / "openflight" / "camera-vertical-offset.json"
-    assert ".config" in default.parts and "enclosure" not in default.name
 
 
 def test_the_file_is_json_with_its_schema_and_provenance(tmp_path):

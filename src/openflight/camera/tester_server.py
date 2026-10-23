@@ -53,6 +53,7 @@ from openflight.camera import (
     swing_exposure,
     target_line,
     tester_ready_light,
+    tilt_calibration_admin,
     worker_lifetime,
 )
 from openflight.camera.auto_exposure import hitting_zone
@@ -10278,7 +10279,7 @@ def create_app(
                 arm_id: list(values) for arm_id, values in lens_catalogue.allowed_ladder_us.items()
             },
             "setup_reset_on_change": True,
-            "camera_tilt": camera_tilt.calibration_status(tilt_path()),
+            "camera_tilt": tilt_calibration_admin.calibration_status(tilt_path()),
         }
 
     def reset_for_lens(tester_id: str, previous: str | None, lens_id: str) -> list[str]:
@@ -10321,7 +10322,9 @@ def create_app(
             if action not in {"select", "settings", "reset_tilt"}:
                 raise ValueError("action must be select, settings or reset_tilt")
             if action == "reset_tilt":
-                outcome = camera_tilt.reset_calibration(tilt_path(), reason="tester asked")
+                outcome = tilt_calibration_admin.reset_calibration(
+                    tilt_path(), reason="tester asked"
+                )
                 return jsonify({**lens_payload(tester_id), "tilt_reset": outcome})
             lens_catalogue.get(lens_id)
             refuse_while_analysing()
@@ -11594,7 +11597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--camera-tilt-calibration",
         type=Path,
-        default=camera_tilt.default_calibration_path(),
+        default=tilt_calibration_admin.default_calibration_path(),
         help=(
             "This unit's camera-tilt calibration (P8-5), written by the first setup whose "
             "camera and radar agreed; kept with the unit's local settings, not the rig file"
