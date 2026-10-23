@@ -1,3 +1,4 @@
+
 import { ProgressIndicator } from './ProgressIndicator';
 import { useI18n } from '../i18n/useI18n';
 
@@ -7,9 +8,15 @@ interface ShutdownDialogProps {
   state: ShutdownState;
   onConfirm: () => void;
   onCancel: () => void;
+  onSleep: () => void;
 }
 
-export function ShutdownDialog({ state, onConfirm, onCancel }: ShutdownDialogProps) {
+export function ShutdownDialog({
+  state,
+  onConfirm,
+  onCancel,
+  onSleep,
+}: ShutdownDialogProps) {
   const { t } = useI18n();
 
   if (state === 'pending') {
@@ -21,23 +28,58 @@ export function ShutdownDialog({ state, onConfirm, onCancel }: ShutdownDialogPro
           aria-modal="true"
           aria-label={t('shutdown.pendingAria')}
         >
-          <ProgressIndicator variant="dialog" title={t('shutdown.pendingTitle')} detail={t('shutdown.pendingDetail')} />
+          <ProgressIndicator
+            variant="dialog"
+            title={t('shutdown.pendingTitle')}
+            detail={t('shutdown.pendingDetail')}
+          />
         </div>
       </div>
     );
   }
 
   const hasError = state === 'error';
+
   return (
     <div className="shutdown-overlay">
-      <div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-dialog-title">
-        <p id="shutdown-dialog-title">{hasError ? t('shutdown.error') : t('shutdown.confirm')}</p>
-        {hasError ? <span className="shutdown-dialog__error">{t('shutdown.errorDetail')}</span> : null}
+      <div
+        className="shutdown-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shutdown-dialog-title"
+      >
+        <p id="shutdown-dialog-title">
+          {hasError ? t('shutdown.error') : t('shutdown.confirm')}
+        </p>
+
+        {hasError ? (
+          <span className="shutdown-dialog__error">
+            {t('shutdown.errorDetail')}
+          </span>
+        ) : null}
+
         <div className="shutdown-dialog__buttons">
-          <button className="shutdown-dialog__confirm" onClick={onConfirm} autoFocus>
+          <button
+            type="button"
+            className="shutdown-dialog__cancel"
+            onClick={onSleep}
+            disabled={hasError}
+          >
+            Sleep Screen
+          </button>
+
+          <button
+            className="shutdown-dialog__confirm"
+            onClick={onConfirm}
+            autoFocus
+          >
             {hasError ? t('shutdown.tryAgain') : t('shutdown.shutDown')}
           </button>
-          <button className="shutdown-dialog__cancel" onClick={onCancel}>
+
+          <button
+            className="shutdown-dialog__cancel"
+            onClick={onCancel}
+          >
             {t('shutdown.cancel')}
           </button>
         </div>
