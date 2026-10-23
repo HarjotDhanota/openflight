@@ -73,7 +73,7 @@ def kiosk(monkeypatch, tmp_path):
 def _shot(number):
     shot = Shot(ball_speed_mph=120.0, club_speed_mph=85.0, timestamp=datetime.now())
     shot.shot_number = number
-    shot.free_play_run_id = "run-one"
+    shot.extras["free_play_run_id"] = "run-one"
     return shot
 
 
@@ -114,7 +114,7 @@ def test_the_fifth_shot_moves_the_camera_to_the_next_rung_live(kiosk):
     assert kiosk.runtime.applied == [(150, 4.0)]
     sixth = _shot(6)
     tester_hooks._count_free_play_shot(sixth)
-    assert sixth.free_play_exposure_study["rung_id"] == "full-150"
+    assert sixth.extras["free_play_exposure_study"]["rung_id"] == "full-150"
 
 
 def test_after_the_last_rung_the_camera_runs_automatic(kiosk):
@@ -124,8 +124,8 @@ def test_after_the_last_rung_the_camera_runs_automatic(kiosk):
     assert kiosk.runtime.automatic == 1
     after = _shot(11)
     tester_hooks._count_free_play_shot(after)
-    assert after.free_play_exposure_study["ladder_phase"] == "automatic"
-    assert after.free_play_exposure_study["exposure_us"] == 150
+    assert after.extras["free_play_exposure_study"]["ladder_phase"] == "automatic"
+    assert after.extras["free_play_exposure_study"]["exposure_us"] == 150
 
 
 def test_a_matched_clip_gets_the_picture_verdict_on_the_shot_and_its_rung(kiosk, tmp_path):
@@ -152,7 +152,7 @@ def test_a_failed_clip_save_is_labelled_not_judged(kiosk):
 
     tester_hooks._judge_free_play_clip(shot, capture)
 
-    verdict = shot.free_play_exposure_study["verdict"]
+    verdict = shot.extras["free_play_exposure_study"]["verdict"]
     assert verdict["status"] == "no_capture"
     assert "disk full" in verdict["reason"]
 
@@ -213,7 +213,7 @@ def test_without_a_camera_the_shots_say_so(monkeypatch, tmp_path):
 
     tester_hooks._count_free_play_shot(shot)
 
-    assert shot.free_play_exposure_study["ladder_phase"] == "camera_unavailable"
+    assert shot.extras["free_play_exposure_study"]["ladder_phase"] == "camera_unavailable"
 
 
 def test_free_play_without_a_plan_records_no_study(monkeypatch):
@@ -224,7 +224,7 @@ def test_free_play_without_a_plan_records_no_study(monkeypatch):
 
     tester_hooks._count_free_play_shot(shot)
 
-    assert shot.free_play_exposure_study is None
+    assert shot.extras["free_play_exposure_study"] is None
     assert "exposure_study" not in shot.to_dict()["free_play"]
 
 

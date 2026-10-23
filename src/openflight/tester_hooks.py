@@ -518,20 +518,20 @@ def _count_free_play_shot(shot: Shot) -> None:
     """
     study = free_play_study
     if study is None:
-        shot.free_play_exposure_study = None
+        shot.extras["free_play_exposure_study"] = None
         return
     try:
-        shot.free_play_exposure_study = study.on_shot(shot.shot_number)
+        shot.extras["free_play_exposure_study"] = study.on_shot(shot.shot_number)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[FREE PLAY] Exposure study could not count a shot", exc_info=True)
-        shot.free_play_exposure_study = {"error": f"{type(error).__name__}: {error}"}
+        shot.extras["free_play_exposure_study"] = {"error": f"{type(error).__name__}: {error}"}
 
 
 def _judge_free_play_clip(shot: Shot, capture) -> None:
     """The ladder's picture-only verdict for the shot's own clip, on the shot and its rung."""
     from openflight.camera import free_play_ladder  # pylint: disable=import-outside-toplevel
 
-    record = shot.free_play_exposure_study
+    record = shot.extras.get("free_play_exposure_study")
     study = free_play_study
     if study is None or not isinstance(record, dict) or "ladder_phase" not in record:
         return
@@ -554,7 +554,7 @@ def _judge_free_play_clip(shot: Shot, capture) -> None:
             expected_ball=getattr(settings, "setup_ball", None),
             zone_box=getattr(settings, "hitting_zone", None),
         )
-    shot.free_play_exposure_study = {**record, "verdict": verdict}
+    shot.extras["free_play_exposure_study"] = {**record, "verdict": verdict}
     try:
         study.record_verdict(shot.shot_number, verdict)
     except Exception:  # pylint: disable=broad-exception-caught
@@ -685,7 +685,7 @@ def _admit_shot(shot) -> bool:
         # No camera trigger near this impact (P7-3): the edge never reached
         # the camera, which says nothing against the setup. Keep the OPS
         # shot and name the gap, instead of dropping a real swing.
-        shot.missing_trigger_evidence = [
+        shot.extras["missing_trigger_evidence"] = [
             {
                 "id": "camera_trigger",
                 "reason": f"{evidence_problem}: the camera recorded no trigger near this impact",
@@ -698,10 +698,12 @@ def _admit_shot(shot) -> bool:
     elif evidence_problem is not None and _tester_trigger_hard_stop(readiness) is None:
         # D15: measure and label. A blocked or mismatched setup is noted on
         # the shot; only a hard stop below still drops it (P8-7).
-        shot.trigger_evidence_notes = _tester_trigger_evidence_notes(readiness, evidence_problem)
+        shot.extras["trigger_evidence_notes"] = _tester_trigger_evidence_notes(
+            readiness, evidence_problem
+        )
         logger.warning(
             "[SERVER] Tester shot kept with trigger readiness notes: %s",
-            shot.trigger_evidence_notes,
+            shot.extras["trigger_evidence_notes"],
         )
     elif evidence_problem is not None:
         evidence = readiness or {
@@ -897,16 +899,44 @@ def _check_camera_capture(camera_capture, session_uuid: str) -> None:
 
 def _on_shot_accepted(shot) -> None:
     if free_play_config.get("enabled"):
-        shot.free_play_run_id = free_play_config["run_id"]
-        shot.geometry_unverified = bool(free_play_config.get("geometry_unverified"))
-        shot.free_play_exposure = _free_play_exposure_at_shot()
+        shot.extras["free_play_run_id"] = free_play_config["run_id"]
+        shot.extras["geometry_unverified"] = bool(free_play_config.get("geometry_unverified"))
+        shot.extras["free_play_exposure"] = _free_play_exposure_at_shot()
         _count_free_play_shot(shot)
 
 
 def _on_camera_capture(shot, camera_capture) -> None:
     if free_play_config.get("enabled"):
-        shot.free_play_exposure = _free_play_exposure_from_clip(camera_capture)
+        shot.extras["free_play_exposure"] = _free_play_exposure_from_clip(camera_capture)
         _judge_free_play_clip(shot, camera_capture)
+
+
+def _extend_shot_record(shot, data: dict) -> None:
+    """A tester shot's trigger-evidence notes and free play fields, in its record."""
+    extras = shot.extras
+    data["missing_trigger_evidence"] = deepcopy(extras.get("missing_trigger_evidence"))
+    data["trigger_evidence_notes"] = deepcopy(extras.get("trigger_evidence_notes"))
+    run_id = extras.get("free_play_run_id")
+    if not run_id:
+        return
+    unverified = bool(extras.get("geometry_unverified"))
+    data["free_play"] = {"run_id": run_id, "geometry_unverified": unverified}
+    if extras.get("free_play_exposure_study") is not None:
+        data["free_play"]["exposure_study"] = deepcopy(extras["free_play_exposure_study"])
+    data["exposure_decision"] = deepcopy(extras.get("free_play_exposure"))
+    if not unverified:
+        return
+    for metric_id, metric in data["metrics"].items():
+        source = metric.get("source") or ""
+        if (
+            metric_id in {"ball_speed", "club_speed"}
+            or (metric_id == "spin_rate" and metric["status"] == "measured")
+            or source.startswith("radial ratio")
+            or metric["value"] is None
+        ):
+            continue
+        metric["geometry_validation"] = "unverified"
+        metric["note"] = "; ".join(filter(None, [metric.get("note"), "geometry unverified"]))
 
 
 class TesterKioskExtension(kiosk_extensions.KioskExtension):
@@ -955,6 +985,9 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
 
     def on_camera_capture(self, shot, camera_capture) -> None:
         _on_camera_capture(shot, camera_capture)
+
+    def extend_shot_record(self, shot, record: dict) -> None:
+        _extend_shot_record(shot, record)
 
 
 def _log_event(kind: str, data: dict) -> None:

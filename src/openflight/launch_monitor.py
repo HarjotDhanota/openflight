@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
-from . import shot_metrics, smash
+from . import kiosk_extensions, shot_metrics, smash
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .numeric import finite as _finite
@@ -408,21 +408,8 @@ class Shot:
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
-    # Trigger evidence a tester shot lacked but was kept without, as
-    # [{"id", "reason"}]; None when nothing was missing (P7-3).
-    missing_trigger_evidence: Optional[list] = None
-    # What blocked or mismatched trigger evidence said about a tester shot the
-    # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
-    trigger_evidence_notes: Optional[list] = None
     # server.target_line_in_force() when the shot was accepted
     target_line: Optional[dict] = None
-    free_play_run_id: Optional[str] = None
-    free_play_exposure: Optional[dict] = None
-    # Free play's exposure ladder record for this shot: its rung (or the automatic
-    # phase), the controls, the resolution and the picture verdict
-    # (openflight.free_play_exposure_study_shot.v1); None outside a ladder run.
-    free_play_exposure_study: Optional[dict] = None
-    geometry_unverified: bool = False
     # Labels on the camera's values that no longer withhold them (D15): the
     # capture's lighting and optical-quality verdicts; None when there are none.
     camera_notes: Optional[list] = None
@@ -648,8 +635,6 @@ class Shot:
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
-            "missing_trigger_evidence": deepcopy(self.missing_trigger_evidence),
-            "trigger_evidence_notes": deepcopy(self.trigger_evidence_notes),
             "camera_notes": list(self.camera_notes) if self.camera_notes else None,
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
@@ -697,28 +682,7 @@ class Shot:
             "impact_location": deepcopy(self.impact_location),
         }
         data["metrics"] = shot_metrics.from_record(data)
-        if self.free_play_run_id:
-            data["free_play"] = {
-                "run_id": self.free_play_run_id,
-                "geometry_unverified": self.geometry_unverified,
-            }
-            if self.free_play_exposure_study is not None:
-                data["free_play"]["exposure_study"] = deepcopy(self.free_play_exposure_study)
-            data["exposure_decision"] = deepcopy(self.free_play_exposure)
-            if self.geometry_unverified:
-                for metric_id, metric in data["metrics"].items():
-                    source = metric.get("source") or ""
-                    if (
-                        metric_id in {"ball_speed", "club_speed"}
-                        or (metric_id == "spin_rate" and metric["status"] == "measured")
-                        or source.startswith("radial ratio")
-                        or metric["value"] is None
-                    ):
-                        continue
-                    metric["geometry_validation"] = "unverified"
-                    metric["note"] = "; ".join(
-                        filter(None, [metric.get("note"), "geometry unverified"])
-                    )
+        kiosk_extensions.call_all("extend_shot_record", self, data)
         return data
 
 

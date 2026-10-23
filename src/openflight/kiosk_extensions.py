@@ -95,6 +95,9 @@ class KioskExtension:  # pylint: disable=unused-argument
     def on_shot_accepted(self, shot) -> None:
         """A shot was numbered and will be published."""
 
+    def extend_shot_record(self, shot, record: dict) -> None:
+        """Add this extension's keys to a shot's record (``Shot.to_dict``), from its extras."""
+
     def check_camera_capture(self, shot, camera_capture, session_uuid: str) -> None:
         """Raise ValueError when this camera clip must not be fused into the shot."""
 

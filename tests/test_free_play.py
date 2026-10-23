@@ -275,11 +275,14 @@ def test_shot_geometry_warning_preserves_radial_speed_and_freezes_exposure():
     from openflight.launch_monitor import Shot
 
     shot = Shot(ball_speed_mph=150, club_speed_mph=100, timestamp=datetime.now())
-    shot.free_play_run_id = "run-one"
-    shot.geometry_unverified = True
-    shot.free_play_exposure = {"status": "recorded", "decision": {"setting": {"exposure_us": 100}}}
+    shot.extras["free_play_run_id"] = "run-one"
+    shot.extras["geometry_unverified"] = True
+    shot.extras["free_play_exposure"] = {
+        "status": "recorded",
+        "decision": {"setting": {"exposure_us": 100}},
+    }
     record = shot.to_dict()
-    shot.free_play_exposure["decision"]["setting"]["exposure_us"] = 200
+    shot.extras["free_play_exposure"]["decision"]["setting"]["exposure_us"] = 200
     assert record["exposure_decision"]["decision"]["setting"]["exposure_us"] == 100
     assert record["metrics"]["ball_speed"]["value"] == 150
     assert not record["metrics"]["ball_speed"].get("geometry_validation")

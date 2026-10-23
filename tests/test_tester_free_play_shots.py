@@ -154,12 +154,12 @@ class TestFreePlayShots(OnShotDetectedHelpers):
         shot = self._shot()
         server_module._enrich_shot_from_optional_hardware(shot)
         metadata["auto_exposure"]["setting"]["exposure_us"] = 300
-        assert shot.free_play_exposure["decision"]["setting"]["exposure_us"] == 100
-        assert shot.free_play_exposure["decision_scope"] == "clip"
-        assert shot.free_play_exposure["lens"]["lens_id"] == "6mm"
-        assert shot.free_play_exposure["lens_scope"] == "clip"
+        assert shot.extras["free_play_exposure"]["decision"]["setting"]["exposure_us"] == 100
+        assert shot.extras["free_play_exposure"]["decision_scope"] == "clip"
+        assert shot.extras["free_play_exposure"]["lens"]["lens_id"] == "6mm"
+        assert shot.extras["free_play_exposure"]["lens_scope"] == "clip"
         metadata["lens"]["lens_id"] = "stock"  # the record is the clip's own copy
-        assert shot.free_play_exposure["lens"]["lens_id"] == "6mm"
-        shot.free_play_run_id = "free-run"
+        assert shot.extras["free_play_exposure"]["lens"]["lens_id"] == "6mm"
+        shot.extras["free_play_run_id"] = "free-run"
         assert shot.to_dict()["exposure_decision"]["lens"]["focal_mm"] == 6.0
         assert len(session_log.camera_captures) == 1

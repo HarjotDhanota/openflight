@@ -67,7 +67,6 @@
  },
  "mixed": {
   "src/openflight/server.py": "camera_capture tester_setup metadata key name; trigger evidence hooks only",
-  "src/openflight/launch_monitor.py": "Shot carries free play and trigger-evidence fields the tester sets",
   "src/openflight/camera/capture_runtime.py": "diagnostic_capture and held-controls study hooks; 'tester_setup' metadata key",
   "src/openflight/ready_light.py": "'not_counted' result text is the tester gate's",
   "tests/test_server.py": "Part E finalization tests and free-play shot tests",
