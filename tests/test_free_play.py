@@ -68,7 +68,7 @@ def test_free_play_starts_without_a_gain_screen_or_ladder(
     setup_saw_ball(tmp_path)
     catalogue = ts.lens_profiles.load_catalogue()
     settings_path = tmp_path / "lens-settings.json"
-    store = ts.lens_profiles.LensSettingsStore(settings_path, catalogue)
+    store = ts.lens_settings.LensSettingsStore(settings_path, catalogue)
     store.save_settings(
         catalogue.reference_lens_id, {"modes": ["arm5", "arm6"], "default_arm": default_arm}
     )
@@ -559,7 +559,7 @@ def free_play_app(tmp_path, modes=("arm5", "arm6"), default_arm="arm5", ladder=N
     setup_locked_ball(tmp_path)
     catalogue = ts.lens_profiles.load_catalogue()
     settings_path = tmp_path / "lens-settings.json"
-    store = ts.lens_profiles.LensSettingsStore(settings_path, catalogue)
+    store = ts.lens_settings.LensSettingsStore(settings_path, catalogue)
     settings = {"modes": list(modes), "default_arm": default_arm}
     if ladder is not None:
         settings["ladder"] = ladder

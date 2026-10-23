@@ -44,6 +44,7 @@ from openflight.camera import (
     free_play_ladder,
     ground_patch,
     lens_profiles,
+    lens_settings,
     patch_pairing,
     placement_box,
     reference_ball_range,
@@ -7409,7 +7410,7 @@ def create_app(
     ``camera_tilt_path`` is this unit's camera-tilt calibration (P8-5), kept with
     the unit's other local settings; without one the camera stays uncalibrated
     and nothing is stored. It is the stock lens's; another lens keeps its own
-    beside it (``lens_profiles.tilt_calibration_path``).
+    beside it (``lens_settings.tilt_calibration_path``).
 
     ``lens_settings_path`` keeps the unit's lens choice and each lens's settings
     (memory only without one); ``optical_calibration_dir`` holds checkerboard
@@ -7467,7 +7468,7 @@ def create_app(
             radar_jobs.release()
 
     lens_catalogue = lens_profiles.load_catalogue(lens_catalogue_path)
-    lens_store = lens_profiles.LensSettingsStore(lens_settings_path, lens_catalogue)
+    lens_store = lens_settings.LensSettingsStore(lens_settings_path, lens_catalogue)
     box_config = placement_box.load_config(placement_box_config)
 
     def current_lens() -> lens_profiles.ActiveLens | None:
@@ -7487,7 +7488,7 @@ def create_app(
 
     def tilt_path() -> Path | None:
         """This lens's camera-tilt calibration file (the tilt is stored per lens)."""
-        return lens_profiles.tilt_calibration_path(
+        return lens_settings.tilt_calibration_path(
             camera_tilt_path, lens_store.selected(), lens_catalogue
         )
 
@@ -10270,7 +10271,7 @@ def create_app(
         return {
             "tester_id": tester_id,
             "lens_id": lens_store.selected(),
-            "lenses": lens_profiles.lens_listing(
+            "lenses": lens_settings.lens_listing(
                 rig, lens_catalogue, lens_store, [optical_calibration_dir, optical_calibration]
             ),
             "allowed_ladder_us": {
@@ -11602,7 +11603,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--lens-settings",
         type=Path,
-        default=lens_profiles.default_unit_settings_path(),
+        default=lens_settings.default_unit_settings_path(),
         help="This unit's lens choice and per-lens settings (kept with its local settings)",
     )
     parser.add_argument(
