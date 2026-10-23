@@ -54,9 +54,10 @@ export interface Groove {
 /** chrome and satin steel blades, black-headed woods. */
 export type Finish = 'chrome' | 'satin' | 'black';
 
-/** Our own drawings, toe left and hosel right as seen from the target (right-handed), svg mm
- * (+x heel, +y down) around the face centre. Each outline was fitted to a reference photo
- * levelled on its score lines and scaled to one category dimension (docs/camera/impact-location.md). */
+/** Our own drawings, toe left and hosel right as seen along the face normal from the target
+ * (right-handed), svg mm (+x heel, +y down) around the face centre. Each outline was fitted to a
+ * reference photo rectified to that view and scaled to one category dimension; the hosel rises
+ * at atan(tan lie * cos loft) from the model's published specs (docs/camera/impact-location.md). */
 export interface FaceShape {
   finish: Finish;
   head: string;
@@ -286,15 +287,16 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
 
 /** The head and the club's silhouette. `nodes` run from the heel side of the neck round the
  * sole, toe and top line back to the neck, where they meet the tube's foot running along its
- * edges (a fixed tangent there, so no step). The head closes 1.5 mm up inside the tube, which
+ * edges (a fixed tangent there, so no step). The head closes up to 1.5 mm inside the tube, which
  * covers the overlap so no seam shows; the silhouette carries on up the tube to the ferrule. */
 function headAndSilhouette(nodes: readonly Point[], hosel: Hosel): { head: string; silhouette: string } {
   const n = nodes.length;
   const foot = hosel.tube[0][0];
+  const under = Math.min(foot + 1.5, hosel.tube.length > 1 ? hosel.tube[1][0] : foot + 1.5);
   const [footLeft, underLeft, underRight, footRight] = [
     edge(hosel, foot, -1),
-    edge(hosel, foot + 1.5, -1),
-    edge(hosel, foot + 1.5, 1),
+    edge(hosel, under, -1),
+    edge(hosel, under, 1),
     edge(hosel, foot, 1),
   ];
   const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
@@ -420,98 +422,98 @@ function framed(moved: FaceShape): FaceShape {
   };
 }
 
-/* Node lists fitted to each reference photo in its own levelled mm frame (the drawing is then
- * moved onto its face centre). Driver, fairway and hybrid heads and faces, 16-18 nodes each. */
+/* Node lists fitted to each reference photo rectified to the face-normal view, in its own mm
+ * frame (the drawing is then moved onto its face centre). Driver, fairway and hybrid heads and faces, 16-18 nodes each. */
 
 const DRIVER: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [53.4, -7.8], [49.5, -0.5], [43.7, 8.6], [33.1, 18.3], [19.5, 25.3], [-0.7, 28.3], [-20, 25.5], [-39.8, 14.7],
-    [-57.8, -4], [-60.9, -12.8], [-59.8, -18.5], [-47.2, -25.8], [-31.5, -30.7], [-13.3, -32.8], [6.1, -31.6],
-    [22.3, -28.3]
+    [53.7, -11], [45.7, 4], [35.7, 14.8], [23.5, 22.6], [9.5, 26.4], [-6.3, 27.1], [-20.3, 24.2], [-34.6, 17],
+    [-46.6, 6.9], [-58.2, -6.7], [-61.2, -17.4], [-56.8, -22.6], [-43.2, -28.9], [-26.4, -32.5], [-8.3, -33.4],
+    [10.7, -31.3], [28.6, -26.9], [42.3, -22.7]
   ],
   // prettier-ignore
   face: [
-    [-48.3, -2.1], [-57.3, -15.7], [-53.1, -20.4], [-32.4, -25.2], [-16.9, -26.5], [4, -26.1], [23, -23.8],
-    [38.1, -20], [51.4, -14.2], [48.5, -5.4], [39.2, 9.2], [25.3, 18.8], [9.5, 23], [-6, 23.4], [-23, 20.1],
-    [-37.5, 9.8]
+    [-48, -2.8], [-57.4, -17], [-54.4, -21.6], [-34.7, -25.8], [-17.9, -26.9], [3.9, -26.3], [24, -23.9],
+    [39.9, -20.1], [51.2, -14.9], [47.5, -5.3], [38, 8.9], [24.3, 18.2], [8.5, 22.3], [-7, 22.6], [-22.2, 19.5],
+    [-36.1, 10]
   ],
   hosel: {
-    ground: [23.14, 28.34],
-    lieDeg: 59.19,
+    ground: [20.02, 27.28],
+    lieDeg: 56.67,
     tube: [
-      [58, 13.86],
-      [74, 13.75],
-      [80, 12.27],
-      [90, 10.4],
+      [59.82, 13.67],
+      [75.53, 13.56],
+      [81.42, 12.1],
+      [91.24, 10.26],
     ],
-    ferruleLength: 1,
-    shaftTo: 140,
-    shaftWidth: 8,
-    rings: [73],
+    ferruleLength: 0.98,
+    shaftTo: 140.3,
+    shaftWidth: 7.89,
+    rings: [74.54],
     collar: null,
   },
   /* Seven lines a block; the outer ends step with the face edge, the inner ends lie on two lines
    * slanting in toward the sole; three centre bars, the middle one longest, the cross on it. */
   grooves: [
     ...evenRows(
-      -15.93,
-      4.712,
-      [-42.4, -42.5, -41, -38.2, -35.9, -31.8, -25.5].map((from, k): Point => [
+      -16.33,
+      4.723,
+      [-42.5, -42.5, -40.8, -37.9, -35.4, -31.3, -24.9].map((from, k): Point => [
         from,
-        -20.52 + 0.1761 * (-15.93 + k * 4.712),
+        -20.23 + 0.1884 * (-16.33 + k * 4.723),
       ])
     ),
     ...evenRows(
-      -15.93,
-      4.712,
-      [38.1, 41.6, 43.1, 41.4, 38.2, 35.3, 29.2].map((to, k): Point => [22.26 - 0.1969 * (-15.93 + k * 4.712), to])
+      -16.33,
+      4.723,
+      [38, 41.3, 42.6, 40.8, 37.5, 34.5, 28.5].map((to, k): Point => [21.88 + -0.2133 * (-16.33 + k * 4.723), to])
     ),
-    ...evenRows(-8.7, 6.39, [
-      [-8.8, 10.4],
-      [-14.4, 16.5],
-      [-8.5, 10.8],
+    ...evenRows(-8.68, 6.333, [
+      [-8.7, 10.3],
+      [-14.3, 16.3],
+      [-8.4, 10.7],
     ]),
   ],
-  mark: { at: [0.8, -2.25], half: 1.9 },
+  mark: { at: [0.79, -2.22], half: 1.88 },
 };
 
 const FAIRWAY: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [54.8, -3], [45.4, 6.2], [37.9, 11.1], [25.8, 15.6], [11.4, 18.2], [-3.8, 19.1], [-19.7, 18.5], [-33.2, 15.2],
-    [-45.8, 8.8], [-53.7, -0.1], [-55.9, -10.6], [-47.4, -16.2], [-34.7, -20.4], [-22.6, -22.8], [-8.4, -24.3],
-    [8, -24.1], [25.3, -21.9], [38.5, -19.1]
+    [53.8, -2.3], [45.3, 6.2], [36.6, 11.5], [24.5, 15.7], [10.7, 17.9], [-3.6, 18.6], [-18.7, 17.8],
+    [-31.8, 14.7], [-44.1, 8.4], [-51.8, -0.3], [-54, -10.5], [-45.5, -16.4], [-33.2, -20.3], [-20.7, -22.7],
+    [-7, -24], [8.6, -23.7], [25.5, -21.5], [38.8, -18.6]
   ],
   // prettier-ignore
   face: [
-    [-42.6, -3], [-43.5, -13.8], [-30.9, -17.2], [-8.2, -18.8], [14.6, -18.6], [38.8, -15.9], [50.7, -11.9],
-    [50.2, -3.1], [41.5, 6.3], [25.1, 13.6], [7.7, 16.4], [-8.4, 16.7], [-21.5, 15.6], [-35.7, 6.2]
+    [-41.4, -3.1], [-42.3, -13.9], [-30, -17.2], [-8.1, -18.6], [14.2, -18.4], [38.1, -15.7], [50.5, -11.7],
+    [49.9, -3], [41.4, 6.2], [25.9, 13.1], [8.7, 16], [-7.2, 16.1], [-20.6, 14.9], [-34.3, 6]
   ],
   hosel: {
-    ground: [31.15, 19.17],
-    lieDeg: 58.05,
+    ground: [29.26, 18.6],
+    lieDeg: 55.07,
     tube: [
-      [41.5, 16.59],
-      [42, 16.55],
-      [63, 16.25],
-      [74.6, 12.4],
+      [41.75, 16.24],
+      [42.24, 16.2],
+      [62.79, 15.91],
+      [74.15, 12.14],
     ],
-    ferruleLength: 1.5,
-    shaftTo: 125,
-    shaftWidth: 9.4,
-    rings: [54, 62.5],
-    collar: [41.5, 44.2],
+    ferruleLength: 1.47,
+    shaftTo: 123.5,
+    shaftWidth: 9.2,
+    rings: [53.98, 62.3],
+    collar: [41.75, 44.39],
   },
-  grooves: evenRows(-11.61, 4.198, [
-    [-40.2, 40.1],
-    [-39.2, 39.7],
-    [-36.8, 37.9],
-    [-34.7, 35.5],
-    [-29.9, 31.5],
-    [-23, 22.7],
+  grooves: evenRows(-11.4, 4.117, [
+    [-39.2, 39.9],
+    [-38.2, 39.4],
+    [-35.8, 37.5],
+    [-33.7, 35.1],
+    [-29, 30.9],
+    [-22.4, 22.2],
   ]),
 };
 
@@ -519,45 +521,45 @@ const HYBRID: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [46.6, 5.4], [39.1, 12.8], [29.3, 16.1], [14.8, 18.1], [-18.1, 18], [-30.7, 16.3], [-39.9, 12.8], [-47, 4.4],
-    [-43.2, -14.1], [-25.8, -17.5], [-14.5, -17.6], [-6.4, -17.2], [5.9, -15.8], [22.6, -12.4], [34.5, -10.3]
+    [43.5, 6.6], [36.4, 12.4], [28.3, 15], [14, 17.1], [-19.9, 16.9], [-35.8, 13.3], [-45.2, 5.5], [-45.9, -7],
+    [-41.9, -15.4], [-30.9, -17.3], [-16.8, -17.8], [-3.9, -17.1], [6.2, -15.7], [23.7, -12], [33.5, -10.2]
   ],
   // prettier-ignore
   face: [
-    [-38.2, -0.7], [-37.6, -13.3], [-34.1, -16], [-13.7, -16.3], [-0.2, -15.2], [14.6, -13.3], [30.9, -9.3],
-    [46.9, -9.6], [47.4, -4.8], [43.2, 2.6], [34.8, 10.2], [21.4, 13.7], [4.5, 14.3], [-16.3, 13.3], [-27.9, 11.8],
-    [-35.4, 7.7]
+    [-37.5, -0.9], [-37.4, -13], [-34, -16], [-13.8, -16.3], [-0.5, -15.1], [13.5, -13.4], [29.9, -9.2],
+    [45.8, -9.5], [46.1, -5], [41.9, 2.3], [33.6, 9.7], [20.7, 13.2], [4.5, 13.9], [-15.5, 13], [-27, 11.6],
+    [-34.7, 7.5]
   ],
   hosel: {
-    ground: [28.69, 18.43],
-    lieDeg: 57.67,
+    ground: [27.91, 17.38],
+    lieDeg: 56.97,
     tube: [
-      [40, 14.4],
-      [44, 14.2],
-      [52.6, 14.15],
-      [52.8, 12.8],
-      [62, 11.9],
-      [64, 11.45],
-      [66.5, 10.5],
+      [38.8, 14.05],
+      [42.61, 13.86],
+      [50.79, 13.81],
+      [50.98, 12.49],
+      [59.74, 11.61],
+      [61.64, 11.17],
+      [64.02, 10.25],
     ],
-    ferruleLength: 1,
-    shaftTo: 120,
-    shaftWidth: 6.8,
-    rings: [50.5, 55, 63],
+    ferruleLength: 0.95,
+    shaftTo: 114.9,
+    shaftWidth: 6.64,
+    rings: [48.79, 53.07, 60.69],
     collar: null,
   },
   /* A short top line on the toe half (the lettering above it is left out), five long lines and a
    * shorter bottom line. */
   /* The brushed face runs into the neck with no edge: it fades out over its heel end. */
-  faceFade: [30, 46],
-  grooves: evenRows(-10.08, 3.66, [
-    [-30.6, 0.4],
-    [-30.7, 28.1],
-    [-30.7, 28.1],
-    [-30.8, 28.2],
-    [-30.9, 28.3],
-    [-30.9, 28.3],
-    [-19.4, 16.9],
+  faceFade: [29.2, 44.7],
+  grooves: evenRows(-9.94, 3.593, [
+    [-30.2, 0.4],
+    [-30.2, 27.4],
+    [-30.2, 27.4],
+    [-30.2, 27.4],
+    [-30.2, 27.4],
+    [-30.2, 27.3],
+    [-18.8, 16.2],
   ]),
 };
 
@@ -568,25 +570,25 @@ const IRON = {
   finish: 'chrome',
   // prettier-ignore
   head: [
-    [44, 13.1], [33.5, 20.4], [18.7, 23], [4, 23.8], [-12.3, 23.7], [-28.6, 21.8], [-37.3, 17.3], [-42.6, 8.6],
-    [-43.8, -5.4], [-39.6, -18], [-32.2, -25.1], [-21.8, -24.9], [-4.7, -19.2], [12.1, -13], [27.7, -6.9],
-    [37.5, -4.2]
+    [40.7, 16.5], [28.4, 21.9], [17.3, 23.6], [3.2, 24.5], [-12.7, 24.4], [-29, 22.5], [-36.9, 18.8],
+    [-42.6, 10.2], [-43.9, -4.5], [-39.5, -17.6], [-31.6, -25], [-21.1, -24.7], [-3.6, -18.8], [12.2, -12.9],
+    [26.4, -7.2], [37, -3.9]
   ],
   // prettier-ignore
   face: [
-    [32.6, -2.7], [19.4, -9.1], [-7.7, -19.1], [-25.8, -24.5], [-34.8, -21.6], [-40.7, -10.6], [-41.4, 3],
-    [-37, 13.6], [-25, 19], [-6.5, 20.1], [22.8, 19.4], [32.6, 19.2]
+    [32.5, -2.7], [19.5, -9.1], [-7.3, -19.1], [-25.2, -24.6], [-34.3, -21.7], [-40.4, -10.6], [-41.3, 3],
+    [-37.1, 13.6], [-25.3, 19.1], [-6.9, 20.1], [21.6, 19.5], [32.5, 19.2]
   ],
   hosel: {
-    ground: [31.08, 23.73],
-    lieDeg: 59.33,
+    ground: [29.6, 24.6],
+    lieDeg: 58.17,
     tube: [
-      [36, 13.05],
-      [64, 13.05],
+      [37.52, 12.92],
+      [69.25, 12.92],
     ],
-    ferruleLength: 8,
-    shaftTo: 112,
-    shaftWidth: 9.4,
+    ferruleLength: 9.07,
+    shaftTo: 123.6,
+    shaftWidth: 9.3,
     rings: [],
     collar: null,
   },
@@ -596,26 +598,26 @@ const WEDGE = {
   finish: 'satin',
   // prettier-ignore
   head: [
-    [54.7, 7.5], [39, 21.5], [24.9, 25.2], [6.4, 26.4], [-10.5, 26.2], [-28.8, 24.5], [-38, 18.9], [-43.7, 7.6],
-    [-44.1, -8.3], [-38.2, -23.1], [-28.5, -30.8], [-15.9, -30.9], [1.3, -25.3], [17, -17.5], [34.5, -6.2],
-    [44.9, -4.2]
+    [50.4, 9.1], [34.8, 21.9], [22.8, 24.8], [5.4, 25.8], [-13, 25.4], [-29.8, 23.2], [-39.4, 15.4], [-44.1, 1.4],
+    [-42.9, -14.9], [-35.8, -28.5], [-25, -33.9], [-10.7, -31.5], [5, -25.4], [18.7, -17.9], [32.9, -8.2],
+    [44.9, -5.6]
   ],
   // prettier-ignore
   face: [
-    [31.9, -6.7], [17.1, -16.4], [-1.6, -25.7], [-20.9, -30.9], [-32.9, -27.8], [-41.1, -16], [-43.3, -0.2],
-    [-38.7, 14.4], [-28.4, 22], [-6.8, 24.1], [17.5, 23.8], [31.9, 22.3]
+    [32.2, -7], [17.9, -17.1], [-0.9, -27.1], [-20.3, -32.8], [-32.5, -30.2], [-40.9, -18.5], [-43.2, -2.5],
+    [-39, 12.8], [-29, 21.6], [-8.5, 24], [16.1, 23.8], [32.2, 22.4]
   ],
   hosel: {
-    ground: [33.79, 26.49],
-    lieDeg: 55.23,
+    ground: [29.07, 25.87],
+    lieDeg: 48.9,
     tube: [
-      [40, 13.63],
-      [75.3, 15.15],
+      [43.16, 13.61],
+      [72.25, 15.12],
     ],
-    ferruleLength: 8,
-    shaftTo: 120,
-    shaftWidth: 9.4,
-    rings: [63, 68.2],
+    ferruleLength: 6.59,
+    shaftTo: 109.1,
+    shaftWidth: 9.38,
+    rings: [62.12, 66.4],
     collar: null,
   },
 } as const satisfies Omit<Drawing, 'grooves'>;
@@ -627,21 +629,21 @@ const DRAWN: Record<FaceCategory, FaceShape> = {
   iron: blade(
     'iron',
     IRON,
-    { count: 13, lowest: 17.38, pitch: 2.926, from: -26.5, to: 26.4, steps: [-13, -4.6, 3.5, 11.1, 18.3, 25.7] },
-    [-27.1, 26.8]
+    { count: 13, lowest: 17.42, pitch: 2.933, from: -26.4, to: 26.2, steps: [-12.6, -4.3, 3.7, 11.3, 18.3, 25.7] },
+    [-27, 26.7]
   ),
   wedge: blade(
     'wedge',
     WEDGE,
     {
       count: 17,
-      lowest: 19.84,
-      pitch: 2.858,
-      from: -25.3,
-      to: 27.6,
-      steps: [-13.1, -4.8, 1.9, 7.7, 12.7, 17.4, 21.5, 25.4],
+      lowest: 20.27,
+      pitch: 2.953,
+      from: -25.2,
+      to: 27.3,
+      steps: [-13.3, -4.7, 2.1, 8, 13.1, 17.8, 21.9, 25.7],
     },
-    [-25.7, 28.3]
+    [-25.6, 28.4]
   ),
 };
 

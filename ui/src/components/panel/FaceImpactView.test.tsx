@@ -446,18 +446,28 @@ describe('faceImpact', () => {
     expect(Math.abs(bottom.from + bottom.to - (long[0].from + long[0].to))).toBeLessThanOrEqual(1);
   });
 
+  // Published stock loft and lie of the photographed models (docs/camera/impact-location.md);
+  // seen along the face normal the hosel axis rises at atan(tan(lie) * cos(loft)).
   it.each([
-    ['iron', 59.3],
-    ['wedge', 55.2],
-  ] as const)('raises the %s hosel up and to the heel at the photo’s neck angle', (category, lie) => {
-    const { hosel } = FACE_SHAPES[category];
-    const tube = polygon(hoselParts(hosel).tube);
-    const n = tube.length / 2;
-    const bottom = [(tube[0][0] + tube[2 * n - 1][0]) / 2, (tube[0][1] + tube[2 * n - 1][1]) / 2];
-    const top = [(tube[n - 1][0] + tube[n][0]) / 2, (tube[n - 1][1] + tube[n][1]) / 2];
-    expect(top[0]).toBeGreaterThan(bottom[0]);
-    expect(Math.abs((Math.atan2(bottom[1] - top[1], top[0] - bottom[0]) * 180) / Math.PI - lie)).toBeLessThan(0.3);
-  });
+    ['driver', 9, 57],
+    ['fairway', 15, 56],
+    ['hybrid', 19.5, 58.5],
+    ['iron', 33, 62.5],
+    ['wedge', 56, 64],
+  ] as const)(
+    'raises the %s hosel up and to the heel as seen along the face normal (loft %f, lie %f)',
+    (category, loft, lie) => {
+      const { hosel } = FACE_SHAPES[category];
+      const rad = Math.PI / 180;
+      const seen = Math.atan(Math.tan(lie * rad) * Math.cos(loft * rad)) / rad;
+      const tube = polygon(hoselParts(hosel).tube);
+      const n = tube.length / 2;
+      const bottom = [(tube[0][0] + tube[2 * n - 1][0]) / 2, (tube[0][1] + tube[2 * n - 1][1]) / 2];
+      const top = [(tube[n - 1][0] + tube[n][0]) / 2, (tube[n - 1][1] + tube[n][1]) / 2];
+      expect(top[0]).toBeGreaterThan(bottom[0]);
+      expect(Math.abs((Math.atan2(bottom[1] - top[1], top[0] - bottom[0]) * 180) / Math.PI - seen)).toBeLessThan(0.5);
+    }
+  );
 
   it.each(['driver', 'fairway', 'hybrid'] as const)('fits the %s with an adjustable sleeve', (category) => {
     expect(FACE_SHAPES[category].finish).toBe('black');

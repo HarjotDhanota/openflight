@@ -200,19 +200,56 @@ flight and every other metric are the same with or without a reading
 The Club tab opens with a face-impact view:
 
 - **The face.** Our own drawing of the shot's club category (driver, fairway
-  wood, hybrid, iron, wedge), seen from the target, with the toe on the left for a
-  right-hander. A left-hander's drawing is mirrored. Each drawing is our own vector
-  outline (16-18 nodes, smooth Béziers) fitted by measurement to one reference photo
-  per category, with no lettering or logos. Each photo was levelled on its score lines
-  and scaled to one dimension the tests already hold. Irons and wedges were scaled to
-  76.6 mm from the toe to the heel end of the flat face (inside Mizuno's published
-  7-iron head lengths, 74-87 mm). Woods were scaled to the middle of their face-width
-  test: driver 110, fairway 95 and hybrid 85 mm. After scaling, the head and neck
-  outlines follow the photo silhouette to a mean of 0.06 mm or less and at most 0.7 mm.
-  The face outlines are within 0.13 mm mean and 1.2 mm at most. Score-line counts
-  match the photo exactly (driver 7 + 7 + 3 bars, fairway 6, hybrid 7, iron 13,
-  wedge 17), and the line ends are within 0.7 mm. The fit scripts and photos stay
-  out of the repository.
+  wood, hybrid, iron, wedge), seen along the face normal from the target, with the
+  toe on the left for a right-hander; a left-hander's drawing is mirrored. That is
+  the view impact location is measured in (mm along the face). Each drawing is our own
+  vector outline (16-18 nodes, smooth Béziers) fitted by measurement to one reference
+  photo per category, with no lettering or logos. The fit scripts and photos stay out
+  of the repository.
+  - **Rectified first.** The photos are not exactly face-on, so each is first warped
+    to the face-normal view:
+    1. A projective fit makes the score lines straight, horizontal and evenly pitched.
+       Fitting both the spacing gradient and the grooves' convergence corrects the
+       perspective, which had stretched the wedge's pitch from 2.72 to 3.00 mm down
+       the face. On the iron and wedge it also makes the toe edge of the milled area
+       perpendicular; the heel-side edges are not perpendicular by design. On the
+       hybrid it aligns the long lines' ends; on the driver it makes the centre
+       cross's upright perpendicular. For the driver, the face's bulge is removed too
+       (it bowed the lines into an arch).
+    2. An orthographic camera solve at the face centre gives the remaining toe-heel to
+       sole-crown aspect. It uses the published loft and lie of the photographed
+       model: seen along the face normal, the hosel axis rises at
+       atan(tan lie · cos loft), and the photo's hosel must be that axis seen from the
+       solved view.
+  - **What changes off the face plane.** Silhouette parts behind the face plane (the
+    crown, toe and sole rims) are shifted back by their depth times the solved view
+    tilt. The model treats the rim as a quarter-round, so a point w mm outside the
+    face edge lies about w mm behind the face. The hosel is drawn at the computed
+    angle, with its length foreshortened as a face-normal view sees it.
+  - **Specs used** (official pages):
+
+    | Club | Specs | Hosel angle seen face-on |
+    | --- | --- | --- |
+    | TaylorMade P·770 7-iron | 33°, lie 62.5° ([taylormadegolf.com](https://www.taylormadegolf.com/P%E2%88%99770-Irons/DW-TC567.html?lang=en_US)) | 58.2° |
+    | Titleist Vokey SM11 56° | lie 64° for every grind ([titleist.com](https://www.titleist.com/product/vokey-sm11/MASTER-SM11.html)) | 48.9° |
+    | Callaway Paradym Ai Smoke Triple Diamond driver | drawn at 9°, lie 57° ([callawaygolf.com](https://in.callawaygolf.com/golf-clubs/drivers/drivers-2024-paradym-ai-smoke-td.html)) | 56.7° |
+    | Callaway Elyte 3-wood | 15°, lie 56° ([callawaygolf.com](https://www.callawaygolf.com/golf-clubs/woods/fwoods-2025-elyte.html)) | 55.1° |
+    | TaylorMade "Forged Twist Face" #3 Rescue (SIM2, Stealth Plus, Stealth 2 Plus or Qi10 Tour; same specs) | 19.5°, lie 57-60° by sleeve, midpoint 58.5° ([taylormadegolf.com](https://www.taylormadegolf.com/SIM2-Rescue/DW-JJI56.html?lang=en_US)) | 57.0° |
+
+    The driver and fairway photos have their sleeves set to "-1" and "D".
+    Callaway publishes -1 as one degree less loft
+    ([OptiFit](https://www.callawaygolf.com/optifitinstructions)) but gives no number
+    for the Draw lie. Their photos were therefore rectified with the photographed
+    lie left free, at the least-tilted solution (it implies about 2.5-3° upright).
+    The drawings show the stock specs.
+  - **Scale.** After rectification, irons and wedges are scaled to 76.6 mm from the
+    toe to the heel end of the flat face (inside Mizuno's published 7-iron head
+    lengths, 74-87 mm). Woods are scaled to the middle of their face-width test:
+    driver 110, fairway 95 and hybrid 85 mm.
+  - **Fit against the rectified photos.** Head outlines follow the silhouette to a
+    mean of 0.05 mm or less and at most 0.4 mm. Face outlines are within 0.13 mm
+    mean and 1.1 mm at most. Score-line counts match exactly (driver 7 + 7 + 3 bars,
+    fairway 6, hybrid 7, iron 13, wedge 17), and line ends are within 0.15 mm.
 - **The centre lines.** One heel-to-toe and one low-to-high line, clipped to the
   face, cross at the face centre. `faceCentre(category, shape)` computes it from the
   drawn geometry, following the R&A/USGA centre-template idea (TPX3004): the
@@ -229,7 +266,7 @@ The Club tab opens with a face-impact view:
 
   The dot sits at the unrounded mm from there; every number is in mm whatever the
   unit preference. The driver's centre cross stays where the photo has it, 1.7 mm
-  from the computed centre (1.5 mm heel-ward, 0.9 mm up).
+  from the computed centre (1.6 mm heel-ward, 0.4 mm up).
 - **The backend's heel-toe origin is still an uncalibrated convention.** The table
   shows where that convention lands on each drawing: outline midpoint + 8 mm
   toe-ward, and the category height above the head outline's lowest point. It
@@ -238,11 +275,11 @@ The Club tab opens with a face-impact view:
 
   | Club | Toe-ward of the face centre | Above it |
   | --- | --- | --- |
-  | Driver | 8.2 mm | 0.4 mm |
-  | Fairway | 9.3 mm | -3.3 mm |
-  | Hybrid | 6.7 mm | 1.4 mm |
-  | Iron | 2.0 mm | 0.9 mm |
-  | Wedge | -0.1 mm | -2.7 mm |
+  | Driver | 8.2 mm | 1.0 mm |
+  | Fairway | 9.3 mm | -2.8 mm |
+  | Hybrid | 6.5 mm | 2.2 mm |
+  | Iron | 2.1 mm | 0.1 mm |
+  | Wedge | -0.5 mm | -2.9 mm |
 
   Testers' face marks will show whether the convention or the assumption is off.
   Calibration belongs in the backend.
