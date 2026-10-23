@@ -478,40 +478,13 @@ class SessionLogger:
         with self._write_lock:
             return self._session_uuid if self._session_file else None
 
-    def log_fusion_diagnostic(self, expected_session_uuid: str, snapshot: Dict[str, Any]) -> bool:
-        """Write a snapshot only to the exact session pinned at shot admission."""
+    def log_pinned(self, entry_type: str, expected_session_uuid: str, data: Dict[str, Any]) -> bool:
+        """Write one strict-JSON entry only to the session pinned at shot admission."""
         if not self.enabled:
             return False
         line = (
             json.dumps(
-                {"ts": datetime.now().isoformat(), "type": "fusion_diagnostic", **snapshot},
-                allow_nan=False,
-            )
-            + "\n"
-        )
-        with self._write_lock:
-            if (
-                not self._session_file
-                or self._session_uuid != expected_session_uuid
-                or snapshot.get("session_uuid") != expected_session_uuid
-            ):
-                return False
-            self._session_file.write(line)
-            self._session_file.flush()
-            return True
-
-    def log_shot_enrichment(
-        self,
-        expected_session_uuid: str,
-        lifecycle: Dict[str, Any],
-    ) -> bool:
-        """Record deadline continuation and how each late enrichment result was applied."""
-        if not self.enabled:
-            return False
-        line = (
-            json.dumps(
-                {"ts": datetime.now().isoformat(), "type": "shot_enrichment", **lifecycle},
-                allow_nan=False,
+                {"ts": datetime.now().isoformat(), "type": entry_type, **data}, allow_nan=False
             )
             + "\n"
         )
@@ -521,6 +494,10 @@ class SessionLogger:
             self._session_file.write(line)
             self._session_file.flush()
             return True
+
+    def log_shot_enrichment(self, expected_session_uuid: str, lifecycle: Dict[str, Any]) -> bool:
+        """Record deadline continuation and how each late enrichment result was applied."""
+        return self.log_pinned("shot_enrichment", expected_session_uuid, lifecycle)
 
     def log_camera_capture(
         self,

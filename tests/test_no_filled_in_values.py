@@ -498,7 +498,7 @@ def test_a_fusion_unit_says_carry_not_measured_from_first_emit_to_session_log(
         "get_session_logger",
         lambda: SimpleNamespace(
             log_shot=lambda shot, pipeline_ms=None, **_k: logged.append(shot.to_dict()) or True,
-            log_fusion_diagnostic=lambda *_a, **_k: None,
+            log_pinned=lambda *_a, **_k: None,
         ),
     )
     server_module._reset_shot_sequence()  # pylint: disable=protected-access

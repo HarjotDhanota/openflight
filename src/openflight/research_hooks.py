@@ -24,7 +24,10 @@ from datetime import datetime
 from pathlib import Path
 
 from openflight import core_eligibility, instrumentation, kiosk_extensions, pi_trace, server
-from openflight.camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
+from openflight.camera.fusion_diagnostics import (
+    build_snapshot as build_fusion_diagnostic,
+    log_fusion_diagnostic,
+)
 from openflight.gate_timing import GateEvent, warm_edge_reading_cache
 from openflight.launch_monitor import Shot
 from openflight.trace_routes import register_trace_routes
@@ -56,7 +59,7 @@ def _log_fusion_diagnostic(  # pylint: disable=too-many-arguments
             outcome=outcome,
             reason=reason,
         )
-        diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
+        log_fusion_diagnostic(diagnostic_logger, session_uuid, snapshot)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
 

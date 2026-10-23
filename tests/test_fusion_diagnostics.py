@@ -190,13 +190,13 @@ def test_session_logger_rejects_late_snapshot_after_session_reset(tmp_path):
         phase="pending",
         outcome="processing",
     )
-    assert logger.log_fusion_diagnostic(first_uuid, snapshot) is True
+    assert fd.log_fusion_diagnostic(logger, first_uuid, snapshot) is True
     first_path = logger.session_path
     logger.end_session()
     first_entries = [json.loads(line) for line in first_path.read_text().splitlines()]
     logger.start_session(mode="mock")
 
-    assert logger.log_fusion_diagnostic(first_uuid, snapshot) is False
+    assert fd.log_fusion_diagnostic(logger, first_uuid, snapshot) is False
     logger.end_session()
     assert [
         entry["revision"] for entry in first_entries if entry["type"] == "fusion_diagnostic"
@@ -330,7 +330,7 @@ def test_session_file_starts_with_header_before_diagnostic_write(tmp_path):
         phase="terminal",
         outcome="complete",
     )
-    assert logger.log_fusion_diagnostic(session_uuid, snapshot)
+    assert fd.log_fusion_diagnostic(logger, session_uuid, snapshot)
     logger.end_session()
     entries = [json.loads(line) for line in logger.session_path.read_text().splitlines()]
     assert [entry["type"] for entry in entries[:2]] == ["session_start", "fusion_diagnostic"]

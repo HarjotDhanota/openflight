@@ -19,10 +19,11 @@ class _DiagnosticLog:
         self.rows = []
         self.enrichment_rows = []
 
-    def log_fusion_diagnostic(self, expected_session_uuid, snapshot):
+    def log_pinned(self, entry_type, expected_session_uuid, data):
+        assert entry_type == "fusion_diagnostic"
         if expected_session_uuid != self.active_session_uuid:
             return False
-        self.rows.append(snapshot)
+        self.rows.append(data)
         return True
 
     def log_shot_enrichment(self, expected_session_uuid, lifecycle):
@@ -38,10 +39,10 @@ class _FinalizerLog(_DiagnosticLog):
         self.fail_diagnostic = fail_diagnostic
         self.shots = []
 
-    def log_fusion_diagnostic(self, expected_session_uuid, snapshot):
+    def log_pinned(self, entry_type, expected_session_uuid, data):
         if self.fail_diagnostic:
             raise OSError("diagnostic disk failure")
-        return super().log_fusion_diagnostic(expected_session_uuid, snapshot)
+        return super().log_pinned(entry_type, expected_session_uuid, data)
 
     def log_shot(self, shot, pipeline_ms=None):
         self.shots.append((shot, pipeline_ms))
