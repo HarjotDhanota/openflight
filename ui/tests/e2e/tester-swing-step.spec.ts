@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { keepManualLadderOpen, mockConfirmedPlacementBox, useTester } from './helpers';
+import { keepManualLadderOpen, mockConfirmedPlacementBox, useTester } from './testerHelpers';
 
 // 13 Oct UX pass, step 7: the per-shot verdict as a big card at the top (mirrored on the
 // band), live numbers while the ladder runs, “Ready for a swing” from the ball at

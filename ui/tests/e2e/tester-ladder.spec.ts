@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, keepManualLadderOpen, mockConfirmedPlacementBox, useTester, pickTester } from './helpers';
+import { KIOSK_VIEWPORTS } from './helpers';
+import { keepManualLadderOpen, mockConfirmedPlacementBox, useTester, pickTester } from './testerHelpers';
 
 test.use({ hasTouch: true });
 

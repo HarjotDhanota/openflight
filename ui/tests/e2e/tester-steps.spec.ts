@@ -1,5 +1,12 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, mockLens, mockTesters, useTester } from './helpers';
+import {
+  DEFAULT_TESTER,
+  lensState,
+  mockConfirmedPlacementBox,
+  mockLens,
+  mockTesters,
+  useTester,
+} from './testerHelpers';
 
 // 13 Oct UX pass: one step sequence with a sticky “You are here”, the tester ID and the
 // lens picked by touch (no typing anywhere in setup), per-lens settings, and 44 px targets.

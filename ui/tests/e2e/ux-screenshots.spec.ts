@@ -2,17 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { test, type Page, type Route } from '@playwright/test';
-import {
-  expect,
-  foundBall,
-  gotoApp,
-  lensState,
-  placementBoxState,
-  PATCH_PROJECTION,
-  resetSession,
-  simulateShot,
-  withControlSocket,
-} from './helpers';
+import { expect, gotoApp, resetSession, simulateShot, withControlSocket } from './helpers';
+import { foundBall, lensState, placementBoxState, PATCH_PROJECTION } from './testerHelpers';
 
 // Screenshots of every tester step and the kiosk tabs at the two Pi screens, for review.
 // Off unless UX_SHOTS_DIR names a folder: `UX_SHOTS_DIR=/tmp/ux npx playwright test ux-screenshots`.

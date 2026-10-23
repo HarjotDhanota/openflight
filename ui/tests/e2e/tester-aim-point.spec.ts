@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox, PATCH_PROJECTION, rectOf, useTester } from './helpers';
+import { mockConfirmedPlacementBox, PATCH_PROJECTION, rectOf, useTester } from './testerHelpers';
 
 // D34 (13 Oct pass): right after the ball box, the tester drags the aim point onto the
 // target in the live 1280×800 view, drawn as TrackMan's vertical yellow line with an

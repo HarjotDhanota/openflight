@@ -70,10 +70,10 @@
   "src/openflight/launch_monitor.py": "Shot carries free play and trigger-evidence fields the tester sets",
   "src/openflight/camera/capture_runtime.py": "diagnostic_capture and held-controls study hooks; 'tester_setup' metadata key",
   "src/openflight/ready_light.py": "'not_counted' result text is the tester gate's",
-  "ui/tests/e2e/helpers.ts": "kiosk helpers first, tester mocks after",
   "tests/test_server.py": "Part E finalization tests and free-play shot tests",
   "scripts/pi-python-env.sh": "refuse_while_kiosk_service_runs is the tester's",
-  "scripts/start-kiosk.sh": "--no-browser exists for the tester"
+  "scripts/start-kiosk.sh": "--no-browser exists for the tester",
+  "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
   "config/alloy.alloy": "PRODUCT",
@@ -1022,8 +1022,8 @@
   "ui/electron/main.js": "PRODUCT",
   "ui/electron/resolveTargetUrl.js": "PRODUCT",
   "ui/electron/resolveTargetUrl.test.js": "PRODUCT",
-  "ui/electron/windowOptions.js": "PRODUCT",
-  "ui/electron/windowOptions.test.js": "PRODUCT",
+  "ui/electron/windowOptions.js": "TESTER",
+  "ui/electron/windowOptions.test.js": "TESTER",
   "ui/eslint.config.js": "PRODUCT",
   "ui/index.html": "PRODUCT",
   "ui/mock-server/handlers.ts": "PRODUCT",
@@ -1266,6 +1266,7 @@
   "ui/tests/e2e/tester-swing-step.spec.ts": "TESTER",
   "ui/tests/e2e/tester-tee-range.spec.ts": "TESTER",
   "ui/tests/e2e/tester-unit-check.spec.ts": "TESTER",
+  "ui/tests/e2e/testerHelpers.ts": "TESTER",
   "ui/tests/e2e/track-review.spec.ts": "TESTER",
   "ui/tests/e2e/ux-screenshots.spec.ts": "TESTER",
   "ui/tests/isolateProfilesPath.test.ts": "PRODUCT",

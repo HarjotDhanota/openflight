@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { KIOSK_VIEWPORTS, keepManualLadderOpen, mockConfirmedPlacementBox, useTester } from './helpers';
+import { KIOSK_VIEWPORTS } from './helpers';
+import { keepManualLadderOpen, mockConfirmedPlacementBox, useTester } from './testerHelpers';
 
 test.use({ hasTouch: true });
 

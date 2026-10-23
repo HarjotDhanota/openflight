@@ -1,11 +1,6 @@
 import { expect, test } from '@playwright/test';
-import {
-  gotoApp,
-  KIOSK_VIEWPORTS,
-  simulateShot,
-  useTester,
-  withControlSocket,
-} from './helpers';
+import { gotoApp, KIOSK_VIEWPORTS, simulateShot, withControlSocket } from './helpers';
+import { useTester } from './testerHelpers';
 
 for (const viewport of KIOSK_VIEWPORTS) {
   test.describe(`free play at ${viewport.width}x${viewport.height}`, () => {

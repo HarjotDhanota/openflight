@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { BOX_OUTLINE_PX, foundBall, placementBoxState, rectOf, useTester } from './helpers';
+import { BOX_OUTLINE_PX, foundBall, placementBoxState, rectOf, useTester } from './testerHelpers';
 
 // 1a (13 Oct): the TrackMan-style ball box. A FIXED box on the live view: the tester
 // puts the ball in it and a check appears when the camera finds it; one horizontal
