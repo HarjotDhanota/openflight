@@ -5,6 +5,7 @@ import { FaceImpactView } from './FaceImpactView';
 import {
   FACE_SHAPES,
   faceCategory,
+  faceCentre,
   GROOVE_WIDTH_MM,
   hoselParts,
   impactReading,
@@ -84,16 +85,6 @@ function crossings(points: Point[], y: number): number[] {
   return xs.sort((p, q) => p - q);
 }
 
-/** The scoring area's centre: midway between the score lines' outer ends, midway up the face. */
-function scoringCentre(category: FaceCategory): [number, number] {
-  const shape = FACE_SHAPES[category];
-  const x =
-    (Math.min(...shape.grooves.map((groove) => groove.from)) + Math.max(...shape.grooves.map((groove) => groove.to))) /
-    2;
-  const [top, bottom] = span(polygon(shape.face), x);
-  return [x, (top + bottom) / 2];
-}
-
 function inside(points: Point[], x: number, y: number): boolean {
   let hit = false;
   points.forEach((a, index) => {
@@ -160,18 +151,19 @@ describe('faceImpact', () => {
     expect(faceCategory(club)).toBe(category);
   });
 
-  it('keeps the iron at a 7-iron length', () => {
-    const iron = extent(polygon(FACE_SHAPES.iron.head));
-    expect(iron.maxX - iron.minX).toBeGreaterThanOrEqual(74);
-    expect(iron.maxX - iron.minX).toBeLessThanOrEqual(87);
+  it('keeps the iron at its 7-iron blade length, toe to the heel end of the face', () => {
+    const iron = FACE_SHAPES.iron;
+    const blade = extent(polygon(iron.face)).maxX - extent(polygon(iron.head)).minX;
+    expect(blade).toBeGreaterThanOrEqual(74);
+    expect(blade).toBeLessThanOrEqual(87);
   });
 
   it.each([
-    ['driver', [105, 115], [55, 62]],
-    ['fairway', [90, 100], [35, 40]],
-    ['hybrid', [80, 90], [32, 40]],
-    ['iron', [60, 80], [48, 52]],
-    ['wedge', [60, 80], [55, 60]],
+    ['driver', [105, 115], [48, 53]],
+    ['fairway', [90, 100], [34, 38]],
+    ['hybrid', [80, 90], [29, 33]],
+    ['iron', [70, 78], [44, 48]],
+    ['wedge', [70, 80], [53, 58]],
   ] as const)('draws the %s face at its category size', (category, width, height) => {
     const face = extent(polygon(FACE_SHAPES[category].face));
     expect(face.maxX - face.minX).toBeGreaterThanOrEqual(width[0]);
@@ -181,30 +173,33 @@ describe('faceImpact', () => {
   });
 
   it.each(['driver', 'fairway', 'hybrid'] as const)(
-    'puts the %s centre lines on the scoring-area centre: midway between the score-line ends, midway up the face',
+    'puts the %s centre lines on the face centre: equal heel/toe and sole/crown distances to the face edge',
     (category) => {
-      const [x, y] = scoringCentre(category);
-      expect(Math.abs(x)).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(y)).toBeLessThanOrEqual(0.5);
+      const face = polygon(FACE_SHAPES[category].face);
+      const across = crossings(face, 0);
+      expect(Math.abs(across[0] + across[across.length - 1])).toBeLessThanOrEqual(0.05);
+      const [top, bottom] = span(face, 0);
+      expect(Math.abs(top + bottom)).toBeLessThanOrEqual(0.05);
+      const [x, y] = faceCentre(category, FACE_SHAPES[category]);
+      expect(Math.abs(x)).toBeLessThanOrEqual(0.05);
+      expect(Math.abs(y)).toBeLessThanOrEqual(0.05);
     }
   );
 
   it.each(['iron', 'wedge'] as const)(
-    'puts the %s centre lines on the groove-block centre: midway between the common line ends and the lowest and highest line over it',
+    'puts the %s centre lines on the longest score line’s midpoint, midway between leading edge and top line there',
     (category) => {
-      const grooves = [...FACE_SHAPES[category].grooves].sort((a, b) => b.y - a.y);
-      const heelEnd = Math.max(...grooves.map((groove) => groove.to));
-      expect(Math.abs((grooves[0].from + heelEnd) / 2)).toBeLessThanOrEqual(0.5);
-      const over = grooves.filter((groove) => groove.from <= 0 && groove.to >= 0);
-      expect(Math.abs((over[0].y + over[over.length - 1].y) / 2)).toBeLessThanOrEqual(0.5);
+      const shape = FACE_SHAPES[category];
+      const longest = Math.max(...shape.grooves.map((groove) => groove.to - groove.from));
+      for (const groove of shape.grooves.filter((g) => g.to - g.from > longest - 0.01))
+        expect(Math.abs((groove.from + groove.to) / 2)).toBeLessThanOrEqual(0.05);
+      const [top, bottom] = span(polygon(shape.face), 0);
+      expect(Math.abs(top + bottom)).toBeLessThanOrEqual(0.05);
+      const [x, y] = faceCentre(category, shape);
+      expect(Math.abs(x)).toBeLessThanOrEqual(0.05);
+      expect(Math.abs(y)).toBeLessThanOrEqual(0.05);
     }
   );
-
-  it.each(['driver', 'fairway'] as const)('centres the %s score-line rows midway up the face', (category) => {
-    const [, middle] = scoringCentre(category);
-    const ys = FACE_SHAPES[category].grooves.map((groove) => groove.y);
-    expect(Math.abs((Math.min(...ys) + Math.max(...ys)) / 2 - middle)).toBeLessThanOrEqual(0.5);
-  });
 
   it.each(['iron', 'wedge'] as const)(
     'draws the %s as a blade: tallest at the toe, topline falling to the heel',
@@ -219,66 +214,58 @@ describe('faceImpact', () => {
     }
   );
 
-  it('gives the iron a 30-35 mm heel', () => {
-    const face = polygon(FACE_SHAPES.iron.face);
-    const heel = span(face, extent(face).maxX - 8);
-    expect(heel[1] - heel[0]).toBeGreaterThanOrEqual(30);
-    expect(heel[1] - heel[0]).toBeLessThanOrEqual(35);
-  });
-
   it.each([
-    ['iron', [14, 16], [50, 58]],
-    ['wedge', [16, 18], [48, 56]],
-  ] as const)('lays the %s score lines out like a real club', (category, count, length) => {
-    const shape = FACE_SHAPES[category];
-    const face = polygon(shape.face);
-    const grooves = [...shape.grooves].sort((a, b) => b.y - a.y);
-    expect(grooves.length).toBeGreaterThanOrEqual(count[0]);
-    expect(grooves.length).toBeLessThanOrEqual(count[1]);
-    const toeEnds = grooves.map((groove) => groove.from);
-    expect(Math.max(...toeEnds) - Math.min(...toeEnds)).toBeLessThanOrEqual(0.1);
-    const pitches = grooves.slice(1).map((groove, k) => grooves[k].y - groove.y);
-    for (const pitch of pitches) {
-      expect(Math.abs(pitch - pitches[0])).toBeLessThanOrEqual(0.05);
-      expect(pitch).toBeGreaterThanOrEqual(3);
-      expect(pitch).toBeLessThanOrEqual(3.8);
+    ['iron', 13, 6, [2.3, 3], [3, 6], [4, 8]],
+    ['wedge', 17, 8, [3.5, 4.5], [6, 10], [3, 6]],
+  ] as const)(
+    'lays the %s score lines out as the photo: %i lines, the top %i stepped under the topline',
+    (category, count, stepped, lowest, toeMargin, heelMargin) => {
+      const shape = FACE_SHAPES[category];
+      const face = polygon(shape.face);
+      const grooves = [...shape.grooves].sort((a, b) => b.y - a.y);
+      expect(grooves).toHaveLength(count);
+      const toeEnds = grooves.map((groove) => groove.from);
+      expect(Math.max(...toeEnds) - Math.min(...toeEnds)).toBeLessThanOrEqual(0.1);
+      const pitches = grooves.slice(1).map((groove, k) => grooves[k].y - groove.y);
+      for (const pitch of pitches) {
+        expect(Math.abs(pitch - pitches[0])).toBeLessThanOrEqual(0.05);
+        expect(pitch).toBeGreaterThanOrEqual(2.8);
+        expect(pitch).toBeLessThanOrEqual(3);
+      }
+      const below = span(face, 0)[1] - grooves[0].y;
+      expect(below).toBeGreaterThanOrEqual(lowest[0]);
+      expect(below).toBeLessThanOrEqual(lowest[1]);
+      const heelEnd = Math.max(...grooves.map((groove) => groove.to));
+      const steps = grooves.filter((groove) => groove.to < heelEnd - 0.05);
+      expect(steps).toHaveLength(stepped);
+      steps.forEach((groove, k) => {
+        const under = groove.y - span(face, groove.to)[0];
+        expect(under).toBeGreaterThanOrEqual(2.5);
+        expect(under).toBeLessThanOrEqual(5.5);
+        if (k) expect(groove.to).toBeLessThan(steps[k - 1].to);
+      });
+      expect(heelEnd - grooves[0].from).toBeGreaterThanOrEqual(50);
+      expect(heelEnd - grooves[0].from).toBeLessThanOrEqual(56);
+      const across = crossings(face, grooves[0].y);
+      expect(grooves[0].from - across[0]).toBeGreaterThanOrEqual(toeMargin[0]);
+      expect(grooves[0].from - across[0]).toBeLessThanOrEqual(toeMargin[1]);
+      expect(across[across.length - 1] - heelEnd).toBeGreaterThanOrEqual(heelMargin[0]);
+      expect(across[across.length - 1] - heelEnd).toBeLessThanOrEqual(heelMargin[1]);
     }
-    const lowest = span(face, 0)[1] - grooves[0].y;
-    expect(lowest).toBeGreaterThanOrEqual(4);
-    expect(lowest).toBeLessThanOrEqual(5);
-    const top = grooves[grooves.length - 1];
-    const underTopAtToe = top.y - span(face, top.from)[0];
-    expect(underTopAtToe).toBeGreaterThanOrEqual(2.5);
-    expect(underTopAtToe).toBeLessThanOrEqual(3 + pitches[0]);
-    const heelEnd = Math.max(...grooves.map((groove) => groove.to));
-    expect(grooves.filter((groove) => groove.to < heelEnd - 0.05).length).toBeGreaterThanOrEqual(4);
-    for (const groove of grooves) {
-      const clearance = groove.y - span(face, groove.to)[0];
-      expect(clearance).toBeGreaterThanOrEqual(2.5);
-      if (groove.to < heelEnd - 0.05) expect(clearance).toBeLessThanOrEqual(3.5);
-    }
-    expect(heelEnd - grooves[0].from).toBeGreaterThanOrEqual(length[0]);
-    expect(heelEnd - grooves[0].from).toBeLessThanOrEqual(length[1]);
-    const across = crossings(face, grooves[0].y);
-    expect(grooves[0].from - across[0]).toBeGreaterThanOrEqual(8);
-    expect(grooves[0].from - across[0]).toBeLessThanOrEqual(14);
-    expect(across[across.length - 1] - heelEnd).toBeGreaterThanOrEqual(2);
-    expect(across[across.length - 1] - heelEnd).toBeLessThanOrEqual(6);
-    expect(FACE_SHAPES.wedge.grooves.length).toBeGreaterThan(FACE_SHAPES.iron.grooves.length);
-  });
+  );
 
   it.each(['iron', 'wedge'] as const)(
-    'bounds the %s milled scoring area with straight toe and heel sides around the lines',
+    'bounds the %s milled scoring area with straight toe and heel sides just outside the lines',
     (category) => {
       const shape = FACE_SHAPES[category];
       const scoring = polygon(shape.scoring!);
       const box = extent(scoring);
       const toeEnd = shape.grooves[0].from;
       const heelEnd = Math.max(...shape.grooves.map((groove) => groove.to));
-      expect(toeEnd - box.minX).toBeGreaterThan(0.5);
-      expect(toeEnd - box.minX).toBeLessThan(3);
-      expect(box.maxX - heelEnd).toBeGreaterThan(0.5);
-      expect(box.maxX - heelEnd).toBeLessThan(3);
+      expect(toeEnd - box.minX).toBeGreaterThan(0.2);
+      expect(toeEnd - box.minX).toBeLessThan(1.5);
+      expect(box.maxX - heelEnd).toBeGreaterThan(0.2);
+      expect(box.maxX - heelEnd).toBeLessThan(1.5);
       const toeSide = scoring.filter((point) => Math.abs(point[0] - box.minX) < 0.01);
       const heelSide = scoring.filter((point) => Math.abs(point[0] - box.maxX) < 0.01);
       expect(toeSide.length).toBeGreaterThanOrEqual(2);
@@ -292,6 +279,67 @@ describe('faceImpact', () => {
     }
   );
 
+  it.each(['iron', 'wedge'] as const)('keeps the %s topline highlight on the face, short of the hosel', (category) => {
+    const shape = FACE_SHAPES[category];
+    const box = extent(polygon(shape.face));
+    expect(shape.edges.length).toBeGreaterThan(0);
+    for (const { d } of shape.edges)
+      for (const [x, y] of polygon(d)) {
+        expect(x).toBeLessThanOrEqual(box.maxX + 0.01);
+        expect(x).toBeGreaterThanOrEqual(box.minX - 0.01);
+        expect(y).toBeGreaterThanOrEqual(box.minY - 0.01);
+      }
+  });
+
+  it.each(['iron', 'wedge'] as const)(
+    'fades the %s topline highlight out down the toe instead of cutting it off',
+    (category) => {
+      const { edges } = FACE_SHAPES[category];
+      const tail = edges[edges.length - 1];
+      expect(tail.fade).not.toBeNull();
+      const ends = polygon(tail.d);
+      expect(Math.hypot(ends[0][0] - tail.fade![0][0], ends[0][1] - tail.fade![0][1])).toBeLessThan(0.02);
+      const last = ends[ends.length - 1];
+      expect(Math.hypot(last[0] - tail.fade![1][0], last[1] - tail.fade![1][1])).toBeLessThan(0.02);
+      const main = polygon(edges[0].d);
+      expect(Math.hypot(main.at(-1)![0] - ends[0][0], main.at(-1)![1] - ends[0][1])).toBeLessThan(0.02);
+    }
+  );
+
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'runs the %s outline from the head into the tube without a step',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const numbers = (shape.silhouette.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+      const points: Point[] = [];
+      for (let i = 0; i < numbers.length; i += 2) points.push([numbers[i], numbers[i + 1]]);
+      const tube = polygon(hoselParts(shape.hosel).tube);
+      const n = tube.length / 2;
+      for (const foot of [tube[0], tube[2 * n - 1]]) {
+        // M p0, then C c1 c2 p per segment: an end point sits at index 3j, its handles either side.
+        const k = points.findIndex(
+          (point, i) => i % 3 === 0 && Math.hypot(point[0] - foot[0], point[1] - foot[1]) < 0.02
+        );
+        expect(k).toBeGreaterThan(0);
+        const [before, at, after] = [points[k - 1], points[k], points[k + 1]];
+        const u = [at[0] - before[0], at[1] - before[1]];
+        const v = [after[0] - at[0], after[1] - at[1]];
+        const turn = Math.abs(Math.atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]));
+        expect(turn).toBeLessThan(0.02);
+      }
+    }
+  );
+
+  it('fades the hybrid face into the neck at the heel; the other faces keep a hard edge', () => {
+    const face = extent(polygon(FACE_SHAPES.hybrid.face));
+    const [from, to] = FACE_SHAPES.hybrid.faceFade!;
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeLessThanOrEqual(face.maxX + 0.01);
+    expect(to - from).toBeGreaterThan(8);
+    for (const category of ['driver', 'fairway', 'iron', 'wedge'] as const)
+      expect(FACE_SHAPES[category].faceFade).toBeNull();
+  });
+
   it.each(Object.keys(FACE_SHAPES) as FaceCategory[])('keeps every %s score line on the face', (category) => {
     const shape = FACE_SHAPES[category];
     const face = polygon(shape.face);
@@ -301,72 +349,125 @@ describe('faceImpact', () => {
     }
   });
 
-  it('gives the driver 8 lines in each heel and toe block and a plain centre with three bars and a cross', () => {
+  it('gives the driver 7 lines in each heel and toe block, inner ends on slanted lines, outer ends stepping with the face', () => {
     const shape = FACE_SHAPES.driver;
-    const [cx, cy] = scoringCentre('driver');
-    const toe = shape.grooves.filter((groove) => groove.to < cx - 15);
-    const heel = shape.grooves.filter((groove) => groove.from > cx + 15);
-    const centre = shape.grooves.filter((groove) => groove.from < cx && groove.to > cx);
-    expect(toe).toHaveLength(8);
-    expect(heel).toHaveLength(8);
-    expect(centre).toHaveLength(3);
-    for (const groove of centre) {
-      expect(groove.to - groove.from).toBeLessThanOrEqual(34);
-      expect(Math.abs((groove.from + groove.to) / 2 - cx)).toBeLessThanOrEqual(0.1);
+    const face = polygon(shape.face);
+    const toe = shape.grooves.filter((groove) => groove.to < -10).sort((a, b) => a.y - b.y);
+    const heel = shape.grooves.filter((groove) => groove.from > 10).sort((a, b) => a.y - b.y);
+    expect(toe).toHaveLength(7);
+    expect(heel).toHaveLength(7);
+    for (const inner of [toe.map((groove) => groove.to), heel.map((groove) => groove.from)]) {
+      const slope = (inner[6] - inner[0]) / (toe[6].y - toe[0].y);
+      expect(Math.abs(slope)).toBeGreaterThan(0.1);
+      inner.forEach((x, k) => expect(Math.abs(inner[0] + slope * (toe[k].y - toe[0].y) - x)).toBeLessThanOrEqual(0.06));
     }
-    const cross = polygon(shape.mark!);
-    for (const [x, y] of cross) {
-      expect(x).toBeCloseTo(cx, 1);
-      expect(Math.abs(y - cy)).toBeLessThanOrEqual(2);
+    expect(toe[6].to).toBeGreaterThan(toe[0].to);
+    expect(heel[6].from).toBeLessThan(heel[0].from);
+    for (const groove of toe) {
+      const margin = groove.from - crossings(face, groove.y)[0];
+      expect(margin).toBeGreaterThan(2);
+      expect(margin).toBeLessThan(16);
+    }
+    for (const groove of heel) {
+      const across = crossings(face, groove.y);
+      const margin = across[across.length - 1] - groove.to;
+      expect(margin).toBeGreaterThan(2);
+      expect(margin).toBeLessThan(16);
     }
   });
 
-  it('gives the fairway six lines across the face, set in from its outline, the toe ends further, the lowest shortest', () => {
+  it('gives the driver a plain centre with three bars, the middle one longest, and a small cross on it', () => {
+    const shape = FACE_SHAPES.driver;
+    const bars = shape.grooves.filter((groove) => groove.from < 0 && groove.to > 0).sort((a, b) => a.y - b.y);
+    expect(bars).toHaveLength(3);
+    const length = bars.map((bar) => bar.to - bar.from);
+    expect(length[1]).toBeGreaterThan(length[0] + 8);
+    expect(length[1]).toBeGreaterThan(length[2] + 8);
+    const cross = polygon(shape.mark!);
+    const x = cross[0][0];
+    for (const point of cross) expect(point[0]).toBeCloseTo(x, 5);
+    const ys = cross.map((point) => point[1]);
+    expect(Math.min(...ys)).toBeLessThan(bars[1].y);
+    expect(Math.max(...ys)).toBeGreaterThan(bars[1].y);
+    expect(x).toBeGreaterThan(bars[1].from);
+    expect(x).toBeLessThan(bars[1].to);
+  });
+
+  it('gives the fairway six lines across the face, their ends stepping in with the outline, the lowest shortest', () => {
     const shape = FACE_SHAPES.fairway;
     const face = polygon(shape.face);
     const grooves = [...shape.grooves].sort((a, b) => a.y - b.y);
     expect(grooves).toHaveLength(6);
     expect(shape.mark).toBeNull();
-    const [cx] = scoringCentre('fairway');
     for (const groove of grooves) {
-      expect(groove.from).toBeLessThan(cx - 15);
-      expect(groove.to).toBeGreaterThan(cx + 15);
+      expect(groove.from).toBeLessThan(-15);
+      expect(groove.to).toBeGreaterThan(15);
       const across = crossings(face, groove.y);
-      const toeInset = groove.from - across[0];
-      const heelInset = across[across.length - 1] - groove.to;
-      expect(toeInset).toBeGreaterThanOrEqual(8.9);
-      expect(heelInset).toBeGreaterThanOrEqual(6.9);
-      expect(toeInset).toBeGreaterThan(heelInset);
+      expect(groove.from - across[0]).toBeGreaterThanOrEqual(2);
+      expect(groove.from - across[0]).toBeLessThanOrEqual(14);
+      expect(across[across.length - 1] - groove.to).toBeGreaterThanOrEqual(2);
+      expect(across[across.length - 1] - groove.to).toBeLessThanOrEqual(14);
     }
     const lengths = grooves.map((groove) => groove.to - groove.from);
-    expect(lengths[5]).toBeLessThan(Math.min(...lengths.slice(0, 5)) - 5);
-    for (let k = 1; k < 6; k += 1) expect(lengths[k]).toBeLessThanOrEqual(lengths[k - 1] + 1);
+    expect(lengths[5]).toBeLessThan(Math.min(...lengths.slice(0, 5)) - 10);
+    for (let k = 1; k < 6; k += 1) expect(lengths[k]).toBeLessThanOrEqual(lengths[k - 1] + 0.5);
   });
 
-  it('fits the fairway sleeve with a grey ring where it meets the head', () => {
-    expect(hoselParts(FACE_SHAPES.fairway.hosel).collar).toBeTruthy();
+  it('fits the fairway sleeve with a grey band across it just above where the neck meets the head', () => {
+    const { hosel } = FACE_SHAPES.fairway;
+    expect(hosel.collar).not.toBeNull();
+    const [from, to] = hosel.collar!;
+    expect(from).toBeCloseTo(hosel.tube[0][0], 5);
+    expect(to - from).toBeGreaterThan(2);
+    expect(to - from).toBeLessThan(4);
+    const parts = hoselParts(hosel);
+    const tube = polygon(parts.tube);
+    const band = polygon(parts.collar!);
+    const middle = band.reduce(
+      (sum, point) => [sum[0] + point[0] / band.length, sum[1] + point[1] / band.length],
+      [0, 0]
+    );
+    expect(inside(tube, middle[0], middle[1])).toBe(true);
+    for (const [x, y] of band.slice(0, 4))
+      expect(inside(tube, x + (middle[0] - x) * 0.01, y + (middle[1] - y) * 0.01)).toBe(true);
   });
 
-  it('gives the hybrid six long lines and a shorter bottom line centred under them', () => {
+  it('gives the hybrid a short top line on the toe half, five long lines and a shorter bottom line under them', () => {
     const grooves = [...FACE_SHAPES.hybrid.grooves].sort((a, b) => a.y - b.y);
     expect(grooves).toHaveLength(7);
-    const long = grooves.slice(0, 6);
-    const bottom = grooves[6];
-    for (const groove of long) expect(groove.to - groove.from).toBeGreaterThanOrEqual(50);
+    const [top, ...rest] = grooves;
+    const long = rest.slice(0, 5);
+    const bottom = rest[5];
+    for (const groove of long) expect(groove.to - groove.from).toBeGreaterThanOrEqual(55);
+    expect(Math.abs(top.from - long[0].from)).toBeLessThanOrEqual(0.5);
+    expect(top.to).toBeLessThan((long[0].from + long[0].to) / 2 + 3);
+    expect(top.to - top.from).toBeLessThan(long[0].to - long[0].from - 20);
     expect(bottom.to - bottom.from).toBeLessThan(long[0].to - long[0].from - 15);
-    expect(Math.abs(bottom.from + bottom.to - (long[0].from + long[0].to))).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(bottom.from + bottom.to - (long[0].from + long[0].to))).toBeLessThanOrEqual(1);
   });
 
+  // Published stock loft and lie of the photographed models (docs/camera/impact-location.md);
+  // seen along the face normal the hosel axis rises at atan(tan(lie) * cos(loft)).
   it.each([
-    ['iron', 62],
-    ['wedge', 63],
-  ] as const)('raises the %s hosel up and to the heel at its lie angle', (category, lie) => {
-    const [a, b, c, d] = polygon(hoselParts(FACE_SHAPES[category].hosel).tube);
-    const bottom = [(a[0] + d[0]) / 2, (a[1] + d[1]) / 2];
-    const top = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2];
-    expect(top[0]).toBeGreaterThan(bottom[0]);
-    expect((Math.atan2(bottom[1] - top[1], top[0] - bottom[0]) * 180) / Math.PI).toBeCloseTo(lie, 0);
-  });
+    ['driver', 9, 57],
+    ['fairway', 15, 56],
+    ['hybrid', 19.5, 58.5],
+    ['iron', 33, 62.5],
+    ['wedge', 56, 64],
+  ] as const)(
+    'raises the %s hosel up and to the heel as seen along the face normal (loft %f, lie %f)',
+    (category, loft, lie) => {
+      const { hosel } = FACE_SHAPES[category];
+      const rad = Math.PI / 180;
+      const seen = Math.atan(Math.tan(lie * rad) * Math.cos(loft * rad)) / rad;
+      const tube = polygon(hoselParts(hosel).tube);
+      const n = tube.length / 2;
+      const bottom = [(tube[0][0] + tube[2 * n - 1][0]) / 2, (tube[0][1] + tube[2 * n - 1][1]) / 2];
+      const top = [(tube[n - 1][0] + tube[n][0]) / 2, (tube[n - 1][1] + tube[n][1]) / 2];
+      expect(top[0]).toBeGreaterThan(bottom[0]);
+      expect(Math.abs((Math.atan2(bottom[1] - top[1], top[0] - bottom[0]) * 180) / Math.PI - seen)).toBeLessThan(0.5);
+    }
+  );
 
   it.each(['driver', 'fairway', 'hybrid'] as const)('fits the %s with an adjustable sleeve', (category) => {
     expect(FACE_SHAPES[category].finish).toBe('black');
@@ -413,8 +514,7 @@ describe('the drawings against the USGA Equipment Rules', () => {
       const sets = new Map<string, number[]>();
       for (const groove of FACE_SHAPES[category].grooves) {
         expect(groove.to).toBeGreaterThan(groove.from);
-        const cx = scoringCentre(category)[0];
-        const key = groove.to < cx ? 'toe' : groove.from > cx ? 'heel' : 'centre';
+        const key = groove.to < 0 ? 'toe' : groove.from > 0 ? 'heel' : 'centre';
         sets.set(key, [...(sets.get(key) ?? []), groove.y]);
       }
       for (const ys of sets.values()) {
@@ -430,23 +530,21 @@ describe('the drawings against the USGA Equipment Rules', () => {
     }
   );
 
-  it('keeps the driver heel and toe blocks out of the central impact strip', () => {
+  it('keeps the driver heel and toe blocks out of the central impact strip around the face centre', () => {
     const half = USGA.woodImpactStripMm / 2;
-    const [cx] = scoringCentre('driver');
-    const blocks = FACE_SHAPES.driver.grooves.filter((groove) => groove.to < cx || groove.from > cx);
-    expect(blocks).toHaveLength(16);
+    const blocks = FACE_SHAPES.driver.grooves.filter((groove) => groove.to < 0 || groove.from > 0);
+    expect(blocks).toHaveLength(14);
     for (const groove of blocks) {
-      const inner = groove.to < cx ? cx - groove.to : groove.from - cx;
+      const inner = groove.to < 0 ? -groove.to : groove.from;
       expect(half - inner).toBeLessThan(USGA.impactAreaEncroachMm);
     }
   });
 
-  it('keeps the driver centre cross inside the decorative square around the impact-area centre', () => {
+  it('keeps the driver centre cross inside the decorative square around the face centre', () => {
     const half = USGA.centreMarkSquareMm / 2;
-    const [cx, cy] = scoringCentre('driver');
     for (const [x, y] of polygon(FACE_SHAPES.driver.mark!)) {
-      expect(Math.abs(x - cx)).toBeLessThanOrEqual(half);
-      expect(Math.abs(y - cy)).toBeLessThanOrEqual(half);
+      expect(Math.abs(x)).toBeLessThanOrEqual(half);
+      expect(Math.abs(y)).toBeLessThanOrEqual(half);
     }
   });
 
@@ -460,10 +558,11 @@ describe('the drawings against the USGA Equipment Rules', () => {
     const shape = FACE_SHAPES[category];
     const { hosel } = shape;
     const lie = (hosel.lieDeg * Math.PI) / 180;
-    const joint = hosel.ground[0] + hosel.from * Math.cos(lie);
+    const joint = hosel.ground[0] + hosel.tube[0][0] * Math.cos(lie);
     expect(joint).toBeGreaterThan(Math.max(...shape.grooves.map((groove) => groove.to)));
     const sole = extent(polygon(shape.head)).maxY;
-    const neck = hosel.ferruleAt + hosel.ferruleLength + (sole - hosel.ground[1]) / Math.sin(lie);
+    const top = hosel.tube[hosel.tube.length - 1][0];
+    const neck = top + hosel.ferruleLength + (sole - hosel.ground[1]) / Math.sin(lie);
     expect(neck).toBeLessThanOrEqual(USGA.neckToSoleMaxMm);
   });
 });
@@ -498,6 +597,10 @@ describe('FaceImpactView', () => {
     const html = render(shot({ club: 'driver' }));
     expect(html).toContain('face-impact__mark');
     expect(html.match(/face-impact__groove"/g)).toHaveLength(FACE_SHAPES.driver.grooves.length);
+  });
+
+  it('draws the fairway sleeve band', () => {
+    expect(render(shot({ club: '3-wood' }))).toContain('face-impact__collar');
   });
 
   it('says heel and low for a strike on the other side', () => {

@@ -175,43 +175,96 @@ async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number 
   });
 }
 
-test.describe('face impact drawings', () => {
-  test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
+/** The topline highlight, sleeve band and score lines stay on their parts (no stroke poking out). */
+async function artefacts(page: Page): Promise<string[]> {
+  return page.locator('.face-impact').evaluate((view) => {
+    const box = (selector: string) => (view.querySelector(selector) as SVGGraphicsElement | null)?.getBBox();
+    const problems: string[] = [];
+    const face = box('.face-impact__face')!;
+    const within = (inner: DOMRect, outer: DOMRect, slop = 0.05) =>
+      inner.x >= outer.x - slop &&
+      inner.y >= outer.y - slop &&
+      inner.x + inner.width <= outer.x + outer.width + slop &&
+      inner.y + inner.height <= outer.y + outer.height + slop;
+    for (const edge of view.querySelectorAll('.face-impact__edge'))
+      if (!within((edge as SVGGraphicsElement).getBBox(), face)) problems.push('topline highlight off the face');
+    const scoring = box('.face-impact__scoring');
+    if (scoring && !within(scoring, face)) problems.push('milled area off the face');
+    for (const groove of view.querySelectorAll('.face-impact__groove'))
+      if (!within((groove as SVGGraphicsElement).getBBox(), face)) problems.push('score line off the face');
+    const collar = box('.face-impact__collar');
+    const hosel = box('.face-impact__hosel')!;
+    if (collar && !within(collar, hosel)) problems.push('sleeve band off the sleeve');
+    return problems;
+  });
+}
 
-  for (const [club, category] of [
-    ['driver', 'driver'],
-    ['3-wood', 'fairway'],
-    ['5-hybrid', 'hybrid'],
-    ['7-iron', 'iron'],
-    ['sw', 'wedge'],
-  ] as const) {
-    test(`draws the ${category} face with the centre strike and an off-centre strike on it`, async ({ page }) => {
-      await openClubPanel(page, 2, club);
-      await setReadings(page, [
-        { offset: 0, height: 0 },
-        { offset: 9, height: 4, sigma: [4, 5] },
-      ]);
+const DRAWINGS = [
+  ['driver', 'driver'],
+  ['3-wood', 'fairway'],
+  ['5-hybrid', 'hybrid'],
+  ['7-iron', 'iron'],
+  ['sw', 'wedge'],
+] as const;
+
+for (const viewport of [
+  { width: 1024, height: 600 },
+  { width: 800, height: 480 },
+]) {
+  const size = `${viewport.width}x${viewport.height}`;
+  test.describe(`face impact drawings at ${size}`, () => {
+    test.use({ hasTouch: true, viewport });
+
+    for (const [club, category] of DRAWINGS) {
+      test(`draws the ${category} face with the centre strike and an off-centre strike on it`, async ({ page }) => {
+        await openClubPanel(page, 2, club);
+        await setReadings(page, [
+          { offset: 0, height: 0 },
+          { offset: 9, height: 4, sigma: [4, 5] },
+        ]);
+        const view = page.locator('.face-impact');
+        await expect(view).toHaveAttribute('data-face', category);
+        await expect(view.locator('.face-impact__head')).toHaveCount(1);
+        await expect(view.locator('.face-impact__dot')).toHaveCount(1);
+        await expect(view.locator('.face-impact__earlier')).toHaveCount(1);
+        expect(await inFace(page)).toEqual({ origin: true, dot: true });
+        const mm = await dotMm(page);
+        expect(Math.abs(mm.toe - 9)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs(mm.up - 4)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs(mm.rx - 4)).toBeLessThanOrEqual(0.1);
+        await expect(view.locator('.face-impact__centre-line')).toHaveCount(2);
+        await expect(view).not.toContainText('grid');
+        expect(await overflowing(page)).toEqual([]);
+        expect(await artefacts(page)).toEqual([]);
+        await keep(page, `face-impact-${category}-${size}`);
+        if (OUT)
+          await view
+            .locator('.face-impact__figure')
+            .screenshot({ path: join(OUT, `face-impact-${category}-figure-${size}.png`) });
+      });
+    }
+
+    test('mirrors the driver face for a left-handed golfer', async ({ page }) => {
+      await openClubPanel(page, 1, 'driver');
+      await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
       const view = page.locator('.face-impact');
-      await expect(view).toHaveAttribute('data-face', category);
-      await expect(view.locator('.face-impact__head')).toHaveCount(1);
-      await expect(view.locator('.face-impact__dot')).toHaveCount(1);
-      await expect(view.locator('.face-impact__earlier')).toHaveCount(1);
+      await expect(view).toHaveAttribute('data-face', 'driver');
+      await expect(view).toHaveAttribute('data-handed', 'left');
+      await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
       expect(await inFace(page)).toEqual({ origin: true, dot: true });
       const mm = await dotMm(page);
-      expect(Math.abs(mm.toe - 9)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(mm.up - 4)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(mm.rx - 4)).toBeLessThanOrEqual(0.1);
-      await expect(view.locator('.face-impact__centre-line')).toHaveCount(2);
-      await expect(view).not.toContainText('grid');
+      expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
       expect(await overflowing(page)).toEqual([]);
-      await keep(page, `face-impact-${category}-1024x600`);
+      expect(await artefacts(page)).toEqual([]);
+      await keep(page, `face-impact-driver-left-${size}`);
       if (OUT)
         await view
           .locator('.face-impact__figure')
-          .screenshot({ path: join(OUT, `face-impact-${category}-figure.png`) });
+          .screenshot({ path: join(OUT, `face-impact-driver-left-figure-${size}.png`) });
     });
-  }
-});
+  });
+}
 
 test.describe('face impact states', () => {
   test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
@@ -224,20 +277,5 @@ test.describe('face impact states', () => {
     await expect(view).toContainText(`Not measured: ${reason}`);
     await expect(view.locator('.face-impact__dot')).toHaveCount(0);
     await keep(page, 'face-impact-not-measured-1024x600');
-  });
-
-  test('mirrors the driver face for a left-handed golfer', async ({ page }) => {
-    await openClubPanel(page, 1, 'driver');
-    await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
-    const view = page.locator('.face-impact');
-    await expect(view).toHaveAttribute('data-face', 'driver');
-    await expect(view).toHaveAttribute('data-handed', 'left');
-    await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
-    expect(await inFace(page)).toEqual({ origin: true, dot: true });
-    const mm = await dotMm(page);
-    expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
-    expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
-    expect(await overflowing(page)).toEqual([]);
-    await keep(page, 'face-impact-driver-left-1024x600');
   });
 });

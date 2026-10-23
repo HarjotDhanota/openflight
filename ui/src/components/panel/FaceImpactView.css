@@ -158,7 +158,15 @@
   fill: none;
   stroke: var(--face-art-highlight);
   stroke-width: 0.6;
-  stroke-linecap: round;
+  stroke-linecap: butt;
+}
+
+.face-impact__highlight-stop {
+  stop-color: var(--face-art-highlight);
+}
+
+.face-impact__highlight-stop--end {
+  stop-opacity: 0;
 }
 
 .face-impact__side {
