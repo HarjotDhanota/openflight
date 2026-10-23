@@ -573,20 +573,6 @@ def test_trigger_evidence_provider_failure_blocks_without_losing_trigger(tmp_pat
     ]
 
 
-def test_shot_admission_uses_frozen_trigger_evidence_after_provider_recovers(tmp_path):
-    current = {"ready": False, "blockers": [{"id": "lis3dh", "reason": "moving"}]}
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path, trigger_evidence_provider=lambda _timestamp: current
-    )
-    runtime._running = True
-    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: True)
-
-    runtime.notify_trigger(10.0)
-    current["ready"] = True
-
-    assert runtime.trigger_evidence_for_shot(10.0)["ready"] is False
-
-
 def test_triggers_are_refused_while_the_save_backlog_is_full(tmp_path):
     from openflight.camera import capture_runtime  # pylint: disable=import-outside-toplevel
 

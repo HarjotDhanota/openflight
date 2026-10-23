@@ -2224,7 +2224,11 @@ def init_camera_capture(
                 Path.home() / ".config" / "openflight" / "camera-sensor-limits.json"
             ),
         )
-        camera_capture_runtime = CameraCaptureRuntime(
+        runtime_class = (
+            kiosk_extensions.first("camera_runtime_class", CameraCaptureRuntime)
+            or CameraCaptureRuntime
+        )
+        camera_capture_runtime = runtime_class(
             output_dir=output_dir,
             settings=settings,
             use_gpio_trigger=use_gpio_trigger,

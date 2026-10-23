@@ -67,6 +67,10 @@ class KioskExtension:  # pylint: disable=unused-argument
         its controls may exceed the armed exposure profile."""
         return False
 
+    def camera_runtime_class(self, base: type) -> Optional[type]:
+        """A subclass of ``base`` (the camera runtime class) the kiosk runs instead, or None."""
+        return None
+
     def trigger_evidence_provider(self) -> Optional[Callable[[float], dict]]:
         """A readiness reader the camera stamps on each trigger, or None."""
         return None

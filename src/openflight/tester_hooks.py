@@ -958,6 +958,13 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
     def diagnostic_camera(self) -> bool:
         return study_mode_enabled
 
+    def camera_runtime_class(self, base):  # pylint: disable=import-outside-toplevel
+        if not isinstance(base, type):
+            return None  # a stand-in factory, not a runtime class
+        from openflight.camera import tester_capture_runtime
+
+        return tester_capture_runtime.runtime_class(base)
+
     def trigger_evidence_provider(self):
         if not tester_setup_required:
             return None
