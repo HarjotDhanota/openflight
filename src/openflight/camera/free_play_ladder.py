@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from openflight.camera import study_ladder, swing_exposure as sx
+from openflight.camera import study_ladder, swing_exposure as sx, tester_light
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ def _startup(
     first = next((rung for rung in rungs if rung["status"] == "pending"), None)
     if first is not None:
         return {"exposure_us": first["exposure_us"], "gain": first["gain"], "source": "first_rung"}
-    seed = sx.kiosk_would_use(light_index, arm_id, sensor_limits)
+    seed = tester_light.kiosk_would_use(light_index, arm_id, sensor_limits)
     if "exposure_us" in seed:
         return {
             "exposure_us": int(seed["exposure_us"]),

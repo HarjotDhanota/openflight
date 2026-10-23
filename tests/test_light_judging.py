@@ -44,7 +44,7 @@ def test_a_clipped_ball_is_too_bright_and_ineligible():
     frames = _frames(background=70, ball=255)
     light = lj.judge_light(frames, lj.SENSOR_BLACK_LEVEL_DN, BALL)
     assert light["cause"] == "ball_clipped"
-    assert lj.light_label(light["cause"]) is not None
+    assert light["cause"] in lj.BRIGHT_LIGHT_CAUSES
     judged = lj.capture_analysis_eligibility(frames, lj.SENSOR_BLACK_LEVEL_DN, BALL)
     assert judged["eligible"] is False and judged["reason"].startswith("too bright for the ball")
 
@@ -56,10 +56,3 @@ def test_a_dark_zone_with_no_ball_is_zone_dark():
     judged = lj.capture_analysis_eligibility(frames, lj.SENSOR_BLACK_LEVEL_DN, BALL)
     assert judged["eligible"] is False
     assert judged["reason"] == "the resting ball was not found where the setup saw it"
-
-
-def test_light_labels_name_only_the_bright_and_dark_causes():
-    assert lj.light_label("ok") is None and lj.light_label(None) is None
-    assert lj.light_label("ball_dark") == lj.light_label("zone_dark")
-    assert lj.light_label("ball_clipped") == lj.light_label("zone_clipped_no_ball")
-    assert lj.light_label("ball_dark") != lj.light_label("ball_clipped")

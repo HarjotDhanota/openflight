@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from openflight.camera import swing_exposure
+from openflight.camera import swing_exposure, tester_light
 from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.light_judging import (  # noqa: F401  (the one light rule, re-exported)
     BALL_MIN_SIGNAL_DN,
@@ -35,10 +35,10 @@ from openflight.camera.light_judging import (  # noqa: F401  (the one light rule
     ball_light,
     capture_analysis_eligibility,
     judge_light,
-    light_label,
     resting_frames,
 )
 from openflight.camera.paired_eligibility import evaluate_paired_capture
+from openflight.camera.tester_light import light_label
 
 SWINGS_PER_RUNG = 5
 GAIN_CEILING = 12.0
@@ -197,7 +197,7 @@ def kiosk_marks(
     )
     marks = {}
     for arm_id in RUNG_FPS:
-        mark = swing_exposure.kiosk_would_use(
+        mark = tester_light.kiosk_would_use(
             light_index_dn_per_us_gain, arm_id, sensor_limits.get(arm_id), config=_SWING_CONFIG
         )
         offered = [r for r in LADDER if r.arm_id == arm_id and r.rung_id not in below]

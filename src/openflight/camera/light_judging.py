@@ -125,15 +125,6 @@ def ball_light(
     }
 
 
-def light_label(cause: str | None) -> str | None:
-    """The tester-facing label for a light cause: what to do about it (13 Oct)."""
-    if cause in BRIGHT_LIGHT_CAUSES:
-        return swing_exposure.TOO_BRIGHT_LABEL
-    if cause in DARK_LIGHT_CAUSES:
-        return swing_exposure.TOO_DARK_LABEL
-    return None
-
-
 def judge_light(
     frames: np.ndarray,
     black_floor: float,
