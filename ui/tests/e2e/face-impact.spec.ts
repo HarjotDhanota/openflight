@@ -179,23 +179,29 @@ async function inFace(page: Page): Promise<{ origin: boolean; dot: boolean }> {
 /** The dot's distance from the centre-line crossing on screen, back in mm (+ toe, + up). */
 async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number }> {
   return page.locator('.face-impact').evaluate((view) => {
-    const svg = view.querySelector('.face-impact__svg') as SVGSVGElement;
+    const delivery = view.querySelector('.face-impact__delivery') as SVGGElement;
     const dot = view.querySelector('.face-impact__dot') as SVGCircleElement;
     const ellipse = view.querySelector('.face-impact__ellipse') as SVGEllipseElement;
     const lines = [...view.querySelectorAll('.face-impact__centre-line')] as SVGLineElement[];
     const across = lines.find((line) => line.y1.baseVal.value === line.y2.baseVal.value)!;
     const upright = lines.find((line) => line.x1.baseVal.value === line.x2.baseVal.value)!;
-    const matrix = svg.getScreenCTM()!;
+    const matrix = delivery.getScreenCTM()!;
     const screen = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(matrix);
     const crossing = screen(upright.x1.baseVal.value, across.y1.baseVal.value);
     const centre = screen(dot.cx.baseVal.value, dot.cy.baseVal.value);
     const mirror = view.getAttribute('data-handed') === 'left' ? 1 : -1;
     const rim = screen(ellipse.cx.baseVal.value + ellipse.rx.baseVal.value, ellipse.cy.baseVal.value);
     const ellipseCentre = screen(ellipse.cx.baseVal.value, ellipse.cy.baseVal.value);
+    const right = screen(1, 0),
+      down = screen(0, 1);
+    const scale = Math.hypot(matrix.a, matrix.b);
+    const along = (point: DOMPoint) =>
+      ((centre.x - crossing.x) * (point.x - crossing.x) + (centre.y - crossing.y) * (point.y - crossing.y)) /
+      scale ** 2;
     return {
-      toe: (mirror * (centre.x - crossing.x)) / matrix.a,
-      up: -(centre.y - crossing.y) / matrix.d,
-      rx: (rim.x - ellipseCentre.x) / matrix.a,
+      toe: mirror * along(right),
+      up: -along(down),
+      rx: Math.hypot(rim.x - ellipseCentre.x, rim.y - ellipseCentre.y) / scale,
     };
   });
 }

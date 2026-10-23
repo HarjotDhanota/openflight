@@ -52,6 +52,14 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   const [viewMinX, viewMaxX] = left ? [-maxX, -minX] : [minX, maxX];
   const mirror = left ? 'scale(-1 1)' : undefined;
   const rotation = faceDeliveryRotation(shot, category) * (left ? -1 : 1);
+  const angle = (rotation * Math.PI) / 180;
+  const corners = [viewMinX, viewMaxX].flatMap((x) =>
+    [minY, maxY].map((y) => [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)])
+  );
+  const frameLeft = Math.min(...corners.map(([x]) => x));
+  const frameTop = Math.min(...corners.map(([, y]) => y));
+  const frameWidth = Math.max(...corners.map(([x]) => x)) - frameLeft;
+  const frameHeight = Math.max(...corners.map(([, y]) => y)) - frameTop;
   const earlier = sessionShots
     .filter((other) => other.timestamp !== shot.timestamp && other.club === shot.club)
     .map(impactReading)
@@ -81,7 +89,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
       <div className="face-impact__figure">
         <svg
           className="face-impact__svg"
-          viewBox={`${viewMinX} ${minY} ${viewMaxX - viewMinX} ${maxY - minY}`}
+          viewBox={`${frameLeft} ${frameTop} ${frameWidth} ${frameHeight}`}
           role="img"
           aria-label={
             read

@@ -105,6 +105,53 @@ async function fit(page: Page, view: string) {
   });
 }
 
+async function auditFace(page: Page) {
+  return page.locator('.face-impact__svg').evaluate((svg) => {
+    const face = svg.querySelector('.face-impact__face') as SVGPathElement;
+    const shaft = svg.querySelector('.face-impact__shaft') as SVGPathElement;
+    const dot = svg.querySelector('.face-impact__dot') as SVGCircleElement;
+    const axis = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(face.getScreenCTM()!);
+    const origin = axis(0, 0),
+      right = axis(1, 0),
+      down = axis(0, 1);
+    const scale = Math.hypot(right.x - origin.x, right.y - origin.y);
+    const hit = new DOMPoint(dot.cx.baseVal.value, dot.cy.baseVal.value).matrixTransform(dot.getScreenCTM()!);
+    const along = (point: DOMPoint) =>
+      ((hit.x - origin.x) * (point.x - origin.x) + (hit.y - origin.y) * (point.y - origin.y)) / scale ** 2;
+    const points = shaft
+      .getAttribute('d')!
+      .match(/-?\d+(?:\.\d+)?/g)!
+      .map(Number);
+    const bottom = axis((points[0] + points[6]) / 2, (points[1] + points[7]) / 2);
+    const tip = axis((points[2] + points[4]) / 2, (points[3] + points[5]) / 2);
+    const area = svg.getBoundingClientRect();
+    const outside: string[] = [];
+    for (const selector of ['.face-impact__face', '.face-impact__head']) {
+      const path = svg.querySelector(selector) as SVGPathElement;
+      for (let i = 0; i <= 200; i++) {
+        const local = path.getPointAtLength((path.getTotalLength() * i) / 200);
+        const p = new DOMPoint(local.x, local.y).matrixTransform(path.getScreenCTM()!);
+        if (p.x < area.left - 1 || p.x > area.right + 1 || p.y < area.top - 1 || p.y > area.bottom + 1) {
+          outside.push(selector);
+          break;
+        }
+      }
+    }
+    const toe = [...svg.querySelectorAll('.face-impact__side')].find(
+      (node) => node.textContent?.toLowerCase() === 'toe'
+    ) as SVGTextElement;
+    const toeAt = new DOMPoint(toe.x.baseVal[0].value, toe.y.baseVal[0].value).matrixTransform(toe.getScreenCTM()!);
+    return {
+      heelSide: Math.sign(tip.x - origin.x),
+      toeSide: Math.sign(toeAt.x - origin.x),
+      offset: -along(right),
+      height: -along(down),
+      lie: (Math.atan2(-(tip.y - bottom.y), Math.abs(tip.x - bottom.x)) * 180) / Math.PI,
+      outside,
+    };
+  });
+}
+
 async function sheet(page: Page, name: string) {
   if (!OUT) return;
   await page.evaluate(() => {
@@ -151,6 +198,9 @@ for (const viewport of [
       for (const hand of ['right', 'left']) {
         test(`${club} ${hand}: metrics, geometry and kiosk fit`, async ({ page }) => {
           await open(page, club, hand);
+          await expect(page.locator('.panel-header__club')).toContainText(
+            hand === 'left' ? 'Left-handed' : 'Right-handed'
+          );
           await page.evaluate(() => document.fonts.ready);
           if (OUT) mkdirSync(OUT, { recursive: true });
           for (const [index, view] of VIEWS.entries()) {
@@ -158,7 +208,28 @@ for (const viewport of [
             const card = page.locator(`[data-club-view="${view}"]`);
             await expect(card.locator('[data-view-metric]')).toHaveCount(3);
             expect(await fit(page, view)).toEqual([]);
-            if (view !== 'face') {
+            if (view === 'face') {
+              const face = await auditFace(page);
+              expect(face.heelSide).toBe(hand === 'right' ? 1 : -1);
+              expect(face.toeSide).toBe(hand === 'right' ? -1 : 1);
+              expect(face.offset).toBeCloseTo(9, 5);
+              expect(face.height).toBeCloseTo(4, 5);
+              const loft =
+                club === 'driver'
+                  ? 13.2
+                  : club === '3-wood'
+                    ? 16.5
+                    : club === '5-hybrid'
+                      ? 20.1
+                      : club === 'sw'
+                        ? 51.3
+                        : 29.4;
+              expect(face.lie).toBeCloseTo(
+                (Math.atan(Math.tan((64.6 * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180)) * 180) / Math.PI,
+                1
+              );
+              expect(face.outside).toEqual([]);
+            } else {
               const result = await card.locator('.club-projection').evaluate((svg) => {
                 const group = svg.querySelector('.club-projection__hand') as SVGGElement;
                 const face = svg.querySelector('.club-projection__arrow--face') as SVGLineElement;
@@ -194,6 +265,51 @@ for (const viewport of [
           await sheet(page, `${club}-${hand}-${size}`);
         });
       }
+    for (const hand of ['right', 'left']) {
+      test(`${hand}: face normals, impact signs and lie extremes agree with shot identity`, async ({ page }) => {
+        await open(page, '7-iron', hand);
+        for (const [lie, offset, height] of [
+          [45, -9, -4],
+          [75, 9, 4],
+        ]) {
+          await page.evaluate(
+            async ({ lie, offset, height, hand }) => {
+              const { useShotStore } = await import('/src/stores/useShotStore.ts');
+              const { useSystemStore } = await import('/src/stores/useSystemStore.ts');
+              useSystemStore.getState().setHanded(hand === 'left' ? 'RH' : 'LH');
+              const shot = useShotStore.getState().shots.at(-1)!;
+              const metrics = { ...shot.metrics };
+              for (const [key, value] of Object.entries({
+                dynamic_lie: lie,
+                impact_offset: offset,
+                impact_height: height,
+              }))
+                metrics[key] = { ...metrics[key], value };
+              useShotStore.getState().updateShot({ ...shot, metrics });
+            },
+            { lie, offset, height, hand }
+          );
+          await expect(page.locator('.panel-header__club')).toContainText(
+            hand === 'left' ? 'Left-handed' : 'Right-handed'
+          );
+          const face = await auditFace(page);
+          expect(face.heelSide).toBe(hand === 'right' ? 1 : -1);
+          expect(face.toeSide).toBe(hand === 'right' ? -1 : 1);
+          expect(face.offset).toBeCloseTo(offset, 5);
+          expect(face.height).toBeCloseTo(height, 5);
+          expect(face.lie).toBeCloseTo(
+            (Math.atan(Math.tan((lie * Math.PI) / 180) * Math.cos((29.4 * Math.PI) / 180)) * 180) / Math.PI,
+            1
+          );
+          expect(face.outside).toEqual([]);
+          if (OUT) {
+            const name = `audit-iron-${hand}-lie-${lie}-${size}`;
+            await page.screenshot({ path: join(OUT, `${name}.png`) });
+            await sheet(page, name);
+          }
+        }
+      });
+    }
   });
 }
 
