@@ -15,7 +15,7 @@
 }
 
 /* Polished chrome blade, a milled scoring area and dark score lines. */
-.face-impact[data-finish='chrome'] {
+:is(.face-impact, .club-projection)[data-finish='chrome'] {
   --face-art-steel-hi: #f1f3f5;
   --face-art-steel-mid: #a9b0b8;
   --face-art-steel-lo: #6e757d;
@@ -31,7 +31,7 @@
 }
 
 /* Satin wedge: softer, greyer steel. */
-.face-impact[data-finish='satin'] {
+:is(.face-impact, .club-projection)[data-finish='satin'] {
   --face-art-steel-hi: #d9dde1;
   --face-art-steel-mid: #9aa1a9;
   --face-art-steel-lo: #686f77;
@@ -47,7 +47,7 @@
 }
 
 /* Black head, light grey face, painted score lines, graphite shaft. */
-.face-impact[data-finish='black'] {
+:is(.face-impact, .club-projection)[data-finish='black'] {
   --face-art-steel-hi: #3d4248;
   --face-art-steel-mid: #212428;
   --face-art-steel-lo: #121416;
@@ -63,7 +63,7 @@
 }
 
 /* The hybrid's face is dark too, with light grey lines. */
-.face-impact[data-face='hybrid'] {
+:is(.face-impact, .club-projection)[data-face='hybrid'] {
   --face-art-face-hi: #3e4247;
   --face-art-face-lo: #2b2e32;
   --face-art-groove: #a9afb5;

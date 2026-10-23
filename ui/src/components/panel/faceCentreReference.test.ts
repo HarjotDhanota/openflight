@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FACE_SHAPES, faceCentre, type FaceCategory } from './faceImpact';
+import { CLUB_PROFILES } from './clubDelivery';
 
 /** The impact-location backend reads its face centres from this file; the drawings must agree. */
 const REFERENCE = JSON.parse(
@@ -26,6 +27,16 @@ const REFERENCE = JSON.parse(
     }
   >;
 };
+
+it.each(Object.keys(CLUB_PROFILES) as FaceCategory[])(
+  'anchors the %s delivery views to the shared face centre',
+  (category) => {
+    const p = CLUB_PROFILES[category];
+    const reference = REFERENCE.categories[category];
+    expect(p.toe).toBeCloseTo(reference.centre_from_toe_mm, 2);
+    expect(Math.abs(p.faceHeight / 2 - reference.centre_above_face_bottom_mm)).toBeLessThanOrEqual(0.1);
+  }
+);
 
 type Point = [number, number];
 

@@ -9,7 +9,7 @@ import { isMeasured } from '../../utils/units';
 import { isComingLater, shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FaceImpactView } from './FaceImpactView';
+import { ClubDeliveryViews } from './ClubDeliveryViews';
 import { PanelHeader } from './PanelHeader';
 import './MetricGroupPanel.css';
 
@@ -203,7 +203,7 @@ export function MetricGroupPanel({
     <div className="panel">
       {header}
       <div className="panel__body metric-groups" data-metric-panel={view}>
-        {view === 'club' ? <FaceImpactView shot={shot} sessionShots={sessionShots} /> : null}
+        {view === 'club' ? <ClubDeliveryViews shot={shot} sessionShots={sessionShots} /> : null}
         {PANEL_GROUPS[view].map((group) => (
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>
