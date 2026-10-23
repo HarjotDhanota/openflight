@@ -3222,7 +3222,7 @@ def record_placement(
 
 
 # The nominal model's angular uncertainty: the camera's vertical before the unit's
-# tilt is calibrated (about 3 deg, harjot-indoor-test-1), and at least this much after.
+# tilt is calibrated (about 3 deg, indoor-test-1), and at least this much after.
 UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
 CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
 

@@ -1,7 +1,7 @@
 """The radar searches only the patch's range window and reports every candidate (P8-3).
 
 Neither the power-profile (magnitude) difference nor the coherent one is always
-right: on harjot-indoor-test-1 the coherent difference accepted 1.575 m against a
+right: on indoor-test-1 the coherent difference accepted 1.575 m against a
 tape of about 1.25 m, and the magnitude's strongest change, about 1.20 m, failed
 its fractional gate; on the 29 Sept door setup both read the tape's 1.00 m. So
 both methods' peaks are reported with their scores and elevations, and the
@@ -194,7 +194,7 @@ def test_a_window_past_the_capture_is_clipped_and_says_so():
 
 
 def test_the_door_is_a_still_reflector_and_the_ball_is_not():
-    """harjot-indoor-test-2: the door's bin holds 6x anything else and changes 3 %."""
+    """indoor-test-2: the door's bin holds 6x anything else and changes 3 %."""
     # the ball at bin 27 (array index 19), the door at bin 35
     empty, present = _synthetic([(19, 3.0e6)])
     empty = StaticRangeProfileV2(

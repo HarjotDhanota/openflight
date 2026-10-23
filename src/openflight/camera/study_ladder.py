@@ -108,7 +108,7 @@ LADDER: tuple[Rung, ...] = tuple(
 )
 RUNG_FPS = {"arm5": 120.0, "arm6": 288.0}
 # Signal per pixel relative to 1280x800 at the same exposure and gain. MEASURED
-# (13 Oct, coordinator): the paired gain screens in harjot-indoor-test-1/-2 and
+# (13 Oct, coordinator): the paired gain screens in indoor-test-1/-2 and
 # Outdoors-test-5/-8 (arm5 binned 2x2 against arm6, unclipped pixels) give
 # 1.96-2.04x for 640x400. It supersedes light-audit.md section 4's "unmeasured, the
 # same rows apply". Used to predict which rungs a light supports and to carry a light

@@ -3266,7 +3266,7 @@ def _coherent_records(name="outdoors-test-7-5a7821af3641"):
 
 
 def _indoor_records():
-    """harjot-indoor-test-1's two captures as the Pi writes them (P8-3 fixture)."""
+    """indoor-test-1's two captures as the Pi writes them (P8-3 fixture)."""
     fixture = json.loads(
         (REPO / "tests" / "fixtures" / "ground_patch" / "indoor-c77d227da087-radar.json").read_text(
             encoding="utf-8"
@@ -3300,7 +3300,7 @@ def _v3_patch_record(distance_m, *, pitch_deg=1.72, side_m=0.0):
 
 
 def test_the_radar_reports_every_candidate_inside_the_patch_window():
-    """P8-3 on harjot-indoor-test-1: the magnitude's 1.20 m (near the tape's 1.25 m) is
+    """P8-3 on indoor-test-1: the magnitude's 1.20 m (near the tape's 1.25 m) is
     a candidate; the door at 1.575 m is a still reflector, flagged wherever it shows."""
     empty, present = _indoor_records()
     window = ts.patch_radar_window(_v3_patch_record(1.25))
@@ -3687,7 +3687,7 @@ def test_the_640x400_settings_use_the_1280x800_ball_halved():
 def test_the_indoor_test_1_setup_saves_no_distance_where_the_radar_disagrees_with_itself(
     tmp_path, inputs, monkeypatch
 ):
-    """End to end on harjot-indoor-test-1's radar captures (13 Oct): the magnitude change
+    """End to end on indoor-test-1's radar captures (13 Oct): the magnitude change
     near the tape's 1.25 m is not a ground-level coherent change, and the coherent
     difference's only candidate there is the door, a still reflector. The radar's two
     methods never agree, so no distance is saved (it once took the magnitude alone)."""

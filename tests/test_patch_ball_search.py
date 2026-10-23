@@ -1,6 +1,6 @@
 """The camera looks for the ball only inside the patch (P8-2).
 
-The indoor scene is a COMPOSITE: harjot-indoor-test-1 saved no frame with the
+The indoor scene is a COMPOSITE: indoor-test-1 saved no frame with the
 ball in it, so a crop of its light-screen frame (taken before the ball was
 placed) gets a ball sprite cut from Outdoors-test-7, pasted where the tester's
 screenshot showed the ball, at about the size a ball 1.25 m out has
@@ -111,7 +111,7 @@ def outdoor_scene():
 
 
 def test_the_indoor_ball_is_found_in_a_patch_placed_over_it_by_eye():
-    """harjot-indoor-test-1: the old floor-row term refused this ball; the patch finds it."""
+    """indoor-test-1: the old floor-row term refused this ball; the patch finds it."""
     camera = v3(pitch_deg=1.72)  # the LIS3DH's reading, not the camera's true tilt
     frames = indoor_scene()
     patch = patch_from_centre_pixel(camera, (INDOOR_BALL_PX[0], INDOOR_BALL_PX[1] + 10.0))
@@ -261,7 +261,7 @@ def test_the_search_never_leaves_the_patch():
 
 
 def test_a_ball_whose_centre_is_just_inside_the_outline_s_edge_is_found_whole():
-    """harjot-indoor-test-2: the ball's centre 2 rows inside the fixed box's bottom edge;
+    """indoor-test-2: the ball's centre 2 rows inside the fixed box's bottom edge;
     the search region must hold the whole ball, not stop 4 px past the outline."""
     camera = v3()
     diameter = 34.0

@@ -1702,7 +1702,7 @@ class TestGuidedRangeAnalyzer:
     def test_live_looks_that_land_while_save_searches_do_not_make_the_save_frames_stale(
         self, monkeypatch
     ):
-        # harjot-indoor-test-2 (30 Sept): Save's whole-patch search took 3.3 s on the
+        # indoor-test-2 (30 Sept): Save's whole-patch search took 3.3 s on the
         # Pi, the live loop kept looking meanwhile, and Save was withheld as "older
         # than the stable camera observation" though its frames were the newest
         orientation = {"status": "stable", "camera_pitch_deg": 0.0, "roll_deg": 0.0}

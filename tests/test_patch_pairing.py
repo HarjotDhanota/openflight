@@ -89,7 +89,7 @@ def _radar(name, window, *, channels=True):
     ],
 )
 def test_the_indoor_test_1_radar_never_agrees_with_itself_so_no_distance_is_saved(diameter_px):
-    """harjot-indoor-test-1: the ball's centre taped at about 1.25 m from the radar.
+    """indoor-test-1: the ball's centre taped at about 1.25 m from the radar.
 
     The magnitude change at 1.18 m comes from 17 deg above the array's boresight and
     the coherent difference sees nothing there; its only ground-level peak is the
@@ -288,7 +288,7 @@ def test_a_calibrated_ray_distance_is_the_camera_s_main_distance():
 
 
 def test_the_two_radar_methods_agree_within_two_and_a_half_bins():
-    """harjot-indoor-test-2: the magnitude at 1.293 m and the coherent at 1.200 m are
+    """indoor-test-2: the magnitude at 1.293 m and the coherent at 1.200 m are
     two bins apart (the magnitude is pulled by a loss in the next bin); they agree."""
     radar = [
         _peak("magnitude", 1.293, score=2.2, uncertainty_m=0.023),

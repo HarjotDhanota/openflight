@@ -2,7 +2,7 @@
 
 Status: M1/M2 tooling. Written 2026-09-24 from a code trace of
 `feat/tester-capture-pilot` at `f7c67ac` and the five replay reports of the
-first Pi session (`harjot-pilot-test-1`, Arm 5, run-01). No accuracy is
+first Pi session (`pilot-test-1`, Arm 5, run-01). No accuracy is
 claimed anywhere in this workflow.
 
 ## Data path as found

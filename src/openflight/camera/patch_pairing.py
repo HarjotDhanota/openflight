@@ -3,8 +3,8 @@
 **The radar's ball** is a magnitude change and a coherent change that agree with
 each other (within ``AGREEMENT_SIGMAS`` of their combined uncertainty, and never
 closer than ``RADAR_METHODS_MIN_TOLERANCE_BINS`` bins). Neither method alone is the
-ball: on harjot-indoor-test-1 the coherent difference took the door at 1.575 m and
-the magnitude change sat 17 deg above the array; on harjot-indoor-test-2 the door
+ball: on indoor-test-1 the coherent difference took the door at 1.575 m and
+the magnitude change sat 17 deg above the array; on indoor-test-2 the door
 was the coherent difference's strongest peak and the ball its 4th. A candidate at
 a dominant still reflector (range_evidence.dominant_still_reflectors) is never the
 ball. When a capture has no per-channel means the coherent method cannot run; the
