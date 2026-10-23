@@ -1,6 +1,6 @@
 # Fusion method plan: from the test bench to the live unit
 
-Written 4 October 2026. Owner: Harjot. Status: stage 1 done (1e closed by D20). Stages 2–7 superseded on 5 October by the
+Written 4 October 2026. Owner: the fork owner. Status: stage 1 done (1e closed by D20). Stages 2–7 superseded on 5 October by the
 readiness roadmap (`openflight-test-bench`, `docs/superpowers/plans/2026-10-05-readiness-roadmap.md`),
 itself paused on 8 October (MASTER-PLAN W12). Entry point: the bench's `docs/MASTER-PLAN.md`.
 Since 7 October (the bench spec's Revisions 2-5), the "rules the live unit will follow" below
@@ -19,7 +19,7 @@ TrackMan session is its Part C pilot, replacing the D19 field day.
   horizontal reference) and C8 (phone-level check before applying LIS3DH roll).
   M3–M5 have not passed.
 - **The live unit does not use the bench's measurement method.** The bench
-  (`HarjotDhanota/openflight-test-bench`, method in its `docs/SYSTEM.md`) measures
+  (the private test-bench repository, method in its `docs/SYSTEM.md`) measures
   each shot from its own captures only. The live pipeline breaks those rules in
   several places and keeps methods the bench showed don't work at this geometry.
   The full comparison is listed under stage 1 and the port stages below.
@@ -96,7 +96,7 @@ impact is still the trigger time. Both need the stage 2 port; they are removed t
 
 ## Stages 2–6 — move the fusion method into openflight
 
-> **Superseded (5 October, Harjot's call).** The readiness roadmap ports the bench once,
+> **Superseded (5 October, the owner's call).** The readiness roadmap ports the bench once,
 > as opt-in `openflight/fusion/` modules on branches cut from upstream main, after its
 > Phase 1 makes the bench deterministic. Stage 2's work is the roadmap's branches #11
 > (IWR tracks) and #14 (timing). The stages below are kept as the method they describe,
