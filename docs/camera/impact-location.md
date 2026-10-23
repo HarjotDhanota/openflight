@@ -51,14 +51,69 @@ Both axes are the face coordinates of the contact point **P = B − r·n̂**:
    bracket contact, at most 9 ms apart. Heel, toe and the sole line are interpolated
    between them, in millimetres, to the contact moment.
 
+## The face centre
+
+Both axes are measured from the same face centre the kiosk's face view draws
+(`faceCentre` in `ui/src/components/panel/faceImpact.ts`). It follows the R&A/USGA
+centre template (TPX3004):
+
+- **Driver, fairway wood, hybrid:** the centre of the face perimeter. The point sits at
+  the middles of the heel-toe and sole-crown chords through it, found by iterating.
+- **Iron and wedge:** heel to toe, the middle of the longest score line. Up the face,
+  midway between the face's bottom edge and the top line at that point.
+
+The backend cannot see grooves or the face from behind, so it carries the centre as two
+numbers per category, measured on the same drawings:
+
+- **C**, how far the centre sits heel-ward of the head's toe extreme;
+- **H**, the centre's height along the face above the **leading edge**: the head's
+  lowest point under the centre, seen along the face normal.
+
+Both live in one file, `src/openflight/camera/face_centre_reference.json`, with the
+reference club each came from. `ui/src/components/panel/faceCentreReference.test.ts`
+re-measures them on the drawings and fails if a drawing's centre moves by more than
+0.1 mm without the file following.
+
+| Category | Reference club | C (mm) | H (mm) | H above the face's bottom edge (mm) |
+|---|---|---|---|---|
+| Driver | Callaway Paradym Ai Smoke TD | 60.4 ± 4.0 | 29.1 ± 4.0 | 24.7 |
+| Fairway | Callaway Elyte 3-wood | 58.5 ± 3.5 | 19.7 ± 3.5 | 17.5 |
+| Hybrid | TaylorMade #3 Rescue | 49.6 ± 3.5 | 17.8 ± 3.5 | 14.3 |
+| Iron | TaylorMade P770 7-iron | 44.0 ± 3.0 | 22.8 ± 3.0 | 18.3 |
+| Wedge | Titleist Vokey SM11 56° | 45.4 ± 3.0 | 26.9 ± 3.5 | 25.2 |
+
+They are labelled `reference_geometry_face_centre_rule`. The sigmas are brackets, not a
+measured spread. Each category has one reference model, scaled to one category length:
+irons and wedges to 76.6 mm, inside Mizuno's official 7-iron head lengths of 74–87 mm,
+which move an iron's C by about −3 to +14 %. No manufacturer publishes face heights. An
+unknown club takes the iron's numbers, 1.5× wider.
+
+**Why the toe.** The toe is the landmark calibrated against slow frames. The heel
+landmark depends on how much of the hosel the camera's mask keeps, so a centre built
+from the heel-toe midpoint moves with the hosel cut. The toe extreme's heel-toe
+coordinate is the same in the face-normal drawing and in the behind-ball camera: both
+views are perpendicular to the heel-toe axis.
+
+**Why the head's lowest point for H.** The camera's sole line is the trailing edge, and
+the sole datum (parallax plus bounce, below) lifts it to the front of the sole, where it
+meets the face. Seen along the face normal, that is the head's lowest point: the sole
+behind it projects higher, by about its width × sin(loft). The face's own bottom edge sits
+1.7–4.5 mm above it on the drawings (the leading edge's radius seen face-on). The table
+gives both; the backend uses the first.
+
 ## Heel to toe
 
-The ball centre is projected on the interpolated heel-to-toe line, and measured from
-the face centre. The face centre is a **convention**: the outline's heel-toe midpoint
-plus 8 mm toe-ward, uncalibrated.
+The ball centre is projected on the interpolated heel-to-toe line and measured from the
+toe landmark: `ball_from_toe_mm`, negative on the face. Then
 
-The image sees `a·cos F + r·sin F` for a true offset a at face angle F. So F, + open in
-the analysis orientation, is taken out: a = (imaged − r·sin F) / cos F.
+impact offset = (ball_from_toe − r·sin F) / cos F + C
+
+For a true distance d along the face from the toe, the image sees `d·cos F + r·sin F`.
+So the face angle F, + open in the analysis orientation, is taken out before C is added.
+
+`--face-centre-from-toe-mm` (and `face_centre_from_toe_mm` in `locate_impact` and
+`analyse_shot`) is a research override of C. It is exact (no sigma), labelled
+`research_override`, and named in `face_centre_convention`.
 
 | Term | Source |
 |---|---|
@@ -68,11 +123,11 @@ the analysis orientation, is taken out: a = (imaged − r·sin F) / cos F.
 | range scale | The range's own sigma (IWR spread, else one 46.9 mm bin) |
 | arc chord | The straight chord against the curved path |
 | face angle | The face angle's sigma |
+| face centre | C's sigma (0 under the research override) |
 | contact frame ambiguity | Only when the contact witnesses or the ball clock flag it |
 
-Not in the budget: the face-centre convention (systematic), toe blur beyond the toe
-calibration, and lens distortion. The pinhole model is used; the stock lens has about
-16 % barrel distortion at the edge.
+Not in the budget: toe blur beyond the toe calibration, and lens distortion. The pinhole
+model is used; the stock lens has about 16 % barrel distortion at the edge.
 
 ## Top to bottom (new)
 
@@ -85,8 +140,11 @@ line, read at the ball's heel-toe position:
    adds sole width × sin(effective bounce).
 3. Less r·sin(loft): the contact point sits below the ball centre on a lofted face.
 4. Divided by cos(loft): this gives the distance along the face.
-5. Less the **face-centre height**: the face centre's height above the leading edge,
+5. Less the **face-centre height** H: the face centre's height above the leading edge,
    along the face.
+
+The sole line is read under the ball, and H under the face centre. Where the leading
+edge rises between the two, heel to toe, the difference is not in the budget.
 
 | Term | Source |
 |---|---|
@@ -94,7 +152,7 @@ line, read at the ball's heel-toe position:
 | contact timing | The larger of the re-read across the contact fraction and V·sin(\|attack\| + sigma) × timing sigma |
 | club speed, range scale | As for heel-toe |
 | dynamic loft | The loft's sigma, re-read (about 0.35 mm per degree) |
-| face-centre height | The anchor's or the prior's sigma |
+| face-centre height | The anchor's sigma, or H's |
 | sole datum | From the sole width, bounce and lens-height sigmas |
 | contact frame ambiguity | As for heel-toe |
 
@@ -102,13 +160,32 @@ line, read at the ball's heel-toe position:
 
 No manufacturer publishes it. Two sources, in order:
 
-1. **An anchor per club from marked face photos.** The photo must mark the leading edge
-   and the top line; the face-centre height is half the distance between them at the
-   groove midpoint. The test bench builds the file (`face_centre_anchors.json`, schema
-   `openflight.face_centre_anchors.v1`); pass it with `--anchors`.
-2. **A category prior**, labelled `prior_unpublished_category_bracket`. It is irons
-   23 ± 5 mm, wedges 24 ± 5, hybrids 20 ± 5, fairway woods 17 ± 5, driver 30 ± 6. An
-   unknown club gets the iron prior, 1.5× wider.
+1. **An anchor per club from marked face photos.** The test bench builds the file
+   (`face_centre_anchors.json`, schema `openflight.face_centre_anchors.v1`); pass it
+   with `--anchors`. Its value must be the same H: the rule's centre, measured above the
+   head's lowest point. The bench's anchors do not follow that yet (see below).
+2. **The category's H** from `face_centre_reference.json` (table above).
+
+Until 22 Oct 2026 the category values were unpublished brackets, labelled
+`prior_unpublished_category_bracket`: irons 23 ± 5 mm, wedges 24 ± 5, hybrids 20 ± 5,
+fairway woods 17 ± 5, driver 30 ± 6.
+
+**The bench's anchors.** `openflight_bench.truth.spray_marks` takes half the
+leading-edge-to-top-line distance at the midpoint of the face's *lowest* groove, from the
+marked `leading_edge_px` line (described as the face's bottom edge). Two changes are
+needed there for its anchors to mean H:
+
+- **Where.** The rule's heel-toe point is the longest score line's middle. That is the
+  lowest groove's middle only when the lowest groove is full length, as on the reference
+  iron and wedge. Woods and hybrids follow the perimeter rule instead.
+- **Above what.** Midway between the face's bottom edge and the top line, then measured
+  from the head's lowest point. If the marked line is the face's bottom edge, the anchor
+  is short by the leading edge's band (1.7–4.5 mm on the drawings). If it is the head's
+  lowest point, it is short by half that band. The photo needs both lines, or the
+  category's band (H less the face-bottom height in the reference file) added.
+
+Its heel-toe truth for grading (+ toe from the lowest groove's middle) has the same
+"where" difference.
 
 The other inputs are labelled too:
 
@@ -136,7 +213,8 @@ hint, not a finding.
 
 ```
 uv run python scripts/analysis/impact_location.py SESSION --out OUT \
-    [--anchors face_centre_anchors.json] [--handedness right|left] [--truth marks.csv]
+    [--anchors face_centre_anchors.json] [--handedness right|left] [--truth marks.csv] \
+    [--face-centre-from-toe-mm C]
 ```
 
 - `SESSION` is a tester session folder, an unzipped bundle or a bundle `.zip`.
@@ -267,22 +345,25 @@ The Club tab opens with a face-impact view:
   The dot sits at the unrounded mm from there; every number is in mm whatever the
   unit preference. The driver's centre cross stays where the photo has it, 1.7 mm
   from the computed centre (1.6 mm heel-ward, 0.4 mm up).
-- **The backend's heel-toe origin is still an uncalibrated convention.** The table
-  shows where that convention lands on each drawing: outline midpoint + 8 mm
-  toe-ward, and the category height above the head outline's lowest point. It
-  assumes the camera's head outline matches the drawn head outline, including the
-  neck up to the hosel or sleeve.
+- **The backend measures from this centre** (since 22 Oct 2026; see "The face
+  centre"). Before, its origin was the camera outline's heel-toe midpoint + 8 mm
+  toe-ward, and a category height above the head outline's lowest point. The table
+  shows where that old origin landed on each drawing, assuming the camera's head
+  outline matched the drawn one, including the neck up to the hosel or sleeve. The
+  last column is what the old origin reported for a strike at the drawn centre.
 
-  | Club | Toe-ward of the face centre | Above it |
-  | --- | --- | --- |
-  | Driver | 8.2 mm | 1.0 mm |
-  | Fairway | 9.3 mm | -2.8 mm |
-  | Hybrid | 6.5 mm | 2.2 mm |
-  | Iron | 2.1 mm | 0.1 mm |
-  | Wedge | -0.5 mm | -2.9 mm |
+  | Club | Old origin, toe-ward of the centre | Above it | Old reading of a centre strike |
+  | --- | --- | --- | --- |
+  | Driver | 8.1 mm | 0.9 mm | heel 8.1, low 0.9 |
+  | Fairway | 9.3 mm | -2.8 mm | heel 9.3, high 2.7 |
+  | Hybrid | 6.5 mm | 2.2 mm | heel 6.5, low 2.2 |
+  | Iron | 2.1 mm | 0.1 mm | heel 2.1, low 0.2 |
+  | Wedge | -0.6 mm | -2.9 mm | toe 0.6, high 2.9 |
 
-  Testers' face marks will show whether the convention or the assumption is off.
-  Calibration belongs in the backend.
+  The heights in the last column are taken under the centre, the heights in "Above
+  it" at the head's lowest point overall. The old heel-toe origin also moved with how
+  much hosel the camera's mask kept: by about half the mask's run past the hosel
+  transition.
 - **USGA limits.** The drawings keep to the parts of the USGA/R&A Equipment Rules,
   Part 2, that a face-on drawing can show: score lines straight, parallel and evenly
   pitched, drawn 0.6 mm wide against the 0.9 mm (0.035 in) limit, with edge-to-edge
@@ -351,9 +432,9 @@ r = 0.97) are not in the bench, so that regression was not run.
   height budget especially.
 - **Range.** It needs the shot's own IWR distance, and two of the eight shots had none.
 - **Face-centre truth.** No official face height exists, and the existing marks have no
-  leading edge or top line. Height therefore rests on priors (±5 mm), and the photos'
-  scale rests on a groove-length prior (±13 %) until a club's groove length is
-  measured.
+  leading edge or top line. Both axes therefore rest on one reference club per category
+  (±3–4 mm), and the photos' scale rests on a groove-length prior (±13 %) until a club's
+  groove length is measured.
 - **Lens.** The stock lens is uncalibrated and about 16 % barrel at the edge.
 - **Live width.** The kiosk reads at 640x400 to keep up. The 1280x800 detail is lost
   to the averaging until the reading is fast enough at full size.
