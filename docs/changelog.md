@@ -559,6 +559,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replayed an older host detector on the computed tee bin while the board ran
   the firmware detector on the bin ball-detect observed. It now runs the same
   C detector, armed as the board was, over the frozen ring.
+- **Simulator output tags estimated launch angles as estimated.** When the
+  server fills in a launch angle before the sim fan-out, the resolver tagged
+  it, and the carry built on it, as measured. It now reads the angle's source,
+  so the simulator badges, `sim_shot` event and `sim_send` log entries match
+  the data.
+- **Doc paths named from the Python package resolve again.** The K-LD7
+  OPS-bin penalty warning, the cloud client and session-logger comments,
+  and the two-ray module docstring pointed at flat `docs/*.md` files that
+  moved in the docs restructure. A new test scans `src/openflight`,
+  `scripts/`, `.github/`, and the top-level guides for `docs/…​.md`
+  references and fails on any that do not exist.
+- **`openflight-cloud` honors `--config`/`--log-dir` before the subcommand.**
+  The subcommand's defaults overwrote options given before it, so
+  `openflight-cloud --log-dir X push` scanned the default session directory.
+  The server's session-end push uses that form, so with a custom `--log-dir`
+  it looked in the wrong place.
 - **Stale doc paths from the docs restructure.** The hardware-help issue
   template and the user-facing messages in `scripts/setup/setup.sh`,
   `setup_kld7_devices.sh`, `capture_kld7_radc.py`, `replay_spin_dechirp.py`,
@@ -607,6 +623,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Mock mode simulates the optional hardware phones react to.** So a Pi
+  with no radar, UPS or camera can exercise every phone event: mock shots
+  now report `shot_processing` `capturing` then `calculating` like the radar,
+  `simulate_shot` with `{"fail": true}` reports `failed` without a shot,
+  `--mock-enrichment-ms MS` sends mock shots provisional then final through the
+  real enrichment pipeline (above the 20 s deadline they finalize as skipped),
+  and `--battery mock` cycles `power_status` through every state. See
+  [simulating hardware](ios-ble.md#simulating-hardware-on-a-pi-without-it).
 - **Bluetooth LE connection for phone apps.** `--ble` (with the optional `ble`
   extra, `bless==0.3.0` on Linux) advertises one GATT service with a shot and a
   control characteristic, speaking schema version 2; without BlueZ or the
@@ -681,6 +705,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a trigger-frame impact marker. MP4 conversion starts only after a manual
   Replay selection, caches the result beside the raw capture, and reports
   retryable preparation or playback failures without affecting shot results.
+- **Opt-in OPS243 internal hardware trigger.** `--trigger hardware` configures
+  the radar's internal speed trigger with 25 mph, magnitude 25, and the tested
+  `S#6` split at 30 ksps. Captures are parsed and the radar is re-armed with
+  `PA` after each dump. The existing sound-trigger default and
+  `--sound-pre-trigger` behavior are unchanged. Hardware mode requires and
+  validates OPS243-A firmware v1.3.2 or newer in the 1.3 release train;
+  firmware v1.3.1 is rejected because of a vendor data-sequence bug. See
+  [OPS243 Internal Hardware Trigger](hardware-trigger.md).
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in
