@@ -3223,7 +3223,6 @@ def _publish_ready_light() -> dict:
     key = (
         payload["state"],
         payload["cause"],
-        payload["hold"],
         None if left is None else math.ceil(left),
         swing.get("id"),
         (swing.get("result") or {}).get("kind"),

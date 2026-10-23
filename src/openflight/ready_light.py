@@ -2,8 +2,8 @@
 
 One readiness state, computed from what each sensor reports right now:
 
-- red, NOT READY, naming the cause: a hold another page set, a setup problem an
-  extension reports, or a sensor missing, failed or not yet armed;
+- red, NOT READY, naming the cause: a setup problem an extension reports, or a
+  sensor missing, failed or not yet armed;
 - amber, WAIT, with the cause and a rough time left: the OPS243 dumping,
   draining or re-arming, the IWR6843 dumping, the camera saving a clip or
   refilling its ring (and whatever an extension's camera rule adds);
@@ -167,10 +167,9 @@ def _camera(  # pylint: disable=too-many-return-statements
         camera_rule(camera, now, red, amber)
 
 
-def compute_state(states: SensorStates, now: float, hold: str | None = None) -> dict:
+def compute_state(states: SensorStates, now: float) -> dict:
     """The light for these sensor states: red outranks amber outranks green."""
-    red: list[str] = [hold] if hold else []
-    red.extend(states.setup_problems)
+    red: list[str] = list(states.setup_problems)
     amber: list[tuple[str, float | None]] = []
     _ops(states.ops, now, red, amber)
     if states.iwr is not None:
@@ -211,26 +210,14 @@ def _clock(epoch: float) -> str:
 
 
 class ReadyLight:
-    """The kiosk's one ready light: its state, an outside hold and the last swing."""
+    """The kiosk's one ready light: its state and the last swing."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._hold: str | None = None
         self._key: tuple | None = None
         self._since: float | None = None
         self._swing: dict | None = None
         self._swing_count = 0
-
-    @property
-    def hold(self) -> str | None:
-        """The red cause another page holds, or None."""
-        with self._lock:
-            return self._hold
-
-    def set_hold(self, cause: str | None) -> None:
-        """Hold the light red for a cause another page knows (None clears it)."""
-        with self._lock:
-            self._hold = cause or None
 
     def _new_swing(self, source: str, at: float) -> dict:
         self._swing_count += 1
@@ -275,7 +262,6 @@ class ReadyLight:
         """
         now = time.time() if now is None else float(now)
         with self._lock:
-            hold = self._hold
             if states is None:
                 light = {
                     "state": "off",
@@ -285,7 +271,7 @@ class ReadyLight:
                     "causes": [],
                 }
             else:
-                light = compute_state(states, now, hold)
+                light = compute_state(states, now)
             key = (light["state"], light["cause"])
             if key != self._key:
                 self._key = key
@@ -307,6 +293,5 @@ class ReadyLight:
                 **light,
                 "since": self._since,
                 "checked_at": now,
-                "hold": hold,
                 "swing": swing,
             }

@@ -53,6 +53,8 @@ tester_config_hash: str | None = None
 free_play_pause: dict = {}
 _pause_lock = threading.RLock()
 PAUSE_CAUSES = {"photo": "taking a face photo", "aim": "moving the aim"}
+# The red cause the tester page holds the ready light at (the ladder's phase), or None.
+ready_hold: str | None = None
 FACE_PHOTO_DIR = "face-photos"
 
 
@@ -445,8 +447,9 @@ def ready_light_hold():
     cause = body.get("cause")
     if cause is not None and (not isinstance(cause, str) or not cause.strip() or len(cause) > 120):
         return jsonify({"error": "cause must be null or a short text"}), 400
-    server.ready_light.set_hold(cause.strip() if cause else None)
-    return jsonify(server._publish_ready_light())
+    global ready_hold  # pylint: disable=global-statement
+    ready_hold = cause.strip() if cause else None
+    return jsonify({**server._publish_ready_light(), "hold": ready_hold})
 
 
 def load_free_play_plan(path) -> dict:
@@ -852,7 +855,9 @@ def _ready_light_states(states):
     Outside a tester's kiosk (the ladder or plain swings) the light is the plain
     kiosk's: the sensors alone decide it.
     """
-    if states is None or not (tester_setup_required or study_mode_enabled or free_play_pause):
+    if states is None or not (
+        tester_setup_required or study_mode_enabled or free_play_pause or ready_hold
+    ):
         return states
     camera = states.camera
     if server.camera_capture_runtime is not None and camera is not None:
@@ -868,7 +873,8 @@ def _ready_light_states(states):
     return dataclasses.replace(
         states,
         camera=camera,
-        setup_problems=(*states.setup_problems, *problems),
+        # the page's hold is red and comes first
+        setup_problems=(*((ready_hold,) if ready_hold else ()), *states.setup_problems, *problems),
         camera_rule=_free_play_camera_rule,
         green_note=_free_play_note(camera),
         amber_causes=(
