@@ -356,6 +356,63 @@ def club_category(club: str | None) -> str | None:
     return None
 
 
+REFERENCE_BAND = "reference_geometry_leading_edge_band"
+PHOTO_BAND_SIGMA_FRACTION = 0.5
+PHOTO_LINE_LENGTH_SIGMA_FRACTION = 0.25
+
+
+@dataclass(frozen=True)
+class FacePhotoReference:
+    """The face-centre rule's numbers a marked face photo needs, for one club's category.
+
+    A photo shows the face's own bottom edge, its top line and the lowest score line (its
+    row, end to end), not the leading edge or the face perimeter. ``leading_edge_band`` is
+    how far the face's bottom edge sits above the leading edge this module's heights start
+    from; ``centre_toeward_of_lowest_line_middle`` carries the lowest line's middle to the
+    rule's centre (+ toe-ward; nothing to carry when the lowest line is the longest);
+    ``lowest_line_length`` and ``lowest_line_above_face_bottom`` stand in for a photo with
+    no scale or no lines. All are reference geometry from ``face_centre_reference.json``,
+    their sigmas brackets (its ``fields.sigma``). ``category`` is None for an unknown club,
+    which takes the iron's numbers, ``UNKNOWN_CLUB_SIGMA_SCALE`` wider.
+    """
+
+    category: str | None
+    leading_edge_band: Labelled
+    centre_toeward_of_lowest_line_middle: Labelled
+    lowest_line_length: Labelled
+    lowest_line_above_face_bottom: Labelled
+
+
+def face_photo_reference(club: str | None) -> FacePhotoReference:
+    """``FacePhotoReference`` for a kiosk club name."""
+    category = club_category(club)
+    entry = FACE_CENTRE_REFERENCE["categories"][category or "iron"]
+    widen = 1.0 if category else UNKNOWN_CLUB_SIGMA_SCALE
+    suffix = "" if category else "_unknown_club"
+
+    def labelled(value: float, sigma: float, source: str) -> Labelled:
+        return Labelled(float(value), float(sigma) * widen, source + suffix)
+
+    band = entry["centre_above_leading_edge_mm"] - entry["centre_above_face_bottom_mm"]
+    length = entry["lowest_line_length_mm"]
+    toeward_sigma = 0.0 if entry["lowest_line_is_longest"] else entry["centre_from_toe_sigma_mm"]
+    return FacePhotoReference(
+        category=category,
+        leading_edge_band=labelled(band, band * PHOTO_BAND_SIGMA_FRACTION, REFERENCE_BAND),
+        centre_toeward_of_lowest_line_middle=labelled(
+            entry["centre_toeward_of_lowest_line_middle_mm"], toeward_sigma, REFERENCE_FACE_CENTRE
+        ),
+        lowest_line_length=labelled(
+            length, length * PHOTO_LINE_LENGTH_SIGMA_FRACTION, REFERENCE_FACE_CENTRE
+        ),
+        lowest_line_above_face_bottom=labelled(
+            entry["lowest_line_above_face_bottom_mm"],
+            entry["centre_above_leading_edge_sigma_mm"],
+            REFERENCE_FACE_CENTRE,
+        ),
+    )
+
+
 def nominal_loft_deg(club: str | None) -> float | None:
     """The club's nominal loft from the shared club physics table, or None."""
     from openflight.clubs.physics import CLUB_PHYSICS  # noqa: PLC0415

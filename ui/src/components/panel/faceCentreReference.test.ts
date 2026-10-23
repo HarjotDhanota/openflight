@@ -12,7 +12,15 @@ const REFERENCE = JSON.parse(
 ) as {
   categories: Record<
     FaceCategory,
-    { centre_from_toe_mm: number; centre_above_leading_edge_mm: number; centre_above_face_bottom_mm: number }
+    {
+      centre_from_toe_mm: number;
+      centre_above_leading_edge_mm: number;
+      centre_above_face_bottom_mm: number;
+      lowest_line_is_longest: boolean;
+      centre_toeward_of_lowest_line_middle_mm: number;
+      lowest_line_length_mm: number;
+      lowest_line_above_face_bottom_mm: number;
+    }
   >;
 };
 
@@ -67,6 +75,27 @@ describe('the backend face-centre reference', () => {
       expect(Math.abs(bottom(polygon(shape.face), x) - y - entry.centre_above_face_bottom_mm)).toBeLessThanOrEqual(
         0.1
       );
+    }
+  );
+
+  /* A marked face photo gives the lowest score line (its row end to end, across any gap) and the
+   * face's bottom edge; these carry it to the drawn centre. Toe is -x, so toe-ward is mid - x. */
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'matches the %s drawing: the lowest score line against the centre',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const entry = REFERENCE.categories[category];
+      const [x] = faceCentre(category, shape);
+      const lowest = Math.max(...shape.grooves.map((groove) => groove.y));
+      const row = shape.grooves.filter((groove) => Math.abs(groove.y - lowest) < 0.01);
+      const [from, to] = [Math.min(...row.map((g) => g.from)), Math.max(...row.map((g) => g.to))];
+      const longest = Math.max(...shape.grooves.map((groove) => groove.to - groove.from));
+      expect(row.length === 1 && to - from >= longest - 0.01).toBe(entry.lowest_line_is_longest);
+      expect(Math.abs((from + to) / 2 - x - entry.centre_toeward_of_lowest_line_middle_mm)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(to - from - entry.lowest_line_length_mm)).toBeLessThanOrEqual(0.1);
+      expect(
+        Math.abs(bottom(polygon(shape.face), x) - lowest - entry.lowest_line_above_face_bottom_mm)
+      ).toBeLessThanOrEqual(0.1);
     }
   );
 });
