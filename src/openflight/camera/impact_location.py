@@ -9,10 +9,14 @@ both in face coordinates of the contact point P = B - r n_hat.
 reference.** The heel-toe method it ports agreed with one annotator's hand marks
 on the same pixels (r = 0.97, 2.6 mm rms over a 10.8 mm spread, August 2026
 session, 467 fps); that is a consistency figure, not an accuracy one. Every
-result carries ``label == "experimental_unqualified"``. The heel-toe face centre
-is a CONVENTION (the aligned outline's heel-toe midpoint plus 8 mm toe-ward) and
-the height face centre is a per-club height above the leading edge, from marked
-face photos or a labelled category prior.
+result carries ``label == "experimental_unqualified"``. The face centre follows
+the R&A/USGA centre template, as the kiosk's face drawings do: the centre of the
+face perimeter for woods and hybrids, and for irons and wedges the middle of the
+longest score line, midway between the face's bottom edge and the top line. Heel
+to toe it sits a category distance heel-ward of the toe landmark (the hosel cut
+moves the heel landmark, not the toe); its height above the leading edge comes
+from marked face photos, else the category's. Both category numbers are measured
+on one reference club's drawing and kept in ``face_centre_reference.json``.
 
 Height: the ball centre's height above the head's sole line at contact (the
 outline's bottom edge, interpolated across the bracketing frames like heel and
@@ -55,8 +59,9 @@ promotion on ``integration/cv-2026-09`` (``clubpose/head_outline.py``,
   passes, toe landmark calibrated against the slow frames;
 * placement by translation and roll only (FFT local IoU), at a scale pinned by
   a range model rather than fitted; IoU, search-boundary and track gates;
-* the reading convention (face centre 8 mm toe-ward of the heel-toe midpoint),
-  the toe-anchored reading and its physics gate.
+* the toe-anchored reading and its physics gate (the research's face centre, the
+  outline's heel-toe midpoint plus 8 mm toe-ward, is replaced by the centre
+  template's distance from the toe).
 
 New in v1, because the tester captures 120-288 fps rather than 467 fps:
 
@@ -85,10 +90,12 @@ no sign change, so + is toward the toe for either hand.
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import cv2
@@ -184,7 +191,6 @@ MEASURED_CLUB_SPEED_RELATIVE_SIGMA = 0.03
 POST_IMPACT_SPEED_FRACTION = 0.83
 MIN_DEPTH_RATIO = 0.3
 
-FACE_CENTRE_TOEWARD_MM = 8.0
 MAX_IRON_BLADE_MM = 87.0  # official game-improvement 7-iron band (Mizuno/Srixon)
 BLADE_GATE_MARGIN_MM = 15.0
 TOE_SIDE_MARGIN_MM = 10.0
@@ -255,7 +261,8 @@ class Labelled:
         return {"value": round(self.value, 4), "sigma": round(self.sigma, 4), "source": self.source}
 
 
-PRIOR_FACE_CENTRE = "prior_unpublished_category_bracket"
+REFERENCE_FACE_CENTRE = "reference_geometry_face_centre_rule"
+RESEARCH_OVERRIDE = "research_override"
 PRIOR_LOFT = "prior_nominal_loft_minus_typical_shaft_lean"
 PRIOR_SQUARE = "prior_square_face"
 PRIOR_ATTACK = "prior_category_typical_attack"
@@ -264,37 +271,64 @@ PRIOR_SOLE = "prior_unpublished_sole_width"
 PRIOR_BOUNCE = "prior_effective_bounce_at_impact"
 RIG_LENS_HEIGHT = "rig_file_lens_height"
 
+FACE_CENTRE_REFERENCE: dict[str, Any] = json.loads(
+    Path(__file__).with_name("face_centre_reference.json").read_text(encoding="utf-8")
+)
+FACE_CENTRE_CONVENTION = (
+    "R&A/USGA centre template: woods and hybrids the face perimeter's centre; irons and "
+    "wedges the longest score line's middle, midway between the face's bottom edge and the "
+    "top line. Heel-toe: the category's distance heel-ward of the toe landmark. Height: "
+    "above the leading edge (the head's lowest point seen along the face normal)"
+)
+
+
+def _reference(category: str) -> dict[str, tuple[float, float, str]]:
+    entry = FACE_CENTRE_REFERENCE["categories"][category]
+    return {
+        "face_centre_from_toe": (
+            entry["centre_from_toe_mm"],
+            entry["centre_from_toe_sigma_mm"],
+            REFERENCE_FACE_CENTRE,
+        ),
+        "face_centre_height": (
+            entry["centre_above_leading_edge_mm"],
+            entry["centre_above_leading_edge_sigma_mm"],
+            REFERENCE_FACE_CENTRE,
+        ),
+    }
+
+
 CATEGORY_PRIORS: dict[str, dict[str, tuple[float, float, str]]] = {
     "iron": {
-        "face_centre_height": (23.0, 5.0, PRIOR_FACE_CENTRE),
+        **_reference("iron"),
         "loft_shift": (-4.0, 6.0, PRIOR_LOFT),
         "attack_angle": (-4.0, 4.0, PRIOR_ATTACK),
         "sole_width": (19.9, 2.3, OFFICIAL_SOLE),
         "effective_bounce": (3.0, 3.0, PRIOR_BOUNCE),
     },
     "wedge": {
-        "face_centre_height": (24.0, 5.0, PRIOR_FACE_CENTRE),
+        **_reference("wedge"),
         "loft_shift": (-4.0, 6.0, PRIOR_LOFT),
         "attack_angle": (-5.0, 4.0, PRIOR_ATTACK),
         "sole_width": (22.0, 5.0, PRIOR_SOLE),
         "effective_bounce": (6.0, 4.0, PRIOR_BOUNCE),
     },
     "hybrid": {
-        "face_centre_height": (20.0, 5.0, PRIOR_FACE_CENTRE),
+        **_reference("hybrid"),
         "loft_shift": (-2.0, 6.0, PRIOR_LOFT),
         "attack_angle": (-2.0, 4.0, PRIOR_ATTACK),
         "sole_width": (30.0, 10.0, PRIOR_SOLE),
         "effective_bounce": (0.0, 3.0, PRIOR_BOUNCE),
     },
     "fairway": {
-        "face_centre_height": (17.0, 5.0, PRIOR_FACE_CENTRE),
+        **_reference("fairway"),
         "loft_shift": (0.0, 6.0, PRIOR_LOFT),
         "attack_angle": (-1.0, 4.0, PRIOR_ATTACK),
         "sole_width": (45.0, 12.0, PRIOR_SOLE),
         "effective_bounce": (0.0, 3.0, PRIOR_BOUNCE),
     },
     "driver": {
-        "face_centre_height": (30.0, 6.0, PRIOR_FACE_CENTRE),
+        **_reference("driver"),
         "loft_shift": (2.0, 5.0, PRIOR_LOFT),
         "attack_angle": (2.0, 4.0, PRIOR_ATTACK),
         "sole_width": (60.0, 15.0, PRIOR_SOLE),
@@ -339,7 +373,8 @@ class FaceInputs:  # pylint: disable=too-many-instance-attributes
 
     ``face_angle`` is in the analysis orientation, + open (the toe trailing),
     against the camera's line of sight. ``face_centre_height`` is the face
-    centre's height above the leading edge, measured along the face.
+    centre's height above the leading edge, measured along the face;
+    ``face_centre_from_toe`` is its distance heel-ward of the toe extreme.
     ``sole_width`` and ``effective_bounce`` place the leading edge above the
     silhouette's bottom (the trailing edge); ``lens_height`` is the lens above
     the hitting surface.
@@ -349,13 +384,14 @@ class FaceInputs:  # pylint: disable=too-many-instance-attributes
     face_angle: Labelled
     attack_angle: Labelled
     face_centre_height: Labelled
+    face_centre_from_toe: Labelled
     sole_width: Labelled
     effective_bounce: Labelled
     lens_height: Labelled
 
     @classmethod
     def priors(cls, club: str | None, *, lens_height_mm: float | None = None) -> "FaceInputs":
-        """Category priors for every input, each labelled as a prior."""
+        """Category values for every input, each labelled with where it came from."""
         category = club_category(club)
         table = CATEGORY_PRIORS[category or "iron"]
         widen = 1.0 if category else UNKNOWN_CLUB_SIGMA_SCALE
@@ -372,6 +408,7 @@ class FaceInputs:  # pylint: disable=too-many-instance-attributes
             face_angle=Labelled(0.0, 4.0, PRIOR_SQUARE),
             attack_angle=prior("attack_angle"),
             face_centre_height=prior("face_centre_height"),
+            face_centre_from_toe=prior("face_centre_from_toe"),
             sole_width=prior("sole_width"),
             effective_bounce=prior("effective_bounce"),
             lens_height=Labelled(
@@ -1685,8 +1722,7 @@ class ImpactLocation:  # pylint: disable=too-many-instance-attributes
     is its height along the face above the face centre, + up. ``status`` and
     ``reason`` cover the offset (the whole shot fails with it); ``height_status``
     and ``height_reason`` cover the height, which can fail alone. The sigmas are
-    1-sigma budgets of named terms in quadrature; the heel-toe face-centre
-    convention is systematic and not in them.
+    1-sigma budgets of named terms in quadrature, the face centre's among them.
     """
 
     status: str
@@ -1704,10 +1740,7 @@ class ImpactLocation:  # pylint: disable=too-many-instance-attributes
     impact_height_sigma_mm: float | None = None
     ball_from_toe_mm: float | None = None
     face_width_mm: float | None = None
-    face_centre_convention: str = (
-        f"heel-toe: aligned-outline midpoint + {FACE_CENTRE_TOEWARD_MM:.0f} mm toe-ward "
-        "(uncalibrated); height: face-centre height above the leading edge"
-    )
+    face_centre_convention: str = FACE_CENTRE_CONVENTION
     diagnostics: dict[str, Any] = field(default_factory=dict)
     alignments: dict[int, Alignment] = field(default_factory=dict, repr=False)
 
@@ -1815,10 +1848,14 @@ def _read(  # pylint: disable=too-many-locals
     *,
     fraction: float,
     speed: float,
-    face_centre_toeward_mm: float,
     face: FaceInputs,
 ) -> dict[str, Any] | None:
-    """Heel, toe and sole interpolated to contact; the ball read against them."""
+    """Heel, toe and sole interpolated to contact; the ball read against them.
+
+    Heel to toe the ball is read from the toe: its distance from the toe along the
+    face (the ball radius and face angle taken out) plus the face centre's distance
+    heel-ward of the toe.
+    """
     last_rest = shot.contact.last_rest_frame
     assert last_rest is not None
     contact = last_rest + fraction
@@ -1835,20 +1872,21 @@ def _read(  # pylint: disable=too-many-locals
     if length <= 0.0:
         return None
     unit = span / length
-    centre = 0.5 * (points["heel"] + points["toe"]) + unit * face_centre_toeward_mm
     ball = _metric(shot, np.array([shot.ball.x, shot.ball.y]), 1.0)
     face_angle = math.radians(face.face_angle.value)
-    imaged = float(np.dot(ball - centre, unit))
+    from_toe = face.face_centre_from_toe.value
+    ball_from_toe = float(np.dot(ball - points["toe"], unit))
+    centre = points["toe"] - unit * from_toe * math.cos(face_angle)
 
-    def centre_on(alignment: Alignment, ratio: float) -> float:
-        heel = _metric(shot, alignment.landmarks["heel"], ratio)
-        toe = _metric(shot, alignment.landmarks["toe"], ratio)
-        return float(np.dot(0.5 * (heel + toe), unit))
+    def toe_on(alignment: Alignment, ratio: float) -> float:
+        return float(np.dot(_metric(shot, alignment.landmarks["toe"], ratio), unit))
 
     reading: dict[str, Any] = {
-        "impact_offset_mm": (imaged - BALL_RADIUS_MM * math.sin(face_angle)) / math.cos(face_angle),
-        "imaged_offset_mm": imaged,
-        "ball_from_toe_mm": float(np.dot(ball - points["toe"], unit)),
+        "impact_offset_mm": (ball_from_toe - BALL_RADIUS_MM * math.sin(face_angle))
+        / math.cos(face_angle)
+        + from_toe,
+        "imaged_offset_mm": float(np.dot(ball - centre, unit)),
+        "ball_from_toe_mm": ball_from_toe,
         "face_width_mm": length,
         "weight": weight,
         "ratio_before": ratio_before,
@@ -1856,7 +1894,7 @@ def _read(  # pylint: disable=too-many-locals
         "heel_mm": points["heel"],
         "toe_mm": points["toe"],
         "centre_mm": centre,
-        "centre_step_mm": centre_on(after, ratio_after) - centre_on(before, ratio_before),
+        "centre_step_mm": toe_on(after, ratio_after) - toe_on(before, ratio_before),
         "toe_before_px": before.landmarks["toe"],
         "toe_after_px": after.landmarks["toe"],
     }
@@ -2057,6 +2095,7 @@ def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
             - reread(key, face_angle=face.face_angle.value - face.face_angle.sigma)
         )
         / 2.0,
+        "face_centre_mm": face.face_centre_from_toe.sigma,
     }
     if shot.contact.warning is not None:
         budget["contact_frame_ambiguity_mm"] = abs(reading["centre_step_mm"]) / 2.0
@@ -2138,10 +2177,18 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
     template: HeadTemplate | None,
     *,
     face: FaceInputs | None = None,
-    face_centre_toeward_mm: float = FACE_CENTRE_TOEWARD_MM,
+    face_centre_from_toe_mm: float | None = None,
 ) -> ImpactLocation:
-    """Align the template, interpolate the head to contact, read the ball. Fails closed."""
+    """Align the template, interpolate the head to contact, read the ball. Fails closed.
+
+    ``face_centre_from_toe_mm`` is a research override of the heel-toe face centre:
+    the given distance heel-ward of the toe, exact (no sigma), in place of the club's.
+    """
     face = face or FaceInputs.priors(shot.club)
+    if face_centre_from_toe_mm is not None:
+        face = face.with_changes(
+            face_centre_from_toe=Labelled(float(face_centre_from_toe_mm), 0.0, RESEARCH_OVERRIDE)
+        )
     contact = shot.contact
     diagnostics = _diagnostics(shot, face)
     common: dict[str, Any] = {
@@ -2152,10 +2199,10 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
     }
     if contact.status != "ok":
         return ImpactLocation("rejected", contact.reason, diagnostics=diagnostics, **common)
-    if face_centre_toeward_mm != FACE_CENTRE_TOEWARD_MM:
+    if face_centre_from_toe_mm is not None:
         common["face_centre_convention"] = (
-            f"heel-toe: aligned-outline midpoint + {face_centre_toeward_mm:.1f} mm toe-ward; "
-            "height: face-centre height above the leading edge"
+            f"{FACE_CENTRE_CONVENTION}; heel-toe by research override: "
+            f"{face_centre_from_toe_mm:.1f} mm heel-ward of the toe"
         )
     if template is None:
         reason = "no_template_for_this_club"
@@ -2217,7 +2264,6 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
             after,
             fraction=changes.get("fraction", shot.contact_fraction),
             speed=changes.get("speed", shot.club_speed_mps),
-            face_centre_toeward_mm=face_centre_toeward_mm,
             face=changed_face,
         )
 
@@ -2278,7 +2324,7 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
             "centre_at_contact_mm": [round(v, 2) for v in reading["centre_mm"]],
             "edge_blur": _edge_blur(shot, before, after, reading),
             "not_in_uncertainty": [
-                "heel-toe face-centre convention (systematic until spray-calibrated)",
+                "the leading edge's rise between the ball and the face centre, heel to toe",
                 "toe blur overhang beyond the toe calibration",
                 "lens distortion (pinhole assumed) and the principal point",
             ],
@@ -2312,7 +2358,7 @@ def analyse_shot(
     ball_clock_frames: float | None = None,
     template: HeadTemplate | None = None,
     face: FaceInputs | None = None,
-    face_centre_toeward_mm: float = FACE_CENTRE_TOEWARD_MM,
+    face_centre_from_toe_mm: float | None = None,
 ) -> ImpactLocation:
     """One shot end to end. EXPERIMENTAL.
 
@@ -2337,7 +2383,7 @@ def analyse_shot(
     )
     if template is None and shot.contact.status == "ok":
         template, _reason = build_self_template([shot])
-    return locate_impact(shot, template, face=face, face_centre_toeward_mm=face_centre_toeward_mm)
+    return locate_impact(shot, template, face=face, face_centre_from_toe_mm=face_centre_from_toe_mm)
 
 
 def render_overlay(

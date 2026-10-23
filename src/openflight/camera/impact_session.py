@@ -17,8 +17,10 @@ Per-shot inputs, each with its source:
   implies, else the ladder's recorded ball;
 - club speed (OPS), dynamic loft, face angle and attack from the shot record's
   labelled metrics, else the category priors of ``FaceInputs.priors``;
-- the face-centre height: an anchor per club (from marked face photos), else
-  the category prior;
+- the face centre: its height above the leading edge from an anchor per club
+  (marked face photos), else the category's; heel to toe, the category's distance
+  from the toe (``face_centre_reference.json``) unless ``--face-centre-from-toe-mm``
+  overrides it for research;
 - the golfer's hand from the session's ``--handed`` record (right-handed by
   default), the lens's focal length from the session's lens record or the rig
   file's lens.
@@ -74,6 +76,7 @@ CSV_FIELDS = (
     "club_speed_source",
     "dynamic_loft_source",
     "face_centre_height_source",
+    "face_centre_from_toe_source",
     "toe_blur_10_90_mm",
     "sole_blur_10_90_mm",
     "topline_blur_10_90_mm",
@@ -373,7 +376,12 @@ def shot_face_inputs(
 
 
 def read_anchors(path: Path | None) -> dict[str, il.Labelled]:
-    """Per-club face-centre heights (mm above the leading edge, along the face)."""
+    """Per-club face-centre heights (mm along the face above the physical leading edge).
+
+    The centre is the one ``impact_location.FACE_CENTRE_CONVENTION`` names; the
+    leading edge is the head's lowest point seen along the face normal, not the
+    face's own bottom edge.
+    """
     if path is None:
         return {}
     data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -398,7 +406,7 @@ class Options:  # pylint: disable=too-many-instance-attributes
     contact_fraction: float | None = None
     ball: tuple[float, float, float] | None = None
     anchors: dict[str, il.Labelled] = field(default_factory=dict)
-    face_centre_toeward_mm: float = il.FACE_CENTRE_TOEWARD_MM
+    face_centre_from_toe_mm: float | None = None
     shots: tuple[str, ...] = ()
     template_scope: str = "club"
     lens_id: str | None = None
@@ -578,6 +586,7 @@ def result_row(
         "club_speed_source": clip.extra.get("club_speed_source"),
         "dynamic_loft_source": face.dynamic_loft.source if face else None,
         "face_centre_height_source": face.face_centre_height.source if face else None,
+        "face_centre_from_toe_source": face.face_centre_from_toe.source if face else None,
         "face_photo": clip.face_photo,
         "relative_path": clip.relative_path,
     }
@@ -585,6 +594,9 @@ def result_row(
         reason = clip.error or "not_analysed"
         row.update(status="rejected", reason=reason, height_status="rejected", height_reason=reason)
         return row
+    from_toe = (location.diagnostics.get("inputs") or {}).get("face_centre_from_toe")
+    if from_toe:
+        row["face_centre_from_toe_source"] = from_toe["source"]
     row.update(
         status=location.status,
         reason=location.reason,
@@ -617,6 +629,11 @@ def analyse_session(
 ) -> dict[str, Any]:
     """Every clip of the session read on both axes; the report as a JSON-ready dict."""
     options = options or Options()
+    centre = "the category's distance from the toe"
+    if options.face_centre_from_toe_mm is not None:
+        centre = (
+            f"{options.face_centre_from_toe_mm:.1f} mm heel-ward of the toe (research override)"
+        )
     clips = find_clips(root)
     if options.shots:
         clips = [c for c in clips if any(s in c.relative_path for s in options.shots)]
@@ -644,7 +661,7 @@ def analyse_session(
             clip.prepared,
             template,
             face=clip.face,
-            face_centre_toeward_mm=options.face_centre_toeward_mm,
+            face_centre_from_toe_mm=options.face_centre_from_toe_mm,
         )
         rows.append(result_row(clip, location, template))
         details.append({"shot_id": clip.shot_id, **location.as_dict()})
@@ -659,9 +676,8 @@ def analyse_session(
         "label": il.EXPERIMENTAL_LABEL,
         "caveat": (
             "EXPERIMENTAL, UNQUALIFIED post-session analysis; not shown on the kiosk. "
-            "Heel-toe face centre: outline midpoint + "
-            f"{options.face_centre_toeward_mm:.1f} mm toe-ward (a convention). Height face "
-            "centre: per-club anchor from marked face photos, else a labelled category prior."
+            f"Face centre: {il.FACE_CENTRE_CONVENTION}. Heel-toe: {centre}. Height: per-club "
+            "anchor from marked face photos, else the category's."
         ),
         "session": str(root),
         "templates": template_notes,

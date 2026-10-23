@@ -1,0 +1,53 @@
+{
+ "schema": "openflight.face_centre_reference.v1",
+ "rule": "R&A/USGA centre template (TPX3004). Driver, fairway wood, hybrid: the centre of the face perimeter, at the middles of its heel-toe and sole-crown chords through the point, iterated. Iron and wedge: heel-toe at the middle of the longest score line; up the face midway between the face's bottom edge and the top line there.",
+ "source": "One reference club per category, drawn along the face normal in the kiosk's face view (ui/src/components/panel/faceImpact.ts, faceCentre); docs/camera/impact-location.md names each model and its official specs. ui/src/components/panel/faceCentreReference.test.ts fails when a drawing's centre moves and this file is not updated.",
+ "fields": {
+  "centre_from_toe_mm": "how far the face centre sits heel-ward of the head's toe extreme, along the score lines",
+  "centre_above_leading_edge_mm": "the face centre's height along the face above the head's lowest point under it in the face-normal view: the physical leading edge, the datum the camera's sole line plus the sole datum lands on",
+  "centre_above_face_bottom_mm": "the same above the face's own bottom edge, for reference; the band between the two is the leading edge's radius seen face-on",
+  "sigma": "a bracket, not a measured spread: one reference model per category, scaled to one category length (irons and wedges to 76.6 mm within Mizuno's official 7-iron head lengths of 74-87 mm, which move an iron's numbers by about -3 to +14 %); face heights are published by no manufacturer"
+ },
+ "categories": {
+  "driver": {
+   "club": "Callaway Paradym Ai Smoke Triple Diamond driver",
+   "centre_from_toe_mm": 60.4,
+   "centre_from_toe_sigma_mm": 4.0,
+   "centre_above_leading_edge_mm": 29.08,
+   "centre_above_leading_edge_sigma_mm": 4.0,
+   "centre_above_face_bottom_mm": 24.74
+  },
+  "fairway": {
+   "club": "Callaway Elyte 3-wood",
+   "centre_from_toe_mm": 58.51,
+   "centre_from_toe_sigma_mm": 3.5,
+   "centre_above_leading_edge_mm": 19.65,
+   "centre_above_leading_edge_sigma_mm": 3.5,
+   "centre_above_face_bottom_mm": 17.51
+  },
+  "hybrid": {
+   "club": "TaylorMade Forged Twist Face #3 Rescue",
+   "centre_from_toe_mm": 49.61,
+   "centre_from_toe_sigma_mm": 3.5,
+   "centre_above_leading_edge_mm": 17.76,
+   "centre_above_leading_edge_sigma_mm": 3.5,
+   "centre_above_face_bottom_mm": 14.31
+  },
+  "iron": {
+   "club": "TaylorMade P770 7-iron",
+   "centre_from_toe_mm": 43.98,
+   "centre_from_toe_sigma_mm": 3.0,
+   "centre_above_leading_edge_mm": 22.82,
+   "centre_above_leading_edge_sigma_mm": 3.0,
+   "centre_above_face_bottom_mm": 18.3
+  },
+  "wedge": {
+   "club": "Titleist Vokey SM11 56 degree",
+   "centre_from_toe_mm": 45.41,
+   "centre_from_toe_sigma_mm": 3.0,
+   "centre_above_leading_edge_mm": 26.89,
+   "centre_above_leading_edge_sigma_mm": 3.5,
+   "centre_above_face_bottom_mm": 25.22
+  }
+ }
+}

@@ -157,6 +157,7 @@ def test_the_cli_reads_both_axes_from_a_recorded_session(tmp_path):
     assert row["ball_range_source"] == "shot_iwr_post_impact"
     assert row["ball_range_mm"] == pytest.approx(synthetic.BALL_RANGE_MM, abs=1.0)
     assert row["face_centre_height_source"] == "face_photo_marks_n3"
+    assert row["face_centre_from_toe_source"] == "reference_geometry_face_centre_rule"
     assert row["dynamic_loft_source"] == "shot_metric_calculated"
     assert row["face_photo"] == "face-photos/shot-0001.pgm"
     assert row["impact_offset_mm"] == pytest.approx(8.0, abs=2.5)
@@ -167,6 +168,24 @@ def test_the_cli_reads_both_axes_from_a_recorded_session(tmp_path):
     assert (out / "overlays" / f"{CLIP}.png").is_file()
     header = (out / "impact_location.csv").read_text(encoding="utf-8").splitlines()[0]
     assert "impact_height_sigma_mm" in header and "height_reason" in header
+    assert "longest score line" in report["caveat"] and "midpoint" not in report["caveat"]
+
+
+def test_the_cli_moves_the_face_centre_only_through_the_research_override(tmp_path):
+    parser = cli.build_parser()
+    flags = {flag for action in parser._actions for flag in action.option_strings}
+    assert "--face-centre-offset-mm" not in flags
+    assert parser.parse_args(["session"]).face_centre_from_toe_mm is None
+    assert session.Options().face_centre_from_toe_mm is None
+    root = write_session(tmp_path)
+    default = session.analyse_session(root)
+    moved = session.analyse_session(
+        root, session.Options(face_centre_from_toe_mm=synthetic.FACE_CENTRE_FROM_TOE_MM - 10.0)
+    )
+    row, shifted = default["rows"][0], moved["rows"][0]
+    assert shifted["impact_offset_mm"] - row["impact_offset_mm"] == pytest.approx(-10.0, abs=1e-6)
+    assert shifted["face_centre_from_toe_source"] == "research_override"
+    assert "research override" in moved["caveat"]
 
 
 def test_a_left_handed_session_is_read_through_the_mirror(tmp_path):

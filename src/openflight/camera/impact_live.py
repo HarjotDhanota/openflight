@@ -304,6 +304,7 @@ def _reading(location, clip) -> dict[str, Any]:
         "impact_height_sigma_mm": _number(location.impact_height_sigma_mm) if height_ok else None,
         "contact_frame": location.contact_frame,
         "face_centre_height_source": face.face_centre_height.source if face else None,
+        "face_centre_from_toe_source": face.face_centre_from_toe.source if face else None,
         "dynamic_loft_source": face.dynamic_loft.source if face else None,
     }
 
