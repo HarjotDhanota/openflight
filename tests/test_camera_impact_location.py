@@ -8,6 +8,8 @@ the module reads has a closed-form truth here.
 
 from __future__ import annotations
 
+import inspect
+import json
 import math
 from pathlib import Path
 
@@ -28,6 +30,17 @@ BALL_SPEED = 50.0
 LAUNCH_DEG = 18.0
 HEAD_WIDTH_MM = 75.0
 FACE_CENTRE_HEIGHT_MM = 18.0
+REFERENCE = json.loads(
+    Path(il.__file__).with_name("face_centre_reference.json").read_text(encoding="utf-8")
+)
+FACE_CENTRE_FROM_TOE_MM = REFERENCE["categories"]["iron"]["centre_from_toe_mm"]
+CATEGORY_CLUBS = {
+    "driver": "driver",
+    "fairway": "3-wood",
+    "hybrid": "3-hybrid",
+    "iron": "7-iron",
+    "wedge": "sw",
+}
 
 
 def _centre(width: int, height: int) -> tuple[float, float]:
@@ -39,9 +52,11 @@ def _project(x_mm, height_mm, depth_mm, *, focal, width, height):
     return cx + focal * x_mm / depth_mm, cy + focal * (CAMERA_HEIGHT_MM - height_mm) / depth_mm
 
 
-def _head_polygon(heel_x: float, lift: float) -> list[tuple[float, float]]:
+def _head_polygon(
+    heel_x: float, lift: float, width: float = HEAD_WIDTH_MM
+) -> list[tuple[float, float]]:
     """A flat iron seen from behind: (lateral mm, height mm), heel to toe."""
-    toe_x = heel_x + HEAD_WIDTH_MM
+    toe_x = heel_x + width
     return [
         (heel_x, lift),
         (toe_x - 8.0, lift),
@@ -70,11 +85,13 @@ def render_swing(  # pylint: disable=too-many-locals
     subframes: int = 1,
     ball_level: float = 225.0,
     head_level: float = 35.0,
+    from_toe_mm: float = FACE_CENTRE_FROM_TOE_MM,
+    head_width_mm: float = HEAD_WIDTH_MM,
 ) -> tuple[np.ndarray, il.RestingBall]:
     """Frames of one swing and the resting ball, right-handed, unmirrored.
 
-    ``truth_mm`` is the ball centre's offset from the module's heel-toe face-centre
-    convention (heel-toe midpoint + 8 mm toe-ward) at contact, + toward the toe.
+    ``truth_mm`` is the ball centre's offset from the face centre at contact, + toward
+    the toe; the face centre sits ``from_toe_mm`` heel-ward of the toe extreme.
     ``lift_mm`` raises the sole above the ground. With ``exposure_ms`` each frame
     averages ``subframes`` renders across the exposure (motion blur).
     """
@@ -95,7 +112,7 @@ def render_swing(  # pylint: disable=too-many-locals
             speed = CLUB_SPEED * (il.POST_IMPACT_SPEED_FRACTION if elapsed_ms > 0 else 1.0)
             head_depth = BALL_RANGE_MM + speed * elapsed_ms
             centre = centre_at_contact + drift_mm_per_frame * (time - contact_time)
-            heel = centre - il.FACE_CENTRE_TOEWARD_MM - HEAD_WIDTH_MM / 2.0
+            heel = centre + from_toe_mm - head_width_mm
             if ball_moves and elapsed_ms > 0:
                 travel = BALL_SPEED * elapsed_ms
                 ball_depth = BALL_RANGE_MM + travel * math.cos(math.radians(LAUNCH_DEG))
@@ -120,7 +137,10 @@ def render_swing(  # pylint: disable=too-many-locals
                     )
                 else:
                     points = np.array(
-                        [_project(x, h, depth, **project) for x, h in _head_polygon(heel, lift_mm)]
+                        [
+                            _project(x, h, depth, **project)
+                            for x, h in _head_polygon(heel, lift_mm, head_width_mm)
+                        ]
                     )
                     cv2.fillPoly(
                         image, [np.round(points * 16).astype(np.int32)], head_level, shift=4
@@ -142,6 +162,7 @@ def face_inputs(loft_deg: float = 0.0, **changes) -> il.FaceInputs:
         "face_angle": il.Labelled(0.0, 2.0, "given"),
         "attack_angle": il.Labelled(0.0, 2.0, "given"),
         "face_centre_height": il.Labelled(FACE_CENTRE_HEIGHT_MM, 3.0, "given"),
+        "face_centre_from_toe": il.Labelled(FACE_CENTRE_FROM_TOE_MM, 2.0, "given"),
         "sole_width": il.Labelled(0.0, 0.0, "given"),
         "effective_bounce": il.Labelled(0.0, 0.0, "given"),
         "lens_height": il.Labelled(CAMERA_HEIGHT_MM, 2.0, "given"),
@@ -282,16 +303,6 @@ def test_left_handed_is_the_mirror_image_and_keeps_toe_positive():
         il.analysis_flip(frames_mirrored=False, handedness="ambidextrous")
 
 
-def test_an_open_face_shifts_the_imaged_offset_by_one_ball_radius_times_its_sine():
-    frames, ball = render_swing(truth_mm=6.0)
-    square = analyse(frames, ball).impact_offset_mm
-    opened = analyse(frames, ball, face=face_inputs(face_angle=il.Labelled(5.0, 2.0, "given")))
-    expected = (square - il.BALL_RADIUS_MM * math.sin(math.radians(5.0))) / math.cos(
-        math.radians(5.0)
-    )
-    assert opened.impact_offset_mm == pytest.approx(expected, abs=0.05)
-
-
 def test_edge_blur_is_measured_per_edge_and_the_lateral_toe_blurs_more():
     sharp_frames, ball = render_swing(truth_mm=4.0, drift_mm_per_frame=40.0)
     blurred_frames, _ = render_swing(
@@ -308,10 +319,98 @@ def test_edge_blur_is_measured_per_edge_and_the_lateral_toe_blurs_more():
 
 def test_face_inputs_priors_are_labelled_and_wide_for_an_unanchored_club():
     priors = il.FaceInputs.priors("7-iron")
-    assert priors.face_centre_height.source.startswith("prior")
-    assert priors.face_centre_height.sigma >= 4.0
+    assert priors.face_centre_height.source == "reference_geometry_face_centre_rule"
+    assert priors.face_centre_from_toe.source == "reference_geometry_face_centre_rule"
+    assert priors.face_centre_height.sigma >= 3.0
+    assert priors.face_centre_from_toe.sigma >= 2.5
     assert priors.dynamic_loft.source.startswith("prior")
     assert il.FaceInputs.priors("driver").face_centre_height.value > 25.0
+    unknown = il.FaceInputs.priors("unknown")
+    assert unknown.face_centre_from_toe.value == priors.face_centre_from_toe.value
+    assert unknown.face_centre_from_toe.sigma == pytest.approx(
+        priors.face_centre_from_toe.sigma * il.UNKNOWN_CLUB_SIGMA_SCALE
+    )
+    assert unknown.face_centre_from_toe.source.endswith("_unknown_club")
+
+
+def test_the_reference_file_is_the_one_source_of_every_category_face_centre():
+    assert REFERENCE["schema"] == "openflight.face_centre_reference.v1"
+    assert set(REFERENCE["categories"]) == set(il.CATEGORY_PRIORS) == set(CATEGORY_CLUBS)
+    for category, club in CATEGORY_CLUBS.items():
+        assert il.club_category(club) == category
+        entry = REFERENCE["categories"][category]
+        assert entry["club"]
+        priors = il.FaceInputs.priors(club)
+        assert priors.face_centre_from_toe == il.Labelled(
+            entry["centre_from_toe_mm"], entry["centre_from_toe_sigma_mm"], il.REFERENCE_FACE_CENTRE
+        )
+        assert priors.face_centre_height == il.Labelled(
+            entry["centre_above_leading_edge_mm"],
+            entry["centre_above_leading_edge_sigma_mm"],
+            il.REFERENCE_FACE_CENTRE,
+        )
+
+
+@pytest.mark.parametrize("category", sorted(CATEGORY_CLUBS))
+def test_each_category_reads_heel_toe_from_the_toe_and_its_reference_centre(category):
+    entry = REFERENCE["categories"][category]
+    priors = il.FaceInputs.priors(CATEGORY_CLUBS[category])
+    from_toe = entry["centre_from_toe_mm"]
+    # the same heel-side length as the default plate, so the ball never sits on the heel
+    width = from_toe + HEAD_WIDTH_MM - FACE_CENTRE_FROM_TOE_MM
+    frames, ball = render_swing(truth_mm=-5.0, from_toe_mm=from_toe, head_width_mm=width)
+    face = face_inputs(
+        face_centre_from_toe=priors.face_centre_from_toe,
+        face_centre_height=priors.face_centre_height,
+    )
+    result = analyse(frames, ball, face=face)
+    assert result.status == "ok", result.reason
+    assert result.impact_offset_mm == pytest.approx(-5.0, abs=2.5)
+    # ball_from_toe is the ball along heel -> toe from the toe: negative on the face
+    assert result.ball_from_toe_mm < 0.0
+    assert result.impact_offset_mm - result.ball_from_toe_mm == pytest.approx(from_toe, abs=1e-9)
+    budget = result.diagnostics["offset_uncertainty_budget_mm"]
+    assert budget["face_centre_mm"] == pytest.approx(entry["centre_from_toe_sigma_mm"], abs=0.01)
+    assert result.height_status == "ok", result.height_reason
+    along = result.diagnostics["contact_above_leading_edge_mm"]
+    assert result.impact_height_mm == pytest.approx(
+        along - entry["centre_above_leading_edge_mm"], abs=0.01
+    )
+    budget = result.diagnostics["height_uncertainty_budget_mm"]
+    assert budget["face_centre_height_mm"] == pytest.approx(
+        entry["centre_above_leading_edge_sigma_mm"], abs=0.01
+    )
+
+
+def test_an_open_face_takes_the_ball_radius_out_before_the_centre_is_added():
+    frames, ball = render_swing(truth_mm=6.0)
+    face_angle = 5.0
+    opened = analyse(
+        frames, ball, face=face_inputs(face_angle=il.Labelled(face_angle, 2.0, "given"))
+    )
+    angle = math.radians(face_angle)
+    expected = (opened.ball_from_toe_mm - il.BALL_RADIUS_MM * math.sin(angle)) / math.cos(
+        angle
+    ) + FACE_CENTRE_FROM_TOE_MM
+    assert opened.impact_offset_mm == pytest.approx(expected, abs=1e-9)
+
+
+def test_the_old_midpoint_plus_8_mm_centre_is_gone_and_only_the_override_moves_the_centre():
+    assert not hasattr(il, "FACE_CENTRE_TOEWARD_MM")
+    for function in (il.locate_impact, il.analyse_shot):
+        parameters = inspect.signature(function).parameters
+        assert "face_centre_toeward_mm" not in parameters
+        assert parameters["face_centre_from_toe_mm"].default is None
+    frames, ball = render_swing(truth_mm=-5.0)
+    default = analyse(frames, ball)
+    moved = analyse(frames, ball, face_centre_from_toe_mm=FACE_CENTRE_FROM_TOE_MM + 8.0)
+    assert moved.impact_offset_mm - default.impact_offset_mm == pytest.approx(8.0, abs=1e-9)
+    assert moved.diagnostics["inputs"]["face_centre_from_toe"]["source"] == "research_override"
+    assert moved.diagnostics["offset_uncertainty_budget_mm"]["face_centre_mm"] == 0.0
+    assert "research override" in moved.face_centre_convention
+    assert "midpoint" not in default.face_centre_convention
+    assert "longest score line" in default.face_centre_convention
+    assert default.face_centre_convention == il.FACE_CENTRE_CONVENTION
 
 
 def test_the_kiosk_reads_impact_location_only_into_its_own_experimental_records():

@@ -119,7 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--contact-fraction", type=float, default=None)
     parser.add_argument("--ball", type=float, nargs=3, metavar=("X", "Y", "DIAMETER"), default=None)
-    parser.add_argument("--face-centre-offset-mm", type=float, default=il.FACE_CENTRE_TOEWARD_MM)
+    parser.add_argument(
+        "--face-centre-from-toe-mm",
+        type=float,
+        default=None,
+        help="research override: the heel-toe face centre this far heel-ward of the toe",
+    )
     parser.add_argument("--template-scope", choices=("club", "session"), default="club")
     parser.add_argument("--shot", action="append", default=[])
     parser.add_argument("--no-overlays", action="store_true")
@@ -139,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         contact_fraction=args.contact_fraction,
         ball=tuple(args.ball) if args.ball else None,
         anchors=session.read_anchors(args.anchors),
-        face_centre_toeward_mm=args.face_centre_offset_mm,
+        face_centre_from_toe_mm=args.face_centre_from_toe_mm,
         shots=tuple(args.shot),
         template_scope=args.template_scope,
         lens_id=args.lens_id,
