@@ -97,7 +97,7 @@ from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.clubs.types import ClubType
 from openflight.constants import BALL_DIAMETER_MM
-from openflight.inclinometer import orientation_check
+from openflight.inclinometer import guided_check, orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
     StaticRangeProfile,
@@ -7635,7 +7635,7 @@ def create_app(
             enclosure.set_mount(mount)
 
     mount_store = orientation_check.MountStore(lis3dh_mount_path, rig_yaw_deg=rig_lis3dh_yaw())
-    orientation = orientation_check.GuidedCheck(
+    orientation = guided_check.GuidedCheck(
         mount_store, lambda: enclosure.reading(), on_mount_change=apply_mount
     )
 
