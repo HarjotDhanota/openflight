@@ -1550,7 +1550,7 @@ def _ball_at_address_loop() -> None:
             logger.warning("[BALL_AT_ADDRESS] look failed", exc_info=True)
 
 
-def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> None:
+def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None, outline=None) -> None:
     """Re-locate the resting ball in the box about once a second, between clips."""
     global ball_at_address_monitor, _ball_at_address_thread, _ball_at_address_range  # pylint: disable=global-statement
     from .camera.ball_at_address import BallAtAddress  # noqa: PLC0415
@@ -1558,7 +1558,7 @@ def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> N
     locator = BallAtAddress(
         box_px=box, setup_ball=None, setup_range_m=None, lens=rig_geometry_config.get("lens")
     )
-    locator.reconfigure(box, setup_ball, setup_range_m, range_prior)
+    locator.reconfigure(box, setup_ball, setup_range_m, range_prior, outline_px=outline)
     ball_at_address_monitor = locator
     _ball_at_address_range = (setup_range_m, range_prior)
     if _ball_at_address_thread is None or not _ball_at_address_thread.is_alive():
@@ -1578,16 +1578,19 @@ def apply_setup_box(box: dict | None) -> None:
         _when_idle(lambda: _set_box(None, None))
         return
     try:
-        zone, setup_ball = _box_in_this_picture(box)
+        zone, setup_ball, outline = _box_in_this_picture(box)
     except (KeyError, TypeError, ValueError):
         _when_idle(lambda: _set_box(None, None))
         raise
-    _when_idle(lambda: _set_box(zone, setup_ball))
+    _when_idle(lambda: _set_box(zone, setup_ball, outline))
 
 
-def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict]:
-    """The box and its ball in the running capture's pixels: 1280x800 and 640x400 are
-    one field of view, binned, so a box moves between them by scaling."""
+def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict, list | None]:
+    """The box, its ball and its confirmed outline in the running capture's pixels:
+    1280x800 and 640x400 are one field of view, binned, so a box moves between them by
+    scaling. An older box without an outline is tested as its rectangle (None)."""
+    from .camera import ground_patch  # noqa: PLC0415
+
     size = box.get("image_size_px")
     if not size or len(size) != 2:
         raise ValueError("the box has no picture size: confirm the box again")
@@ -1614,10 +1617,15 @@ def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict]:
         "y": float(box["ball_px"][1]) * scale,
         "diameter_px": float(box["diameter_px"]) * scale,
     }
-    return zone, setup_ball
+    outline = box.get("outline_px")
+    if outline is not None:
+        outline = ground_patch.scale_outline(outline, scale)
+        if len(outline) < 3:
+            raise ValueError(f"the box outline {outline} is not a polygon: confirm the box again")
+    return zone, setup_ball, outline
 
 
-def _set_box(zone, setup_ball) -> None:
+def _set_box(zone, setup_ball, outline=None) -> None:
     global camera_ball_box_px, ball_at_address_monitor  # pylint: disable=global-statement
     camera_ball_box_px = zone
     runtime = camera_capture_runtime
@@ -1629,10 +1637,12 @@ def _set_box(zone, setup_ball) -> None:
     if zone is None:
         ball_at_address_monitor = None
     elif ball_at_address_monitor is not None:
-        ball_at_address_monitor.reconfigure(zone, setup_ball, *_ball_at_address_range)
+        ball_at_address_monitor.reconfigure(
+            zone, setup_ball, *_ball_at_address_range, outline_px=outline
+        )
     elif runtime is not None:
-        start_ball_at_address(zone, setup_ball, *_ball_at_address_range)
-    logger.info("[SERVER] Ball box now %s, setup ball %s", zone, setup_ball)
+        start_ball_at_address(zone, setup_ball, *_ball_at_address_range, outline=outline)
+    logger.info("[SERVER] Ball box now %s, outline %s, setup ball %s", zone, outline, setup_ball)
 
 
 def _rig_tee_lateral_offset_m() -> float:
@@ -1685,7 +1695,9 @@ def _set_ball_range(prior, side: float | None, provenance: dict | None = None) -
     _ball_at_address_range = (None, prior)
     locator = ball_at_address_monitor
     if locator is not None:
-        locator.reconfigure(locator.box, locator.setup_ball, None, prior)
+        locator.reconfigure(
+            locator.box, locator.setup_ball, None, prior, outline_px=locator.outline_px
+        )
     if iwr6843_runtime is not None:
         iwr6843_runtime.range_prior = prior
         _set_iwr_calibration(

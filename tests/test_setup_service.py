@@ -730,3 +730,43 @@ def test_the_snapshot_says_whether_the_kiosk_has_a_camera(make):
 
     assert with_camera.snapshot()["live"]["camera_available"] is True
     assert without.snapshot()["live"]["camera_available"] is False
+
+
+def test_the_box_keeps_the_outline_the_user_confirmed(make, scene):
+    service, _recorder = make()
+
+    box = _confirm_box(service, scene)["setup"]["box"]
+
+    projection = placement_box.project_fixed_box(CAMERA, calibrated=True, roll_deg=0.0)
+    assert np.asarray(box["outline_px"]) == pytest.approx(
+        np.asarray(projection.search_outline_px), abs=0.01
+    )
+
+
+def test_a_moved_outline_makes_a_new_box_though_the_ball_stayed(make, scene):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    first = service.snapshot()["box"]["id"]
+    assert service.range("measure")["ok"]
+
+    # an unread roll pads the outline: the box the user sees is not the one confirmed
+    rolled, _recorder = make(camera_provider=lambda: CameraView(CAMERA, None))
+    result = _confirm_box(rolled, scene)
+
+    assert result["setup"]["box"]["id"] != first
+    assert result["setup"]["ball_range"]["state"] == "stale"
+
+
+def test_an_older_box_without_an_outline_is_a_new_box_when_reconfirmed(make, scene, tmp_path):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    record = load(tmp_path / "setup.json")
+    first = record["box"]["id"]
+    del record["box"]["outline_px"]
+    save(tmp_path / "setup.json", record)
+    older, _recorder = make()
+
+    result = _confirm_box(older, scene)
+
+    assert result["setup"]["box"]["id"] != first
+    assert result["setup"]["box"]["outline_px"]

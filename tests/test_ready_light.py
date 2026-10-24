@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -367,7 +369,8 @@ def test_setup_incomplete_ignores_the_lens_height():
 def test_ready_light_amber_when_ball_not_in_box(state):
     light = compute_state(_states(setup=_setup(), ball_look=_look(state)), NOW)
 
-    assert (light["state"], light["word"], light["cause"]) == ("amber", "WAIT", "ball not in box")
+    words = {"not_seen": "no ball in the box", "outside_box": "ball outside the box"}[state]
+    assert (light["state"], light["word"], light["cause"]) == ("amber", "WAIT", words)
 
 
 @pytest.mark.parametrize(
@@ -414,3 +417,37 @@ def test_an_extensions_setup_causes_are_red_or_amber():
 
     states = _states(setup=_setup(), setup_causes=(("red", "no admitted setup"),))
     assert compute_state(states, NOW)["state"] == "red"
+
+
+NEEDS = json.loads(
+    (
+        Path(__file__).resolve().parents[1] / "ui/src/components/setup/setupNeedsCases.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("case", NEEDS["cases"], ids=[case["name"] for case in NEEDS["cases"]])
+def test_setup_incomplete_agrees_with_the_setup_screens_needs_setup(case):
+    setup = {
+        **NEEDS["base"],
+        **case["sections"],
+        "live": {"camera_available": case["camera"]},
+        "unapplied": case["unapplied"],
+    }
+
+    light = compute_state(_states(setup=setup, ball_look=_look("in_box")), NOW)
+
+    setup_reds = [c["cause"] for c in light["causes"] if c["cause"].startswith("setup incomplete")]
+    assert setup_reds == ([case["cause"]] if case["cause"] else [])
+    assert bool(setup_reds) == case["needs"]
+
+
+def test_a_box_that_failed_to_apply_says_nothing_about_the_ball():
+    setup = _setup()
+    setup["unapplied"] = {"box": "the box is outside the 640x400 picture"}
+
+    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
+
+    assert [cause["cause"] for cause in light["causes"]] == [
+        "setup incomplete: box not applied (the box is outside the 640x400 picture)"
+    ]

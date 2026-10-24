@@ -80,26 +80,71 @@ for (const viewport of KIOSK_VIEWPORTS) {
   });
 }
 
-const AIM_PICTURE = '.live-panel__aim .setup-picture';
+const AIM_PICTURE = '.live-panel__aim-view .setup-picture';
+
+/**
+ * The green light a kiosk shows with every sensor ready and its setup finished: the mock
+ * backend reports no light at all, and every setup used here is finished.
+ */
+async function showGreenLight(page: Page) {
+  await page.evaluate(async () => {
+    const { useSystemStore } = await import('/src/stores/useSystemStore.ts');
+    useSystemStore
+      .getState()
+      .setReadyLight({ state: 'green', cause: 'Ready for a swing', word: 'SWING', swing: null, time_left_s: null });
+  });
+}
+
+async function openLive(page: Page, hand: 'RH' | 'LH') {
+  await gotoApp(page);
+  await page.getByRole('button', { name: 'Close Select club' }).click();
+  await setHanded(page, hand);
+  await showGreenLight(page);
+  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+}
+
+async function tileHeights(page: Page): Promise<number[]> {
+  return page
+    .locator('.live-panel__grid .metric-card')
+    .evaluateAll((tiles) => tiles.map((tile) => tile.getBoundingClientRect().height));
+}
 
 for (const viewport of KIOSK_VIEWPORTS) {
   for (const hand of ['RH', 'LH'] as const) {
     test.describe(`the aim line on the live view at ${viewport.width}x${viewport.height} ${hand}`, () => {
       test.use({ viewport, hasTouch: true });
 
-      test('is drawn from the ball to the aim point once set, and the tiles still fit', async ({ page }) => {
-        await mockSetupAndPreview(page, setUpSnapshot());
+      test('the target strip opens it over the tiles, and the tiles keep their height', async ({ page }) => {
+        const tag = `${viewport.width}x${viewport.height}-${hand}`;
+        const out = process.env.UX_SHOTS_DIR;
+        if (out) mkdirSync(out, { recursive: true });
         await withControlSocket(async (socket) => {
           await simulateShot(socket);
         });
-        await gotoApp(page);
-        await page.getByRole('button', { name: 'Close Select club' }).click();
-        await setHanded(page, hand);
-        await showReadyLightAndAThreeDigitShot(page);
+        // a finished setup with the aim skipped: the strip is words only
+        const kiosk = await mockSetupAndPreview(
+          page,
+          setUpSnapshot({ aim: { state: 'skipped', source: 'skipped', reason: 'the tester skipped the aim point' } })
+        );
+        await openLive(page, hand);
+        await expect(page.locator('.live-panel__target')).toHaveText(/Target line not set/);
+        const words = await tileHeights(page);
 
+        kiosk.use(setUpSnapshot());
+        await openLive(page, hand);
+        const strip = page.locator('.live-panel__target-button');
+        await expect(strip).toHaveText(/Target line set \+4\.1° ±0\.8° ›/);
+        await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
+        expect(await tileHeights(page)).toEqual(words);
+        expect(await overflowingLiveMetricValues(page)).toEqual([]);
+        expect(await overflowingLiveMetricMetadata(page)).toEqual([]);
+        await expect(page.locator('.live-panel__aim-view')).toHaveCount(0);
+        if (out) await page.screenshot({ path: join(out, `task8-live-aim-${tag}-closed.png`) });
+
+        await strip.click();
         const line = page.locator(`${AIM_PICTURE} .setup-picture__aim-line`);
         await expect(line).toBeVisible();
-        await expect(page.locator('.live-panel__aim-row .live-panel__target')).toBeVisible();
         const svg = (await page.locator(`${AIM_PICTURE} .setup-picture__overlay`).boundingBox())!;
         const ends = await line.evaluate((node) =>
           ['x1', 'y1', 'x2', 'y2'].map((name) => Number(node.getAttribute(name)))
@@ -112,19 +157,14 @@ for (const viewport of KIOSK_VIEWPORTS) {
         expect(Math.abs(svg.y + ends[3] - to[1])).toBeLessThan(1);
         // a right-hander's aim point is right of the ball on the picture, a left-hander's left
         expect(Math.sign(ends[2] - ends[0])).toBe(hand === 'RH' ? 1 : -1);
+        // big enough to see what the line points at
+        expect(Math.hypot(ends[2] - ends[0], ends[3] - ends[1])).toBeGreaterThanOrEqual(60);
+        const picture = (await page.locator(`${AIM_PICTURE} img`).boundingBox())!;
+        expect(Math.min(picture.width, (picture.height * 8) / 5)).toBeGreaterThanOrEqual(290);
+        if (out) await page.screenshot({ path: join(out, `task8-live-aim-${tag}-open.png`) });
 
-        await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
-        expect(await overflowingLiveMetricValues(page)).toEqual([]);
-        expect(await overflowingLiveMetricMetadata(page)).toEqual([]);
-        for (const tile of await page.locator('.live-panel__grid .metric-card').all()) {
-          const bounds = await tile.boundingBox();
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 0.5);
-        }
-        const out = process.env.UX_SHOTS_DIR;
-        if (out) {
-          mkdirSync(out, { recursive: true });
-          await page.screenshot({ path: join(out, `task8-live-aim-${viewport.width}x${viewport.height}-${hand}.png`) });
-        }
+        await page.locator('.live-panel__aim-view').click();
+        await expect(page.locator('.live-panel__aim-view')).toHaveCount(0);
       });
     });
   }

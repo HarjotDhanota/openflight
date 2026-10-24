@@ -9,6 +9,7 @@ import { PanelAction } from '../panel/PanelAction';
 import { PanelHeader } from '../panel/PanelHeader';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { isInImage, toCamera, toScreen, type Px, type SetupViewRect } from './setupGeometry';
+import { boxOutline } from './setupOverlay';
 import {
   SETUP_STEPS,
   aimWords,
@@ -196,20 +197,7 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
   const floorRejected = floorTaps === null && savedFloor !== null && setup.net_range.source !== 'camera_floor_line';
   const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (setup.box.ball_px ?? liveBox?.ball_px ?? null);
   const ballDiameter = step === 'box' ? liveBox?.diameter_px : setup.box.diameter_px;
-  const outline: Px[] | null =
-    liveBox?.outline_px && liveBox.outline_px.length > 2
-      ? liveBox.outline_px
-      : setup.box.box_px && setup.box.box_px.length === 4
-        ? (() => {
-            const [x0, y0, x1, y1] = setup.box.box_px;
-            return [
-              [x0, y0],
-              [x1, y0],
-              [x1, y1],
-              [x0, y1],
-            ] as Px[];
-          })()
-        : null;
+  const outline = boxOutline(setup, { live: true });
 
   const onStageClick = (event: MouseEvent<HTMLDivElement>) => {
     if (step !== 'aim' || !view || !boxReady) return;

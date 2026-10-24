@@ -52,7 +52,8 @@ SETUP_SECTIONS = (
 UNUSABLE = ("not_set", "stale")
 # A shot takes a ball look this recent as its own (ball_at_address.MAX_LOOK_AGE_S).
 BALL_LOOK_MAX_AGE_S = 30.0
-BALL_NOT_IN_BOX_STATES = ("not_seen", "outside_box")
+# ball_not_in_box, by what the look saw
+BALL_NOT_IN_BOX = {"not_seen": "no ball in the box", "outside_box": "ball outside the box"}
 
 
 @dataclass(frozen=True)
@@ -167,22 +168,31 @@ def _state_words(state) -> str:
 
 def setup_causes(setup: Mapping | None, ball_look: Mapping | None, now: float) -> list[SetupCause]:
     """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit without a
-    camera, which can never set up, and nothing about the ball without a recent look."""
+    camera, which can never set up, and nothing about the ball without a recent look.
+
+    A section saved but not put into effect (``unapplied``) is incomplete too.
+    """
     if setup is None or not (setup.get("live") or {}).get("camera_available", True):
         return []
+    unapplied = setup.get("unapplied") or {}
     causes: list[SetupCause] = []
     missing = []
     for name, words in SETUP_SECTIONS:
         state = (setup.get(name) or {}).get("state", "not_set")
         if state in UNUSABLE:
             missing.append(f"{words} {_state_words(state)}")
+        elif name in unapplied:
+            missing.append(f"{words} not applied ({unapplied[name]})")
     if missing:
         causes.append(("red", "setup incomplete: " + ", ".join(missing)))
-    box_set = (setup.get("box") or {}).get("state", "not_set") not in UNUSABLE
-    if box_set and ball_look and ball_look.get("state") in BALL_NOT_IN_BOX_STATES:
-        observed = ball_look.get("observed_at")
+    box_in_force = (setup.get("box") or {}).get(
+        "state", "not_set"
+    ) not in UNUSABLE and "box" not in unapplied
+    words = BALL_NOT_IN_BOX.get((ball_look or {}).get("state"))
+    if box_in_force and words:
+        observed = ball_look.get("observed_at")  # type: ignore[union-attr]
         if observed is not None and now - float(observed) <= BALL_LOOK_MAX_AGE_S:
-            causes.append(("amber", "ball not in box"))
+            causes.append(("amber", words))
     return causes
 
 

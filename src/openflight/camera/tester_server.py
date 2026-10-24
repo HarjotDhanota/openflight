@@ -1528,7 +1528,8 @@ def _box_setup_section(
         return _not_set("the camera found no ball in the box: confirm the box again")
     centre, diameter = found
     box_px = [int(value) for value in record["box_px"]]
-    identity = json.dumps([box_px, centre, diameter], separators=(",", ":"))
+    outline = record.get("search_outline_px")
+    identity = json.dumps([box_px, centre, diameter, outline], separators=(",", ":"))
     pads = record.get("camera_tilt") or {}
     return setup_service.box_section(
         box_id=setup_service.new_box_id(
@@ -1541,6 +1542,7 @@ def _box_setup_section(
         tilt_pad_deg=pads.get("search_pad_deg"),
         roll_pad_deg=pads.get("roll_pad_deg"),
         ctx=ctx,
+        outline_px=outline,
     )
 
 

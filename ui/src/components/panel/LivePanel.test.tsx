@@ -101,7 +101,7 @@ describe('LivePanel target line', () => {
 
 describe('LivePanel aim line', () => {
   const notSet = { state: 'not_set' };
-  const setup = (aim: SetupSection): SetupSnapshot => ({
+  const setup = (aim: SetupSection, unapplied: Record<string, string> = {}): SetupSnapshot => ({
     revision: 4,
     box: {
       state: 'confirmed',
@@ -111,13 +111,15 @@ describe('LivePanel aim line', () => {
       image_size_px: [1280, 800],
     },
     aim,
-    ball_range: notSet,
-    net_range: notSet,
+    ball_range: { state: 'set' },
+    net_range: { state: 'default' },
     scene: notSet,
     live: { camera_available: true },
-    unapplied: {},
+    unapplied,
   });
-  const renderWith = (snapshot: SetupSnapshot | null) =>
+  const aimSet = { state: 'set', aim_px: [900, 300] as [number, number] };
+  const lineSet: TargetLine = { status: 'set', yawDeg: 2.14, uncertaintyDeg: 0.8 };
+  const renderWith = (snapshot: SetupSnapshot | null, targetLine: TargetLine | null = lineSet) =>
     renderToString(
       <LivePanel
         shot={makeShot()}
@@ -125,22 +127,31 @@ describe('LivePanel aim line', () => {
         profileId="james"
         profileName="James"
         clubLabel="DR"
-        targetLine={{ status: 'set', yawDeg: 2.14, uncertaintyDeg: 0.8 }}
+        targetLine={targetLine}
         setup={snapshot}
         handed="RH"
       />
     );
 
-  it('shows the camera view for the aim line beside the target line text once an aim is set', () => {
-    const html = renderWith(setup({ state: 'set', aim_px: [900, 300] }));
-    expect(html).toContain('live-panel__aim');
+  it('makes the one-line target strip a button that opens the aim view, closed at first', () => {
+    const html = renderWith(setup(aimSet));
+    expect(html).toContain('live-panel__target-button');
+    expect(html).toContain('aria-expanded="false"');
     expect(text(html)).toContain('Target line set +2.1° ±0.8°');
+    // nothing is fetched or drawn until it is opened
+    expect(html).not.toContain('live-panel__aim-view');
+    expect(html).not.toContain('<img');
   });
 
-  it('shows no view without a set aim', () => {
-    expect(renderWith(setup({ state: 'skipped' }))).not.toContain('live-panel__aim');
-    expect(renderWith(setup(notSet))).not.toContain('live-panel__aim');
-    expect(renderWith(null)).not.toContain('live-panel__aim');
+  it('offers no aim view unless the target line is set and the aim was applied', () => {
+    expect(renderWith(setup(aimSet), { status: 'not_set', yawDeg: null, uncertaintyDeg: null })).not.toContain(
+      'live-panel__target-button'
+    );
+    expect(renderWith(setup(aimSet), null)).not.toContain('live-panel__target-button');
+    expect(renderWith(setup(aimSet, { aim: 'no gap between shots' }))).not.toContain('live-panel__target-button');
+    expect(renderWith(setup({ state: 'skipped' }))).not.toContain('live-panel__target-button');
+    expect(renderWith(setup(notSet))).not.toContain('live-panel__target-button');
+    expect(renderWith(null)).not.toContain('live-panel__target-button');
   });
 });
 

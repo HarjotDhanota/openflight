@@ -1,0 +1,56 @@
+{
+  "note": "One table for the kiosk's setup_incomplete ready-light cause (tests/test_ready_light.py) and the Setup screen's needsSetup (setupWords.test.ts), so the two stay in step. Each case changes the base sections; cause null means no setup_incomplete cause.",
+  "base": {
+    "box": { "state": "confirmed" },
+    "aim": { "state": "set" },
+    "ball_range": { "state": "set" },
+    "net_range": { "state": "default" },
+    "scene": { "state": "not_set", "reason": "not set" }
+  },
+  "cases": [
+    { "name": "every step done", "sections": {}, "unapplied": {}, "camera": true, "needs": false, "cause": null },
+    {
+      "name": "the lens height is not a step",
+      "sections": { "scene": { "state": "stale", "reason": "box changed" } },
+      "unapplied": {},
+      "camera": true,
+      "needs": false,
+      "cause": null
+    },
+    {
+      "name": "unset and stale sections",
+      "sections": {
+        "aim": { "state": "not_set", "reason": "not set" },
+        "net_range": { "state": "stale", "reason": "aim is not_set" }
+      },
+      "unapplied": {},
+      "camera": true,
+      "needs": true,
+      "cause": "setup incomplete: aim not set, net range stale"
+    },
+    {
+      "name": "a box that failed to apply",
+      "sections": {},
+      "unapplied": { "box": "the box is outside the 640x400 picture" },
+      "camera": true,
+      "needs": true,
+      "cause": "setup incomplete: box not applied (the box is outside the 640x400 picture)"
+    },
+    {
+      "name": "a lens height that failed to apply is not a step",
+      "sections": {},
+      "unapplied": { "scene": "no gap between shots" },
+      "camera": true,
+      "needs": false,
+      "cause": null
+    },
+    {
+      "name": "a unit without a camera",
+      "sections": { "box": { "state": "not_set" }, "aim": { "state": "not_set" } },
+      "unapplied": {},
+      "camera": false,
+      "needs": false,
+      "cause": null
+    }
+  ]
+}

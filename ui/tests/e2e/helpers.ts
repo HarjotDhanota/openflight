@@ -242,10 +242,19 @@ export async function overflowingLiveMetricMetadata(page: Page): Promise<string[
 
 type Px = [number, number];
 
-/** A setup made on a 1280x800 picture, off centre so a mirrored drawing shows as one. */
+/**
+ * A setup made on a 1280x800 picture, off centre so a mirrored drawing shows as one. The
+ * confirmed outline is not the box_px rectangle around it, so drawing the rectangle shows.
+ */
 export const SET_UP = {
   image: [1280, 800] as Px,
   box: [460, 560, 980, 720] as const,
+  outline: [
+    [500, 710],
+    [940, 710],
+    [900, 575],
+    [540, 575],
+  ] as Px[],
   ball: [720, 610] as Px,
   aim: [900, 300] as Px,
 };
@@ -255,13 +264,18 @@ const SET_UP_PICTURE = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" hei
   <rect width="1280" height="800" fill="#1d2420"/>
   <rect width="1280" height="255" fill="#3b4148"/>
   <rect x="120" y="60" width="18" height="420" fill="#c96"/>
+  <rect x="890" y="270" width="24" height="40" fill="#e8e05a"/>
   <polygon points="510,560 930,560 980,720 460,720" fill="#2f6b3a"/>
   <circle cx="720" cy="610" r="11" fill="#f4f4f0"/>
 </svg>`;
 
-/** The setup record with the box confirmed and, unless `aim` says otherwise, the aim set. */
-export function setUpSnapshot(aim: Record<string, unknown> = { state: 'set', aim_px: SET_UP.aim }) {
-  const notSet = { state: 'not_set', reason: 'not set' };
+const notSet = { state: 'not_set', reason: 'not set' };
+
+/**
+ * A finished setup, as a kiosk that applied it reports it: box confirmed, aim set, ball range
+ * measured, the labelled default net. `changes` replaces sections, `unapplied` or `live`.
+ */
+export function setUpSnapshot(changes: Record<string, unknown> = {}) {
   return {
     schema: 'openflight.setup.v1',
     revision: 3,
@@ -269,27 +283,53 @@ export function setUpSnapshot(aim: Record<string, unknown> = { state: 'set', aim
       state: 'confirmed',
       id: 'box@720,610#1',
       box_px: [...SET_UP.box],
+      outline_px: SET_UP.outline,
       ball_px: SET_UP.ball,
       diameter_px: 22,
       image_size_px: SET_UP.image,
     },
-    aim,
-    ball_range: notSet,
-    net_range: notSet,
+    aim: { state: 'set', aim_px: SET_UP.aim, yaw_deg: 4.1, uncertainty_deg: 0.84 },
+    ball_range: { state: 'set', range_m: 2.31, uncertainty_m: 0.12, source: 'camera_prior' },
+    net_range: { state: 'default', value_m: 4.6, source: 'default_not_measured', reason: 'no floor line marked' },
     scene: notSet,
     live: { camera_available: true },
     unapplied: {},
+    ...changes,
   };
 }
 
-/** GET /api/setup answers `snapshot`; the camera preview is the picture the setup was made on. */
-export async function mockSetupAndPreview(page: Page, snapshot: object) {
+/** Nothing set up: what a fresh kiosk with a camera reports. */
+export function notSetUpSnapshot() {
+  return setUpSnapshot({ box: notSet, aim: notSet, ball_range: notSet, net_range: notSet });
+}
+
+/** The target line a kiosk reports for `snapshot`: set only when its aim was applied. */
+function targetLineFor(snapshot: ReturnType<typeof setUpSnapshot>) {
+  const aim = snapshot.aim as { state: string };
+  const applied = aim.state === 'set' && !('aim' in snapshot.unapplied);
+  return applied ? { status: 'set', yaw_deg: 4.1, total_uncertainty_deg: 0.84 } : { status: 'not_set' };
+}
+
+/**
+ * The kiosk's setup API, its target line and its camera preview, all from one setup record,
+ * so the views never show a state the kiosk could not be in. `use` swaps the record.
+ */
+export async function mockSetupAndPreview(page: Page, snapshot: ReturnType<typeof setUpSnapshot>) {
+  let current = snapshot;
   await page.route(/\/api\/setup$/, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot) })
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(current) })
+  );
+  await page.route(/\/api\/target-line$/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(targetLineFor(current)) })
   );
   await page.route('**/api/camera/preview.jpg*', (route) =>
     route.fulfill({ status: 200, contentType: 'image/svg+xml', body: SET_UP_PICTURE })
   );
+  return {
+    use(next: ReturnType<typeof setUpSnapshot>) {
+      current = next;
+    },
+  };
 }
 
 /** Set the golfer's hand after the kiosk's own arrives on connect. */

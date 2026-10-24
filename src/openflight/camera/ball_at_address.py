@@ -31,11 +31,19 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from . import ground_patch
+
 SCHEMA = "openflight.ball_at_address.v1"
 SAME_SPOT_DIAMETERS = 0.5
 MAX_LOOK_AGE_S = 30.0
 # the tuned detector's size limits (9-30 px at 640x400) are centred on the setup ball
 _TUNED_GEOMETRIC_MIDDLE_PX = math.sqrt(9.0 * 30.0)
+
+
+def _outline(points) -> tuple[tuple[float, float], ...] | None:
+    if points is None:
+        return None
+    return tuple((float(x), float(y)) for x, y in points)
 
 
 def _now_utc() -> str:
@@ -54,8 +62,11 @@ class BallAtAddress:
         lens: Mapping[str, Any] | None = None,
         setup_range_uncertainty_m: float | None = None,
         setup_range_kind: str = "radar_range",
+        outline_px: Sequence[Sequence[float]] | None = None,
     ):
         self.box = tuple(int(value) for value in box_px)
+        # the polygon the user confirmed; None (an older box) is the box_px rectangle
+        self.outline_px = _outline(outline_px)
         self.setup_ball = dict(setup_ball) if setup_ball else None
         self.setup_range_m = float(setup_range_m) if setup_range_m else None
         self.setup_range_uncertainty_m = (
@@ -68,7 +79,9 @@ class BallAtAddress:
         self._looks: list[dict] = []
         self._generation = 0
 
-    def reconfigure(self, box_px, setup_ball, setup_range_m, range_prior) -> None:
+    def reconfigure(  # pylint: disable=too-many-arguments
+        self, box_px, setup_ball, setup_range_m, range_prior, *, outline_px=None
+    ) -> None:
         """Take a new box, setup ball and range; looks judged against the old ones are dropped.
 
         A ``range_prior`` (``range_m``, ``uncertainty_m``) is used only without a radar range.
@@ -76,6 +89,7 @@ class BallAtAddress:
         prior_only = setup_range_m is None and range_prior is not None
         with self._lock:
             self.box = tuple(int(value) for value in box_px)
+            self.outline_px = _outline(outline_px)
             self.setup_ball = dict(setup_ball) if setup_ball else None
             self.setup_range_m = (
                 float(range_prior.range_m)
@@ -122,6 +136,12 @@ class BallAtAddress:
             return None, None
         return self.setup_range_m * setup_d / diameter, f"camera_size_ratio_to_the_setup_{kind}"
 
+    def _in_box(self, x: float, y: float) -> bool:
+        if self.outline_px is not None:
+            return ground_patch.point_in_polygon(x, y, self.outline_px)
+        x0, y0, x1, y1 = self.box
+        return x0 <= x <= x1 and y0 <= y <= y1
+
     def observe(self, image: np.ndarray, *, at: float) -> dict:
         """Look for the resting ball in this frame; keep and return what was found."""
         with self._lock:
@@ -130,7 +150,7 @@ class BallAtAddress:
         found = self._find(image, self.box)
         state, reason = "not_seen", "no ball in the box"
         center = diameter = range_m = source = None
-        if found is not None and x0 <= found.x <= x1 and y0 <= found.y <= y1:
+        if found is not None and self._in_box(found.x, found.y):
             state, reason = "in_box", None
             center = [round(float(found.x), 1), round(float(found.y), 1)]
             diameter = round(float(found.diameter_px), 2)
@@ -139,7 +159,7 @@ class BallAtAddress:
             width, height = x1 - x0, y1 - y0
             wider = (x0 - width, y0 - height, x1 + width, y1 + height)
             elsewhere = self._find(image, wider)
-            if elsewhere is not None and not (x0 <= elsewhere.x <= x1 and y0 <= elsewhere.y <= y1):
+            if elsewhere is not None and not self._in_box(elsewhere.x, elsewhere.y):
                 state = "outside_box"
                 reason = "the ball is outside the box: its shot is labelled, not blocked"
                 center = [round(float(elsewhere.x), 1), round(float(elsewhere.y), 1)]
@@ -161,6 +181,7 @@ class BallAtAddress:
             "observed_at": float(at),
             "updated_at": _now_utc(),
             "box_px": list(self.box),
+            "outline_px": [list(point) for point in self.outline_px] if self.outline_px else None,
             "lens": self.lens,
         }
         with self._lock:

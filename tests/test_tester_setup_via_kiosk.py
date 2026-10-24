@@ -50,6 +50,7 @@ def _box_record():
     return {
         "mode": placement_box.MODE,
         "box_px": [480, 380, 800, 520],
+        "search_outline_px": [[490.0, 510.0], [790.0, 510.0], [790.0, 390.0], [490.0, 390.0]],
         "frame_size_px": [1280, 800],
         "camera_tilt": {"search_pad_deg": 1.0, "roll_pad_deg": 2.0},
         "ball_at_confirm": {"state": "found", "center_px": [641.0, 451.0], "diameter_px": 20.5},
@@ -133,10 +134,10 @@ def _lens():
     )
 
 
-def _sections(solution, *, tilt=None, line=None):
+def _sections(solution, *, tilt=None, line=None, box_record=None):
     return ts.tester_setup_sections(
         solution,
-        placement_box_record=_box_record(),
+        placement_box_record=box_record if box_record is not None else _box_record(),
         target_line_record=line if line is not None else _line_record(),
         net_line=None,
         rig_geometry=RIG,
@@ -218,6 +219,8 @@ def test_the_tester_s_sections_are_the_kiosk_s_shape():
     # the setup's camera search saw the ball: it is the box's ball
     assert box["ball_px"] == [640.0, 450.0] and box["diameter_px"] == 20.0
     assert box["image_size_px"] == [1280, 800] and box["box_px"] == [480, 380, 800, 520]
+    # the outline the tester confirmed, which the kiosk tests the ball against
+    assert box["outline_px"] == [[490.0, 510.0], [790.0, 510.0], [790.0, 390.0], [490.0, 390.0]]
     assert box["uncertainty"] == {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0}
     assert box["inputs"] == {
         "lens_id": _lens().to_dict()["effective_lens_id"],
@@ -439,3 +442,12 @@ def test_setup_is_allowed_when_no_run_is_bound(monkeypatch):
     monkeypatch.setattr(tester_hooks, "tester_config_hash", None)
 
     assert tester_hooks.extension.before_setup_action("box", "confirm", {}) is None
+
+
+def test_an_older_tester_box_without_an_outline_has_none():
+    record = {key: value for key, value in _box_record().items() if key != "search_outline_px"}
+
+    sections = _sections(_prior_solution(), tilt=TILT, box_record=record)
+
+    assert sections["box"]["state"] == "confirmed"
+    assert "outline_px" not in sections["box"]

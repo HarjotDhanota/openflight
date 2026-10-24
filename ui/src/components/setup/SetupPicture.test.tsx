@@ -2,7 +2,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SetupSnapshot } from '../../hooks/useSetup';
 import { SetupPicture } from './SetupPicture';
-import { aimLine, confirmedBox, sameShape } from './setupOverlay';
+import { aimLine, boxOutline, confirmedBox, sameShape } from './setupOverlay';
 
 const notSet = { state: 'not_set', reason: 'not set' };
 
@@ -27,7 +27,7 @@ function snapshot(changes: Partial<SetupSnapshot> = {}): SetupSnapshot {
 }
 
 describe('the setup drawn on a camera picture', () => {
-  it('takes the confirmed box as its four corners and ball, in camera pixels', () => {
+  it('falls back to the box_px rectangle for a record saved before outlines were kept', () => {
     expect(confirmedBox(snapshot())).toEqual({
       imageSize: [1280, 800],
       outline: [
@@ -39,6 +39,34 @@ describe('the setup drawn on a camera picture', () => {
       ball: [640, 610],
       diameter: 22,
     });
+  });
+
+  it('draws the outline the user confirmed, not the rectangle around it', () => {
+    const outline: [number, number][] = [
+      [430, 700],
+      [850, 700],
+      [850, 580],
+      [430, 580],
+    ];
+    const saved = snapshot({ box: { ...snapshot().box, outline_px: outline } });
+    expect(confirmedBox(saved)?.outline).toEqual(outline);
+    expect(boxOutline(saved)).toEqual(outline);
+  });
+
+  it("puts the Setup screen's live look first, only when asked", () => {
+    const look: [number, number][] = [
+      [1, 1],
+      [9, 1],
+      [9, 9],
+    ];
+    const setup = snapshot({ live: { box: { state: 'found', ball_px: null, diameter_px: null, outline_px: look } } });
+    expect(boxOutline(setup, { live: true })).toEqual(look);
+    expect(boxOutline(setup)).toEqual(confirmedBox(setup)?.outline);
+  });
+
+  it('draws no box the kiosk could not put into effect', () => {
+    expect(confirmedBox(snapshot({ unapplied: { box: 'the box is outside the 640x400 picture' } }))).toBeNull();
+    expect(aimLine(snapshot({ unapplied: { box: 'the box is outside the 640x400 picture' } }))).toBeNull();
   });
 
   it('draws no box that is not set or is stale, and none without its picture size', () => {

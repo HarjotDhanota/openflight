@@ -553,6 +553,7 @@
 /* ------------------------------------------------------------ live panel -- */
 
 .live-panel__empty {
+  position: relative;
   gap: 12px;
   text-align: center;
   padding: 0 32px;
@@ -590,30 +591,29 @@
   color: var(--color-accent);
 }
 
-/* the aim line drawn on a small camera view, beside the target line words */
-.live-panel__aim-row {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm, 8px);
-  padding: 2px var(--space-md, 12px);
-  border-top: 1px solid var(--color-border);
+/* the target-line strip opens the aim view; it stays one line high */
+.live-panel__target-button {
+  all: unset;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
 }
 
-.live-panel__aim-row .live-panel__target {
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  border-top: 0;
+.live-panel__target-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
-.live-panel__aim {
-  flex-shrink: 0;
-  width: 64px;
-  height: 40px;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #000;
+/* the aim line on the camera view, over the tiles until tapped */
+.live-panel__aim-view {
+  all: unset;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.88);
 }
 
 .live-panel__body {

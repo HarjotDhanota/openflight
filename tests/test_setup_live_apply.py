@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import re
 import threading
 from types import SimpleNamespace
 
@@ -298,3 +300,45 @@ def test_the_aim_section_moves_the_target_line(kiosk, monkeypatch):
     assert server.horizontal_offset_deg is None
     assert server.target_line_in_force()["status"] == "not_set"
     assert server._target_line_revision == 3
+
+
+OUTLINE = [[520.0, 500.0], [760.0, 500.0], [760.0, 400.0], [520.0, 400.0]]
+
+
+def test_the_confirmed_outline_reaches_the_monitor_scaled_with_the_mode(kiosk):
+    kiosk.camera.settings = CameraCaptureSettings(width=640, height=400)
+
+    server.apply_setup_box({**BOX, "outline_px": OUTLINE})
+
+    monitor = server.ball_at_address_monitor
+    assert monitor.outline_px == ((260.0, 250.0), (380.0, 250.0), (380.0, 200.0), (260.0, 200.0))
+    # the detector's window stays the bounding rectangle
+    assert monitor.box == (240, 190, 400, 260)
+
+
+def test_an_older_box_without_an_outline_is_tested_as_its_rectangle(kiosk):
+    server.apply_setup_box(BOX)
+
+    monitor = server.ball_at_address_monitor
+    assert monitor.outline_px is None
+    assert monitor._in_box(482.0, 382.0)  # pylint: disable=protected-access
+    assert not monitor._in_box(470.0, 382.0)  # pylint: disable=protected-access
+
+
+def test_a_range_change_keeps_the_outline(kiosk):
+    server.apply_setup_box({**BOX, "outline_px": OUTLINE})
+
+    server.apply_setup_ball_range(RANGE)
+
+    assert server.ball_at_address_monitor.outline_px[0] == (520.0, 500.0)
+
+
+def test_the_preview_the_overlays_draw_on_is_not_rolled():
+    """The Camera and Live views draw setup pixels on /api/camera/preview.jpg, which the
+    capture rotates by its roll correction: the kiosk must start the camera unrolled."""
+    assert inspect.signature(server.init_camera_capture).parameters[
+        "roll_correction_deg"
+    ].default == pytest.approx(0.0)
+    calls = re.findall(r"init_camera_capture\((.*?)\):", inspect.getsource(server.main), re.S)
+    assert calls, "the kiosk no longer starts the camera through init_camera_capture"
+    assert all("roll_correction_deg" not in call for call in calls)

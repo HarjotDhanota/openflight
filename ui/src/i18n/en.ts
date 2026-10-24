@@ -299,6 +299,7 @@ export const en = {
   'live.targetLineSetNoSpread': 'Target line set {yaw}',
   'live.targetLineNotSet': "Target line not set: left/right is from the unit's aim",
   'live.aimView': 'Camera view with the aim line',
+  'live.aimViewClose': 'Close the aim view',
   'nav.moreTabs': 'More tabs',
   'nav.setup': 'Setup',
   'setup.offer': 'Finish setup',

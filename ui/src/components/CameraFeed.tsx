@@ -27,6 +27,8 @@ interface CaptureSettingsPanelProps {
   boxSet: boolean;
 }
 
+// The box is drawn on this preview in setup pixels: true only because the kiosk never rolls
+// it (test_the_preview_the_overlays_draw_on_is_not_rolled).
 const PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const EXPOSURE_QUALITY_URL = `${getServerOrigin()}/api/camera/exposure-quality`;
 const PREVIEW_REFRESH_MS = 5000;

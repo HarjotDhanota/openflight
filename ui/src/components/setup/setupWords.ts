@@ -18,14 +18,17 @@ export function hasCamera(setup: SetupSnapshot): boolean {
   return setup.live.camera_available !== false;
 }
 
+const STEP_SECTIONS = ['box', 'aim', 'ball_range', 'net_range'] as const;
+
 /**
- * Whether to offer the Setup screen: a step on it is unset or stale, and the unit has the
- * camera every step needs. The lens height (`scene`) has no step here; without one the
- * kiosk runs on the enclosure's value.
+ * Whether to offer the Setup screen: a step on it is unset, stale or saved but not put into
+ * effect, and the unit has the camera every step needs. The lens height (`scene`) has no
+ * step here; without one the kiosk runs on the enclosure's value. The kiosk's ready light
+ * holds red on the same sections (setupNeedsCases.json keeps the two in step).
  */
 export function needsSetup(setup: SetupSnapshot | null): boolean {
   if (!setup || !hasCamera(setup)) return false;
-  return [setup.box, setup.aim, setup.ball_range, setup.net_range].some(needsDoing);
+  return STEP_SECTIONS.some((name) => needsDoing(setup[name]) || name in setup.unapplied);
 }
 
 /** The index of the first step still to do; the ready check when none is. */

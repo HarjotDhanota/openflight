@@ -30,6 +30,8 @@ WIDE_WINDOW_M = (0.7, 4.0)
 WIDE_HALF_WIDTH_M = 1.2
 # a re-confirmed box keeps its identity (and what was set against it) if the ball stayed put
 SAME_BALL_PX = 3.0
+# ... and its outline did not move (a new tilt or roll pad moves it)
+SAME_OUTLINE_PX = 0.5
 TOO_UNCERTAIN = "too uncertain to measure"
 
 
@@ -78,9 +80,15 @@ def box_section(  # pylint: disable=too-many-arguments
     tilt_pad_deg: float,
     roll_pad_deg: float,
     ctx: StartContext,
+    outline_px=None,
 ) -> dict:
-    """A confirmed box, stamped with the lens, rig and tilt it was confirmed under."""
-    return {
+    """A confirmed box, stamped with the lens, rig and tilt it was confirmed under.
+
+    ``outline_px`` is the polygon the user confirmed (the search outline); ``box_px`` bounds
+    it and the ground, and is only the detector's window. A record without an outline is
+    read as its ``box_px`` rectangle.
+    """
+    section = {
         "state": "confirmed",
         "id": box_id,
         "box_px": list(box_px),
@@ -94,6 +102,18 @@ def box_section(  # pylint: disable=too-many-arguments
             "box", lens_id=ctx.lens_id, rig_sha256=ctx.rig_sha256, tilt_deg=ctx.tilt_offset_deg
         ),
     }
+    if outline_px is not None:
+        section["outline_px"] = [[round(float(x), 2), round(float(y), 2)] for x, y in outline_px]
+    return section
+
+
+def _same_outline(kept, outline) -> bool:
+    if not kept or len(kept) != len(outline):
+        return False
+    return all(
+        np.hypot(a[0] - b[0], a[1] - b[1]) <= SAME_OUTLINE_PX
+        for a, b in zip(kept, outline, strict=True)
+    )
 
 
 def aim_section(line: dict, *, floor, floor_line_used: bool, box_id: str) -> dict:
@@ -471,10 +491,12 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         previous = record["box"]  # evaluated: a stale box has no id to carry on
         base = placement_box.box_id(self._config, self._ctx.lens_id)
         kept = previous.get("ball_px")
+        outline = [list(point) for point in projection.search_outline_px]
         same_ball = (
             str(previous.get("id", "")).startswith(base)
             and kept is not None
             and np.hypot(kept[0] - centre[0], kept[1] - centre[1]) <= SAME_BALL_PX
+            and _same_outline(previous.get("outline_px"), outline)
         )
         # the revision keeps a new id from ever equalling a stale box's, which would revive
         # the aim and range set against it
@@ -493,6 +515,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 tilt_pad_deg=projection.tilt_pad_deg,
                 roll_pad_deg=projection.roll_pad_deg,
                 ctx=self._ctx,
+                outline_px=outline,
             )
         }
 

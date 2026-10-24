@@ -301,6 +301,7 @@ export const pt: Messages = {
   'live.targetLineSetNoSpread': 'Linha do alvo definida {yaw}',
   'live.targetLineNotSet': 'Linha do alvo não definida: esquerda/direita pela mira do aparelho',
   'live.aimView': 'Vista da câmara com a linha do alvo',
+  'live.aimViewClose': 'Fechar a vista do alvo',
   'nav.moreTabs': 'Mais abas',
   'nav.setup': 'Ajuste',
   'setup.offer': 'Concluir o ajuste',

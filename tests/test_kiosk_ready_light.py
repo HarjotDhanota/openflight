@@ -168,7 +168,7 @@ def test_the_setup_record_and_the_ball_look_reach_the_light(kiosk, monkeypatch):
     look = {"state": "not_seen", "observed_at": time.time()}
     monkeypatch.setattr(server, "ball_at_address_monitor", SimpleNamespace(latest=lambda: look))
     light = kiosk.light()
-    assert (light["state"], light["cause"]) == ("amber", "ball not in box")
+    assert (light["state"], light["cause"]) == ("amber", "no ball in the box")
 
 
 def test_an_extension_adds_setup_causes_from_the_snapshot(kiosk, monkeypatch):

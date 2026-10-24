@@ -10,6 +10,8 @@ export interface SetupSection {
   reason?: string | null;
   source?: string;
   box_px?: number[];
+  /** The confirmed box's outline, in `image_size_px` pixels; older records have none. */
+  outline_px?: Px[];
   ball_px?: Px | null;
   diameter_px?: number | null;
   image_size_px?: Px;

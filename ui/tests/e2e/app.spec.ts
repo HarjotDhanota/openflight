@@ -12,6 +12,7 @@ import {
   setClub,
   setHanded,
   setUpSnapshot,
+  notSetUpSnapshot,
   simulateShot,
   waitForEvent,
   withControlSocket,
@@ -731,19 +732,16 @@ for (const size of [
         await expect(outline).toBeVisible();
         await expect(page.locator('.camera-feed__crosshair, .camera-feed__center-cross')).toHaveCount(0);
         await expect(page.getByText('Confirmed on the Setup tab')).toBeVisible();
-        const [x0, y0, x1, y1] = SET_UP.box;
-        const corners = await Promise.all(
-          [
-            [x0, y0],
-            [x1, y1],
-          ].map((px) => drawnAt(page, CAMERA_PICTURE, px as [number, number], hand))
-        );
+        // the drawn polygon is the outline the user confirmed, vertex by vertex
+        const svg = (await page.locator(`${CAMERA_PICTURE} .setup-picture__overlay`).boundingBox())!;
+        const points = (await outline.getAttribute('points'))!.split(' ').map((pair) => pair.split(',').map(Number));
+        expect(points).toHaveLength(SET_UP.outline.length);
+        for (const [index, px] of SET_UP.outline.entries()) {
+          const [x, y] = await drawnAt(page, CAMERA_PICTURE, px, hand);
+          expect(Math.abs(svg.x + points[index][0] - x)).toBeLessThan(1);
+          expect(Math.abs(svg.y + points[index][1] - y)).toBeLessThan(1);
+        }
         // the shape's own geometry: Playwright's box for an SVG shape takes in its stroke
-        const drawn = await outline.evaluate((node) => node.getBoundingClientRect().toJSON());
-        expect(Math.abs(drawn.x - Math.min(corners[0][0], corners[1][0]))).toBeLessThan(2);
-        expect(Math.abs(drawn.x + drawn.width - Math.max(corners[0][0], corners[1][0]))).toBeLessThan(2);
-        expect(Math.abs(drawn.y - corners[0][1])).toBeLessThan(2);
-        expect(Math.abs(drawn.y + drawn.height - corners[1][1])).toBeLessThan(2);
         const ball = await page
           .locator(`${CAMERA_PICTURE} .setup-picture__ball`)
           .evaluate((node) => node.getBoundingClientRect().toJSON());
@@ -763,15 +761,14 @@ for (const size of [
 }
 
 test('with no box or aim set, the camera and live views draw nothing on the picture', async ({ page }) => {
-  const snapshot = setUpSnapshot({ state: 'skipped' });
-  snapshot.box = { state: 'not_set', reason: 'not set' } as typeof snapshot.box;
-  await mockSetupAndPreview(page, snapshot);
+  await mockSetupAndPreview(page, notSetUpSnapshot());
   await page.setViewportSize({ width: 800, height: 480 });
   await gotoApp(page);
   await dismissPicker(page);
 
-  await expect(page.locator('.live-panel__target')).toBeVisible();
-  await expect(page.locator('.live-panel__aim')).toHaveCount(0);
+  await expect(page.locator('.live-panel__target')).toHaveText(/Target line not set/);
+  await expect(page.getByRole('button', { name: 'Finish setup' })).toBeVisible();
+  await expect(page.locator('.live-panel__target-button')).toHaveCount(0);
   await page.getByRole('button', { name: 'Camera' }).click();
   await expect(page.locator('.camera-feed__stream img')).toBeVisible();
   await expect(page.getByText('Not set: confirm the ball in the box on the Setup tab')).toBeVisible();

@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { SetupSnapshot } from '../../hooks/useSetup';
 import { useCameraStill } from '../../hooks/useCameraStill';
 import type { Handed } from '../../stores/useSystemStore';
@@ -35,22 +35,40 @@ interface LivePanelProps {
   resultVisible?: boolean;
   /** The kiosk's target line (GET /api/target-line); null draws nothing. */
   targetLine?: TargetLine | null;
-  /** The kiosk's setup record: a set aim is drawn on a small camera view. */
+  /** The kiosk's setup record: the applied aim can be opened on a camera view. */
   setup?: SetupSnapshot | null;
   handed?: Handed | null;
 }
 
-// small: the view only has to show where the line points
-const AIM_VIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg?width=320`;
-const AIM_VIEW_REFRESH_MS = 5000;
+// The preview is in the setup's pixels only because the kiosk never rolls it
+// (test_the_preview_the_overlays_draw_on_is_not_rolled).
+const AIM_VIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg?width=640`;
+const AIM_VIEW_REFRESH_MS = 2000;
+const AIM_VIEW_OPEN_MS = 10_000;
 
-function AimView({ aim, handed, label }: { aim: AimOverlay; handed: Handed | null; label: string }) {
+/** The aim line on the camera view, over the tiles; fetched only while it is open. */
+function AimView({
+  aim,
+  handed,
+  label,
+  closeLabel,
+  onClose,
+}: {
+  aim: AimOverlay;
+  handed: Handed | null;
+  label: string;
+  closeLabel: string;
+  onClose: () => void;
+}) {
   const still = useCameraStill(AIM_VIEW_URL, AIM_VIEW_REFRESH_MS);
-  if (still.state === 'unavailable') return null;
+  useEffect(() => {
+    const timer = setTimeout(onClose, AIM_VIEW_OPEN_MS);
+    return () => clearTimeout(timer);
+  }, [onClose]);
   return (
-    <div className="live-panel__aim">
+    <button type="button" className="live-panel__aim-view" aria-label={closeLabel} onClick={onClose}>
       {still.src ? <SetupPicture src={still.src} alt={label} handed={handed} aim={aim} /> : null}
-    </div>
+    </button>
   );
 }
 
@@ -76,6 +94,8 @@ export function LivePanel({
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
+  const [aimOpen, setAimOpen] = useState(false);
+  const closeAim = useCallback(() => setAimOpen(false), []);
   const profileShots = useMemo(() => filterShotsByProfile(shots, profileId), [shots, profileId]);
   const displayedShot = profileShots[profileShots.length - 1] ?? null;
   // the same position in both trees, so an extension's state survives an empty panel
@@ -112,20 +132,34 @@ export function LivePanel({
         ? t('live.targetLineSetNoSpread', { yaw })
         : t('live.targetLineSet', { yaw, spread: `${targetLine.uncertaintyDeg.toFixed(1)}°` });
   }
-  const targetWords = targetText ? (
+  // the picture and the words describe one aim: the one the kiosk applied
+  const aim = targetLine?.status === 'set' && !setup?.unapplied.aim ? aimLine(setup) : null;
+  const target = targetText ? (
     <p className="live-panel__target" data-status={targetLine?.status} role="status">
-      {targetText}
+      {aim ? (
+        <button
+          type="button"
+          className="live-panel__target-button"
+          aria-expanded={aimOpen}
+          onClick={() => setAimOpen((open) => !open)}
+        >
+          {targetText} ›
+        </button>
+      ) : (
+        targetText
+      )}
     </p>
   ) : null;
-  const aim = aimLine(setup);
-  const target = aim ? (
-    <div className="live-panel__aim-row">
-      <AimView aim={aim} handed={handed} label={t('live.aimView')} />
-      {targetWords}
-    </div>
-  ) : (
-    targetWords
-  );
+  const aimView =
+    aim && aimOpen ? (
+      <AimView
+        aim={aim}
+        handed={handed}
+        label={t('live.aimView')}
+        closeLabel={t('live.aimViewClose')}
+        onClose={closeAim}
+      />
+    ) : null;
 
   if (!selected) {
     return (
@@ -136,6 +170,7 @@ export function LivePanel({
         <div className="panel__body panel__body--empty live-panel__empty">
           <span className="panel__empty-title live-panel__empty-title">{t('live.ready')}</span>
           <span className="panel__empty-detail live-panel__empty-detail">{t('live.readyDetail')}</span>
+          {aimView}
         </div>
       </div>
     );
@@ -148,6 +183,7 @@ export function LivePanel({
       {target}
       <div className="panel__body live-panel__body">
         {isProfileNewShot ? <div className="shot-flash" /> : null}
+        {aimView}
         <div ref={gridRef} className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>
           {metrics.map((metric) => (
             <MetricCard

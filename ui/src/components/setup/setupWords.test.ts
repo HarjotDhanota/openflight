@@ -12,6 +12,7 @@ import {
   refusalWords,
   sceneWords,
 } from './setupWords';
+import needsCases from './setupNeedsCases.json';
 
 const notSet = { state: 'not_set', reason: 'no setup file' };
 
@@ -130,6 +131,24 @@ describe('setup words', () => {
     expect(needsSetup(snapshot({ live: { camera_available: false } }))).toBe(false);
     expect(needsSetup(snapshot({ live: { camera_available: true } }))).toBe(true);
   });
+
+  // the same table runs the kiosk's setup_incomplete cause in tests/test_ready_light.py
+  for (const item of needsCases.cases) {
+    it(`agrees with the ready light: ${item.name}`, () => {
+      const sections = { ...needsCases.base, ...item.sections } as Record<string, SetupSnapshot['box']>;
+      const setup = {
+        revision: 1,
+        box: sections.box,
+        aim: sections.aim,
+        ball_range: sections.ball_range,
+        net_range: sections.net_range,
+        scene: sections.scene,
+        live: { camera_available: item.camera },
+        unapplied: item.unapplied as Record<string, string>,
+      };
+      expect(needsSetup(setup)).toBe(item.needs);
+    });
+  }
 
   it('opens on the first step left to do', () => {
     expect(firstStepToDo(null)).toBe(0);

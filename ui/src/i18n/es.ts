@@ -301,6 +301,7 @@ export const es: Messages = {
   'live.targetLineSetNoSpread': 'Línea de objetivo fijada {yaw}',
   'live.targetLineNotSet': 'Línea de objetivo sin fijar: izquierda/derecha según la dirección del equipo',
   'live.aimView': 'Vista de la cámara con la línea de objetivo',
+  'live.aimViewClose': 'Cerrar la vista de objetivo',
   'nav.moreTabs': 'Más pestañas',
   'nav.setup': 'Ajustes',
   'setup.offer': 'Terminar el ajuste',

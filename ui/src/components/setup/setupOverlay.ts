@@ -17,19 +17,34 @@ export interface AimOverlay {
   to: Px;
 }
 
-/** The box the kiosk is using; null when none is confirmed or it is stale. */
+/**
+ * The box outline to draw, in the box's `image_size_px` pixels: the Setup screen's live look
+ * when `live` and there is one, else the saved confirmed outline, else (a record saved before
+ * outlines were kept) the `box_px` rectangle the kiosk then tests the ball against.
+ */
+export function boxOutline(setup: SetupSnapshot | null, { live = false } = {}): Px[] | null {
+  const looked = setup?.live.box?.outline_px;
+  if (live && looked && looked.length > 2) return looked;
+  const box = setup?.box;
+  if (box?.outline_px && box.outline_px.length > 2) return box.outline_px;
+  if (box?.box_px?.length !== 4) return null;
+  const [x0, y0, x1, y1] = box.box_px;
+  return [
+    [x0, y0],
+    [x1, y0],
+    [x1, y1],
+    [x0, y1],
+  ];
+}
+
+/** The box the kiosk is using; null when none is confirmed or it is stale or unapplied. */
 export function confirmedBox(setup: SetupSnapshot | null): BoxOverlay | null {
   const box = setup?.box;
-  if (!box || !isUsable(box) || box.box_px?.length !== 4 || !box.image_size_px) return null;
-  const [x0, y0, x1, y1] = box.box_px;
+  const outline = boxOutline(setup);
+  if (!box || !isUsable(box) || 'box' in (setup?.unapplied ?? {}) || !outline || !box.image_size_px) return null;
   return {
     imageSize: box.image_size_px,
-    outline: [
-      [x0, y0],
-      [x1, y0],
-      [x1, y1],
-      [x0, y1],
-    ],
+    outline,
     ball: box.ball_px ?? null,
     diameter: box.diameter_px ?? null,
   };

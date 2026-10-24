@@ -172,3 +172,15 @@ def test_a_look_begun_before_a_reconfigure_is_not_kept():
     locator.observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
 
     assert locator.latest() is None
+
+
+def test_a_ball_in_the_rectangle_but_outside_the_confirmed_outline_is_outside_the_box():
+    # the user confirmed a narrower box than the detector's window
+    outline = [(600.0, 520.0), (800.0, 520.0), (800.0, 380.0), (600.0, 380.0)]
+    locator = _locator(outline_px=outline)
+
+    seen = locator.observe(_scene([(520.0, 450.0, 20.0)]), at=20.0)
+    assert seen["state"] == "outside_box"
+    assert seen["outline_px"] == [list(point) for point in outline]
+
+    assert locator.observe(_scene([(700.0, 450.0, 20.0)]), at=21.0)["state"] == "in_box"
