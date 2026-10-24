@@ -40,9 +40,9 @@ interface LivePanelProps {
   handed?: Handed | null;
 }
 
-// The preview is in the setup's pixels only because the kiosk never rolls it
-// (test_the_preview_the_overlays_draw_on_is_not_rolled).
-const AIM_VIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg?width=640`;
+// The preview is the capture frame, in the setup's pixels, only because the kiosk never
+// rolls it (test_the_preview_the_overlays_draw_on_is_not_rolled).
+const AIM_VIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const AIM_VIEW_REFRESH_MS = 2000;
 const AIM_VIEW_OPEN_MS = 10_000;
 

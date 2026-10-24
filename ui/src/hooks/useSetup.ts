@@ -10,12 +10,10 @@ export interface SetupSection {
   reason?: string | null;
   source?: string;
   box_px?: number[];
-  /** The confirmed box's outline, in `image_size_px` pixels; older records have none. */
+  /** The confirmed box's outline, in camera pixels; older records have none. */
   outline_px?: Px[];
   ball_px?: Px | null;
   diameter_px?: number | null;
-  /** The capture size the section's pixels are in (box; aim, else the box's). */
-  image_size_px?: Px;
   aim_px?: Px;
   floor_line?: [Px, Px] | null;
   yaw_deg?: number;

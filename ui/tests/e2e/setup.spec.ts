@@ -88,7 +88,6 @@ class MockSetup {
             box_px: [380, 560, 900, 720],
             ball_px: BALL,
             diameter_px: 22,
-            image_size_px: IMAGE,
           },
         });
       }

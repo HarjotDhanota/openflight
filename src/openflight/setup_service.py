@@ -37,12 +37,8 @@ logger = logging.getLogger(__name__)
 # the wider look that tells "outside the box" from "no ball": the hitting area either side
 WIDE_WINDOW_M = (0.7, 4.0)
 WIDE_HALF_WIDTH_M = 1.2
-# a re-confirmed box keeps its identity (and what was set against it) if the ball stayed put
-SAME_BALL_PX = 3.0
-# ... and its outline did not move (a new tilt or roll pad moves it)
+# the fixed box drawn again this close (the tilt sensor's noise) is the box already confirmed
 SAME_OUTLINE_PX = 0.5
-# across binned modes each mode's projection rounds on its own
-SAME_OUTLINE_ACROSS_MODES_PX = 1.0
 TOO_UNCERTAIN = "too uncertain to measure"
 # each section's actions, as the kiosk's API takes them
 ACTIONS = {
@@ -86,45 +82,16 @@ def _usable(section: dict) -> bool:
     return section.get("state") not in ("not_set", "stale")
 
 
-def box_picture_size(box) -> tuple[int, int]:
-    """The capture size the box's pixels are in; ValueError when it has none."""
-    size = box.get("image_size_px")
-    if not size or len(size) != 2:
-        raise ValueError("the box has no picture size: confirm the box again")
-    width, height = int(size[0]), int(size[1])
-    if width <= 0 or height <= 0:
-        raise ValueError(f"the box's picture size {size} is not a picture: confirm the box again")
-    return width, height
-
-
-def box_scale(box, width: int, height: int) -> float:
-    """The factor taking the box's pixels into a ``width`` x ``height`` capture: 1280x800 and
-    640x400 are one field of view, binned. ValueError for a picture of another shape."""
-    confirmed_w, confirmed_h = box_picture_size(box)
-    if confirmed_w * height != confirmed_h * width:
-        raise ValueError(
-            f"the box was confirmed on a {confirmed_w}x{confirmed_h} picture and the camera "
-            f"runs at {width}x{height}: confirm the box again"
-        )
-    return width / confirmed_w
-
-
 # The service writes its sections with these builders, as may anything else that writes a
 # setup record a kiosk then starts from.
 
 
-def new_box_id(config: placement_box.PlacementBoxConfig, lens_id, centre, suffix) -> str:
-    """A confirmed box's identity: the fixed box on this lens, its ball, and a unique suffix."""
-    return f"{placement_box.box_id(config, lens_id)}@{centre[0]:.0f},{centre[1]:.0f}#{suffix}"
-
-
 def box_section(  # pylint: disable=too-many-arguments
     *,
-    box_id: str,
+    config: placement_box.PlacementBoxConfig,
     box_px,
     ball_px,
     diameter_px: float,
-    image_size_px,
     tilt_pad_deg: float,
     roll_pad_deg: float,
     ctx: StartContext,
@@ -134,16 +101,14 @@ def box_section(  # pylint: disable=too-many-arguments
 
     ``outline_px`` is the polygon the user confirmed (the search outline); ``box_px`` bounds
     it and the ground, and is only the detector's window. A record without an outline is
-    read as its ``box_px`` rectangle.
+    read as its ``box_px`` rectangle. The id is the box's geometry and inputs, never its
+    ball: a ball anywhere in the box keeps the aim and range set against it.
     """
     section = {
         "state": "confirmed",
-        "id": box_id,
         "box_px": list(box_px),
         "ball_px": [float(ball_px[0]), float(ball_px[1])],
         "diameter_px": float(diameter_px),
-        # the pixel space of box_px, ball_px and diameter_px: a capture mode, not an input
-        "image_size_px": list(image_size_px),
         "source": placement_box.SOURCE,
         "uncertainty": {"tilt_pad_deg": tilt_pad_deg, "roll_pad_deg": roll_pad_deg},
         "inputs": section_inputs(
@@ -151,25 +116,29 @@ def box_section(  # pylint: disable=too-many-arguments
         ),
     }
     if outline_px is not None:
-        section["outline_px"] = [[round(float(x), 2), round(float(y), 2)] for x, y in outline_px]
+        section["outline_px"] = _rounded(outline_px)
+    geometry = {key: section.get(key) for key in ("box_px", "outline_px", "inputs")}
+    digest = hashlib.sha256(json.dumps(geometry, sort_keys=True).encode("utf-8")).hexdigest()
+    section["id"] = f"{placement_box.box_id(config, ctx.lens_id)}-{digest[:12]}"
     return section
 
 
-def _same_outline(kept, outline, tolerance_px: float = SAME_OUTLINE_PX) -> bool:
+def _rounded(outline) -> list[list[float]]:
+    return [[round(float(x), 2), round(float(y), 2)] for x, y in outline]
+
+
+def _same_outline(kept, outline) -> bool:
     if not kept or len(kept) != len(outline):
         return False
     return all(
-        np.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance_px
+        np.hypot(a[0] - b[0], a[1] - b[1]) <= SAME_OUTLINE_PX
         for a, b in zip(kept, outline, strict=True)
     )
 
 
-def aim_section(
-    line: dict, *, floor, floor_line_used: bool, box_id: str, image_size_px=None
-) -> dict:
-    """An aim from a bounded ``target_line.target_line_record``; ``image_size_px`` is the
-    capture size its ``aim_px`` and floor line are in (an older aim's are the box's)."""
-    section = {
+def aim_section(line: dict, *, floor, floor_line_used: bool, box_id: str) -> dict:
+    """An aim from a bounded ``target_line.target_line_record``."""
+    return {
         "state": "set",
         "aim_px": line["aim_px"],
         "floor_line": floor,
@@ -183,9 +152,6 @@ def aim_section(
         "source": line["source"],
         "inputs": section_inputs("aim", box_id=box_id),
     }
-    if image_size_px is not None:
-        section["image_size_px"] = [int(image_size_px[0]), int(image_size_px[1])]
-    return section
 
 
 def skipped_aim_section(box_id: str) -> dict:
@@ -565,46 +531,16 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         if classified["state"] != "found":
             raise _Refused(classified["state"])
         ball = classified["selected"]
-        centre = [float(ball["x_px"]), float(ball["y_px"])]
-        previous = record["box"]  # evaluated: a stale box has no id to carry on
-        base = placement_box.box_id(self._config, self._ctx.lens_id)
-        outline = [list(point) for point in projection.search_outline_px]
-        # the previous box in this mode's pixels: a binned mode keeps the same box
-        try:
-            scale = box_scale(previous, *projection.image_size_px)
-        except (KeyError, TypeError, ValueError):
-            scale = None
-        kept = previous.get("ball_px")
-        kept_outline = previous.get("outline_px")
-        if scale is not None and kept is not None:
-            kept = [float(kept[0]) * scale, float(kept[1]) * scale]
-            if kept_outline is not None:
-                kept_outline = ground_patch.scale_outline(kept_outline, scale)
-        same_ball = (
-            str(previous.get("id", "")).startswith(base)
-            and scale is not None
-            and kept is not None
-            and np.hypot(kept[0] - centre[0], kept[1] - centre[1]) <= SAME_BALL_PX
-            and _same_outline(
-                kept_outline,
-                outline,
-                SAME_OUTLINE_PX if scale == 1.0 else SAME_OUTLINE_ACROSS_MODES_PX,
-            )
-        )
-        # the revision keeps a new id from ever equalling a stale box's, which would revive
-        # the aim and range set against it
-        box_id = (
-            previous["id"]
-            if same_ball
-            else new_box_id(self._config, self._ctx.lens_id, centre, self.revision + 1)
-        )
+        box_px, outline = list(projection.box_px), _rounded(projection.search_outline_px)
+        previous = record["box"]
+        if _usable(previous) and _same_outline(previous.get("outline_px"), outline):
+            box_px, outline = previous["box_px"], previous["outline_px"]
         return {
             "box": box_section(
-                box_id=box_id,
-                box_px=projection.box_px,
-                ball_px=centre,
+                config=self._config,
+                box_px=box_px,
+                ball_px=[float(ball["x_px"]), float(ball["y_px"])],
                 diameter_px=ball["diameter_px"],
-                image_size_px=projection.image_size_px,
                 tilt_pad_deg=projection.tilt_pad_deg,
                 roll_pad_deg=projection.roll_pad_deg,
                 ctx=self._ctx,
@@ -633,7 +569,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         camera, roll = self._view()
         if payload["aim_px"] is None:
             raise _Refused("tap the target to set the aim point")
-        ball = self._box_ball_lfu(camera, box)
+        ball = self._box_centre_lfu(camera)
         tilt_pad = placement_box.pads_deg(self._config, self._ctx.tilt_calibrated)[0]
         try:
             floor = target_line.parse_floor_line(payload["floor_line_px"], camera)
@@ -665,13 +601,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 "the camera cannot bound this aim point: aim at a farther target, or skip it"
             )
         return {
-            "aim": aim_section(
-                line,
-                floor=floor,
-                floor_line_used=used_floor,
-                box_id=box["id"],
-                image_size_px=(camera.image_width_px, camera.image_height_px),
-            ),
+            "aim": aim_section(line, floor=floor, floor_line_used=used_floor, box_id=box["id"]),
             "net_range": stamped_net(net, floor, self._ctx),
         }
 
@@ -682,52 +612,23 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             "net_range": stamped_net(default_net("aim point skipped"), None, self._ctx),
         }
 
-    def _box_here(self, camera, box: dict) -> dict:
-        """The box's ball and outline in this camera's pixels (the box may be another mode's)."""
-        try:
-            scale = box_scale(box, int(camera.image_width_px), int(camera.image_height_px))
-        except ValueError as exc:
-            raise _Refused(str(exc)) from exc
-        here = {
-            **box,
-            "ball_px": [float(box["ball_px"][0]) * scale, float(box["ball_px"][1]) * scale],
-            "diameter_px": float(box["diameter_px"]) * scale,
-            "image_size_px": [int(camera.image_width_px), int(camera.image_height_px)],
-        }
-        if box.get("outline_px") is not None:
-            here["outline_px"] = ground_patch.scale_outline(box["outline_px"], scale)
-        return here
-
-    def _box_ball_lfu(self, camera, box: dict) -> tuple[float, float]:
-        ball_px = self._box_here(camera, box)["ball_px"]
-        try:
-            hit = reference_ball_range.ray_to_ball_center_plane(
-                camera, ball_px, ball_center_height_m=ground_patch.BALL_CENTER_HEIGHT_M
-            )
-        except ValueError as exc:
-            raise _Refused(f"the box's ball has no floor point: {exc}") from exc
-        return float(hit.point_lfu_m[0]), float(hit.point_lfu_m[1])
+    def _box_centre_lfu(self, camera) -> tuple[float, float]:
+        """The box's centre on the ground, which the aim is solved from: a ball anywhere in
+        the box gives the same aim."""
+        box = placement_box.fixed_box(camera, self._config)
+        return box.centre_lateral_m, box.centre_forward_m
 
     # ball range
 
     def _range_measure(self, record: dict, _payload: dict) -> dict:
         box = self._need_box(record)
         camera, roll = self._view()
-        here = self._box_here(camera, box)
         frames = self._frames()
         projection = placement_box.project_fixed_box(
             camera, calibrated=self._ctx.tilt_calibrated, roll_deg=roll, config=self._config
         )
-        found = self._search(
-            frames,
-            camera,
-            ground_patch.PatchSearch.from_projection(projection),
-            confirm_anchor={
-                "x_px": here["ball_px"][0],
-                "y_px": here["ball_px"][1],
-                "diameter_px": here["diameter_px"],
-            },
-        )
+        # the ball wherever it is in the box now: the range depends on the box alone
+        found = self._search(frames, camera, ground_patch.PatchSearch.from_projection(projection))
         ball = found["result"].selected
         if found["status"] != "selected" or ball is None or ball.size_radar_range_m is None:
             raise _Refused(f"ball not measured: {found['status']}")

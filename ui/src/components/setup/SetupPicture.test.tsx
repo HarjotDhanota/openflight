@@ -2,7 +2,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SetupSnapshot } from '../../hooks/useSetup';
 import { SetupPicture } from './SetupPicture';
-import { aimLine, boxOutline, confirmedBox, sameShape, savedMarks, toPicture } from './setupOverlay';
+import { aimLine, boxOutline, confirmedBox } from './setupOverlay';
 
 const notSet = { state: 'not_set', reason: 'not set' };
 
@@ -14,7 +14,6 @@ function snapshot(changes: Partial<SetupSnapshot> = {}): SetupSnapshot {
       box_px: [380, 560, 900, 720],
       ball_px: [640, 610],
       diameter_px: 22,
-      image_size_px: [1280, 800],
     },
     aim: { state: 'set', aim_px: [900, 300] },
     ball_range: notSet,
@@ -29,7 +28,6 @@ function snapshot(changes: Partial<SetupSnapshot> = {}): SetupSnapshot {
 describe('the setup drawn on a camera picture', () => {
   it('falls back to the box_px rectangle for a record saved before outlines were kept', () => {
     expect(confirmedBox(snapshot())).toEqual({
-      imageSize: [1280, 800],
       outline: [
         [380, 560],
         [900, 560],
@@ -69,15 +67,14 @@ describe('the setup drawn on a camera picture', () => {
     expect(aimLine(snapshot({ unapplied: { box: 'the box is outside the 640x400 picture' } }))).toBeNull();
   });
 
-  it('draws no box that is not set or is stale, and none without its picture size', () => {
+  it('draws no box that is not set or is stale', () => {
     expect(confirmedBox(null)).toBeNull();
     expect(confirmedBox(snapshot({ box: notSet }))).toBeNull();
     expect(confirmedBox(snapshot({ box: { ...snapshot().box, state: 'stale' } }))).toBeNull();
-    expect(confirmedBox(snapshot({ box: { ...snapshot().box, image_size_px: undefined } }))).toBeNull();
   });
 
   it('runs the aim line from the box ball to the aim point', () => {
-    expect(aimLine(snapshot())).toEqual({ imageSize: [1280, 800], from: [640, 610], to: [900, 300] });
+    expect(aimLine(snapshot())).toEqual({ from: [640, 610], to: [900, 300] });
   });
 
   it('draws no aim line for a skipped, unset or stale aim, or without a box', () => {
@@ -85,65 +82,6 @@ describe('the setup drawn on a camera picture', () => {
     expect(aimLine(snapshot({ aim: notSet }))).toBeNull();
     expect(aimLine(snapshot({ aim: { state: 'stale', aim_px: [900, 300] } }))).toBeNull();
     expect(aimLine(snapshot({ box: notSet }))).toBeNull();
-  });
-
-  it('draws only on a picture of the same shape as the one the setup was made on', () => {
-    expect(sameShape([1280, 800], [640, 400])).toBe(true);
-    expect(sameShape([1280, 800], [320, 200])).toBe(true);
-    expect(sameShape([1280, 800], [1280, 720])).toBe(false);
-  });
-
-  it('moves a saved pixel into a binned picture, and refuses another shape', () => {
-    expect(toPicture([640, 610], [1280, 800], [640, 400])).toEqual([320, 305]);
-    expect(toPicture([640, 610], [1280, 800], [1280, 720])).toBeNull();
-    expect(toPicture([640, 610], undefined, [640, 400])).toEqual([640, 610]);
-  });
-
-  it('runs an aim saved at another size from the box ball, in the box pixels', () => {
-    const setup = snapshot({ aim: { state: 'set', aim_px: [450, 150], image_size_px: [640, 400] } });
-    expect(aimLine(setup)).toEqual({ imageSize: [1280, 800], from: [640, 610], to: [900, 300] });
-  });
-
-  it("draws the Setup screen's saved marks in the still's pixels", () => {
-    const setup = snapshot({
-      box: {
-        ...snapshot().box,
-        outline_px: [
-          [400, 700],
-          [880, 700],
-          [860, 580],
-          [420, 580],
-        ],
-      },
-      aim: {
-        state: 'set',
-        aim_px: [900, 300],
-        floor_line: [
-          [100, 500],
-          [1100, 500],
-        ],
-        image_size_px: [1280, 800],
-      },
-    });
-
-    const marks = savedMarks(setup, [640, 400]);
-
-    expect(marks.ball).toEqual([320, 305]);
-    expect(marks.diameter).toBe(11);
-    expect(marks.outline?.[0]).toEqual([200, 350]);
-    expect(marks.aim).toEqual([450, 150]);
-    expect(marks.floor).toEqual([
-      [50, 250],
-      [550, 250],
-    ]);
-    // a picture of another shape gets none of them
-    expect(savedMarks(setup, [1280, 720])).toEqual({
-      outline: null,
-      ball: null,
-      diameter: null,
-      aim: null,
-      floor: null,
-    });
   });
 
   it("mirrors a left-hander's picture, as the Setup view does", () => {

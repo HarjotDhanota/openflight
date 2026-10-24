@@ -21,7 +21,6 @@ BOX = {
     "box_px": [480.0, 380.0, 800.0, 520.0],
     "ball_px": [640.0, 450.0],
     "diameter_px": 20.0,
-    "image_size_px": [1280, 800],
     "source": "placement_box",
     "uncertainty": {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0},
 }
@@ -129,40 +128,11 @@ def test_clearing_box_stops_ball_at_address(kiosk):
     assert server.camera_capture_config["hitting_zone"] is None
 
 
-def test_a_box_confirmed_at_1280x800_is_halved_at_640x400(kiosk):
-    kiosk.camera.settings = CameraCaptureSettings(width=640, height=400)
-
+def test_a_box_that_is_not_a_rectangle_is_cleared_with_a_reason(kiosk):
     server.apply_setup_box(BOX)
 
-    assert server.camera_ball_box_px == (240, 190, 400, 260)
-    assert kiosk.camera.settings.hitting_zone == (240, 190, 400, 260)
-    assert kiosk.camera.settings.setup_ball == {"x": 320.0, "y": 225.0, "diameter_px": 10.0}
-    assert server.ball_at_address_monitor.box == (240, 190, 400, 260)
-
-
-@pytest.mark.parametrize(
-    "size, reason",
-    [([1280, 720], "1280x720"), (None, "no picture size")],
-)
-def test_a_box_from_another_picture_shape_is_cleared_with_a_reason(kiosk, size, reason):
-    server.apply_setup_box(BOX)
-    stale = {key: value for key, value in BOX.items() if key != "image_size_px"}
-    if size is not None:
-        stale["image_size_px"] = size
-
-    with pytest.raises(ValueError, match=reason):
-        server.apply_setup_box(stale)
-
-    assert server.camera_ball_box_px is None
-    assert server.ball_at_address_monitor is None
-    assert kiosk.camera.settings.hitting_zone is None
-
-
-def test_a_box_outside_the_picture_is_refused(kiosk):
-    server.apply_setup_box(BOX)
-
-    with pytest.raises(ValueError, match="outside the 1280x800 picture"):
-        server.apply_setup_box({**BOX, "box_px": [480, 380, 1300, 520]})
+    with pytest.raises(ValueError, match="not a rectangle"):
+        server.apply_setup_box({**BOX, "box_px": [800, 380, 480, 520]})
 
     assert server.camera_ball_box_px is None
     assert server.ball_at_address_monitor is None
@@ -305,15 +275,13 @@ def test_the_aim_section_moves_the_target_line(kiosk, monkeypatch):
 OUTLINE = [[520.0, 500.0], [760.0, 500.0], [760.0, 400.0], [520.0, 400.0]]
 
 
-def test_the_confirmed_outline_reaches_the_monitor_scaled_with_the_mode(kiosk):
-    kiosk.camera.settings = CameraCaptureSettings(width=640, height=400)
-
+def test_the_confirmed_outline_reaches_the_monitor(kiosk):
     server.apply_setup_box({**BOX, "outline_px": OUTLINE})
 
     monitor = server.ball_at_address_monitor
-    assert monitor.outline_px == ((260.0, 250.0), (380.0, 250.0), (380.0, 200.0), (260.0, 200.0))
+    assert monitor.outline_px == tuple(tuple(point) for point in OUTLINE)
     # the detector's window stays the bounding rectangle
-    assert monitor.box == (240, 190, 400, 260)
+    assert monitor.box == (480, 380, 800, 520)
 
 
 def test_an_older_box_without_an_outline_is_tested_as_its_rectangle(kiosk):

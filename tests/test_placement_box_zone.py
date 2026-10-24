@@ -474,7 +474,7 @@ def _solution_with_box():
     "arm_id, expected", [("arm5", [562, 470, 718, 600]), ("arm6", [281, 235, 359, 300])]
 )
 def test_a_ladder_kiosk_is_told_the_setups_box(arm_id, expected):
-    # the setup record carries the box in 1280x800 pixels; each mode's kiosk scales it
+    # the tester writes the box in the pixels of the mode it starts the kiosk at
     record = {
         "mode": "fixed",
         "box_px": list(BOX),
@@ -487,10 +487,10 @@ def test_a_ladder_kiosk_is_told_the_setups_box(arm_id, expected):
         target_line_record=None,
         net_line=None,
         rig_geometry=RIG,
+        image_size_px=(ts.ARMS[arm_id].width, ts.ARMS[arm_id].height),
     )["box"]
 
-    scale = ts.ARMS[arm_id].width / box["image_size_px"][0]
-    assert [round(value * scale) for value in box["box_px"]] == expected
+    assert box["box_px"] == expected
     assert list(ts.mode_placement_box(record, ts.ARMS[arm_id])) == expected
 
 

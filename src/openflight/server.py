@@ -1564,8 +1564,8 @@ def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None, outl
 def apply_setup_box(box: dict | None) -> None:
     """Put the setup's box into effect: the resting-ball monitor, the capture's zone and ball.
 
-    A box from a picture of another shape, or outside this one, is cleared and the reason
-    raised, so the setup shows it as needing confirming again.
+    A box that is not a rectangle is cleared and the reason raised, so the setup shows it
+    as needing confirming again.
     """
     if box is None:
         _when_idle(lambda: _set_box(None, None))
@@ -1579,32 +1579,19 @@ def apply_setup_box(box: dict | None) -> None:
 
 
 def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict, list | None]:
-    """The box, its ball and its confirmed outline in the running capture's pixels:
-    1280x800 and 640x400 are one field of view, binned, so a box moves between them by
-    scaling. An older box without an outline is tested as its rectangle (None)."""
-    from .camera import ground_patch  # noqa: PLC0415
-    from .setup_service import box_picture_size, box_scale  # noqa: PLC0415
-
-    settings = getattr(camera_capture_runtime, "settings", None)
-    width, height = (
-        (int(settings.width), int(settings.height))
-        if settings is not None
-        else box_picture_size(box)
-    )
-    scale = box_scale(box, width, height)
-    zone = tuple(int(round(float(value) * scale)) for value in box["box_px"])
-    if len(zone) != 4 or not (0 <= zone[0] < zone[2] <= width and 0 <= zone[1] < zone[3] <= height):
-        raise ValueError(f"the box {zone} is outside the {width}x{height} picture")
+    """The box, its ball and its confirmed outline, in the capture's pixels. An older box
+    without an outline is tested as its rectangle (None)."""
+    zone = tuple(int(round(float(value))) for value in box["box_px"])
+    if len(zone) != 4 or not (0 <= zone[0] < zone[2] and 0 <= zone[1] < zone[3]):
+        raise ValueError(f"the box {zone} is not a rectangle: confirm the box again")
     setup_ball = {
-        "x": float(box["ball_px"][0]) * scale,
-        "y": float(box["ball_px"][1]) * scale,
-        "diameter_px": float(box["diameter_px"]) * scale,
+        "x": float(box["ball_px"][0]),
+        "y": float(box["ball_px"][1]),
+        "diameter_px": float(box["diameter_px"]),
     }
     outline = box.get("outline_px")
-    if outline is not None:
-        outline = ground_patch.scale_outline(outline, scale)
-        if len(outline) < 3:
-            raise ValueError(f"the box outline {outline} is not a polygon: confirm the box again")
+    if outline is not None and len(outline) < 3:
+        raise ValueError(f"the box outline {outline} is not a polygon: confirm the box again")
     return zone, setup_ball, outline
 
 
@@ -2150,14 +2137,10 @@ def api_setup_action(section: str):
 
 @app.route("/api/setup/view.jpg")
 def api_setup_view():
-    """The capture's latest frame, in the pixels the setup's box and points are in, or
-    narrowed to ``?width=`` (160 to 1280)."""
+    """The capture's latest frame, in the pixels the setup's box and points are in."""
     runtime = camera_capture_runtime
     if runtime is None:
         return "Camera capture not enabled", 404
-    max_width = request.args.get("width", type=int)
-    if "width" in request.args and (max_width is None or not 160 <= max_width <= 1280):
-        return "The view width must be between 160 and 1280 pixels", 400
     frames = runtime.recent_frames(1, timeout_s=0.5)
     if not frames:
         return "No camera frame yet", 503
@@ -2166,13 +2149,6 @@ def api_setup_view():
 
         quality = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # pylint: disable=no-member
         image = np.ascontiguousarray(frames[-1].image)
-        if max_width is not None and image.shape[1] > max_width:
-            height = round(image.shape[0] * max_width / image.shape[1])
-            image = cv2.resize(  # pylint: disable=no-member
-                image,
-                (max_width, height),
-                interpolation=cv2.INTER_AREA,  # pylint: disable=no-member
-            )
         ok, encoded = cv2.imencode(".jpg", image, quality)  # pylint: disable=no-member
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[SETUP] could not encode the camera view", exc_info=True)

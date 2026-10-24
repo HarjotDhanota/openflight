@@ -30,7 +30,6 @@ def write_setup(  # pylint: disable=too-many-arguments
     lens_id: str | None = "stock-2.8mm",
     rig: str | None = None,
     tilt_deg: float | None = None,
-    image_size_px: tuple[int, int] = (1280, 800),
     aim_yaw_deg: float | None = None,
     ball_range: dict | None = None,
     net_range_m: float | None = None,
@@ -50,7 +49,6 @@ def write_setup(  # pylint: disable=too-many-arguments
         "box_px": [float(value) for value in BOX_PX],
         "ball_px": list(BALL_PX),
         "diameter_px": BALL_DIAMETER_PX,
-        "image_size_px": list(image_size_px),
         "source": placement_box.SOURCE,
         "uncertainty": {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0},
         "inputs": section_inputs(

@@ -1514,7 +1514,10 @@ def _box_setup_section(
     solution: tee_range.TeeRangeSolution | None,
     ctx: setup_record.StartContext,
     config: placement_box.PlacementBoxConfig,
+    factor: float,
 ) -> dict:
+    """The confirmed box in the pixels of the mode the kiosk starts at (``factor`` times the
+    confirmed picture's size: every arm is one field of view, binned)."""
     if not isinstance(record, Mapping) or record.get("box_px") is None:
         return _not_set("no box confirmed for this setup")
     if record.get("mode") != placement_box.MODE:
@@ -1525,26 +1528,22 @@ def _box_setup_section(
     if found is None:
         return _not_set("the camera found no ball in the box: confirm the box again")
     centre, diameter = found
-    box_px = [int(value) for value in record["box_px"]]
     outline = record.get("search_outline_px")
-    identity = json.dumps([box_px, centre, diameter, outline], separators=(",", ":"))
     pads = record.get("camera_tilt") or {}
     return setup_service.box_section(
-        box_id=setup_service.new_box_id(
-            config, ctx.lens_id, centre, "t" + hashlib.sha256(identity.encode()).hexdigest()[:12]
-        ),
-        box_px=box_px,
-        ball_px=centre,
-        diameter_px=diameter,
-        image_size_px=list(record["frame_size_px"]),
+        config=config,
+        box_px=list(reference_ball_range.scale_placement_box(record["box_px"], factor)),
+        ball_px=[centre[0] * factor, centre[1] * factor],
+        diameter_px=diameter * factor,
         tilt_pad_deg=pads.get("search_pad_deg"),
         roll_pad_deg=pads.get("roll_pad_deg"),
         ctx=ctx,
-        outline_px=outline,
+        outline_px=ground_patch.scale_outline(outline, factor) if outline is not None else None,
     )
 
 
-def _aim_setup_section(line: Mapping | None, box: Mapping) -> dict:
+def _aim_setup_section(line: Mapping | None, box: Mapping, factor: float) -> dict:
+    """The confirmed aim, its points in the box's pixels (``factor`` as the box's)."""
     if not _set(box):
         return _not_set(f"box is {box['state']}: confirm the box first")
     if line is None:
@@ -1552,15 +1551,21 @@ def _aim_setup_section(line: Mapping | None, box: Mapping) -> dict:
     if line.get("status") == target_line.SKIPPED:
         return setup_service.skipped_aim_section(box["id"])
     floor = line.get("floor_line_px")
+    if floor is not None:
+        floor = ground_patch.scale_outline(floor, factor)
+
+    def in_mode(aim: Mapping) -> dict:
+        return {**aim, "aim_px": ground_patch.scale_outline([aim["aim_px"]], factor)[0]}
+
     if line.get("total_uncertainty_deg") is not None:
         return setup_service.aim_section(
-            dict(line), floor=floor, floor_line_used=floor is not None, box_id=box["id"]
+            in_mode(line), floor=floor, floor_line_used=floor is not None, box_id=box["id"]
         )
     direction = line.get("setup_direction")
     if isinstance(direction, Mapping) and direction.get("total_uncertainty_deg") is not None:
         # an unbounded floor line: the aim as a direction, the floor line for the net alone
         return setup_service.aim_section(
-            dict(direction), floor=floor, floor_line_used=False, box_id=box["id"]
+            in_mode(direction), floor=floor, floor_line_used=False, box_id=box["id"]
         )
     return _not_set("the camera cannot bound this aim point: aim at a farther target, or skip it")
 
@@ -1595,7 +1600,11 @@ def _net_setup_section(
 
 
 def _ball_range_setup_section(
-    solution: tee_range.TeeRangeSolution | None, box: Mapping, *, use_unqualified: bool
+    solution: tee_range.TeeRangeSolution | None,
+    box: Mapping,
+    *,
+    use_unqualified: bool,
+    factor: float,
 ) -> dict:
     if not _set(box):
         return _not_set(f"box is {box['state']}: confirm the box first")
@@ -1610,8 +1619,14 @@ def _ball_range_setup_section(
             range_m=prior.radar_slant_range_m,
             uncertainty_m=prior.uncertainty_m,
             side_offset_m=facts.get("side_offset_m"),
-            ball_px=facts.get("ball_px") or box["ball_px"],
-            diameter_px=facts.get("diameter_px") or box["diameter_px"],
+            ball_px=(
+                [value * factor for value in facts["ball_px"]]
+                if facts.get("ball_px")
+                else box["ball_px"]
+            ),
+            diameter_px=(
+                facts["diameter_px"] * factor if facts.get("diameter_px") else box["diameter_px"]
+            ),
             source="camera_prior",
             box_id=box["id"],
             qualification=source,
@@ -1670,17 +1685,23 @@ def tester_setup_sections(  # pylint: disable=too-many-arguments
     camera_tilt_calibration: Mapping | None = None,
     box_config: placement_box.PlacementBoxConfig | None = None,
     use_unqualified: bool = False,
+    image_size_px: tuple[int, int] | None = None,
 ) -> dict[str, dict]:
     """This tester's confirmed box, aim and ball range as the setup record's sections.
 
-    Stamped as the kiosk the tester starts will check them, so none reads stale there.
+    Stamped as the kiosk the tester starts will check them, so none reads stale there: in
+    the pixels of ``image_size_px``, the capture size it starts at (None: the box's own).
     """
     ctx = tester_setup_context(rig_geometry, lens, camera_tilt_calibration)
+    frame = (placement_box_record or {}).get("frame_size_px")
+    factor = image_size_px[0] / float(frame[0]) if image_size_px and frame else 1.0
     box = _box_setup_section(
-        placement_box_record, solution, ctx, box_config or placement_box.load_config()
+        placement_box_record, solution, ctx, box_config or placement_box.load_config(), factor
     )
-    aim = _aim_setup_section(target_line_record, box)
-    ball_range = _ball_range_setup_section(solution, box, use_unqualified=use_unqualified)
+    aim = _aim_setup_section(target_line_record, box, factor)
+    ball_range = _ball_range_setup_section(
+        solution, box, use_unqualified=use_unqualified, factor=factor
+    )
     return {
         "box": box,
         "aim": aim,
@@ -8803,8 +8824,9 @@ def create_app(
         root = tester_root(sessions_root, tester_id)
         return confirmed_target_line(root, eligibility, confirmed_placement_box(root, eligibility))
 
-    def write_setup(tester_id: str, eligibility: Mapping, solution) -> dict:
-        """Write this tester's confirmed setup as the record every kiosk it starts reads."""
+    def write_setup(tester_id: str, eligibility: Mapping, solution, arm: Arm) -> dict:
+        """Write this tester's confirmed setup as the record the kiosk it starts for ``arm``
+        reads, in that mode's pixels."""
         root = tester_root(sessions_root, tester_id)
         sections = tester_setup_sections(
             solution,
@@ -8816,6 +8838,7 @@ def create_app(
             camera_tilt_calibration=unit_camera_tilt(),
             box_config=box_config,
             use_unqualified=use_unqualified_tee_range,
+            image_size_px=(arm.width, arm.height),
         )
         path = root / SETUP_FILE
         return kiosk_setup_summary(path, write_tester_setup(path, sections))
@@ -10876,7 +10899,9 @@ def create_app(
                         tester_root(sessions_root, params.tester_id),
                         timeout_s=session_bundle.WRITER_WAIT_S,
                     ):
-                        handed["kiosk_setup"] = write_setup(params.tester_id, eligibility, solution)
+                        handed["kiosk_setup"] = write_setup(
+                            params.tester_id, eligibility, solution, params.arm
+                        )
                         write_setup_admission(
                             run_dir, params.tester_id, eligibility, solution, reference, handed
                         )
@@ -11356,7 +11381,9 @@ def create_app(
                 tester_root(sessions_root, tester_id),
                 timeout_s=session_bundle.WRITER_WAIT_S,
             ):
-                handed["kiosk_setup"] = write_setup(tester_id, admitted_setup[tester_id], solution)
+                handed["kiosk_setup"] = write_setup(
+                    tester_id, admitted_setup[tester_id], solution, params_for_arm.arm
+                )
                 write_setup_admission(
                     run, tester_id, admitted_setup[tester_id], solution, reference, handed
                 )

@@ -124,8 +124,9 @@ default, labelled.
 
 ### Per-shot re-location (the kiosk)
 
-The ladder and swing kiosks get the box from the setup record, rescaled to their
-mode.
+The ladder and swing kiosks get the box from the setup record, which the tester
+writes afresh, in the pixels of the mode it starts each kiosk at; the kiosk converts
+nothing.
 About once a second, between clips, the kiosk finds the resting ball in it on its
 latest frame. A shot takes the last look before its trigger (none older than
 30 s): the setup's range while the ball sits where the setup measured it

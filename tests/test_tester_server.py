@@ -2249,7 +2249,7 @@ class TestTheLadder:
     )
     def test_a_ladder_kiosk_is_told_where_the_setup_saw_the_ball(self, arm_id, expected):
         """P7-8: the kiosk judges each clip's analysis eligibility on the setup's ball, which
-        the setup record's box carries in 1280x800 pixels; 640x400 is it halved."""
+        the setup record's box carries in the pixels of the mode it starts at."""
         from openflight import tee_range
 
         camera = tee_range.TeeRangeCandidate(
@@ -2276,13 +2276,13 @@ class TestTheLadder:
             "target_line_record": None,
             "net_line": None,
             "rig_geometry": RIG,
+            "image_size_px": (ts.ARMS[arm_id].width, ts.ARMS[arm_id].height),
         }
 
         box = ts.tester_setup_sections(solution, placement_box_record=record, **common)["box"]
         unseen = ts.tester_setup_sections(None, placement_box_record=record, **common)["box"]
 
-        scale = ts.ARMS[arm_id].width / box["image_size_px"][0]
-        assert [value * scale for value in (*box["ball_px"], box["diameter_px"])] == expected
+        assert [*box["ball_px"], box["diameter_px"]] == expected
         assert unseen["state"] == "not_set"
 
     def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):

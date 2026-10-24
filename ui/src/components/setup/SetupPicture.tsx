@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Handed } from '../../stores/useSystemStore';
 import { toScreen, type Px, type SetupViewRect } from './setupGeometry';
-import { sameShape, type AimOverlay, type BoxOverlay } from './setupOverlay';
+import type { AimOverlay, BoxOverlay } from './setupOverlay';
 import './SetupPicture.css';
 
 function useElementSize(ref: RefObject<HTMLElement | null>): { width: number; height: number } | null {
@@ -37,18 +37,16 @@ interface SetupPictureProps {
 }
 
 /**
- * A camera picture, whole and centred, with the setup drawn on it through `toScreen`.
- * A left-hander's picture is mirrored as the Setup view's is. Nothing is drawn on a picture
- * of another shape than the one the setup was made on.
+ * A camera frame, whole and centred, with the setup drawn on it through `toScreen` in the
+ * frame's own pixels. A left-hander's picture is mirrored as the Setup view's is.
  */
 export function SetupPicture({ src, alt, handed, box = null, aim = null, className = '' }: SetupPictureProps) {
   const ref = useRef<HTMLDivElement>(null);
   const size = useElementSize(ref);
   const [natural, setNatural] = useState<Px | null>(null);
-  const imageSize = box?.imageSize ?? aim?.imageSize ?? null;
   const view: SetupViewRect | null =
-    size && size.width > 0 && size.height > 0 && imageSize && natural && sameShape(imageSize, natural)
-      ? { width: size.width, height: size.height, imageWidth: imageSize[0], imageHeight: imageSize[1] }
+    size && size.width > 0 && size.height > 0 && natural
+      ? { width: size.width, height: size.height, imageWidth: natural[0], imageHeight: natural[1] }
       : null;
   const screen = (px: Px) => toScreen(px, view!, handed);
   const scale = view ? Math.min(view.width / view.imageWidth, view.height / view.imageHeight) : 1;

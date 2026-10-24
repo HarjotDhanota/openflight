@@ -134,7 +134,7 @@ def _lens():
     )
 
 
-def _sections(solution, *, tilt=None, line=None, box_record=None):
+def _sections(solution, *, tilt=None, line=None, box_record=None, image_size_px=None):
     return ts.tester_setup_sections(
         solution,
         placement_box_record=box_record if box_record is not None else _box_record(),
@@ -143,6 +143,7 @@ def _sections(solution, *, tilt=None, line=None, box_record=None):
         rig_geometry=RIG,
         lens=_lens(),
         camera_tilt_calibration=tilt,
+        image_size_px=image_size_px,
     )
 
 
@@ -218,7 +219,7 @@ def test_the_tester_s_sections_are_the_kiosk_s_shape():
     assert box["state"] == "confirmed"
     # the setup's camera search saw the ball: it is the box's ball
     assert box["ball_px"] == [640.0, 450.0] and box["diameter_px"] == 20.0
-    assert box["image_size_px"] == [1280, 800] and box["box_px"] == [480, 380, 800, 520]
+    assert box["box_px"] == [480, 380, 800, 520]
     # the outline the tester confirmed, which the kiosk tests the ball against
     assert box["outline_px"] == [[490.0, 510.0], [790.0, 510.0], [790.0, 390.0], [490.0, 390.0]]
     assert box["uncertainty"] == {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0}
@@ -379,7 +380,8 @@ def test_a_kiosk_started_from_the_tester_s_record_applies_it_with_nothing_stale(
 ):
     tilt_path = tmp_path / "camera-tilt.json"
     tilt_path.write_text(json.dumps({"status": "calibrated", **TILT}), encoding="utf-8")
-    ts.write_tester_setup(kiosk.path, _sections(_prior_solution(), tilt=TILT))
+    sections = _sections(_prior_solution(), tilt=TILT, image_size_px=(width, height))
+    ts.write_tester_setup(kiosk.path, sections)
     args, _record = ts.tee_range_handoff(
         _prior_solution(),
         rig_geometry=RIG,
@@ -414,6 +416,7 @@ def test_a_kiosk_started_from_the_tester_s_record_applies_it_with_nothing_stale(
     assert started["unapplied"] == {}
     scale = width / 1280
     assert server.camera_ball_box_px == tuple(round(v * scale) for v in (480, 380, 800, 520))
+    assert started["aim"]["aim_px"] == [700.0 * scale, 300.0 * scale]
     assert server.setup_handoff_config["target_line"]["yaw_deg"] == 2.5
     assert server.horizontal_offset_deg == -2.5
     assert server.setup_handoff_config["tee_range"]["prior"]["range_m"] == 2.31

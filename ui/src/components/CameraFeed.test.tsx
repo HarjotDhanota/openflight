@@ -152,7 +152,6 @@ describe('CameraFeed', () => {
             box_px: [380, 560, 900, 720],
             ball_px: [640, 610],
             diameter_px: 22,
-            image_size_px: [1280, 800],
           },
           aim: { state: 'not_set' },
           ball_range: { state: 'not_set' },

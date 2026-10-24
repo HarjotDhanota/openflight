@@ -286,7 +286,6 @@ export function setUpSnapshot(changes: Record<string, unknown> = {}) {
       outline_px: SET_UP.outline,
       ball_px: SET_UP.ball,
       diameter_px: 22,
-      image_size_px: SET_UP.image,
     },
     aim: { state: 'set', aim_px: SET_UP.aim, yaw_deg: 4.1, uncertainty_deg: 0.84 },
     ball_range: { state: 'set', range_m: 2.31, uncertainty_m: 0.12, source: 'camera_prior' },

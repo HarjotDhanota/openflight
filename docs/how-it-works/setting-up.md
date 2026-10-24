@@ -19,8 +19,10 @@ steps. **Back** and **Next** move between them.
 
 ### 1. Ball in the box
 
-The camera view shows a box. Put one ball in it and wait for **Ball found in the box**,
-then tap **Confirm**. The unit looks for the ball only inside this box.
+The camera view shows a fixed box. Put one ball anywhere in it and wait for **Ball
+found in the box**, then tap **Confirm**. The unit looks for the ball only inside this box.
+The aim and the ball range belong to the box, not to the ball's spot in it: move the ball
+within the box and neither needs redoing.
 
 | What it says | What to do |
 | --- | --- |
@@ -86,6 +88,8 @@ depended on it show **Needs redoing**, with the reason:
 - the **enclosure** (rig file): the same;
 - the **camera tilt**, by more than the box allows;
 - the **box**: the aim and the ball range.
+
+Moving the ball within the box is not a change: a ball anywhere in it is fine.
 
 A stale step is not used. Redo it from the Setup screen.
 

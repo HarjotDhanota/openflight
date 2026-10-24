@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import cv2
 import numpy as np
 import pytest
 
@@ -243,21 +242,6 @@ def test_the_view_is_the_latest_camera_frame(kiosk, monkeypatch):
     assert absent.status_code == 404
 
 
-def test_the_view_takes_a_width_up_to_1280(kiosk):
-    class Frame:
-        image = np.full((800, 1280), 40, dtype=np.uint8)
-
-    kiosk.camera.recent_frames = lambda count, timeout_s=2.0: [Frame()]
-
-    small = kiosk.client.get("/api/setup/view.jpg?width=640")
-
-    assert small.status_code == 200
-    decoded = cv2.imdecode(np.frombuffer(small.data, np.uint8), cv2.IMREAD_GRAYSCALE)
-    assert decoded.shape == (400, 640)
-    for bad in ("1281", "100", "wide"):
-        assert kiosk.client.get(f"/api/setup/view.jpg?width={bad}").status_code == 400, bad
-
-
 def test_a_kiosk_without_the_tilt_sensor_says_setup_cannot_run(kiosk, monkeypatch):
     for name in ("rig_geometry", "rig_geometry_config"):
         monkeypatch.setattr(server, name, getattr(server, name))
@@ -355,7 +339,6 @@ def _saved_record(path, *, lens_id, rig_sha256, tilt_deg=None):
         "box_px": [480.0, 380.0, 800.0, 520.0],
         "ball_px": [640.0, 450.0],
         "diameter_px": 20.0,
-        "image_size_px": [1280, 800],
         "source": placement_box.SOURCE,
         "uncertainty": {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0},
         "inputs": section_inputs("box", lens_id=lens_id, rig_sha256=rig_sha256, tilt_deg=tilt_deg),

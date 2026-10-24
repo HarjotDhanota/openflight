@@ -39,6 +39,8 @@ def _camera() -> BallPlaneCamera:
 
 CAMERA = _camera()
 BALL_PX = list(project_to_pixel(CAMERA, (0.0, 2.35, BALL_HEIGHT_M)))
+# another spot in the box: nearer its right edge and its far end
+BALL_ELSEWHERE_PX = list(project_to_pixel(CAMERA, (0.2, 2.7, BALL_HEIGHT_M)))
 
 
 def _candidate(x_px, y_px) -> ReferenceBallRangeCandidate:
@@ -168,7 +170,6 @@ def test_confirm_box_saves_and_applies(make, scene, tmp_path):
     assert box["state"] == "confirmed"
     assert box["id"] and box["box_px"]
     assert box["ball_px"] == pytest.approx(BALL_PX) and box["diameter_px"] == 24.0
-    assert box["image_size_px"] == [1280, 800]
     assert box["source"] == placement_box.SOURCE and box["uncertainty"]["tilt_pad_deg"] > 0
     assert box["inputs"] == section_inputs(
         "box", lens_id="stock-2.8", rig_sha256="rig-a", tilt_deg=2.0
@@ -181,17 +182,39 @@ def test_confirm_box_saves_and_applies(make, scene, tmp_path):
     assert service.revision == kept["revision"]
 
 
-def test_reconfirming_a_still_ball_keeps_the_box_and_what_was_set_on_it(make, scene):
+def test_box_id_ignores_the_ball_position(make, scene):
     service, _recorder = make()
+    first = _confirm_box(service, scene)["setup"]["box"]["id"]
+
+    scene.in_box = BALL_ELSEWHERE_PX
+    moved = service.box("confirm")["setup"]["box"]
+    service.box("clear")
+    fresh = service.box("confirm")["setup"]["box"]
+
+    assert moved["id"] == fresh["id"] == first
+    assert moved["ball_px"] == pytest.approx(BALL_ELSEWHERE_PX)
+
+
+def test_moving_the_ball_inside_the_box_keeps_aim_and_range(make, scene):
+    service, recorder = make()
     _confirm_box(service, scene)
-    first = service.snapshot()["box"]["id"]
+    aim = service.aim("confirm", aim_px=AIM_PX)["setup"]["aim"]
     assert service.range("measure")["ok"]
 
-    scene.in_box = [BALL_PX[0] + 1.0, BALL_PX[1] - 1.0]
+    scene.in_box = BALL_ELSEWHERE_PX
     result = service.box("confirm")
 
-    assert result["setup"]["box"]["id"] == first
+    assert result["ok"], result["reason"]
+    assert result["setup"]["aim"] == aim
     assert result["setup"]["ball_range"]["state"] == "set"
+    assert recorder.calls["aim"] == [aim]
+    # the aim is solved from the box's centre on the ground, wherever the ball is in it
+    centre = placement_box.fixed_box(CAMERA)
+    assert aim["ball_lfu_m"] == pytest.approx([centre.centre_lateral_m, centre.centre_forward_m])
+    assert service.aim("confirm", aim_px=AIM_PX)["setup"]["aim"] == aim
+    assert service.range("measure")["setup"]["ball_range"]["ball_px"] == pytest.approx(
+        BALL_ELSEWHERE_PX
+    )
 
 
 def test_a_rig_change_then_the_same_ball_does_not_revive_aim_and_range(make, scene):
@@ -210,19 +233,6 @@ def test_a_rig_change_then_the_same_ball_does_not_revive_aim_and_range(make, sce
     assert result["setup"]["box"]["state"] == "confirmed"
     for name in ("aim", "ball_range", "net_range"):
         assert result["setup"][name]["state"] == "stale", name
-
-
-def test_a_moved_ball_makes_a_new_box_and_stales_the_range(make, scene):
-    service, _recorder = make()
-    _confirm_box(service, scene)
-    first = service.snapshot()["box"]["id"]
-    assert service.range("measure")["ok"]
-
-    scene.in_box = [BALL_PX[0] + 30.0, BALL_PX[1]]
-    result = service.box("confirm")
-
-    assert result["setup"]["box"]["id"] != first
-    assert result["setup"]["ball_range"]["state"] == "stale"
 
 
 def _floor_line(forward_m=4.6):
@@ -402,7 +412,8 @@ def test_range_measure_is_camera_only(make, scene):
     assert ball["range_m"] == pytest.approx(2.41) and ball["uncertainty_m"] == pytest.approx(0.19)
     assert ball["side_offset_m"] == pytest.approx(0.12)
     assert ball["inputs"] == section_inputs("ball_range", box_id=result["setup"]["box"]["id"])
-    assert scene.calls[-1]["confirm_anchor"]["x_px"] == pytest.approx(BALL_PX[0])
+    # the ball is searched for anywhere in the box, not at the pixel it was confirmed at
+    assert "confirm_anchor" not in scene.calls[-1]
     assert recorder.calls["ball_range"] == [ball]
 
 
@@ -490,7 +501,7 @@ def test_an_applier_that_fails_is_reported_and_the_record_is_kept(make, scene, t
 
 def test_a_box_the_kiosk_cannot_use_shows_why_until_it_applies(make, scene):
     service, _recorder = make()
-    refusal = ["the box was confirmed on a 1280x720 picture"]
+    refusal = ["the box (800, 380, 480, 520) is not a rectangle"]
 
     def applier(_section):
         if refusal:
@@ -502,7 +513,7 @@ def test_a_box_the_kiosk_cannot_use_shows_why_until_it_applies(make, scene):
 
     failed = service.apply_all()
 
-    assert failed == ["could not apply box: the box was confirmed on a 1280x720 picture"]
+    assert failed == ["could not apply box: the box (800, 380, 480, 520) is not a rectangle"]
     assert service.snapshot()["unapplied"] == {"box": refusal[0]}
     refusal.clear()
     assert service.apply_all() == [] and service.snapshot()["unapplied"] == {}
@@ -741,7 +752,7 @@ def test_the_box_keeps_the_outline_the_user_confirmed(make, scene):
     )
 
 
-def test_a_moved_outline_makes_a_new_box_though_the_ball_stayed(make, scene):
+def test_a_moved_outline_makes_a_new_box(make, scene):
     service, _recorder = make()
     _confirm_box(service, scene)
     first = service.snapshot()["box"]["id"]
@@ -759,70 +770,15 @@ def test_an_older_box_without_an_outline_is_a_new_box_when_reconfirmed(make, sce
     service, _recorder = make()
     _confirm_box(service, scene)
     record = load(tmp_path / "setup.json")
-    first = record["box"]["id"]
+    record["box"]["id"] = "fixed@640,450#3"
     del record["box"]["outline_px"]
     save(tmp_path / "setup.json", record)
     older, _recorder = make()
 
     result = _confirm_box(older, scene)
 
-    assert result["setup"]["box"]["id"] != first
+    assert result["setup"]["box"]["id"] != "fixed@640,450#3"
     assert result["setup"]["box"]["outline_px"]
-
-
-def _binned(width, height) -> BallPlaneCamera:
-    """CAMERA's field of view at another capture size (binned when the aspect matches)."""
-    return BallPlaneCamera.nominal(
-        focal_px=933.3334 * width / 1280,
-        image_width_px=width,
-        image_height_px=height,
-        pitch_deg=0.0,
-        roll_correction_deg=0.0,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.6),
-        radar_origin_lfu=(0.0, -0.0014, 0.55),
-        angular_uncertainty_deg=3.0,
-        focal_relative_uncertainty=0.08,
-    )
-
-
-def test_a_box_confirmed_at_1280_measures_the_same_aim_and_range_at_640(make, scene):
-    mode = [CAMERA]
-    service, _recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
-    _confirm_box(service, scene)
-    in_mode = service.aim("confirm", aim_px=AIM_PX)["setup"]["aim"]
-    assert in_mode["image_size_px"] == [1280, 800]
-    assert service.range("measure")["ok"]
-    anchor_in_mode = scene.calls[-1]["confirm_anchor"]
-
-    mode[0] = _binned(640, 400)
-    result = service.aim("confirm", aim_px=[AIM_PX[0] / 2, AIM_PX[1] / 2])
-
-    assert result["ok"], result["reason"]
-    aim = result["setup"]["aim"]
-    assert aim["yaw_deg"] == pytest.approx(in_mode["yaw_deg"], abs=1e-3)
-    assert aim["ball_lfu_m"] == pytest.approx(in_mode["ball_lfu_m"], abs=1e-4)
-    assert aim["image_size_px"] == [640, 400]
-    assert service.range("measure")["ok"]
-    anchor = scene.calls[-1]["confirm_anchor"]
-    assert anchor["x_px"] == pytest.approx(anchor_in_mode["x_px"] / 2)
-    assert anchor["y_px"] == pytest.approx(anchor_in_mode["y_px"] / 2)
-    assert anchor["diameter_px"] == pytest.approx(anchor_in_mode["diameter_px"] / 2)
-
-
-def test_a_box_from_a_picture_of_another_shape_refuses_aim_and_range(make, scene):
-    mode = [CAMERA]
-    service, recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
-    _confirm_box(service, scene)
-    mode[0] = _binned(1280, 720)
-
-    aim = service.aim("confirm", aim_px=AIM_PX)
-    rng = service.range("measure")
-
-    for result in (aim, rng):
-        assert result["ok"] is False
-        assert "1280x800" in result["reason"] and "1280x720" in result["reason"]
-    assert recorder.calls["aim"] == [] and recorder.calls["ball_range"] == []
 
 
 def test_a_second_writer_does_not_overwrite_the_first(make, scene, tmp_path):
@@ -885,23 +841,3 @@ def test_the_snapshot_says_whether_setup_is_possible_and_why_not(make):
     assert no_camera.snapshot()["live"]["setup_possible"] is False
     assert no_tilt.snapshot()["live"]["setup_fault"] is False
     assert failed.snapshot()["live"]["setup_fault"] is True
-
-
-def test_the_same_ball_reconfirmed_in_a_binned_mode_keeps_its_box(make, scene):
-    mode = [CAMERA]
-    service, _recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
-    first = _confirm_box(service, scene)["setup"]["box"]["id"]
-    assert service.aim("confirm", aim_px=AIM_PX)["ok"]
-    assert service.range("measure")["ok"]
-
-    mode[0] = _binned(640, 400)
-    scene.in_box = [BALL_PX[0] / 2, BALL_PX[1] / 2]
-    result = service.box("confirm")
-
-    assert result["ok"], result["reason"]
-    setup = result["setup"]
-    assert setup["box"]["id"] == first and setup["box"]["image_size_px"] == [640, 400]
-    assert setup["aim"]["state"] == "set" and setup["ball_range"]["state"] == "set"
-    # a moved ball is still a new box at this size
-    scene.in_box = [BALL_PX[0] / 2 + 10.0, BALL_PX[1] / 2]
-    assert service.box("confirm")["setup"]["box"]["id"] != first

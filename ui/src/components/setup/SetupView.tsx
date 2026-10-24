@@ -9,7 +9,7 @@ import { PanelAction } from '../panel/PanelAction';
 import { PanelHeader } from '../panel/PanelHeader';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { isInImage, toCamera, toScreen, type Px, type SetupViewRect } from './setupGeometry';
-import { savedMarks } from './setupOverlay';
+import { boxOutline } from './setupOverlay';
 import {
   SETUP_STEPS,
   aimWords,
@@ -187,27 +187,23 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
     );
   }
 
-  const imagePx = imageSize ?? setup.box.image_size_px ?? null;
   const view: SetupViewRect | null =
-    stageSize && imagePx && stageSize.width > 0 && stageSize.height > 0
-      ? { width: stageSize.width, height: stageSize.height, imageWidth: imagePx[0], imageHeight: imagePx[1] }
+    stageSize && imageSize && stageSize.width > 0 && stageSize.height > 0
+      ? { width: stageSize.width, height: stageSize.height, imageWidth: imageSize[0], imageHeight: imageSize[1] }
       : null;
   const screen = (px: Px) => (view ? toScreen(px, view, handed) : px);
 
   const liveBox = setup.live.box;
   const boxReady = isUsable(setup.box);
-  // the live look and the taps are in the still's pixels; saved marks are moved into them
-  const saved = savedMarks(setup, imagePx);
-  const savedAim = saved.aim;
+  const savedAim = setup.aim.state === 'set' ? (setup.aim.aim_px ?? null) : null;
   const aimPoint = aimTap ?? savedAim;
-  const savedFloor = saved.floor;
+  const savedFloor = setup.aim.state === 'set' ? (setup.aim.floor_line ?? null) : null;
   const floorLine: Px[] = floorTaps ?? savedFloor ?? [];
   // a saved floor line the service measured nothing from is drawn as not used
   const floorRejected = floorTaps === null && savedFloor !== null && setup.net_range.source !== 'camera_floor_line';
-  const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (saved.ball ?? liveBox?.ball_px ?? null);
-  const ballDiameter = step === 'box' ? liveBox?.diameter_px : saved.diameter;
-  const looked = liveBox?.outline_px;
-  const outline = looked && looked.length > 2 ? looked : saved.outline;
+  const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (setup.box.ball_px ?? liveBox?.ball_px ?? null);
+  const ballDiameter = step === 'box' ? liveBox?.diameter_px : setup.box.diameter_px;
+  const outline = boxOutline(setup, { live: true });
 
   const onStageClick = (event: MouseEvent<HTMLDivElement>) => {
     if (step !== 'aim' || !view || !boxReady) return;
@@ -279,11 +275,11 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
             <circle key={index} className="setup-view__floor-point" cx={screen(px)[0]} cy={screen(px)[1]} r={5} />
           ))
         : null}
-      {step === 'aim' && aimPoint && saved.ball ? (
+      {step === 'aim' && aimPoint && setup.box.ball_px ? (
         <line
           className={`setup-view__aim-line${samePx(aimPoint, savedAim) && floorTaps === null ? ' setup-view__aim-line--saved' : ''}`}
-          x1={screen(saved.ball)[0]}
-          y1={screen(saved.ball)[1]}
+          x1={screen(setup.box.ball_px)[0]}
+          y1={screen(setup.box.ball_px)[1]}
           x2={screen(aimPoint)[0]}
           y2={screen(aimPoint)[1]}
         />
