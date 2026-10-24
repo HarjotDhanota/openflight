@@ -61,7 +61,8 @@
 }
 
 .nav__recording-dot,
-.nav__ball-dot {
+.nav__ball-dot,
+.nav__setup-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -74,6 +75,10 @@
 
 .nav__ball-dot {
   background: var(--color-info);
+}
+
+.nav__setup-dot {
+  background: var(--color-accent);
 }
 
 @media (max-height: 500px) {

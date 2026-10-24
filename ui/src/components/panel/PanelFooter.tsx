@@ -20,6 +20,8 @@ interface PanelFooterProps {
   menuOpen: boolean;
   shotCount: number;
   debugRecording: boolean;
+  /** Setup has a step to do: the Setup tab carries a dot. */
+  setupOffered?: boolean;
   /** Replaces the logo when Launch Daddy mode is active. */
   brand?: ReactNode;
   /**
@@ -46,6 +48,7 @@ export function PanelFooter({
   menuOpen,
   shotCount,
   debugRecording,
+  setupOffered = false,
   brand,
   powerStatus: powerStatusProp,
 }: PanelFooterProps) {
@@ -89,6 +92,8 @@ export function PanelFooter({
           label,
           badge: shotCount > 0 ? <span className="nav__badge">{shotCount}</span> : undefined,
         };
+      case 'setup':
+        return { ...view, label, badge: setupOffered ? <span className="nav__setup-dot" /> : undefined };
       case 'debug':
         return {
           ...view,

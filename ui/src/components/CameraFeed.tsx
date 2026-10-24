@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useCameraPointerDragScroll } from '../hooks/useCameraPointerDragScroll';
+import { useCameraStill } from '../hooks/useCameraStill';
 import type { CameraAutoExposureStatus, CameraCaptureSettings } from '../stores/useCameraStore';
 import { verticalViewTargets } from '../utils/cameraView';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -23,8 +24,6 @@ const EXPOSURE_QUALITY_URL = `${getServerOrigin()}/api/camera/exposure-quality`;
 const PREVIEW_REFRESH_MS = 5000;
 const BALL_GUIDE_X_PCT = 50;
 const BALL_GUIDE_Y_PCT = 78;
-
-type PreviewState = 'checking' | 'available' | 'unavailable';
 
 interface ExposureQuality {
   sample_available: boolean;
@@ -226,55 +225,35 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
  */
 export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCaptureSettings }: CameraFeedProps) {
   useCameraPointerDragScroll();
-  const [previewState, setPreviewState] = useState<PreviewState>('checking');
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const {
+    state: previewState,
+    src: previewSrc,
+    updatedAt: lastUpdated,
+  } = useCameraStill(PREVIEW_URL, PREVIEW_REFRESH_MS);
   const [exposureQuality, setExposureQuality] = useState<ExposureQuality | null>(null);
   const crosshairStyle = {
     '--camera-crosshair-x': `${BALL_GUIDE_X_PCT}%`,
     '--camera-crosshair-y': `${BALL_GUIDE_Y_PCT}%`,
   } as CSSProperties;
 
+  // the exposure is read after each new frame, as the frame it describes
   useEffect(() => {
+    if (!lastUpdated) return undefined;
     let cancelled = false;
-    let objectUrl: string | null = null;
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const refresh = async () => {
+    (async () => {
       try {
-        const response = await fetch(`${PREVIEW_URL}?t=${Date.now()}`, { cache: 'no-store' });
-        if (cancelled) return;
-        if (response.status === 404) {
-          setPreviewState('unavailable');
-          if (timer) clearInterval(timer);
-          return;
-        }
-        if (!response.ok) return;
-        const blob = await response.blob();
-        if (cancelled) return;
-        const nextUrl = URL.createObjectURL(blob);
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = nextUrl;
-        setPreviewSrc(nextUrl);
-        setLastUpdated(new Date());
-        setPreviewState('available');
         const qualityResponse = await fetch(`${EXPOSURE_QUALITY_URL}?t=${Date.now()}`, { cache: 'no-store' });
         if (qualityResponse.ok && !cancelled) {
           setExposureQuality(await qualityResponse.json());
         }
       } catch {
-        // Keep the last frame and retry after a transient network failure.
+        // Keep the last reading and retry with the next frame.
       }
-    };
-
-    refresh();
-    timer = setInterval(refresh, PREVIEW_REFRESH_MS);
+    })();
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, []);
+  }, [lastUpdated]);
 
   if (previewState === 'available' || previewState === 'checking') {
     return (

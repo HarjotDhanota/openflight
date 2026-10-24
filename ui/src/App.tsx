@@ -9,6 +9,7 @@ import { useProfileStore } from './stores/useProfileStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { useTargetLine } from './hooks/useTargetLine';
+import { useSetup } from './hooks/useSetup';
 import { socketService } from './services/socketService';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
@@ -19,6 +20,8 @@ import { ReadyLightBar } from './components/ReadyLight';
 import { uiExtensions } from './extensions';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
+import { SetupView } from './components/setup/SetupView';
+import { needsSetup } from './components/setup/setupWords';
 import {
   CameraPanel,
   LivePanel,
@@ -115,6 +118,9 @@ function AppContent() {
   const [currentView, setCurrentView] = useState<PanelView>('live');
   // what the Live tab's left/right are measured from
   const targetLine = useTargetLine(currentView === 'live');
+  const { setup, act: setupAct } = useSetup();
+  // offered, never forced: the kiosk runs with a gap labelled until the user sets it
+  const setupOffered = needsSetup(setup) && currentView !== 'setup';
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -260,6 +266,11 @@ function AppContent() {
 
   const liveHeaderActions = (
     <>
+      {setupOffered ? (
+        <PanelAction variant="secondary" onClick={() => setCurrentView('setup')}>
+          {t('setup.offer')}
+        </PanelAction>
+      ) : null}
       {latestReplay ? (
         <PanelAction variant="secondary" onClick={() => openReplay(latestReplay)}>
           {t('replay.open')}
@@ -405,6 +416,9 @@ function AppContent() {
             onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
           />
         )}
+        {currentView === 'setup' && (
+          <SetupView setup={setup} act={setupAct} handed={handed} onDone={() => setCurrentView('live')} />
+        )}
         {currentView === 'debug' && (
           <div className="panel">
             <PanelHeader
@@ -486,6 +500,7 @@ function AppContent() {
         menuOpen={menuOpen}
         shotCount={profileShots.length}
         debugRecording={debugMode}
+        setupOffered={setupOffered}
         brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
         onShutdown={() => {
           setShutdownState('confirm');

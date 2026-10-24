@@ -36,6 +36,24 @@ const batteryStatus = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
 });
 
 describe('PanelFooter', () => {
+  it('marks the Setup tab while setup is offered', () => {
+    const offered = renderToString(
+      <PanelFooter
+        currentView="live"
+        onChangeView={() => {}}
+        onOpenMenu={() => {}}
+        menuOpen={false}
+        shotCount={0}
+        debugRecording={false}
+        setupOffered
+        powerStatus={null}
+        onShutdown={() => {}}
+      />
+    );
+    expect(offered).toMatch(/<span>Setup<\/span><span class="nav__setup-dot"/);
+    expect(render('live')).not.toContain('nav__setup-dot');
+  });
+
   it('puts units on the right of Live without a shot count', () => {
     const html = render('live', 55);
 
@@ -118,6 +136,6 @@ describe('PanelFooter', () => {
     expect(html).toContain('panel-footer__nav');
     expect(html).toContain('panel-footer__tabs');
     expect(html).toContain('aria-label="Panels"');
-    expect(html.match(/panel-header__divider/g)).toHaveLength(7);
+    expect(html.match(/panel-header__divider/g)).toHaveLength(8);
   });
 });

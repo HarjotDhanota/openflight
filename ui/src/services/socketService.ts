@@ -28,6 +28,7 @@ const SOCKET_URL = getServerOrigin();
 class SocketService {
   private socket: Socket | null = null;
   private sessionClearedListeners = new Set<() => void>();
+  private setupChangedListeners = new Set<(snapshot: unknown) => void>();
 
   connect() {
     if (this.socket) return;
@@ -132,6 +133,10 @@ class SocketService {
 
     this.socket.on('handedness', ingestHandedness);
 
+    this.socket.on('setup_changed', (snapshot: unknown) => {
+      this.setupChangedListeners.forEach((listener) => listener(snapshot));
+    });
+
     this.socket.on('profiles', (data: ProfilesSnapshot) => {
       useProfileStore.getState().applySnapshot(data);
     });
@@ -215,6 +220,13 @@ class SocketService {
     this.sessionClearedListeners.add(listener);
     return () => {
       this.sessionClearedListeners.delete(listener);
+    };
+  }
+
+  onSetupChanged(listener: (snapshot: unknown) => void) {
+    this.setupChangedListeners.add(listener);
+    return () => {
+      this.setupChangedListeners.delete(listener);
     };
   }
 
