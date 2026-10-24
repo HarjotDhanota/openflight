@@ -177,8 +177,23 @@ def test_the_calibrated_projection_sees_a_level_line_level(roll_deg):
     assert np.ptp(_elevations(rays(-observed))) > 0.5
 
 
-def test_the_roll_is_recorded_not_applied_until_b2_confirms_it():
-    """The LIS3DH roll is not applied yet; every path goes through camera_roll."""
-    assert camera_roll.LIS3DH_ROLL_APPLIED is False
-    assert camera_roll.applied_camera_roll_deg(-2.9, 0.0) == 0.0
-    assert camera_roll.calibrated_observed_roll_deg(-2.9, 1.5) == 1.5
+def test_the_roll_is_applied_only_on_a_unit_that_verified_it():
+    """No global gate: the unit's own check decides, and every path asks camera_roll."""
+    assert not hasattr(camera_roll, "LIS3DH_ROLL_APPLIED")
+    assert camera_roll.applied_camera_roll_deg(-2.9, 0.0, apply=False) == 0.0
+    assert camera_roll.calibrated_observed_roll_deg(-2.9, 1.5, apply=False) == 1.5
+
+    unverified = camera_roll.roll_record(-2.9, 0.5, verified=False)
+    assert unverified["applied"] is False
+    assert unverified["roll_correction_deg"] == 0.0
+    assert unverified["label"] == "roll not verified on this unit"
+
+    verified = camera_roll.roll_record(-2.9, 0.5, verified=True)
+    assert verified["applied"] is True
+    assert verified["camera_roll_deg"] == pytest.approx(-3.4)
+    assert verified["roll_correction_deg"] == pytest.approx(3.4)
+    assert verified["residual_deg"] == camera_roll.APPLIED_ROLL_RESIDUAL_DEG
+
+    no_reading = camera_roll.roll_record(None, 0.0, verified=True)
+    assert no_reading["applied"] is False
+    assert no_reading["status"] == "not_applied_no_lis3dh_reading"

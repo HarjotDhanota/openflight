@@ -198,6 +198,7 @@ def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
     server._snapshot_inclinometer_for_shot(shot)
 
     assert shot.inclinometer["applied_to"] == ["camera"]
+    assert shot.inclinometer["roll_verified"] is False
     assert "effective_iwr_tilt_deg" not in shot.inclinometer
     pose = camera_tilt.swing_camera_pose(
         rig=RigGeometry.from_json(
@@ -372,6 +373,7 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     store.apply_correction("quarter_left")
     store.apply_correction("upside_down")
     store.record_pass({"front_up_deg": 5.8})
+    store.record_roll({"left_up_deg": 6.0}, verified=True)
 
     assert server.init_inclinometer(mount_file=path) is True
 
@@ -384,6 +386,7 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     assert config["mount_upside_down"] is True
     assert config["mount_source"] == "unit_file"
     assert config["orientation_check"]["check"]["state"] == "passed"
+    assert config["roll_verified"] is True
     assert [c["correction"] for c in config["orientation_check"]["corrections"]] == [
         "quarter_left",
         "upside_down",
@@ -399,3 +402,4 @@ def test_init_inclinometer_without_a_unit_file_keeps_the_rig_mount(monkeypatch, 
     assert made["sensor"].yaw_deg == 180.0
     assert server.inclinometer_runtime_config["mount_source"] == "rig_file"
     assert server.inclinometer_runtime_config["orientation_check"]["check"] is None
+    assert server.inclinometer_runtime_config["roll_verified"] is False

@@ -163,7 +163,7 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
     seen = {}
 
     def fake_pair(shot_range, *, ball_px, lis3dh_pitch_deg, camera_at_pitch):
-        seen.update(range=shot_range, ball=ball_px, pitch=lis3dh_pitch_deg)
+        seen.update(range=shot_range, ball=ball_px, pitch=lis3dh_pitch_deg, camera=camera_at_pitch)
         return {"status": "solved", "reason": None, "solved": {"offset_deg": -1.4}}
 
     monkeypatch.setattr(swing_tilt, "swing_pair", fake_pair)
@@ -177,6 +177,15 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
         club=ClubType.IRON_7,
         shot_number=4,
     )
+    roll = math.radians(-2.0)
+    shot.inclinometer = {
+        "applied_to": ["camera"],
+        "roll_verified": True,
+        "calibrated_pitch_deg": 0.0,
+        "x_g": math.sin(roll),
+        "y_g": 0.0,
+        "z_g": math.cos(roll),
+    }
     shot.ball_range_m, shot.ball_range_source, shot.ball_range_uncertainty_m = (
         2.1,
         "iwr_post_impact",
@@ -189,6 +198,12 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
     assert seen["range"]["ball_range_source"] == "iwr_post_impact"
     assert seen["ball"]["x_px"] == pytest.approx(640.0, abs=1.5)
     assert seen["pitch"] == -0.4
+    # the solve's camera is rolled as the swing's own pose is (a verified unit)
+    pose_roll = server_module._swing_camera_pose(shot)["roll"]  # pylint: disable=protected-access
+    assert pose_roll["applied"] is True
+    assert seen["camera"](0.0).ray_model.roll_correction_deg == pytest.approx(
+        pose_roll["roll_correction_deg"]
+    )
     assert shot.camera_tilt_swing_pair["status"] == "solved"
     assert shot.camera_tilt_swing_pair["outcome"] == {"action": "pending"}
 

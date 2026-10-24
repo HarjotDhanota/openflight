@@ -28,6 +28,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from openflight.camera import camera_roll
 from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 
 BALL_CENTER_HEIGHT_M = GOLF_BALL_DIAMETER_M / 2.0
@@ -53,8 +54,9 @@ CALIBRATED_TILT_PAD_DEG = 1.0
 # padded by the search's full degree would reach past 2.8 m.
 UNCALIBRATED_WINDOW_PAD_DEG = UNCALIBRATED_TILT_PAD_DEG
 CALIBRATED_WINDOW_PAD_DEG = 0.5
-# The LIS3DH roll is recorded but not applied to the camera (camera_roll, C8), so
-# the rows at the outline's ends are padded for it; without a reading, this much.
+# A camera that does not apply the LIS3DH roll (a unit that has not verified it,
+# camera_roll) pads the rows at the outline's ends for the reading; without one, this
+# much. A camera that applies it pads only camera_roll.APPLIED_ROLL_RESIDUAL_DEG.
 UNKNOWN_ROLL_PAD_DEG = 3.0
 MIN_ROLL_PAD_DEG = 1.0
 # A ball's apparent size may differ from the nominal focal length's prediction by
@@ -85,6 +87,7 @@ def ground_patch_policy() -> dict[str, Any]:
         "calibrated_window_pad_deg": CALIBRATED_WINDOW_PAD_DEG,
         "unknown_roll_pad_deg": UNKNOWN_ROLL_PAD_DEG,
         "min_roll_pad_deg": MIN_ROLL_PAD_DEG,
+        "applied_roll_residual_deg": camera_roll.APPLIED_ROLL_RESIDUAL_DEG,
         "pad": "rows_only_columns_exact",
         "size_tolerance": SIZE_TOLERANCE,
         "radar_window_margin_m": RADAR_WINDOW_MARGIN_M,
@@ -246,19 +249,18 @@ def _pixels(camera, points: np.ndarray) -> np.ndarray:
     return np.asarray([project_to_pixel(camera, point) for point in points], dtype=float)
 
 
-def _roll_pad_deg(roll_deg: float | None) -> float:
+def roll_pad_deg(camera: Any, roll_deg: float | None) -> float:
+    """The roll the rows are padded for, as the target line (D34) carries it too.
+
+    ``camera_roll.APPLIED_ROLL_RESIDUAL_DEG`` when the camera applies the LIS3DH roll;
+    otherwise ``roll_deg`` (the roll it does not apply), at least ``MIN_ROLL_PAD_DEG``,
+    or ``UNKNOWN_ROLL_PAD_DEG`` without one.
+    """
+    if camera_roll.is_applied(camera):
+        return camera_roll.APPLIED_ROLL_RESIDUAL_DEG
     if roll_deg is None or isinstance(roll_deg, bool) or not math.isfinite(float(roll_deg)):
         return UNKNOWN_ROLL_PAD_DEG
     return max(abs(float(roll_deg)), MIN_ROLL_PAD_DEG)
-
-
-def unapplied_roll_pad_deg(roll_deg: float | None) -> float:
-    """The roll the camera models record but do not apply, as the patch pads for it.
-
-    The reading's size, at least ``MIN_ROLL_PAD_DEG``; ``UNKNOWN_ROLL_PAD_DEG``
-    without one. The target line (D34) carries the same roll as its uncertainty.
-    """
-    return _roll_pad_deg(roll_deg)
 
 
 def point_in_polygon(x: float, y: float, polygon: Sequence[Sequence[float]]) -> bool:
@@ -405,7 +407,8 @@ def project_patch(  # pylint: disable=too-many-locals
     ``outline_px`` is the patch on the ground, for drawing; ``ball_outline_px`` is
     where the centres of balls resting on it appear; ``search_outline_px`` is that
     outline with its far edge raised and its near edge lowered by the camera tilt's
-    uncertainty (``tilt_pad_deg``) and the unapplied roll, its columns exact.
+    uncertainty (``tilt_pad_deg``) and the roll pad (``roll_pad_deg``), its columns
+    exact.
     ``box_px`` bounds both outlines and is the hitting zone the light and the
     ladder judge (it replaces the P7-4 box); ``search_box_px`` bounds the search.
     The distance windows come from the ball-centre outline padded by
@@ -417,7 +420,7 @@ def project_patch(  # pylint: disable=too-many-locals
     focal = float(camera.focal_size_px)
     pad_px = focal * math.tan(math.radians(float(tilt_pad_deg)))
     window_px = focal * math.tan(math.radians(float(window_pad_deg)))
-    roll_pad = _roll_pad_deg(roll_deg)
+    roll_pad = roll_pad_deg(camera, roll_deg)
     centre_x = width / 2.0
     search = _padded(ball, pad_px, roll_pad, centre_x)
     windowed = _padded(ball, window_px, roll_pad, centre_x)

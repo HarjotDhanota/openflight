@@ -29,7 +29,7 @@ SEARCH_SPAN_DEG = 25.0
 # what one ball's geometry leaves uncertain besides the radar's own range
 PIXEL_UNCERTAINTY_PX = 1.0
 LENS_HEIGHT_UNCERTAINTY_M = 0.005
-COMPOSITION = "pitch = lis3dh_camera_pitch + offset (same lateral axis; roll not applied)"
+COMPOSITION = "pitch = lis3dh_camera_pitch + offset (same lateral axis; roll once verified)"
 LABEL = "unit_calibration_from_validated_pairs"
 # validated pairs that must agree (within CHECK_TOLERANCE_DEG of their median) to calibrate
 MIN_PAIRS = 2
@@ -422,7 +422,7 @@ def swing_camera_pose(
     Pitch: the rig's boresight pitch moved by this swing's LIS3DH departure from the
     rig's expected reading, plus the unit's offset; focal length: the rig's for this mode.
     Without all three inputs the pose says why and stays uncalibrated. Roll goes
-    through ``camera_roll`` and is applied only when its gate is on.
+    through ``camera_roll`` and is applied only on a unit that verified it.
     """
     from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
 
@@ -465,10 +465,10 @@ def swing_camera_pose(
 
 
 def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
-    """This swing's LIS3DH roll, through the one convention setup and swings share."""
+    """This swing's LIS3DH roll, through the one convention setup and swings share:
+    applied when the shot's record says the unit verified its roll."""
     from openflight.camera import camera_roll  # noqa: PLC0415
 
-    applied = camera_roll.roll_applied()
     gravity = (
         tuple(inclinometer.get(axis) for axis in ("x_g", "y_g", "z_g"))
         if _for_camera(inclinometer)
@@ -480,25 +480,8 @@ def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
         else None
     )
     expected = (rig.expected_inclinometer_orientation().roll_deg or 0.0) if rig is not None else 0.0
-    record = {
-        "measured_deg": measured,
-        "expected_deg": expected,
-        "applied": False,
-        "roll_correction_deg": 0.0,
-        "status": "not_applied_pending_c8",
-    }
-    if not applied:
-        return record
-    if measured is None:
-        record["status"] = "not_applied_no_lis3dh_reading"
-        return record
-    camera_roll_deg = camera_roll.applied_camera_roll_deg(measured, expected, apply=True)
-    record.update(
-        applied=True,
-        status="applied",
-        roll_correction_deg=camera_roll.nominal_roll_correction_deg(camera_roll_deg),
-    )
-    return record
+    verified = isinstance(inclinometer, Mapping) and inclinometer.get("roll_verified") is True
+    return camera_roll.roll_record(measured, expected, verified=verified)
 
 
 def with_swing_pose(geometry: Any, pose: Mapping | None) -> Any:

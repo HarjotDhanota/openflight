@@ -24,14 +24,14 @@ point (``floor_point``). Without a floor line the aim is taken as a direction,
 the method is recorded, and the parallax the direction leaves at the net's range
 is added to the uncertainty at the hand-off.
 
-**Roll.** The LIS3DH roll is recorded but not applied to the camera
-(``camera_roll.LIS3DH_ROLL_APPLIED``). A camera rolled by r turns the picture
-about its centre, so an aim point d rows from the centre moves about d * sin(r)
-columns: at the horizon row nothing, 1.4 m up a screen 4.5 m out (about 270 rows
-above the centre) about 0.9 deg for a 3 deg roll. That error is carried in the
-uncertainty (``roll_deg``), using the patch's roll pad (the reading, at least
-1 deg, or 3 deg without one). An aim point low on the screen, near where it meets
-the floor, keeps it small.
+**Roll.** The camera applies the LIS3DH roll only on a unit whose tilt check
+verified it (``camera_roll``). A camera rolled by r turns the picture about its
+centre, so an aim point d rows from the centre moves about d * sin(r) columns: at
+the horizon row nothing, 1.4 m up a screen 4.5 m out (about 270 rows above the
+centre) about 0.9 deg for a 3 deg roll. The roll the camera does not apply is
+carried in the uncertainty (``roll_deg``) with the patch's roll pad (the reading,
+at least 1 deg, or 3 deg without one); an applied roll carries only its residual.
+An aim point low on the screen, near where it meets the floor, keeps it small.
 
 **Lens.** The nominal model is a distortion-free pinhole; the stock 2.8 mm lens
 has a barrel of about 16 % at the 1280 frame's edge (field frames, 30 Sept). It
@@ -120,9 +120,7 @@ def target_line_policy() -> dict[str, Any]:
         "large_yaw_warning_deg": LARGE_YAW_WARNING_DEG,
         "camera_to_iwr_yaw_deg": CAMERA_TO_IWR_YAW_DEG,
         "camera_to_iwr_basis": CAMERA_TO_IWR_BASIS,
-        "roll": "recorded_not_applied_carried_as_uncertainty"
-        if not camera_roll.LIS3DH_ROLL_APPLIED
-        else "applied",
+        "roll": "applied_on_a_verified_unit_else_carried_as_uncertainty",
     }
 
 
@@ -278,13 +276,6 @@ def _spread(base: float, values: Sequence[float]) -> float:
     return max((abs(value - base) for value in values), default=0.0)
 
 
-def _roll_pad_deg(roll_deg: float | None) -> float:
-    """The roll the camera model does not apply: the patch's pad, or 1 deg once applied."""
-    if camera_roll.LIS3DH_ROLL_APPLIED:
-        return ground_patch.MIN_ROLL_PAD_DEG
-    return ground_patch.unapplied_roll_pad_deg(roll_deg)
-
-
 def aim_pixel_uncertainty(display_scale: float | None) -> tuple[float, str]:
     """How far the aim pixel may be off, in frame pixels, and on what basis."""
     if display_scale is None:
@@ -366,10 +357,10 @@ def _uncertainty(  # pylint: disable=too-many-arguments,too-many-locals
         ),
         "tilt_pad_deg": float(tilt_pad_deg),
         "roll_pad_deg": float(roll_pad_deg),
-        "roll_applied": bool(camera_roll.LIS3DH_ROLL_APPLIED),
+        "roll_applied": camera_roll.is_applied(camera),
         "roll_note": (
-            "the LIS3DH roll is recorded but not applied to the camera; the yaw an "
-            "unapplied roll of roll_pad_deg would move is roll_deg"
+            "the yaw a roll of roll_pad_deg would move is roll_deg: the residual of the "
+            "applied LIS3DH roll, or the roll a camera that does not apply it leaves"
         ),
         "lens_distortion": (
             "stock_lens_barrel_estimate_not_applied" if nominal else "in_the_calibrated_model"
@@ -434,7 +425,7 @@ def net_range_from_floor_line(
         return None if ground is None else float(math.hypot(ground[0], ground[1]))
 
     value = float(math.hypot(point[0], point[1]))
-    roll_pad = _roll_pad_deg(roll_deg)
+    roll_pad = ground_patch.roll_pad_deg(camera, roll_deg)
     touch = np.asarray([0.0, FLOOR_LINE_PIXEL_UNCERTAINTY_PX])
     # Tilt, roll and the touch are separate errors; they add in quadrature, as in the yaw's.
     cases = (
@@ -490,8 +481,8 @@ def target_line_record(  # pylint: disable=too-many-arguments
 
     ``ball_lfu`` is the box's ball on the floor (rig frame); ``tilt_pad_deg`` the
     camera tilt's uncertainty; ``roll_deg`` the LIS3DH roll the camera does not
-    apply (against the rig's expected placement). ``display_scale`` (frame px per
-    screen px) sizes the touch's own uncertainty; ``target_distance_m`` is how far
+    apply (against the rig's expected placement; 0 once applied). ``display_scale``
+    (frame px per screen px) sizes the touch's own uncertainty; ``target_distance_m`` is how far
     the target is taken to be beyond the ball, for the direction's parallax, which
     ``total_uncertainty_deg`` (the one +- the page shows) includes.
     """
@@ -499,7 +490,7 @@ def target_line_record(  # pylint: disable=too-many-arguments
     floor = parse_floor_line(floor_line_px, camera)
     ball = (float(ball_lfu[0]), float(ball_lfu[1]))
     solved = solve_yaw(camera, ball, aim, floor)
-    roll_pad = _roll_pad_deg(roll_deg)
+    roll_pad = ground_patch.roll_pad_deg(camera, roll_deg)
     aim_uncertainty, aim_basis = aim_pixel_uncertainty(display_scale)
     uncertainty = _uncertainty(
         camera,

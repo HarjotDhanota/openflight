@@ -1869,9 +1869,15 @@ def setup_blocked_reason() -> str | None:
     return block.reason if block is not None else None
 
 
+def _roll_verified() -> bool:
+    """Whether this unit's tilt check verified the LIS3DH roll (its mount file)."""
+    return inclinometer_runtime_config.get("roll_verified") is True
+
+
 def setup_camera_view():
     """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
-    not apply (a ``setup_service.CameraView``); None without a camera.
+    not apply (a ``setup_service.CameraView``; 0 on a unit that verified its roll); None
+    without a camera.
 
     Built as the tester's setup camera is: with calibrated fusion loaded, the calibrated
     optical model at the LIS3DH's pose; otherwise the rig's lens and radar, this mode's
@@ -1896,9 +1902,14 @@ def setup_camera_view():
     pitch, measured_roll, status = _setup_lis3dh()
     expected = rig_geometry.expected_inclinometer_orientation()
     expected_roll = float(expected.roll_deg or 0.0)
-    unapplied_roll = measured_roll - expected_roll if measured_roll is not None else None
+    roll = camera_roll.roll_record(measured_roll, expected_roll, verified=_roll_verified())
+    unapplied_roll = (
+        0.0
+        if roll["applied"]
+        else (measured_roll - expected_roll if measured_roll is not None else None)
+    )
     if camera_optical_calibration is not None and camera_placement is not None:
-        camera = _calibrated_setup_camera(width, height, pitch, measured_roll)
+        camera = _calibrated_setup_camera(width, height, pitch, measured_roll, roll)
         return CameraView(camera, unapplied_roll)
     if pitch is None:
         # the rig's boresight would pass for a measurement and move every floor range
@@ -1933,20 +1944,19 @@ def setup_camera_view():
         image_width_px=width,
         image_height_px=height,
         pitch_deg=float(applied["pitch_deg"]),
-        roll_correction_deg=camera_roll.nominal_roll_correction_deg(
-            camera_roll.applied_camera_roll_deg(measured_roll, expected_roll)
-        ),
+        roll_correction_deg=roll["roll_correction_deg"],
         mirror_horizontal=False,
         camera_origin_lfu=lens,
         radar_origin_lfu=lens + offset,
         angular_uncertainty_deg=angular,
         focal_relative_uncertainty=0.08,
         vertical_offset=applied,
+        roll=roll,
     )
     return CameraView(camera, unapplied_roll)
 
 
-def _calibrated_setup_camera(width: int, height: int, pitch, roll):
+def _calibrated_setup_camera(width: int, height: int, pitch, measured_roll, roll: dict):
     """The calibrated optical model at the LIS3DH's pose, as the swings and the tester use it."""
     from .camera import camera_roll  # noqa: PLC0415
     from .camera.calibrated_projection import build_calibrated_camera_model  # noqa: PLC0415
@@ -1962,9 +1972,11 @@ def _calibrated_setup_camera(width: int, height: int, pitch, roll):
         camera_placement,
         observed_pitch_deg=pitch,
         observed_roll_deg=(
-            camera_roll.calibrated_observed_roll_deg(roll, reference_roll)
+            camera_roll.calibrated_observed_roll_deg(
+                measured_roll, reference_roll, apply=roll["applied"]
+            )
             if isinstance(reference_roll, (int, float))
-            else roll
+            else measured_roll
         ),
     )
     return replace(
@@ -1974,6 +1986,7 @@ def _calibrated_setup_camera(width: int, height: int, pitch, roll):
             "reason": "a calibrated optical model carries its own principal point and "
             "placement pose",
         },
+        roll=roll,
     )
 
 
@@ -3018,6 +3031,7 @@ def init_inclinometer(
             "mount_source": mount_source,
             "mount_file": str(mount_file) if mount_file is not None else None,
             "orientation_check": mount_record,
+            "roll_verified": mount_record["roll_verified"],
             "startup": startup.to_dict(),
         }
         if startup.snapshot is None:
@@ -4394,6 +4408,7 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     selection = inclinometer_service.snapshot_for_shot(impact_timestamp)
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
+    data["roll_verified"] = _roll_verified()
     applied_to: list[str] = []
     snapshot = selection.snapshot
     if snapshot is None:
@@ -5172,6 +5187,7 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
             height=height_px,
             camera_origin_lfu=(0.0, 0.0, lens_m),
             radar_origin_lfu=(float(offset[0]), float(offset[1]), lens_m + float(offset[2])),
+            roll_correction_deg=_swing_camera_pose(shot)["roll"]["roll_correction_deg"],
         )
         pair = swing_tilt.swing_pair(
             {
@@ -5316,10 +5332,11 @@ def _fuse_camera_measurements(
                     raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
                 from openflight.camera import camera_roll  # noqa: PLC0415
 
-                # recorded, not applied, until its direction is confirmed on the unit
+                # applied only on a unit whose tilt check verified the roll
                 observed_roll = camera_roll.calibrated_observed_roll_deg(
                     camera_roll.lis3dh_roll_deg(*gravity),
                     (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0),
+                    apply=pose.get("roll_verified") is True,
                 )
                 model = build_calibrated_camera_model(
                     camera_optical_calibration,

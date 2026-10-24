@@ -180,7 +180,7 @@ def _padded_outline(
     The box's ball-centre corners, and the ground's, are projected through the camera
     pitched up and down by the pad (each pitch moves a ball almost straight up or down the
     picture, by more than ``f tan(pad)`` off the axis), lifted and lowered at the
-    ends by the unapplied roll, and bounded by a rectangle. Ordered near-left,
+    ends by the roll pad, and bounded by a rectangle. Ordered near-left,
     near-right, far-right, far-left, as the ground outline is. A TrackMan-style box
     on screen is a rectangle too.
     """
@@ -219,7 +219,7 @@ def project_fixed_box(
     box = fixed_box(camera, config)
     margin, window_pad = pads_deg(config, calibrated)
     width, height = int(camera.image_width_px), int(camera.image_height_px)
-    roll_pad = ground_patch.unapplied_roll_pad_deg(roll_deg)
+    roll_pad = ground_patch.roll_pad_deg(camera, roll_deg)
     ground = ground_patch._pixels(camera, box.corners(0.0))  # noqa: SLF001
     ball = ground_patch._pixels(  # noqa: SLF001
         camera, box.corners(ground_patch.BALL_CENTER_HEIGHT_M)

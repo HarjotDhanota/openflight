@@ -68,8 +68,10 @@ def nominal_camera_at_pitch(
     height: int,
     camera_origin_lfu: Sequence[float],
     radar_origin_lfu: Sequence[float],
+    roll_correction_deg: float = 0.0,
 ) -> Callable[[float], Any]:
-    """The nominal camera at a trial pitch, as the tester's solve builds it."""
+    """The nominal camera at a trial pitch, as the tester's solve builds it, with the
+    swing's roll correction (0 unless the unit verified its roll)."""
     from openflight.camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
 
     def camera(pitch_deg: float):
@@ -78,7 +80,7 @@ def nominal_camera_at_pitch(
             image_width_px=int(width),
             image_height_px=int(height),
             pitch_deg=float(pitch_deg),
-            roll_correction_deg=0.0,
+            roll_correction_deg=float(roll_correction_deg),
             mirror_horizontal=False,
             camera_origin_lfu=tuple(camera_origin_lfu),
             radar_origin_lfu=tuple(radar_origin_lfu),

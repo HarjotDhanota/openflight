@@ -196,3 +196,20 @@ def test_the_patch_round_trips_and_the_page_gets_the_projection():
     assert parameters["approximate"] is False
     with pytest.raises(ValueError):
         GroundPatch(0.0, 0.2)
+
+
+def test_once_the_camera_applies_the_roll_only_its_residual_pads_the_rows():
+    from dataclasses import replace  # noqa: PLC0415
+
+    from openflight.camera import camera_roll  # noqa: PLC0415
+
+    camera = _v3()
+    patch = GroundPatch(0.0, 1.25)
+    applied = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, verified=True))
+    unverified = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, verified=False))
+
+    assert _projection(applied, patch, roll_deg=0.0).roll_pad_deg == pytest.approx(
+        camera_roll.APPLIED_ROLL_RESIDUAL_DEG
+    )
+    assert _projection(unverified, patch, roll_deg=-2.9).roll_pad_deg == pytest.approx(2.9)
+    assert _projection(camera, patch, roll_deg=None).roll_pad_deg == pytest.approx(3.0)

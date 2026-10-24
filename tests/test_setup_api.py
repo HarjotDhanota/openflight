@@ -545,6 +545,15 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     assert view.roll_deg == pytest.approx(
         np.degrees(np.arctan2(0.05, 1.0)) - (expected.roll_deg or 0.0)
     )
+    assert view.camera.roll["applied"] is False
+    assert view.camera.ray_model.roll_correction_deg == 0.0
+    # a unit whose tilt check verified the roll: the camera applies it, nothing is left
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"roll_verified": True})
+    rolled = server.setup_camera_view()
+    assert rolled.camera.roll["applied"] is True
+    assert rolled.roll_deg == 0.0
+    assert rolled.camera.ray_model.roll_correction_deg == pytest.approx(-view.roll_deg)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {})
     server.setup_handoff_config["camera_tilt"] = {"vertical_offset_deg": 1.5, "source": None}
     typed = server.setup_camera_view()
     assert typed.camera.vertical_offset["status"] == "uncalibrated"

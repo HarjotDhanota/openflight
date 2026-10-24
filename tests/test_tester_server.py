@@ -2047,6 +2047,24 @@ class TestTheInclinometerRunsBesideThePage:
         assert reading["roll_deg"] == pytest.approx(math.degrees(math.atan2(0.052, 1.0)), abs=0.05)
         # the page shows which way round the rig file says the board is
         assert reading["mount_yaw_deg"] == 180.0
+        assert reading["roll_verified"] is False
+
+    def test_a_unit_that_verified_its_roll_says_so_in_its_reading(self, tmp_path):
+        from openflight.inclinometer import orientation_check as oc  # noqa: PLC0415
+
+        path = tmp_path / oc.FILE_NAME
+        store = oc.MountStore(path, rig_yaw_deg=180.0)
+        store.record_pass({"front_up_deg": 6.0})
+        store.record_roll({"left_up_deg": 6.0}, verified=True)
+        tilt = ts.EnclosureTilt(
+            RIG, service_factory=lambda: FakeTiltService(0.0, x_g=0.03), mount_path=path
+        )
+        tilt.start()
+        reading = tilt.reading()
+
+        assert reading["roll_verified"] is True
+        # the box pads only the residual: the camera applies the roll
+        assert ts._placement_roll_deg(RIG, reading) == 0.0  # pylint: disable=protected-access
 
     def test_without_a_sensor_it_says_so(self):
         def broken():

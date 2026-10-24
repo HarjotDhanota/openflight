@@ -170,6 +170,8 @@ class BallPlaneCamera:
     focal_relative_uncertainty: float
     # P8-5: the unit's camera tilt this model's pitch was composed with, labelled
     vertical_offset: Mapping[str, Any] | None = None
+    # the LIS3DH roll this model was built with (``camera_roll.roll_record``)
+    roll: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -207,18 +209,20 @@ class BallPlaneCamera:
         angular_uncertainty_deg: float,
         focal_relative_uncertainty: float,
         vertical_offset: Mapping[str, Any] | None = None,
+        roll: Mapping[str, Any] | None = None,
     ) -> "BallPlaneCamera":
         """Build a visibly uncalibrated model from declared pinhole assumptions.
 
         ``pitch_deg`` is the camera's whole pitch; ``vertical_offset`` records how it
-        was composed (the LIS3DH's and the unit's camera tilt, P8-5).
+        was composed (the LIS3DH's and the unit's camera tilt, P8-5), ``roll`` how the
+        LIS3DH roll was taken.
         """
         focal_px = _positive(focal_px, "focal size")
         if not isinstance(mirror_horizontal, bool):
             raise ValueError("mirror_horizontal must be a boolean")
         pitch = float(pitch_deg)
-        roll = float(roll_correction_deg)
-        if not math.isfinite(pitch) or not math.isfinite(roll):
+        correction = float(roll_correction_deg)
+        if not math.isfinite(pitch) or not math.isfinite(correction):
             raise ValueError("camera pitch and roll must be finite")
         model = NominalRayModel(
             focal_px=focal_px,
@@ -226,7 +230,7 @@ class BallPlaneCamera:
             image_height_px=image_height_px,
             pitch_rad=math.radians(pitch),
             horizontal_pixel_sign=-1.0 if mirror_horizontal else 1.0,
-            roll_correction_deg=roll,
+            roll_correction_deg=correction,
         )
         return cls(
             ray_model=model,
@@ -240,6 +244,7 @@ class BallPlaneCamera:
             angular_uncertainty_deg=angular_uncertainty_deg,
             focal_relative_uncertainty=focal_relative_uncertainty,
             vertical_offset=dict(vertical_offset) if vertical_offset is not None else None,
+            roll=dict(roll) if roll is not None else None,
         )
 
     @classmethod

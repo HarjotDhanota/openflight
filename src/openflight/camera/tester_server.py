@@ -3245,18 +3245,22 @@ class EnclosureTilt:
         self._service = None
         self._error: str | None = None
 
-    def mount(self):
-        """``(Mount, source)``: the corrected mount, else the unit file's, else the rig's."""
+    def _unit_mount(self):
+        """``(mount, source, record)`` from the unit's file, else the rig's yaw."""
         from openflight.inclinometer import orientation_check  # noqa: PLC0415
         from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
-        if self._mount_override is not None:
-            return self._mount_override, "tester_check"
         try:
             rig_yaw = RigGeometry.from_json(self.rig_geometry).lis3dh_mount_yaw_deg
         except (OSError, TypeError, ValueError, KeyError):
             rig_yaw = None
-        mount, source, _record = orientation_check.effective_mount(self.mount_path, rig_yaw)
+        return orientation_check.effective_mount(self.mount_path, rig_yaw)
+
+    def mount(self):
+        """``(Mount, source)``: the corrected mount, else the unit file's, else the rig's."""
+        if self._mount_override is not None:
+            return self._mount_override, "tester_check"
+        mount, source, _record = self._unit_mount()
         return mount, source
 
     def set_mount(self, mount) -> None:
@@ -3338,6 +3342,8 @@ class EnclosureTilt:
                 "mount_yaw_deg": mount.yaw_deg,
                 "mount_upside_down": mount.upside_down,
                 "mount_source": mount_source,
+                # the check's roll step passed under this mount: the camera applies the roll
+                "roll_verified": self._unit_mount()[2]["roll_verified"],
             }
         )
         return data
@@ -3534,12 +3540,19 @@ def _reference_ball_camera(
             raise ValueError("calibrated camera mode does not match the active capture mode")
         # one roll convention with the nominal path (wiring audit C8)
         reference_roll = (placement.get("reference_pose_deg") or {}).get("roll")
+        roll = camera_roll.roll_record(
+            tilt.get("roll_deg"),
+            reference_roll if isinstance(reference_roll, (int, float)) else 0.0,
+            verified=tilt.get("roll_verified") is True,
+        )
         model = build_calibrated_camera_model(
             artifact,
             placement,
             observed_pitch_deg=tilt.get("pitch_deg"),
             observed_roll_deg=(
-                camera_roll.calibrated_observed_roll_deg(tilt.get("roll_deg"), reference_roll)
+                camera_roll.calibrated_observed_roll_deg(
+                    tilt.get("roll_deg"), reference_roll, apply=roll["applied"]
+                )
                 if isinstance(reference_roll, (int, float))
                 else tilt.get("roll_deg")
             ),
@@ -3551,6 +3564,7 @@ def _reference_ball_camera(
                 "reason": "a calibrated optical model carries its own principal point and "
                 "placement pose",
             },
+            roll=roll,
         )
     rig = RigGeometry.from_json(rig_geometry)
     if rig.lens_height_above_floor_mm is None:
@@ -3573,25 +3587,26 @@ def _reference_ball_camera(
         if applied["status"] == "calibrated"
         else UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
     )
+    # The camera is level in the enclosure; the LIS3DH roll goes through the one
+    # convention both paths share, applied on a unit that verified it (camera_roll).
+    roll = camera_roll.roll_record(
+        tilt.get("roll_deg"),
+        rig.expected_inclinometer_orientation().roll_deg or 0.0,
+        verified=tilt.get("roll_verified") is True,
+    )
     return BallPlaneCamera.nominal(
         focal_px=mode_focal_px(arm, rig_geometry, lens),
         image_width_px=arm.width,
         image_height_px=arm.height,
         pitch_deg=float(applied["pitch_deg"]),
-        # The camera is level in the enclosure; the LIS3DH roll goes through the one
-        # convention both paths share, which records it but does not yet apply it
-        # (wiring audit C8, camera_roll).
-        roll_correction_deg=camera_roll.nominal_roll_correction_deg(
-            camera_roll.applied_camera_roll_deg(
-                tilt.get("roll_deg"), rig.expected_inclinometer_orientation().roll_deg or 0.0
-            )
-        ),
+        roll_correction_deg=roll["roll_correction_deg"],
         mirror_horizontal=False,
         camera_origin_lfu=camera,
         radar_origin_lfu=camera + offset,
         angular_uncertainty_deg=angular,
         focal_relative_uncertainty=0.08,
         vertical_offset=applied,
+        roll=roll,
     )
 
 
@@ -3762,12 +3777,15 @@ def confirm_placement_box(
 
 
 def _placement_roll_deg(rig_geometry: Path, tilt: Mapping) -> float | None:
-    """The LIS3DH roll the camera models record but do not apply, for the box's padding."""
+    """The LIS3DH roll the camera models do not apply, for the box's padding: 0 on a
+    unit that verified its roll."""
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     roll = tilt.get("roll_deg")
     if isinstance(roll, bool) or not isinstance(roll, (int, float)) or not math.isfinite(roll):
         return None
+    if tilt.get("roll_verified") is True:
+        return 0.0
     try:
         expected = RigGeometry.from_json(rig_geometry).expected_inclinometer_orientation().roll_deg
     except (OSError, TypeError, ValueError, KeyError):

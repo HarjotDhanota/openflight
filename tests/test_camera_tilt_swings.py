@@ -210,10 +210,7 @@ def _rolled_reading(roll_deg=-2.9):
     return {**_inclinometer(1.0), "x_g": math.sin(roll), "y_g": 0.0, "z_g": math.cos(roll)}
 
 
-def test_by_default_the_roll_is_recorded_not_applied_on_swings():
-    from openflight.camera import camera_roll  # noqa: PLC0415
-
-    assert camera_roll.LIS3DH_ROLL_APPLIED is False
+def test_on_an_unverified_unit_the_roll_is_recorded_not_applied_on_swings():
     pose = camera_tilt.swing_camera_pose(
         rig=RigGeometry.from_json(RIG_PATH),
         image_width_px=1280,
@@ -229,7 +226,32 @@ def test_by_default_the_roll_is_recorded_not_applied_on_swings():
     )
 
     assert pose["roll"]["applied"] is False
-    assert pose["roll"]["status"] == "not_applied_pending_c8"
+    assert pose["roll"]["status"] == "not_verified_on_this_unit"
+    assert pose["roll"]["label"] == "roll not verified on this unit"
     assert pose["roll"]["measured_deg"] == pytest.approx(-2.9)
     assert pose["roll"]["roll_correction_deg"] == 0.0
     assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == 0.4
+
+
+def test_on_a_verified_unit_the_swing_applies_the_roll():
+    rig = RigGeometry.from_json(RIG_PATH)
+    expected = rig.expected_inclinometer_orientation().roll_deg or 0.0
+    pose = camera_tilt.swing_camera_pose(
+        rig=rig,
+        image_width_px=1280,
+        inclinometer={**_rolled_reading(-2.9), "roll_verified": True},
+        calibration=None,
+    )
+    geometry = ball_flight.CameraBallGeometry(
+        camera_height_m=0.095,
+        radar_height_m=0.05,
+        tee_range_m=1.5,
+        ball_height_m=0.0213,
+        roll_correction_deg=0.4,
+    )
+
+    assert pose["roll"]["applied"] is True
+    assert pose["roll"]["roll_correction_deg"] == pytest.approx(-(-2.9 - expected))
+    assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == pytest.approx(
+        0.4 + 2.9 + expected
+    )
