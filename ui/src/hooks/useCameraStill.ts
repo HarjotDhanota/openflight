@@ -22,7 +22,7 @@ export function useCameraStill(
 
     const refresh = async () => {
       try {
-        const response = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+        const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, { cache: 'no-store' });
         if (cancelled) return;
         if (response.status === 404) {
           setState('unavailable');

@@ -72,8 +72,10 @@ describe('CameraFeed', () => {
     expect(html).not.toContain('Environment profile');
     expect(html).not.toContain('Darker');
     expect(html).not.toContain('Brighter');
-    expect(html).toContain('Ball placement guide');
-    expect(html).toContain('50% across · 78% down');
+    expect(html).toContain('Ball box');
+    expect(html).toContain('Not set: confirm the ball in the box on the Setup tab');
+    expect(html).not.toContain('50% across · 78% down');
+    expect(html).not.toContain('camera-feed__crosshair');
     expect(html).not.toContain('type="range"');
     expect(html).not.toContain('Apply alignment guide');
     expect(html).toContain('Sensor view');
@@ -135,5 +137,36 @@ describe('CameraFeed', () => {
     expect(html).toContain(label);
     if (frameLabel) expect(html).toContain(frameLabel);
     if (status === 'holding_no_ball') expect(html).toContain('not seen');
+  });
+
+  it('says the ball box comes from Setup once one is confirmed', () => {
+    const html = renderToString(
+      <CameraFeed
+        captureSettings={captureSettings}
+        captureSettingsError={null}
+        onUpdateCaptureSettings={vi.fn()}
+        setup={{
+          revision: 2,
+          box: {
+            state: 'confirmed',
+            box_px: [380, 560, 900, 720],
+            ball_px: [640, 610],
+            diameter_px: 22,
+            image_size_px: [1280, 800],
+          },
+          aim: { state: 'not_set' },
+          ball_range: { state: 'not_set' },
+          net_range: { state: 'not_set' },
+          scene: { state: 'not_set' },
+          live: {},
+          unapplied: {},
+        }}
+        handed="LH"
+      />
+    );
+
+    expect(html).toContain('Ball box');
+    expect(html).toContain('Confirmed on the Setup tab');
+    expect(html).not.toContain('Not set: confirm the ball');
   });
 });

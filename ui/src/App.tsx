@@ -350,6 +350,8 @@ function AppContent() {
                 isNewShot={profileIsNewShot}
                 headerAction={liveHeaderActions}
                 targetLine={targetLine}
+                setup={setup}
+                handed={handed}
                 resultVisible={
                   activeReplay === null &&
                   !showShutdown &&
@@ -414,6 +416,8 @@ function AppContent() {
             captureSettings={captureSettings}
             captureSettingsError={captureSettingsError}
             onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
+            setup={setup}
+            handed={handed}
           />
         )}
         {currentView === 'setup' && (

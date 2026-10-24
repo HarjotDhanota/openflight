@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -74,6 +75,8 @@ class _Kiosk:
             SimpleNamespace(ready_snapshot=lambda: self.camera),
         )
         monkeypatch.setattr(server, "camera_capture_config", {"enabled": True})
+        monkeypatch.setattr(server, "setup_service", None)
+        monkeypatch.setattr(server, "ball_at_address_monitor", None)
 
     def light(self):
         return server.ready_light.update(server._ready_light_states())
@@ -142,3 +145,46 @@ def test_the_light_is_off_in_mock_mode_and_on_the_streaming_trigger(kiosk, monke
     monkeypatch.setattr(server, "mock_mode", False)
     kiosk.monitor.trigger_type = "speed"
     assert kiosk.light()["state"] == "off"
+
+
+def _snapshot(**sections):
+    record = {
+        "box": {"state": "confirmed"},
+        "aim": {"state": "set"},
+        "ball_range": {"state": "set"},
+        "net_range": {"state": "default"},
+        "scene": {"state": "not_set"},
+    }
+    record.update(sections)
+    return {**record, "live": {"camera_available": True}, "unapplied": {}}
+
+
+def test_the_setup_record_and_the_ball_look_reach_the_light(kiosk, monkeypatch):
+    snapshot = _snapshot(ball_range={"state": "not_set"})
+    monkeypatch.setattr(server, "setup_service", SimpleNamespace(snapshot=lambda: snapshot))
+    assert kiosk.light()["cause"] == "setup incomplete: ball range not set"
+
+    snapshot = _snapshot()
+    look = {"state": "not_seen", "observed_at": time.time()}
+    monkeypatch.setattr(server, "ball_at_address_monitor", SimpleNamespace(latest=lambda: look))
+    light = kiosk.light()
+    assert (light["state"], light["cause"]) == ("amber", "ball not in box")
+
+
+def test_an_extension_adds_setup_causes_from_the_snapshot(kiosk, monkeypatch):
+    seen = []
+
+    class Tester(kiosk_extensions.KioskExtension):
+        def setup_ready_causes(self, snapshot):
+            seen.append(snapshot)
+            return [("amber", "free play paused")]
+
+    snapshot = _snapshot()
+    monkeypatch.setattr(server, "setup_service", SimpleNamespace(snapshot=lambda: snapshot))
+    assert kiosk_extensions.setup_ready_causes(snapshot) == []
+    kiosk_extensions.register(Tester())
+
+    light = kiosk.light()
+
+    assert (light["state"], light["cause"]) == ("amber", "free play paused")
+    assert seen == [snapshot]

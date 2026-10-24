@@ -325,3 +325,92 @@ def test_a_swing_during_a_pause_says_it_was_not_counted():
     light = ReadyLight()
     light.swing_result("paused", at=NOW)
     assert light.update(_states(), now=NOW)["swing"]["result"]["text"] == "Not counted: paused"
+
+
+def _setup(camera_available=True, **sections):
+    record = {
+        "box": {"state": "confirmed"},
+        "aim": {"state": "set"},
+        "ball_range": {"state": "set"},
+        "net_range": {"state": "default"},
+        "scene": {"state": "not_set", "reason": "not set"},
+    }
+    record.update(sections)
+    return {**record, "live": {"camera_available": camera_available}, "unapplied": {}}
+
+
+def _look(state, at=NOW - 1.0):
+    return {"state": state, "observed_at": at}
+
+
+def test_ready_light_red_when_setup_incomplete():
+    setup = _setup(
+        aim={"state": "not_set", "reason": "not set"},
+        net_range={"state": "stale", "reason": "aim is not_set"},
+    )
+
+    light = compute_state(_states(setup=setup, ball_look=_look("in_box")), NOW)
+
+    assert (light["state"], light["cause"]) == (
+        "red",
+        "setup incomplete: aim not set, net range stale",
+    )
+
+
+def test_setup_incomplete_ignores_the_lens_height():
+    light = compute_state(_states(setup=_setup(), ball_look=_look("in_box")), NOW)
+
+    assert light["state"] == "green"
+
+
+@pytest.mark.parametrize("state", ["not_seen", "outside_box"])
+def test_ready_light_amber_when_ball_not_in_box(state):
+    light = compute_state(_states(setup=_setup(), ball_look=_look(state)), NOW)
+
+    assert (light["state"], light["word"], light["cause"]) == ("amber", "WAIT", "ball not in box")
+
+
+@pytest.mark.parametrize(
+    "look",
+    [None, _look("not_seen", at=NOW - 31.0), _look("unknown")],
+    ids=["no look yet", "too old", "unknown state"],
+)
+def test_no_fresh_look_says_nothing_about_the_ball(look):
+    light = compute_state(_states(setup=_setup(), ball_look=look), NOW)
+
+    assert light["state"] == "green"
+
+
+def test_no_box_set_says_only_setup_incomplete_not_ball_not_in_box():
+    setup = _setup(box={"state": "not_set", "reason": "not set"})
+
+    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
+
+    assert [cause["cause"] for cause in light["causes"]] == ["setup incomplete: box not set"]
+
+
+def test_a_unit_without_a_camera_has_no_setup_causes():
+    setup = _setup(camera_available=False, box={"state": "not_set"}, aim={"state": "not_set"})
+
+    light = compute_state(_states(camera=None, setup=setup, ball_look=_look("not_seen")), NOW)
+
+    assert light["state"] == "green"
+
+
+def test_sensor_faults_come_before_setup_incomplete():
+    setup = _setup(box={"state": "not_set"})
+
+    light = compute_state(_states(camera=_camera(running=False), setup=setup), NOW)
+
+    assert [cause["cause"] for cause in light["causes"]] == [
+        "camera is not running",
+        "setup incomplete: box not set",
+    ]
+
+
+def test_an_extensions_setup_causes_are_red_or_amber():
+    states = _states(setup=_setup(), setup_causes=(("amber", "free play paused"),))
+    assert compute_state(states, NOW)["cause"] == "free play paused"
+
+    states = _states(setup=_setup(), setup_causes=(("red", "no admitted setup"),))
+    assert compute_state(states, NOW)["state"] == "red"

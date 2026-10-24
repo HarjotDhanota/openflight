@@ -240,4 +240,77 @@ export async function overflowingLiveMetricMetadata(page: Page): Promise<string[
   });
 }
 
+type Px = [number, number];
+
+/** A setup made on a 1280x800 picture, off centre so a mirrored drawing shows as one. */
+export const SET_UP = {
+  image: [1280, 800] as Px,
+  box: [460, 560, 980, 720] as const,
+  ball: [720, 610] as Px,
+  aim: [900, 300] as Px,
+};
+
+// with a left/right difference (the pole), so a mirrored picture shows as one
+const SET_UP_PICTURE = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800">
+  <rect width="1280" height="800" fill="#1d2420"/>
+  <rect width="1280" height="255" fill="#3b4148"/>
+  <rect x="120" y="60" width="18" height="420" fill="#c96"/>
+  <polygon points="510,560 930,560 980,720 460,720" fill="#2f6b3a"/>
+  <circle cx="720" cy="610" r="11" fill="#f4f4f0"/>
+</svg>`;
+
+/** The setup record with the box confirmed and, unless `aim` says otherwise, the aim set. */
+export function setUpSnapshot(aim: Record<string, unknown> = { state: 'set', aim_px: SET_UP.aim }) {
+  const notSet = { state: 'not_set', reason: 'not set' };
+  return {
+    schema: 'openflight.setup.v1',
+    revision: 3,
+    box: {
+      state: 'confirmed',
+      id: 'box@720,610#1',
+      box_px: [...SET_UP.box],
+      ball_px: SET_UP.ball,
+      diameter_px: 22,
+      image_size_px: SET_UP.image,
+    },
+    aim,
+    ball_range: notSet,
+    net_range: notSet,
+    scene: notSet,
+    live: { camera_available: true },
+    unapplied: {},
+  };
+}
+
+/** GET /api/setup answers `snapshot`; the camera preview is the picture the setup was made on. */
+export async function mockSetupAndPreview(page: Page, snapshot: object) {
+  await page.route(/\/api\/setup$/, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot) })
+  );
+  await page.route('**/api/camera/preview.jpg*', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/svg+xml', body: SET_UP_PICTURE })
+  );
+}
+
+/** Set the golfer's hand after the kiosk's own arrives on connect. */
+export async function setHanded(page: Page, hand: 'RH' | 'LH') {
+  await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
+  await page.evaluate(async (handed) => {
+    const { useSystemStore } = await import('/src/stores/useSystemStore.ts');
+    useSystemStore.getState().setHanded(handed);
+  }, hand);
+}
+
+/** Where a camera pixel of SET_UP is drawn in `selector`: whole and centred, mirrored for LH. */
+export async function drawnAt(page: Page, selector: string, px: Px, hand: 'RH' | 'LH'): Promise<Px> {
+  const box = (await page.locator(selector).boundingBox())!;
+  const [width, height] = SET_UP.image;
+  const scale = Math.min(box.width / width, box.height / height);
+  const x = hand === 'LH' ? width - px[0] : px[0];
+  return [
+    box.x + (box.width - width * scale) / 2 + x * scale,
+    box.y + (box.height - height * scale) / 2 + px[1] * scale,
+  ];
+}
+
 export { expect };

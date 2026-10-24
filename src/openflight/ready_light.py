@@ -38,6 +38,21 @@ RESULT_TEXT = {
 
 # A kiosk extension's extra camera rule (camera, now, red, amber), run after the camera's checks.
 CameraRule = Callable[[Mapping, float, list, list], None]
+# A setup cause: ("red" or "amber", what it says).
+SetupCause = tuple[str, str]
+
+# The setup sections the light needs, as the Setup screen's needsSetup counts them; the
+# lens height (scene) has a labelled default and never holds the light.
+SETUP_SECTIONS = (
+    ("box", "box"),
+    ("aim", "aim"),
+    ("ball_range", "ball range"),
+    ("net_range", "net range"),
+)
+UNUSABLE = ("not_set", "stale")
+# A shot takes a ball look this recent as its own (ball_at_address.MAX_LOOK_AGE_S).
+BALL_LOOK_MAX_AGE_S = 30.0
+BALL_NOT_IN_BOX_STATES = ("not_seen", "outside_box")
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,11 @@ class SensorStates:
     camera_rule: CameraRule | None = None
     green_note: str | None = None
     amber_causes: Sequence[str] = ()
+    # the setup service's snapshot (None: no setup service) and the latest ball-at-address look
+    setup: Mapping | None = None
+    ball_look: Mapping | None = None
+    # an extension's own causes from the snapshot (``setup_ready_causes``)
+    setup_causes: Sequence[SetupCause] = ()
 
 
 def _left(typical: float | None, since: float | None, now: float) -> float | None:
@@ -141,6 +161,31 @@ def _camera(  # pylint: disable=too-many-return-statements
         camera_rule(camera, now, red, amber)
 
 
+def _state_words(state) -> str:
+    return str(state).replace("_", " ")
+
+
+def setup_causes(setup: Mapping | None, ball_look: Mapping | None, now: float) -> list[SetupCause]:
+    """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit without a
+    camera, which can never set up, and nothing about the ball without a recent look."""
+    if setup is None or not (setup.get("live") or {}).get("camera_available", True):
+        return []
+    causes: list[SetupCause] = []
+    missing = []
+    for name, words in SETUP_SECTIONS:
+        state = (setup.get(name) or {}).get("state", "not_set")
+        if state in UNUSABLE:
+            missing.append(f"{words} {_state_words(state)}")
+    if missing:
+        causes.append(("red", "setup incomplete: " + ", ".join(missing)))
+    box_set = (setup.get("box") or {}).get("state", "not_set") not in UNUSABLE
+    if box_set and ball_look and ball_look.get("state") in BALL_NOT_IN_BOX_STATES:
+        observed = ball_look.get("observed_at")
+        if observed is not None and now - float(observed) <= BALL_LOOK_MAX_AGE_S:
+            causes.append(("amber", "ball not in box"))
+    return causes
+
+
 def compute_state(states: SensorStates, now: float) -> dict:
     """The light for these sensor states: red outranks amber outranks green."""
     red: list[str] = list(states.setup_problems)
@@ -150,6 +195,14 @@ def compute_state(states: SensorStates, now: float) -> dict:
         _iwr(states.iwr, now, red, amber)
     if states.camera is not None:
         _camera(states.camera, now, red, amber, states.camera_rule)
+    for level, cause in (
+        *setup_causes(states.setup, states.ball_look, now),
+        *states.setup_causes,
+    ):
+        if level == "red":
+            red.append(cause)
+        else:
+            amber.append((cause, None))
     amber.extend((cause, None) for cause in states.amber_causes)
     if red:
         return {

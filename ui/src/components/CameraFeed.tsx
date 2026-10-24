@@ -1,7 +1,11 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import { useCameraPointerDragScroll } from '../hooks/useCameraPointerDragScroll';
 import { useCameraStill } from '../hooks/useCameraStill';
+import type { SetupSnapshot } from '../hooks/useSetup';
 import type { CameraAutoExposureStatus, CameraCaptureSettings } from '../stores/useCameraStore';
+import type { Handed } from '../stores/useSystemStore';
+import { SetupPicture } from './setup/SetupPicture';
+import { confirmedBox } from './setup/setupOverlay';
 import { verticalViewTargets } from '../utils/cameraView';
 import { getServerOrigin } from '../utils/serverOrigin';
 import './CameraFeed.css';
@@ -10,6 +14,9 @@ interface CameraFeedProps {
   captureSettings: CameraCaptureSettings;
   captureSettingsError: string | null;
   onUpdateCaptureSettings: (settings: Partial<CameraCaptureSettings>) => void;
+  /** The kiosk's setup record: its confirmed box is drawn on the preview. */
+  setup?: SetupSnapshot | null;
+  handed?: Handed | null;
 }
 
 interface CaptureSettingsPanelProps {
@@ -17,13 +24,12 @@ interface CaptureSettingsPanelProps {
   exposureQuality: ExposureQuality | null;
   error: string | null;
   onUpdate: (settings: Partial<CameraCaptureSettings>) => void;
+  boxSet: boolean;
 }
 
 const PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const EXPOSURE_QUALITY_URL = `${getServerOrigin()}/api/camera/exposure-quality`;
 const PREVIEW_REFRESH_MS = 5000;
-const BALL_GUIDE_X_PCT = 50;
-const BALL_GUIDE_Y_PCT = 78;
 
 interface ExposureQuality {
   sample_available: boolean;
@@ -51,7 +57,7 @@ function formatGain(gain: number | undefined): string {
   return gain === undefined ? '—' : `${Math.round(gain * 100) / 100}`;
 }
 
-function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: CaptureSettingsPanelProps) {
+function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate, boxSet }: CaptureSettingsPanelProps) {
   const verticalOffset = settings.vertical_offset_px ?? 0;
   const verticalMin = settings.vertical_offset_min_px ?? verticalOffset;
   const verticalMax = settings.vertical_offset_max_px ?? verticalOffset;
@@ -167,14 +173,11 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
 
         <section className="camera-settings__section">
           <div className="camera-settings__section-title">
-            <span>Ball placement guide</span>
-            <small>fixed recommendation</small>
+            <span>Ball box</span>
           </div>
-          <div className="camera-settings__ball-guide-position">50% across · 78% down</div>
-          <p className="camera-settings__note">
-            Adjust the physical setup or sensor view until the center of the ball sits on the +. This leaves room above
-            the ball for club and launch tracking.
-          </p>
+          <div className="camera-settings__ball-guide-position">
+            {boxSet ? 'Confirmed on the Setup tab' : 'Not set: confirm the ball in the box on the Setup tab'}
+          </div>
         </section>
 
         <section className="camera-settings__section camera-settings__section--summary">
@@ -223,7 +226,13 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
  * still refreshed every 5 s from the concurrent preview stream. The raw
  * rolling buffer keeps running, so shots are never missed while viewing.
  */
-export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCaptureSettings }: CameraFeedProps) {
+export function CameraFeed({
+  captureSettings,
+  captureSettingsError,
+  onUpdateCaptureSettings,
+  setup = null,
+  handed = null,
+}: CameraFeedProps) {
   useCameraPointerDragScroll();
   const {
     state: previewState,
@@ -231,10 +240,7 @@ export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCapt
     updatedAt: lastUpdated,
   } = useCameraStill(PREVIEW_URL, PREVIEW_REFRESH_MS);
   const [exposureQuality, setExposureQuality] = useState<ExposureQuality | null>(null);
-  const crosshairStyle = {
-    '--camera-crosshair-x': `${BALL_GUIDE_X_PCT}%`,
-    '--camera-crosshair-y': `${BALL_GUIDE_Y_PCT}%`,
-  } as CSSProperties;
+  const box = confirmedBox(setup);
 
   // the exposure is read after each new frame, as the frame it describes
   useEffect(() => {
@@ -277,32 +283,8 @@ export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCapt
         <div className="camera-feed__workspace">
           <div className="camera-feed__preview-column">
             {previewSrc ? (
-              <div className="camera-feed__stream" style={crosshairStyle}>
-                <img src={previewSrc} alt="Camera preview" className="camera-feed__video" />
-                <svg
-                  className="camera-feed__crosshair"
-                  viewBox="0 0 100 100"
-                  preserveAspectRatio="none"
-                  aria-hidden="true"
-                >
-                  <line
-                    x1={BALL_GUIDE_X_PCT}
-                    y1="0"
-                    x2={BALL_GUIDE_X_PCT}
-                    y2="100"
-                    vectorEffect="non-scaling-stroke"
-                    className="camera-feed__hairline"
-                  />
-                  <line
-                    x1="0"
-                    y1={BALL_GUIDE_Y_PCT}
-                    x2="100"
-                    y2={BALL_GUIDE_Y_PCT}
-                    vectorEffect="non-scaling-stroke"
-                    className="camera-feed__hairline"
-                  />
-                </svg>
-                <div className="camera-feed__center-cross" aria-hidden="true" />
+              <div className="camera-feed__stream">
+                <SetupPicture src={previewSrc} alt="Camera preview" handed={handed} box={box} />
                 <div className="camera-feed__overlay">
                   <div className="camera-feed__status">Rolling buffer remains armed</div>
                 </div>
@@ -319,6 +301,7 @@ export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCapt
             exposureQuality={exposureQuality}
             error={captureSettingsError}
             onUpdate={onUpdateCaptureSettings}
+            boxSet={box !== null}
           />
         </div>
       </div>

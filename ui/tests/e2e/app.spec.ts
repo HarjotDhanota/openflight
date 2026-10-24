@@ -1,10 +1,17 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from '@playwright/test';
 import {
+  drawnAt,
   expect,
   gotoApp,
   KIOSK_VIEWPORTS,
+  mockSetupAndPreview,
   resetSession,
+  SET_UP,
   setClub,
+  setHanded,
+  setUpSnapshot,
   simulateShot,
   waitForEvent,
   withControlSocket,
@@ -701,4 +708,73 @@ test('tabbing to a menu segmented control shows a real keyboard focus ring, not 
 
   // The individual button's own outline stays suppressed — no double ring.
   await expect(metricButton).toHaveCSS('outline-style', 'none');
+});
+
+const CAMERA_PICTURE = '.camera-feed__stream .setup-picture';
+
+for (const size of [
+  { width: 1024, height: 600 },
+  { width: 800, height: 480 },
+]) {
+  for (const hand of ['RH', 'LH'] as const) {
+    test.describe(`camera tab at ${size.width}x${size.height} ${hand}`, () => {
+      test.use({ viewport: size, hasTouch: true });
+
+      test('draws the confirmed box where the setup put it, not a fixed crosshair', async ({ page }) => {
+        await mockSetupAndPreview(page, setUpSnapshot());
+        await gotoApp(page);
+        await dismissPicker(page);
+        await setHanded(page, hand);
+        await page.getByRole('button', { name: 'Camera' }).click();
+
+        const outline = page.locator(`${CAMERA_PICTURE} .setup-picture__box`);
+        await expect(outline).toBeVisible();
+        await expect(page.locator('.camera-feed__crosshair, .camera-feed__center-cross')).toHaveCount(0);
+        await expect(page.getByText('Confirmed on the Setup tab')).toBeVisible();
+        const [x0, y0, x1, y1] = SET_UP.box;
+        const corners = await Promise.all(
+          [
+            [x0, y0],
+            [x1, y1],
+          ].map((px) => drawnAt(page, CAMERA_PICTURE, px as [number, number], hand))
+        );
+        // the shape's own geometry: Playwright's box for an SVG shape takes in its stroke
+        const drawn = await outline.evaluate((node) => node.getBoundingClientRect().toJSON());
+        expect(Math.abs(drawn.x - Math.min(corners[0][0], corners[1][0]))).toBeLessThan(2);
+        expect(Math.abs(drawn.x + drawn.width - Math.max(corners[0][0], corners[1][0]))).toBeLessThan(2);
+        expect(Math.abs(drawn.y - corners[0][1])).toBeLessThan(2);
+        expect(Math.abs(drawn.y + drawn.height - corners[1][1])).toBeLessThan(2);
+        const ball = await page
+          .locator(`${CAMERA_PICTURE} .setup-picture__ball`)
+          .evaluate((node) => node.getBoundingClientRect().toJSON());
+        const [bx, by] = await drawnAt(page, CAMERA_PICTURE, SET_UP.ball, hand);
+        expect(Math.abs(ball.x + ball.width / 2 - bx)).toBeLessThan(2);
+        expect(Math.abs(ball.y + ball.height / 2 - by)).toBeLessThan(2);
+
+        const out = process.env.UX_SHOTS_DIR;
+        if (out) {
+          mkdirSync(out, { recursive: true });
+          await page.locator('.camera-feed__stream').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: join(out, `task8-camera-box-${size.width}x${size.height}-${hand}.png`) });
+        }
+      });
+    });
+  }
+}
+
+test('with no box or aim set, the camera and live views draw nothing on the picture', async ({ page }) => {
+  const snapshot = setUpSnapshot({ state: 'skipped' });
+  snapshot.box = { state: 'not_set', reason: 'not set' } as typeof snapshot.box;
+  await mockSetupAndPreview(page, snapshot);
+  await page.setViewportSize({ width: 800, height: 480 });
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await expect(page.locator('.live-panel__target')).toBeVisible();
+  await expect(page.locator('.live-panel__aim')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Camera' }).click();
+  await expect(page.locator('.camera-feed__stream img')).toBeVisible();
+  await expect(page.getByText('Not set: confirm the ball in the box on the Setup tab')).toBeVisible();
+  await expect(page.locator('.setup-picture__overlay')).toHaveCount(0);
+  await expect(page.locator('.camera-feed__crosshair, .camera-feed__center-cross')).toHaveCount(0);
 });

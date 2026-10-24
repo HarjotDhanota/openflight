@@ -74,6 +74,10 @@ class KioskExtension:  # pylint: disable=unused-argument
         """Return the ready light's sensor states adjusted for this extension (None: off)."""
         return states
 
+    def setup_ready_causes(self, snapshot: dict) -> list:
+        """Extra ready-light causes from the setup snapshot: ("red" or "amber", what it says)."""
+        return []
+
     def before_setup_action(self, section: str, action: str, payload: dict) -> Optional[str]:
         """A reason to refuse this setup action (e.g. a run is in progress), or None."""
         return None
@@ -215,6 +219,14 @@ def adjust_ready_light(states):
             break
         states = extension.ready_light_states(states)
     return states
+
+
+def setup_ready_causes(snapshot: dict) -> list:
+    """Every extension's extra ready-light causes, in registration order."""
+    causes: list = []
+    for extension in registered():
+        causes.extend(extension.setup_ready_causes(snapshot) or ())
+    return causes
 
 
 @contextlib.contextmanager

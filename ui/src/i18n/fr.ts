@@ -300,6 +300,7 @@ export const fr: Messages = {
   'live.targetLineSet': 'Ligne de cible fixée {yaw} ±{spread}',
   'live.targetLineSetNoSpread': 'Ligne de cible fixée {yaw}',
   'live.targetLineNotSet': "Ligne de cible non fixée : gauche/droite selon la visée de l'appareil",
+  'live.aimView': 'Vue de la caméra avec la ligne de cible',
   'nav.moreTabs': "Plus d'onglets",
   'nav.setup': 'Réglage',
   'setup.offer': 'Terminer le réglage',

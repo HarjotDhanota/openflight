@@ -109,18 +109,6 @@
   aspect-ratio: 8 / 5;
 }
 
-.camera-feed--capture .camera-feed__video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.camera-feed__video {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
 .camera-feed__overlay {
   position: absolute;
   top: 0;
@@ -519,52 +507,4 @@
   border-color: rgba(248, 113, 113, 0.42);
   background: rgba(248, 113, 113, 0.09);
   color: var(--color-danger);
-}
-
-/* Alignment crosshair over the capture preview */
-.camera-feed__crosshair {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.camera-feed__hairline {
-  stroke: rgba(0, 255, 140, 0.55);
-  stroke-width: 1px;
-}
-
-.camera-feed__center-cross {
-  position: absolute;
-  left: var(--camera-crosshair-x, 50%);
-  top: var(--camera-crosshair-y, 50%);
-  width: 28px;
-  height: 28px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-
-.camera-feed__center-cross::before,
-.camera-feed__center-cross::after {
-  content: '';
-  position: absolute;
-  background: rgba(0, 255, 140, 0.95);
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
-}
-
-.camera-feed__center-cross::before {
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 3px;
-  transform: translateY(-50%);
-}
-
-.camera-feed__center-cross::after {
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 3px;
-  transform: translateX(-50%);
 }

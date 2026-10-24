@@ -3621,7 +3621,17 @@ def _ready_light_states() -> SensorStates | None:
         camera = dict(camera_capture_runtime.ready_snapshot())
     elif camera_capture_config.get("error"):
         camera = {"running": False}  # a requested camera that failed to start
-    return kiosk_extensions.adjust_ready_light(SensorStates(ops=ops, iwr=iwr, camera=camera))
+    setup = setup_service.snapshot() if setup_service is not None else None
+    look = ball_at_address_monitor.latest() if ball_at_address_monitor is not None else None
+    states = SensorStates(
+        ops=ops,
+        iwr=iwr,
+        camera=camera,
+        setup=setup,
+        ball_look=look,
+        setup_causes=tuple(kiosk_extensions.setup_ready_causes(setup)) if setup else (),
+    )
+    return kiosk_extensions.adjust_ready_light(states)
 
 
 def _publish_ready_light() -> dict:

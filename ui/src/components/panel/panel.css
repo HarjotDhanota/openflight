@@ -590,6 +590,32 @@
   color: var(--color-accent);
 }
 
+/* the aim line drawn on a small camera view, beside the target line words */
+.live-panel__aim-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 8px);
+  padding: 2px var(--space-md, 12px);
+  border-top: 1px solid var(--color-border);
+}
+
+.live-panel__aim-row .live-panel__target {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.live-panel__aim {
+  flex-shrink: 0;
+  width: 64px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+}
+
 .live-panel__body {
   position: relative;
   display: grid;

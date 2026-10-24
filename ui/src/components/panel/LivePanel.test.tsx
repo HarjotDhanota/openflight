@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { SetupSection, SetupSnapshot } from '../../hooks/useSetup';
 import type { Shot } from '../../types/shot';
 import type { TargetLine } from '../../utils/targetLine';
 import { LivePanel } from './LivePanel';
@@ -95,6 +96,51 @@ describe('LivePanel target line', () => {
 
   it('draws nothing when the kiosk cannot say', () => {
     expect(renderWith(null)).not.toContain('live-panel__target');
+  });
+});
+
+describe('LivePanel aim line', () => {
+  const notSet = { state: 'not_set' };
+  const setup = (aim: SetupSection): SetupSnapshot => ({
+    revision: 4,
+    box: {
+      state: 'confirmed',
+      box_px: [380, 560, 900, 720],
+      ball_px: [640, 610],
+      diameter_px: 22,
+      image_size_px: [1280, 800],
+    },
+    aim,
+    ball_range: notSet,
+    net_range: notSet,
+    scene: notSet,
+    live: { camera_available: true },
+    unapplied: {},
+  });
+  const renderWith = (snapshot: SetupSnapshot | null) =>
+    renderToString(
+      <LivePanel
+        shot={makeShot()}
+        shots={[makeShot()]}
+        profileId="james"
+        profileName="James"
+        clubLabel="DR"
+        targetLine={{ status: 'set', yawDeg: 2.14, uncertaintyDeg: 0.8 }}
+        setup={snapshot}
+        handed="RH"
+      />
+    );
+
+  it('shows the camera view for the aim line beside the target line text once an aim is set', () => {
+    const html = renderWith(setup({ state: 'set', aim_px: [900, 300] }));
+    expect(html).toContain('live-panel__aim');
+    expect(text(html)).toContain('Target line set +2.1° ±0.8°');
+  });
+
+  it('shows no view without a set aim', () => {
+    expect(renderWith(setup({ state: 'skipped' }))).not.toContain('live-panel__aim');
+    expect(renderWith(setup(notSet))).not.toContain('live-panel__aim');
+    expect(renderWith(null)).not.toContain('live-panel__aim');
   });
 });
 

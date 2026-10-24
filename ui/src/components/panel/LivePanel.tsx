@@ -1,4 +1,10 @@
 import { useMemo, type ReactNode } from 'react';
+import type { SetupSnapshot } from '../../hooks/useSetup';
+import { useCameraStill } from '../../hooks/useCameraStill';
+import type { Handed } from '../../stores/useSystemStore';
+import { getServerOrigin } from '../../utils/serverOrigin';
+import { SetupPicture } from '../setup/SetupPicture';
+import { aimLine, type AimOverlay } from '../setup/setupOverlay';
 import type { Shot } from '../../types/shot';
 import { computeSwingSpeedStats, filterShotsByProfile } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
@@ -29,6 +35,23 @@ interface LivePanelProps {
   resultVisible?: boolean;
   /** The kiosk's target line (GET /api/target-line); null draws nothing. */
   targetLine?: TargetLine | null;
+  /** The kiosk's setup record: a set aim is drawn on a small camera view. */
+  setup?: SetupSnapshot | null;
+  handed?: Handed | null;
+}
+
+// small: the view only has to show where the line points
+const AIM_VIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg?width=320`;
+const AIM_VIEW_REFRESH_MS = 5000;
+
+function AimView({ aim, handed, label }: { aim: AimOverlay; handed: Handed | null; label: string }) {
+  const still = useCameraStill(AIM_VIEW_URL, AIM_VIEW_REFRESH_MS);
+  if (still.state === 'unavailable') return null;
+  return (
+    <div className="live-panel__aim">
+      {still.src ? <SetupPicture src={still.src} alt={label} handed={handed} aim={aim} /> : null}
+    </div>
+  );
 }
 
 /**
@@ -48,6 +71,8 @@ export function LivePanel({
   headerAction,
   resultVisible = false,
   targetLine = null,
+  setup = null,
+  handed = null,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
@@ -87,11 +112,20 @@ export function LivePanel({
         ? t('live.targetLineSetNoSpread', { yaw })
         : t('live.targetLineSet', { yaw, spread: `${targetLine.uncertaintyDeg.toFixed(1)}°` });
   }
-  const target = targetText ? (
+  const targetWords = targetText ? (
     <p className="live-panel__target" data-status={targetLine?.status} role="status">
       {targetText}
     </p>
   ) : null;
+  const aim = aimLine(setup);
+  const target = aim ? (
+    <div className="live-panel__aim-row">
+      <AimView aim={aim} handed={handed} label={t('live.aimView')} />
+      {targetWords}
+    </div>
+  ) : (
+    targetWords
+  );
 
   if (!selected) {
     return (

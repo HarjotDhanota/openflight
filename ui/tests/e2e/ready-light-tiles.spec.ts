@@ -1,9 +1,16 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import {
+  drawnAt,
   gotoApp,
   KIOSK_VIEWPORTS,
+  mockSetupAndPreview,
   overflowingLiveMetricMetadata,
   overflowingLiveMetricValues,
+  SET_UP,
+  setHanded,
+  setUpSnapshot,
   simulateShot,
   withControlSocket,
 } from './helpers';
@@ -71,4 +78,54 @@ for (const viewport of KIOSK_VIEWPORTS) {
       });
     });
   });
+}
+
+const AIM_PICTURE = '.live-panel__aim .setup-picture';
+
+for (const viewport of KIOSK_VIEWPORTS) {
+  for (const hand of ['RH', 'LH'] as const) {
+    test.describe(`the aim line on the live view at ${viewport.width}x${viewport.height} ${hand}`, () => {
+      test.use({ viewport, hasTouch: true });
+
+      test('is drawn from the ball to the aim point once set, and the tiles still fit', async ({ page }) => {
+        await mockSetupAndPreview(page, setUpSnapshot());
+        await withControlSocket(async (socket) => {
+          await simulateShot(socket);
+        });
+        await gotoApp(page);
+        await page.getByRole('button', { name: 'Close Select club' }).click();
+        await setHanded(page, hand);
+        await showReadyLightAndAThreeDigitShot(page);
+
+        const line = page.locator(`${AIM_PICTURE} .setup-picture__aim-line`);
+        await expect(line).toBeVisible();
+        await expect(page.locator('.live-panel__aim-row .live-panel__target')).toBeVisible();
+        const svg = (await page.locator(`${AIM_PICTURE} .setup-picture__overlay`).boundingBox())!;
+        const ends = await line.evaluate((node) =>
+          ['x1', 'y1', 'x2', 'y2'].map((name) => Number(node.getAttribute(name)))
+        );
+        const from = await drawnAt(page, AIM_PICTURE, SET_UP.ball, hand);
+        const to = await drawnAt(page, AIM_PICTURE, SET_UP.aim, hand);
+        expect(Math.abs(svg.x + ends[0] - from[0])).toBeLessThan(1);
+        expect(Math.abs(svg.y + ends[1] - from[1])).toBeLessThan(1);
+        expect(Math.abs(svg.x + ends[2] - to[0])).toBeLessThan(1);
+        expect(Math.abs(svg.y + ends[3] - to[1])).toBeLessThan(1);
+        // a right-hander's aim point is right of the ball on the picture, a left-hander's left
+        expect(Math.sign(ends[2] - ends[0])).toBe(hand === 'RH' ? 1 : -1);
+
+        await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
+        expect(await overflowingLiveMetricValues(page)).toEqual([]);
+        expect(await overflowingLiveMetricMetadata(page)).toEqual([]);
+        for (const tile of await page.locator('.live-panel__grid .metric-card').all()) {
+          const bounds = await tile.boundingBox();
+          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 0.5);
+        }
+        const out = process.env.UX_SHOTS_DIR;
+        if (out) {
+          mkdirSync(out, { recursive: true });
+          await page.screenshot({ path: join(out, `task8-live-aim-${viewport.width}x${viewport.height}-${hand}.png`) });
+        }
+      });
+    });
+  }
 }

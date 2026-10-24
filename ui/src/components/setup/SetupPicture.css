@@ -1,0 +1,49 @@
+.setup-picture {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+.setup-picture__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.setup-picture__image--mirrored {
+  transform: scaleX(-1);
+}
+
+.setup-picture__overlay {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.setup-picture__box {
+  fill: rgba(255, 212, 0, 0.08);
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  stroke-dasharray: 8 5;
+}
+
+.setup-picture__ball {
+  fill: none;
+  stroke: var(--color-success);
+  stroke-width: 2;
+}
+
+.setup-picture__aim-line {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+}
+
+.setup-picture__aim-point {
+  fill: var(--color-accent);
+}
