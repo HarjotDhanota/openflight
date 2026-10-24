@@ -117,6 +117,27 @@ docs = [
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.format]
+# Upstream files upstream has not run ruff format on: kept in upstream's layout so
+# the fork's diff of them is its code changes only. (format.exclude adds to exclude.)
+exclude = [
+    "scripts/analysis/compare_trackman.py",
+    "scripts/analysis/experiment_spin_windows.py",
+    "scripts/analysis/sweep_ballistic_coeffs.py",
+    "scripts/analysis/validate_ballistics.py",
+    "src/openflight/ballistics.py",
+    "src/openflight/iwr6843/trajectory.py",
+    "src/openflight/ops243.py",
+    "tests/conftest.py",
+    "tests/test_compare_trackman.py",
+    "tests/test_gspro_messages.py",
+    "tests/test_launch_monitor.py",
+    "tests/test_ops243.py",
+    "tests/test_sim_resolver.py",
+    "tests/test_sim_server_wiring.py",
+    "tests/test_sim_transport.py",
+]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]  # Line length handled separately

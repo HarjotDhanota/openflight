@@ -3,7 +3,6 @@
 Exercises TcpSimClient through a real codec (GSProCodec) against the mock
 sim server, plus framing unit tests for the brace-balanced JSON framer.
 """
-
 import json
 import threading
 import time
@@ -56,7 +55,7 @@ def test_nested_objects():
 
 
 def test_empty_buffer_returns_none():
-    assert find_json_end(b"") is None
+    assert find_json_end(b'') is None
 
 
 def test_leading_whitespace_before_object():
@@ -73,7 +72,6 @@ def test_non_ascii_inside_string():
 
 class _NoHeartbeatCodec:
     """Minimal codec whose protocol has no keepalive (no heartbeat thread)."""
-
     name = "noheartbeat"
 
     def build_shot(self, resolved) -> bytes:
@@ -107,19 +105,10 @@ def _wait_for_state(client, state, deadline=3.0):
 
 def _resolved() -> ResolvedShot:
     return ResolvedShot(
-        shot_number=7,
-        ball_speed_mph=140.0,
-        vla=12.0,
-        hla=0.0,
-        total_spin_rpm=2500.0,
-        spin_axis_deg=0.0,
-        back_spin_rpm=2500.0,
-        side_spin_rpm=0.0,
-        carry_yards=255.0,
-        club_path_deg=0.0,
-        club=ClubType.DRIVER,
-        club_speed_mph=None,
-        provenance={},
+        shot_number=7, ball_speed_mph=140.0, vla=12.0, hla=0.0,
+        total_spin_rpm=2500.0, spin_axis_deg=0.0, back_spin_rpm=2500.0,
+        side_spin_rpm=0.0, carry_yards=255.0, club_path_deg=0.0,
+        club=ClubType.DRIVER, club_speed_mph=None, provenance={},
     )
 
 
@@ -267,7 +256,9 @@ def test_reconnect_after_server_drop(mock_sim):
         mock_sim.disconnect_client()
         assert _wait_for_state(client, ConnectionState.RECONNECT_BACKOFF, 2.0)
         reconnect = next(
-            status for status in statuses if status.state == ConnectionState.RECONNECT_BACKOFF
+            status
+            for status in statuses
+            if status.state == ConnectionState.RECONNECT_BACKOFF
         )
         assert reconnect.message == "peer closed connection (EOF)"
         assert _wait_for_state(client, ConnectionState.CONNECTED, 3.0)
@@ -398,4 +389,6 @@ def test_recv_loop_reports_socket_error():
 
     reason = client._recv_loop()
 
-    assert reason == ("receive failed: ConnectionResetError: [Errno 104] Connection reset by peer")
+    assert reason == (
+        "receive failed: ConnectionResetError: [Errno 104] Connection reset by peer"
+    )

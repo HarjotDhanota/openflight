@@ -22,7 +22,6 @@ All line fits work in ground coordinates: x = horizontal meters from the
 radar, h = meters above the RADAR PLANE (tilt already applied). Two-ray
 heights are meters above the FLOOR.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,20 +40,20 @@ class TrajectoryFit:
     method: str
     launch_angle_deg: float
     n_points: int
-    h_rms_m: float  # scatter about the fit
-    launch_cross_m: float  # where the fit meets the radar plane
+    h_rms_m: float                 # scatter about the fit
+    launch_cross_m: float          # where the fit meets the radar plane
 
 
-def _ground_xy(points: list[AnglePoint], cal: Calibration) -> tuple[np.ndarray, np.ndarray]:
+def _ground_xy(points: list[AnglePoint], cal: Calibration
+               ) -> tuple[np.ndarray, np.ndarray]:
     """AnglePoints -> (x horizontal, h above radar plane)."""
     theta = np.array([p.theta_rad for p in points]) + cal.tilt_rad
     rng = np.array([p.range_m for p in points])
     return rng * np.cos(theta), rng * np.sin(theta)
 
 
-def fit_free(
-    points: list[AnglePoint], cal: Calibration, min_points: int = 8
-) -> TrajectoryFit | None:
+def fit_free(points: list[AnglePoint], cal: Calibration,
+             min_points: int = 8) -> TrajectoryFit | None:
     """Unconstrained least-squares line fit."""
     if len(points) < min_points:
         return None
@@ -62,21 +61,16 @@ def fit_free(
     slope, icpt = np.polyfit(x_m, h_m, 1)
     resid = h_m - (slope * x_m + icpt)
     cross = float(-icpt / slope) if slope else float("nan")
-    return TrajectoryFit(
-        method="free",
-        launch_angle_deg=float(np.degrees(np.arctan(slope))),
-        n_points=len(points),
-        h_rms_m=float(np.sqrt((resid**2).mean())),
-        launch_cross_m=cross,
-    )
+    return TrajectoryFit(method="free",
+                         launch_angle_deg=float(np.degrees(np.arctan(slope))),
+                         n_points=len(points),
+                         h_rms_m=float(np.sqrt((resid ** 2).mean())),
+                         launch_cross_m=cross)
 
 
-def fit_tee(
-    points: list[AnglePoint],
-    cal: Calibration,
-    min_points: int = 8,
-    th_gate_rad: float | None = None,
-) -> TrajectoryFit | None:
+def fit_tee(points: list[AnglePoint], cal: Calibration,
+            min_points: int = 8,
+            th_gate_rad: float | None = None) -> TrajectoryFit | None:
     """Line forced through the measured launch point (floor-referenced).
 
     ``th_gate_rad`` keeps only points measured BELOW that boresight angle
@@ -94,18 +88,17 @@ def fit_tee(
     d_x = x_m - x_0
     slope = float(np.sum(d_x * (h_m - h_0)) / np.sum(d_x * d_x))
     resid = h_m - (h_0 + slope * d_x)
-    return TrajectoryFit(
-        method="tee",
-        launch_angle_deg=float(np.degrees(np.arctan(slope))),
-        n_points=len(points),
-        h_rms_m=float(np.sqrt((resid**2).mean())),
-        launch_cross_m=float(x_0 - h_0 / slope) if slope else float("nan"),
-    )
+    return TrajectoryFit(method="tee",
+                         launch_angle_deg=float(np.degrees(np.arctan(slope))),
+                         n_points=len(points),
+                         h_rms_m=float(np.sqrt((resid ** 2).mean())),
+                         launch_cross_m=float(x_0 - h_0 / slope) if slope
+                         else float("nan"))
 
 
-def _two_ray_solve(
-    snapshot: np.ndarray, x_m: float, radar_height_m: float, tilt_rad: float, grid_m: np.ndarray
-) -> tuple[float, float, float]:
+def _two_ray_solve(snapshot: np.ndarray, x_m: float, radar_height_m: float,
+                   tilt_rad: float, grid_m: np.ndarray
+                   ) -> tuple[float, float, float]:
     """Best-fit ball height ABOVE THE FLOOR for one snapshot (vectorized).
 
     For each hypothesized height the direct and floor-image arrival angles
@@ -125,14 +118,14 @@ def _two_ray_solve(
     det = np.where(np.abs(det) < 1e-9, 1e-9, det)
     c_a = (n_el * b_1 - a12 * b_2) / det
     c_b = (n_el * b_2 - np.conj(a12) * b_1) / det
-    pred_power = (
-        np.abs(c_a) ** 2 * n_el + np.abs(c_b) ** 2 * n_el + 2 * np.real(np.conj(c_a) * c_b * a12)
-    )
+    pred_power = (np.abs(c_a) ** 2 * n_el + np.abs(c_b) ** 2 * n_el
+                  + 2 * np.real(np.conj(c_a) * c_b * a12))
     power = float(np.vdot(snapshot, snapshot).real) + 1e-12
     expl = np.real(pred_power) / power
     k = int(np.argmax(expl))
     p_a, p_b = abs(c_a[k]) ** 2, abs(c_b[k]) ** 2
-    return (float(grid_m[k]), float(expl[k]), float(p_b / (p_a + p_b + 1e-12)))
+    return (float(grid_m[k]), float(expl[k]),
+            float(p_b / (p_a + p_b + 1e-12)))
 
 
 def fit_two_ray(
@@ -171,7 +164,7 @@ def fit_two_ray(
     hs: list[float] = []
     ws: list[float] = []
     for _t, rng_m, snap in snap_points:
-        x_m = float(rng_m)  # slant ~ horizontal at these angles
+        x_m = float(rng_m)                 # slant ~ horizontal at these angles
         if x_max_m is not None and x_m > x_max_m:
             continue
         # Bartlett-peak gate for the corrupted zone. Tested alternative
@@ -180,7 +173,8 @@ def fit_two_ray(
         # heights, while their Bartlett peak drifts high and betrays them.
         if th_gate_rad is not None and est_bartlett(snap) > th_gate_rad:
             continue
-        height, explained, imfrac = _two_ray_solve(snap, x_m, radar_height_m, cal.tilt_rad, grid)
+        height, explained, imfrac = _two_ray_solve(
+            snap, x_m, radar_height_m, cal.tilt_rad, grid)
         if explained >= min_explained and np.isfinite(height):
             w = (explained - min_explained + 1e-3) if weighted else 1.0
             if dominance:
@@ -210,22 +204,16 @@ def fit_two_ray(
     resid = h_a - (slope * x_a + icpt)
     # launch_cross in radar-plane coords: floor height == radar_height below
     cross = float((radar_height_m - icpt) / slope) if slope else float("nan")
-    return TrajectoryFit(
-        method="two_ray",
-        launch_angle_deg=float(np.degrees(np.arctan(slope))),
-        n_points=len(xs),
-        h_rms_m=float(np.sqrt((resid**2).mean())),
-        launch_cross_m=cross,
-    )
+    return TrajectoryFit(method="two_ray",
+                         launch_angle_deg=float(np.degrees(np.arctan(slope))),
+                         n_points=len(xs),
+                         h_rms_m=float(np.sqrt((resid ** 2).mean())),
+                         launch_cross_m=cross)
 
 
-def cosine_speed_factor(
-    la_deg: float,
-    r_first_m: float,
-    r_last_m: float,
-    cal: Calibration,
-    radar_height_m: float | None = None,
-) -> float:
+def cosine_speed_factor(la_deg: float, r_first_m: float, r_last_m: float,
+                        cal: Calibration,
+                        radar_height_m: float | None = None) -> float:
     """Radial-projection factor: track slope = factor * true ball speed.
 
     The radar measures range rate along the line of sight; a climbing ball's
@@ -242,7 +230,7 @@ def cosine_speed_factor(
     la = np.radians(np.clip(la_deg, 0.0, 40.0))
     z_0 = cal.tee_ball_height_m
     d_z = z_0 - radar_height_m
-    x_tee = float(np.sqrt(max(cal.tee_range_m**2 - d_z * d_z, 0.25)))
+    x_tee = float(np.sqrt(max(cal.tee_range_m ** 2 - d_z * d_z, 0.25)))
 
     def r_of(x: float) -> float:
         z = z_0 + np.tan(la) * (x - x_tee)

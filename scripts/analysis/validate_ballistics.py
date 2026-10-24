@@ -120,25 +120,13 @@ def _normalize_club(raw: Optional[str]) -> str:
     if len(parts) == 2:
         a, b = parts
         if a.isdigit() and b in ("iron", "i", "wood", "w", "hybrid", "h"):
-            kind = {
-                "iron": "iron",
-                "i": "iron",
-                "wood": "wood",
-                "w": "wood",
-                "hybrid": "hybrid",
-                "h": "hybrid",
-            }[b]
+            kind = {"iron": "iron", "i": "iron", "wood": "wood", "w": "wood",
+                    "hybrid": "hybrid", "h": "hybrid"}[b]
             return f"{a}-{kind}"
         if b.isdigit() and a in ("iron", "wood", "hybrid"):
             return f"{b}-{a}"
-    aliases = {
-        "drv": "driver",
-        "1-wood": "driver",
-        "pitching-wedge": "pw",
-        "sand-wedge": "sw",
-        "gap-wedge": "gw",
-        "lob-wedge": "lw",
-    }
+    aliases = {"drv": "driver", "1-wood": "driver", "pitching-wedge": "pw",
+               "sand-wedge": "sw", "gap-wedge": "gw", "lob-wedge": "lw"}
     return aliases.get(s, s)
 
 
@@ -290,7 +278,7 @@ def _default_session_label(path: Path) -> str:
     stem = path.stem
     for prefix in ("OpenFlight-Test.", "comparison_", "session_"):
         if stem.startswith(prefix):
-            stem = stem[len(prefix) :]
+            stem = stem[len(prefix):]
             break
     return stem or path.name
 
@@ -417,25 +405,23 @@ def load_comparison(path: Path, session: Optional[str] = None) -> List[Compariso
     with open(path, "r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         for r in reader:
-            rows.append(
-                ComparisonRow(
-                    timestamp_of=r.get("timestamp_of", "") or "",
-                    club_raw=r.get("club", "") or "",
-                    match_quality=r.get("match_quality", "") or "",
-                    ball_speed_of=_to_float(r.get("ball_speed_of")),
-                    launch_v_of=_to_float(r.get("launch_v_of")),
-                    launch_h_of=_to_float(r.get("launch_h_of")),
-                    spin_of=_to_float(r.get("spin_of")),
-                    carry_of=_to_float(r.get("carry_of")),
-                    ball_speed_tm=_to_float(r.get("ball_speed_tm")),
-                    launch_v_tm=_to_float(r.get("launch_v_tm")),
-                    launch_h_tm=_to_float(r.get("launch_h_tm")),
-                    spin_tm=_to_float(r.get("spin_tm")),
-                    spin_axis_tm=_to_float(r.get("spin_axis_tm")),
-                    carry_tm=_to_float(r.get("carry_tm")),
-                    session=session_label,
-                )
-            )
+            rows.append(ComparisonRow(
+                timestamp_of=r.get("timestamp_of", "") or "",
+                club_raw=r.get("club", "") or "",
+                match_quality=r.get("match_quality", "") or "",
+                ball_speed_of=_to_float(r.get("ball_speed_of")),
+                launch_v_of=_to_float(r.get("launch_v_of")),
+                launch_h_of=_to_float(r.get("launch_h_of")),
+                spin_of=_to_float(r.get("spin_of")),
+                carry_of=_to_float(r.get("carry_of")),
+                ball_speed_tm=_to_float(r.get("ball_speed_tm")),
+                launch_v_tm=_to_float(r.get("launch_v_tm")),
+                launch_h_tm=_to_float(r.get("launch_h_tm")),
+                spin_tm=_to_float(r.get("spin_tm")),
+                spin_axis_tm=_to_float(r.get("spin_axis_tm")),
+                carry_tm=_to_float(r.get("carry_tm")),
+                session=session_label,
+            ))
     return rows
 
 
@@ -503,7 +489,9 @@ def validate_tm_inputs(
     """
     out: List[ValidationRow] = []
     for s in tm_shots:
-        if not _has_required_inputs(s.ball_speed_mph, s.launch_v_deg, s.spin_rpm, s.carry_yards):
+        if not _has_required_inputs(
+            s.ball_speed_mph, s.launch_v_deg, s.spin_rpm, s.carry_yards
+        ):
             continue
         spin_axis = s.spin_axis_deg if s.spin_axis_deg is not None else 0.0
         launch_h = s.launch_h_deg if s.launch_h_deg is not None else 0.0
@@ -574,7 +562,9 @@ def validate_of_inputs(
     for i, row in enumerate(comp_rows, start=1):
         if row.match_quality != "good":
             continue
-        if not _has_required_inputs(row.ball_speed_of, row.launch_v_of, row.carry_tm):
+        if not _has_required_inputs(
+            row.ball_speed_of, row.launch_v_of, row.carry_tm
+        ):
             continue
         club_enum = _club_type(row.club_raw)
         spin_rpm, spin_source = _resolve_of_spin(row, club_enum)
@@ -600,23 +590,21 @@ def validate_of_inputs(
         )
         traj = simulate(conditions, air_density=air_density, aero=aero)
         session_tag = row.session or "default"
-        out.append(
-            ValidationRow(
-                source="of",
-                shot_label=f"of#{i}@{session_tag}@{row.timestamp_of[:19]}",
-                club=_normalize_club(row.club_raw),
-                session=session_tag,
-                ball_speed_mph=row.ball_speed_of,
-                launch_v_deg=row.launch_v_of,
-                launch_h_deg=launch_h,
-                spin_rpm=spin_rpm,
-                spin_axis_deg=spin_axis,
-                spin_source=spin_source,
-                measured_carry_yards=row.carry_tm,
-                model_carry_yards=traj.carry_yards,
-                delta_yards=traj.carry_yards - row.carry_tm,
-            )
-        )
+        out.append(ValidationRow(
+            source="of",
+            shot_label=f"of#{i}@{session_tag}@{row.timestamp_of[:19]}",
+            club=_normalize_club(row.club_raw),
+            session=session_tag,
+            ball_speed_mph=row.ball_speed_of,
+            launch_v_deg=row.launch_v_of,
+            launch_h_deg=launch_h,
+            spin_rpm=spin_rpm,
+            spin_axis_deg=spin_axis,
+            spin_source=spin_source,
+            measured_carry_yards=row.carry_tm,
+            model_carry_yards=traj.carry_yards,
+            delta_yards=traj.carry_yards - row.carry_tm,
+        ))
     return out
 
 
@@ -624,60 +612,31 @@ def validate_of_inputs(
 # Output
 # ---------------------------------------------------------------------------
 
-
 def write_per_shot_csv(rows: List[ValidationRow], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(
-            [
-                "source",
-                "session",
-                "shot_label",
-                "club",
-                "ball_speed_mph",
-                "launch_v_deg",
-                "launch_h_deg",
-                "spin_rpm",
-                "spin_axis_deg",
-                "spin_source",
-                "measured_carry_yards",
-                "model_carry_yards",
-                "delta_yards",
-                "abs_delta_yards",
-            ]
-        )
+        w.writerow([
+            "source", "session", "shot_label", "club",
+            "ball_speed_mph", "launch_v_deg", "launch_h_deg",
+            "spin_rpm", "spin_axis_deg", "spin_source",
+            "measured_carry_yards", "model_carry_yards",
+            "delta_yards", "abs_delta_yards",
+        ])
         for r in rows:
-            w.writerow(
-                [
-                    r.source,
-                    r.session,
-                    r.shot_label,
-                    r.club,
-                    f"{r.ball_speed_mph:.2f}",
-                    f"{r.launch_v_deg:.2f}",
-                    f"{r.launch_h_deg:.2f}",
-                    f"{r.spin_rpm:.0f}",
-                    f"{r.spin_axis_deg:.2f}",
-                    r.spin_source,
-                    f"{r.measured_carry_yards:.2f}",
-                    f"{r.model_carry_yards:.2f}",
-                    f"{r.delta_yards:.2f}",
-                    f"{abs(r.delta_yards):.2f}",
-                ]
-            )
+            w.writerow([
+                r.source, r.session, r.shot_label, r.club,
+                f"{r.ball_speed_mph:.2f}", f"{r.launch_v_deg:.2f}", f"{r.launch_h_deg:.2f}",
+                f"{r.spin_rpm:.0f}", f"{r.spin_axis_deg:.2f}", r.spin_source,
+                f"{r.measured_carry_yards:.2f}", f"{r.model_carry_yards:.2f}",
+                f"{r.delta_yards:.2f}", f"{abs(r.delta_yards):.2f}",
+            ])
 
 
 def _stats(deltas: List[float]) -> Dict[str, float]:
     if not deltas:
-        return {
-            "n": 0,
-            "mean": float("nan"),
-            "stdev": float("nan"),
-            "rmse": float("nan"),
-            "mae": float("nan"),
-            "max_abs": float("nan"),
-        }
+        return {"n": 0, "mean": float("nan"), "stdev": float("nan"),
+                "rmse": float("nan"), "mae": float("nan"), "max_abs": float("nan")}
     mean = statistics.fmean(deltas)
     stdev = statistics.pstdev(deltas) if len(deltas) > 1 else 0.0
     rmse = math.sqrt(sum(d * d for d in deltas) / len(deltas))
@@ -706,10 +665,8 @@ def format_stats(label: str, rows: List[ValidationRow]) -> str:
     clubs = sorted({r.club for r in rows})
     lines.append("-" * 80)
     lines.append("By club:")
-    lines.append(
-        f"  {'club':10s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
-        f"{'mae':>6s}  {'max|d|':>7s}  {'measured_n':>4s}  {'fallback_n':>4s}"
-    )
+    lines.append(f"  {'club':10s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
+                 f"{'mae':>6s}  {'max|d|':>7s}  {'measured_n':>4s}  {'fallback_n':>4s}")
     for club in clubs:
         club_rows = [r for r in rows if r.club == club]
         s = _stats([r.delta_yards for r in club_rows])
@@ -724,9 +681,8 @@ def format_stats(label: str, rows: List[ValidationRow]) -> str:
     sessions = sorted({r.session for r in rows})
     if len(sessions) > 1:
         lines.append("By session:")
-        lines.append(
-            f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  {'mae':>6s}  {'max|d|':>7s}"
-        )
+        lines.append(f"  {'session':24s}  {'n':>3s}  {'bias':>8s}  {'rmse':>6s}  "
+                     f"{'mae':>6s}  {'max|d|':>7s}")
         for sess in sessions:
             sess_rows = [r for r in rows if r.session == sess]
             s = _stats([r.delta_yards for r in sess_rows])
@@ -768,7 +724,8 @@ def write_scatter(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
-        print(f"[warn] matplotlib not available — skipping {out_path.name}", file=sys.stderr)
+        print(f"[warn] matplotlib not available — skipping {out_path.name}",
+              file=sys.stderr)
         return
 
     if not rows:
@@ -790,7 +747,8 @@ def write_scatter(
             if not cr:
                 continue
             label = (
-                f"{club} (n={len(cr)})" if len(sessions) == 1 else f"{club}/{sess} (n={len(cr)})"
+                f"{club} (n={len(cr)})" if len(sessions) == 1
+                else f"{club}/{sess} (n={len(cr)})"
             )
             ax.scatter(
                 [r.measured_carry_yards for r in cr],
@@ -798,19 +756,15 @@ def write_scatter(
                 label=label,
                 color=color_for[club],
                 marker=marker_for[sess],
-                s=42,
-                alpha=0.85,
-                edgecolor="k",
-                linewidth=0.5,
+                s=42, alpha=0.85, edgecolor="k", linewidth=0.5,
             )
     all_x = [r.measured_carry_yards for r in rows]
     all_y = [r.model_carry_yards for r in rows]
     lo = min(min(all_x), min(all_y)) * 0.95
     hi = max(max(all_x), max(all_y)) * 1.05
     ax.plot([lo, hi], [lo, hi], "k--", lw=1, label="1:1")
-    ax.fill_between(
-        [lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5], color="grey", alpha=0.15, label="+/-5 yd"
-    )
+    ax.fill_between([lo, hi], [lo - 5, hi - 5], [lo + 5, hi + 5],
+                    color="grey", alpha=0.15, label="+/-5 yd")
 
     stats = _stats([r.delta_yards for r in rows])
     ax.set_title(
@@ -832,7 +786,6 @@ def write_scatter(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
 
 def main(argv: Optional[List[str]] = None) -> int:
     # Allow non-ASCII (e.g. arrows, Greek letters) in printed stats on
@@ -933,12 +886,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"TM-inputs validation (rho={args.air_density:.3f} kg/m³)",
         args.output_dir / "scatter_tm_inputs.png",
     )
-    stats_text = [
-        format_stats(
-            f"TM-inputs (model fed TrackMan measurements, rho={args.air_density:.3f})",
-            tm_rows,
-        )
-    ]
+    stats_text = [format_stats(
+        f"TM-inputs (model fed TrackMan measurements, rho={args.air_density:.3f})",
+        tm_rows,
+    )]
 
     # --- OF inputs ---
     of_rows: List[ValidationRow] = []
@@ -965,12 +916,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"OF-inputs end-to-end (rho={args.air_density:.3f} kg/m³)",
             args.output_dir / "scatter_of_inputs.png",
         )
-        stats_text.append(
-            format_stats(
-                f"OF-inputs (OpenFlight measurements → model → TM carry, rho={args.air_density:.3f})",
-                of_rows,
-            )
-        )
+        stats_text.append(format_stats(
+            f"OF-inputs (OpenFlight measurements → model → TM carry, rho={args.air_density:.3f})",
+            of_rows,
+        ))
 
     out_stats = args.output_dir / "stats.txt"
     out_stats.parent.mkdir(parents=True, exist_ok=True)
