@@ -212,7 +212,6 @@ covers the tester page; the page's "Kiosk view" button opens the kiosk UI at
 | `GET /api/tester/placement-box` (`?arm_id=`) | the box (`mode`, `box_outline_px`, `frame_size_px`, `placement_window_m`), `ball`, `net_line`, `distance_note`, the lens |
 | `POST /api/tester/placement-box` | `show`, `confirm` (no coordinates), `set_net_line {row_px}` |
 | `GET\|POST /api/tester/lens` | the lenses, the selection, each lens's settings, `allowed_ladder_us`; `select`, `settings`, `reset_tilt` |
-| `GET /api/tester/testers` | `testers`, `suggested_new` |
 | `GET /api/tester/status` | adds `lens_id`, `kiosk`, `ball_at_address`, `live_metrics` |
 | `GET\|POST /api/tester/aim-point` | `display_scale`, `skip`, `total_uncertainty_deg`; during free play `preview_source: kiosk` and `free_play {applied, error}` |
 | `GET\|POST /api/tester/handedness` | the tester's `handed` (`RH` or `LH`) and its `source` |
