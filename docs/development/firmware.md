@@ -119,10 +119,9 @@ a pending frame was overrun, or the build packs on the CPU) carries no scanned
 flag, and the host reports the capture's IQ8 integrity as unobserved, never
 clean. A capture plan with fewer than two pre frames never sets the capture's
 scan flag (the next frame could reuse the slot mid-scan), so it also reads
-unobserved. The scan is a CPU pass over the same components the old CPU packer
-touched (15,264 per profile C frame), so its worst-case elapsed scan time, including pre-emption, is recorded
-from `sensorStart` for `perfstats` (with the scan count and total, for an average). Whether it costs frames at 2 ms is measured
-on hardware, not assumed.
+unobserved. The scan is a CPU pass (15,264 components per profile C frame), so
+its worst-case elapsed scan time, including pre-emption, is recorded from
+`sensorStart` for `perfstats` (with the scan count and total, for an average).
 
 ## Firmware And Host Contract
 

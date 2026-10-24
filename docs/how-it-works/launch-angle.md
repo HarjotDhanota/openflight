@@ -18,15 +18,13 @@ without hiding quality.
 | Estimator | **LCMF-v2** (per-antenna paths) |
 | Validation | **Three indoor TrackMan sessions** (LCMF-v1) |
 
-!!! warning "LCMF-v2 replaced LCMF-v1 on 30 September 2026"
+!!! warning "The running estimator is LCMF-v2"
 
-    The running estimator is LCMF-v2 (`lcmf_v2_per_antenna`). It places each
-    IWR6843LEVM antenna (RX1–RX4, TX1, TX3) from the enclosure's rig file
-    (`--rig-geometry`) and fits exact direct and floor-bounced path lengths for
-    every TX/RX pair, instead of one radar height on idealised element positions.
-    Its gates, angle grid and five component models are LCMF-v1's. The TrackMan
-    results on this page were measured with LCMF-v1 on the July rig; LCMF-v2 has
-    no paired TrackMan session yet.
+    LCMF-v2 (`lcmf_v2_per_antenna`) places each IWR6843LEVM antenna (RX1–RX4,
+    TX1, TX3) from the enclosure's rig file (`--rig-geometry`) and fits exact
+    direct and floor-bounced path lengths for every TX/RX pair. Its gates, angle
+    grid and five component models are LCMF-v1's. The TrackMan results on this
+    page were measured with LCMF-v1; LCMF-v2 has no paired TrackMan session yet.
 
 **Explain it like I’m five**
 

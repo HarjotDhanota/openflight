@@ -57,7 +57,7 @@ Full procedure: **[mounting, aiming, and measuring](../iwr6843/mounting.md)**.
 
 Every horizontal angle (horizontal launch, club path, the D-plane face angle and
 the spin-axis proxy, from the camera and the IWR alike) has one zero model, in two
-layers (D36):
+layers:
 
 1. **Each sensor's own boresight zero.** The IWR's is its board's horizontal phase
    reference, `--iwr6843-horizontal-phase-reference-rad`, measured per board. The
@@ -70,8 +70,8 @@ layers (D36):
    and reports 0; + still means right of the target line.
 
 The offset is given through `--camera-capture-horizontal-offset-deg` and
-`--iwr6843-azimuth-offset-deg`, with the same value; the D34 target-line
-hand-off from the tester page passes it to both (target line 3° right of the
+`--iwr6843-azimuth-offset-deg`, with the same value; the tester page's
+target-line hand-off passes it to both (target line 3° right of the
 boresight → `-3`). Either flag alone sets it for both sensors; two different
 values are refused. Unset or `0`, every horizontal angle is reported against the
 unit boresight and its record says `unit_boresight`; with an offset, against the

@@ -63,8 +63,7 @@ sudo systemctl restart openflight
 
 ### Updating a unit installed before October 2026
 
-Units installed before the restart limits were added retry forever: one Pi
-restarted 98 times in 10 minutes when its radar could not be found, running
+Units installed before the restart limits were added retry forever, running
 `uv sync` and grabbing the hardware on every attempt. `systemctl daemon-reload`
 alone does not help, because the installed file is a copy. Reinstall it with
 the `sed ... | sudo tee` command above (or rerun `scripts/setup/setup.sh` and

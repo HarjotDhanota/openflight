@@ -9,40 +9,24 @@ Camera capture is experimental. Camera-assisted horizontal launch, club path,
 and attack angle must remain quality-gated until they are validated against a
 launch-monitor source of truth.
 
-Development follows the [fusion master plan](../development/fusion-master-plan.md),
-which defines calibration, replay, accuracy validation and promotion gates.
-The [offline optical calibration bench](optical-calibration.md) fits independent
-checkerboard candidates and reports held-out residuals. The
-[opt-in live calibrated path](live-calibrated-fusion.md) consumes a candidate
-with explicit placement, mode checks and per-shot inclination; it remains
-unqualified until independent validation.
-The [offline projection comparison](calibrated-projection.md) compares candidate
-and current-model rays and checks capture compatibility without promoting either.
-The [recorded-track comparison](recorded-track-comparison.md) applies both models
-to capture-bound ball-center or club-feature annotations and reports conditional
-ray, position and interval-motion differences.
-The [tester fusion diagnostic view](live-fusion-diagnostics.md) displays existing
-pipeline results with processing states, source labels, recorded discrepancies
-and optional hidden-metric testing blocks.
-The [tester setup requirements](tester-setup-gate.md) distinguish the approved
-measured rig, operator physical confirmation and runtime sensor readiness.
-[The fixed box](tester-fixed-box.md) describes the tester's TrackMan-style
-placement box, how the IWR's distance is matched to the camera's direction, the
-lens choice and the aim point.
-Use the [first Pi session procedure](pi-commissioning.md) to commission the
-complete bench and preserve level, tilted and recovery evidence.
-The [speed contract](speed-contract.md) explains the retained OPS radial result
-and why total-speed correction is now a separate experimental candidate.
-The [timing evidence bench](timing-validation.md) checks recorded camera clock
-correlation and independent event intervals without promoting a live mapping.
-[Recorded camera-fusion replay](fusion-replay.md) reuses the live camera core,
-and the [accuracy benchmark](accuracy-benchmark.md) scores reviewed reference
-matches while retaining incompatible and unavailable observations.
-[Raw radar and camera replay](raw-fusion-replay.md) reruns saved radar inputs
-through production processing. The [commissioning report](commissioning-report.md)
-summarizes acquisition, recorded timing and missing evidence after a Pi run.
-Use [community contribution packages](community-contributions.md) to make a
-consent-bound, checksum-verified local archive from a tester export.
+Related pages: the [fusion master plan](../development/fusion-master-plan.md)
+(calibration, replay, validation and promotion gates);
+[optical calibration](optical-calibration.md) (checkerboard candidates);
+the [opt-in live calibrated path](live-calibrated-fusion.md) (unqualified);
+[projection comparison](calibrated-projection.md);
+[recorded-track comparison](recorded-track-comparison.md);
+the [tester fusion diagnostic view](live-fusion-diagnostics.md);
+[tester setup requirements](tester-setup-gate.md);
+[the fixed box](tester-fixed-box.md) (placement box, lens choice, aim point);
+the [first Pi session procedure](pi-commissioning.md);
+the [speed contract](speed-contract.md) (OPS radial speed and the experimental
+total-speed correction); the [timing evidence bench](timing-validation.md);
+[camera-fusion replay](fusion-replay.md); the
+[accuracy benchmark](accuracy-benchmark.md);
+[raw radar and camera replay](raw-fusion-replay.md); the
+[commissioning report](commissioning-report.md); and
+[community contribution packages](community-contributions.md) (consent-bound,
+checksum-verified archives of a tester export).
 
 ## Supported Hardware
 
@@ -105,9 +89,7 @@ offset overrides that flag. The v3 file places the IWR reference 30 mm behind
 the camera, giving a camera offset of **+0.030 m**. Club and ball reconstruction
 use this offset in camera position and camera-to-ball distance; the supplied
 tee slant range remains measured from the radar. Without a measured offset or
-explicit flag, the historical zero-forward-separation assumption remains.
-This translation correction does not establish lens calibration or a general
-mount/placement rotation calibration.
+explicit flag, the forward offset is zero.
 
 The useful image does not need to contain the golfer or the full shaft. It must
 contain:
@@ -291,7 +273,7 @@ camera restart and is intentionally not part of the live-control path.
 
 ## Automatic Exposure
 
-The rule (13 Oct 2026): **use the lowest exposure unless more is needed**, with
+The rule: **use the lowest exposure unless more is needed**, with
 the resting ball as the light meter. The policy is `camera/swing_exposure.py`; its
 inputs and their derivation are in `config/swing_exposure.json`.
 
@@ -311,8 +293,7 @@ inputs and their derivation are in `config/swing_exposure.json`.
 - **The decision ladder** runs down from the ceiling in steps of about √2 (294,
   208, 147, 104, 74, 52, 37, 26, 18, 13, 9 µs …) to the sensor's minimum. Gain runs
   from the sensor's minimum (1) to its analogue cap (about 15.94 on the OV9281,
-  read from the controls). The old stepped list, with 650–1,250 µs steps and gains
-  of 18 and 20 that the sensor silently clamped, is retired.
+  read from the controls).
 - **Choosing a setting.** The ball's brightest part (p95 of its core) is aimed at
   **0.55 of clip** (between black, 16 DN, and clip, 250 DN). The policy picks the
   **shortest** exposure on the ladder at which some gain within the cap gets there,
@@ -325,7 +306,7 @@ inputs and their derivation are in `config/swing_exposure.json`.
   - *Not enough light*: at the blur ceiling with the gain capped, the ball is still
     under the gate. The setting stays there and clips are labelled **too dark: add
     light**. The policy never goes past the ceiling.
-  - Neither label blocks anything (D15): the shot is analysed and labelled.
+  - Neither label blocks anything: the shot is analysed and labelled.
 - **Before every swing.** About once a second, between clips, the kiosk measures
   the resting ball. It uses the ball the `--camera-ball-box` look found, or, without
   a box, the setup's ball spot (`--camera-setup-ball`). It judges only frames taken
@@ -369,13 +350,12 @@ The last ball-judged setting and its light are stored at:
 
 What it means in practice (6 mm lens):
 
-- **13 Oct room.** The ball read 26–53 DN at 300 µs × 12 at 2.14–1.32 m. The policy
-  goes to 294 µs × 15.94: the ball reads about 34–69 DN, above the gate but under
-  the 0.55 target. More light is the only way to shorter exposures.
-- **30 Sept full sun.** The ball locked at 7 µs × 1, so 1280×800 sits at the
-  sensor's shortest exposure. 640×400, twice as bright, clips there unless its
-  minimum is about 3 µs, so it is labelled too bright: shade the ball or fit an ND
-  filter.
+- **Indoors**, the policy typically ends at the blur ceiling with the gain capped,
+  the ball above the gate but under the 0.55 target. More light is the only way
+  to shorter exposures.
+- **In full sun**, 1280×800 sits at the sensor's shortest exposure. 640×400, twice
+  as bright, can clip there and is labelled too bright: shade the ball or fit an
+  ND filter.
 
 The standalone calibration sweep remains useful when diagnosing an unusual
 lighting installation:

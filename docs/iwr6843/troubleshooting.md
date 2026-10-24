@@ -29,12 +29,10 @@ until power, ports, firmware, config, and geometry are verified.
 
 ## CLI answers only after RESET (open hardware limitation)
 
-On the tester Pi the Enhanced `if00` CLI has alternated between answering and
-staying silent to `help` until RESET was pressed. The host releases the port
-and its lock after every check and capture, including failures (covered by
-simulated-device tests, not by hardware). No cause is proven, and OpenFlight
-deliberately does not unbind USB, power-cycle, pulse DTR/RTS or retry to hide
-it.
+The Enhanced `if00` CLI can stay silent to `help` until RESET is pressed. The
+host releases the port and its lock after every check and capture, including
+failures. The cause is unknown; OpenFlight does not unbind USB, power-cycle,
+pulse DTR/RTS or retry to hide it.
 
 Every `check_cli.py` run prints one `IWR6843 CLI evidence: {...}` JSON line
 before its result: requested and resolved port, by-id aliases, USB interface,
