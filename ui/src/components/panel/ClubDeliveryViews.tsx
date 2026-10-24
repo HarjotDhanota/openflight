@@ -23,39 +23,39 @@ const BALL_RADIUS_MM = BALL_DIAMETER_MM / 2;
 
 // Original close packing with tetrahedral symmetry; seeds are unit vectors and radii in mm.
 const BALL_DIMPLE_SEEDS = [
-  [0.57735, 0.57735, 0.57735, 1.95783],
-  [-0.41411, 0.89255, 0.1785, 1.87481],
-  [0.95646, -0.27067, -0.10921, 1.81059],
-  [-0.69297, 0.17677, 0.69896, 1.82182],
-  [0.55126, -0.77632, -0.30568, 1.94654],
-  [0.45802, 0.48909, -0.7423, 1.90691],
-  [0.10745, 0.096, -0.98957, 1.89261],
-  [0.55029, -0.30712, -0.77644, 1.95383],
-  [0.95528, 0.10866, 0.27502, 1.79311],
-  [0.42607, -0.18217, 0.88616, 1.97045],
-  [0.5754, -0.81292, 0.08988, 1.98689],
-  [-0.57961, -0.1102, 0.80741, 1.93934],
-  [0.83468, 0.3885, 0.39037, 1.83617],
-  [-0.3653, -0.85439, -0.36956, 1.95538],
-  [0.64653, -0.4048, -0.64663, 1.95383],
-  [0.08163, -0.09036, -0.99256, 1.94697],
-  [-0.64832, 0.67882, 0.3448, 1.69966],
-  [-0.70731, -0.70679, 0.01305, 1.9441],
-  [-0.95959, -0.06797, -0.27309, 1.8283],
-  [-0.69103, 0.691, -0.21213, 1.95145],
-  [0.60359, -0.48957, 0.62929, 1.69966],
-  [-0.89933, 0.01153, -0.43713, 1.95102],
-  [-0.43473, 0.87832, -0.19889, 1.84699],
-  [-0.72081, -0.4898, 0.49044, 1.88658],
-  [-0.93776, -0.24839, -0.24273, 1.85682],
-  [0.53287, -0.79908, 0.27844, 1.8566],
-  [0.95609, -0.28508, 0.06803, 1.8401],
-  [0.27801, -0.27995, -0.91888, 1.79311],
-  [-0.87901, 0.43226, -0.20123, 1.83883],
-  [0.80746, -0.10771, -0.58001, 1.92034],
-  [-0.78287, 0.54587, 0.29857, 2.01493],
-  [0.08884, -0.8132, 0.57517, 1.92641],
-  [0.89852, 0.43869, 0.0148, 1.90154],
+  [0.57735, 0.57735, 0.57735, 2.25],
+  [-0.419281, 0.887907, 0.189273, 1.95],
+  [0.952466, -0.285945, -0.10509, 1.8],
+  [-0.686759, 0.191472, 0.701214, 1.8],
+  [0.54091, -0.784576, -0.30308, 2.05],
+  [0.474321, 0.506992, -0.719708, 2.05],
+  [0.091642, 0.086345, -0.992041, 2.05],
+  [0.538191, -0.30756, -0.784702, 2.1],
+  [0.951702, 0.107761, 0.287489, 1.7],
+  [0.416953, -0.19249, 0.888312, 2.25],
+  [0.579892, -0.808157, 0.102995, 2.25],
+  [-0.572251, -0.115115, 0.811959, 2.05],
+  [0.847251, 0.373012, 0.37819, 1.9],
+  [-0.389126, -0.841892, -0.373896, 2.1],
+  [0.649594, -0.398874, -0.647246, 2.1],
+  [0.104049, -0.110497, -0.988415, 2.1],
+  [-0.651313, 0.666408, 0.362892, 1.4],
+  [-0.709842, -0.704218, 0.014202, 2.05],
+  [-0.962904, -0.056652, -0.263829, 1.8],
+  [-0.689036, 0.693753, -0.20961, 2.1],
+  [0.60948, -0.482612, 0.628983, 1.4],
+  [-0.903171, 0.00272, -0.429271, 2.1],
+  [-0.422183, 0.885362, -0.194669, 1.95],
+  [-0.728372, -0.484078, 0.484914, 1.95],
+  [-0.940592, -0.232648, -0.247308, 1.95],
+  [0.554489, -0.776719, 0.298747, 1.95],
+  [0.95863, -0.275762, 0.070593, 1.9],
+  [0.266778, -0.268663, -0.925554, 1.7],
+  [-0.88569, 0.419963, -0.197951, 1.9],
+  [0.812755, -0.102604, -0.5735, 2.05],
+  [-0.772999, 0.552936, 0.311021, 2.25],
+  [0.093022, -0.811161, 0.577377, 2.05],
+  [0.900608, 0.4345, 0.010739, 2.05],
 ];
 const ballCentres = new Map<string, number[]>();
 for (const [x, y, z, radius] of BALL_DIMPLE_SEEDS) {
@@ -90,12 +90,16 @@ const BALL_DIMPLES = [...ballCentres.values()].flatMap(([sx, sy, sz, radius]) =>
     y = ring * v * scale;
   const rx = (radius * scale * (z - perspective)) / (1 - perspective * z);
   const ry = radius * scale;
-  const dx = rx * Math.cos(angle),
-    dy = rx * Math.sin(angle);
-  const point = (a: number, b: number) => `${a.toFixed(3)} ${b.toFixed(3)}`;
-  const arc = `${point(rx, ry)} ${((angle * 180) / Math.PI).toFixed(3)} 0 1`;
   return {
-    d: `M ${point(x - dx, y - dy)} A ${arc} ${point(x + dx, y + dy)} A ${arc} ${point(x - dx, y - dy)} Z`,
+    transform: `translate(${x} ${y}) rotate(${(angle * 180) / Math.PI}) scale(${rx} ${ry})`,
+    // Compensate for the ellipse transform to keep the shading gradient fixed on screen.
+    lightAngles: [-1, 1].map(
+      (lx) =>
+        (Math.atan2((Math.cos(angle) - lx * Math.sin(angle)) * ry, (lx * Math.cos(angle) + Math.sin(angle)) * rx) *
+          180) /
+          Math.PI -
+        90
+    ),
     opacity: 0.55 + 0.45 * z,
   };
 });
@@ -352,19 +356,27 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           />
         </mask>
         <radialGradient id={`${id}ball`} cx={left ? '30%' : '70%'} cy="25%" r="75%">
-          <stop offset="0" stopColor="#fffffc" />
-          <stop offset=".35" stopColor="#f5f5f1" />
-          <stop offset=".7" stopColor="#dededb" />
-          <stop offset="1" stopColor="#ababaa" />
+          <stop offset="0" stopColor="#fff" />
+          <stop offset=".35" stopColor="#f8f8f6" />
+          <stop offset=".7" stopColor="#e2e2e0" />
+          <stop offset="1" stopColor="#a9aaa9" />
         </radialGradient>
-        <linearGradient id={`${id}dimple`} x1={left ? '0%' : '100%'} y1="0%" x2={left ? '100%' : '0%'} y2="100%">
-          <stop offset="0" stopColor="#626260" stopOpacity=".27" />
-          <stop offset=".45" stopColor="#858581" stopOpacity=".1" />
-          <stop offset=".65" stopColor="#fff" stopOpacity=".04" />
-          <stop offset="1" stopColor="#fff" stopOpacity=".45" />
+        <linearGradient id={`${id}dimple`} x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0" stopColor="#626260" stopOpacity=".25" />
+          <stop offset=".4" stopColor="#858581" stopOpacity=".12" />
+          <stop offset=".65" stopColor="#fff" stopOpacity=".08" />
+          <stop offset="1" stopColor="#fff" stopOpacity=".5" />
         </linearGradient>
+        <radialGradient id={`${id}dimple-edge`}>
+          <stop offset=".82" stopColor="#fff" />
+          <stop offset=".94" stopColor="#bbb" />
+          <stop offset="1" stopColor="#000" />
+        </radialGradient>
+        <mask id={`${id}dimple-rim`} maskUnits="userSpaceOnUse" x="-1" y="-1" width="2" height="2">
+          <circle r="1" fill={`url(#${id}dimple-edge)`} />
+        </mask>
         <radialGradient id={`${id}ball-sheen`} cx={left ? '28%' : '72%'} cy="22%" r="60%">
-          <stop offset="0" stopColor="#fff" stopOpacity=".65" />
+          <stop offset="0" stopColor="#fff" stopOpacity=".45" />
           <stop offset=".5" stopColor="#fff" stopOpacity=".12" />
           <stop offset="1" stopColor="#fff" stopOpacity="0" />
         </radialGradient>
@@ -489,7 +501,13 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
         <g clipPath={`url(#${id}ball-clip)`}>
           <g transform={`translate(${ballX} ${ballY})`} fill={`url(#${id}dimple)`}>
             {BALL_DIMPLES.map((dimple, i) => (
-              <path key={i} d={dimple.d} opacity={dimple.opacity} />
+              <g key={i} transform={dimple.transform} opacity={dimple.opacity}>
+                <circle
+                  r="1"
+                  mask={`url(#${id}dimple-rim)`}
+                  transform={`rotate(${dimple.lightAngles[left ? 1 : 0]})`}
+                />
+              </g>
             ))}
           </g>
           <circle cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball-sheen)`} />
