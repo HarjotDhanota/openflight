@@ -4380,22 +4380,27 @@ def horizontal_confidence_from(coherence: float | None) -> float:
 
 
 def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
-    """Attach the pre-impact enclosure orientation and the sensors it corrects.
+    """Attach the enclosure orientation this shot is corrected with and the sensors it corrects.
 
-    ``applied_to`` names them: the camera whenever a reading was selected and the
-    camera runs, the IWR when it runs.
+    The service's rule chooses it (``rule``): an older or swing-shaken reading waits up
+    to a second for the reading after impact, and a unit that moved gets none.
+    ``applied_to`` names the camera whenever a reading was selected and the camera
+    runs, the IWR when it runs.
     """
     if inclinometer_service is None or shot.mode == "mock":
         return
 
     impact_timestamp = shot.impact_timestamp or time.time()
-    selection = inclinometer_service.snapshot_for_impact(impact_timestamp)
+    selection = inclinometer_service.snapshot_for_shot(impact_timestamp)
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
     applied_to: list[str] = []
     snapshot = selection.snapshot
     if snapshot is None:
-        logger.warning("[SERVER] Inclinometer correction not applied: %s", selection.status)
+        logger.warning(
+            "[SERVER] Inclinometer correction not applied: %s",
+            selection.reason or selection.status,
+        )
     else:
         if camera_capture_runtime is not None:
             applied_to.append("camera")
@@ -5476,14 +5481,14 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         return _ShotEnrichmentResult(iwr6843_ms=monitor.enrich(shot))
 
     enrichment_started = time.monotonic()
-    # Snapshot orientation before IWR capture can block, and select only data
-    # timestamped before impact so impact vibration cannot bias the geometry.
-    _snapshot_inclinometer_for_shot(shot)
     camera_executor: ThreadPoolExecutor | None = None
     camera_future: Future[_CameraPrefetchResult] | None = None
     if camera_capture_runtime is not None and shot.mode != "mock":
         camera_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="camera-prefetch")
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
+    # The orientation before any estimator uses it; its wait for the reading after
+    # impact overlaps the camera fetch and the IWR's dump.
+    _snapshot_inclinometer_for_shot(shot)
     iwr6843_ms = _process_iwr6843_angle(shot)
     kld7_ms = None
     camera_capture_ms = None

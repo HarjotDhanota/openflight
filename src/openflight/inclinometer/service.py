@@ -8,11 +8,19 @@ import statistics
 import threading
 import time
 from collections import deque
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .models import AccelerationSample, OrientationSnapshot, SnapshotSelection
 
 logger = logging.getLogger(__name__)
+
+# A shot takes a reading this old, or one the swing shook, only when the first stable
+# reading taken wholly after impact agrees with it within MOVE_TOLERANCE_DEG in pitch
+# and roll; it waits at most CONFIRM_WAIT_S for that reading.
+MAX_CONFIRMED_AGE_S = 60.0
+MOVE_TOLERANCE_DEG = 0.3
+CONFIRM_WAIT_S = 1.0
+UNIT_MOVED = "the unit moved"
 
 
 class Accelerometer(Protocol):  # pylint: disable=unnecessary-ellipsis
@@ -69,6 +77,10 @@ class InclinometerService:
         self._last_error: str | None = None
         self._last_error_timestamp: float | None = None
         self._last_unstable_timestamp: float | None = None
+        # every unsteady window's (or failed read's) time, as far back as a shot looks
+        self._unsteady: deque[float] = deque(
+            maxlen=math.ceil((MAX_CONFIRMED_AGE_S + history_seconds) * sample_hz)
+        )
 
     def start(self) -> None:
         """Initialize hardware and start the sampling thread."""
@@ -101,6 +113,7 @@ class InclinometerService:
                 with self._lock:
                     self._last_error = str(error)
                     self._last_error_timestamp = time.time()
+                    self._unsteady.append(self._last_error_timestamp)
                 logger.warning("LIS3DH sample failed: %s", error)
             delay = max(0.0, interval_s - (time.monotonic() - started))
             self._stop_event.wait(delay)
@@ -118,11 +131,12 @@ class InclinometerService:
             y_g = statistics.median(item.y_g for item in samples)
             z_g = statistics.median(item.z_g for item in samples)
             gravity_g = math.sqrt(x_g * x_g + y_g * y_g + z_g * z_g)
-            if not self.gravity_range_g[0] <= gravity_g <= self.gravity_range_g[1]:
+            if (
+                not self.gravity_range_g[0] <= gravity_g <= self.gravity_range_g[1]
+                or pitch_std > self.max_pitch_std_deg
+            ):
                 self._last_unstable_timestamp = sample.timestamp
-                return None
-            if pitch_std > self.max_pitch_std_deg:
-                self._last_unstable_timestamp = sample.timestamp
+                self._unsteady.append(sample.timestamp)
                 return None
             raw_pitch = statistics.median(pitches)
             snapshot = OrientationSnapshot(
@@ -135,6 +149,7 @@ class InclinometerService:
                 calibrated_pitch_deg=raw_pitch + self.zero_offset_deg,
                 pitch_std_deg=pitch_std,
                 sample_count=len(samples),
+                window_start_timestamp=samples[0].timestamp,
             )
             self._history.append(snapshot)
             return snapshot
@@ -161,6 +176,84 @@ class InclinometerService:
         if age_s > self.max_snapshot_age_s:
             return SnapshotSelection(snapshot=None, status="stale", age_s=age_s)
         return SnapshotSelection(snapshot=snapshot, status="stable", age_s=age_s)
+
+    def snapshot_for_shot(
+        self,
+        impact_timestamp: float,
+        *,
+        wait_s: float = CONFIRM_WAIT_S,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> SnapshotSelection:
+        """The reading a shot is corrected with, and the rule that chose it.
+
+        ``recent_stable``: the newest stable reading at most ``max_snapshot_age_s``
+        before impact, steady through it. Otherwise that reading, up to
+        ``MAX_CONFIRMED_AGE_S`` old, stands once the first stable reading taken wholly
+        after impact (waited for up to ``wait_s``) agrees with it within
+        ``MOVE_TOLERANCE_DEG`` in pitch and roll (``confirmed_after_impact``); a unit
+        that moved gets none (``moved``).
+        """
+        with self._lock:
+            candidates = [item for item in self._history if item.timestamp <= impact_timestamp]
+            last_error = self._last_error
+        if not candidates:
+            status = "sensor_error" if last_error else "no_stable_preimpact_reading"
+            return SnapshotSelection(snapshot=None, status=status)
+        snapshot = candidates[-1]
+        age_s = max(0.0, impact_timestamp - snapshot.timestamp)
+        if age_s > MAX_CONFIRMED_AGE_S:
+            return SnapshotSelection(
+                snapshot=None,
+                status="stale",
+                age_s=age_s,
+                reason=f"the last steady reading is over {MAX_CONFIRMED_AGE_S:g} s old",
+            )
+        with self._lock:
+            disturbed = any(snapshot.timestamp < at <= impact_timestamp for at in self._unsteady)
+        if age_s <= self.max_snapshot_age_s and not disturbed:
+            return SnapshotSelection(snapshot, "stable", age_s, rule="recent_stable")
+        after = self._first_stable_after(impact_timestamp, wait_s, sleep)
+        if after is None:
+            return SnapshotSelection(
+                snapshot=None,
+                status="unconfirmed",
+                age_s=age_s,
+                reason="no steady reading after impact shows the unit did not move",
+            )
+        pitch_change = after.calibrated_pitch_deg - snapshot.calibrated_pitch_deg
+        roll_change = after.roll_deg - snapshot.roll_deg
+        confirmation = {
+            "timestamp": after.timestamp,
+            "pitch_change_deg": round(pitch_change, 3),
+            "roll_change_deg": round(roll_change, 3),
+            "tolerance_deg": MOVE_TOLERANCE_DEG,
+        }
+        if max(abs(pitch_change), abs(roll_change)) > MOVE_TOLERANCE_DEG:
+            return SnapshotSelection(
+                snapshot=None,
+                status="moved",
+                age_s=age_s,
+                reason=UNIT_MOVED,
+                confirmation=confirmation,
+            )
+        return SnapshotSelection(
+            snapshot, "stable", age_s, rule="confirmed_after_impact", confirmation=confirmation
+        )
+
+    def _first_stable_after(
+        self, impact_timestamp: float, wait_s: float, sleep: Callable[[float], None]
+    ) -> OrientationSnapshot | None:
+        """The first stable reading whose window starts after impact; waits up to ``wait_s``."""
+        deadline = time.monotonic() + max(0.0, wait_s)
+        while True:
+            with self._lock:
+                found = next(
+                    (item for item in self._history if item.window_start > impact_timestamp),
+                    None,
+                )
+            if found is not None or time.monotonic() >= deadline:
+                return found
+            sleep(min(0.05, 1.0 / self.sample_hz))
 
     def wait_for_stable(self, timeout_s: float = 2.0) -> SnapshotSelection:
         """Wait briefly for a startup orientation diagnostic."""

@@ -186,3 +186,149 @@ def test_the_mounting_passes_start_and_stop_through():
     mounted.close()
 
     assert board.calls == ["initialize", "close"]
+
+
+# A shot's reading: the newest stable one before the swing; an older one, or one the
+# swing shook, stands only when the next stable reading after impact agrees with it.
+
+
+def _tilted(timestamp, pitch_deg=2.0, roll_deg=0.0):
+    pitch, roll = math.radians(pitch_deg), math.radians(roll_deg)
+    return AccelerationSample(
+        timestamp,
+        math.sin(roll),
+        math.sin(pitch) * math.cos(roll),
+        math.cos(pitch) * math.cos(roll),
+    )
+
+
+def _shake(timestamp):
+    return AccelerationSample(timestamp, 0.4, 0.3, 1.3)
+
+
+def _service():
+    return InclinometerService(sensor=None, window_samples=4, max_snapshot_age_s=2.0)
+
+
+def _feed(service, samples):
+    for sample in samples:
+        service.add_sample(sample)
+
+
+def _steady(start, stop, **orientation):
+    count = round((stop - start) / 0.1) + 1
+    return [_tilted(round(start + 0.1 * index, 3), **orientation) for index in range(count)]
+
+
+def test_a_snapshot_records_its_roll_and_window():
+    service = _service()
+    _feed(service, _steady(1.0, 1.3, pitch_deg=1.0, roll_deg=-2.5))
+
+    snapshot = service.snapshot_for_impact(1.4).snapshot
+
+    assert snapshot.roll_deg == pytest.approx(-2.5)
+    assert snapshot.window_start_timestamp == 1.0
+    assert snapshot.to_dict()["roll_deg"] == pytest.approx(-2.5)
+
+
+def test_a_shot_takes_the_recent_steady_reading_at_once():
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+
+    selection = service.snapshot_for_shot(2.2, wait_s=0.0)
+
+    assert selection.status == "stable"
+    assert selection.rule == "recent_stable"
+    assert selection.snapshot.timestamp == 1.9
+    assert selection.to_dict()["rule"] == "recent_stable"
+
+
+def test_swing_vibration_does_not_cost_the_correction():
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+    _feed(service, [_shake(t) for t in (2.0, 2.1, 2.2, 2.3)])
+    _feed(service, _steady(2.4, 3.0))
+
+    selection = service.snapshot_for_shot(2.2, wait_s=0.0)
+
+    assert selection.status == "stable"
+    assert selection.rule == "confirmed_after_impact"
+    assert selection.snapshot.timestamp == 1.9
+    assert selection.confirmation["timestamp"] == 2.7
+    assert selection.confirmation["pitch_change_deg"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_reading_up_to_a_minute_old_stands_once_confirmed():
+    service = _service()
+    _feed(service, _steady(1.0, 1.3))
+    _feed(service, _steady(50.1, 50.4, pitch_deg=2.2, roll_deg=0.2))
+
+    selection = service.snapshot_for_shot(50.0, wait_s=0.0)
+
+    assert selection.status == "stable"
+    assert selection.rule == "confirmed_after_impact"
+    assert selection.age_s == pytest.approx(48.7)
+
+
+@pytest.mark.parametrize("moved", [{"pitch_deg": 2.4}, {"roll_deg": 0.4}])
+def test_a_unit_that_moved_gets_no_correction(moved):
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+    _feed(service, [_shake(t) for t in (2.0, 2.1, 2.2, 2.3)])
+    _feed(service, _steady(2.4, 2.7, **{"pitch_deg": 2.0, **moved}))
+
+    selection = service.snapshot_for_shot(2.2, wait_s=0.0)
+
+    assert selection.status == "moved"
+    assert selection.snapshot is None
+    assert selection.reason == "the unit moved"
+    record = selection.to_dict()
+    assert record["reason"] == "the unit moved"
+    assert "calibrated_pitch_deg" not in record
+
+
+def test_without_a_reading_after_impact_an_unsteady_one_is_refused():
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+    _feed(service, [_shake(t) for t in (2.0, 2.1, 2.2, 2.3)])
+
+    selection = service.snapshot_for_shot(2.2, wait_s=0.0)
+
+    assert selection.status == "unconfirmed"
+    assert selection.snapshot is None
+
+
+def test_a_window_that_spans_impact_does_not_confirm():
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+    _feed(service, [_shake(2.0)])
+    # one stable window, 2.1-2.4: it began before the 2.15 impact
+    _feed(service, _steady(2.1, 2.4))
+
+    assert service.snapshot_for_shot(2.15, wait_s=0.0).status == "unconfirmed"
+    _feed(service, _steady(2.5, 2.5))
+    assert service.snapshot_for_shot(2.15, wait_s=0.0).rule == "confirmed_after_impact"
+
+
+def test_a_reading_older_than_a_minute_is_stale():
+    service = _service()
+    _feed(service, _steady(1.0, 1.3))
+    _feed(service, _steady(70.1, 70.5))
+
+    assert service.snapshot_for_shot(70.0, wait_s=0.0).status == "stale"
+
+
+def test_the_shot_waits_briefly_for_the_reading_after_impact():
+    service = _service()
+    _feed(service, _steady(1.0, 1.9))
+    _feed(service, [_shake(t) for t in (2.0, 2.1, 2.2, 2.3)])
+    waited = []
+
+    def sleep(seconds):
+        waited.append(seconds)
+        _feed(service, _steady(2.4, 2.7))
+
+    selection = service.snapshot_for_shot(2.2, wait_s=1.0, sleep=sleep)
+
+    assert selection.rule == "confirmed_after_impact"
+    assert len(waited) == 1

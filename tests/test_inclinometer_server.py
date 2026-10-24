@@ -19,7 +19,7 @@ class FakeInclinometer:
         self.selection = selection
         self.impact_timestamp = None
 
-    def snapshot_for_impact(self, impact_timestamp):
+    def snapshot_for_shot(self, impact_timestamp, **_kwargs):
         self.impact_timestamp = impact_timestamp
         return self.selection
 
@@ -127,6 +127,61 @@ def test_init_inclinometer_is_fail_soft(monkeypatch):
     assert server.inclinometer_service is None
     assert server.inclinometer_runtime_config["requested"] is True
     assert server.inclinometer_runtime_config["error"] == "I2C unavailable"
+
+
+def test_a_unit_that_moved_gets_no_correction_and_says_so(monkeypatch):
+    sensor = FakeInclinometer(
+        SnapshotSelection(snapshot=None, status="moved", age_s=4.0, reason="the unit moved")
+    )
+    calibration = Calibration.identity()
+    seen = {}
+
+    def process_shot(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(capture=None, measurement=None, club_path=None)
+
+    monkeypatch.setattr(server, "inclinometer_service", sensor)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
+    monkeypatch.setattr(
+        server,
+        "iwr6843_runtime",
+        SimpleNamespace(calibration=calibration, process_shot=process_shot),
+    )
+    monkeypatch.setattr(server, "camera_capture_runtime", object())
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+    server._process_iwr6843_angle(shot)
+
+    assert shot.inclinometer["applied_to"] == []
+    assert shot.inclinometer["status"] == "moved"
+    assert shot.inclinometer["reason"] == "the unit moved"
+    assert seen["tilt_deg"] is None
+
+
+def test_the_shot_records_which_rule_chose_its_reading(monkeypatch):
+    selection = _stable_selection()
+    sensor = FakeInclinometer(
+        SnapshotSelection(
+            selection.snapshot,
+            "stable",
+            age_s=12.0,
+            rule="confirmed_after_impact",
+            confirmation={"pitch_change_deg": 0.1, "roll_change_deg": 0.0},
+        )
+    )
+    monkeypatch.setattr(server, "inclinometer_service", sensor)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
+    monkeypatch.setattr(server, "iwr6843_runtime", None)
+    monkeypatch.setattr(server, "camera_capture_runtime", object())
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+
+    assert shot.inclinometer["rule"] == "confirmed_after_impact"
+    assert shot.inclinometer["confirmation"]["pitch_change_deg"] == 0.1
+    assert shot.inclinometer["applied_to"] == ["camera"]
 
 
 def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
