@@ -418,7 +418,7 @@ The Club tab opens with a face-impact view:
     Up the face, the centre is midway between the leading edge and the top line, on
     the line through that point.
 
-  The dot sits at the unrounded mm from there; every number is in mm whatever the
+  The impact centre sits at the unrounded mm from there; every number is in mm whatever the
   unit preference. The driver's centre cross sits on the computed centre: on an
   average club the design centre is the face centre.
 - **The backend measures from this centre** (since 22 Oct 2026; see "The face
@@ -439,14 +439,18 @@ The Club tab opens with a face-impact view:
   [Rule 4 (clubhead)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-5.html),
   [Rule 5 (club face)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6.html)
   and [its interpretations](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6-interpretations.html).
-- **The contact marker.** When both coordinates are available, a pale contact
-  imprint with faint dimple impressions surrounds a small centre dot at the
-  unrounded reading. Its fixed, roughly 14 by 16 mm shape is illustrative, not a
+- **The contact marker.** When both coordinates are available, a flat, mottled
+  contact imprint with incomplete dimple impressions is centred at the
+  unrounded reading. It is grey on light faces and pale on the dark hybrid face;
+  the grooves remain visible over it. Its fixed, roughly 20 by 22 mm shape is
+  illustrative, not a
   measured contact patch or a speed/compression estimate. It is clipped to the
-  face and mirrors with handedness. The separate dashed 1-sigma ellipse retains
+  face and mirrors with handedness. The subdued dashed 1-sigma ellipse retains
   the reading's uncertainty; its size does not control the imprint. An offset-only
   reading keeps the hollow marker and horizontal uncertainty bar, without an
-  invented contact patch at zero height. Earlier shots remain faint dots.
+  invented contact patch at zero height. Earlier shots remain faint dots. The
+  full-reading centre circle remains an unpainted coordinate anchor; the yellow
+  centre and heavy halo were removed after the owner rejected their badge-like appearance.
 - **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:
   reason".
 

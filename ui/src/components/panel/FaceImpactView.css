@@ -181,21 +181,35 @@
 }
 
 .face-impact__contact-shape {
-  fill: #fffef2;
-  opacity: 0.78;
+  fill: #414747;
+  opacity: 0.5;
+}
+
+.face-impact[data-face='hybrid'] .face-impact__contact-shape {
+  fill: #e4e5dc;
+  opacity: 0.48;
+}
+
+.face-impact__contact-grain {
+  fill: none;
+  stroke: #fffef1;
+  stroke-width: 0.2;
+  stroke-linecap: round;
+  opacity: 0.7;
 }
 
 .face-impact__halo {
   fill: none;
   stroke: var(--face-art-ink);
-  stroke-width: 1.3;
-  stroke-opacity: 0.55;
+  stroke-width: 0.8;
+  stroke-opacity: 0.12;
 }
 
 .face-impact__ellipse {
   fill: none;
-  stroke: var(--color-experimental);
-  stroke-width: 0.6;
+  stroke: #eff3f5;
+  stroke-opacity: 0.35;
+  stroke-width: 0.35;
   stroke-dasharray: 1.4 1;
 }
 
@@ -205,9 +219,8 @@
 }
 
 .face-impact__dot {
-  fill: var(--color-accent);
-  stroke: var(--face-art-ink);
-  stroke-width: 0.35;
+  fill: none;
+  stroke: none;
 }
 
 .face-impact__dot--offset-only {

@@ -22,28 +22,35 @@ interface FaceImpactViewProps {
 }
 
 // Fixed illustrative contact texture; neither its outline nor its size is measured.
+const contactNoise = (seed: number) => {
+  const value = Math.sin(seed * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+};
 const CONTACT_SHAPE =
-  'M 0 -8 C 2.6 -8.2 5.5 -6.4 6.5 -3.5 C 7.4 -1.2 7 2.4 5.7 4.9 C 4.2 7.1 1.6 8.3 -1 7.9 C -3.7 7.5 -6.1 5.5 -6.6 2.7 C -7.4 0.2 -6.7 -3.1 -5.1 -5.4 C -3.9 -7.2 -2 -7.9 0 -8 Z';
-const CONTACT_DIMPLES = [
-  [-2.1, -5.3, 1.2],
-  [1.3, -5.4, 1.3],
-  [4.4, -3.8, 1.1],
-  [-4.9, -2.3, 1.2],
-  [-1.6, -2, 1.4],
-  [1.9, -2.2, 1.5],
-  [-3.3, 1.2, 1.4],
-  [0.3, 1.2, 1.4],
-  [3.9, 1, 1.3],
-  [-5.4, 3.8, 1.1],
-  [-1.8, 4.5, 1.3],
-  [1.7, 4.4, 1.4],
-  [4.9, 3.8, 1.1],
-  [-0.2, 7, 1.1],
-];
+  Array.from({ length: 96 }, (_, i) => {
+    const angle = (i * Math.PI) / 48;
+    const radius = 1 + 0.035 * Math.sin(7 * angle) + 0.025 * Math.cos(17 * angle);
+    return `${i ? 'L' : 'M'} ${(10 * radius * Math.cos(angle)).toFixed(3)} ${(11 * radius * Math.sin(angle)).toFixed(3)}`;
+  }).join(' ') + ' Z';
+const CONTACT_DIMPLES = Array.from({ length: 7 }, (_, row) =>
+  Array.from({ length: 7 }, (_, col) => {
+    const seed = row * 7 + col + 1;
+    return [
+      (col - 3) * 3.5 + (row % 2) * 1.75 + (contactNoise(seed) - 0.5) * 0.45,
+      (row - 3) * 3.2 + (contactNoise(seed + 51) - 0.5) * 0.4,
+      1.15 + contactNoise(seed + 102) * 0.4,
+    ];
+  })
+).flat();
+const CONTACT_GRAIN = Array.from({ length: 380 }, (_, i) => {
+  const x = contactNoise(i + 1) * 24 - 12;
+  const y = contactNoise(i + 401) * 26 - 13;
+  return `M ${x.toFixed(3)} ${y.toFixed(3)} l ${(0.08 + contactNoise(i + 801) * 0.32).toFixed(3)} ${(contactNoise(i + 1201) * 0.35).toFixed(3)}`;
+}).join(' ');
 
 /** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
  * the club's earlier shots faint, centre lines through the reading's face centre; mirrored for a
- * left-hander. The dot sits at the unrounded mm values, the svg's units. */
+ * left-hander. The impact anchor sits at the unrounded mm values, the svg's units. */
 export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactViewProps) {
   const { t } = useI18n();
   const id = useId();
@@ -127,18 +134,12 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
           preserveAspectRatio="xMidYMid meet"
         >
           <defs>
-            <radialGradient id={`${id}contact-fade`}>
-              <stop offset="0" stopColor="#fff" />
-              <stop offset=".55" stopColor="#eee" />
-              <stop offset=".83" stopColor="#aaa" />
-              <stop offset="1" stopColor="#000" />
-            </radialGradient>
             <radialGradient id={`${id}contact-dimple`}>
-              <stop offset=".5" stopColor="#000" />
+              <stop offset=".7" stopColor="#000" />
               <stop offset="1" stopColor="#000" stopOpacity="0" />
             </radialGradient>
-            <mask id={`${id}contact-mask`} maskUnits="userSpaceOnUse" x="-9" y="-10" width="18" height="20">
-              <path d={CONTACT_SHAPE} fill={`url(#${id}contact-fade)`} />
+            <mask id={`${id}contact-mask`} maskUnits="userSpaceOnUse" x="-12" y="-13" width="24" height="26">
+              <path d={CONTACT_SHAPE} fill="#fff" />
               {CONTACT_DIMPLES.map(([x, y, radius], i) => (
                 <circle
                   key={i}
@@ -146,9 +147,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                   cy={y}
                   r={radius}
                   fill={`url(#${id}contact-dimple)`}
-                  opacity={i % 3 === 0 ? '.4' : '.55'}
+                  opacity={i % 4 === 0 ? '.6' : '.95'}
                 />
               ))}
+              <path d={CONTACT_GRAIN} fill="none" stroke="#000" strokeWidth=".16" strokeLinecap="round" opacity=".65" />
             </mask>
             <clipPath id={clipId}>
               <rect x={viewMinX} y={minY} width={viewMaxX - viewMinX} height={maxY - minY} />
@@ -343,6 +345,17 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 <line className="face-impact__centre-line" x1={viewMinX} x2={viewMaxX} y1={0} y2={0} />
                 <line className="face-impact__centre-line" x1={0} x2={0} y1={minY} y2={maxY} />
               </g>
+              {read && reading.height !== null ? (
+                <g className="face-impact__contact" clipPath={`url(#${faceClipId})`}>
+                  <title>{t('faceImpact.illustrativeMark')}</title>
+                  <g className="face-impact__imprint" transform={`translate(${cx} ${cy}) scale(${left ? -1 : 1} 1)`}>
+                    <g mask={`url(#${id}contact-mask)`}>
+                      <path className="face-impact__contact-shape" d={CONTACT_SHAPE} />
+                      <path className="face-impact__contact-grain" d={CONTACT_GRAIN} transform="translate(.2 -.25)" />
+                    </g>
+                  </g>
+                </g>
+              ) : null}
               <g className="face-impact__face-marks" transform={mirror}>
                 {shape.grooves.map((groove) => (
                   <line
@@ -372,14 +385,6 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <text className="face-impact__side" x={heelEnd} y={1.5} textAnchor={left ? 'end' : 'start'}>
               {t('faceImpact.heel')}
             </text>
-            {read && reading.height !== null ? (
-              <g className="face-impact__contact" clipPath={`url(#${faceClipId})`}>
-                <title>{t('faceImpact.illustrativeMark')}</title>
-                <g className="face-impact__imprint" transform={`translate(${cx} ${cy}) scale(${left ? -1 : 1} 1)`}>
-                  <path className="face-impact__contact-shape" d={CONTACT_SHAPE} mask={`url(#${id}contact-mask)`} />
-                </g>
-              </g>
-            ) : null}
             {earlier.map((other, index) => (
               <circle
                 key={index}
