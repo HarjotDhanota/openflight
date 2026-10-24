@@ -571,7 +571,7 @@ def solve_setup(ball, rig: RigGeometry) -> SetupSolution:
         warnings.append("ball_near_frame_edge_diameter_at_risk")
 
     solved_from = {
-        "range_to_ball_mm": "ball angular size (42.67 mm over its pixel diameter)",
+        "range_to_ball_mm": "ball angular size (42.7 mm over its pixel diameter)",
         "mm_per_px_at_ball": "range over focal length",
         "lateral_offset_mm": "ball column off the principal point",
         "height_above_ball_mm": (

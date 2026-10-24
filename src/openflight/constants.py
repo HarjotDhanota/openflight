@@ -3,8 +3,10 @@
 MPH_TO_MPS = 0.44704
 GRAVITY = 9.81  # m/s^2
 
-# The Rules' minimum ball diameter, 1.68 in: the camera and rig geometry use it.
-BALL_DIAMETER_MM = 42.67
-BALL_DIAMETER_M = 0.04267
-# The flight and collision models' ball radius (42.7 mm diameter).
-FLIGHT_BALL_RADIUS_M = 0.02135
+# A golf ball's size: 42.7 mm, what modern balls measure and what the flight and
+# collision models were fitted with. Every camera, rig and model calculation uses it.
+BALL_DIAMETER_MM = 42.7
+BALL_DIAMETER_M = 0.0427
+BALL_RADIUS_M = 0.02135
+# The Rules of Golf minimum diameter, 1.68 in: only where a rule is meant.
+RULES_MIN_BALL_DIAMETER_MM = 42.67

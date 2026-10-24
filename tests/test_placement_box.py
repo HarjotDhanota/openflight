@@ -17,7 +17,7 @@ from openflight.camera.reference_ball_range import (
     scale_placement_box,
 )
 
-RADIUS_M = 0.04267 / 2.0
+RADIUS_M = 0.0427 / 2.0
 V3_FOCAL_1280 = 933.3334
 
 
@@ -96,7 +96,7 @@ def _two_balls(camera):
     balls = []
     for lateral in (0.0, 0.25):
         x, y = _ball_pixel(camera, lateral, 1.34)
-        diameter = camera.focal_size_px * 0.04267 / 1.34
+        diameter = camera.focal_size_px * 0.0427 / 1.34
         balls.append((x, y, diameter / 2.0, 90.0))
     return balls, _lit_spheres(camera.image_height_px, camera.image_width_px, balls)
 

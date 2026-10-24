@@ -13,7 +13,7 @@ import pytest
 from openflight.camera import ground_patch, placement_box
 from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
 
-RADIUS_M = 0.04267 / 2.0
+RADIUS_M = 0.0427 / 2.0
 
 
 def _v3(width=1280, height=800, *, focal_scale=1.0, pitch_deg=0.0):
@@ -175,7 +175,7 @@ def test_the_size_window_is_the_ball_s_physical_range_not_the_tilt_s():
     projection = placement_box.project_fixed_box(camera, calibrated=False, roll_deg=0.0)
 
     far = config.placement_window_m[1] + config.size_far_margin_m
-    smallest = camera.focal_size_px * 0.04267 / far / (1.0 + ground_patch.SIZE_TOLERANCE)
+    smallest = camera.focal_size_px * 0.0427 / far / (1.0 + ground_patch.SIZE_TOLERANCE)
     assert projection.diameter_px[0] == pytest.approx(smallest, rel=1e-3)
     # the near end stays the padded one: a ball short of the window still fits
-    assert projection.diameter_px[1] > camera.focal_size_px * 0.04267 / 1.2
+    assert projection.diameter_px[1] > camera.focal_size_px * 0.0427 / 1.2

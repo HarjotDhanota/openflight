@@ -31,7 +31,7 @@ def test_an_impossible_solved_height_is_refused():
 
 
 def test_a_ball_on_the_ground_is_the_default_ball_height():
-    assert server.BALL_RADIUS_M == pytest.approx(0.021335)
+    assert server.BALL_RADIUS_M == pytest.approx(0.02135)
 
 
 def test_a_lens_height_that_would_bury_the_radar_is_refused():
@@ -41,7 +41,7 @@ def test_a_lens_height_that_would_bury_the_radar_is_refused():
         solved_camera_height_m=0.030,
         camera_capture_mount_height_m=0.095,
         iwr6843_radar_height_m=0.051,
-        iwr6843_ball_height_m=0.021335,
+        iwr6843_ball_height_m=0.02135,
     )
     enclosure = SimpleNamespace(camera_mount_height_m=0.095, radar_height_m=0.051)
 
@@ -77,7 +77,7 @@ def test_the_solved_height_is_recorded_apart_from_the_rig_file(monkeypatch):
         solved_camera_height_m=0.081,
         camera_capture_mount_height_m=0.095,
         iwr6843_radar_height_m=0.051,
-        iwr6843_ball_height_m=0.021335,
+        iwr6843_ball_height_m=0.02135,
     )
 
     server._apply_solved_camera_height(

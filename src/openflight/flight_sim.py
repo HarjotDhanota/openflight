@@ -40,7 +40,7 @@ from typing import Literal, Optional
 from .bounce_roll import TURF_ROLL_V2, HopFlight, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
-from .constants import FLIGHT_BALL_RADIUS_M as BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
+from .constants import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
 

@@ -85,8 +85,8 @@ def _reference(**changes):
     values = {
         "ball_x_px": 320.0,
         "ball_y_px": 200.0,
-        "ball_diameter_px": 480.0 * 0.04267 / 1.5,
-        "ball_diameter_m": 0.04267,
+        "ball_diameter_px": 480.0 * 0.0427 / 1.5,
+        "ball_diameter_m": 0.0427,
         "image_width_px": 640,
         "image_height_px": 400,
         "horizontal_pixel_sign": 1.0,
@@ -143,7 +143,7 @@ def test_the_ball_estimator_uses_the_calibrated_model():
         setup_pitch_deg=0.5,
         setup_focal_px=470.0,
     )
-    anchor = ReferenceBall(x=320.0, y=200.0, diameter_px=480.0 * 0.04267 / 1.5, area_px=100)
+    anchor = ReferenceBall(x=320.0, y=200.0, diameter_px=480.0 * 0.0427 / 1.5, area_px=100)
 
     (focal, pitch, _offset), check = ball_flight._checked_camera_model(  # pylint: disable=protected-access
         anchor, geometry

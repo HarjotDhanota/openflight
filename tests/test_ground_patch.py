@@ -179,7 +179,7 @@ def test_before_calibration_a_3_deg_tilt_error_still_puts_the_ball_in_the_patch(
     # every window still holds the ball's true distance and size
     true_slant = float(np.linalg.norm(np.asarray(ball) - np.asarray(modelled.radar_origin_lfu)))
     assert projection.radar_window_m[0] <= true_slant <= projection.radar_window_m[1]
-    size = V3_FOCAL_1280 * 0.04267 / 1.25
+    size = V3_FOCAL_1280 * 0.0427 / 1.25
     assert projection.diameter_px[0] <= size <= projection.diameter_px[1]
 
 

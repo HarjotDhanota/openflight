@@ -97,7 +97,7 @@ def test_ball_flight_selects_a_1280_reference_ball():
         camera_height_m=0.095,
         radar_height_m=0.051,
         tee_range_m=1.13,
-        ball_height_m=0.021335,
+        ball_height_m=0.02135,
         image_width_px=1280,
         image_height_px=800,
     )

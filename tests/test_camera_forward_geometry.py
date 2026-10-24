@@ -21,7 +21,7 @@ from openflight.rig_geometry import RigGeometry
 def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
     camera = np.array([lateral_offset, forward_offset, 0.095])
     radar = np.array([0.0, 0.0, 0.051])
-    tee = np.array([0.0, 1.5, 0.021335])
+    tee = np.array([0.0, 1.5, 0.02135])
     focal_px = 466.6667
 
     def project(point):
@@ -34,7 +34,7 @@ def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
     ball = ReferenceBall(
         x=ball_px[0],
         y=ball_px[1],
-        diameter_px=focal_px * 0.04267 / np.linalg.norm(tee - camera),
+        diameter_px=focal_px * 0.0427 / np.linalg.norm(tee - camera),
         area_px=140,
     )
     geometry_class = (
@@ -44,7 +44,7 @@ def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
         camera_height_m=0.095,
         radar_height_m=0.051,
         tee_range_m=float(np.linalg.norm(tee - radar)),
-        ball_height_m=0.021335,
+        ball_height_m=0.02135,
         camera_lateral_offset_m=lateral_offset,
         camera_forward_offset_m=forward_offset,
         image_width_px=320,
@@ -61,7 +61,7 @@ def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
                 geometry=geometry,
             )[0, [0, 2, 1]]
         else:
-            diameter = focal_px * 0.04267 / np.linalg.norm(point - camera)
+            diameter = focal_px * 0.0427 / np.linalg.norm(point - camera)
             candidate = ball_flight.BallCandidate(
                 x=pixel[0],
                 y=pixel[1],
@@ -97,7 +97,7 @@ def test_live_fusion_receives_forward_offset(monkeypatch, tmp_path, kind, config
             calibration=SimpleNamespace(
                 tee_range_m=1.5,
                 radar_height_m=0.051,
-                tee_ball_height_m=0.021335,
+                tee_ball_height_m=0.02135,
             )
         ),
     )
@@ -144,7 +144,7 @@ def test_live_fusion_rejects_archive_dimension_mismatch_before_estimator(
             calibration=SimpleNamespace(
                 tee_range_m=1.5,
                 radar_height_m=0.051,
-                tee_ball_height_m=0.021335,
+                tee_ball_height_m=0.02135,
             )
         ),
     )

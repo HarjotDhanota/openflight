@@ -38,9 +38,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from openflight.constants import BALL_DIAMETER_MM  # noqa: E402
 from openflight.rig_geometry import RigGeometry  # noqa: E402
 
-BALL_DIAMETER_MM = 42.67
 FOCAL_PX_2X = 466.6667
 FOCAL_PX_1X = 933.3333
 LATERAL_SPREAD_FRACTION = 0.1  # of the frame's width, before a roll is fitted

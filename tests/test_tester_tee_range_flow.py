@@ -1105,7 +1105,7 @@ def test_guided_flow_saves_and_survives_reload(tmp_path, inputs, monkeypatch):
         "--iwr6843-tee-prior-source",
         "camera_size_coarse",
         "--iwr6843-ball-height-m",
-        "0.021335",
+        "0.02135",
         "--iwr6843-tee-range-source",
         "camera_size_coarse",
         "--iwr6843-tee-range-candidate",
@@ -2104,7 +2104,7 @@ def _level_camera():
 def _setup_ball_seen_from(lens_height_m, distance_m=1.4):
     """Pixel and radar range of a surface ball when the lens is truly this high."""
     camera = _level_camera()
-    radius = 0.021335
+    radius = 0.02135
     down = (lens_height_m - radius) / distance_m
     y_px = 400.0 + 933.3333 * down
     ray = np.asarray(camera.ray_model.rays(np.array([640.0, y_px])), dtype=float)
@@ -2328,7 +2328,7 @@ def test_a_pending_range_still_hands_swings_the_solved_lens_height():
     assert args[0] == "--iwr6843-tee-range-pending"
     assert "--iwr6843-tee-m" not in args
     assert float(args[args.index("--solved-camera-height-m") + 1]) == pytest.approx(0.40, abs=0.003)
-    assert args[args.index("--iwr6843-ball-height-m") + 1] == "0.021335"
+    assert args[args.index("--iwr6843-ball-height-m") + 1] == "0.02135"
 
 
 def test_setup_captures_go_through_the_held_radar_session(tmp_path, inputs, monkeypatch):
@@ -2571,7 +2571,7 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     scene = handed["scene"]
     assert scene["lens_height_solved_m"] is not None
     assert scene["lens_height_used_source"] in {"rig_nominal", "range_setup"}
-    assert scene["ball_height_m"] == pytest.approx(0.021335)
+    assert scene["ball_height_m"] == pytest.approx(0.02135)
     assert scene["ball_height_basis"] == "assumed_on_surface"
     assert (
         handed["cli_args"]

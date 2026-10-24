@@ -21,7 +21,7 @@ from openflight.club_arc import MEASURED, MODEL_GEOMETRY, club_delivery_payload
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubRangeEvidence
 
-CAMERA_HEIGHT_M, RADAR_HEIGHT_M, BALL_HEIGHT_M = 0.095, 0.051, 0.021335
+CAMERA_HEIGHT_M, RADAR_HEIGHT_M, BALL_HEIGHT_M = 0.095, 0.051, 0.02135
 FOCAL_PX, WIDTH, HEIGHT = 933.33, 640, 400
 BALL = np.array([0.0, 1.30, BALL_HEIGHT_M])  # lateral, forward, up
 IMPACT_FRAME = 40
@@ -63,7 +63,7 @@ def _scene(monkeypatch):
     ball = ReferenceBall(
         x=float(ball_px[0]),
         y=float(ball_px[1]),
-        diameter_px=FOCAL_PX * 0.04267 / float(np.linalg.norm(BALL - camera)),
+        diameter_px=FOCAL_PX * 0.0427 / float(np.linalg.norm(BALL - camera)),
         area_px=400,
     )
     offsets = [np.array([dx, 0.0, dz]) for dx in (-0.01, 0.0, 0.01) for dz in (-0.008, 0.0, 0.008)]

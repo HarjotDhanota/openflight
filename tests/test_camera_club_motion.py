@@ -166,8 +166,8 @@ def test_image_plane_motion_uses_terminal_interval_and_ball_scale():
     assert motion.horizontal_px_s == pytest.approx(1000.0)
     assert motion.vertical_px_s == pytest.approx(-750.0)
     assert motion.mm_per_px == pytest.approx(BALL_DIAMETER_MM / 10.0)
-    assert motion.horizontal_m_s == pytest.approx(4.267)
-    assert motion.vertical_m_s == pytest.approx(-3.20025)
+    assert motion.horizontal_m_s == pytest.approx(4.27)
+    assert motion.vertical_m_s == pytest.approx(-3.2025)
 
 
 def test_image_plane_motion_rejects_nonconsecutive_points():

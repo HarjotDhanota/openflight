@@ -18,7 +18,7 @@ from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_p
 
 FOCAL_PX = 2000.0
 LENS_HEIGHT_M = 0.095
-BALL_CENTRE_M = 0.04267 / 2.0
+BALL_CENTRE_M = 0.0427 / 2.0
 
 
 def _camera(pitch_deg):

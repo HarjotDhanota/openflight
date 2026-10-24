@@ -894,7 +894,7 @@ class TestSolvedRange:
             handle.write(b"P5\n320 200\n255\n")
             handle.write(image.tobytes())
         solved = ts.solved_range(tmp_path, arm, {"gain": 6.0}, RIG)
-        # 466.67 px focal x 42.67 mm over a ~12 px ball, slightly off-axis
+        # 466.67 px focal x 42.7 mm over a ~12 px ball, slightly off-axis
         assert solved["solved_range_m"] == pytest.approx(1.66, abs=0.05)
         assert solved["solved_ball_diameter_px"] == pytest.approx(12.0, abs=0.5)
 
@@ -1410,7 +1410,7 @@ class TestLiveBall:
         readout = ts.ball_readout(_ball_frames(110, 230), 466.6667)
         assert readout["found"] is True
         assert readout["diameter_px"] == pytest.approx(12.0, abs=1.0)
-        # 466.67 px x 42.67 mm / 12 px
+        # 466.67 px x 42.7 mm / 12 px
         assert readout["range_m"] == pytest.approx(1.66, abs=0.15)
         assert readout["ball_dn"] == 230 and readout["around_dn"] == 110
         assert readout["edge_dn_per_px"] > 0
@@ -1948,7 +1948,7 @@ class TestTheCameraSaysHowFar:
             y_px=470.0,
             diameter_px=38.0,
             area_px=1100,
-            size_point_lfu_m=(0.0, 1.1, 0.021335),
+            size_point_lfu_m=(0.0, 1.1, 0.02135),
             size_radar_range_m=1.101,
             floor_camera_range_m=1.073,
             size_camera_range_m=1.08,

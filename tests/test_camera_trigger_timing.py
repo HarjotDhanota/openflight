@@ -200,7 +200,7 @@ def _fusion_context():
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     )
     return fp.build_context(
         geometry=geometry,
@@ -268,7 +268,7 @@ def _live_server(monkeypatch, tmp_path):
         "iwr6843_runtime",
         SimpleNamespace(
             calibration=SimpleNamespace(
-                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335
+                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135
             )
         ),
     )

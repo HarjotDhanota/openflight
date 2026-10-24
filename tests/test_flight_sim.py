@@ -488,12 +488,12 @@ class TestHopsFlyInTheTrajectorysAir:
     [
         ("openflight.flight_sim", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.flight_sim", "GRAVITY", "GRAVITY"),
-        ("openflight.flight_sim", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
+        ("openflight.flight_sim", "BALL_RADIUS_M", "BALL_RADIUS_M"),
         ("openflight.bounce_roll", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.bounce_roll", "GRAVITY", "GRAVITY"),
-        ("openflight.bounce_roll", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
+        ("openflight.bounce_roll", "BALL_RADIUS_M", "BALL_RADIUS_M"),
         ("openflight.collision_forward", "MPH_TO_M_S", "MPH_TO_MPS"),
-        ("openflight.collision_forward", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
+        ("openflight.collision_forward", "BALL_RADIUS_M", "BALL_RADIUS_M"),
         ("openflight.collision_model", "MPH_TO_M_S", "MPH_TO_MPS"),
     ],
 )

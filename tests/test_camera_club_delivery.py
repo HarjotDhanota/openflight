@@ -122,7 +122,7 @@ def _project_impact_tracks(
         camera_height_m=0.20955,
         radar_height_m=0.15875,
         tee_range_m=1.524,
-        ball_height_m=0.021335,
+        ball_height_m=0.02135,
         camera_lateral_offset_m=camera_lateral_offset_m,
     )
     ball = _Ball()
@@ -987,7 +987,7 @@ def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: f
     the rate at the second frame, which off centre costs about 0.1 deg of path
     per millisecond of pair span. That bias is the fallback's own, not a zero.
     """
-    camera_height_m, radar_height_m, ball_height_m = 0.095, 0.051, 0.021335
+    camera_height_m, radar_height_m, ball_height_m = 0.095, 0.051, 0.02135
     focal_px, width, height = 933.33, 640, 400
     tee_range_m = 1.30
     lateral_m = ball_offset_px * 1.3 / focal_px

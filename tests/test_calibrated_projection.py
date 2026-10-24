@@ -239,7 +239,7 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     ).with_calibrated_model(
         model.snapshot,
         {

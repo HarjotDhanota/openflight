@@ -13,7 +13,7 @@ def _inputs(**changes):
         "camera_height_m": 0.095,
         "radar_height_m": 0.051,
         "tee_slant_range_m": 1.5,
-        "ball_height_m": 0.021335,
+        "ball_height_m": 0.02135,
         "camera_lateral_offset_m": 0.004,
         "camera_forward_offset_m": 0.03,
         "image_width_px": 320,
@@ -21,7 +21,7 @@ def _inputs(**changes):
         "horizontal_pixel_sign": -1.0,
         "roll_correction_deg": 2.5,
         "ball_horizontal_output_offset_deg": -0.4,
-        "ball_diameter_m": 0.04267,
+        "ball_diameter_m": 0.0427,
     }
     values.update(changes)
     return EffectiveCameraGeometryInputs(**values)
@@ -38,7 +38,7 @@ def test_snapshot_round_trip_is_detached_from_mutable_source_config():
         "roll_correction_deg": 2.5,
         "horizontal_offset_deg": -0.4,
     }
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335)
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
     effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
     snapshot = effective.snapshot()
     session = {"effective_camera_geometry": snapshot}
@@ -153,7 +153,7 @@ def test_session_start_records_actual_runtime_geometry(monkeypatch):
         "iwr6843_runtime",
         SimpleNamespace(
             calibration=SimpleNamespace(
-                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335
+                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135
             )
         ),
     )
@@ -191,16 +191,16 @@ def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
         "height": 400,
         "tee_side_offset_m": 0.12,
     }
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335)
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
     effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
 
     assert effective.ball_lateral_offset_m == pytest.approx(0.12)
     assert effective.ball_lateral_offset_source == "setup_patch_pair"
     for geometry in (effective.ball_geometry(), effective.delivery_geometry()):
         assert geometry.ball_lateral_offset_m == pytest.approx(0.12)
-        forward = (1.5**2 - (0.021335 - 0.051) ** 2 - 0.12**2) ** 0.5
+        forward = (1.5**2 - (0.02135 - 0.051) ** 2 - 0.12**2) ** 0.5
         assert geometry.ball_forward_m == pytest.approx(forward)
-        assert list(geometry.ball_position_lfu) == pytest.approx([0.12, forward, 0.021335])
+        assert list(geometry.ball_position_lfu) == pytest.approx([0.12, forward, 0.02135])
     snapshot = effective.snapshot()
     assert snapshot["assumptions"]["tee_lateral_position"] == "setup_patch_pair"
     restored = EffectiveCameraGeometryInputs.from_recorded_session(
@@ -211,7 +211,7 @@ def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
 
 def test_without_a_measured_side_offset_the_ball_is_labelled_dead_ahead():
     camera = {"mount_height_m": 0.095, "width": 640, "height": 400}
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335)
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
     effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
 
     assert effective.ball_lateral_offset_m == 0.0

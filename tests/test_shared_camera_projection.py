@@ -39,7 +39,7 @@ def test_reference_model_and_range_intersection_recover_physical_point(
     focal_px = 480.0
     pitch = -0.035
     ball_pixel = _pixel_for_world_point(ball, camera, focal_px, pitch, roll_deg, pixel_sign)
-    ball_diameter_m = 0.04267
+    ball_diameter_m = 0.0427
     ball_diameter_px = focal_px * ball_diameter_m / np.linalg.norm(ball - camera)
 
     model = reference_ball_camera_model(
@@ -88,7 +88,7 @@ def test_reference_model_rejects_bad_ball_and_behind_camera_placement():
         ball_x_px=320.0,
         ball_y_px=200.0,
         ball_diameter_px=12.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
         image_width_px=640,
         image_height_px=400,
         horizontal_pixel_sign=1.0,

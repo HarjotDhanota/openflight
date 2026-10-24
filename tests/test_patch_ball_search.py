@@ -32,7 +32,7 @@ V3_FOCAL_1280 = 933.3334
 # the tester's screenshot: the ball at (744, 518), inside the box they had dragged
 INDOOR_BALL_PX = (744.0, 518.0)
 # a ball 1.25 m from the radar is about 1.252 m from the lens: 31.8 px at 933 px
-INDOOR_BALL_DIAMETER_PX = V3_FOCAL_1280 * 0.04267 / 1.252
+INDOOR_BALL_DIAMETER_PX = V3_FOCAL_1280 * 0.0427 / 1.252
 
 
 def v3(pitch_deg=0.0, width=1280, height=800):
@@ -184,7 +184,7 @@ def _lit_spheres(height, width, spheres, *, seed=4):
 def _ball(camera, lateral, forward):
     x, y = project_to_pixel(camera, (lateral, forward, BALL_CENTER_HEIGHT_M))
     distance = math.dist((lateral, forward, BALL_CENTER_HEIGHT_M), camera.camera_origin_lfu)
-    return x, y, V3_FOCAL_1280 * 0.04267 / distance / 2.0
+    return x, y, V3_FOCAL_1280 * 0.0427 / distance / 2.0
 
 
 def test_a_patch_2_m_out_and_to_the_side_finds_its_ball_and_nothing_else():
@@ -241,7 +241,7 @@ def test_the_search_never_leaves_the_patch():
     elsewhere = patch_at(camera, 1.25, 0.9)
 
     result = estimate_patch_ball(
-        frames, camera, search=search_for(camera, elsewhere), ball_center_height_m=0.021335
+        frames, camera, search=search_for(camera, elsewhere), ball_center_height_m=0.02135
     )
 
     assert result.selected is None
@@ -256,7 +256,7 @@ def test_the_search_never_leaves_the_patch():
     # there is no whole-frame search: a search without a patch is refused
     with pytest.raises(TypeError):
         estimate_patch_ball(  # pylint: disable=missing-kwoa
-            frames, camera, ball_center_height_m=0.021335
+            frames, camera, ball_center_height_m=0.02135
         )
 
 
