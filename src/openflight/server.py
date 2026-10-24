@@ -4380,7 +4380,11 @@ def horizontal_confidence_from(coherence: float | None) -> float:
 
 
 def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
-    """Attach the stable pre-impact enclosure orientation used by this shot."""
+    """Attach the pre-impact enclosure orientation and the sensors it corrects.
+
+    ``applied_to`` names them: the camera whenever a reading was selected and the
+    camera runs, the IWR when it runs.
+    """
     if inclinometer_service is None or shot.mode == "mock":
         return
 
@@ -4388,31 +4392,30 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     selection = inclinometer_service.snapshot_for_impact(impact_timestamp)
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
+    applied_to: list[str] = []
     snapshot = selection.snapshot
-    if snapshot is not None and iwr6843_runtime is not None:
-        configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
-        # Only the departure from the expected placement pitch corrects the designed
-        # tilt; summing the raw reading double-counts on a housing that leans.
-        expected_pitch = (_expected_inclinometer_orientation() or {}).get("pitch_deg") or 0.0
-        effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
-        data.update(
-            {
-                "applied": True,
-                "configured_iwr_tilt_deg": round(configured_tilt, 3),
-                "effective_iwr_tilt_deg": round(effective_tilt, 3),
-            }
-        )
+    if snapshot is None:
+        logger.warning("[SERVER] Inclinometer correction not applied: %s", selection.status)
+    else:
+        if camera_capture_runtime is not None:
+            applied_to.append("camera")
+        if iwr6843_runtime is not None:
+            configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
+            # Only the departure from the expected placement pitch corrects the designed
+            # tilt; summing the raw reading double-counts on a housing that leans.
+            expected_pitch = (_expected_inclinometer_orientation() or {}).get("pitch_deg") or 0.0
+            effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
+            data["configured_iwr_tilt_deg"] = round(configured_tilt, 3)
+            data["effective_iwr_tilt_deg"] = round(effective_tilt, 3)
+            applied_to.append("iwr6843")
         logger.info(
-            "[SERVER] Inclinometer pitch: raw %+.2fdeg, calibrated %+.2fdeg, "
-            "IWR tilt %.2fdeg (age %.0fms)",
+            "[SERVER] Inclinometer pitch: raw %+.2fdeg, calibrated %+.2fdeg, for %s (age %.0fms)",
             snapshot.raw_pitch_deg,
             snapshot.calibrated_pitch_deg,
-            effective_tilt,
+            ", ".join(applied_to) or "no sensor",
             (selection.age_s or 0.0) * 1000.0,
         )
-    else:
-        data["applied"] = False
-        logger.warning("[SERVER] Inclinometer correction not applied: %s", selection.status)
+    data["applied_to"] = applied_to
     shot.inclinometer = data
 
 
@@ -4474,7 +4477,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
     try:
         effective_tilt_deg = (
             shot.inclinometer.get("effective_iwr_tilt_deg")
-            if shot.inclinometer and shot.inclinometer.get("applied")
+            if "iwr6843" in ((shot.inclinometer or {}).get("applied_to") or ())
             else None
         )
         club = shot.club.value
@@ -7898,7 +7901,7 @@ def build_parser():
     parser.add_argument(
         "--inclinometer",
         action="store_true",
-        help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
+        help="Enable LIS3DH enclosure tilt compensation for the camera and the IWR6843",
     )
     parser.add_argument(
         "--inclinometer-bus", type=int, default=1, help="LIS3DH I2C bus (default: 1)"
@@ -8144,8 +8147,6 @@ def main():
         parser.error("--iwr6843 and vertical --kld7 cannot both own launch angle")
     if args.iwr6843 and args.kld7_horizontal:
         parser.error("--iwr6843 and horizontal --kld7 cannot both own club path")
-    if args.inclinometer and not args.iwr6843:
-        parser.error("--inclinometer requires --iwr6843")
     if args.iwr6843 and args.mock:
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
@@ -8445,7 +8446,7 @@ def main():
             address=args.inclinometer_address,
             mount_file=args.lis3dh_mount_file,
         ):
-            print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+            print("WARNING: Inclinometer unavailable; continuing without tilt correction")
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
         else:
             startup_status.ready("inclinometer", "Inclinometer connected")

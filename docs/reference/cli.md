@@ -81,7 +81,7 @@ LIS3DH enclosure tilt compensation.
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--inclinometer` | flag | Enable LIS3DH enclosure pitch compensation for IWR6843 tilt |
+| `--inclinometer` | flag | Enable LIS3DH enclosure tilt compensation for the camera and the IWR6843 |
 | `--lis3dh-mount-file` | path; default `~/.config/openflight/lis3dh-mount.json` | This unit's checked LIS3DH mount, saved by the orientation check; without the file the rig file's `lis3dh_mount_yaw_deg` stands |
 
 ## Unit setup

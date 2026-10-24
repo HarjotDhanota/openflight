@@ -51,7 +51,6 @@ class SnapshotSelection:
     def to_dict(self) -> dict:
         """Return selection diagnostics suitable for shot/session logging."""
         data = {
-            "applied": self.snapshot is not None,
             "status": self.status,
             "age_s": round(self.age_s, 3) if self.age_s is not None else None,
         }

@@ -30,7 +30,7 @@ CALIBRATION = {"offset_deg": 2.0, "uncertainty_deg": 0.3, "calibrated_at_utc": "
 
 def _inclinometer(calibrated_pitch_deg=1.0):
     return {
-        "applied": True,
+        "applied_to": ["camera", "iwr6843"],
         "status": "stable",
         "stable": True,
         "calibrated_pitch_deg": calibrated_pitch_deg,
@@ -59,7 +59,8 @@ def test_a_calibrated_unit_swings_with_the_lis3dh_pitch_plus_its_offset():
     [
         (None, _inclinometer(), "no unit camera tilt calibration"),
         (CALIBRATION, None, "no stable LIS3DH reading"),
-        (CALIBRATION, {"applied": False, "status": "stale"}, "no stable LIS3DH reading"),
+        (CALIBRATION, {"applied_to": [], "status": "stale"}, "no stable LIS3DH reading"),
+        (CALIBRATION, {**_inclinometer(), "applied_to": ["iwr6843"]}, "no stable LIS3DH"),
     ],
 )
 def test_without_calibration_or_a_reading_the_swing_stays_uncalibrated(

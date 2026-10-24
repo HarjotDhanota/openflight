@@ -395,9 +395,14 @@ def applied_pitch(lis3dh_pitch_deg: float, calibration: Mapping | None) -> dict:
 SWING_POSE_SCHEMA = "openflight.camera_swing_pose.v1"
 
 
+def _for_camera(inclinometer: Mapping | None) -> bool:
+    """Whether this swing's LIS3DH reading was handed to the camera."""
+    return isinstance(inclinometer, Mapping) and "camera" in (inclinometer.get("applied_to") or ())
+
+
 def _stable_pitch(inclinometer: Mapping | None) -> float | None:
-    """This swing's own calibrated LIS3DH pitch, when its reading was stable."""
-    if not isinstance(inclinometer, Mapping) or inclinometer.get("applied") is not True:
+    """This swing's own calibrated LIS3DH pitch, when the camera took its reading."""
+    if not _for_camera(inclinometer):
         return None
     pitch = inclinometer.get("calibrated_pitch_deg")
     if isinstance(pitch, bool) or not isinstance(pitch, (int, float)):
@@ -466,7 +471,7 @@ def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
     applied = camera_roll.roll_applied()
     gravity = (
         tuple(inclinometer.get(axis) for axis in ("x_g", "y_g", "z_g"))
-        if isinstance(inclinometer, Mapping) and inclinometer.get("applied") is True
+        if _for_camera(inclinometer)
         else (None, None, None)
     )
     measured = (

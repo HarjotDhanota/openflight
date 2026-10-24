@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from openflight import server
 from openflight.inclinometer import OrientationSnapshot, SnapshotSelection
 from openflight.iwr6843.calibration import Calibration
@@ -68,6 +66,7 @@ def test_server_passes_effective_preimpact_tilt_to_iwr(monkeypatch):
     server._process_iwr6843_angle(shot)
 
     assert sensor.impact_timestamp == 100.0
+    assert shot.inclinometer["applied_to"] == ["iwr6843"]
     assert shot.inclinometer["configured_iwr_tilt_deg"] == 11.5
     assert shot.inclinometer["effective_iwr_tilt_deg"] == 16.0
     assert shot.inclinometer["age_s"] == 0.2
@@ -98,7 +97,7 @@ def test_server_preserves_configured_tilt_without_stable_snapshot(monkeypatch):
     server._snapshot_inclinometer_for_shot(shot)
     server._process_iwr6843_angle(shot)
 
-    assert shot.inclinometer["applied"] is False
+    assert shot.inclinometer["applied_to"] == []
     assert shot.inclinometer["status"] == "no_stable_preimpact_reading"
     assert seen["tilt_deg"] is None
 
@@ -121,6 +120,8 @@ def test_init_inclinometer_is_fail_soft(monkeypatch):
     monkeypatch.setattr("openflight.inclinometer.LIS3DH", BrokenSensor)
     monkeypatch.setattr("openflight.inclinometer.InclinometerService", BrokenService)
     monkeypatch.setattr(server, "log_session_error", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {})
 
     assert server.init_inclinometer() is False
     assert server.inclinometer_service is None
@@ -128,16 +129,80 @@ def test_init_inclinometer_is_fail_soft(monkeypatch):
     assert server.inclinometer_runtime_config["error"] == "I2C unavailable"
 
 
-def test_inclinometer_flag_requires_iwr6843(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["openflight-server", "--inclinometer"])
+def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
+    """The camera's tilt correction does not wait on the ranging radar."""
+    from openflight.camera import camera_tilt
+    from openflight.rig_geometry import RigGeometry
 
-    with pytest.raises(SystemExit, match="2"):
-        server.main()
+    monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_stable_selection()))
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
+    monkeypatch.setattr(server, "iwr6843_runtime", None)
+    monkeypatch.setattr(server, "camera_capture_runtime", object())
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+
+    assert shot.inclinometer["applied_to"] == ["camera"]
+    assert "effective_iwr_tilt_deg" not in shot.inclinometer
+    pose = camera_tilt.swing_camera_pose(
+        rig=RigGeometry.from_json(
+            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
+        ),
+        image_width_px=1280,
+        inclinometer=shot.inclinometer,
+        calibration={"offset_deg": 1.0},
+    )
+    assert pose["status"] == "calibrated"
+
+
+def test_both_sensors_are_named_when_both_take_the_reading(monkeypatch):
+    calibration = Calibration.identity()
+    monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_stable_selection()))
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
+    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
+    monkeypatch.setattr(server, "camera_capture_runtime", object())
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+
+    assert shot.inclinometer["applied_to"] == ["camera", "iwr6843"]
+
+
+def test_the_inclinometer_starts_without_the_iwr(monkeypatch, tmp_path):
+    started = {}
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--no-logging",
+            "--inclinometer",
+            "--camera-capture",
+            "--rig-geometry",
+            str(Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"),
+            "--startup-status-file",
+            str(tmp_path / "status.json"),
+        ],
+    )
+    for name in ("rig_geometry", "rig_geometry_config"):
+        monkeypatch.setattr(server, name, getattr(server, name))
+    monkeypatch.setattr(server, "init_camera_capture", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        server, "init_inclinometer", lambda **kwargs: started.update(kwargs) or True
+    )
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(server, "start_monitor", lambda **_kwargs: None)
+    monkeypatch.setattr(server.socketio, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
+
+    server.main()
+
+    assert "mount_file" in started
 
 
 def test_shot_dict_includes_inclinometer_provenance():
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
-    shot.inclinometer = {"applied": True, "effective_iwr_tilt_deg": 16.0}
+    shot.inclinometer = {"applied_to": ["iwr6843"], "effective_iwr_tilt_deg": 16.0}
 
     assert server.shot_to_dict(shot)["inclinometer"] == shot.inclinometer
 
@@ -146,7 +211,7 @@ def test_session_log_records_orientation_used_for_shot(tmp_path):
     logger = SessionLogger(log_dir=tmp_path, enabled=True)
     logger.start_session(mode="rolling-buffer", trigger_type="sound")
     orientation = {
-        "applied": True,
+        "applied_to": ["iwr6843"],
         "calibrated_pitch_deg": 4.5,
         "effective_iwr_tilt_deg": 16.0,
     }
