@@ -83,6 +83,8 @@ AIM_PIXEL_UNCERTAINTY_PX = 2.0
 TOUCH_UNCERTAINTY_SCREEN_PX = 12.5
 DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX = 30.0
 FLOOR_LINE_PIXEL_UNCERTAINTY_PX = 2.0
+# The net distance a setup falls back to when its floor line measures nothing.
+DEFAULT_NET_RANGE_M = 4.6
 # A re-confirmed aim point (or floor line end) that moved less than this has not moved.
 AIM_MOVE_TOLERANCE_PX = 4.0
 # The stock lens's barrel, as a one-term radial model at 1280 px wide (Outdoors-test-5,
@@ -404,6 +406,58 @@ def parse_floor_line(value: Any, camera) -> list[list[float]] | None:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
         raise ValueError("floor_line_px must be two points")
     return [_pixel(end, camera, "floor_line_px") for end in value]
+
+
+def _net_default(reason: str) -> dict[str, Any]:
+    return {"value_m": DEFAULT_NET_RANGE_M, "source": "default_not_measured", "reason": reason}
+
+
+def net_range_from_floor_line(
+    camera,
+    floor_line_px: Sequence[Sequence[float]],
+    *,
+    ball_lfu: Sequence[float],
+    tilt_pad_deg: float,
+    roll_deg: float | None,
+) -> dict[str, Any]:
+    """The net's distance from the unit, from the floor line the tester taps.
+
+    The floor point under the line's midpoint, as a horizontal distance from the rig's
+    origin. A line at or above the horizon, or not beyond the ball, measures nothing.
+    """
+    first, second = (np.asarray(end, dtype=float) for end in floor_line_px)
+    midpoint = (first + second) / 2.0
+    point = _ground_point(camera, midpoint)
+    if point is None:
+        return _net_default("above the horizon")
+    if point[1] <= float(ball_lfu[1]):
+        return _net_default("in front of the ball")
+
+    def distance(model, pixel) -> float | None:
+        ground = _ground_point(model, pixel)
+        return None if ground is None else float(math.hypot(ground[0], ground[1]))
+
+    value = float(math.hypot(point[0], point[1]))
+    roll_pad = _roll_pad_deg(roll_deg)
+    touch = np.asarray([0.0, FLOOR_LINE_PIXEL_UNCERTAINTY_PX])
+    # Tilt, roll and the touch are separate errors; they add in quadrature, as in the yaw's.
+    cases = (
+        [(_pitched(camera, sign * float(tilt_pad_deg)), midpoint) for sign in (1.0, -1.0)],
+        [(_rolled(camera, sign * roll_pad), midpoint) for sign in (1.0, -1.0)],
+        [(camera, midpoint + sign * touch) for sign in (1.0, -1.0)],
+    )
+    parts = []
+    for case in cases:
+        moved = [distance(model, pixel) for model, pixel in case]
+        if any(item is None for item in moved):
+            # a ray the pad lifts to the horizon has no floor point: the distance is unbounded
+            return _net_default("too close to the horizon to measure")
+        parts.append(_spread(value, moved))
+    return {
+        "value_m": round(value, 3),
+        "uncertainty_m": round(math.sqrt(sum(part * part for part in parts)), 3),
+        "source": "camera_floor_line",
+    }
 
 
 def _ball_offset_from_aim_ray_m(camera, ball: tuple[float, float], aim: list[float]) -> float:

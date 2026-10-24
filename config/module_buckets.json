@@ -911,6 +911,7 @@
   "tests/test_mock_power.py": "PRODUCT",
   "tests/test_moving_range_replay.py": "RESEARCH",
   "tests/test_multitaper_spin.py": "PRODUCT",
+  "tests/test_net_from_floor_line.py": "FUSION",
   "tests/test_no_camera_size_distance.py": "TESTER",
   "tests/test_no_enclosure_constants.py": "FUSION",
   "tests/test_no_filled_in_values.py": "FUSION",
