@@ -21,8 +21,9 @@ class FakeInclinometer:
         self.selection = selection
         self.impact_timestamp = None
 
-    def snapshot_for_shot(self, impact_timestamp, **_kwargs):
+    def snapshot_for_shot(self, impact_timestamp, **kwargs):
         self.impact_timestamp = impact_timestamp
+        self.kwargs = kwargs
         return self.selection
 
 
@@ -274,6 +275,29 @@ def test_both_sensors_are_named_when_both_take_the_reading(monkeypatch):
     server._snapshot_inclinometer_for_shot(shot)
 
     assert shot.inclinometer["applied_to"] == ["camera", "iwr6843"]
+
+
+@pytest.mark.parametrize(
+    ("camera", "iwr", "waits"), [(None, None, False), (object(), None, True), (None, True, True)]
+)
+def test_a_shot_waits_for_confirmation_only_when_a_sensor_takes_the_reading(
+    monkeypatch, camera, iwr, waits
+):
+    """An OPS-only kiosk with --inclinometer never holds the OPS callback for a reading."""
+    sensor = FakeInclinometer(_stable_selection())
+    monkeypatch.setattr(server, "inclinometer_service", sensor)
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
+    monkeypatch.setattr(server, "camera_capture_runtime", camera)
+    monkeypatch.setattr(
+        server,
+        "iwr6843_runtime",
+        SimpleNamespace(calibration=Calibration.identity()) if iwr else None,
+    )
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+
+    assert (sensor.kwargs.get("wait_s", 1.0) > 0.0) is waits
 
 
 def test_the_inclinometer_starts_without_the_iwr(monkeypatch, tmp_path):

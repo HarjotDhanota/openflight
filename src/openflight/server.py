@@ -4405,7 +4405,11 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
         return
 
     impact_timestamp = shot.impact_timestamp or time.time()
-    selection = inclinometer_service.snapshot_for_shot(impact_timestamp)
+    # with no camera and no IWR nothing takes the reading: never hold the OPS callback
+    consumers = camera_capture_runtime is not None or iwr6843_runtime is not None
+    selection = inclinometer_service.snapshot_for_shot(
+        impact_timestamp, **({} if consumers else {"wait_s": 0.0})
+    )
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
     data["roll_verified"] = _roll_verified()
