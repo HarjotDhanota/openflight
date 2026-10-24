@@ -16,7 +16,8 @@ ball into it; nothing is dragged.
   screen the box is one rectangle (`box_outline_px`) that holds every ball
   resting in that ground rectangle at any camera pitch within the tilt margin:
   ±3° until the unit's camera tilt is calibrated, 1° after it, plus the LIS3DH
-  roll the camera does not apply (0.5° once it applies a verified roll). It is
+  roll the camera does not apply (the unit's zero repeatability once it applies a
+  verified, zeroed roll). It is
   drawn through the **selected lens**.
 - **A ball outside the window is labelled, never blocked** (D15):
   `distance_note` says "inside the 1.8–2.9 m window", "closer than 1.8 m: numbers

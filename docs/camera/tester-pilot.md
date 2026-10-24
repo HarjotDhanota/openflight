@@ -340,7 +340,8 @@ each exposure from the allowed list. Changing the lens asks first, because the
 ball box, the aim point and the camera tilt are set again for the new lens.
 
 **Step 2: check the unit.** A: **Check the unit** reads all four sensors (the
-box, light and range wait for it). B: the tilt check, by a lift of the front, then of the left side (the roll).
+box, light and range wait for it). B: the tilt check, by a lift of the front, then of the left side (the roll's
+direction), then a turn round and back on the same spot (the roll's zero).
 C: confirm the setup. The engineering rows and notes are folded under **Details
 (for the maintainer)**.
 
@@ -663,7 +664,8 @@ uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
 - **Uncertainty.** `uncertainty.parts_deg` holds what each source would move the
   angle by: ±2 px of aim (about 0.1°), the camera tilt (4° until the tilt is
   calibrated, 1° after), the roll (the inclinometer's reading, at least 1°, or 3°
-  without one; 0.5° once the camera applies a verified roll), the focal length (8 %), the lens's barrel (not
+  without one; the unit's zero repeatability once the camera applies a verified,
+  zeroed roll), the focal length (8 %), the lens's barrel (not
   corrected), and for a floor line ±2 px of its rows. For a direction, the
   hand-off adds the parallax at the net's measured distance beyond the ball (the
   swing server's 4.6 m when no net was measured). `total_deg` adds them in

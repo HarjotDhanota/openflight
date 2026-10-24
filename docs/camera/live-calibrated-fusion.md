@@ -61,7 +61,7 @@ declared target-line heading. Origins and the pivot are meters in target LFU.
 The placement rig hash must match the loaded rig exactly.
 
 For each shot, the server freezes the observed calibrated pitch and gravity-
-derived roll (the roll's departure only on a unit that verified it). It rotates the declared mount and both sensor origins about the
+derived roll (the zeroed roll only on a unit that verified and zeroed it). It rotates the declared mount and both sensor origins about the
 declared pivot relative to the reference pose. The LIS3DH supplies inclination;
 it does not measure yaw, optical-center height, target alignment, or any origin.
 Missing or non-finite gravity, missing capture-mode evidence, a mode mismatch,
@@ -74,7 +74,7 @@ estimator's own geometry model; that estimator still receives its existing
 scalar effective pitch correction. The persisted shared-core result exposes the
 experimental calibrated-camera vertical estimate even when the canonical
 vertical launch remains the IWR measurement. The roll is applied (to the
-camera and the IWR) only on a unit whose tilt check verified it; no accuracy
+camera and the IWR) only on a unit whose tilt check verified and zeroed it; no accuracy
 qualification is claimed for the RF estimator.
 
 The per-shot `camera_fusion_context` binds the full calibrated model, placement,
