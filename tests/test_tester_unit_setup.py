@@ -30,11 +30,16 @@ class SimTilt:
         self.true_mount = true_mount
         self.mount = assumed
         self.front_up_deg = 0.0
+        self.left_up_deg = 0.0
         self.mounts_set = []
 
     def reading(self):
-        angle = math.radians(self.front_up_deg)
-        raw = self.true_mount.inverse_apply(0.0, math.sin(angle), math.cos(angle))
+        if self.left_up_deg:
+            angle = math.radians(self.left_up_deg)
+            raw = self.true_mount.inverse_apply(-math.sin(angle), 0.0, math.cos(angle))
+        else:
+            angle = math.radians(self.front_up_deg)
+            raw = self.true_mount.inverse_apply(0.0, math.sin(angle), math.cos(angle))
         x, y, z = self.mount.apply(*raw)
         pitch = math.degrees(math.atan2(y, math.hypot(x, z)))
         return {
@@ -248,9 +253,16 @@ class TestOrientationCheck:
         assert self.post(client, action="start")["state"] == "lift"
         tilt.front_up_deg = 6.0
         status = client.get("/api/tester/lis3dh-check").get_json()
-        assert status["state"] == "passed"
+        assert status["state"] == "lift_left"
         tilt.front_up_deg = 0.0
+        # the front's pass is the setup's; the roll step only verifies the roll
         assert eligibility(client)["eligible"] is True
+        tilt.left_up_deg = 6.0
+        status = client.get("/api/tester/lis3dh-check").get_json()
+        assert status["state"] == "passed"
+        assert status["roll_verified"] is True
+        saved = json.loads((tmp_path / "config" / oc.FILE_NAME).read_text(encoding="utf-8"))
+        assert saved["roll_verified"] is True
 
     def test_a_turned_board_is_corrected_by_tap_and_saved_for_the_unit(self, tmp_path):
         tilt = SimTilt(oc.Mount(90.0))
@@ -267,7 +279,7 @@ class TestOrientationCheck:
         assert tilt.mounts_set == [oc.Mount(90.0)]
         assert after["state"] == "lift"
         tilt.front_up_deg = 6.0
-        assert client.get("/api/tester/lis3dh-check").get_json()["state"] == "passed"
+        assert client.get("/api/tester/lis3dh-check").get_json()["state"] == "lift_left"
         saved = json.loads((tmp_path / "config" / oc.FILE_NAME).read_text(encoding="utf-8"))
         assert saved["mount"] == {"yaw_deg": 90.0, "upside_down": False}
         assert saved["check"]["state"] == "passed"

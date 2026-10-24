@@ -91,6 +91,7 @@ function tilt(state: string, extra: object = {}) {
   return {
     state,
     passed: state === 'passed',
+    roll_verified: state === 'passed',
     mount: { yaw_deg: 180, upside_down: false },
     mount_source: 'rig_file',
     corrections: ['turned_around', 'quarter_left', 'quarter_right', 'upside_down'],
@@ -233,9 +234,34 @@ for (const viewport of VIEWPORTS) {
       // the check runs again with the fix
       await expect(page.locator('#lis3dh-status')).toHaveText('Lift the FRONT of the unit about 2 cm and hold it still');
 
-      state = tilt('passed', { front_up_deg: 5.9 });
-      await expect(page.locator('#lis3dh-status')).toHaveText('Tilt sensor checked: the front reads up');
+      // then the roll: the left side, with no button to press
+      state = tilt('lift_left', { front_up_deg: 5.9, passed: true });
+      await expect(page.locator('#lis3dh-status')).toHaveText(
+        'Front checked. Now lift the LEFT side about 2 cm and hold it still'
+      );
+      await expect(page.locator('#lis3dh-start')).toBeHidden();
+
+      state = tilt('passed', { front_up_deg: 5.9, left_up_deg: 6.1 });
+      await expect(page.locator('#lis3dh-status')).toHaveText('Tilt sensor checked: the front and the left read up');
       await expect(page.locator('#lis3dh-prompt')).toHaveText('Put the unit back down on its feet.');
+      await expect(page.locator('#lis3dh-start')).toHaveText('Check it again');
+    });
+
+    test('a roll that reads the wrong way stays unverified and says who to tell', async ({ page }) => {
+      let state = tilt('roll_reversed', { passed: true, front_up_deg: 5.9 });
+      await stage(page, { setup: () => eligibility({ checked: true, tilt: true }), tilt: () => state });
+      await page.goto('/tester.html');
+      await expect(page.locator('#lis3dh-status')).toHaveText(
+        'The left side read the wrong way: the roll is not verified on this unit'
+      );
+      await expect(page.locator('#lis3dh-prompt')).toContainText('tell the maintainer');
+      await expect(page.locator('#lis3dh-start')).toHaveText('Try again');
+
+      // a unit checked before the roll step: the front stands, the roll asks for a recheck
+      state = tilt('passed', { roll_verified: false, front_up_deg: 5.9 });
+      await expect(page.locator('#lis3dh-status')).toHaveText(
+        'Tilt sensor checked: the front reads up; the roll is not checked yet'
+      );
       await expect(page.locator('#lis3dh-start')).toHaveText('Check it again');
     });
 

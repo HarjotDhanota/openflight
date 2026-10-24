@@ -23,6 +23,12 @@ def enclosure_gravity(front_up_deg: float = 0.0) -> tuple[float, float, float]:
     return (0.0, math.sin(angle), math.cos(angle))
 
 
+def enclosure_gravity_left_up(left_up_deg: float) -> tuple[float, float, float]:
+    """The enclosure's own reading with its LEFT (target-left) side raised this much."""
+    angle = math.radians(left_up_deg)
+    return (-math.sin(angle), 0.0, math.cos(angle))
+
+
 def board_reads(true_mount: oc.Mount, enclosure: tuple[float, float, float]):
     """The raw board reading for a board mounted ``true_mount`` in the enclosure."""
     return true_mount.inverse_apply(*enclosure)
@@ -128,3 +134,46 @@ class TestMountStore:
         assert mount == oc.Mount(180.0).corrected("upside_down")
         assert source == "unit_file"
         assert record["check"] is None
+
+
+class TestRollVerified:
+    """The roll is applied only on a unit whose file says the roll step passed."""
+
+    def test_a_roll_pass_is_saved_after_the_front_pass(self, tmp_path):
+        path = tmp_path / "lis3dh-mount.json"
+        store = oc.MountStore(path, rig_yaw_deg=180.0)
+        store.record_pass({"front_up_deg": 6.0})
+        assert store.roll_verified() is False
+
+        store.record_roll({"left_up_deg": 6.0, "roll_change_deg": -6.0}, verified=True)
+
+        again = oc.MountStore(path, rig_yaw_deg=180.0)
+        assert again.roll_verified() is True
+        assert again.record()["roll_verified"] is True
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["roll_verified"] is True
+        assert document["check"]["roll"]["state"] == "passed"
+
+    def test_a_reversed_roll_is_recorded_unverified(self, tmp_path):
+        store = oc.MountStore(tmp_path / "m.json", rig_yaw_deg=180.0)
+        store.record_pass({"front_up_deg": 6.0})
+        store.record_roll({"left_up_deg": 6.0}, verified=False)
+        assert store.roll_verified() is False
+        assert store.record()["check"]["roll"]["state"] == "reversed"
+
+    def test_a_correction_or_a_new_front_pass_voids_the_roll(self, tmp_path):
+        store = oc.MountStore(tmp_path / "m.json", rig_yaw_deg=180.0)
+        store.record_pass({"front_up_deg": 6.0})
+        store.record_roll({}, verified=True)
+        store.record_pass({"front_up_deg": 6.1})
+        assert store.roll_verified() is False
+        store.record_roll({}, verified=True)
+        store.apply_correction("turned_around")
+        assert store.roll_verified() is False
+
+    def test_no_roll_without_a_front_pass(self, tmp_path):
+        store = oc.MountStore(tmp_path / "m.json", rig_yaw_deg=180.0)
+        with pytest.raises(ValueError):
+            store.record_roll({}, verified=True)
+        assert oc.MountStore(None, rig_yaw_deg=0.0).roll_verified() is False
+        assert oc.effective_mount(tmp_path / "none.json", 180.0)[2]["roll_verified"] is False

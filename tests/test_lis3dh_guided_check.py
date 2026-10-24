@@ -12,6 +12,7 @@ from tests.test_lis3dh_orientation_check import (
     LIFT_DEG,
     board_reads,
     enclosure_gravity,
+    enclosure_gravity_left_up,
     reading,
 )
 
@@ -100,6 +101,27 @@ def test_the_guided_check_finds_every_flat_mount(true_mount, assumed):
     assert mount.apply(*board_reads(true_mount, probe)) == pytest.approx(probe)
 
 
+class TestLeftLiftVerdict:
+    LEVEL = reading(*enclosure_gravity(0.0))
+
+    def test_the_left_side_up_reads_the_roll_down_and_passes(self):
+        verdict = gc.left_lift_verdict(self.LEVEL, reading(*enclosure_gravity_left_up(LIFT_DEG)))
+        assert verdict["state"] == "pass"
+        assert verdict["left_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
+        assert verdict["roll_change_deg"] == pytest.approx(-LIFT_DEG, abs=0.05)
+
+    def test_a_roll_that_reads_the_other_way_is_reversed(self):
+        x, y, z = enclosure_gravity_left_up(LIFT_DEG)
+        assert gc.left_lift_verdict(self.LEVEL, reading(-x, y, z))["state"] == "reversed"
+
+    def test_the_front_still_up_or_a_small_lift_keeps_waiting(self):
+        front = reading(*enclosure_gravity(LIFT_DEG))
+        assert gc.left_lift_verdict(self.LEVEL, front)["state"] == "waiting"
+        small = reading(*enclosure_gravity_left_up(1.0))
+        assert gc.left_lift_verdict(self.LEVEL, small)["state"] == "waiting"
+        assert gc.left_lift_verdict(self.LEVEL, {"status": "moving"})["state"] == "waiting"
+
+
 class FakeClock:
     def __init__(self):
         self.now = 1000.0
@@ -111,30 +133,75 @@ class FakeClock:
 class TestGuidedCheck:
     """The tester page's check: start, lift, correct, again, pass."""
 
-    def make(self, tmp_path, true_mount, rig_yaw=180.0):
-        state = {"front_up": 0.0, "status": "stable"}
+    def make(self, tmp_path, true_mount, rig_yaw=180.0, mirrored_x=False):
+        state = {"front_up": 0.0, "left_up": 0.0, "status": "stable"}
         store = oc.MountStore(tmp_path / "lis3dh-mount.json", rig_yaw_deg=rig_yaw)
 
         def read():
             if state["status"] != "stable":
                 return {"status": state["status"]}
-            raw = board_reads(true_mount, enclosure_gravity(state["front_up"]))
-            return reading(*store.mount().apply(*raw))
+            gravity = (
+                enclosure_gravity_left_up(state["left_up"])
+                if state["left_up"]
+                else enclosure_gravity(state["front_up"])
+            )
+            x, y, z = store.mount().apply(*board_reads(true_mount, gravity))
+            return reading(-x if mirrored_x else x, y, z)
 
         clock = FakeClock()
         check = gc.GuidedCheck(store, read, clock=clock)
         return check, state, store, clock
 
-    def test_a_board_that_matches_passes_after_one_lift(self, tmp_path):
+    def lift_front_then_left(self, check, state):
+        state["front_up"] = LIFT_DEG
+        after_front = check.status()
+        state["front_up"] = 0.0
+        down = check.status()
+        state["left_up"] = LIFT_DEG
+        return after_front, down, check.status()
+
+    def test_a_board_that_matches_passes_after_the_front_and_the_left(self, tmp_path):
         check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0))
         assert check.status()["state"] == "not_run"
         assert check.start()["state"] == "lift"
         assert check.status()["state"] == "lift"
-        state["front_up"] = LIFT_DEG
-        status = check.status()
+        after_front, down, status = self.lift_front_then_left(check, state)
+        assert after_front["state"] == "lift_left"
+        assert after_front["front_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
+        assert after_front["passed"] is True and after_front["roll_verified"] is False
+        assert down["state"] == "lift_left"
         assert status["state"] == "passed"
-        assert status["front_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
-        assert store.passed() is True
+        assert status["roll_verified"] is True
+        assert status["left_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
+        assert store.passed() is True and store.roll_verified() is True
+
+    def test_a_roll_that_reads_the_wrong_way_is_not_verified(self, tmp_path):
+        check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0), mirrored_x=True)
+        check.start()
+        _front, _down, status = self.lift_front_then_left(check, state)
+        assert status["state"] == "roll_reversed"
+        assert status["roll_verified"] is False
+        assert store.passed() is True and store.roll_verified() is False
+
+    def test_no_left_lift_within_the_time_says_so(self, tmp_path):
+        check, state, store, clock = self.make(tmp_path, oc.Mount(180.0))
+        check.start()
+        state["front_up"] = LIFT_DEG
+        check.status()
+        clock.now += gc.LIFT_TIMEOUT_S + 1
+        assert check.status()["state"] == "no_left_lift"
+        assert store.roll_verified() is False
+
+    def test_checking_again_needs_the_roll_again(self, tmp_path):
+        check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0))
+        check.start()
+        self.lift_front_then_left(check, state)
+        assert store.roll_verified() is True
+        state["left_up"] = 0.0
+        check.start()
+        state["front_up"] = LIFT_DEG
+        assert check.status()["state"] == "lift_left"
+        assert store.roll_verified() is False
 
     def test_a_quarter_turned_board_is_named_then_passes(self, tmp_path):
         check, state, store, _clock = self.make(tmp_path, oc.Mount(90.0))
@@ -147,7 +214,7 @@ class TestGuidedCheck:
         after = check.correct(status["suggestion"])
         assert after["state"] == "lift"
         state["front_up"] = LIFT_DEG
-        assert check.status()["state"] == "passed"
+        assert check.status()["state"] == "lift_left"
         assert store.mount() == oc.Mount(90.0)
 
     def test_an_upside_down_board_is_caught_before_the_lift(self, tmp_path):
@@ -194,3 +261,4 @@ class TestGuidedCheck:
         assert status["mount_source"] == "rig_file"
         assert status["thresholds"]["lift_min_deg"] == gc.LIFT_MIN_DEG
         assert status["passed"] is False
+        assert status["roll_verified"] is False

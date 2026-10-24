@@ -2580,6 +2580,7 @@
 
       // B (19 Oct): which way round the LIS3DH is fitted. Gravity says upside down or not;
       // lifting the FRONT says which way it faces. A wrong reading offers the fix by tap.
+      // Then lifting the LEFT side verifies the roll, which is applied only once verified.
       let lis3dhState = null;
       let lis3dhAvailable = true;
       let lis3dhPending = false;
@@ -2592,7 +2593,23 @@
           'waiting',
           'Lift the front edge (the end the camera looks out of), in the middle, about two fingers high. Hold it until this changes.',
         ],
-        passed: ['Tilt sensor checked: the front reads up', 'found', 'Put the unit back down on its feet.'],
+        lift_left: [
+          'Front checked. Now lift the LEFT side about 2 cm and hold it still',
+          'waiting',
+          'Put the front back down, then lift the left side (your left, standing behind the unit), in the middle, about two fingers high. Hold it until this changes.',
+        ],
+        passed: ['Tilt sensor checked: the front and the left read up', 'found', 'Put the unit back down on its feet.'],
+        passed_roll_unverified: [
+          'Tilt sensor checked: the front reads up; the roll is not checked yet',
+          'found',
+          'Tap <b>Check it again</b> to check the roll too: the front, then the left side.',
+        ],
+        roll_reversed: [
+          'The left side read the wrong way: the roll is not verified on this unit',
+          'problem',
+          'If you lifted the LEFT side, tell the maintainer: the sensor reads its roll reversed. The front is checked. Otherwise try again.',
+        ],
+        no_left_lift: ['No left-side lift seen', 'problem', 'Try again, and lift the middle of the left side about 2 cm.'],
         needs_correction: [
           'The front read the wrong way: the sensor is fitted another way round',
           'problem',
@@ -2621,7 +2638,8 @@
         const box = el('lis3dh-check');
         box.hidden = !lis3dhAvailable || !currentTester();
         const state = lis3dhState?.state || 'not_run';
-        const [status, tone, prompt] = LIS3DH_TEXT[state] || [state, 'waiting', ''];
+        const text = state === 'passed' && lis3dhState?.roll_verified === false ? 'passed_roll_unverified' : state;
+        const [status, tone, prompt] = LIS3DH_TEXT[text] || [state, 'waiting', ''];
         box.dataset.state = state;
         el('lis3dh-status').textContent = status;
         el('lis3dh-status').dataset.state = tone;
@@ -2635,7 +2653,7 @@
           button.disabled = lis3dhPending;
         }
         const start = el('lis3dh-start');
-        start.hidden = ['level', 'lift'].includes(state) || fixing;
+        start.hidden = ['level', 'lift', 'lift_left'].includes(state) || fixing;
         start.textContent = state === 'not_run' ? 'Start the tilt check' : state === 'passed' ? 'Check it again' : 'Try again';
         start.classList.toggle('primary', state !== 'passed');
         start.disabled = lis3dhPending || !currentTester();

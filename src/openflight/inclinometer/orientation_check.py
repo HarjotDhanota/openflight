@@ -3,6 +3,9 @@
 A board reading in enclosure axes is ``R(yaw) . F^upside_down . (x, y, z)``: ``F`` flips
 about the board's Y (X and Z reversed), ``R`` turns counter-clockwise seen from above.
 Corrections apply after the current mount; upside down also mirrors the yaw.
+
+``roll_verified`` is true once the check's roll step (the unit's left side lifted, the
+roll read moving down) passed under the current mount; only then is the roll applied.
 """
 
 from __future__ import annotations
@@ -161,12 +164,19 @@ class MountStore:
         mount = self.mount()
         with self._lock:
             document = dict(self._document or {})
+        check = document.get("check")
+        passed = bool(
+            isinstance(check, Mapping)
+            and check.get("state") == "passed"
+            and check.get("mount") == mount.as_dict()
+        )
         return {
             "mount": mount.as_dict(),
             "source": "rig_file" if not document else "unit_file",
             "rig_mount": self.rig_mount.as_dict(),
-            "check": document.get("check"),
+            "check": check,
             "corrections": list(document.get("corrections") or []),
+            "roll_verified": passed and document.get("roll_verified") is True,
         }
 
     def passed(self) -> bool:
@@ -177,6 +187,10 @@ class MountStore:
             and check.get("state") == "passed"
             and check.get("mount") == record["mount"]
         )
+
+    def roll_verified(self) -> bool:
+        """Whether the roll step passed under this mount: the roll may be applied."""
+        return bool(self.record()["roll_verified"])
 
     def _base(self) -> dict[str, Any]:
         document = dict(self._document or {})
@@ -193,6 +207,7 @@ class MountStore:
             document = self._base()
             document["mount"] = after.as_dict()
             document["check"] = None
+            document["roll_verified"] = False
             document["corrections"] = [
                 *document["corrections"],
                 {
@@ -216,6 +231,25 @@ class MountStore:
                 "mount": mount.as_dict(),
                 **dict(detail),
             }
+            # a new check: the roll step must pass again
+            document["roll_verified"] = False
+            self._write(document)
+
+    def record_roll(self, detail: Mapping[str, Any], *, verified: bool) -> None:
+        """The roll step's result, after a passed front lift: verified, or reversed."""
+        if not self.passed():
+            raise ValueError("the roll step follows a passed front lift")
+        with self._lock:
+            document = self._base()
+            document["check"] = {
+                **document["check"],
+                "roll": {
+                    "state": "passed" if verified else "reversed",
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    **dict(detail),
+                },
+            }
+            document["roll_verified"] = bool(verified)
             self._write(document)
 
 

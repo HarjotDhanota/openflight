@@ -1,10 +1,15 @@
-"""The tester page's LIS3DH orientation check: gravity, then one lift of the unit's front.
+"""The tester page's LIS3DH orientation check: gravity, a lift of the front, then the left.
 
 Gravity alone tells upside down from upright; it cannot tell a board turned round
 when the unit stands level. So the tester lifts the FRONT of the unit about 2 cm and
 holds it: the reading must then show the front up on the enclosure's +Y axis. Any
 other axis names the correction, which the tester taps; it is saved for this unit
 only (``orientation_check.MountStore``), and the check runs again until it passes.
+
+Then the roll: the tester puts the front down and lifts the LEFT side about 2 cm. The
+roll must read moving down (+X, the target-right side, going down); then the unit's
+file says ``roll_verified`` and the roll is applied. A roll that reads the other way
+has no tap fix (the axes are mirrored): it stays unverified, recorded and padded.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from .models import gravity_roll_deg
 from .orientation_check import CORRECTIONS, Mount, MountStore, _gravity
 
 # |z| at least this (in g) when the unit stands on its feet: a flat board's gravity
@@ -78,8 +84,28 @@ def lift_verdict(level: Mapping[str, Any], lifted: Mapping[str, Any]) -> dict[st
     return {"state": "unclear", **detail}
 
 
+def left_lift_verdict(level: Mapping[str, Any], lifted: Mapping[str, Any]) -> dict[str, Any]:
+    """The left side lifted and held: does the roll read it, the +X side going down?
+
+    It waits until the lift is clearly across the unit, so a front still coming down
+    is not judged; a corner lift times out.
+    """
+    before = _gravity(level)
+    after = _gravity(lifted)
+    if before is None or after is None:
+        return {"state": "waiting", "left_up_deg": None}
+    dx, dy = after[0] - before[0], after[1] - before[1]
+    detail = {
+        "left_up_deg": round(math.degrees(math.asin(min(1.0, math.hypot(dx, dy)))), 2),
+        "roll_change_deg": round(gravity_roll_deg(*after) - gravity_roll_deg(*before), 2),
+    }
+    if detail["left_up_deg"] < LIFT_MIN_DEG or abs(dx) < LIFT_AXIS_RATIO * abs(dy):
+        return {"state": "waiting", **detail}
+    return {"state": "pass" if dx < 0 else "reversed", **detail}
+
+
 class GuidedCheck:
-    """The tester page's check, polled: start, lift and hold, correct, again.
+    """The tester page's check, polled: start, lift the front, correct, again, lift the left.
 
     ``read`` returns the LIS3DH reading in the current mount's axes (the tester
     server's ``EnclosureTilt.reading``); ``on_mount_change`` re-reads the sensor
@@ -105,11 +131,16 @@ class GuidedCheck:
         state = dict(self._state)
         if state["state"] == "not_run" and self.store.passed():
             check = self.store.record()["check"] or {}
-            state = {"state": "passed", "front_up_deg": check.get("front_up_deg")}
+            state = {
+                "state": "passed",
+                "front_up_deg": check.get("front_up_deg"),
+                "left_up_deg": (check.get("roll") or {}).get("left_up_deg"),
+            }
         state.pop("since", None)
         return {
             **state,
             "passed": self.store.passed(),
+            "roll_verified": self.store.roll_verified(),
             "mount": self.store.mount().as_dict(),
             "mount_source": self.store.source(),
             "corrections": list(CORRECTIONS),
@@ -174,6 +205,26 @@ class GuidedCheck:
                 self.store.record_pass(
                     {key: detail.get(key) for key in ("front_up_deg", "delta_g", "level", "lifted")}
                 )
-                self._state = {**detail, "state": "passed"}
+                self._state = {
+                    "state": "lift_left",
+                    "since": now,
+                    "level": state["level"],
+                    "front_up_deg": verdict["front_up_deg"],
+                }
                 return
             self._state = detail
+            return
+        if state["state"] == "lift_left":
+            level = {"status": "stable", **state["level"]}
+            verdict = left_lift_verdict(level, self.read())
+            if verdict["state"] == "waiting":
+                if now - state["since"] > LIFT_TIMEOUT_S:
+                    self._state = {**state, "state": "no_left_lift"}
+                return
+            roll = {key: verdict[key] for key in ("left_up_deg", "roll_change_deg")}
+            self.store.record_roll(roll, verified=verdict["state"] == "pass")
+            self._state = {
+                **state,
+                **roll,
+                "state": "passed" if verdict["state"] == "pass" else "roll_reversed",
+            }
