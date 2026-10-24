@@ -50,7 +50,7 @@ CAMERA_UNAVAILABLE_MESSAGE = (
     "The camera could not look for the ball (the picture was too dark or too bright), and "
     "the radar alone does not confirm a ball inside the box: no distance is saved."
 )
-# where a saved range came from, as the swing server's --iwr6843-tee-range-source
+# where a saved range came from, as the setup record's ball range qualification
 SOURCES = {
     "static_iwr_coherent_magnitude": "patch_validated_static_iwr_coherent_magnitude",
     "static_iwr_magnitude": "patch_validated_static_iwr_magnitude",

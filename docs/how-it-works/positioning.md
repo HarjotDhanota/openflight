@@ -32,12 +32,12 @@ has several.
 measurement requirements, and its geometry values are runtime inputs rather than
 approximations.
 
-You must measure and supply:
+Where each value comes from:
 
-| Value | Flag |
+| Value | Source |
 | --- | --- |
-| Antenna-centre to tee slant range | `--iwr6843-tee-m` |
-| Antenna-centre to net range | `--iwr6843-net-m` |
+| Antenna-centre to tee slant range | the unit's [setup record](../reference/configuration.md#configopenflightsetupjson) (a prior; each shot is ranged from its own capture) |
+| Antenna-centre to net range | the setup record |
 | Ball-centre height above the mat | `--iwr6843-ball-height-m` |
 | Mount tilt | from the enclosure's rig file (`--rig-geometry`) |
 | Antenna-centre height | from the enclosure's rig file (`--rig-geometry`) |
@@ -69,13 +69,12 @@ layers:
    line. A ball hit straight down the target line reads +yaw from the boresight
    and reports 0; + still means right of the target line.
 
-The offset is given through `--camera-capture-horizontal-offset-deg` and
-`--iwr6843-azimuth-offset-deg`, with the same value; the tester page's
-target-line hand-off passes it to both (target line 3° right of the
-boresight → `-3`). Either flag alone sets it for both sensors; two different
-values are refused. Unset or `0`, every horizontal angle is reported against the
-unit boresight and its record says `unit_boresight`; with an offset, against the
-target line, `target_line`. A value built from two frames (a face angle or spin
+The offset comes from the aim in the unit's
+[setup record](../reference/configuration.md#configopenflightsetupjson), and the
+kiosk gives both sensors the same value (target line 3° right of the
+boresight → `-3`); a new aim applies between two shots. Without an aim, every
+horizontal angle is reported against the unit boresight and its record says
+`unit_boresight`; with one (even at `0`), against the target line, `target_line`. A value built from two frames (a face angle or spin
 axis from a target-line launch and a boresight path) says `mixed`.
 
 See [horizontal launch and club path](../iwr6843/club-path.md#set-the-target-line-reference).

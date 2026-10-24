@@ -647,11 +647,10 @@ uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
   between the lens and the ball. The server still accepts a floor line from an
   older page, but this page never sends one.
 - **The angle goes to both sensors.** The rig file has no sideways angle between
-  the camera and the IWR (they share a boresight by design), so the kiosk gets the
-  same value in `--camera-capture-horizontal-offset-deg` and
-  `--iwr6843-azimuth-offset-deg`. Those flags take the unit's boresight relative to
-  the target line, so they get minus the target line's angle: a ball hit straight
-  down the target line reads 0.
+  the camera and the IWR (they share a boresight by design), so the kiosk gives
+  both the same offset from the setup record's aim. The offset is the unit's
+  boresight relative to the target line, minus the target line's angle: a ball hit
+  straight down the target line reads 0.
 - **What is recorded.** `target-line.json`, beside `placement-box.json`, keeps the
   confirmed aim point (`aim_px`, 1280×800 pixels), the `display_scale` it was set
   at, the ball box, the method (`direction` or `floor_point`), the angle (`yaw_deg`, positive
@@ -698,7 +697,7 @@ on each swing**. That is enough to finish the setup, and you never stand still f
 radar captures.
 
 The camera's distance is only a **prior**: the kiosk gets it with its uncertainty
-(never less than 15 % of the distance) as `--iwr6843-tee-prior-m`, and uses it to
+(never less than 15 % of the distance) in the setup record, and uses it to
 size the radar's search. Each swing's IWR capture then measures that swing's own
 launch point: the ball's track after impact, worked back to where the club met it
 (`openflight.iwr6843.launch_range`). A swing the radar cannot range uses the prior,
@@ -777,8 +776,8 @@ and the ball stand on the same surface. When the camera and radar agree on the
 ball, the pair also solves the lens height from the radar's range along the ball's
 pixel ray (once the camera tilt is calibrated). One ball solves it only to about ±25–65 mm, so the solve is a gross-error
 check: it replaces the rig file's height only when the two disagree by more than
-60 mm (for example a unit standing on a box). Swings are then started with
-`--solved-camera-height-m`, which moves the radar height with the lens; the kiosk
+60 mm (for example a unit standing on a box). The setup record's `scene` then
+holds the solved height, which moves the radar height with the lens; the kiosk
 log states both. A solve that would put the radar below the hitting surface is
 refused. A mat under the ball but not the unit (about 20–30 mm) is below what one
 ball can see; in simulation it moves the radar's vertical launch by up to about
@@ -806,7 +805,7 @@ frame stability as the 24-frame default.
 
 The empty capture also measures the net: the strongest still reflector 2-6 m out,
 at least 10 dB above the rest of that window, is recorded as `net_range` in the
-setup evidence and handed to swings as `--net-range-m`, so the swing server's ball
+setup evidence and handed to swings in the setup record, so the swing server's ball
 gates stop 0.25 m short of it. The static capture's window ends near 2.9 m
 (apparent), so a net further away is not seen; swings then assume 4.6 m, and
 `session_start`'s `net_range` says the value was assumed.
@@ -838,7 +837,7 @@ ball, so a person standing behind the ball stays a candidate the pair does not
 pick. The summary's **ball** line says what happened (camera and radar agree,
 camera only, radar only, disagree, no ball), with both distances and how far the
 ball sits left or right of straight ahead (from the camera's ray at the radar's
-distance; swings place the resting ball there, `--tee-side-offset-m`); its **radar candidates** line lists everything the radar saw in the
+distance; swings place the resting ball there, from the setup record); its **radar candidates** line lists everything the radar saw in the
 box. Something ball-sized at the same distance as the ball, such as a shoe beside
 it, is not separated, so the prompt asks you to step at least 2 m away before each
 capture.

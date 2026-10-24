@@ -43,16 +43,16 @@ on the Pi GPIO UART — the IWR6843 needs the USB bus.
 scripts/start-kiosk.sh \
   --iwr6843 \
   --radar-port /dev/ttyAMA0 \
-  --iwr6843-tee-m <measured-slant-metres> \
-  --iwr6843-net-m 4.6 \
   --iwr6843-ball-height-m 0.040
 ```
 
-!!! warning "Measure your own geometry"
+!!! note "The setup is not a flag"
 
-    Replace the tee-range placeholder with the current measured placement.
-    Omitting it intentionally keeps IWR capture raw-only and withholds
-    range-dependent output. See
+    The radar's placement comes from the enclosure's rig file. The ball box, the
+    aim, the resting ball's range and the net range come from the unit's
+    [setup record](../reference/configuration.md#configopenflightsetupjson),
+    which the setup screen writes. Without a ball range each shot is ranged from
+    its own capture; see
     [mounting and geometry](../iwr6843/mounting.md#measure-the-geometry).
 
 Add `--inclinometer` if you have fitted the LIS3DH, so enclosure tilt is

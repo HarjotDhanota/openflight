@@ -57,7 +57,7 @@ The value is subtracted in phase space before conversion to degrees. Omitting
 it reports horizontal launch relative to the board's uncalibrated RF phase
 zero, which can create a consistent left/right bias even when the enclosure is
 aimed correctly. This is the IWR's own boresight zero. It is separate from the
-horizontal offset (`--iwr6843-azimuth-offset-deg`, −(target yaw)), which is added
+horizontal offset (−(target yaw), from the setup record's aim), which is added
 to the horizontal launch and the club path alike, as to every horizontal angle
 ([target line reference](../how-it-works/positioning.md#target-line-reference)).
 
@@ -91,30 +91,26 @@ operator trusting ±0.3° there would be relying on a number nobody measured.
 ### Set the target-line reference
 
 Club path is relative to the target line, and the array calibration cannot
-supply where the unit's boresight points. Measure the angle between boresight
-and your target line (normally the tester's target-line hand-off does), then pass it:
+supply where the unit's boresight points. The setup's aim step measures the
+angle between the boresight and your target line and keeps it in the unit's
+[setup record](../reference/configuration.md#configopenflightsetupjson); it is
+not a flag.
 
-```bash
-scripts/start-kiosk.sh --iwr6843 --iwr6843-azimuth-offset-deg 1.5
-```
-
-Positive means boresight points right of the target line: the value is
-−(target yaw), the target yaw being + when the target line lies right of the
-boresight, seen from behind the unit. The value is added to the measured path,
-exactly as to the horizontal launch and every other horizontal angle. Left
-unset or at 0, club path is reported relative to the boresight
+The offset is −(target yaw), the target yaw being + when the target line lies
+right of the boresight, seen from behind the unit, so it is positive when the
+boresight points right of the target line. It is added to the measured path,
+exactly as to the horizontal launch and every other horizontal angle, camera
+and IWR alike. Without an aim, club path is reported relative to the boresight
 (`club_path_frame: unit_boresight`) rather than the target line (`target_line`),
-which is fine for separation testing but not for absolute numbers. The same
-value goes to `--camera-capture-horizontal-offset-deg`; two different values are
-refused.
+which is fine for separation testing but not for absolute numbers.
 
-This flag is not optional trim. The estimator fits `x(t)` and `y(t)` in
+The offset is not optional trim. The estimator fits `x(t)` and `y(t)` in
 Cartesian coordinates and reports `path = atan2(v_y, v_x)`, so absolute
 azimuth enters as a constant offset rather than cancelling out: a constant
 per-element phase error from the shipped array calibration (measured on a
 different board than the one it ships on) shifts the reported path by a
-constant. `--iwr6843-azimuth-offset-deg` is what absorbs that shift, not a
-convenience for aiming.
+constant. The aim's offset is what absorbs that shift, not a convenience for
+aiming.
 
 ### Why this can't be the ball
 

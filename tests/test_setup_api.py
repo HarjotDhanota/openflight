@@ -379,15 +379,16 @@ def _rig_sha256() -> str:
 def test_start_applies_saved_record_and_marks_stale_on_lens_change(kiosk, start_kiosk):
     _saved_record(kiosk.path, lens_id="stock-2.8mm", rig_sha256=_rig_sha256())
 
-    started = start_kiosk("--iwr6843-tee-m", "2.2")
+    started = start_kiosk()
 
     assert started["box"]["state"] == "confirmed" and started["aim"]["state"] == "set"
     assert server.camera_ball_box_px == (480, 380, 800, 520)
     assert server.setup_handoff_config["target_line"]["status"] == "set"
     assert server.setup_handoff_config["target_line"]["yaw_deg"] == 2.5
     assert server.horizontal_offset_deg == -2.5
-    # the record has no ball range, so the flag's still stands
-    assert server.setup_handoff_config["tee_range"]["tee_slant_range_m"] == 2.2
+    # the record has no ball range: each shot is ranged alone, and nothing is filled in
+    assert server.setup_handoff_config["tee_range"]["status"] == "pending"
+    assert server.setup_handoff_config["tee_range"]["tee_slant_range_m"] is None
     assert server.setup_service.applied_revision == 1
 
     moved = start_kiosk("--camera-lens-id", "6mm")
@@ -401,10 +402,12 @@ def test_start_applies_saved_record_and_marks_stale_on_lens_change(kiosk, start_
 
 
 def test_a_missing_setup_file_starts_the_kiosk_with_nothing_applied(kiosk, start_kiosk):
-    started = start_kiosk("--iwr6843-tee-m", "2.2")
+    started = start_kiosk()
 
     assert all(started[name]["state"] == "not_set" for name in SECTIONS)
-    assert server.setup_handoff_config["tee_range"]["tee_slant_range_m"] == 2.2
+    assert server.setup_handoff_config["tee_range"]["status"] == "pending"
+    assert server.setup_handoff_config["net_range"]["source"] == "default_not_measured"
+    assert server.setup_handoff_config["scene"]["lens_height_used_source"] == "rig_nominal"
     assert server.setup_handoff_config["target_line"]["status"] == "not_set"
     assert not kiosk.path.exists()
 

@@ -108,12 +108,11 @@ See the **[Raspberry Pi Setup Guide](docs/setup/raspberry-pi.md)** for details a
 # Default: rolling buffer mode with sound trigger
 scripts/start-kiosk.sh
 
-# With the IWR6843 angle radar (OPS243 on the Pi GPIO UART).
-# Supply the current measured tee range; there is no fixed placement default.
+# With the IWR6843 angle radar (OPS243 on the Pi GPIO UART). The radar's
+# placement comes from the rig file; the ball box, aim and ranges from the
+# unit's setup record (~/.config/openflight/setup.json), not from flags.
 scripts/start-kiosk.sh --iwr6843 \
   --ops-port /dev/ttyAMA0 \
-  --iwr6843-tee-m <measured-slant-metres> --iwr6843-net-m 4.064 \
-  --iwr6843-tilt-deg 5.5 --iwr6843-radar-height-m 0.229 \
   --iwr6843-ball-height-m 0.021
 
 # With legacy K-LD7 hardware (measure the mount tilt first)

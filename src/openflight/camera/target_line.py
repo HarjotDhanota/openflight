@@ -42,15 +42,14 @@ should be turned to face the target roughly.
 **Camera to IWR.** The rig file has no yaw term between the camera and the IWR:
 they share a boresight in azimuth by design (the IWR is pitched 10 deg up, which
 does not turn it sideways; ``iwr_offset_mm`` puts it straight below the lens).
-So one yaw applies to both, and both kiosk flags get the same value. A measured
+So one yaw applies to both, and both sensors get the same offset. A measured
 camera-to-IWR yaw, when the rig file has one, enters ``iwr_yaw_deg`` here.
 
-**Kiosk flags.** ``--camera-capture-horizontal-offset-deg`` and
-``--iwr6843-azimuth-offset-deg`` are each *added* to the measured angle and are
-documented as the boresight's azimuth from the target line (the IWR flag:
-"positive means boresight points right of the target line"). That is minus the
-target line's yaw, so the flags get ``kiosk_offset_deg = -yaw_deg``: a ball
-launched straight down the target line then reads 0.
+**Kiosk offset.** The kiosk *adds* one horizontal offset to every measured angle,
+the boresight's azimuth from the target line (positive when the boresight points
+right of the target line). That is minus the target line's yaw, so the setup
+record's aim gives ``kiosk_offset_deg = -yaw_deg``: a ball launched straight down
+the target line then reads 0.
 """
 
 from __future__ import annotations

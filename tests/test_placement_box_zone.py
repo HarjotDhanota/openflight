@@ -284,23 +284,48 @@ def test_a_clip_judged_on_the_setup_ball_records_the_box_zone(tmp_path):
     assert judged["zone"]["zone_box_px"] == list(BOX)
 
 
-def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
+class _Started(Exception):
+    pass
+
+
+def _run_kiosk_with_camera(monkeypatch, tmp_path, *, setup_file):
+    """main() with a stand-in camera, up to the monitor's start (after the setup's apply)."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
     from openflight import server as server_module, tester_hooks  # noqa: PLC0415
 
     # --study-mode below turns the tester's study mode on: restored after the test
     monkeypatch.setattr(tester_hooks, "study_mode_enabled", tester_hooks.study_mode_enabled)
+    for name in (
+        "rig_geometry",
+        "rig_geometry_config",
+        "setup_handoff_config",
+        "camera_capture_config",
+        "camera_ball_box_px",
+        "ball_at_address_monitor",
+        "_ball_at_address_range",
+    ):
+        monkeypatch.setattr(server_module, name, getattr(server_module, name))
+    monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+    monkeypatch.setattr(server_module, "_ball_at_address_loop", lambda: None)
+    camera = SimpleNamespace(
+        settings=CameraCaptureSettings(width=1280, height=800), stop=lambda: None
+    )
     received = {}
-
-    class StopAfterCameraInit(Exception):
-        pass
 
     def fake_init_camera_capture(**kwargs):
         received.update(kwargs)
-        raise StopAfterCameraInit
+        server_module.camera_capture_runtime = camera
+        server_module.camera_capture_config = {"enabled": True}
+        return True
+
+    def stop(**_kwargs):
+        raise _Started
 
     monkeypatch.setattr(server_module, "init_camera_capture", fake_init_camera_capture)
     monkeypatch.setattr(server_module, "init_session_logger", lambda **kwargs: None)
     monkeypatch.setattr(server_module, "profile_store", None)
+    monkeypatch.setattr(server_module, "start_monitor", stop)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -313,35 +338,42 @@ def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
             "--no-logging",
             "--profiles-path",
             str(tmp_path / "profiles.json"),
-            *extra,
+            "--setup-file",
+            str(setup_file),
         ],
     )
-    with pytest.raises((StopAfterCameraInit, SystemExit)) as raised:
+    with pytest.raises(_Started):
         server_module.main()
-    return received, raised.value
+    return received, camera
 
 
-def test_the_kiosk_hands_the_box_to_the_camera(monkeypatch, tmp_path):
-    received, _stop = _run_kiosk_until_camera_init(
-        monkeypatch, tmp_path, "--camera-hitting-zone", "562,470,718,600"
-    )
+def test_the_kiosk_hands_the_record_s_box_and_ball_to_the_camera(monkeypatch, tmp_path):
+    from openflight import server as server_module  # noqa: PLC0415
+    from tests.setup_files import BALL_DIAMETER_PX, BALL_PX, BOX_PX, write_setup  # noqa: PLC0415
 
-    assert received["hitting_zone"] == BOX
+    setup_file = tmp_path / "setup.json"
+    write_setup(setup_file)
+
+    received, camera = _run_kiosk_with_camera(monkeypatch, tmp_path, setup_file=setup_file)
+
+    # the camera starts with none; the setup record puts them in before the first shot
+    assert "hitting_zone" not in received and "setup_ball" not in received
+    assert camera.settings.hitting_zone == BOX_PX
+    assert camera.settings.setup_ball == {
+        "x": BALL_PX[0],
+        "y": BALL_PX[1],
+        "diameter_px": BALL_DIAMETER_PX,
+    }
+    assert server_module.camera_ball_box_px == BOX_PX
 
 
 def test_a_kiosk_without_a_box_keeps_the_fixed_zone(monkeypatch, tmp_path):
-    received, _stop = _run_kiosk_until_camera_init(monkeypatch, tmp_path)
-
-    assert received["hitting_zone"] is None
-
-
-def test_a_malformed_box_stops_the_kiosk(monkeypatch, tmp_path):
-    received, stop = _run_kiosk_until_camera_init(
-        monkeypatch, tmp_path, "--camera-hitting-zone", "562,470,718"
+    _received, camera = _run_kiosk_with_camera(
+        monkeypatch, tmp_path, setup_file=tmp_path / "no-setup.json"
     )
 
-    assert isinstance(stop, SystemExit) and stop.code == 2
-    assert received == {}
+    assert camera.settings.hitting_zone is None
+    assert camera.settings.setup_ball is None
 
 
 # --- the gain screen (B) ----------------------------------------------------------

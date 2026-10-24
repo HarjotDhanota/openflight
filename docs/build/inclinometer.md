@@ -174,10 +174,11 @@ uv run python scripts/hardware-test/read_lis3dh.py \
 uv run python scripts/hardware-test/read_lis3dh.py --address 0x19
 ```
 
-## Calibrate The Zero Offset
+## Check The Sensor's Bias
 
-The zero offset corrects only the LIS3DH's own mounting and sensor bias. It does
-not include the TI board's fixed mounting angle.
+The kiosk takes no typed zero offset. The calibration helper still measures the
+LIS3DH's own mounting and sensor bias, as a check: a large bias means the sensor
+is not seated flat in the enclosure.
 
 1. Put the complete enclosure on a firm, stationary surface.
 2. Measure that surface in the radar tilt direction with a phone level app.
@@ -195,38 +196,26 @@ The script averages 50 samples and prints a value such as:
 ```text
 Raw pitch mean: -1.401deg (std dev 0.071deg)
 Reference pitch: +0.100deg
-Recommended flag: --inclinometer-zero-offset +1.501
+Bias: +1.501deg (a check; the kiosk takes no typed zero offset)
 ```
 
-Record that value in the launch command. The current implementation does not
-write a calibration file.
+## The Fixed IWR6843 Tilt
 
-## Measure The Fixed IWR6843 Tilt
-
-Measure the TI antenna face relative to the enclosure base, not relative to the
-floor under the rig. Pass that fixed mounting angle through
-`--iwr6843-tilt-deg`.
-
-For the prototype's measured `11.5` degree mounting angle:
-
-```bash
---iwr6843-tilt-deg 11.5
-```
-
-Do not add the current floor slope to this number. The LIS3DH supplies that
-runtime correction.
+The TI antenna face's mounting angle relative to the enclosure base comes only
+from the enclosure's rig file (`iwr_boresight_pitch_deg`, read through
+`--rig-geometry`). It is not a flag. It does not include the current floor slope;
+the LIS3DH supplies that runtime correction.
 
 ## Start OpenFlight
 
 Example production startup:
 
 ```bash
-scripts/start-kiosk.sh \
-  --iwr6843 \
-  --iwr6843-tilt-deg 11.5 \
-  --inclinometer \
-  --inclinometer-zero-offset 1.5
+scripts/start-kiosk.sh --iwr6843 --inclinometer
 ```
+
+`start-kiosk.sh` passes `config/enclosure_v3_rig_geometry.json` unless another
+`--rig-geometry` file is given.
 
 At startup, OpenFlight prints the raw enclosure pitch, calibrated pitch,
 configured IWR tilt, and effective IWR tilt. It then samples the LIS3DH at 10 Hz.
@@ -326,12 +315,11 @@ the configured IWR tilt.
 
 Confirm the inputs have distinct meanings:
 
-- `--iwr6843-tilt-deg`: TI antenna angle relative to the enclosure.
-- `--inclinometer-zero-offset`: LIS3DH calibration bias.
+- The rig file's `iwr_boresight_pitch_deg`: TI antenna angle relative to the
+  enclosure.
 - Runtime enclosure pitch: current enclosure angle relative to level.
 
-Do not put the floor slope into `--iwr6843-tilt-deg`, and do not put the TI board
-mounting angle into `--inclinometer-zero-offset`.
+The rig file's angle never includes the floor slope.
 
 ## Current Limitations
 

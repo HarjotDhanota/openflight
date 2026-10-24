@@ -372,7 +372,7 @@ def _path_or_attack(metric_id: str):
 BALL_RANGE_SOURCES = {
     "iwr_post_impact": "IWR post-impact launch point (this shot's own capture)",
     "camera_prior": "camera prior: the resting ball's size, coarse",
-    "configured_tee": "range configured for the run (--iwr6843-tee-m)",
+    "configured_tee": "a fixed range configured for the run (tests only)",
 }
 BALL_RANGE_UNVALIDATED = "per-swing IWR range: not validated against a tape yet"
 CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"

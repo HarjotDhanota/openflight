@@ -14,9 +14,6 @@ TARGET_LINE = "target_line"
 # a value derived from angles in two different frames
 MIXED = "mixed"
 
-CAMERA_OFFSET_FLAG = "--camera-capture-horizontal-offset-deg"
-IWR_OFFSET_FLAG = "--iwr6843-azimuth-offset-deg"
-
 
 def _wrap_deg(angle_deg):
     """Wrap to [-180, 180); works on floats and numpy arrays alike."""
@@ -24,7 +21,7 @@ def _wrap_deg(angle_deg):
 
 
 def offset_from_target_yaw(target_yaw_deg: float) -> float:
-    """The flag value for a target yaw (+ = target line right of the boresight)."""
+    """The horizontal offset for a target yaw (+ = target line right of the boresight)."""
     return -float(target_yaw_deg)
 
 
@@ -52,16 +49,3 @@ def combined_frame(*frames: Optional[str]) -> Optional[str]:
     if not known:
         return None
     return known.pop() if len(known) == 1 else MIXED
-
-
-def resolve_horizontal_offset(
-    *, camera_deg: Optional[float], iwr_deg: Optional[float]
-) -> Optional[float]:
-    """The one horizontal offset from the two kiosk flags; two different values are refused."""
-    if camera_deg is not None and iwr_deg is not None and camera_deg != iwr_deg:
-        raise ValueError(
-            f"{CAMERA_OFFSET_FLAG} ({camera_deg:+g}) and {IWR_OFFSET_FLAG} ({iwr_deg:+g}) differ. "
-            "Both carry the one horizontal offset, -(target yaw), added to every horizontal "
-            "angle (positive = boresight right of the target line), and must be equal."
-        )
-    return camera_deg if camera_deg is not None else iwr_deg

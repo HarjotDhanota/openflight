@@ -50,10 +50,10 @@ the horizon a padded row reaches.
 The setup no longer measures the resting ball's distance with the radar. The camera
 locks the ball in the box and gives a **coarse** distance from its size and the
 lens's focal length (`camera_prior`, labelled experimental, shown as "camera
-estimate (coarse)", uncertainty never under 15 %). The kiosk gets it as a prior
-(`--iwr6843-tee-prior-m`, `--iwr6843-tee-prior-uncertainty-m`,
-`--iwr6843-tee-prior-source camera_size_coarse`), never `--iwr6843-tee-m`, and the
-side offset from the camera's ray at that distance. The prior sizes each swing's
+estimate (coarse)", uncertainty never under 15 %). The kiosk gets it as a prior,
+never a fixed range, in the setup record's `ball_range` section (`setup.json`,
+with its uncertainty and source), together with the side offset from the camera's
+ray at that distance. The prior sizes each swing's
 IWR search, the IWR club gate and the club's contact check; each swing's own IWR
 capture then measures its launch point (`ball_range_source` `iwr_post_impact`),
 else the prior stands in, labelled estimated. Not yet validated against a tape.
@@ -124,15 +124,15 @@ default, labelled.
 
 ### Per-shot re-location (the kiosk)
 
-The ladder and swing kiosks get the box in their mode (`--camera-ball-box`).
+The ladder and swing kiosks get the box from the setup record, rescaled to their
+mode.
 About once a second, between clips, the kiosk finds the resting ball in it on its
 latest frame. A shot takes the last look before its trigger (none older than
 30 s): the setup's range while the ball sits where the setup measured it
 (within half a diameter), else that range scaled by the setup ball's size over
 this ball's. Since 13 Oct the setup's range is the camera prior, so a look is
 that shot's own prior, with the prior's relative uncertainty
-(`setup_camera_prior`, `camera_size_ratio_to_the_setup_camera_prior`); a
-configured `--iwr6843-tee-m` keeps the old `..._radar_range` labels. A ball
+(`setup_camera_prior`, `camera_size_ratio_to_the_setup_camera_prior`). A ball
 outside the box, or none, labels the shot and carries no range. The look is in
 the IWR record's `per_shot_inputs`; `GET /api/ball-at-address` serves the
 latest, and the tester's status relays it as `ball_at_address`.

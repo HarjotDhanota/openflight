@@ -1,15 +1,14 @@
 """The kiosk takes the camera's estimate as a prior and ranges each shot.
 
-``--iwr6843-tee-prior-m`` is a prior plus its uncertainty; each shot's own IWR launch point
-(or the labelled prior) is the range its camera scale, ball speed and club delivery use."""
+The setup record's ball range is a prior plus its uncertainty; each shot's own IWR launch
+point (or the labelled prior) is the range its camera scale, ball speed and club delivery
+use."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from openflight import server as server_module
 from openflight.clubs import ClubType
@@ -20,36 +19,25 @@ from openflight.launch_monitor import Shot
 PRIOR = lr.LaunchRangePrior(range_m=2.11, uncertainty_m=0.42, source="camera_size_coarse")
 
 
-def _parse(*extra):
-    import argparse  # noqa: PLC0415
+def test_the_setup_record_s_ball_range_is_the_iwr_s_prior(monkeypatch):
+    runtime = SimpleNamespace(range_prior=None, calibration=None)
+    monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+    monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"enabled": True})
+    monkeypatch.setattr(server_module, "ball_at_address_monitor", None)
+    monkeypatch.setattr(server_module, "_ball_at_address_range", (None, None))
+    monkeypatch.setattr(server_module, "camera_capture_config", {"enabled": False})
+    monkeypatch.setattr(server_module, "setup_handoff_config", {})
+    monkeypatch.setattr(server_module, "shot_processing_pending", lambda: False)
 
-    parser = argparse.ArgumentParser()
-    server_module._add_iwr_tee_range_arguments(parser)  # pylint: disable=protected-access
-    return parser.parse_args(list(extra))
-
-
-def test_the_prior_flags_parse():
-    args = _parse(
-        "--iwr6843-tee-prior-m",
-        "2.11",
-        "--iwr6843-tee-prior-uncertainty-m",
-        "0.42",
-        "--iwr6843-tee-prior-source",
-        "camera_size_coarse",
+    server_module.apply_setup_ball_range(
+        {"state": "set", "range_m": 2.11, "uncertainty_m": 0.42, "source": "camera_size_coarse"}
     )
 
-    assert server_module.range_prior_from_args(args) == PRIOR
-
-
-def test_without_the_flags_there_is_no_prior_and_nothing_is_filled_in():
-    assert server_module.range_prior_from_args(_parse()) is None
-
-
-def test_a_prior_without_its_uncertainty_is_refused():
-    args = _parse("--iwr6843-tee-prior-m", "2.11")
-
-    with pytest.raises(ValueError, match="uncertainty"):
-        server_module.range_prior_from_args(args)
+    assert runtime.range_prior == PRIOR
+    assert server_module.iwr6843_runtime_config["tee_range_status"] == (
+        "per_shot_with_camera_prior"
+    )
+    assert server_module.setup_handoff_config["tee_range"]["tee_slant_range_m"] is None
 
 
 def _shot():

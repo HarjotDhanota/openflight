@@ -48,7 +48,6 @@ from .clubs.physics import (
 from .constants import BALL_DIAMETER_MM
 from .horizontal_frame import (
     frame_for,
-    resolve_horizontal_offset,
     to_reported_deg,
 )
 from .inclinometer.orientation_check import default_mount_path as _default_lis3dh_mount_path
@@ -1412,7 +1411,7 @@ def _kld7_angle_log_payload(
 
 
 def init_rig_geometry(path) -> None:
-    """Load the enclosure file; its constants override the typed geometry flags, logged."""
+    """Load the enclosure file: the only source of the camera and radar placement."""
     global rig_geometry, rig_geometry_config, camera_lens  # pylint: disable=global-statement
     camera_lens = None
     if path is None:
@@ -1437,7 +1436,7 @@ def init_rig_geometry(path) -> None:
     logger.info("[SERVER] Rig geometry loaded from %s: %s", path, setup.as_dict())
     if setup.missing:
         logger.warning(
-            "[SERVER] Rig geometry lacks %s; the command-line values stand in for those",
+            "[SERVER] Rig geometry lacks %s",
             ", ".join(setup.missing),
         )
 
@@ -1460,41 +1459,6 @@ def init_camera_lens(lens_id: str | None) -> None:
     rig_geometry_config["lens"] = lens.to_dict()
     camera_lens = lens
     logger.info("[SERVER] Camera lens: %s", lens.label())
-
-
-def target_line_config(args) -> dict:
-    """The aim point's target line the tester handed over, for the kiosk's Live tab."""
-    status = getattr(args, "target_line_status", None)
-    yaw = getattr(args, "target_line_yaw_deg", None)
-    if status is None:
-        status = "set" if yaw is not None else "not_set"
-    return {
-        "status": status,
-        "yaw_deg": yaw if status == "set" else None,
-        "total_uncertainty_deg": (
-            getattr(args, "target_line_uncertainty_deg", None) if status == "set" else None
-        ),
-        "source": (getattr(args, "target_line_source", None) or "aim_point")
-        if status == "set"
-        else None,
-    }
-
-
-def range_prior_from_args(args):
-    """The camera's coarse range prior the setup handed over, or None; needs its uncertainty."""
-    from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
-
-    range_m = getattr(args, "iwr6843_tee_prior_m", None)
-    if range_m is None:
-        return None
-    uncertainty = getattr(args, "iwr6843_tee_prior_uncertainty_m", None)
-    if uncertainty is None:
-        raise ValueError("--iwr6843-tee-prior-m needs --iwr6843-tee-prior-uncertainty-m")
-    return LaunchRangePrior(
-        range_m=float(range_m),
-        uncertainty_m=float(uncertainty),
-        source=getattr(args, "iwr6843_tee_prior_source", None) or "camera_size_coarse",
-    )
 
 
 def _look_range_prior(look: dict | None):
@@ -1797,7 +1761,7 @@ def _set_net_range(handoff: dict) -> None:
 
 @app.route("/api/target-line")
 def api_target_line():
-    """The target line this session's yaw flags came from."""
+    """The target line in force, from the setup record's aim."""
     line = setup_handoff_config.get("target_line") or {}
     status = line.get("status") or "not_set"
     shown = status == "set"
@@ -2179,31 +2143,6 @@ def api_setup_view():
     return Response(encoded.tobytes(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
-def _apply_solved_camera_height(args, enclosure) -> None:
-    """Use the setup's solved lens height above the hitting surface; the radar keeps its offset."""
-    solved = float(args.solved_camera_height_m)
-    nominal = getattr(enclosure, "camera_mount_height_m", None)
-    radar_height = _solved_radar_height(solved, enclosure, name="--solved-camera-height-m")
-    if radar_height is not None:
-        args.iwr6843_radar_height_m = radar_height
-    args.camera_capture_mount_height_m = solved
-    # "derived" stays the rig file's; a solved height is never read back as the enclosure's
-    if rig_geometry_config.get("enabled"):
-        rig_geometry_config["solved_camera_height"] = {
-            "camera_mount_height_m": solved,
-            "radar_height_m": args.iwr6843_radar_height_m,
-            "rig_nominal_camera_mount_height_m": nominal,
-            "reference": "hitting_surface",
-            "source": "range_setup",
-        }
-    logger.info(
-        "[SERVER] Camera height %.1f mm above the hitting surface, solved by this setup "
-        "(rig file: %s)",
-        solved * 1000.0,
-        f"{nominal * 1000.0:.1f} mm" if nominal is not None else "none",
-    )
-
-
 def _solved_radar_height(solved: float, enclosure, *, name: str) -> float | None:
     """The radar height a solved lens height puts the radar at, keeping the rig's offset."""
     if not 0.0 < solved < 1.0:
@@ -2230,7 +2169,7 @@ def apply_setup_scene(scene: dict | None) -> None:
     if scene is not None and scene.get("source") != "rig_nominal":
         solved = _finite_number(scene.get("lens_height_m"), "lens_height_m")
     if solved is None and nominal is None:
-        return  # no rig file: the start's command-line heights stay
+        return  # no rig file, so no heights to put into effect
     if solved is not None and nominal is None:
         raise ValueError("a solved lens height needs the rig file's heights to move the radar")
     if solved is not None:
@@ -2280,72 +2219,44 @@ def _set_scene(scene: dict | None, solved: float | None, radar: float | None, en
 
 
 def init_setup_handoff(args, enclosure) -> None:
-    """Record what the range setup handed this session, and where each value came from."""
+    """Record what this session starts with, and where each value came from.
+
+    The setup record's sections replace these as they are applied (``apply_saved_setup``).
+    """
     global setup_handoff_config  # pylint: disable=global-statement
-    tee = args.iwr6843_tee_m
     nominal = getattr(enclosure, "camera_mount_height_m", None)
     ball_height = float(args.iwr6843_ball_height_m)
-    if args.solved_camera_height_m is not None:
-        used_source = "range_setup"
-    elif nominal is not None:
-        used_source = "rig_nominal"
-    else:
-        used_source = "command_line"
     setup_handoff_config = {
         "tee_range": {
-            "tee_slant_range_m": tee,
-            "status": (
-                "configured"
-                if tee is not None
-                else "prior"
-                if getattr(args, "iwr6843_tee_prior_m", None) is not None
-                else "pending"
-            ),
-            "source": args.iwr6843_tee_range_source
-            or ("command_line" if tee is not None else "pending"),
-            "candidate_id": args.iwr6843_tee_range_candidate,
-            **(
-                {
-                    "prior": {
-                        "range_m": args.iwr6843_tee_prior_m,
-                        "uncertainty_m": getattr(args, "iwr6843_tee_prior_uncertainty_m", None),
-                        "source": getattr(args, "iwr6843_tee_prior_source", None),
-                        "label": "estimated",
-                    },
-                    "per_shot_range": "iwr_post_impact_else_camera_prior",
-                }
-                if getattr(args, "iwr6843_tee_prior_m", None) is not None
-                else {}
-            ),
+            "tee_slant_range_m": None,
+            "status": "pending",
+            "source": "pending",
+            "candidate_id": None,
         },
         "scene": {
             "reference": "hitting_surface",
-            "lens_height_used_m": args.camera_capture_mount_height_m,
-            "lens_height_used_source": used_source,
-            "lens_height_solved_m": args.scene_lens_height_solved_m,
-            "lens_height_solved_uncertainty_m": args.scene_lens_height_solved_uncertainty_m,
+            "lens_height_used_m": nominal,
+            "lens_height_used_source": "rig_nominal" if nominal is not None else None,
+            "lens_height_solved_m": None,
+            "lens_height_solved_uncertainty_m": None,
             "rig_lens_height_m": nominal,
-            "radar_height_m": args.iwr6843_radar_height_m,
+            "radar_height_m": getattr(enclosure, "radar_height_m", None),
             "ball_height_m": ball_height,
             "ball_height_basis": (
                 "assumed_on_surface"
                 if math.isclose(ball_height, BALL_RADIUS_M, abs_tol=1e-6)
                 else "command_line"
             ),
-            "tee_side_offset_m": getattr(args, "tee_side_offset_m", None),
-            "tee_side_offset_source": (
-                "setup_patch_pair"
-                if getattr(args, "tee_side_offset_m", None) is not None
-                else "assumed_directly_downrange"
-            ),
+            "tee_side_offset_m": None,
+            "tee_side_offset_source": "assumed_directly_downrange",
         },
         "net_range": {
-            "net_range_m": args.iwr6843_net_m,
-            "source": args.iwr6843_net_range_source,
+            "net_range_m": DEFAULT_NET_RANGE_M,
+            "source": "default_not_measured",
             "range_space": "apparent",
-            "assumed": args.iwr6843_net_range_source == "default_not_measured",
+            "assumed": True,
         },
-        "target_line": target_line_config(args),
+        "target_line": _no_target_line("not_set"),
         "lens": rig_geometry_config.get("lens"),
         "camera_tilt": {
             "vertical_offset_deg": getattr(args, "camera_vertical_offset_deg", None),
@@ -2357,34 +2268,17 @@ def init_setup_handoff(args, enclosure) -> None:
             ),
         },
     }
-    if setup_handoff_config["net_range"]["assumed"] and args.iwr6843:
-        logger.warning(
-            "[SERVER] Net range %.2f m is ASSUMED: the range setup measured none; a nearer "
-            "net can enter the ball gates",
-            args.iwr6843_net_m,
-        )
     logger.info(
-        "[SERVER] Tee range %s (%s); ball height %.1f mm, %s",
-        f"{tee:.3f} m" if tee is not None else "pending",
-        setup_handoff_config["tee_range"]["source"],
+        "[SERVER] Ball height %.1f mm, %s; the setup record supplies the rest",
         ball_height * 1000.0,
         setup_handoff_config["scene"]["ball_height_basis"].replace("_", " "),
     )
 
 
-def _rig_override(name: str, flag_value, rig_value):
-    """Prefer the enclosure's measured value over a typed-in flag, and say so."""
-    if rig_value is None:
-        return flag_value
-    if flag_value is not None and not math.isclose(
-        float(flag_value), float(rig_value), abs_tol=1e-9
-    ):
-        logger.info(
-            "[SERVER] %s: rig geometry %s overrides command-line %s", name, rig_value, flag_value
-        )
-    else:
-        logger.info("[SERVER] %s: %s from rig geometry", name, rig_value)
-    return rig_value
+def _rig_value(enclosure, name: str) -> float:
+    """A camera offset from the rig file; without a rig file the camera is on the radar's axis."""
+    value = getattr(enclosure, name, None)
+    return float(value) if value is not None else 0.0
 
 
 def _swing_camera_pose(shot: Shot) -> dict:
@@ -2717,11 +2611,11 @@ def init_camera_capture(
     stream: str,
     rotate_180: bool,
     mirror_horizontal: bool,
-    roll_correction_deg: float,
+    roll_correction_deg: float = 0.0,
     scaler_crop: tuple[int, int, int, int] | None,
     mount_height_m: float,
     lateral_offset_m: float,
-    horizontal_offset_deg: float | None,
+    horizontal_offset_deg: float | None = None,
     use_gpio_trigger: bool,
     auto_exposure: bool = True,
     forward_offset_m: float = 0.0,
@@ -3070,7 +2964,7 @@ def _iwr6843_startup_recovery(error: object) -> str:
 
 def init_inclinometer(
     *,
-    zero_offset_deg: float,
+    zero_offset_deg: float = 0.0,
     bus_number: int = 1,
     address: int = 0x18,
     mount_file: Path | None = None,
@@ -7633,8 +7527,9 @@ def _add_battery_arguments(parser):
     )
 
 
-def _add_box_kiosk_arguments(parser):
-    """The tester's fixed box, lens and target line, as the kiosk takes them."""
+def _add_camera_unit_arguments(parser):
+    """The unit's lens and camera tilt. The setup itself (box, aim, ranges, scene) comes
+    only from --setup-file."""
     parser.add_argument(
         "--camera-lens-id",
         default=None,
@@ -7643,58 +7538,6 @@ def _add_box_kiosk_arguments(parser):
             "a checkerboard calibration kept for it, replaces the rig file's for every "
             "camera metric, and is recorded"
         ),
-    )
-    parser.add_argument(
-        "--camera-ball-box",
-        default=None,
-        metavar="X0,Y0,X1,Y1",
-        help=(
-            "The tester's fixed placement box in this camera mode. Before each swing the "
-            "resting ball is found in it again and the shot takes its own range"
-        ),
-    )
-    parser.add_argument("--target-line-yaw-deg", type=float, default=None)
-    parser.add_argument("--target-line-uncertainty-deg", type=float, default=None)
-    parser.add_argument("--target-line-source", default=None)
-    parser.add_argument(
-        "--target-line-status",
-        choices=("set", "skipped", "not_set"),
-        default=None,
-        help="Whether the tester set or skipped the aim point (served at /api/target-line)",
-    )
-
-
-def _add_iwr_tee_range_arguments(parser):
-    """Add IWR tee-range inputs without guessing the physical placement."""
-    parser.add_argument(
-        "--iwr6843-tee-m",
-        type=float,
-        default=None,
-        help=(
-            "Measured antenna-center to tee slant range in metres. When omitted, "
-            "raw TI captures are saved but range-dependent metrics are withheld."
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-tee-prior-m",
-        type=float,
-        default=None,
-        help=(
-            "The camera's coarse estimate of the resting ball's slant range (13 Oct): a "
-            "PRIOR only. It sizes each shot's IWR search and stands in, labelled "
-            "estimated, for a shot whose own capture does not measure its launch point"
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-tee-prior-uncertainty-m",
-        type=float,
-        default=None,
-        help="The prior's one-sigma uncertainty in metres; required with the prior",
-    )
-    parser.add_argument(
-        "--iwr6843-tee-prior-source",
-        default=None,
-        help="Where the prior came from (camera_size_coarse from the tester's setup)",
     )
     parser.add_argument(
         "--camera-tilt-calibration-path",
@@ -7706,28 +7549,6 @@ def _add_iwr_tee_range_arguments(parser):
         ),
     )
     parser.add_argument(
-        "--iwr6843-tee-range-pending",
-        action="store_true",
-        help=(
-            "Capture raw TI evidence without a resolved tee range; withhold "
-            "range-dependent launch and club metrics"
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-tee-range-source",
-        default=None,
-        help=(
-            "Where the tee range came from, as the range setup handed it over "
-            "(qualified_static_iwr, unqualified_static_iwr, "
-            "unqualified_static_iwr_camera_steered or pending); recorded in session_start"
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-tee-range-candidate",
-        default=None,
-        help="The range setup's candidate ID behind --iwr6843-tee-m; recorded in session_start",
-    )
-    parser.add_argument(
         "--camera-vertical-offset-deg",
         type=float,
         default=None,
@@ -7737,16 +7558,6 @@ def _add_iwr_tee_range_arguments(parser):
             "session_start. Applied on swings (D36): each shot's camera pitch is its own "
             "LIS3DH pitch plus this offset and its focal length the rig's for the mode; "
             "the resting ball's per-shot inference is kept as a flagged cross-check"
-        ),
-    )
-    parser.add_argument(
-        "--tee-side-offset-m",
-        type=float,
-        default=None,
-        help=(
-            "The resting ball's side offset from the radar's axis, + target-right, from the "
-            "setup's validated camera-radar pair (D36). The camera estimators place the ball "
-            "there; without it they assume it dead ahead, and say so"
         ),
     )
     parser.add_argument(
@@ -7768,11 +7579,10 @@ def _apply_kld7_device_defaults(args, dev_root: Path = Path("/dev")) -> None:
         args.kld7_horizontal_port = str(horizontal)
 
 
-def main():
-    """Run the server."""
+def build_parser():
+    """The kiosk's command line, with every registered extension's flags."""
     import argparse  # pylint: disable=import-outside-toplevel
 
-    kiosk_extensions.load_installed()
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
     parser.add_argument(
@@ -7856,16 +7666,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--camera-setup-ball",
-        default=None,
-        metavar="X,Y,DIAMETER",
-        help=(
-            "Where the tester setup saw the resting ball in this camera mode, in pixels. "
-            "Manual-exposure clips are then judged analysis-eligible on that ball, not "
-            "the hitting-zone box (P7-8)"
-        ),
-    )
-    parser.add_argument(
         "--camera-light-index",
         type=float,
         default=None,
@@ -7874,16 +7674,6 @@ def main():
             "The setup's measured light: the 1280x800 resting ball's DN above black per "
             "microsecond x gain. Seeds the automatic swing exposure before the first "
             "resting-ball look; 640x400 doubles it (measured)"
-        ),
-    )
-    parser.add_argument(
-        "--camera-hitting-zone",
-        default=None,
-        metavar="X0,Y0,X1,Y1",
-        help=(
-            "The tester's confirmed placement box in this camera mode, in pixels. The "
-            "exposure meter and the capture-time zone rule judge it instead of the fixed "
-            "centre-lower box (P7-15)"
         ),
     )
     parser.add_argument(
@@ -7906,53 +7696,6 @@ def main():
         type=float,
         default=4.0,
         help="Startup analogue gain (automatic exposure keeps it within the sensor's cap).",
-    )
-    parser.add_argument(
-        "--camera-capture-mount-height-m",
-        type=float,
-        default=None,
-        help=(
-            "Camera optical-center height above the hitting surface. No default: "
-            "--rig-geometry supplies it and overrides this flag (wiring audit C1)."
-        ),
-    )
-    parser.add_argument(
-        "--camera-capture-horizontal-offset-deg",
-        type=float,
-        default=None,
-        help=(
-            "The one horizontal offset, degrees, = -(target yaw): positive when the unit "
-            "boresight points right of the target line. Added to every horizontal angle "
-            "(camera and IWR); the D34 target-line hand-off sets it. Same value as "
-            "--iwr6843-azimuth-offset-deg; two different values are refused."
-        ),
-    )
-    parser.add_argument(
-        "--camera-capture-lateral-offset-m",
-        type=float,
-        default=0.0,
-        help=(
-            "Camera optical-center lateral position relative to radar center in meters; "
-            "positive is target-right when looking downrange."
-        ),
-    )
-    parser.add_argument(
-        "--camera-capture-forward-offset-m",
-        type=float,
-        default=0.0,
-        help=(
-            "Camera forward position relative to the IWR radar reference in meters; "
-            "positive is toward the ball. Overridden by --rig-geometry when available."
-        ),
-    )
-    parser.add_argument(
-        "--camera-capture-roll-deg",
-        type=float,
-        default=0.0,
-        help=(
-            "Clockwise image-roll correction applied to camera preview and geometry "
-            "without modifying saved raw frames."
-        ),
     )
     parser.add_argument(
         "--camera-capture-stream",
@@ -8125,8 +7868,8 @@ def main():
         default=None,
         help=(
             "Enclosure geometry JSON (RigGeometry.to_json). The camera mount height, camera "
-            "lateral offset, radar height and radar tilt come from it and override the flags "
-            "below (logged). Required with --iwr6843; start-kiosk.sh passes "
+            "lateral and forward offsets, radar height and radar tilt come only from it. "
+            "Required with --iwr6843 and --camera-capture; start-kiosk.sh passes "
             "config/enclosure_v3_rig_geometry.json unless another file is given."
         ),
     )
@@ -8134,12 +7877,6 @@ def main():
         "--inclinometer",
         action="store_true",
         help="Enable LIS3DH enclosure pitch compensation for IWR6843 tilt",
-    )
-    parser.add_argument(
-        "--inclinometer-zero-offset",
-        type=float,
-        default=0.0,
-        help="Degrees added to raw LIS3DH pitch (default: 0)",
     )
     parser.add_argument(
         "--inclinometer-bus", type=int, default=1, help="LIS3DH I2C bus (default: 1)"
@@ -8179,73 +7916,8 @@ def main():
         default=17,
         help="BCM GPIO receiving the shared sound-trigger edge (default: 17)",
     )
-    _add_iwr_tee_range_arguments(parser)
-    _add_box_kiosk_arguments(parser)
+    _add_camera_unit_arguments(parser)
     _add_setup_arguments(parser)
-    parser.add_argument(
-        "--iwr6843-net-m",
-        "--net-range-m",
-        dest="iwr6843_net_m",
-        type=float,
-        default=None,
-        help=(
-            "Apparent radar range to the net in metres, as the tester's empty static "
-            "capture measured it. Without it 4.6 m is assumed and flagged in session_start."
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-net-range-source",
-        default=None,
-        help=(
-            "Where --net-range-m came from (empty_static_capture), or "
-            "default_not_measured; recorded in session_start"
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-tilt-deg",
-        type=float,
-        default=None,
-        help=(
-            "Superseded: --iwr6843 requires --rig-geometry, whose radar tilt overrides "
-            "this (logged). The TI calibration JSON's tilt is never used."
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-radar-height-m",
-        type=float,
-        default=None,
-        help=(
-            "Superseded: --iwr6843 requires --rig-geometry, whose radar height overrides "
-            "this (logged). The TI calibration JSON's height is never used."
-        ),
-    )
-    parser.add_argument(
-        "--solved-camera-height-m",
-        type=float,
-        default=None,
-        help=(
-            "Lens height above the hitting surface, solved by this session's range setup "
-            "when the unit is clearly not standing on that surface. Overrides the rig "
-            "file's nominal height and moves the radar height with it, keeping their "
-            "fixed offset inside the enclosure."
-        ),
-    )
-    parser.add_argument(
-        "--scene-lens-height-solved-m",
-        type=float,
-        default=None,
-        help=(
-            "Lens height above the hitting surface that this session's range setup "
-            "solved from the radar, recorded in session_start even when the rig file's "
-            "height is used. Recorded only; --solved-camera-height-m changes the geometry."
-        ),
-    )
-    parser.add_argument(
-        "--scene-lens-height-solved-uncertainty-m",
-        type=float,
-        default=None,
-        help="1-sigma uncertainty of --scene-lens-height-solved-m; recorded only",
-    )
     parser.add_argument(
         "--iwr6843-ball-height-m",
         type=float,
@@ -8277,18 +7949,6 @@ def main():
         help=(
             "Raw TI dump directory, used when --debug or cloud raw uploads "
             "(openflight-cloud raw on) are enabled (default: <session-log-dir>/iwr6843)"
-        ),
-    )
-    parser.add_argument(
-        "--iwr6843-azimuth-offset-deg",
-        type=float,
-        default=None,
-        help=(
-            "Azimuth of the radar boresight relative to the target line, in degrees, = "
-            "-(target yaw): positive means boresight points right of the target line. "
-            "Added to every horizontal angle (camera and IWR horizontal launch, club "
-            "path); unset or 0 reports them relative to the unit boresight. Same value "
-            "as --camera-capture-horizontal-offset-deg; two different values are refused."
         ),
     )
     parser.add_argument(
@@ -8398,28 +8058,18 @@ def main():
         help="The golfer's hand when no simulator says (default: right-handed)",
     )
     kiosk_extensions.call_all("add_arguments", parser)
+    return parser
+
+
+def main():
+    """Run the server."""
+    kiosk_extensions.load_installed()
+    parser = build_parser()
     args = parser.parse_args()
     kiosk_extensions.call_all("configure", args, parser)
     global golfer_handed  # pylint: disable=global-statement
     golfer_handed = args.handed
     _apply_kld7_device_defaults(args)
-    global horizontal_offset_deg  # pylint: disable=global-statement
-    try:
-        horizontal_offset_deg = resolve_horizontal_offset(
-            camera_deg=args.camera_capture_horizontal_offset_deg,
-            iwr_deg=args.iwr6843_azimuth_offset_deg,
-        )
-    except ValueError as error:
-        parser.error(str(error))
-    # None is the boresight frame; an explicit 0.0 is the target line
-    args.camera_capture_horizontal_offset_deg = horizontal_offset_deg
-    args.iwr6843_azimuth_offset_deg = horizontal_offset_deg
-    if args.iwr6843_tee_range_pending:
-        args.iwr6843_tee_m = None
-    try:
-        range_prior = range_prior_from_args(args)
-    except ValueError as error:
-        parser.error(str(error))
     global camera_tilt_calibration_path  # pylint: disable=global-statement
     camera_tilt_calibration_path = (
         Path(args.camera_tilt_calibration_path).expanduser()
@@ -8478,15 +8128,6 @@ def main():
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
         parser.error("--camera-capture cannot be used with --mock")
-    if args.iwr6843_net_m is None:
-        args.iwr6843_net_m = DEFAULT_NET_RANGE_M
-        args.iwr6843_net_range_source = "default_not_measured"
-    elif args.iwr6843_net_range_source is None:
-        args.iwr6843_net_range_source = "command_line"
-    if args.iwr6843 and (
-        (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
-    ):
-        parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
     if args.iwr6843 and args.rig_geometry is None:
         parser.error(
             "--iwr6843 requires --rig-geometry: the radar's height, tilt and offset come "
@@ -8500,14 +8141,6 @@ def main():
         init_camera_lens(args.camera_lens_id)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"--camera-lens-id: {error}")
-    camera_ball_box = None
-    if args.camera_ball_box:
-        from .camera.ball_at_address import parse_ball_box  # noqa: PLC0415
-
-        try:
-            camera_ball_box = parse_ball_box(args.camera_ball_box)
-        except ValueError as exc:
-            parser.error(f"--camera-ball-box: {exc}")
     try:
         init_camera_calibrated_fusion(
             args.camera_optical_calibration,
@@ -8516,28 +8149,7 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"calibrated camera fusion: {error}")
     enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
-    if enclosure is not None:
-        args.camera_capture_mount_height_m = _rig_override(
-            "camera mount height",
-            args.camera_capture_mount_height_m,
-            enclosure.camera_mount_height_m,
-        )
-        args.camera_capture_lateral_offset_m = _rig_override(
-            "camera lateral offset",
-            args.camera_capture_lateral_offset_m,
-            enclosure.camera_lateral_offset_m,
-        )
-        args.camera_capture_forward_offset_m = _rig_override(
-            "camera forward offset",
-            args.camera_capture_forward_offset_m,
-            enclosure.camera_forward_offset_m,
-        )
-        args.iwr6843_radar_height_m = _rig_override(
-            "radar height", args.iwr6843_radar_height_m, enclosure.radar_height_m
-        )
-        args.iwr6843_tilt_deg = _rig_override(
-            "radar tilt", args.iwr6843_tilt_deg, enclosure.iwr_tilt_deg
-        )
+    lens_height_m = getattr(enclosure, "camera_mount_height_m", None)
     radar_needs = ("lens_height_above_floor_mm", "iwr_offset_mm", "iwr_boresight_pitch_deg")
     lacking = [name for name in radar_needs if enclosure is not None and name in enclosure.missing]
     if args.iwr6843 and lacking:
@@ -8545,16 +8157,11 @@ def main():
             f"--rig-geometry {args.rig_geometry} cannot place the IWR: it lacks "
             + ", ".join(lacking)
         )
-    if args.camera_capture and args.camera_capture_mount_height_m is None:
+    if args.camera_capture and lens_height_m is None:
         parser.error(
-            "--camera-capture needs the camera height: pass --rig-geometry "
-            "(or --camera-capture-mount-height-m); there is no default height"
+            "--camera-capture needs the camera height: pass a --rig-geometry file with the "
+            "lens height; there is no default height"
         )
-    if args.solved_camera_height_m is not None:
-        try:
-            _apply_solved_camera_height(args, enclosure)
-        except ValueError as error:
-            parser.error(str(error))
     init_setup_handoff(args, enclosure)
     init_setup_service(args.setup_file)
 
@@ -8566,7 +8173,7 @@ def main():
         or args.camera_capture_post_ms <= 0
         or args.camera_capture_exposure_us <= 0
         or args.camera_capture_gain <= 0
-        or args.camera_capture_mount_height_m <= 0
+        or lens_height_m <= 0
     ):
         parser.error("--camera-capture dimensions, timing, exposure, and gain must be positive")
     armed_profile = None
@@ -8587,22 +8194,6 @@ def main():
                 "--camera-capture-exposure-us/--camera-capture-gain exceed the qualified "
                 "armed profile ceiling"
             )
-    camera_setup_ball = None
-    if args.camera_setup_ball:
-        from .camera.capture_runtime import parse_setup_ball  # noqa: PLC0415
-
-        try:
-            camera_setup_ball = parse_setup_ball(args.camera_setup_ball)
-        except ValueError as exc:
-            parser.error(f"--camera-setup-ball: {exc}")
-    camera_hitting_zone = None
-    if args.camera_hitting_zone:
-        from .camera.capture_runtime import parse_hitting_zone  # noqa: PLC0415
-
-        try:
-            camera_hitting_zone = parse_hitting_zone(args.camera_hitting_zone)
-        except ValueError as exc:
-            parser.error(f"--camera-hitting-zone: {exc}")
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -8624,7 +8215,6 @@ def main():
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
-    global ball_speed_correction_lateral_ft, ball_speed_correction_geometry_source
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
     ball_speed_correction_enabled = args.kld7 or bool(args.iwr6843)
@@ -8743,11 +8333,9 @@ def main():
             post_ms=args.camera_capture_post_ms,
             exposure_us=args.camera_capture_exposure_us,
             gain=args.camera_capture_gain,
-            mount_height_m=args.camera_capture_mount_height_m,
-            lateral_offset_m=args.camera_capture_lateral_offset_m,
-            forward_offset_m=args.camera_capture_forward_offset_m,
-            horizontal_offset_deg=args.camera_capture_horizontal_offset_deg,
-            roll_correction_deg=args.camera_capture_roll_deg,
+            mount_height_m=lens_height_m,
+            lateral_offset_m=_rig_value(enclosure, "camera_lateral_offset_m"),
+            forward_offset_m=_rig_value(enclosure, "camera_forward_offset_m"),
             stream=args.camera_capture_stream,
             rotate_180=args.camera_capture_rotate_180,
             mirror_horizontal=args.camera_capture_mirror_horizontal,
@@ -8756,9 +8344,6 @@ def main():
             auto_exposure=not args.camera_capture_manual_exposure,
             armed_profile=armed_profile,
             diagnostic_capture=kiosk_extensions.any_true("diagnostic_camera"),
-            setup_ball=camera_setup_ball,
-            hitting_zone=camera_hitting_zone,
-            tee_side_offset_m=args.tee_side_offset_m,
             lens=rig_geometry_config.get("lens"),
             light_index_dn_per_us_gain=args.camera_light_index,
         ):
@@ -8767,12 +8352,6 @@ def main():
         else:
             print(f"Camera capture enabled: {camera_capture_output_dir}")
             startup_status.ready("camera", "High-speed camera connected")
-            if camera_ball_box is not None:
-                global camera_ball_box_px  # pylint: disable=global-statement
-                camera_ball_box_px = tuple(camera_ball_box)
-                start_ball_at_address(
-                    camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
-                )
 
     kiosk_extensions.call_all("after_camera_setup")
 
@@ -8794,45 +8373,24 @@ def main():
             calibration_path=args.iwr6843_cal,
             output_dir=iwr_output_dir,
             trigger_pin=args.iwr6843_trigger_pin,
-            tee_range_m=args.iwr6843_tee_m,
-            range_prior=range_prior,
-            net_range_m=args.iwr6843_net_m,
+            tee_range_m=None,
+            net_range_m=DEFAULT_NET_RANGE_M,
             tx_order=args.iwr6843_tx_order,
             capture_timeout_s=args.iwr6843_capture_timeout,
-            tilt_deg=args.iwr6843_tilt_deg,
-            radar_height_m=args.iwr6843_radar_height_m,
+            tilt_deg=enclosure.iwr_tilt_deg,
+            radar_height_m=enclosure.radar_height_m,
             ball_height_m=args.iwr6843_ball_height_m,
-            azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             # Raw cloud uploads need the dumps on disk to send them.
             save_dumps=args.debug or _cloud_raw_uploads_enabled(),
-            # the setup's measured side offset, else the rig's camera axis, else downrange
-            lateral_tee_offset_m=(
-                float(args.tee_side_offset_m)
-                if args.tee_side_offset_m is not None
-                else enclosure.tee_lateral_offset_m
-                if enclosure is not None and enclosure.tee_lateral_offset_m is not None
-                else 0.0
-            ),
-            board_rotation_deg=(
-                enclosure.iwr_board_rotation_deg if enclosure is not None else None
-            ),
+            # the rig's camera axis, else downrange, until the setup's side offset applies
+            lateral_tee_offset_m=_rig_tee_lateral_offset_m(),
+            board_rotation_deg=enclosure.iwr_board_rotation_deg,
         ):
             print(
                 "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
             )
-            if args.iwr6843_tee_m is None and range_prior is None:
-                print(
-                    "IWR6843: no camera prior; each shot is ranged from its own capture "
-                    "or its range-dependent metrics are not measured"
-                )
-            elif range_prior is not None:
-                print(
-                    f"IWR6843 camera prior {range_prior.range_m:.2f} +/- "
-                    f"{range_prior.uncertainty_m:.2f} m ({range_prior.source}); each shot "
-                    "is ranged from its own capture"
-                )
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
@@ -8850,20 +8408,10 @@ def main():
             sys.exit(1)
 
     apply_saved_setup()
-    # the OPS cosine geometry needs a configured tee range (the flag's); a prior is not one
-    calibration = getattr(iwr6843_runtime, "calibration", None)
-    if calibration is not None and calibration.tee_range_m is not None:
-        (
-            ball_speed_correction_distance_ft,
-            ball_speed_correction_ball_above_radar_ft,
-            ball_speed_correction_lateral_ft,
-            ball_speed_correction_geometry_source,
-        ) = _ops_speed_correction_geometry(calibration)
 
     if args.inclinometer:
         startup_status.start("inclinometer", "Connecting inclinometer")
         if not init_inclinometer(
-            zero_offset_deg=args.inclinometer_zero_offset,
             bus_number=args.inclinometer_bus,
             address=args.inclinometer_address,
             mount_file=args.lis3dh_mount_file,

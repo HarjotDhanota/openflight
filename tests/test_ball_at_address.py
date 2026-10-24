@@ -101,13 +101,6 @@ def test_the_shot_takes_the_last_look_before_its_trigger_and_never_a_later_one()
     assert locator.for_shot(99.0) is None
 
 
-def test_the_box_argument_parses_and_refuses_nonsense():
-    assert baa.parse_ball_box("480,380,800,520") == (480, 380, 800, 520)
-    for bad in ("1,2,3", "5,5,4,9", "a,b,c,d"):
-        with pytest.raises(ValueError):
-            baa.parse_ball_box(bad)
-
-
 def test_with_a_camera_prior_each_look_is_a_prior_with_its_uncertainty():
     """13 Oct: the setup hands the camera's coarse estimate as a prior; each shot's own
     look scales it, uncertainty and all, and says it is a camera prior."""

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Average a stationary LIS3DH and print its recommended zero-offset flag."""
+"""Average a stationary LIS3DH and print its bias against a known surface pitch.
+
+A check only: the kiosk takes no typed zero offset.
+"""
 
 import argparse
 import statistics
@@ -41,7 +44,7 @@ def main() -> None:
     offset = args.reference_pitch - raw_pitch
     print(f"Raw pitch mean: {raw_pitch:+.3f}deg (std dev {std_pitch:.3f}deg)")
     print(f"Reference pitch: {args.reference_pitch:+.3f}deg")
-    print(f"Recommended flag: --inclinometer-zero-offset {offset:+.3f}")
+    print(f"Bias: {offset:+.3f}deg (a check; the kiosk takes no typed zero offset)")
 
 
 if __name__ == "__main__":

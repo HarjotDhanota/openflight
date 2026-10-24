@@ -20,7 +20,6 @@ from openflight.horizontal_frame import (
     UNIT_BORESIGHT,
     frame_for,
     offset_from_target_yaw,
-    resolve_horizontal_offset,
     to_boresight_deg,
     to_reported_deg,
 )
@@ -29,7 +28,7 @@ from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
 
 YAW_DEG = 3.0  # the target line lies 3 deg right of the unit boresight
-OFFSET_DEG = -3.0  # what the hand-off passes to both flags for that yaw
+OFFSET_DEG = -3.0  # the one horizontal offset for that yaw
 
 
 def test_the_hand_off_value_is_minus_the_target_yaw():
@@ -53,15 +52,6 @@ def test_reported_angle_is_the_boresight_angle_plus_the_offset():
     assert to_boresight_deg(to_reported_deg(4.0, OFFSET_DEG), OFFSET_DEG) == pytest.approx(4.0)
 
 
-def test_the_two_flags_must_agree_when_both_are_given():
-    assert resolve_horizontal_offset(camera_deg=None, iwr_deg=None) is None
-    assert resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=None) == OFFSET_DEG
-    assert resolve_horizontal_offset(camera_deg=None, iwr_deg=OFFSET_DEG) == OFFSET_DEG
-    assert resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=OFFSET_DEG) == OFFSET_DEG
-    with pytest.raises(ValueError, match="must be equal"):
-        resolve_horizontal_offset(camera_deg=OFFSET_DEG, iwr_deg=-OFFSET_DEG)
-
-
 def _stub_main_runtime(monkeypatch):
     monkeypatch.setattr(server_module, "start_monitor", lambda **kwargs: None)
     monkeypatch.setattr(server_module, "load_sim_config", lambda: [])
@@ -71,7 +61,33 @@ def _stub_main_runtime(monkeypatch):
     monkeypatch.setattr(server_module.socketio, "run", lambda *args, **kwargs: None)
 
 
-def test_kiosk_refuses_two_different_offsets(monkeypatch, capsys):
+def test_the_setup_record_s_aim_sets_the_offset_for_every_sensor(monkeypatch, tmp_path):
+    from tests.setup_files import write_setup  # noqa: PLC0415
+
+    _stub_main_runtime(monkeypatch)
+    for name in ("horizontal_offset_deg", "rig_geometry", "rig_geometry_config"):
+        monkeypatch.setattr(server_module, name, getattr(server_module, name))
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
+    monkeypatch.setattr(server_module, "setup_handoff_config", {})
+    setup_file = tmp_path / "setup.json"
+    # with --mock and no rig file the box is stamped for no lens and no rig
+    write_setup(setup_file, lens_id=None, rig="no_rig_geometry", aim_yaw_deg=YAW_DEG)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["openflight-server", "--mock", "--no-logging", "--setup-file", str(setup_file)],
+    )
+
+    server_module.main()
+
+    assert server_module.horizontal_offset_deg == pytest.approx(OFFSET_DEG)
+    assert server_module.target_line_in_force()["frame"] == TARGET_LINE
+
+
+def test_without_an_aim_every_sensor_stays_in_the_boresight_frame(monkeypatch, tmp_path):
+    _stub_main_runtime(monkeypatch)
+    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
+    monkeypatch.setattr(server_module, "setup_handoff_config", {})
     monkeypatch.setattr(
         sys,
         "argv",
@@ -79,33 +95,15 @@ def test_kiosk_refuses_two_different_offsets(monkeypatch, capsys):
             "openflight-server",
             "--mock",
             "--no-logging",
-            "--camera-capture-horizontal-offset-deg",
-            "-3",
-            "--iwr6843-azimuth-offset-deg",
-            "3",
+            "--setup-file",
+            str(tmp_path / "none.json"),
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        server_module.main()
-
-    assert exc_info.value.code == 2
-    error = capsys.readouterr().err
-    assert "--camera-capture-horizontal-offset-deg" in error
-    assert "--iwr6843-azimuth-offset-deg" in error
-
-
-@pytest.mark.parametrize(
-    "flag", ["--camera-capture-horizontal-offset-deg", "--iwr6843-azimuth-offset-deg"]
-)
-def test_one_flag_sets_the_offset_for_every_sensor(monkeypatch, flag):
-    _stub_main_runtime(monkeypatch)
-    monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
-    monkeypatch.setattr(sys, "argv", ["openflight-server", "--mock", "--no-logging", flag, "-3"])
-
     server_module.main()
 
-    assert server_module.horizontal_offset_deg == pytest.approx(OFFSET_DEG)
+    assert server_module.horizontal_offset_deg is None
+    assert server_module.target_line_in_force()["frame"] == UNIT_BORESIGHT
 
 
 def _runtime(**kwargs):

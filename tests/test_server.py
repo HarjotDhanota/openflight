@@ -5489,20 +5489,6 @@ class TestBatteryConfiguration:
 class TestIwrTeeRangeConfiguration:
     """Range-dependent IWR output must never inherit a guessed placement."""
 
-    def test_cli_has_no_implicit_tee_range(self):
-        parser = argparse.ArgumentParser()
-        server_module._add_iwr_tee_range_arguments(parser)
-
-        assert parser.parse_args([]).iwr6843_tee_m is None
-
-    def test_cli_preserves_explicit_measured_tee_range(self):
-        parser = argparse.ArgumentParser()
-        server_module._add_iwr_tee_range_arguments(parser)
-
-        args = parser.parse_args(["--iwr6843-tee-m", "2.3368"])
-
-        assert args.iwr6843_tee_m == pytest.approx(2.3368)
-
     @staticmethod
     def _run_main_until_iwr_init(monkeypatch, tmp_path, extra_argv):
         class StopAfterIwrInit(Exception):
@@ -5538,29 +5524,14 @@ class TestIwrTeeRangeConfiguration:
 
         return received
 
-    def test_production_launch_without_tee_range_stays_unresolved(self, monkeypatch, tmp_path):
+    def test_production_launch_without_a_setup_stays_unresolved(self, monkeypatch, tmp_path):
         received = self._run_main_until_iwr_init(monkeypatch, tmp_path, [])
 
+        # no fixed tee and no prior: the setup record's ball range, when set, is the prior
         assert received["tee_range_m"] is None
-        assert received["range_prior"] is None
-        assert server_module.ball_speed_correction_enabled is True
-
-    def test_production_launch_passes_measured_tee_range_unchanged(self, monkeypatch, tmp_path):
-        received = self._run_main_until_iwr_init(
-            monkeypatch, tmp_path, ["--iwr6843-tee-m", "2.3368"]
-        )
-
-        assert received["tee_range_m"] == 2.3368
-        assert server_module.ball_speed_correction_enabled is True
-
-    def test_pending_flag_overrides_a_supplied_tee_range(self, monkeypatch, tmp_path):
-        received = self._run_main_until_iwr_init(
-            monkeypatch,
-            tmp_path,
-            ["--iwr6843-tee-m", "2.3368", "--iwr6843-tee-range-pending"],
-        )
-
-        assert received["tee_range_m"] is None
+        assert received.get("range_prior") is None
+        assert received["net_range_m"] == server_module.DEFAULT_NET_RANGE_M
+        assert "azimuth_offset_deg" not in received
         assert server_module.ball_speed_correction_enabled is True
 
     @pytest.mark.parametrize(

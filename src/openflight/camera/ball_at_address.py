@@ -2,7 +2,7 @@
 
 The setup measures the ball once; a tester then tees the next ball wherever it
 lands in the box. Before each swing the kiosk looks at its own latest camera
-frame, finds the resting ball inside the box (``--camera-ball-box``), and gives
+frame, finds the resting ball inside the setup record's box, and gives
 that shot its own range:
 
 * the setup's radar range, while the ball sits where the setup measured it
@@ -36,20 +36,6 @@ SAME_SPOT_DIAMETERS = 0.5
 MAX_LOOK_AGE_S = 30.0
 # the tuned detector's size limits (9-30 px at 640x400) are centred on the setup ball
 _TUNED_GEOMETRIC_MIDDLE_PX = math.sqrt(9.0 * 30.0)
-
-
-def parse_ball_box(value: str) -> tuple[int, int, int, int]:
-    """``x0,y0,x1,y1`` in the kiosk mode's pixels."""
-    try:
-        numbers = [int(round(float(part))) for part in str(value).split(",")]
-    except ValueError as exc:
-        raise ValueError("the ball box must be four numbers x0,y0,x1,y1") from exc
-    if len(numbers) != 4:
-        raise ValueError("the ball box must be four numbers x0,y0,x1,y1")
-    x0, y0, x1, y1 = numbers
-    if not (0 <= x0 < x1 and 0 <= y0 < y1):
-        raise ValueError("the ball box must have x0 < x1 and y0 < y1, inside the picture")
-    return x0, y0, x1, y1
 
 
 def _now_utc() -> str:

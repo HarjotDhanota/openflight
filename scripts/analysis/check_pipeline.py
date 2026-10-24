@@ -98,7 +98,7 @@ def virtual_session(frozen: tuple, injection: Injection) -> tuple:
     The tee range goes where ``tester_server`` hands it to the kiosk
     (``tee_range_handoff``, ``iwr6843.tee_slant_range_m``) and where the kiosk
     records it per shot (the IWR runtime snapshot, rehashed); the setup ball and
-    box go where ``--camera-setup-ball`` and ``--camera-hitting-zone`` put them.
+    box go where the setup record's box (``apply_setup_box``) puts them.
     """
     session_hash, _start, events = frozen
     events = copy.deepcopy(events)

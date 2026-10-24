@@ -35,15 +35,12 @@ openflight_args=(
     # Optional measurement modes:
     # --calculated-spin  # Replaces measured OPS spin with a kinematic estimate.
 
-    # TI IWR6843 example; replace every geometry value with measurements from
-    # this installation before uncommenting.
+    # TI IWR6843 example. The radar's placement comes from the rig file
+    # (--rig-geometry), and the ball box, aim and ranges from the unit's setup
+    # record (~/.config/openflight/setup.json, or --setup-file).
     # --iwr6843
     # --iwr6843-port /dev/serial/by-id/REPLACE_WITH_TI_SERIAL_ID
     # --iwr6843-config config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg
-    # --iwr6843-tee-m 1.372
-    # --iwr6843-net-m 4.064
-    # --iwr6843-tilt-deg 5.5
-    # --iwr6843-radar-height-m 0.229
     # --iwr6843-ball-height-m 0.021
 
     # Optional Geekworm X1202/X1206 monitoring:

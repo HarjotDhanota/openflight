@@ -19,10 +19,6 @@ scripts/start-kiosk.sh --debug \
   --iwr6843 \
   --iwr6843-port /dev/ttyUSB0 \
   --iwr6843-config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \
-  --iwr6843-tee-m <measured-slant-metres> \
-  --iwr6843-net-m 4.6 \
-  --iwr6843-tilt-deg 10.4 \
-  --iwr6843-radar-height-m 0.1524 \
   --iwr6843-ball-height-m 0.040 \
   --session-location home
 ```

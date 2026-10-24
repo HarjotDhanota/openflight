@@ -186,11 +186,9 @@ def test_v3_rig_preserves_camera_ahead_of_radar():
     assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
 
 
-@pytest.mark.parametrize(
-    "use_rig,flag,expected", [(True, -0.2, 0.03138), (False, -0.02, -0.02), (False, None, 0.0)]
-)
-def test_startup_passes_measured_offset_or_explicit_fallback(
-    monkeypatch, tmp_path, use_rig, flag, expected
+@pytest.mark.parametrize("use_rig", [True, False])
+def test_startup_takes_the_camera_offsets_only_from_the_rig_file(
+    monkeypatch, tmp_path, capsys, use_rig
 ):
     argv = [
         "openflight-server",
@@ -206,10 +204,6 @@ def test_startup_passes_measured_offset_or_explicit_fallback(
             "--rig-geometry",
             str(Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"),
         ]
-    else:
-        argv += ["--camera-capture-mount-height-m", "0.095"]
-    if flag is not None:
-        argv += ["--camera-capture-forward-offset-m", str(flag)]
     monkeypatch.setattr(sys, "argv", argv)
     for name in ("rig_geometry", "rig_geometry_config"):
         monkeypatch.setattr(server, name, getattr(server, name))
@@ -225,9 +219,18 @@ def test_startup_passes_measured_offset_or_explicit_fallback(
     monkeypatch.setattr(server.socketio, "run", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
 
+    if not use_rig:
+        # no typed height or offsets: without the rig file the camera cannot be placed
+        with pytest.raises(SystemExit):
+            server.main()
+        assert "--camera-capture needs the camera height" in capsys.readouterr().err
+        return
     server.main()
 
-    assert received["forward_offset_m"] == pytest.approx(expected, abs=1e-5)
+    assert received["forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
+    setup = server.rig_geometry.enclosure_setup()
+    assert received["lateral_offset_m"] == pytest.approx(setup.camera_lateral_offset_m)
+    assert received["mount_height_m"] == pytest.approx(setup.camera_mount_height_m)
 
 
 def test_capture_records_forward_offset_in_session_config(monkeypatch, tmp_path):

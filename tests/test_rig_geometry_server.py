@@ -1,4 +1,4 @@
-"""Enclosure geometry file <-> live server: flag overrides and the tilt arithmetic."""
+"""Enclosure geometry file <-> live server: the only placement source, and the tilt arithmetic."""
 
 from __future__ import annotations
 
@@ -39,12 +39,6 @@ class TestTheGeometryReplacesTheFlags:
         assert block["derived"]["radar_height_m"] == pytest.approx(0.0522, abs=5e-4)
         assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.0444, abs=5e-4)
         assert block["derived"]["provenance"]
-
-    def test_a_measured_value_beats_a_typed_flag(self):
-        assert server._rig_override("radar height", 0.1524, 0.051) == 0.051
-
-    def test_a_flag_survives_where_the_rig_is_silent(self):
-        assert server._rig_override("radar height", 0.1524, None) == 0.1524
 
     def test_an_absent_file_is_an_error_not_a_silent_default(self):
         with pytest.raises(FileNotFoundError):
@@ -195,21 +189,68 @@ class TestTheSwingServerNeedsTheRigFile:
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
         assert received["board_rotation_deg"] == 90.0
 
-    def test_a_solved_camera_height_moves_the_antennas_with_it(self, monkeypatch, tmp_path):
-        from openflight.iwr6843 import antennas  # noqa: PLC0415
+    def test_the_setup_record_s_solved_lens_height_moves_the_antennas_with_it(
+        self, monkeypatch, tmp_path
+    ):
+        from tests.setup_files import write_setup  # noqa: PLC0415
 
-        received = self._main(
-            monkeypatch,
-            tmp_path,
-            ["--iwr6843", "--rig-geometry", V3, "--solved-camera-height-m", "0.195"],
+        class Started(Exception):
+            pass
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        def started(*_args, **_kwargs):
+            raise Started
+
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
         )
-        layout = antennas.layout_from_phase_centre(
-            phase_centre_height_m=received["radar_height_m"],
-            board_rotation_deg=received["board_rotation_deg"],
-            boresight_pitch_deg=received["tilt_deg"],
+        for name in ("iwr6843_runtime", "iwr6843_runtime_config", "setup_handoff_config"):
+            monkeypatch.setattr(server, name, getattr(server, name))
+        monkeypatch.setattr(server, "start_monitor", started)
+        monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
+        monkeypatch.setattr(server, "init_session_logger", lambda **kwargs: None)
+        monkeypatch.setattr(server, "profile_store", None)
+        config_path = tmp_path / "snapshot.cfg"
+        config_path.write_text("profileCfg 0\n", encoding="utf-8")
+        setup_file = tmp_path / "setup.json"
+        write_setup(setup_file, scene_lens_height_m=0.195, scene_uncertainty_m=0.01)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "openflight-server",
+                "--no-logging",
+                "--profiles-path",
+                str(tmp_path / "profiles.json"),
+                "--iwr6843",
+                "--iwr6843-config",
+                str(config_path),
+                "--rig-geometry",
+                V3,
+                "--setup-file",
+                str(setup_file),
+            ],
         )
+
+        with pytest.raises(Started):
+            server.main()
+
+        layout = server.iwr6843_runtime.calibration.antennas
         # the RX row stays the rig's 50.6 mm below the lens, now 195 mm up
         assert layout.rx_row_height_m == pytest.approx(0.195 - 0.0506, abs=1e-6)
+        scene = server.setup_handoff_config["scene"]
+        assert scene["lens_height_used_m"] == pytest.approx(0.195)
+        assert scene["lens_height_used_source"] == "radar_solved_height"
+        assert scene["lens_height_solved_uncertainty_m"] == pytest.approx(0.01)
 
     def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
         with pytest.raises(SystemExit):

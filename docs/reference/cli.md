@@ -64,21 +64,15 @@ The supported angle radar.
 | Flag | Type / default | Description |
 | --- | --- | --- |
 | `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v2 vertical launch angle (per-antenna paths from the rig file). Requires `--rig-geometry`. |
-| `--rig-geometry` | path; no default in the server | Enclosure rig file; the radar's height, tilt and offset and the camera's height come only from it. `start-kiosk.sh` passes `config/enclosure_v3_rig_geometry.json` unless another file is given. |
+| `--rig-geometry` | path; no default in the server | Enclosure rig file; the radar's height, tilt and offset and the camera's height and offsets come only from it (required with `--iwr6843` and `--camera-capture`). `start-kiosk.sh` passes `config/enclosure_v3_rig_geometry.json` unless another file is given. |
 | `--iwr6843-port` | — | TI serial port (auto-detect by default) |
 | `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | TI RF config matching the flashed L3 firmware |
 | `--iwr6843-cal` | default `config/iwr6843_calibration_reference.json` | TI complex array/range calibration JSON |
 | `--iwr6843-trigger-pin` | int; default `17` | BCM GPIO receiving the shared sound-trigger edge (default: 17) |
-| `--iwr6843-tee-m` | float; no default | Measured antenna-center to tee slant range in metres. If omitted, OpenFlight saves raw TI captures but withholds range-dependent metrics. |
-| `--iwr6843-tee-range-pending` | flag | Explicitly mark the tee range unresolved and run raw-only, even if another launch wrapper supplied a range. |
-| `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
-| `--iwr6843-tilt-deg` | float | Superseded: the rig file's radar tilt overrides it. The TI calibration JSON's tilt is never used. |
-| `--iwr6843-radar-height-m` | float | Superseded: the rig file's radar height overrides it. The TI calibration JSON's height is never used. |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |
 | `--iwr6843-tx-order` | choices: `auto`, `normal`, `reversed`; default `auto` | TI TDM chirp order; auto reads the chirp masks from the cfg |
 | `--iwr6843-capture-timeout` | float; default `16.0` | Maximum seconds an OPS shot waits for its TI UART dump |
 | `--iwr6843-output-dir` | — | Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843) |
-| `--iwr6843-azimuth-offset-deg` | float; unset | The one **horizontal offset**, in degrees, **= −(target yaw)**; the target yaw is + when the target line lies right of the unit boresight, seen from behind the unit. **Added** once to every horizontal angle (camera and IWR horizontal launch, both club paths, the D-plane face angle, the spin-axis proxy), so a ball hit straight down the target line reports 0. Example: target line 3° right of the boresight → `-3`. The tester's target-line hand-off passes the same value to this flag and to `--camera-capture-horizontal-offset-deg`; either flag alone sets it for every sensor, and two different values are refused. Unset or `0`: frame `unit_boresight`; set: `target_line`; a face angle or spin axis built from both says `mixed`. |
 | `--iwr6843-horizontal-phase-reference-rad` | float | Static target-line phase measured by horizontal aim calibration. Subtracted from the TX2 horizontal proxy before angle conversion. |
 
 ## Inclinometer
@@ -88,7 +82,31 @@ LIS3DH enclosure tilt compensation.
 | Flag | Type / default | Description |
 | --- | --- | --- |
 | `--inclinometer` | flag | Enable LIS3DH enclosure pitch compensation for IWR6843 tilt |
-| `--inclinometer-zero-offset` | float | Degrees added to raw LIS3DH pitch (default: 0) |
+| `--lis3dh-mount-file` | path; default `~/.config/openflight/lis3dh-mount.json` | This unit's checked LIS3DH mount, saved by the orientation check; without the file the rig file's `lis3dh_mount_yaw_deg` stands |
+
+## Unit setup
+
+The setup itself (the ball box, the aim, the resting ball's range, the net range and
+the lens height) is not a flag. It comes only from the unit's setup record
+([`setup.json`](configuration.md#configopenflightsetupjson)), which the setup screen
+writes and the kiosk applies between shots, without a restart.
+
+| Flag | Type / default | Description |
+| --- | --- | --- |
+| `--setup-file` | path; default `~/.config/openflight/setup.json` | The unit's setup record. A missing or unreadable file starts with nothing set; a section confirmed against another lens, rig file or camera tilt starts stale and is not applied |
+| `--camera-tilt-calibration-path` | path; unset | The unit's per-lens camera-tilt file: each swing with a measured IWR launch point and the resting ball's row adds a pair to it; two that agree calibrate the tilt |
+| `--camera-vertical-offset-deg` | float; unset | The unit's calibrated camera tilt (mount pitch plus principal-point row), applied on swings with each shot's LIS3DH pitch; recorded in session_start |
+| `--camera-vertical-offset-source` | unset | Where `--camera-vertical-offset-deg` came from (`unit_calibration`). Only a calibrated tilt narrows the setup's box margin; recorded |
+
+The old setup flags are refused: `--camera-ball-box`, `--camera-hitting-zone`,
+`--camera-setup-ball`, the `--target-line-*` flags,
+`--camera-capture-horizontal-offset-deg`, `--iwr6843-azimuth-offset-deg`, every
+`--iwr6843-tee-*` flag, `--tee-side-offset-m`, `--iwr6843-net-m` / `--net-range-m`,
+`--iwr6843-net-range-source`, `--solved-camera-height-m`, the
+`--scene-lens-height-solved-*` flags, `--camera-capture-mount-height-m`,
+`--camera-capture-lateral-offset-m`, `--camera-capture-forward-offset-m`,
+`--iwr6843-tilt-deg`, `--iwr6843-radar-height-m`, `--inclinometer-zero-offset` and
+`--camera-capture-roll-deg`.
 
 ## Ballistics & spin
 
@@ -154,14 +172,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | `--camera-capture-gain` | float; default `4.0` | Startup analogue gain; automatic exposure keeps it within the sensor's cap |
 | `--camera-light-index` | float; unset | The setup's measured light: the 1280×800 resting ball's DN above black per µs × gain. It seeds the automatic swing exposure before the first resting-ball look; 640×400 doubles it (measured). Unset, the light remembered from the last ball-judged setting, else the startup controls |
 | `--camera-armed-profile` | path | Qualified armed exposure profile. Production capture refuses exposure or gain above its ceiling; `--study-mode` captures stay diagnostic and their out-of-ceiling metrics are withheld. There is no default ceiling. |
-| `--camera-capture-mount-height-m` | float; no default | Camera optical-center height above the hitting surface; `--rig-geometry` supplies and overrides it |
-| `--camera-capture-horizontal-offset-deg` | float; unset | The one **horizontal offset**, in degrees, **= −(target yaw)**; the target yaw is + when the target line lies right of the unit boresight, seen from behind the unit. **Added** once to every horizontal angle (camera and IWR horizontal launch, both club paths, the D-plane face angle, the spin-axis proxy), so a ball hit straight down the target line reports 0. Example: target line 3° right of the boresight → `-3`. The tester's target-line hand-off passes the same value to this flag and to `--iwr6843-azimuth-offset-deg`; either flag alone sets it for every sensor, and two different values are refused. Unset or `0`: frame `unit_boresight`; set: `target_line`; a face angle or spin axis built from both says `mixed`. |
-| `--camera-capture-lateral-offset-m` | float; default `0` | Camera position relative to radar center; positive is target-right |
-| `--tee-side-offset-m` | float; unset | The resting ball's side offset from the radar's axis, metres, positive target-right, from the setup's validated camera-radar pair (the tester hand-off passes it). The camera estimators place the ball there, and the IWR launch fit takes it as its `lateral_tee_offset_m`; unset, they assume it dead ahead (the rig's camera axis) and record `assumed_directly_downrange` |
 | `--camera-lens-id` | `stock-2.8mm`, `6mm` or `8mm`; unset | The lens on the unit ([lenses](configuration.md#configlensesjson)). Its focal length (nominal, or from a checkerboard calibration kept for it) replaces the rig file's for every camera metric; recorded in session_start and every clip's metadata. Unset, the rig file's own (stock) lens, recorded as such |
-| `--camera-ball-box` | `X0,Y0,X1,Y1`; unset | The tester's fixed placement box in this camera mode. About once a second, between clips, the resting ball is found in it again; a shot takes its own range from the last look before its trigger (the setup's radar range at the setup's spot, else scaled by the ball's size, labelled). Served at `GET /api/ball-at-address` |
-| `--target-line-yaw-deg`, `--target-line-uncertainty-deg`, `--target-line-source`, `--target-line-status` | unset | The aim point's target line as the tester handed it over (`status` `set`, `skipped` or `not_set`), served at `GET /api/target-line` for the Live tab; the yaw itself is applied through the horizontal-offset flags |
-| `--camera-capture-roll-deg` | float; default `0` | Clockwise image-roll correction for preview and geometry |
 | `--camera-capture-stream` | `raw` or `main-y`; default `raw` | Camera stream to persist |
 | `--camera-capture-scaler-crop` | `X,Y,W,H` | Optional Picamera2 scaler crop |
 | `--camera-capture-rotate-180` | flag | Rotate saved frames 180 degrees |

@@ -39,14 +39,12 @@ The UI is at **`http://localhost:8080`** on the Pi, or
     ```bash
     scripts/start-kiosk.sh \
       --iwr6843 \
-      --radar-port /dev/ttyAMA0 \
-      --iwr6843-tee-m <measured-slant-metres> \
-      --iwr6843-net-m 4.6
+      --radar-port /dev/ttyAMA0
     ```
 
-    Replace the tee-range placeholder with the current measured placement. The
-    guided tester supplies a qualified automatic solution when one is available;
-    otherwise OpenFlight stays raw-only. See
+    The ball box, the aim and the ranges come from the unit's
+    [setup record](../reference/configuration.md#configopenflightsetupjson),
+    which the setup screen writes; they are not flags. See
     [mounting and geometry](../iwr6843/mounting.md).
 
 === "Swing speed only"

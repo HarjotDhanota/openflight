@@ -51,45 +51,34 @@ and camera board before applying power.
 Mount the camera rigidly and point it down the target line. The tested original
 assembly placed the camera directly above the IWR6843 antenna center, about
 `8.25 in` (`0.20955 m`) above the hitting surface. A laterally offset camera is
-also supported when its position is measured and passed to OpenFlight.
+also supported: its position comes from the enclosure's rig file
+(`--rig-geometry`), never from a flag.
 
-Measure horizontally from the radar antenna center used for radar height to the
-camera lens optical center. Pass that signed distance in meters:
-
-```bash
-scripts/start-kiosk.sh \
-  --camera-capture \
-  --camera-capture-lateral-offset-m 0.0762
-```
-
-The sign is defined while standing behind the unit and looking down the target
-line:
+The rig file gives the signed horizontal distance from the radar antenna center
+to the camera lens optical center. The sign is defined while standing behind the
+unit and looking down the target line:
 
 - Positive: camera is to target-right of the radar center.
 - Negative: camera is to target-left of the radar center.
 - Zero: camera and radar optical centers share the same vertical centerline.
 
-For reference, `3 in` is `0.0762 m`. Measure center-to-center rather than using
-enclosure edges. OpenFlight records this value with the session and uses it in
-camera-only ball depth, camera/IWR horizontal launch, Club Path, and Attack
-Angle geometry.
+OpenFlight records this value with the session and uses it in camera-only ball
+depth, camera/IWR horizontal launch, Club Path, and Attack Angle geometry.
 
-This physical distance is different from
-`--camera-capture-horizontal-offset-deg`. The meter value describes where the
-camera is mounted; the degree value is the one horizontal offset, −(target yaw)
+This physical distance is different from the setup's horizontal offset. The meter
+value describes where the camera is mounted; the degree value is the one
+horizontal offset, −(target yaw)
 (positive = boresight right of the target line; added to every horizontal angle,
 camera and IWR alike; see
 [target line reference](../how-it-works/positioning.md#target-line-reference)). Do not convert the physical separation into degrees, and do not use
 the degree setting as a substitute for the measured distance.
 
-Forward separation is recorded separately as
-`--camera-capture-forward-offset-m`: positive means the camera is ahead of the
-IWR reference, toward the ball. With `--rig-geometry`, the measured forward
-offset overrides that flag. The v3 file places the IWR reference 30 mm behind
-the camera, giving a camera offset of **+0.030 m**. Club and ball reconstruction
-use this offset in camera position and camera-to-ball distance; the supplied
-tee slant range remains measured from the radar. Without a measured offset or
-explicit flag, the forward offset is zero.
+The rig file also gives the forward separation: positive means the camera is
+ahead of the IWR reference, toward the ball. The v3 file places the IWR reference
+30 mm behind the camera, giving a camera offset of **+0.030 m**. Club and ball
+reconstruction use this offset in camera position and camera-to-ball distance;
+the resting ball's slant range remains measured from the radar. The camera needs
+a rig file: without one the kiosk refuses `--camera-capture`.
 
 The useful image does not need to contain the golfer or the full shaft. It must
 contain:
@@ -232,21 +221,8 @@ Use the preview to place the ball near the horizontal center and ensure the
 clubhead and expected launch corridor remain within the vertical window. The
 preview is rotated for the tested inverted camera mount.
 
-Small residual camera roll can be corrected without resampling the high-speed
-capture. Pass a clockwise-positive correction measured from a stationary
-full-field preview:
-
-```bash
-scripts/start-kiosk.sh \
-  --camera-capture \
-  --camera-capture-roll-deg 2.8
-```
-
-OpenFlight applies this value to the Camera-tab preview and to the pixel-ray
-geometry used by horizontal launch, Club Path, and Attack Angle. Saved raw
-frames remain unchanged so calibration can be revised during offline replay.
-Physical leveling is still preferred when practical because it preserves the
-entire usable area of a compact sensor crop.
+There is no typed roll correction: level the camera physically. Saved raw
+frames are never resampled, so calibration can be revised during offline replay.
 
 ## Camera Tab Controls
 
@@ -308,8 +284,8 @@ inputs and their derivation are in `config/swing_exposure.json`.
     light**. The policy never goes past the ceiling.
   - Neither label blocks anything: the shot is analysed and labelled.
 - **Before every swing.** About once a second, between clips, the kiosk measures
-  the resting ball. It uses the ball the `--camera-ball-box` look found, or, without
-  a box, the setup's ball spot (`--camera-setup-ball`). It judges only frames taken
+  the resting ball. It uses the ball the look in the setup's box found, or the
+  setup's ball spot (both from the unit's setup record). It judges only frames taken
   at the controls in force, and moves the controls for the next swing. There is no
   startup lock. **Hysteresis:**
   - a ball whose peak is between 0.40 and 0.75 of clip is left alone;

@@ -469,7 +469,7 @@ class IWR6843Runtime:
                     uncertainty_m=float(getattr(shot_calibration, "tee_range_uncertainty_m", 0.0)),
                     source="configured_tee",
                     label="measured",
-                    reason="the range configured for this run (--iwr6843-tee-m)",
+                    reason="a fixed range configured for this run (tests only)",
                 )
             else:
                 ball_range = shot_ball_range(launch_range, prior)

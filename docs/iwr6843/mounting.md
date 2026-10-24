@@ -42,31 +42,27 @@ golf-ball validation.
 
 ## Measure The Geometry
 
-OpenFlight needs these physical inputs:
+OpenFlight takes no typed geometry. Each input has one source:
 
-| Argument | Measurement |
+| Input | Source |
 |---|---|
-| `--iwr6843-tee-m` | Slant distance from antenna center to ball center |
-| `--iwr6843-net-m` | Distance from antenna center to net or screen |
-| `--iwr6843-tilt-deg` | Antenna-face mount tilt from an inclinometer |
-| `--iwr6843-radar-height-m` | Antenna-center height above the floor reference |
-| `--iwr6843-ball-height-m` | Ball-center height above the same floor reference |
+| Antenna-face mount tilt | the enclosure's rig file (`--rig-geometry`) |
+| Antenna-center height above the hitting surface | the rig file, or the setup's radar-solved lens height |
+| Resting ball's slant range | the unit's [setup record](../reference/configuration.md#configopenflightsetupjson): a prior; each shot is ranged from its own capture |
+| Net range | the setup record; without one, 4.6 m labelled `default_not_measured` |
+| Ball-center height | `--iwr6843-ball-height-m` (default one ball radius, a ball on the ground) |
 
-There is no tee-range default. A manual launch must pass the current measured
-slant range. The guided tester passes its own solution only when the placement
-qualifies; otherwise OpenFlight saves raw captures and withholds every
-range-dependent metric. The automatic range is not yet validated on hardware.
+There is no tee-range default. Without a ball range in the setup record, each
+shot is ranged from its own capture, and a shot whose capture does not measure
+its launch point withholds every range-dependent metric. The per-shot range is
+not yet validated on hardware.
 
 Measurement guidance:
 
-- Measure from the antenna center, not the enclosure edge or mounting feet.
-- Use radar-to-ball slant range for `tee-m`.
-- Keep `net-m` honest so late net reflections can be excluded.
-- Measure radar and ball height from the same floor reference. If the radar and
-  ball sit on different surfaces, extend a common level reference between them.
 - Add an elevated mat to ball height. A 1 inch mat adds approximately `0.0254 m`.
 - A typical iron ball center is around `0.040 m`; a driver tee is higher.
-- Do not reuse a tilt value after moving the rig unless you verify it again.
+- Run the setup again after moving the rig: its sections are checked against the
+  lens, the rig file and the camera tilt at every start.
 
 The checked-in reference calibration contains the array correction used by the
 validated radar. It provides a known starting point, not a universal factory

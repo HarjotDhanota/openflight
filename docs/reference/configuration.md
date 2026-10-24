@@ -57,6 +57,23 @@ Created by the device-linking flow rather than by hand; see
 [cloud sync](../using/cloud-sync.md#linking-a-device) and the
 [wire contract](cloud-uploader-spec.md#6-config-configopenflightcloudjson-mode-0600).
 
+## `~/.config/openflight/setup.json`
+
+The unit's setup record, and the only way a setup reaches the kiosk: the ball box,
+the aim (the target line every horizontal angle is measured from), the resting
+ball's range, the net range and the scene (the lens height above the hitting
+surface). The setup screen writes it through the kiosk's `/api/setup/*` actions, and
+the kiosk applies each change between two shots, without a restart;
+[`--setup-file`](cli.md#unit-setup) names another file.
+
+Each section keeps its `source` and its uncertainty, and the inputs it was confirmed
+against: the lens, the rig file and the camera tilt for the box, the box for the
+aim, ball range and scene. At start, a section whose inputs no longer match is
+marked stale with the reason and is not applied. A section never set leaves the
+kiosk's own start values: no box, the unit-boresight frame, each shot ranged from
+its own capture without a prior, the 4.6 m net labelled `default_not_measured`, and
+the rig file's lens height. A missing or unreadable file starts with nothing set.
+
 ## IWR6843 radar configs
 
 `config/iwr6843_l3dump_*.cfg` — TI RF configuration matching the flashed L3

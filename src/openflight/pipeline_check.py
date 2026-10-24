@@ -42,7 +42,7 @@ CAUSES = ("DATA", "CODE", "PENDING", "UNKNOWN")
 # Where each stage can stop a shot on its way to a metric, in pipeline order.
 GATES = {
     "setup_admission": "camera/tester_server.py: setup admission (setup_admission.json blockers)",
-    "setup_box_ball": "server.py: --camera-setup-ball / --camera-hitting-zone hand-off",
+    "setup_box_ball": "server.py: apply_setup_box (the setup record's box and ball)",
     "tee_range": "server.py: tee_range_handoff (the setup record's ball range)",
     "camera_vertical_offset": "server.py: config['camera_tilt'] (P8-5, the setup's solved offset)",
     "ops_shot": "rolling_buffer/processor.py: OPS shot extraction",
