@@ -179,7 +179,7 @@ class GuidedCheck:
             self._advance()
             return self._status()
 
-    def _advance(self) -> None:
+    def _advance(self) -> None:  # pylint: disable=too-many-return-statements
         state = self._state
         now = self.clock()
         if state["state"] == "level":
