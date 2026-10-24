@@ -29,6 +29,7 @@ class SocketService {
   private socket: Socket | null = null;
   private sessionClearedListeners = new Set<() => void>();
   private setupChangedListeners = new Set<(snapshot: unknown) => void>();
+  private connectListeners = new Set<() => void>();
 
   connect() {
     if (this.socket) return;
@@ -66,6 +67,7 @@ class SocketService {
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
       uiExtensions.forEach((extension) => extension.onConnect?.(socket));
+      this.connectListeners.forEach((listener) => listener());
     });
 
     this.socket.on('disconnect', () => {
@@ -220,6 +222,14 @@ class SocketService {
     this.sessionClearedListeners.add(listener);
     return () => {
       this.sessionClearedListeners.delete(listener);
+    };
+  }
+
+  /** Every (re)connect to the kiosk, which may have restarted since. */
+  onConnect(listener: () => void) {
+    this.connectListeners.add(listener);
+    return () => {
+      this.connectListeners.delete(listener);
     };
   }
 

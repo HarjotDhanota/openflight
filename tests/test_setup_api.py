@@ -110,6 +110,15 @@ def test_get_setup_without_file_is_all_not_set(kiosk, contents, reason):
     assert server.setup_handoff_config["target_line"] == {"status": "not_set"}
 
 
+def test_get_setup_says_whether_the_kiosk_has_a_camera(kiosk, monkeypatch):
+    _start(kiosk)
+    assert kiosk.client.get("/api/setup").get_json()["live"]["camera_available"] is True
+
+    monkeypatch.setattr(server, "camera_capture_runtime", None)
+
+    assert kiosk.client.get("/api/setup").get_json()["live"]["camera_available"] is False
+
+
 def test_without_a_setup_service_the_api_says_so(kiosk):
     response = kiosk.client.get("/api/setup")
 

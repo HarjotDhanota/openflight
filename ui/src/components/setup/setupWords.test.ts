@@ -3,6 +3,7 @@ import { setActiveLocale } from '../../i18n';
 import type { SetupSnapshot } from '../../hooks/useSetup';
 import {
   aimWords,
+  boxStateWords,
   firstStepToDo,
   needsSetup,
   netWords,
@@ -53,6 +54,32 @@ describe('setup words', () => {
     );
   });
 
+  it('says why a floor line gave no net distance', () => {
+    const rejected = (reason: string) => ({
+      state: 'default',
+      value_m: 4.6,
+      source: 'default_not_measured',
+      reason,
+    });
+    expect(netWords(rejected('above the horizon'))).toBe('4.6 m (not measured): the floor line is above the horizon');
+    expect(netWords(rejected('in front of the ball'))).toBe(
+      '4.6 m (not measured): the floor line is nearer than the ball'
+    );
+    expect(netWords(rejected('too close to the horizon to measure'))).toBe(
+      '4.6 m (not measured): the floor line is too close to the horizon to measure'
+    );
+    expect(netWords(rejected('too uncertain to measure'))).toBe(
+      '4.6 m (not measured): the floor line is too uncertain to measure'
+    );
+    expect(netWords(rejected('aim point skipped'))).toBe('4.6 m (not measured)');
+  });
+
+  it('says a box not yet saved is not confirmed', () => {
+    expect(boxStateWords({ state: 'not_set', reason: 'no setup file' })).toBe('Not confirmed');
+    expect(boxStateWords({ state: 'confirmed' })).toBe('Confirmed');
+    expect(boxStateWords({ state: 'stale', reason: 'lens changed (a -> b)' })).toBe('Needs redoing');
+  });
+
   it('says the aim and a skipped aim', () => {
     expect(aimWords(done.aim)).toBe('Set, ± 0.8°');
     expect(aimWords({ state: 'skipped', reason: 'the tester skipped the aim point' })).toBe(
@@ -86,7 +113,9 @@ describe('setup words', () => {
     expect(refusalWords('no_ball')).toBe('No ball seen. Put a ball in the box.');
     expect(refusalWords('outside_box')).toBe('The ball is outside the box. Move it in.');
     expect(refusalWords(null)).toBe("Couldn't reach the kiosk. Try again.");
-    expect(refusalWords('camera unavailable')).toBe('camera unavailable');
+    expect(refusalWords('camera unavailable')).toBe('The camera has no picture yet. Try again.');
+    expect(refusalWords('no camera frames')).toBe('The camera has no picture yet. Try again.');
+    expect(refusalWords('something else')).toBe('something else');
   });
 
   it('offers setup while a step the user can do is unset or stale', () => {
@@ -97,6 +126,9 @@ describe('setup words', () => {
     expect(needsSetup({ ...done, ball_range: { state: 'stale', reason: 'box changed (a -> b)' } })).toBe(true);
     // the lens height has no step on this screen: the kiosk runs on the enclosure's value
     expect(needsSetup({ ...done, scene: { state: 'stale', reason: 'box changed' } })).toBe(false);
+    // a unit without a camera can never set up: never offer it
+    expect(needsSetup(snapshot({ live: { camera_available: false } }))).toBe(false);
+    expect(needsSetup(snapshot({ live: { camera_available: true } }))).toBe(true);
   });
 
   it('opens on the first step left to do', () => {

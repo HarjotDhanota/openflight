@@ -12,6 +12,8 @@ import { isInImage, toCamera, toScreen, type Px, type SetupViewRect } from './se
 import {
   SETUP_STEPS,
   aimWords,
+  boxStateWords,
+  hasCamera,
   ballWords,
   boxWords,
   firstStepToDo,
@@ -40,6 +42,8 @@ const STEP_LABELS: Record<SetupStep, MessageKey> = {
 
 interface SetupViewProps {
   setup: SetupSnapshot | null;
+  /** The setup could not be read from the kiosk after retries. */
+  loadFailed?: boolean;
   act: (section: SetupActionSection, body: SetupActionBody) => Promise<SetupActionResult>;
   handed: Handed | null;
   onDone: () => void;
@@ -59,7 +63,7 @@ function stepDone(step: SetupStep, setup: SetupSnapshot): boolean {
 }
 
 /** The kiosk Setup tab: ball in the box, aim, ball range, then the ready check. */
-export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
+export function SetupView({ setup, loadFailed = false, act, handed, onDone }: SetupViewProps) {
   const { t } = useI18n();
   const [stepIndex, setStepIndex] = useState(() => firstStepToDo(setup));
   // open on the first step to do once the setup arrives (adjust state when an input changes)
@@ -69,6 +73,8 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
     setStepIndex(firstStepToDo(setup));
   }
   const step = SETUP_STEPS[stepIndex];
+  // without a camera no step can be done: nothing is attempted
+  const cameraOk = setup !== null && hasCamera(setup);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [lookRefusal, setLookRefusal] = useState<string | null>(null);
@@ -99,7 +105,7 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
 
   // the box step keeps looking, so the found / outside / not-seen state follows the ball
   useEffect(() => {
-    if (step !== 'box') return undefined;
+    if (step !== 'box' || !cameraOk) return undefined;
     let cancelled = false;
     let looking = false;
     const look = async () => {
@@ -115,11 +121,11 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [step, act]);
+  }, [step, act, cameraOk]);
 
   useEffect(() => {
-    if (step === 'aim') void act('aim', { action: 'show' });
-  }, [step, act]);
+    if (step === 'aim' && cameraOk) void act('aim', { action: 'show' });
+  }, [step, act, cameraOk]);
 
   // the range is measured on arrival, with the ball already in the box
   const measuredOnArrival = useRef(false);
@@ -128,7 +134,7 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
       measuredOnArrival.current = false;
       return;
     }
-    if (measuredOnArrival.current || !setup) return;
+    if (measuredOnArrival.current || !setup || !hasCamera(setup)) return;
     measuredOnArrival.current = true;
     if (isUsable(setup.box) && setup.ball_range.state !== 'set') {
       // started after this render, as a tap would: the measurement's busy flag is not
@@ -161,12 +167,13 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
     };
   }, [step, hasSetup]);
 
-  if (!setup) {
+  if (!setup || !hasCamera(setup)) {
+    const line = setup ? t('setup.needsCamera') : loadFailed ? t('setup.unreachable') : t('setup.loading');
     return (
       <div className="panel setup-view">
         <PanelHeader title={t('nav.setup')} />
         <div className="panel__body panel__body--empty">
-          <p className="panel__empty-title">{t('setup.loading')}</p>
+          <p className="setup-view__only-line">{line}</p>
         </div>
       </div>
     );
@@ -185,6 +192,8 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
   const aimPoint = aimTap ?? savedAim;
   const savedFloor = setup.aim.state === 'set' ? (setup.aim.floor_line ?? null) : null;
   const floorLine: Px[] = floorTaps ?? savedFloor ?? [];
+  // a saved floor line the service measured nothing from is drawn as not used
+  const floorRejected = floorTaps === null && savedFloor !== null && setup.net_range.source !== 'camera_floor_line';
   const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (setup.box.ball_px ?? liveBox?.ball_px ?? null);
   const ballDiameter = step === 'box' ? liveBox?.diameter_px : setup.box.diameter_px;
   const outline: Px[] | null =
@@ -260,7 +269,7 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
       ) : null}
       {step === 'aim' && floorLine.length === 2 ? (
         <line
-          className="setup-view__floor-line"
+          className={`setup-view__floor-line${floorRejected ? ' setup-view__floor-line--rejected' : ''}`}
           x1={screen(floorLine[0])[0]}
           y1={screen(floorLine[0])[1]}
           x2={screen(floorLine[1])[0]}
@@ -354,7 +363,7 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
           {ballWords(liveBox?.state)}
         </p>
         <div className="setup-view__saved">
-          <span className={`setup-view__badge setup-view__badge--${setup.box.state}`}>{stateWords(setup.box)}</span>
+          <span className={`setup-view__badge setup-view__badge--${setup.box.state}`}>{boxStateWords(setup.box)}</span>
           {boxWords(setup.box) ? <span>{boxWords(setup.box)}</span> : null}
         </div>
         {unapplied('box')}
@@ -402,6 +411,9 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
               {t('setup.row.net')}: {netWords(setup.net_range)}
             </span>
           ) : null}
+          {savedFloor && setup.aim.floor_line_used === false ? (
+            <span className="setup-view__saved-line">{t('setup.aim.floorNotUsed')}</span>
+          ) : null}
         </div>
         {unapplied('aim')}
         {unapplied('net_range')}
@@ -442,8 +454,15 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
       </>
     );
   } else {
-    const rows: Array<{ section: keyof SetupSnapshot & string; label: MessageKey; badge: string; words: string }> = [
-      { section: 'box', label: 'setup.row.box', badge: stateWords(setup.box), words: boxWords(setup.box) },
+    const sceneShown = setup.scene.state === 'set' ? setup.scene : { state: 'default' };
+    const rows: Array<{
+      section: keyof SetupSnapshot & string;
+      label: MessageKey;
+      badge: string;
+      words: string;
+      state?: string;
+    }> = [
+      { section: 'box', label: 'setup.row.box', badge: boxStateWords(setup.box), words: boxWords(setup.box) },
       { section: 'aim', label: 'setup.row.aim', badge: stateWords(setup.aim), words: aimWords(setup.aim) },
       {
         section: 'ball_range',
@@ -461,7 +480,8 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
         section: 'scene',
         label: 'setup.row.scene',
         // the kiosk runs on the enclosure's lens height until the radar solves one
-        badge: stateWords(setup.scene.state === 'set' ? setup.scene : { state: 'default' }),
+        badge: stateWords(sceneShown),
+        state: sceneShown.state,
         words: sceneWords(setup.scene),
       },
     ];
@@ -473,7 +493,7 @@ export function SetupView({ setup, act, handed, onDone }: SetupViewProps) {
         </p>
         <ul className="setup-view__checks">
           {rows.map((row) => {
-            const state = (setup[row.section] as { state: string }).state;
+            const state = row.state ?? (setup[row.section] as { state: string }).state;
             return (
               <li key={row.section} className="setup-view__check" data-section={row.section} data-state={state}>
                 <span className="setup-view__check-label">{t(row.label)}</span>

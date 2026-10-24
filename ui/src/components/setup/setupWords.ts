@@ -13,12 +13,18 @@ function needsDoing(section: SetupSection | undefined): boolean {
   return !isUsable(section);
 }
 
+/** Whether the kiosk has a camera; an older snapshot that does not say is taken as yes. */
+export function hasCamera(setup: SetupSnapshot): boolean {
+  return setup.live.camera_available !== false;
+}
+
 /**
- * Whether to offer the Setup screen: a step on it is unset or stale. The lens height
- * (`scene`) has no step here; without one the kiosk runs on the enclosure's value.
+ * Whether to offer the Setup screen: a step on it is unset or stale, and the unit has the
+ * camera every step needs. The lens height (`scene`) has no step here; without one the
+ * kiosk runs on the enclosure's value.
  */
 export function needsSetup(setup: SetupSnapshot | null): boolean {
-  if (!setup) return false;
+  if (!setup || !hasCamera(setup)) return false;
   return [setup.box, setup.aim, setup.ball_range, setup.net_range].some(needsDoing);
 }
 
@@ -41,6 +47,11 @@ const STATES = new Set(['not_set', 'confirmed', 'set', 'skipped', 'default', 'st
 
 export function stateWords(section: SetupSection): string {
   return STATES.has(section.state) ? t(`setup.state.${section.state}` as MessageKey) : section.state;
+}
+
+// beside a live "Ball found in the box", "Not set" reads as a contradiction
+export function boxStateWords(section: SetupSection): string {
+  return section.state === 'not_set' ? t('setup.state.notConfirmed') : stateWords(section);
 }
 
 // The service's reasons, by how they start; anything else is shown as it is.
@@ -70,6 +81,7 @@ export function refusalWords(reason: string | null): string {
   if (reason === null) return t('setup.unreachable');
   if (BALL_STATES.has(reason)) return ballWords(reason);
   if (/^box is /.test(reason)) return t('setup.needsBox');
+  if (reason === 'camera unavailable' || reason === 'no camera frames') return t('setup.cameraNotReady');
   return reason;
 }
 
@@ -93,8 +105,19 @@ export function netWords(section: SetupSection): string {
   if (section.source === 'camera_floor_line' && section.uncertainty_m != null) {
     return t('setup.net.measured', { value: metres(section.value_m), spread: metres(section.uncertainty_m) });
   }
-  return t('setup.net.default', { value: plain(section.value_m) });
+  const rejected = FLOOR_LINE_REJECTIONS[section.reason ?? ''];
+  return rejected
+    ? t('setup.net.defaultWithReason', { value: plain(section.value_m), reason: t(rejected) })
+    : t('setup.net.default', { value: plain(section.value_m) });
 }
+
+// why the service kept the default for a floor line the user did mark
+const FLOOR_LINE_REJECTIONS: Record<string, MessageKey> = {
+  'above the horizon': 'setup.floor.aboveHorizon',
+  'in front of the ball': 'setup.floor.inFront',
+  'too close to the horizon to measure': 'setup.floor.nearHorizon',
+  'too uncertain to measure': 'setup.floor.tooUncertain',
+};
 
 export function aimWords(section: SetupSection): string {
   if (section.state === 'skipped') return t('setup.aim.skipped');

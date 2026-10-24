@@ -1997,6 +1997,7 @@ def init_setup_service(path):
             scene=apply_setup_scene,
         ),
         between_shots=_when_idle,
+        camera_available=lambda: camera_capture_runtime is not None,
     )
     service.on_change = _on_setup_change
     setup_service = service

@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupSnapshot } from './useSetup';
 
 const listeners = new Set<(snapshot: unknown) => void>();
+const connectListeners = new Set<() => void>();
 vi.mock('../services/socketService', () => ({
   socketService: {
     onSetupChanged: (listener: (snapshot: unknown) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    onConnect: (listener: () => void) => {
+      connectListeners.add(listener);
+      return () => connectListeners.delete(listener);
     },
   },
 }));
@@ -56,6 +61,7 @@ async function flush() {
 describe('useSetup', () => {
   beforeEach(() => {
     listeners.clear();
+    connectListeners.clear();
     latest = null;
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
@@ -68,6 +74,49 @@ describe('useSetup', () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('reads the setup again when the kiosk comes back', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(1, 'stale') });
+    act(() => connectListeners.forEach((listener) => listener()));
+    await flush();
+    expect(latest?.setup?.revision).toBe(1);
+    expect(latest?.setup?.box.state).toBe('stale');
+  });
+
+  it('retries a failed first read, then says it failed, until a read works', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({ ok: false }) });
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    expect(latest?.loadFailed).toBe(false);
+    for (let retry = 0; retry < 5; retry += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+    }
+    expect(fetchMock.mock.calls.length).toBe(3);
+    expect(latest?.setup).toBeNull();
+    expect(latest?.loadFailed).toBe(true);
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(2) });
+    act(() => connectListeners.forEach((listener) => listener()));
+    await flush();
+    expect(latest?.setup?.revision).toBe(2);
+    expect(latest?.loadFailed).toBe(false);
+  });
+
+  it('keeps the same setup when an event repeats it, so nothing re-renders', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    const before = latest?.setup;
+    act(() => listeners.forEach((listener) => listener(snapshot(3))));
+    expect(latest?.setup).toBe(before);
   });
 
   it('reads the setup at start', async () => {

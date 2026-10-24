@@ -9,23 +9,18 @@ export interface SetupSection {
   state: string;
   reason?: string | null;
   source?: string;
-  // box
   box_px?: number[];
   ball_px?: Px | null;
   diameter_px?: number | null;
   image_size_px?: Px;
-  // aim
   aim_px?: Px;
   floor_line?: [Px, Px] | null;
   yaw_deg?: number;
   uncertainty_deg?: number | null;
   floor_line_used?: boolean;
-  // ball range
   range_m?: number;
   uncertainty_m?: number | null;
-  // net range
   value_m?: number;
-  // scene
   lens_height_m?: number | null;
 }
 
@@ -39,6 +34,8 @@ export interface SetupLive {
     outline_px: Px[];
   };
   aim?: { default_aim_px: Px };
+  /** False on a unit without a camera: no step can be done there. */
+  camera_available?: boolean;
 }
 
 /** GET /api/setup and the `setup_changed` event. */
@@ -87,48 +84,84 @@ function normalised(snapshot: SetupSnapshot): SetupSnapshot {
   return { ...snapshot, live: snapshot.live ?? {}, unapplied: snapshot.unapplied ?? {} };
 }
 
-/** The kiosk's setup record, kept current from `setup_changed`, and its actions. */
+const READ_ATTEMPTS = 3;
+const RETRY_MS = 2000;
+
+/**
+ * The kiosk's setup record, kept current from `setup_changed` and read again whenever the
+ * socket connects (a restarted kiosk may have marked sections stale), and its actions.
+ * `loadFailed` says the record could not be read after the retries.
+ */
 export function useSetup(): {
   setup: SetupSnapshot | null;
+  loadFailed: boolean;
   act: (section: SetupActionSection, body: SetupActionBody) => Promise<SetupActionResult>;
 } {
   const [setup, setSetup] = useState<SetupSnapshot | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // a repeated snapshot keeps the state as it is, so the app does not re-render for it
+  const take = useCallback((value: unknown): boolean => {
+    if (!isSnapshot(value)) return false;
+    const next = normalised(value);
+    setSetup((previous) => (previous && JSON.stringify(previous) === JSON.stringify(next) ? previous : next));
+    return true;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    const take = (value: unknown) => {
-      if (!cancelled && isSnapshot(value)) setSetup(normalised(value));
+    let reading = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const read = (attempt = 1, generation = ++reading) => {
+      if (retry) clearTimeout(retry);
+      retry = null;
+      fetch(`${getServerOrigin()}/api/setup`, { cache: 'no-store' })
+        .then((response) => (response.ok ? response.json() : null))
+        .catch(() => null)
+        .then((body) => {
+          if (cancelled || generation !== reading) return;
+          if (take(body)) {
+            setLoadFailed(false);
+          } else if (attempt < READ_ATTEMPTS) {
+            retry = setTimeout(() => read(attempt + 1, generation), RETRY_MS);
+          } else {
+            setLoadFailed(true);
+          }
+        });
     };
-    const unsubscribe = socketService.onSetupChanged(take);
-    fetch(`${getServerOrigin()}/api/setup`, { cache: 'no-store' })
-      .then((response) => (response.ok ? response.json() : null))
-      .then(take)
-      .catch(() => {
-        // no setup service (an older kiosk) or no kiosk yet: the screen says so
-      });
+    const unsubscribeChanged = socketService.onSetupChanged((value) => {
+      if (!cancelled) take(value);
+    });
+    const unsubscribeConnect = socketService.onConnect(() => read());
+    read();
     return () => {
       cancelled = true;
-      unsubscribe?.();
+      if (retry) clearTimeout(retry);
+      unsubscribeChanged?.();
+      unsubscribeConnect?.();
     };
-  }, []);
+  }, [take]);
 
-  const act = useCallback(async (section: SetupActionSection, body: SetupActionBody) => {
-    try {
-      const response = await fetch(`${getServerOrigin()}/api/setup/${section}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const answer = (await response.json()) as { ok?: unknown; reason?: unknown; setup?: unknown };
-      if (isSnapshot(answer.setup)) setSetup(normalised(answer.setup));
-      return {
-        ok: answer.ok === true,
-        reason: typeof answer.reason === 'string' ? answer.reason : null,
-      };
-    } catch {
-      return { ok: false, reason: null };
-    }
-  }, []);
+  const act = useCallback(
+    async (section: SetupActionSection, body: SetupActionBody) => {
+      try {
+        const response = await fetch(`${getServerOrigin()}/api/setup/${section}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const answer = (await response.json()) as { ok?: unknown; reason?: unknown; setup?: unknown };
+        take(answer.setup);
+        return {
+          ok: answer.ok === true,
+          reason: typeof answer.reason === 'string' ? answer.reason : null,
+        };
+      } catch {
+        return { ok: false, reason: null };
+      }
+    },
+    [take]
+  );
 
-  return { setup, act };
+  return { setup, loadFailed, act };
 }

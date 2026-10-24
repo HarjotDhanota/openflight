@@ -43,12 +43,14 @@ class MockSetup {
     ball_range: notSet,
     net_range: notSet,
     scene: notSet,
-    live: {},
+    live: { camera_available: true },
     unapplied: {},
   };
   posts: Array<{ section: string; body: Record<string, unknown> }> = [];
   /** What the next look at the box sees; a test moves the ball by changing it. */
   ball: 'found' | 'outside_box' | 'no_ball' = 'found';
+  /** Why the service would keep the default net for a marked floor line, if it would. */
+  floorRejected: string | null = null;
 
   private set(changes: Record<string, unknown>) {
     this.snapshot = { ...this.snapshot, ...changes, revision: (this.snapshot.revision as number) + 1 };
@@ -101,12 +103,18 @@ class MockSetup {
             floor_line: floor,
             yaw_deg: 4.1,
             uncertainty_deg: 0.84,
-            floor_line_used: floor !== null,
+            floor_line_used: floor !== null && this.floorRejected === null,
             warnings: [],
           },
-          net_range: floor
-            ? { state: 'set', value_m: 3.917, uncertainty_m: 0.204, source: 'camera_floor_line' }
-            : { state: 'default', value_m: 4.6, source: 'default_not_measured', reason: 'no floor line marked' },
+          net_range:
+            floor && this.floorRejected === null
+              ? { state: 'set', value_m: 3.917, uncertainty_m: 0.204, source: 'camera_floor_line' }
+              : {
+                  state: 'default',
+                  value_m: 4.6,
+                  source: 'default_not_measured',
+                  reason: floor ? this.floorRejected : 'no floor line marked',
+                },
         });
       }
       if (action === 'skip') {
@@ -192,11 +200,52 @@ function expectNear(actual: unknown, expected: Px, tolerance: number) {
   expect(Math.abs(y - expected[1])).toBeLessThan(tolerance);
 }
 
+/** In every ready-check row the label, badge and words sit side by side, never on each other. */
+async function expectRowsApart(page: Page) {
+  const rows = page.locator('.setup-view__check');
+  await expect(rows).toHaveCount(5);
+  for (const row of await rows.all()) {
+    const parts = [
+      (await row.locator('.setup-view__check-label').boundingBox())!,
+      (await row.locator('.setup-view__badge').boundingBox())!,
+    ];
+    const words = await row.locator('.setup-view__check-words').boundingBox();
+    if (words && words.width > 0) parts.push(words);
+    for (let index = 1; index < parts.length; index += 1) {
+      const sameLine = parts[index].y < parts[index - 1].y + parts[index - 1].height;
+      if (sameLine) expect(parts[index].x).toBeGreaterThanOrEqual(parts[index - 1].x + parts[index - 1].width + 4);
+    }
+    const label = parts[0];
+    // a label never wraps onto a second line
+    expect(label.height).toBeLessThan(24);
+  }
+}
+
 async function shot(page: Page, name: string) {
   if (!OUT) return;
   mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: join(OUT, `${name}.png`) });
 }
+
+test.describe('a kiosk without a camera', () => {
+  test.use({ viewport: { width: 800, height: 480 }, hasTouch: true });
+
+  test('offers no setup, and the Setup tab says it needs the camera', async ({ page }) => {
+    const mock = await open(page, 'RH');
+    mock.snapshot = { ...mock.snapshot, live: { camera_available: false } };
+    // the first read may have happened before the change: the kiosk comes back
+    await page.reload();
+    await page.getByRole('button', { name: 'Close Select club' }).click();
+    await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
+    await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
+    await expect(page.locator('.nav__setup-dot')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Setup', exact: true }).click();
+    await expect(page.locator('.setup-view')).toHaveText(/Setup needs the camera, and this kiosk has none\./);
+    await expect(page.locator('.setup-view__steps')).toHaveCount(0);
+    await page.waitForTimeout(2500);
+    expect(mock.posts).toEqual([]);
+  });
+});
 
 for (const size of SIZES) {
   for (const hand of HANDS) {
@@ -216,6 +265,7 @@ for (const size of SIZES) {
         await expect(page.locator('.setup-view__step--active')).toContainText('Ball in the box');
         await expect(page.locator('.setup-view__look')).toHaveText('No ball seen. Put a ball in the box.');
         await expect(page.getByRole('button', { name: 'Confirm', exact: true })).toBeDisabled();
+        await expect(page.locator('.setup-view__saved')).toHaveText('Not confirmed');
         await shot(page, `${tag}-1-box-not-seen`);
         mock.ball = 'outside_box';
         await expect(page.locator('.setup-view__look')).toHaveText('The ball is outside the box. Move it in.', {
@@ -260,6 +310,7 @@ for (const size of SIZES) {
         await expect(page.locator('[data-section="aim"]')).toContainText('± 0.8°');
         await expect(page.locator('[data-section="ball_range"]')).toContainText('from the camera');
         await expect(page.locator('[data-section="net_range"]')).toContainText('4.6 m (not measured)');
+        await expectRowsApart(page);
         await shot(page, `${tag}-4-ready`);
         await page.getByRole('button', { name: 'Done', exact: true }).click();
         await expect(page.locator('.setup-view')).toHaveCount(0);
@@ -301,6 +352,26 @@ for (const size of SIZES) {
         await expect(page.locator('[data-section="aim"]')).toContainText('Skipped');
         await expect(page.locator('[data-section="net_range"]')).toContainText('4.6 m (not measured)');
         await expect(page.locator('[data-section="ball_range"]')).toContainText('Not set');
+      });
+
+      test('a rejected floor line says why and is drawn as not used', async ({ page }) => {
+        const mock = await open(page, hand);
+        mock.floorRejected = 'above the horizon';
+        await page.getByRole('button', { name: 'Setup', exact: true }).click();
+        await expect(page.locator('.setup-view__look')).toContainText('Ball found in the box', { timeout: 6000 });
+        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await page.getByRole('button', { name: 'Next', exact: true }).click();
+        await tap(page, AIM, hand);
+        await page.getByRole('button', { name: 'Floor line', exact: true }).click();
+        await tap(page, FLOOR[0], hand);
+        await tap(page, FLOOR[1], hand);
+        await expect(page.locator('.setup-view__floor-line--rejected')).toHaveCount(0);
+        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(page.locator('.setup-view__saved')).toContainText(
+          '4.6 m (not measured): the floor line is above the horizon'
+        );
+        await expect(page.locator('.setup-view__saved')).toContainText("The floor line wasn't used for the aim.");
+        await expect(page.locator('.setup-view__floor-line--rejected')).toBeVisible();
       });
     });
   }

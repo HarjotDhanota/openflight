@@ -216,6 +216,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         hooks: Callable[..., Any] = kiosk_extensions.first,
         box_config: placement_box.PlacementBoxConfig | None = None,
         between_shots: Callable[[Callable[[], Any]], Any] = lambda apply: apply(),
+        camera_available: Callable[[], bool] = lambda: True,
     ):
         self._path = Path(path)
         self._ctx = ctx
@@ -225,6 +226,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         self._hooks = hooks
         # runs one change's applies together, so no shot lands between two sections
         self._between_shots = between_shots
+        self._camera_available = camera_available
         self._config = box_config or placement_box.load_config()
         self._action_lock = threading.Lock()
         self._record = load(self._path)
@@ -258,7 +260,11 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         """The record against the start context, the last live look, and why any is not in effect."""
         return {
             **self._evaluated(),
-            "live": copy.deepcopy(self._live),
+            # a unit without a camera can never set up, so the screen need not offer it
+            "live": {
+                **copy.deepcopy(self._live),
+                "camera_available": bool(self._camera_available()),
+            },
             "unapplied": dict(self._apply_errors),
         }
 
@@ -319,6 +325,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             if refusal:
                 return self._result(False, str(refusal))
             before = self._evaluated()
+            looked = copy.deepcopy(self._live)
             try:
                 changes = perform[action](before, payload)
                 if changes:
@@ -334,8 +341,11 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             after = self._evaluated()
             failed = self._apply({n for n in SECTIONS if after[n] != before[n]}, after)
             result = self._result(not failed, "; ".join(failed) or None)
-            self.on_change(result["setup"])
-            if not failed:
+            # a look every few seconds is news only when it saw something new, and never
+            # an action for the hooks
+            if action != "show" or self._live != looked:
+                self.on_change(result["setup"])
+            if not failed and action != "show":
                 kiosk_extensions.call_all("after_setup_action", section, action, result)
             return result
 

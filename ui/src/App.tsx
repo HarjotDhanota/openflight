@@ -118,7 +118,7 @@ function AppContent() {
   const [currentView, setCurrentView] = useState<PanelView>('live');
   // what the Live tab's left/right are measured from
   const targetLine = useTargetLine(currentView === 'live');
-  const { setup, act: setupAct } = useSetup();
+  const { setup, loadFailed: setupLoadFailed, act: setupAct } = useSetup();
   // offered, never forced: the kiosk runs with a gap labelled until the user sets it
   const setupOffered = needsSetup(setup) && currentView !== 'setup';
   const [selectedClub, setSelectedClub] = useState('driver');
@@ -417,7 +417,13 @@ function AppContent() {
           />
         )}
         {currentView === 'setup' && (
-          <SetupView setup={setup} act={setupAct} handed={handed} onDone={() => setCurrentView('live')} />
+          <SetupView
+            setup={setup}
+            loadFailed={setupLoadFailed}
+            act={setupAct}
+            handed={handed}
+            onDone={() => setCurrentView('live')}
+          />
         )}
         {currentView === 'debug' && (
           <div className="panel">

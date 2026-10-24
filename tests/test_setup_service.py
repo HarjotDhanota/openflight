@@ -703,3 +703,30 @@ def test_the_record_s_hash_follows_what_is_saved(make, scene, tmp_path):
     assert service.sha256 != empty
     restarted, _recorder = make()
     assert restarted.sha256 == service.sha256
+
+
+def test_a_look_that_sees_nothing_new_announces_nothing(make, scene, monkeypatch):
+    after = []
+    monkeypatch.setattr(kiosk_extensions, "call_all", lambda name, *args: after.append(name))
+    service, _recorder = make()
+    announced = []
+    service.on_change = announced.append
+    scene.in_box = BALL_PX
+
+    service.box("show")
+    service.box("show")
+    scene.in_box = None
+    service.box("show")
+
+    assert [snapshot["live"]["box"]["state"] for snapshot in announced] == ["found", "no_ball"]
+    assert after == []
+    _confirm_box(service, scene)
+    assert after == ["after_setup_action"]
+
+
+def test_the_snapshot_says_whether_the_kiosk_has_a_camera(make):
+    with_camera, _recorder = make()
+    without, _recorder = make(camera_available=lambda: False)
+
+    assert with_camera.snapshot()["live"]["camera_available"] is True
+    assert without.snapshot()["live"]["camera_available"] is False
