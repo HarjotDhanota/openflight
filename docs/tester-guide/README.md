@@ -32,9 +32,9 @@ Leave the terminal open; **Ctrl+C** in it stops everything. Then open the tester
 
 Work down the page. Each step opens when the one before it is done, and the bar at the top says where you are.
 
-**1. Tester and lens.** Tap your tester ID, or **New tester**. Tap **Indoors** or **Outdoors**, **Right-handed** or **Left-handed**, then the lens fitted to the unit (**Stock 2.8 mm** unless you've changed it).
+**1. Tester and lens.** Type your tester ID in the box and tap **Use this ID** (or press Enter). Use the same ID every time you test, so your sessions stay together; it can have letters, numbers, dots, dashes and underscores. Tap **Indoors** or **Outdoors**, **Right-handed** or **Left-handed**, then the lens fitted to the unit (**Stock 2.8 mm** unless you've changed it).
 
-<img src="images/1-tester.png" width="480" alt="Step 1: tap your tester ID or New tester, Indoors or Outdoors, and Right-handed or Left-handed"> <img src="images/1-lens.png" width="480" alt="Step 1: the stock 2.8 mm lens tapped">
+<img src="images/1-tester.png" width="480" alt="Step 1: a tester ID typed in the box, Indoors or Outdoors, and Right-handed or Left-handed"> <img src="images/1-lens.png" width="480" alt="Step 1: the stock 2.8 mm lens tapped">
 
 **2. Check the unit.** Three short checks, top to bottom.
 

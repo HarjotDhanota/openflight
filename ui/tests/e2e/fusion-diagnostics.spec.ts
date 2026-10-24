@@ -92,11 +92,16 @@ function response(shots: ReturnType<typeof shot>[], options: Record<string, unkn
   };
 }
 
-async function mockRuns(page: Page) {
-  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
-    key: 'openflight-tester-id',
-    value: testerId,
-  });
+async function mockRuns(page: Page, { preset = true } = {}) {
+  // the tester ID this tab already has (sessionStorage only, never localStorage)
+  if (preset) {
+    await page.addInitScript(({ key, value }) => {
+      if (!sessionStorage.getItem(key)) sessionStorage.setItem(key, value);
+    }, {
+      key: 'openflight-tester-id',
+      value: testerId,
+    });
+  }
   await page.route('**/api/tester/attempts?**', (route) =>
     json(route, { schema_version: 1, scopes: [runOne, runTwo] })
   );
@@ -345,3 +350,23 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(overflow).toBeLessThanOrEqual(1);
   });
 }
+
+test('the tester ID is kept for this tab only, and the old localStorage copy is deleted', async ({ page }) => {
+  await mockRuns(page, { preset: false });
+  // what an older page left on the unit: never shown, and deleted on load
+  await page.addInitScript(() => localStorage.setItem('openflight-tester-id', 'someone-else'));
+  await page.goto('/fusion-diagnostics.html');
+  await expect(page.locator('#tester-id')).toHaveValue('');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  await page.locator('#tester-id').fill(testerId);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('openflight-tester-id'))).toBe(testerId);
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  // a reload of the same tab keeps it; a new tab starts empty
+  await page.reload();
+  await expect(page.locator('#tester-id')).toHaveValue(testerId);
+  const next = await page.context().newPage();
+  await next.goto('/fusion-diagnostics.html');
+  await expect(next.locator('#tester-id')).toHaveValue('');
+});

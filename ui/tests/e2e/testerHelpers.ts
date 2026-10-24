@@ -77,37 +77,29 @@ export async function mockConfirmedPlacementBox(page: Page) {
   });
 }
 
-/** The tester ID the page starts with: picked once by touch, then remembered. */
+/** The tester ID the page starts with: typed once, then kept for that browser tab. */
 export const DEFAULT_TESTER = '20260922-name';
 
-/** Starts the tester page with a tester already picked, as a returning tester's page does. */
+/**
+ * Starts the tester page with a tester already entered, as a reload of the same tab
+ * does (the ID is kept in the tab's sessionStorage, never across visits).
+ */
 export async function useTester(page: Page, testerId = DEFAULT_TESTER) {
   await page.addInitScript((id) => {
     try {
-      if (!localStorage.getItem('openflight-tester-id')) localStorage.setItem('openflight-tester-id', id);
+      if (!sessionStorage.getItem('openflight-tester-id')) sessionStorage.setItem('openflight-tester-id', id);
     } catch {
-      // a page without storage picks its tester by touch
+      // a page without storage asks for its tester ID
     }
   }, testerId);
 }
 
-/** GET /api/tester/testers: the saved tester IDs and the suggested new one. */
-export async function mockTesters(page: Page, testers: string[], suggested = 'tester-2026-10-13-1') {
-  await page.route('**/api/tester/testers**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ testers, suggested_new: suggested }),
-    })
-  );
-}
-
-/** Picks a tester ID by touch: opens the picker and taps it (no typing anywhere). */
+/** Enters a tester ID in step 1: opens the entry box if needed, types the ID and uses it. */
 export async function pickTester(page: Page, testerId: string) {
-  await mockTesters(page, [DEFAULT_TESTER, testerId]);
   const change = page.locator('#tester-change');
   if (await change.isVisible()) await change.click();
-  await page.locator('#tester-list').getByRole('button').filter({ hasText: new RegExp(`^${testerId}$`) }).click();
+  await page.locator('#tester-entry').fill(testerId);
+  await page.locator('#tester-use').click();
 }
 
 /** The three lenses the backend offers (13 Oct contract), the stock one fitted. */

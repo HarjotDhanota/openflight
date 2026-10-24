@@ -4,12 +4,13 @@ import {
   lensState,
   mockConfirmedPlacementBox,
   mockLens,
-  mockTesters,
+  pickTester,
   useTester,
 } from './testerHelpers';
 
-// 13 Oct UX pass: one step sequence with a sticky “You are here”, the tester ID and the
-// lens picked by touch (no typing anywhere in setup), per-lens settings, and 44 px targets.
+// 13 Oct UX pass: one step sequence with a sticky “You are here”, the lens picked by touch,
+// per-lens settings, and 44 px targets. The tester ID is typed into one box: the page never
+// lists the IDs saved on the unit, so no tester sees another's.
 test.use({ hasTouch: true });
 
 async function json(route: Route, payload: object, status = 200) {
@@ -71,49 +72,129 @@ test('the page is the OpenFlight Tester, with one numbered sequence', async ({ p
   ].map((text) => new RegExp(`^${text}`)));
 });
 
-test('with no tester chosen, the picker lists the saved IDs and a new one; a tap picks one, no typing', async ({
-  page,
-}) => {
-  await mockBase(page);
-  await mockTesters(page, ['indoor-test-2', DEFAULT_TESTER], 'tester-2026-10-13-1');
+function askedTesters(page: Page) {
   const asked: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/api/tester/setup-eligibility?')) asked.push(new URL(request.url()).searchParams.get('tester_id') ?? '');
+  });
+  return asked;
+}
+
+test('with no tester entered, step 1 is one text box and lists no saved IDs', async ({ page }) => {
+  await mockBase(page);
+  const listRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/tester/testers')) listRequests.push(request.url());
   });
   await page.goto('/tester.html');
 
   await expect(page.locator('#tester-current-id')).toHaveText('not chosen');
   await expect(page.locator('#tester-picker')).toBeVisible();
-  await expect(page.locator('#setup-summary')).toHaveText('Pick your tester ID in step 1 first.');
+  await expect(page.locator('#setup-summary')).toHaveText('Enter your tester ID in step 1 first.');
   await expect(page.locator('#stepbar-step')).toHaveText('Step 1 · Tester and lens');
-  const chips = page.locator('#tester-list').getByRole('button');
-  await expect(chips).toHaveText(['indoor-test-2', DEFAULT_TESTER]);
-  for (const chip of await chips.all()) {
-    expect((await chip.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const entry = page.getByLabel('Your tester ID');
+  await expect(entry).toBeVisible();
+  await expect(entry).toHaveValue('');
+  await expect(entry).toHaveAttribute('id', 'tester-entry');
+  await expect(page.locator('#tester-entry-hint')).toHaveText(
+    'Letters, numbers, dots, dashes and underscores; start with a letter or number; up to 80 characters.'
+  );
+  const use = page.getByRole('button', { name: 'Use this ID' });
+  for (const target of [entry, use]) {
+    expect((await target.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   }
-  // no typed field anywhere in the steps (the advanced tools keep their old controls)
-  await expect(page.locator('section.step input:not([type=hidden]):not([type=checkbox]):not([type=file])')).toHaveCount(0);
-
-  await page.locator('#tester-new').tap();
-  await expect(page.locator('#tester-current-id')).toHaveText('tester-2026-10-13-1');
-  await expect(page.locator('#tester-picker')).toBeHidden();
-  await expect.poll(() => asked).toContain('tester-2026-10-13-1');
-  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBe('tester-2026-10-13-1');
-
-  await page.locator('#tester-change').tap();
-  await chips.filter({ hasText: 'indoor-test-2' }).tap();
-  await expect(page.locator('#tester-current-id')).toHaveText('indoor-test-2');
-  await expect(page.locator('#tester-id')).toHaveValue('indoor-test-2');
+  // no list of IDs, no new-tester button, and no request that would fetch one
+  await expect(page.locator('#tester-list')).toHaveCount(0);
+  await expect(page.locator('#tester-new')).toHaveCount(0);
+  await expect(page.locator('#step-1')).not.toContainText('No typing needed');
+  await expect(page.locator('#step-1 .chip')).toHaveCount(0);
+  // the tester ID is the only typed field in the steps (the advanced tools keep their old controls)
+  await expect(page.locator('section.step input:not([type=hidden]):not([type=checkbox]):not([type=file])')).toHaveCount(1);
+  await page.waitForTimeout(300);
+  expect(listRequests).toEqual([]);
 });
 
-test('a tester list the server cannot give still offers a new ID by touch', async ({ page }) => {
+test('a typed ID is used by the button or by Enter, and kept only for this tab', async ({ page }) => {
   await mockBase(page);
-  await page.route('**/api/tester/testers**', (route) => json(route, { error: 'boom' }, 500));
+  const asked = askedTesters(page);
   await page.goto('/tester.html');
-  await expect(page.locator('#tester-picker-note')).toContainText('The saved tester IDs are unavailable');
-  await expect(page.locator('#tester-new')).toHaveText(/^New tester: tester-\d{4}-\d{2}-\d{2}-1$/);
-  await page.locator('#tester-new').tap();
-  await expect(page.locator('#tester-current-id')).toHaveText(/^tester-\d{4}-\d{2}-\d{2}-1$/);
+
+  await page.locator('#tester-entry').fill('tester-2026-10-23-1');
+  await page.locator('#tester-use').tap();
+  await expect(page.locator('#tester-current-id')).toHaveText('tester-2026-10-23-1');
+  await expect(page.locator('#tester-id')).toHaveValue('tester-2026-10-23-1');
+  await expect(page.locator('#tester-picker')).toBeHidden();
+  await expect.poll(() => asked).toContain('tester-2026-10-23-1');
+  expect(await page.evaluate(() => sessionStorage.getItem('openflight-tester-id'))).toBe('tester-2026-10-23-1');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  // Change tester opens an empty box; Enter uses what is typed (spaces around it are dropped)
+  await page.locator('#tester-change').tap();
+  await expect(page.locator('#tester-entry')).toHaveValue('');
+  await expect(page.locator('#tester-entry')).toBeFocused();
+  await page.locator('#tester-entry').fill('  garage_unit.2  ');
+  await page.locator('#tester-entry').press('Enter');
+  await expect(page.locator('#tester-current-id')).toHaveText('garage_unit.2');
+  await expect.poll(() => asked).toContain('garage_unit.2');
+
+  // Cancel keeps the current tester
+  await page.locator('#tester-change').tap();
+  await page.locator('#tester-cancel').tap();
+  await expect(page.locator('#tester-picker')).toBeHidden();
+  await expect(page.locator('#tester-current-id')).toHaveText('garage_unit.2');
+
+  // a reload of the same tab keeps it
+  await page.reload();
+  await expect(page.locator('#tester-current-id')).toHaveText('garage_unit.2');
+});
+
+test('an ID the server would refuse is not used, and the page says why in plain words', async ({ page }) => {
+  await mockBase(page);
+  const asked = askedTesters(page);
+  await page.goto('/tester.html');
+  const error = page.locator('#tester-entry-error');
+  await expect(error).toBeHidden();
+
+  await page.locator('#tester-use').tap();
+  await expect(error).toHaveText('Type your tester ID first.');
+
+  for (const bad of ['../other', 'has space', '-starts-with-a-dash', 'café', 'a'.repeat(81)]) {
+    await page.locator('#tester-entry').fill(bad);
+    await page.locator('#tester-entry').press('Enter');
+    await expect(error).toBeVisible();
+    await expect(error).toHaveText(
+      'That ID can’t be used. Use only letters, numbers, dots, dashes and underscores, start with a letter or number, and keep it to 80 characters.'
+    );
+    await expect(page.locator('#tester-entry')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#tester-current-id')).toHaveText('not chosen');
+  }
+  // 80 characters is the longest the server takes
+  await page.locator('#tester-entry').fill('a'.repeat(80));
+  await page.locator('#tester-use').tap();
+  await expect(error).toBeHidden();
+  await expect(page.locator('#tester-entry')).not.toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('#tester-current-id')).toHaveText('a'.repeat(80));
+  expect(asked.filter((id) => id !== 'a'.repeat(80) && id !== '')).toEqual([]);
+});
+
+test('a new visit starts with an empty box, even when an older page saved an ID on the unit', async ({ page, context }) => {
+  await mockBase(page);
+  // what the old page left behind in localStorage is never shown, and is deleted on load
+  await page.addInitScript(() => localStorage.setItem('openflight-tester-id', 'someone-else'));
+  await page.goto('/tester.html');
+  await expect(page.locator('#tester-current-id')).toHaveText('not chosen');
+  await expect(page.locator('#tester-entry')).toHaveValue('');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+  await pickTester(page, 'tester-2026-10-23-1');
+  await expect(page.locator('#tester-current-id')).toHaveText('tester-2026-10-23-1');
+
+  const next = await context.newPage();
+  await mockBase(next);
+  await next.goto('/tester.html');
+  await expect(next.locator('#tester-current-id')).toHaveText('not chosen');
+  await expect(next.locator('#tester-entry')).toHaveValue('');
+  await expect(next.locator('#step-1')).not.toContainText('tester-2026-10-23-1');
+  await expect(next.locator('#step-1')).not.toContainText('someone-else');
 });
 
 test('where is two buttons, sent with the unit check', async ({ page }) => {

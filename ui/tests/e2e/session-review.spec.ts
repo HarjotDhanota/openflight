@@ -230,9 +230,14 @@ async function json(route: Route, body: object, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function mockLive(page: Page) {
+async function mockLive(page: Page, { preset = true } = {}) {
   const state = { phase: 'idle' as 'idle' | 'running' | 'done', posts: [] as unknown[] };
-  await page.addInitScript((id) => localStorage.setItem('openflight-tester-id', id), testerId);
+  // the tester ID this tab already has (sessionStorage only, never localStorage)
+  if (preset) {
+    await page.addInitScript((id) => {
+      if (!sessionStorage.getItem('openflight-tester-id')) sessionStorage.setItem('openflight-tester-id', id);
+    }, testerId);
+  }
   await page.route('**/api/tester/analysis**', async (route) => {
     if (route.request().method() === 'POST') {
       state.posts.push(route.request().postDataJSON());
@@ -464,4 +469,25 @@ test.describe('bundle import', () => {
     await expect(page.locator('#verification')).toContainText('Hash check FAILED', { timeout: 20000 });
     await expect(page.locator('#verification')).toContainText('does not match its manifest hash');
   });
+});
+
+test('the tester ID is kept for this tab only, and the old localStorage copy is deleted', async ({ page }) => {
+  await mockLive(page, { preset: false });
+  // what an older page left on the unit: never shown, and deleted on load
+  await page.addInitScript(() => localStorage.setItem('openflight-tester-id', 'someone-else'));
+  await page.goto('/session-review.html');
+  await expect(page.locator('#tester-id')).toHaveValue('');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  await page.locator('#tester-id').fill(testerId);
+  await page.locator('#tester-id').press('Enter');
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('openflight-tester-id'))).toBe(testerId);
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  // a reload of the same tab keeps it; a new tab starts empty
+  await page.reload();
+  await expect(page.locator('#tester-id')).toHaveValue(testerId);
+  const next = await page.context().newPage();
+  await next.goto('/session-review.html');
+  await expect(next.locator('#tester-id')).toHaveValue('');
 });

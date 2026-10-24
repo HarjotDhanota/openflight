@@ -7340,36 +7340,6 @@ def study_overview(
 
 # the kiosk's web port (start-kiosk.sh's default), for the tester page's "Kiosk view"
 KIOSK_WEB_PORT = 8080
-# what marks a folder under the sessions root as a tester's
-TESTER_MARKERS = (
-    "setup_eligibility.jsonl",
-    "setup-confirmation.json",
-    "placement-box.json",
-    "calibration",
-    "arm5",
-    "arm6",
-)
-
-
-def known_testers(sessions_root: Path, today: datetime | None = None) -> dict:
-    """The testers on this unit (newest first) and a new id, so none is ever typed."""
-    root = Path(sessions_root)
-    found = []
-    if root.is_dir():
-        for child in root.iterdir():
-            if (
-                child.is_dir()
-                and not child.is_symlink()
-                and SAFE_SEGMENT.fullmatch(child.name)
-                and any((child / marker).exists() for marker in TESTER_MARKERS)
-            ):
-                found.append((child.stat().st_mtime, child.name))
-    names = [name for _mtime, name in sorted(found, reverse=True)]
-    stamp = (today or datetime.now()).strftime("%Y-%m-%d")
-    index = 1
-    while f"tester-{stamp}-{index}" in names or (root / f"tester-{stamp}-{index}").exists():
-        index += 1
-    return {"testers": names, "suggested_new": f"tester-{stamp}-{index}"}
 
 
 def create_app(
@@ -10343,11 +10313,6 @@ def create_app(
             return jsonify({"error": str(exc)}), 409
         except (OSError, ValueError, TypeError, KeyError) as exc:
             return jsonify({"error": str(exc)}), 400
-
-    @app.get("/api/tester/testers")
-    def testers_route():
-        """The testers this unit has, to pick by touch, and a new id to create without typing."""
-        return jsonify(known_testers(sessions_root))
 
     def kiosk_block() -> dict:
         """The kiosk the tester started: its state, the mode switch's progress, its URL."""

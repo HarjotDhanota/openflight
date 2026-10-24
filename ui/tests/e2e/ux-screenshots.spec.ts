@@ -111,12 +111,9 @@ function ladderRunning() {
 async function stage(page: Page, options: Stage) {
   const tester = options.tester === undefined ? TESTER : options.tester;
   await page.addInitScript((id) => {
-    if (id) localStorage.setItem('openflight-tester-id', id);
-    else localStorage.removeItem('openflight-tester-id');
+    if (id) sessionStorage.setItem('openflight-tester-id', id);
+    else sessionStorage.removeItem('openflight-tester-id');
   }, tester);
-  await page.route('**/api/tester/testers**', (route) =>
-    json(route, { testers: [TESTER, '20260922-name', 'garage-unit-1'], suggested_new: 'tester-2026-10-13-1' })
-  );
   await page.route('**/api/tester/lens**', (route) => json(route, lensState(TESTER, options.lens === undefined ? 'stock-2.8mm' : options.lens)));
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, eligibility(options.eligible ?? true)));
   await page.route('**/api/tester/placement-box**', (route) =>
@@ -166,12 +163,12 @@ for (const size of SIZES) {
   test.describe(`tester steps at ${size.width}x${size.height}`, () => {
     test.use({ viewport: size });
 
-    test('step 1: tester picker and lens', async ({ page }) => {
+    test('step 1: tester ID box and lens', async ({ page }) => {
       await stage(page, { tester: null });
       await page.goto('/tester.html');
-      await expect(page.locator('#tester-list button')).toHaveCount(3);
-      await shot(page, '01-step1-tester-picker', size);
-      await page.locator('#tester-list button').first().tap();
+      await page.locator('#tester-entry').fill(TESTER);
+      await shot(page, '01-step1-tester-id', size);
+      await page.locator('#tester-entry').press('Enter');
       await expect(page.locator('#lens-list .lens-card')).toHaveCount(3);
       await shot(page, '02-step1-lens', size, '#lens');
       await page.locator('#lens-list .lens-card').nth(1).tap();

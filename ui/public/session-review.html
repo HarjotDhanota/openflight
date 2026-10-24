@@ -650,7 +650,7 @@
         const testerId = el('tester-id').value.trim();
         if (!testerId) return;
         try {
-          localStorage.setItem(TESTER_ID_STORAGE_KEY, testerId);
+          sessionStorage.setItem(TESTER_ID_STORAGE_KEY, testerId);
         } catch {
           // The page still works when browser storage is unavailable.
         }
@@ -1091,6 +1091,13 @@
         }
       });
 
+      // Older pages kept the tester ID in localStorage, where the next tester saw it:
+      // delete that copy on every load.
+      try {
+        localStorage.removeItem(TESTER_ID_STORAGE_KEY);
+      } catch {
+        // Storage can be unavailable in locked-down kiosk browser profiles.
+      }
       if (offline) {
         el('live-controls').hidden = true;
         el('source').textContent = 'Opened from disk: choose the original session bundle (.zip) below.';
@@ -1099,7 +1106,8 @@
         const fromUrl = new URLSearchParams(location.search).get('tester_id');
         let saved = null;
         try {
-          saved = localStorage.getItem(TESTER_ID_STORAGE_KEY);
+          // this browser tab's tester ID only: a new visit starts empty
+          saved = sessionStorage.getItem(TESTER_ID_STORAGE_KEY);
         } catch {
           // Storage can be unavailable in locked-down kiosk browser profiles.
         }

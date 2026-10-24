@@ -325,9 +325,13 @@ that step. The same bar holds **Kiosk view** and **Stop**. **Advanced: manual
 single-arm tools** is for a maintainer-directed investigation of one mode; it is
 not the normal pilot and does not replace the ladder.
 
-**Step 1: tester ID and lens, by touch.** Nothing in setup is typed. Tap your
-tester ID in the list, or **New tester** to start one with the suggested ID; the
-page remembers it on this browser. Tap **Indoors** or **Outdoors**. Then tap the
+**Step 1: tester ID and lens.** Type your tester ID in the box and tap **Use this
+ID** (or press Enter). The page accepts the same characters the server does
+(letters, numbers, dots, dashes and underscores, starting with a letter or number,
+up to 80) and says so plainly when an ID can't be used. It never lists the IDs
+saved on the unit, so no tester sees another's; typing an ID that already has data
+resumes it. The ID is kept for this browser tab only: a reload keeps it, a new
+visit starts empty. Tap **Indoors** or **Outdoors**. Then tap the
 lens fitted to the unit (stock 2.8 mm, 6 mm or 8 mm): the page shows its
 aperture, field of view and whether its camera model is calibrated, and its
 settings: the modes it runs, the default mode, and the exposure-ladder settings.
@@ -369,7 +373,7 @@ the camera from the ball range.
 
 ## Test suite
 
-On the study page, pick your tester ID and lens (step 1), check the unit
+On the study page, enter your tester ID and pick the lens (step 1), check the unit
 (step 2: **Check the unit**, the tilt check, then confirm), put the ball in the box
 (step 3) and set or skip the aim point (step 4), then:
 
