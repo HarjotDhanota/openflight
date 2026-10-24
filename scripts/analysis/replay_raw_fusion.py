@@ -446,6 +446,7 @@ def replay(args, *, frozen_session=None) -> dict:
                 calibration_bytes = args.iwr_calibration.read_bytes()
                 tee_range_m = args.iwr_tee_m
                 tilt_deg = args.iwr_tilt_deg
+                roll_deg = None
                 radar_height_m = args.iwr_radar_height_m
                 ball_height_m = args.ball_height_m
                 # legacy flags: one height, read as the RX row of a +90 deg board
@@ -462,6 +463,12 @@ def replay(args, *, frozen_session=None) -> dict:
                     else None
                 )
                 tilt_deg = per_shot_tilt if per_shot_tilt is not None else effective["tilt_deg"]
+                # the kiosk's roll, recorded only on a unit that verified and zeroed it
+                roll_deg = (
+                    per_shot_inputs.get("effective_roll_deg")
+                    if isinstance(per_shot_inputs, dict)
+                    else None
+                )
                 radar_height_m = effective["radar_height_m"]
                 ball_height_m = effective["ball_height_m"]
                 # recorded since LCMF-v2; older sessions fall back to the legacy reading
@@ -500,6 +507,7 @@ def replay(args, *, frozen_session=None) -> dict:
                     radar_height_m=radar_height_m,
                     ball_height_m=ball_height_m,
                     board_rotation_deg=board_rotation_deg,
+                    roll_deg=roll_deg,
                 )
                 tx_order = tx_order_from_config(frozen_radar_config)
             capture_path, capture_resolution, raw = (

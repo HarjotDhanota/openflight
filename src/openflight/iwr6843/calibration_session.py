@@ -86,6 +86,7 @@ def clone_calibration(
     radar_height_m: float | None = None,
     ball_height_m: float | None = None,
     board_rotation_deg: float | None = None,
+    roll_deg: float | None = None,
 ) -> Calibration:
     """Copy calibration constants while replacing session geometry.
 
@@ -103,7 +104,10 @@ def clone_calibration(
         meta=copy.deepcopy(calibration.meta),
         lateral_tee_offset_m=calibration.lateral_tee_offset_m,
         antennas=calibration.antennas,
+        roll_rad=calibration.roll_rad,
     )
+    if roll_deg is not None:
+        cloned.roll_rad = math.radians(roll_deg)
     if tee_range_m is not None:
         cloned.tee_range_m = tee_range_m
     if tilt_deg is not None:

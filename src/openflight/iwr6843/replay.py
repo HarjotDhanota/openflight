@@ -257,11 +257,13 @@ def build_replay_calibration(
     radar_height_m: float | None,
     ball_height_m: float,
     board_rotation_deg: float | None = None,
+    roll_deg: float | None = None,
 ) -> Calibration:
     """Load array calibration and apply replay geometry overrides.
 
     Without ``board_rotation_deg`` the radar height is a legacy single height
-    (`lcmf.antenna_layout`); with it, the rig-derived phase centre's.
+    (`lcmf.antenna_layout`); with it, the rig-derived phase centre's. ``roll_deg``
+    is the shot's recorded roll (a unit that verified and zeroed it).
     """
     return clone_calibration(
         Calibration.load(str(calibration_path)),
@@ -270,6 +272,7 @@ def build_replay_calibration(
         radar_height_m=radar_height_m,
         ball_height_m=ball_height_m,
         board_rotation_deg=board_rotation_deg,
+        roll_deg=roll_deg,
     )
 
 

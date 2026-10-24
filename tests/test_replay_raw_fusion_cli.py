@@ -526,7 +526,8 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
     assert result["stages"]["moving_camera_iwr_anchor"]["status"] == ("withheld_prerequisites")
 
 
-def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, monkeypatch):
+def _replay_recorded_iwr(tmp_path, monkeypatch, per_shot_tilt):
+    """Replay one recorded IWR shot; returns the replay calibration's inputs and the result."""
     session = _session(tmp_path)
     raw = tmp_path / "iwr.bin"
     raw.write_bytes(b"raw")
@@ -557,7 +558,7 @@ def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, mo
             "ball_speed_mph": 101.0,
             "club": "7-iron",
             "club_speed_mph": 77.0,
-            "effective_tilt_deg": None,
+            **per_shot_tilt,
         },
     }
     runtime_hash = hashlib.sha256(
@@ -600,9 +601,26 @@ def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, mo
         cli, "replay_iwr_capture_bytes", lambda *_args, **_kwargs: (measurement, None)
     )
     result = cli.replay(_args(tmp_path, session, iwr=True))
+    return seen, result, radar_bytes
+
+
+def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, monkeypatch):
+    seen, result, radar_bytes = _replay_recorded_iwr(
+        tmp_path, monkeypatch, {"effective_tilt_deg": None}
+    )
     assert result["stages"]["iwr6843"]["runtime_config_source"] == "recorded_per_shot_snapshot"
     assert seen["tilt_deg"] == 12.5
+    assert seen["roll_deg"] is None
     assert result["stages"]["iwr6843"]["config_sha256"] == hashlib.sha256(radar_bytes).hexdigest()
+
+
+def test_a_verified_units_recorded_roll_is_replayed_as_the_kiosk_ran_it(tmp_path, monkeypatch):
+    """The review gate compares the replay with the kiosk: the roll must be the kiosk's."""
+    seen, _result, _radar = _replay_recorded_iwr(
+        tmp_path, monkeypatch, {"effective_tilt_deg": 11.0, "effective_roll_deg": -2.0}
+    )
+    assert seen["tilt_deg"] == 11.0
+    assert seen["roll_deg"] == -2.0
 
 
 def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_path, monkeypatch):

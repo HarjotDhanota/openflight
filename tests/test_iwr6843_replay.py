@@ -229,3 +229,23 @@ def test_the_replay_record_names_the_estimator_and_the_antenna_basis(monkeypatch
 
     assert record.to_dict()["estimator"] == lcmf.NAME
     assert record.to_dict()["antenna_basis"] == antennas.LEGACY_BASIS
+
+
+def test_the_replay_calibration_takes_the_recorded_roll(tmp_path):
+    import math  # noqa: PLC0415
+
+    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
+
+    def build(**extra):
+        return build_replay_calibration(
+            "config/iwr6843_calibration_reference.json",
+            tee_range_m=1.5,
+            tilt_deg=10.0,
+            radar_height_m=0.05,
+            ball_height_m=0.04,
+            board_rotation_deg=90.0,
+            **extra,
+        )
+
+    assert build().roll_rad == 0.0
+    assert math.degrees(build(roll_deg=-2.0).roll_rad) == pytest.approx(-2.0)
