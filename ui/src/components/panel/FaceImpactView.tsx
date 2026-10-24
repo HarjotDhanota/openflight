@@ -21,6 +21,26 @@ interface FaceImpactViewProps {
   metricRow?: ReactNode;
 }
 
+// Fixed illustrative contact texture; neither its outline nor its size is measured.
+const CONTACT_SHAPE =
+  'M 0 -8 C 2.6 -8.2 5.5 -6.4 6.5 -3.5 C 7.4 -1.2 7 2.4 5.7 4.9 C 4.2 7.1 1.6 8.3 -1 7.9 C -3.7 7.5 -6.1 5.5 -6.6 2.7 C -7.4 0.2 -6.7 -3.1 -5.1 -5.4 C -3.9 -7.2 -2 -7.9 0 -8 Z';
+const CONTACT_DIMPLES = [
+  [-2.1, -5.3, 1.2],
+  [1.3, -5.4, 1.3],
+  [4.4, -3.8, 1.1],
+  [-4.9, -2.3, 1.2],
+  [-1.6, -2, 1.4],
+  [1.9, -2.2, 1.5],
+  [-3.3, 1.2, 1.4],
+  [0.3, 1.2, 1.4],
+  [3.9, 1, 1.3],
+  [-5.4, 3.8, 1.1],
+  [-1.8, 4.5, 1.3],
+  [1.7, 4.4, 1.4],
+  [4.9, 3.8, 1.1],
+  [-0.2, 7, 1.1],
+];
+
 /** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
  * the club's earlier shots faint, centre lines through the reading's face centre; mirrored for a
  * left-hander. The dot sits at the unrounded mm values, the svg's units. */
@@ -107,6 +127,29 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
           preserveAspectRatio="xMidYMid meet"
         >
           <defs>
+            <radialGradient id={`${id}contact-fade`}>
+              <stop offset="0" stopColor="#fff" />
+              <stop offset=".55" stopColor="#eee" />
+              <stop offset=".83" stopColor="#aaa" />
+              <stop offset="1" stopColor="#000" />
+            </radialGradient>
+            <radialGradient id={`${id}contact-dimple`}>
+              <stop offset=".5" stopColor="#000" />
+              <stop offset="1" stopColor="#000" stopOpacity="0" />
+            </radialGradient>
+            <mask id={`${id}contact-mask`} maskUnits="userSpaceOnUse" x="-9" y="-10" width="18" height="20">
+              <path d={CONTACT_SHAPE} fill={`url(#${id}contact-fade)`} />
+              {CONTACT_DIMPLES.map(([x, y, radius], i) => (
+                <circle
+                  key={i}
+                  cx={x}
+                  cy={y}
+                  r={radius}
+                  fill={`url(#${id}contact-dimple)`}
+                  opacity={i % 3 === 0 ? '.4' : '.55'}
+                />
+              ))}
+            </mask>
             <clipPath id={clipId}>
               <rect x={viewMinX} y={minY} width={viewMaxX - viewMinX} height={maxY - minY} />
             </clipPath>
@@ -329,6 +372,14 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <text className="face-impact__side" x={heelEnd} y={1.5} textAnchor={left ? 'end' : 'start'}>
               {t('faceImpact.heel')}
             </text>
+            {read && reading.height !== null ? (
+              <g className="face-impact__contact" clipPath={`url(#${faceClipId})`}>
+                <title>{t('faceImpact.illustrativeMark')}</title>
+                <g className="face-impact__imprint" transform={`translate(${cx} ${cy}) scale(${left ? -1 : 1} 1)`}>
+                  <path className="face-impact__contact-shape" d={CONTACT_SHAPE} mask={`url(#${id}contact-mask)`} />
+                </g>
+              </g>
+            ) : null}
             {earlier.map((other, index) => (
               <circle
                 key={index}
@@ -370,7 +421,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 className={`face-impact__dot${reading.height === null ? ' face-impact__dot--offset-only' : ''}`}
                 cx={cx}
                 cy={cy}
-                r={2.6}
+                r={reading.height === null ? 2.6 : 0.75}
               />
             ) : null}
           </g>
@@ -410,7 +461,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
           </p>
         ) : null}
         <p className="face-impact__caption">
-          {t('faceImpact.illustrative')}
+          {t(read && reading.height !== null ? 'faceImpact.illustrativeMark' : 'faceImpact.illustrative')}
           {earlier.length ? ` · ${t('faceImpact.earlier', { count: String(earlier.length) })}` : ''}
         </p>
       </div>

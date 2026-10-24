@@ -180,6 +180,11 @@
   opacity: 0.7;
 }
 
+.face-impact__contact-shape {
+  fill: #fffef2;
+  opacity: 0.78;
+}
+
 .face-impact__halo {
   fill: none;
   stroke: var(--face-art-ink);
@@ -188,8 +193,7 @@
 }
 
 .face-impact__ellipse {
-  fill: var(--color-experimental);
-  fill-opacity: 0.2;
+  fill: none;
   stroke: var(--color-experimental);
   stroke-width: 0.6;
   stroke-dasharray: 1.4 1;
@@ -203,7 +207,7 @@
 .face-impact__dot {
   fill: var(--color-accent);
   stroke: var(--face-art-ink);
-  stroke-width: 0.6;
+  stroke-width: 0.35;
 }
 
 .face-impact__dot--offset-only {

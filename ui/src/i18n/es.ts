@@ -296,6 +296,7 @@ export const es: Messages = {
   'faceImpact.centre': 'Centro',
   'faceImpact.heightNotMeasured': 'Alto/bajo no medido: {reason}',
   'faceImpact.illustrative': 'Cara ilustrativa',
+  'faceImpact.illustrativeMark': 'Cara y marca de impacto ilustrativas',
   'faceImpact.earlier': '{count} anteriores con este palo',
   'live.targetLineSet': 'Línea de objetivo fijada {yaw} ±{spread}',
   'live.targetLineSetNoSpread': 'Línea de objetivo fijada {yaw}',

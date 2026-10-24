@@ -294,6 +294,7 @@ export const en = {
   'faceImpact.centre': 'Centre',
   'faceImpact.heightNotMeasured': 'High/low not measured: {reason}',
   'faceImpact.illustrative': 'Illustrative face',
+  'faceImpact.illustrativeMark': 'Illustrative face and contact mark',
   'faceImpact.earlier': '{count} earlier with this club',
   'live.targetLineSet': 'Target line set {yaw} ±{spread}',
   'live.targetLineSetNoSpread': 'Target line set {yaw}',

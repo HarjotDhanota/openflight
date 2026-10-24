@@ -580,6 +580,34 @@ describe('the drawings against the USGA Equipment Rules', () => {
 });
 
 describe('FaceImpactView', () => {
+  it.each(['right', 'left'] as const)(
+    'centres the illustrative contact mark on the unrounded %s-handed reading',
+    (hand) => {
+      const html = render(
+        shot(
+          { impact_location: { status: 'ok', handedness: hand } },
+          { impact_offset: reading(8.64, 4), impact_height: reading(-0.46, 5) }
+        )
+      );
+      expect(attr(html, 'face-impact__imprint"', 'transform')).toBe(
+        `translate(${hand === 'left' ? 8.64 : -8.64} 0.46) scale(${hand === 'left' ? -1 : 1} 1)`
+      );
+      const clip = attr(html, 'face-impact__contact"', 'clip-path');
+      expect(clip).toMatch(/^url\(#.+\)$/);
+      expect(html).toContain(`id="${clip!.slice(5, -1)}"`);
+      expect(html).toContain('Illustrative face and contact mark');
+    }
+  );
+
+  it('keeps the decorative contact shape independent of measurement uncertainty', () => {
+    const narrow = render(shot({}, { impact_offset: reading(8, 1), impact_height: reading(3, 2) }));
+    const wide = render(shot({}, { impact_offset: reading(8, 7), impact_height: reading(3, 9) }));
+    expect(attr(narrow, 'face-impact__contact-shape"', 'd')).toBeTruthy();
+    expect(attr(narrow, 'face-impact__contact-shape"', 'd')).toBe(attr(wide, 'face-impact__contact-shape"', 'd'));
+    expect(attr(narrow, 'face-impact__ellipse', 'rx')).toBe('1');
+    expect(attr(wide, 'face-impact__ellipse', 'rx')).toBe('7');
+  });
+
   it('draws the shot on its club face with the EXP badge and toe and high callouts', () => {
     const html = render(shot());
     expect(html).toContain('data-face="iron"');
@@ -694,6 +722,7 @@ describe('FaceImpactView', () => {
     );
     expect(html).toContain(`Not measured: ${reason}`);
     expect(html).not.toContain('face-impact__dot');
+    expect(html).not.toContain('class="face-impact__contact"');
   });
 
   it('keeps the heel-toe reading when only the height was refused', () => {
@@ -701,6 +730,7 @@ describe('FaceImpactView', () => {
     expect(html).toContain('face-impact__dot');
     expect(html).toContain('High/low not measured: no sole line at contact');
     expect(attr(html, 'face-impact__dot', 'cy')).toBe('0');
+    expect(html).not.toContain('class="face-impact__contact"');
   });
 
   it('shows this session’s earlier shots with the same club as faint dots', () => {

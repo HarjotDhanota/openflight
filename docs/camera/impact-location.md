@@ -439,8 +439,14 @@ The Club tab opens with a face-impact view:
   [Rule 4 (clubhead)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-5.html),
   [Rule 5 (club face)](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6.html)
   and [its interpretations](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-2-rule-6-interpretations.html).
-- **The dots.** The shot's dot with its 1-sigma ellipse, and this session's earlier
-  shots with the same club as faint dots.
+- **The contact marker.** When both coordinates are available, a pale contact
+  imprint with faint dimple impressions surrounds a small centre dot at the
+  unrounded reading. Its fixed, roughly 14 by 16 mm shape is illustrative, not a
+  measured contact patch or a speed/compression estimate. It is clipped to the
+  face and mirrors with handedness. The separate dashed 1-sigma ellipse retains
+  the reading's uncertainty; its size does not control the imprint. An offset-only
+  reading keeps the hollow marker and horizontal uncertainty bar, without an
+  invented contact patch at zero height. Earlier shots remain faint dots.
 - **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:
   reason".
 
