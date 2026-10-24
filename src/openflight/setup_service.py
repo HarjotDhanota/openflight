@@ -306,7 +306,8 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         """Measure the resting ball's range from the camera, or clear it."""
         perform = {
             "measure": self._range_measure,
-            "clear": lambda _record, _payload: self._cleared("ball_range", "scene"),
+            # a solved lens height belongs to the box, not the range: it survives this clear
+            "clear": lambda _record, _payload: self._cleared("ball_range"),
         }
         return self._run("ball_range", action, {}, perform)
 

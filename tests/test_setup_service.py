@@ -14,7 +14,7 @@ from openflight.camera.reference_ball_range import (
     project_to_pixel,
 )
 from openflight.setup_record import StartContext, load, save, section_inputs
-from openflight.setup_service import Appliers, CameraView, SetupService
+from openflight.setup_service import Appliers, CameraView, SetupService, scene_section
 
 CTX = StartContext(
     lens_id="stock-2.8", rig_sha256="rig-a", tilt_offset_deg=2.0, tilt_calibrated=True
@@ -366,6 +366,28 @@ def test_a_bad_aim_point_is_refused_not_raised(make, scene):
 
     assert outside["ok"] is False and missing["ok"] is False
     assert recorder.calls["aim"] == []
+
+
+def test_a_range_clear_keeps_the_solved_lens_height_and_a_box_clear_drops_it(make, scene, tmp_path):
+    service, _recorder = make()
+    box_id = _confirm_box(service, scene)["setup"]["box"]["id"]
+    # a radar-solved height, written against this box by the tester's setup
+    record = load(tmp_path / "setup.json")
+    record["scene"] = scene_section(
+        lens_height_m=0.4, uncertainty_m=0.02, source="radar_solved_height", box_id=box_id
+    )
+    save(tmp_path / "setup.json", record)
+    service, recorder = make()
+    assert service.range("measure")["ok"]
+
+    cleared = service.range("clear")
+
+    assert cleared["ok"], cleared["reason"]
+    assert cleared["setup"]["ball_range"]["state"] == "not_set"
+    assert cleared["setup"]["scene"]["state"] == "set"
+    assert cleared["setup"]["scene"]["lens_height_m"] == 0.4
+    assert recorder.calls["scene"] == []
+    assert service.box("clear")["setup"]["scene"]["state"] == "not_set"
 
 
 def test_range_measure_is_camera_only(make, scene):
