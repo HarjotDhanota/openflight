@@ -70,8 +70,8 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   const shaftRadius = 4.6 - (0.4 * (ferruleEnd - shaftY)) / (shaftEnd - shaftY);
   const heelCorner = paths.top.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const neck = top
-    ? `M ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 5} ${heelCorner[0] + 3} ${heelCorner[1] + 5} ${heelCorner[0] - 2} ${heelCorner[1] - 1} L ${heelCorner[0] - 5} ${heelCorner[1] - 9} L ${shaftX + 4} ${heelCorner[1] - 9} C ${shaftX + 4} ${heelCorner[1] - 2} ${shaftX + 6.4} ${shaftY - 5} ${shaftX + 6.4} ${shaftY} L ${shaftX + ferruleRadius} ${ferruleBase} Z`
-    : `M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX + ferruleRadius} ${ferruleBase} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`;
+    ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${ferruleBase - 12} ${heelCorner[0] + 4} ${heelCorner[1] + 6} ${heelCorner[0] - 2} ${heelCorner[1] - 1} L ${heelCorner[0] - 5} ${heelCorner[1] - 9} L ${shaftX + 4} ${heelCorner[1] - 9} C ${shaftX + 4} ${heelCorner[1] + 2} ${shaftX + ferruleRadius} ${ferruleBase - 12} ${shaftX + ferruleRadius} ${ferruleBase} Z`
+    : `M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - ferruleRadius} ${shaftY + 8} ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX + ferruleRadius} ${ferruleBase} C ${shaftX + ferruleRadius} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
   const headYs = coords.filter((_, i) => i % 2 === 1);
