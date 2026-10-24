@@ -74,6 +74,7 @@ from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
+from .setup_record import SECTIONS as SETUP_SECTIONS, StartContext
 from .sim import (
     IncompleteShotError,
     PlayerState as SimPlayerState,
@@ -316,6 +317,18 @@ _ball_at_address_thread: threading.Thread | None = None
 # (setup_range_m, range_prior) the monitor takes, kept for a box set after the range
 _ball_at_address_range: tuple = (None, None)
 BALL_AT_ADDRESS_EVERY_S = 1.0
+# The per-unit setup record and the actions on it (setup_service.SetupService), from main()
+setup_service = None
+# the applied setup revision the session log last recorded
+_setup_logged_revision: int | None = None
+SETUP_ACTIONS = {
+    "box": ("show", "confirm", "clear"),
+    "aim": ("show", "confirm", "skip", "clear"),
+    "range": ("measure", "clear"),
+}
+# the setup searches the latest few frames, as the tester's live view does
+SETUP_FRAMES = 5
+MIN_SETUP_FRAMES = 3
 # The net's apparent range when the range setup measured none; flagged when used.
 DEFAULT_NET_RANGE_M = 4.6
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
@@ -1807,6 +1820,276 @@ def api_ball_at_address():
     return jsonify(latest)
 
 
+def _default_setup_path() -> Path:
+    return Path.home() / ".config" / "openflight" / "setup.json"
+
+
+def _add_setup_arguments(parser) -> None:
+    parser.add_argument(
+        "--setup-file",
+        type=Path,
+        default=_default_setup_path(),
+        help=(
+            "This unit's setup record: the ball box, aim, ball range, net range and scene "
+            "(default ~/.config/openflight/setup.json). A missing or unreadable file "
+            "starts with nothing set, and the setup screen fills it in"
+        ),
+    )
+
+
+def setup_start_context() -> StartContext:
+    """What the saved setup is checked against: the lens, the rig file and the camera tilt."""
+    lens = rig_geometry_config.get("lens") or {}
+    tilt = _unit_camera_tilt()
+    source = (setup_handoff_config.get("camera_tilt") or {}).get("source")
+    return StartContext(
+        lens_id=lens.get("effective_lens_id") or lens.get("lens_id"),
+        rig_sha256=rig_geometry_config.get("rig_geometry_params_sha256") or "no_rig_geometry",
+        tilt_offset_deg=tilt["offset_deg"] if tilt is not None else None,
+        # the box's calibrated tilt margin only for the tilt from the unit's calibration file
+        tilt_calibrated=tilt is not None and source == "unit_calibration",
+    )
+
+
+def _setup_lis3dh() -> tuple[float | None, float | None, str]:
+    """The LIS3DH's calibrated pitch and its roll now, or Nones, with the reading's status."""
+    from .camera import camera_roll  # noqa: PLC0415
+
+    if inclinometer_service is None:
+        return None, None, "no LIS3DH (--inclinometer)"
+    selection = inclinometer_service.snapshot_for_impact(time.time())
+    reading = selection.snapshot
+    if reading is None:
+        return None, None, selection.status
+    roll = camera_roll.lis3dh_roll_deg(reading.x_g, reading.y_g, reading.z_g)
+    return float(reading.calibrated_pitch_deg), float(roll), selection.status
+
+
+def setup_camera_view():
+    """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
+    not apply (a ``setup_service.CameraView``); None without a camera.
+
+    Built as the tester's setup camera is: the rig's lens and radar, this mode's focal
+    length, the LIS3DH's pitch composed with the unit's camera tilt. A camera it cannot
+    model raises ValueError with the reason.
+    """
+    from .camera import camera_roll, camera_tilt  # noqa: PLC0415
+    from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
+    from .camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
+    from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
+    from .setup_service import CameraView  # noqa: PLC0415
+
+    runtime = camera_capture_runtime
+    if runtime is None:
+        return None
+    width, height = int(runtime.settings.width), int(runtime.settings.height)
+    if (width, height) == (320, 200):
+        raise ValueError("320x200 is refused for measurement: its strip offset is not modelled")
+    if rig_geometry is None or rig_geometry.lens_height_above_floor_mm is None:
+        raise ValueError("the setup needs the rig file's lens height (--rig-geometry)")
+    pitch, measured_roll, status = _setup_lis3dh()
+    if pitch is None:
+        # the rig's boresight would pass for a measurement and move every floor range
+        raise ValueError(
+            f"the LIS3DH reading has no camera pitch ({status}); wait for a stable reading"
+        )
+    expected = rig_geometry.expected_inclinometer_orientation()
+    expected_roll = float(expected.roll_deg or 0.0)
+    camera_pitch = float(rig_geometry.boresight_pitch_deg) + (
+        pitch - float(expected.pitch_deg or 0.0)
+    )
+    applied = camera_tilt.applied_pitch(camera_pitch, _unit_camera_tilt())
+    angular = (
+        max(
+            camera_tilt.CALIBRATED_ANGULAR_UNCERTAINTY_DEG,
+            float(applied.get("uncertainty_deg") or 0.0),
+        )
+        if applied["status"] == "calibrated"
+        else camera_tilt.UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
+    )
+    lens = np.asarray((0.0, 0.0, rig_geometry.lens_height_above_floor_mm / 1000.0))
+    # the radar's ranges start at its phase centre, not the RX row
+    offset = np.asarray(
+        camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
+    )
+    camera = BallPlaneCamera.nominal(
+        focal_px=mode_focal_px(width, rig_geometry),
+        image_width_px=width,
+        image_height_px=height,
+        pitch_deg=float(applied["pitch_deg"]),
+        roll_correction_deg=camera_roll.nominal_roll_correction_deg(
+            camera_roll.applied_camera_roll_deg(measured_roll, expected_roll)
+        ),
+        mirror_horizontal=False,
+        camera_origin_lfu=lens,
+        radar_origin_lfu=lens + offset,
+        angular_uncertainty_deg=angular,
+        focal_relative_uncertainty=0.08,
+        vertical_offset=applied,
+    )
+    return CameraView(camera, measured_roll - expected_roll)
+
+
+def setup_camera_frames() -> np.ndarray | None:
+    """The capture's latest few frames for the setup to search, or None without them."""
+    runtime = camera_capture_runtime
+    if runtime is None:
+        return None
+    frames = runtime.recent_frames(SETUP_FRAMES, timeout_s=1.0)
+    if len(frames) < MIN_SETUP_FRAMES:
+        return None
+    return np.stack([np.asarray(frame.image) for frame in frames])
+
+
+def init_setup_service(path):
+    """Load the unit's setup record against this start, and wire its actions to the kiosk."""
+    global setup_service  # pylint: disable=global-statement
+    from .setup_service import Appliers, SetupService  # noqa: PLC0415
+
+    # pylint: disable=unnecessary-lambda
+    service = SetupService(
+        Path(path).expanduser(),
+        setup_start_context(),
+        # late-bound, so an action uses the camera in force when it runs
+        camera_provider=lambda: setup_camera_view(),
+        frames_provider=lambda: setup_camera_frames(),
+        appliers=Appliers(
+            box=apply_setup_box,
+            aim=apply_setup_aim,
+            ball_range=apply_setup_ball_range,
+            net_range=apply_setup_net_range,
+            scene=apply_setup_scene,
+        ),
+        between_shots=_when_idle,
+    )
+    service.on_change = _on_setup_change
+    setup_service = service
+    logger.info("[SETUP] Setup record %s, revision %d", Path(path).expanduser(), service.revision)
+    return service
+
+
+def apply_saved_setup() -> list[str]:
+    """Put the saved setup into effect before the first shot; the sections that failed."""
+    global _setup_logged_revision  # pylint: disable=global-statement
+    service = setup_service
+    failed = service.apply_saved()
+    # session_start records this revision; later ones are logged as they come into effect
+    _setup_logged_revision = service.applied_revision
+    snapshot = service.snapshot()
+    logger.info(
+        "[SETUP] Revision %s at start: %s",
+        service.applied_revision,
+        ", ".join(f"{name} {snapshot[name].get('state')}" for name in SETUP_SECTIONS),
+    )
+    for name in SETUP_SECTIONS:
+        if snapshot[name].get("state") == "stale":
+            logger.warning(
+                "[SETUP] %s is stale and not applied: %s", name, snapshot[name]["reason"]
+            )
+    for failure in failed:
+        logger.warning("[SETUP] %s", failure)
+    return failed
+
+
+def _on_setup_change(snapshot: dict) -> None:
+    global _setup_logged_revision  # pylint: disable=global-statement
+    socketio.emit("setup_changed", snapshot)
+    service = setup_service
+    if service is None or service.applied_revision == _setup_logged_revision:
+        return
+    _setup_logged_revision = service.applied_revision
+    session = get_session_logger()
+    if session is not None:
+        session.log_event(
+            "setup_changed",
+            {"revision": service.applied_revision, "sha256": service.sha256, "record": snapshot},
+        )
+
+
+def setup_revision_in_force() -> int | None:
+    """The setup revision the kiosk has in effect now, which each shot records."""
+    service = setup_service
+    return service.applied_revision if service is not None else None
+
+
+def setup_in_force() -> dict | None:
+    """The setup for session_start: its revision, the saved record's hash, and the record."""
+    service = setup_service
+    if service is None:
+        return None
+    return {
+        "revision": service.applied_revision,
+        "sha256": service.sha256,
+        "record": service.snapshot(),
+    }
+
+
+def _setup_refusal(reason: str, status: int):
+    service = setup_service
+    snapshot = service.snapshot() if service is not None else None
+    return jsonify({"ok": False, "reason": reason, "setup": snapshot}), status
+
+
+@app.route("/api/setup")
+def api_setup():
+    """The setup record against this start, the last live look, and what is not applied."""
+    if setup_service is None:
+        return _setup_refusal("the setup service is not running", 503)
+    return jsonify(setup_service.snapshot())
+
+
+@app.route("/api/setup/<any(box, aim, range):section>", methods=["POST"])
+def api_setup_action(section: str):
+    """One setup action, ``{action, ...}``: 400 for a bad request, 409 when it is refused."""
+    service = setup_service
+    if service is None:
+        return _setup_refusal("the setup service is not running", 503)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _setup_refusal("the body must be a JSON object with an action", 400)
+    action = body.get("action")
+    if action not in SETUP_ACTIONS[section]:
+        return _setup_refusal(
+            f"unknown {section} action {action!r}: one of {', '.join(SETUP_ACTIONS[section])}",
+            400,
+        )
+    if section == "aim":
+        for key in ("aim_px", "floor_line_px"):
+            if body.get(key) is not None and not isinstance(body[key], list):
+                return _setup_refusal(f"{key} must be a list of pixels", 400)
+        result = service.aim(
+            action, aim_px=body.get("aim_px"), floor_line_px=body.get("floor_line_px")
+        )
+    elif section == "box":
+        result = service.box(action)
+    else:
+        result = service.range(action)
+    return jsonify(result), 200 if result["ok"] else 409
+
+
+@app.route("/api/setup/view.jpg")
+def api_setup_view():
+    """The capture's latest frame, in the pixels the setup's box and points are in."""
+    runtime = camera_capture_runtime
+    if runtime is None:
+        return "Camera capture not enabled", 404
+    frames = runtime.recent_frames(1, timeout_s=0.5)
+    if not frames:
+        return "No camera frame yet", 503
+    try:
+        import cv2  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        quality = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # pylint: disable=no-member
+        image = np.ascontiguousarray(frames[-1].image)
+        ok, encoded = cv2.imencode(".jpg", image, quality)  # pylint: disable=no-member
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SETUP] could not encode the camera view", exc_info=True)
+        ok = False
+    if not ok:
+        return "The camera frame could not be encoded", 503
+    return Response(encoded.tobytes(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 def _apply_solved_camera_height(args, enclosure) -> None:
     """Use the setup's solved lens height above the hitting surface; the radar keeps its offset."""
     solved = float(args.solved_camera_height_m)
@@ -2023,18 +2306,22 @@ def _swing_camera_pose(shot: Shot) -> dict:
     """
     from .camera import camera_tilt  # noqa: PLC0415
 
-    recorded = (setup_handoff_config.get("camera_tilt") or {}).get("vertical_offset_deg")
-    calibration = (
-        {"offset_deg": float(recorded), "label": camera_tilt.LABEL}
-        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool)
-        else None
-    )
     return camera_tilt.swing_camera_pose(
         rig=rig_geometry,
         image_width_px=int(camera_capture_config.get("width") or 0),
         inclinometer=getattr(shot, "inclinometer", None),
-        calibration=calibration,
+        calibration=_unit_camera_tilt(),
     )
+
+
+def _unit_camera_tilt() -> dict | None:
+    """The unit's camera tilt the kiosk applies (``--camera-vertical-offset-deg``), or None."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    recorded = (setup_handoff_config.get("camera_tilt") or {}).get("vertical_offset_deg")
+    if isinstance(recorded, (int, float)) and not isinstance(recorded, bool):
+        return {"offset_deg": float(recorded), "label": camera_tilt.LABEL}
+    return None
 
 
 def _expected_inclinometer_orientation() -> dict:
@@ -2066,6 +2353,7 @@ def _session_start_config() -> dict:
     config["scene"] = deepcopy(setup_handoff_config["scene"])
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
+    config["setup"] = setup_in_force()
     kiosk_extensions.call_all("session_start_config", config)
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
@@ -6354,6 +6642,7 @@ def _handle_shot_detected(shot: Shot) -> None:
     _open_smash_factor_status(shot)
     _assign_shot_number(shot)
     shot.target_line = target_line_in_force()
+    shot.setup_revision = setup_revision_in_force()
     kiosk_extensions.call_all("on_shot_accepted", shot)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
@@ -7803,6 +8092,7 @@ def main():
     )
     _add_iwr_tee_range_arguments(parser)
     _add_box_kiosk_arguments(parser)
+    _add_setup_arguments(parser)
     parser.add_argument(
         "--iwr6843-net-m",
         "--net-range-m",
@@ -8177,6 +8467,7 @@ def main():
         except ValueError as error:
             parser.error(str(error))
     init_setup_handoff(args, enclosure)
+    init_setup_service(args.setup_file)
 
     if args.camera_capture and (
         args.camera_capture_width <= 0
@@ -8438,14 +8729,6 @@ def main():
                 enclosure.iwr_board_rotation_deg if enclosure is not None else None
             ),
         ):
-            calibration = iwr6843_runtime.calibration
-            if args.iwr6843_tee_m is not None:
-                (
-                    ball_speed_correction_distance_ft,
-                    ball_speed_correction_ball_above_radar_ft,
-                    ball_speed_correction_lateral_ft,
-                    ball_speed_correction_geometry_source,
-                ) = _ops_speed_correction_geometry(calibration)
             print(
                 "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
@@ -8476,6 +8759,17 @@ def main():
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
             _cleanup_hardware_for_shutdown()
             sys.exit(1)
+
+    apply_saved_setup()
+    # the OPS cosine geometry needs a configured tee range (the flag's); a prior is not one
+    calibration = getattr(iwr6843_runtime, "calibration", None)
+    if calibration is not None and calibration.tee_range_m is not None:
+        (
+            ball_speed_correction_distance_ft,
+            ball_speed_correction_ball_above_radar_ft,
+            ball_speed_correction_lateral_ft,
+            ball_speed_correction_geometry_source,
+        ) = _ops_speed_correction_geometry(calibration)
 
     if args.inclinometer:
         startup_status.start("inclinometer", "Connecting inclinometer")

@@ -102,3 +102,69 @@ def test_with_the_gate_on_setup_and_swings_apply_the_same_roll(monkeypatch):
     assert setup.ray_model.roll_correction_deg != 0.0
     assert geometry.roll_correction_deg == pytest.approx(setup.ray_model.roll_correction_deg)
     assert pose["roll"]["roll_correction_deg"] == pytest.approx(setup.ray_model.roll_correction_deg)
+
+
+def test_the_kiosk_s_setup_camera_is_the_tester_s_for_the_same_reading(monkeypatch):
+    """The kiosk's setup screen measures through the camera the tester's setup builds."""
+    import time  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from openflight import server  # noqa: PLC0415
+    from openflight.camera.capture_runtime import CameraCaptureSettings  # noqa: PLC0415
+    from openflight.inclinometer.models import (  # noqa: PLC0415
+        OrientationSnapshot,
+        SnapshotSelection,
+    )
+
+    for name in ("rig_geometry", "rig_geometry_config"):
+        monkeypatch.setattr(server, name, getattr(server, name))
+    arm = ts.ARMS["arm5"]
+    monkeypatch.setattr(
+        server,
+        "camera_capture_runtime",
+        SimpleNamespace(settings=CameraCaptureSettings(width=arm.width, height=arm.height)),
+    )
+    monkeypatch.setattr(
+        server,
+        "setup_handoff_config",
+        {"camera_tilt": {"vertical_offset_deg": CALIBRATION["offset_deg"]}},
+    )
+    server.init_rig_geometry(RIG_PATH)
+    reading = OrientationSnapshot(
+        timestamp=time.time(),
+        x_g=-0.03,
+        y_g=0.0,
+        z_g=1.0,
+        gravity_g=1.0,
+        raw_pitch_deg=0.75,
+        calibrated_pitch_deg=0.75,
+        pitch_std_deg=0.05,
+        sample_count=20,
+    )
+    monkeypatch.setattr(
+        server,
+        "inclinometer_service",
+        SimpleNamespace(snapshot_for_impact=lambda _t: SnapshotSelection(reading, "stable")),
+    )
+    rig = RigGeometry.from_json(RIG_PATH)
+    expected = rig.expected_inclinometer_orientation()
+    roll = math.degrees(math.atan2(reading.x_g, math.hypot(reading.y_g, reading.z_g)))
+    tilt = {
+        "camera_pitch_deg": rig.boresight_pitch_deg + (0.75 - (expected.pitch_deg or 0.0)),
+        "roll_deg": roll,
+    }
+
+    tester = ts._reference_ball_camera(  # pylint: disable=protected-access
+        arm, RIG_PATH, tilt, None, None, CALIBRATION
+    )
+    kiosk = server.setup_camera_view()
+
+    assert kiosk.camera.ray_model.pitch_rad == pytest.approx(tester.ray_model.pitch_rad)
+    assert kiosk.camera.ray_model.focal_px == pytest.approx(tester.ray_model.focal_px)
+    assert kiosk.camera.ray_model.roll_correction_deg == tester.ray_model.roll_correction_deg
+    assert kiosk.camera.camera_origin_lfu == pytest.approx(tester.camera_origin_lfu)
+    assert kiosk.camera.radar_origin_lfu == pytest.approx(tester.radar_origin_lfu)
+    assert kiosk.camera.angular_uncertainty_deg == tester.angular_uncertainty_deg
+    assert kiosk.roll_deg == pytest.approx(
+        ts._placement_roll_deg(RIG_PATH, tilt)  # pylint: disable=protected-access
+    )

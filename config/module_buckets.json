@@ -980,6 +980,7 @@
   "tests/test_session_bundle.py": "TESTER",
   "tests/test_session_logger.py": "PRODUCT",
   "tests/test_session_review.py": "TESTER",
+  "tests/test_setup_api.py": "FUSION",
   "tests/test_setup_eligibility.py": "TESTER",
   "tests/test_setup_live_apply.py": "FUSION",
   "tests/test_setup_record.py": "FUSION",

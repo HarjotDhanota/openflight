@@ -368,6 +368,8 @@ class Shot:
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
     target_line: Optional[dict] = None
+    # the setup record's revision in force when the shot started (session_start, setup_changed)
+    setup_revision: Optional[int] = None
     # Lighting and optical-quality labels on the camera's values (they label, not withhold).
     camera_notes: Optional[list] = None
     server_callback_started_monotonic_ns: Optional[int] = field(
@@ -616,6 +618,7 @@ class Shot:
             "air_density_kg_m3": self.air_density_kg_m3,
             "flight": deepcopy(self.flight),
             "target_line": deepcopy(self.target_line),
+            "setup_revision": self.setup_revision,
             "impact_location": deepcopy(self.impact_location),
         }
         data["metrics"] = shot_metrics.from_record(data)

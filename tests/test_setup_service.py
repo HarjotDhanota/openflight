@@ -106,10 +106,11 @@ def make(tmp_path):
         service = SetupService(
             tmp_path / "setup.json",
             over.pop("ctx", CTX),
-            camera_provider=lambda: CameraView(CAMERA, 0.0),
+            camera_provider=over.pop("camera_provider", lambda: CameraView(CAMERA, 0.0)),
             frames_provider=lambda: np.zeros((2, 800, 1280), dtype=np.uint8),
             appliers=recorder.appliers(),
             hooks=hooks,
+            **over,
         )
         return service, recorder
 
@@ -568,3 +569,115 @@ def test_the_kiosk_extension_hooks_reach_the_service(monkeypatch, make, scene):
     refuse[0] = None
     assert service.box("confirm")["ok"]
     assert seen == [("box", "confirm", True)]
+
+
+LENS_CHANGED = StartContext(
+    lens_id="6mm", rig_sha256="rig-a", tilt_offset_deg=2.0, tilt_calibrated=True
+)
+
+
+def test_at_start_only_the_sections_once_set_are_applied(make, scene):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    restarted, recorder = make()
+
+    assert restarted.apply_saved() == []
+
+    assert recorder.calls["box"][0]["state"] == "confirmed"
+    for name in ("aim", "ball_range", "net_range", "scene"):
+        assert recorder.calls[name] == [], name
+    assert restarted.applied_revision == restarted.revision == 1
+
+
+def test_at_start_a_stale_section_is_applied_as_none_so_it_clears(make, scene):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    service.aim("skip")
+    restarted, recorder = make(ctx=LENS_CHANGED)
+
+    restarted.apply_saved()
+
+    assert recorder.calls["box"] == [None]
+    assert recorder.calls["aim"] == [None]
+    assert recorder.calls["net_range"] == [None]
+    assert recorder.calls["ball_range"] == [] and recorder.calls["scene"] == []
+
+
+def test_an_empty_record_applies_nothing_at_start(make):
+    service, recorder = make()
+
+    assert service.apply_saved() == []
+
+    assert all(calls == [] for calls in recorder.calls.values())
+    assert service.applied_revision == 0
+
+
+def test_one_action_s_sections_are_applied_in_one_gap_between_shots(make, scene):
+    gaps = []
+    inside = []
+
+    def between_shots(apply):
+        gaps.append("gap")
+        inside.append(True)
+        try:
+            return apply()
+        finally:
+            inside.pop()
+
+    service, recorder = make(between_shots=between_shots)
+    _confirm_box(service, scene)
+    gaps.clear()
+    for name in ("aim", "net_range"):
+        setattr(
+            service._appliers,  # noqa: SLF001
+            name,
+            lambda section, name=name: recorder.calls[name].append(bool(inside)),
+        )
+
+    assert service.aim("skip")["ok"]
+
+    assert gaps == ["gap"]
+    assert recorder.calls["aim"] == [True] and recorder.calls["net_range"] == [True]
+
+
+def test_a_gap_that_never_comes_leaves_the_change_unapplied(make, scene):
+    service, recorder = make()
+    _confirm_box(service, scene)
+    applied = service.applied_revision
+
+    def busy(_apply):
+        raise RuntimeError("a shot is still being processed; try again in a moment")
+
+    service._between_shots = busy  # noqa: SLF001
+    result = service.aim("skip")
+
+    assert result["ok"] is False and "still being processed" in result["reason"]
+    assert set(result["setup"]["unapplied"]) == {"aim", "net_range"}
+    assert service.revision == applied + 1 and service.applied_revision == applied
+    assert recorder.calls["aim"] == []
+    service._between_shots = lambda apply: apply()  # noqa: SLF001
+    assert service.box("show")["ok"]
+    assert service.applied_revision == service.revision
+    assert recorder.calls["aim"][0]["state"] == "skipped"
+
+
+def test_a_camera_that_cannot_be_modelled_refuses_with_its_reason(make, scene):
+    def no_pitch():
+        raise ValueError("no stable LIS3DH reading: wait for a stable reading")
+
+    service, _recorder = make(camera_provider=no_pitch)
+
+    result = service.box("confirm")
+
+    assert result["ok"] is False
+    assert result["reason"] == "no stable LIS3DH reading: wait for a stable reading"
+
+
+def test_the_record_s_hash_follows_what_is_saved(make, scene, tmp_path):
+    service, _recorder = make()
+    empty = service.sha256
+    _confirm_box(service, scene)
+
+    assert service.sha256 != empty
+    restarted, _recorder = make()
+    assert restarted.sha256 == service.sha256

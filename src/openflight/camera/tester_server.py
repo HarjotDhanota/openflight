@@ -3223,10 +3223,9 @@ def record_placement(
     return count + 1
 
 
-# The nominal model's angular uncertainty: the camera's vertical before the unit's
-# tilt is calibrated (about 3 deg, indoor-test-1), and at least this much after.
-UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
-CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
+# the nominal model's angular uncertainty, shared with the kiosk's setup camera
+UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = camera_tilt.UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
+CALIBRATED_ANGULAR_UNCERTAINTY_DEG = camera_tilt.CALIBRATED_ANGULAR_UNCERTAINTY_DEG
 
 
 def _reference_ball_camera(

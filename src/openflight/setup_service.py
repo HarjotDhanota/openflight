@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
+import json
 import logging
 import threading
 from dataclasses import dataclass
@@ -70,6 +72,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         appliers: Appliers,
         hooks: Callable[..., Any] = kiosk_extensions.first,
         box_config: placement_box.PlacementBoxConfig | None = None,
+        between_shots: Callable[[Callable[[], Any]], Any] = lambda apply: apply(),
     ):
         self._path = Path(path)
         self._ctx = ctx
@@ -77,18 +80,32 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         self._frames_provider = frames_provider
         self._appliers = appliers
         self._hooks = hooks
+        # runs one change's applies together, so no shot lands between two sections
+        self._between_shots = between_shots
         self._config = box_config or placement_box.load_config()
         self._action_lock = threading.Lock()
         self._record = load(self._path)
         self._live: dict[str, Any] = {}
         self._unapplied: set[str] = set()
         self._apply_errors: dict[str, str] = {}
+        self._applied_revision: int | None = None
         self.on_change: Callable[[dict], None] = lambda snapshot: None
 
     @property
     def revision(self) -> int:
         """The saved record's revision, which grows with every save."""
         return int(self._record["revision"])
+
+    @property
+    def applied_revision(self) -> int | None:
+        """The revision the kiosk last put into effect, which each shot records; None before."""
+        return self._applied_revision
+
+    @property
+    def sha256(self) -> str:
+        """The saved record's hash (canonical JSON), logged with each revision."""
+        canonical = json.dumps(self._record, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def _evaluated(self) -> dict:
         margin = placement_box.pads_deg(self._config, self._ctx.tilt_calibrated)[0]
@@ -103,9 +120,20 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         }
 
     def apply_all(self) -> list[str]:
-        """Put every section into effect, as at kiosk start; the sections that failed."""
+        """Put every section into effect again; the sections that failed."""
         with self._action_lock:
             return self._apply(set(SECTIONS), self._evaluated())
+
+    def apply_saved(self) -> list[str]:
+        """At kiosk start: put every section ever set into effect, a stale one as None so it
+        clears; one never set is left to the kiosk's own start values. The failures."""
+        with self._action_lock:
+            evaluated = self._evaluated()
+            present = {name for name in SECTIONS if evaluated[name].get("state") != "not_set"}
+            failed = self._apply(present, evaluated)
+            if not present:
+                self._applied_revision = self.revision  # nothing to put into effect
+            return failed
 
     # actions
 
@@ -172,10 +200,23 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
 
     def _apply(self, changed: set[str], evaluated: dict) -> list[str]:
         """Apply the changed sections and any an earlier failure left unapplied."""
+        names = [name for name in SECTIONS if name in changed or name in self._unapplied]
+        # with nothing to apply, a newly saved revision still comes into effect between
+        # shots; before the start's apply_saved, none has
+        if not names and self._applied_revision in (None, self.revision):
+            return []
+        try:
+            return self._between_shots(lambda: self._apply_now(names, evaluated))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[SETUP] no gap between shots to apply %s", names, exc_info=True)
+            for name in names:
+                self._unapplied.add(name)
+                self._apply_errors[name] = str(exc)
+            return [f"could not apply {name}: {exc}" for name in names]
+
+    def _apply_now(self, names: list[str], evaluated: dict) -> list[str]:
         failed = []
-        for name in SECTIONS:
-            if name not in changed and name not in self._unapplied:
-                continue
+        for name in names:
             try:
                 getattr(self._appliers, name)(evaluated[name] if _usable(evaluated[name]) else None)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -186,6 +227,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             else:
                 self._unapplied.discard(name)
                 self._apply_errors.pop(name, None)
+        self._applied_revision = self.revision
         return failed
 
     def _cleared(self, *names: str) -> dict:
@@ -194,7 +236,10 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
     # camera access
 
     def _view(self) -> tuple[Any, float | None]:
-        view = self._camera_provider()
+        try:
+            view = self._camera_provider()
+        except ValueError as exc:
+            raise _Refused(str(exc)) from exc
         if view is None:
             raise _Refused("camera unavailable")
         return view.camera, view.roll_deg

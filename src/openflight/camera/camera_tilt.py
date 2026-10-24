@@ -35,6 +35,10 @@ LABEL = "unit_calibration_from_validated_pairs"
 MIN_PAIRS = 2
 # this many checks in a row disagreeing on the same side re-calibrate from their median
 RECALIBRATE_AFTER = 2
+# The setup's nominal camera's angular uncertainty: the camera's vertical before the unit's
+# tilt is calibrated (about 3 deg, indoor-test-1), and at least this much after.
+UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
+CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
 
 
 def camera_tilt_policy() -> dict[str, Any]:
