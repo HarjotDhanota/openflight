@@ -13,11 +13,9 @@ is under 1 cm the ball slides on the ground until it rolls, then rolls out
 against a constant rolling resistance plus a speed-squared turf drag
 (deceleration g c0 + k v^2), which integrates in closed form.
 
-turf-roll-v1 flies the hops between bounces as vacuum arcs. turf-roll-v2 flies
-them through the flight model (``ballistics.hop_flight``: drag, Magnus lift and
-spin decay, carrying the spin out of each bounce), which shortens the long, fast
-hops of a shallow landing. Both sets of constants were fitted by the maintainer;
-see each model's ``calibration``.
+turf-roll-v2 flies the hops between bounces through the flight model
+(``flight_sim.hop_flight``: drag, Magnus lift and spin decay, carrying the spin out
+of each bounce). Its constants were fitted by the maintainer; see its ``calibration``.
 """
 
 from __future__ import annotations
@@ -94,7 +92,7 @@ class TurfRollModel:
         None for a non-finite input or a landing angle outside the fitted range.
         Negative when backspin pulls the ball back past its landing point. A model
         with ``aerodynamic_hops`` flies each hop with ``fly_hop`` (the flight
-        model's, ``ballistics.hop_flight``); otherwise the hops are vacuum arcs.
+        model's, ``flight_sim.hop_flight``); otherwise the hops are vacuum arcs.
         """
         if self.aerodynamic_hops and fly_hop is None:
             raise ValueError(f"{self.version} flies its hops through the air: pass a hop flight")
@@ -160,45 +158,6 @@ def _rest_distance_m(
     return x + math.copysign(roll, v_roll)
 
 
-TURF_ROLL_V1 = TurfRollModel(
-    version="turf-roll-v1",
-    surface="fairway, normal firmness",
-    citation=(
-        "turf-roll-v1: Penner 2002 dented-turf bounce (Can. J. Phys. 80, 931) with "
-        "Cross 2002 grip-slip impacts (Am. J. Phys. 70, 1093), sliding then rolling "
-        "out; constants fitted by the maintainer (flight-fit-v2)"
-    ),
-    landing_angle_range_deg=(5.0, 65.0),
-    tilt_max_rad=0.595,
-    tilt_speed_mps=24.8,
-    tilt_peak_rad=0.768,
-    tilt_width_rad=0.338,
-    restitution=0.437,
-    restitution_speed_mps=65.5,
-    friction=0.135,
-    tangential_cap_mps=22.4,
-    tangential_cap_normal_mps=24.5,
-    sliding_friction=0.355,
-    rolling_resistance=0.0971,
-    turf_drag_per_m=0.0414,
-    calibration=RollCalibration(
-        version="flight-fit-v2",
-        source="fitted by the maintainer (flight-fit-v2) on fairway turf, normal firmness",
-        fitted_on="2026-10-20",
-        domain_landing_angle_deg=(5.0, 65.0),
-        domain=(
-            "landing speed 18-100 mph, landing angle 5-65 deg, backspin 0-11,000 rpm; "
-            "4096 landing states, a random 20 % held out"
-        ),
-        method=(
-            "scipy least_squares (soft L1, 2 yd) on the distance to rest, eleven "
-            "constants with the tilt maximum held at 0.595 rad, rounded to three "
-            "significant figures"
-        ),
-        metrics=(("held-out landing states roll RMSE yd", 1.76),),
-    ),
-)
-
 TURF_ROLL_V2 = TurfRollModel(
     version="turf-roll-v2",
     surface="fairway, normal firmness",
@@ -244,5 +203,3 @@ TURF_ROLL_V2 = TurfRollModel(
         ),
     ),
 )
-
-ROLL_MODELS: dict[str, TurfRollModel] = {m.version: m for m in (TURF_ROLL_V1, TURF_ROLL_V2)}

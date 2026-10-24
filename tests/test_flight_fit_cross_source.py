@@ -26,7 +26,8 @@ if str(_ANALYSIS) not in sys.path:
 
 import fit_flight_model as ffm  # noqa: E402
 
-from openflight.ballistics import FERGUSON_2022, FLIGHT_FIT_V1  # noqa: E402
+from openflight.flight_models_superseded import FERGUSON_2022  # noqa: E402
+from openflight.flight_sim import FLIGHT_FIT_V1  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not ffm.EXTERNAL_EXPORT.exists(),

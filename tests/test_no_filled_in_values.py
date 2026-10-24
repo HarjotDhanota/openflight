@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import server as server_module, shot_models
-from openflight.ballistics import resolve_launch
 from openflight.clubs import ClubType
+from openflight.flight_sim import resolve_launch
 from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from openflight.sim.resolver import resolve_shot
 from openflight.sim.types import PlayerState
@@ -267,7 +267,7 @@ def _measure_launch(shot, *, horizontal=True, spin_axis=True):
 
 
 def _ballistic_carry(shot, *, substitutes):
-    from openflight.ballistics import simulate
+    from openflight.flight_sim import simulate
 
     conditions = resolve_launch(shot, substitutes=substitutes)
     assert conditions is not None

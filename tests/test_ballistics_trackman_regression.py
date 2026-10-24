@@ -338,7 +338,7 @@ def total_deltas():
     from tm_owner_export import number, owner_shots
     from validate_ballistics import TM_FLAT_AIR_DENSITY, _normalize_club
 
-    from openflight.ballistics import LaunchConditions, simulate
+    from openflight.flight_sim import LaunchConditions, simulate
 
     if not TRACKMAN_CSV.exists():
         pytest.skip(f"TrackMan reference capture not present: {TRACKMAN_CSV}")

@@ -3,7 +3,7 @@
 Two independent comparisons are produced:
 
 1. **TM-inputs** — feed TrackMan's measured (ball_speed, launch_v,
-   launch_h, spin_rpm, spin_axis) into :func:`openflight.ballistics.simulate`
+   launch_h, spin_rpm, spin_axis) into :func:`openflight.flight_sim.simulate`
    and compare the model's ``carry_yards`` to TrackMan's ``Carry Flat -
    Length``. This isolates the physics model from any sensor noise.
 
@@ -11,7 +11,7 @@ Two independent comparisons are produced:
    into the model and compare to TrackMan's carry. This is the
    end-to-end check the user actually sees on screen (sensor + model
    error combined). Spin handling matches production
-   :func:`openflight.ballistics.resolve_launch`: measured spin if
+   :func:`openflight.flight_sim.resolve_launch`: measured spin if
    confidence >= SPIN_CONFIDENCE_HIGH, otherwise club-typical fallback.
    OpenFlight has no spin-axis measurement, so spin_axis = 0 is assumed.
 
@@ -60,16 +60,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from openflight.ballistics import (  # noqa: E402
+from openflight.clubs import ClubType  # noqa: E402
+from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
+from openflight.flight_sim import (  # noqa: E402
     ACTIVE_AERO_MODEL,
-    AERO_MODELS,
     CLUB_TYPICAL_SPIN_RPM,
     AeroModel,
     LaunchConditions,
     simulate,
 )
-from openflight.clubs import ClubType  # noqa: E402
-from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
 
 # TrackMan "Flat" normalization: no wind, 0 ft altitude, 77 °F. The model flies
 # the kiosk's own normalized reference (openflight.flight: 25 °C, 1013.25 hPa,
@@ -886,14 +885,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=f"Air density (kg/m³) for simulate(). Default "
         f"{TM_FLAT_AIR_DENSITY} matches TrackMan 'Flat' (77°F sea level).",
     )
-    parser.add_argument(
-        "--aero",
-        choices=sorted(AERO_MODELS),
-        default=ACTIVE_AERO_MODEL.version,
-        help=f"Aerodynamic model to fly (default {ACTIVE_AERO_MODEL.version}).",
-    )
     args = parser.parse_args(argv)
-    aero = AERO_MODELS[args.aero]
+    aero = ACTIVE_AERO_MODEL
 
     # Resolve session labels.
     if args.session_label and len(args.session_label) != len(args.trackman):

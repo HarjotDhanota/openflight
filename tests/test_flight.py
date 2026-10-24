@@ -15,18 +15,18 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import metric_definitions, server as server_module, shot_models
-from openflight.ballistics import (
-    AIR_DENSITY_STD,
-    CLUB_TYPICAL_SPIN_RPM,
-    LaunchConditions,
-    resolve_launch,
-    simulate,
-)
 from openflight.clubs import ClubType, physics as club_physics
 from openflight.flight import (
     AIR_DENSITY_NORMALIZED,
     FLIGHT_METRICS,
     compute_flight,
+)
+from openflight.flight_sim import (
+    AIR_DENSITY_STD,
+    CLUB_TYPICAL_SPIN_RPM,
+    LaunchConditions,
+    resolve_launch,
+    simulate,
 )
 from openflight.launch_monitor import Shot
 from openflight.sim import resolver

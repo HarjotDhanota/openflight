@@ -16,10 +16,7 @@ import numpy as np
 import pytest
 
 from openflight import (
-    collision_model,
-    flight as flight_module,
     server as server_module,
-    shot_models,
 )
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
@@ -3558,22 +3555,6 @@ class OnShotDetectedHelpers:
             club_angle_deg=2.0,
         )
 
-    @staticmethod
-    def _expected_spin_axis():
-        """E2: the collision model's centre-strike axis, not horizontal launch minus path."""
-        return (
-            collision_model.evaluate(
-                club=ClubType.DRIVER,
-                club_path=collision_model.Input(-1.5),
-                attack_angle=collision_model.Input(2.0),
-                launch_horizontal=collision_model.Input(3.2),
-                launch_vertical=collision_model.Input(14.0),
-                club_speed_mph=collision_model.Input(100.0),
-            )
-            .metrics["spin_axis"]
-            .value
-        )
-
     def _run_with_no_radar_hardware(self, monkeypatch, shot):
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)
@@ -5486,37 +5467,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert shot.launch_angle_vertical == pytest.approx(18.7)
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
 
-    def test_spin_axis_emitted_when_horizontal_confidence_clears_gate(self, monkeypatch):
-        shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
-
-        self._run_with_no_radar_hardware(monkeypatch, shot)
-
-        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.spin_axis_source == collision_model.SPIN_AXIS_SOURCE_MODEL
-
-    def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
-        """D36 item 2: face to path cancels the horizontal offset only within one frame."""
-        shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
-        shot.launch_angle_horizontal_frame = "target_line"
-        shot.club_path_frame = "unit_boresight"
-
-        self._run_with_no_radar_hardware(monkeypatch, shot)
-
-        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.to_dict()["spin_axis_frame"] == "mixed"
-
-    def test_spin_axis_estimated_when_horizontal_confidence_below_gate(self, monkeypatch):
-        """Below the horizontal leg's confidence floor the axis is labelled estimated,
-        never calculated (V-formulas C2; it used to be withheld)."""
-        shot = self._spin_axis_shot(
-            horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
-        )
-
-        self._run_with_no_radar_hardware(monkeypatch, shot)
-
-        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.spin_axis_source.startswith("estimated")
-
 
 class TestBallisticsConfiguration:
     """The physics model is preferred unless an operator explicitly opts out."""
@@ -5750,120 +5700,6 @@ def test_kld7_device_symlinks_supply_stable_defaults(tmp_path):
     assert args.kld7_port == str(tmp_path / "kld7_vertical")
     assert args.kld7_horizontal is True
     assert args.kld7_horizontal_port == str(tmp_path / "kld7_horizontal")
-
-
-class TestCarryComputation:
-    """Tests for the ballistic carry path in on_shot_detected."""
-
-    def _patch_environment(self, monkeypatch):
-        # an OPS-only install: no IWR or camera, so its labelled estimates stand (D17)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
-        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
-
-    def test_carry_uses_ballistic_simulator_when_launch_angle_present(self, monkeypatch):
-        """A shot with a vertical launch angle should get carry from the physics sim."""
-        self._patch_environment(monkeypatch)
-        monkeypatch.setattr(server_module, "ballistics_enabled", True)
-
-        captured = {}
-
-        from openflight import ballistics as ballistics_module
-
-        real_simulate = ballistics_module.simulate
-
-        def spying_simulate(conditions, *args, **kwargs):
-            captured["conditions"] = conditions
-            return real_simulate(conditions, *args, **kwargs)
-
-        monkeypatch.setattr(flight_module, "simulate", spying_simulate)
-
-        shot = Shot(
-            ball_speed_mph=165.0,
-            club_speed_mph=112.0,
-            timestamp=datetime.now(),
-            club=ClubType.DRIVER,
-            launch_angle_vertical=11.0,
-            launch_angle_confidence=0.8,
-            spin_rpm=2700,
-            spin_confidence=0.85,
-            angle_source="radar",
-        )
-
-        on_shot_detected(shot)
-        _wait_for_shot_finalization_idle()
-
-        assert "conditions" in captured, "simulate() should have been called"
-        assert captured["conditions"].spin_source == "measured"
-        assert shot.carry_spin_adjusted is not None
-        assert 250 < shot.carry_spin_adjusted < 300
-
-    def test_carry_falls_back_to_table_when_resolve_returns_none(self, monkeypatch):
-        """When resolve_launch returns None, the table path should compute carry."""
-        self._patch_environment(monkeypatch)
-
-        monkeypatch.setattr(flight_module, "resolve_launch", lambda shot, **_kwargs: None)
-
-        def fail_simulate(*args, **kwargs):
-            raise AssertionError("simulate() must not be called when resolve_launch is None")
-
-        monkeypatch.setattr(flight_module, "simulate", fail_simulate)
-
-        shot = Shot(
-            ball_speed_mph=150.0,
-            club_speed_mph=105.0,
-            timestamp=datetime.now(),
-            club=ClubType.DRIVER,
-            launch_angle_vertical=12.0,
-            spin_rpm=2700,
-            spin_confidence=0.85,
-            angle_source="radar",
-        )
-
-        on_shot_detected(shot)
-        _wait_for_shot_finalization_idle()
-
-        assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted > 0
-
-    def test_carry_skips_ballistic_when_ballistics_disabled(self, monkeypatch):
-        """When ballistics_enabled is False, the simulator must not run even
-        if a valid launch angle is present — carry falls through to the
-        table estimator. Operators can request this with `--no-ballistics`."""
-        self._patch_environment(monkeypatch)
-        monkeypatch.setattr(server_module, "ballistics_enabled", False)
-
-        def fail_resolve(*args, **kwargs):
-            raise AssertionError("resolve_launch must not run when ballistics disabled")
-
-        def fail_simulate(*args, **kwargs):
-            raise AssertionError("simulate() must not run when ballistics disabled")
-
-        monkeypatch.setattr(flight_module, "resolve_launch", fail_resolve)
-        monkeypatch.setattr(flight_module, "simulate", fail_simulate)
-
-        shot = Shot(
-            ball_speed_mph=165.0,
-            club_speed_mph=112.0,
-            timestamp=datetime.now(),
-            club=ClubType.DRIVER,
-            launch_angle_vertical=11.0,
-            launch_angle_confidence=0.8,
-            spin_rpm=2700,
-            spin_confidence=0.85,
-            angle_source="radar",
-        )
-
-        on_shot_detected(shot)
-        _wait_for_shot_finalization_idle()
-
-        assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted > 0
 
 
 class TestApplyCalculatedSpin:
@@ -6422,41 +6258,6 @@ class TestIwrAzimuthCalibration:
 
         assert shot.experimental_club_path_status == "rejected_phase_span"
 
-    def test_without_a_reference_face_angle_uses_camera_paths_only(self, monkeypatch):
-        shot = self._run(monkeypatch, phase_reference=None)
-        # The camera horizontal (camera bearing on accepted IWR depth) outranks
-        # the radar one and carries no azimuth mark.
-        server_module._apply_camera_horizontal_decision(
-            shot, 2.0, 0.75, "camera_assisted_experimental"
-        )
-        assert shot.launch_angle_horizontal_status is None
-
-        shot_models._attach_collision_model(shot)
-        assert shot.experimental_face_angle_deg is None
-        assert shot.experimental_face_angle_status == "missing_accepted_club_path"
-
-        shot.experimental_fused_club_path_deg = -4.0
-        shot.experimental_fused_status = "chained_high"
-        shot_models._attach_collision_model(shot)
-        # E2: the PING weight for this club (Wood et al. 2018), not a fixed 0.8
-        weight = collision_model.weights_for_club(shot.club).horizontal
-        assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.0 / weight, abs=0.05)
-        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
-
-    def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
-        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source."""
-        shot = self._run(monkeypatch, phase_reference=None)
-        shot.experimental_fused_club_path_deg = -4.0
-        shot.experimental_fused_status = "chained_high"
-
-        shot_models._attach_collision_model(shot)
-
-        weight = collision_model.weights_for_club(shot.club).horizontal
-        assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.25 / weight, abs=0.05)
-        assert shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated"
-        assert shot.experimental_face_angle_path_source == "camera_fused_chained"
-        assert shot.experimental_face_angle_launch_source == "radar"
-
     def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
         """P8-7: shown, labelled, and never displacing a radar horizontal."""
         monkeypatch.setattr(
@@ -6548,17 +6349,6 @@ class TestBallisticCarryPrecedence:
             carry_spin_adjusted=prefilled_carry,
             mode="rolling-buffer",
         )
-
-    def test_simulator_overrides_prefilled_table_carry(self, monkeypatch):
-        monkeypatch.setattr(server_module, "ballistics_enabled", True)
-        shot = self._shot(launch_angle=19.1, prefilled_carry=119.2)
-
-        server_module._finalize_shot_detected(shot, emit_event="shot")
-
-        expected = flight_module.simulate(flight_module.resolve_launch(shot)).carry_yards
-        assert shot.carry_spin_adjusted == pytest.approx(expected)
-        assert shot.carry_spin_adjusted != pytest.approx(119.2)
-        assert shot.carry_spin_adjusted > 135.0
 
     def test_table_fallback_replaces_prefilled_carry_when_ballistics_disabled(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", False)

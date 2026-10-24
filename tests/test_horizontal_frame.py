@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from openflight import server as server_module, shot_models
+from openflight import server as server_module
 from openflight.clubs import ClubType
 from openflight.horizontal_frame import (
     TARGET_LINE,
@@ -201,82 +201,6 @@ def _shot(**kwargs) -> Shot:
         club=ClubType.IRON_7,
         **kwargs,
     )
-
-
-def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):
-    measurement = SimpleNamespace(
-        accepted=True,
-        angle_deg=18.5,
-        horizontal_deg=0.8,
-        horizontal_confidence=0.93,
-        horizontal_status="hlcmf_v2_accepted",
-        horizontal_frame="target_line",
-        n_snapshots=18,
-        n_frames=5,
-        component_std_deg=1.4,
-        to_dict=lambda: {},
-    )
-    club_path = SimpleNamespace(
-        accepted=True,
-        status="accepted",
-        path_deg=-1.0,
-        confidence=0.8,
-        n_frames=5,
-        candidate_path_deg=-1.0,
-        candidate_path_status="candidate_available",
-        candidate_attack_angle_deg=-4.0,
-        attack_angle_status="candidate_available",
-        club_path_frame="target_line",
-        to_dict=lambda: {},
-    )
-    capture = SimpleNamespace(
-        trigger_timestamp=100.01,
-        path=None,
-        raw=b"raw",
-        dump_duration_s=4.5,
-        error=None,
-        valid=True,
-        sequence=1,
-    )
-    runtime = SimpleNamespace(
-        horizontal_phase_reference_rad=-0.5,
-        process_shot=lambda **kwargs: SimpleNamespace(
-            capture=capture, measurement=measurement, club_path=club_path
-        ),
-    )
-    monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
-    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-    monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
-    shot = _shot()
-
-    server_module._process_iwr6843_angle(shot)
-    shot_models._attach_collision_model(shot)
-    payload = shot.to_dict()
-
-    assert payload["launch_angle_horizontal_frame"] == "target_line"
-    assert payload["experimental_club_path_frame"] == "target_line"
-    assert payload["experimental_face_angle_frame"] == "target_line"
-
-    server_module._apply_camera_horizontal_decision(
-        shot, 1.2, 0.75, "camera_assisted_experimental", frame="target_line"
-    )
-    assert shot.to_dict()["launch_angle_horizontal_frame"] == "target_line"
-
-
-def test_face_angle_from_two_frames_is_labelled_mixed():
-    shot = _shot(
-        launch_angle_horizontal=2.0,
-        launch_angle_horizontal_source="camera_assisted_experimental",
-        launch_angle_horizontal_frame="target_line",
-        club_path_deg=-1.0,
-        club_path_frame="unit_boresight",
-    )
-
-    shot_models._attach_collision_model(shot)
-
-    assert shot.experimental_face_angle_deg is not None
-    assert shot.experimental_face_angle_frame == "mixed"
-    assert shot.experimental_face_angle_status.endswith("_mixed_frames")
 
 
 def test_kld7_angles_take_the_same_yaw(monkeypatch):

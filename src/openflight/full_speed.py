@@ -54,7 +54,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .ballistics import (
+from .flight_sim import (
     ACTIVE_AERO_MODEL,
     AIR_DENSITY_STD,
     BALL_AREA_M2,

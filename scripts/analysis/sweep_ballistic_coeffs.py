@@ -1,5 +1,5 @@
 """Tune the six polynomial aerodynamic coefficients in
-:mod:`openflight.ballistics` against TrackMan-measured carry.
+:mod:`openflight.flight_sim` against TrackMan-measured carry.
 
 Superseded for calibration by ``fit_flight_model.py`` (E8a), which fits carry,
 apex, landing angle and hang time jointly and ships a versioned model. This
@@ -71,8 +71,8 @@ from validate_ballistics import (  # noqa: E402
     load_trackman,
 )
 
-import openflight.ballistics as bl  # noqa: E402
-from openflight.ballistics import LaunchConditions, simulate  # noqa: E402
+import openflight.flight_sim as bl  # noqa: E402
+from openflight.flight_sim import LaunchConditions, simulate  # noqa: E402
 
 # Bounds for the search. Wide enough to span published Cd/Cl ranges for
 # dimpled golf balls in the post-drag-crisis regime; narrow enough that

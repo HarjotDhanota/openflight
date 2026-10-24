@@ -2,7 +2,7 @@
 
 flight-fit-v1 is Ferguson, McNally & McPhee's (2022) functional form refitted to
 TM4's normalized exports on carry, apex, landing angle and hang time jointly. The
-published Ferguson constants stay in the code, selectable, for comparison. These
+published Ferguson constants are research's (flight_models_superseded). These
 tests pin the selection, the provenance record (D38) and the physical guards; the
 accuracy budgets live in test_ballistics_trackman_regression.py.
 """
@@ -15,52 +15,38 @@ from pathlib import Path
 
 import pytest
 
-from openflight import ballistics, flight, full_speed
-from openflight.ballistics import (
+from openflight import flight, flight_sim, full_speed
+from openflight.flight import AIR_DENSITY_NORMALIZED
+from openflight.flight_sim import (
     ACTIVE_AERO_MODEL,
-    AERO_MODELS,
-    FERGUSON_2022,
     FLIGHT_FIT_V1,
     MPH_TO_MPS,
     LaunchConditions,
     simulate,
 )
-from openflight.flight import AIR_DENSITY_NORMALIZED
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 IN_REPO_EXPORT = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 
-MODELS = sorted(AERO_MODELS.values(), key=lambda m: m.version)
+MODELS = [FLIGHT_FIT_V1]
 
 
 def test_the_active_model_is_flight_fit_v1():
     assert ACTIVE_AERO_MODEL is FLIGHT_FIT_V1
     assert FLIGHT_FIT_V1.version == "flight-fit-v1"
-    assert set(AERO_MODELS) == {"ferguson-2022", "flight-fit-v1", "flight-fit-v2"}
-    assert all(AERO_MODELS[name].version == name for name in AERO_MODELS)
-
-
-def test_the_published_ferguson_constants_are_kept_and_selectable():
-    # Ferguson, McNally & McPhee 2022: "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031,
-    # -1.1490, 0.01}"
-    assert FERGUSON_2022.cd_poly == (0.1304, 0.9287, -0.8259)
-    assert FERGUSON_2022.cl_poly == (0.0504, 1.2031, -1.1490)
-    assert FERGUSON_2022.cm_per_sp == 0.01
-    assert FERGUSON_2022.sp_fit_max == 0.75
-    assert FERGUSON_2022.calibration is None  # published, not fitted here
 
 
 def test_the_module_constants_are_the_active_model_s():
-    assert ballistics.CD_POLY is ACTIVE_AERO_MODEL.cd_poly
-    assert ballistics.CL_POLY is ACTIVE_AERO_MODEL.cl_poly
-    assert ballistics.CM_PER_SP == ACTIVE_AERO_MODEL.cm_per_sp
-    assert ballistics.SP_FIT_MAX == ACTIVE_AERO_MODEL.sp_fit_max
+    assert flight_sim.CD_POLY is ACTIVE_AERO_MODEL.cd_poly
+    assert flight_sim.CL_POLY is ACTIVE_AERO_MODEL.cl_poly
+    assert flight_sim.CM_PER_SP == ACTIVE_AERO_MODEL.cm_per_sp
+    assert flight_sim.SP_FIT_MAX == ACTIVE_AERO_MODEL.sp_fit_max
 
 
 def test_the_fit_keeps_ferguson_s_form_and_sp_range():
     # the form is Ferguson's Eqs. (2)-(4); only the seven constants were refitted
     assert len(FLIGHT_FIT_V1.cd_poly) == 3 and len(FLIGHT_FIT_V1.cl_poly) == 3
-    assert FLIGHT_FIT_V1.sp_fit_max == FERGUSON_2022.sp_fit_max
+    assert FLIGHT_FIT_V1.sp_fit_max == 0.75  # Ferguson's Sp range
 
 
 @pytest.mark.parametrize("model", MODELS, ids=lambda m: m.version)
@@ -85,7 +71,7 @@ def test_the_coefficients_are_physical_everywhere(model):
 @pytest.mark.parametrize("speed_mph", [50.0, 100.0, 150.0, 190.0])
 @pytest.mark.parametrize("spin_rpm", [1500.0, 4000.0, 7000.0, 10000.0])
 def test_flights_are_plausible_over_the_stated_domain(model, speed_mph, spin_rpm):
-    sp = ballistics.BALL_RADIUS_M * spin_rpm * 2 * math.pi / 60 / (speed_mph * MPH_TO_MPS)
+    sp = flight_sim.BALL_RADIUS_M * spin_rpm * 2 * math.pi / 60 / (speed_mph * MPH_TO_MPS)
     if not 0.05 <= sp <= 0.45:
         pytest.skip(f"Sp {sp:.2f} outside 0.05-0.45")
     traj = simulate(
@@ -103,60 +89,8 @@ def test_simulate_flies_the_active_model_unless_told_otherwise():
     cond = LaunchConditions(123.0, 16.1, 0.0, 7124.0, 0.0, "measured")
     default = simulate(cond, air_density=AIR_DENSITY_NORMALIZED)
     active = simulate(cond, air_density=AIR_DENSITY_NORMALIZED, aero=FLIGHT_FIT_V1)
-    old = simulate(cond, air_density=AIR_DENSITY_NORMALIZED, aero=FERGUSON_2022)
     assert default.carry_yards == active.carry_yards
     assert default.apex_yards == active.apex_yards
-    assert old.carry_yards != active.carry_yards
-
-
-@pytest.mark.parametrize(
-    "launch, carry, apex, landing, hang",
-    [
-        # the Ferguson model's own numbers before E8a, at the normalized reference
-        (
-            (171, 10.4, 0, 2545, 0),
-            291.28883226338803,
-            32.03431114744539,
-            35.372203041659674,
-            6.75697724138633,
-        ),
-        (
-            (123, 16.1, 0, 7124, 0),
-            171.30399486806218,
-            32.12384275344705,
-            45.95708662018948,
-            6.147371219130198,
-        ),
-        # the tilted axis now turns about the launch direction itself (no rifle spin)
-        (
-            (104, 23.7, 2, 9316, -3),
-            138.0946014785882,
-            30.735900023693745,
-            47.898373368959085,
-            5.6127339127065055,
-        ),
-    ],
-)
-def test_selecting_ferguson_reproduces_the_previous_model_exactly(
-    launch, carry, apex, landing, hang
-):
-    traj = simulate(
-        LaunchConditions(*launch, "measured"),
-        air_density=AIR_DENSITY_NORMALIZED,
-        aero=FERGUSON_2022,
-    )
-    assert traj.carry_yards == pytest.approx(carry, abs=1e-9)
-    assert traj.apex_yards == pytest.approx(apex, abs=1e-9)
-    assert traj.landing_angle_deg == pytest.approx(landing, abs=1e-9)
-    assert traj.flight_time_s == pytest.approx(hang, abs=1e-9)
-
-
-def test_the_spin_decay_uses_the_selected_model_s_moment():
-    omega, v, rho = 600.0, 40.0, 1.2
-    fit = ballistics.spin_acceleration(omega, v, rho, FLIGHT_FIT_V1.cm_per_sp)
-    ferg = ballistics.spin_acceleration(omega, v, rho, FERGUSON_2022.cm_per_sp)
-    assert fit / ferg == pytest.approx(FLIGHT_FIT_V1.cm_per_sp / FERGUSON_2022.cm_per_sp)
-    assert ballistics.spin_acceleration(omega, v, rho) == fit
 
 
 # ---- D38 provenance --------------------------------------------------------------------

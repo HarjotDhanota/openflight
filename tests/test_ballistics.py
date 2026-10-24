@@ -12,6 +12,7 @@ from openflight.ballistics import (
     CLUB_TYPICAL_SPIN_RPM,
     MPH_TO_MPS,
     SP_FIT_MAX,
+    SPIN_DECAY_RATE,
     LaunchConditions,
     _cd,
     _cl,
@@ -150,8 +151,10 @@ class TestSimulate:
         traj = simulate(_driver(spin_rpm=initial_spin))
         final_spin = traj.points[-1].spin_rpm
 
-        # The decay law (Ferguson 2022's C_M = 0.01 S) is checked in
-        # test_v_formulas_fixes; here only its size over one flight.
+        # Assert the decay law itself rather than a hardcoded window, so the
+        # test stays valid when aero coefficients change the flight time.
+        expected = initial_spin * math.exp(-SPIN_DECAY_RATE * traj.flight_time_s)
+        assert final_spin == pytest.approx(expected, rel=1e-3)
 
         # Sanity: spin must fall, but not collapse over a single flight.
         assert 0.6 * initial_spin < final_spin < initial_spin
@@ -185,67 +188,17 @@ class TestSimulate:
         assert traj.total_yards > traj.carry_yards
 
 
-@pytest.mark.parametrize("substitutes", [True, False], ids=["ops_only", "fusion"])
-@pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
-@pytest.mark.parametrize(
-    "field", ["launch_angle_vertical", "launch_angle_horizontal", "spin_axis_deg", "spin_rpm"]
-)
-def test_a_non_finite_input_resolves_launch_exactly_like_a_missing_one(field, bad, substitutes):
-    """Task 3 fix round (I1): a non-finite value is a missing value; D17 unchanged."""
-    measured = dict(
-        ball_speed_mph=120.0,
-        timestamp=datetime(2026, 10, 11),
-        club=ClubType.IRON_7,
-        launch_angle_vertical=18.0,
-        launch_angle_horizontal=1.0,
-        spin_rpm=6500.0,
-        spin_confidence=0.9,
-        spin_axis_deg=2.0,
-    )
-    with_bad = resolve_launch(Shot(**{**measured, field: bad}), substitutes=substitutes)
-    with_none = resolve_launch(Shot(**{**measured, field: None}), substitutes=substitutes)
-    assert with_bad == with_none
-    if with_bad is not None:
-        assert all(
-            math.isfinite(v)
-            for v in (
-                with_bad.launch_angle_v,
-                with_bad.launch_angle_h,
-                with_bad.spin_rpm,
-                with_bad.spin_axis_deg,
-            )
-        )
-
-
-@pytest.mark.parametrize("substitutes", [True, False], ids=["ops_only", "fusion"])
-@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
-def test_a_non_finite_ball_speed_resolves_no_launch(bad, substitutes):
-    """A-M2: a non-finite ball speed is a missing one, so there is nothing to simulate."""
-    shot = Shot(
-        ball_speed_mph=bad,
-        timestamp=datetime(2026, 10, 12),
-        club=ClubType.IRON_7,
-        launch_angle_vertical=18.0,
-        launch_angle_horizontal=1.0,
-        spin_rpm=6500.0,
-        spin_confidence=0.9,
-        spin_axis_deg=2.0,
-    )
-    assert resolve_launch(shot, substitutes=substitutes) is None
-
-
 class TestAeroCoefficientSafeguards:
     """Guards on the Cd/Cl quadratics outside their fitted range.
 
-    The coefficients are fitted over Sp <= SP_FIT_MAX. Extrapolated past it
-    both parabolas turn over and cross zero (Ferguson's published constants:
-    Cl above Sp ~1.09, Cd above ~1.25; flight-fit-v1: Cl above ~1.33, Cd above
-    ~1.66), which would mean lift pulling the ball down and drag *accelerating*
-    it. Sp is recomputed every integration step from r*omega/v, and v decays
-    faster than spin, so a normal lob wedge reaches Sp ~1.5 near apex - inside
-    the negative-lift region of both. Holding both curves at their end value is
-    the guard; these tests (on the active model, and test_flight_fit_v1 on every
-    model) are what make its removal fail.
+    The Ferguson coefficients are fitted over Sp <= SP_FIT_MAX. Extrapolated
+    past it both parabolas turn over and cross zero (Cl above Sp ~1.09, Cd
+    above ~1.25), which would mean lift pulling the ball down and drag
+    *accelerating* it. Sp is recomputed every integration step from
+    r*omega/v, and v decays faster than spin, so a normal lob wedge reaches
+    Sp ~1.5 near apex - inside the negative-drag region. Holding both curves
+    at their end value is the guard; these tests are what make its removal
+    fail.
     """
 
     def test_zero_spin_produces_no_lift(self):
@@ -278,10 +231,9 @@ class TestAeroCoefficientSafeguards:
         """A real lob wedge drives Sp past the fitted range in flight.
 
         This is why the clamp is not hypothetical: 55 mph / 40 deg /
-        10000 rpm peaks near Sp 1.5, where the raw parabolas give
-        Cd = -0.35 and Cl = -0.73 (Ferguson's published constants) or
-        Cd = +0.15 and Cl = -0.24 (flight-fit-v1). The clamp is what holds
-        that at the Sp 0.75 endpoint instead.
+        10000 rpm peaks near Sp 1.5, where the raw parabola gives
+        Cd = -0.35 and Cl = -0.73. The clamp is what holds that at the
+        Sp 0.75 endpoint instead.
 
         Note this asserts reachability, not the clamp's presence: removing
         the clamp *lowers* peak Sp (less drag keeps the ball faster), so it
@@ -311,227 +263,3 @@ class TestAeroCoefficientSafeguards:
         assert 30.0 < traj.carry_yards < 90.0, (
             f"lob wedge carry {traj.carry_yards:.1f} yd is not plausible"
         )
-
-
-# --- W7 (E4): carry to the landing point; spin axis against the launch direction ---
-
-
-def _yawed(la_h, axis=0.0, spin=2700.0):
-    return simulate(_driver(spin_rpm=spin, axis=axis, la_h=la_h))
-
-
-class TestW7Coordinates:
-    """A launch rotated about the vertical must fly the same shot, rotated.
-
-    Carry is TrackMan's "straight-line distance between where the golf ball was
-    launched from and where it crosses a point that has the same elevation"
-    (metric_definitions.curve cites it), i.e. hypot(x, y), not the x component.
-    The spin axis is a tilt against the launch direction, so its vector turns
-    with the horizontal launch angle.
-    """
-
-    def test_carry_is_the_straight_line_distance_to_the_landing_point(self):
-        traj = _yawed(10.0)
-        landing = traj.points[-1]
-        assert traj.carry_yards == pytest.approx(math.hypot(landing.x, landing.y), abs=1e-6)
-        assert traj.downrange_yards == pytest.approx(landing.x, abs=1e-6)
-        assert traj.carry_side_yards == pytest.approx(landing.y, abs=1e-6)
-
-    @pytest.mark.parametrize("la_h", [5.0, 10.0, -30.0])
-    def test_a_yawed_pure_backspin_shot_carries_as_far_as_a_straight_one(self, la_h):
-        straight = _yawed(0.0)
-        yawed = _yawed(la_h)
-        assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
-        assert yawed.apex_yards == pytest.approx(straight.apex_yards, abs=0.01)
-        assert yawed.flight_time_s == pytest.approx(straight.flight_time_s, abs=1e-3)
-
-    def test_a_pure_backspin_shot_launched_right_does_not_curve(self):
-        yawed = _yawed(5.0)
-        # it lands on its launch line: side = carry * sin(5 deg), and nothing more
-        assert yawed.carry_side_yards == pytest.approx(
-            yawed.carry_yards * math.sin(math.radians(5.0)), abs=0.01
-        )
-        assert yawed.landing_heading_deg == pytest.approx(5.0, abs=0.01)
-
-    @pytest.mark.parametrize("axis", [-12.0, 10.0])
-    def test_a_tilted_axis_curves_the_same_whatever_the_launch_direction(self, axis):
-        straight = _yawed(0.0, axis=axis)
-        yawed = _yawed(5.0, axis=axis)
-        h = math.radians(5.0)
-        # the yawed landing point is the straight one rotated by the launch angle
-        x0, y0 = straight.downrange_yards, straight.carry_side_yards
-        assert yawed.downrange_yards == pytest.approx(x0 * math.cos(h) - y0 * math.sin(h), abs=0.01)
-        assert yawed.carry_side_yards == pytest.approx(
-            x0 * math.sin(h) + y0 * math.cos(h), abs=0.01
-        )
-        assert yawed.carry_yards == pytest.approx(straight.carry_yards, abs=0.01)
-
-
-class TestSpinAxisCarriesNoRifleSpin:
-    """A tilted axis is the backspin axis turned about the launch direction itself.
-
-    The spin vector stays perpendicular to the launch velocity whatever the launch
-    angle, so a tilted axis adds no spin about the direction of travel.
-    """
-
-    @pytest.mark.parametrize("launch_v", [0.0, 12.0, 30.0])
-    @pytest.mark.parametrize("launch_h", [0.0, 7.0])
-    @pytest.mark.parametrize("axis", [-25.0, 0.0, 15.0])
-    def test_the_spin_vector_is_a_unit_vector_across_the_launch(self, launch_v, launch_h, axis):
-        from openflight.ballistics import launch_relative_spin_axis
-
-        w = launch_relative_spin_axis(axis, launch_h, launch_v)
-        v, h = math.radians(launch_v), math.radians(launch_h)
-        d = (math.cos(v) * math.cos(h), math.cos(v) * math.sin(h), math.sin(v))
-        assert math.hypot(*w) == pytest.approx(1.0, abs=1e-12)
-        assert sum(a * b for a, b in zip(w, d)) == pytest.approx(0.0, abs=1e-12)
-
-    def test_a_level_launch_keeps_the_old_axis(self):
-        from openflight.ballistics import launch_relative_spin_axis
-
-        a = math.radians(10.0)
-        h = math.radians(4.0)
-        expected = (math.cos(a) * math.sin(h), -math.cos(a) * math.cos(h), math.sin(a))
-        assert launch_relative_spin_axis(10.0, 4.0) == pytest.approx(expected, abs=1e-12)
-
-    def test_a_tilt_to_the_right_still_fades(self):
-        assert simulate(_driver(axis=20.0, launch=25.0)).carry_side_yards > 0.0
-        assert simulate(_driver(axis=-20.0, launch=25.0)).carry_side_yards < 0.0
-
-
-# --- E4: total distance; the USGA / R&A 2021 bounce model stays selectable ---
-
-
-class TestBounceModel:
-    """USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in
-    Evaluating Optimum Overall Distance", Eq. 1: d_bounce = 79.1 - 1.6 * alpha_f
-    (yards, alpha_f the terminal angle in degrees), from fairway data over
-    terminal angles of 10-50 degrees (its Table 1)."""
-
-    @staticmethod
-    def _usga(angle):
-        from openflight.ballistics import USGA_RA_2021_BOUNCE_MODEL, bounce_and_roll_yards
-
-        return bounce_and_roll_yards(angle, model=USGA_RA_2021_BOUNCE_MODEL)
-
-    def test_the_papers_equation_at_its_reference_angle(self):
-        # The intercept was set so the model matches the 2003 model at the
-        # mean terminal angle of the 2020 ODS tests, 37.6 deg (§4, Figure 9).
-        assert self._usga(37.6) == pytest.approx(79.1 - 1.6 * 37.6)
-        assert self._usga(37.6) == pytest.approx(18.94, abs=1e-9)
-
-    def test_the_typical_39_degree_landing(self):
-        assert self._usga(39.0) == pytest.approx(16.7, abs=1e-9)
-
-    @pytest.mark.parametrize("angle", [9.9, 50.1, 70.0, -5.0])
-    def test_outside_the_models_data_range_there_is_no_total(self, angle):
-        assert self._usga(angle) is None
-
-    def test_an_unknown_surface_has_no_model(self):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        assert bounce_and_roll_yards(39.0, surface="green_fast") is None
-
-    def test_every_roll_model_is_registered(self):
-        from openflight.ballistics import ROLL_MODELS, USGA_RA_2021_BOUNCE_MODEL
-        from openflight.bounce_roll import TURF_ROLL_V1, TURF_ROLL_V2
-
-        assert ROLL_MODELS == {
-            "usga-ra-2021": USGA_RA_2021_BOUNCE_MODEL,
-            "turf-roll-v1": TURF_ROLL_V1,
-            "turf-roll-v2": TURF_ROLL_V2,
-        }
-
-
-class TestTurfRollIsTheFairwayModel:
-    """Total on fairway turf comes from the turf bounce-and-roll model, which
-    needs the landing speed and backspin as well as the landing angle."""
-
-    def test_the_fairway_model_is_the_turf_roll_with_airborne_hops(self):
-        from openflight.ballistics import ACTIVE_ROLL_MODEL, BOUNCE_MODELS, FAIRWAY_NORMAL
-        from openflight.bounce_roll import TURF_ROLL_V2
-
-        assert ACTIVE_ROLL_MODEL is TURF_ROLL_V2
-        assert BOUNCE_MODELS[FAIRWAY_NORMAL] is TURF_ROLL_V2
-
-    def test_the_turf_roll_is_never_clamped(self):
-        from openflight.ballistics import roll_clamped
-
-        assert roll_clamped(55.0) is False
-
-    def test_without_the_landing_speed_and_spin_there_is_no_roll(self):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        assert bounce_and_roll_yards(39.0) is None
-
-    def test_the_trajectory_carries_its_landing_backspin(self):
-        traj = _yawed(0.0, axis=20.0)
-        spin = traj.points[-1].spin_rpm
-        assert 0.0 < spin < 2700.0
-        assert traj.landing_backspin_rpm == pytest.approx(spin * math.cos(math.radians(20.0)))
-
-    def test_total_rolls_on_along_the_landing_heading(self):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        traj = _yawed(5.0, axis=8.0)
-        roll = bounce_and_roll_yards(
-            traj.landing_angle_deg,
-            landing_speed_mph=traj.landing_speed_mph,
-            backspin_rpm=traj.landing_backspin_rpm,
-        )
-        assert roll is not None and roll > 0.0
-        heading = math.radians(traj.landing_heading_deg)
-        rest_x = traj.downrange_yards + roll * math.cos(heading)
-        rest_y = traj.carry_side_yards + roll * math.sin(heading)
-        assert traj.total_yards == pytest.approx(math.hypot(rest_x, rest_y), abs=1e-6)
-        assert traj.total_side_yards == pytest.approx(rest_y, abs=1e-6)
-
-    def test_the_usga_line_can_still_be_asked_for(self):
-        from openflight.ballistics import USGA_RA_2021_BOUNCE_MODEL
-
-        traj = _yawed(0.0)
-        rest = traj.rest_point(model=USGA_RA_2021_BOUNCE_MODEL)
-        roll = 79.1 - 1.6 * traj.landing_angle_deg
-        assert rest[0] == pytest.approx(traj.downrange_yards + roll, abs=1e-6)
-
-
-class TestHopsFlyInTheTrajectorysAir:
-    """A turf model with airborne hops flies them in the flight's own air and model."""
-
-    @staticmethod
-    def _airborne():
-        import dataclasses
-
-        from openflight.bounce_roll import TURF_ROLL_V1
-
-        return dataclasses.replace(TURF_ROLL_V1, aerodynamic_hops=True)
-
-    def test_the_trajectory_records_its_air_and_model(self):
-        from openflight.ballistics import ACTIVE_AERO_MODEL, FERGUSON_2022
-
-        traj = simulate(_driver(), air_density=1.1)
-        assert traj.air_density_kg_m3 == pytest.approx(1.1)
-        assert traj.aero is ACTIVE_AERO_MODEL
-        assert simulate(_driver(), aero=FERGUSON_2022).aero is FERGUSON_2022
-
-    def test_rest_point_flies_the_hops_in_that_air(self):
-        import dataclasses
-
-        traj = simulate(_driver())
-        model = self._airborne()
-        thick = dataclasses.replace(traj, air_density_kg_m3=1.4).rest_point(model=model)
-        thin = dataclasses.replace(traj, air_density_kg_m3=0.9).rest_point(model=model)
-        assert thin[0] > thick[0]
-
-    def test_without_a_trajectory_the_hops_fly_the_default_air(self):
-        from openflight.ballistics import bounce_and_roll_yards
-
-        traj = simulate(_driver())
-        model = self._airborne()
-        roll = bounce_and_roll_yards(
-            traj.landing_angle_deg,
-            landing_speed_mph=traj.landing_speed_mph,
-            backspin_rpm=traj.landing_backspin_rpm,
-            model=model,
-        )
-        assert traj.rest_point(model=model)[0] == pytest.approx(traj.downrange_yards + roll)

@@ -8,7 +8,8 @@ scripts/, config/, docs/ and tests/ one bucket:
 - TESTER and RESEARCH: the fork's tester tooling and research, never merged.
 
 The dependencies point one way: TESTER and RESEARCH may import anything, a
-FUSION or PRODUCT Python file may import only FUSION and PRODUCT modules. The
+FUSION or PRODUCT Python file may import only FUSION and PRODUCT modules, and
+outside Part E (the shot models) never a Part E one. The
 check walks every import statement (lazy ones inside functions included). An
 extension the kiosk loads by entry point is not an import, and is not checked.
 """
@@ -113,10 +114,24 @@ def test_every_tracked_file_has_exactly_one_known_bucket():
     assert not unknown, f"unknown buckets: {unknown}"
 
 
-def test_part_e_files_are_fusion_files_in_the_manifest():
+def test_part_e_files_are_upstream_bound_files_in_the_manifest():
     files = _files()
     for path in _manifest()["part_e"]:
-        assert files.get(path) == "FUSION", path
+        assert files.get(path) in SHIPPED | {"DOCS-USER"}, path
+
+
+def test_shipped_python_outside_part_e_never_imports_part_e():
+    """The kiosk, its sensors and their tests stand without the shot models (Part E)."""
+    files = _files()
+    part_e = set(_manifest()["part_e"])
+    crossings = []
+    for path, bucket in sorted(files.items()):
+        if bucket not in SHIPPED or path in part_e or not path.endswith(".py"):
+            continue
+        for line, target in sorted(_imported_files(path)):
+            if target in part_e:
+                crossings.append(f"{path}:{line} imports {target} (Part E)")
+    assert not crossings, "code outside Part E imports Part E:\n" + "\n".join(crossings)
 
 
 def test_shipped_python_never_imports_tester_or_research_code():

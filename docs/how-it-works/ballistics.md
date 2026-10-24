@@ -11,8 +11,9 @@ TrackMan 4 exports (flight-fit-v1), then adds bounce and roll from a published
 turf-bounce form (Penner 2002) with fitted constants. Every output says what it
 is, where it came from and how uncertain it is.
 
-Implemented in `src/openflight/ballistics.py` (the physics) and
-`src/openflight/flight.py` (the labelled outputs).
+Implemented in `src/openflight/flight_sim.py` (the physics) and
+`src/openflight/flight.py` (the labelled outputs). Without them the kiosk's carry
+comes from upstream's `src/openflight/ballistics.py`.
 
 ## The outputs
 
@@ -222,9 +223,9 @@ $$
   lift.
 - **No spin, no lift:** $C_l(0) = 0$.
 
-Three models are in the code (`ballistics.AERO_MODELS`). The active one is
-`flight-fit-v1`; `simulate(..., aero=FERGUSON_2022)` or `aero=FLIGHT_FIT_V2`
-flies another.
+The active model is `flight-fit-v1` (`flight_sim.FLIGHT_FIT_V1`). Ferguson's
+published constants and flight-fit-v2 are kept for comparison in
+`flight_models_superseded` (research).
 
 | Model | $a, b, c$ ($C_d$) | $d, e, f$ ($C_l$) | $g$ |
 | --- | --- | --- | --- |
@@ -429,12 +430,10 @@ uv run python scripts/analysis/fit_flight_model.py --loo --plots --output-dir ou
   2 ms step. Held-out folds run in parallel (`--jobs`).
 - **A new version:** gets a new id (`flight-fit-v2`), its own calibration
   record, and re-derived budgets in `tests/test_ballistics_trackman_regression.py`.
-  `flight-fit-v1` stays selectable.
-- **Either model on any export:**
-  `scripts/analysis/validate_ballistics.py --aero ferguson-2022` (or
-  `flight-fit-v1`).
+  `flight-fit-v1` is kept for comparison.
+- **The active model on any export:** `scripts/analysis/validate_ballistics.py`.
 
-### flight-fit-v2: a descent term (selectable)
+### flight-fit-v2: a descent term (research)
 
 flight-fit-v2 keeps Ferguson's quadratics on the way up. While the ball
 descends, both coefficients are scaled by a smooth factor of the descent angle
@@ -532,7 +531,7 @@ landing backspin (the spin times the cosine of the spin axis tilt):
   it leaves rolling. The normal restitution falls with the normal impact speed,
   \(e = e_0 / (1 + v_n / v_e)\), and the turf caps the speed kept along the
   surface, \(v_t / \sqrt{1 + (v_t / v_c)^2}\) with \(v_c\) falling with \(v_n\).
-- **Hops** between bounces fly through the flight model (`ballistics.hop_flight`):
+- **Hops** between bounces fly through the flight model (`flight_sim.hop_flight`):
   drag, Magnus lift and spin decay as in flight, in the flight's own air,
   carrying the spin out of each bounce (backspin lifts a hop, topspin pushes it
   down). RK4 at 10 ms lands a hop within 2 mm of the 2 ms flight step. Once a hop
@@ -576,8 +575,8 @@ OpenFlight applies it as follows:
   gives `total_side`.
 
 The **USGA & R&A Rules Ltd (9 March 2021), "Proposed Bounce Model for Use in
-Evaluating Optimum Overall Distance"**, Eq. 1, also stays selectable
-(`USGA_RA_2021_BOUNCE_MODEL`, `TURF_ROLL_V1`, `ROLL_MODELS`, or `model=` on
+Evaluating Optimum Overall Distance"**, Eq. 1, is kept for comparison with
+turf-roll-v1 (`flight_models_superseded`, research; `model=` on
 `bounce_and_roll_yards` and `Trajectory.rest_point`):
 
 $$
@@ -643,8 +642,8 @@ themselves from speed, launch and spin.
 | `CL_POLY` | (0.0646, 1.1261, -0.8869) | The active model's $C_l$ polynomial $(d, e, f)$ |
 | `SP_FIT_MAX` | 0.75 | Top of the fitted $S_p$ range; curves held beyond it |
 | `CM_PER_SP` | 0.010 | The active model's spin-down moment per unit $S_p$ (Eq. 4) |
-| `FERGUSON_2022` | (0.1304, 0.9287, -0.8259), (0.0504, 1.2031, -1.1490), 0.01 | Ferguson's published constants, selectable |
-| `FLIGHT_FIT_V2` | (0.1510, 0.8274, -0.5778), (0.0715, 1.1250, -0.9015), 0.0117; descent 4.99, 4.90, 8.03 | Selectable, not active |
+| `FERGUSON_2022` | (0.1304, 0.9287, -0.8259), (0.0504, 1.2031, -1.1490), 0.01 | Ferguson's published constants (research) |
+| `FLIGHT_FIT_V2` | (0.1510, 0.8274, -0.5778), (0.0715, 1.1250, -0.9015), 0.0117; descent 4.99, 4.90, 8.03 | Not active (research) |
 | `GRAVITY` | 9.81 m/s² | |
 | `DT_SECONDS` | 0.002 | 500 Hz integration |
 | `RANGE_DT_SECONDS` | 0.02 | Range sweep only |
@@ -652,8 +651,8 @@ themselves from speed, launch and spin.
 | `SAMPLE_INTERVAL_S` | 0.05 | Cadence of returned trajectory points |
 | `HOP_DT_SECONDS` | 0.01 | Step for the hops between bounces |
 | `TURF_ROLL_V2` | twelve fitted constants, landing angle 5–65°, hops through the air | Fairway bounce and roll (active) |
-| `TURF_ROLL_V1` | twelve fitted constants, landing angle 5–65°, vacuum hops | Fairway bounce and roll (selectable) |
-| `USGA_RA_2021_BOUNCE_MODEL` | 79.1 yd, −1.6 yd/°, 10–50° | Fairway bounce and roll (selectable) |
+| `TURF_ROLL_V1` | twelve fitted constants, landing angle 5–65°, vacuum hops | Fairway bounce and roll (research) |
+| `USGA_RA_2021_BOUNCE_MODEL` | 79.1 yd, −1.6 yd/°, 10–50° | Fairway bounce and roll (research) |
 
 !!! note "Why the maximum-conforming ball"
 

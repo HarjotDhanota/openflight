@@ -30,6 +30,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from . import kiosk_extensions, shot_metrics
+from .ballistics import resolve_launch, simulate
 from .ble.protocol import (
     build_power_status_event,
     build_profiles_event,
@@ -55,6 +56,7 @@ from .launch_monitor import (
     CARRY_ESTIMATED,
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
+    SPIN_CONFIDENCE_HIGH,
     SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
@@ -5458,6 +5460,33 @@ def _open_smash_factor_status(shot: Shot) -> None:
     shot.smash_factor_status = SMASH_RADIAL_RATIO if _fusion_unit() else None
 
 
+def _ballistic_carry(shot: Shot, *, fusion: bool) -> kiosk_extensions.CarryOutcome:
+    """The simulator's carry on the shot's launch, or why there is none.
+
+    A fusion unit simulates only a measured spin, horizontal launch and spin axis
+    (D17); an OPS-only unit lets resolve_launch fill the club-typical spin.
+    """
+    inputs = [shot.ball_speed_mph, shot.launch_angle_vertical]
+    if fusion:
+        inputs += [shot.spin_rpm, shot.launch_angle_horizontal, shot.spin_axis_deg]
+    measured_spin = _finite(shot.spin_confidence) and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
+    usable = ballistics_enabled and all(_finite(v) for v in inputs)
+    if usable and (measured_spin or not fusion):
+        trajectory = simulate(resolve_launch(shot))
+        if _finite(trajectory.carry_yards):
+            shot.carry_spin_adjusted = trajectory.carry_yards
+            shot.carry_status = CARRY_ESTIMATED
+            logger.info("[SERVER] Ballistic carry: %.0f yds", shot.carry_spin_adjusted)
+            return kiosk_extensions.CarryOutcome(source="ballistic", table_reason=None)
+    reason = "ballistics disabled" if not ballistics_enabled else "launch not measured"
+    if fusion:
+        shot.carry_spin_adjusted = None
+        shot.carry_status = CARRY_NOT_MEASURED
+        logger.info("[SERVER] Carry not measured: %s", reason)
+        return kiosk_extensions.CarryOutcome(source=None, table_reason=None)
+    return kiosk_extensions.CarryOutcome(source=None, table_reason=reason)
+
+
 def _finalize_shot_detected(
     shot: Shot,
     *,
@@ -5507,20 +5536,12 @@ def _finalize_shot_detected(
     fusion = _fusion_unit()
     if shot.mode != "mock":
         # A flight model (an extension's) simulates every flight output and commits
-        # the carry. Without one, a fusion unit has no carry (D17) and an OPS-only
-        # unit takes the table estimate.
+        # the carry; without one, the drag + Magnus simulator does.
         outcome = kiosk_extensions.first(
             "simulate_carry", shot, fusion=fusion, enabled=ballistics_enabled
-        )
-        if outcome is None and fusion:
-            shot.carry_spin_adjusted = None
-            shot.carry_status = CARRY_NOT_MEASURED
-            logger.info("[SERVER] Carry not measured: no flight model")
-        elif outcome is None:
-            outcome = kiosk_extensions.CarryOutcome(source=None, table_reason="no flight model")
-        if outcome is not None:
-            carry_source = outcome.source
-        if outcome is not None and outcome.table_reason is not None:
+        ) or _ballistic_carry(shot, fusion=fusion)
+        carry_source = outcome.source
+        if outcome.table_reason is not None:
             has_reliable_spin = (
                 shot.spin_rpm
                 and shot.spin_rpm > 0
