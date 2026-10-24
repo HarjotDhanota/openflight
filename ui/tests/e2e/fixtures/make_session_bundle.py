@@ -23,7 +23,7 @@ viewer = REPO / "ui" / "public" / "session-review.html"
 if runner.analyze(root, TESTER, package=True, viewer=viewer) != 0:
     raise SystemExit("analysis failed")
 job = json.loads((root / TESTER / "analysis" / "job.json").read_text(encoding="utf-8"))
-bundle = Path(job["bundle"]["path"])
+bundle = root / job["bundle"]["path"]  # job.json records it relative to the sessions folder
 duplicate = bundle.with_name("duplicate-member.zip")
 shutil.copy2(bundle, duplicate)
 with warnings.catch_warnings(), zipfile.ZipFile(duplicate, "a") as archive:
