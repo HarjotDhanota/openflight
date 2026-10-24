@@ -4427,6 +4427,10 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
             effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
             data["configured_iwr_tilt_deg"] = round(configured_tilt, 3)
             data["effective_iwr_tilt_deg"] = round(effective_tilt, 3)
+            if data["roll_verified"]:
+                # the board turns with the unit: its departure from the expected roll
+                expected_roll = (_expected_inclinometer_orientation() or {}).get("roll_deg") or 0.0
+                data["effective_iwr_roll_deg"] = round(snapshot.roll_deg - expected_roll, 3)
             applied_to.append("iwr6843")
         logger.info(
             "[SERVER] Inclinometer pitch: raw %+.2fdeg, calibrated %+.2fdeg, for %s (age %.0fms)",
@@ -4495,11 +4499,10 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
     started = time.monotonic()
     shot_result = None
     try:
-        effective_tilt_deg = (
-            shot.inclinometer.get("effective_iwr_tilt_deg")
-            if "iwr6843" in ((shot.inclinometer or {}).get("applied_to") or ())
-            else None
-        )
+        for_iwr = "iwr6843" in ((shot.inclinometer or {}).get("applied_to") or ())
+        effective_tilt_deg = shot.inclinometer.get("effective_iwr_tilt_deg") if for_iwr else None
+        effective_roll_deg = shot.inclinometer.get("effective_iwr_roll_deg") if for_iwr else None
+        roll_inputs = {"roll_deg": effective_roll_deg} if effective_roll_deg is not None else {}
         club = shot.club.value
         at_address = shot_ball_at_address(shot.impact_timestamp)
         own_prior = _look_range_prior(at_address)
@@ -4510,6 +4513,11 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 club=club,
                 club_speed_mph=shot.club_speed_mph,
                 effective_tilt_deg=effective_tilt_deg,
+                **(
+                    {"effective_roll_deg": effective_roll_deg}
+                    if effective_roll_deg is not None
+                    else {}
+                ),
                 **({"ball_at_address": at_address} if at_address is not None else {}),
                 **({"range_prior": own_prior} if own_prior is not None else {}),
             )
@@ -4522,6 +4530,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             club=club,
             club_speed_mph=shot.club_speed_mph,
             tilt_deg=effective_tilt_deg,
+            **roll_inputs,
             **({"range_prior": own_prior} if own_prior is not None else {}),
         )
         capture = shot_result.capture

@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from openflight import server
 from openflight.inclinometer import OrientationSnapshot, SnapshotSelection
 from openflight.iwr6843.calibration import Calibration
@@ -127,6 +129,56 @@ def test_init_inclinometer_is_fail_soft(monkeypatch):
     assert server.inclinometer_service is None
     assert server.inclinometer_runtime_config["requested"] is True
     assert server.inclinometer_runtime_config["error"] == "I2C unavailable"
+
+
+def _rolled_selection(roll_deg):
+    roll = math.radians(roll_deg)
+    snapshot = OrientationSnapshot(
+        timestamp=99.8,
+        x_g=math.sin(roll),
+        y_g=0.0,
+        z_g=math.cos(roll),
+        gravity_g=1.0,
+        raw_pitch_deg=0.0,
+        calibrated_pitch_deg=0.0,
+        pitch_std_deg=0.1,
+        sample_count=8,
+    )
+    return SnapshotSelection(snapshot=snapshot, status="stable", age_s=0.2, rule="recent_stable")
+
+
+@pytest.mark.parametrize("verified", [True, False])
+def test_the_iwr_takes_the_roll_only_on_a_verified_unit(monkeypatch, verified):
+    calibration = Calibration.identity()
+    seen = {}
+
+    def process_shot(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(capture=None, measurement=None, club_path=None)
+
+    monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_rolled_selection(2.0)))
+    monkeypatch.setattr(
+        server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0, "roll_verified": verified}
+    )
+    monkeypatch.setattr(
+        server,
+        "iwr6843_runtime",
+        SimpleNamespace(calibration=calibration, process_shot=process_shot),
+    )
+    monkeypatch.setattr(server, "rig_geometry", None)
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
+
+    server._snapshot_inclinometer_for_shot(shot)
+    server._process_iwr6843_angle(shot)
+
+    assert shot.inclinometer["roll_verified"] is verified
+    if verified:
+        assert shot.inclinometer["effective_iwr_roll_deg"] == pytest.approx(2.0)
+        assert seen["roll_deg"] == pytest.approx(2.0)
+    else:
+        assert "effective_iwr_roll_deg" not in shot.inclinometer
+        assert "roll_deg" not in seen
 
 
 def test_a_unit_that_moved_gets_no_correction_and_says_so(monkeypatch):

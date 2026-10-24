@@ -328,6 +328,7 @@ class IWR6843Runtime:
         club: str | None = None,
         club_speed_mph: float | None = None,
         effective_tilt_deg: float | None = None,
+        effective_roll_deg: float | None = None,
         tee_range_m: float | None = None,
         ball_at_address: dict | None = None,
         range_prior: LaunchRangePrior | None = None,
@@ -356,6 +357,7 @@ class IWR6843Runtime:
                 "club": club,
                 "club_speed_mph": club_speed_mph,
                 "effective_tilt_deg": effective_tilt_deg,
+                "effective_roll_deg": effective_roll_deg,
                 "tee_range_m": tee_range_m,
                 "ball_at_address": ball_at_address,
                 "range_prior": (range_prior or self.range_prior).to_dict()
@@ -402,10 +404,12 @@ class IWR6843Runtime:
         tilt_deg: float | None = None,
         tee_range_m: float | None = None,
         range_prior: LaunchRangePrior | None = None,
+        roll_deg: float | None = None,
     ) -> IWR6843ShotResult:
         """Match one OPS shot to TI data, range its launch point, and run LCMF.
 
         Range: the shot's own launch point, else the labelled camera prior, else none.
+        ``roll_deg`` (the unit's verified roll) turns the board about its boresight.
         """
         process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(
@@ -441,6 +445,8 @@ class IWR6843Runtime:
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
+        if roll_deg is not None:
+            shot_calibration = replace(shot_calibration, roll_rad=math.radians(roll_deg))
         if tee_range_m is not None:
             shot_calibration = replace(shot_calibration, tee_range_m=float(tee_range_m))
         prepared = None

@@ -6,6 +6,8 @@ factory calibration. Conventions:
 
 - Element corrections apply AFTER the physical-orientation flip (x8[::-1]).
 - ``tilt_rad`` rotates measured angles into ground coordinates.
+- ``roll_rad`` turns the board about its boresight (the unit's roll, + target-right
+  side up); 0 unless the unit verified its LIS3DH roll.
 - ``range_bias_m`` subtracts from measured range (radar-face referenced).
 
 Re-run array calibration whenever the board, enclosure, or antenna orientation
@@ -34,6 +36,7 @@ class Calibration:
     tilt_rad: float
     range_bias_m: float
     source: str = "unset"
+    roll_rad: float = 0.0
     tee_range_m: float | None = None  # the shot's launch-point range (slant)
     # 0 when measured; else the camera prior's uncertainty, which widens the club gate.
     tee_range_uncertainty_m: float = 0.0

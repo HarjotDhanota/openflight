@@ -328,9 +328,9 @@ def _model_geometry(
     bistatic mean over the eight pairs differs by hundredths of a millimetre).
     """
     layout = antenna_layout(cal)
-    positions = layout.positions_m(cal.tilt_rad)
+    positions = layout.positions_m(cal.tilt_rad, cal.roll_rad)
     tx_positions, rx_positions = antennas.channel_positions_m(positions, tx_order)
-    phase_centre_height_m = layout.phase_centre_height_m(cal.tilt_rad)
+    phase_centre_height_m = layout.phase_centre_height_m(cal.tilt_rad, cal.roll_rad)
     vertical_delta_m = cal.tee_ball_height_m - phase_centre_height_m
     lateral_m = cal.lateral_tee_offset_m
     return {
@@ -843,6 +843,38 @@ def _median_pairwise_slope(times: np.ndarray, values: np.ndarray) -> float:
     return float(np.median(slopes))
 
 
+def launch_direction_deg(  # pylint: disable=too-many-arguments
+    times_s: np.ndarray,
+    ranges_m: np.ndarray,
+    bearing_rad: np.ndarray,
+    tee_position_m: tuple[float, float, float],
+    vertical_launch_deg: float,
+    *,
+    roll_rad: float = 0.0,
+) -> float:
+    """The ball's horizontal launch from its track: ``atan2(v_lateral, v_forward)``.
+
+    ``bearing_rad`` is the board's (TX2) bearing, + right; on a rolled board it mixes
+    in the height, so the lateral is un-rolled (``antennas.world_lateral_m``) with the
+    height from the vertical launch along the line from ``tee_position_m`` (forward,
+    lateral, height from the phase centre). Gravity is ignored.
+    """
+    tee_x_m, tee_y_m, tee_z_m = tee_position_m
+    rise = math.tan(math.radians(vertical_launch_deg))
+    board_lateral_m = ranges_m * np.sin(bearing_rad)
+    height_m = np.full_like(ranges_m, tee_z_m)
+    for _ in range(4):  # the lateral and the height depend on each other: settle both
+        lateral_m = antennas.world_lateral_m(board_lateral_m, height_m, roll_rad)
+        downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
+        travelled_m = np.hypot(np.maximum(downrange_m - tee_x_m, 0.0), lateral_m - tee_y_m)
+        height_m = tee_z_m + travelled_m * rise
+    lateral_m = antennas.world_lateral_m(board_lateral_m, height_m, roll_rad)
+    downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
+    v_lateral = _median_pairwise_slope(times_s, lateral_m)
+    v_forward = _median_pairwise_slope(times_s, downrange_m)
+    return math.degrees(math.atan2(v_lateral, v_forward))
+
+
 def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     raw: bytes,
     shot: ShotMeasurement,
@@ -862,9 +894,8 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     reference voltages cancels them about 15 deg off boresight). With the
     track range r: ``y = r*sin(bearing)``, ``x = sqrt(r**2 - y**2 - z**2)``,
     z from this shot's vertical launch along the line from ``tee_position_m``
-    (forward, lateral, height from the phase centre). Launch direction is
-    ``atan2(v_y, v_x)`` of the robust velocity; gravity is ignored.
-    Positive starts right of the boresight.
+    (forward, lateral, height from the phase centre), y un-rolled by ``cal.roll_rad``
+    (``launch_direction_deg``). Positive starts right of the boresight.
     """
     collected = _tx2_phase_snapshots(
         raw,
@@ -908,18 +939,14 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
         np.asarray([shot.track.range_at(time_s, geometry.range_res_m) for time_s in t_array])
         - cal.range_bias_m
     )
-    lateral_m = ranges_m * np.sin(bearing_rad)
-    tee_x_m, tee_y_m, tee_z_m = tee_position_m
-    rise = math.tan(math.radians(vertical_launch_deg))
-    height_m = np.full_like(ranges_m, tee_z_m)
-    for _ in range(4):  # the height depends on the downrange distance: settle both
-        downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
-        travelled_m = np.hypot(np.maximum(downrange_m - tee_x_m, 0.0), lateral_m - tee_y_m)
-        height_m = tee_z_m + travelled_m * rise
-    downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
-    v_lateral = _median_pairwise_slope(t_array, lateral_m)
-    v_forward = _median_pairwise_slope(t_array, downrange_m)
-    angle_deg = math.degrees(math.atan2(v_lateral, v_forward))
+    angle_deg = launch_direction_deg(
+        t_array,
+        ranges_m,
+        bearing_rad,
+        tee_position_m,
+        vertical_launch_deg,
+        roll_rad=cal.roll_rad,
+    )
     if coherence < HORIZONTAL_COHERENCE_MIN:
         return angle_deg, coherence, "hlcmf_v2_low_coherence"
     return angle_deg, coherence, "hlcmf_v2_accepted"
@@ -1129,5 +1156,6 @@ __all__ = [
     "NAME",
     "antenna_layout",
     "estimate_lcmf_v1",
+    "launch_direction_deg",
     "prepare_lcmf_capture",
 ]

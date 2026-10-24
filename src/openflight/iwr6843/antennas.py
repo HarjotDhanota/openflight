@@ -42,14 +42,22 @@ class AntennaLayout:
     # An idealised patch table for tests; None is TI's LEVM ECAD table.
     patches_mm: Mapping[str, tuple[float, float]] | None = None
 
-    def _relative_m(self, tilt_rad: float) -> dict[str, np.ndarray]:
+    def _relative_m(self, tilt_rad: float, roll_rad: float) -> dict[str, np.ndarray]:
         offsets = levm_antenna_offsets_mm(
             self.board_rotation_deg, math.degrees(tilt_rad), self.patches_mm
         )
+        # the unit's roll turns the board about the forward axis: + lifts its right side
+        cos_roll, sin_roll = math.cos(roll_rad), math.sin(roll_rad)
         relative = {}
         for name, offset in offsets.items():
             lateral, forward, up = camera_rdf_offset_to_target_lfu(offset)
-            relative[name] = np.array([forward, lateral, up])
+            relative[name] = np.array(
+                [
+                    forward,
+                    lateral * cos_roll - up * sin_roll,
+                    lateral * sin_roll + up * cos_roll,
+                ]
+            )
         return relative
 
     def _phase_centre_m(self, relative: Mapping[str, np.ndarray]) -> np.ndarray:
@@ -57,10 +65,11 @@ class AntennaLayout:
         rx = np.mean([relative[name] for name in RX], axis=0)
         return 0.5 * (tx + rx)
 
-    def positions_m(self, tilt_rad: float) -> dict[str, np.ndarray]:
+    def positions_m(self, tilt_rad: float, roll_rad: float = 0.0) -> dict[str, np.ndarray]:
         """Every antenna's (forward, lateral, up) in metres, origin below the
-        phase centre, heights above the hitting surface."""
-        relative = self._relative_m(tilt_rad)
+        phase centre, heights above the hitting surface; ``roll_rad`` turns the
+        board about its RX-row centre."""
+        relative = self._relative_m(tilt_rad, roll_rad)
         centre = self._phase_centre_m(relative)
         return {
             name: np.array(
@@ -73,9 +82,10 @@ class AntennaLayout:
             for name, position in relative.items()
         }
 
-    def phase_centre_height_m(self, tilt_rad: float) -> float:
+    def phase_centre_height_m(self, tilt_rad: float, roll_rad: float = 0.0) -> float:
         """Height of the LCMF virtual array's phase centre above the surface."""
-        return self.rx_row_height_m + float(self._phase_centre_m(self._relative_m(tilt_rad))[2])
+        relative = self._relative_m(tilt_rad, roll_rad)
+        return self.rx_row_height_m + float(self._phase_centre_m(relative)[2])
 
     def as_dict(self) -> dict:
         """JSON-safe description for session and replay records."""
@@ -85,6 +95,17 @@ class AntennaLayout:
             "basis": self.basis,
             "patches": "levm_ecad" if self.patches_mm is None else "custom",
         }
+
+
+def world_lateral_m(board_lateral_m, height_m, roll_rad: float):
+    """The world lateral a rolled board's horizontal baseline (TX2) measured.
+
+    The baseline lies along (0, cos r, sin r) in (forward, lateral, up): it reads
+    lateral * cos r + height * sin r, so the height (from the phase centre) comes out.
+    """
+    return (np.asarray(board_lateral_m) - np.asarray(height_m) * math.sin(roll_rad)) / math.cos(
+        roll_rad
+    )
 
 
 def layout_from_phase_centre(
@@ -173,4 +194,5 @@ __all__ = [
     "layout_from_phase_centre",
     "legacy_layout",
     "steering",
+    "world_lateral_m",
 ]
