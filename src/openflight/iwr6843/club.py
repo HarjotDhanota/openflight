@@ -191,6 +191,9 @@ class ClubPathResult:
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
     club_path_frame: str = "unit_boresight"
+    # The ball's angles take a verified unit's roll; the club path does not yet (about
+    # 0.2 deg at a 3 deg roll and a -4 deg attack).
+    roll: str = "roll not applied"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
     # files to Python implementation details.

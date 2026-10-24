@@ -123,3 +123,9 @@ def test_the_vertical_model_places_the_antennas_of_the_rolled_board():
     tx, _rx = antennas.channel_positions_m(expected, "normal")
     np.testing.assert_allclose(rolled["tx_positions_m"], tx, atol=1e-12)
     assert not np.allclose(rolled["rx_positions_m"], level["rx_positions_m"])
+
+
+def test_the_club_path_says_it_does_not_take_the_roll():
+    from openflight.iwr6843.club import ClubPathResult  # noqa: PLC0415
+
+    assert ClubPathResult(status="accepted").to_dict()["roll"] == "roll not applied"
