@@ -132,3 +132,50 @@ def test_without_an_uncertainty_a_look_states_none():
     seen = _locator().observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
 
     assert seen["range_uncertainty_m"] is None
+
+
+def test_reconfigure_takes_the_new_box_and_range_and_drops_the_old_looks():
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    locator = _locator()
+    locator.observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
+    prior = SimpleNamespace(range_m=2.5, uncertainty_m=0.3)
+
+    locator.reconfigure(
+        (500, 390, 820, 530), {"x": 660.0, "y": 460.0, "diameter_px": 18.0}, None, prior
+    )
+
+    assert locator.latest() is None
+    assert locator.box == (500, 390, 820, 530)
+    assert locator.setup_ball == {"x": 660.0, "y": 460.0, "diameter_px": 18.0}
+    assert locator.setup_range_m == pytest.approx(2.5)
+    assert locator.setup_range_uncertainty_m == pytest.approx(0.3)
+    assert locator.setup_range_kind == "camera_prior"
+
+    locator.reconfigure(BOX, SETUP, 2.2, None)
+
+    assert locator.setup_range_m == pytest.approx(2.2)
+    assert locator.setup_range_uncertainty_m is None
+    assert locator.setup_range_kind == "radar_range"
+
+    locator.reconfigure(BOX, None, None, None)
+
+    assert locator.setup_ball is None
+    assert locator.setup_range_m is None
+
+
+def test_a_look_begun_before_a_reconfigure_is_not_kept():
+    locator = _locator()
+    find = locator._find
+    moved = []
+
+    def find_while_the_box_moves(image, roi):
+        if not moved:
+            moved.append(True)
+            locator.reconfigure(BOX, SETUP, 2.5, None)
+        return find(image, roi)
+
+    locator._find = find_while_the_box_moves
+    locator.observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
+
+    assert locator.latest() is None

@@ -981,6 +981,7 @@
   "tests/test_session_logger.py": "PRODUCT",
   "tests/test_session_review.py": "TESTER",
   "tests/test_setup_eligibility.py": "TESTER",
+  "tests/test_setup_live_apply.py": "FUSION",
   "tests/test_setup_record.py": "FUSION",
   "tests/test_setup_service.py": "FUSION",
   "tests/test_shared_camera_projection.py": "FUSION",

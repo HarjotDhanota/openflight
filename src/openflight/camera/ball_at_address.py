@@ -80,6 +80,30 @@ class BallAtAddress:
         self.lens = dict(lens) if lens else None
         self._lock = threading.Lock()
         self._looks: list[dict] = []
+        self._generation = 0
+
+    def reconfigure(self, box_px, setup_ball, setup_range_m, range_prior) -> None:
+        """Take a new box, setup ball and range; looks judged against the old ones are dropped.
+
+        A ``range_prior`` (``range_m``, ``uncertainty_m``) is used only without a radar range.
+        """
+        prior_only = setup_range_m is None and range_prior is not None
+        with self._lock:
+            self.box = tuple(int(value) for value in box_px)
+            self.setup_ball = dict(setup_ball) if setup_ball else None
+            self.setup_range_m = (
+                float(range_prior.range_m)
+                if prior_only
+                else float(setup_range_m)
+                if setup_range_m
+                else None
+            )
+            self.setup_range_uncertainty_m = (
+                float(range_prior.uncertainty_m) if prior_only else None
+            )
+            self.setup_range_kind = "camera_prior" if prior_only else "radar_range"
+            self._looks = []
+            self._generation += 1
 
     def _pixel_scale(self) -> float | None:
         if not self.setup_ball:
@@ -114,6 +138,8 @@ class BallAtAddress:
 
     def observe(self, image: np.ndarray, *, at: float) -> dict:
         """Look for the resting ball in this frame; keep and return what was found."""
+        with self._lock:
+            generation = self._generation
         x0, y0, x1, y1 = self.box
         found = self._find(image, self.box)
         state, reason = "not_seen", "no ball in the box"
@@ -152,7 +178,9 @@ class BallAtAddress:
             "lens": self.lens,
         }
         with self._lock:
-            self._looks = [*self._looks[-9:], look]
+            # a look begun before a reconfigure was judged against the old box
+            if generation == self._generation:
+                self._looks = [*self._looks[-9:], look]
         return dict(look)
 
     def latest(self) -> dict | None:

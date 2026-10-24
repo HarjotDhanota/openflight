@@ -216,7 +216,6 @@ def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
     ``line`` is the aim step's hand-off (``set`` or ``skipped``). New shots wait
     while every consumer takes the offset, so each shot is wholly in one frame.
     """
-    global horizontal_offset_deg, _target_line_revision, _target_line_since  # pylint: disable=global-statement
     status = line.get("status") if isinstance(line, dict) else None
     if status == "set":
         yaw = _finite_number(line.get("yaw_deg"), "yaw_deg")
@@ -229,37 +228,73 @@ def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
         }
     elif status == "skipped":
         offset = None
-        handed = {
-            "status": "skipped",
-            "yaw_deg": None,
-            "total_uncertainty_deg": None,
-            "source": None,
-        }
+        handed = _no_target_line("skipped")
     else:
         raise ValueError("a target line is set (with its yaw and offset) or skipped")
+    return _when_idle(lambda: _swap_target_line(offset, handed), timeout_s=timeout_s)
+
+
+def apply_setup_aim(aim: dict | None) -> None:
+    """Put the setup record's aim into effect: its target line, skipped, or none (None)."""
+    state = aim.get("state") if isinstance(aim, dict) else None
+    if state == "set":
+        yaw = _finite_number(aim.get("yaw_deg"), "yaw_deg")
+        offset = -yaw
+        handed = {
+            "status": "set",
+            "yaw_deg": yaw,
+            "total_uncertainty_deg": aim.get("uncertainty_deg"),
+            "method": aim.get("method"),
+            "source": aim.get("source") or "aim_point",
+        }
+    else:
+        offset = None
+        handed = _no_target_line("skipped" if state == "skipped" else "not_set")
+    _when_idle(lambda: _swap_target_line(offset, handed))
+
+
+def _no_target_line(status: str) -> dict:
+    return {"status": status, "yaw_deg": None, "total_uncertainty_deg": None, "source": None}
+
+
+def _swap_target_line(offset: float | None, handed: dict) -> dict:
+    global horizontal_offset_deg, _target_line_revision, _target_line_since  # pylint: disable=global-statement
+    previous = target_line_in_force()
+    horizontal_offset_deg = offset
+    if "horizontal_offset_deg" in camera_capture_config:
+        camera_capture_config["horizontal_offset_deg"] = offset
+    if iwr6843_runtime is not None:
+        iwr6843_runtime.azimuth_offset_deg = offset
+    if iwr6843_runtime_config.get("enabled"):
+        iwr6843_runtime_config["azimuth_offset_deg"] = offset
+    setup_handoff_config["target_line"] = handed
+    _target_line_revision += 1
+    _target_line_since = datetime.now(timezone.utc).isoformat()
+    record = target_line_in_force()
+    session = get_session_logger()
+    if session is not None:
+        session.log_event("target_line_changed", {"previous": previous, "target_line": record})
+    logger.info("[SERVER] Target line now %s", record)
+    return record
+
+
+_idle_holder = threading.local()
+
+
+def _when_idle(fn, *, timeout_s: float = 20.0):
+    """Run ``fn`` between two shots, so each shot is wholly in one setup; its result."""
+    # nested calls already hold the shot lock (several sections applied in one gap)
+    if getattr(_idle_holder, "inside", False):
+        return fn()
     deadline = time.monotonic() + timeout_s
     while True:
         with _shot_callback_lock:
             if not shot_processing_pending():
-                previous = target_line_in_force()
-                horizontal_offset_deg = offset
-                if "horizontal_offset_deg" in camera_capture_config:
-                    camera_capture_config["horizontal_offset_deg"] = offset
-                if iwr6843_runtime is not None:
-                    iwr6843_runtime.azimuth_offset_deg = offset
-                if iwr6843_runtime_config.get("enabled"):
-                    iwr6843_runtime_config["azimuth_offset_deg"] = offset
-                setup_handoff_config["target_line"] = handed
-                _target_line_revision += 1
-                _target_line_since = datetime.now(timezone.utc).isoformat()
-                record = target_line_in_force()
-                session = get_session_logger()
-                if session is not None:
-                    session.log_event(
-                        "target_line_changed", {"previous": previous, "target_line": record}
-                    )
-                logger.info("[SERVER] Target line now %s", record)
-                return record
+                _idle_holder.inside = True
+                try:
+                    return fn()
+                finally:
+                    _idle_holder.inside = False
         if time.monotonic() >= deadline:
             raise RuntimeError("a shot is still being processed; try again in a moment")
         time.sleep(0.05)
@@ -278,6 +313,8 @@ rig_geometry_config: dict = {"enabled": False}
 setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
 ball_at_address_monitor = None
 _ball_at_address_thread: threading.Thread | None = None
+# (setup_range_m, range_prior) the monitor takes, kept for a box set after the range
+_ball_at_address_range: tuple = (None, None)
 BALL_AT_ADDRESS_EVERY_S = 1.0
 # The net's apparent range when the range setup measured none; flagged when used.
 DEFAULT_NET_RANGE_M = 4.6
@@ -1534,23 +1571,173 @@ def _ball_at_address_loop() -> None:
 
 def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> None:
     """Re-locate the resting ball in the box about once a second, between clips."""
-    global ball_at_address_monitor, _ball_at_address_thread  # pylint: disable=global-statement
+    global ball_at_address_monitor, _ball_at_address_thread, _ball_at_address_range  # pylint: disable=global-statement
     from .camera.ball_at_address import BallAtAddress  # noqa: PLC0415
 
-    prior_only = setup_range_m is None and range_prior is not None
-    ball_at_address_monitor = BallAtAddress(
-        box_px=box,
-        setup_ball=setup_ball,
-        setup_range_m=range_prior.range_m if prior_only else setup_range_m,
-        lens=rig_geometry_config.get("lens"),
-        setup_range_uncertainty_m=range_prior.uncertainty_m if prior_only else None,
-        setup_range_kind="camera_prior" if prior_only else "radar_range",
+    locator = BallAtAddress(
+        box_px=box, setup_ball=None, setup_range_m=None, lens=rig_geometry_config.get("lens")
     )
+    locator.reconfigure(box, setup_ball, setup_range_m, range_prior)
+    ball_at_address_monitor = locator
+    _ball_at_address_range = (setup_range_m, range_prior)
     if _ball_at_address_thread is None or not _ball_at_address_thread.is_alive():
         _ball_at_address_thread = threading.Thread(
             target=_ball_at_address_loop, name="ball-at-address", daemon=True
         )
         _ball_at_address_thread.start()
+
+
+def apply_setup_box(box: dict | None) -> None:
+    """Put the setup's box into effect: the resting-ball monitor, the capture's zone and ball."""
+    if box is None:
+        zone = setup_ball = None
+    else:
+        zone = tuple(int(round(float(value))) for value in box["box_px"])
+        if len(zone) != 4 or not (0 <= zone[0] < zone[2] and 0 <= zone[1] < zone[3]):
+            raise ValueError(f"the box must be x0,y0,x1,y1 inside the picture, not {zone}")
+        setup_ball = {
+            "x": float(box["ball_px"][0]),
+            "y": float(box["ball_px"][1]),
+            "diameter_px": float(box["diameter_px"]),
+        }
+    _when_idle(lambda: _set_box(zone, setup_ball))
+
+
+def _set_box(zone, setup_ball) -> None:
+    global camera_ball_box_px, ball_at_address_monitor  # pylint: disable=global-statement
+    camera_ball_box_px = zone
+    runtime = camera_capture_runtime
+    if runtime is not None:
+        runtime.settings = replace(runtime.settings, setup_ball=setup_ball, hitting_zone=zone)
+    if camera_capture_config.get("enabled"):
+        camera_capture_config["setup_ball"] = dict(setup_ball) if setup_ball else None
+        camera_capture_config["hitting_zone"] = list(zone) if zone else None
+    if zone is None:
+        ball_at_address_monitor = None
+    elif ball_at_address_monitor is not None:
+        ball_at_address_monitor.reconfigure(zone, setup_ball, *_ball_at_address_range)
+    elif runtime is not None:
+        start_ball_at_address(zone, setup_ball, *_ball_at_address_range)
+    logger.info("[SERVER] Ball box now %s, setup ball %s", zone, setup_ball)
+
+
+def _rig_tee_lateral_offset_m() -> float:
+    enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
+    offset = getattr(enclosure, "tee_lateral_offset_m", None)
+    return float(offset) if offset is not None else 0.0
+
+
+def _set_iwr_calibration(**changes) -> None:
+    """Give the running IWR a calibration with ``changes``; its recorded values follow."""
+    runtime = iwr6843_runtime
+    if runtime is None or runtime.calibration is None:
+        return
+    runtime.calibration = calibration = replace(runtime.calibration, **changes)
+    layout = getattr(calibration, "antennas", None)
+    recorded = {
+        "tee_slant_range_m": calibration.tee_range_m,
+        "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
+        "radar_height_m": calibration.meta.get("radar_height_m"),
+        "antenna_layout": layout.as_dict() if layout is not None else None,
+    }
+    if iwr6843_runtime_config.get("enabled"):
+        iwr6843_runtime_config.update(recorded)
+    effective = (runtime.calibration_provenance or {}).get("effective")
+    if isinstance(effective, dict):
+        effective.update(recorded)
+
+
+def apply_setup_ball_range(rng: dict | None) -> None:
+    """Put the setup's ball range into effect: the IWR's prior, the monitor's, the side offset.
+
+    The range is a prior: each shot is still ranged from its own IWR capture.
+    """
+    from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
+
+    prior = side = None
+    if rng is not None:
+        prior = LaunchRangePrior(
+            range_m=rng["range_m"], uncertainty_m=rng["uncertainty_m"], source=rng.get("source")
+        )
+        if rng.get("side_offset_m") is not None:
+            side = _finite_number(rng["side_offset_m"], "side_offset_m")
+    _when_idle(lambda: _set_ball_range(prior, side))
+
+
+def _set_ball_range(prior, side: float | None) -> None:
+    global _ball_at_address_range  # pylint: disable=global-statement
+    _ball_at_address_range = (None, prior)
+    locator = ball_at_address_monitor
+    if locator is not None:
+        locator.reconfigure(locator.box, locator.setup_ball, None, prior)
+    if iwr6843_runtime is not None:
+        iwr6843_runtime.range_prior = prior
+        _set_iwr_calibration(
+            tee_range_m=None,
+            tee_range_uncertainty_m=0.0,
+            lateral_tee_offset_m=side if side is not None else _rig_tee_lateral_offset_m(),
+        )
+    if iwr6843_runtime_config.get("enabled"):
+        iwr6843_runtime_config["range_prior"] = prior.to_dict() if prior is not None else None
+        iwr6843_runtime_config["tee_range_status"] = (
+            "per_shot_with_camera_prior" if prior is not None else "per_shot_without_prior"
+        )
+    if camera_capture_config.get("enabled"):
+        camera_capture_config["tee_side_offset_m"] = side
+    setup_handoff_config["tee_range"] = {
+        "tee_slant_range_m": None,
+        "status": "prior" if prior is not None else "pending",
+        "source": prior.source if prior is not None else "pending",
+        "candidate_id": None,
+        **(
+            {
+                "prior": {**prior.to_dict(), "label": "estimated"},
+                "per_shot_range": "iwr_post_impact_else_camera_prior",
+            }
+            if prior is not None
+            else {}
+        ),
+    }
+    setup_handoff_config["scene"] = {
+        **(setup_handoff_config.get("scene") or {}),
+        "tee_side_offset_m": side,
+        "tee_side_offset_source": (
+            prior.source if side is not None else "assumed_directly_downrange"
+        ),
+    }
+    logger.info("[SERVER] Ball range prior now %s, side offset %s", prior, side)
+
+
+def apply_setup_net_range(net: dict | None) -> None:
+    """Put the setup's net range into the radar's ball gates; without one, the labelled default."""
+    if net is None or net.get("value_m") is None:
+        value, source = DEFAULT_NET_RANGE_M, "default_not_measured"
+    else:
+        value, source = _finite_number(net["value_m"], "value_m"), net.get("source")
+        if value <= 0.0:
+            raise ValueError("the net range must be positive")
+    assumed = source == "default_not_measured"
+    handoff = {
+        "net_range_m": value,
+        "source": source,
+        # the floor-line tap gives a horizontal distance from the unit, not the radar's
+        # apparent range; the gate's margin covers the difference
+        "range_space": (
+            "horizontal_from_the_unit" if source == "camera_floor_line" else "apparent"
+        ),
+        "assumed": assumed,
+        **{key: net[key] for key in ("uncertainty_m", "reason") if net and key in net},
+    }
+    _when_idle(lambda: _set_net_range(handoff))
+
+
+def _set_net_range(handoff: dict) -> None:
+    if iwr6843_runtime is not None:
+        iwr6843_runtime.net_range_m = handoff["net_range_m"]
+    if iwr6843_runtime_config.get("enabled"):
+        iwr6843_runtime_config["net_range_m"] = handoff["net_range_m"]
+    setup_handoff_config["net_range"] = handoff
+    logger.info("[SERVER] Net range now %s", handoff)
 
 
 @app.route("/api/target-line")
@@ -1590,19 +1777,9 @@ def api_ball_at_address():
 def _apply_solved_camera_height(args, enclosure) -> None:
     """Use the setup's solved lens height above the hitting surface; the radar keeps its offset."""
     solved = float(args.solved_camera_height_m)
-    if not 0.0 < solved < 1.0:
-        raise ValueError("--solved-camera-height-m must be between 0 and 1 m")
     nominal = getattr(enclosure, "camera_mount_height_m", None)
-    radar = getattr(enclosure, "radar_height_m", None)
-    radar_height = None
-    if nominal is not None and radar is not None:
-        radar_height = solved - (nominal - radar)
-        if radar_height < MIN_RADAR_CLEARANCE_M:
-            raise ValueError(
-                f"--solved-camera-height-m {solved * 1000:.0f} mm puts the radar "
-                f"{radar_height * 1000:.0f} mm above the hitting surface; the radar would be "
-                "below the hitting surface or touching it"
-            )
+    radar_height = _solved_radar_height(solved, enclosure, name="--solved-camera-height-m")
+    if radar_height is not None:
         args.iwr6843_radar_height_m = radar_height
     args.camera_capture_mount_height_m = solved
     # "derived" stays the rig file's; a solved height is never read back as the enclosure's
@@ -1620,6 +1797,81 @@ def _apply_solved_camera_height(args, enclosure) -> None:
         solved * 1000.0,
         f"{nominal * 1000.0:.1f} mm" if nominal is not None else "none",
     )
+
+
+def _solved_radar_height(solved: float, enclosure, *, name: str) -> float | None:
+    """The radar height a solved lens height puts the radar at, keeping the rig's offset."""
+    if not 0.0 < solved < 1.0:
+        raise ValueError(f"{name} must be between 0 and 1 m")
+    nominal = getattr(enclosure, "camera_mount_height_m", None)
+    radar = getattr(enclosure, "radar_height_m", None)
+    if nominal is None or radar is None:
+        return None
+    radar_height = solved - (nominal - radar)
+    if radar_height < MIN_RADAR_CLEARANCE_M:
+        raise ValueError(
+            f"{name} {solved * 1000:.0f} mm puts the radar "
+            f"{radar_height * 1000:.0f} mm above the hitting surface; the radar would be "
+            "below the hitting surface or touching it"
+        )
+    return radar_height
+
+
+def apply_setup_scene(scene: dict | None) -> None:
+    """Put the setup's lens height into effect: solved, or the rig file's (None, rig_nominal)."""
+    enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
+    nominal = getattr(enclosure, "camera_mount_height_m", None)
+    solved = None
+    if scene is not None and scene.get("source") != "rig_nominal":
+        solved = _finite_number(scene.get("lens_height_m"), "lens_height_m")
+    if solved is None and nominal is None:
+        return  # no rig file: the start's command-line heights stay
+    if solved is not None and nominal is None:
+        raise ValueError("a solved lens height needs the rig file's heights to move the radar")
+    if solved is not None:
+        radar = _solved_radar_height(solved, enclosure, name="the solved lens height")
+    else:
+        radar = getattr(enclosure, "radar_height_m", None)
+    _when_idle(lambda: _set_scene(scene if solved is not None else None, solved, radar, enclosure))
+
+
+def _set_scene(scene: dict | None, solved: float | None, radar: float | None, enclosure) -> None:
+    nominal = enclosure.camera_mount_height_m
+    lens = solved if solved is not None else nominal
+    if camera_capture_config.get("enabled"):
+        camera_capture_config["mount_height_m"] = lens
+    calibration = getattr(iwr6843_runtime, "calibration", None)
+    if radar is not None and calibration is not None:
+        _set_iwr_calibration(
+            meta={**calibration.meta, "radar_height_m": radar},
+            antennas=_antenna_layout(
+                radar,
+                getattr(enclosure, "iwr_board_rotation_deg", None),
+                math.degrees(calibration.tilt_rad),
+            ),
+        )
+    if rig_geometry_config.get("enabled"):
+        if solved is None:
+            rig_geometry_config.pop("solved_camera_height", None)
+        else:
+            rig_geometry_config["solved_camera_height"] = {
+                "camera_mount_height_m": solved,
+                "radar_height_m": radar,
+                "rig_nominal_camera_mount_height_m": nominal,
+                "reference": "hitting_surface",
+                "source": scene.get("source"),
+            }
+    setup_handoff_config["scene"] = {
+        **(setup_handoff_config.get("scene") or {}),
+        "reference": "hitting_surface",
+        "lens_height_used_m": lens,
+        "lens_height_used_source": scene.get("source") if scene else "rig_nominal",
+        "lens_height_solved_m": solved,
+        "lens_height_solved_uncertainty_m": scene.get("uncertainty_m") if scene else None,
+        "rig_lens_height_m": nominal,
+        "radar_height_m": radar,
+    }
+    logger.info("[SERVER] Lens height now %.1f mm (%s)", lens * 1000.0, scene or "rig_nominal")
 
 
 def init_setup_handoff(args, enclosure) -> None:
@@ -2212,6 +2464,19 @@ def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: 
     camera_placement = placement
 
 
+def _antenna_layout(radar_height_m: float, board_rotation_deg: float | None, tilt_deg: float):
+    from .iwr6843 import antennas  # noqa: PLC0415
+
+    # without a board rotation the radar height is the RX row's (legacy layout)
+    if board_rotation_deg is None:
+        return antennas.legacy_layout(float(radar_height_m))
+    return antennas.layout_from_phase_centre(
+        phase_centre_height_m=float(radar_height_m),
+        board_rotation_deg=float(board_rotation_deg),
+        boresight_pitch_deg=float(tilt_deg),
+    )
+
+
 def init_iwr6843(
     *,
     port: str | None,
@@ -2244,7 +2509,7 @@ def init_iwr6843(
         if value is None or not math.isfinite(float(value)):
             raise ValueError(f"init_iwr6843 needs the rig's {name}, got {value!r}")
     try:
-        from .iwr6843 import Calibration, antennas, lcmf
+        from .iwr6843 import Calibration, lcmf
         from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
         from .iwr6843.runtime import IWR6843Runtime
 
@@ -2278,16 +2543,7 @@ def init_iwr6843(
         calibration.tilt_rad = math.radians(float(tilt_deg))
         calibration.meta["radar_height_m"] = float(radar_height_m)
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
-        # without a board rotation the radar height is the RX row's (legacy layout)
-        calibration.antennas = (
-            antennas.layout_from_phase_centre(
-                phase_centre_height_m=float(radar_height_m),
-                board_rotation_deg=float(board_rotation_deg),
-                boresight_pitch_deg=float(tilt_deg),
-            )
-            if board_rotation_deg is not None
-            else antennas.legacy_layout(float(radar_height_m))
-        )
+        calibration.antennas = _antenna_layout(radar_height_m, board_rotation_deg, tilt_deg)
 
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
