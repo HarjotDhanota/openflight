@@ -183,14 +183,13 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
         <linearGradient
           id={`${id}face`}
           gradientUnits="userSpaceOnUse"
-          x1="0"
-          x2={-p.faceHeight * Math.sin((p.loft * Math.PI) / 180)}
+          x1={lightX < 0 ? -p.faceHeight * Math.sin((p.loft * Math.PI) / 180) : 0}
+          x2={lightX < 0 ? 0 : -p.faceHeight * Math.sin((p.loft * Math.PI) / 180)}
           y1="0"
           y2="0"
         >
-          <stop className={lightX < 0 ? 'face-impact__face-lo' : 'face-impact__face-hi'} offset="0" stopOpacity=".9" />
-          <stop className="face-impact__face-lo" offset=".4" stopOpacity=".55" />
-          <stop className="face-impact__face-lo" offset="1" stopOpacity="0" />
+          <stop className="face-impact__face-hi" offset="0" />
+          <stop className="face-impact__face-lo" offset="1" />
         </linearGradient>
         <linearGradient id={`${id}back`} gradientUnits="userSpaceOnUse" x1={paths.bx - p.sole} x2={paths.bx}>
           <stop offset="0" stopColor="#101820" stopOpacity=".22" />
@@ -338,8 +337,9 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           {top ? (
             <path
               className="club-projection__topline"
-              d={p.depth ? head : paths.topFace}
+              d={paths.topFace}
               fill={`url(#${id}${p.depth ? 'face' : 'metal'})`}
+              clipPath={p.depth ? `url(#${id}clip)` : undefined}
               stroke={p.depth ? 'none' : '#edf2f5'}
               strokeOpacity=".6"
               strokeWidth="1.4"
@@ -352,6 +352,16 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               clipPath={!p.depth ? `url(#${id}clip)` : undefined}
             />
           )}
+          {top && p.depth ? (
+            <path
+              d={paths.topFaceJoin}
+              fill="none"
+              stroke="#c5ccd2"
+              strokeOpacity=".32"
+              strokeWidth=".7"
+              clipPath={`url(#${id}clip)`}
+            />
+          ) : null}
           {top && !p.depth ? (
             <path className="club-projection__neck" d={neck} fill={`url(#${id}neck)`} mask={`url(#${id}joint)`} />
           ) : null}

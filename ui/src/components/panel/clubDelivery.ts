@@ -135,8 +135,11 @@ export function clubProfilePaths(category: FaceCategory) {
     ? `M 0 0 C 0 ${-toe * 0.65} -5 ${-toe} ${-depth * 0.36} ${-toe} C ${-depth * 0.74} ${-toe} ${-depth} ${-toe * 0.66} ${-depth} 0 C ${-depth} ${heel * 0.72} ${-depth * 0.65} ${heel} ${-depth * 0.34} ${heel} C -6 ${heel} 0 ${heel * 0.56} 0 0 Z`
     : bladePlan(FACE_SHAPES[category].face, Math.sin(radians) + back / p.faceHeight, -back / 2);
   const topFace = wood
-    ? `M 0 0 C 0 ${-toe * 0.55} -3 ${-toe * 0.8} -8 ${-toe * 0.88} L -11 ${-toe * 0.85} C -6 ${-toe * 0.5} -6 ${heel * 0.48} -12 ${heel * 0.84} L -8 ${heel * 0.88} C -3 ${heel * 0.8} 0 ${heel * 0.55} 0 0 Z`
+    ? `M ${-depth * 0.36} ${-toe} C -5 ${-toe} 0 ${-toe * 0.65} 0 0 C 0 ${heel * 0.56} -6 ${heel} ${-depth * 0.34} ${heel} C ${-6 - projection * 0.3} ${heel} ${-projection} ${heel * 0.56} ${-projection} 0 C ${-projection} ${-toe * 0.65} ${-5 - projection * 0.3} ${-toe} ${-depth * 0.36} ${-toe} Z`
     : bladePlan(FACE_SHAPES[category].face, Math.sin(radians));
+  const topFaceJoin = wood
+    ? `M ${-depth * 0.36} ${-toe} C ${-5 - projection * 0.3} ${-toe} ${-projection} ${-toe * 0.65} ${-projection} 0 C ${-projection} ${heel * 0.56} ${-6 - projection * 0.3} ${heel} ${-depth * 0.34} ${heel}`
+    : '';
   const [tx, ty] = [(-Math.sin(radians) * p.faceHeight) / 2, (-Math.cos(radians) * p.faceHeight) / 2];
   const [bx, by] = [-tx, -ty];
   const crown = -p.height + p.faceHeight / 2;
@@ -148,6 +151,7 @@ export function clubProfilePaths(category: FaceCategory) {
   return {
     top,
     topFace,
+    topFaceJoin,
     topShellTransform,
     side,
     sideFace: `M ${point(tx, ty)} L ${point(bx, by)}`,
