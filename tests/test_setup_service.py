@@ -14,7 +14,7 @@ from openflight.camera.reference_ball_range import (
     project_to_pixel,
 )
 from openflight.setup_record import StartContext, load, save, section_inputs
-from openflight.setup_service import Appliers, CameraView, SetupService, scene_section
+from openflight.setup_service import Appliers, Blocked, CameraView, SetupService, scene_section
 
 CTX = StartContext(
     lens_id="stock-2.8", rig_sha256="rig-a", tilt_offset_deg=2.0, tilt_calibrated=True
@@ -460,17 +460,14 @@ def test_hook_refusal_blocks_action(make, scene):
     assert service.revision == 0 and recorder.calls["box"] == []
 
 
-def test_a_finished_action_announces_the_change_then_runs_the_after_hook(make, scene, monkeypatch):
+def test_a_finished_action_announces_the_change_then_runs_the_after_hook(make, scene):
     order = []
 
     def hooks(name, *args):
         order.append(name)
+        if name == "after_setup_action":
+            assert args[:2] == ("box", "confirm") and args[2]["ok"] is True
 
-    def call_all(name, *args):
-        order.append(name)
-        assert args[:2] == ("box", "confirm") and args[2]["ok"] is True
-
-    monkeypatch.setattr(kiosk_extensions, "call_all", call_all)
     service, _recorder = make(hooks)
     service.on_change = lambda snapshot: order.append(("changed", snapshot["box"]["state"]))
     scene.in_box = BALL_PX
@@ -705,10 +702,11 @@ def test_the_record_s_hash_follows_what_is_saved(make, scene, tmp_path):
     assert restarted.sha256 == service.sha256
 
 
-def test_a_look_that_sees_nothing_new_announces_nothing(make, scene, monkeypatch):
+def test_a_look_that_sees_nothing_new_announces_nothing(make, scene):
     after = []
-    monkeypatch.setattr(kiosk_extensions, "call_all", lambda name, *args: after.append(name))
-    service, _recorder = make()
+    service, _recorder = make(
+        lambda name, *args: after.append(name) if name == "after_setup_action" else None
+    )
     announced = []
     service.on_change = announced.append
     scene.in_box = BALL_PX
@@ -876,7 +874,8 @@ def test_a_failed_applier_does_not_advance_the_applied_revision(make, scene):
 
 def test_the_snapshot_says_whether_setup_is_possible_and_why_not(make):
     able, _recorder = make()
-    no_tilt, _recorder = make(setup_blocked=lambda: "the setup needs the tilt sensor")
+    no_tilt, _recorder = make(setup_blocked=lambda: Blocked("the setup needs the tilt sensor"))
+    failed, _recorder = make(setup_blocked=lambda: Blocked("the tilt sensor did not start", True))
     no_camera, _recorder = make(camera_available=lambda: False)
 
     assert able.snapshot()["live"]["setup_possible"] is True
@@ -884,3 +883,25 @@ def test_the_snapshot_says_whether_setup_is_possible_and_why_not(make):
     assert no_tilt.snapshot()["live"]["setup_possible"] is False
     assert no_tilt.snapshot()["live"]["setup_blocked_reason"] == "the setup needs the tilt sensor"
     assert no_camera.snapshot()["live"]["setup_possible"] is False
+    assert no_tilt.snapshot()["live"]["setup_fault"] is False
+    assert failed.snapshot()["live"]["setup_fault"] is True
+
+
+def test_the_same_ball_reconfirmed_in_a_binned_mode_keeps_its_box(make, scene):
+    mode = [CAMERA]
+    service, _recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
+    first = _confirm_box(service, scene)["setup"]["box"]["id"]
+    assert service.aim("confirm", aim_px=AIM_PX)["ok"]
+    assert service.range("measure")["ok"]
+
+    mode[0] = _binned(640, 400)
+    scene.in_box = [BALL_PX[0] / 2, BALL_PX[1] / 2]
+    result = service.box("confirm")
+
+    assert result["ok"], result["reason"]
+    setup = result["setup"]
+    assert setup["box"]["id"] == first and setup["box"]["image_size_px"] == [640, 400]
+    assert setup["aim"]["state"] == "set" and setup["ball_range"]["state"] == "set"
+    # a moved ball is still a new box at this size
+    scene.in_box = [BALL_PX[0] / 2 + 10.0, BALL_PX[1] / 2]
+    assert service.box("confirm")["setup"]["box"]["id"] != first

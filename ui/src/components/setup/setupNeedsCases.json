@@ -68,6 +68,17 @@
       "possible": false,
       "needs": false,
       "cause": null
+    },
+    {
+      "name": "a tilt sensor that did not start",
+      "sections": { "box": { "state": "not_set" } },
+      "unapplied": {},
+      "camera": true,
+      "possible": false,
+      "fault": true,
+      "reason": "the tilt sensor did not start",
+      "needs": false,
+      "cause": "setup incomplete: the tilt sensor did not start"
     }
   ]
 }

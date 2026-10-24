@@ -1854,21 +1854,32 @@ def _setup_lis3dh() -> tuple[float | None, float | None, str]:
     return float(reading.calibrated_pitch_deg), float(roll), selection.status
 
 
-def setup_blocked_reason() -> str | None:
-    """Why this kiosk, as started, can never set up, or None: what setup_camera_view always
-    refuses without (a camera, the rig file, and the tilt sensor unless the camera is
-    calibrated)."""
+def setup_block():
+    """Why this kiosk, as started, can never set up (a ``setup_service.Blocked``), or None:
+    what setup_camera_view always refuses without (a camera, the rig file, and the tilt
+    sensor unless the camera is calibrated). A tilt sensor asked for that did not start is
+    a fault."""
+    from .setup_service import Blocked  # noqa: PLC0415
+
     if camera_capture_runtime is None:
-        return "no camera"
+        return Blocked("no camera")
     if rig_geometry is None:
-        return "the setup needs the rig file (--rig-geometry)"
+        return Blocked("the setup needs the rig file (--rig-geometry)")
     if camera_optical_calibration is not None and camera_placement is not None:
         return None
     if rig_geometry.lens_height_above_floor_mm is None:
-        return "the setup needs the rig file's lens height (--rig-geometry)"
+        return Blocked("the setup needs the rig file's lens height (--rig-geometry)")
     if inclinometer_service is None:
-        return "the setup needs the tilt sensor (LIS3DH, --inclinometer)"
+        if inclinometer_runtime_config.get("requested"):
+            return Blocked("the tilt sensor did not start", fault=True)
+        return Blocked("the setup needs the tilt sensor (LIS3DH, --inclinometer)")
     return None
+
+
+def setup_blocked_reason() -> str | None:
+    """The reason in ``setup_block``, or None."""
+    block = setup_block()
+    return block.reason if block is not None else None
 
 
 def setup_camera_view():
@@ -2011,7 +2022,7 @@ def init_setup_service(path):
         ),
         between_shots=_when_idle,
         camera_available=lambda: camera_capture_runtime is not None,
-        setup_blocked=lambda: setup_blocked_reason(),
+        setup_blocked=lambda: setup_block(),
     )
     service.on_change = _on_setup_change
     setup_service = service

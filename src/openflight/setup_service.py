@@ -41,6 +41,8 @@ WIDE_HALF_WIDTH_M = 1.2
 SAME_BALL_PX = 3.0
 # ... and its outline did not move (a new tilt or roll pad moves it)
 SAME_OUTLINE_PX = 0.5
+# across binned modes each mode's projection rounds on its own
+SAME_OUTLINE_ACROSS_MODES_PX = 1.0
 TOO_UNCERTAIN = "too uncertain to measure"
 # each section's actions, as the kiosk's API takes them
 ACTIONS = {
@@ -48,6 +50,14 @@ ACTIONS = {
     "aim": ("show", "confirm", "skip", "clear"),
     "range": ("measure", "clear"),
 }
+
+
+class Blocked(NamedTuple):
+    """Why the kiosk as started can never set up; ``fault`` when something asked for failed
+    (the tilt sensor did not start), which holds the ready light red."""
+
+    reason: str
+    fault: bool = False
 
 
 class CameraView(NamedTuple):
@@ -145,11 +155,11 @@ def box_section(  # pylint: disable=too-many-arguments
     return section
 
 
-def _same_outline(kept, outline) -> bool:
+def _same_outline(kept, outline, tolerance_px: float = SAME_OUTLINE_PX) -> bool:
     if not kept or len(kept) != len(outline):
         return False
     return all(
-        np.hypot(a[0] - b[0], a[1] - b[1]) <= SAME_OUTLINE_PX
+        np.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance_px
         for a, b in zip(kept, outline, strict=True)
     )
 
@@ -281,7 +291,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         box_config: placement_box.PlacementBoxConfig | None = None,
         between_shots: Callable[[Callable[[], Any]], Any] = lambda apply: apply(),
         camera_available: Callable[[], bool] = lambda: True,
-        setup_blocked: Callable[[], str | None] = lambda: None,
+        setup_blocked: Callable[[], Blocked | None] = lambda: None,
     ):
         self._path = Path(path)
         self._ctx = ctx
@@ -326,7 +336,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
     def snapshot(self) -> dict:
         """The record against the start context, the last live look, and why any is not in effect."""
         camera = bool(self._camera_available())
-        blocked = self._setup_blocked() if camera else "no camera"
+        blocked = self._setup_blocked() if camera else Blocked("no camera")
         return {
             **self._evaluated(),
             # a unit that can never set up is not offered the screen, nor held red for it
@@ -334,7 +344,8 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 **copy.deepcopy(self._live),
                 "camera_available": camera,
                 "setup_possible": blocked is None,
-                "setup_blocked_reason": blocked,
+                "setup_blocked_reason": blocked.reason if blocked else None,
+                "setup_fault": bool(blocked and blocked.fault),
             },
             "unapplied": dict(self._apply_errors),
         }
@@ -416,7 +427,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             if action != "show" or self._live != looked:
                 self.on_change(result["setup"])
             if ok and action != "show":
-                kiosk_extensions.call_all("after_setup_action", section, action, result)
+                self._hooks("after_setup_action", section, action, result)
             return result
 
     def _save(self, changes: dict) -> None:
@@ -557,13 +568,28 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         centre = [float(ball["x_px"]), float(ball["y_px"])]
         previous = record["box"]  # evaluated: a stale box has no id to carry on
         base = placement_box.box_id(self._config, self._ctx.lens_id)
-        kept = previous.get("ball_px")
         outline = [list(point) for point in projection.search_outline_px]
+        # the previous box in this mode's pixels: a binned mode keeps the same box
+        try:
+            scale = box_scale(previous, *projection.image_size_px)
+        except (KeyError, TypeError, ValueError):
+            scale = None
+        kept = previous.get("ball_px")
+        kept_outline = previous.get("outline_px")
+        if scale is not None and kept is not None:
+            kept = [float(kept[0]) * scale, float(kept[1]) * scale]
+            if kept_outline is not None:
+                kept_outline = ground_patch.scale_outline(kept_outline, scale)
         same_ball = (
             str(previous.get("id", "")).startswith(base)
+            and scale is not None
             and kept is not None
             and np.hypot(kept[0] - centre[0], kept[1] - centre[1]) <= SAME_BALL_PX
-            and _same_outline(previous.get("outline_px"), outline)
+            and _same_outline(
+                kept_outline,
+                outline,
+                SAME_OUTLINE_PX if scale == 1.0 else SAME_OUTLINE_ACROSS_MODES_PX,
+            )
         )
         # the revision keeps a new id from ever equalling a stale box's, which would revive
         # the aim and range set against it

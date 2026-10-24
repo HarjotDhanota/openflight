@@ -173,7 +173,8 @@ def setup_causes(
     setup: Mapping | None, ball_look: Mapping | None, now: float, optional: Sequence[str] = ()
 ) -> list[SetupCause]:
     """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit that can
-    never set up (no camera, no tilt sensor), and nothing about the ball without a recent look.
+    never set up (no camera, no tilt sensor) unless that is a fault (the sensor did not
+    start), and nothing about the ball without a recent look.
 
     A section saved but not put into effect (``unapplied``) is incomplete too; one in
     ``optional`` never is.
@@ -182,6 +183,9 @@ def setup_causes(
     if setup is None or not live.get("camera_available", True):
         return []
     if not live.get("setup_possible", True):
+        # a sensor that failed is red; a kiosk started without setup says nothing
+        if live.get("setup_fault"):
+            return [("red", f"setup incomplete: {live.get('setup_blocked_reason')}")]
         return []
     unapplied = setup.get("unapplied") or {}
     causes: list[SetupCause] = []

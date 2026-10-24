@@ -411,6 +411,22 @@ def test_a_unit_that_cannot_set_up_has_no_setup_causes():
     assert light["state"] == "green"
 
 
+def test_a_tilt_sensor_that_did_not_start_keeps_setup_red():
+    setup = _setup(box={"state": "not_set"})
+    setup["live"] = {
+        "camera_available": True,
+        "setup_possible": False,
+        "setup_blocked_reason": "the tilt sensor did not start",
+        "setup_fault": True,
+    }
+
+    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
+
+    assert [cause["cause"] for cause in light["causes"]] == [
+        "setup incomplete: the tilt sensor did not start"
+    ]
+
+
 def test_a_section_the_run_does_not_need_is_not_incomplete():
     setup = _setup(ball_range={"state": "not_set", "reason": "not set"})
 
@@ -450,7 +466,12 @@ def test_setup_incomplete_agrees_with_the_setup_screens_needs_setup(case):
     setup = {
         **NEEDS["base"],
         **case["sections"],
-        "live": {"camera_available": case["camera"], "setup_possible": case.get("possible", True)},
+        "live": {
+            "camera_available": case["camera"],
+            "setup_possible": case.get("possible", True),
+            "setup_blocked_reason": case.get("reason"),
+            "setup_fault": case.get("fault", False),
+        },
         "unapplied": case["unapplied"],
     }
 
@@ -458,7 +479,8 @@ def test_setup_incomplete_agrees_with_the_setup_screens_needs_setup(case):
 
     setup_reds = [c["cause"] for c in light["causes"] if c["cause"].startswith("setup incomplete")]
     assert setup_reds == ([case["cause"]] if case["cause"] else [])
-    assert bool(setup_reds) == case["needs"]
+    # a fault holds the light red, though the screen has nothing to offer
+    assert bool(setup_reds) == (case["needs"] or case.get("fault", False))
 
 
 def test_a_box_that_failed_to_apply_says_nothing_about_the_ball():

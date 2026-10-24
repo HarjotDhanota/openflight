@@ -42,6 +42,8 @@ export interface SetupLive {
   /** False when the kiosk as started can never set up (no tilt sensor, ...); the reason says why. */
   setup_possible?: boolean;
   setup_blocked_reason?: string | null;
+  /** True when that is a failure (the tilt sensor did not start): the ready light holds red. */
+  setup_fault?: boolean;
 }
 
 /** GET /api/setup and the `setup_changed` event. */

@@ -269,8 +269,12 @@ def test_a_kiosk_without_the_tilt_sensor_says_setup_cannot_run(kiosk, monkeypatc
 
     live = kiosk.client.get("/api/setup").get_json()["live"]
 
-    assert live["setup_possible"] is False
+    assert live["setup_possible"] is False and live["setup_fault"] is False
     assert "tilt sensor" in live["setup_blocked_reason"]
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"requested": True, "error": "x"})
+    live = kiosk.client.get("/api/setup").get_json()["live"]
+    assert live["setup_fault"] is True
+    assert live["setup_blocked_reason"] == "the tilt sensor did not start"
     monkeypatch.setattr(server, "inclinometer_service", SimpleNamespace())
     live = kiosk.client.get("/api/setup").get_json()["live"]
     assert live["setup_possible"] is True and live["setup_blocked_reason"] is None
@@ -574,6 +578,11 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     with pytest.raises(ValueError, match=r"needs the tilt sensor \(LIS3DH, --inclinometer\)"):
         server.setup_camera_view()
     assert "tilt sensor" in server.setup_blocked_reason()
+    # asked for (--inclinometer) but failed to start: a fault, not a kiosk without one
+    monkeypatch.setattr(server, "inclinometer_runtime_config", {"requested": True, "error": "x"})
+    assert server.setup_blocked_reason() == "the tilt sensor did not start"
+    with pytest.raises(ValueError, match="the tilt sensor did not start"):
+        server.setup_camera_view()
     monkeypatch.setattr(server, "camera_capture_runtime", None)
     assert server.setup_camera_view() is None
 
