@@ -74,6 +74,13 @@ class KioskExtension:  # pylint: disable=unused-argument
         """Return the ready light's sensor states adjusted for this extension (None: off)."""
         return states
 
+    def before_setup_action(self, section: str, action: str, payload: dict) -> Optional[str]:
+        """A reason to refuse this setup action (e.g. a run is in progress), or None."""
+        return None
+
+    def after_setup_action(self, section: str, action: str, result: dict) -> None:
+        """A setup action finished and was applied."""
+
     def on_shot_detected(self, shot) -> None:
         """An OPS shot reached the kiosk, before any extension may refuse it."""
 
