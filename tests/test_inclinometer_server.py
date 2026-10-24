@@ -149,7 +149,7 @@ def _rolled_selection(roll_deg):
 
 
 @pytest.mark.parametrize("verified", [True, False])
-def test_the_iwr_takes_the_roll_only_on_a_verified_unit(monkeypatch, verified):
+def test_the_iwr_takes_the_roll_only_on_a_verified_zeroed_unit(monkeypatch, verified):
     calibration = Calibration.identity()
     seen = {}
 
@@ -159,7 +159,17 @@ def test_the_iwr_takes_the_roll_only_on_a_verified_unit(monkeypatch, verified):
 
     monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_rolled_selection(2.0)))
     monkeypatch.setattr(
-        server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0, "roll_verified": verified}
+        server,
+        "inclinometer_runtime_config",
+        {
+            "zero_offset_deg": 0.0,
+            "roll_calibration": {
+                "verified": True,
+                "zero_deg": 0.5 if verified else None,
+                "residual_deg": 0.2 if verified else None,
+                "applied": verified,
+            },
+        },
     )
     monkeypatch.setattr(
         server,
@@ -173,10 +183,11 @@ def test_the_iwr_takes_the_roll_only_on_a_verified_unit(monkeypatch, verified):
     server._snapshot_inclinometer_for_shot(shot)
     server._process_iwr6843_angle(shot)
 
-    assert shot.inclinometer["roll_verified"] is verified
+    assert shot.inclinometer["roll_calibration"]["applied"] is verified
     if verified:
-        assert shot.inclinometer["effective_iwr_roll_deg"] == pytest.approx(2.0)
-        assert seen["roll_deg"] == pytest.approx(2.0)
+        # the reading less the unit's zero
+        assert shot.inclinometer["effective_iwr_roll_deg"] == pytest.approx(1.5)
+        assert seen["roll_deg"] == pytest.approx(1.5)
     else:
         assert "effective_iwr_roll_deg" not in shot.inclinometer
         assert "roll_deg" not in seen
@@ -251,7 +262,7 @@ def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
     server._snapshot_inclinometer_for_shot(shot)
 
     assert shot.inclinometer["applied_to"] == ["camera"]
-    assert shot.inclinometer["roll_verified"] is False
+    assert shot.inclinometer["roll_calibration"] is None
     assert "effective_iwr_tilt_deg" not in shot.inclinometer
     pose = camera_tilt.swing_camera_pose(
         rig=RigGeometry.from_json(
@@ -450,6 +461,7 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     store.apply_correction("upside_down")
     store.record_pass({"front_up_deg": 5.8})
     store.record_roll({"left_up_deg": 6.0}, verified=True)
+    store.record_roll_zero(oc.reversal_roll_zero(1.0, 0.6, 1.0))
 
     assert server.init_inclinometer(mount_file=path) is True
 
@@ -462,7 +474,8 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     assert config["mount_upside_down"] is True
     assert config["mount_source"] == "unit_file"
     assert config["orientation_check"]["check"]["state"] == "passed"
-    assert config["roll_verified"] is True
+    assert config["roll_calibration"]["applied"] is True
+    assert config["roll_calibration"]["zero_deg"] == pytest.approx(0.8)
     assert [c["correction"] for c in config["orientation_check"]["corrections"]] == [
         "quarter_left",
         "upside_down",
@@ -478,4 +491,4 @@ def test_init_inclinometer_without_a_unit_file_keeps_the_rig_mount(monkeypatch, 
     assert made["sensor"].yaw_deg == 180.0
     assert server.inclinometer_runtime_config["mount_source"] == "rig_file"
     assert server.inclinometer_runtime_config["orientation_check"]["check"] is None
-    assert server.inclinometer_runtime_config["roll_verified"] is False
+    assert server.inclinometer_runtime_config["roll_calibration"]["applied"] is False

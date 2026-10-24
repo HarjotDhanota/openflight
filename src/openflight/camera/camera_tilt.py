@@ -466,7 +466,7 @@ def swing_camera_pose(
 
 def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
     """This swing's LIS3DH roll, through the one convention setup and swings share:
-    applied when the shot's record says the unit verified its roll."""
+    applied when the shot's record says the unit verified and zeroed its roll."""
     from openflight.camera import camera_roll  # noqa: PLC0415
 
     gravity = (
@@ -480,8 +480,10 @@ def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
         else None
     )
     expected = (rig.expected_inclinometer_orientation().roll_deg or 0.0) if rig is not None else 0.0
-    verified = isinstance(inclinometer, Mapping) and inclinometer.get("roll_verified") is True
-    return camera_roll.roll_record(measured, expected, verified=verified)
+    calibration = (
+        inclinometer.get("roll_calibration") if isinstance(inclinometer, Mapping) else None
+    )
+    return camera_roll.roll_record(measured, expected, calibration)
 
 
 def with_swing_pose(geometry: Any, pose: Mapping | None) -> Any:

@@ -3342,8 +3342,8 @@ class EnclosureTilt:
                 "mount_yaw_deg": mount.yaw_deg,
                 "mount_upside_down": mount.upside_down,
                 "mount_source": mount_source,
-                # the check's roll step passed under this mount: the camera applies the roll
-                "roll_verified": self._unit_mount()[2]["roll_verified"],
+                # the check's roll step and zero, under this mount: the camera applies them
+                "roll_calibration": self._unit_mount()[2]["roll_calibration"],
             }
         )
         return data
@@ -3543,16 +3543,14 @@ def _reference_ball_camera(
         roll = camera_roll.roll_record(
             tilt.get("roll_deg"),
             reference_roll if isinstance(reference_roll, (int, float)) else 0.0,
-            verified=tilt.get("roll_verified") is True,
+            tilt.get("roll_calibration"),
         )
         model = build_calibrated_camera_model(
             artifact,
             placement,
             observed_pitch_deg=tilt.get("pitch_deg"),
             observed_roll_deg=(
-                camera_roll.calibrated_observed_roll_deg(
-                    tilt.get("roll_deg"), reference_roll, apply=roll["applied"]
-                )
+                camera_roll.calibrated_observed_roll_deg(roll, reference_roll)
                 if isinstance(reference_roll, (int, float))
                 else tilt.get("roll_deg")
             ),
@@ -3592,7 +3590,7 @@ def _reference_ball_camera(
     roll = camera_roll.roll_record(
         tilt.get("roll_deg"),
         rig.expected_inclinometer_orientation().roll_deg or 0.0,
-        verified=tilt.get("roll_verified") is True,
+        tilt.get("roll_calibration"),
     )
     return BallPlaneCamera.nominal(
         focal_px=mode_focal_px(arm, rig_geometry, lens),
@@ -3778,13 +3776,13 @@ def confirm_placement_box(
 
 def _placement_roll_deg(rig_geometry: Path, tilt: Mapping) -> float | None:
     """The LIS3DH roll the camera models do not apply, for the box's padding: 0 on a
-    unit that verified its roll."""
+    unit that verified and zeroed its roll."""
     from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     roll = tilt.get("roll_deg")
     if isinstance(roll, bool) or not isinstance(roll, (int, float)) or not math.isfinite(roll):
         return None
-    if tilt.get("roll_verified") is True:
+    if (tilt.get("roll_calibration") or {}).get("applied") is True:
         return 0.0
     try:
         expected = RigGeometry.from_json(rig_geometry).expected_inclinometer_orientation().roll_deg

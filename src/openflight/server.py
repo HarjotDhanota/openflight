@@ -1869,15 +1869,16 @@ def setup_blocked_reason() -> str | None:
     return block.reason if block is not None else None
 
 
-def _roll_verified() -> bool:
-    """Whether this unit's tilt check verified the LIS3DH roll (its mount file)."""
-    return inclinometer_runtime_config.get("roll_verified") is True
+def _roll_calibration() -> dict | None:
+    """This unit's LIS3DH roll direction and zero from its tilt check (its mount file)."""
+    calibration = inclinometer_runtime_config.get("roll_calibration")
+    return dict(calibration) if isinstance(calibration, dict) else None
 
 
 def setup_camera_view():
     """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
-    not apply (a ``setup_service.CameraView``; 0 on a unit that verified its roll); None
-    without a camera.
+    not apply (a ``setup_service.CameraView``; 0 on a unit that verified and zeroed its
+    roll); None without a camera.
 
     Built as the tester's setup camera is: with calibrated fusion loaded, the calibrated
     optical model at the LIS3DH's pose; otherwise the rig's lens and radar, this mode's
@@ -1902,7 +1903,7 @@ def setup_camera_view():
     pitch, measured_roll, status = _setup_lis3dh()
     expected = rig_geometry.expected_inclinometer_orientation()
     expected_roll = float(expected.roll_deg or 0.0)
-    roll = camera_roll.roll_record(measured_roll, expected_roll, verified=_roll_verified())
+    roll = camera_roll.roll_record(measured_roll, expected_roll, _roll_calibration())
     unapplied_roll = (
         0.0
         if roll["applied"]
@@ -1967,14 +1968,15 @@ def _calibrated_setup_camera(width: int, height: int, pitch, measured_roll, roll
     if (saved.get("width"), saved.get("height")) != (width, height):
         raise ValueError("calibrated camera mode does not match the active capture mode")
     reference_roll = (camera_placement.get("reference_pose_deg") or {}).get("roll")
+    if isinstance(reference_roll, (int, float)):
+        # the calibrated model's expected roll is its placement's reference pose
+        roll = camera_roll.roll_record(measured_roll, reference_roll, _roll_calibration())
     model = build_calibrated_camera_model(
         artifact,
         camera_placement,
         observed_pitch_deg=pitch,
         observed_roll_deg=(
-            camera_roll.calibrated_observed_roll_deg(
-                measured_roll, reference_roll, apply=roll["applied"]
-            )
+            camera_roll.calibrated_observed_roll_deg(roll, reference_roll)
             if isinstance(reference_roll, (int, float))
             else measured_roll
         ),
@@ -3031,7 +3033,7 @@ def init_inclinometer(
             "mount_source": mount_source,
             "mount_file": str(mount_file) if mount_file is not None else None,
             "orientation_check": mount_record,
-            "roll_verified": mount_record["roll_verified"],
+            "roll_calibration": mount_record["roll_calibration"],
             "startup": startup.to_dict(),
         }
         if startup.snapshot is None:
@@ -4412,7 +4414,7 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     )
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
-    data["roll_verified"] = _roll_verified()
+    data["roll_calibration"] = _roll_calibration()
     applied_to: list[str] = []
     snapshot = selection.snapshot
     if snapshot is None:
@@ -4431,10 +4433,15 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
             effective_tilt = configured_tilt + (snapshot.calibrated_pitch_deg - expected_pitch)
             data["configured_iwr_tilt_deg"] = round(configured_tilt, 3)
             data["effective_iwr_tilt_deg"] = round(effective_tilt, 3)
-            if data["roll_verified"]:
-                # the board turns with the unit: its departure from the expected roll
-                expected_roll = (_expected_inclinometer_orientation() or {}).get("roll_deg") or 0.0
-                data["effective_iwr_roll_deg"] = round(snapshot.roll_deg - expected_roll, 3)
+            from .camera import camera_roll  # noqa: PLC0415
+
+            # the board turns with the unit: the reading less its zero and expected roll
+            expected_roll = (_expected_inclinometer_orientation() or {}).get("roll_deg") or 0.0
+            iwr_roll = camera_roll.roll_record(
+                snapshot.roll_deg, expected_roll, _roll_calibration()
+            )
+            if iwr_roll["applied"]:
+                data["effective_iwr_roll_deg"] = round(iwr_roll["camera_roll_deg"], 3)
             applied_to.append("iwr6843")
         logger.info(
             "[SERVER] Inclinometer pitch: raw %+.2fdeg, calibrated %+.2fdeg, for %s (age %.0fms)",
@@ -5345,11 +5352,15 @@ def _fuse_camera_measurements(
                     raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
                 from openflight.camera import camera_roll  # noqa: PLC0415
 
-                # applied only on a unit whose tilt check verified the roll
+                # applied only on a unit whose tilt check verified and zeroed the roll
+                reference_roll = (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0)
                 observed_roll = camera_roll.calibrated_observed_roll_deg(
-                    camera_roll.lis3dh_roll_deg(*gravity),
-                    (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0),
-                    apply=pose.get("roll_verified") is True,
+                    camera_roll.roll_record(
+                        camera_roll.lis3dh_roll_deg(*gravity),
+                        reference_roll,
+                        pose.get("roll_calibration"),
+                    ),
+                    reference_roll,
                 )
                 model = build_calibrated_camera_model(
                     camera_optical_calibration,

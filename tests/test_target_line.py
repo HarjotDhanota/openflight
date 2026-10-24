@@ -374,12 +374,11 @@ def test_a_camera_that_applies_the_roll_carries_only_its_residual():
 
     from openflight.camera import camera_roll  # noqa: PLC0415
 
-    camera = replace(_camera(), roll=camera_roll.roll_record(-2.9, 0.0, verified=True))
+    zeroed = {"verified": True, "zero_deg": 0.0, "residual_deg": 0.3, "applied": True}
+    camera = replace(_camera(), roll=camera_roll.roll_record(-2.9, 0.0, zeroed))
     aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 0.3))
 
     record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=4.0, roll_deg=0.0)
 
     assert record["uncertainty"]["roll_applied"] is True
-    assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(
-        camera_roll.APPLIED_ROLL_RESIDUAL_DEG
-    )
+    assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(0.3)

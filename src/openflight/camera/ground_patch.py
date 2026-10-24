@@ -56,7 +56,7 @@ UNCALIBRATED_WINDOW_PAD_DEG = UNCALIBRATED_TILT_PAD_DEG
 CALIBRATED_WINDOW_PAD_DEG = 0.5
 # A camera that does not apply the LIS3DH roll (a unit that has not verified it,
 # camera_roll) pads the rows at the outline's ends for the reading; without one, this
-# much. A camera that applies it pads only camera_roll.APPLIED_ROLL_RESIDUAL_DEG.
+# much. A camera that applies it pads only the unit's zero repeatability.
 UNKNOWN_ROLL_PAD_DEG = 3.0
 MIN_ROLL_PAD_DEG = 1.0
 # A ball's apparent size may differ from the nominal focal length's prediction by
@@ -87,7 +87,7 @@ def ground_patch_policy() -> dict[str, Any]:
         "calibrated_window_pad_deg": CALIBRATED_WINDOW_PAD_DEG,
         "unknown_roll_pad_deg": UNKNOWN_ROLL_PAD_DEG,
         "min_roll_pad_deg": MIN_ROLL_PAD_DEG,
-        "applied_roll_residual_deg": camera_roll.APPLIED_ROLL_RESIDUAL_DEG,
+        "applied_roll_pad": "the_units_roll_zero_repeatability",
         "pad": "rows_only_columns_exact",
         "size_tolerance": SIZE_TOLERANCE,
         "radar_window_margin_m": RADAR_WINDOW_MARGIN_M,
@@ -252,12 +252,14 @@ def _pixels(camera, points: np.ndarray) -> np.ndarray:
 def roll_pad_deg(camera: Any, roll_deg: float | None) -> float:
     """The roll the rows are padded for, as the target line (D34) carries it too.
 
-    ``camera_roll.APPLIED_ROLL_RESIDUAL_DEG`` when the camera applies the LIS3DH roll;
+    The applied roll's residual (the unit's zero repeatability) when the camera
+    applies the LIS3DH roll;
     otherwise ``roll_deg`` (the roll it does not apply), at least ``MIN_ROLL_PAD_DEG``,
     or ``UNKNOWN_ROLL_PAD_DEG`` without one.
     """
     if camera_roll.is_applied(camera):
-        return camera_roll.APPLIED_ROLL_RESIDUAL_DEG
+        residual = camera_roll.residual_deg(camera)
+        return MIN_ROLL_PAD_DEG if residual is None else residual
     if roll_deg is None or isinstance(roll_deg, bool) or not math.isfinite(float(roll_deg)):
         return UNKNOWN_ROLL_PAD_DEG
     return max(abs(float(roll_deg)), MIN_ROLL_PAD_DEG)

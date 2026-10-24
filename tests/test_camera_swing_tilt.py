@@ -180,7 +180,12 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
     roll = math.radians(-2.0)
     shot.inclinometer = {
         "applied_to": ["camera"],
-        "roll_verified": True,
+        "roll_calibration": {
+            "verified": True,
+            "zero_deg": 0.0,
+            "residual_deg": 0.2,
+            "applied": True,
+        },
         "calibrated_pitch_deg": 0.0,
         "x_g": math.sin(roll),
         "y_g": 0.0,

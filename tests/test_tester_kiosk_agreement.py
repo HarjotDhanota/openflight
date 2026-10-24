@@ -78,12 +78,13 @@ def test_on_a_verified_unit_setup_and_swings_apply_the_same_roll():
     from openflight.camera import camera_roll  # noqa: PLC0415
 
     rig = RigGeometry.from_json(RIG_PATH)
-    reading = {**_rolled_reading(-2.9), "roll_verified": True}
+    zeroed = {"verified": True, "zero_deg": 0.4, "residual_deg": 0.2, "applied": True}
+    reading = {**_rolled_reading(-2.9), "roll_calibration": zeroed}
     expected = rig.expected_inclinometer_orientation()
     tilt = {
         "camera_pitch_deg": rig.boresight_pitch_deg + (1.0 - (expected.pitch_deg or 0.0)),
         "roll_deg": camera_roll.lis3dh_roll_deg(reading["x_g"], reading["y_g"], reading["z_g"]),
-        "roll_verified": True,
+        "roll_calibration": zeroed,
     }
 
     setup = ts._reference_ball_camera(  # pylint: disable=protected-access

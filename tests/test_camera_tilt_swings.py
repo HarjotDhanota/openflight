@@ -26,6 +26,8 @@ from openflight.rig_geometry import RigGeometry
 
 RIG_PATH = Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
 CALIBRATION = {"offset_deg": 2.0, "uncertainty_deg": 0.3, "calibrated_at_utc": "2026-10-01"}
+# a unit whose tilt check verified and zeroed its roll
+ZEROED = {"verified": True, "zero_deg": 0.0, "residual_deg": 0.2, "applied": True}
 
 
 def _inclinometer(calibrated_pitch_deg=1.0):
@@ -239,7 +241,7 @@ def test_on_a_verified_unit_the_swing_applies_the_roll():
     pose = camera_tilt.swing_camera_pose(
         rig=rig,
         image_width_px=1280,
-        inclinometer={**_rolled_reading(-2.9), "roll_verified": True},
+        inclinometer={**_rolled_reading(-2.9), "roll_calibration": ZEROED},
         calibration=None,
     )
     geometry = ball_flight.CameraBallGeometry(

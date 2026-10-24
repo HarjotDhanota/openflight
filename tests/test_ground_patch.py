@@ -205,11 +205,11 @@ def test_once_the_camera_applies_the_roll_only_its_residual_pads_the_rows():
 
     camera = _v3()
     patch = GroundPatch(0.0, 1.25)
-    applied = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, verified=True))
-    unverified = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, verified=False))
+    zeroed = {"verified": True, "zero_deg": 0.0, "residual_deg": 0.25, "applied": True}
+    applied = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, zeroed))
+    unverified = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, None))
 
-    assert _projection(applied, patch, roll_deg=0.0).roll_pad_deg == pytest.approx(
-        camera_roll.APPLIED_ROLL_RESIDUAL_DEG
-    )
+    # the unit's own zero repeatability, not a fixed figure
+    assert _projection(applied, patch, roll_deg=0.0).roll_pad_deg == pytest.approx(0.25)
     assert _projection(unverified, patch, roll_deg=-2.9).roll_pad_deg == pytest.approx(2.9)
     assert _projection(camera, patch, roll_deg=None).roll_pad_deg == pytest.approx(3.0)
