@@ -81,6 +81,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         self._action_lock = threading.Lock()
         self._record = load(self._path)
         self._live: dict[str, Any] = {}
+        self._unapplied: set[str] = set()
         self.on_change: Callable[[dict], None] = lambda snapshot: None
 
     @property
@@ -96,11 +97,10 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         """The record as it stands against the start context, plus the last live look."""
         return {**self._evaluated(), "live": copy.deepcopy(self._live)}
 
-    def apply_all(self) -> None:
-        """Put every usable section into effect, as at kiosk start."""
-        record = self._evaluated()
-        for name in SECTIONS:
-            getattr(self._appliers, name)(record[name] if _usable(record[name]) else None)
+    def apply_all(self) -> list[str]:
+        """Put every section into effect, as at kiosk start; the sections that failed."""
+        with self._action_lock:
+            return self._apply(set(SECTIONS), self._evaluated())
 
     # actions
 
@@ -154,26 +154,31 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                     self._record = record
             except _Refused as refusal_:
                 return self._result(False, str(refusal_))
-            failed = self._apply_changes(before, self._evaluated())
+            after = self._evaluated()
+            failed = self._apply({n for n in SECTIONS if after[n] != before[n]}, after)
             result = self._result(not failed, "; ".join(failed) or None)
             self.on_change(result["setup"])
             if not failed:
-                self._hooks("after_setup_action", section, action, result)
+                kiosk_extensions.call_all("after_setup_action", section, action, result)
             return result
 
     def _result(self, ok: bool, reason: str | None) -> dict:
         return {"ok": ok, "reason": reason, "setup": self.snapshot()}
 
-    def _apply_changes(self, before: dict, after: dict) -> list[str]:
+    def _apply(self, changed: set[str], evaluated: dict) -> list[str]:
+        """Apply the changed sections and any an earlier failure left unapplied."""
         failed = []
         for name in SECTIONS:
-            if after[name] == before[name]:
+            if name not in changed and name not in self._unapplied:
                 continue
             try:
-                getattr(self._appliers, name)(after[name] if _usable(after[name]) else None)
+                getattr(self._appliers, name)(evaluated[name] if _usable(evaluated[name]) else None)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("[SETUP] applying %s failed", name, exc_info=True)
+                self._unapplied.add(name)
                 failed.append(f"could not apply {name}: {exc}")
+            else:
+                self._unapplied.discard(name)
         return failed
 
     def _cleared(self, *names: str) -> dict:
@@ -251,13 +256,13 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         }
         return projection, classified
 
-    def _box_confirm(self, _record: dict, _payload: dict) -> dict:
+    def _box_confirm(self, record: dict, _payload: dict) -> dict:
         projection, classified = self._classify_box()
         if classified["state"] != "found":
             raise _Refused(classified["state"])
         ball = classified["selected"]
         centre = [float(ball["x_px"]), float(ball["y_px"])]
-        previous = self._record["box"]
+        previous = record["box"]  # evaluated: a stale box has no id to carry on
         base = placement_box.box_id(self._config, self._ctx.lens_id)
         kept = previous.get("ball_px")
         same_ball = (
@@ -265,7 +270,13 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             and kept is not None
             and np.hypot(kept[0] - centre[0], kept[1] - centre[1]) <= SAME_BALL_PX
         )
-        box_id = previous["id"] if same_ball else f"{base}@{centre[0]:.0f},{centre[1]:.0f}"
+        # the revision keeps a new id from ever equalling a stale box's, which would revive
+        # the aim and range set against it
+        box_id = (
+            previous["id"]
+            if same_ball
+            else f"{base}@{centre[0]:.0f},{centre[1]:.0f}#{self.revision + 1}"
+        )
         return {
             "box": {
                 "state": "confirmed",
@@ -344,18 +355,31 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             floor = target_line.parse_floor_line(payload["floor_line_px"], camera)
             net = self._net_range(camera, roll, ball, floor, tilt_pad)
             lens_forward = float(camera.camera_origin_lfu[1])
-            line = target_line.target_line_record(
-                camera,
-                ball,
-                payload["aim_px"],
-                floor,
-                tilt_pad_deg=tilt_pad,
-                roll_deg=roll,
-                target_distance_m=max(net["value_m"] - (ball[1] - lens_forward), 0.5),
-                target_distance_basis=f"net_range_{net['source']}_less_the_ball_offset",
-            )
+
+            def solve(floor_line):
+                return target_line.target_line_record(
+                    camera,
+                    ball,
+                    payload["aim_px"],
+                    floor_line,
+                    tilt_pad_deg=tilt_pad,
+                    roll_deg=roll,
+                    target_distance_m=max(net["value_m"] - (ball[1] - lens_forward), 0.5),
+                    target_distance_basis=f"net_range_{net['source']}_less_the_ball_offset",
+                )
+
+            line = solve(floor)
+            used_floor = floor is not None
+            if line["total_uncertainty_deg"] is None and used_floor:
+                # an unbounded floor line gives the aim no honest +-: aim as a direction,
+                # and keep the floor line for the net distance alone
+                line, used_floor = solve(None), False
         except ValueError as exc:
             raise _Refused(str(exc)) from exc
+        if line["total_uncertainty_deg"] is None:
+            raise _Refused(
+                "the camera cannot bound this aim point: aim at a farther target, or skip it"
+            )
         return {
             "aim": {
                 "state": "set",
@@ -365,6 +389,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 "iwr_yaw_deg": line["applies_to"]["iwr_yaw_deg"],
                 "uncertainty_deg": line["total_uncertainty_deg"],
                 "method": line["method"],
+                "floor_line_used": used_floor,
                 "warnings": line["warnings"],
                 "ball_lfu_m": line["ball_lfu_m"],
                 "source": line["source"],

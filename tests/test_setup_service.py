@@ -192,6 +192,24 @@ def test_reconfirming_a_still_ball_keeps_the_box_and_what_was_set_on_it(make, sc
     assert result["setup"]["ball_range"]["state"] == "set"
 
 
+def test_a_rig_change_then_the_same_ball_does_not_revive_aim_and_range(make, scene):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    service.aim("skip")
+    assert service.range("measure")["ok"]
+    new_rig = StartContext(
+        lens_id="stock-2.8", rig_sha256="rig-b", tilt_offset_deg=2.0, tilt_calibrated=True
+    )
+    restarted, _recorder = make(ctx=new_rig)
+    assert restarted.snapshot()["box"]["state"] == "stale"
+
+    result = _confirm_box(restarted, scene)
+
+    assert result["setup"]["box"]["state"] == "confirmed"
+    for name in ("aim", "ball_range", "net_range"):
+        assert result["setup"][name]["state"] == "stale", name
+
+
 def test_a_moved_ball_makes_a_new_box_and_stales_the_range(make, scene):
     service, _recorder = make()
     _confirm_box(service, scene)
@@ -286,6 +304,57 @@ def test_a_floor_line_more_uncertain_than_it_is_long_is_the_default(make, scene,
     assert net["reason"] == "too uncertain to measure"
 
 
+def _fake_line(unbounded_with_floor: bool, solved: list):
+    def record(camera, ball, aim_px, floor_line=None, **kwargs):
+        solved.append(floor_line)
+        bounded = not (unbounded_with_floor and floor_line is not None)
+        return {
+            "aim_px": list(aim_px),
+            "yaw_deg": 0.5,
+            "applies_to": {"iwr_yaw_deg": 0.4},
+            "total_uncertainty_deg": 0.8 if bounded else None,
+            "method": "direction" if floor_line is None else "floor_point",
+            "warnings": [],
+            "ball_lfu_m": [0.0, 2.35],
+            "source": "aim_point",
+        }
+
+    return record
+
+
+def test_an_unbounded_floor_line_aims_as_a_direction_and_keeps_the_net(make, scene, monkeypatch):
+    service, _recorder = make()
+    _confirm_box(service, scene)
+    solved = []
+    monkeypatch.setattr(target_line, "target_line_record", _fake_line(True, solved))
+    floor = _floor_line()
+
+    result = service.aim("confirm", aim_px=AIM_PX, floor_line_px=floor)
+
+    assert result["ok"], result["reason"]
+    assert solved == [floor, None]
+    aim, net = result["setup"]["aim"], result["setup"]["net_range"]
+    assert aim["uncertainty_deg"] == 0.8 and aim["method"] == "direction"
+    assert aim["floor_line_used"] is False and aim["floor_line"] == floor
+    assert net["source"] == "camera_floor_line" and net["inputs"]["floor_line"] == floor
+
+
+def test_an_aim_that_cannot_be_bounded_is_refused(make, scene, monkeypatch):
+    service, recorder = make()
+    _confirm_box(service, scene)
+    monkeypatch.setattr(
+        target_line,
+        "target_line_record",
+        lambda *args, **kwargs: {"total_uncertainty_deg": None},
+    )
+
+    result = service.aim("confirm", aim_px=AIM_PX)
+
+    assert result["ok"] is False and "cannot bound" in result["reason"]
+    assert result["setup"]["aim"]["state"] == "not_set"
+    assert recorder.calls["aim"] == []
+
+
 def test_a_bad_aim_point_is_refused_not_raised(make, scene):
     service, recorder = make()
     _confirm_box(service, scene)
@@ -367,14 +436,17 @@ def test_hook_refusal_blocks_action(make, scene):
     assert service.revision == 0 and recorder.calls["box"] == []
 
 
-def test_a_finished_action_announces_the_change_then_runs_the_after_hook(make, scene):
+def test_a_finished_action_announces_the_change_then_runs_the_after_hook(make, scene, monkeypatch):
     order = []
 
     def hooks(name, *args):
         order.append(name)
-        if name == "after_setup_action":
-            assert args[:2] == ("box", "confirm") and args[2]["ok"] is True
 
+    def call_all(name, *args):
+        order.append(name)
+        assert args[:2] == ("box", "confirm") and args[2]["ok"] is True
+
+    monkeypatch.setattr(kiosk_extensions, "call_all", call_all)
     service, _recorder = make(hooks)
     service.on_change = lambda snapshot: order.append(("changed", snapshot["box"]["state"]))
     scene.in_box = BALL_PX
@@ -393,6 +465,30 @@ def test_an_applier_that_fails_is_reported_and_the_record_is_kept(make, scene, t
 
     assert result["ok"] is False and "camera busy" in result["reason"]
     assert load(tmp_path / "setup.json")["box"]["state"] == "confirmed"
+
+
+def test_a_failed_apply_is_retried_by_the_same_action_and_by_apply_all(make, scene):
+    service, recorder = make()
+    attempts = []
+
+    def flaky(section):
+        attempts.append(section)
+        if len(attempts) == 1:
+            raise RuntimeError("camera busy")
+
+    service._appliers.box = flaky
+    scene.in_box = BALL_PX
+
+    first = service.box("confirm")
+    second = service.box("confirm")
+
+    assert first["ok"] is False and "camera busy" in first["reason"]
+    assert second["ok"] is True
+    assert [item["state"] for item in attempts] == ["confirmed", "confirmed"]
+    assert service.box("show")["ok"] and len(attempts) == 2
+
+    service._unapplied.add("box")
+    assert service.apply_all() == [] and len(attempts) == 3 and "box" not in service._unapplied
 
 
 def test_show_looks_without_saving(make, scene):
