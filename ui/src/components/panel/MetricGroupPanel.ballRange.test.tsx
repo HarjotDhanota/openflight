@@ -4,7 +4,7 @@ import type { Shot, ShotMetric } from '../../types/shot';
 import { MetricGroupPanel } from './MetricGroupPanel';
 import { formatMetricValue } from './metricFormat';
 
-// 13 Oct: each shot's ball distance, with where it came from, in the Flight details
+// Each shot's ball distance, with where it came from, in the Flight details
 function ballRange(overrides: Partial<ShotMetric>): ShotMetric {
   return {
     value: 2.08,

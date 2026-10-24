@@ -13,7 +13,7 @@ interface SystemState {
   cloudUploadMessage: string;
   simStatuses: Record<string, SimStatus>;
   latestSimShots: Record<string, SimShotInfo>;
-  /** The latest shot withheld from the simulators, if any (D31). */
+  /** The latest shot withheld from the simulators, if any. */
   simShotNotSent: SimShotNotSent | null;
   serverClub: string | null;
   handed: Handed | null;

@@ -53,7 +53,7 @@ export function LivePanel({
   const { unitSystem } = useUnitPreference();
   const profileShots = useMemo(() => filterShotsByProfile(shots, profileId), [shots, profileId]);
   const displayedShot = profileShots[profileShots.length - 1] ?? null;
-  // the same position in both trees below, so an extension's state survives an empty panel
+  // the same position in both trees, so an extension's state survives an empty panel
   const extensionResults = uiExtensions.map((extension, index) =>
     extension.LiveResult ? <extension.LiveResult key={index} shot={displayedShot} visible={resultVisible} /> : null
   );
@@ -77,7 +77,6 @@ export function LivePanel({
     metrics.map((metric) => `${metric.value}:${metric.unit ?? ''}`).join('|')
   );
   const header = <PanelHeader title={t('nav.live')} subtitle={profileName} club={clubLabel} actions={headerAction} />;
-  // what left and right are measured from: the tester's target line, or the unit's aim
   let targetText: string | null = null;
   if (targetLine?.status === 'not_set') {
     targetText = t('live.targetLineNotSet');

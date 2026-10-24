@@ -10,11 +10,7 @@ const WORD_KEYS: Record<'red' | 'amber' | 'green', MessageKey> = {
   green: 'ready.swing',
 };
 
-/**
- * The ready light as a full-width band (P7-14): the word as well as the colour,
- * the cause, a rough time left, and the last swing. It sits in the page flow
- * above the panels, so it never covers the camera feed.
- */
+/** The ready light as a full-width band in the page flow, so it never covers the camera feed. */
 export function ReadyLightBand({ light }: { light: ReadyLight | null }) {
   const { t } = useI18n();
   if (light === null || light.state === 'off') return null;

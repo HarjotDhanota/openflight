@@ -1,11 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 
-/**
- * Pixels a fitted row keeps spare at its right edge. A row that fit to the last
- * pixel (within the old 1 px slop) had its unit's final letter cut by the row's
- * overflow clip, and a kiosk's own font rendering can differ by a pixel or two:
- * "mph" was clipped on three-digit speeds at 1024×600.
- */
+/** Pixels a fitted row keeps spare at its right edge: kiosk font rendering can differ by a pixel or two. */
 export const FIT_MARGIN_PX = 4;
 /** A caption may shrink the values for height, never below this share of their fitted size. */
 const HEIGHT_FIT_FLOOR = 0.6;
@@ -49,11 +44,8 @@ function cardOf(row: HTMLElement): CardBox | null {
 
 /**
  * One size for every row: the CSS ceiling, or smaller if the widest row still
- * overflows, with ``FIT_MARGIN_PX`` to spare. When a tile's caption then pushes
- * its content past the tile's height (the club path's D-plane note beside the
- * ready light at 800×400), the values shrink a little more, down to
- * ``HEIGHT_FIT_FLOOR`` of their fitted size; a caption that cannot fit even then
- * leaves the values alone.
+ * overflows. If a caption then overflows its tile's height, the values shrink
+ * further, down to ``HEIGHT_FIT_FLOOR`` of their fitted size.
  */
 export function applySharedFitFontSize(rows: HTMLElement[], minPx = 12): void {
   if (rows.length === 0) {

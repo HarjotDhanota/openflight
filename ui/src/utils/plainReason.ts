@@ -1,10 +1,4 @@
-/**
- * Tester-facing words for a metric's not-measured reason (13 Oct UX pass, item 9).
- * The server's reason is written for developers and is cut off by the cell; the
- * screen shows this short form and the full reason on a tap (a `title` tooltip
- * never shows on a touch screen). The tester page (public/tester.html) keeps the
- * same table.
- */
+/** Short tester-facing words for a not-measured reason; public/tester.html keeps the same table. */
 const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^pending E\d+|not built yet/i, 'coming later'],
   [/no camera club delivery/i, 'the camera did not see the club'],
@@ -24,7 +18,7 @@ export function shortReason(reason: string | null | undefined): string {
   }
   if (text.length <= SHORT_MAX) return text;
   const words = text.slice(0, SHORT_MAX).split(' ');
-  words.pop(); // never a word cut in half
+  words.pop();
   return words.join(' ');
 }
 

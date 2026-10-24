@@ -10,23 +10,10 @@ export interface CameraReplay {
   display_mirror_horizontal: boolean;
 }
 
-/**
- * What a shot's carry is, as the server commits it. A fusion unit (IWR or camera)
- * reports its flight's label, `calculated` (simulator on measured or calculated
- * inputs) or `model_geometry` (a spin or spin axis built on an assumed swing
- * geometry, D39), or `not_measured`, and never the ball-speed table (D17);
- * `measured` appears only in older logs. An OPS-only unit reports
- * `estimated`. Missing or null: a shot that never reached finalization.
- */
+/** The carry's label as the server commits it; `measured` appears only in older logs. */
 export type CarryStatus = Exclude<MetricLabel, 'experimental'>;
 
-/**
- * A metric's label (openflight.shot_metrics.LABELS): `measured` (a sensor saw it),
- * `calculated` (a named model on measured or calculated inputs, D38),
- * `model_geometry` (rests on assumed swing geometry, D39), `estimated` (an OPS-only
- * install's labelled stand-in), `experimental` (shown before it is validated; it feeds
- * no other metric), `not_measured` (no value; the reason says why, D17).
- */
+/** A metric's label; mirrors openflight.shot_metrics.LABELS. */
 export const METRIC_LABELS = [
   'measured',
   'calculated',
@@ -37,7 +24,6 @@ export const METRIC_LABELS = [
 ] as const;
 export type MetricLabel = (typeof METRIC_LABELS)[number];
 
-/** One metric of one shot, as the server reports it in `Shot.metrics`. */
 export interface ShotMetric {
   value: number | null;
   unit: string;
@@ -58,11 +44,7 @@ export interface Shot {
   ball_speed_mph: number | null;
   club_speed_mph: number | null;
   smash_factor: number | null;
-  /**
-   * What smash_factor divides. `radial_ratio` (fusion units): the OPS radial ball
-   * speed over the OPS radial club speed, not TrackMan's full speeds (D21, D37).
-   * Missing or null: unlabelled, as an OPS-only unit has always shown it.
-   */
+  /** `radial_ratio`: OPS radial ball over club speed, not full speeds. Null: unlabelled. */
   smash_factor_status?: string | null;
   /** The ball-speed table; null on a fusion unit, which never shows it. */
   estimated_carry_yards: number | null;
@@ -124,7 +106,7 @@ export interface Shot {
   camera_replay?: CameraReplay | null;
   /** Every golf metric with its label, by metric id (openflight.shot_metrics). */
   metrics?: Record<string, ShotMetric> | null;
-  /** The camera's experimental impact reading; its values are in `metrics.impact_*`. */
+  /** Values are in `metrics.impact_*`. */
   impact_location?: ImpactLocationReading | null;
 }
 
@@ -136,15 +118,13 @@ export interface ImpactLocationReading {
 
 export interface SessionStats {
   shot_count: number;
-  /** Null when no shot has a measured value (the server sends a non-finite one as null). */
+  /** Null when no shot has a measured value. */
   avg_ball_speed: number | null;
   max_ball_speed: number | null;
   min_ball_speed: number | null;
-  /** Null with fewer than two measured ball speeds. */
   std_dev?: number | null;
   avg_club_speed: number | null;
   avg_smash_factor: number | null;
-  /** Mean of the carries the kiosk reports; null when no shot has one. */
   avg_carry_est: number | null;
   // Rolling buffer mode spin stats
   avg_spin_rpm?: number | null;
@@ -227,7 +207,6 @@ export function getSwingSpeedMph(shot: Shot): number | null {
   return shot.club_speed_mph ?? shot.ball_speed_mph;
 }
 
-/** The measured values (the one rule, {@link isMeasured}); a not-measured metric is null. */
 function measuredValues(values: Array<number | null | undefined>): number[] {
   return values.filter(isMeasured);
 }
@@ -298,31 +277,15 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
   };
 }
 
-/**
- * The carry the kiosk shows for a shot, or null when it is not measured.
- *
- * The committed carry when there is one. The ball-speed table stands in only on
- * an OPS-only unit (`estimated`) or for a shot that never reached finalization;
- * a fusion unit's missing carry stays missing (D17). Mirrors the server's
- * `Shot.reported_carry_yards`.
- */
+/** The carry the kiosk shows, or null; mirrors the server's `Shot.reported_carry_yards`. */
 export function reportedCarryYards(shot: Shot): number | null {
   if (shot.carry_status === 'not_measured') return null;
-  // the one missing-value rule ({@link isMeasured}): a non-finite carry is no carry
   if (isMeasured(shot.carry_spin_adjusted)) return shot.carry_spin_adjusted;
   const tableAllowed = shot.carry_status == null || shot.carry_status === 'estimated';
   return tableAllowed ? firstMeasured(shot.estimated_carry_yards) : null;
 }
 
-/**
- * The label on the reported carry, or null when there is none to label.
- *
- * The server's own label when the shot carries `metrics`. Otherwise its carry
- * status: a simulated carry is `calculated` (D38) whether its spin was measured
- * or calculated (an older log's `measured` is that same simulated carry), and
- * `model_geometry` when flown on model geometry (D39). An OPS-only or unfinalized
- * shot's carry is `estimated`.
- */
+/** The reported carry's label, or null; an older log's `measured` carry reads `calculated`. */
 export function carryLabel(shot: Shot): MetricLabel | null {
   if (reportedCarryYards(shot) === null) return null;
   const server = shot.metrics?.carry?.status;
@@ -334,15 +297,12 @@ export function carryLabel(shot: Shot): MetricLabel | null {
 
 /**
  * Compute session stats from an array of shots.
- *
- * Only measured values count ({@link isMeasured}); a stat with nothing measured is
- * null, never 0: an empty session too, and std_dev with fewer than two ball speeds.
+ * A stat with nothing measured is null, never 0.
  */
 export function computeStats(shots: Shot[]): SessionStats {
   const ballSpeeds = measuredValues(shots.map((s) => s.ball_speed_mph));
   const clubSpeeds = measuredValues(shots.map((s) => s.club_speed_mph));
   const smashFactors = measuredValues(shots.map((s) => s.smash_factor));
-  // only reported carries: a fusion shot's missing carry is not averaged in
   const carries = measuredValues(shots.map(reportedCarryYards));
 
   const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;

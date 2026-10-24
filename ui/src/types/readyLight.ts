@@ -1,4 +1,4 @@
-/** The kiosk's ready light (P7-14), as its `ready_light` socket event carries it. */
+/** The kiosk's ready light, as its `ready_light` socket event carries it. */
 export type ReadyLightState = 'red' | 'amber' | 'green' | 'off';
 
 export interface ReadyLightSwingResult {

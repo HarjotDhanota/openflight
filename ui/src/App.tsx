@@ -113,7 +113,7 @@ function AppContent() {
   );
 
   const [currentView, setCurrentView] = useState<PanelView>('live');
-  // what the Live tab's left/right are measured from (13 Oct contract)
+  // what the Live tab's left/right are measured from
   const targetLine = useTargetLine(currentView === 'live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
@@ -288,7 +288,7 @@ function AppContent() {
     <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
 
-      {/* In the flow above the panels, so it never covers the camera feed (P7-14). */}
+      {/* In the flow above the panels, so it never covers the camera feed. */}
       <div className="session-status">
         <ReadyLightBar />
         {uiExtensions.map((extension, index) =>

@@ -4,8 +4,6 @@ import { useSystemStore } from '../stores/useSystemStore';
 import type { SimShotNotSent } from '../types/socket';
 import { SimNotSentNotice } from './SimNotSentNotice';
 
-// D31: a fusion unit sends a simulator only what it measured. A shot missing a value
-// the simulator requires is not sent, and the screen says why.
 const notSent: SimShotNotSent = {
   reason: 'spin not measured',
   missing: ['spin'],

@@ -24,7 +24,6 @@ function record(overrides: Partial<ShotMetric>): ShotMetric {
 
 const LABEL_CYCLE: readonly MetricLabel[] = METRIC_LABELS;
 
-/** A shot whose metrics cycle through every label, so every badge renders. */
 function everyMetricShot(): Shot {
   const metrics: Record<string, ShotMetric> = {};
   METRIC_CATALOG.forEach((spec, index) => {
@@ -78,7 +77,6 @@ describe('MetricGroupPanel', () => {
     const html = render(PANEL_GROUPS.club.includes(group as never) ? 'club' : 'flight');
     const spec = METRIC_CATALOG.find((item) => item.id === id)!;
     if (isComingLater(spec, everyMetricShot().metrics![id])) {
-      // not built yet: named in the one Coming later cell, with its reason a tap away
       const later = html.match(/data-metric="coming-later"[^>]*data-metrics="([^"]*)"/);
       expect(later?.[1].split(' '), id).toContain(id);
       return;

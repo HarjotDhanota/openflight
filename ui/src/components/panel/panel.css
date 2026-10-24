@@ -304,7 +304,6 @@
   align-items: center;
 }
 
-/* the tabs and the "more tabs" hint over their right end */
 .panel-footer__tabs-wrap {
   position: relative;
   display: flex;
@@ -572,7 +571,6 @@
   text-transform: uppercase;
 }
 
-/* the kiosk's target line under the Live header: one slim line, never a tile */
 .live-panel__target {
   flex-shrink: 0;
   margin: 0;
@@ -683,9 +681,7 @@
 }
 
 .live-panel__grid .metric-card--label-above {
-  /* only label, value and caption are spaced: a gap beside each empty spacer row
-     cost a short tile 11 px, which the club path's D-plane note needed beside
-     the ready light at 800×400 */
+  /* only label, value and caption are spaced, not the empty spacer rows */
   row-gap: 0;
 }
 
@@ -715,8 +711,7 @@
   max-width: 100%;
 }
 
-/* Short kiosks (800×480, 800×400) with the ready light: captions stay whole but
-   tighter, so a two-line note and its experimental pill fit beside the value */
+/* Short kiosks (800×480, 800×400): tighter captions so a two-line note fits */
 @media (max-height: 520px) {
   .live-panel__grid .metric-card--label-above .metric-card__value-row {
     margin-block: 0.25rem;

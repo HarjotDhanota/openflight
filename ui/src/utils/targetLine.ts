@@ -1,7 +1,6 @@
 /**
- * The kiosk's target line (GET /api/target-line, 13 Oct contract): the zero every
- * left/right angle is measured from, set by the tester's aim point. Without it,
- * left and right are measured from where the unit points.
+ * The kiosk's target line (GET /api/target-line): the zero every left/right angle is
+ * measured from. Without it, left and right are measured from where the unit points.
  */
 export interface TargetLine {
   status: 'set' | 'not_set';

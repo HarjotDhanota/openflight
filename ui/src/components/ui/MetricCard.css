@@ -113,7 +113,6 @@
   gap: 4px;
 }
 
-/* Why a metric is not measured: at most two short lines, the rest in the title. */
 .metric-card__reason {
   display: -webkit-box;
   -webkit-box-orient: vertical;
