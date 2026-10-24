@@ -1,5 +1,8 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { METRIC_CATALOG, type MetricSpec } from '../../data/metricCatalog';
+import { getClubName } from '../../data/clubs';
+import { useSystemStore } from '../../stores/useSystemStore';
+import { clubWithHand } from '../../utils/handedness';
 import type { MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import type { Shot, ShotMetric } from '../../types/shot';
@@ -9,7 +12,8 @@ import { isMeasured } from '../../utils/units';
 import { isComingLater, shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
-import { FaceImpactView } from './FaceImpactView';
+import { ClubDeliveryViews } from './ClubDeliveryViews';
+import { shotHandedness } from './faceImpact';
 import { PanelHeader } from './PanelHeader';
 import './MetricGroupPanel.css';
 
@@ -170,11 +174,16 @@ export function MetricGroupPanel({
   headerAction,
 }: MetricGroupPanelProps) {
   const { t } = useI18n();
+  const handed = useSystemStore((state) => state.handed);
+  const displayedClub =
+    view === 'club' && shot?.metrics && !isSwingSpeedShot(shot)
+      ? clubWithHand(getClubName(shot.club), shotHandedness(shot, handed) === 'left' ? 'LH' : 'RH')
+      : clubLabel;
   const header = (
     <PanelHeader
       title={t(`nav.${view}` as MessageKey)}
       subtitle={profileName}
-      club={clubLabel}
+      club={displayedClub}
       actions={headerAction}
     />
   );
@@ -199,7 +208,7 @@ export function MetricGroupPanel({
     <div className="panel">
       {header}
       <div className="panel__body metric-groups" data-metric-panel={view}>
-        {view === 'club' ? <FaceImpactView shot={shot} sessionShots={sessionShots} /> : null}
+        {view === 'club' ? <ClubDeliveryViews shot={shot} sessionShots={sessionShots} /> : null}
         {PANEL_GROUPS[view].map((group) => (
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>

@@ -85,6 +85,7 @@ describe('MetricGroupPanel taps', () => {
     expect(list.hidden).toBe(true);
     act(() => later.click());
     expect(list.hidden).toBe(false);
-    expect(list.textContent).toContain('Dynamic lie: no input');
+    expect(list.textContent).toContain('Club speed (total): no input');
+    expect(list.textContent).not.toContain('Dynamic lie:');
   });
 });

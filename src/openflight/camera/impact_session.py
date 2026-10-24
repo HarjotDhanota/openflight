@@ -560,6 +560,11 @@ def prepare_clip(  # pylint: disable=too-many-locals
         name=clip.shot_id,
         club=clip.club,
     )
+    from openflight.camera.dynamic_lie import estimate_dynamic_lie  # noqa: PLC0415
+
+    clip.extra["dynamic_lie"] = estimate_dynamic_lie(
+        clip.prepared, pitch_deg=rig.boresight_pitch_deg, geometry_source=rig_source
+    )
 
 
 def _blur(location: il.ImpactLocation, edge: str) -> float | None:
@@ -589,6 +594,7 @@ def result_row(
         "face_centre_from_toe_source": face.face_centre_from_toe.source if face else None,
         "face_photo": clip.face_photo,
         "relative_path": clip.relative_path,
+        "dynamic_lie": clip.extra.get("dynamic_lie"),
     }
     if location is None:
         reason = clip.error or "not_analysed"

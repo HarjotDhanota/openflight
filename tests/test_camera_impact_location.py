@@ -317,12 +317,13 @@ def test_edge_blur_is_measured_per_edge_and_the_lateral_toe_blurs_more():
     assert blurred["kinematic_mm"]["toe"] > blurred["kinematic_mm"]["sole"]
 
 
-def test_face_inputs_priors_are_labelled_and_wide_for_an_unanchored_club():
+def test_face_inputs_priors_are_labelled_with_the_population_spread_for_an_unanchored_club():
     priors = il.FaceInputs.priors("7-iron")
     assert priors.face_centre_height.source == "reference_geometry_face_centre_rule"
     assert priors.face_centre_from_toe.source == "reference_geometry_face_centre_rule"
-    assert priors.face_centre_height.sigma >= 3.0
-    assert priors.face_centre_from_toe.sigma >= 2.5
+    # 45 7-iron models: the spread of the centre's height and toe distance, about 2 mm each
+    assert priors.face_centre_height.sigma == pytest.approx(2.0)
+    assert priors.face_centre_from_toe.sigma == pytest.approx(2.0)
     assert priors.dynamic_loft.source.startswith("prior")
     assert il.FaceInputs.priors("driver").face_centre_height.value > 25.0
     unknown = il.FaceInputs.priors("unknown")
@@ -334,7 +335,7 @@ def test_face_inputs_priors_are_labelled_and_wide_for_an_unanchored_club():
 
 
 def test_the_reference_file_is_the_one_source_of_every_category_face_centre():
-    assert REFERENCE["schema"] == "openflight.face_centre_reference.v1"
+    assert REFERENCE["schema"] == "openflight.face_centre_reference.v2"
     assert set(REFERENCE["categories"]) == set(il.CATEGORY_PRIORS) == set(CATEGORY_CLUBS)
     for category, club in CATEGORY_CLUBS.items():
         assert il.club_category(club) == category
@@ -360,8 +361,9 @@ def test_a_face_photo_s_bottom_edge_sits_one_reference_band_above_the_leading_ed
 
     assert photo.category == category
     assert 1.5 < band < 5.0
+    assert entry["leading_edge_band_mm"] == pytest.approx(band, abs=0.01)
     assert photo.leading_edge_band == il.Labelled(
-        pytest.approx(band), pytest.approx(band * il.PHOTO_BAND_SIGMA_FRACTION), il.REFERENCE_BAND
+        entry["leading_edge_band_mm"], entry["leading_edge_band_sigma_mm"], il.REFERENCE_BAND
     )
 
 
@@ -386,16 +388,17 @@ def test_a_wood_photo_s_lowest_line_reaches_the_perimeter_centre_by_reference_ge
     assert entry["lowest_line_is_longest"] is False
     assert photo.centre_toeward_of_lowest_line_middle == il.Labelled(
         entry["centre_toeward_of_lowest_line_middle_mm"],
-        entry["centre_from_toe_sigma_mm"],
+        entry["centre_toeward_of_lowest_line_middle_sigma_mm"],
         il.REFERENCE_FACE_CENTRE,
     )
-    length = entry["lowest_line_length_mm"]
     assert photo.lowest_line_length == il.Labelled(
-        length, length * il.PHOTO_LINE_LENGTH_SIGMA_FRACTION, il.REFERENCE_FACE_CENTRE
+        entry["lowest_line_length_mm"],
+        entry["lowest_line_length_sigma_mm"],
+        il.REFERENCE_FACE_CENTRE,
     )
     assert photo.lowest_line_above_face_bottom == il.Labelled(
         entry["lowest_line_above_face_bottom_mm"],
-        entry["centre_above_leading_edge_sigma_mm"],
+        entry["lowest_line_above_face_bottom_sigma_mm"],
         il.REFERENCE_FACE_CENTRE,
     )
 

@@ -15,8 +15,9 @@ face perimeter for woods and hybrids, and for irons and wedges the middle of the
 longest score line, midway between the face's bottom edge and the top line. Heel
 to toe it sits a category distance heel-ward of the toe landmark (the hosel cut
 moves the heel landmark, not the toe); its height above the leading edge comes
-from marked face photos, else the category's. Both category numbers are measured
-on one reference club's drawing and kept in ``face_centre_reference.json``.
+from marked face photos, else the category's. Both category numbers are the
+population-average club's (a few dozen 2021+ models per category, measured on the
+kiosk's drawing of it) and kept, with their spreads, in ``face_centre_reference.json``.
 
 Height: the ball centre's height above the head's sole line at contact (the
 outline's bottom edge, interpolated across the bracketing frames like heel and
@@ -357,8 +358,6 @@ def club_category(club: str | None) -> str | None:
 
 
 REFERENCE_BAND = "reference_geometry_leading_edge_band"
-PHOTO_BAND_SIGMA_FRACTION = 0.5
-PHOTO_LINE_LENGTH_SIGMA_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -371,9 +370,10 @@ class FacePhotoReference:
     from; ``centre_toeward_of_lowest_line_middle`` carries the lowest line's middle to the
     rule's centre (+ toe-ward; nothing to carry when the lowest line is the longest);
     ``lowest_line_length`` and ``lowest_line_above_face_bottom`` stand in for a photo with
-    no scale or no lines. All are reference geometry from ``face_centre_reference.json``,
-    their sigmas brackets (its ``fields.sigma``). ``category`` is None for an unknown club,
-    which takes the iron's numbers, ``UNKNOWN_CLUB_SIGMA_SCALE`` wider.
+    no scale or no lines. All are the population-average club's geometry from
+    ``face_centre_reference.json``, each with the population's spread as its sigma (its
+    ``fields.sigma``). ``category`` is None for an unknown club, which takes the iron's
+    numbers, ``UNKNOWN_CLUB_SIGMA_SCALE`` wider.
     """
 
     category: str | None
@@ -393,21 +393,27 @@ def face_photo_reference(club: str | None) -> FacePhotoReference:
     def labelled(value: float, sigma: float, source: str) -> Labelled:
         return Labelled(float(value), float(sigma) * widen, source + suffix)
 
-    band = entry["centre_above_leading_edge_mm"] - entry["centre_above_face_bottom_mm"]
-    length = entry["lowest_line_length_mm"]
-    toeward_sigma = 0.0 if entry["lowest_line_is_longest"] else entry["centre_from_toe_sigma_mm"]
+    toeward_sigma = (
+        0.0
+        if entry["lowest_line_is_longest"]
+        else entry["centre_toeward_of_lowest_line_middle_sigma_mm"]
+    )
     return FacePhotoReference(
         category=category,
-        leading_edge_band=labelled(band, band * PHOTO_BAND_SIGMA_FRACTION, REFERENCE_BAND),
+        leading_edge_band=labelled(
+            entry["leading_edge_band_mm"], entry["leading_edge_band_sigma_mm"], REFERENCE_BAND
+        ),
         centre_toeward_of_lowest_line_middle=labelled(
             entry["centre_toeward_of_lowest_line_middle_mm"], toeward_sigma, REFERENCE_FACE_CENTRE
         ),
         lowest_line_length=labelled(
-            length, length * PHOTO_LINE_LENGTH_SIGMA_FRACTION, REFERENCE_FACE_CENTRE
+            entry["lowest_line_length_mm"],
+            entry["lowest_line_length_sigma_mm"],
+            REFERENCE_FACE_CENTRE,
         ),
         lowest_line_above_face_bottom=labelled(
             entry["lowest_line_above_face_bottom_mm"],
-            entry["centre_above_leading_edge_sigma_mm"],
+            entry["lowest_line_above_face_bottom_sigma_mm"],
             REFERENCE_FACE_CENTRE,
         ),
     )

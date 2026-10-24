@@ -66,6 +66,23 @@ function render(view: 'club' | 'flight', shot: Shot | null = everyMetricShot()) 
 }
 
 describe('MetricGroupPanel', () => {
+  it.each(['right', 'left'] as const)('labels the displayed club shot with its recorded %s hand', (hand) => {
+    const shot = everyMetricShot();
+    shot.impact_location = { handedness: hand };
+    const html = renderToString(
+      <MetricGroupPanel
+        view="club"
+        shot={shot}
+        profileName="Golfer"
+        clubLabel={`Driver · ${hand === 'left' ? 'Right' : 'Left'}-handed`}
+        unitSystem="imperial"
+      />
+    );
+    expect(html.match(/class="panel-header__club">([^<]*)/)?.[1]).toBe(
+      `7 Iron · ${hand === 'left' ? 'Left' : 'Right'}-handed`
+    );
+  });
+
   it('puts every metric in the catalog on the Club or the Flight panel, once', () => {
     const shown = [...PANEL_GROUPS.club, ...PANEL_GROUPS.flight];
     const groups = new Set(METRIC_CATALOG.map((spec) => spec.group));
@@ -98,16 +115,21 @@ describe('MetricGroupPanel', () => {
     }
   });
 
-  it('names the item that builds an unbuilt metric (in the Coming later detail)', () => {
-    const html = render('club');
-    expect(html).toContain('pending E6: not built yet');
+  it('shows dynamic lie as unavailable with its camera reason instead of coming later', () => {
+    const shot = everyMetricShot();
+    shot.metrics!.dynamic_lie = record({ unit: 'deg', reason: 'no visible lower shaft near impact' });
+    const html = render('club', shot);
+    expect(html).toContain('data-metric="dynamic_lie"');
+    expect(html).toContain('no visible lower shaft');
   });
 
   it('folds the not-built metrics into one Coming later row, shown once per panel', () => {
-    const html = render('club');
+    const shot = everyMetricShot();
+    shot.metrics!.club_speed_full = record({ unit: 'mph', reason: 'full club speed is not available yet' });
+    const html = render('club', shot);
     expect(html.match(/data-metric="coming-later"/g)).toHaveLength(1);
     expect(html).toContain('Coming later');
-    expect(html).not.toMatch(/data-metric="dynamic_lie"/);
+    expect(html).not.toMatch(/data-metric="club_speed_full"/);
     expect(html).toMatch(/Dynamic lie/);
   });
 

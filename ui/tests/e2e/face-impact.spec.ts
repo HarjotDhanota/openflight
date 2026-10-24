@@ -112,6 +112,28 @@ async function keep(page: Page, name: string) {
   }
 }
 
+async function keepFigure(page: Page, name: string) {
+  if (!OUT) return;
+  const figure = page.locator('.face-impact__figure');
+  await figure.screenshot({ path: join(OUT, `${name}.png`) });
+  const original = await figure.getAttribute('style');
+  await figure.evaluate((element) => {
+    const { width, height } = element.getBoundingClientRect();
+    element.setAttribute(
+      'style',
+      `position: fixed; top: 0; left: 0; z-index: 9999; width: ${width * 4}px; height: ${height * 4}px; background: var(--color-surface)`
+    );
+  });
+  try {
+    await figure.screenshot({ path: join(OUT, `${name}-4x.png`) });
+  } finally {
+    await figure.evaluate(
+      (element, style) => (style === null ? element.removeAttribute('style') : element.setAttribute('style', style)),
+      original
+    );
+  }
+}
+
 for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
   test.describe(`face impact at ${viewport.width}×${viewport.height}`, () => {
     test.use({ hasTouch: true, viewport });
@@ -126,7 +148,10 @@ for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
       const view = page.locator('.face-impact');
       await expect(view).toBeVisible();
       await expect(view).toHaveAttribute('data-face', 'iron');
-      await expect(view.locator('.label-badge--experimental')).toBeVisible();
+      await expect(view.locator('.face-impact__title .label-badge--experimental')).toBeVisible();
+      for (const metric of ['impact_height', 'impact_offset']) {
+        await expect(view.locator(`[data-view-metric="${metric}"] .label-badge--experimental`)).toBeVisible();
+      }
       await expect(view.locator('.face-impact__dot')).toHaveCount(1);
       await expect(view.locator('.face-impact__ellipse')).toHaveCount(1);
       await expect(view.locator('.face-impact__earlier')).toHaveCount(2);
@@ -154,23 +179,29 @@ async function inFace(page: Page): Promise<{ origin: boolean; dot: boolean }> {
 /** The dot's distance from the centre-line crossing on screen, back in mm (+ toe, + up). */
 async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number }> {
   return page.locator('.face-impact').evaluate((view) => {
-    const svg = view.querySelector('.face-impact__svg') as SVGSVGElement;
+    const delivery = view.querySelector('.face-impact__delivery') as SVGGElement;
     const dot = view.querySelector('.face-impact__dot') as SVGCircleElement;
     const ellipse = view.querySelector('.face-impact__ellipse') as SVGEllipseElement;
     const lines = [...view.querySelectorAll('.face-impact__centre-line')] as SVGLineElement[];
     const across = lines.find((line) => line.y1.baseVal.value === line.y2.baseVal.value)!;
     const upright = lines.find((line) => line.x1.baseVal.value === line.x2.baseVal.value)!;
-    const matrix = svg.getScreenCTM()!;
+    const matrix = delivery.getScreenCTM()!;
     const screen = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(matrix);
     const crossing = screen(upright.x1.baseVal.value, across.y1.baseVal.value);
     const centre = screen(dot.cx.baseVal.value, dot.cy.baseVal.value);
     const mirror = view.getAttribute('data-handed') === 'left' ? 1 : -1;
     const rim = screen(ellipse.cx.baseVal.value + ellipse.rx.baseVal.value, ellipse.cy.baseVal.value);
     const ellipseCentre = screen(ellipse.cx.baseVal.value, ellipse.cy.baseVal.value);
+    const right = screen(1, 0),
+      down = screen(0, 1);
+    const scale = Math.hypot(matrix.a, matrix.b);
+    const along = (point: DOMPoint) =>
+      ((centre.x - crossing.x) * (point.x - crossing.x) + (centre.y - crossing.y) * (point.y - crossing.y)) /
+      scale ** 2;
     return {
-      toe: (mirror * (centre.x - crossing.x)) / matrix.a,
-      up: -(centre.y - crossing.y) / matrix.d,
-      rx: (rim.x - ellipseCentre.x) / matrix.a,
+      toe: mirror * along(right),
+      up: -along(down),
+      rx: Math.hypot(rim.x - ellipseCentre.x, rim.y - ellipseCentre.y) / scale,
     };
   });
 }
@@ -237,32 +268,28 @@ for (const viewport of [
         expect(await overflowing(page)).toEqual([]);
         expect(await artefacts(page)).toEqual([]);
         await keep(page, `face-impact-${category}-${size}`);
-        if (OUT)
-          await view
-            .locator('.face-impact__figure')
-            .screenshot({ path: join(OUT, `face-impact-${category}-figure-${size}.png`) });
+        await keepFigure(page, `face-impact-${category}-figure-${size}`);
       });
     }
 
-    test('mirrors the driver face for a left-handed golfer', async ({ page }) => {
-      await openClubPanel(page, 1, 'driver');
-      await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
-      const view = page.locator('.face-impact');
-      await expect(view).toHaveAttribute('data-face', 'driver');
-      await expect(view).toHaveAttribute('data-handed', 'left');
-      await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
-      expect(await inFace(page)).toEqual({ origin: true, dot: true });
-      const mm = await dotMm(page);
-      expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
-      expect(await overflowing(page)).toEqual([]);
-      expect(await artefacts(page)).toEqual([]);
-      await keep(page, `face-impact-driver-left-${size}`);
-      if (OUT)
-        await view
-          .locator('.face-impact__figure')
-          .screenshot({ path: join(OUT, `face-impact-driver-left-figure-${size}.png`) });
-    });
+    for (const [club, category] of DRAWINGS) {
+      test(`mirrors the ${category} face for a left-handed golfer`, async ({ page }) => {
+        await openClubPanel(page, 1, club);
+        await setReadings(page, [{ offset: 12, height: 6, handedness: 'left' }]);
+        const view = page.locator('.face-impact');
+        await expect(view).toHaveAttribute('data-face', category);
+        await expect(view).toHaveAttribute('data-handed', 'left');
+        await expect(view.locator('.face-impact__outline-group')).toHaveAttribute('transform', 'scale(-1 1)');
+        expect(await inFace(page)).toEqual({ origin: true, dot: true });
+        const mm = await dotMm(page);
+        expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
+        expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
+        expect(await overflowing(page)).toEqual([]);
+        expect(await artefacts(page)).toEqual([]);
+        await keep(page, `face-impact-${category}-left-${size}`);
+        await keepFigure(page, `face-impact-${category}-left-figure-${size}`);
+      });
+    }
   });
 }
 

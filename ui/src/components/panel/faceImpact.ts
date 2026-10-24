@@ -22,6 +22,9 @@ export const USGA = {
   centreMarkSquareMm: 9.53,
   /** 4b(i): wood heel to toe at most 5 in, sole to crown at most 2.8 in. */
   woodHeelToToeMaxMm: 127,
+  /** Appendix II: where the heel's outermost point is not clearly defined it is taken 0.875 in
+   * above the ground. */
+  woodHeelPointHeightMm: 22.23,
   woodSoleToCrownMaxMm: 71.12,
   /** 2c: shaft fixed at the heel, the top of the neck or socket at most 5 in from the sole. */
   neckToSoleMaxMm: 127,
@@ -147,40 +150,113 @@ export function hoselParts(hosel: Hosel): {
 }
 
 type Tangents = Readonly<Record<number, Point>>;
+type Lines = readonly (readonly [number, number])[];
+type Segment = [Point, Point, Point, Point];
 
-/** The cubic Béziers of a smooth closed outline through `nodes` (Catmull-Rom). At a node listed
- * in `corners` the curve runs straight at its neighbours instead, a sharp corner; at a node in
- * `tangents` it runs along that unit direction. */
-function segments(
-  nodes: readonly Point[],
-  corners: readonly number[],
-  tangents: Tangents = {}
-): [Point, Point, Point, Point][] {
-  const n = nodes.length;
-  const p = (k: number) => nodes[(k + n) % n];
-  const sharp = (k: number) => corners.includes((k + n) % n);
-  const half = (a: Point, b: Point): Point => [(a[0] - b[0]) / 2, (a[1] - b[1]) / 2];
-  return nodes.map((a, k) => {
-    const b = p(k + 1);
-    const chord = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const along = (j: number, otherwise: Point): Point => {
-      const t = tangents[(j + n) % n];
-      return t ? [t[0] * chord, t[1] * chord] : otherwise;
-    };
-    const leave = along(k, sharp(k) ? add(b, a, -1) : half(p(k + 1), p(k - 1)));
-    const arrive = along(k + 1, sharp(k + 1) ? add(b, a, -1) : half(p(k + 2), a));
-    return [a, add(a, leave, 1 / 3), add(b, arrive, -1 / 3), b];
-  });
+/** Solves the small dense system `a x = b` (two right-hand sides) by Gaussian elimination. */
+function solve(a: number[][], b: Point[]): Point[] {
+  const n = a.length;
+  const m = a.map((row, k) => [...row, b[k][0], b[k][1]]);
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r += 1) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r;
+    [m[col], m[pivot]] = [m[pivot], m[col]];
+    for (let r = 0; r < n; r += 1) {
+      if (r === col || m[r][col] === 0) continue;
+      const f = m[r][col] / m[col][col];
+      for (let c = col; c < n + 2; c += 1) m[r][c] -= f * m[col][c];
+    }
+  }
+  return m.map((row, k) => [row[n] / m[k][k], row[n + 1] / m[k][k]]);
 }
 
-function outline(nodes: readonly Point[], corners: readonly number[] = [], tangents: Tangents = {}): string {
-  const parts = segments(nodes, corners, tangents).map(([, c1, c2, b]) => `C ${pt(c1)} ${pt(c2)} ${pt(b)}`);
+/** Node slopes (per mm of chord) of a C2 cubic spline through `p`: periodic, or open with each
+ * end either clamped to a unit tangent or free (zero curvature). */
+function slopes(p: readonly Point[], start: Point | null, end: Point | null, periodic: boolean): Point[] {
+  const n = p.length;
+  const h = (k: number) => Math.hypot(p[(k + 1) % n][0] - p[k % n][0], p[(k + 1) % n][1] - p[k % n][1]);
+  const chord = (k: number): Point => {
+    const [a, b, len] = [p[k % n], p[(k + 1) % n], h(k)];
+    return [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+  };
+  const a = Array.from({ length: n }, () => new Array<number>(n).fill(0));
+  const b: Point[] = Array.from({ length: n }, (): Point => [0, 0]);
+  const interior = (k: number) => {
+    const [hp, hn] = [h((k - 1 + n) % n), h(k)];
+    const [dp, dn] = [chord((k - 1 + n) % n), chord(k)];
+    a[k][(k - 1 + n) % n] += hn;
+    a[k][k] += 2 * (hp + hn);
+    a[k][(k + 1) % n] += hp;
+    b[k] = [3 * (hn * dp[0] + hp * dn[0]), 3 * (hn * dp[1] + hp * dn[1])];
+  };
+  if (periodic) {
+    for (let k = 0; k < n; k += 1) interior(k);
+    return solve(a, b);
+  }
+  for (let k = 1; k < n - 1; k += 1) interior(k);
+  const [first, last] = [chord(0), chord(n - 2)];
+  if (start) [a[0][0], b[0]] = [1, start];
+  else [a[0][0], a[0][1], b[0]] = [2, 1, [3 * first[0], 3 * first[1]]];
+  if (end) [a[n - 1][n - 1], b[n - 1]] = [1, end];
+  else [a[n - 1][n - 2], a[n - 1][n - 1], b[n - 1]] = [1, 2, [3 * last[0], 3 * last[1]]];
+  return solve(a, b);
+}
+
+/** The cubic Béziers of a fair closed outline through `nodes`: C2 cubic splines (chord-length
+ * parameter, so curvature is continuous) between designed breaks. A node in `corners` is a sharp
+ * corner; one in `tangents` a smooth join along that unit direction; a pair in `lines` a straight
+ * segment, whose ends join the curves either side smoothly unless they are corners. With no breaks
+ * the outline is one periodic spline. Each spline piece is the cubic Bézier it exactly is. */
+function segments(
+  nodes: readonly Point[],
+  corners: readonly number[] = [],
+  tangents: Tangents = {},
+  lines: Lines = []
+): Segment[] {
+  const n = nodes.length;
+  const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
+  const ends = new Map<number, [Point | null, Point | null]>(corners.map((k) => [k, [null, null]]));
+  for (const [k, t] of Object.entries(tangents)) ends.set(Number(k), [unit(t), unit(t)]);
+  for (const [i, j] of lines) {
+    const d = unit(add(nodes[j % n], nodes[i], -1));
+    const [ei, ej] = [ends.get(i) ?? [null, null], ends.get(j % n) ?? [null, null]];
+    ends.set(i, [corners.includes(i) ? ei[0] : d, d]);
+    ends.set(j % n, [d, corners.includes(j % n) ? ej[1] : d]);
+  }
+  const piece = (a: Point, b: Point, ma: Point, mb: Point): Segment => {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) / 3;
+    return [a, add(a, ma, len), add(b, mb, -len), b];
+  };
+  if (ends.size === 0) {
+    const m = slopes(nodes, null, null, true);
+    return nodes.map((a, k) => piece(a, nodes[(k + 1) % n], m[k], m[(k + 1) % n]));
+  }
+  const out: Segment[] = new Array(n);
+  const keys = [...ends.keys()].sort((p, q) => p - q);
+  keys.forEach((start, k) => {
+    const stop = keys[(k + 1) % keys.length];
+    const run = stop > start ? stop - start : stop + n - start;
+    const idx = Array.from({ length: run + 1 }, (_, i) => (start + i) % n);
+    const p = idx.map((i) => nodes[i]);
+    const m = slopes(p, ends.get(start)![1], ends.get(stop)![0], false);
+    for (let i = 0; i < run; i += 1) out[idx[i]] = piece(p[i], p[i + 1], m[i], m[i + 1]);
+  });
+  return out;
+}
+
+function outline(
+  nodes: readonly Point[],
+  corners: readonly number[] = [],
+  tangents: Tangents = {},
+  lines: Lines = []
+): string {
+  const parts = segments(nodes, corners, tangents, lines).map(([, c1, c2, b]) => `C ${pt(c1)} ${pt(c2)} ${pt(b)}`);
   return `M ${pt(nodes[0])} ${parts.join(' ')} Z`;
 }
 
 /** The open stretch of the outline from node `from` to node `to`. */
-function stretch(nodes: readonly Point[], corners: readonly number[], from: number, to: number): string {
-  const parts = segments(nodes, corners)
+function stretch(nodes: readonly Point[], corners: readonly number[], lines: Lines, from: number, to: number): string {
+  const parts = segments(nodes, corners, {}, lines)
     .slice(from, to)
     .map(([, c1, c2, b]) => `C ${pt(c1)} ${pt(c2)} ${pt(b)}`);
   return `M ${pt(nodes[from])} ${parts.join(' ')}`;
@@ -289,7 +365,11 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
  * sole, toe and top line back to the neck, where they meet the tube's foot running along its
  * edges (a fixed tangent there, so no step). The head closes up to 1.5 mm inside the tube, which
  * covers the overlap so no seam shows; the silhouette carries on up the tube to the ferrule. */
-function headAndSilhouette(nodes: readonly Point[], hosel: Hosel): { head: string; silhouette: string } {
+function headAndSilhouette(
+  nodes: readonly Point[],
+  hosel: Hosel,
+  lines: Lines = []
+): { head: string; silhouette: string } {
   const n = nodes.length;
   const foot = hosel.tube[0][0];
   const under = Math.min(foot + 1.5, hosel.tube.length > 1 ? hosel.tube[1][0] : foot + 1.5);
@@ -305,11 +385,17 @@ function headAndSilhouette(nodes: readonly Point[], hosel: Hosel): { head: strin
   const sides = [...stations.map((s) => edge(hosel, s, -1)), ...[...stations].reverse().map((s) => edge(hosel, s, 1))];
   const m = sides.length;
   return {
-    head: outline([...nodes, footLeft, underLeft, underRight, footRight], [n + 1, n + 2], { [n]: up, [n + 3]: down }),
+    head: outline(
+      [...nodes, footLeft, underLeft, underRight, footRight],
+      [n + 1, n + 2],
+      { [n]: up, [n + 3]: down },
+      lines
+    ),
     silhouette: outline(
       [...nodes, footLeft, ...sides, footRight],
       sides.map((_, k) => n + 1 + k),
-      { [n]: up, [n + 1 + m]: down }
+      { [n]: up, [n + 1 + m]: down },
+      lines
     ),
   };
 }
@@ -321,29 +407,34 @@ function evenRows(top: number, pitch: number, ends: readonly Point[]): Groove[] 
 interface Drawing {
   finish: Finish;
   head: readonly Point[];
+  /** Straight stretches of the head outline, as pairs of consecutive node indices. */
+  headLines?: Lines;
   face: readonly Point[];
+  faceLines?: Lines;
   hosel: Hosel;
   grooves: Groove[];
-  mark?: { at: Point; half: number };
+  /** A centre cross this tall, on the computed face centre. */
+  mark?: { half: number };
   faceFade?: Point;
 }
 
 function wood(category: FaceCategory, o: Drawing): FaceShape {
   const shape: FaceShape = {
     finish: o.finish,
-    ...headAndSilhouette(o.head, o.hosel),
-    face: outline(o.face),
+    ...headAndSilhouette(o.head, o.hosel, o.headLines),
+    face: outline(o.face, [], {}, o.faceLines),
     faceFade: o.faceFade ?? null,
     scoring: null,
     edges: [],
     hosel: o.hosel,
     grooves: o.grooves,
-    mark: o.mark ? `M ${pt(add(o.mark.at, [0, -o.mark.half]))} L ${pt(add(o.mark.at, [0, o.mark.half]))}` : null,
+    mark: null,
     ends: [0, 0],
     bounds: UNFRAMED,
   };
   const [x, y] = faceCentre(category, shape);
-  return centred(shape, [-x, -y]);
+  const mark = o.mark ? `M ${pt([x, y - o.mark.half])} L ${pt([x, y + o.mark.half])}` : null;
+  return centred({ ...shape, mark }, [-x, -y]);
 }
 
 /** Iron and wedge score lines: `count` lines at a pitch up from the lowest, all from `from`; the
@@ -359,7 +450,8 @@ interface BladeLines {
 
 function blade(category: FaceCategory, o: Omit<Drawing, 'grooves'>, lines: BladeLines, milled: Point): FaceShape {
   const last = o.face.length - 1;
-  const face = outline(o.face, [0, last]);
+  const faceLines = o.faceLines ?? [];
+  const face = outline(o.face, [0, last], {}, faceLines);
   const polygon = flatten(face);
   const grooves = Array.from({ length: lines.count }, (_, k) => {
     const fromTop = lines.count - 1 - k;
@@ -381,13 +473,13 @@ function blade(category: FaceCategory, o: Omit<Drawing, 'grooves'>, lines: Blade
   const toeMost = o.face.reduce((best, point, k) => (point[0] < o.face[best][0] ? k : best), 0);
   const shape: FaceShape = {
     finish: o.finish,
-    ...headAndSilhouette(o.head, o.hosel),
+    ...headAndSilhouette(o.head, o.hosel, o.headLines),
     face,
     faceFade: null,
     scoring: `M ${[...top, ...bottom].map(pt).join(' L ')} Z`,
     edges: [
-      { d: stretch(o.face, [0, last], 0, toeMost - 1), fade: null },
-      { d: stretch(o.face, [0, last], toeMost - 1, toeMost), fade: [o.face[toeMost - 1], o.face[toeMost]] },
+      { d: stretch(o.face, [0, last], faceLines, 0, toeMost - 1), fade: null },
+      { d: stretch(o.face, [0, last], faceLines, toeMost - 1, toeMost), fade: [o.face[toeMost - 1], o.face[toeMost]] },
     ],
     hosel: o.hosel,
     grooves,
@@ -422,145 +514,122 @@ function framed(moved: FaceShape): FaceShape {
   };
 }
 
-/* Node lists fitted to each reference photo rectified to the face-normal view, in its own mm
- * frame (the drawing is then moved onto its face centre). Driver, fairway and hybrid heads and faces, 16-18 nodes each. */
+/* The population-average club of each category, drawn along the face normal (svg mm, y down)
+ * from the research aggregates in docs/camera/impact-location.md: each outline is a few fair
+ * curves (C2 splines between designed breaks). The head rims the face with a band of one width all
+ * the way round (the population's leading-edge band), then blends into the hosel at the heel; the
+ * face centre, band and score lines land on the population values. */
 
 const DRIVER: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [53.7, -11], [45.7, 4], [35.7, 14.8], [23.5, 22.6], [9.5, 26.4], [-6.3, 27.1], [-20.3, 24.2], [-34.6, 17],
-    [-46.6, 6.9], [-58.2, -6.7], [-61.2, -17.4], [-56.8, -22.6], [-43.2, -28.9], [-26.4, -32.5], [-8.3, -33.4],
-    [10.7, -31.3], [28.6, -26.9], [42.3, -22.7]
+    [64.2, -39.42], [53.71, -23.3], [49.06, -17.42], [43.4, -12.12], [37.12, -7.7], [30.37, -4.4],
+    [23.02, -2.18], [15.06, -0.79], [6.85, -0.06], [-1.54, 0.1], [-10.12, -0.11], [-18.2, -0.77],
+    [-25.75, -2.35], [-32.94, -4.99], [-39.53, -8.66], [-45.34, -13.36], [-50.48, -19.09], [-55.14, -25.72],
+    [-59.29, -32.71], [-61.53, -38.77], [-61.35, -43.95], [-58.84, -48.59], [-54.06, -52.4], [-47.45, -55.2],
+    [-39.76, -57.11], [-31.57, -58.38], [-23.1, -59.2], [-14.53, -59.73], [-5.98, -59.94], [2.52, -59.82],
+    [10.82, -59.23], [19.13, -58.09], [27.37, -56.5], [34.96, -55.32], [42.65, -54.86], [50.26, -55.48],
+    [57.6, -57.93]
   ],
+  headLines: [[0, 1]],
   // prettier-ignore
   face: [
-    [-48, -2.8], [-57.4, -17], [-54.4, -21.6], [-34.7, -25.8], [-17.9, -26.9], [3.9, -26.3], [24, -23.9],
-    [39.9, -20.1], [51.2, -14.9], [47.5, -5.3], [38, 8.9], [24.3, 18.2], [8.5, 22.3], [-7, 22.6], [-22.2, 19.5],
-    [-36.1, 10]
+    [52.15, -38.89], [40.29, -47.39], [20.6, -52.96], [6.48, -54.8], [-5.83, -55.14], [-21.09, -54.54],
+    [-56.89, -40.14], [-52.97, -31.33], [-37.96, -13.42], [-20.41, -6], [-6.45, -4.79], [5.96, -4.82],
+    [19.61, -6.37], [36.02, -12.67]
   ],
   hosel: {
-    ground: [20.02, 27.28],
-    lieDeg: 56.67,
-    tube: [
-      [59.82, 13.67],
-      [75.53, 13.56],
-      [81.42, 12.1],
-      [91.24, 10.26],
-    ],
+    ground: [30.39, 0],
+    lieDeg: 56.95,
+    // prettier-ignore
+    tube: [[70.71, 13.67], [86.42, 13.56], [92.31, 12.1], [102.13, 10.26]],
     ferruleLength: 0.98,
-    shaftTo: 140.3,
+    shaftTo: 151.2,
     shaftWidth: 7.89,
-    rings: [74.54],
+    rings: [85.43],
     collar: null,
   },
   /* Seven lines a block; the outer ends step with the face edge, the inner ends lie on two lines
-   * slanting in toward the sole; three centre bars, the middle one longest, the cross on it. */
+   * slanting in toward the sole; three centre bars, the middle one longest, the cross on the centre. */
   grooves: [
-    ...evenRows(
-      -16.33,
-      4.723,
-      [-42.5, -42.5, -40.8, -37.9, -35.4, -31.3, -24.9].map((from, k): Point => [
-        from,
-        -20.23 + 0.1884 * (-16.33 + k * 4.723),
-      ])
-    ),
-    ...evenRows(
-      -16.33,
-      4.723,
-      [38, 41.3, 42.6, 40.8, 37.5, 34.5, 28.5].map((to, k): Point => [21.88 + -0.2133 * (-16.33 + k * 4.723), to])
-    ),
-    ...evenRows(-8.68, 6.333, [
-      [-8.7, 10.3],
-      [-14.3, 16.3],
-      [-8.4, 10.7],
+    // prettier-ignore
+    ...evenRows(-43.35, 4.785, [[-41.85, -22.59], [-44.62, -21.69], [-44.08, -20.79], [-41.93, -19.89], [-40.19, -18.98], [-36.76, -18.08], [-30.73, -17.18]]),
+    // prettier-ignore
+    ...evenRows(-43.35, 4.785, [[26.08, 36.09], [25.06, 42.53], [24.04, 47.1], [23.02, 46.49], [21.99, 43.1], [20.97, 39.37], [19.95, 32.81]]),
+    ...evenRows(-36.31, 6.417, [
+      [-9.62, 9.38],
+      [-15.42, 15.18],
+      [-9.67, 9.43],
     ]),
   ],
-  mark: { at: [0.79, -2.22], half: 1.88 },
+  mark: { half: 1.9 },
 };
 
 const FAIRWAY: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [53.8, -2.3], [45.3, 6.2], [36.6, 11.5], [24.5, 15.7], [10.7, 17.9], [-3.6, 18.6], [-18.7, 17.8],
-    [-31.8, 14.7], [-44.1, 8.4], [-51.8, -0.3], [-54, -10.5], [-45.5, -16.4], [-33.2, -20.3], [-20.7, -22.7],
-    [-7, -24], [8.6, -23.7], [25.5, -21.5], [38.8, -18.6]
+    [49.81, -24.27], [44.98, -17.21], [40.26, -11.92], [34.18, -7.24], [27.52, -3.62], [20.65, -1.54],
+    [12.71, -0.68], [4.04, -0.19], [-4.34, -0.19], [-12.91, -0.75], [-21.04, -1.68], [-27.97, -3.69],
+    [-34.42, -7.23], [-40.41, -12.01], [-45.28, -17.49], [-48, -22.94], [-48, -27.39], [-45.64, -30.78],
+    [-40.49, -33.21], [-32.97, -34.59], [-24.46, -35.35], [-15.82, -35.74], [-7.01, -35.9], [1.81, -35.91],
+    [10.63, -35.77], [19.36, -35.48], [25.22, -35.29], [31.04, -35.54], [36.69, -36.93]
   ],
+  headLines: [[0, 1]],
   // prettier-ignore
   face: [
-    [-41.4, -3.1], [-42.3, -13.9], [-30, -17.2], [-8.1, -18.6], [14.2, -18.4], [38.1, -15.7], [50.5, -11.7],
-    [49.9, -3], [41.4, 6.2], [25.9, 13.1], [8.7, 16], [-7.2, 16.1], [-20.6, 14.9], [-34.3, 6]
+    [43.86, -25.98], [31.12, -31.25], [14.34, -32.77], [3.7, -32.99], [-3.11, -33.02], [-13.73, -32.89],
+    [-29.8, -32.01], [-44.79, -27.48], [-28.81, -7.27], [-13.73, -3.73], [-3.48, -3.06], [3.38, -3.07],
+    [12.97, -3.6], [25.83, -6.06]
   ],
   hosel: {
-    ground: [29.26, 18.6],
-    lieDeg: 55.07,
-    tube: [
-      [41.75, 16.24],
-      [42.24, 16.2],
-      [62.79, 15.91],
-      [74.15, 12.14],
-    ],
+    ground: [23.38, 0],
+    lieDeg: 55.65,
+    // prettier-ignore
+    tube: [[43.51, 16.24], [64.55, 15.91], [75.91, 12.14]],
     ferruleLength: 1.47,
-    shaftTo: 123.5,
+    shaftTo: 125.3,
     shaftWidth: 9.2,
-    rings: [53.98, 62.3],
-    collar: [41.75, 44.39],
+    rings: [55.74, 64.06],
+    collar: [43.51, 46.15],
   },
-  grooves: evenRows(-11.4, 4.117, [
-    [-39.2, 39.9],
-    [-38.2, 39.4],
-    [-35.8, 37.5],
-    [-33.7, 35.1],
-    [-29, 30.9],
-    [-22.4, 22.2],
-  ]),
+  // prettier-ignore
+  grooves: evenRows(-27.11, 4.7, [[-37.28, 35.22], [-38.03, 35.97], [-35.03, 32.97], [-29.53, 27.47], [-21.03, 18.97]]),
 };
 
 const HYBRID: Drawing = {
   finish: 'black',
   // prettier-ignore
   head: [
-    [43.5, 6.6], [36.4, 12.4], [28.3, 15], [14, 17.1], [-19.9, 16.9], [-35.8, 13.3], [-45.2, 5.5], [-45.9, -7],
-    [-41.9, -15.4], [-30.9, -17.3], [-16.8, -17.8], [-3.9, -17.1], [6.2, -15.7], [23.7, -12], [33.5, -10.2]
+    [45.9, -21.47], [40.74, -13.74], [36.16, -8.8], [30.04, -4.66], [23.35, -1.84], [16.13, -0.54],
+    [7.61, -0.14], [-0.98, -0.05], [-9.38, -0.53], [-17.83, -1.43], [-24.98, -3.19], [-31.45, -6.41],
+    [-37.52, -11.02], [-42.5, -16.42], [-45.3, -21.77], [-45.39, -26.26], [-43.08, -29.69], [-38, -32.13],
+    [-30.51, -33.46], [-21.93, -34.19], [-13.23, -34.59], [-4.39, -34.79], [4.45, -34.85], [13.31, -34.77],
+    [21.57, -34.41], [27.83, -33.89], [34.06, -34]
   ],
+  headLines: [[0, 1]],
   // prettier-ignore
   face: [
-    [-37.5, -0.9], [-37.4, -13], [-34, -16], [-13.8, -16.3], [-0.5, -15.1], [13.5, -13.4], [29.9, -9.2],
-    [45.8, -9.5], [46.1, -5], [41.9, 2.3], [33.6, 9.7], [20.7, 13.2], [4.5, 13.9], [-15.5, 13], [-27, 11.6],
-    [-34.7, 7.5]
+    [39.44, -21.42], [27.66, -29.85], [14.59, -31.45], [2.15, -31.55], [-3.22, -31.51], [-12.89, -31.3],
+    [-27.35, -30.46], [-41.85, -26.17], [-27.65, -8], [-12.65, -4.15], [-3.7, -3.44], [2.67, -3.34],
+    [11.66, -3.59], [24.29, -5.63]
   ],
   hosel: {
-    ground: [27.91, 17.38],
-    lieDeg: 56.97,
-    tube: [
-      [38.8, 14.05],
-      [42.61, 13.86],
-      [50.79, 13.81],
-      [50.98, 12.49],
-      [59.74, 11.61],
-      [61.64, 11.17],
-      [64.02, 10.25],
-    ],
+    ground: [23.12, 0],
+    lieDeg: 56.28,
+    // prettier-ignore
+    tube: [[39.8, 14.05], [43.61, 13.86], [51.79, 13.81], [51.98, 12.49], [60.74, 11.61], [62.64, 11.17], [65.02, 10.25]],
     ferruleLength: 0.95,
-    shaftTo: 114.9,
+    shaftTo: 115.9,
     shaftWidth: 6.64,
-    rings: [48.79, 53.07, 60.69],
+    rings: [49.79, 54.07, 61.69],
     collar: null,
   },
-  /* A short top line on the toe half (the lettering above it is left out), five long lines and a
-   * shorter bottom line. */
   /* The brushed face runs into the neck with no edge: it fades out over its heel end. */
-  faceFade: [29.2, 44.7],
-  grooves: evenRows(-9.94, 3.593, [
-    [-30.2, 0.4],
-    [-30.2, 27.4],
-    [-30.2, 27.4],
-    [-30.2, 27.4],
-    [-30.2, 27.4],
-    [-30.2, 27.3],
-    [-18.8, 16.2],
-  ]),
+  faceFade: [23.94, 39.44],
+  // prettier-ignore
+  grooves: evenRows(-25.64, 3.5, [[-32.05, 29.95], [-33.55, 31.45], [-32.55, 30.45], [-30.05, 27.95], [-25.55, 23.45], [-18.95, 16.85]]),
 };
 
 /* Iron and wedge faces run from the face's top-heel corner over the top line and toe to its
@@ -570,24 +639,25 @@ const IRON = {
   finish: 'chrome',
   // prettier-ignore
   head: [
-    [40.7, 16.5], [28.4, 21.9], [17.3, 23.6], [3.2, 24.5], [-12.7, 24.4], [-29, 22.5], [-36.9, 18.8],
-    [-42.6, 10.2], [-43.9, -4.5], [-39.5, -17.6], [-31.6, -25], [-21.1, -24.7], [-3.6, -18.8], [12.2, -12.9],
-    [26.4, -7.2], [37, -3.9]
+    [84.87, -5.65], [79.53, -3.3], [58.06, -0.32], [36.01, -0.05], [16.19, -1.82], [8.2, -4.91], [0, -26],
+    [8.17, -52.37], [12.92, -56.32], [30, -56.07], [74, -35.65], [81.38, -29.63]
   ],
+  headLines: [[9, 10]],
   // prettier-ignore
   face: [
-    [32.5, -2.7], [19.5, -9.1], [-7.3, -19.1], [-25.2, -24.6], [-34.3, -21.7], [-40.4, -10.6], [-41.3, 3],
-    [-37.1, 13.6], [-25.3, 19.1], [-6.9, 20.1], [21.6, 19.5], [32.5, 19.2]
+    [78, -28.93], [72.99, -33.47], [28.99, -53.9], [23.48, -55.53], [17.94, -55.51], [13.44, -53.85],
+    [9.39, -50.1], [6.01, -44.9], [3.76, -38.89], [2.6, -32.31], [2.42, -25.35], [3.17, -18.58],
+    [4.98, -12.67], [7.87, -8.31], [11.89, -5.64], [18.04, -3.88], [25.13, -2.88], [32.63, -2.5],
+    [40.5, -2.42], [48.41, -2.48], [56.33, -2.66], [64.09, -3], [71.33, -3.78], [78, -5.32]
   ],
+  faceLines: [[1, 2]],
   hosel: {
-    ground: [29.6, 24.6],
-    lieDeg: 58.17,
-    tube: [
-      [37.52, 12.92],
-      [69.25, 12.92],
-    ],
+    ground: [78.2, 0],
+    lieDeg: 58.4,
+    // prettier-ignore
+    tube: [[40, 13.05], [72, 13.05]],
     ferruleLength: 9.07,
-    shaftTo: 123.6,
+    shaftTo: 126,
     shaftWidth: 9.3,
     rings: [],
     collar: null,
@@ -598,26 +668,26 @@ const WEDGE = {
   finish: 'satin',
   // prettier-ignore
   head: [
-    [50.4, 9.1], [34.8, 21.9], [22.8, 24.8], [5.4, 25.8], [-13, 25.4], [-29.8, 23.2], [-39.4, 15.4], [-44.1, 1.4],
-    [-42.9, -14.9], [-35.8, -28.5], [-25, -33.9], [-10.7, -31.5], [5, -25.4], [18.7, -17.9], [32.9, -8.2],
-    [44.9, -5.6]
+    [88.19, -6.88], [79.96, -3.61], [58.1, -0.46], [35.99, -0.06], [16.32, -2.51], [7.38, -7.47], [0, -30],
+    [5.51, -51.73], [14.25, -61.5], [30.01, -62.31], [55.91, -50.94], [72.11, -39.32], [84.54, -29.04]
   ],
   // prettier-ignore
   face: [
-    [32.2, -7], [17.9, -17.1], [-0.9, -27.1], [-20.3, -32.8], [-32.5, -30.2], [-40.9, -18.5], [-43.2, -2.5],
-    [-39, 12.8], [-29, 21.6], [-8.5, 24], [16.1, 23.8], [32.2, 22.4]
+    [77, -30.91], [71.46, -36.57], [66.33, -41.21], [60.51, -45.33], [54.02, -49.27], [47.39, -53.01],
+    [40.84, -56.22], [34.24, -58.71], [27.6, -60.33], [21.38, -60.81], [16.31, -59.81], [12.35, -57.14],
+    [8.7, -52.47], [5.67, -46.54], [3.62, -40.24], [2.57, -33.62], [2.46, -26.79], [3.32, -20.25],
+    [5.26, -14.47], [8.29, -9.95], [12.56, -6.72], [18.29, -4.41], [24.81, -3.08], [31.95, -2.54],
+    [39.62, -2.43], [47.37, -2.49], [55.11, -2.72], [62.77, -3.14], [70.1, -3.91], [77, -5.27]
   ],
   hosel: {
-    ground: [29.07, 25.87],
-    lieDeg: 48.9,
-    tube: [
-      [43.16, 13.61],
-      [72.25, 15.12],
-    ],
+    ground: [81.8, 0],
+    lieDeg: 48.7,
+    // prettier-ignore
+    tube: [[44, 13.6], [73.5, 15.12]],
     ferruleLength: 6.59,
-    shaftTo: 109.1,
+    shaftTo: 112,
     shaftWidth: 9.38,
-    rings: [62.12, 66.4],
+    rings: [63.2, 67.5],
     collar: null,
   },
 } as const satisfies Omit<Drawing, 'grooves'>;
@@ -629,21 +699,28 @@ const DRAWN: Record<FaceCategory, FaceShape> = {
   iron: blade(
     'iron',
     IRON,
-    { count: 13, lowest: 17.42, pitch: 2.933, from: -26.4, to: 26.2, steps: [-12.6, -4.3, 3.7, 11.3, 18.3, 25.7] },
-    [-27, 26.7]
+    {
+      count: 13,
+      lowest: -6.74,
+      pitch: 3.46,
+      from: 17.4,
+      to: 71,
+      steps: [30.01, 37.34, 44.66, 52.75, 60.08, 65.57],
+    },
+    [16.8, 71.6]
   ),
   wedge: blade(
     'wedge',
     WEDGE,
     {
-      count: 17,
-      lowest: 20.27,
-      pitch: 2.953,
-      from: -25.2,
-      to: 27.3,
-      steps: [-13.3, -4.7, 2.1, 8, 13.1, 17.8, 21.9, 25.7],
+      count: 18,
+      lowest: -6.06,
+      pitch: 2.98,
+      from: 18.9,
+      to: 71.1,
+      steps: [31.92, 38.27, 43.65, 48.78, 53.58, 57.75, 61.83, 66.1],
     },
-    [-25.6, 28.4]
+    [18.3, 71.7]
   ),
 };
 
@@ -678,6 +755,11 @@ function axis(record: ShotMetric | undefined): [number | null, number | null, st
   return [record.value, sigma, null];
 }
 
+export function shotHandedness(shot: Shot, fallback: 'RH' | 'LH' | null = null): 'right' | 'left' {
+  const hand = shot.impact_location?.handedness;
+  return hand === 'right' || hand === 'left' ? hand : fallback === 'LH' ? 'left' : 'right';
+}
+
 export function impactReading(shot: Shot): ImpactReading {
   const [offset, offsetSigma, offsetReason] = axis(shot.metrics?.impact_offset ?? undefined);
   const [height, heightSigma, heightReason] = axis(shot.metrics?.impact_height ?? undefined);
@@ -688,7 +770,7 @@ export function impactReading(shot: Shot): ImpactReading {
     height,
     heightSigma,
     heightReason,
-    handedness: shot.impact_location?.handedness === 'left' ? 'left' : 'right',
+    handedness: shotHandedness(shot),
   };
 }
 

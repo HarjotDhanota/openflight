@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FACE_SHAPES, faceCentre, type FaceCategory } from './faceImpact';
+import { CLUB_PROFILES } from './clubDelivery';
 
 /** The impact-location backend reads its face centres from this file; the drawings must agree. */
 const REFERENCE = JSON.parse(
@@ -20,9 +21,22 @@ const REFERENCE = JSON.parse(
       centre_toeward_of_lowest_line_middle_mm: number;
       lowest_line_length_mm: number;
       lowest_line_above_face_bottom_mm: number;
+      leading_edge_band_mm: number;
+      longest_line_length_mm: number;
+      toe_margin_mm?: number;
     }
   >;
 };
+
+it.each(Object.keys(CLUB_PROFILES) as FaceCategory[])(
+  'anchors the %s delivery views to the shared face centre',
+  (category) => {
+    const p = CLUB_PROFILES[category];
+    const reference = REFERENCE.categories[category];
+    expect(p.toe).toBeCloseTo(reference.centre_from_toe_mm, 2);
+    expect(Math.abs(p.faceHeight / 2 - reference.centre_above_face_bottom_mm)).toBeLessThanOrEqual(0.1);
+  }
+);
 
 type Point = [number, number];
 
@@ -62,19 +76,24 @@ describe('the backend face-centre reference', () => {
     expect(Object.keys(REFERENCE.categories).sort()).toEqual(Object.keys(FACE_SHAPES).sort());
   });
 
+  /* A wood's drawn head rims its face with an even band, so its toe extreme is the drawing's, not the
+   * population's: the file keeps the research C (the backend measures from the real club's toe) and
+   * only the irons' drawings reproduce it. */
+  const DRAWN_TOE_IS_ILLUSTRATIVE: readonly FaceCategory[] = ['driver', 'fairway', 'hybrid'];
+
   it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
-    'matches the %s drawing: centre heel-ward of the toe extreme, and above the leading edge',
+    'matches the %s drawing: centre heel-ward of the toe extreme (irons), and above the leading edge',
     (category) => {
       const shape = FACE_SHAPES[category];
       const entry = REFERENCE.categories[category];
       const [x, y] = faceCentre(category, shape);
       const head = polygon(shape.head);
       const toe = Math.min(...head.map((point) => point[0]));
-      expect(Math.abs(x - toe - entry.centre_from_toe_mm)).toBeLessThanOrEqual(0.1);
+      if (!DRAWN_TOE_IS_ILLUSTRATIVE.includes(category)) {
+        expect(Math.abs(x - toe - entry.centre_from_toe_mm)).toBeLessThanOrEqual(0.1);
+      }
       expect(Math.abs(bottom(head, x) - y - entry.centre_above_leading_edge_mm)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(bottom(polygon(shape.face), x) - y - entry.centre_above_face_bottom_mm)).toBeLessThanOrEqual(
-        0.1
-      );
+      expect(Math.abs(bottom(polygon(shape.face), x) - y - entry.centre_above_face_bottom_mm)).toBeLessThanOrEqual(0.1);
     }
   );
 
@@ -96,6 +115,25 @@ describe('the backend face-centre reference', () => {
       expect(
         Math.abs(bottom(polygon(shape.face), x) - lowest - entry.lowest_line_above_face_bottom_mm)
       ).toBeLessThanOrEqual(0.1);
+    }
+  );
+
+  it.each(Object.keys(FACE_SHAPES) as FaceCategory[])(
+    'matches the %s drawing: leading-edge band, longest line and the lines’ toe margin',
+    (category) => {
+      const shape = FACE_SHAPES[category];
+      const entry = REFERENCE.categories[category];
+      const [x] = faceCentre(category, shape);
+      const head = polygon(shape.head);
+      const band = bottom(head, x) - bottom(polygon(shape.face), x);
+      expect(Math.abs(band - entry.leading_edge_band_mm)).toBeLessThanOrEqual(0.1);
+      const longest = Math.max(...shape.grooves.map((groove) => groove.to - groove.from));
+      expect(Math.abs(longest - entry.longest_line_length_mm)).toBeLessThanOrEqual(0.1);
+      if (entry.toe_margin_mm !== undefined) {
+        const toe = Math.min(...head.map((point) => point[0]));
+        const margin = Math.min(...shape.grooves.map((groove) => groove.from)) - toe;
+        expect(Math.abs(margin - entry.toe_margin_mm)).toBeLessThanOrEqual(0.1);
+      }
     }
   );
 });

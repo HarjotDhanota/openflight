@@ -128,12 +128,12 @@ launch, spin and spin axis, and model geometry only with
 | Low point side | `low_point_side` | ✓ | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Impact offset | `impact_offset` | ✓ experimental, after the shot | ✓ | Club, face view | all | ✓ | ✓ | ✓ | ✓ | n/a |
 | Impact height | `impact_height` | ✓ experimental, after the shot | ✓ | Club, face view | all | ✓ | ✓ | ✓ | ✓ | n/a |
-| Dynamic lie | `dynamic_lie` | ✓ not measured (E6) | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ (PENDING E6) | n/a |
+| Dynamic lie | `dynamic_lie` | ✓ camera shaft estimate (model geometry) | ✓ | Club | all | ✓ | ✓ | ✓ | ✓ | lower shaft visible near impact |
 
 ## pipeline_check causes for a kiosk metric
 
 - **pass:** measured. **labelled:** calculated, model geometry, estimated or experimental (the value is shown, with its label).
-- **PENDING:** not built yet (dynamic lie E6), or not measured for a named unbuilt dependency: the full club speed (W6, W9), the full smash on it, and gyro (the planar E2 model).
+- **PENDING:** not measured for a named unbuilt dependency: the full club speed (W6, W9), the full smash on it, and gyro (the planar E2 model). Dynamic lie now reports a labelled model-geometry estimate or its missing camera evidence.
 - **NOT REACHED:** every stage the metric stands on failed; it inherits that stage's cause.
 - **DATA:** not measured with its stages passing: the shot's data did not support it, and the reason says why.
 - **CODE:** the record breaks the label contract: an unknown label, a value under `not_measured`, no value under a label, not measured without a reason, or a metric missing from the shot.

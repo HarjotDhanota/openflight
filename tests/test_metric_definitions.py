@@ -81,6 +81,27 @@ class TestDirectionVectors:
 
 
 class TestSpinLoft:
+    def test_club_view_examples_and_their_mirrors_match_vector_separation(self):
+        for loft in (0.0, 10.4, 14.9, 16.5, 18.8, 31.4, 56.3):
+            for attack in (-6.25, -4.2, 0.0, 6.25):
+                for face in (-3.17, 0.0, 3.17):
+                    for path in (-4.23, 0.0, 4.23):
+                        normal = md.face_normal(loft, face)
+                        velocity = md.club_direction(attack, path)
+                        cross = (
+                            normal[1] * velocity[2] - normal[2] * velocity[1],
+                            normal[2] * velocity[0] - normal[0] * velocity[2],
+                            normal[0] * velocity[1] - normal[1] * velocity[0],
+                        )
+                        dot = math.fsum(a * b for a, b in zip(normal, velocity))
+                        expected = math.degrees(math.atan2(math.hypot(*cross), dot))
+                        actual = md.spin_loft_deg(loft, face, attack, path)
+                        assert actual == pytest.approx(expected, abs=1e-10)
+                        assert md.spin_loft_deg(loft, -face, attack, -path) == pytest.approx(actual)
+                        assert md.face_to_path_deg(-face, -path) == pytest.approx(
+                            -md.face_to_path_deg(face, path)
+                        )
+
     def test_pure_loft_is_loft_minus_attack(self):
         # square face on a square path: the 2D picture is exact
         assert md.spin_loft_deg(12.0, 0.0, -3.0, 0.0) == pytest.approx(15.0)

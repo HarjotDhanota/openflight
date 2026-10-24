@@ -196,6 +196,7 @@ class LiveAnalyser:
             "recorded_frame_size": clip.extra.get("recorded_frame_size", clip.frame_size),
             "ball_range_source": clip.range_source,
             "stages_ms": stages,
+            "dynamic_lie": clip.extra.get("dynamic_lie"),
         }
         pool = self._pools.setdefault(f"{clip.club}_{clip.frame_size}", _Pool())
 
@@ -204,7 +205,10 @@ class LiveAnalyser:
             reading["analysis_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
             for key, value in stages.items():
                 stages[key] = round(value, 1)
-            return {**base, **reading}
+            result = {**base, **reading}
+            if reading.get("status") == "dropped":
+                result.pop("dynamic_lie", None)
+            return result
 
         prepared = clip.prepared
         if prepared is None:
