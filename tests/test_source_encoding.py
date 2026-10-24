@@ -1,9 +1,4 @@
-"""Log text is written in UTF-8 once, not re-encoded (P6-6).
-
-Outdoors-test-5's kiosk log held ``C3 82 C2 B0`` for every degree sign: the
-server's own format strings had been decoded as cp1252 and saved again as
-UTF-8, so the log faithfully wrote "Â°".
-"""
+"""Source text is UTF-8 once, never decoded as cp1252 and re-encoded ("Â°" for "°")."""
 
 import re
 from pathlib import Path

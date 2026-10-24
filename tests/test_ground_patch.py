@@ -1,4 +1,4 @@
-"""The 2 ft x 2 ft ground patch the setup takes every window from (P8-1, D14)."""
+"""The 2 ft x 2 ft ground patch the setup takes every window from."""
 
 import math
 
@@ -62,11 +62,9 @@ def test_a_patch_1_25_m_out_is_wide_and_shallow_on_screen():
     ball = projection.ball_outline_px
 
     assert patch.size_m == PATCH_SIZE_M == 0.61
-    # near edge about 600 px wide, far edge about 370 px, straight ahead
     assert _width(ground, 0, 1) == pytest.approx(600.0, abs=10.0)
     assert _width(ground, 3, 2) == pytest.approx(368.0, abs=10.0)
     assert (ground[0][0] + ground[1][0]) / 2.0 == pytest.approx(640.0, abs=0.5)
-    # the ball centres a patch this far out can hold span only about 29 rows
     assert ball[0][1] - ball[3][1] == pytest.approx(28.6, abs=1.0)
     facts = patch_distance(camera, patch)
     assert facts["ground_distance_m"] == pytest.approx(1.25, abs=1e-9)
@@ -83,9 +81,7 @@ def test_a_patch_2_m_out_works_and_is_about_11_rows_deep():
 
     assert ball[0][1] - ball[3][1] == pytest.approx(10.8, abs=1.0)
     assert _width(projection.outline_px, 0, 1) == pytest.approx(336.0, abs=6.0)
-    # a ball 2 m out is about 20 px across; the size window holds it
     assert projection.diameter_px[0] < 20.0 < projection.diameter_px[1]
-    # the radar window reaches past the patch's far edge
     assert projection.radar_window_m[1] >= projection.nominal["far_slant_m"]
     assert projection.radar_window_m[0] <= projection.nominal["near_slant_m"]
 
@@ -122,7 +118,6 @@ def test_a_drag_past_the_supported_distances_is_held_at_their_ends():
     near = patch_distance(camera, under_the_lens)["ground_distance_m"]
     assert far == pytest.approx(PATCH_CENTRE_DISTANCE_M[1], abs=1e-6)
     assert near == pytest.approx(PATCH_CENTRE_DISTANCE_M[0], abs=1e-6)
-    # the heading of the drag is kept: right of centre stays right
     assert above_horizon.centre_lateral_m > 0.0
 
 
@@ -153,7 +148,6 @@ def test_the_outline_tightens_once_the_tilt_is_calibrated():
     assert after.radar_window_m[1] - after.radar_window_m[0] < (
         before.radar_window_m[1] - before.radar_window_m[0]
     )
-    # calibrated, the radar looks from just short of the near edge to past the far one
     assert after.radar_window_m[0] < after.nominal["near_slant_m"]
     assert after.radar_window_m[1] > after.nominal["far_slant_m"]
     assert after.radar_window_m[1] < 2.4
@@ -161,22 +155,19 @@ def test_the_outline_tightens_once_the_tilt_is_calibrated():
 
 @pytest.mark.parametrize("placed_by", ["eye", "distance"])
 def test_before_calibration_a_3_deg_tilt_error_still_puts_the_ball_in_the_patch(placed_by):
-    """indoor-test-1: the camera looked about 3-4 deg further down than modelled."""
+    """A camera looking 3-4 deg further down than modelled still finds the ball."""
     modelled = _v3(pitch_deg=1.72)
     truth = _v3(pitch_deg=1.72 - 3.8)
     ball = (0.02, 1.25, BALL_CENTER_HEIGHT_M)
     seen = project_to_pixel(truth, ball)
     if placed_by == "eye":
-        # the tester drags the drawn patch over the ball in the picture
         patch = patch_from_centre_pixel(modelled, (seen[0], seen[1] + 12.0))
     else:
-        # or places it by its displayed distance and puts the ball there
         patch = patch_at(modelled, 1.25)
 
     projection = _projection(modelled, patch)
 
     assert point_in_polygon(seen[0], seen[1], projection.search_outline_px)
-    # every window still holds the ball's true distance and size
     true_slant = float(np.linalg.norm(np.asarray(ball) - np.asarray(modelled.radar_origin_lfu)))
     assert projection.radar_window_m[0] <= true_slant <= projection.radar_window_m[1]
     size = V3_FOCAL_1280 * 0.0427 / 1.25

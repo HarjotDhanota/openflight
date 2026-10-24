@@ -1,4 +1,4 @@
-"""The resting-ball gate follows the setup's ball, not fixed image fractions (P8-7)."""
+"""The resting-ball gate follows the setup's ball, not fixed image fractions."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from openflight.camera import ball_flight
 from openflight.camera.club_motion import detect_impact_reference_ball
 
 WIDTH, HEIGHT = 1280, 800
-# Outdoors-test-7's setup ball sits at row 463 of 800; the fixed gate needs 320-760
-# and the impact detector only looks below row 496.
+# the fixed gate needs rows 320-760 and the impact detector looks only below row 496
 HIGH_BALL = {"x": 640.0, "y": 280.0, "diameter_px": 30.0}
 
 

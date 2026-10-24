@@ -1068,11 +1068,8 @@ class TestInternalSpeedTrigger:
         assert radar.last_hardware_trigger_outcome == "timeout"
 
     def test_one_lost_dump_detector_serves_both_trigger_paths(self):
-        """D30 (d): the sound path's wait (a GATE-edge hook) ends on the same orphaned tail.
-
-        A Q array before any capture marker is a dump that lost its start, even
-        far below DISCARDED_DUMP_MIN_BYTES; there is no opt-in.
-        """
+        """The sound path's wait ends on the same orphaned tail: a Q array before any
+        capture marker, at any size, with no opt-in."""
         tail = b"1789,1763,1742]}\r\n" + TestWaitForHardwareTrigger._DUMP[2]
         assert len(tail) < OPS243Radar.DISCARDED_DUMP_MIN_BYTES
         radar = self._radar(_ScheduledSerial([(0.05, tail)]))
@@ -1085,7 +1082,7 @@ class TestInternalSpeedTrigger:
         assert time.time() - started < 2.0
 
     def test_wait_takes_no_flush_option(self):
-        """D30 (e) / P7-1: no caller can ask the wait to clear serial input."""
+        """No caller can ask the wait to clear serial input."""
         parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
         assert "discard_pending_input" not in parameters
         assert "detect_orphaned_dump" not in parameters

@@ -628,7 +628,7 @@ class TestIWR6843ShotIntegration:
         server_module.iwr6843_runtime = None
 
     def test_init_iwr6843_takes_the_tee_lateral_offset_from_the_rig(self, monkeypatch, tmp_path):
-        """F10: the LCMF inversion's lateral offset is the rig's, recorded, not July's."""
+        """The LCMF inversion's lateral offset is the rig's."""
         calibration = Calibration.identity()
 
         class FakeCaptureMonitor:
@@ -1101,7 +1101,7 @@ class TestIWR6843ShotIntegration:
     def test_a_non_finite_launch_angle_is_handled_exactly_like_a_missing_one(
         self, monkeypatch, fusion, bad
     ):
-        """I1 / D17: OPS-only fills its labelled estimate; a fusion unit fills nothing in."""
+        """OPS-only fills its labelled estimate; a fusion unit fills nothing in."""
         monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace() if fusion else None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
 
@@ -1127,7 +1127,7 @@ class TestIWR6843ShotIntegration:
         ):
             assert getattr(with_bad, name) == getattr(with_none, name), name
         if fusion:
-            assert with_none.launch_angle_vertical is None  # D17 unchanged: nothing filled
+            assert with_none.launch_angle_vertical is None
             assert with_none.launch_angle_vertical_source is None
         else:
             assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
@@ -1139,7 +1139,7 @@ class TestIWR6843ShotIntegration:
     def test_ops_only_launch_estimate_ignores_a_non_finite_input_like_none(
         self, monkeypatch, field, bad
     ):
-        """2b: estimate_launch_angle only checks > 0, so +inf used to drive the estimate."""
+        """estimate_launch_angle only checks > 0, so +inf must not drive the estimate."""
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
 
@@ -1455,7 +1455,6 @@ class TestShotToDict:
         raw = shot.to_dict()
         result = shot_to_dict(shot)
 
-        # metrics_not_measured: names any non-finite metric sent as null (None here)
         assert set(result) == set(raw) - {"mode", "readings", "readings_count"} | {
             "metrics_not_measured"
         }
@@ -1611,7 +1610,6 @@ class TestShotToDict:
         assert estimate_call["geometry"].roll_correction_deg == 2.8
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert "ball_tracker" not in estimate_call
-        # D36 item 4b: no measured side offset: the ball is assumed dead ahead
         assert estimate_call["geometry"].ball_lateral_offset_m == 0.0
 
     def _fuse_with_camera_estimate(self, monkeypatch, tmp_path, estimate, shot):
@@ -1814,7 +1812,7 @@ class TestShotToDict:
         )
 
     def test_live_camera_fusion_carries_the_club_stage_notes(self, monkeypatch, tmp_path):
-        """D15 (P8-7): the club stage's labels reach the shot beside its values."""
+        """The club stage's labels reach the shot beside its values."""
 
         np.savez(
             tmp_path / "frames.npz",
@@ -1852,7 +1850,7 @@ class TestShotToDict:
         ]
 
     def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
-        """P8-7 gate 2: the tee contract stands; the shot says plainly what it lacked."""
+        """The tee contract stands; the shot says what it lacked."""
         from openflight.camera.geometry_contract import NO_TEE_RANGE
 
         np.savez(
@@ -1890,7 +1888,7 @@ class TestShotToDict:
         assert NO_TEE_RANGE in shot.camera_notes
 
     def test_live_camera_fusion_labels_dark_frames_and_preserves_iwr(self, monkeypatch):
-        """D15 (P8-7): ineligible lighting is a note; the camera stages still run."""
+        """Ineligible lighting is a note; the camera stages still run."""
         runtime = SimpleNamespace(camera_analysis_eligible=False)
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
         decoded = []
@@ -2021,7 +2019,7 @@ class TestShotToDict:
     def test_optical_provenance_failures_label_the_camera_metrics(
         self, monkeypatch, auto_exposure, applied_exposure_us, status
     ):
-        """D15 (P8-7): the optical-quality verdict is recorded and noted, not a refusal."""
+        """The optical-quality verdict is recorded and noted, not a refusal."""
         monkeypatch.setattr(
             server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
         )
@@ -2041,7 +2039,6 @@ class TestShotToDict:
         assert result["camera_optical_quality"]["applied"]["exposure_us"] == applied_exposure_us
 
     def test_angle_source_none_by_default(self):
-        """Shot without angle source should have None."""
         shot = Shot(
             ball_speed_mph=150.0,
             timestamp=datetime.now(),
@@ -2107,12 +2104,12 @@ class TestShotToDict:
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
     def test_no_non_finite_float_field_raises_or_leaks_into_the_payload(self, bad):
-        """Owner rule: a shot is never dropped; a non-finite metric goes out as null."""
+        """A shot is never dropped; a non-finite metric goes out as null."""
         for name in self._float_fields():
             shot = Shot(ball_speed_mph=120.0, timestamp=datetime(2026, 10, 11, 9, 0, 0))
             setattr(shot, name, bad)
-            result = shot_to_dict(shot)  # must not raise
-            json.dumps(result, allow_nan=False)  # strict JSON: the browser can parse it
+            result = shot_to_dict(shot)
+            json.dumps(result, allow_nan=False)
             if name not in result:  # a field the UI schema doesn't carry
                 continue
             assert result[name] is None, name
@@ -2121,7 +2118,7 @@ class TestShotToDict:
             ], name
 
     def test_a_non_finite_launch_leaves_carry_on_its_no_launch_path(self):
-        """A non-finite value is a missing value (I1): carry is the no-launch carry."""
+        """A non-finite value is a missing value: carry is the no-launch carry."""
         when = datetime(2026, 10, 11, 9, 0, 0)
         result = shot_to_dict(
             Shot(ball_speed_mph=120.0, timestamp=when, launch_angle_vertical=math.nan)
@@ -2134,7 +2131,7 @@ class TestShotToDict:
         assert result["carry_range"] == no_launch["carry_range"]
 
     def test_a_derived_non_finite_metric_is_nulled_and_named(self):
-        """2c: smash factor and carry derive from an infinite ball speed; each is named."""
+        """Smash factor and carry derive from an infinite ball speed; each is named."""
         result = shot_to_dict(
             Shot(
                 ball_speed_mph=math.inf,
@@ -2155,7 +2152,7 @@ class TestShotToDict:
         json.dumps(result, allow_nan=False)
 
     def test_a_nulled_smash_factor_keeps_no_radial_ratio_label(self):
-        """D37: the radial-ratio label goes out only beside a smash value it describes."""
+        """The radial-ratio label goes out only beside a smash value it describes."""
         result = shot_to_dict(
             Shot(
                 ball_speed_mph=math.inf,
@@ -3373,7 +3370,6 @@ class OnShotDetectedHelpers:
     @pytest.fixture(autouse=True)
     def _reset_ordered_pipeline(self, monkeypatch):
         server_module._reset_shot_sequence()
-        # each test gets its own deferred-enrichment backlog, like its own queue
         monkeypatch.setattr(server_module, "_deferred_shot_enrichment", deque())
         yield
         _wait_for_shot_finalization_idle()
@@ -3463,7 +3459,6 @@ class OnShotDetectedHelpers:
     def _assert_finalized_once(cls, emitted, session_log):
         updates = cls._final_update_payloads(emitted)
         assert len(updates) == 1
-        # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
         assert updates[0]["shot"]["launch_angle_vertical_source"] is None
         assert updates[0]["shot"]["carry_spin_adjusted"] is None
         assert len(session_log.shots) == 1
@@ -3538,8 +3533,7 @@ class OnShotDetectedHelpers:
             assert value is None or not isinstance(value, float) or math.isfinite(value), key
 
     def _spin_axis_shot(self, *, horizontal_confidence):
-        """A shot with launch angles, club path and attack already resolved, isolating
-        the spin-axis gate itself rather than whatever radar path fed it."""
+        """A shot with launch, club path and attack resolved, isolating the spin-axis gate."""
         return Shot(
             ball_speed_mph=150.0,
             club_speed_mph=100.0,
@@ -3568,8 +3562,6 @@ class OnShotDetectedHelpers:
 
 
 class TestOnShotDetected(OnShotDetectedHelpers):
-    """Tests for live shot processing in the server."""
-
     def test_enrichment_queue_has_hard_capacity(self):
         assert server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY > 0
         assert (
@@ -3852,7 +3844,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
     def test_a_fusion_unit_labels_smash_a_radial_ratio_from_first_emit_to_session_log(
         self, monkeypatch
     ):
-        """D21/D37: both speeds are OPS radial readings, so smash says so on every emit."""
+        """Both speeds are OPS radial readings, so smash says so on every emit."""
         emitted, session_log = self._record_finalization(monkeypatch)
         worker_targets = []
         monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
@@ -3881,7 +3873,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             assert shot_data["smash_factor_status"] == "radial_ratio"
 
     def test_an_ops_only_unit_leaves_smash_unlabelled(self, monkeypatch):
-        """D37: the label is scoped to fusion units; OPS-only smash is unchanged."""
+        """The label is scoped to fusion units; OPS-only smash is unchanged."""
         emitted, session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
 
@@ -4120,10 +4112,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert not overflow_callback.is_alive()
         assert all(not thread.is_alive() for thread in background_threads)
 
-        # Changed with fix/keep-late-enrichment: shot 4 overflowed the enrichment
-        # queue and used to be "skipped" (no IWR or camera processing ever). It
-        # is now deferred: the notice says "pending", and its recorded IWR and
-        # camera captures are processed once the queue drains.
+        # shot 4 overflows the queue: it is deferred, not skipped
         expected = [(index, shot.impact_timestamp) for index, shot in enumerate(shots, start=1)]
         initial_shots = [payload["shot"] for event, payload in emitted if event == "shot"]
         status_notices = [
@@ -4154,8 +4143,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.camera_captures
         ] == expected
-        # first results stay in shot order; shot 4's enrichment lands either on
-        # time or as one late update to the same shot
         first_seen = list(dict.fromkeys(row["shot_number"] for row in final_shots))
         assert first_seen == [1, 2, 3, 4]
         assert [row["shot_number"] for row in final_shots].count(4) in (1, 2)
@@ -4189,9 +4176,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             )
 
         assert [defer(shot) for shot in shots[:3]] == [True, True, False]
-        # the queue has room again, but an older shot is still deferred: the
-        # newer shot must wait behind it, or the older shot's recorded IWR and
-        # camera captures would be discarded as stale by the newer match
+        # an older shot is still deferred, so the newer one waits behind it
         server_module.shot_enrichment_queue.get_nowait()
         server_module.shot_enrichment_queue.task_done()
         processed.append(shots[0].impact_timestamp)
@@ -4393,19 +4378,13 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         for thread in background_threads:
             thread.join(timeout=2.0)
 
-        # Changed with fix/keep-late-enrichment: this test used to assert that
-        # every shot stayed OPS-only after the stuck hardware returned, because
-        # late results were discarded. Late results are now applied as updates
-        # to the same shot, and shots that overflowed the queue are deferred
-        # instead of skipped, so every shot whose enrichment was active, queued
-        # or deferred (1-11) gains its launch angle afterwards; the rest were
-        # abandoned loudly at the backlog bound. First results are unchanged.
+        # late results update the same shot: shots 1-11 gain their launch angle,
+        # the rest were abandoned at the backlog bound
         final_payloads = self._final_update_payloads(emitted)
         first_results = final_payloads[:shot_count]
         late_updates = final_payloads[shot_count:]
         assert [p["shot"]["shot_number"] for p in first_results] == list(range(1, shot_count + 1))
         assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
-        # a fusion unit fills nothing in: no measured launch, so none and no carry (D17)
         assert all(p["shot"]["launch_angle_vertical_source"] is None for p in first_results)
         assert all(p["shot"]["carry_spin_adjusted"] is None for p in first_results)
         enriched = server_module._SHOT_AWAITING_LATE_CAPACITY  # active + queued + deferred
@@ -4444,7 +4423,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert first_result["shot"]["launch_angle_vertical"] is None
         assert late["shot"]["launch_angle_vertical"] == 14.0
         assert late["shot"]["launch_angle_vertical_source"] == "radar"
-        # the UI replaces a shot in place by its timestamp; the number stays too
         for key in ("shot_number", "timestamp"):
             assert late["shot"][key] == first_result["shot"][key] == initial["shot"][key]
         assert late["stats"]["shot_count"] == 1, "the update must not add a shot to the stats"
@@ -4467,10 +4445,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert not server_module._shot_awaiting_late_enrichment
 
     def test_phones_get_a_late_result_as_an_update_to_the_same_shot(self, monkeypatch):
-        """D30 (b): an OPS-only first result is provisional on phones, never terminal.
-
-        The late IWR result then finishes the same shot (same event_id).
-        """
+        """An OPS-only first result is provisional on phones; the late IWR result
+        finishes the same shot (same event_id)."""
         from openflight.ble.protocol import stable_shot_event_id
 
         phone_shots = []
@@ -4507,7 +4483,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_finalization_coordinator_empty()
 
     def test_a_shot_with_non_finite_metrics_is_still_emitted_and_logged(self, monkeypatch):
-        """Owner rule: nothing is dropped. NaN launch and inf spin go out as null."""
+        """Nothing is dropped. NaN launch and inf spin go out as null."""
         emitted, session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         shot = self._shot()
@@ -4521,8 +4497,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         payload = emitted[0][1]
         json.dumps(payload, allow_nan=False)
         assert payload["shot"]["ball_speed_mph"] == 150.0
-        # OPS-only unit: the NaN launch and the inf spin get exactly the missing-value
-        # handling (I1, 2b): the same labelled estimate as a shot missing both.
         reference = self._shot()
         server_module._ensure_user_facing_launch_angles(reference)
         assert payload["shot"]["launch_angle_vertical_source"] == "estimated"
@@ -4534,7 +4508,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert len(session_log.shots) == 1
 
     def test_a_nan_shot_in_the_history_never_poisons_later_stats(self, monkeypatch):
-        """A-I1: one NaN shot in the session, then every later emit is strict JSON."""
+        """One NaN shot in the session, then every later emit is strict JSON."""
         emitted, _session_log = self._record_finalization(monkeypatch)
         history = []
         monkeypatch.setattr(
@@ -4567,7 +4541,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_strict_finite_or_null_stats(session_state)
 
     def test_non_finite_stats_from_any_monitor_are_nulled_before_emit(self, monkeypatch):
-        """A-I1 defence in depth: stats are nulled before emitting, whatever made them."""
+        """Stats are nulled before emitting, whatever made them."""
         emitted, _session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(
             server_module,
@@ -4590,7 +4564,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
     def test_table_carry_gets_no_club_speed_when_it_is_non_finite(self, monkeypatch, bad):
-        """A-M3: a non-finite club speed reaches the table carry as None (missing)."""
+        """A non-finite club speed reaches the table carry as None (missing)."""
         self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         calls = []
@@ -5569,7 +5543,6 @@ class TestIwrTeeRangeConfiguration:
 
         assert received["tee_range_m"] is None
         assert received["range_prior"] is None
-        # the cosine candidate takes each shot's own range; a shot without one has none
         assert server_module.ball_speed_correction_enabled is True
 
     def test_production_launch_passes_measured_tee_range_unchanged(self, monkeypatch, tmp_path):
@@ -5588,7 +5561,6 @@ class TestIwrTeeRangeConfiguration:
         )
 
         assert received["tee_range_m"] is None
-        # 13 Oct: each shot's own range drives the candidate, never a configured one
         assert server_module.ball_speed_correction_enabled is True
 
     @pytest.mark.parametrize(
@@ -5677,7 +5649,6 @@ class TestIwrTeeRangeConfiguration:
 
         runtime = server_module.iwr6843_runtime
         assert runtime.calibration.tee_range_m is None
-        # 13 Oct: no configured range means each shot is ranged from its own capture
         assert server_module.iwr6843_runtime_config["tee_range_status"] == "per_shot_without_prior"
         assert server_module.iwr6843_runtime_config["tee_slant_range_m"] is None
         snapshot = runtime.replay_config_snapshot()
@@ -5724,7 +5695,6 @@ class TestApplyCalculatedSpin:
         assert 4500 < shot.spin_rpm < 5100
         assert shot.spin_rpm_measured == 6800.0
         assert shot.spin_source == "calculated"
-        # a model's output has no measurement confidence (D17)
         assert shot.spin_confidence is None
         assert shot.spin_rejection_reason is None
 
@@ -5856,8 +5826,6 @@ class TestOpsBaudValidation:
 
 
 class TestNativeHardwareTriggerPlumbing:
-    """Server forwarding and bad-data safeguards for OPS-only hardware mode."""
-
     @staticmethod
     def _stub_main_runtime(monkeypatch, captured):
         monkeypatch.setattr(
@@ -6047,12 +6015,11 @@ def test_live_speed_candidate_matches_shared_replay_without_changing_canonical(m
 
 
 def test_ops_speed_geometry_comes_from_the_rig_ops_offsets(monkeypatch):
-    """F12: with a rig, the cosine candidate uses the OPS's own position."""
+    """With a rig, the cosine candidate uses the OPS's own position."""
     from openflight.rig_geometry import RigGeometry
 
     rig = RigGeometry.from_json("config/enclosure_v3_rig_geometry.json")
     monkeypatch.setattr(server_module, "rig_geometry", rig)
-    # the kiosk's radar height is the rig's, at the phase centre (audit F11)
     radar_height = rig.enclosure_setup().radar_height_m
     calibration = SimpleNamespace(
         tee_range_m=1.30, tee_ball_height_m=0.02135, radar_height_m=radar_height
@@ -6119,12 +6086,8 @@ def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
 
 
 class TestCameraShotAnalysisRefused:
-    """D30 (c): upstream's --camera-shot-analysis never runs live on a fusion unit.
-
-    It takes ball distance from pixel size and OPS speed, which breaks the fixed
-    sensor roles (the camera locates, the IWR gives distance). The flag turns the
-    camera on, so every unit it could run on is a fusion unit.
-    """
+    """Upstream's --camera-shot-analysis never runs live on a fusion unit: it takes
+    ball distance from pixel size, but the IWR gives distance."""
 
     @pytest.mark.parametrize(
         "extra",
@@ -6163,7 +6126,7 @@ class TestCameraShotAnalysisRefused:
 
 
 class TestIwrAzimuthCalibration:
-    """F8: without a horizontal phase reference the IWR's azimuth is uncalibrated."""
+    """Without a horizontal phase reference the IWR's azimuth is uncalibrated."""
 
     @staticmethod
     def _run(
@@ -6225,7 +6188,7 @@ class TestIwrAzimuthCalibration:
         return shot
 
     def test_a_low_coherence_radar_horizontal_is_shown_labelled_not_fused(self, monkeypatch):
-        """D15 (P8-7): shown under its own source, never handed to the camera as IWR's."""
+        """Shown under its own source, never handed to the camera as IWR's."""
         shot = self._run(
             monkeypatch, phase_reference=-0.5, horizontal_status="hlcmf_v1_low_coherence"
         )
@@ -6233,7 +6196,6 @@ class TestIwrAzimuthCalibration:
         assert shot.launch_angle_horizontal == pytest.approx(2.25)
         assert shot.launch_angle_horizontal_source == "radar_low_coherence"
         assert shot.iwr6843_horizontal_deg is None
-        # any camera horizontal outranks it
         server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
         assert shot.launch_angle_horizontal == pytest.approx(4.0)
 
@@ -6259,7 +6221,7 @@ class TestIwrAzimuthCalibration:
         assert shot.experimental_club_path_status == "rejected_phase_span"
 
     def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
-        """P8-7: shown, labelled, and never displacing a radar horizontal."""
+        """Shown, labelled, and never displacing a radar horizontal."""
         monkeypatch.setattr(
             server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
         )
@@ -6285,7 +6247,7 @@ class TestIwrAzimuthCalibration:
 
 
 class TestShotCarryLogText:
-    """P6-6: the shot line names the carry the UI shows and the table estimate beside it."""
+    """The shot line names the carry the UI shows and the table estimate beside it."""
 
     def test_the_shown_ballistic_carry_is_named_beside_the_table_estimate(self):
         shot = Shot(ball_speed_mph=75.8, club_speed_mph=50.6, timestamp=datetime.now())
@@ -6433,8 +6395,6 @@ class TestBallisticCarryPrecedence:
 
 
 class TestHardwareTriggerPlumbing:
-    """Server-side forwarding and validation for the opt-in trigger mode."""
-
     def test_server_cli_accepts_trigger_speed_alias(self, monkeypatch):
         """The Pi's --trigger-speed spelling reaches hardware trigger setup."""
         captured = {}

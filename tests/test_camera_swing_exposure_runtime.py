@@ -1,8 +1,7 @@
 """The capture runtime's swing exposure: the resting ball meters, before every swing.
 
-No startup lock (13 Oct 2026): the runtime reads the sensor's limits when the camera
-is configured, seeds from the setup's light index, then re-checks the resting ball
-between clips and moves the controls for the next swing.
+The runtime reads the sensor's limits at configure, seeds from the setup's light
+index, then re-checks the resting ball between clips for the next swing.
 """
 
 import json
@@ -90,9 +89,6 @@ def _light_at(runtime, index):
     return index * runtime.settings.exposure_us * runtime.settings.gain
 
 
-# --- limits ----------------------------------------------------------------------------------
-
-
 def test_the_sensor_limits_are_read_from_the_camera_and_recorded(tmp_path):
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,
@@ -128,9 +124,6 @@ def test_a_camera_without_exposure_limits_holds_its_controls_and_says_so(tmp_pat
     status = runtime.auto_exposure_status()
     assert status["status"] == "unavailable"
     assert "limits" in status["message"]
-
-
-# --- seeding ---------------------------------------------------------------------------------
 
 
 def test_the_setup_light_index_seeds_the_first_setting(tmp_path):
@@ -185,9 +178,6 @@ def test_a_remembered_light_index_seeds_the_next_start(tmp_path):
 
     assert second.auto_exposure_status()["reason"] == "remembered_light_index"
     assert (second.settings.exposure_us, second.settings.gain) == (294, CAP)
-
-
-# --- the per-swing re-check ------------------------------------------------------------------
 
 
 def test_today_s_room_moves_to_the_blur_ceiling_and_the_gain_cap(tmp_path):
@@ -433,9 +423,6 @@ def test_a_clip_keeps_its_own_decision_not_the_log(tmp_path):
     assert runtime.auto_exposure_status()["recent_decisions"]
 
 
-# --- the ball-finding sweep in the runtime --------------------------------------------
-
-
 def _not_seen(box=(40, 40, 80, 80)):
     return lambda: {
         "state": "not_seen",
@@ -593,7 +580,7 @@ def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, mon
             width=1280,
             height=800,
             fps=120.0,
-            exposure_us=8,  # the near-black startup free play used to pass
+            exposure_us=8,  # near-black
             gain=1.0,
             light_index_dn_per_us_gain=0.1,
         ),

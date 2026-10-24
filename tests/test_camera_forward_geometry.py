@@ -181,7 +181,7 @@ def test_v3_rig_preserves_camera_ahead_of_radar():
     )
     setup = rig.enclosure_setup()
     # the lens is 30 mm ahead of the RX row and 1.38 mm more ahead of the phase
-    # centre the radar's ranges start from, which the 10 deg aim tips back (audit F11)
+    # centre the radar's ranges start from, which the 10 deg aim tips back
     assert setup.camera_forward_offset_m == pytest.approx(0.03138, abs=1e-5)
     assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
 
@@ -207,7 +207,6 @@ def test_startup_passes_measured_offset_or_explicit_fallback(
             str(Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"),
         ]
     else:
-        # without a rig file there is no default camera height (wiring audit C1)
         argv += ["--camera-capture-mount-height-m", "0.095"]
     if flag is not None:
         argv += ["--camera-capture-forward-offset-m", str(flag)]

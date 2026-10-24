@@ -1,8 +1,6 @@
-"""Each shot's resting ball comes from that shot's own frames (D17).
+"""Each shot's resting ball comes from that shot's own frames.
 
-The kiosk used to settle a shot's reference ball with the median of up to 15 earlier
-shots' balls, carried for the life of the server. No shot's data may shape another's:
-a shot whose two detectors disagree, or that finds nothing, withholds its reference
+A shot whose two detectors disagree, or that finds nothing, withholds its reference
 ball and says why.
 """
 
@@ -136,9 +134,6 @@ def test_the_club_stage_finds_no_ball_on_its_own_and_borrows_none(monkeypatch):
     assert result.status == "rejected_no_ball"
 
 
-# ---- the frozen fusion context carries no earlier shots' balls ------------------------
-
-
 def _geometry():
     return EffectiveCameraGeometryInputs(
         camera_height_m=0.095,
@@ -198,8 +193,6 @@ def test_a_fusion_result_hands_no_tracker_state_to_the_next_shot():
 
 
 def test_a_recorded_version_1_context_replays_without_its_earlier_shots_balls():
-    # a kiosk before D17 froze each shot's tracker state from earlier shots; replaying
-    # it ignores that state and says so
     legacy = {key: value for key, value in _context().items() if key != "sha256"}
     legacy["version"] = 1
     earlier = [{"x": 3.0, "y": 4.0, "diameter_px": 12.0, "area_px": 100}] * 3

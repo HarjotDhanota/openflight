@@ -72,8 +72,7 @@ def _installed_unit(user: str, project_dir: str) -> str:
         "SCRIPT_DIR=scripts/setup\n"
         f"{match.group(1)}\n"
     )
-    # stdin, not ``bash -c``: WSL's launcher expands $VARS in a -c argument too early.
-    # Bytes, so Windows text mode cannot turn the newlines into CRLF.
+    # stdin, not ``bash -c`` (WSL expands $VARS too early); bytes, so no CRLF
     result = subprocess.run(
         ["bash", "-s"],
         input=script.encode("utf-8"),
@@ -86,7 +85,7 @@ def _installed_unit(user: str, project_dir: str) -> str:
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="renders the unit with setup.sh's sed")
 def test_the_installed_unit_carries_the_restart_limits():
-    """98 restarts in 10 minutes came from a Pi whose installed unit predated the limits."""
+    """The installed unit carries the restart limits."""
     installed = _installed_unit("pi", "/home/pi/openflight")
     lines = [line.strip() for line in installed.splitlines()]
     unit = lines[lines.index("[Unit]") + 1 : lines.index("[Service]")]

@@ -1,9 +1,7 @@
-"""The target line from a camera aim point (D34; TM4's "Target Image").
+"""The target line from a camera aim point.
 
-Synthetic cameras with known answers: a target placed at a known yaw from the
-ball is projected into the picture, and the aim point's pixel must give that yaw
-back, for both signs, for a far target (a direction) and a near one (on a screen
-whose floor line is marked).
+Synthetic cameras with known answers: a target at a known yaw is projected into the
+picture, and its pixel must give that yaw back, far (a direction) and near (a screen).
 """
 
 import math
@@ -63,8 +61,6 @@ def _pixel(camera, point):
 @pytest.mark.parametrize("pitch_deg", [0.0, -3.0, 2.0])
 def test_a_far_aim_point_is_a_direction_and_gives_the_yaw_back(yaw_deg, pitch_deg):
     camera = _camera(pitch_deg=pitch_deg)
-    # a target 2 km out: a direction. (A flag 150 m out is not quite one: the ball
-    # sits 1.25 m ahead of the lens, which shrinks a 6 deg yaw by 0.05 deg there.)
     aim = _pixel(camera, _target(BALL, yaw_deg, 2000.0, 2.0))
 
     solved = tl.solve_yaw(camera, BALL, aim)
@@ -87,7 +83,6 @@ def test_the_sign_is_positive_for_a_target_right_of_the_boresight():
 @pytest.mark.parametrize("ball", [(0.0, 1.25), (0.25, 1.6), (-0.2, 1.0)])
 def test_a_near_aim_on_a_screen_uses_the_floor_line(yaw_deg, ball):
     camera = _camera(pitch_deg=-1.0)
-    # the screen stands 3 m beyond the ball; the target is 0.6 m up it
     distance = 3.0 / math.cos(math.radians(yaw_deg))
     aim = _pixel(camera, _target(ball, yaw_deg, distance, 0.6))
     floor = _screen_floor_line(camera, ball, 3.0)
@@ -136,18 +131,15 @@ def test_the_record_carries_the_hand_off_sign_and_its_uncertainty():
     assert record["source"] == "aim_point"
     assert record["method"] == "direction"
     assert record["yaw_deg"] == pytest.approx(3.0, abs=0.01)
-    # the kiosk's flags take the boresight's azimuth from the target line
     assert record["kiosk_offset_deg"] == pytest.approx(-record["yaw_deg"])
     assert record["aim_px"] == pytest.approx(aim, abs=0.01)
     parts = record["uncertainty"]["parts_deg"]
-    # a finger on the Pi's preview, +-30 frame px of aim at 933 px: about 1.8 deg
+    # +-30 frame px of aim at 933 px
     assert parts["aim_pixel_deg"] == pytest.approx(math.degrees(30.0 / FOCAL_1280), rel=0.1)
     assert record["uncertainty"]["roll_applied"] is False
     assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(2.9)
     assert record["uncertainty"]["total_deg"] >= max(parts.values())
     assert record["applies_to"]["camera_to_iwr_yaw_deg"] == 0.0
-    # a direction says what it would be off by for a near target (the ball is 1.25 m
-    # ahead of the lens): about a third of the yaw for a target 3 m beyond the ball
     assert record["parallax_deg_at_m"]["3"] == pytest.approx(
         math.degrees(math.atan2(1.25 * math.sin(math.radians(3.0)), 3.0)), abs=0.01
     )
@@ -276,7 +268,7 @@ def test_the_alignment_stick_check_records_the_difference_and_whether_it_agrees(
 def test_the_tilt_term_covers_what_a_wrong_pitch_does_to_the_yaw(pitch_error_deg):
     model = _camera()
     true = _camera(pitch_deg=pitch_error_deg)
-    # 1.4 m up a screen 4.5 m out, off to the right: where pitch and azimuth couple
+    # high and off to the right, where pitch and azimuth couple
     aim = _pixel(true, (1.2, 4.5, 1.4))
     truth = tl.solve_yaw(true, BALL, aim).yaw_deg
 
@@ -301,9 +293,7 @@ def test_the_unapplied_roll_term_covers_a_rolled_camera():
 
 
 def test_a_floor_line_that_falls_back_under_a_perturbation_is_unbounded_and_warns():
-    """At 95 mm the floor line of a screen 4.5 m out is ~20 rows below the horizon:
-    a 3 deg tilt pad puts it above the horizon, where the floor-point method falls
-    back to a direction. That fallback must not read as a tighter yaw (D34 audit)."""
+    """A tilt pad that pushes the floor line above the horizon must not read as a tighter yaw."""
     camera = _camera()
     aim = _pixel(camera, _target(BALL, 2.0, 3.3, 0.6))
     floor = _screen_floor_line(camera, BALL, 3.3)
@@ -335,7 +325,6 @@ def test_the_touch_uncertainty_scales_with_the_preview_and_dominates_the_aim():
         finger["uncertainty"]["parts_deg"]["aim_pixel_deg"]
         > (mouse["uncertainty"]["parts_deg"]["aim_pixel_deg"])
     )
-    # without a scale, a finger on the Pi's preview: 20-40 frame px
     assert 20.0 <= unknown["uncertainty"]["aim_px"] <= 40.0
     assert unknown["uncertainty"]["aim_px_basis"] == "touch_on_the_pi_preview_assumed"
 

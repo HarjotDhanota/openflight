@@ -103,7 +103,7 @@ def test_the_ball_stage_s_reference_ball_reaches_the_club_stage(monkeypatch):
         reference_ball_selected=True,
     )
 
-    # no departure found: the trigger frame stands in, labelled (P8-7)
+    # no departure found: the trigger frame stands in, labelled
     assert result.impact_frame == 40
     assert any("contact from the trigger" in note for note in result.notes)
     assert seen["ball"] is shared
@@ -312,7 +312,7 @@ class TestChainedImpactDelivery:
         assert result.attack_confidence_tier == "medium"
 
     def test_ops_speed_mismatch_labels_both_angles(self):
-        """D15 (P8-7): an implausible speed ratio is a label on the values, not a refusal."""
+        """An implausible speed ratio is a label on the values, not a refusal."""
         tracks, times, ranges, ball, geometry = _project_impact_tracks(
             path_deg=3.0,
             aoa_deg=-4.0,
@@ -492,9 +492,7 @@ class TestCameraOpsFallback:
         )
 
     def test_yawed_unit_reports_path_from_its_own_boresight(self):
-        # F2: the teed ball no longer sets the zero. A unit aimed 3 deg right
-        # of the scene frame reads 3 deg less path, as the IWR and the chained
-        # branch do; the target-line correction comes from the alignment stick.
+        # the teed ball does not set the zero: a unit aimed 3 deg right reads 3 deg less path
         tracks, times, ball, geometry = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
@@ -921,7 +919,7 @@ class TestVelocityAngleProjection:
 
 
 def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
-    """F4: a rejected club track downgrades delivery to the camera+OPS fallback."""
+    """A rejected club track downgrades delivery to the camera+OPS fallback."""
     from types import SimpleNamespace  # noqa: PLC0415
 
     from openflight.iwr6843.club import ClubRangeEvidence  # noqa: PLC0415
@@ -977,15 +975,10 @@ def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
 
 
 def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: float = 67.0):
-    """One club motion seen by a level camera centred above the radar (v3 layout).
+    """One club motion seen by a level camera centred above the radar.
 
-    The teed ball sits ``ball_offset_px`` right of the image centre because the
-    golfer placed it there, not because the unit is yawed. Returns a two-frame
-    feature pair plus the radar ranges the chained branch needs.
-
-    The pair spans 1 ms: the camera-OPS branch takes the secant image rate as
-    the rate at the second frame, which off centre costs about 0.1 deg of path
-    per millisecond of pair span. That bias is the fallback's own, not a zero.
+    The teed ball sits ``ball_offset_px`` right of the image centre, the unit not
+    yawed. Returns a two-frame feature pair (1 ms apart) plus the radar ranges.
     """
     camera_height_m, radar_height_m, ball_height_m = 0.095, 0.051, 0.02135
     focal_px, width, height = 933.33, 640, 400
@@ -1043,7 +1036,7 @@ def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: f
 
 @pytest.mark.parametrize(("path_deg", "offset_px"), [(3.0, 67.0), (-4.0, -67.0), (0.0, 67.0)])
 def test_both_club_path_branches_share_the_unit_boresight_zero(path_deg, offset_px):
-    """F2: with the ball 67 px off centre, the chained and camera-OPS paths agree."""
+    """With the ball 67 px off centre, the chained and camera-OPS paths agree."""
     tracks, times, ranges, ball, geometry = _off_centre_ball_scene(
         path_deg=path_deg, aoa_deg=-4.0, ball_offset_px=offset_px
     )
@@ -1078,14 +1071,14 @@ def test_every_camera_club_path_names_its_frame():
     ("offset_deg", "frame"),
     [
         (None, "unit_boresight"),
-        # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+        # an explicit 0.0 is a target line straight down the boresight
         (0.0, "target_line"),
         (2.0, "target_line"),
         (-3.0, "target_line"),
     ],
 )
 def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, frame):
-    """F9, D36 item 2: the horizontal offset is added to club path as to launch."""
+    """The horizontal offset is added to club path as to launch."""
     ball = ReferenceBall(10.0, 10.0, 12.0, 120)
     monkeypatch.setattr(
         club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
@@ -1127,7 +1120,7 @@ def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, 
 
 
 def test_camera_contact_is_midway_between_the_last_resting_and_first_departed_frames():
-    """F7: one reusable contact time, from the ball, on whichever clock is given."""
+    """One reusable contact time, from the ball, on whichever clock is given."""
     from openflight.camera.club_delivery import camera_contact_time, frame_clock  # noqa: PLC0415
 
     frames = np.zeros((60, 9, 9), dtype=np.uint8)

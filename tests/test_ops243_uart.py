@@ -131,13 +131,7 @@ class TestUartPortDetection:
 
 
 class TestGpioUartFallback:
-    """No USB radar: probe the GPIO-header UART before giving up (19 Oct).
-
-    openflight.service runs start-kiosk.sh with no arguments. On a Pi whose
-    OPS243 is wired to J3 the USB-only detection raised, the server exited and
-    systemd restarted it 98 times in 10 minutes. A UART is only used when the
-    radar answers ``?V`` on it, so the probe cannot mistake another device.
-    """
+    """No USB radar: probe the GPIO-header UART, used only when it answers ``?V``."""
 
     @staticmethod
     def _factory(answering_port, opened):
@@ -184,7 +178,6 @@ class TestGpioUartFallback:
         assert radar.port == "/dev/ttyAMA0"
         assert radar.baud == 230400
         assert radar.serial is opened[-1] and radar.serial.is_open
-        # the probe is the negotiation: one answer at the target rate, no second pass
         assert len(opened) == 1
 
     def test_a_silent_uart_is_skipped_for_the_next_candidate(self):
@@ -654,7 +647,7 @@ class TestBaudPlumbing:
 
 
 class TestBaudNegotiationRecord:
-    """Minor 1 (Task 6): the I5 switch is a mutation, so connect records what it did."""
+    """Connect records what the baud negotiation did."""
 
     def _negotiate(self, answers_at, **kwargs):
         radar, _opened, factory = _radar_with_fake_ports(answers_at=answers_at, **kwargs)

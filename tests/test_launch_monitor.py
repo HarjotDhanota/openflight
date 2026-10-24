@@ -91,12 +91,12 @@ class TestShot:
 
     @pytest.mark.parametrize("club", [0.0, -100.0])
     def test_smash_factor_none_without_a_positive_club_speed(self, club):
-        """D37: TrackMan's ratio needs a positive club speed; none is filled in."""
+        """Smash needs a positive club speed; none is filled in."""
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=club, timestamp=datetime.now())
         assert shot.smash_factor is None
 
     def test_smash_factor_uses_the_cited_definition(self, monkeypatch):
-        """D37: Shot.smash_factor is smash.smash_factor, not a copy."""
+        """Shot.smash_factor is smash.smash_factor, not a copy."""
         from openflight import smash
 
         calls = []
@@ -115,7 +115,7 @@ class TestShot:
         assert shot.to_dict()["smash_factor_status"] is None
 
     def test_a_radial_ratio_label_rides_with_its_smash_factor(self):
-        """D21/D37: radial ball over radial club speed is labelled, not passed off as smash."""
+        """Radial ball over radial club speed is labelled, not passed off as smash."""
         shot = Shot(
             ball_speed_mph=150.0,
             club_speed_mph=100.0,
@@ -281,7 +281,7 @@ class TestMultiObjectReporting:
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
-    """Task 3 fix round (I1): a non-finite value is a missing value."""
+    """A non-finite value is a missing value."""
     from datetime import datetime as _dt
 
     with_bad = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1), launch_angle_vertical=bad)
@@ -315,7 +315,7 @@ _DERIVED = (
     ],
 )
 def test_every_derived_property_treats_a_non_finite_input_exactly_like_none(field, bad):
-    """Fix round 2 (2a and its class): a non-finite value is a missing value."""
+    """A non-finite value is a missing value."""
     from datetime import datetime as _dt
 
     measured = dict(
@@ -345,9 +345,6 @@ def test_a_zero_launch_confidence_keeps_its_existing_carry_default():
         ).estimated_carry_yards
 
     assert carry(0.0) == carry(None) == carry(0.2)
-
-
-# --- summarize_shots: a non-finite value is a missing value (final review A-I1) ---
 
 
 def _summary_shot(ball=150.0, club=100.0, spin=3000.0):

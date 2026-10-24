@@ -1,9 +1,7 @@
-"""A kiosk without the shot models (E1-E4) still measures, labels and publishes.
+"""A kiosk without the shot models still measures, labels and publishes.
 
-No extension is registered here: the club arc, collision model, full speeds and
-flight model do not run. An OPS-only unit takes the table carry; a fusion unit
-has no carry (D17); --calculated-spin uses its own formula.
-"""
+Nothing is registered: an OPS-only unit takes the table carry, a fusion unit has no carry,
+and --calculated-spin uses its own formula."""
 
 from datetime import datetime
 from types import SimpleNamespace

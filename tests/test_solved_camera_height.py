@@ -35,8 +35,7 @@ def test_a_ball_on_the_ground_is_the_default_ball_height():
 
 
 def test_a_lens_height_that_would_bury_the_radar_is_refused():
-    # heights are above the hitting surface: the radar, 44 mm below the lens,
-    # cannot be under it, so nothing is lifted to make it fit
+    # heights are above the hitting surface: the radar 44 mm below the lens cannot be under it
     args = SimpleNamespace(
         solved_camera_height_m=0.030,
         camera_capture_mount_height_m=0.095,
@@ -50,8 +49,7 @@ def test_a_lens_height_that_would_bury_the_radar_is_refused():
 
 
 def test_a_teed_ball_never_moves_the_radar_height():
-    # the floor-bounce model needs the radar above the surface it reflects from;
-    # the ball's own height is a separate input
+    # the floor-bounce model needs the radar above the surface it reflects from
     args = SimpleNamespace(
         solved_camera_height_m=0.095,
         camera_capture_mount_height_m=0.095,
@@ -67,7 +65,6 @@ def test_a_teed_ball_never_moves_the_radar_height():
 
 
 def test_the_solved_height_is_recorded_apart_from_the_rig_file(monkeypatch):
-    # wiring audit C4/C13: "derived" stays what the rig file says
     monkeypatch.setattr(
         server,
         "rig_geometry_config",
@@ -113,7 +110,6 @@ def _handoff_args(**overrides):
 
 
 def test_the_session_records_where_its_tee_range_and_heights_came_from(monkeypatch):
-    # wiring audit S3, C4, C5: recorded in session_start
     monkeypatch.setattr(server, "setup_handoff_config", {"tee_range": None, "scene": None})
     enclosure = SimpleNamespace(camera_mount_height_m=0.095, radar_height_m=0.051)
 
@@ -141,7 +137,6 @@ def test_the_session_records_where_its_tee_range_and_heights_came_from(monkeypat
     assert scene["lens_height_solved_m"] == pytest.approx(0.11)
     assert scene["lens_height_solved_uncertainty_m"] == pytest.approx(0.03)
     assert scene["ball_height_basis"] == "assumed_on_surface"
-    # C7: without a measured net the 4.6 m default is flagged
     assert recorded["net_range"] == {
         "net_range_m": pytest.approx(4.6),
         "source": "default_not_measured",

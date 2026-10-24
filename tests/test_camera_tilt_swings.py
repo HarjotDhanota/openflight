@@ -1,11 +1,7 @@
-"""D36 item 4a: the unit's camera tilt calibration is applied on swings, not only at setup.
+"""The unit's camera tilt calibration is applied on swings, not only at setup.
 
-With a calibrated tilt (P8-5) each swing's camera pitch is that swing's own
-LIS3DH pitch plus the unit's offset, and its focal length the rig's for the
-mode: once-measured calibration, as the setup uses. The per-shot pitch and focal
-length inferred from the resting ball stay as a recorded cross-check, flagged
-beyond a stated tolerance. Without a calibration the swings keep inferring them,
-labelled ``uncalibrated``.
+A swing's pitch is its own LIS3DH pitch plus the unit's offset and its focal length the
+rig's; the resting ball's inference is a recorded cross-check. Uncalibrated swings infer.
 """
 
 from __future__ import annotations
@@ -205,8 +201,7 @@ def test_the_kiosk_composes_each_swing_from_its_own_reading(monkeypatch):
     assert server_module._swing_camera_pose(shot)["status"] == "uncalibrated"  # pylint: disable=protected-access
 
 
-# D36 item 4c: the LIS3DH roll goes through the same composition on swings as at
-# setup. It waits on the owner's phone-level check (C8), so the gate stays off.
+# The LIS3DH roll goes through the same composition on swings as at setup; its gate is off.
 
 
 def _rolled_reading(roll_deg=-2.9):

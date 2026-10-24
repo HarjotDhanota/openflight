@@ -1,9 +1,4 @@
-"""The trigger holds the frame lock only to freeze the ring (P6-7).
-
-In Outdoors-test-5 ``notify_trigger`` ran the evidence provider, its deepcopy,
-``auto_exposure_status()`` and a second deepcopy under the lock ``_on_frame``
-needs, so frame delivery stalled 14-31 ms at every trigger.
-"""
+"""The trigger holds the frame lock only to freeze the ring, so frame delivery never stalls."""
 
 from __future__ import annotations
 

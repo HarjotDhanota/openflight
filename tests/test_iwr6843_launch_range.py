@@ -1,10 +1,7 @@
-"""Each swing's launch-point range from its own IWR capture (13 Oct decision "a").
+"""Each swing's launch-point range from its own IWR capture.
 
-The resting ball's distance is no longer measured by static empty/ball captures at
-setup. Each swing's IWR capture tracks the ball after impact; the launch point is
-where its range walk meets the club's approach (the club reaches the ball at
-impact), or, without a club track, where the ball's walk starts. The camera's coarse
-size estimate is only the prior that sizes the search and checks the answer.
+The launch point is where the ball's range walk meets the club's approach, or, without
+a club track, where the ball's walk starts. The camera's size estimate is only a prior.
 """
 
 from __future__ import annotations
@@ -66,7 +63,7 @@ def _capture(
     geo = _geometry()
     cube = (rng.normal(0.0, 1.0, (N_FRAMES, N_LOOPS * 2, N_RX, N_BINS)) + 0j).astype(complex)
     cube += 1j * rng.normal(0.0, 1.0, cube.shape)
-    # static clutter the MTI removes: the door, the golfer's feet
+    # static clutter the MTI removes
     for clutter_m in (1.65, 2.40):
         cube[:, :, :, int(clutter_m / RES_M)] += 400.0
     for frame in range(N_FRAMES):
@@ -119,7 +116,6 @@ def test_without_a_club_track_the_ball_walk_s_start_is_the_launch_point():
     assert estimate.status == "measured", estimate.reason
     assert estimate.method == "ball_track_start"
     assert estimate.range_m == pytest.approx(2.10, abs=0.10)
-    # the walk starts up to a frame after impact: the uncertainty says so
     assert estimate.uncertainty_m >= 45.0 * FRAME_PERIOD_S / 2.0
 
 
@@ -176,8 +172,7 @@ def test_a_launch_point_far_from_the_camera_prior_is_refused_and_kept_for_review
 
 
 def test_the_ball_track_searched_starts_short_of_the_prior_not_at_2_25_m():
-    """The production tracker's ball gates begin at 2.25 m (July rig, tee 1.37 m); a
-    ball resting at 1.32 m is searched from its own prior."""
+    """The tracker's default ball gates begin at 2.25 m; a 1.32 m ball is searched from its prior."""
     estimate = lr.estimate_launch_range(
         _capture(launch_m=1.32),
         ball_speed_mph=_mph(45.0),
@@ -255,7 +250,7 @@ class TestTheShotSBallRange:
 
 
 class TestThePriorSizesTheClubGate:
-    """Build A: the camera prior's uncertainty widens the IWR club gate and contact check."""
+    """The camera prior's uncertainty widens the IWR club gate and contact check."""
 
     def test_a_measured_range_keeps_the_gate_as_it_was(self):
         from openflight.iwr6843 import club  # noqa: PLC0415

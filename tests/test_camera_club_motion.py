@@ -59,12 +59,7 @@ def test_compact_capture_ignores_saturated_clutter_above_hitting_zone():
 
 
 def _room_scene(height, width, ball_xy, diameter, *, with_ball=True, seed=0):
-    """Carpet-like ground, a ceiling-lit ball and a door hinge, as a room gives them.
-
-    The ball is brighter than the ground but nowhere near saturation: bright
-    towards the light, dim on its far side. The hinge is a dark vertical strip
-    inside the dark-silhouette path's search zone.
-    """
+    """Carpet-like ground, an unsaturated ceiling-lit ball and a dark door-hinge strip."""
     rng = np.random.default_rng(seed)
     yy, xx = np.indices((height, width))
     image = 115 + rng.normal(0, 5, (height, width))
@@ -100,8 +95,7 @@ def test_a_room_lit_ball_is_found_in_the_compact_crop():
 
 
 def test_a_side_lit_ball_is_measured_to_its_shaded_rim():
-    # a Lambertian sphere lit from the upper left: its far side fades to the
-    # ground's level beside its cast shadow, but the circle is the whole ball
+    # a Lambertian sphere lit from the upper left; the circle is the whole ball
     height, width, radius, cx, cy = 400, 640, 16.0, 300.3, 260.6
     yy, xx = np.indices((height, width)).astype(np.float64)
     dx, dy = xx - cx, yy - cy

@@ -1,8 +1,4 @@
-"""A search region in pixels for the whole-frame estimator, and the projection it rests on.
-
-The tester's pixel box (P7-4) became the ground patch (P8-1, tests/test_ground_patch.py);
-these keep the estimator's own ``placement_box_px`` region honest.
-"""
+"""A search region in pixels for the whole-frame estimator, and the projection it rests on."""
 
 import math
 
@@ -130,8 +126,7 @@ def test_the_search_looks_only_inside_the_placement_box():
     assert boxed.selected.x_px == pytest.approx(balls[0][0], abs=2.0)
     assert boxed.diagnostics["plausible_candidate_count"] == 1
     assert boxed.diagnostics["placement_box_px"] == list(box)
-    # a box dragged onto the spare ball finds that ball and nothing else, though
-    # the whole-frame search would always have preferred the one straight ahead
+    # a box dragged onto the spare ball finds that ball and nothing else
     assert unboxed.selected.x_px == pytest.approx(balls[0][0], abs=2.0)
     assert spare.status == "selected"
     assert spare.selected.x_px == pytest.approx(balls[1][0], abs=2.0)
@@ -154,7 +149,6 @@ def test_a_box_dragged_onto_the_sky_finds_nothing():
 
     assert result.selected is None
     assert result.status in {"not_found", "no_consistent_candidate"}
-    # whatever was fitted there still has to pass the physical hitting-area checks
     assert all(item.rejection_reason is not None for item in result.candidates)
 
 

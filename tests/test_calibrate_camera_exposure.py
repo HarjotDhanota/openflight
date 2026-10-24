@@ -54,7 +54,7 @@ def _result(gain, mean, clipped, dark=0.0):
 
 
 def test_a_dark_scene_is_not_told_to_reduce_its_brightness():
-    """Outdoors-test-5 at dusk: gain 4 was the best, too dark, and every brighter gain clipped."""
+    """At dusk the best gain is still too dark and every brighter gain clips."""
     results = [
         _result(4, 48.6, 0.97),
         _result(1, 23.9, 0.0),

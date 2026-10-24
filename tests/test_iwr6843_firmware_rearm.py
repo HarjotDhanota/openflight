@@ -187,7 +187,6 @@ def test_production_build_uses_configurable_compression_and_single_release():
     assert source.count("\nbuild-native:") == 1
 
 
-# --- the release directory holds the rollback image; a build never overwrites it by accident.
 ROLLBACK_IMAGE = "l3_dump_configurable_capture_20260818.bin"
 
 
@@ -221,10 +220,7 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_the_default_release_name_is_not_a_release():
-    """A bare build names a scratch file, never a dated release or the rollback image.
-
-    The scratch file may exist after a local build; it is never a tracked release.
-    """
+    """A bare build names a scratch file, never a dated release or the rollback image."""
     default = _default_release_name()
 
     assert default != ROLLBACK_IMAGE

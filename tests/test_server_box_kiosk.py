@@ -1,11 +1,5 @@
-"""The kiosk's side of the 13 Oct tester contract.
-
-``--camera-lens-id`` puts the selected lens's focal length under every camera
-metric and records it; ``--camera-ball-box`` re-locates the resting ball before
-each swing and gives the shot its own range; ``--tee-side-offset-m`` reaches the
-radar launch fit; ``GET /api/target-line`` and ``GET /api/ball-at-address`` serve
-the tester page and the kiosk's Live tab.
-"""
+"""The kiosk's side of the tester contract: the lens id, the ball box, the tee side offset,
+and the target-line and ball-at-address routes."""
 
 from __future__ import annotations
 
@@ -250,8 +244,7 @@ def test_the_measured_side_offset_reaches_the_radar_launch_fit(monkeypatch, tmp_
 
 
 def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_state, monkeypatch):
-    """The swing camera's resting-ball gate (3 diameters) was always the setup ball's;
-    a ball teed elsewhere in the box is found where it now rests."""
+    """A ball teed elsewhere in the box is found where it now rests."""
     monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
     monitor.observe(_scene([(700.0, 420.0, 16.0)]), at=50.0)
     server.ball_at_address_monitor = monitor

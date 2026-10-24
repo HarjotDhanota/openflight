@@ -1,10 +1,7 @@
-"""The trigger is timed first, and frames are split by exposure time (P6-5).
+"""The trigger is timed first, and frames are split by exposure time.
 
-Outdoors-test-5 showed a ~31 ms host stall at every trigger: the trigger held
-the frame lock while it copied its evidence, so frames 18-20 arrived after the
-trigger's timestamp even though they were exposed before or around it. The
-arrival split (``pre_trigger_count``) keeps its meaning; the exposure split is
-a new field that time comparisons use when a clip carries it.
+A host stall at the trigger can deliver frames exposed before it after its
+timestamp, so time comparisons use the exposure split when a clip carries it.
 """
 
 import json

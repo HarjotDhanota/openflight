@@ -1,4 +1,4 @@
-"""Host-side transfer timing and the W4a firmware replies (simulated firmware)."""
+"""Host-side transfer timing and the firmware's replies (simulated firmware)."""
 
 from __future__ import annotations
 

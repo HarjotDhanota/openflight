@@ -1,11 +1,7 @@
-"""D36 item 2: one horizontal-angle zero model for every horizontal angle.
+"""One horizontal-angle zero model: each sensor's boresight zero, then one offset.
 
-Two layers: each sensor's own boresight zero (the IWR's horizontal phase
-reference, the camera's optical axis), then ONE horizontal offset, added once to
-every angle. The offset is -(target yaw): the target yaw is + when the target
-line lies right of the unit boresight, seen from behind the unit, so the offset
-is + when the boresight points right of the target line (the flags' existing
-meaning). A ball hit straight down the target line reports 0.
+The offset is -(target yaw); target yaw is + when the target line lies right of
+the unit boresight, seen from behind. A ball down the target line reports 0.
 """
 
 from __future__ import annotations
@@ -33,7 +29,7 @@ from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
 
 YAW_DEG = 3.0  # the target line lies 3 deg right of the unit boresight
-OFFSET_DEG = -3.0  # what the D34 hand-off passes to both flags for that yaw
+OFFSET_DEG = -3.0  # what the hand-off passes to both flags for that yaw
 
 
 def test_the_hand_off_value_is_minus_the_target_yaw():
@@ -42,7 +38,7 @@ def test_the_hand_off_value_is_minus_the_target_yaw():
 
 def test_frame_is_the_boresight_until_an_offset_is_set():
     assert frame_for(None) == UNIT_BORESIGHT == "unit_boresight"
-    # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+    # an explicit 0.0 is a target line straight down the boresight
     assert frame_for(0.0) == TARGET_LINE
     assert frame_for(OFFSET_DEG) == TARGET_LINE == "target_line"
     assert frame_for(-OFFSET_DEG) == TARGET_LINE
@@ -204,7 +200,7 @@ def _shot(**kwargs) -> Shot:
 
 
 def test_kld7_angles_take_the_same_yaw(monkeypatch):
-    """The K-LD7's own offset is its sensor zero; the horizontal offset is the one model's."""
+    """The K-LD7's own offset is its sensor zero, separate from the horizontal offset."""
     monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
 
     assert server_module._reported_horizontal_deg(4.0) == pytest.approx(1.0)

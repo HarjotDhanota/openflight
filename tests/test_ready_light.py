@@ -1,4 +1,4 @@
-"""P7-14 (D13): the ready light, one readiness state from what the sensors report."""
+"""The ready light: one readiness state from what the sensors report."""
 
 from __future__ import annotations
 

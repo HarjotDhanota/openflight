@@ -160,7 +160,7 @@ def test_leave_one_channel_out_error_rejects_dimension_mismatch():
 
 
 class TestLateralTeeOffset:
-    """F10: the LCMF inversion uses this setup's lateral geometry, not July's 64 mm."""
+    """The LCMF inversion uses this setup's lateral geometry, not July's 64 mm."""
 
     @staticmethod
     def _cal(lateral_m=0.0):
@@ -194,9 +194,8 @@ class TestLateralTeeOffset:
         )
 
         assert geometry["lateral_offset_m"] == 0.08
-        # The tee range starts at the phase centre. This calibration records
-        # only a radar height, which LCMF-v2 takes as the RX-row centre of a
-        # +90 deg board, so the range origin sits ~8 mm above 0.051 m.
+        # The range starts at the phase centre: with only a radar height, LCMF-v2
+        # puts it ~8 mm above 0.051 m.
         centre = geometry["phase_centre_height_m"]
         assert centre == pytest.approx(0.051 + 0.00797, abs=1e-5)
         assert geometry["tee_x_m"] == pytest.approx(

@@ -1,9 +1,5 @@
-"""Per-antenna LEVM geometry for the LCMF vertical estimator.
-
-The positions come from TI's ECAD patch centres, turned by the rig's board
-rotation and aim. These tests pin the v3 numbers by hand from the ECAD table
-so the geometry the estimator and the simulator share has its own check.
-"""
+"""Per-antenna LEVM geometry for the LCMF vertical estimator, pinned by hand from
+TI's ECAD table for the v3 board rotation and aim."""
 
 from __future__ import annotations
 
@@ -70,7 +66,6 @@ def test_v3_order_is_rx1_lowest_and_tx1_below_tx3():
     heights = [positions[f"RX{index}"][2] for index in range(1, 5)]
     assert heights == sorted(heights)
     assert positions["TX1"][2] < positions["TX3"][2]
-    # the TX pair's centre sits about 16 mm above the RX row's
     tx_centre = 0.5 * (positions["TX1"][2] + positions["TX3"][2])
     assert tx_centre - float(np.mean(heights)) == pytest.approx(0.0157, abs=0.0002)
 
@@ -80,7 +75,6 @@ def test_minus_ninety_reverses_the_order():
     heights = [positions[f"RX{index}"][2] for index in range(1, 5)]
     assert heights == sorted(heights, reverse=True)
     assert positions["TX1"][2] > positions["TX3"][2]
-    # and the TX pair now hangs below the RX row
     assert positions["TX3"][2] < float(np.mean(heights))
 
 
@@ -92,7 +86,6 @@ def test_phase_centre_is_the_rigs():
         np.mean([positions[name] for name in ("TX1", "TX3")], axis=0)
         + np.mean([positions[f"RX{index}"] for index in range(1, 5)], axis=0)
     )
-    # the frame's horizontal origin is the phase centre
     np.testing.assert_allclose(centre[:2], [0.0, 0.0], atol=1e-12)
     offset_down_mm = levm_phase_centre_offset_mm(90.0, PITCH_DEG)[1]
     assert layout.phase_centre_height_m(tilt) == pytest.approx(
@@ -135,11 +128,7 @@ def test_legacy_layout_takes_the_height_as_the_rx_row_at_plus_ninety():
 
 
 def test_canonical_channels_follow_the_snapshot_builder():
-    """Slot k of a canonical snapshot is (TX3, RX4) ... (TX1, RX1) in both TX orders.
-
-    canonicalize_tx_blocks restores the physical TX order and reverses the
-    eight channels, so the slot-to-antenna map is derived from it, not typed.
-    """
+    """Slot k of a canonical snapshot is (TX3, RX4) ... (TX1, RX1) in both TX orders."""
     expected = (
         ("TX3", "RX4"),
         ("TX3", "RX3"),

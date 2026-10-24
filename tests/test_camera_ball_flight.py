@@ -176,7 +176,7 @@ def test_horizontal_launch_uses_measured_vertical_and_tracked_centroids(monkeypa
 
 
 def test_horizontal_launch_reports_with_the_horizontal_offset(monkeypatch):
-    """D36 item 2: the unwired comparator uses the same zero model as the kiosk."""
+    """The unwired comparator uses the same zero model as the kiosk."""
     geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
         horizontal_offset_deg=1.0
     )
@@ -341,7 +341,7 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
 
 
 def test_path_estimate_applies_setup_level_horizontal_offset():
-    """D36 item 2: the horizontal offset (+ = boresight right of target) is added."""
+    """The horizontal offset (+ = boresight right of target) is added."""
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0,
         horizontal_offset_deg=-0.45,
@@ -477,7 +477,7 @@ def test_lcmf_ball_range_evidence_is_transient():
 
 
 def test_lcmf_range_evidence_carries_the_estimator_status(monkeypatch):
-    """F4: a rejected ball track keeps its evidence, marked rejected."""
+    """A rejected ball track keeps its evidence, marked rejected."""
     from openflight.iwr6843 import lcmf  # noqa: PLC0415
 
     monkeypatch.setattr(lcmf, "impact_time_s", lambda *_args, **_kwargs: 0.012)
@@ -499,7 +499,7 @@ def test_lcmf_range_evidence_carries_the_estimator_status(monkeypatch):
 
 
 def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
-    """F4: the camera falls back to its own size-based depth and says so."""
+    """The camera falls back to its own size-based depth and says so."""
     anchor = ReferenceBall(160.0, 150.0, 14.0, 150)
     seen = []
     monkeypatch.setattr(
@@ -557,19 +557,14 @@ def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
         ),
         ops_ball_speed_mph=100.0,
     )
-    # a rejected IWR range leaves no distance: the camera's ball size never stands in
     assert not seen
     assert estimate.status == "rejected_no_iwr_range"
     assert estimate.range_evidence_status == "rejected_track_quality"
 
 
 def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
-    """A flight whose radar track and camera frames share one physical clock.
-
-    The camera's sensor clock runs 1.7 s ahead of physical time and the sound
-    trigger fires ``trigger_after_contact_s`` after contact, as it does on the
-    rig (median 2.6 ms). The IWR places impact at 12 ms into its capture.
-    """
+    """A flight whose radar track and camera frames share one physical clock
+    (sensor clock 1.7 s ahead, IWR impact 12 ms into its capture)."""
     geometry, _anchor, model, candidates, _timestamps, _evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0
     )
@@ -600,7 +595,7 @@ def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
 
 
 def test_flight_timed_from_contact_recovers_the_launch():
-    """F7: contact 2.6 ms before the trigger; timing from contact recovers H and V."""
+    """Contact 2.6 ms before the trigger; timing from contact recovers H and V."""
     geometry, model, candidates, sensor_ns, evidence, speed_ms, contact_ns, trigger_ns = (
         _timed_flight()
     )
@@ -626,7 +621,6 @@ def test_flight_timed_from_contact_recovers_the_launch():
 
     assert from_contact.horizontal_deg == pytest.approx(4.0, abs=0.05)
     assert from_contact.vertical_deg == pytest.approx(20.0, abs=0.05)
-    # The trigger-timed version reads the range 2.6 ms late in flight.
     assert abs(from_trigger.vertical_deg - 20.0) > 0.1
 
 
@@ -677,7 +671,7 @@ _GEOMETRY_320 = CameraBallGeometry(
 
 
 def test_ball_flight_times_the_radar_from_the_departure_frame_on_the_sensor_clock(monkeypatch):
-    """F7: the live estimator hands the ball's departure time, not the trigger, to the fit."""
+    """The live estimator hands the ball's departure time, not the trigger, to the fit."""
     seen = []
     _stub_the_sweep(monkeypatch, seen)
     host = np.arange(40, dtype=np.int64) * 3_500_000 + 5_000_000_000
@@ -722,7 +716,6 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
         ops_ball_speed_mph=100.0,
     )
 
-    # without a departure the radar can't be timed, so there is no distance
     assert not seen
     assert estimate.status == "rejected_no_iwr_range"
     assert estimate.timing_anchor == "no_ball_departure"
@@ -730,7 +723,7 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
 
 
 def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch):
-    """D15 (P8-7): a scattered sweep still reports its median, as low consensus."""
+    """A scattered sweep still reports its median, as low consensus."""
     seen = []
     _stub_the_sweep(monkeypatch, seen)
     monkeypatch.setattr(
@@ -780,7 +773,7 @@ def test_a_low_consensus_camera_stands_in_labelled_when_there_is_no_radar():
 
 
 def test_a_side_offset_tee_is_fitted_from_where_it_sits(monkeypatch):
-    """D36 item 4b: told the tee's side offset, the fit starts the flight there."""
+    """Told the tee's side offset, the fit starts the flight there."""
     import dataclasses  # noqa: PLC0415
 
     geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
@@ -814,7 +807,7 @@ def test_a_side_offset_tee_is_fitted_from_where_it_sits(monkeypatch):
 
 
 def test_a_camera_ball_straight_down_the_target_line_reports_zero():
-    """D36 item 2, the sign pinned: yaw +3 deg, hand-off flag -3, along the target line -> 0."""
+    """Sign pinned: yaw +3 deg, hand-off flag -3, along the target line -> 0."""
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=3.0,  # from the boresight: straight down a target line 3 deg right
         horizontal_offset_deg=-3.0,

@@ -1,9 +1,7 @@
-"""The kiosk takes the camera's estimate as a prior and ranges each shot (13 Oct, A2 + B).
+"""The kiosk takes the camera's estimate as a prior and ranges each shot.
 
-``--iwr6843-tee-prior-m`` replaces ``--iwr6843-tee-m`` as a hard value: a prior plus
-its uncertainty. Each shot's own IWR launch point (or the prior, labelled) is the
-range its camera scale, full ball speed and club delivery use.
-"""
+``--iwr6843-tee-prior-m`` is a prior plus its uncertainty; each shot's own IWR launch point
+(or the labelled prior) is the range its camera scale, ball speed and club delivery use."""
 
 from __future__ import annotations
 

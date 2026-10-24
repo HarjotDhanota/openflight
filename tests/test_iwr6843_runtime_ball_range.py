@@ -1,8 +1,7 @@
-"""The IWR runtime ranges each shot before anything uses the range (13 Oct, Build B).
+"""The IWR runtime ranges each shot before anything uses the range.
 
-The kiosk gets the camera's coarse estimate as a prior only. Each shot's own capture
-gives its launch point; that range, or the prior labelled when the IWR could not
-measure it, is what LCMF, the impact anchor and the club gate use for that shot.
+Each shot's own capture gives its launch point; that range, or the camera prior
+labelled, is what LCMF, the impact anchor and the club gate use for that shot.
 """
 
 from __future__ import annotations

@@ -1,8 +1,6 @@
-"""Firmware contract for W4a's observed evidence.
+"""Firmware contract for the IWR6843 frame-evidence block.
 
-Source-contract checks follow tests/test_iwr6843_firmware_rearm.py. The host-compiled
-checks build only this fork's own headers with the Mac's C compiler; they never touch
-TI's SDK and say so when no compiler is present.
+Host-compiled checks build only this fork's headers, never TI's SDK, and skip without a compiler.
 """
 
 from __future__ import annotations
@@ -66,8 +64,7 @@ def _run_c(source: str, tmp_path: Path, *args: str, flags: tuple[str, ...] = ())
     return subprocess.run([str(exe), *args], check=True, capture_output=True, text=True).stdout
 
 
-# Stand-ins for the SDK names the evidence block uses, so the host compiler can check the
-# block's declarations and order (S12). They are not the SDK; the owner's TI build is.
+# Stand-ins for the SDK names the evidence block uses; not the SDK.
 EVIDENCE_PRELUDE = """#include <stdint.h>
 #include <string.h>
 #include "dump_format.h"
@@ -114,8 +111,7 @@ def _evidence_block(source: str) -> str:
 
 @pytest.mark.parametrize("pack_flags", [(), ("-DL3_IQ8_EDMA_PACK",)], ids=["cpu", "edma"])
 def test_the_evidence_block_compiles_in_order_as_c99(tmp_path, pack_flags):
-    """Every helper is declared before use (S12), with and without the EDMA pack's perf
-    state. Not a substitute for the TI build."""
+    """Every helper is declared before use, with and without the EDMA pack's perf state."""
     probe = tmp_path / "evidence_block.c"
     probe.write_text(
         EVIDENCE_PRELUDE + _evidence_block(FIRMWARE.read_text(encoding="utf-8")),
@@ -274,7 +270,7 @@ int main(int argc, char **argv)
 )
 @pytest.mark.parametrize("version", [8, 9])
 def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
-    """Independent of dump.py's packer (S5): the bytes come from dump_format.h's structs."""
+    """Independent of dump.py's packer: the bytes come from dump_format.h's structs."""
     out = tmp_path / f"v{version}.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), str(version))
 
@@ -303,7 +299,6 @@ def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
     sys.byteorder != "little", reason="the firmware and the parser are little-endian"
 )
 def test_a_c_written_unassociated_record_reads_as_unobserved(tmp_path):
-    """I1: a no-stamp record parses to None."""
     out = tmp_path / "unassociated.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), "8", "unassociated")
 
@@ -314,8 +309,7 @@ def test_a_c_written_unassociated_record_reads_as_unobserved(tmp_path):
     assert record["done_tick"] == 0x010927C0 + 340000
 
 
-# Drives the firmware's own l3_recordFrameEvidence (the evidence block, host-compiled with
-# EVIDENCE_PRELUDE's stand-ins). Made-up stamps for a known answer; not a hardware result.
+# Drives the firmware's l3_recordFrameEvidence on the host with made-up stamps.
 RECORD_HARNESS = r"""
 #include <stdio.h>
 
@@ -341,7 +335,7 @@ int main(void)
 
 
 def test_a_record_without_a_fresh_start_carries_no_stamp(tmp_path):
-    """I1, firmware: only a fresh start's seq and tick are copied; otherwise L3_FRAME_NO_STAMP."""
+    """Only a fresh start's seq and tick are copied; otherwise L3_FRAME_NO_STAMP."""
     source = EVIDENCE_PRELUDE + _evidence_block(FIRMWARE.read_text(encoding="utf-8"))
     out = _run_c(source + RECORD_HARNESS, tmp_path, flags=("-Wno-unused-variable",))
 
@@ -354,7 +348,6 @@ def test_a_record_without_a_fresh_start_carries_no_stamp(tmp_path):
 
 
 def test_c_struct_sizes_match_the_python_parser(tmp_path):
-    """sizeof each C evidence struct equals the parser's struct size."""
     out = _run_c(
         '#include <stdio.h>\n#include "dump_format.h"\n'
         "int main(void) {\n"
@@ -372,7 +365,6 @@ def test_c_struct_sizes_match_the_python_parser(tmp_path):
 
 
 def test_dump_format_constants_match_the_parser():
-    """dump_format.h's versions, magics and flags equal dump.py's."""
     header = FORMAT.read_text(encoding="utf-8")
 
     def define(name):
@@ -401,7 +393,6 @@ def test_production_builds_turn_the_evidence_on():
 
 
 def test_frame_start_isr_stamps_only_armed_frames():
-    """Only an armed frame start sets the active sequence, tick and fresh flag."""
     source = FIRMWARE.read_text(encoding="utf-8")
     isr = _function_source(
         source, "static void l3_frameStartISR", "static int32_t l3_startFrontEnd"
@@ -417,7 +408,6 @@ def test_frame_start_isr_stamps_only_armed_frames():
 
 
 def test_output_done_records_the_completed_slot_before_counters_advance():
-    """The record lands in the completed frame's slot, before the counters move."""
     source = FIRMWARE.read_text(encoding="utf-8")
     callback = _function_source(
         source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
@@ -436,7 +426,7 @@ def _ring_slot_helper(source: str) -> str:
 
 
 def test_the_ring_slot_formula_is_written_once():
-    """I2: one helper owns the active frame's ring slot; arming and output-done share it."""
+    """One helper owns the active frame's ring slot; arming and output-done share it."""
     source = FIRMWARE.read_text(encoding="utf-8")
     helper = _ring_slot_helper(source)
     callback = _function_source(
@@ -450,12 +440,10 @@ def test_the_ring_slot_formula_is_written_once():
     assert "gCapturePlan.preFrames + gPostFramesCaptured" in helper
     assert "gPreFramesCaptured % gCapturePlan.preFrames" in helper
     assert callback.count("l3_activeRingSlot()") == 1
-    # The callback's remaining modulus is the wrap check, after the counter advanced.
     assert callback.count("gPreFramesCaptured % gCapturePlan.preFrames") == 1
     assert "(gPreFramesCaptured % gCapturePlan.preFrames) == 0U" in callback
     assert "gPreFramesCaptured % gCapturePlan.preFrames" not in arm
     assert arm.count("ringSlot = l3_activeRingSlot();") == 1
-    # The slot is taken once the frame's role is set on both branches.
     assert arm.rindex("gActiveFrameIsPost = 0U;") < arm.index("ringSlot = l3_activeRingSlot();")
     assert arm.index("ringSlot = l3_activeRingSlot();") < arm.index(
         "if (ringSlot >= gCapturePlan.totalFrames)"
@@ -463,7 +451,6 @@ def test_the_ring_slot_formula_is_written_once():
 
 
 def test_the_record_consumes_the_fresh_start():
-    """A record is associated only with a fresh start, and consumes it."""
     source = FIRMWARE.read_text(encoding="utf-8")
     record = _function_source(
         source, "static void l3_recordFrameEvidence", "/* W4A-EVIDENCE-END */"
@@ -471,7 +458,7 @@ def test_the_record_consumes_the_fresh_start():
 
     snapshot = record.index("uint8_t fresh = gActiveFrameFresh;")
     consumed = record.index("gActiveFrameFresh = 0U;")
-    assert snapshot < consumed < record.index("return;")  # consumed on every path
+    assert snapshot < consumed < record.index("return;")
     assert "fresh ? gActiveFrameSeq : L3_FRAME_NO_STAMP" in record
     assert "fresh ? gActiveFrameStartTick : L3_FRAME_NO_STAMP" in record
     assert "fresh ? L3_FRAME_FLAG_ASSOCIATED : 0U" in record
@@ -479,7 +466,6 @@ def test_the_record_consumes_the_fresh_start():
 
 
 def test_dump_stamps_request_freeze_stop_and_header_in_order():
-    """Request, freeze, RF-stop and header ticks are taken in that order."""
     source = FIRMWARE.read_text(encoding="utf-8")
     stop = _function_source(
         source,
@@ -526,7 +512,6 @@ def test_dump_streams_evidence_after_metadata_and_before_payload_then_the_traile
 
 
 def test_evidence_is_reset_at_sensor_start_and_before_each_restart():
-    """Evidence flags are cleared at sensorStart and before each post-dump restart."""
     source = FIRMWARE.read_text(encoding="utf-8")
     dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
 
@@ -541,10 +526,6 @@ def test_cycle_counter_starts_before_any_frame_can_start():
 
     assert init.index("l3_cycleCounterInit();") < init.index("UART_init();")
 
-
-# --- Task 4: the IQ8 pre-narrowing scan -------------------------------------------------
-# Made-up values for known answers; none of this is a hardware result. The host compiler
-# checks the scan's C; it does not replace the owner's TI build (Task 9).
 
 SCAN_PROBE = """#include <stdio.h>
 #include "l3_evidence.h"
@@ -576,8 +557,7 @@ def test_scan_counts_only_values_outside_int8(tmp_path):
     assert lines == ["4 32768", "0 128", "0 0", "65280 32768"]
 
 
-# Scans every int16 value on its own with the firmware's l3_iq8ScanComponents and writes,
-# per value, the overflow count (uint8) and then the magnitude (uint16), to argv[1].
+# Writes, per int16 value, l3_iq8ScanComponents' overflow count (uint8) and magnitude (uint16).
 SCAN_EACH_VALUE_PROBE = r"""#include <stdio.h>
 #include "l3_evidence.h"
 int main(int argc, char **argv) {
@@ -604,10 +584,9 @@ int main(int argc, char **argv) {
     sys.byteorder != "little", reason="the R4F and the EDMA model here are little-endian"
 )
 def test_the_scan_rule_is_exactly_the_values_the_low_byte_copy_changes(tmp_path):
-    """R-D1: the firmware's scan, run on each int16, flags exactly what the pack changes.
+    """The firmware's scan, run on each int16, flags exactly what the pack changes.
 
-    The reference models l3_startIq8EdmaPack: aCount 1, source B-index 2 bytes, so the EDMA
-    copies the byte at each int16's even (low, little-endian) address into an int8.
+    The EDMA pack copies each int16's low (little-endian) byte into an int8.
     """
     import numpy as np
 
@@ -634,7 +613,6 @@ def _rearm_task(source: str) -> str:
 
 
 def test_the_scan_runs_after_each_pack_starts_and_before_the_task_lets_go():
-    """Both rearm pack sites start the pack and scan through one helper (DRY)."""
     source = FIRMWARE.read_text(encoding="utf-8")
     task = _rearm_task(source)
     call = "l3_startIq8PackAndScan(pendingSlot, pendingScratch);"
@@ -645,14 +623,13 @@ def test_the_scan_runs_after_each_pack_starts_and_before_the_task_lets_go():
     normal_call = task.rindex(call)
     assert freeze_call != normal_call
     assert task.count(call) == 2
-    # The normal path arms the next frame first, so the scan never delays the HWA.
+    # The scan must never delay the HWA: the next frame is armed first.
     assert task.index("errCode = l3_restartCompletedHwaFrame();") < normal_call
     assert normal_call < task.rindex("gHwaRearmBusy = 0U;")
     assert "(void)l3_startIq8EdmaPack(" not in task
 
 
 def test_a_pack_that_did_not_start_leaves_its_frame_unscanned():
-    """No fill-ins: a frame the EDMA never narrowed must not read 'scanned, clean'."""
     source = FIRMWARE.read_text(encoding="utf-8")
     helper = _function_source(
         source,
@@ -730,9 +707,8 @@ def _scan_source(source: str) -> str:
     return source[start : source.index("#endif", start)]
 
 
-# Drives the firmware's own l3_scanIq8Scratch (with the evidence block) on the host, with
-# stand-ins for the SDK and the capture plan: a 16-word scratch, frames of 4-6 components
-# and a fake cycle counter that advances gStep per read. Made-up values, known answers.
+# Drives l3_scanIq8Scratch on the host: a 16-word scratch, frames of 4-6 components and
+# a fake cycle counter that advances gStep per read.
 SCRATCH_HARNESS_PRELUDE = r"""
 #include <stdint.h>
 static uint32_t gNow;
@@ -820,7 +796,6 @@ def test_the_scan_records_each_frame_and_its_cost(tmp_path):
     assert lines[1] == f"0 4 {scanned}"
     assert lines[2] == f"{0x1111} {0x2222} {associated}"  # zero components: unscanned
     assert lines[3] == f"{0x1111} {0x2222} {associated}"  # oversized frame: unscanned
-    # worst elapsed scan ticks (across the wrap), frames scanned, components, elapsed total
     assert lines[4] == "300 2 3 400"
     assert lines[5] == "hwi_depth=0 hwi_sections=2"  # one locked update per scan that ran
     assert lines[6] == "0 0 0 0"
@@ -831,11 +806,7 @@ def test_the_scan_records_each_frame_and_its_cost(tmp_path):
 )
 @pytest.mark.parametrize("version", [8, 9])
 def test_c_struct_written_iq8_dumps_parse_scale_table_then_evidence(tmp_path, version):
-    """Controller ruling (Task 3 review): production IQ8 v8/v9 layout, independent of dump.py.
-
-    fmt 5 puts the n_frames uint16 scale table after the descriptors and before the
-    evidence block; the payload is int8 Im/Re times the frame's scale.
-    """
+    """Production IQ8 v8/v9 layout: scale table after the descriptors, then the evidence block."""
     out = tmp_path / f"iq8_v{version}.l3dump"
     _run_c(FIXTURE_WRITER, tmp_path, str(out), str(version), "iq8")
 
@@ -857,9 +828,8 @@ def test_c_struct_written_iq8_dumps_parse_scale_table_then_evidence(tmp_path, ve
     assert len(raw) == meta["header_nbytes"] + dump.payload_nbytes(meta, raw)
 
 
-# Ruling on Task 4 concern 2: with a one-frame pre ring the next frame reuses the slot being
-# scanned, so an output-done during a long scan could tag the new record with the old
-# frame's counts. The capture then never claims the scan; the host reads "unobserved".
+# With a one-frame pre ring the next frame reuses the slot being scanned, so the capture
+# never claims the scan and the host reads "unobserved".
 GUARANTEE_PROBE = """#include <stdio.h>
 #include "l3_evidence.h"
 int main(void) {
@@ -878,7 +848,6 @@ def test_the_scan_is_claimed_only_when_no_slot_can_be_reused_mid_scan(tmp_path):
 
 
 def test_the_capture_flag_follows_the_plan_check():
-    """Source contract: the writer takes the flag from the plan check and the live plan."""
     source = FIRMWARE.read_text(encoding="utf-8")
     writer = _function_source(
         source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
@@ -886,7 +855,6 @@ def test_the_capture_flag_follows_the_plan_check():
 
     assert writer.count("l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)") == 1
     assert "l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN" not in source
-    # The scan itself is unchanged: it still marks every frame it covers.
     scan = _scan_source(source)
     assert "preFrames" not in scan
     assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan

@@ -1,7 +1,6 @@
 """Repeated open/close ownership of the IWR6843 CLI port, with the real device lock.
 
-The serial device is simulated (``tests/iwr6843_firmware_fake.py``); these tests
-prove host-side ownership and evidence, not how the physical board behaves.
+The serial device is simulated (``tests/iwr6843_firmware_fake.py``).
 """
 
 from __future__ import annotations

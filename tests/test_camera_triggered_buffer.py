@@ -226,7 +226,7 @@ def test_capture_persistence_uses_fast_uncompressed_npz(tmp_path, monkeypatch):
 
 
 def test_a_clip_records_the_controls_requested_and_applied_at_its_trigger(tmp_path):
-    """Wiring audit T4: a 30 us ladder clip must not read as the 300 us startup snapshot."""
+    """A 30 us ladder clip must not read as the 300 us startup snapshot."""
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,
         settings=CameraCaptureSettings(fps=120.0, exposure_us=300, gain=2.0, auto_exposure=False),

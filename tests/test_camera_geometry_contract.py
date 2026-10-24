@@ -68,12 +68,11 @@ def test_legacy_record_uses_only_recorded_fields_and_explicit_legacy_defaults():
     assert effective.camera_forward_offset_m == 0
     assert effective.horizontal_pixel_sign == 1
     assert effective.roll_correction_deg == 0
-    # a legacy record set no target line: unset, not 0.0 (V-formulas C5)
+    # a legacy record set no target line: unset, not 0.0
     assert effective.ball_horizontal_output_offset_deg is None
 
 
 def test_horizontal_offset_rotates_ball_and_club_geometry_together():
-    # F9: a target-line correction is a frame rotation, so path turns with launch.
     effective = _inputs(ball_horizontal_output_offset_deg=3.25)
     assert effective.ball_geometry().horizontal_offset_deg == 3.25
     assert effective.delivery_geometry().horizontal_offset_deg == 3.25
@@ -184,7 +183,7 @@ def test_session_start_records_explicit_unavailable_reason(monkeypatch):
 
 
 def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
-    """D36 item 4b: the patch pair's side offset is the resting ball's lateral position."""
+    """The patch pair's side offset is the resting ball's lateral position."""
     camera = {
         "mount_height_m": 0.095,
         "width": 640,

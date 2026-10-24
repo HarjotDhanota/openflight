@@ -1,12 +1,6 @@
-"""The per-antenna LCMF dictionary against the processed data's phase convention.
-
-Written before the exact-path dictionary replaced LCMF-v1's single-height
-one. The calibrated channels are known to follow LCMF-v1's dictionary,
-exp(+j*pi*k*sin(angle)) on canonical slot k. Collapse the LEVM onto one line
-at lambda/2 spacing, put the ball in the far field, and the exact paths must
-reproduce that dictionary up to one complex constant per column; turned the
-other way up, they must reproduce its mirror image instead.
-"""
+"""The per-antenna LCMF dictionary against the processed data's phase convention:
+collapsed onto one far-field lambda/2 line, the exact paths must reproduce LCMF-v1's
+exp(+j*pi*k*sin(angle)) up to one constant per column (mirrored on a flipped board)."""
 
 from __future__ import annotations
 
@@ -24,11 +18,8 @@ HALF_LAMBDA_MM = 0.5 * LAM * 1000.0
 
 
 def _collapsed_patches() -> dict[str, tuple[float, float]]:
-    """The LEVM's element order on one ECAD line at exact lambda/2 spacing.
-
-    RX1-RX4 at indices 0..3 and TX1/TX3 at 0 and 4 along ECAD +X, as LCMF-v1
-    assumed, both rows centred on one point so they share one height.
-    """
+    """The LEVM's element order on one ECAD line at exact lambda/2 spacing,
+    both rows centred on one point."""
     centre_x, row_y = 30.0, 45.0
     patches = {
         f"RX{index + 1}": (centre_x + (index - 1.5) * HALF_LAMBDA_MM, row_y) for index in range(4)
@@ -84,11 +75,8 @@ def test_minus_ninety_reproduces_the_mirror_image():
 
 
 def test_the_opposite_phase_sign_would_mirror_a_plus_ninety_board():
-    """exp(-j*2*pi*path/lambda) on the +90 deg board gives the MIRRORED dictionary.
-
-    So with the snapshot builder's slot order (slot 0 = TX3/RX4) and the ECAD
-    table, only PHASE_SIGN = +1 matches the channels' known convention.
-    """
+    """exp(-j*2*pi*path/lambda) on the +90 deg board gives the MIRRORED dictionary,
+    so only PHASE_SIGN = +1 matches the channels' convention."""
     assert antennas.PHASE_SIGN == 1.0
     exact, direct, image = _far_field_steering(90.0)
     conjugate = np.conj(exact)
@@ -97,12 +85,8 @@ def test_the_opposite_phase_sign_would_mirror_a_plus_ninety_board():
 
 
 def test_phase_sign_agrees_with_the_positive_tdm_registration():
-    """The later chirp sees the receding ball 2*v*tau of path further on.
-
-    Production locks the TDM sign positive (measured on the hardware), which
-    removes exp(+j*4*pi*v*tau/lambda) from the later block. That cancels the
-    exact steering's advance only if phase grows with path.
-    """
+    """The later chirp sees the receding ball 2*v*tau of path further on; the positive
+    TDM sign cancels the exact steering's advance only if phase grows with path."""
     speed_ms, tau_s = 45.0, doa.TDM_TAU_S
     layout = antennas.AntennaLayout(90.0, 0.051, "test")
     tx, rx = antennas.channel_positions_m(layout.positions_m(math.radians(TILT_DEG)), "normal")
@@ -121,7 +105,6 @@ def test_phase_sign_agrees_with_the_positive_tdm_registration():
         tdm_phase=+1 * 4.0 * np.pi * speed_ms * tau_s / LAM,
         tx_order="normal",
     )
-    # the radial path rate differs from 2*v by the aperture's parallax only
     np.testing.assert_allclose(np.angle(canonical / now), 0.0, atol=2e-3)
 
 

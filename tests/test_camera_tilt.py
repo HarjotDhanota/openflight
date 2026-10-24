@@ -1,10 +1,7 @@
-"""The unit's camera tilt, calibrated from the median of validated pairs (P8-5).
+"""The unit's camera tilt, calibrated from the median of validated pairs.
 
-The camera's vertical (its mount's pitch on the enclosure plus the principal
-point's row) is solved from a ball whose distance the radar confirmed: the row
-the ball sits in, against the row the radar's distance, the lens height and the
-ball's radius predict at the LIS3DH's pitch. It is kept per unit, outside the
-shared rig file, and composed with each session's LIS3DH pitch.
+The camera's vertical is solved from a radar-ranged ball's image row, kept per
+unit, and composed with each session's LIS3DH pitch.
 """
 
 import json
@@ -50,13 +47,11 @@ def test_a_known_offset_is_recovered_from_one_ball():
 
     assert solved["offset_deg"] == pytest.approx(2.5, abs=0.01)
     assert solved["pitch_deg"] == pytest.approx(3.7, abs=0.01)
-    # one ball fixes it to a few tenths of a degree: the radar's bin, a pixel of row,
-    # and a few millimetres of lens height
     assert 0.05 < solved["uncertainty_deg"] < 0.5
 
 
 def test_the_indoor_pair_gives_about_two_degrees():
-    """indoor-test-1: the ball at (744, 518), the pair's 1.18 m, LIS3DH 1.72 deg."""
+    """The ball at (744, 518), the pair's 1.18 m, LIS3DH 1.72 deg."""
     solved = camera_tilt.solve_vertical_offset(
         v3_at, (744.0, 518.0), radar_range_m=1.176, radar_uncertainty_m=0.026, lis3dh_pitch_deg=1.72
     )
@@ -88,7 +83,6 @@ def test_one_pair_never_calibrates_two_agreeing_pairs_do_from_their_median(tmp_p
     first = camera_tilt.record_pair(path, PAIR, facts={"epoch_id": "one"})
     assert first["action"] == "pending"
     assert first["pairs_needed"] == 1
-    # the first validated pair no longer calibrates the unit for good
     assert camera_tilt.load_calibration(path) is None
 
     second = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 2.5}, facts={"epoch_id": "two"})
@@ -127,7 +121,6 @@ def test_later_pairs_check_and_two_disagreeing_in_a_row_recalibrate(tmp_path):
 
     twice = camera_tilt.record_pair(path, {**PAIR, "offset_deg": 4.4}, facts={"epoch_id": "c"})
 
-    # the unit moved on its mount, or the stored value was wrong: re-calibrated, said so
     assert twice["action"] == "recalibrated"
     assert "re-calibrated" in twice["warning"]
     calibration = camera_tilt.load_calibration(path)
@@ -160,14 +153,12 @@ def test_each_session_composes_the_offset_with_its_own_lis3dh_pitch(tmp_path):
     _calibrate(path, 2.1, 2.1)
     calibration = camera_tilt.load_calibration(path)
 
-    # the unit set down differently the next day: the LIS3DH now reads 0.4 deg
     applied = camera_tilt.applied_pitch(0.4, calibration)
 
     assert applied["pitch_deg"] == pytest.approx(2.5)
     assert applied["offset_deg"] == pytest.approx(2.1)
     assert applied["lis3dh_pitch_deg"] == pytest.approx(0.4)
     assert applied["status"] == "calibrated"
-    # without a calibration the LIS3DH's pitch stands alone, labelled so
     bare = camera_tilt.applied_pitch(0.4, None)
     assert bare == {
         "pitch_deg": 0.4,

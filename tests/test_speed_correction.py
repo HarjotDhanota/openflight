@@ -102,7 +102,7 @@ def test_available_candidate_retains_unvalidated_model_inputs():
 
 
 class TestOpsOwnPosition:
-    """F12: the cosine candidate uses where the OPS sits, not the IWR."""
+    """The cosine candidate uses where the OPS sits, not the IWR."""
 
     LATERAL_FT = 0.085 * 3.28084
 

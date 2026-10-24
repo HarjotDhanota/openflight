@@ -58,7 +58,7 @@ def test_circular_median_does_not_degrade_to_a_linear_median():
 
 
 def test_only_a_coherent_iwr_horizontal_is_handed_to_the_camera():
-    """P8-7: kiosk and replay share one rule; a low-coherence value is display only."""
+    """Kiosk and replay share one rule; a low-coherence value is display only."""
     from types import SimpleNamespace
 
     from openflight.iwr6843.runtime import camera_horizontal_input
