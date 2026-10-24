@@ -3,10 +3,12 @@
 import inspect
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 import serial
 
+from openflight import ops243 as ops243_module
 from openflight.ops243 import Direction, OPS243Radar, SpeedReading, parse_firmware_version
 
 
@@ -543,23 +545,32 @@ class _ScheduledSerial:
 
 
 class _StaggeredDrainSerial:
-    """Serial stand-in whose active dump pauses longer than the old quiet gap."""
+    """Serial stand-in whose active dump pauses longer than the old quiet gap.
+
+    It runs on its own clock (``monotonic``/``sleep``, patched into ops243) so
+    the drain's timing does not depend on the host clock's resolution.
+    """
 
     is_open = True
 
     def __init__(self, chunks):
         self.timeout = 1.0
+        self.now = 0.0
         self._chunks = iter(sorted(chunks, key=lambda item: item[0]))
         self._next_time, self._next_chunk = next(self._chunks)
-        self._started = time.monotonic()
         self.read_bytes = bytearray()
 
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
     def read(self, _size):
-        remaining = self._next_time - (time.monotonic() - self._started)
-        if remaining > 0:
-            time.sleep(min(remaining, self.timeout))
-        if time.monotonic() - self._started < self._next_time:
+        if self._next_time > self.now + self.timeout:
+            self.now += self.timeout
             return b""
+        self.now = max(self.now, self._next_time)
         chunk = self._next_chunk
         self.read_bytes.extend(chunk)
         try:
@@ -572,24 +583,28 @@ class _StaggeredDrainSerial:
         pass
 
 
+def _drain_radar(monkeypatch, chunks):
+    radar = OPS243Radar.__new__(OPS243Radar)
+    radar.port = "/dev/ttyACM0"
+    radar.baud = OPS243Radar.DEFAULT_BAUD
+    radar.serial = _StaggeredDrainSerial(chunks)
+    clock = SimpleNamespace(monotonic=radar.serial.monotonic, sleep=radar.serial.sleep)
+    monkeypatch.setattr(ops243_module, "time", clock)
+    return radar
+
+
 class TestSerialDrain:
     """Startup must wait through a short USB pause inside an active dump."""
 
-    def test_drain_waits_for_late_dump_tail(self):
-        radar = OPS243Radar.__new__(OPS243Radar)
-        radar.port = "/dev/ttyACM0"
-        radar.baud = OPS243Radar.DEFAULT_BAUD
-        radar.serial = _StaggeredDrainSerial([(0.0, b"head"), (0.6, b"tail")])
+    def test_drain_waits_for_late_dump_tail(self, monkeypatch):
+        radar = _drain_radar(monkeypatch, [(0.0, b"head"), (0.6, b"tail")])
 
         radar._drain_serial(max_wait=2.0)
 
         assert bytes(radar.serial.read_bytes) == b"headtail"
 
-    def test_drain_rejects_a_stream_that_misses_the_deadline(self):
-        radar = OPS243Radar.__new__(OPS243Radar)
-        radar.port = "/dev/ttyACM0"
-        radar.baud = OPS243Radar.DEFAULT_BAUD
-        radar.serial = _StaggeredDrainSerial([(0.0, b"head"), (1.2, b"tail")])
+    def test_drain_rejects_a_stream_that_misses_the_deadline(self, monkeypatch):
+        radar = _drain_radar(monkeypatch, [(0.0, b"head"), (1.2, b"tail")])
         original_timeout = radar.serial.timeout
 
         with pytest.raises(ConnectionError, match=r"did not quiesce.*4 bytes drained"):
