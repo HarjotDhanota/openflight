@@ -340,7 +340,7 @@ each exposure from the allowed list. Changing the lens asks first, because the
 ball box, the aim point and the camera tilt are set again for the new lens.
 
 **Step 2: check the unit.** A: **Check the unit** reads all four sensors (the
-box, light and range wait for it). B: the tilt check, by one lift of the front.
+box, light and range wait for it). B: the tilt check, by a lift of the front, then of the left side (the roll).
 C: confirm the setup. The engineering rows and notes are folded under **Details
 (for the maintainer)**.
 
@@ -637,8 +637,8 @@ many camera pixels one screen pixel covered where you set the point
 uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
 
 - **Pick a target low down and near the picture's middle.** Turn the unit to face
-  the target roughly. The inclinometer's roll is recorded but not applied to the
-  camera, so a target high on a screen moves sideways with any roll: 1.4 m up a
+  the target roughly. Until the tilt check verifies the roll on the unit, it is
+  not applied to the camera, so a target high on a screen moves sideways with any roll: 1.4 m up a
   screen 4.5 m from the unit, a 3° roll moves the angle about 0.9°. On the horizon (about
   the lens's 95 mm height) it moves it by almost nothing. Far from the picture's
   middle, the stock lens's barrel distortion adds up to about a degree.
@@ -662,8 +662,8 @@ uncertainty; the only ± the page shows is the server's `total_uncertainty_deg`.
   aim point was confirmed.
 - **Uncertainty.** `uncertainty.parts_deg` holds what each source would move the
   angle by: ±2 px of aim (about 0.1°), the camera tilt (4° until the tilt is
-  calibrated, 1° after), the unapplied roll (the inclinometer's reading, at least
-  1°, or 3° without one), the focal length (8 %), the lens's barrel (not
+  calibrated, 1° after), the roll (the inclinometer's reading, at least 1°, or 3°
+  without one; 0.5° once the camera applies a verified roll), the focal length (8 %), the lens's barrel (not
   corrected), and for a floor line ±2 px of its rows. For a direction, the
   hand-off adds the parallax at the net's measured distance beyond the ball (the
   swing server's 4.6 m when no net was measured). `total_deg` adds them in

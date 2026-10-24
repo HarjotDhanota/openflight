@@ -1,16 +1,16 @@
 # LIS3DH Inclinometer Setup
 
 OpenFlight can use an LIS3DH accelerometer mounted to the enclosure base to
-measure whether the rig is level. The measured enclosure pitch is added to the
-fixed IWR6843 antenna mounting angle for each shot.
+measure whether the rig is level. For each shot, the enclosure's pitch departure
+corrects the camera's pose and the fixed IWR6843 antenna mounting angle; its roll
+departure is applied too once the unit's tilt check has verified the roll.
 
 This is an optional feature. It is disabled unless `--inclinometer` is passed.
-The server flag requires `--iwr6843`; use the standalone tools when testing the
-LIS3DH without the radar.
+It works with the camera alone, the IWR6843 alone, or both; the shot record
+names the sensors a reading corrected (`applied_to`).
 
-If the sensor is missing, moving, stale, or temporarily unreadable, OpenFlight
-keeps the shot and uses the configured IWR6843 tilt without an enclosure
-correction.
+If the sensor is missing, unsteady, stale, or temporarily unreadable, or the unit
+moved, OpenFlight keeps the shot without an enclosure correction.
 
 ## What To Buy
 
@@ -98,8 +98,13 @@ For the Adafruit board:
 - Z points perpendicular to the board.
 
 The validated installation aligns **Y with the radar tilt direction**. Positive
-Y must increase when the enclosure tilts backward. X/roll is recorded but is not
-currently applied to the launch-angle correction.
+Y must increase when the enclosure tilts backward. Roll is `atan2(X, hypot(Y, Z))`,
+positive when the target-right side is up. It is applied only on a unit whose
+tilt check (the tester page, step 2 B) passed its roll step: the tester lifts the
+unit's left side about 2 cm and the roll must read negative. The unit's
+`~/.config/openflight/lis3dh-mount.json` then says `roll_verified: true`;
+otherwise the roll is recorded, padded, and labelled "roll not verified on this
+unit".
 
 Before fixing the board permanently, run the readout script and gently tilt the
 enclosure backward. Confirm that the reported pitch becomes more positive.
@@ -222,12 +227,18 @@ configured IWR tilt, and effective IWR tilt. It then samples the LIS3DH at 10 Hz
 
 For each shot, OpenFlight:
 
-1. Selects the newest stable LIS3DH snapshot timestamped before impact.
-2. Rejects snapshots after motion, sensor errors, or more than two seconds old.
-3. Adds calibrated enclosure pitch to the configured IWR tilt.
-4. Uses a per-shot copy of the IWR calibration so shared calibration is never
+1. Takes the newest stable LIS3DH snapshot before the swing. Within two seconds
+   of impact and steady through it, it is used at once (`rule: recent_stable`).
+2. Otherwise, up to 60 seconds old, or shaken by the swing, it is used once the
+   first stable snapshot taken wholly after impact agrees within 0.3° in pitch
+   and roll (`rule: confirmed_after_impact`). The shot waits at most a second for
+   it, alongside the camera fetch and the IWR dump.
+3. Gives no correction when the unit moved (`status: moved`, "the unit moved"),
+   when nothing confirms it (`unconfirmed`), or past 60 seconds (`stale`).
+4. Corrects the camera pose and the IWR tilt by the pitch's departure from the
+   rig's expected pitch, and on a verified unit both by the roll's departure.
+5. Uses a per-shot copy of the IWR calibration so shared calibration is never
    mutated.
-5. Continues with the configured IWR tilt if correction cannot be applied.
 
 ## Session Logging
 
@@ -242,12 +253,13 @@ Each `shot_detected` entry records:
 
 - Raw and calibrated pitch.
 - X, Y, Z, and gravity magnitude.
-- Reading timestamp and age at impact.
-- Stability/application status.
-- Configured and effective IWR tilt.
+- Reading timestamp and age at impact, and the rule that chose it.
+- Status, reason, and the sensors it corrected (`applied_to`).
+- Whether the unit verified its roll (`roll_verified`).
+- Configured and effective IWR tilt, and the effective IWR roll when applied.
 
-Common statuses are `stable`, `moving`, `stale`, `sensor_error`, and
-`no_stable_preimpact_reading`.
+Common statuses are `stable`, `moved`, `unconfirmed`, `stale`, `sensor_error`,
+and `no_stable_preimpact_reading`.
 
 ## Troubleshooting
 
@@ -297,7 +309,7 @@ positive. If it becomes negative, rotate the LIS3DH mounting so positive Y faces
 the required direction. A zero offset corrects bias; it should not be used to
 hide a reversed axis.
 
-### Pitch Is Noisy Or Shots Report `moving`
+### Pitch Is Noisy Or Shots Report `moved` Or `unconfirmed`
 
 - Tighten the sensor mounting.
 - Replace flexible foam tape with thin rigid tape or standoffs.
@@ -324,6 +336,9 @@ The rig file's angle never includes the floor slope.
 ## Current Limitations
 
 - Pitch compensation uses the LIS3DH Y direction.
-- X/roll is logged but not yet applied to full 3D boresight compensation.
+- Roll is applied only on a unit that verified it. The check verifies its
+  direction, not the camera's or the IWR's own roll in the enclosure; that is
+  carried as a 0.5° residual.
+- The IWR club path does not take the roll yet.
 - Sensor bus, address, and calibration are command-line/runtime settings rather
   than a persisted rig configuration file.
