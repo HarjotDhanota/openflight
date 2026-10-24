@@ -171,12 +171,25 @@ def test_the_swings_are_started_with_the_ball_s_range_and_side_offset(chain, set
     args, handed = ts.tee_range_handoff(solution, rig_geometry=V3_RIG, lens=chain["lens"])
 
     assert solution.reason == ts.PATCH_BALL_SAVED_REASON
-    assert float(args[args.index("--iwr6843-tee-m") + 1]) == pytest.approx(1.20, abs=0.02)
-    assert args[args.index("--iwr6843-tee-range-source") + 1] == (
-        "patch_validated_static_iwr_coherent_magnitude"
-    )
-    assert float(args[args.index("--tee-side-offset-m") + 1]) == pytest.approx(-0.14, abs=0.04)
+    assert handed["tee_m"] == pytest.approx(1.20, abs=0.02)
+    assert handed["tee_range_source"] == "patch_validated_static_iwr_coherent_magnitude"
+    assert handed["tee_side_offset_m"] == pytest.approx(-0.14, abs=0.04)
     assert args[args.index("--camera-lens-id") + 1] == "stock-2.8mm"
+    # the setup record carries the radar diagnostic's range to the kiosk
+    camera = chain["decision"]["camera"]
+    seen = {"state": "found", "center_px": [camera["x_px"], camera["y_px"]]}
+    box = {**chain["record"], "ball_at_confirm": {**seen, "diameter_px": camera["diameter_px"]}}
+    ball_range = ts.tester_setup_sections(
+        solution,
+        placement_box_record=box,
+        target_line_record=None,
+        net_line=None,
+        rig_geometry=V3_RIG,
+        lens=chain["lens"],
+    )["ball_range"]
+    assert ball_range["source"] == "radar"
+    assert ball_range["range_m"] == pytest.approx(1.20, abs=0.02)
+    assert ball_range["side_offset_m"] == pytest.approx(-0.14, abs=0.04)
     assert handed["experimental"] is True
     assert handed["patch_ball"]["status"] == "validated"
     assert tee_range.TeeRangeSolution.from_dict(solution.to_dict()).reason == solution.reason

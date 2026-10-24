@@ -29,7 +29,6 @@ def test_free_play_command_uses_automatic_exposure_and_opens_the_kiosk(tmp_path)
         ts.DEFAULT_RIG_GEOMETRY,
         tester_setup=TESTER_SETUP,
         light_index_dn_per_us_gain=0.25,
-        ball_box=(50, 100, 1000, 700),
     )
     command = commands[0]
     assert "--tester-free-play" in command
@@ -39,7 +38,9 @@ def test_free_play_command_uses_automatic_exposure_and_opens_the_kiosk(tmp_path)
     assert command[command.index("--camera-light-index") + 1] == "0.25"
     assert "--tester-setup-required" in command
     assert "--camera-capture" in command and "--iwr6843" in command and "--debug" in command
-    assert command[command.index("--camera-ball-box") + 1] == "50,100,1000,700"
+    # the box comes from the tester's setup record
+    assert command[command.index("--setup-file") + 1].endswith(ts.SETUP_FILE)
+    assert "--camera-ball-box" not in command
 
 
 class Jobs:

@@ -120,11 +120,12 @@ def test_a_floor_line_at_95_mm_is_poorly_conditioned_and_bounds_the_radar_s_net_
     assert measured["measured"]["window_basis"] == "floor_line"
     # swings get the measured net, not the 4.6 m default
     state = drive(client, tester)
-    args, handed = ts.tee_range_handoff(
+    _args, handed = ts.tee_range_handoff(
         ts.tee_range.TeeRangeSolution.from_dict(state["solution"]),
         net_line=ts.read_net_line(ts.tester_root(tmp_path / "sessions", tester)),
     )
-    assert float(args[args.index("--net-range-m") + 1]) == pytest.approx(2.8, abs=0.05)
+    assert handed["net_range"]["status"] == "measured"
+    assert handed["net_range"]["net_range_m"] == pytest.approx(2.8, abs=0.05)
     assert handed["net_line"]["status"] == "measured_by_radar"
 
 
@@ -247,9 +248,13 @@ def test_the_selected_lens_drives_the_box_and_reaches_the_kiosk(tmp_path, inputs
     command = app.config["TEST_STATIC_MANAGER"].last_command
     assert command[command.index("--camera-lens-id") + 1] == "6mm"
     assert command[2] == "--no-browser"
-    box = [int(value) for value in command[command.index("--camera-ball-box") + 1].split(",")]
+    # the kiosk finds the resting ball in the box the setup record carries, on this lens
+    setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
+    box = setup["box"]["box_px"]
     xs = [x for x, _y in six["box_outline_px"]]
-    assert box[0] == pytest.approx(min(xs), abs=1) and box[2] == pytest.approx(max(xs), abs=1)
+    # box_px bounds the drawn outline, rounded out to whole pixels
+    assert box[0] == pytest.approx(min(xs), abs=2) and box[2] == pytest.approx(max(xs), abs=2)
+    assert setup["box"]["inputs"]["lens_id"] == "6mm"
     assert state["evidence"]["placement_box"]["lens"]["effective_lens_id"] == "6mm"
 
 

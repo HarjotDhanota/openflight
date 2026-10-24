@@ -81,11 +81,10 @@ def test_the_kiosk_gets_the_camera_estimate_as_a_prior_never_a_hard_range(
 
     args, record = ts.tee_range_handoff(solution)
 
-    assert "--iwr6843-tee-m" not in args
-    assert args[args.index("--iwr6843-tee-prior-m") + 1] == "1.2"
-    uncertainty = float(args[args.index("--iwr6843-tee-prior-uncertainty-m") + 1])
+    assert not [token for token in args if token.startswith("--iwr6843-tee")]
+    uncertainty = record["prior"]["uncertainty_m"]
     assert uncertainty == pytest.approx(state["evidence"]["camera_prior"]["uncertainty_m"])
-    assert args[args.index("--iwr6843-tee-prior-source") + 1] == "camera_size_coarse"
+    assert record["prior"]["source"] == record["tee_range_source"] == "camera_size_coarse"
     assert record["tee_range_status"] == "prior"
     assert record["tee_m"] is None
     assert record["prior"]["range_m"] == pytest.approx(1.2)
@@ -116,14 +115,14 @@ def test_the_radar_check_is_kept_as_a_diagnostic_and_never_the_distance(
     state = _with_radar_check(app.test_client(), tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
 
-    args, _record = ts.tee_range_handoff(solution)
+    _args, record = ts.tee_range_handoff(solution)
 
     assert state["phase"] == "experimental"
     assert state["evidence"]["camera_prior"]["range_m"] == pytest.approx(1.5)
     assert "radar_check" in state["evidence"]
     assert state["evidence"]["radar_check"]["label"] == "diagnostic"
-    assert "--iwr6843-tee-m" not in args
-    assert args[args.index("--iwr6843-tee-prior-m") + 1] == "1.5"
+    assert record["tee_m"] is None
+    assert record["prior"]["range_m"] == pytest.approx(1.5)
 
 
 def test_the_setup_no_longer_calibrates_the_camera_tilt_from_a_static_pair(
@@ -151,8 +150,8 @@ def test_without_a_ball_nothing_is_handed_over_and_the_reason_is_kept(
     state = phase(client, tester)
     solution = tee_range.TeeRangeSolution.from_dict(state["solution"])
 
-    args, record = ts.tee_range_handoff(solution)
+    _args, record = ts.tee_range_handoff(solution)
 
     assert state["phase"] == "raw_only"
-    assert "--iwr6843-tee-prior-m" not in args
+    assert record["prior"] is None
     assert record["tee_range_status"] == "pending"

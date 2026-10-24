@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from openflight import server
 from openflight.camera import target_line as tl, tester_server as ts
 from tests.test_tester_tee_range_flow import (
     _solving_camera,
@@ -45,17 +46,15 @@ def inputs(tmp_path):
     return paths
 
 
-def _kiosk_iwr_arguments(command, rig_path, tmp_path, monkeypatch) -> dict:
-    """Start the swing server on the tester's hand-off; return what it gives the IWR."""
+def _kiosk_started_from(command, rig_path, tmp_path, monkeypatch) -> dict:
+    """Start the swing server on the tester's hand-off and its setup record; return the
+    setup it put into effect."""
     from openflight import server  # noqa: PLC0415
 
     class StopAfterIwrInit(Exception):
         pass
 
-    seen: dict = {}
-
-    def stop(**kwargs):
-        seen.update(kwargs)
+    def stop(**_kwargs):
         raise StopAfterIwrInit
 
     handoff = command[command.index("--iwr6843") + 1 : command.index("--inclinometer")]
@@ -81,7 +80,8 @@ def _kiosk_iwr_arguments(command, rig_path, tmp_path, monkeypatch) -> dict:
     )
     with pytest.raises(StopAfterIwrInit):
         server.main()
-    return seen
+    server.apply_saved_setup()
+    return server.setup_service.snapshot()
 
 
 def aim_state(client, tester):
@@ -255,10 +255,11 @@ def test_swings_hand_one_yaw_to_both_kiosk_flags_and_record_it(tmp_path, inputs,
     handed = ts.read_arm_state(tmp_path / "sessions", tester, "arm5")["handed_to_swings"]
     admission = json.loads((run_dir / "setup_admission.json").read_text(encoding="utf-8"))
     assert admission["handed_to_swings"] == handed
-    args = handed["cli_args"]
-    camera_value = float(args[args.index(tl.CAMERA_FLAG) + 1])
-    iwr_value = float(args[args.index(tl.IWR_FLAG) + 1])
-    assert camera_value == iwr_value == pytest.approx(-line["yaw_deg"], abs=1e-5)
+    # the yaw reaches the kiosk in the setup record, one value for the camera and the IWR
+    assert tl.CAMERA_FLAG not in command and tl.IWR_FLAG not in command
+    setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
+    assert setup["aim"]["yaw_deg"] == pytest.approx(line["yaw_deg"])
+    assert setup["aim"]["iwr_yaw_deg"] == pytest.approx(line["applies_to"]["iwr_yaw_deg"])
     assert line["yaw_deg"] < 0.0  # left of the picture's middle
     record = handed["target_line"]
     assert record["status"] == "set"
@@ -270,16 +271,13 @@ def test_swings_hand_one_yaw_to_both_kiosk_flags_and_record_it(tmp_path, inputs,
     assert record["uncertainty"]["aim_px"] == tl.DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX
     assert record["uncertainty"]["parallax_deg"] is not None
     assert record["total_uncertainty_deg"] == pytest.approx(record["uncertainty"]["total_deg"])
-    assert float(args[args.index("--target-line-yaw-deg") + 1]) == pytest.approx(
-        line["yaw_deg"], abs=1e-4
-    )
     assert record["uncertainty"]["total_deg"] >= line["uncertainty"]["total_deg"]
-    assert command[command.index(tl.IWR_FLAG) + 1] == args[args.index(tl.IWR_FLAG) + 1]
 
-    # the kiosk takes the flag as it is (D36 applies it; D34 only supplies it)
-    kiosk = _kiosk_iwr_arguments(command, inputs["rig"], tmp_path, monkeypatch)
+    # the kiosk takes the record's yaw as it is (D36 applies it; D34 only supplies it)
+    kiosk = _kiosk_started_from(command, inputs["rig"], tmp_path, monkeypatch)
 
-    assert kiosk["azimuth_offset_deg"] == pytest.approx(iwr_value)
+    assert kiosk["aim"]["state"] == "set"
+    assert server.horizontal_offset_deg == pytest.approx(-line["yaw_deg"], abs=1e-5)
 
 
 def test_swings_without_an_aim_point_pass_no_yaw_and_say_so(tmp_path, inputs, monkeypatch):
@@ -295,6 +293,9 @@ def test_swings_without_an_aim_point_pass_no_yaw_and_say_so(tmp_path, inputs, mo
     assert tl.CAMERA_FLAG not in handed["cli_args"]
     assert tl.IWR_FLAG not in handed["cli_args"]
     assert handed["target_line"]["status"] == "not_set"
+    command = app.config["TEST_STATIC_MANAGER"].last_command
+    setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
+    assert setup["aim"]["state"] == "not_set"
 
 
 def test_moving_the_aim_after_swings_marks_those_runs_stale(tmp_path, inputs, monkeypatch):
@@ -403,4 +404,6 @@ def test_the_aim_can_be_skipped_and_swings_say_they_use_the_boresight(
     assert handed["target_line"]["status"] == "skipped"
     assert "boresight" in handed["target_line"]["reason"]
     command = app.config["TEST_STATIC_MANAGER"].last_command
-    assert command[command.index("--target-line-status") + 1] == "skipped"
+    assert "--target-line-status" not in command
+    setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
+    assert setup["aim"]["state"] == "skipped"

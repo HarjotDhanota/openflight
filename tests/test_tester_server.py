@@ -373,8 +373,9 @@ class TestCommands:
         assert "--camera-capture-manual-exposure" in command
         assert command[command.index("--radar-port") + 1] == "/dev/ttyAMA0"
         assert command[command.index("--club") + 1] == "7-iron"
-        assert "--iwr6843-tee-m" not in command
-        assert "--iwr6843-tee-range-pending" in command
+        # the ball range reaches the kiosk in the setup record, never as a flag
+        assert command[command.index("--setup-file") + 1].endswith(ts.SETUP_FILE)
+        assert not [token for token in command if token.startswith("--iwr6843-tee")]
         assert command[command.index("--log-dir") + 1].endswith("run-01")
 
     @pytest.mark.parametrize("action", ["swings", "ladder"])
@@ -836,15 +837,15 @@ class TestRunsAndTape:
         command = ts.action_commands("swings", params(), tmp_path, RIG, tester_setup=TESTER_SETUP)[
             0
         ][0]
-        assert "--iwr6843-tee-range-pending" in command
-        assert "--iwr6843-tee-m" not in command
+        assert command[command.index("--setup-file") + 1].endswith(ts.SETUP_FILE)
+        assert not [token for token in command if token.startswith("--iwr6843-tee")]
 
     def test_optional_tape_is_validation_truth_not_a_runtime_override(self, tmp_path):
         p = params(tee_mm=1524)
         screened(tmp_path, p)
         command = ts.action_commands("swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
-        assert "--iwr6843-tee-range-pending" in command
-        assert "--iwr6843-tee-m" not in command
+        assert command[command.index("--setup-file") + 1].endswith(ts.SETUP_FILE)
+        assert not [token for token in command if token.startswith("--iwr6843-tee")]
 
     def test_a_distance_outside_the_room_is_refused(self):
         with pytest.raises(ValueError, match="radar-to-ball"):
@@ -2236,18 +2237,19 @@ class TestTheLadder:
         )
         command = commands[0]
         assert "--study-mode" in command
-        assert "--iwr6843-tee-m" not in command
-        assert "--iwr6843-tee-range-pending" in command
+        assert command[command.index("--setup-file") + 1].endswith(ts.SETUP_FILE)
+        assert not [token for token in command if token.startswith("--iwr6843-tee")]
         assert command[command.index("--tester-config-hash") + 1] == "test-config"
         assert command[command.index("--inclinometer-address") + 1] == "0x18"
         assert command[command.index("--camera-capture-exposure-us") + 1] == "300"
 
     @pytest.mark.parametrize(
         "arm_id, expected",
-        [("arm5", "612.0,505.0,34.0"), ("arm6", "306.0,252.5,17.0")],
+        [("arm5", [612.0, 505.0, 34.0]), ("arm6", [306.0, 252.5, 17.0])],
     )
-    def test_a_ladder_kiosk_is_told_where_the_setup_saw_the_ball(self, tmp_path, arm_id, expected):
-        """P7-8: the kiosk judges each clip's analysis eligibility on the setup's ball."""
+    def test_a_ladder_kiosk_is_told_where_the_setup_saw_the_ball(self, arm_id, expected):
+        """P7-8: the kiosk judges each clip's analysis eligibility on the setup's ball, which
+        the setup record's box carries in 1280x800 pixels; 640x400 is it halved."""
         from openflight import tee_range
 
         camera = tee_range.TeeRangeCandidate(
@@ -2264,23 +2266,24 @@ class TestTheLadder:
             },
         )
         solution = tee_range.TeeRangeSolution.unresolved([camera], reason="test")
-        params = ts.TesterParameters("20260922-name", arm_id, "indoors")
-        ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
-        for action in ("ladder", "swings"):
-            with_ball = ts.action_commands(
-                action,
-                params,
-                tmp_path,
-                RIG,
-                tester_setup=TESTER_SETUP,
-                tee_range_solution=solution,
-            )[0][0]
-            without = ts.action_commands(action, params, tmp_path, RIG, tester_setup=TESTER_SETUP)[
-                0
-            ][0]
+        record = {
+            "mode": "fixed",
+            "box_px": [480, 380, 800, 620],
+            "frame_size_px": [1280, 800],
+            "camera_tilt": {"search_pad_deg": 1.0, "roll_pad_deg": 2.0},
+        }
+        common = {
+            "target_line_record": None,
+            "net_line": None,
+            "rig_geometry": RIG,
+        }
 
-            assert with_ball[with_ball.index("--camera-setup-ball") + 1] == expected
-            assert "--camera-setup-ball" not in without
+        box = ts.tester_setup_sections(solution, placement_box_record=record, **common)["box"]
+        unseen = ts.tester_setup_sections(None, placement_box_record=record, **common)["box"]
+
+        scale = ts.ARMS[arm_id].width / box["image_size_px"][0]
+        assert [value * scale for value in (*box["ball_px"], box["diameter_px"])] == expected
+        assert unseen["state"] == "not_set"
 
     def test_the_ladder_needs_both_gain_screens_first(self, tmp_path):
         client = eligible_app(sessions_root=tmp_path, rig_geometry=RIG).test_client()

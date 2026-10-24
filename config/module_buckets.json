@@ -1036,6 +1036,7 @@
   "tests/test_tester_restart.py": "TESTER",
   "tests/test_tester_server.py": "TESTER",
   "tests/test_tester_setup_readiness.py": "TESTER",
+  "tests/test_tester_setup_via_kiosk.py": "TESTER",
   "tests/test_tester_spawn.py": "TESTER",
   "tests/test_tester_target_line_flow.py": "TESTER",
   "tests/test_tester_tee_range_flow.py": "TESTER",

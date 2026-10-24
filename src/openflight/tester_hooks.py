@@ -996,6 +996,10 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
     def extend_shot_record(self, shot, record: dict) -> None:
         _extend_shot_record(shot, record)
 
+    def before_setup_action(self, section: str, action: str, payload: dict) -> str | None:
+        # a run bound to a setup confirmation keeps the setup it was admitted with
+        return "a run is in progress" if tester_setup_required and tester_config_hash else None
+
 
 def _log_event(kind: str, data: dict) -> None:
     session = server.get_session_logger()

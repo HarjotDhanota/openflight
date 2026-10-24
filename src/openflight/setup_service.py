@@ -59,6 +59,140 @@ def _usable(section: dict) -> bool:
     return section.get("state") not in ("not_set", "stale")
 
 
+# The service writes its sections with these builders, as may anything else that writes a
+# setup record a kiosk then starts from.
+
+
+def new_box_id(config: placement_box.PlacementBoxConfig, lens_id, centre, suffix) -> str:
+    """A confirmed box's identity: the fixed box on this lens, its ball, and a unique suffix."""
+    return f"{placement_box.box_id(config, lens_id)}@{centre[0]:.0f},{centre[1]:.0f}#{suffix}"
+
+
+def box_section(  # pylint: disable=too-many-arguments
+    *,
+    box_id: str,
+    box_px,
+    ball_px,
+    diameter_px: float,
+    image_size_px,
+    tilt_pad_deg: float,
+    roll_pad_deg: float,
+    ctx: StartContext,
+) -> dict:
+    """A confirmed box, stamped with the lens, rig and tilt it was confirmed under."""
+    return {
+        "state": "confirmed",
+        "id": box_id,
+        "box_px": list(box_px),
+        "ball_px": [float(ball_px[0]), float(ball_px[1])],
+        "diameter_px": float(diameter_px),
+        # the pixel space of box_px, ball_px and diameter_px: a capture mode, not an input
+        "image_size_px": list(image_size_px),
+        "source": placement_box.SOURCE,
+        "uncertainty": {"tilt_pad_deg": tilt_pad_deg, "roll_pad_deg": roll_pad_deg},
+        "inputs": section_inputs(
+            "box", lens_id=ctx.lens_id, rig_sha256=ctx.rig_sha256, tilt_deg=ctx.tilt_offset_deg
+        ),
+    }
+
+
+def aim_section(line: dict, *, floor, floor_line_used: bool, box_id: str) -> dict:
+    """An aim from a bounded ``target_line.target_line_record``."""
+    return {
+        "state": "set",
+        "aim_px": line["aim_px"],
+        "floor_line": floor,
+        "yaw_deg": line["yaw_deg"],
+        "iwr_yaw_deg": line["applies_to"]["iwr_yaw_deg"],
+        "uncertainty_deg": line["total_uncertainty_deg"],
+        "method": line["method"],
+        "floor_line_used": floor_line_used,
+        "warnings": line["warnings"],
+        "ball_lfu_m": line["ball_lfu_m"],
+        "source": line["source"],
+        "inputs": section_inputs("aim", box_id=box_id),
+    }
+
+
+def skipped_aim_section(box_id: str) -> dict:
+    return {
+        "state": "skipped",
+        "floor_line": None,
+        "source": "skipped",
+        "reason": "the tester skipped the aim point",
+        "inputs": section_inputs("aim", box_id=box_id),
+    }
+
+
+def default_net(reason: str) -> dict:
+    return {
+        "state": "default",
+        "value_m": target_line.DEFAULT_NET_RANGE_M,
+        "source": "default_not_measured",
+        "reason": reason,
+    }
+
+
+def floor_line_net(camera, roll, ball_lfu, floor, tilt_pad) -> dict:
+    """The net distance the floor line measures, or the labelled default and why."""
+    if floor is None:
+        return default_net("no floor line marked")
+    net = target_line.net_range_from_floor_line(
+        camera, floor, ball_lfu=ball_lfu, tilt_pad_deg=tilt_pad, roll_deg=roll
+    )
+    if net["source"] != "camera_floor_line":
+        return {"state": "default", **net}
+    if net["uncertainty_m"] >= net["value_m"]:
+        return default_net(TOO_UNCERTAIN)
+    return {"state": "set", **net}
+
+
+def stamped_net(net: dict, floor, ctx: StartContext) -> dict:
+    """A net range stamped with the floor line, lens and tilt it was measured under."""
+    return {
+        **net,
+        "inputs": section_inputs(
+            "net_range", floor_line=floor, lens_id=ctx.lens_id, tilt_deg=ctx.tilt_offset_deg
+        ),
+    }
+
+
+def ball_range_section(  # pylint: disable=too-many-arguments
+    *,
+    range_m: float,
+    uncertainty_m: float,
+    side_offset_m: float | None,
+    ball_px,
+    diameter_px,
+    source: str,
+    box_id: str,
+) -> dict:
+    """The resting ball's range from the radar's origin: a prior for each shot's own."""
+    return {
+        "state": "set",
+        "range_m": float(range_m),
+        "uncertainty_m": float(uncertainty_m),
+        "side_offset_m": float(side_offset_m) if side_offset_m is not None else None,
+        "ball_px": list(ball_px) if ball_px is not None else None,
+        "diameter_px": diameter_px,
+        "source": source,
+        "inputs": section_inputs("ball_range", box_id=box_id),
+    }
+
+
+def scene_section(
+    *, lens_height_m: float | None, uncertainty_m: float | None, source: str, ball_range_m: float
+) -> dict:
+    """The lens height used: radar-solved (a gross error), else the rig file's, labelled."""
+    return {
+        "state": "default" if source == "rig_nominal" else "set",
+        "lens_height_m": lens_height_m,
+        "uncertainty_m": uncertainty_m,
+        "source": source,
+        "inputs": section_inputs("scene", ball_range_m=ball_range_m),
+    }
+
+
 class SetupService:  # pylint: disable=too-many-instance-attributes
     """The setup record and the actions on it."""
 
@@ -327,29 +461,19 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         box_id = (
             previous["id"]
             if same_ball
-            else f"{base}@{centre[0]:.0f},{centre[1]:.0f}#{self.revision + 1}"
+            else new_box_id(self._config, self._ctx.lens_id, centre, self.revision + 1)
         )
         return {
-            "box": {
-                "state": "confirmed",
-                "id": box_id,
-                "box_px": list(projection.box_px),
-                "ball_px": centre,
-                "diameter_px": float(ball["diameter_px"]),
-                # the pixel space of box_px, ball_px and diameter_px: a capture mode, not an input
-                "image_size_px": list(projection.image_size_px),
-                "source": placement_box.SOURCE,
-                "uncertainty": {
-                    "tilt_pad_deg": projection.tilt_pad_deg,
-                    "roll_pad_deg": projection.roll_pad_deg,
-                },
-                "inputs": section_inputs(
-                    "box",
-                    lens_id=self._ctx.lens_id,
-                    rig_sha256=self._ctx.rig_sha256,
-                    tilt_deg=self._ctx.tilt_offset_deg,
-                ),
-            }
+            "box": box_section(
+                box_id=box_id,
+                box_px=projection.box_px,
+                ball_px=centre,
+                diameter_px=ball["diameter_px"],
+                image_size_px=projection.image_size_px,
+                tilt_pad_deg=projection.tilt_pad_deg,
+                roll_pad_deg=projection.roll_pad_deg,
+                ctx=self._ctx,
+            )
         }
 
     def _box_clear(self, _record: dict, _payload: dict) -> dict:
@@ -368,36 +492,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         self._live = {**self._live, "aim": {"default_aim_px": target_line.default_aim_px(camera)}}
         return {}
 
-    @staticmethod
-    def _default_net(reason: str) -> dict:
-        return {
-            "state": "default",
-            "value_m": target_line.DEFAULT_NET_RANGE_M,
-            "source": "default_not_measured",
-            "reason": reason,
-        }
-
-    def _net_range(self, camera, roll, ball_lfu, floor, tilt_pad) -> dict:
-        if floor is None:
-            return self._default_net("no floor line marked")
-        net = target_line.net_range_from_floor_line(
-            camera, floor, ball_lfu=ball_lfu, tilt_pad_deg=tilt_pad, roll_deg=roll
-        )
-        if net["source"] != "camera_floor_line":
-            return {"state": "default", **net}
-        if net["uncertainty_m"] >= net["value_m"]:
-            return self._default_net(TOO_UNCERTAIN)
-        return {"state": "set", **net}
-
-    def _stamped_net(self, net: dict, floor) -> dict:
-        net["inputs"] = section_inputs(
-            "net_range",
-            floor_line=floor,
-            lens_id=self._ctx.lens_id,
-            tilt_deg=self._ctx.tilt_offset_deg,
-        )
-        return net
-
     def _aim_confirm(self, record: dict, payload: dict) -> dict:
         box = self._need_box(record)
         camera, roll = self._view()
@@ -407,7 +501,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         tilt_pad = placement_box.pads_deg(self._config, self._ctx.tilt_calibrated)[0]
         try:
             floor = target_line.parse_floor_line(payload["floor_line_px"], camera)
-            net = self._net_range(camera, roll, ball, floor, tilt_pad)
+            net = floor_line_net(camera, roll, ball, floor, tilt_pad)
             lens_forward = float(camera.camera_origin_lfu[1])
 
             def solve(floor_line):
@@ -435,35 +529,15 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 "the camera cannot bound this aim point: aim at a farther target, or skip it"
             )
         return {
-            "aim": {
-                "state": "set",
-                "aim_px": line["aim_px"],
-                "floor_line": floor,
-                "yaw_deg": line["yaw_deg"],
-                "iwr_yaw_deg": line["applies_to"]["iwr_yaw_deg"],
-                "uncertainty_deg": line["total_uncertainty_deg"],
-                "method": line["method"],
-                "floor_line_used": used_floor,
-                "warnings": line["warnings"],
-                "ball_lfu_m": line["ball_lfu_m"],
-                "source": line["source"],
-                "inputs": section_inputs("aim", box_id=box["id"]),
-            },
-            "net_range": self._stamped_net(net, floor),
+            "aim": aim_section(line, floor=floor, floor_line_used=used_floor, box_id=box["id"]),
+            "net_range": stamped_net(net, floor, self._ctx),
         }
 
     def _aim_skip(self, record: dict, _payload: dict) -> dict:
         box = self._need_box(record)
-        net = self._default_net("aim point skipped")
         return {
-            "aim": {
-                "state": "skipped",
-                "floor_line": None,
-                "source": "skipped",
-                "reason": "the tester skipped the aim point",
-                "inputs": section_inputs("aim", box_id=box["id"]),
-            },
-            "net_range": self._stamped_net(net, None),
+            "aim": skipped_aim_section(box["id"]),
+            "net_range": stamped_net(default_net("aim point skipped"), None, self._ctx),
         }
 
     def _box_ball_lfu(self, camera, box: dict) -> tuple[float, float]:
@@ -499,14 +573,13 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             raise _Refused(f"ball not measured: {found['status']}")
         radar_x = float(camera.radar_origin_lfu[0])
         return {
-            "ball_range": {
-                "state": "set",
-                "range_m": float(ball.size_radar_range_m),
-                "uncertainty_m": float(ball.size_range_uncertainty_m),
-                "side_offset_m": float(ball.size_point_lfu_m[0]) - radar_x,
-                "ball_px": [ball.x_px, ball.y_px],
-                "diameter_px": ball.diameter_px,
-                "source": "camera_prior",
-                "inputs": section_inputs("ball_range", box_id=box["id"]),
-            }
+            "ball_range": ball_range_section(
+                range_m=ball.size_radar_range_m,
+                uncertainty_m=ball.size_range_uncertainty_m,
+                side_offset_m=float(ball.size_point_lfu_m[0]) - radar_x,
+                ball_px=[ball.x_px, ball.y_px],
+                diameter_px=ball.diameter_px,
+                source="camera_prior",
+                box_id=box["id"],
+            )
         }

@@ -439,24 +439,27 @@ def _solution_with_box():
 
 
 @pytest.mark.parametrize(
-    "arm_id, expected", [("arm5", "562,470,718,600"), ("arm6", "281,235,359,300")]
+    "arm_id, expected", [("arm5", [562, 470, 718, 600]), ("arm6", [281, 235, 359, 300])]
 )
-def test_a_ladder_kiosk_is_told_the_setups_box(tmp_path, arm_id, expected):
-    params = _params(arm_id)
-    ts.write_arm_state(tmp_path, params, gain=3.0, gain_exposure_us=300)
-    for action in ("ladder", "swings"):
-        with_box = ts.action_commands(
-            action,
-            params,
-            tmp_path,
-            RIG,
-            tester_setup=TESTER_SETUP,
-            tee_range_solution=_solution_with_box(),
-        )[0][0]
-        without = ts.action_commands(action, params, tmp_path, RIG, tester_setup=TESTER_SETUP)[0][0]
+def test_a_ladder_kiosk_is_told_the_setups_box(arm_id, expected):
+    # the setup record carries the box in 1280x800 pixels; each mode's kiosk scales it
+    record = {
+        "mode": "fixed",
+        "box_px": list(BOX),
+        "frame_size_px": [1280, 800],
+        "camera_tilt": {"search_pad_deg": 1.0, "roll_pad_deg": 2.0},
+    }
+    box = ts.tester_setup_sections(
+        _solution_with_box(),
+        placement_box_record=record,
+        target_line_record=None,
+        net_line=None,
+        rig_geometry=RIG,
+    )["box"]
 
-        assert with_box[with_box.index("--camera-hitting-zone") + 1] == expected
-        assert "--camera-hitting-zone" not in without
+    scale = ts.ARMS[arm_id].width / box["image_size_px"][0]
+    assert [round(value * scale) for value in box["box_px"]] == expected
+    assert list(ts.mode_placement_box(record, ts.ARMS[arm_id])) == expected
 
 
 def test_the_ladders_zone_comes_from_the_setups_box():

@@ -35,7 +35,14 @@ from typing import Callable
 import numpy as np
 from flask import Flask, Response, g, jsonify, request, send_file
 
-from openflight import session_bundle, tee_range, tee_range_setup, unit_check
+from openflight import (
+    session_bundle,
+    setup_record,
+    setup_service,
+    tee_range,
+    tee_range_setup,
+    unit_check,
+)
 from openflight.camera import (
     attempt_ledger,
     ball_pixels,
@@ -1398,42 +1405,19 @@ def ladder_zone_box(
     return mode_placement_box(setup_placement_box(solution), arm)
 
 
-def tee_range_handoff(
-    solution: tee_range.TeeRangeSolution | None,
-    *,
-    use_unqualified: bool = False,
-    rig_geometry: Path | None = None,
-    reference: tee_range_setup.TeeRangeEpochReference | None = None,
-    camera_tilt_calibration: Mapping | None = None,
-    target_line_record: Mapping | None = None,
-    net_line: Mapping | None = None,
-    lens=None,
-    camera_tilt_path: Path | None = None,
-) -> tuple[list[str], dict]:
-    """The swing server's tee-range arguments, and the record of what they hand over.
-
-    ``camera_tilt_calibration`` is the unit's camera tilt (P8-5); a calibrated one
-    is handed to the kiosk, which records it in session_start.
-
-    ``target_line_record`` is the aim point confirmed for this setup and patch
-    (D34): its yaw goes to both kiosk yaw flags as one value, and the record says
-    where it came from and how sure it is. Without one no yaw flag is passed, and
-    the record says the target line was not set.
-
-    ``net_line`` is the tester's floor line (13 Oct): the net is looked for in the
-    empty capture where it puts it. ``lens`` is the lens on the unit: the kiosk's
-    camera metrics take its focal length (``--camera-lens-id``).
-
-    The record goes into arm.json, setup_admission.json and the run's tee_range.json,
-    so the tester's files say what the kiosk ran with (wiring audit S3).
-    """
+def tee_range_choice(
+    solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
+) -> tuple[
+    str, str, tee_range.TeeRangeCandidate | None, tee_range.TeeRangeCandidate | None, dict | None
+]:
+    """Which range the setup hands on: ``(status, source, radar candidate, camera prior,
+    experimental decision)``. The camera's coarse distance goes over as a prior, never a range."""
     candidate = None
     prior_candidate = camera_prior_choice(solution)
     experimental, decision = experimental_tee_range_choice(solution)
     if prior_candidate is not None:
-        # 13 Oct: the camera's coarse distance goes over as a PRIOR, never a range
         status, source = "prior", CAMERA_PRIOR_SOURCE
-        experimental = decision = None
+        decision = None
     elif solution is not None and solution.status == "resolved":
         status, source = "resolved", "qualified_static_iwr"
         candidate = next(
@@ -1467,6 +1451,281 @@ def tee_range_handoff(
         source = "unqualified_static_iwr_camera_steered" if steered else "unqualified_static_iwr"
     else:
         status = source = "pending"
+    return status, source, candidate, prior_candidate, decision
+
+
+# The tester's setup record (openflight.setup.v1), in its folder: every kiosk it starts
+# reads it (--setup-file), and its sections are the kiosk Setup screen's.
+SETUP_FILE = "setup.json"
+
+
+def tester_setup_context(
+    rig_geometry: Path | None, lens=None, camera_tilt_calibration: Mapping | None = None
+) -> setup_record.StartContext:
+    """What a kiosk this tester starts checks the record against (its setup_start_context)."""
+    lens_facts = lens.to_dict() if lens is not None else {}
+    tilt = camera_tilt.applied_pitch(0.0, camera_tilt_calibration)
+    calibrated = tilt["status"] == "calibrated"
+    return setup_record.StartContext(
+        lens_id=lens_facts.get("effective_lens_id") or lens_facts.get("lens_id"),
+        rig_sha256=rig_geometry_hashes(rig_geometry)["rig_geometry_params_sha256"]
+        or "no_rig_geometry",
+        # the value the kiosk parses from --camera-vertical-offset-deg
+        tilt_offset_deg=float(f"{tilt['offset_deg']:.6g}") if calibrated else None,
+        tilt_calibrated=calibrated,
+    )
+
+
+# what an aim section takes from a target line record (setup_service.aim_section)
+SETUP_AIM_KEYS = (
+    "aim_px",
+    "yaw_deg",
+    "applies_to",
+    "total_uncertainty_deg",
+    "method",
+    "warnings",
+    "ball_lfu_m",
+    "source",
+)
+
+
+def _not_set(reason: str) -> dict:
+    return {"state": "not_set", "reason": reason}
+
+
+def _set(section: Mapping) -> bool:
+    return section.get("state") not in ("not_set", "stale")
+
+
+def _box_ball(
+    solution: tee_range.TeeRangeSolution | None, record: Mapping
+) -> tuple[list[float], float] | None:
+    """The box's ball in its 1280x800 pixels: the setup search's, else the one seen at confirm."""
+    ball = expected_ladder_ball(solution, PLACEMENT_BOX_ARM)
+    if ball is not None:
+        return [ball["x"], ball["y"]], ball["diameter_px"]
+    seen = record.get("ball_at_confirm") or {}
+    if seen.get("state") == "found" and seen.get("center_px") and seen.get("diameter_px"):
+        return [float(value) for value in seen["center_px"]], float(seen["diameter_px"])
+    return None
+
+
+def _box_setup_section(
+    record: Mapping | None,
+    solution: tee_range.TeeRangeSolution | None,
+    ctx: setup_record.StartContext,
+    config: placement_box.PlacementBoxConfig,
+) -> dict:
+    if not isinstance(record, Mapping) or record.get("box_px") is None:
+        return _not_set("no box confirmed for this setup")
+    if record.get("mode") != placement_box.MODE:
+        return _not_set("an older dragged box: confirm the box again")
+    found = _box_ball(solution, record)
+    if found is None:
+        return _not_set("the camera found no ball in the box: confirm the box again")
+    centre, diameter = found
+    box_px = [int(value) for value in record["box_px"]]
+    identity = json.dumps([box_px, centre, diameter], separators=(",", ":"))
+    pads = record.get("camera_tilt") or {}
+    return setup_service.box_section(
+        box_id=setup_service.new_box_id(
+            config, ctx.lens_id, centre, "t" + hashlib.sha256(identity.encode()).hexdigest()[:12]
+        ),
+        box_px=box_px,
+        ball_px=centre,
+        diameter_px=diameter,
+        image_size_px=list(record.get("frame_size_px") or [1280, 800]),
+        tilt_pad_deg=pads.get("search_pad_deg"),
+        roll_pad_deg=pads.get("roll_pad_deg"),
+        ctx=ctx,
+    )
+
+
+def _aim_setup_section(line: Mapping | None, box: Mapping) -> dict:
+    if not _set(box):
+        return _not_set(f"box is {box['state']}: confirm the box first")
+    if line is None:
+        return _not_set("no aim point confirmed for this setup and box")
+    if line.get("status") == target_line.SKIPPED:
+        return setup_service.skipped_aim_section(box["id"])
+    floor = line.get("floor_line_px")
+    if line.get("total_uncertainty_deg") is not None:
+        return setup_service.aim_section(
+            dict(line), floor=floor, floor_line_used=floor is not None, box_id=box["id"]
+        )
+    direction = line.get("setup_direction")
+    if isinstance(direction, Mapping) and direction.get("total_uncertainty_deg") is not None:
+        # an unbounded floor line: the aim as a direction, the floor line for the net alone
+        return setup_service.aim_section(
+            dict(direction), floor=floor, floor_line_used=False, box_id=box["id"]
+        )
+    return _not_set("the camera cannot bound this aim point: aim at a farther target, or skip it")
+
+
+def _net_setup_section(
+    line: Mapping | None,
+    aim: Mapping,
+    solution: tee_range.TeeRangeSolution | None,
+    net_line: Mapping | None,
+    ctx: setup_record.StartContext,
+) -> dict:
+    if not _set(aim):
+        return _not_set(f"aim is {aim['state']}")
+    floor_net = (line or {}).get("floor_line_net") if aim["state"] == "set" else None
+    empty = setup_net_range(solution, net_search_window(net_line))
+    if isinstance(floor_net, Mapping) and floor_net.get("state") == "set":
+        net = dict(floor_net)
+    elif empty.get("status") == "measured":
+        net = {
+            "state": "set",
+            "value_m": empty["net_range_m"],
+            "uncertainty_m": None,
+            "source": "empty_static_capture",
+            "range_space": "apparent",
+        }
+    elif isinstance(floor_net, Mapping):
+        net = dict(floor_net)
+    else:
+        reason = "aim point skipped" if aim["state"] == "skipped" else "no floor line marked"
+        net = setup_service.default_net(reason)
+    return setup_service.stamped_net(net, aim.get("floor_line"), ctx)
+
+
+def _ball_range_setup_section(
+    solution: tee_range.TeeRangeSolution | None, box: Mapping, *, use_unqualified: bool
+) -> dict:
+    if not _set(box):
+        return _not_set(f"box is {box['state']}: confirm the box first")
+    status, _source, candidate, prior, decision = tee_range_choice(
+        solution, use_unqualified=use_unqualified
+    )
+    if prior is not None:
+        facts = tee_range._thaw_json(  # pylint: disable=protected-access
+            (prior.evidence or {}).get("camera_prior") or {}
+        )
+        return setup_service.ball_range_section(
+            range_m=prior.radar_slant_range_m,
+            uncertainty_m=prior.uncertainty_m,
+            side_offset_m=facts.get("side_offset_m"),
+            ball_px=facts.get("ball_px") or box["ball_px"],
+            diameter_px=facts.get("diameter_px") or box["diameter_px"],
+            source="camera_prior",
+            box_id=box["id"],
+        )
+    if candidate is None:
+        return _not_set(f"no ball range yet ({status}): finish the ball range step")
+    if not candidate.uncertainty_m:
+        return _not_set("the radar range carries no uncertainty of its own")
+    paired = decision is not None and decision.get("schema") in patch_pairing.DECISION_SCHEMAS
+    return setup_service.ball_range_section(
+        range_m=candidate.radar_slant_range_m,
+        uncertainty_m=candidate.uncertainty_m,
+        side_offset_m=decision.get("side_offset_m") if paired else None,
+        ball_px=box["ball_px"],
+        diameter_px=box["diameter_px"],
+        # the static radar diagnostic's range, a prior like the camera's
+        source="radar",
+        box_id=box["id"],
+    )
+
+
+def _scene_setup_section(
+    solution: tee_range.TeeRangeSolution | None, ball_range: Mapping, rig_geometry: Path | None
+) -> dict:
+    if not _set(ball_range):
+        return _not_set(f"ball range is {ball_range['state']}")
+    height = _setup_camera_height_m(solution)
+    if height is not None:
+        return setup_service.scene_section(
+            lens_height_m=height,
+            uncertainty_m=(_setup_camera_height(solution) or {}).get("uncertainty_m"),
+            source="radar_solved_height",
+            ball_range_m=ball_range["range_m"],
+        )
+    return setup_service.scene_section(
+        lens_height_m=_rig_lens_height_m(rig_geometry),
+        uncertainty_m=None,
+        source="rig_nominal",
+        ball_range_m=ball_range["range_m"],
+    )
+
+
+def tester_setup_sections(  # pylint: disable=too-many-arguments
+    solution: tee_range.TeeRangeSolution | None,
+    *,
+    placement_box_record: Mapping | None,
+    target_line_record: Mapping | None,
+    net_line: Mapping | None,
+    rig_geometry: Path | None,
+    lens=None,
+    camera_tilt_calibration: Mapping | None = None,
+    box_config: placement_box.PlacementBoxConfig | None = None,
+    use_unqualified: bool = False,
+) -> dict[str, dict]:
+    """This tester's confirmed box, aim and ball range as the setup record's sections.
+
+    Stamped as the kiosk the tester starts will check them, so none reads stale there.
+    """
+    ctx = tester_setup_context(rig_geometry, lens, camera_tilt_calibration)
+    box = _box_setup_section(
+        placement_box_record, solution, ctx, box_config or placement_box.load_config()
+    )
+    aim = _aim_setup_section(target_line_record, box)
+    ball_range = _ball_range_setup_section(solution, box, use_unqualified=use_unqualified)
+    return {
+        "box": box,
+        "aim": aim,
+        "ball_range": ball_range,
+        "net_range": _net_setup_section(target_line_record, aim, solution, net_line, ctx),
+        "scene": _scene_setup_section(solution, ball_range, rig_geometry),
+    }
+
+
+def write_tester_setup(path: Path, sections: Mapping[str, Mapping]) -> dict:
+    """Save the sections as the setup record; an unchanged setup keeps its revision."""
+    record = setup_record.load(path)
+    wanted = json.loads(json.dumps({name: sections[name] for name in setup_record.SECTIONS}))
+    if path.is_file() and all(record[name] == wanted[name] for name in wanted):
+        return record
+    record.update(wanted)
+    setup_record.save(path, record)
+    return setup_record.load(path)
+
+
+def tee_range_handoff(
+    solution: tee_range.TeeRangeSolution | None,
+    *,
+    use_unqualified: bool = False,
+    rig_geometry: Path | None = None,
+    reference: tee_range_setup.TeeRangeEpochReference | None = None,
+    camera_tilt_calibration: Mapping | None = None,
+    target_line_record: Mapping | None = None,
+    net_line: Mapping | None = None,
+    lens=None,
+    camera_tilt_path: Path | None = None,
+) -> tuple[list[str], dict]:
+    """The kiosk's lens and camera-tilt arguments, and the record of the setup handed over.
+
+    The box, aim, ball range, net and scene reach the kiosk in the tester's setup record
+    (``tester_setup_sections``); the record here says what that setup was.
+
+    ``camera_tilt_calibration`` is the unit's camera tilt (P8-5); a calibrated one
+    is handed to the kiosk, which records it in session_start.
+
+    ``target_line_record`` is the aim point confirmed for this setup and patch
+    (D34): the record says its yaw, where it came from and how sure it is, or that the
+    target line was not set.
+
+    ``net_line`` is the tester's floor line (13 Oct): the net is looked for in the
+    empty capture where it puts it. ``lens`` is the lens on the unit: the kiosk's
+    camera metrics take its focal length (``--camera-lens-id``).
+
+    The record goes into arm.json, setup_admission.json and the run's tee_range.json,
+    so the tester's files say what the kiosk ran with (wiring audit S3).
+    """
+    status, source, candidate, prior_candidate, decision = tee_range_choice(
+        solution, use_unqualified=use_unqualified
+    )
     tee_m = candidate.radar_slant_range_m if candidate is not None else None
     scene = setup_scene(solution, rig_geometry)
     net = setup_net_range(solution, net_search_window(net_line))
@@ -1474,12 +1733,6 @@ def tee_range_handoff(
     if not measured_net:
         net["default_m"] = DEFAULT_NET_RANGE_M
     height = _setup_camera_height_m(solution)
-    solved = scene["lens_height_solved_m"]
-    uncertainty = scene["lens_height_solved_uncertainty_m"]
-    # The setup ball rests on the surface, so its centre is one radius up; swings
-    # must use the same ball height the setup solved the lens height with. A
-    # pending range still carries a lens height the setup had to override, such as
-    # a unit on a box (wiring audit S6).
     prior = (
         tee_range._thaw_json(  # pylint: disable=protected-access
             (prior_candidate.evidence or {}).get("camera_prior") or {}
@@ -1487,42 +1740,7 @@ def tee_range_handoff(
         if prior_candidate is not None
         else None
     )
-    args = [
-        *(
-            ["--iwr6843-tee-m", f"{tee_m:.9g}"]
-            if tee_m is not None
-            else [
-                "--iwr6843-tee-prior-m",
-                f"{prior_candidate.radar_slant_range_m:.9g}",
-                "--iwr6843-tee-prior-uncertainty-m",
-                f"{prior_candidate.uncertainty_m:.6g}",
-                "--iwr6843-tee-prior-source",
-                CAMERA_PRIOR_SOURCE,
-            ]
-            if prior_candidate is not None
-            else ["--iwr6843-tee-range-pending"]
-        ),
-        "--iwr6843-ball-height-m",
-        f"{scene['ball_height_m']:.6g}",
-        *(["--solved-camera-height-m", f"{height:.6g}"] if height is not None else []),
-        "--iwr6843-tee-range-source",
-        source,
-        *(
-            ["--iwr6843-tee-range-candidate", (candidate or prior_candidate).candidate_id]
-            if (candidate or prior_candidate) is not None
-            else []
-        ),
-        *(["--scene-lens-height-solved-m", f"{solved:.6g}"] if solved is not None else []),
-        *(
-            ["--scene-lens-height-solved-uncertainty-m", f"{uncertainty:.6g}"]
-            if solved is not None and uncertainty is not None
-            else []
-        ),
-        # the net the empty capture saw; the swing server's 4.6 m otherwise, flagged
-        *(["--net-range-m", f"{net['net_range_m']:.3g}"] if measured_net else []),
-        "--iwr6843-net-range-source",
-        "empty_static_capture" if measured_net else "default_not_measured",
-    ]
+    args: list[str] = []
     side_offset_m = (
         prior.get("side_offset_m")
         if prior is not None
@@ -1530,9 +1748,6 @@ def tee_range_handoff(
         if decision is not None and decision.get("schema") in patch_pairing.DECISION_SCHEMAS
         else None
     )
-    if side_offset_m is not None:
-        # D36 item 4b: the swing estimators place the resting ball where the pair saw it
-        args += ["--tee-side-offset-m", f"{side_offset_m:.6g}"]
     tilt = camera_tilt.applied_pitch(0.0, camera_tilt_calibration)
     if tilt["status"] == "calibrated":
         # the unit's camera tilt (P8-5), recorded by the kiosk in session_start
@@ -1542,14 +1757,12 @@ def tee_range_handoff(
             "--camera-vertical-offset-source",
             "unit_calibration",
         ]
-    # D34: the target line's yaw, one value for both flags (the rig file gives the
-    # camera and the IWR one boresight). A direction's parallax is bounded at the
-    # net's distance beyond the ball: the measured net, or the swing server's default.
+    # D34: a direction's parallax is bounded at the net's distance beyond the ball: the
+    # measured net, or the swing server's default
     distance_m, distance_basis = target_line_distance(net, tee_m)
-    line_args, line = target_line.handoff(
+    _line_args, line = target_line.handoff(
         target_line_record, target_distance_m=distance_m, distance_basis=distance_basis
     )
-    args += line_args
     if lens is not None and lens.lens_id is not None:
         # every camera calculation in the kiosk takes the selected lens's focal length
         args += ["--camera-lens-id", lens.lens_id]
@@ -1654,12 +1867,6 @@ def target_line_distance(net: Mapping | None, tee_m: float | None) -> tuple[floa
         else "default_net_range_not_measured_less_tee_range"
     )
     return max(net_m - (tee_m or 0.0), 0.5), basis
-
-
-def _tee_range_cli_args(
-    solution: tee_range.TeeRangeSolution | None, *, use_unqualified: bool = False
-) -> list[str]:
-    return tee_range_handoff(solution, use_unqualified=use_unqualified)[0]
 
 
 # The hitting zone may clip this much (sun patches, a white ball) and still be usable.
@@ -2353,14 +2560,11 @@ def action_commands(
     tester_setup: Mapping | None = None,
     optical_calibration: Path | None = None,
     camera_placement: Path | None = None,
-    tee_range_solution: tee_range.TeeRangeSolution | None = None,
     iwr_static_port: str | None = None,
     operator_reset: bool | None = None,
-    use_unqualified_tee_range: bool = False,
     handed_to_swings: Mapping | None = None,
     iwr_calibration: Path = DEFAULT_IWR_CALIBRATION,
     zone_box: Sequence[int] | None = None,
-    ball_box: Sequence[int] | None = None,
     light_index_dn_per_us_gain: float | None = None,
     free_play_plan: Mapping | None = None,
     club: str = CLUB,
@@ -2372,12 +2576,12 @@ def action_commands(
     ladder at the tapped resolution: the kiosk starts at its startup controls,
     held (manual) while a ladder runs, and reads the plan from the run folder.
 
-    ``handed_to_swings`` (from ``tee_range_handoff``) supplies the tee-range
-    arguments, so the kiosk runs with exactly what the tester records.
-    ``zone_box`` is the tester's confirmed box in this arm's pixels: the gain
-    screen measures its hitting zone there (P7-15). ``ball_box`` is the fixed box in
-    this arm's pixels: the kiosk finds the resting ball inside it before each swing
-    (per-shot re-location, 13 Oct).
+    Every kiosk reads the tester's setup record (``--setup-file``, written by
+    ``write_tester_setup``): its box, aim, ball range, net and scene. ``handed_to_swings``
+    (from ``tee_range_handoff``) supplies the lens and camera-tilt arguments, so the
+    kiosk runs with exactly what the tester records. ``zone_box`` is the tester's
+    confirmed box in this arm's pixels: the gain screen measures its hitting zone
+    there (P7-15).
     """
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
@@ -2385,13 +2589,13 @@ def action_commands(
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     root = arm_directory(sessions_root, params)
     arm = params.arm
-    tee_range_args = []
+    setup_args = []
     if action in {"ladder", "swings", "free_play"}:
-        tee_range_args = (
-            list(handed_to_swings["cli_args"])
-            if handed_to_swings is not None
-            else _tee_range_cli_args(tee_range_solution, use_unqualified=use_unqualified_tee_range)
-        )
+        setup_args = [
+            "--setup-file",
+            str(tester_root(sessions_root, params.tester_id) / SETUP_FILE),
+            *(list(handed_to_swings["cli_args"]) if handed_to_swings is not None else []),
+        ]
     if action == "preflight":
         # Check the unit (step 2): the sensors first, so nothing before them can stop
         # them; each one's result is written for the tester server to read
@@ -2450,7 +2654,7 @@ def action_commands(
                 "--camera-capture-manual-exposure",
                 "--debug",
                 "--iwr6843",
-                *tee_range_args,
+                *setup_args,
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -2491,7 +2695,7 @@ def action_commands(
                 *(["--camera-capture-manual-exposure"] if held else []),
                 "--debug",
                 "--iwr6843",
-                *tee_range_args,
+                *setup_args,
                 "--inclinometer",
                 "--rig-geometry",
                 str(rig_geometry),
@@ -2515,6 +2719,11 @@ def action_commands(
     if action in {"ladder", "swings", "free_play"}:
         if not tester_setup or not tester_setup.get("config_hash"):
             raise ValueError("tester setup evidence is required for capture")
+        if float(tester_setup.get("inclinometer_zero_offset_deg") or 0.0) != 0.0:
+            # the kiosk takes no typed zero offset, and its setup gate hashes the one it reads
+            raise ValueError(
+                "the LIS3DH zero offset must be 0: the kiosk takes no typed zero offset"
+            )
         commands[0].extend(["--handed", handed])
         # the tester page stays on screen: no fullscreen kiosk window (2a); the page's
         # "Kiosk view" button opens the kiosk UI in a normal window or tab
@@ -2529,30 +2738,11 @@ def action_commands(
                 )
         else:
             commands[0].insert(2, "--no-browser")
-        if ball_box is not None:
-            commands[0].extend(
-                ["--camera-ball-box", ",".join(str(int(value)) for value in ball_box)]
-            )
         if iwr_static_port:
             # The kiosk must own the same interface the hardware check verified.
             commands[0].extend(["--iwr6843-port", iwr_static_port])
         # the same board calibration the setup's static ranges used (wiring audit C10)
         commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
-        # each clip's analysis eligibility is judged on the setup's ball (P7-8)
-        setup_ball = expected_ladder_ball(tee_range_solution, params.arm_id)
-        if setup_ball is not None:
-            commands[0].extend(
-                [
-                    "--camera-setup-ball",
-                    ",".join(f"{setup_ball[key]:.1f}" for key in ("x", "y", "diameter_px")),
-                ]
-            )
-        # and the hitting zone is the setup's placement box in this mode (P7-15)
-        hitting_zone = ladder_zone_box(tee_range_solution, params.arm_id)
-        if hitting_zone is not None:
-            commands[0].extend(
-                ["--camera-hitting-zone", ",".join(str(int(value)) for value in hitting_zone)]
-            )
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -2562,8 +2752,6 @@ def action_commands(
                 str(tester_setup["inclinometer_bus"]),
                 "--inclinometer-address",
                 hex(int(tester_setup["inclinometer_address"])),
-                "--inclinometer-zero-offset",
-                str(tester_setup["inclinometer_zero_offset_deg"]),
             ]
         )
         if tester_setup.get("lis3dh_mount_file"):
@@ -8566,6 +8754,22 @@ def create_app(
         root = tester_root(sessions_root, tester_id)
         return confirmed_target_line(root, eligibility, confirmed_placement_box(root, eligibility))
 
+    def write_setup(tester_id: str, eligibility: Mapping, solution) -> dict:
+        """Write this tester's confirmed setup as the record every kiosk it starts reads."""
+        root = tester_root(sessions_root, tester_id)
+        sections = tester_setup_sections(
+            solution,
+            placement_box_record=confirmed_placement_box(root, eligibility),
+            target_line_record=current_target_line(tester_id, eligibility),
+            net_line=read_net_line(root),
+            rig_geometry=rig_geometry,
+            lens=current_lens(),
+            camera_tilt_calibration=unit_camera_tilt(),
+            box_config=box_config,
+            use_unqualified=use_unqualified_tee_range,
+        )
+        return write_tester_setup(root / SETUP_FILE, sections)
+
     def target_line_runs(tester_id: str, current: Mapping | None) -> dict:
         """Each mode's last hand-off, against the confirmed target line (D34)."""
         return {
@@ -8726,6 +8930,28 @@ def create_app(
                 else "default_net_range_not_measured_less_the_box_centre"
             ),
         )
+        tilt_pad = placement_box.pads_deg(box_config, facts["calibrated"])[0]
+        floor = record["floor_line_px"]
+        if floor is not None:
+            # for the setup record: the net the floor line measures, and, when the floor
+            # line leaves the aim unbounded, the aim taken as a direction
+            record["floor_line_net"] = setup_service.floor_line_net(
+                camera, roll, ball, floor, tilt_pad
+            )
+            if record["total_uncertainty_deg"] is None:
+                direction = target_line.target_line_record(
+                    camera,
+                    ball,
+                    payload.get("aim_px"),
+                    None,
+                    tilt_pad_deg=tilt_pad,
+                    roll_deg=roll,
+                    camera_tilt=facts,
+                    display_scale=float(display_scale) if display_scale is not None else None,
+                    target_distance_m=max(net_m - (float(ball[1]) - lens_forward), 0.5),
+                    target_distance_basis=record["parallax_basis"],
+                )
+                record["setup_direction"] = {key: direction[key] for key in SETUP_AIM_KEYS}
         record["requested"] = {
             key: payload.get(key)
             for key in ("aim_px", "floor_line_px", "display_scale")
@@ -10217,23 +10443,6 @@ def create_app(
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
             return jsonify({"error": str(exc)}), 400
 
-    def kiosk_ball_box(tester_id: str, eligibility: Mapping, arm: Arm) -> list[int] | None:
-        """The fixed box in this mode's pixels, for the kiosk's per-shot ball re-location."""
-        record = confirmed_placement_box(tester_root(sessions_root, tester_id), eligibility)
-        if not isinstance(record, Mapping) or record.get("mode") != placement_box.MODE:
-            return None
-        outline = box_mode_view(record, arm.arm_id)["box_outline_px"]
-        if not outline:
-            return None
-        xs = [x for x, _y in outline]
-        ys = [y for _x, y in outline]
-        return [
-            int(math.floor(min(xs))),
-            int(math.floor(min(ys))),
-            int(math.ceil(max(xs))),
-            int(math.ceil(max(ys))),
-        ]
-
     def lens_payload(tester_id: str | None) -> dict:
         from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
@@ -10545,10 +10754,8 @@ def create_app(
                 setup_command_config(eligibility) if action in {"swings", "free_play"} else None,
                 optical_calibration,
                 camera_placement,
-                solution,
                 iwr_static_port,
                 operator_reset if action == "preflight" else None,
-                use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
                 zone_box=mode_placement_box(box, params.arm) if action == "gain" else None,
@@ -10556,9 +10763,6 @@ def create_app(
                     "light_index_dn_per_us_gain"
                 )
                 if action == "free_play"
-                else None,
-                ball_box=kiosk_ball_box(params.tester_id, eligibility, params.arm)
-                if action in {"swings", "free_play"}
                 else None,
                 free_play_plan=plan,
                 club=club,
@@ -10625,6 +10829,7 @@ def create_app(
                         write_setup_admission(
                             run_dir, params.tester_id, eligibility, solution, reference, handed
                         )
+                        write_setup(params.tester_id, eligibility, solution)
                         tee_range.write_solution(
                             run_dir / "tee_range.json", solution, handed_to_swings=handed
                         )
@@ -11091,12 +11296,9 @@ def create_app(
                 setup_command_config({"config_hash": config_hash}),
                 optical_calibration,
                 camera_placement,
-                solution,
                 iwr_static_port,
-                use_unqualified_tee_range=use_unqualified_tee_range,
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
-                ball_box=kiosk_ball_box(tester_id, admitted_setup[tester_id], ARMS[arm_id]),
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(
@@ -11106,6 +11308,7 @@ def create_app(
                 write_setup_admission(
                     run, tester_id, admitted_setup[tester_id], solution, reference, handed
                 )
+                write_setup(tester_id, admitted_setup[tester_id], solution)
                 tee_range.write_solution(run / "tee_range.json", solution, handed_to_swings=handed)
                 write_arm_state(
                     sessions_root,

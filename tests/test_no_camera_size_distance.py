@@ -63,15 +63,13 @@ def test_a_setup_saved_before_d17_with_a_camera_size_range_hands_swings_nothing(
             }
         },
     )
-    solution = tee_range.TeeRangeSolution.unresolved(
-        [legacy], reason=ts.PATCH_BALL_SAVED_REASON
-    )
+    solution = tee_range.TeeRangeSolution.unresolved([legacy], reason=ts.PATCH_BALL_SAVED_REASON)
 
     candidate, decision = ts.experimental_tee_range_choice(solution)
 
     assert candidate is None
     assert "ball-size" in decision["withheld"]
-    assert ts.tee_range_handoff(solution)[0][0] == "--iwr6843-tee-range-pending"
+    assert ts.tee_range_handoff(solution)[1]["tee_range_status"] == "pending"
 
 
 def test_the_pipeline_check_names_the_missing_iwr_range_as_the_cause():
