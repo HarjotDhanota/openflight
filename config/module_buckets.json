@@ -1300,6 +1300,7 @@
   "ui/tests/e2e/tester-ready-light.spec.ts": "TESTER",
   "ui/tests/e2e/tester-setup-gate.spec.ts": "TESTER",
   "ui/tests/e2e/tester-steps.spec.ts": "TESTER",
+  "ui/tests/e2e/tester-no-jump.spec.ts": "TESTER",
   "ui/tests/e2e/tester-swing-step.spec.ts": "TESTER",
   "ui/tests/e2e/tester-tee-range.spec.ts": "TESTER",
   "ui/tests/e2e/tester-unit-check.spec.ts": "TESTER",
