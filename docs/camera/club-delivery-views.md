@@ -80,7 +80,9 @@ This replaces the first
 round's rectangular blade outlines without changing face-on geometry or wood
 head shapes. Short visible shaft sections and a viewport fitted to the rotated
 head, ball and arrows keep the drawings readable without changing the head/ball
-size ratio. Side blades sit in front of the hosel, exposing the lofted face line,
+size ratio. In the heel-side view the hosel is nearest the golfer and is drawn
+in front of the head for both hands. Drawing it behind the head would instead
+give the overlap cue of a toe-side view. The blade retains its lofted face line,
 rounded leading edge, sole/bounce and fuller back profile.
 Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the

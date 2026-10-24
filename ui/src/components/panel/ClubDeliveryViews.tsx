@@ -89,6 +89,46 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
     Math.max(...bx) - Math.min(...bx) + 20,
     Math.max(...by) - Math.min(...by) + 20,
   ];
+  const hosel = (
+    <g className="club-projection__hosel">
+      {top && !p.depth ? (
+        <path
+          className="club-projection__neck"
+          d={`M ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} Z`}
+          fill={`url(#${id}neck)`}
+        />
+      ) : null}
+      {!top && !p.depth ? (
+        <path
+          className="club-projection__neck"
+          d={`M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`}
+          fill={`url(#${id}neck)`}
+        />
+      ) : null}
+      <path
+        className="club-projection__shaft"
+        d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
+        fill={`url(#${id}shaft)`}
+      />
+      <path
+        d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
+        fill={`url(#${id}${p.depth ? 'ferrule' : 'neck'})`}
+      />
+      <path
+        d={`M ${shaftX - 4.8} ${ferruleEnd} l 0 ${top ? -6 : 6} l 9.6 0 l 0 ${top ? 6 : -6} Z`}
+        fill={`url(#${id}ferrule)`}
+      />
+      <line
+        x1={shaftX - 5.2}
+        x2={shaftX + 5.2}
+        y1={ferruleEnd + (top ? -8 : 8)}
+        y2={ferruleEnd + (top ? -8 : 8)}
+        stroke="#b9c2cb"
+        strokeWidth=".65"
+        strokeOpacity=".65"
+      />
+    </g>
+  );
   return (
     <svg
       className="club-projection"
@@ -165,13 +205,6 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
       <g className="club-projection__hand" transform={left ? undefined : 'scale(-1 1)'}>
         <line className="club-projection__target" x1="-137" x2="146" y1="0" y2="0" />
         <g className="club-projection__head" transform={`rotate(${rotation})`}>
-          {top && !p.depth ? (
-            <path
-              className="club-projection__neck"
-              d={`M ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} Z`}
-              fill={`url(#${id}neck)`}
-            />
-          ) : null}
           {!top && !p.depth ? (
             <path
               d={`M ${paths.tx - p.topline} ${paths.ty + 7} Q ${paths.bx - p.sole - 4} ${paths.by - 14} ${paths.bx - p.sole + 3} ${paths.by - 2}`}
@@ -181,35 +214,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               strokeWidth="1.2"
             />
           ) : null}
-          {!top && !p.depth ? (
-            <path
-              className="club-projection__neck"
-              d={`M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`}
-              fill={`url(#${id}neck)`}
-            />
-          ) : null}
-          <path
-            className="club-projection__shaft"
-            d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
-            fill={`url(#${id}shaft)`}
-          />
-          <path
-            d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
-            fill={`url(#${id}${p.depth ? 'ferrule' : 'neck'})`}
-          />
-          <path
-            d={`M ${shaftX - 4.8} ${ferruleEnd} l 0 ${top ? -6 : 6} l 9.6 0 l 0 ${top ? 6 : -6} Z`}
-            fill={`url(#${id}ferrule)`}
-          />
-          <line
-            x1={shaftX - 5.2}
-            x2={shaftX + 5.2}
-            y1={ferruleEnd + (top ? -8 : 8)}
-            y2={ferruleEnd + (top ? -8 : 8)}
-            stroke="#b9c2cb"
-            strokeWidth=".65"
-            strokeOpacity=".65"
-          />
+          {top ? hosel : null}
           {top && !p.depth ? (
             <path
               className="club-projection__blade-shell"
@@ -261,6 +266,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               })}
             </g>
           ) : null}
+          {!top ? hosel : null}
         </g>
         <circle className="club-projection__ball" cx={ballX} cy={ballY} r="21.335" fill={`url(#${id}ball)`} />
         {(

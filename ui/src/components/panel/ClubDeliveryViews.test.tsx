@@ -71,6 +71,14 @@ function svg(shot: Shot, view: 'top' | 'side') {
 const attr = (element: Element, name: string) => Number(element.getAttribute(name));
 
 describe('club delivery drawings', () => {
+  it.each(clubHands)('%s %s heel view puts the near-side hosel in front of the head', (category, hand) => {
+    const element = svg(shot(category, hand), 'side');
+    const outline = element.querySelector('.club-projection__outline')!;
+    const shaft = element.querySelector('.club-projection__shaft')!;
+    expect(outline.compareDocumentPosition(shaft) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    const neck = element.querySelector('.club-projection__neck');
+    if (neck) expect(outline.compareDocumentPosition(neck) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
   it.each(['iron', 'wedge'] as const)('%s address surface restores projected grooves for both hands', (category) => {
     for (const hand of ['right', 'left'] as const) {
       const element = svg(shot(category, hand), 'top');
