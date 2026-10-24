@@ -37,8 +37,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   ].map((part) => `${id}${part}`);
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
+  const blade = category === 'iron' || category === 'wedge';
   const hosel = hoselParts(shape.hosel);
   const lie = (shape.hosel.lieDeg * Math.PI) / 180;
+  const jointStart = blade ? shape.hosel.tube[0][0] : 0;
   const tubeWidth = Math.max(...shape.hosel.tube.map(([, width]) => width));
   const crossTube = (side: number) => ({
     x: shape.hosel.ground[0] + (side * tubeWidth * Math.sin(lie)) / 2,
@@ -160,18 +162,18 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
               <stop offset="1" stopColor="#fff" stopOpacity="0.7" />
             </linearGradient>
             <clipPath id={`${id}head-clip`}>
-              <path d={shape.head} />
+              <path d={blade ? shape.silhouette : shape.head} />
             </clipPath>
             <linearGradient
               id={`${id}joint-fade`}
               gradientUnits="userSpaceOnUse"
-              x1={shape.hosel.ground[0]}
-              y1={shape.hosel.ground[1]}
+              x1={shape.hosel.ground[0] + jointStart * Math.cos(lie)}
+              y1={shape.hosel.ground[1] - jointStart * Math.sin(lie)}
               x2={hosel.shaftLine[0][0]}
               y2={hosel.shaftLine[0][1]}
             >
-              <stop offset="0.35" stopColor="#fff" stopOpacity="0" />
-              <stop offset="0.7" stopColor="#fff" />
+              <stop offset={blade ? '0' : '0.35'} stopColor="#fff" stopOpacity="0" />
+              <stop offset={blade ? '0.65' : '0.7'} stopColor="#fff" />
             </linearGradient>
             <mask
               id={`${id}joint`}
@@ -246,16 +248,21 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 </g>
                 <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
                 <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
-                <path className="face-impact__head-reflection" d={shape.head} fill={`url(#${id}reflection)`} />
+                {blade ? <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} /> : null}
+                <path
+                  className="face-impact__head-reflection"
+                  d={blade ? shape.silhouette : shape.head}
+                  fill={`url(#${id}reflection)`}
+                />
                 <path
                   className="face-impact__leading-radius"
-                  d={shape.head}
+                  d={blade ? shape.silhouette : shape.head}
                   fill="none"
                   stroke={`url(#${id}radius)`}
                   strokeWidth="1.5"
                   clipPath={`url(#${id}head-clip)`}
                 />
-                <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
+                {!blade ? <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} /> : null}
                 <path d={hosel.tube} fill={`url(#${id}tube)`} mask={`url(#${id}joint)`} />
                 {hosel.collar ? (
                   <path className="face-impact__collar" d={hosel.collar} fill={`url(#${id}tube)`} />

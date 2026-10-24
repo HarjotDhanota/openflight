@@ -65,9 +65,14 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
   const shaftEnd = top ? shaftY + 24 : -64;
   const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
+  const neck = top
+    ? `M ${shaftX - 4.8} ${ferruleEnd} L ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} L ${shaftX + 4.8} ${ferruleEnd} Z`
+    : `M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
-  const xs = coords.filter((_, i) => i % 2 === 0).concat([shaftX - 14, shaftX + 7]);
-  const ys = coords.filter((_, i) => i % 2 === 1).concat([shaftY, shaftEnd, ferruleEnd]);
+  const headXs = coords.filter((_, i) => i % 2 === 0);
+  const headYs = coords.filter((_, i) => i % 2 === 1);
+  const xs = headXs.concat([shaftX - 14, shaftX + 7]);
+  const ys = headYs.concat([shaftY, shaftEnd, ferruleEnd]);
   const angle = (rotation * Math.PI) / 180;
   const bounds = [Math.min(...xs) - 3, Math.max(...xs) + 3].flatMap((x) =>
     [Math.min(...ys) - 3, Math.max(...ys) + 3].map((y) => [
@@ -91,29 +96,22 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   ];
   const hosel = (
     <g className="club-projection__hosel">
-      {top && !p.depth ? (
-        <path
-          className="club-projection__neck"
-          d={`M ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} Z`}
-          fill={`url(#${id}neck)`}
-        />
-      ) : null}
-      {!top && !p.depth ? (
-        <path
-          className="club-projection__neck"
-          d={`M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`}
-          fill={`url(#${id}neck)`}
-        />
-      ) : null}
       <path
         className="club-projection__shaft"
         d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
         fill={`url(#${id}shaft)`}
       />
-      <path
-        d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
-        fill={`url(#${id}${p.depth ? 'ferrule' : 'neck'})`}
-      />
+      {p.depth ? (
+        <path
+          d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
+          fill={`url(#${id}ferrule)`}
+        />
+      ) : (
+        <>
+          <path className="club-projection__neck" d={neck} fill={`url(#${id}metal)`} />
+          <path d={neck} fill={`url(#${id}neck)`} mask={`url(#${id}joint)`} />
+        </>
+      )}
       <path
         d={`M ${shaftX - 4.8} ${ferruleEnd} l 0 ${top ? -6 : 6} l 9.6 0 l 0 ${top ? 6 : -6} Z`}
         fill={`url(#${id}ferrule)`}
@@ -141,7 +139,14 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
       aria-label={t(top ? 'clubViews.top' : 'clubViews.side')}
     >
       <defs>
-        <linearGradient id={`${id}metal`} x1="0" y1="0" x2="1" y2=".7">
+        <linearGradient
+          id={`${id}metal`}
+          gradientUnits={p.depth ? 'objectBoundingBox' : 'userSpaceOnUse'}
+          x1={p.depth ? 0 : Math.min(...xs)}
+          y1={p.depth ? 0 : Math.min(...headYs)}
+          x2={p.depth ? 1 : Math.max(...xs)}
+          y2={p.depth ? 0.7 : Math.max(...headYs)}
+        >
           <stop className="face-impact__steel-hi" offset="0" />
           <stop className="face-impact__steel-mid" offset=".3" />
           <stop className="face-impact__steel-lo" offset=".49" />
@@ -171,11 +176,45 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           <stop offset="1" stopColor="#090c10" />
         </linearGradient>
         <linearGradient id={`${id}neck`} gradientUnits="userSpaceOnUse" x1={shaftX - 6.4} x2={shaftX + 6.4}>
-          <stop offset="0" stopColor="#59616b" />
-          <stop offset=".38" stopColor="#e5ebf0" />
-          <stop offset=".6" stopColor="#adb5be" />
-          <stop offset="1" stopColor="#626c76" />
+          <stop offset="0" className="face-impact__steel-lo" />
+          <stop offset=".38" className="face-impact__steel-hi" />
+          <stop offset=".6" className="face-impact__steel-mid" />
+          <stop offset="1" className="face-impact__steel-lo" />
         </linearGradient>
+        <linearGradient
+          id={`${id}joint-fade`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          x2="0"
+          y1={top ? paths.heel - 10 : paths.by - 3}
+          y2={top ? shaftY + 4 : shaftY + 10}
+        >
+          <stop offset="0" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#fff" />
+        </linearGradient>
+        <mask id={`${id}joint`}>
+          <path d={neck} fill={`url(#${id}joint-fade)`} />
+        </mask>
+        <linearGradient
+          id={`${id}heel-edge-fade`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          x2="0"
+          y1={paths.heel - 12}
+          y2={paths.heel - 3}
+        >
+          <stop offset="0" stopColor="#fff" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+        <mask id={`${id}heel-edge`}>
+          <rect
+            x={Math.min(...xs) - 10}
+            y={Math.min(...ys) - 10}
+            width={Math.max(...xs) - Math.min(...xs) + 20}
+            height={Math.max(...ys) - Math.min(...ys) + 20}
+            fill={`url(#${id}heel-edge-fade)`}
+          />
+        </mask>
         <radialGradient id={`${id}ball`} cx="30%" cy="25%" r="75%">
           <stop offset="0" stopColor="#fff" />
           <stop offset=".55" stopColor="#e5e9ec" />
@@ -226,7 +265,12 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               strokeLinejoin="round"
             />
           ) : null}
-          <path className="club-projection__outline" d={head} fill={`url(#${id}${p.depth ? 'crown' : 'metal'})`} />
+          <path
+            className="club-projection__outline"
+            d={head}
+            fill={`url(#${id}${p.depth ? 'crown' : 'metal'})`}
+            mask={top && !p.depth ? `url(#${id}heel-edge)` : undefined}
+          />
           <path
             d={head}
             fill="none"
@@ -234,6 +278,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
             strokeOpacity={p.depth ? '.24' : '.6'}
             strokeWidth="1.1"
             clipPath={`url(#${id}clip)`}
+            mask={top && !p.depth ? `url(#${id}heel-edge)` : undefined}
           />
           {top ? (
             <path
@@ -243,9 +288,14 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               stroke={p.depth ? 'none' : '#edf2f5'}
               strokeOpacity=".6"
               strokeWidth="1.4"
+              mask={!p.depth ? `url(#${id}heel-edge)` : undefined}
             />
           ) : (
-            <path className="club-projection__face-edge" d={paths.sideFace} />
+            <path
+              className="club-projection__face-edge"
+              d={paths.sideFace}
+              clipPath={!p.depth ? `url(#${id}clip)` : undefined}
+            />
           )}
           {top && !p.depth ? (
             <g clipPath={`url(#${id}face-clip)`}>
