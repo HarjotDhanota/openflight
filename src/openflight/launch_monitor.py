@@ -226,6 +226,8 @@ class Shot:
     impact_timestamp: Optional[float] = None
     impact_timestamp_kld7: Optional[float] = None
     club_speed_mph: Optional[float] = None
+    # Raw OPS radial ball speed, kept when the cosine correction rewrites
+    # ball_speed_mph (radar bin anchoring must keep using the radial value)
     ball_speed_raw_mph: Optional[float] = None
     ball_speed_contract: Optional[str] = None
     experimental_ball_speed_total: Optional[dict] = None

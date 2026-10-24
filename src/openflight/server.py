@@ -1956,6 +1956,9 @@ def apply_club_selection(payload):
         return {"error": "Unknown is not a selectable club"}, 400
 
     with club_selection_lock:
+        # Without a monitor (startup, or tests) the selection is still recorded
+        # and broadcast, as the Socket.IO handler always did; the monitor picks
+        # up later changes once it exists.
         if monitor is not None:
             try:
                 monitor.set_club(club)
@@ -8027,8 +8030,7 @@ def main():
         set_show_raw_readings(True)
         print("Raw radar readings display ENABLED - signed speed values will be shown")
 
-    # Start the monitor. Keep each strategy's settings isolated so the
-    # established sound and host-speed defaults remain unchanged.
+    # Start the monitor. Keep sound-only settings out of the other strategies.
     if args.trigger == "sound":
         trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
     elif args.trigger == "hardware":
