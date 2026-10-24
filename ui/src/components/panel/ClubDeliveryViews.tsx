@@ -68,6 +68,8 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   const ferruleBase = ferruleEnd + (top ? -8 : 8);
   const ferruleRadius = 4.8 + (1.6 * 8) / Math.abs(ferruleEnd - shaftY);
   const shaftRadius = 4.6 - (0.4 * (ferruleEnd - shaftY)) / (shaftEnd - shaftY);
+  const crownJoin = shaftY + (top ? -10 : 10);
+  const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
   const heelCorner = paths.top.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const neck = top
     ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${ferruleBase - 12} ${heelCorner[0] + 4} ${heelCorner[1] + 6} ${heelCorner[0] - 2} ${heelCorner[1] - 1} L ${heelCorner[0] - 5} ${heelCorner[1] - 9} L ${shaftX + 4} ${heelCorner[1] - 9} C ${shaftX + 4} ${heelCorner[1] + 2} ${shaftX + ferruleRadius} ${ferruleBase - 12} ${shaftX + ferruleRadius} ${ferruleBase} Z`
@@ -103,7 +105,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
     Math.max(...bx) - Math.min(...bx) + 20,
     Math.max(...by) - Math.min(...by) + 20,
   ];
-  const ferrule = !p.depth ? (
+  const ferrule = (
     <>
       <path
         d={`M ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX - shaftRadius} ${ferruleEnd} L ${shaftX + shaftRadius} ${ferruleEnd} L ${shaftX + ferruleRadius} ${ferruleBase} Z`}
@@ -119,22 +121,6 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
         strokeOpacity=".35"
       />
     </>
-  ) : (
-    <>
-      <path
-        d={`M ${shaftX - 4.8} ${ferruleEnd} l 0 ${top ? -6 : 6} l 9.6 0 l 0 ${top ? 6 : -6} Z`}
-        fill={`url(#${id}ferrule)`}
-      />
-      <line
-        x1={shaftX - 5.2}
-        x2={shaftX + 5.2}
-        y1={ferruleEnd + (top ? -8 : 8)}
-        y2={ferruleEnd + (top ? -8 : 8)}
-        stroke="#b9c2cb"
-        strokeWidth=".65"
-        strokeOpacity=".65"
-      />
-    </>
   );
   const hosel = (
     <g className="club-projection__hosel">
@@ -144,10 +130,10 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
         fill={`url(#${id}shaft)`}
       />
       {p.depth ? (
-        <path
-          d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
-          fill={`url(#${id}ferrule)`}
-        />
+        <>
+          <path className="club-projection__neck" d={woodNeck} fill={`url(#${id}crown)`} />
+          <path d={woodNeck} fill={`url(#${id}ferrule)`} mask={`url(#${id}joint)`} />
+        </>
       ) : !top ? (
         <>
           <path className="club-projection__neck" d={neck} fill={`url(#${id}metal)`} />
@@ -229,14 +215,14 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           gradientUnits="userSpaceOnUse"
           x1="0"
           x2="0"
-          y1={top ? paths.heel - 10 : paths.by - 3}
-          y2={top ? shaftY + 4 : shaftY + 10}
+          y1={p.depth ? crownJoin : top ? paths.heel - 10 : paths.by - 3}
+          y2={p.depth ? ferruleBase : top ? shaftY + 4 : shaftY + 10}
         >
           <stop offset="0" stopColor="#fff" stopOpacity="0" />
           <stop offset="1" stopColor="#fff" />
         </linearGradient>
         <mask id={`${id}joint`}>
-          <path d={neck} fill={`url(#${id}joint-fade)`} />
+          <path d={p.depth ? woodNeck : neck} fill={`url(#${id}joint-fade)`} />
         </mask>
         <mask
           id={`${id}body`}
