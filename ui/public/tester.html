@@ -2277,6 +2277,13 @@
       const PACKAGE_TIMEOUT_MS = 300000;
       // Save re-runs the full-frame ball search, which takes several seconds on a Pi.
       const TEE_RANGE_ACTION_TIMEOUT_MS = 90000;
+      // Older pages kept the tester ID in localStorage, where the next tester saw it:
+      // delete that copy on every load.
+      try {
+        localStorage.removeItem(TESTER_ID_STORAGE_KEY);
+      } catch {
+        // Storage can be unavailable in locked-down kiosk browser profiles.
+      }
       // The tester ID is kept for this browser tab only, so a reload keeps it but a new
       // visit starts empty: the next tester never sees the last one's ID.
       try {

@@ -30,11 +30,20 @@ function frameSvg(index: string) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="rgb(${Number(index) * 40},20,30)"/></svg>`;
 }
 
-async function mockReview(page: Page, onCompare?: (body: Record<string, unknown>) => void) {
-  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
-    key: 'openflight-tester-id',
-    value: testerId,
-  });
+async function mockReview(
+  page: Page,
+  onCompare?: (body: Record<string, unknown>) => void,
+  { preset = true } = {}
+) {
+  // the tester ID this tab already has (sessionStorage only, never localStorage)
+  if (preset) {
+    await page.addInitScript(({ key, value }) => {
+      if (!sessionStorage.getItem(key)) sessionStorage.setItem(key, value);
+    }, {
+      key: 'openflight-tester-id',
+      value: testerId,
+    });
+  }
   await page.route('**/api/tester/attempts?**', (route) => json(route, { schema_version: 1, scopes: [scope] }));
   await page.route('**/api/tester/review/captures?**', (route) =>
     json(route, {
@@ -254,7 +263,7 @@ test('late frame response cannot replace the newly selected frame', async ({ pag
 });
 
 test('late run discovery cannot restore a previous tester scope', async ({ page }) => {
-  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+  await page.addInitScript(({ key, value }) => sessionStorage.setItem(key, value), {
     key: 'openflight-tester-id',
     value: testerId,
   });
@@ -278,7 +287,7 @@ test('late run discovery cannot restore a previous tester scope', async ({ page 
 });
 
 test('a stalled saved-run read times out and leaves recovery controls available', async ({ page }) => {
-  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+  await page.addInitScript(({ key, value }) => sessionStorage.setItem(key, value), {
     key: 'openflight-tester-id',
     value: testerId,
   });
@@ -406,3 +415,23 @@ for (const viewport of KIOSK_VIEWPORTS) {
     expect(overflow.bottom).toBeLessThanOrEqual(1);
   });
 }
+
+test('the tester ID is kept for this tab only, and the old localStorage copy is deleted', async ({ page }) => {
+  await mockReview(page, undefined, { preset: false });
+  // what an older page left on the unit: never shown, and deleted on load
+  await page.addInitScript(() => localStorage.setItem('openflight-tester-id', 'someone-else'));
+  await page.goto('/track-review.html');
+  await expect(page.locator('#tester-id')).toHaveValue('');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  await page.locator('#tester-id').fill(testerId);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('openflight-tester-id'))).toBe(testerId);
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
+
+  // a reload of the same tab keeps it; a new tab starts empty
+  await page.reload();
+  await expect(page.locator('#tester-id')).toHaveValue(testerId);
+  const next = await page.context().newPage();
+  await next.goto('/track-review.html');
+  await expect(next.locator('#tester-id')).toHaveValue('');
+});

@@ -906,15 +906,23 @@
           true
         );
       }
+      // Older pages kept the tester ID in localStorage, where the next tester saw it:
+      // delete that copy on every load.
       try {
-        $('tester-id').value = localStorage.getItem(TESTER_KEY) || '';
+        localStorage.removeItem(TESTER_KEY);
+      } catch {
+        // Storage can be unavailable in locked-down kiosk browser profiles.
+      }
+      // this browser tab's tester ID only: a new visit starts empty
+      try {
+        $('tester-id').value = sessionStorage.getItem(TESTER_KEY) || '';
       } catch (error) {
         $('tester-id').value = '';
         $('storage-error').textContent = `Tester ID could not be restored: ${error.message}.`;
       }
       $('tester-id').addEventListener('input', () => {
         try {
-          localStorage.setItem(TESTER_KEY, $('tester-id').value.trim());
+          sessionStorage.setItem(TESTER_KEY, $('tester-id').value.trim());
         } catch (error) {
           $('storage-error').textContent = `Tester ID could not be saved: ${error.message}.`;
         }

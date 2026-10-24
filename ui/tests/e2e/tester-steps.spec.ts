@@ -179,11 +179,12 @@ test('an ID the server would refuse is not used, and the page says why in plain 
 
 test('a new visit starts with an empty box, even when an older page saved an ID on the unit', async ({ page, context }) => {
   await mockBase(page);
-  // what the old page left behind in localStorage is never shown
+  // what the old page left behind in localStorage is never shown, and is deleted on load
   await page.addInitScript(() => localStorage.setItem('openflight-tester-id', 'someone-else'));
   await page.goto('/tester.html');
   await expect(page.locator('#tester-current-id')).toHaveText('not chosen');
   await expect(page.locator('#tester-entry')).toHaveValue('');
+  expect(await page.evaluate(() => localStorage.getItem('openflight-tester-id'))).toBeNull();
   await pickTester(page, 'tester-2026-10-23-1');
   await expect(page.locator('#tester-current-id')).toHaveText('tester-2026-10-23-1');
 
