@@ -5,9 +5,9 @@ They contain no product artwork, logos, or model-specific surface patterns.
 Face-on geometry remains in `faceImpact.ts`; rendering changes do not alter its
 centre, outline, even rim, score lines or equipment checks.
 
-The owner chose swipe navigation at 800×480 and a side view **from the heel**
-(the golfer side) on 23 October 2026. At 1024×600 the three views sit alongside
-one another. Smaller screens also use swipe navigation, with tap alternatives.
+At 800×480 the views use swipe navigation, and the side view looks **from the
+heel** (the golfer side). At 1024×600 the three views sit alongside one another.
+Smaller screens also use swipe navigation, with tap alternatives.
 
 ## Dimensions and evidence
 
@@ -43,7 +43,7 @@ heights against `face_centre_reference.json`.
 Iron/wedge figures use `irons-3view/official_specs.csv`: parse ranges by midpoint,
 average entries within a brand/model, then give models equal weight. Exclude any
 explicit release year before 2021. Some rows have no release year and retain the
-research selection's modern-club assumption, pending Claude's audit. Iron sole
+research selection's modern-club assumption, pending an audit. Iron sole
 width: 21 models, 20.60 ± 2.17 mm; topline: 12, 5.83 ± 1.29 mm; bounce: 24,
 6.09 ± 2.42°; offset: 47, 2.97 ± 0.97 mm. Wedge sole width: only 3 models,
 23.84 ± 3.89 mm; bounce: 24, 10.44 ± 1.15°; offset: 5, 1.45 ± 0.91 mm.
@@ -51,8 +51,8 @@ Hosel-axis progression is 6 mm (assumed hosel radius) minus offset for blades.
 
 *No published wedge topline value is present. The iron aggregate is a temporary
 visual proxy, not a claimed wedge population measurement. Back profiles and
-small edge rounding are illustrative. Claude should verify these sparse inputs
-before owner review. These aggregates use the existing local research.
+small edge rounding are illustrative. These sparse inputs are unverified.
+These aggregates use the existing local research.
 
 ## Coordinates and shot values
 
@@ -75,9 +75,7 @@ Blade address silhouettes project the existing fair face contour by
 2.4 mm edge band and a topline that recedes by its thickness times cosine of loft;
 the heel neck is drawn separately from the planar blade. The address surface is
 smooth metal with a light topline/edge band; no face grooves are drawn there.
-This replaces the first
-round's rectangular blade outlines without changing face-on geometry or wood
-head shapes. Short visible shaft sections and a viewport fitted to the rotated
+Face-on geometry and wood head shapes are shared with the face view. Short visible shaft sections and a viewport fitted to the rotated
 head, ball and arrows keep the drawings readable without changing the head/ball
 size ratio. Side blades sit in front of the hosel, exposing the lofted face line,
 rounded leading edge, sole/bounce and fuller back profile.
@@ -103,11 +101,11 @@ Validation is through unit tests and mock browser captures, not hardware or
 human validation. Review screenshots live outside the repository in the shared
 `research/club-models/codex-rounds/` folder.
 
-## Sign and mathematics audit (23 October 2026)
+## Sign and mathematics audit
 
 The same physical reading keeps the same number for either handedness. Changing
 the viewing orientation is not the same operation as reflecting a physical shot.
-The Club header now uses the displayed shot's club and resolved hand, matching
+The Club header uses the displayed shot's club and resolved hand, matching
 the drawings even if the kiosk selection has since changed.
 
 | Reading | Positive direction or definition | Handedness effect on the number |
@@ -144,10 +142,10 @@ The implementation computes S with the stable equivalent
 `abs(L - A)` is exact only when the horizontal directions agree in the usual
 golf angle range. Reflecting a physical shot negates F, P and face-to-path,
 while preserving L, A and spin loft. Merely selecting the other handedness does
-not alter any supplied metric. A new backend regression independently checks
+not alter any supplied metric. A backend regression independently checks
 252 combinations against `atan2(length(n cross d), n dot d)` and their mirrors.
 
-For the owner's LH 3-wood example, the unrounded fixture has F = -3.17 degrees,
+For an LH 3-wood example, the unrounded fixture has F = -3.17 degrees,
 P = +4.23 degrees, L = 16.5 degrees and A = -4.2 degrees. It correctly displays
 face angle -3.2, path +4.2, face-to-path -7.4 and spin loft 22.0 degrees.
 The orange top-view arrow above the rightward target line represents target-left,
@@ -156,11 +154,11 @@ so its negative sign is correct. This is an open face for a left-handed golfer.
 Face-on impact dots are tested in the rotated face's local axes, not against
 screen horizontal/vertical. Browser checks recover the signed millimetres and
 projected shaft angle from actual screen transforms for every club and hand.
-The SVG viewport now encloses the rotated assembly; additional 45/75-degree
-lie cases catch clipping that the old fixed viewport allowed. The paths, centre,
+The SVG viewport encloses the rotated assembly; 45/75-degree lie cases catch
+clipping. The paths, centre,
 rim, grooves and physical scale relative to the impact dot are unchanged.
 
-Dynamic lie now has an owner-approved [camera-based estimate](dynamic-lie.md),
+Dynamic lie has a [camera-based estimate](dynamic-lie.md),
 always labelled model geometry. A missing shaft reading stays a dash. The main
 review screenshots use that unavailable state; separate synthetic tilt fixtures
 carry the MODEL label. Its visual projection follows the schematic rule above,

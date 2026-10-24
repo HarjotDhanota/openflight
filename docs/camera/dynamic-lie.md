@@ -1,6 +1,6 @@
 # Dynamic lie: camera-based estimate
 
-The owner approved a labelled estimate on 23 October 2026. This is **model
+Dynamic lie is a labelled estimate. It is **model
 geometry**, not a measured 3D shaft pose. Its accuracy has not been graded on real
 swings. The existing late camera worker publishes it in the same shot update as
 impact location, under `impact_location.dynamic_lie`. The metric catalogue turns
