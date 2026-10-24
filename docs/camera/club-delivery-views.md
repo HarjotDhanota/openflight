@@ -81,7 +81,7 @@ size ratio. Side blades sit in front of the hosel, exposing the lofted face line
 rounded leading edge, sole/bounce and fuller back profile.
 Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
-impact centre. The ball is 42.67 mm
+impact centre. The ball is 42.7 mm
 in diameter and sits beyond the arrows on the target side; its position is
 illustrative, not a measured ball location. The side face normal and loft arrow
 share the same angle. Spin loft is the backend's 3D face-normal/path separation,

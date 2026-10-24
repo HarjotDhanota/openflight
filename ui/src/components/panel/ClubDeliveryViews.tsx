@@ -18,6 +18,8 @@ import {
 import { formatMetricValue } from './metricFormat';
 import './ClubDeliveryViews.css';
 
+const BALL_RADIUS_MM = 21.35; // the 42.7 mm ball the shot models use
+
 export function DeliveryNumbers({ shot, view }: { shot: Shot; view: DeliveryView }) {
   const { t } = useI18n();
   return (
@@ -75,7 +77,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
       x * Math.sin(angle) + y * Math.cos(angle),
     ])
   );
-  bounds.push([ballX - 21.335, ballY - 21.335], [ballX + 21.335, ballY + 21.335]);
+  bounds.push([ballX - BALL_RADIUS_MM, ballY - BALL_RADIUS_MM], [ballX + BALL_RADIUS_MM, ballY + BALL_RADIUS_MM]);
   for (const value of [face, path]) {
     if (value === null) continue;
     const [x, y] = direction(top && left ? -value : value);
@@ -243,7 +245,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
             <path className="club-projection__face-edge" d={paths.sideFace} />
           )}
         </g>
-        <circle className="club-projection__ball" cx={ballX} cy={ballY} r="21.335" fill={`url(#${id}ball)`} />
+        <circle className="club-projection__ball" cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball)`} />
         {(
           [
             ['face', face],

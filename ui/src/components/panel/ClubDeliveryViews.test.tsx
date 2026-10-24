@@ -210,7 +210,7 @@ describe('club delivery drawings', () => {
       expect(attr(arrow, 'y1')).toBe(0);
       expect(arrow.parentElement).toBe(element.querySelector('.club-projection__hand'));
     }
-    expect(attr(element.querySelector('.club-projection__ball')!, 'r')).toBe(21.335);
+    expect(attr(element.querySelector('.club-projection__ball')!, 'r')).toBe(21.35);
     const head = element.querySelector('.club-projection__head')!;
     expect(head.getAttribute('transform')).toBe(
       `rotate(${view === 'top' ? -1.44 * (hand === 'left' ? 1 : -1) : CLUB_PROFILES[category].loft - 33.34})`
