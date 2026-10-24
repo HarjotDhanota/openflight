@@ -2560,12 +2560,14 @@
           }
           setupEligibility = body;
           renderSetupEligibility();
+          stepInputAnswered('setup');
           return setupReady();
         } catch (error) {
           if (version === setupRequestVersion && testerId === el('tester-id').value.trim()) {
             setupEligibility = null;
             renderSetupEligibility();
             el('setup-summary').textContent = `Setup gate unavailable: ${error.message}`;
+            stepInputAnswered('setup');
           }
           return false;
         } finally {
@@ -2926,10 +2928,12 @@
           });
           if (version !== statusRequestVersion || testerId !== el('tester-id').value.trim()) return;
           render(body);
+          stepInputAnswered('status');
         } catch {
           if (version === statusRequestVersion && testerId === el('tester-id').value.trim()) {
             el('status').dataset.state = 'unavailable';
             el('status').textContent = 'The unit is not answering. Start it with scripts/start-tester.sh.';
+            stepInputAnswered('status');
           }
         } finally {
           statusRequestRunning = false;
@@ -3532,7 +3536,8 @@
             frame.hidden = false;
             el('placement-camera-frame').replaceWith(frame);
             renderPlacementOverlay();
-            if (first && (placementMoving || currentStep() === 3)) revealStep(3);
+            // only the view this step's arrival or the tester opened; a preview reopened by a poll stays put
+            if (first && (placementMoving || liveRevealStep === 3)) revealStep(3);
           }
         });
         frame.addEventListener('error', () => {
@@ -3633,10 +3638,12 @@
           if (!body.previewing) placementPreviewShowing = false;
           renderPlacement();
           maybeOpenPlacementPreview();
+          stepInputAnswered('placement');
         } catch (error) {
           if (version === placementRequestVersion && testerId === currentTester()) {
             el('placement-summary').className = 'problem';
             el('placement-summary').textContent = `The ball box step is unavailable: ${error.message}`;
+            stepInputAnswered('placement');
           }
         } finally {
           placementRequestRunning = false;
@@ -3706,7 +3713,10 @@
         }
       }
 
-      el('placement-show').addEventListener('click', () => submitPlacement('show'));
+      el('placement-show').addEventListener('click', () => {
+        liveRevealStep = 3; // asked for by the tester: the picture comes up under the bars
+        submitPlacement('show');
+      });
       el('placement-confirm').addEventListener('click', () => {
         if (placementState?.ball?.state !== 'found') return;
         submitPlacement('confirm', { request_id: newAttemptId() });
@@ -4019,7 +4029,8 @@
             if (aimFullOpen) el('aim-full-frame').src = frame.src;
             if (first) renderAim();
             else renderAimDraft();
-            if (first && (aimMoving || currentStep() === 4)) revealStep(4);
+            // only the view this step's arrival or the tester opened; a preview reopened by a poll stays put
+            if (first && (aimMoving || liveRevealStep === 4)) revealStep(4);
           }
         });
         frame.addEventListener('error', () => {
@@ -4121,10 +4132,12 @@
           if (!body.previewing) aimPreviewShowing = false;
           renderAim();
           maybeOpenAimPreview();
+          stepInputAnswered('aim');
         } catch (error) {
           if (version === aimRequestVersion && testerId === currentTester()) {
             el('aim-summary').className = 'problem';
             el('aim-summary').textContent = `The aim point step is unavailable: ${error.message}`;
+            stepInputAnswered('aim');
           }
         } finally {
           aimRequestRunning = false;
@@ -4209,7 +4222,10 @@
           request_id: newAttemptId(),
         });
       }
-      el('aim-show').addEventListener('click', () => submitAim('show'));
+      el('aim-show').addEventListener('click', () => {
+        liveRevealStep = 4; // asked for by the tester: the picture comes up under the bars
+        submitAim('show');
+      });
       el('aim-confirm').addEventListener('click', confirmAim);
       el('aim-full-confirm').addEventListener('click', confirmAim);
       el('aim-skip').addEventListener('click', () => submitAim('skip', { request_id: newAttemptId() }));
@@ -5110,10 +5126,12 @@
             setTeeRangeActionError(null);
           }
           renderTeeRange();
+          stepInputAnswered('teeRange');
         } catch (error) {
           if (testerId !== el('tester-id').value.trim()) return;
           el('automatic-range-summary').className = 'problem';
           el('automatic-range-summary').textContent = `Automatic range unavailable: ${error.message}`;
+          stepInputAnswered('teeRange');
           // an unreadable ball range has no camera to take: the other steps may open theirs
           if (!teeRangeKnown()) {
             teeRangeKnownFor = testerId;
@@ -6294,9 +6312,11 @@
           if (version !== ladderRequestVersion || testerId !== el('tester-id').value.trim()) return;
           renderLadder(state);
           kioskShotTick();
+          stepInputAnswered('ladder');
         } catch (error) {
           if (version === ladderRequestVersion && testerId === el('tester-id').value.trim()) {
             el('ladder-panel').textContent = `Ladder status is unavailable: ${error.message}`;
+            stepInputAnswered('ladder');
           }
         } finally {
           ladderRequestRunning = false;
@@ -6458,6 +6478,7 @@
           return;
         }
         el('tester-id').value = id;
+        resetStepReveal(); // the new tester's steps scroll into view once their polls answer
         suiteActionVersion += 1;
         try {
           sessionStorage.setItem(TESTER_ID_STORAGE_KEY, currentTester());
@@ -6772,6 +6793,7 @@
         }
         renderLens();
         buildLadderControls();
+        stepInputAnswered('lens');
       }
 
       // a lens's settings: its modes, its default mode and its ladder, tapped from the allowed list
@@ -6916,10 +6938,71 @@
       function revealStep(step) {
         const views = { 3: ['placement-preview', 'placement-stage'], 4: ['aim-preview', 'aim-stage'] };
         const [preview, stage] = views[step] || [];
-        const target = preview && !el(preview).hidden ? el(stage) : el(`step-${step}`);
-        target.scrollIntoView({ block: 'start' });
+        const showing = Boolean(preview) && !el(preview).hidden;
+        // a live view still opening moves up under the bars on its first picture, once
+        liveRevealStep = preview && !showing ? step : null;
+        (showing ? el(stage) : el(`step-${step}`)).scrollIntoView({ block: 'start' });
       }
-      let revealedStep = null;
+
+      // (23 Oct) The page scrolls by itself only when the tester moves on, never because a
+      // poll changed its mind. Every step is worked out from its own poll, and the polls
+      // answer in any order and now and then miss one (a timeout, a busy unit, a reading
+      // that wobbles): each such change used to scroll the page to the step it pointed at,
+      // and back again on the next poll. So:
+      // - nothing scrolls until every poll that decides the steps so far has answered once;
+      // - after that it scrolls only to a step further on than any it has shown, never
+      //   back, and never again to one it has already shown;
+      // - the tester's own tap at or before the current step lets the steps after it
+      //   scroll into view again as they open (a start over, a new lens).
+      const STEP_INPUTS = {
+        1: ['lens'],
+        2: ['setup'],
+        3: ['placement'],
+        4: ['aim'],
+        5: ['status'],
+        6: ['teeRange'],
+        7: ['ladder', 'status'],
+      };
+      const answeredStepInputs = new Set();
+      let revealedStep = null; // the step last worked out once its polls had answered
+      let furthestStep = 0; // the furthest step the page has scrolled to by itself
+      let liveRevealStep = null; // the step whose live view moves up on its first picture
+      function stepInputAnswered(name) {
+        if (answeredStepInputs.has(name)) return;
+        answeredStepInputs.add(name);
+        renderSteps();
+      }
+      function stepsSettled(now) {
+        if (!currentTester()) return true;
+        for (let step = 1; step <= Math.min(now, 7); step += 1) {
+          if (!STEP_INPUTS[step].every((name) => answeredStepInputs.has(name))) return false;
+        }
+        return true;
+      }
+      function resetStepReveal() {
+        answeredStepInputs.clear();
+        revealedStep = null;
+        furthestStep = 0;
+        liveRevealStep = null;
+      }
+      // the tester working at or before the current step: what opens next scrolls into view
+      document.addEventListener(
+        'click',
+        (event) => {
+          const section = event.target.closest?.('section.step');
+          const match = /^step-(\d)$/.exec(section?.id ?? '');
+          const now = currentStep();
+          if (match && Number(match[1]) <= now && revealedStep === now) furthestStep = Math.min(furthestStep, now);
+        },
+        true
+      );
+      // the tester scrolling the page themselves: a live view opening later stays where it is
+      for (const type of ['wheel', 'touchmove']) {
+        window.addEventListener(type, () => (liveRevealStep = null), { passive: true });
+      }
+      window.addEventListener('keydown', (event) => {
+        if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) liveRevealStep = null;
+      });
 
       // (10) one step sequence, and a sticky “You are here” that scrolls to the next open step
       let lightMeasured = false;
@@ -6988,15 +7071,18 @@
         if (changed || captureChanged) {
           document.dispatchEvent(new CustomEvent('tester-step', { detail: { step: now, label } }));
         }
-        if (now !== revealedStep) {
+        if (now !== revealedStep && stepsSettled(now)) {
           const first = revealedStep === null;
           revealedStep = now;
-          // the page opens at the top on step 1; any later step scrolls into view
-          if (!(first && now === 1)) queueMicrotask(() => revealStep(now));
+          // the page opens at the top on step 1; a later step scrolls into view once, as it opens
+          if (first ? now !== 1 : now > furthestStep) queueMicrotask(() => revealStep(now));
+          furthestStep = first ? now : Math.max(furthestStep, now);
         }
       }
       el('stepbar-here').addEventListener('click', () => {
-        el(`step-${currentStep()}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const now = currentStep();
+        el(`step-${now}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
+        furthestStep = Math.min(furthestStep, now);
       });
       el('setup-physical-confirm').addEventListener('change', () => {
         physicalConfirmationDraft = el('setup-physical-confirm').checked;
