@@ -2300,8 +2300,11 @@ def test_a_validation_without_a_range_is_not_compared():
     assert ts.camera_validation_agreement(arm5, arm6)["status"] == "not_compared"
 
 
-def test_a_pending_range_still_hands_swings_the_solved_lens_height():
+def test_a_pending_range_still_hands_swings_the_solved_lens_height(tmp_path, monkeypatch):
     # wiring audit S6: a unit on a box without a range for swings
+    from openflight.camera import lens_profiles  # noqa: PLC0415
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
     boxed, _level = _heights()
     solution = tee_range.TeeRangeSolution.unresolved(
         (_accepted_iwr(), _camera_candidate("arm5", boxed)), reason="test"
@@ -2313,6 +2316,43 @@ def test_a_pending_range_still_hands_swings_the_solved_lens_height():
     assert handed["tee_m"] is None
     assert handed["solved_camera_height_m"] == pytest.approx(0.40, abs=0.003)
     assert handed["scene"]["ball_height_m"] == pytest.approx(0.02135)
+
+    # and the kiosk started from the setup record runs at that height, range pending
+    rig = Path(ts.DEFAULT_RIG_GEOMETRY)
+    lens = lens_profiles.active_lens(
+        RigGeometry.from_json(rig),
+        lens_profiles.load_catalogue(),
+        None,
+        [lens_profiles.default_calibration_dir()],
+    )
+    box = {
+        "mode": "fixed",
+        "box_px": [480, 380, 800, 520],
+        "frame_size_px": [1280, 800],
+        "ball_at_confirm": {"state": "found", "center_px": [640.0, 450.0], "diameter_px": 20.0},
+    }
+    path = tmp_path / ts.SETUP_FILE
+    ts.write_tester_setup(
+        path,
+        ts.tester_setup_sections(
+            solution,
+            placement_box_record=box,
+            target_line_record=None,
+            net_line=None,
+            rig_geometry=rig,
+            lens=lens,
+        ),
+    )
+    command = ["--iwr6843", "--setup-file", str(path), "--inclinometer"]
+
+    session = _session_start_for(command, rig, tmp_path, monkeypatch)
+
+    record = session["setup"]["record"]
+    assert record["ball_range"]["state"] == "not_set"
+    assert record["scene"]["state"] == "set"
+    assert session["scene"]["lens_height_used_source"] == "radar_solved_height"
+    assert session["scene"]["lens_height_used_m"] == pytest.approx(0.40, abs=0.003)
+    assert session["tee_range_handoff"]["status"] == "pending"
 
 
 def test_setup_captures_go_through_the_held_radar_session(tmp_path, inputs, monkeypatch):
@@ -2572,20 +2612,31 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
 
     session = _session_start_for(command, inputs["rig"], tmp_path, monkeypatch)
 
-    # the record's ball range is the camera's prior, and nothing in it reads stale
+    # the tester's files and session_start agree: the setup record's range, as a prior
+    kiosk = handed["kiosk_setup"]
+    tee = kiosk["tee"]
+    assert kiosk["file"] == setup_file
+    assert session["setup"]["revision"] == kiosk["revision"]
+    assert tee["used_as"] == "prior"
+    assert tee["qualification"] == handed["tee_range_source"]
+    assert tee["candidate_id"] == handed["candidate_id"]
+    assert tee["range_m"] == pytest.approx(prior["range_m"])
     assert session["tee_range_handoff"] == {
         "tee_slant_range_m": None,
         "status": "prior",
-        "source": "camera_prior",
-        "candidate_id": None,
+        "source": tee["source"],
+        "candidate_id": tee["candidate_id"],
+        "qualification": tee["qualification"],
         "prior": {
-            "range_m": pytest.approx(prior["range_m"]),
-            "uncertainty_m": pytest.approx(prior["uncertainty_m"], rel=1e-5),
-            "source": "camera_prior",
+            "range_m": pytest.approx(tee["range_m"]),
+            "uncertainty_m": pytest.approx(tee["uncertainty_m"], rel=1e-5),
+            "source": tee["source"],
             "label": "estimated",
         },
         "per_shot_range": "iwr_post_impact_else_camera_prior",
     }
+    assert session["net_range"]["net_range_m"] == pytest.approx(kiosk["net"]["value_m"])
+    assert session["net_range"]["source"] == kiosk["net"]["source"]
     record = session["setup"]["record"]
     assert {name: record[name]["state"] for name in ("box", "ball_range", "scene")} == {
         "box": "confirmed",
@@ -2594,7 +2645,7 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     }
     for key in ("reference", "lens_height_used_m", "rig_lens_height_m", "ball_height_m"):
         assert session["scene"][key] == pytest.approx(scene[key], abs=1e-6), key
-    assert session["scene"]["lens_height_used_source"] == "rig_nominal"
+    assert session["scene"]["lens_height_used_source"] == kiosk["scene"]["source"]
     hashes = {
         "rig_geometry_file_sha256": file_hash(inputs["rig"]),
         "rig_geometry_params_sha256": session["rig_geometry"]["snapshot"]["sha256"],

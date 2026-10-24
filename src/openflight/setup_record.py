@@ -21,7 +21,8 @@ _INPUT_KEYS = {
     "aim": ("box_id",),
     "ball_range": ("box_id",),
     "net_range": ("floor_line", "lens_id", "tilt_deg"),
-    "scene": ("ball_range_m",),
+    # a lens height is solved against the box's ball, with or without a ball range
+    "scene": ("box_id",),
 }
 
 
@@ -118,14 +119,14 @@ def evaluate(record: dict, ctx: StartContext, *, tilt_margin_deg: float) -> dict
         inputs = out[name].get("inputs")
         if not isinstance(inputs, dict):
             return "no inputs recorded"
-        box, aim, ball = out["box"], out["aim"], out["ball_range"]
+        box, aim = out["box"], out["aim"]
         if name == "box":
             return (
                 _changed("lens", inputs.get("lens_id"), ctx.lens_id)
                 or _changed("rig", inputs.get("rig_sha256"), ctx.rig_sha256)
                 or _tilt_changed(inputs.get("tilt_deg"), ctx.tilt_offset_deg, tilt_margin_deg)
             )
-        if name in ("aim", "ball_range"):
+        if name in ("aim", "ball_range", "scene"):
             return blocked("box") or _changed("box", inputs.get("box_id"), box.get("id"))
         if name == "net_range":
             return (
@@ -134,9 +135,7 @@ def evaluate(record: dict, ctx: StartContext, *, tilt_margin_deg: float) -> dict
                 or blocked("aim")
                 or _changed("floor line", inputs.get("floor_line"), aim.get("floor_line"))
             )
-        return blocked("ball_range") or _changed(
-            "ball range", inputs.get("ball_range_m"), ball.get("range_m")
-        )
+        raise ValueError(f"unknown setup section {name!r}")
 
     for name in SECTIONS:
         if out[name].get("state") in ("not_set", "stale"):

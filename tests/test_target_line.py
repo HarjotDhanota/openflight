@@ -214,7 +214,7 @@ def test_moves_compare_in_pixels_within_the_tolerance():
     assert tl.target_line_moved(None, base)
 
 
-def test_the_hand_off_passes_one_value_to_both_flags():
+def test_the_hand_off_records_one_offset_for_camera_and_iwr():
     camera = _camera()
     record = tl.target_line_record(
         camera,
@@ -224,25 +224,23 @@ def test_the_hand_off_passes_one_value_to_both_flags():
         roll_deg=0.0,
     )
 
-    args, handed = tl.handoff(record, target_distance_m=4.6, distance_basis="default_not_measured")
+    handed = tl.handoff(record, target_distance_m=4.6, distance_basis="default_not_measured")
 
-    camera_value = float(args[args.index("--camera-capture-horizontal-offset-deg") + 1])
-    iwr_value = float(args[args.index("--iwr6843-azimuth-offset-deg") + 1])
-    assert camera_value == iwr_value == pytest.approx(-2.5, abs=0.01)
+    assert handed["kiosk_offset_deg"] == pytest.approx(-2.5, abs=0.01)
+    assert handed["applies_to"]["camera_yaw_deg"] == handed["applies_to"]["iwr_yaw_deg"]
     assert handed["status"] == "set"
     assert handed["source"] == "aim_point"
     assert handed["yaw_deg"] == pytest.approx(record["yaw_deg"])
-    assert handed["kiosk_offset_deg"] == pytest.approx(camera_value, abs=1e-6)
+    assert handed["kiosk_offset_deg"] == pytest.approx(-handed["yaw_deg"], abs=1e-4)
     assert handed["aim_px"] == record["aim_px"]
     assert handed["method"] == "direction"
     assert handed["uncertainty"]["parallax_basis"] == "default_not_measured"
     assert handed["uncertainty"]["total_deg"] >= record["uncertainty"]["total_deg"]
 
 
-def test_no_aim_point_passes_no_flags_and_says_so():
-    args, handed = tl.handoff(None, target_distance_m=None, distance_basis=None)
+def test_no_aim_point_says_so():
+    handed = tl.handoff(None, target_distance_m=None, distance_basis=None)
 
-    assert args == []
     assert handed["status"] == "not_set"
     assert handed["yaw_deg"] is None
 
@@ -354,21 +352,18 @@ def test_the_hand_off_tells_the_kiosk_the_line_and_its_one_plus_minus():
         roll_deg=0.0,
     )
 
-    args, handed = tl.handoff(record, target_distance_m=2.2, distance_basis="test")
+    handed = tl.handoff(record, target_distance_m=2.2, distance_basis="test")
 
-    assert float(args[args.index("--target-line-yaw-deg") + 1]) == pytest.approx(
-        record["yaw_deg"], abs=1e-4
+    assert handed["yaw_deg"] == pytest.approx(record["yaw_deg"], abs=1e-4)
+    assert handed["total_uncertainty_deg"] == pytest.approx(
+        handed["uncertainty"]["total_deg"], abs=1e-3
     )
-    assert float(args[args.index("--target-line-uncertainty-deg") + 1]) == pytest.approx(
-        handed["total_uncertainty_deg"], abs=1e-3
-    )
-    assert args[args.index("--target-line-source") + 1] == "aim_point"
+    assert handed["source"] == "aim_point"
 
 
 def test_a_skipped_aim_point_hands_over_the_boresight_frame_labelled():
-    args, handed = tl.handoff(tl.skipped_record(), target_distance_m=None, distance_basis=None)
+    handed = tl.handoff(tl.skipped_record(), target_distance_m=None, distance_basis=None)
 
-    assert "--camera-capture-horizontal-offset-deg" not in args
-    assert args == ["--target-line-status", "skipped"]
     assert handed["status"] == "skipped"
+    assert handed["kiosk_offset_deg"] is None
     assert "boresight" in handed["reason"]

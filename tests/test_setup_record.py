@@ -50,7 +50,7 @@ def _confirmed_record() -> dict:
         },
         "scene": {
             "state": "confirmed",
-            "inputs": section_inputs("scene", ball_range_m=1.9),
+            "inputs": section_inputs("scene", box_id="b1"),
         },
     }
 
@@ -155,12 +155,25 @@ def test_net_range_follows_the_aim_floor_line():
     assert "floor line" in out["net_range"]["reason"]
 
 
-def test_scene_follows_ball_range():
+def test_scene_follows_the_box_it_was_solved_against():
     record = _confirmed_record()
-    record["ball_range"]["range_m"] = 2.4
+    record["box"]["id"] = "b2"
     out = evaluate(record, _ctx(), tilt_margin_deg=1.0)
-    assert out["ball_range"]["state"] == "confirmed"
     assert out["scene"]["state"] == "stale"
+    assert "box changed" in out["scene"]["reason"]
+
+
+def test_a_solved_scene_stands_while_the_ball_range_is_pending():
+    record = _confirmed_record()
+    record["ball_range"] = {"state": "not_set", "reason": "pending"}
+    out = evaluate(record, _ctx(), tilt_margin_deg=1.0)
+    assert out["scene"]["state"] == "confirmed"
+
+
+def test_a_stale_box_stales_the_scene():
+    out = evaluate(_confirmed_record(), _ctx(lens_id="6mm"), tilt_margin_deg=1.0)
+    assert out["scene"]["state"] == "stale"
+    assert "box is stale" in out["scene"]["reason"]
 
 
 def test_not_set_sections_stay_not_set(tmp_path):

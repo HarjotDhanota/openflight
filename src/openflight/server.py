@@ -1705,16 +1705,18 @@ def apply_setup_ball_range(rng: dict | None) -> None:
     from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
 
     prior = side = None
+    provenance = {"candidate_id": None, "qualification": None}
     if rng is not None:
         prior = LaunchRangePrior(
             range_m=rng["range_m"], uncertainty_m=rng["uncertainty_m"], source=rng.get("source")
         )
         if rng.get("side_offset_m") is not None:
             side = _finite_number(rng["side_offset_m"], "side_offset_m")
-    _when_idle(lambda: _set_ball_range(prior, side))
+        provenance = {key: rng.get(key) for key in provenance}
+    _when_idle(lambda: _set_ball_range(prior, side, provenance))
 
 
-def _set_ball_range(prior, side: float | None) -> None:
+def _set_ball_range(prior, side: float | None, provenance: dict | None = None) -> None:
     global _ball_at_address_range  # pylint: disable=global-statement
     _ball_at_address_range = (None, prior)
     locator = ball_at_address_monitor
@@ -1734,11 +1736,14 @@ def _set_ball_range(prior, side: float | None) -> None:
         )
     if camera_capture_config.get("enabled"):
         camera_capture_config["tee_side_offset_m"] = side
+    provenance = provenance or {}
     setup_handoff_config["tee_range"] = {
         "tee_slant_range_m": None,
         "status": "prior" if prior is not None else "pending",
         "source": prior.source if prior is not None else "pending",
-        "candidate_id": None,
+        "candidate_id": provenance.get("candidate_id"),
+        # how its maker qualified the range (the tester's tee-range source), for review
+        "qualification": provenance.get("qualification"),
         **(
             {
                 "prior": {**prior.to_dict(), "label": "estimated"},

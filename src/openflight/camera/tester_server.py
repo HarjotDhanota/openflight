@@ -1414,10 +1414,11 @@ def tee_range_choice(
     experimental decision)``. The camera's coarse distance goes over as a prior, never a range."""
     candidate = None
     prior_candidate = camera_prior_choice(solution)
-    experimental, decision = experimental_tee_range_choice(solution)
+    experimental, decision = (
+        experimental_tee_range_choice(solution) if prior_candidate is None else (None, None)
+    )
     if prior_candidate is not None:
         status, source = "prior", CAMERA_PRIOR_SOURCE
-        decision = None
     elif solution is not None and solution.status == "resolved":
         status, source = "resolved", "qualified_static_iwr"
         candidate = next(
@@ -1520,6 +1521,8 @@ def _box_setup_section(
         return _not_set("no box confirmed for this setup")
     if record.get("mode") != placement_box.MODE:
         return _not_set("an older dragged box: confirm the box again")
+    if not record.get("frame_size_px"):
+        return _not_set("box saved without its picture size: confirm it again")
     found = _box_ball(solution, record)
     if found is None:
         return _not_set("the camera found no ball in the box: confirm the box again")
@@ -1534,7 +1537,7 @@ def _box_setup_section(
         box_px=box_px,
         ball_px=centre,
         diameter_px=diameter,
-        image_size_px=list(record.get("frame_size_px") or [1280, 800]),
+        image_size_px=list(record["frame_size_px"]),
         tilt_pad_deg=pads.get("search_pad_deg"),
         roll_pad_deg=pads.get("roll_pad_deg"),
         ctx=ctx,
@@ -1596,7 +1599,7 @@ def _ball_range_setup_section(
 ) -> dict:
     if not _set(box):
         return _not_set(f"box is {box['state']}: confirm the box first")
-    status, _source, candidate, prior, decision = tee_range_choice(
+    status, source, candidate, prior, decision = tee_range_choice(
         solution, use_unqualified=use_unqualified
     )
     if prior is not None:
@@ -1611,6 +1614,8 @@ def _ball_range_setup_section(
             diameter_px=facts.get("diameter_px") or box["diameter_px"],
             source="camera_prior",
             box_id=box["id"],
+            qualification=source,
+            candidate_id=prior.candidate_id,
         )
     if candidate is None:
         return _not_set(f"no ball range yet ({status}): finish the ball range step")
@@ -1623,30 +1628,34 @@ def _ball_range_setup_section(
         side_offset_m=decision.get("side_offset_m") if paired else None,
         ball_px=box["ball_px"],
         diameter_px=box["diameter_px"],
-        # the static radar diagnostic's range, a prior like the camera's
+        # the static radar diagnostic's range, a prior like the camera's; how it was
+        # qualified (qualified_static_iwr, or how it went unqualified) rides beside it
         source="radar",
         box_id=box["id"],
+        qualification=source,
+        candidate_id=candidate.candidate_id,
     )
 
 
 def _scene_setup_section(
-    solution: tee_range.TeeRangeSolution | None, ball_range: Mapping, rig_geometry: Path | None
+    solution: tee_range.TeeRangeSolution | None, box: Mapping, rig_geometry: Path | None
 ) -> dict:
-    if not _set(ball_range):
-        return _not_set(f"ball range is {ball_range['state']}")
+    if not _set(box):
+        return _not_set(f"box is {box['state']}: confirm the box first")
+    # a gross-error height stands even while the range is pending (wiring audit S6)
     height = _setup_camera_height_m(solution)
     if height is not None:
         return setup_service.scene_section(
             lens_height_m=height,
             uncertainty_m=(_setup_camera_height(solution) or {}).get("uncertainty_m"),
             source="radar_solved_height",
-            ball_range_m=ball_range["range_m"],
+            box_id=box["id"],
         )
     return setup_service.scene_section(
         lens_height_m=_rig_lens_height_m(rig_geometry),
         uncertainty_m=None,
         source="rig_nominal",
-        ball_range_m=ball_range["range_m"],
+        box_id=box["id"],
     )
 
 
@@ -1677,7 +1686,46 @@ def tester_setup_sections(  # pylint: disable=too-many-arguments
         "aim": aim,
         "ball_range": ball_range,
         "net_range": _net_setup_section(target_line_record, aim, solution, net_line, ctx),
-        "scene": _scene_setup_section(solution, ball_range, rig_geometry),
+        "scene": _scene_setup_section(solution, box, rig_geometry),
+    }
+
+
+def kiosk_setup_summary(path: Path, record: Mapping) -> dict:
+    """What a kiosk started from this setup record applies: the tee as a prior, the net
+    and the lens height with their sources as written, and the record's revision."""
+    rng, net, scene = record["ball_range"], record["net_range"], record["scene"]
+    tee_keys = (
+        "range_m",
+        "uncertainty_m",
+        "side_offset_m",
+        "source",
+        "qualification",
+        "candidate_id",
+    )
+    return {
+        "file": str(path),
+        "revision": record["revision"],
+        "tee": (
+            {"used_as": "prior", **{key: rng.get(key) for key in tee_keys}}
+            if _set(rng)
+            else {"used_as": None, "state": rng.get("state"), "reason": rng.get("reason")}
+        ),
+        "net": (
+            {"value_m": net["value_m"], "source": net.get("source"), "state": net["state"]}
+            if _set(net) and net.get("value_m") is not None
+            else {
+                "value_m": DEFAULT_NET_RANGE_M,
+                "source": "default_not_measured",
+                "state": net.get("state"),
+                "reason": net.get("reason"),
+            }
+        ),
+        "scene": (
+            {"lens_height_m": scene.get("lens_height_m"), "source": scene.get("source")}
+            if _set(scene)
+            else {"lens_height_m": None, "source": "rig_nominal", "state": scene.get("state")}
+        ),
+        "sections": {name: record[name] for name in setup_record.SECTIONS},
     }
 
 
@@ -1704,10 +1752,11 @@ def tee_range_handoff(
     lens=None,
     camera_tilt_path: Path | None = None,
 ) -> tuple[list[str], dict]:
-    """The kiosk's lens and camera-tilt arguments, and the record of the setup handed over.
+    """The kiosk's lens and camera-tilt arguments, and the record of what the setup chose.
 
     The box, aim, ball range, net and scene reach the kiosk in the tester's setup record
-    (``tester_setup_sections``); the record here says what that setup was.
+    (``tester_setup_sections``). A launch adds ``kiosk_setup`` to this record
+    (``kiosk_setup_summary``): what the kiosk applies from it, the tee as a prior.
 
     ``camera_tilt_calibration`` is the unit's camera tilt (P8-5); a calibrated one
     is handed to the kiosk, which records it in session_start.
@@ -1720,8 +1769,8 @@ def tee_range_handoff(
     empty capture where it puts it. ``lens`` is the lens on the unit: the kiosk's
     camera metrics take its focal length (``--camera-lens-id``).
 
-    The record goes into arm.json, setup_admission.json and the run's tee_range.json,
-    so the tester's files say what the kiosk ran with (wiring audit S3).
+    The record goes into arm.json, setup_admission.json and the run's tee_range.json;
+    with ``kiosk_setup`` they say what the kiosk ran with (wiring audit S3).
     """
     status, source, candidate, prior_candidate, decision = tee_range_choice(
         solution, use_unqualified=use_unqualified
@@ -1760,7 +1809,7 @@ def tee_range_handoff(
     # D34: a direction's parallax is bounded at the net's distance beyond the ball: the
     # measured net, or the swing server's default
     distance_m, distance_basis = target_line_distance(net, tee_m)
-    _line_args, line = target_line.handoff(
+    line = target_line.handoff(
         target_line_record, target_distance_m=distance_m, distance_basis=distance_basis
     )
     if lens is not None and lens.lens_id is not None:
@@ -8768,7 +8817,8 @@ def create_app(
             box_config=box_config,
             use_unqualified=use_unqualified_tee_range,
         )
-        return write_tester_setup(root / SETUP_FILE, sections)
+        path = root / SETUP_FILE
+        return kiosk_setup_summary(path, write_tester_setup(path, sections))
 
     def target_line_runs(tester_id: str, current: Mapping | None) -> dict:
         """Each mode's last hand-off, against the confirmed target line (D34)."""
@@ -8797,7 +8847,7 @@ def create_app(
         distance_m, basis = target_line_distance(
             (handed or {}).get("net_range"), (handed or {}).get("tee_m")
         )
-        _args, line = target_line.handoff(
+        line = target_line.handoff(
             current_target_line(tester_id, eligibility),
             target_distance_m=distance_m,
             distance_basis=basis,
@@ -10826,10 +10876,10 @@ def create_app(
                         tester_root(sessions_root, params.tester_id),
                         timeout_s=session_bundle.WRITER_WAIT_S,
                     ):
+                        handed["kiosk_setup"] = write_setup(params.tester_id, eligibility, solution)
                         write_setup_admission(
                             run_dir, params.tester_id, eligibility, solution, reference, handed
                         )
-                        write_setup(params.tester_id, eligibility, solution)
                         tee_range.write_solution(
                             run_dir / "tee_range.json", solution, handed_to_swings=handed
                         )
@@ -10864,7 +10914,8 @@ def create_app(
                     params,
                     capture_gain=gain,
                     capture_exposure_us=exposure_us,
-                    # the range the kiosk runs with, not only a qualified one (S3)
+                    # the range the setup chose, not only a qualified one (S3); the kiosk
+                    # takes it as a prior, as handed_to_swings.kiosk_setup records
                     tee_range_m=handed["tee_m"],
                     tee_range_source=handed["tee_range_source"],
                     tee_range_validation_truth_m=(
@@ -11305,10 +11356,10 @@ def create_app(
                 tester_root(sessions_root, tester_id),
                 timeout_s=session_bundle.WRITER_WAIT_S,
             ):
+                handed["kiosk_setup"] = write_setup(tester_id, admitted_setup[tester_id], solution)
                 write_setup_admission(
                     run, tester_id, admitted_setup[tester_id], solution, reference, handed
                 )
-                write_setup(tester_id, admitted_setup[tester_id], solution)
                 tee_range.write_solution(run / "tee_range.json", solution, handed_to_swings=handed)
                 write_arm_state(
                     sessions_root,

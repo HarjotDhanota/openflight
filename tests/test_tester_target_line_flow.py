@@ -256,7 +256,8 @@ def test_swings_hand_one_yaw_to_both_kiosk_flags_and_record_it(tmp_path, inputs,
     admission = json.loads((run_dir / "setup_admission.json").read_text(encoding="utf-8"))
     assert admission["handed_to_swings"] == handed
     # the yaw reaches the kiosk in the setup record, one value for the camera and the IWR
-    assert tl.CAMERA_FLAG not in command and tl.IWR_FLAG not in command
+    assert "--camera-capture-horizontal-offset-deg" not in command
+    assert "--iwr6843-azimuth-offset-deg" not in command
     setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
     assert setup["aim"]["yaw_deg"] == pytest.approx(line["yaw_deg"])
     assert setup["aim"]["iwr_yaw_deg"] == pytest.approx(line["applies_to"]["iwr_yaw_deg"])
@@ -290,8 +291,7 @@ def test_swings_without_an_aim_point_pass_no_yaw_and_say_so(tmp_path, inputs, mo
     assert run_swings(client, tester).status_code == 202
     handed = ts.read_arm_state(tmp_path / "sessions", tester, "arm5")["handed_to_swings"]
 
-    assert tl.CAMERA_FLAG not in handed["cli_args"]
-    assert tl.IWR_FLAG not in handed["cli_args"]
+    assert handed["cli_args"] == []
     assert handed["target_line"]["status"] == "not_set"
     command = app.config["TEST_STATIC_MANAGER"].last_command
     setup = ts.setup_record.load(Path(command[command.index("--setup-file") + 1]))
@@ -400,7 +400,7 @@ def test_the_aim_can_be_skipped_and_swings_say_they_use_the_boresight(
     drive(client, tester)
     assert run_swings(client, tester).status_code == 202
     handed = ts.read_arm_state(tmp_path / "sessions", tester, "arm5")["handed_to_swings"]
-    assert tl.CAMERA_FLAG not in handed["cli_args"]
+    assert handed["cli_args"] == []
     assert handed["target_line"]["status"] == "skipped"
     assert "boresight" in handed["target_line"]["reason"]
     command = app.config["TEST_STATIC_MANAGER"].last_command

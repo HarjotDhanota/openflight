@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import kiosk_extensions, server, tee_range, tester_hooks
+from openflight import kiosk_extensions, review_metrics, server, tee_range, tester_hooks
 from openflight.camera import lens_profiles, placement_box, tester_server as ts
 from openflight.camera.capture_runtime import CameraCaptureSettings
 from openflight.rig_geometry import RigGeometry
@@ -230,13 +230,33 @@ def test_the_tester_s_sections_are_the_kiosk_s_shape():
     rng = sections["ball_range"]
     assert rng["source"] == "camera_prior"
     assert (rng["range_m"], rng["uncertainty_m"], rng["side_offset_m"]) == (2.31, 0.35, 0.02)
+    assert rng["qualification"] == "camera_size_coarse"
+    assert rng["candidate_id"] == "camera-prior-epoch-1"
     assert rng["inputs"] == {"box_id": box["id"]}
     net = sections["net_range"]
     assert net["state"] == "default" and net["value_m"] == 4.6
     assert net["source"] == "default_not_measured"
     scene = sections["scene"]
     assert scene["source"] == "rig_nominal" and scene["state"] == "default"
-    assert scene["inputs"] == {"ball_range_m": 2.31}
+    assert scene["inputs"] == {"box_id": box["id"]}
+
+
+def test_a_box_saved_without_its_picture_size_is_not_set():
+    record = {key: value for key, value in _box_record().items() if key != "frame_size_px"}
+
+    box = ts.tester_setup_sections(
+        _prior_solution(),
+        placement_box_record=record,
+        target_line_record=None,
+        net_line=None,
+        rig_geometry=RIG,
+        lens=_lens(),
+    )["box"]
+
+    assert box == {
+        "state": "not_set",
+        "reason": "box saved without its picture size: confirm it again",
+    }
 
 
 def test_an_unbounded_aim_is_not_set_unless_its_direction_is_bounded():
@@ -260,10 +280,82 @@ def test_radar_diagnostic_supplies_radar_range_via_hook():
     rng = sections["ball_range"]
     assert rng["source"] == "radar"
     assert (rng["range_m"], rng["uncertainty_m"], rng["side_offset_m"]) == (2.274, 0.04, -0.03)
+    # how the diagnostic's range was qualified rides beside it, a prior either way
+    assert rng["qualification"] == "patch_validated_static_iwr_coherent_magnitude"
+    assert rng["candidate_id"] == "patch-ball-epoch-1"
     scene = sections["scene"]
     assert scene["source"] == "radar_solved_height" and scene["state"] == "set"
     assert scene["lens_height_m"] == 0.181 and scene["uncertainty_m"] == 0.02
-    assert scene["inputs"] == {"ball_range_m": 2.274}
+    assert scene["inputs"] == {"box_id": sections["box"]["id"]}
+
+
+def test_a_solved_lens_height_is_written_while_the_range_is_pending():
+    pending = tee_range.TeeRangeSolution.from_dict(
+        {**_radar_solution(solved_height=0.181).to_dict(), "reason": "pending"}
+    )
+    assert ts.tee_range_choice(pending)[0] == "pending"
+
+    sections = _sections(pending)
+
+    assert sections["ball_range"]["state"] == "not_set"
+    assert sections["scene"]["source"] == "radar_solved_height"
+    assert sections["scene"]["lens_height_m"] == 0.181
+
+
+def test_a_qualified_range_reads_qualified_in_review_after_the_kiosk_starts(
+    kiosk, start_kiosk, monkeypatch
+):
+    qualified = tee_range.TeeRangeCandidate(
+        candidate_id="iwr-epoch-1",
+        source="iwr_static_profile_difference",
+        source_group="iwr",
+        radar_slant_range_m=2.274,
+        uncertainty_m=0.03,
+        selectable=False,
+        evidence={},
+    )
+    monkeypatch.setattr(
+        ts,
+        "tee_range_choice",
+        lambda _solution, **_kw: ("resolved", "qualified_static_iwr", qualified, None, None),
+    )
+    record = ts.write_tester_setup(kiosk.path, _sections(_radar_solution()))
+    assert record["ball_range"]["qualification"] == "qualified_static_iwr"
+
+    started = start_kiosk()
+
+    assert started["ball_range"]["state"] == "set"
+    handoff = server._session_start_config()["tee_range_handoff"]  # noqa: SLF001
+    assert handoff["status"] == "prior" and handoff["candidate_id"] == "iwr-epoch-1"
+    details = review_metrics._tee_details(handoff)  # noqa: SLF001
+    assert details["tee_range_qualified"] is True
+    unqualified = {**handoff, "qualification": "unqualified_static_iwr"}
+    assert review_metrics._tee_details(unqualified)["tee_range_qualified"] is False  # noqa: SLF001
+
+
+def test_the_launch_record_says_what_the_kiosk_applies(tmp_path):
+    path = tmp_path / ts.SETUP_FILE
+    record = ts.write_tester_setup(path, _sections(_prior_solution()))
+
+    summary = ts.kiosk_setup_summary(path, record)
+
+    assert summary["file"] == str(path) and summary["revision"] == record["revision"]
+    assert summary["tee"] == {
+        "used_as": "prior",
+        "range_m": 2.31,
+        "uncertainty_m": 0.35,
+        "side_offset_m": 0.02,
+        "source": "camera_prior",
+        "qualification": "camera_size_coarse",
+        "candidate_id": "camera-prior-epoch-1",
+    }
+    assert summary["net"]["value_m"] == 4.6
+    assert summary["net"]["source"] == "default_not_measured"
+    assert summary["scene"] == {
+        "lens_height_m": record["scene"]["lens_height_m"],
+        "source": "rig_nominal",
+    }
+    assert summary["sections"]["box"] == record["box"]
 
 
 def test_writing_the_same_setup_again_keeps_its_revision(tmp_path):

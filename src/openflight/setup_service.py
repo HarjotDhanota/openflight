@@ -166,8 +166,14 @@ def ball_range_section(  # pylint: disable=too-many-arguments
     diameter_px,
     source: str,
     box_id: str,
+    qualification: str | None = None,
+    candidate_id: str | None = None,
 ) -> dict:
-    """The resting ball's range from the radar's origin: a prior for each shot's own."""
+    """The resting ball's range from the radar's origin: a prior for each shot's own.
+
+    ``qualification`` says how the range was qualified where its maker knows (the tester's
+    tee-range source), and ``candidate_id`` which candidate it was.
+    """
     return {
         "state": "set",
         "range_m": float(range_m),
@@ -176,20 +182,23 @@ def ball_range_section(  # pylint: disable=too-many-arguments
         "ball_px": list(ball_px) if ball_px is not None else None,
         "diameter_px": diameter_px,
         "source": source,
+        "qualification": qualification,
+        "candidate_id": candidate_id,
         "inputs": section_inputs("ball_range", box_id=box_id),
     }
 
 
 def scene_section(
-    *, lens_height_m: float | None, uncertainty_m: float | None, source: str, ball_range_m: float
+    *, lens_height_m: float | None, uncertainty_m: float | None, source: str, box_id: str
 ) -> dict:
-    """The lens height used: radar-solved (a gross error), else the rig file's, labelled."""
+    """The lens height used: radar-solved against the box's ball (a gross error), else the
+    rig file's, labelled."""
     return {
         "state": "default" if source == "rig_nominal" else "set",
         "lens_height_m": lens_height_m,
         "uncertainty_m": uncertainty_m,
         "source": source,
-        "inputs": section_inputs("scene", ball_range_m=ball_range_m),
+        "inputs": section_inputs("scene", box_id=box_id),
     }
 
 

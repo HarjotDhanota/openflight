@@ -67,11 +67,9 @@ SCHEMA = "openflight.tester_target_line.v1"
 SOURCE = "aim_point"
 SIGN_CONVENTION = "positive_target_line_right_of_unit_boresight_seen_from_behind"
 KIOSK_OFFSET_CONVENTION = (
-    "kiosk_offset_deg = -yaw_deg: both flags take the boresight's azimuth from the target "
-    "line and are added to measured horizontal angles"
+    "kiosk_offset_deg = -yaw_deg: the camera and the IWR take the boresight's azimuth from "
+    "the target line, added to measured horizontal angles"
 )
-CAMERA_FLAG = "--camera-capture-horizontal-offset-deg"
-IWR_FLAG = "--iwr6843-azimuth-offset-deg"
 # The rig file carries no camera-to-IWR yaw: a shared boresight by design, not measured.
 CAMERA_TO_IWR_YAW_DEG = 0.0
 CAMERA_TO_IWR_BASIS = "rig_file_has_no_yaw_term_shared_boresight_by_design_not_measured"
@@ -667,15 +665,15 @@ def handoff(
     *,
     target_distance_m: float | None,
     distance_basis: str | None,
-) -> tuple[list[str], dict[str, Any]]:
-    """The kiosk's two yaw flags (one value), and the record of what they hand over.
+) -> dict[str, Any]:
+    """The record of the target line a run is handed: its yaw for the camera and the IWR.
 
     ``target_distance_m`` is how far the target is taken to be for a direction's
     parallax: the net's range from the empty static capture, or the swing
     server's default (``distance_basis`` says which).
     """
     if not isinstance(record, Mapping):
-        return [], {
+        return {
             "schema": SCHEMA,
             "status": "not_set",
             "source": None,
@@ -683,11 +681,10 @@ def handoff(
             "yaw_deg": None,
             "kiosk_offset_deg": None,
             "total_uncertainty_deg": None,
-            "flags": [],
             "sign_convention": SIGN_CONVENTION,
         }
     if record.get("status") == SKIPPED:
-        return ["--target-line-status", SKIPPED], {
+        return {
             "schema": SCHEMA,
             "status": SKIPPED,
             "source": None,
@@ -695,13 +692,10 @@ def handoff(
             "yaw_deg": None,
             "kiosk_offset_deg": None,
             "total_uncertainty_deg": None,
-            "flags": [],
             "sign_convention": SIGN_CONVENTION,
             "skipped_at_utc": record.get("skipped_at_utc"),
         }
     offset = float(record["kiosk_offset_deg"])
-    value = f"{offset:.6g}"
-    args = [CAMERA_FLAG, value, IWR_FLAG, value]
     uncertainty = dict(record.get("uncertainty") or {})
     parallax = parallax_deg(record, target_distance_m)
     bounded = uncertainty.get("total_deg") is not None
@@ -716,12 +710,7 @@ def handoff(
             "total_deg": round(total, 4) if total is not None else None,
         }
     )
-    # the kiosk's Live tab shows the line and its one +- (GET /api/target-line)
-    args += ["--target-line-yaw-deg", f"{float(record['yaw_deg']):.6g}"]
-    if total is not None:
-        args += ["--target-line-uncertainty-deg", f"{total:.4g}"]
-    args += ["--target-line-source", str(record.get("source", SOURCE))]
-    return args, {
+    return {
         "schema": SCHEMA,
         "status": "set",
         "source": record.get("source", SOURCE),
@@ -729,7 +718,6 @@ def handoff(
         "kiosk_offset_deg": offset,
         "kiosk_offset_convention": KIOSK_OFFSET_CONVENTION,
         "sign_convention": SIGN_CONVENTION,
-        "flags": [CAMERA_FLAG, IWR_FLAG],
         "aim_px": record.get("aim_px"),
         "floor_line_px": record.get("floor_line_px"),
         "frame_size_px": record.get("frame_size_px"),

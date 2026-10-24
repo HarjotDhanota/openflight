@@ -206,10 +206,13 @@ def _tee_details(tee_range: Mapping[str, Any] | None) -> dict[str, Any]:
     """The tee range a launch stands on, where it came from, and whether it is qualified."""
     tee = mapping(tee_range)
     source = tee.get("source") if isinstance(tee.get("source"), str) else None
+    # a setup-record range is the kiosk's prior; its qualification says how it was made
+    qualification = tee.get("qualification") if isinstance(tee.get("qualification"), str) else None
     return {
         "tee_range_m": finite(tee.get("tee_slant_range_m")),
         "tee_range_source": source or "unknown",
-        "tee_range_qualified": source in QUALIFIED_TEE_SOURCES,
+        "tee_range_qualified": source in QUALIFIED_TEE_SOURCES
+        or qualification in QUALIFIED_TEE_SOURCES,
     }
 
 
