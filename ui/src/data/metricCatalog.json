@@ -267,7 +267,7 @@
       "label": "Dynamic lie",
       "group": "club",
       "unit": "deg",
-      "pending": "E6"
+      "pending": null
     }
   ]
 }

@@ -117,16 +117,21 @@ describe('MetricGroupPanel', () => {
     }
   });
 
-  it('names the item that builds an unbuilt metric (in the Coming later detail)', () => {
-    const html = render('club');
-    expect(html).toContain('pending E6: not built yet');
+  it('shows dynamic lie as unavailable with its camera reason instead of coming later', () => {
+    const shot = everyMetricShot();
+    shot.metrics!.dynamic_lie = record({ unit: 'deg', reason: 'no visible lower shaft near impact' });
+    const html = render('club', shot);
+    expect(html).toContain('data-metric="dynamic_lie"');
+    expect(html).toContain('no visible lower shaft');
   });
 
   it('folds the not-built metrics into one Coming later row, shown once per panel', () => {
-    const html = render('club');
+    const shot = everyMetricShot();
+    shot.metrics!.club_speed_full = record({ unit: 'mph', reason: 'full club speed is not available yet' });
+    const html = render('club', shot);
     expect(html.match(/data-metric="coming-later"/g)).toHaveLength(1);
     expect(html).toContain('Coming later');
-    expect(html).not.toMatch(/data-metric="dynamic_lie"/);
+    expect(html).not.toMatch(/data-metric="club_speed_full"/);
     expect(html).toMatch(/Dynamic lie/);
   });
 

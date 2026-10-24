@@ -29,11 +29,7 @@ export function shortReason(reason: string | null | undefined): string {
 }
 
 /** Metrics not built yet, folded into one “Coming later” row while they have no value. */
-export const COMING_LATER_METRICS: ReadonlySet<string> = new Set([
-  'club_speed_full',
-  'gyro',
-  'dynamic_lie',
-]);
+export const COMING_LATER_METRICS: ReadonlySet<string> = new Set(['club_speed_full', 'gyro']);
 
 export function isComingLater(
   spec: { id: string; pending: string | null },

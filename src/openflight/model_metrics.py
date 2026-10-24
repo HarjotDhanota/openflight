@@ -6,7 +6,8 @@ shot models produce: the full speeds (E3), the collision model's face, loft,
 spin loft, spin and smash indices, face to path, D-plane tilt and gyro (E2), the arc's swing plane,
 direction and low point (E1), every flight output (E4), the camera's experimental
 impact location (read after the shot; it feeds no other metric), and the metric
-not built yet (dynamic lie, E6). It also gives carry its flight-model builder. It is loaded through the ``openflight.shot_metrics``
+estimated from the camera shaft (dynamic lie, E6). It also gives carry its
+flight-model builder. It is loaded through the ``openflight.shot_metrics``
 entry point the first time the catalogue is read, and reads only the records
 the models left on the shot.
 """
@@ -24,10 +25,7 @@ NO_FULL_SPEED = "full speed not computed on this shot (not finalized)"
 IMPACT_SOURCE = "camera head outline and resting ball, read after the shot (experimental)"
 IMPACT_NOTE = "not validated yet: compare it with the face spray marks"
 NO_IMPACT_READING = "needs this shot's camera clip; impact location is read after the shot"
-DYNAMIC_LIE_PENDING = (
-    "pending E6: dynamic lie is not built yet (the lower shaft line from the camera at impact, "
-    "after the lens and crop mode are chosen)"
-)
+NO_DYNAMIC_LIE = "needs this shot's camera clip with a visible lower shaft near impact"
 
 # Collision-model metric names (collision_model.evaluate) per metric id.
 _COLLISION = {
@@ -152,13 +150,18 @@ def _impact(metric_id: str):
     return build
 
 
-def _pending(metric_id: str):
-    def build(_shot):
+def _dynamic_lie(shot):
+    reading = sm.as_mapping(shot.get("impact_location"))
+    entry = sm.as_mapping(reading.get("dynamic_lie"))
+    value = sm.finite_or_none(entry.get("value"))
+    if entry.get("status") != sm.MODEL_GEOMETRY or value is None or not 0 < value <= 90:
         return sm.build_record(
-            metric_id, None, None, reason=sm.metric_spec(metric_id).pending_reason
+            "dynamic_lie",
+            None,
+            None,
+            reason=entry.get("reason") or reading.get("reason") or NO_DYNAMIC_LIE,
         )
-
-    return build
+    return sm.producer_record("dynamic_lie", entry)
 
 
 def _full(metric_id: str, field: str, value_key: str):
@@ -231,8 +234,8 @@ sm.register_metrics(
         (Spec("impact_offset", "Impact offset", CLUB, "mm"), _impact("impact_offset")),
         (Spec("impact_height", "Impact height", CLUB, "mm"), _impact("impact_height")),
         (
-            Spec("dynamic_lie", "Dynamic lie", CLUB, "deg", "E6", DYNAMIC_LIE_PENDING),
-            _pending("dynamic_lie"),
+            Spec("dynamic_lie", "Dynamic lie", CLUB, "deg"),
+            _dynamic_lie,
         ),
     ],
     after="attack_angle",

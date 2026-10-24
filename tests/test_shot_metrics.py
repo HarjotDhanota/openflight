@@ -25,7 +25,6 @@ from openflight.launch_monitor import (
 from tests.every_metric import (
     EXPECTED_METRIC_IDS,
     LABELS,
-    PENDING_METRIC_IDS,
     fusion_shot,
 )
 
@@ -139,13 +138,41 @@ def test_an_index_without_the_collision_model_says_why():
     assert record["reason"] == "collision model did not run on this shot"
 
 
-@pytest.mark.parametrize("metric_id", PENDING_METRIC_IDS)
-def test_unbuilt_metrics_are_not_measured_with_the_item_that_builds_them(metric_id):
-    record = fusion_shot().to_dict()["metrics"][metric_id]
+def test_dynamic_lie_without_a_shaft_reading_is_unavailable_not_pending():
+    record = fusion_shot().to_dict()["metrics"]["dynamic_lie"]
     assert record["value"] is None
     assert record["status"] == "not_measured"
-    assert "E6" in record["reason"]
-    assert shot_metrics.SPECS[metric_id].pending == "E6"
+    assert "shaft" in record["reason"]
+    assert shot_metrics.SPECS["dynamic_lie"].pending is None
+
+
+@pytest.mark.parametrize(
+    "value,status",
+    [
+        (61, "measured"),
+        (float("nan"), "model_geometry"),
+        (0, "model_geometry"),
+        (91, "model_geometry"),
+    ],
+)
+def test_dynamic_lie_rejects_invalid_values_and_measured_mislabels(value, status):
+    shot = fusion_shot(impact_location={"dynamic_lie": {"value": value, "status": status}})
+    assert shot.to_dict()["metrics"]["dynamic_lie"]["value"] is None
+
+
+def test_dynamic_lie_keeps_its_model_label_and_assumptions_independent_of_impact_status():
+    entry = dict(
+        value=61.25,
+        status="model_geometry",
+        source="camera plane model",
+        range=None,
+        note="unvalidated constant-depth assumption",
+    )
+    shot = fusion_shot(impact_location={"status": "rejected", "dynamic_lie": entry})
+    record = shot.to_dict()["metrics"]["dynamic_lie"]
+    assert record["value"] == 61.25
+    assert record["status"] == "model_geometry"
+    assert record["note"] == entry["note"]
 
 
 def test_a_model_geometry_spin_and_carry_keep_their_label():
