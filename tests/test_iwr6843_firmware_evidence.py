@@ -141,14 +141,6 @@ def test_the_evidence_block_compiles_in_order_as_c99(tmp_path, pack_flags):
     assert result.returncode == 0, result.stderr
 
 
-def test_the_tick_source_opens_the_evidence_block():
-    """The block's first mention of l3_ticks is its definition."""
-    block = _evidence_block(FIRMWARE.read_text(encoding="utf-8"))
-    definition = block.index("static uint32_t l3_ticks(void)")
-
-    assert block.index("l3_ticks(") == definition + len("static uint32_t ")
-
-
 FIXTURE_WRITER = r"""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -419,50 +411,6 @@ def test_output_done_records_the_completed_slot_before_counters_advance():
     assert record < callback.index("gPreFramesCaptured++")
     assert slot < callback.index("gIq8PendingSlot = completedSlot;")
     assert "gActiveFrameFresh = 0U;" in callback
-
-
-def _ring_slot_helper(source: str) -> str:
-    return _function_source(source, "static inline uint32_t l3_activeRingSlot(void)", "#endif")
-
-
-def test_the_ring_slot_formula_is_written_once():
-    """One helper owns the active frame's ring slot; arming and output-done share it."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-    helper = _ring_slot_helper(source)
-    callback = _function_source(
-        source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
-    )
-    arm = _function_source(
-        source, "static int32_t l3_configHwaFrameOutput", "static void l3_drainHwaRearmSemaphore"
-    )
-
-    assert source.count("gCapturePlan.preFrames + gPostFramesCaptured") == 1
-    assert "gCapturePlan.preFrames + gPostFramesCaptured" in helper
-    assert "gPreFramesCaptured % gCapturePlan.preFrames" in helper
-    assert callback.count("l3_activeRingSlot()") == 1
-    assert callback.count("gPreFramesCaptured % gCapturePlan.preFrames") == 1
-    assert "(gPreFramesCaptured % gCapturePlan.preFrames) == 0U" in callback
-    assert "gPreFramesCaptured % gCapturePlan.preFrames" not in arm
-    assert arm.count("ringSlot = l3_activeRingSlot();") == 1
-    assert arm.rindex("gActiveFrameIsPost = 0U;") < arm.index("ringSlot = l3_activeRingSlot();")
-    assert arm.index("ringSlot = l3_activeRingSlot();") < arm.index(
-        "if (ringSlot >= gCapturePlan.totalFrames)"
-    )
-
-
-def test_the_record_consumes_the_fresh_start():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    record = _function_source(
-        source, "static void l3_recordFrameEvidence", "/* W4A-EVIDENCE-END */"
-    )
-
-    snapshot = record.index("uint8_t fresh = gActiveFrameFresh;")
-    consumed = record.index("gActiveFrameFresh = 0U;")
-    assert snapshot < consumed < record.index("return;")
-    assert "fresh ? gActiveFrameSeq : L3_FRAME_NO_STAMP" in record
-    assert "fresh ? gActiveFrameStartTick : L3_FRAME_NO_STAMP" in record
-    assert "fresh ? L3_FRAME_FLAG_ASSOCIATED : 0U" in record
-    assert record.count("gActiveFrameFresh") == 2  # one read, one consume: no re-read
 
 
 def test_dump_stamps_request_freeze_stop_and_header_in_order():

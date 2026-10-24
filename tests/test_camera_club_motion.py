@@ -74,24 +74,22 @@ def _room_scene(height, width, ball_xy, diameter, *, with_ball=True, seed=0):
     return np.clip(frames, 0, 255).astype(np.uint8)
 
 
-def test_a_room_lit_ball_is_found_not_the_hinge_at_full_resolution():
-    frames = _room_scene(400, 640, (290.0, 260.0), 28.0)
+@pytest.mark.parametrize(
+    "height, width, centre, diameter, size_tolerance",
+    [
+        (400, 640, (290.0, 260.0), 28.0, 0.08),  # full resolution: the ball, not the hinge
+        (200, 320, (125.0, 150.0), 14.0, 0.1),  # the compact crop
+    ],
+    ids=["full_resolution", "compact_crop"],
+)
+def test_a_room_lit_ball_is_found(height, width, centre, diameter, size_tolerance):
+    frames = _room_scene(height, width, centre, diameter)
 
     ball = detect_reference_ball(frames)
 
-    assert ball.x == pytest.approx(290.0, abs=1.0)
-    assert ball.y == pytest.approx(260.0, abs=1.0)
-    assert ball.diameter_px == pytest.approx(28.0, rel=0.08)
-
-
-def test_a_room_lit_ball_is_found_in_the_compact_crop():
-    frames = _room_scene(200, 320, (125.0, 150.0), 14.0)
-
-    ball = detect_reference_ball(frames)
-
-    assert ball.x == pytest.approx(125.0, abs=1.0)
-    assert ball.y == pytest.approx(150.0, abs=1.0)
-    assert ball.diameter_px == pytest.approx(14.0, rel=0.1)
+    assert ball.x == pytest.approx(centre[0], abs=1.0)
+    assert ball.y == pytest.approx(centre[1], abs=1.0)
+    assert ball.diameter_px == pytest.approx(diameter, rel=size_tolerance)
 
 
 def test_a_side_lit_ball_is_measured_to_its_shaded_rim():
