@@ -81,9 +81,12 @@ def test_ops_shot_without_camera_trigger_evidence_is_kept_and_flagged(monkeypatc
 
     assert finished == [shot]
     assert errors == []
-    assert [item["id"] for item in shot.missing_trigger_evidence] == ["camera_trigger"]
-    assert "no matching trigger readiness evidence" in shot.missing_trigger_evidence[0]["reason"]
-    assert shot.to_dict()["missing_trigger_evidence"] == shot.missing_trigger_evidence
+    assert [item["id"] for item in shot.extras["missing_trigger_evidence"]] == ["camera_trigger"]
+    assert (
+        "no matching trigger readiness evidence"
+        in shot.extras["missing_trigger_evidence"][0]["reason"]
+    )
+    assert shot.to_dict()["missing_trigger_evidence"] == shot.extras["missing_trigger_evidence"]
 
 
 def test_blocked_trigger_readiness_keeps_the_shot_with_a_note(monkeypatch):
@@ -98,10 +101,10 @@ def test_blocked_trigger_readiness_keeps_the_shot_with_a_note(monkeypatch):
 
     assert finished == [shot]
     assert errors == []
-    reasons = [note["reason"] for note in shot.trigger_evidence_notes]
+    reasons = [note["reason"] for note in shot.extras["trigger_evidence_notes"]]
     assert "trigger readiness was blocked" in reasons
     assert any("setup fingerprint differs" in reason for reason in reasons)
-    assert shot.to_dict()["trigger_evidence_notes"] == shot.trigger_evidence_notes
+    assert shot.to_dict()["trigger_evidence_notes"] == shot.extras["trigger_evidence_notes"]
 
 
 def test_a_wrong_setup_hash_is_a_note_not_a_refusal(monkeypatch):
@@ -110,7 +113,7 @@ def test_a_wrong_setup_hash_is_a_note_not_a_refusal(monkeypatch):
     shot, finished, _errors = _drive_tester_shot(monkeypatch, readiness)
 
     assert finished == [shot]
-    assert any("setup hash" in note["reason"] for note in shot.trigger_evidence_notes)
+    assert any("setup hash" in note["reason"] for note in shot.extras["trigger_evidence_notes"])
 
 
 @pytest.mark.parametrize(

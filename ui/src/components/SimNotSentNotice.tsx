@@ -8,10 +8,7 @@ interface SimNotSentNoticeProps {
   latestShotTimestamp: string | null;
 }
 
-/**
- * Says why the shot on screen was not sent to the simulator (D31): a fusion unit
- * sends only what it measured, e.g. "Not sent to simulator: spin not measured".
- */
+/** Says why the shot on screen was not sent to the simulator. */
 export function SimNotSentNotice({ notSent, latestShotTimestamp }: SimNotSentNoticeProps) {
   const { t } = useI18n();
   if (!notSent || !latestShotTimestamp || notSent.shot_timestamp !== latestShotTimestamp) {

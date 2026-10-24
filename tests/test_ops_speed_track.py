@@ -61,5 +61,4 @@ def test_the_monitor_attaches_the_ops_track_to_the_shot():
     shot = monitor._create_shot(_processed())  # pylint: disable=protected-access
 
     assert shot.ops_speed_track == ops_speed_track(_processed())
-    # transient: the chosen reading travels inside ball_speed_full instead
     assert "ops_speed_track" not in shot.to_dict()

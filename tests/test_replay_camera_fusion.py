@@ -42,7 +42,7 @@ def _write_replay_fixture(tmp_path):
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     )
     context = build_context(
         geometry=geometry,
@@ -142,7 +142,7 @@ def test_replay_entry_reads_actual_session_logger_capture_contract(tmp_path):
             horizontal_pixel_sign=1.0,
             roll_correction_deg=0.0,
             ball_horizontal_output_offset_deg=0.0,
-            ball_diameter_m=0.04267,
+            ball_diameter_m=0.0427,
         ),
         lighting_eligible=True,
         ball_range_evidence=None,

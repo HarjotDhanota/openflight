@@ -1105,7 +1105,7 @@ def test_guided_flow_saves_and_survives_reload(tmp_path, inputs, monkeypatch):
         "--iwr6843-tee-prior-source",
         "camera_size_coarse",
         "--iwr6843-ball-height-m",
-        "0.021335",
+        "0.02135",
         "--iwr6843-tee-range-source",
         "camera_size_coarse",
         "--iwr6843-tee-range-candidate",
@@ -2104,7 +2104,7 @@ def _level_camera():
 def _setup_ball_seen_from(lens_height_m, distance_m=1.4):
     """Pixel and radar range of a surface ball when the lens is truly this high."""
     camera = _level_camera()
-    radius = 0.021335
+    radius = 0.02135
     down = (lens_height_m - radius) / distance_m
     y_px = 400.0 + 933.3333 * down
     ray = np.asarray(camera.ray_model.rays(np.array([640.0, y_px])), dtype=float)
@@ -2328,7 +2328,7 @@ def test_a_pending_range_still_hands_swings_the_solved_lens_height():
     assert args[0] == "--iwr6843-tee-range-pending"
     assert "--iwr6843-tee-m" not in args
     assert float(args[args.index("--solved-camera-height-m") + 1]) == pytest.approx(0.40, abs=0.003)
-    assert args[args.index("--iwr6843-ball-height-m") + 1] == "0.021335"
+    assert args[args.index("--iwr6843-ball-height-m") + 1] == "0.02135"
 
 
 def test_setup_captures_go_through_the_held_radar_session(tmp_path, inputs, monkeypatch):
@@ -2571,7 +2571,7 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     scene = handed["scene"]
     assert scene["lens_height_solved_m"] is not None
     assert scene["lens_height_used_source"] in {"rig_nominal", "range_setup"}
-    assert scene["ball_height_m"] == pytest.approx(0.021335)
+    assert scene["ball_height_m"] == pytest.approx(0.02135)
     assert scene["ball_height_basis"] == "assumed_on_surface"
     assert (
         handed["cli_args"]
@@ -3266,7 +3266,7 @@ def _coherent_records(name="outdoors-test-7-5a7821af3641"):
 
 
 def _indoor_records():
-    """harjot-indoor-test-1's two captures as the Pi writes them (P8-3 fixture)."""
+    """indoor-test-1's two captures as the Pi writes them (P8-3 fixture)."""
     fixture = json.loads(
         (REPO / "tests" / "fixtures" / "ground_patch" / "indoor-c77d227da087-radar.json").read_text(
             encoding="utf-8"
@@ -3300,7 +3300,7 @@ def _v3_patch_record(distance_m, *, pitch_deg=1.72, side_m=0.0):
 
 
 def test_the_radar_reports_every_candidate_inside_the_patch_window():
-    """P8-3 on harjot-indoor-test-1: the magnitude's 1.20 m (near the tape's 1.25 m) is
+    """P8-3 on indoor-test-1: the magnitude's 1.20 m (near the tape's 1.25 m) is
     a candidate; the door at 1.575 m is a still reflector, flagged wherever it shows."""
     empty, present = _indoor_records()
     window = ts.patch_radar_window(_v3_patch_record(1.25))
@@ -3687,7 +3687,7 @@ def test_the_640x400_settings_use_the_1280x800_ball_halved():
 def test_the_indoor_test_1_setup_saves_no_distance_where_the_radar_disagrees_with_itself(
     tmp_path, inputs, monkeypatch
 ):
-    """End to end on harjot-indoor-test-1's radar captures (13 Oct): the magnitude change
+    """End to end on indoor-test-1's radar captures (13 Oct): the magnitude change
     near the tape's 1.25 m is not a ground-level coherent change, and the coherent
     difference's only candidate there is the door, a still reflector. The radar's two
     methods never agree, so no distance is saved (it once took the magnitude alone)."""

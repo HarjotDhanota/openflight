@@ -213,9 +213,8 @@ def test_phone_sees_processing_then_provisional_then_final(pi, monkeypatch):
 def test_enrichment_past_the_deadline_publishes_now_and_finalizes_late(pi, monkeypatch):
     """What ``--mock-enrichment-ms`` above the 20 s deadline shows, sped up.
 
-    On this fork a late result updates the same shot instead of being dropped
-    (D29): the deadline publishes the OPS-only shot, still pending, and the final
-    message follows once the late enrichment arrives.
+    A late result updates the same shot: the deadline publishes the OPS-only shot,
+    still pending, and the final message follows when the enrichment arrives.
     """
     _run_enrichment_in_threads(monkeypatch)
     monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.2)

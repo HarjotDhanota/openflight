@@ -604,6 +604,13 @@ class DiagnosticReader:
             }
 
 
+def log_fusion_diagnostic(session_logger, expected_session_uuid: str, snapshot: Mapping) -> bool:
+    """Write a snapshot only to the exact session pinned at shot admission."""
+    if snapshot.get("session_uuid") != expected_session_uuid:
+        return False
+    return session_logger.log_pinned("fusion_diagnostic", expected_session_uuid, dict(snapshot))
+
+
 def _json_response(value: Mapping[str, Any], status: int = 200) -> Response:
     return Response(
         json.dumps(value, allow_nan=False, separators=(",", ":")),

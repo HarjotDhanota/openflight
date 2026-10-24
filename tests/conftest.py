@@ -18,19 +18,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from openflight import kiosk_extensions  # noqa: E402  pylint: disable=wrong-import-position
 
-# The kiosk extensions this install declares, loaded once the way openflight-server
-# loads them at start-up, so every test sees the same hooks however the run is
-# ordered. A plain install declares none.
+# Load the declared kiosk extensions once, as openflight-server does at start-up.
 kiosk_extensions.load_installed()
 
 
 @pytest.fixture(autouse=True)
 def _no_ready_light_thread(monkeypatch):
-    """Keep main() from starting the ready light's polling thread in a test.
-
-    The thread is a daemon that outlives the test that started it and would
-    emit ``ready_light`` into later tests' recorded socket events.
-    """
+    """Keep main() from starting the ready light's polling thread, which would
+    outlive the test and emit ``ready_light`` into later tests."""
     from openflight import server  # pylint: disable=import-outside-toplevel
 
     monkeypatch.setattr(server, "start_ready_light", lambda: None)
@@ -38,10 +33,7 @@ def _no_ready_light_thread(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_live_impact_worker(monkeypatch):
-    """Keep main() from turning on the live impact reading, whose worker is a process.
-
-    Its tests build their own extension; the installed one stays off in every test.
-    """
+    """Keep main() from turning on the live impact reading, whose worker is a process."""
     live = sys.modules.get("openflight.camera.impact_live")
     if live is not None:
         monkeypatch.setattr(live.extension, "enabled", False)

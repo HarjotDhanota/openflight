@@ -1,5 +1,4 @@
-"""Tests for the hitting zone's exposure rating (the kiosk's swing exposure lives in
-swing_exposure and is tested in test_swing_exposure)."""
+"""Tests for the hitting zone's exposure rating."""
 
 import numpy as np
 import pytest
@@ -38,6 +37,5 @@ def test_measure_exposure_flags_nearly_black_view():
     ["EXPOSURE_STEPS", "ExposureStep", "AutoExposurePolicy", "exposure_steps_for_fps"],
 )
 def test_the_zone_metered_startup_ladder_is_retired(retired):
-    """13 Oct: 650-1250 us steps past the blur ceiling and gains of 18 and 20 the sensor
-    clamps at 15.94, metered on the zone and locked at startup. The resting ball meters now."""
+    """The zone-metered, startup-locked ladder is gone; the resting ball meters now."""
     assert not hasattr(auto_exposure, retired)

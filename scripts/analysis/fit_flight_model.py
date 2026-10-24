@@ -66,15 +66,15 @@ from validate_ballistics import (  # noqa: E402
     load_tm_export,
 )
 
-from openflight import ballistics as bl  # noqa: E402
-from openflight.ballistics import (  # noqa: E402
-    FERGUSON_2022,
+from openflight import flight_sim as bl  # noqa: E402
+from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
+from openflight.flight_models_superseded import FERGUSON_2022  # noqa: E402
+from openflight.flight_sim import (  # noqa: E402
     SPIN_DECAY_G_BOUNDS,
     AeroModel,
     LaunchConditions,
     simulate,
 )
-from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
 
 IN_REPO_EXPORT = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 EXTERNAL_EXPORT = _REPO_ROOT.parent / "tm-exports" / "tm4-public-swingsync-2026-10-12.csv"

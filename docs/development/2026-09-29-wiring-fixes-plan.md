@@ -25,7 +25,7 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 | F8's horizontal reference | An alignment-stick session (D3). Until then radar horizontal and the IWR path are marked `azimuth_uncalibrated` and face angle uses camera paths only. |
 | C8's roll correction | A phone-level check against the LIS3DH roll (setup spec B2). The sign is derived and pinned by a test, but roll stays unapplied in both camera paths until the check. |
 
-**F11 closed (30 Sept, `agent/radar-phase-centre`, 5060e8a9).** Harjot reported the IWR board's turn on 29 Sept: USB top right and RX antennas on the left, seen from the front, which is +90° from the ECAD frame. The v3 rig file records it as `iwr_board_rotation_deg: 90.0`, with a new approved fingerprint (f2b05c97…; the 22 Sept entry is kept). The phase centre sits 7.97 mm above the RX row in the board's plane; with the 10° aim that is 7.85 mm up, 1.38 mm back and 1.86 mm target-left. The radar height the two-ray model uses on the v3 enclosure became 58.8 mm, not 51 mm, and every range that starts at the IWR starts there (`RigGeometry.iwr_origin_mm`). Checks against a placement's measured RX row, and the tape's start, keep the RX row. On 30 Sept Harjot re-measured the receive column straight up from the surface: the bottom edge of RX1 at 40.2 mm, its middle at 44.3 mm and the top edge of RX4 at 48.6 mm (the layout predicts an 8.8 mm span; measured 8.4). Fitting all three puts the middle at 44.4 mm, 50.6 mm below the lens he confirmed at 95 mm. The rig file's offset is now 50.6 mm, with a new approved fingerprint (ef96c8ee…), and the halfway point is 52.25 mm. The vertical launch model itself now places every antenna separately (lcmf_v2_per_antenna): receive antennas 40.8-48.0 mm, transmit antennas 55.3 and 64.9 mm.
+**F11 closed (30 Sept, `agent/radar-phase-centre`, 5060e8a9).** The owner reported the IWR board's turn on 29 Sept: USB top right and RX antennas on the left, seen from the front, which is +90° from the ECAD frame. The v3 rig file records it as `iwr_board_rotation_deg: 90.0`, with a new approved fingerprint (f2b05c97…; the 22 Sept entry is kept). The phase centre sits 7.97 mm above the RX row in the board's plane; with the 10° aim that is 7.85 mm up, 1.38 mm back and 1.86 mm target-left. The radar height the two-ray model uses on the v3 enclosure became 58.8 mm, not 51 mm, and every range that starts at the IWR starts there (`RigGeometry.iwr_origin_mm`). Checks against a placement's measured RX row, and the tape's start, keep the RX row. On 30 Sept the owner re-measured the receive column straight up from the surface: the bottom edge of RX1 at 40.2 mm, its middle at 44.3 mm and the top edge of RX4 at 48.6 mm (the layout predicts an 8.8 mm span; measured 8.4). Fitting all three puts the middle at 44.4 mm, 50.6 mm below the lens he confirmed at 95 mm. The rig file's offset is now 50.6 mm, with a new approved fingerprint (ef96c8ee…), and the halfway point is 52.25 mm. The vertical launch model itself now places every antenna separately (lcmf_v2_per_antenna): receive antennas 40.8-48.0 mm, transmit antennas 55.3 and 64.9 mm.
 
 **Where the build departs from this plan or the spec, and why:**
 - C2: focal length scales by the camera's binning, not by the mode's width, because 320×200 is a crop of the 640×400 mode. The approved-rig list keys on the parameter fingerprint, since the file's bytes change with line endings.
@@ -46,14 +46,14 @@ Date: 29 September 2026. Branch: `feat/tester-capture-pilot`. It implements `202
 - **At the end of each phase:**
   - Run the full pytest suite against the Windows-only baseline, plus the Playwright tester specs.
   - Update the tester guide (`docs/camera/tester-pilot.md`) where behaviour changed.
-  - Push only when Harjot says so.
+  - Push only when the owner says so.
 - **Fixtures:**
   - Field data from 29 Sept (`pi-handoff/`) becomes a regression fixture wherever an item fixes a field failure.
   - Already saved: the door and outdoor-mat radar setups.
   - To be added: the outdoor gain screens and the Outdoors-test-3 ladder state.
-- **No hardware is touched from the PC.** Pi steps are Harjot's, listed per phase.
+- **No hardware is touched from the PC.** Pi steps are the owner's, listed per phase.
 
-## Before Phase 1: Harjot, on the Pi (five minutes)
+## Before Phase 1: the owner, on the Pi (five minutes)
 
 **P1 (D1): check that libcamera reports the sensor black level.** Stop the tester server, then run:
 
@@ -87,7 +87,7 @@ Order and dependencies:
 - The Outdoors-test-3 gain screens replayed through `choose_gain` give `too_bright` with an equivalent ≤ 1.
 - The 29 Sept ladder file loads.
 
-**Then Harjot runs a field session, outdoors, after pulling:**
+**Then the owner runs a field session, outdoors, after pulling:**
 1. A gain screen for each mode.
 2. The setup, with the ball clear of the mat edge and visible on the preview.
 3. The ladder through the sun rungs.
@@ -143,7 +143,7 @@ T4, T5, T8-T14 (T14 with D5), S7, S8 (unless complex radar subtraction lands fir
 
 ## Phase 6: what Outdoors-test-5 exposed (added 29 Sept, evening)
 
-Outdoors-test-5 ran at dusk (18:45-19:01) on e3308529. Capture worked end to end, but nothing fused: the camera never found the ball, which sat about 1.8 m out on a raised mat at 15-30 DN, so the setup stayed raw-only. The field analysis is the Claude Doc "Outdoors-test-5 field analysis — handoff". Harjot decided D8 and D9 on 29 Sept.
+Outdoors-test-5 ran at dusk (18:45-19:01) on e3308529. Capture worked end to end, but nothing fused: the camera never found the ball, which sat about 1.8 m out on a raised mat at 15-30 DN, so the setup stayed raw-only. The field analysis is the Claude Doc "Outdoors-test-5 field analysis — handoff". The owner decided D8 and D9 on 29 Sept.
 
 | ID | Problem seen in the field | Fix |
 |---|---|---|
@@ -167,9 +167,9 @@ P6-1 to P6-3 touch the same ladder code as the setting selection, so they follow
 
 ## Phase 7: what Outdoors-test-6 and -7 exposed (added 30 Sept)
 
-Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Harjot made 5 real swings; 2 became complete shots, and no camera or IWR number reached any of them. Four read-only investigations traced why (data in `pi-handoff/Outdoors-test-6`, `-7` and `tester-server-7.log`). Harjot decided D10 and D11 on 30 Sept.
+Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. The owner made 5 real swings; 2 became complete shots, and no camera or IWR number reached any of them. Four read-only investigations traced why (data in `pi-handoff/Outdoors-test-6`, `-7` and `tester-server-7.log`). The owner decided D10 and D11 on 30 Sept.
 
-- **D10: a placement box the tester drags (revised 30 Sept).** The tester sets the unit down, drags the box on the live view to where the balls will be hit, and confirms it. The camera and radar checks then run from that box. The box starts at a default spot, projected through the shared rig file and the tilt sensor: straight ahead, about 1.35 m out. It has a fixed size of about 0.20 m wide at that distance, and it can be moved but not resized. A ball found in the box must still pass the physical hitting-area checks. The first version was a fixed box, and Harjot replaced it the same day: "drag the box to where they will hit the balls, and then we run the camera and radar checks based off of that".
+- **D10: a placement box the tester drags (revised 30 Sept).** The tester sets the unit down, drags the box on the live view to where the balls will be hit, and confirms it. The camera and radar checks then run from that box. The box starts at a default spot, projected through the shared rig file and the tilt sensor: straight ahead, about 1.35 m out. It has a fixed size of about 0.20 m wide at that distance, and it can be moved but not resized. A ball found in the box must still pass the physical hitting-area checks. The first version was a fixed box, and the owner replaced it the same day: "drag the box to where they will hit the balls, and then we run the camera and radar checks based off of that".
 - **D11: the setup saves as experimental.** The camera's ball in the box, plus the radar's range when the two roughly agree, is enough to save a range. No qualification file is needed. Every number built on that range is labelled experimental.
 
 **Why nothing fused:**
@@ -208,27 +208,27 @@ Outdoors-test-6 and -7 ran in full sun on 30 Sept (10:10-10:26) on 63b69be9. Har
 | P7-11 | The review labels any `accepted*` IWR launch "accepted", whatever the tee's source (`review_metrics.py:230`). With a guessed tee, the launch moves 4-28° per ±0.25 m. | Label it experimental whenever the tee is unqualified or the status is single-channel, and carry the tee's range and source. |
 | P7-12 | Each rung's starting gain comes from the zone gain screen (`rung_gain`, `study_ladder.py:119-125`). In sun it starts full-10 at gain 12 when the ball needs about 1, and the ladder takes three swings to correct. (Found while building P7-9.) | Start each rung at the setup's ball lock, keeping its exposure × gain. A mode without its own lock scales the 1280×800 lock by the gain screens' mode ratio. With no lock, keep the gain-screen rule. Record the source per rung. |
 
-**Jumping between settings (D12, Harjot, 30 Sept):** "sometimes i dont have time to do all of them. so let me switch between them freely. this is separate from the checkbox system."
+**Jumping between settings (D12, owner, 30 Sept):** "sometimes i dont have time to do all of them. so let me switch between them freely. this is separate from the checkbox system."
 
 | ID | Fix |
 |---|---|
 | P7-13 | The ladder panel gets a button for each setting. Pressing one switches to it now, ticked or not; a mode change restarts the kiosk as usual.<br><br>**Progress:**<ul><li>Swings already taken on the setting left behind stay counted, so returning continues it.</li><li>A setting that has finished with its good swings can't be pressed.</li><li>Pressing a failed or skipped setting reopens it with its earlier swings kept and a fresh red count.</li></ul>**Light:** the pressed setting runs anyway. Its light check still runs to set the gain, but a too-bright or too-dark result is shown as a warning, not a refusal. The swings are judged as usual.<br><br>**Afterwards:** when the pressed setting finishes or fails, the ladder continues with the next unfinished ticked setting in the usual order. The tick boxes keep deciding that order. Each switch is recorded in the ladder state with its time. |
 
-**A ready light (D13, Harjot, 30 Sept):** "something we need is for it to tell me when it's ready for a swing. right now, there's absolutely no feedback at all. something even as simple as a light system on the screen". It shows on both screens: the tester page and the unit's own kiosk screen.
+**A ready light (D13, owner, 30 Sept):** "something we need is for it to tell me when it's ready for a swing. right now, there's absolutely no feedback at all. something even as simple as a light system on the screen". It shows on both screens: the tester page and the unit's own kiosk screen.
 
 | ID | Fix |
 |---|---|
 | P7-14 | The kiosk computes one readiness state from what its sensors report, and serves it to both the tester page and its own screen as a large light.<br><br>**Red, "Not ready", naming the cause:**<ul><li>no admitted setup;</li><li>a sensor missing or failed;</li><li>the kiosk starting, or restarting between settings;</li><li>the ladder's light check running;</li><li>the ladder stopped or finished.</li></ul>**Amber, "Wait", with the cause and a rough time left:**<ul><li>the OPS243 dumping, draining or re-arming;</li><li>the IWR dumping, about 7 s;</li><li>the camera saving a clip.</li></ul>**Green, "Swing":** the OPS243 is armed, the IWR is idle and armed, the camera ring is running in the ladder's current setting, and no clip is being saved.<br><br>**A swing picked up** (a trigger) flashes the light, with the shot's result when it arrives. The state is computed from the sensors' real states, never from timers alone, and each change is logged with its time. |
 
-**The box comes first (Harjot, 30 Sept):**
+**The box comes first (owner, 30 Sept):**
 
 | ID | Fix |
 |---|---|
 | P7-15 | The placement box moves from the start of step 3 into step 1, straight after the setup checklist. The tester sets the unit down, confirms the setup, then drags and confirms the box. The hardware check, the light measurement and the ball range follow.<br><br>**The hitting zone becomes the box.** Wherever the tester judges it, the confirmed box replaces the fixed box (rows 45-90 %, columns 20-80 %), halved for 640×400:<ul><li>the light screens;</li><li>the ladder's zone floor;</li><li>the capture-time zone fallback.</li></ul>The fixed box remains only when no box has been confirmed.<br><br>**Moving the box later** makes the light measurement stale and the ball range redo, as a rig change does. |
 
-## Phase 8: the whole chain, end to end (added 30 Sept, after harjot-indoor-test-1)
+## Phase 8: the whole chain, end to end (added 30 Sept, after indoor-test-1)
 
-Harjot ran the Phase 7 build (95407c34) indoors at 14:43: carpet, a ball near a door, the box dragged over it.
+The owner ran the Phase 7 build (95407c34) indoors at 14:43: carpet, a ball near a door, the box dragged over it.
 - **Radar:** the coherent difference found the ball. The result was `accepted_unqualified`: one ground-level reflector at 1.641 m apparent and 1.575 m corrected, −9.5° elevation, peak score 49.
 - **Camera:** it never locked.
   - The radar-to-camera hint still requires a qualified, `accepted` result (`tester_server.py:4488-4498`), so the camera was told "no accepted static IWR candidate".
@@ -237,9 +237,9 @@ Harjot ran the Phase 7 build (95407c34) indoors at 14:43: carpet, a ball near a 
   - The search then walked to 8000 µs × 12 in a well-lit box.
 - **Why these slipped through:** each piece had unit tests, but nothing replays a real session through the whole chain.
 
-Harjot: "we need to make sure the entire fusion pipeline works completely", and "for step 3, we can see the camera and the box as we put the ball at address".
+The owner: "we need to make sure the entire fusion pipeline works completely", and "for step 3, we can see the camera and the box as we put the ball at address".
 
-**Revised the same evening.** Harjot measured the ball at about 1.25 m from the radar, so the coherent 1.575 m was the wrong object. The old magnitude method's strongest change was at about 1.20 m (1.266 m apparent), close to the tape. Harjot also asked for simplification ("it might be too constrictive"), and then set the target design:
+**Revised the same evening.** The owner measured the ball at about 1.25 m from the radar, so the coherent 1.575 m was the wrong object. The old magnitude method's strongest change was at about 1.20 m (1.266 m apparent), close to the tape. The owner also asked for simplification ("it might be too constrictive"), and then set the target design:
 
 > we pick a spot on the ground where the ball will be. i want this to be about 2ft x 2ft … the camera and radar both search in that area and validate each other … we get the correct object and distance for the most accurate data every time … no need to search anywhere else other than the box … if a ball isnt found, the ball might be outside of the box, so we show a warning … let's make sure that further distances are supported too, if someone set the LM 2 meters away … everything depends on where the box is put.
 
@@ -258,7 +258,7 @@ Harjot: "we need to make sure the entire fusion pipeline works completely", and 
 | P8-7 | **Swings measure, label, don't block.** Every gate between a shot and a metric becomes a note on the value, per D15, using the gate list from P8-8. |
 | P8-8 | **End-to-end check.** It replays a whole session through the production code and reports every stage per shot, classing each failure as DATA, CODE, PENDING or UNKNOWN. It runs on a synthetic session, where every stage passes, and on the real sessions. It becomes a regression test. |
 
-**Harjot, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
+**Owner, before the next session:** put a foam windscreen on the microphone, and check the GATE LED stays quiet in wind before swinging.
 
 The three workstreams run in parallel on their own branches. S owns the tester page and runs the Playwright specs; T and L run pytest and vitest only.
 

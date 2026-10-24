@@ -148,15 +148,15 @@ This already removes the door knobs and clothes in the 28 Sept field frame (well
 
 | Step | Who | What it decides |
 |---|---|---|
-| B1 | Harjot | Run `scripts/analysis/bench_ball_search.py` on the Pi: real timings. |
-| B2 | Harjot | Phone level on the enclosure, noting which side is low, against the LIS3DH roll: confirms A3's sign. |
-| B3 | Harjot | Foil-wrapped vs bare ball at taped radar ranges stepped 5–10 mm apart: where the radar sees a real ball. |
-| B4 | Harjot | Spray-marked session with an alignment stick in view: first impact and direction truth, and a range–Doppler sign check. |
-| B5 | Harjot | LED on the trigger line filmed by the camera: camera-timestamp latency. |
-| B6 | Harjot | Drill-spun ball in front of the IWR, plain and with foil dots, at known axis tilts: radar spin rate and axis feasibility. |
-| B7 | Harjot | Powered USB hub or short cable if the CP2105 stalls return: power or data. |
-| B8 | Harjot | Print a ChArUco board: camera intrinsics (focal length, principal point, distortion). |
-| B9 | Harjot | Five setups with the 24-frame and five with the 14-frame static profile, same ball and spot: does the 14-frame profile give the same accepted range (within 10 mm) and pass the frame-stability gate as often? Also reports the real per-stage timings. |
+| B1 | Owner | Run `scripts/analysis/bench_ball_search.py` on the Pi: real timings. |
+| B2 | Owner | Phone level on the enclosure, noting which side is low, against the LIS3DH roll: confirms A3's sign. |
+| B3 | Owner | Foil-wrapped vs bare ball at taped radar ranges stepped 5–10 mm apart: where the radar sees a real ball. |
+| B4 | Owner | Spray-marked session with an alignment stick in view: first impact and direction truth, and a range–Doppler sign check. |
+| B5 | Owner | LED on the trigger line filmed by the camera: camera-timestamp latency. |
+| B6 | Owner | Drill-spun ball in front of the IWR, plain and with foil dots, at known axis tilts: radar spin rate and axis feasibility. |
+| B7 | Owner | Powered USB hub or short cable if the CP2105 stalls return: power or data. |
+| B8 | Owner | Print a ChArUco board: camera intrinsics (focal length, principal point, distortion). |
+| B9 | Owner | Five setups with the 24-frame and five with the 14-frame static profile, same ball and spot: does the 14-frame profile give the same accepted range (within 10 mm) and pass the frame-stability gate as often? Also reports the real per-stage timings. |
 
 ## 4. After the data
 

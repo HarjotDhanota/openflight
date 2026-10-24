@@ -10,8 +10,8 @@ None of this runs on a plain kiosk. ``openflight.server`` only calls the
   core eligibility;
 - the per-shot fusion diagnostic snapshot in the session log (pending, terminal).
 
-The trace marks on the product's own paths go through ``openflight.instrumentation``
-and are no-ops until ``--pi-trace`` installs a recorder.
+The marks on the product's own paths are wrappers ``trace_points`` installs on import;
+they are no-ops until ``--pi-trace`` installs a recorder.
 """
 
 from __future__ import annotations
@@ -23,8 +23,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from openflight import core_eligibility, instrumentation, kiosk_extensions, pi_trace, server
-from openflight.camera.fusion_diagnostics import build_snapshot as build_fusion_diagnostic
+from openflight import (
+    core_eligibility,
+    instrumentation,
+    kiosk_extensions,
+    pi_trace,
+    server,
+    trace_points,
+)
+from openflight.camera.fusion_diagnostics import (
+    build_snapshot as build_fusion_diagnostic,
+    log_fusion_diagnostic,
+)
 from openflight.gate_timing import GateEvent, warm_edge_reading_cache
 from openflight.launch_monitor import Shot
 from openflight.trace_routes import register_trace_routes
@@ -56,7 +66,7 @@ def _log_fusion_diagnostic(  # pylint: disable=too-many-arguments
             outcome=outcome,
             reason=reason,
         )
-        diagnostic_logger.log_fusion_diagnostic(session_uuid, snapshot)
+        log_fusion_diagnostic(diagnostic_logger, session_uuid, snapshot)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Fusion diagnostic logging failed: %s", error, exc_info=True)
 
@@ -91,10 +101,11 @@ def _trace_tag(  # pylint: disable=too-many-arguments
     "first") and status notices carry False. A reader that needs the newest revision
     compares ``revision`` numbers, never ``final``.
     """
-    if instrumentation.get_recorder() is None or shot.trace_attempt_id is None:
+    attempt_id = trace_points.attempt_of(shot)
+    if instrumentation.get_recorder() is None or attempt_id is None:
         return None
     return {
-        "attempt_id": shot.trace_attempt_id,
+        "attempt_id": attempt_id,
         "revision": revision,
         "final": final,
         "update_kind": update_kind,
@@ -144,7 +155,7 @@ def _install_pi_trace_hooks() -> None:
         capture_monitor = getattr(server.iwr6843_runtime, "capture_monitor", None)
         if capture_monitor is not None:
             warm_edge_reading_cache()
-            capture_monitor.prepend_gate_event_observer(_trace_gate_edge)
+            trace_points.prepend_gate_event_observer(capture_monitor, _trace_gate_edge)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[TRACE] installing the Pi trace hooks failed; ignored", exc_info=True)
 
@@ -164,7 +175,7 @@ def _json_safe_core(core: dict) -> dict:
 def _trace_emit_fields(shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str):
     """Revision, eligibility and tag for one emit; None (and logged) on any trace error."""
     try:
-        attempt_id = shot.trace_attempt_id
+        attempt_id = trace_points.attempt_of(shot)
         revision = None
         if attempt_id is not None:
             with _trace_revisions_lock:
@@ -212,7 +223,8 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
     payload is emitted, and an emit error still reaches the caller's handler.
     """
     trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
-    instrumentation.mark("server_emit_invoked", shot.trace_attempt_id, **trace_fields)
+    attempt_id = trace_points.attempt_of(shot)
+    instrumentation.mark("server_emit_invoked", attempt_id, **trace_fields)
     error = None
     try:
         yield
@@ -220,9 +232,7 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
         error = type(exc).__name__
         raise
     finally:
-        instrumentation.mark(
-            "server_emit_returned", shot.trace_attempt_id, **trace_fields, error=error
-        )
+        instrumentation.mark("server_emit_returned", attempt_id, **trace_fields, error=error)
 
 
 def _start_pi_trace(log_dir: Path | None) -> Path | None:
@@ -292,6 +302,24 @@ class ResearchKioskExtension(kiosk_extensions.KioskExtension):
     def before_monitor_start(self) -> None:
         _install_pi_trace_hooks()
 
+    def on_shot_detected(self, shot) -> None:
+        if instrumentation.get_recorder() is None:
+            return
+        # Phase A join: the monitor calls the server synchronously in its capture
+        # thread, before its next wait, so the current OPS attempt is this shot's.
+        shot.extras["trace_attempt_id"] = instrumentation.current_ops_attempt()
+        instrumentation.mark(
+            "server_callback_started",
+            shot.extras["trace_attempt_id"],
+            monotonic_ns=shot.server_callback_started_monotonic_ns,
+            join="serial_capture_loop",
+        )
+
+    def on_shot_accepted(self, shot) -> None:
+        instrumentation.mark(
+            "server_shot_accepted", trace_points.attempt_of(shot), shot_number=shot.shot_number
+        )
+
     def on_shutdown(self) -> None:
         _stop_pi_trace()
 
@@ -322,4 +350,5 @@ class ResearchKioskExtension(kiosk_extensions.KioskExtension):
         )
 
 
+trace_points.install()
 extension = kiosk_extensions.register(ResearchKioskExtension())

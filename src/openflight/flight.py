@@ -43,25 +43,23 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from . import metric_definitions
-from .ballistics import (
-    ACTIVE_AERO_MODEL,
-    AIR_DENSITY_STD,
-    BOUNCE_MODELS,
-    DEFAULT_SURFACE,
-    MODEL_SPIN_SOURCES,
-    ROLL_CLAMP_NOTE,
-    LaunchConditions,
-    Trajectory,
-    ball_speed_for_flight,
-    resolve_launch,
-    roll_clamped,
-    simulate,
-)
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
 from .collision_model import (
     is_estimated_source,
     is_model_geometry_source,
     model_geometry_inputs,
+)
+from .flight_sim import (
+    ACTIVE_AERO_MODEL,
+    AIR_DENSITY_STD,
+    BOUNCE_MODELS,
+    DEFAULT_SURFACE,
+    MODEL_SPIN_SOURCES,
+    LaunchConditions,
+    Trajectory,
+    ball_speed_for_flight,
+    resolve_launch,
+    simulate,
 )
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
@@ -531,8 +529,6 @@ def _block(
             # an estimate says why it is one (V-formulas C1, C2)
             "reason": "; ".join(estimated) if status == STATUS_ESTIMATED and estimated else None,
         }
-        if name in _TOTAL_METRICS and roll_clamped(traj.landing_angle_deg, surface):
-            metrics[name]["note"] = ROLL_CLAMP_NOTE
     block["metrics"] = metrics
     return block
 

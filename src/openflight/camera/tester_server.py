@@ -44,6 +44,7 @@ from openflight.camera import (
     free_play_ladder,
     ground_patch,
     lens_profiles,
+    lens_settings,
     patch_pairing,
     placement_box,
     reference_ball_range,
@@ -52,6 +53,7 @@ from openflight.camera import (
     swing_exposure,
     target_line,
     tester_ready_light,
+    tilt_calibration_admin,
     worker_lifetime,
 )
 from openflight.camera.auto_exposure import hitting_zone
@@ -95,7 +97,7 @@ from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.clubs.types import ClubType
 from openflight.constants import BALL_DIAMETER_MM
-from openflight.inclinometer import orientation_check
+from openflight.inclinometer import guided_check, orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
     StaticRangeProfile,
@@ -3222,7 +3224,7 @@ def record_placement(
 
 
 # The nominal model's angular uncertainty: the camera's vertical before the unit's
-# tilt is calibrated (about 3 deg, harjot-indoor-test-1), and at least this much after.
+# tilt is calibrated (about 3 deg, indoor-test-1), and at least this much after.
 UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
 CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
 
@@ -7409,7 +7411,7 @@ def create_app(
     ``camera_tilt_path`` is this unit's camera-tilt calibration (P8-5), kept with
     the unit's other local settings; without one the camera stays uncalibrated
     and nothing is stored. It is the stock lens's; another lens keeps its own
-    beside it (``lens_profiles.tilt_calibration_path``).
+    beside it (``lens_settings.tilt_calibration_path``).
 
     ``lens_settings_path`` keeps the unit's lens choice and each lens's settings
     (memory only without one); ``optical_calibration_dir`` holds checkerboard
@@ -7467,7 +7469,7 @@ def create_app(
             radar_jobs.release()
 
     lens_catalogue = lens_profiles.load_catalogue(lens_catalogue_path)
-    lens_store = lens_profiles.LensSettingsStore(lens_settings_path, lens_catalogue)
+    lens_store = lens_settings.LensSettingsStore(lens_settings_path, lens_catalogue)
     box_config = placement_box.load_config(placement_box_config)
 
     def current_lens() -> lens_profiles.ActiveLens | None:
@@ -7487,7 +7489,7 @@ def create_app(
 
     def tilt_path() -> Path | None:
         """This lens's camera-tilt calibration file (the tilt is stored per lens)."""
-        return lens_profiles.tilt_calibration_path(
+        return lens_settings.tilt_calibration_path(
             camera_tilt_path, lens_store.selected(), lens_catalogue
         )
 
@@ -7633,7 +7635,7 @@ def create_app(
             enclosure.set_mount(mount)
 
     mount_store = orientation_check.MountStore(lis3dh_mount_path, rig_yaw_deg=rig_lis3dh_yaw())
-    orientation = orientation_check.GuidedCheck(
+    orientation = guided_check.GuidedCheck(
         mount_store, lambda: enclosure.reading(), on_mount_change=apply_mount
     )
 
@@ -10270,14 +10272,14 @@ def create_app(
         return {
             "tester_id": tester_id,
             "lens_id": lens_store.selected(),
-            "lenses": lens_profiles.lens_listing(
+            "lenses": lens_settings.lens_listing(
                 rig, lens_catalogue, lens_store, [optical_calibration_dir, optical_calibration]
             ),
             "allowed_ladder_us": {
                 arm_id: list(values) for arm_id, values in lens_catalogue.allowed_ladder_us.items()
             },
             "setup_reset_on_change": True,
-            "camera_tilt": camera_tilt.calibration_status(tilt_path()),
+            "camera_tilt": tilt_calibration_admin.calibration_status(tilt_path()),
         }
 
     def reset_for_lens(tester_id: str, previous: str | None, lens_id: str) -> list[str]:
@@ -10320,7 +10322,9 @@ def create_app(
             if action not in {"select", "settings", "reset_tilt"}:
                 raise ValueError("action must be select, settings or reset_tilt")
             if action == "reset_tilt":
-                outcome = camera_tilt.reset_calibration(tilt_path(), reason="tester asked")
+                outcome = tilt_calibration_admin.reset_calibration(
+                    tilt_path(), reason="tester asked"
+                )
                 return jsonify({**lens_payload(tester_id), "tilt_reset": outcome})
             lens_catalogue.get(lens_id)
             refuse_while_analysing()
@@ -11593,7 +11597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--camera-tilt-calibration",
         type=Path,
-        default=camera_tilt.default_calibration_path(),
+        default=tilt_calibration_admin.default_calibration_path(),
         help=(
             "This unit's camera-tilt calibration (P8-5), written by the first setup whose "
             "camera and radar agreed; kept with the unit's local settings, not the rig file"
@@ -11602,7 +11606,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--lens-settings",
         type=Path,
-        default=lens_profiles.default_unit_settings_path(),
+        default=lens_settings.default_unit_settings_path(),
         help="This unit's lens choice and per-lens settings (kept with its local settings)",
     )
     parser.add_argument(

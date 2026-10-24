@@ -124,6 +124,19 @@ def _error(stage: str, error: BaseException) -> dict[str, str]:
     }
 
 
+def verify_post_dump_cli(radar) -> None:
+    """Require the restarted sensor and CLI after a completed binary dump."""
+    health = radar.cmd("stats", 6.0)
+    try:
+        IWR6843Radar._require_done("post-dump stats", health)  # pylint: disable=protected-access
+    except RuntimeError as error:
+        raise RuntimeError(f"IWR6843 post-dump CLI health check failed: {error}") from error
+    if "active=1" not in health:
+        raise RuntimeError(
+            f"IWR6843 post-dump CLI health check found inactive capture: {health.strip()}"
+        )
+
+
 def _validate(inputs: StaticCaptureInputs) -> None:
     if not _CAPTURE_ID.fullmatch(inputs.capture_id):
         raise ValueError("capture_id must use 1-64 letters, digits, dots, dashes, or underscores")
@@ -308,7 +321,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
                 raise StaticCaptureCancelled("capture cancelled after raw evidence was saved")
             stage = enter("post_dump_cli_health")
             try:
-                radar.verify_post_dump_cli()
+                verify_post_dump_cli(radar)
             except Exception:
                 cli_health_uncertain = True
                 raise

@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, PATCH_PROJECTION, useTester } from './helpers';
+import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, PATCH_PROJECTION, useTester } from './testerHelpers';
 
 async function fulfillJson(route: Route, payload: object, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) });

@@ -264,9 +264,9 @@ def test_club_path_receives_ball_tdm_sign():
 def test_club_path_receives_the_configured_azimuth_offset():
     """The aim offset must cross the runtime -> estimator boundary.
 
-    Club path is an absolute angle and the offset enters additively, as for
-    every horizontal angle (D36 item 2), so a boresight that is not the target
-    line shifts every reported path by that amount. Coverage stopped one step short on each side: test_server.py
+    Club path is an absolute angle and the offset enters additively, so a
+    boresight that is not the target line shifts every reported path by that
+    amount. Coverage stopped one step short on each side: test_server.py
     checks the CLI value reaches ``IWR6843Runtime.azimuth_offset_deg``, and the
     tests around this one check that ``tdm_sign`` and ``ops_club_speed_mph``
     reach ``estimate_club_path`` -- but nothing checked that *this* value
@@ -313,7 +313,7 @@ def test_azimuth_offset_corrects_horizontal_launch():
             club_speed_mph=None,
         )
 
-    # D36 item 2: the horizontal offset is added (+ = boresight right of target line)
+    # the horizontal offset is added (+ = boresight right of target line)
     assert result.measurement.horizontal_deg == pytest.approx(0.3)
     assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
     assert result.measurement.horizontal_frame == "target_line"
@@ -502,7 +502,7 @@ def test_azimuth_offset_corrects_horizontal_ball_launch():
             club="9i",
         )
 
-    # D36 item 2: the horizontal offset is added (+ = boresight right of target line)
+    # the horizontal offset is added (+ = boresight right of target line)
     assert result.measurement.horizontal_deg == pytest.approx(0.3)
     assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
     assert result.measurement.horizontal_frame == "target_line"

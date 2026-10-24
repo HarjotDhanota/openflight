@@ -1,4 +1,4 @@
-"""P7-14 (D13): the ready light, one readiness state from what the sensors report."""
+"""The ready light: one readiness state from what the sensors report."""
 
 from __future__ import annotations
 
@@ -188,15 +188,14 @@ def test_red_outranks_amber():
     assert compute_state(states, NOW)["cause"] == "camera is not running"
 
 
-def test_setup_problems_and_holds_are_red_and_come_first():
-    states = _states(setup_problems=("no admitted setup",))
+def test_setup_problems_are_red_and_come_first():
+    states = _states(setup_problems=("no admitted setup",), camera=_camera(running=False))
 
-    assert compute_state(states, NOW)["cause"] == "no admitted setup"
-    held = compute_state(states, NOW, hold="ladder light check running")
-    assert held["cause"] == "ladder light check running"
-    assert [cause["cause"] for cause in held["causes"]] == [
-        "ladder light check running",
+    light = compute_state(states, NOW)
+    assert light["cause"] == "no admitted setup"
+    assert [cause["cause"] for cause in light["causes"]] == [
         "no admitted setup",
+        "camera is not running",
     ]
 
 
@@ -231,21 +230,6 @@ def test_state_since_is_the_time_of_the_change():
     light.update(_states(), now=NOW)
     assert light.update(_states(), now=NOW + 5.0)["since"] == NOW
     assert light.update(_states(iwr=_iwr(armed=False)), now=NOW + 6.0)["since"] == NOW + 6.0
-
-
-def test_a_hold_is_red_until_it_is_cleared():
-    light = ReadyLight()
-
-    light.set_hold("ladder stopped")
-    held = light.update(_states(), now=NOW)
-    assert (held["state"], held["cause"], held["hold"]) == (
-        "red",
-        "ladder stopped",
-        "ladder stopped",
-    )
-
-    light.set_hold(None)
-    assert light.update(_states(), now=NOW + 1.0)["state"] == "green"
 
 
 def test_a_swing_is_picked_up_once_across_its_edge_and_ops_dump():

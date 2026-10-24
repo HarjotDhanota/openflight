@@ -236,10 +236,10 @@ def test_fast_path_publishes_one_final_shot_without_enrichment(phones, monkeypat
     [
         ("shot", "complete", None, False, (True, None)),
         ("shot_update", "complete", None, False, (True, {"status": "complete"})),
-        # A late IWR or camera result can still arrive: not terminal (D30 b).
+        # A late IWR or camera result can still arrive: not terminal.
         ("shot_update", "partial", "enrichment_deadline", True, (False, {"status": "pending"})),
         ("shot_update", "partial", "enrichment_deferred", True, (False, {"status": "pending"})),
-        # Nothing will follow: final, skipped with the fork's own reason (D30 a).
+        # Nothing will follow: final, skipped with the fork's own reason.
         (
             "shot_update",
             "partial",

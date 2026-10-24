@@ -159,11 +159,7 @@ def test_replay_summary_and_csv_output(tmp_path):
 
 
 def test_a_legacy_replay_reads_its_single_height_as_the_rx_row():
-    """July/August sessions record one radar height and a tilt, no rig.
-
-    LCMF-v2 takes that height as the RX-row centre of a +90 deg board, so
-    their replays differ from the numbers they recorded, by design.
-    """
+    """Sessions with one radar height and no rig replay it as the RX-row centre of a +90 deg board."""
     from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
     from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
 

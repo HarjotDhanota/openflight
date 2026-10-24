@@ -182,7 +182,7 @@ Each entry is one test. Its results describe that test only.
 
 ### E1. 24 Sept 2026: a real swing around contact
 
-- **Capture:** session `harjot-pilot-test-1`, clip `camera_20260924_185037_219_001`. 1280×800, 115.1 fps, 298 µs × 12, 24 frames, 18 of them before the trigger.
+- **Capture:** session `pilot-test-1`, clip `camera_20260924_185037_219_001`. 1280×800, 115.1 fps, 298 µs × 12, 24 frames, 18 of them before the trigger.
 - **Observed (Measured):**
   - The ball is at rest in f18.
   - In f19 the head covers the ball's spot and a faint ball remains.
@@ -461,7 +461,7 @@ These claims from the first version of this document (28–29 Sept) were wrong o
 
 ```
 uv run python docs/research/camera-fusion/scripts/make_figures.py \
-    --frame <E2 frame .png> --bundle <harjot-pilot-test-1 bundle .zip> --pitch-deg 1.75
+    --frame <E2 frame .png> --bundle <pilot-test-1 bundle .zip> --pitch-deg 1.75
 ```
 
 The E2 frame and the E1 bundle aren't in the repository. The code state is `feat/tester-capture-pilot`. The research reports and simulation scripts live beside the project research guide (§1Q), in the separate research worktree.

@@ -13,16 +13,10 @@ import math
 
 import pytest
 
-from openflight import ballistics
-from openflight.ballistics import (
-    AERO_MODELS,
-    FERGUSON_2022,
-    FLIGHT_FIT_V1,
-    FLIGHT_FIT_V2,
-    LaunchConditions,
-    simulate,
-)
+from openflight import flight_sim as ballistics
 from openflight.flight import AIR_DENSITY_NORMALIZED
+from openflight.flight_models_superseded import AERO_MODELS, FERGUSON_2022, FLIGHT_FIT_V2
+from openflight.flight_sim import FLIGHT_FIT_V1, LaunchConditions, simulate
 
 # (ball speed mph, launch v, launch h, spin rpm, axis) -> carry yd, apex yd,
 # landing angle deg, hang s, landing speed mph: flight-fit-v2's own numbers

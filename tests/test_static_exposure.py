@@ -235,7 +235,7 @@ def test_a_clipped_ball_is_brought_down_below_clipping():
 
 
 def test_no_ball_in_a_lit_patch_ends_quickly_and_never_brightens():
-    """harjot-indoor-test-1: each 'not found' walked the old search brighter, to 8 ms x 12."""
+    """indoor-test-1: each 'not found' walked the old search brighter, to 8 ms x 12."""
     # a patch above DIM_PATCH_DN is lit: nothing is brightened (72 DN above black)
     scene = Scene(ball_per_signal=0.0, patch_per_signal=0.03)
 
@@ -316,7 +316,7 @@ def test_controls_the_camera_never_applies_end_the_loop():
 
 
 def test_the_indoor_patch_locks_on_the_ball_in_a_few_steps():
-    """harjot-indoor-test-1's light-screen frame with a ball composited in, its
+    """indoor-test-1's light-screen frame with a ball composited in, its
     levels scaled linearly with exposure x gain from the 300 us x 8 screen."""
     from test_patch_ball_search import INDOOR_BALL_PX, indoor_scene  # noqa: PLC0415
 

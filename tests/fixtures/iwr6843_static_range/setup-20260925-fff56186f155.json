@@ -1,7 +1,7 @@
 {
   "schema": "openflight.iwr6843.static_range_regression.v1",
   "epoch_id": "setup-20260925-fff56186f155",
-  "source_bundle": "harjot-pilot-test-2-session-bundle-20260926T063433Z.zip",
+  "source_bundle": "pilot-test-2-session-bundle-20260926T063433Z.zip",
   "source_bundle_sha256": "7e97f652df92fa4222a6aa8174655b70801f74d41eadf70d939cbbfee0a92542",
   "note": "The v1 selector rejected the approximately 1.012 m diagnostic peak.",
   "external_observation": null,

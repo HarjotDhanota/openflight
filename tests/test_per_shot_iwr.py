@@ -1,8 +1,6 @@
-"""The IWR runtime carries nothing from one shot to the next (D17).
+"""The IWR runtime carries nothing from one shot to the next.
 
-It used to keep up to 50 earlier shots' accepted ball tracks and, when a shot had no
-impact time of its own, fit them into a prior that picked this shot's track. A shot
-without its own impact time now has none.
+A shot without its own impact time has none: no prior is built from earlier shots.
 """
 
 import dataclasses

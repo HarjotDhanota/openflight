@@ -1,10 +1,8 @@
-"""Chained club delivery times frames by the sensor clock where the clip has it (P6-8).
+"""Chained club delivery times frames by the sensor clock where the clip has it.
 
-Host arrival times are distorted by up to 31 ms around impact when frame
-delivery stalls (Outdoors-test-5); sensor timestamps are when each frame was
-exposed. Club delivery links camera and radar only through the contact
-anchor (radar impact time plus camera time since the camera's contact), so
-moving every camera time to one clock needs no conversion to the host clock.
+Host arrival times stall by up to ~31 ms around impact; sensor timestamps are
+exposure times. Camera and radar meet only at the contact anchor, so no
+conversion to the host clock is needed.
 """
 
 from __future__ import annotations
@@ -136,7 +134,7 @@ def test_a_clip_without_sensor_timestamps_still_times_by_arrival(monkeypatch):
 
 
 def test_the_field_clips_contact_and_trigger_offset_use_sensor_time(monkeypatch):
-    """Swing 1 of Outdoors-test-5: frame 18 arrived 31 ms late on the host clock."""
+    """Frame 18 arrives 31 ms late on the host clock."""
     with np.load(FIXTURE) as archive:
         frames = archive["s1_frames"]
         sensor = archive["s1_sensor_timestamp_ns"].astype(np.int64)

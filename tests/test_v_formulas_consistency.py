@@ -9,15 +9,15 @@ from datetime import datetime
 import pytest
 
 from openflight import (
-    ballistics,
     collision_forward,
     collision_model as cm,
+    flight_sim as ballistics,
     full_speed,
     metric_definitions as md,
 )
-from openflight.ballistics import LaunchConditions, simulate
 from openflight.clubs import ClubType
 from openflight.flight import AIR_DENSITY_NORMALIZED, compute_flight
+from openflight.flight_sim import LaunchConditions, simulate
 from openflight.launch_monitor import Shot
 
 CLUBS = [club for club in ClubType if club is not ClubType.UNKNOWN]

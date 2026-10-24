@@ -56,16 +56,13 @@ def horizontal_confidence_from(coherence: float | None) -> float:
 
 
 LOW_COHERENCE_HORIZONTAL = "hlcmf_v2_low_coherence"
-# Recorded sessions carry the superseded late-flight bearing's label (D36 item 3).
+# Recorded sessions carry the superseded late-flight bearing's label.
 LOW_COHERENCE_HORIZONTAL_STATUSES = frozenset({"hlcmf_v1_low_coherence", LOW_COHERENCE_HORIZONTAL})
 
 
 def camera_horizontal_input(measurement) -> tuple[float | None, float | None]:
-    """The IWR horizontal and confidence camera fusion may use, kiosk and replay alike.
-
-    A low-coherence horizontal is measured and shown, labelled (D15, P8-7), but
-    it is never the IWR evidence the camera weighs itself against.
-    """
+    """The IWR horizontal and confidence camera fusion may use; a low-coherence
+    horizontal is shown, labelled, but never weighed against the camera."""
     if measurement is None or not getattr(measurement, "accepted", False):
         return None, None
     horizontal = getattr(measurement, "horizontal_deg", None)
@@ -154,8 +151,6 @@ def ops_guided_measurement(
     if baseline is None or not hasattr(baseline, "track_speed_mph"):
         return baseline
     speed = baseline.track_speed_mph
-    # A launch measured on a reject-quality track keeps its label and never
-    # stops the search for a better track (D15, P8-7).
     sound = baseline.accepted and baseline.tracker_quality != "reject"
     if sound and speed is None:
         return replace(baseline, status="accepted_track_speed_warning")
@@ -225,7 +220,6 @@ class IWR6843ShotResult:
     capture_wait_duration_ns: int | None = None
     estimator_analysis_duration_ns: int | None = None
     aggregate_duration_ns: int | None = None
-    # 13 Oct: this shot's launch point from its own capture, and the range it used
     launch_range: LaunchRangeEstimate | None = None
     ball_range: ShotBallRange | None = None
 
@@ -272,9 +266,6 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         tdm_sign_policy=tdm_sign_policy,
         horizontal_phase_reference_rad=horizontal_phase_reference_rad,
     )
-    # ``azimuth_offset_deg`` is the one horizontal offset (D36 item 2):
-    # -(target yaw), added to the ball's horizontal launch exactly as to the
-    # club path below.
     if measurement is not None and getattr(measurement, "horizontal_deg", None) is not None:
         measurement = replace(
             measurement,
@@ -286,7 +277,6 @@ def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
         return measurement, None
     ball_sign = getattr(measurement, "tdm_sign_used", None)
     fallback = ball_sign not in (-1, 1)
-    # this shot's own impact time or none: no earlier shots' tracks stand in (D17)
     impact_t_s = getattr(measurement, "impact_t_s", None)
     if impact_t_s is not None:
         impact_t_s += club_impact_correction_s
@@ -315,8 +305,7 @@ class IWR6843Runtime:
     net_range_m: float | None
     tx_order: str = "normal"
     capture_timeout_s: float = 12.0
-    # The one horizontal offset (D36 item 2): -(target yaw), + when the
-    # boresight points right of the target line; added to launch and club path.
+    # -(target yaw), + when the boresight points right of the target line.
     azimuth_offset_deg: float | None = None
     horizontal_phase_reference_rad: float | None = None
     tdm_sign_policy: str = "positive"
@@ -329,8 +318,7 @@ class IWR6843Runtime:
     club_impact_correction_s: float = -0.002
     calibration_provenance: dict | None = None
     radar_config_provenance: dict | None = None
-    # 13 Oct: the camera's coarse estimate of the resting ball's range, a prior only:
-    # it sizes each shot's search and stands in, labelled, when the IWR cannot range it
+    # The camera's coarse resting-ball range: a prior only, labelled where used.
     range_prior: LaunchRangePrior | None = None
 
     def replay_config_snapshot(
@@ -368,10 +356,8 @@ class IWR6843Runtime:
                 "club": club,
                 "club_speed_mph": club_speed_mph,
                 "effective_tilt_deg": effective_tilt_deg,
-                # the shot's own re-located range, when the kiosk had one (13 Oct)
                 "tee_range_m": tee_range_m,
                 "ball_at_address": ball_at_address,
-                # the shot's own prior (its resting-ball look), else the session's
                 "range_prior": (range_prior or self.range_prior).to_dict()
                 if (range_prior or self.range_prior)
                 else None,
@@ -419,12 +405,7 @@ class IWR6843Runtime:
     ) -> IWR6843ShotResult:
         """Match one OPS shot to TI data, range its launch point, and run LCMF.
 
-        The shot's range is decided first, before anything that uses it (13 Oct): its
-        own launch point (``launch_range``), else the camera prior labelled, else none
-        and every range-dependent estimator is withheld. ``range_prior`` is this
-        shot's own (its resting ball re-located in the box), else the session's.
-        ``tee_range_m`` is a configured range (``--iwr6843-tee-m``), kept as given;
-        the launch point is still recorded beside it.
+        Range: the shot's own launch point, else the labelled camera prior, else none.
         """
         process_started_ns = time.monotonic_ns()
         capture = self.capture_monitor.capture_for_shot(

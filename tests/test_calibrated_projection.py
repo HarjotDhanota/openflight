@@ -239,7 +239,7 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     ).with_calibrated_model(
         model.snapshot,
         {
@@ -358,7 +358,7 @@ def live_calibrated_replay(tmp_path, monkeypatch):
         artifact, placement, observed_pitch_deg=0.0, observed_roll_deg=0.0
     )
     # The ball rests for nine frames and is gone from the trigger frame on, so
-    # the camera's contact (F7) falls midway between frames 8 and 9.
+    # the camera's contact falls midway between frames 8 and 9.
     frame_count = 20
     times = np.arange(frame_count, dtype=float) * 0.0035
     trigger_index = 9

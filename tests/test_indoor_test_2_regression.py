@@ -1,4 +1,4 @@
-"""harjot-indoor-test-2 through the whole fixed-box chain, on its own frame and radar.
+"""indoor-test-2 through the whole fixed-box chain, on its own frame and radar.
 
 30 Sept 2026: the ball was taped about 1.2 m from the radar and a door stands at
 1.575 m, a still reflector 6x anything else in the empty scene. The camera found

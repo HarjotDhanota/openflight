@@ -11,7 +11,7 @@ Every item has four parts:
 - **Tests**: what proves it. Unit and flow tests are required. A field check is listed where only the rig can prove it.
 - **Size**: S = under an hour; M = a few hours; L = a day or more, or it needs data.
 
-Items marked **Decision** need Harjot's choice before they are built. They are also collected in section 8.
+Items marked **Decision** need the owner's choice before they are built. They are also collected in section 8.
 
 ## 1. Blockers for the next field test
 

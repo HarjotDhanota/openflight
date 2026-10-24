@@ -1,9 +1,7 @@
 """Judge a clip's light on the resting ball and the hitting zone.
 
-One light rule for every judge of the camera's pictures: the capture runtime's
-analysis eligibility and auto-exposure, and the exposure studies built on them.
-The ball is judged first, where the setup saw it; with no ball in view the
-hitting zone (the placement box in this mode when there is one) decides.
+One rule for analysis eligibility, auto-exposure and the exposure studies: the ball
+is judged first, where the setup saw it; with no ball in view the hitting zone decides.
 """
 
 from __future__ import annotations
@@ -16,23 +14,16 @@ from openflight.camera import swing_exposure
 from openflight.camera.auto_exposure import measure_exposure
 from openflight.camera.club_motion import detect_reference_ball
 
-# The OV9281's black level in the raw R8 stream every analysis uses: libcamera's
-# SensorBlackLevels reports 4096 on a 16-bit scale (read on the Pi, 29 Sept). It
-# stands in when no floor was measured; the ring around the ball never does, as
-# that turned the signal gate back into a contrast gate (wiring audit B5).
+# OV9281 black level in the raw R8 stream (libcamera SensorBlackLevels 4096 / 16-bit),
+# used when no floor was measured; never the ring around the ball (a contrast gate).
 SENSOR_BLACK_LEVEL_DN = 16.0
 LIGHT_FLOOR_DN = 10.0  # hitting-zone signal above the black floor
 CLIPPED_MAX_PCT = 5.0
 RESTING_FRAMES = 10  # the first pre-impact frames, before the club arrives
-# Outdoors the background beyond the ball can be 30x brighter than the ball's
-# surroundings (29 Sept: a sunlit patio clipped at every setting while the shaded
-# mat sat at 71 DN), so a rung is judged on the ball whenever it is visible.
+# Outdoor background can be far brighter than the ball, so the ball decides when visible.
 BALL_MIN_SIGNAL_DN = 20.0
-# With no ball in view the hitting zone decides, and only a mostly clipped zone
-# counts as too bright: a clipped strip of background is normal outdoors.
+# Only a mostly clipped zone is too bright: a clipped strip of background is normal outdoors.
 ZONE_TOO_BRIGHT_PCT = 50.0
-# The ball is searched for this many diameters around where the setup saw it, and
-# must lie within about one diameter of that spot (P7-9).
 BALL_SEARCH_DIAMETERS = 2.0
 BALL_SEARCH_MIN_PX = 30.0
 BALL_MATCH_DIAMETERS = 1.0
@@ -41,7 +32,7 @@ BRIGHT_LIGHT_CAUSES = frozenset({"ball_clipped", "zone_clipped_no_ball"})
 
 
 def _zone(image: np.ndarray, black_floor: float, zone_box=None) -> dict:
-    """The hitting zone's light: the tester's box when given, else the fixed box (P7-15)."""
+    """The hitting zone's light: the tester's box when given, else the fixed box."""
     observation = measure_exposure(
         np.clip(np.asarray(image), 0, 255).astype(np.uint8), zone_box=zone_box
     )
@@ -58,7 +49,7 @@ def _zone(image: np.ndarray, black_floor: float, zone_box=None) -> dict:
 
 
 def _zone_name(zone: dict) -> str:
-    """How a verdict names the zone it judged: the tester's box, or the fixed zone."""
+    """How a verdict names the zone it judged."""
     return "the box" if zone.get("zone_source") == "placement_box" else "the hitting zone"
 
 
@@ -67,15 +58,9 @@ def ball_light(
 ) -> dict | None:
     """The resting ball's brightness in these frames, if the ball can be found.
 
-    ``expected_ball`` (x, y, diameter_px) is where the setup saw the ball in this
-    mode. The ball is searched for only around that spot, and only a ball of that
-    size within about one diameter of it counts (P7-9: a six-diameter match took
-    fence clutter 175 px away for the ball in sun). Without it nothing is
-    searched: a whole-frame search took a 5 px speck for the ball (P6-1).
-
-    A ball in a sunlit, clipped patch of mat melts into it and cannot be found;
-    when the setup's spot is itself clipped, that spot is judged (``found_by`` is
-    ``setup_position``), since a ball placed there clips too.
+    Only a ball of the size of ``expected_ball`` (x, y, diameter_px) within about one
+    diameter of it counts; without it nothing is searched. When the setup's spot is
+    itself clipped, that spot is judged (``found_by`` is ``setup_position``).
     """
     if expected_ball is None:
         return None
@@ -92,8 +77,7 @@ def ball_light(
     )
     image = np.median(stack, axis=0)
     try:
-        # The detector's strict lit-sphere mode (given a size) refuses sunlit or
-        # half-shaded balls, so the result is checked against the setup instead.
+        # no size given: the strict lit-sphere mode refuses sunlit or half-shaded balls
         found = detect_reference_ball(stack, roi=roi)
     except (RuntimeError, ValueError):
         found = None
@@ -117,21 +101,11 @@ def ball_light(
         "y": y,
         "diameter_px": size,
         "median_dn": median,
-        # the brightest of the ball's core, for the page's live readout
         "peak_dn": float(np.max(core)),
         "signal_dn": median - black_floor,
         "clipped_pct": clipped,
         "found_by": found_by,
     }
-
-
-def light_label(cause: str | None) -> str | None:
-    """The tester-facing label for a light cause: what to do about it (13 Oct)."""
-    if cause in BRIGHT_LIGHT_CAUSES:
-        return swing_exposure.TOO_BRIGHT_LABEL
-    if cause in DARK_LIGHT_CAUSES:
-        return swing_exposure.TOO_DARK_LABEL
-    return None
 
 
 def judge_light(
@@ -142,10 +116,8 @@ def judge_light(
 ) -> dict:
     """The one light rule both the pre-rung check and the swing verdict apply.
 
-    ``cause`` is one of: ``ball_clipped``, ``ball_dark``, ``zone_dark`` (the club's
-    background), ``zone_clipped_no_ball``, ``background_clipped`` (amber only) or
-    ``ok``. The ball is judged first when it can be found. The zone is the
-    tester's placement box in this mode (``zone_box``), else the fixed box (P7-15).
+    ``cause`` is one of: ``ball_clipped``, ``ball_dark``, ``zone_dark``,
+    ``zone_clipped_no_ball``, ``background_clipped`` (amber only) or ``ok``.
     """
     frames = np.asarray(frames)
     zone = _zone(np.median(frames, axis=0), black_floor, zone_box)
@@ -186,14 +158,9 @@ def resting_frames(frames: np.ndarray) -> np.ndarray:
 def capture_analysis_eligibility(
     frames: np.ndarray, black_floor: float, expected_ball: dict, zone_box=None
 ) -> dict:
-    """Whether a clip's light permits camera analysis, judged on the setup's ball (P7-8).
+    """Whether a clip's light permits camera analysis, judged on the setup's ball.
 
-    The same ``judge_light`` as the ladder, on the clip's resting frames. Only the
-    ball decides: its core clipped ``CLIPPED_MAX_PCT`` or less and
-    ``BALL_MIN_SIGNAL_DN`` or more above black. A clipped background or a dark
-    hitting zone does not withhold the camera (outdoors a sunny mat is always
-    about 20 % clipped, and at the setup's own sun lock the zone reads too dark).
-    No ball where the setup saw it is not eligible.
+    Only the ball decides; a clipped background or dark zone does not withhold the camera.
     """
     light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball, zone_box)
     ball = light["ball"]

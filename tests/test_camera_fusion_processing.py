@@ -27,7 +27,7 @@ def _geometry():
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     )
 
 
@@ -225,7 +225,7 @@ def test_out_of_range_pre_trigger_count_is_isolated_to_club_stage(monkeypatch):
 
 
 def test_range_evidence_status_rides_in_the_frozen_context(monkeypatch):
-    """F4: a rejected track keeps its evidence for replay, with its status."""
+    """A rejected track keeps its evidence for replay, with its status."""
     track = BallTrack(45.0, -2.0, 40.0, 0.2, 8, 0.01, 0.04, False)
     geometry = Geometry(4, 8, 2, 4, 64, 0.01, 1)
     context = fp.build_context(
@@ -276,7 +276,7 @@ def test_context_recorded_before_range_status_replays_as_accepted(monkeypatch):
 
 
 def test_ineligible_lighting_is_a_note_and_both_stages_still_run(monkeypatch):
-    """D15 (P8-7): the capture-time lighting verdict labels the result; it never blocks."""
+    """The capture-time lighting verdict labels the result; it never blocks."""
     ran = []
     monkeypatch.setattr(
         fp,
@@ -325,7 +325,7 @@ def test_eligible_lighting_carries_no_notes():
 
 
 def test_the_setup_ball_rides_in_the_context_to_the_ball_gate(monkeypatch):
-    """P8-7: the setup's ball, not fixed fractions, is the resting-ball gate."""
+    """The setup's ball, not fixed fractions, is the resting-ball gate."""
     seen = {}
     monkeypatch.setattr(
         fp,

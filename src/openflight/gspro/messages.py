@@ -14,8 +14,7 @@ class BallData:
     SideSpin: float = 0.0
     HLA: float = 0.0
     VLA: float = 0.0
-    # Optional in OpenConnect V1: None leaves it off the wire, so the simulator
-    # flies the ball itself instead of being handed a carry of 0 (D17).
+    # Optional in OpenConnect V1: None leaves it off the wire, so the simulator flies the ball.
     CarryDistance: Optional[float] = None
 
 
@@ -26,7 +25,6 @@ class ClubData:
     FaceToTarget: float = 0.0
     Lie: float = 0.0
     Loft: float = 0.0
-    # Optional like every ClubData field: None leaves it off the wire (D17).
     Path: Optional[float] = None
     SpeedAtImpact: float = 0.0
     VerticalFaceImpact: float = 0.0
@@ -63,7 +61,7 @@ class GSProResponse:
 
 def serialize_payload(payload: ShotPayload) -> bytes:
     data = asdict(payload)
-    # optional fields with no value are left out, never sent as 0 (D17)
+    # optional fields with no value are left out, never sent as 0
     for section, key in (("BallData", "CarryDistance"), ("ClubData", "Path")):
         if data[section][key] is None:
             del data[section][key]

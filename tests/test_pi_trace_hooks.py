@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 import serial
 
-from openflight import pi_trace, research_hooks, shot_models, tester_hooks
+from openflight import pi_trace, research_hooks, shot_models, tester_hooks, trace_points
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
 from openflight.launch_monitor import Shot
 from openflight.ops243 import OPS243Radar
@@ -251,7 +251,9 @@ def test_an_s_hash_write_that_never_returns_leaves_the_split_unknown(recorder, m
 
 
 def test_shot_attempt_id_is_transient():
-    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="abc-00001")
+    shot = Shot(
+        ball_speed_mph=100.0, timestamp=datetime.now(), extras={"trace_attempt_id": "abc-00001"}
+    )
     assert "trace_attempt_id" not in shot.to_dict()
     assert "abc-00001" not in repr(shot)
     assert shot == Shot(ball_speed_mph=100.0, timestamp=shot.timestamp)
@@ -343,28 +345,6 @@ def test_edge_tick_reading_survives_a_raising_active_time():
 
     capture_monitor._button = Button()  # pylint: disable=protected-access
     assert capture_monitor.edge_tick_reading()["age_ns"] is None
-
-
-def test_prepended_observer_runs_first_and_is_added_once(tmp_path):
-    capture_monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=object()
-    )
-    order = []
-
-    def camera(_wall):
-        order.append("camera")
-
-    def trace(_wall):
-        order.append("trace")
-
-    capture_monitor.add_trigger_observer(camera)
-    capture_monitor.prepend_trigger_observer(trace)
-    capture_monitor.prepend_trigger_observer(trace)
-    capture_monitor._running = capture_monitor._armed = True  # pylint: disable=protected-access
-    capture_monitor._last_observed_edge_timestamp = 0.0  # pylint: disable=protected-access
-    capture_monitor._capture_active = True  # pylint: disable=protected-access
-    capture_monitor.notify_trigger(1_790_000_000.0)
-    assert order == ["trace", "camera"]
 
 
 @pytest.mark.parametrize("bad_age", [float("nan"), float("inf"), "soon"])
@@ -480,7 +460,9 @@ def test_server_edge_observer_is_a_no_op_without_a_recorder(monkeypatch):
 
 
 def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(recorder):
-    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
+    shot = Shot(
+        ball_speed_mph=100.0, timestamp=datetime.now(), extras={"trace_attempt_id": "t-00001"}
+    )
     tag = research_hooks._trace_tag(  # pylint: disable=protected-access
         shot,
         revision=2,
@@ -508,7 +490,9 @@ def test_trace_tag_carries_eligibility_and_update_kind_separately_from_final(rec
 
 def test_trace_tag_is_absent_when_tracing_is_off():
     pi_trace.set_recorder(None)
-    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), trace_attempt_id="t-00001")
+    shot = Shot(
+        ball_speed_mph=100.0, timestamp=datetime.now(), extras={"trace_attempt_id": "t-00001"}
+    )
     assert (
         research_hooks._trace_tag(  # pylint: disable=protected-access
             shot, revision=1, final=False, update_kind="first", core_eligible=False
@@ -637,7 +621,7 @@ def test_callback_joins_the_current_attempt_and_marks_acceptance(recorder, monke
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
     monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
     server._handle_shot_detected(shot)  # pylint: disable=protected-access
-    assert shot.trace_attempt_id == attempt
+    assert shot.extras.get("trace_attempt_id") == attempt
     marks = read_marks(recorder)
     started = _named(marks, "server_callback_started")[0]
     assert started["attempt_id"] == attempt
@@ -656,7 +640,7 @@ def test_untraced_callback_leaves_the_shot_without_an_attempt(monkeypatch):
     monkeypatch.setattr(server, "_finish_shot_detected", lambda *a, **k: None)
     monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
     server._handle_shot_detected(shot)  # pylint: disable=protected-access
-    assert shot.trace_attempt_id is None
+    assert shot.extras.get("trace_attempt_id") is None
 
 
 def _initial_emit_server(monkeypatch):
@@ -678,7 +662,7 @@ def _traced_shot(attempt_id):
         timestamp=datetime.now(),
         launch_angle_vertical=12.0,
         launch_angle_vertical_source="radar",
-        trace_attempt_id=attempt_id,
+        extras={"trace_attempt_id": attempt_id},
     )
 
 
@@ -827,12 +811,16 @@ def test_enrichment_marks_iwr_and_camera_stages_on_the_shot_attempt(recorder, mo
     monkeypatch.setattr(server, "kld7_horizontal", None)
     monkeypatch.setattr(server, "get_session_logger", lambda: None)
     monkeypatch.setattr(server, "_snapshot_inclinometer_for_shot", lambda _shot: None)
-    monkeypatch.setattr(server, "_process_iwr6843_angle", lambda _shot: 12.5)
+    monkeypatch.setattr(
+        server, "_process_iwr6843_angle", trace_points.traced_process_iwr(lambda _shot: 12.5)
+    )
     monkeypatch.setattr(
         server, "_load_camera_capture_archive", lambda _c: {"host_timestamp_ns": [6_000, 7_000]}
     )
     monkeypatch.setattr(server, "_attach_camera_replay", lambda *_a: None)
-    monkeypatch.setattr(server, "_fuse_camera_measurements", lambda *_a: None)
+    monkeypatch.setattr(
+        server, "_fuse_camera_measurements", trace_points.traced_fuse_camera(lambda *_a: None)
+    )
     monkeypatch.setattr(shot_models, "_attach_collision_model", lambda _shot: None)
     shot = _traced_shot("t-00003")
     shot.mode = "rolling-buffer"
@@ -916,8 +904,16 @@ def _admission_server(monkeypatch, defer):
     monkeypatch.setattr(
         server, "_emit_ops_enrichment_status", lambda _shot, **kw: statuses.append(kw)
     )
-    monkeypatch.setattr(server, "_queue_shot_finalization", lambda *a, **k: queued.append(k))
-    monkeypatch.setattr(server, "_log_shot_enrichment_lifecycle", lambda *a, **k: None)
+    monkeypatch.setattr(
+        server,
+        "_queue_shot_finalization",
+        trace_points.traced_queue_finalization(lambda *a, **k: queued.append(k)),
+    )
+    monkeypatch.setattr(
+        server,
+        "_log_shot_enrichment_lifecycle",
+        trace_points.traced_lifecycle(lambda *a, **k: None),
+    )
     monkeypatch.setattr(server, "log_session_error", lambda *a, **k: None)
     monkeypatch.setattr(server, "get_session_logger", lambda: None)
     monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
@@ -1119,7 +1115,7 @@ def test_shot_callback_survives_raising_accessors(raising_recorder, monkeypatch)
     monkeypatch.setattr(server.ready_light, "swing_result", lambda *a, **k: None)
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
     server._handle_shot_detected(shot)  # pylint: disable=protected-access
-    assert assigned == [shot] and shot.trace_attempt_id is None
+    assert assigned == [shot] and shot.extras.get("trace_attempt_id") is None
 
 
 def test_a_raising_trace_tag_still_emits_untagged(recorder, monkeypatch):

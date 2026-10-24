@@ -1,7 +1,7 @@
 /** Rounding slack: a sub-pixel overflow is not more content. */
 const SLACK_PX = 2;
 
-/** Whether a horizontal scroller has content cut off on each side (the kiosk tab bar's hint). */
+/** Whether a horizontal scroller has content cut off on each side. */
 export function scrollHint(box: { scrollLeft: number; clientWidth: number; scrollWidth: number }): {
   left: boolean;
   right: boolean;

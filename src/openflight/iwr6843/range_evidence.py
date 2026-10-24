@@ -1301,7 +1301,7 @@ def _dominant_still_bins(
 
     A door or a frame this strong drifts a little between captures; left out of
     the channel fit, its drift is all residual, and the residual is what is
-    searched for the ball (harjot-indoor-test-2: a door at 1.575 m, 6x anything
+    searched for the ball (indoor-test-2: a door at 1.575 m, 6x anything
     outside the span, became the coherent difference's strongest peak). A ball
     adds far less than such a reflector holds, so fitting on it costs the ball
     nothing; the robust fit still drops it if it changed.
@@ -1641,7 +1641,7 @@ __all__ = [
 
 # P8-3: the radar searches only the patch's slant-range window, and reports every
 # candidate both differences see there, with its scores and elevation. Neither
-# difference is always right (harjot-indoor-test-1: the coherent one took 1.575 m
+# difference is always right (indoor-test-1: the coherent one took 1.575 m
 # against a tape of 1.25 m while the magnitude's 1.20 m failed its fractional
 # gate; the 29 Sept door: both read the tape's 1.00 m), so neither gate refuses a
 # peak here: the camera chooses between them (P8-4). A changed reflector beside a
@@ -1649,18 +1649,18 @@ __all__ = [
 PATCH_CANDIDATES_SCHEMA = "openflight.iwr6843.static_patch_candidates.v1"
 # a magnitude peak's change must be at least this fraction of the still scene there,
 # and stand this far above the difference's own scatter, to be reported at all
-# (harjot-indoor-test-1's ball near the tape: 0.37 of the scene, 0.8 of the scatter)
+# (indoor-test-1's ball near the tape: 0.37 of the scene, 0.8 of the scatter)
 PATCH_MAGNITUDE_MIN_FRACTION = 0.25
 PATCH_MAGNITUDE_MIN_SCORE = 0.5
 PATCH_MAGNITUDE_MAX_CANDIDATES = 3
-# harjot-indoor-test-2: the ball was the coherent difference's 4th peak, behind the
+# indoor-test-2: the ball was the coherent difference's 4th peak, behind the
 # door and two near-field ones; the camera and the magnitude check choose among them
 PATCH_COHERENT_MAX_CANDIDATES = 8
 # A still reflector that dwarfs the rest of the scene and barely changes with the
 # ball (a door, a frame, a net post) is never the ball: its bin holds at least this
 # many times the strongest bin outside its own +-1 neighbours in the empty capture,
 # and its power changes by at most this fraction with the ball present. The
-# 1.575 m door of harjot-indoor-test-1 and -2: 6x, +3 %.
+# 1.575 m door of indoor-test-1 and -2: 6x, +3 %.
 STILL_REFLECTOR_DOMINANCE = 3.0
 STILL_REFLECTOR_MAX_CHANGE = 0.10
 # a peak this many bins inside the capture's first or last bin has both neighbours

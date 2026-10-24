@@ -28,15 +28,12 @@ from openflight.iwr6843.frame_evidence import (
 HZ = 200_000_000
 PERIOD_US = 3000
 PERIOD_TICKS = 600_000
-BENCH = Path(
-    os.environ.get(
-        "OPENFLIGHT_BENCH_ROOT",
-        Path.home() / "Desktop/Coding/Openflight Test Bench/openflight-test-bench",
-    )
-)
+BENCH_ROOT = os.environ.get("OPENFLIGHT_BENCH_ROOT")
 RECORDED_V7 = (
-    BENCH / "sessions/Outdoors-test-7/arm5/paired/run-01/iwr6843/"
+    Path(BENCH_ROOT) / "sessions/Outdoors-test-7/arm5/paired/run-01/iwr6843/"
     "iwr6843_20260930_101810_278_001.l3dump"
+    if BENCH_ROOT
+    else None
 )
 
 
@@ -389,7 +386,10 @@ def test_iq8_clean_reports_headroom():
     assert report["frames_within_2x_of_wrap"] == 2
 
 
-@pytest.mark.skipif(not RECORDED_V7.exists(), reason=f"recorded dump not here: {RECORDED_V7}")
+@pytest.mark.skipif(
+    RECORDED_V7 is None or not RECORDED_V7.exists(),
+    reason="recorded dump not here: set OPENFLIGHT_BENCH_ROOT to the test-bench checkout",
+)
 def test_a_recorded_v7_dump_is_unobserved_on_both_counts():
     meta, cube = parse_dump(RECORDED_V7.read_bytes())
 

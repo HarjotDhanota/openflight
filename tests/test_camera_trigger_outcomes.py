@@ -60,43 +60,15 @@ def test_a_shot_claims_the_refused_trigger_nearest_its_impact_once(tmp_path):
     assert runtime.trigger_rejection_for_shot(None) is None
 
 
-@pytest.mark.parametrize(
-    ("timestamps", "impact", "selected"),
-    [((99.0, 100.0, 100.4), 100.4, 100.4), ((100.0, 100.4), 100.3, 100.4)],
-)
-def test_capture_and_evidence_choose_the_same_nearest_trigger(
-    tmp_path, timestamps, impact, selected
-):
-    runtime = CameraCaptureRuntime(output_dir=tmp_path)
-    runtime._captures = [
-        SavedCameraCapture(i, stamp, stamp + 0.1, tmp_path, {"trigger": stamp})
-        for i, stamp in enumerate(timestamps)
-    ]
-    runtime._admission_evidence = [(stamp, {"trigger": stamp}) for stamp in timestamps]
-
-    capture = runtime.capture_for_shot(impact, timeout_s=0.0)
-    evidence = runtime.trigger_evidence_for_shot(impact)
-
-    assert capture.trigger_timestamp == selected
-    assert evidence == capture.metadata
-    assert runtime.capture_for_shot(100.0, timeout_s=0.0).trigger_timestamp == 100.0
-
-
-@pytest.mark.parametrize("method", ["capture", "evidence"])
-def test_equal_distance_triggers_are_not_consumed_as_a_match(tmp_path, method):
+def test_equal_distance_triggers_are_not_consumed_as_a_match(tmp_path):
     runtime = CameraCaptureRuntime(output_dir=tmp_path)
     runtime._captures = [
         SavedCameraCapture(i, stamp, stamp + 0.1, tmp_path, {"trigger": stamp})
         for i, stamp in enumerate((100.0, 100.5))
     ]
-    runtime._admission_evidence = [(stamp, {"trigger": stamp}) for stamp in (100.0, 100.5)]
 
-    if method == "capture":
-        assert runtime.capture_for_shot(100.25, timeout_s=0.0) is None
-        assert runtime.capture_for_shot(100.5, timeout_s=0.0).trigger_timestamp == 100.5
-    else:
-        assert runtime.trigger_evidence_for_shot(100.25) is None
-        assert runtime.trigger_evidence_for_shot(100.5) == {"trigger": 100.5}
+    assert runtime.capture_for_shot(100.25, timeout_s=0.0) is None
+    assert runtime.capture_for_shot(100.5, timeout_s=0.0).trigger_timestamp == 100.5
 
 
 def test_capture_matching_keeps_future_clips_and_timestamp_free_fifo(tmp_path):

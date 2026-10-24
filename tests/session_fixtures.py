@@ -132,7 +132,7 @@ def _flight_frames() -> np.ndarray:
         ball_x_px=SETUP_BALL["x"],
         ball_y_px=SETUP_BALL["y"],
         ball_diameter_px=SETUP_BALL["diameter_px"],
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
         image_width_px=WIDTH,
         image_height_px=HEIGHT,
         horizontal_pixel_sign=1.0,
@@ -159,7 +159,7 @@ def _flight_frames() -> np.ndarray:
         up = -offset[1] * math.sin(pitch) + offset[2] * math.cos(pitch)
         x = WIDTH / 2 + focal * offset[0] / forward
         y = HEIGHT / 2 - focal * up / forward
-        radius = 0.5 * focal * 0.04267 / float(np.linalg.norm(offset))
+        radius = 0.5 * focal * 0.0427 / float(np.linalg.norm(offset))
         if index < PRE_TRIGGER:
             x, y, radius = SETUP_BALL["x"], SETUP_BALL["y"], SETUP_BALL["diameter_px"] / 2
         frames[index][(columns - x) ** 2 + (rows - y) ** 2 <= radius**2] = 230
@@ -306,7 +306,7 @@ def capture_tree(root: Path, shots=(1, 2), *, tester_setup: bool = False) -> Pat
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     )
     if tester_setup:
         # the geometry the kiosk builds from its camera block and IWR calibration

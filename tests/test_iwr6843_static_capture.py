@@ -10,11 +10,12 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from openflight.iwr6843.driver import IWR6843DumpRecoveryError
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.static_capture import (
     StaticCaptureInputs,
     capture_static_range,
+    verify_post_dump_cli,
 )
 from tests.iwr6843_firmware_fake import FakeClock, FakePort, FirmwareModel, NoLock
 
@@ -48,10 +49,11 @@ class FakeRadar:
             raise self.read_error
         return self.raw
 
-    def verify_post_dump_cli(self) -> None:
-        self.calls.append("verify_post_dump_cli")
+    def cmd(self, line: str, _window: float = 1.5) -> str:
+        self.calls.append(line)
         if self.health_error is not None:
             raise self.health_error
+        return f"{line}\nactive=1\nDone\n"
 
     def stop_sensor(self) -> None:
         self.calls.append("stop_sensor")
@@ -131,7 +133,7 @@ def test_success_saves_raw_before_profile_and_records_exact_hashes(tmp_path, mon
     assert fake.calls == [
         "send_config",
         "read_dump",
-        "verify_post_dump_cli",
+        "stats",
         "stop_sensor",
         "close",
     ]
@@ -193,7 +195,7 @@ def test_repeated_static_captures_verify_and_stop_each_serial_lifecycle(tmp_path
     expected = [
         "send_config",
         "read_dump",
-        "verify_post_dump_cli",
+        "stats",
         "stop_sensor",
         "close",
     ]
@@ -285,7 +287,7 @@ def test_partial_dump_is_preserved_and_marked_unusable(tmp_path):
     assert fake.calls == [
         "send_config",
         "read_dump",
-        "verify_post_dump_cli",
+        "stats",
         "stop_sensor",
         "close",
     ]
@@ -310,7 +312,7 @@ def test_wedged_post_dump_cli_preserves_raw_and_marks_capture_unusable(tmp_path)
     }
     assert (inputs.output_dir / "empty-001.l3dump").read_bytes() == raw
     assert result["raw_evidence_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert fake.calls == ["send_config", "read_dump", "verify_post_dump_cli", "close"]
+    assert fake.calls == ["send_config", "read_dump", "stats", "close"]
 
 
 def test_dump_recovery_failure_carries_and_preserves_complete_raw(tmp_path):
@@ -604,3 +606,18 @@ def test_a_held_radar_whose_health_is_uncertain_is_closed(tmp_path):
     assert result["usable"] is False
     assert result["radar_left_open"] is False
     assert fake.calls[-1] == "close"
+
+
+def test_post_dump_health_requires_active_cli_response(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda command, window: f"{command}\nactive=1\nDone\n")
+
+    verify_post_dump_cli(radar)
+
+
+def test_post_dump_health_rejects_wedged_cli(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args: "")
+
+    with pytest.raises(RuntimeError, match="post-dump CLI health check"):
+        verify_post_dump_cli(radar)

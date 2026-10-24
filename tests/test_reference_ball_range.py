@@ -13,7 +13,7 @@ from openflight.camera.reference_ball_range import (
     ray_to_ball_center_plane,
 )
 
-BALL_DIAMETER_M = 0.04267
+BALL_DIAMETER_M = 0.0427
 
 
 def _project_nominal(camera: BallPlaneCamera, point_lfu: np.ndarray) -> np.ndarray:
@@ -81,7 +81,7 @@ def test_nominal_ray_plane_recovers_slant_range_with_pose_and_offsets(
         camera_origin=camera_origin,
         radar_origin=radar_origin,
     )
-    ball = np.asarray([0.14, 1.72, 0.021335])
+    ball = np.asarray([0.14, 1.72, 0.02135])
     pixel = _project_nominal(camera, ball)
 
     result = ray_to_ball_center_plane(camera, pixel, ball_center_height_m=ball[2])
@@ -97,7 +97,7 @@ def test_nominal_ray_plane_recovers_slant_range_with_pose_and_offsets(
 def test_calibrated_ray_plane_uses_model_rays_and_preserves_unqualified_label():
     camera_origin = np.asarray([0.02, 0.04, 0.11])
     radar_origin = np.asarray([-0.01, 0.0, 0.05])
-    ball = np.asarray([0.12, 1.6, 0.021335])
+    ball = np.asarray([0.12, 1.6, 0.02135])
     ray = (ball - camera_origin) / np.linalg.norm(ball - camera_origin)
 
     class Calibrated:
@@ -126,7 +126,7 @@ def test_parallel_ray_is_rejected_instead_of_inventing_a_floor_range():
     camera = _camera(320, 200, 466.6667)
 
     with pytest.raises(ValueError, match="parallel"):
-        ray_to_ball_center_plane(camera, (160.0, 100.0), ball_center_height_m=0.021335)
+        ray_to_ball_center_plane(camera, (160.0, 100.0), ball_center_height_m=0.02135)
 
 
 def _lit_spheres(
@@ -159,7 +159,7 @@ def _lit_spheres(
 )
 def test_mode_aware_search_recovers_range_without_a_tape(width, height, focal_px):
     camera = _camera(width, height, focal_px, pitch_deg=1.5)
-    point = np.asarray([0.04, 1.72, 0.021335])
+    point = np.asarray([0.04, 1.72, 0.02135])
     pixel = _project_nominal(camera, point)
     diameter = (
         focal_px * BALL_DIAMETER_M / np.linalg.norm(point - np.asarray(camera.camera_origin_lfu))
@@ -194,7 +194,7 @@ def test_mode_aware_search_recovers_range_without_a_tape(width, height, focal_px
 
 def test_physical_floor_and_size_consistency_rejects_high_hinge_and_selects_floor_ball():
     camera = _camera(640, 400, 466.6667)
-    point = np.asarray([0.0, 1.55, 0.021335])
+    point = np.asarray([0.0, 1.55, 0.02135])
     pixel = _project_nominal(camera, point)
     diameter = (
         camera.focal_size_px
@@ -228,7 +228,7 @@ def test_high_hinge_alone_is_not_selected_as_a_floor_ball():
     frames = _lit_spheres(400, 640, [(410.0, 75.0, 7.0, 150.0)])
 
     result = estimate_reference_ball_range(
-        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+        frames, camera, ball_center_height_m=0.02135, plausible_radar_range_m=(0.6, 3.5)
     )
 
     assert result.status in {"not_found", "no_consistent_candidate"}
@@ -238,8 +238,8 @@ def test_high_hinge_alone_is_not_selected_as_a_floor_ball():
 
 def test_two_equally_plausible_floor_balls_are_withheld_as_ambiguous():
     camera = _camera(640, 400, 466.6667)
-    left = np.asarray([-0.18, 1.55, 0.021335])
-    right = np.asarray([0.18, 1.55, 0.021335])
+    left = np.asarray([-0.18, 1.55, 0.02135])
+    right = np.asarray([0.18, 1.55, 0.02135])
     spheres = []
     for point in (left, right):
         pixel = _project_nominal(camera, point)
@@ -267,7 +267,7 @@ def test_scene_without_a_sphere_reports_not_found():
     frames = np.full((5, 200, 320), 70, dtype=np.uint8)
 
     result = estimate_reference_ball_range(
-        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+        frames, camera, ball_center_height_m=0.02135, plausible_radar_range_m=(0.6, 3.5)
     )
 
     assert result.status == "not_found"
@@ -293,14 +293,14 @@ def test_camera_range_estimator_identity_is_pinned():
     """Any estimator constant change must be a deliberate, reviewed identity change."""
     assert camera_range_estimator_policy()["name"] == "camera_reference_ball_size_range"
     assert camera_range_estimator_sha256() == (
-        "248800da0ebaefc7abd873fa75918176137e5a57909e6da7c71e8f94d549590b"
+        "890d149ede8f7897f05f2412dc6ab6bb084a419ec5b0613e9d7f42f20a88ef39"
     )
 
 
 def test_bright_things_above_the_horizon_do_not_crowd_out_a_dimmer_floor_ball():
     """Field failure 2026-09-29: door knobs and clothes filled every fit slot."""
     camera = _camera(640, 400, 466.6667, pitch_deg=1.75, camera_origin=(0.0, 0.0, 0.08))
-    point = np.asarray([0.02, 1.25, 0.021335])
+    point = np.asarray([0.02, 1.25, 0.02135])
     pixel = _project_nominal(camera, point)
     diameter = (
         camera.focal_size_px
@@ -328,7 +328,7 @@ def test_the_radar_range_solves_the_camera_height_far_better_than_apparent_size(
     from openflight.camera.reference_ball_range import solve_camera_height_from_radar
 
     camera = _camera(1280, 800, 933.3333, pitch_deg=1.75, camera_origin=(0.0, 0.0, 0.08))
-    point = np.asarray([0.02, 1.25, 0.021335])
+    point = np.asarray([0.02, 1.25, 0.02135])
     pixel = _project_nominal(camera, point)
     radar_range = float(np.linalg.norm(point - np.asarray(camera.radar_origin_lfu)))
 
@@ -347,7 +347,7 @@ def test_the_radar_range_solves_the_camera_height_far_better_than_apparent_size(
 def test_a_lone_candidate_far_off_the_boresight_is_not_selected():
     """Field frame with the ball missing: a baseboard spot 0.7 m to the side won."""
     camera = _camera(640, 400, 466.6667)
-    point = np.asarray([0.75, 1.40, 0.021335])
+    point = np.asarray([0.75, 1.40, 0.02135])
     pixel = _project_nominal(camera, point)
     diameter = (
         camera.focal_size_px
@@ -377,7 +377,7 @@ def test_a_lens_just_above_a_high_tee_is_plausible():
 
 def test_size_range_uncertainty_is_at_least_a_fifth():
     camera = _camera(1280, 800, 933.3333)
-    point = np.asarray([0.0, 1.25, 0.021335])
+    point = np.asarray([0.0, 1.25, 0.02135])
     pixel = _project_nominal(camera, point)
     diameter = (
         camera.focal_size_px
@@ -407,11 +407,11 @@ def _render_floor_ball(camera, point, width, height, diffuse=90.0):
 def test_a_ball_teed_above_the_lens_is_inside_the_hitting_area():
     """Unit on the floor, ball on an 80 mm tee on a 25 mm mat: 30 mm above the lens."""
     camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.095))
-    point = (0.0, 1.2, 0.025 + 0.080 + 0.021335)
+    point = (0.0, 1.2, 0.025 + 0.080 + 0.02135)
     pixel, frames = _render_floor_ball(camera, point, 640, 400)
 
     result = estimate_reference_ball_range(
-        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+        frames, camera, ball_center_height_m=0.02135, plausible_radar_range_m=(0.6, 3.5)
     )
 
     assert result.status == "selected"
@@ -421,10 +421,10 @@ def test_a_ball_teed_above_the_lens_is_inside_the_hitting_area():
 
 def test_a_ball_outside_the_hitting_area_is_refused_and_the_reason_says_where():
     camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.095))
-    _pixel, frames = _render_floor_ball(camera, (0.38, 1.4, 0.021335), 640, 400)
+    _pixel, frames = _render_floor_ball(camera, (0.38, 1.4, 0.02135), 640, 400)
 
     result = estimate_reference_ball_range(
-        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+        frames, camera, ball_center_height_m=0.02135, plausible_radar_range_m=(0.6, 3.5)
     )
 
     assert result.selected is None
@@ -436,10 +436,10 @@ def test_a_ball_outside_the_hitting_area_is_refused_and_the_reason_says_where():
 
 def test_a_unit_standing_on_a_box_still_finds_a_ball_on_the_floor():
     camera = _camera(640, 400, 466.6667, camera_origin=(0.0, 0.0, 0.5 + 0.095))
-    pixel, frames = _render_floor_ball(camera, (0.05, 1.5, 0.021335), 640, 400)
+    pixel, frames = _render_floor_ball(camera, (0.05, 1.5, 0.02135), 640, 400)
 
     result = estimate_reference_ball_range(
-        frames, camera, ball_center_height_m=0.021335, plausible_radar_range_m=(0.6, 3.5)
+        frames, camera, ball_center_height_m=0.02135, plausible_radar_range_m=(0.6, 3.5)
     )
 
     assert result.status == "selected"

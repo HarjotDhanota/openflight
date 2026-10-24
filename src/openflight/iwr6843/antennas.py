@@ -1,18 +1,8 @@
 """Where each IWR6843LEVM antenna sits, in the frame the LCMF model works in.
 
-LCMF-v1 put every antenna at one radar height on idealised lambda/2 indices.
-The LEVM's TX pair actually sits about 16 mm above its RX row (v3 enclosure,
-board turned +90 deg), so the transmit and receive legs meet the floor bounce
-at different angles; and which element is on top depends on how the board is
-turned. This module places each antenna from TI's ECAD patch table, the
-board's rotation and its aim, reusing the rig module's conventions
-(`openflight.rig_geometry.levm_antenna_offsets_mm`).
-
-Frame: metres; x forward (downrange), y lateral (target-right positive, as
-`camera_rdf_offset_to_target_lfu`), z up above the hitting surface. The
-horizontal origin is the LCMF virtual array's phase centre, where the IWR's
-ranges start (audit F11).
-"""
+Positions come from TI's ECAD patch table, the board's rotation and its aim. Frame: metres;
+x forward, y lateral (target-right positive), z up above the hitting surface; the horizontal
+origin is the LCMF virtual array's phase centre, where the IWR's ranges start."""
 
 from __future__ import annotations
 
@@ -33,14 +23,8 @@ from openflight.rig_geometry import (
 LCMF_TX = ("TX1", "TX3")
 RX = ("RX1", "RX2", "RX3", "RX4")
 
-# The processed channels' carrier phase GROWS with path length:
-# exp(+j*2*pi*path/lambda). Three things in the pipeline agree: the TDM
-# correction is registered positive (a receding ball's later chirp is removed
-# with exp(-j*4*pi*v*tau/lambda)), the four-path TDM cross term is
-# exp(+j*...), and with the snapshot builder's channel order this sign is the
-# only one under which today's dictionary exp(+j*pi*k*sin(angle)) describes a
-# board turned +90 deg (RX1 lowest, TX1 below TX3): slot 0 is then the TOP
-# element, (TX3, RX4). tests/test_iwr6843_lcmf_convention.py pins it.
+# Carrier phase GROWS with path length, exp(+j*2*pi*path/lambda); with the board turned
+# +90 deg slot 0 is the TOP element (TX3, RX4), as a test pins.
 PHASE_SIGN = +1.0
 
 LEGACY_BOARD_ROTATION_DEG = 90.0
@@ -50,12 +34,7 @@ LEGACY_BASIS = "legacy_single_height_as_rx_row_assumed_plus_90_deg"
 
 @dataclass(frozen=True)
 class AntennaLayout:
-    """The LEVM on its mount: enough to place every antenna at any aim.
-
-    The aim is not stored: LCMF takes it from ``Calibration.tilt_rad``, which
-    a shot's inclinometer reading can move. A change of aim turns the board
-    about its RX-row centre, the point the rig file measures.
-    """
+    """The LEVM on its mount; a change of aim turns it about its RX-row centre."""
 
     board_rotation_deg: float
     rx_row_height_m: float  # RX-row centre above the hitting surface
@@ -114,12 +93,7 @@ def layout_from_phase_centre(
     board_rotation_deg: float,
     boresight_pitch_deg: float,
 ) -> AntennaLayout:
-    """The layout behind a rig-derived radar height.
-
-    The server's radar height is the phase centre's (`EnclosureSetup`), at the
-    rig's aim; the RX row it was derived from sits the rig's own offset below.
-    A solved camera height moves both by the same amount, so this holds for it.
-    """
+    """The layout behind a rig-derived (phase-centre) radar height, at the rig's aim."""
     offset_down_mm = levm_phase_centre_offset_mm(board_rotation_deg, boresight_pitch_deg)[1]
     return AntennaLayout(
         board_rotation_deg=float(board_rotation_deg),
@@ -129,13 +103,7 @@ def layout_from_phase_centre(
 
 
 def legacy_layout(radar_height_m: float) -> AntennaLayout:
-    """A layout for a session that recorded one radar height and a tilt.
-
-    July/August sessions have no rig file. Their single height is taken as the
-    RX-row centre and the board as turned +90 deg, the orientation LCMF-v1's
-    hard-coded element order implies. Replays built on it are not the numbers
-    those sessions recorded: the per-antenna model differs by design.
-    """
+    """A rig-less session's layout: its height is the RX-row centre, board turned +90 deg."""
     return AntennaLayout(
         board_rotation_deg=LEGACY_BOARD_ROTATION_DEG,
         rx_row_height_m=float(radar_height_m),
@@ -144,14 +112,7 @@ def legacy_layout(radar_height_m: float) -> AntennaLayout:
 
 
 def canonical_channels(tx_order: str) -> tuple[tuple[str, str], ...]:
-    """(TX, RX) of each slot of a canonical eight-channel snapshot.
-
-    Derived by running channel labels through the snapshot builder
-    (`doa.canonicalize_tx_blocks`), so this cannot drift from it. The chirp
-    configs transmit TX1 first in the "normal" order and TX3 first in the
-    "reversed" one (`monitor.tx_order_from_config`); the raw RX channels are
-    RX1-RX4 in order.
-    """
+    """(TX, RX) of each slot of a canonical eight-channel snapshot, derived from its builder."""
     tx_order = doa.validate_tx_order(tx_order)
     early, late = ("TX1", "TX3") if tx_order == "normal" else ("TX3", "TX1")
     codes = np.arange(4, dtype=float)
@@ -174,11 +135,9 @@ def channel_positions_m(
 
 
 def channel_paths_m(tx_m: np.ndarray, rx_m: np.ndarray, ball_m: np.ndarray) -> np.ndarray:
-    """Exact DD, DG, GD, GG path lengths per ball position and channel.
+    """Exact DD, DG, GD, GG path lengths, shaped (n, channels, 4).
 
-    ``tx_m`` and ``rx_m`` are (channels, 3), ``ball_m`` is (n, 3); the result
-    is (n, channels, 4). A floor-bounced leg is the straight line to the
-    antenna mirrored in the hitting surface (z -> -z).
+    ``tx_m``/``rx_m`` are (channels, 3), ``ball_m`` (n, 3); a floor bounce mirrors z.
     """
     mirror = np.array([1.0, 1.0, -1.0])
     ball = np.asarray(ball_m, dtype=float)[:, None, :]

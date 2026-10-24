@@ -29,8 +29,7 @@ from openflight.rig_geometry import geometry_fingerprint
 
 SCHEMA = "openflight.camera.fusion_context"
 VERSION = 2
-# version 1 froze each shot's resting-ball trackers, built from earlier shots; it still
-# replays, with that state ignored (D17)
+# version 1 froze resting-ball tracker state from earlier shots; it replays with it ignored
 LEGACY_TRACKER_VERSION = 1
 LEGACY_TRACKER_NOTE = (
     "this context was frozen with resting-ball tracker state from earlier shots; "
@@ -78,7 +77,7 @@ def _validate_archive(archive: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarra
 
 
 def _sensor_timestamps(archive: Mapping[str, Any]) -> np.ndarray | None:
-    """The archive's sensor timestamps, which time ball flight (F7) and club delivery (P6-8)."""
+    """The archive's sensor timestamps, which time ball flight and club delivery."""
     sensor = archive.get("sensor_timestamp_ns")
     return None if sensor is None else np.asarray(sensor)
 
@@ -123,7 +122,6 @@ def _restore_range(snapshot: Any, kind: str):
             geometry_data[name] = tuple(geometry_data[name])
     geometry = Geometry(**geometry_data)
     evidence_type = BallRangeEvidence if kind == "ball" else ClubRangeEvidence
-    # Contexts frozen before evidence carried a status replay as they ran then.
     return evidence_type(
         track, geometry, float(snapshot["impact_t_s"]), status=snapshot.get("status", "accepted")
     )
@@ -150,8 +148,7 @@ def build_context(
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
-    ``notes`` are the capture's labels that no longer block the estimators
-    (D15): the lighting and optical-quality verdicts, as the kiosk judged them.
+    ``notes`` are the capture's lighting and optical-quality labels; they never block.
     """
     payload = {
         "schema": SCHEMA,
@@ -171,12 +168,10 @@ def build_context(
         "session_uuid": session_uuid,
         "shot_number": shot_number,
         "notes": [str(note) for note in notes or ()],
-        # where the setup saw the resting ball; the ball gate follows it (P8-7)
         "setup_ball": dict(setup_ball) if setup_ball else None,
     }
     if camera_pose is not None:
-        # D36 item 4a: this swing's calibrated camera pose; a context without one
-        # is the one recorded before, and replays with the resting ball's model
+        # without a pose, replay uses the resting ball's camera model
         payload["camera_pose"] = dict(camera_pose)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
@@ -212,8 +207,6 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     notes = [str(note) for note in context.get("notes") or ()]
     if context["version"] == LEGACY_TRACKER_VERSION:
         notes.append(LEGACY_TRACKER_NOTE)
-    # Lighting labels the result and never blocks it (D15, P8-7). A context
-    # frozen before notes existed still says its lighting was not eligible.
     if context["lighting_eligible"] is not True and not notes:
         notes.append(f"lighting: {LIGHTING_NOT_ELIGIBLE}")
     try:
@@ -236,8 +229,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
         pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
         if not 1 <= pre_trigger_count <= len(frames):
             raise ValueError("camera archive pre-trigger count is outside the frame range")
-        # Impact is compared against the frame exposed at the trigger when the
-        # clip records it (P6-5); older clips keep their arrival split.
+        # Prefer the frame exposed at the trigger; older clips use the arrival split.
         by_exposure = exposure_trigger_index(archive, len(frames))
         trigger_index = pre_trigger_count - 1 if by_exposure is None else by_exposure
         reference_ball = None

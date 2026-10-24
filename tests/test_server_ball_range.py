@@ -1,9 +1,7 @@
-"""The kiosk takes the camera's estimate as a prior and ranges each shot (13 Oct, A2 + B).
+"""The kiosk takes the camera's estimate as a prior and ranges each shot.
 
-``--iwr6843-tee-prior-m`` replaces ``--iwr6843-tee-m`` as a hard value: a prior plus
-its uncertainty. Each shot's own IWR launch point (or the prior, labelled) is the
-range its camera scale, full ball speed and club delivery use.
-"""
+``--iwr6843-tee-prior-m`` is a prior plus its uncertainty; each shot's own IWR launch point
+(or the labelled prior) is the range its camera scale, ball speed and club delivery use."""
 
 from __future__ import annotations
 
@@ -13,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openflight import server as server_module, shot_models
+from openflight import server as server_module
 from openflight.clubs import ClubType
 from openflight.iwr6843 import launch_range as lr
 from openflight.iwr6843.calibration import Calibration
@@ -169,26 +167,3 @@ def test_a_shot_without_a_range_has_no_range_for_the_camera(monkeypatch):
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
 
     assert server_module.shot_iwr_calibration(_shot()).tee_range_m is None
-
-
-def test_full_ball_speed_is_given_the_shot_s_range_and_its_uncertainty(monkeypatch):
-    seen = {}
-
-    def evaluate(**kwargs):
-        seen.update(kwargs)
-        return {"status": "not_measured", "reason": "test"}
-
-    monkeypatch.setattr("openflight.full_speed.evaluate_full_ball_speed", evaluate)
-    calibration = Calibration.identity()
-    calibration.tee_range_m = None
-    monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
-    shot = _shot()
-    shot.ball_range_m = 2.11
-    shot.ball_range_uncertainty_m = 0.42
-    shot.ball_range_source = "camera_prior"
-
-    shot_models._attach_full_speeds(shot)  # pylint: disable=protected-access
-
-    assert seen["tee_range_m"] == 2.11
-    assert seen["tee_range_uncertainty_m"] == 0.42
-    assert seen["tee_range_source"] == "camera_prior"

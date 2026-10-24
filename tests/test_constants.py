@@ -10,23 +10,15 @@ from openflight import constants
 def test_values():
     assert constants.MPH_TO_MPS == 0.44704
     assert constants.GRAVITY == 9.81
-    assert constants.BALL_DIAMETER_MM == 42.67
-    assert constants.BALL_DIAMETER_M == 0.04267
-    assert constants.FLIGHT_BALL_RADIUS_M == 0.02135
+    assert constants.BALL_DIAMETER_MM == 42.7
+    assert constants.BALL_DIAMETER_M == 0.0427
+    assert constants.BALL_RADIUS_M == 0.02135
+    assert constants.RULES_MIN_BALL_DIAMETER_MM == 42.67
 
 
 @pytest.mark.parametrize(
     "module,name,shared",
     [
-        ("openflight.ballistics", "MPH_TO_MPS", "MPH_TO_MPS"),
-        ("openflight.ballistics", "GRAVITY", "GRAVITY"),
-        ("openflight.ballistics", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
-        ("openflight.bounce_roll", "MPH_TO_MPS", "MPH_TO_MPS"),
-        ("openflight.bounce_roll", "GRAVITY", "GRAVITY"),
-        ("openflight.bounce_roll", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
-        ("openflight.collision_forward", "MPH_TO_M_S", "MPH_TO_MPS"),
-        ("openflight.collision_forward", "BALL_RADIUS_M", "FLIGHT_BALL_RADIUS_M"),
-        ("openflight.collision_model", "MPH_TO_M_S", "MPH_TO_MPS"),
         ("openflight.ops_speed_track", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.camera.impact_session", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.camera.club_motion", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),

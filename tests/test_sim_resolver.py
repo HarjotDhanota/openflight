@@ -48,7 +48,7 @@ def test_full_measured_shot():
         "club_path",
     ):
         assert r.provenance[f] == "measured", f
-    # no sensor measures the spin axis: the kiosk computes it (V-formulas C8)
+    # no sensor measures the spin axis: the kiosk computes it
     for f in ("spin_axis", "back_spin", "side_spin"):
         assert r.provenance[f] == "calculated", f
 
@@ -109,9 +109,7 @@ def test_missing_club_path_falls_back_to_zero():
 
 
 def test_an_ops_only_carry_is_always_estimated():
-    """E4 (trackman-comparison §5 item 4): an OPS-only carry flies a club-typical
-    spin or reads the ball-speed table, so it is an estimate even when the
-    launch angle was measured; it is never sent as measured."""
+    """An OPS-only carry flies a club-typical spin, so it is an estimate even with a measured launch."""
     with_launch = resolve_shot(_shot(launch_angle_vertical=12.0), PlayerState())
     assert with_launch.provenance["carry"] == "estimated"
     estimated = resolve_shot(_shot(), PlayerState())
@@ -119,7 +117,7 @@ def test_an_ops_only_carry_is_always_estimated():
 
 
 def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
-    """A simulated carry is the flight model's output: at most calculated (C8)."""
+    """A simulated carry is the flight model's output: at most calculated."""
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_horizontal=1.5,
@@ -157,8 +155,6 @@ def test_carry_falls_back_to_table_when_nothing_committed():
         shot.estimated_carry_yards
     )
 
-
-# --- One rule: a non-finite value is a missing value (Task 3 fix round, I1) ------------
 
 _NON_FINITE = [math.nan, math.inf, -math.inf]
 
@@ -230,9 +226,6 @@ def test_no_resolved_value_can_leave_non_finite(monkeypatch):
         resolve_shot(_shot(), PlayerState())
 
 
-# ---- calculated values keep their label (E2, D31) ------------------------------------
-
-
 def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
     r = resolve_shot(
         _shot(
@@ -285,9 +278,7 @@ def test_server_estimated_launch_angles_are_tagged_estimated():
 
 def test_measured_vla_with_estimated_hla_keeps_each_angle_s_own_label():
     # A vertical angle radar alone gives a measured VLA, and the server fills in
-    # the neutral 0.0 HLA. The carry stays "estimated" on this fork: an OPS-only
-    # carry flies a club-typical spin whatever the launch angle (E4, V-formulas C8),
-    # so the launch angle no longer upgrades its badge.
+    # the neutral 0.0 HLA. An OPS-only carry stays "estimated" whatever the launch angle.
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_vertical_source="radar",

@@ -1,9 +1,7 @@
 import { test, type Page, type Route } from '@playwright/test';
 import { expect, gotoApp, resetSession, simulateShot, withControlSocket } from './helpers';
 
-// 13 Oct UX pass on the kiosk: the Live tab says what left/right is measured from,
-// the tab bar shows there is more to scroll to, and the Club tab folds the metrics
-// not built yet into one row with tester-facing reasons a tap away.
+// Kiosk UX: the horizontal frame strip, the scrollable tab bar, and the folded pending metrics.
 test.use({ hasTouch: true, viewport: { width: 800, height: 480 } });
 
 async function json(route: Route, payload: object, status = 200) {
@@ -30,7 +28,6 @@ test('the Live tab shows a set target line, signed, with its ±', async ({ page 
   const line = page.locator('.live-panel__target');
   await expect(line).toHaveText('Target line set +2.1° ±0.8°');
   await expect(line).toHaveAttribute('data-status', 'set');
-  // the strip is one line and leaves the tiles inside the screen
   const box = await line.boundingBox();
   expect(box?.height ?? 99).toBeLessThan(24);
   await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);

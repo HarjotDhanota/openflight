@@ -36,7 +36,7 @@ interface ExposureQuality {
   auto_exposure?: CameraAutoExposureStatus;
 }
 
-// Why the controls are what they are (the swing exposure's status, 13 Oct 2026)
+// Why the controls are what they are (the swing exposure's status)
 const AUTO_EXPOSURE_LABELS: Record<CameraAutoExposureStatus['status'], string> = {
   seeded: 'Waiting for the ball',
   ball_driven: 'Ball-driven',

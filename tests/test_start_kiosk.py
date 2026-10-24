@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts/start-kiosk.sh"
-# start-kiosk.sh always hands the server a rig file (wiring audit C1, decision D6)
+# start-kiosk.sh always hands the server a rig file
 RIG = ["--rig-geometry", str(REPO_ROOT / "config/enclosure_v3_rig_geometry.json")]
 
 
@@ -42,7 +42,6 @@ def _dry_run(*args: str, env: dict[str, str] | None = None) -> list[str]:
     )
     command = shlex.split(result.stdout)
     # PROJECT_DIR comes from `pwd`, which may spell the checkout differently
-    # (a symlink, or /c/... under Git Bash); the script's own config file is RIG
     if "--rig-geometry" in command:
         index = command.index("--rig-geometry") + 1
         if command[index].endswith("/config/enclosure_v3_rig_geometry.json"):
@@ -112,7 +111,7 @@ def test_hardware_trigger_speed_alias_passes_through_to_server():
 
 
 def test_camera_shot_analysis_is_forwarded_for_the_server_to_refuse():
-    """The wrapper passes the flag through; the server refuses it (D30 c)."""
+    """The wrapper passes the flag through; the server refuses it."""
     assert _dry_run("--camera-shot-analysis") == [
         "openflight-server",
         "--web-port",
@@ -296,7 +295,7 @@ def test_camera_capture_uses_system_python_for_sync_and_server_start():
         script.index("UV_SYNC_ARGS=(--quiet)") : script.index("\nconfigure_kld7_latency\n")
     ]
 
-    # the system-Python venv rule is shared with start-tester.sh (13 Oct)
+    # the system-Python venv rule is shared with start-tester.sh
     helper = (REPO_ROOT / "scripts/pi-python-env.sh").read_text(encoding="utf-8")
     assert 'OPENFLIGHT_SYSTEM_PYTHON="${OPENFLIGHT_SYSTEM_PYTHON:-/usr/bin/python3}"' in helper
     assert 'export UV_PYTHON="$OPENFLIGHT_SYSTEM_PYTHON"' in helper
@@ -880,7 +879,7 @@ def test_startup_failure_prints_the_recovery_hint_to_the_terminal():
 
 
 def _dry_run_browser(*args: str, env: dict | None = None) -> tuple[list[str], str]:
-    """The server command and what the dry run says about the kiosk browser (2a).
+    """The server command and what the dry run says about the kiosk browser.
 
     The variables are set inside bash: a Windows host's bash may not inherit them.
     """
@@ -920,7 +919,7 @@ def test_by_default_the_kiosk_browser_still_opens():
 
 
 def test_every_browser_launch_goes_through_the_no_browser_guard():
-    """The fullscreen window took the tester page over at every ladder start (2a)."""
+    """A fullscreen kiosk window would cover the tester page."""
     script = _script()
     body = script[script.index("maybe_launch_kiosk_browser() {") :]
 

@@ -1,11 +1,7 @@
-"""D36 item 2: one horizontal-angle zero model for every horizontal angle.
+"""One horizontal-angle zero model: each sensor's boresight zero, then one offset.
 
-Two layers: each sensor's own boresight zero (the IWR's horizontal phase
-reference, the camera's optical axis), then ONE horizontal offset, added once to
-every angle. The offset is -(target yaw): the target yaw is + when the target
-line lies right of the unit boresight, seen from behind the unit, so the offset
-is + when the boresight points right of the target line (the flags' existing
-meaning). A ball hit straight down the target line reports 0.
+The offset is -(target yaw); target yaw is + when the target line lies right of
+the unit boresight, seen from behind. A ball down the target line reports 0.
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from openflight import server as server_module, shot_models
+from openflight import server as server_module
 from openflight.clubs import ClubType
 from openflight.horizontal_frame import (
     TARGET_LINE,
@@ -33,7 +29,7 @@ from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
 
 YAW_DEG = 3.0  # the target line lies 3 deg right of the unit boresight
-OFFSET_DEG = -3.0  # what the D34 hand-off passes to both flags for that yaw
+OFFSET_DEG = -3.0  # what the hand-off passes to both flags for that yaw
 
 
 def test_the_hand_off_value_is_minus_the_target_yaw():
@@ -42,7 +38,7 @@ def test_the_hand_off_value_is_minus_the_target_yaw():
 
 def test_frame_is_the_boresight_until_an_offset_is_set():
     assert frame_for(None) == UNIT_BORESIGHT == "unit_boresight"
-    # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+    # an explicit 0.0 is a target line straight down the boresight
     assert frame_for(0.0) == TARGET_LINE
     assert frame_for(OFFSET_DEG) == TARGET_LINE == "target_line"
     assert frame_for(-OFFSET_DEG) == TARGET_LINE
@@ -203,84 +199,8 @@ def _shot(**kwargs) -> Shot:
     )
 
 
-def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):
-    measurement = SimpleNamespace(
-        accepted=True,
-        angle_deg=18.5,
-        horizontal_deg=0.8,
-        horizontal_confidence=0.93,
-        horizontal_status="hlcmf_v2_accepted",
-        horizontal_frame="target_line",
-        n_snapshots=18,
-        n_frames=5,
-        component_std_deg=1.4,
-        to_dict=lambda: {},
-    )
-    club_path = SimpleNamespace(
-        accepted=True,
-        status="accepted",
-        path_deg=-1.0,
-        confidence=0.8,
-        n_frames=5,
-        candidate_path_deg=-1.0,
-        candidate_path_status="candidate_available",
-        candidate_attack_angle_deg=-4.0,
-        attack_angle_status="candidate_available",
-        club_path_frame="target_line",
-        to_dict=lambda: {},
-    )
-    capture = SimpleNamespace(
-        trigger_timestamp=100.01,
-        path=None,
-        raw=b"raw",
-        dump_duration_s=4.5,
-        error=None,
-        valid=True,
-        sequence=1,
-    )
-    runtime = SimpleNamespace(
-        horizontal_phase_reference_rad=-0.5,
-        process_shot=lambda **kwargs: SimpleNamespace(
-            capture=capture, measurement=measurement, club_path=club_path
-        ),
-    )
-    monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
-    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-    monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
-    shot = _shot()
-
-    server_module._process_iwr6843_angle(shot)
-    shot_models._attach_collision_model(shot)
-    payload = shot.to_dict()
-
-    assert payload["launch_angle_horizontal_frame"] == "target_line"
-    assert payload["experimental_club_path_frame"] == "target_line"
-    assert payload["experimental_face_angle_frame"] == "target_line"
-
-    server_module._apply_camera_horizontal_decision(
-        shot, 1.2, 0.75, "camera_assisted_experimental", frame="target_line"
-    )
-    assert shot.to_dict()["launch_angle_horizontal_frame"] == "target_line"
-
-
-def test_face_angle_from_two_frames_is_labelled_mixed():
-    shot = _shot(
-        launch_angle_horizontal=2.0,
-        launch_angle_horizontal_source="camera_assisted_experimental",
-        launch_angle_horizontal_frame="target_line",
-        club_path_deg=-1.0,
-        club_path_frame="unit_boresight",
-    )
-
-    shot_models._attach_collision_model(shot)
-
-    assert shot.experimental_face_angle_deg is not None
-    assert shot.experimental_face_angle_frame == "mixed"
-    assert shot.experimental_face_angle_status.endswith("_mixed_frames")
-
-
 def test_kld7_angles_take_the_same_yaw(monkeypatch):
-    """The K-LD7's own offset is its sensor zero; the horizontal offset is the one model's."""
+    """The K-LD7's own offset is its sensor zero, separate from the horizontal offset."""
     monkeypatch.setattr(server_module, "horizontal_offset_deg", OFFSET_DEG)
 
     assert server_module._reported_horizontal_deg(4.0) == pytest.approx(1.0)

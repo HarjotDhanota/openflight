@@ -80,7 +80,7 @@ report.
 Downloaded bundle on the owner's Windows machine:
 
 ```text
-C:\Users\harjo\Downloads\harjot-pilot-test-2-session-bundle-20260926T063433Z.zip
+<downloads>\pilot-test-2-session-bundle-20260926T063433Z.zip
 ```
 
 Regression extractor:
@@ -98,7 +98,7 @@ tests/fixtures/iwr6843_static_range/
 An external Claude audit may be available locally at:
 
 ```text
-C:\Users\harjo\Downloads\Untitled.md
+<downloads>\Untitled.md
 ```
 
 The repo plan incorporates the audit's useful corrections, so absence of that
@@ -193,7 +193,7 @@ hook was sufficient.
 1. Confirm the branch and remote state:
 
    ```powershell
-   cd C:\Users\harjo\Desktop\Coding\OpenFlight\openflight-tester-pilot
+   cd <fork checkout>
    git status --short
    git branch --show-current
    git rev-parse HEAD
@@ -204,7 +204,7 @@ hook was sufficient.
 2. Verify the fixture extractor:
 
    ```powershell
-   uv run --extra camera python scripts/analysis/extract_static_range_regressions.py --bundle "C:\Users\harjo\Downloads\harjot-pilot-test-2-session-bundle-20260926T063433Z.zip" --output-dir tests/fixtures/iwr6843_static_range --check
+   uv run --extra camera python scripts/analysis/extract_static_range_regressions.py --bundle "<downloads>\pilot-test-2-session-bundle-20260926T063433Z.zip" --output-dir tests/fixtures/iwr6843_static_range --check
    ```
 
 3. Rerun the focused suite that was interrupted:

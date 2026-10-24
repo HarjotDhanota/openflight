@@ -653,11 +653,7 @@ class TestHardwareTriggeredCapture:
         assert HardwareTriggeredCapture().wait_for_trigger(radar, processor) is capture
 
     def test_waits_without_discarding_input_and_detects_orphaned_dumps(self):
-        """The board may already be dumping when the wait starts.
-
-        The wait never flushes and always runs the one lost-dump detector
-        (D30 d/e), so the strategy passes no option for either.
-        """
+        """The board may already be dumping when the wait starts; the wait never flushes."""
         radar = MagicMock()
         radar.wait_for_hardware_trigger.return_value = ""
         radar.last_hardware_trigger_outcome = "timeout"
@@ -694,7 +690,6 @@ class TestHardwareTriggeredCapture:
         assert trigger.wait_for_trigger(radar, MagicMock(), timeout=1.0) is None
         radar.rearm_internal_speed_trigger.assert_called_once_with(30)
         diagnostic = trigger.drain_diagnostics()[0]
-        # One lost-dump detector, one reason on both trigger paths (D30 d).
         assert diagnostic["reason"] == "dump_discarded"
         assert diagnostic["response_bytes"] == 512
 
@@ -1373,7 +1368,7 @@ class TestRollingBufferShotIdentity:
         ]
 
     def test_the_shot_line_names_its_carry_as_the_table_estimate(self, monkeypatch, caplog):
-        """P6-6: shot 1 of Outdoors-test-5 logged three carries (103, 88, 98) unlabelled."""
+        """The shot's console line labels its carry as the table estimate."""
         from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
 
         monkeypatch.setattr(monitor_module, "get_session_logger", lambda: MagicMock())
@@ -1412,9 +1407,7 @@ class TestRollingBufferShotIdentity:
     def test_the_detection_table_carry_reaches_logs_only_as_a_labelled_diagnostic(
         self, monkeypatch, caplog
     ):
-        """On a fusion unit the table is never the shot's carry (D17): at detection the
-        monitor's table number is a diagnostic, named as one in the trigger event, the
-        debug-panel diagnostic and the console line, and never set on the shot."""
+        """On a fusion unit the table carry at detection is a diagnostic, never the shot's."""
         from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
 
         session_log = MagicMock()

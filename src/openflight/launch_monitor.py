@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
-from . import shot_metrics, smash
+from . import kiosk_extensions, shot_metrics, smash
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .numeric import finite as _finite
@@ -25,26 +25,16 @@ SPIN_CONFIDENCE_HIGH = 0.7
 # but the carry table substitutes the club-optimal spin for the ball speed.
 SPIN_CONFIDENCE_RELIABLE = 0.6
 
-# Shot.carry_status: what the reported carry is. Server finalization commits it,
-# and a fusion unit (IWR or camera) only ever reports a carry its simulator built
-# from the shot's own measured inputs (D17).
-# A fusion unit's carry status is its flight's label (flight.compute_flight): a
-# simulated carry is a model's output, so "calculated" on measured or calculated
-# inputs, "model_geometry" when a spin or spin axis under it rests on model geometry.
+# Shot.carry_status values; a fusion unit (IWR or camera) never falls back to the speed table.
 CARRY_MEASURED = "measured"  # older logs: simulator on a measured spin
 CARRY_CALCULATED = "calculated"  # fusion: simulator on measured or calculated inputs
-# fusion: simulator on a spin or spin axis built on model geometry (D39: the arc prior)
-CARRY_MODEL_GEOMETRY = "model_geometry"
+CARRY_MODEL_GEOMETRY = "model_geometry"  # fusion: spin or spin axis rests on model geometry
 CARRY_ESTIMATED = "estimated"  # OPS-only: labelled estimate (substitutes or the spin table)
 CARRY_NOT_MEASURED = "not_measured"  # fusion: no carry; nothing is filled in
-# Statuses under which the ball-speed table may stand in for a missing carry. None
-# is a shot that never reached finalization (mock, replays, older logs).
+# None is a shot that never reached finalization (mock, replays, older logs).
 _TABLE_CARRY_STATUSES = (None, CARRY_ESTIMATED)
 
-# Shot.smash_factor_status: what the shown smash factor is (D21, D37). TrackMan's
-# smash factor is full ball speed over full club speed; a fusion unit's is the OPS
-# radial ball speed over the OPS radial club speed, so it is labelled. None: no
-# label (an OPS-only unit, a mock or a replay), exactly as before.
+# Shot.smash_factor_status: OPS radial ball over OPS radial club speed, not full speeds.
 SMASH_RADIAL_RATIO = "radial_ratio"
 
 
@@ -221,12 +211,9 @@ class Shot:
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         carry_status: What the reported carry is (CARRY_* above); None until finalized
-        air_density_kg_m3: The shot's air density (kg/m^3) when a density source supplied
-            one before finalization: the owner's hook. None flies the as-measured
-            flight in ISA air, labelled "ISA default" (openflight.flight)
-        flight: Every flight output (carry, carry side, total, total side, apex,
-            landing angle, hang time, curve), as measured and normalized, each with
-            status, source, range and reason (openflight.flight); None until finalized
+        air_density_kg_m3: The shot's air density (kg/m^3), or None for ISA air
+        flight: Every flight output with status, source, range and reason
+            (openflight.flight); None until finalized
         smash_factor_status: What smash_factor is (SMASH_RADIAL_RATIO above), or None
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
@@ -239,23 +226,17 @@ class Shot:
     impact_timestamp: Optional[float] = None
     impact_timestamp_kld7: Optional[float] = None
     club_speed_mph: Optional[float] = None
-    # Raw OPS radial ball speed retained for compatibility and explicit provenance.
+    # Raw OPS radial ball speed, kept when the cosine correction rewrites
+    # ball_speed_mph (radar bin anchoring must keep using the radial value)
     ball_speed_raw_mph: Optional[float] = None
-    # Which speed ball_speed_mph is. New live shots retain the OPS radial value.
     ball_speed_contract: Optional[str] = None
     experimental_ball_speed_total: Optional[dict] = None
-    # E3 (openflight.full_speed): the full ball speed by measured projection,
-    # referred to separation, "calculated" or "not_measured" with the reason; the
-    # full club speed by the same projection; and smash from the two (D21, D37).
-    # ball_speed_mph stays the canonical OPS radial reading.
+    # Full ball/club speed and smash by measured projection (openflight.full_speed).
     ball_speed_full: Optional[dict] = None
-    # Its value alone, the field the flight model reads (E4): the calculated full
-    # speed in mph, or None when it is not measured.
     ball_speed_full_mph: Optional[float] = None
     club_speed_full: Optional[dict] = None
     smash_factor_full: Optional[dict] = None
-    # The OPS readings around impact on the OPS clock (full_speed.ops_speed_track);
-    # transient, never serialized: the reading used travels in ball_speed_full.
+    # OPS readings around impact (full_speed.ops_speed_track); never serialized.
     ops_speed_track: Optional[dict] = field(default=None, repr=False, compare=False)
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
@@ -267,12 +248,9 @@ class Shot:
     launch_angle_horizontal_confidence: Optional[float] = None
     launch_angle_vertical_source: Optional[str] = None
     launch_angle_horizontal_source: Optional[str] = None
-    # "azimuth_uncalibrated" when the displayed horizontal is an IWR value
-    # measured without a horizontal phase reference (audit F8).
+    # "azimuth_uncalibrated": an IWR horizontal without a horizontal phase reference.
     launch_angle_horizontal_status: Optional[str] = None
-    # The zero of each horizontal metric (D36 item 2, openflight.horizontal_frame):
-    # "unit_boresight" with no horizontal offset, "target_line" with one, "mixed" for a
-    # value built from angles in two frames; None when the metric is absent.
+    # Zero of each horizontal metric: "unit_boresight", "target_line" or "mixed".
     launch_angle_horizontal_frame: Optional[str] = None
     club_path_frame: Optional[str] = None
     experimental_club_path_frame: Optional[str] = None
@@ -285,12 +263,10 @@ class Shot:
     # Raw radar-measured spin, kept when --calculated-spin rewrites
     # spin_rpm with the kinematic estimate (for offline scoring)
     spin_rpm_measured: Optional[float] = None
-    # "measured", "calculated", "model_geometry" (a model's spin built on an assumed
-    # swing geometry, D39), or None
+    # "measured", "calculated", "model_geometry" (assumed swing geometry), or None
     spin_source: Optional[str] = None
     spin_method: Optional[str] = None
-    # the measured spin's method, kept beside spin_rpm_measured when a model's spin
-    # displaces it, and given back with it
+    # the measured spin's method, kept when a model's spin displaces it
     spin_method_measured: Optional[str] = None
     spin_result_quality: Optional[str] = None
     spin_multipath_fade_hz: Optional[float] = None
@@ -339,36 +315,24 @@ class Shot:
     experimental_fused_attack_angle_confidence: Optional[str] = None
     experimental_fused_club_path_confidence: Optional[str] = None
     experimental_camera_trace_deg: Optional[float] = None
-    # D-plane face angle: derived from start direction and club path, not seen
-    # on the club. Experimental until checked against impact-tape truth.
+    # D-plane face angle from start direction and club path, not seen on the club.
     experimental_face_angle_deg: Optional[float] = None
     experimental_face_angle_status: Optional[str] = None
-    # Which displayed club path and horizontal launch the face angle used.
     experimental_face_angle_path_source: Optional[str] = None
     experimental_face_angle_launch_source: Optional[str] = None
-    # E2 collision model (openflight.collision_model): calculated, never measured.
-    # collision_model["metrics"] holds each value's status, source, unit, frame and
-    # reason; the experimental_face_angle_* fields above mirror face_angle_deg.
+    # Collision model outputs (openflight.collision_model): calculated, never measured.
     face_angle_deg: Optional[float] = None
     dynamic_loft_deg: Optional[float] = None
     spin_loft_deg: Optional[float] = None
     face_to_path_deg: Optional[float] = None
     d_plane_tilt_deg: Optional[float] = None
-    # the collision model's spin, recorded whenever it runs; spin_rpm takes it only without an
-    # accepted measured spin. The --calculated-spin formula's value, likewise recorded.
+    # spin_rpm takes the collision spin only without an accepted measured spin.
     spin_rpm_collision: Optional[float] = None
     spin_rpm_calculated_empirical: Optional[float] = None
-    # "calculated (fitted collision model, ...)" from the collision model (or
-    # "calculated (... + gear effect, Cross & Nathan 2007)"); "model geometry
-    # (...; club path from the arc prior)" when built on model geometry
-    # (D39); None otherwise
     spin_axis_source: Optional[str] = None
     collision_model: Optional[dict] = None
     experimental_aoa_offset_source: Optional[str] = None
-    # E1 club delivery (openflight.club_arc.club_delivery_payload): club path,
-    # attack angle, swing plane, swing direction and low point, each with status
-    # (measured / calculated / model_geometry / not_measured), source, frame, range
-    # and reason, plus the arc fit and the chained cross-check; None without a camera.
+    # Club delivery metrics (openflight.club_arc); None without a camera.
     club_delivery: Optional[dict] = None
     # Independent horizontal ball-flight evidence. The camera-assisted value
     # may become the displayed experimental result while the original IWR
@@ -391,52 +355,28 @@ class Shot:
         repr=False,
         compare=False,
     )
-    # 13 Oct (decision "a"): the range this shot's range-dependent metrics used: its
-    # own IWR launch point (iwr_post_impact, measured), else the camera prior
-    # (camera_prior, estimated), else None with the reason. Never a default number.
+    # IWR launch-point range, else the camera prior, else None with the reason; never a default.
     ball_range_m: Optional[float] = None
     ball_range_source: Optional[str] = None
     ball_range_uncertainty_m: Optional[float] = None
     ball_range_label: Optional[str] = None
     ball_range_reason: Optional[str] = None
-    # the launch-point estimate's own record (openflight.iwr6843.launch_range)
     iwr_launch_range: Optional[dict] = None
-    # this swing's camera-tilt pair (13 Oct, Build C; openflight.camera.swing_tilt)
     camera_tilt_swing_pair: Optional[dict] = None
-    # the camera's experimental impact reading: only its own two metric records read it
     impact_location: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
     stage_timing: Optional[dict] = None
-    # Trigger evidence a tester shot lacked but was kept without, as
-    # [{"id", "reason"}]; None when nothing was missing (P7-3).
-    missing_trigger_evidence: Optional[list] = None
-    # What blocked or mismatched trigger evidence said about a tester shot the
-    # kiosk kept anyway (D15), as [{"id", "reason"}]; None when it said nothing.
-    trigger_evidence_notes: Optional[list] = None
-    # server.target_line_in_force() when the shot was accepted
     target_line: Optional[dict] = None
-    free_play_run_id: Optional[str] = None
-    free_play_exposure: Optional[dict] = None
-    # Free play's exposure ladder record for this shot: its rung (or the automatic
-    # phase), the controls, the resolution and the picture verdict
-    # (openflight.free_play_exposure_study_shot.v1); None outside a ladder run.
-    free_play_exposure_study: Optional[dict] = None
-    geometry_unverified: bool = False
-    # Labels on the camera's values that no longer withhold them (D15): the
-    # capture's lighting and optical-quality verdicts; None when there are none.
+    # Lighting and optical-quality labels on the camera's values (they label, not withhold).
     camera_notes: Optional[list] = None
     server_callback_started_monotonic_ns: Optional[int] = field(
         default=None,
         repr=False,
         compare=False,
     )
-    # Pi trace attempt this shot belongs to (--pi-trace); transient, never serialized.
-    trace_attempt_id: Optional[str] = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
+    # Values a kiosk extension keeps on this shot; never serialized.
+    extras: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def ball_speed_ms(self) -> float:
@@ -453,15 +393,12 @@ class Shot:
     @property
     def smash_factor(self) -> Optional[float]:
         """
-        Smash factor: ball speed over club speed (smash.smash_factor, D37).
+        Smash factor: ball speed over club speed.
 
         Indicates quality of contact:
         - Driver: 1.44-1.50 (optimal)
         - Irons: 1.30-1.38
         - Wedges: 1.20-1.25
-
-        smash_factor_status says which speeds it divides (SMASH_RADIAL_RATIO: both
-        OPS radial readings, not TrackMan's full speeds; D21).
 
         Returns:
             Smash factor, or None without a positive finite club speed
@@ -484,22 +421,14 @@ class Shot:
 
     @property
     def table_carry_allowed(self) -> bool:
-        """Whether the ball-speed table may stand in for a missing carry.
-
-        Never on a fusion unit (D17); an OPS-only shot keeps its labelled estimate.
-        """
+        """Whether the ball-speed table may stand in for a missing carry (never on fusion)."""
         return self.carry_status in _TABLE_CARRY_STATUSES
 
     @property
     def reported_carry_yards(self) -> Optional[float]:
-        """The carry the kiosk shows, averages and sends to simulators, or None.
-
-        The committed (finite) carry when there is one; the ball-speed table only
-        where table_carry_allowed; otherwise not measured.
-        """
+        """The carry the kiosk shows, averages and sends to simulators, or None."""
         if self.carry_status == CARRY_NOT_MEASURED:
             return None
-        # a non-finite carry is a missing carry (owner rule), never reported
         if _finite(self.carry_spin_adjusted):
             return self.carry_spin_adjusted
         if not self.table_carry_allowed:
@@ -524,10 +453,7 @@ class Shot:
 
     @property
     def has_launch_angle(self) -> bool:
-        """Check if launch angle data is available for this shot.
-
-        A non-finite angle is a missing one: it never drives carry or its provenance.
-        """
+        """Check if a finite launch angle is available for this shot."""
         return _finite(self.launch_angle_vertical)
 
     @property
@@ -554,11 +480,7 @@ class Shot:
         return "low"
 
     def to_dict(self) -> dict:
-        """Return the canonical, unrounded representation of this shot.
-
-        ``metrics`` holds every golf metric with its label, source, range, reason
-        and frame (openflight.shot_metrics), built from the fields beside it.
-        """
+        """Return the canonical, unrounded representation of this shot."""
         data = {
             "shot_number": self.shot_number,
             "ball_speed_mph": self.ball_speed_mph,
@@ -571,11 +493,9 @@ class Shot:
             "smash_factor_full": deepcopy(self.smash_factor_full),
             "club_speed_mph": self.club_speed_mph,
             "smash_factor": self.smash_factor,
-            # a label describes a smash value; with none there is nothing to label
             "smash_factor_status": (
                 self.smash_factor_status if self.smash_factor is not None else None
             ),
-            # the ball-speed table is not in a fusion unit's payload at all (D17)
             "estimated_carry_yards": (
                 self.estimated_carry_yards if self.table_carry_allowed else None
             ),
@@ -652,8 +572,6 @@ class Shot:
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
-            "missing_trigger_evidence": deepcopy(self.missing_trigger_evidence),
-            "trigger_evidence_notes": deepcopy(self.trigger_evidence_notes),
             "camera_notes": list(self.camera_notes) if self.camera_notes else None,
             "camera_fusion_context": (
                 dict(self.camera_fusion_context) if self.camera_fusion_context else None
@@ -701,28 +619,7 @@ class Shot:
             "impact_location": deepcopy(self.impact_location),
         }
         data["metrics"] = shot_metrics.from_record(data)
-        if self.free_play_run_id:
-            data["free_play"] = {
-                "run_id": self.free_play_run_id,
-                "geometry_unverified": self.geometry_unverified,
-            }
-            if self.free_play_exposure_study is not None:
-                data["free_play"]["exposure_study"] = deepcopy(self.free_play_exposure_study)
-            data["exposure_decision"] = deepcopy(self.free_play_exposure)
-            if self.geometry_unverified:
-                for metric_id, metric in data["metrics"].items():
-                    source = metric.get("source") or ""
-                    if (
-                        metric_id in {"ball_speed", "club_speed"}
-                        or (metric_id == "spin_rate" and metric["status"] == "measured")
-                        or source.startswith("radial ratio")
-                        or metric["value"] is None
-                    ):
-                        continue
-                    metric["geometry_validation"] = "unverified"
-                    metric["note"] = "; ".join(
-                        filter(None, [metric.get("note"), "geometry unverified"])
-                    )
+        kiosk_extensions.call_all("extend_shot_record", self, data)
         return data
 
 
@@ -752,12 +649,10 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
     if not shots:
         return summary
 
-    # A non-finite value is a missing value (owner rule): it never enters an average,
-    # so one NaN shot can't make every later emit's stats NaN.
+    # Non-finite values are missing, so one NaN shot can't make every average NaN.
     ball_speeds = _finite_values(shot.ball_speed_mph for shot in shots)
     club_speeds = _finite_values(shot.club_speed_mph for shot in shots if shot.club_speed_mph)
     smash_factors = _finite_values(shot.smash_factor for shot in shots)
-    # only carries the kiosk reports: a fusion shot's missing carry is not averaged in
     carries = _finite_values(shot.reported_carry_yards for shot in shots)
     spin_rpms = _finite_values(shot.spin_rpm for shot in shots)
     summary.update(
@@ -770,7 +665,6 @@ def summarize_shots(shots: List[Shot], mode: str) -> dict:
             "avg_smash_factor": _mean_or_none(smash_factors),
             "avg_carry_est": _mean_or_none(carries),
             "avg_spin_rpm": _mean_or_none(spin_rpms),
-            # a non-finite spin is not a detected spin
             "spin_detection_rate": len(spin_rpms) / len(shots),
         }
     )

@@ -86,12 +86,9 @@ def synth_ball_position(
 ):
     """The ball's (forward, lateral, up) at ``t_s`` after it leaves the tee.
 
-    The frame is the antennas' (``AntennaLayout.positions_m``): origin below
-    the virtual array's phase centre, heights above the hitting surface.
-    ``tee_m`` is the slant range from the phase centre to the resting ball.
-    The ball flies along the launch direction, ``accel_ms2`` changing its
-    speed along that line, and falls under gravity. ``horizontal_deg`` turns
-    the launch direction target-right (+) or left (-) of the boresight.
+    Antenna frame (``AntennaLayout.positions_m``): origin below the phase centre,
+    heights above the hitting surface. ``tee_m`` is the slant range to the resting
+    ball; ``horizontal_deg`` is target-right (+) of the boresight.
     """
     centre_m = layout.phase_centre_height_m(np.radians(tilt_deg))
     tee_x = np.sqrt(tee_m**2 - (ball_height_m - centre_m) ** 2 - lateral_m**2)
@@ -110,14 +107,9 @@ def synth_ball_position(
 def synth_channel(tx_m, rx_m, ball_m, *, image_gain, res, samples, n_samples):
     """One TX/RX channel's range samples: every direct and floor path, exactly.
 
-    A floor-bounced leg runs to the antenna mirrored in the hitting surface.
-    ``image_gain`` is one bounce's reflection coefficient, so DG and GD carry
-    it once and GG twice. Each path's carrier phase grows with its length
-    (the processed data's convention) and its range tone sits at half its
-    round trip. The tone is centred on the ADC window: LAM is the sweep's
-    centre wavelength, and a real IF tone's range-FFT phase is its carrier
-    there. An uncentred tone would add a fast-time phase that changes as the
-    ball moves between one loop's chirps.
+    A floor-bounced leg runs to the antenna mirrored in the hitting surface;
+    ``image_gain`` is one bounce's reflection coefficient. The tone is centred on
+    the ADC window so its range-FFT phase is the carrier at LAM.
     """
     legs_tx = (np.linalg.norm(ball_m - tx_m), np.linalg.norm(ball_m - tx_m * _FLOOR_MIRROR))
     legs_rx = (np.linalg.norm(ball_m - rx_m), np.linalg.norm(ball_m - rx_m * _FLOOR_MIRROR))
@@ -163,20 +155,10 @@ def synth_shot(
 ):
     """Raw dump bytes for one synthetic ball flight, with exact per-antenna paths.
 
-    Each chirp is built from the physical antennas that fired and received
-    it: the ball's position at that chirp's own transmit time, and the exact
-    path lengths from its TX to the ball to each RX, direct and via the floor
-    (``synth_channel``). Nothing here reuses the estimator's slot map or
-    dictionary, so the pipeline's decode (chip order, TDM correction,
-    canonical channel order) is what's under test. TX2 fires on three-TX
-    captures from its own ECAD position.
-
-    ``layout`` is where the antennas are (default: the legacy reading of
-    ``RADAR_HEIGHT_M`` as the RX-row centre of a +90 deg board, matching the
-    ``cal`` fixture). ``tee_m`` is the slant range from the phase centre;
-    ``ball_height_m`` defaults to that radar height, as the old radar-plane
-    synthesizer launched there. ``image_gain`` is one floor bounce's
-    reflection coefficient.
+    Nothing here reuses the estimator's slot map or dictionary, so the pipeline's
+    decode (chip order, TDM correction, canonical channel order) is what's under test.
+    ``layout`` defaults to ``RADAR_HEIGHT_M`` as the RX-row centre of a +90 deg board,
+    matching the ``cal`` fixture.
     """
     rng = np.random.default_rng(seed)
     res = RANGE_SPAN_M / n_samples
@@ -860,8 +842,7 @@ def test_notch_speed_ball_recovered(cal):
 
 
 def test_notch_spacing_follows_the_dump_loop_period():
-    """D36 item 1: the burst-MTI notch comb is lambda / (2 x the same-TX loop
-    period), so a 3-TX dump (135 us loop) notches every ~17.9 m/s, not 26.9."""
+    """The burst-MTI notch comb is lambda / (2 x the same-TX loop period)."""
     from openflight.iwr6843.shot import near_mti_notch, notch_spacing_ms
 
     assert notch_spacing_ms(LOOP_PRI_S) == pytest.approx(LAM / (2 * LOOP_PRI_S))
@@ -876,9 +857,7 @@ def test_notch_spacing_follows_the_dump_loop_period():
 
 
 def test_three_tx_notch_speed_ball_is_recovered_and_flown_far(cal):
-    """D36 item 1: a 3-TX ball at the 135 us loop's second notch (~35.8 m/s)
-    must trigger the window-scope retry and the "far" policy, as a 2-TX ball
-    at 2 x 26.9 m/s does."""
+    """A 3-TX ball at the 135 us loop's second notch triggers the retry and the "far" policy."""
     notch_v = 2 * LAM / (2 * TX2_LOOP_PERIOD_S)
     raw = synth_shot(speed_ms=notch_v, n_tx=3, n_loops=12, noise=4.0)
 
@@ -1058,11 +1037,7 @@ def test_lcmf_v1_rejects_empty_capture_without_inventing_angle(cal):
 
 
 def test_lcmf_v1_reports_rejected_track_quality(cal):
-    """A detected but thin track must not be mislabeled as a TDM-sign failure.
-
-    D15 (P8-7): the estimator still runs on a reject-quality track, but this one
-    was never given a TDM sign, so no value exists and the status says why.
-    """
+    """A detected but thin track must not be mislabeled as a TDM-sign failure."""
     raw = synth_shot(n_frames=3, trigger_frame=0, tee_m=2.3)
 
     result = estimate_lcmf_v1(raw, cal, ball_speed_mph=100.0, club="9i")
@@ -1075,7 +1050,7 @@ def test_lcmf_v1_reports_rejected_track_quality(cal):
 
 
 def test_lcmf_v1_measures_on_a_reject_quality_track_and_labels_it(cal, monkeypatch):
-    """D15 (P8-7): a launch from a poor track is shown, labelled; its range is never depth."""
+    """A launch from a poor track is shown, labelled; its range is never depth."""
     raw = synth_shot(speed_ms=45.0, launch_deg=18.0, tee_m=1.5)
     real = lcmf.process_dump
 
@@ -1235,14 +1210,7 @@ def test_lcmf_v1_mti_uses_per_frame_capture_geometry(cal, monkeypatch):
 def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
     tee_m, horizontal_deg, launch_deg
 ):
-    """D36 item 3: horizontal launch is the ball's direction of motion.
-
-    Seen from a radar behind a tee 1-2.5 m away, the late-flight bearing (the
-    old proxy, averaged over the last eight frames at 2.2-4.6 m) reads only
-    0.5-0.7 x the launch direction. Each frame's bearing and range place the
-    ball laterally and downrange, and the fitted velocity's direction is the
-    launch direction: geometry, with no fitted scale.
-    """
+    """Horizontal launch is the ball's direction of motion, not its late-flight bearing."""
     cal = Calibration.identity()
     cal.tilt_rad = np.radians(10.4)
     cal.tee_range_m = tee_m
@@ -1265,7 +1233,7 @@ def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
     assert result.accepted
     assert result.horizontal_status == "hlcmf_v2_accepted"
     assert result.horizontal_deg == pytest.approx(horizontal_deg, abs=0.5)
-    # the superseded late-flight bearing on the same capture shows the bias
+    # the late-flight bearing on the same capture is biased
     shot = process_dump(
         project_tx_pair(raw, (0, 2)),
         cal,
@@ -1374,14 +1342,13 @@ def test_horizontal_proxy_withholds_incoherent_frames(monkeypatch):
 
     angle_deg, coherence, status = _tx2_horizontal_proxy(raw, shot, tdm_sign=1)
 
-    # D15 (P8-7): the value is kept and labelled by its status and coherence
     assert angle_deg is not None and math.isfinite(angle_deg)
     assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
     assert status == "hlcmf_v1_low_coherence"
 
 
 def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
-    """D36 item 3: HLCMF-v2 keeps v1's coherence gate, under its own status."""
+    """HLCMF-v2 keeps v1's coherence gate, under its own status."""
     n_frames, n_loops, n_tx, n_rx, n_bins = 12, 10, 3, 4, 80
     cube = np.zeros((n_frames, n_loops * n_tx, n_rx, n_bins), dtype=complex)
     raw = pack_dump(
@@ -1419,7 +1386,6 @@ def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
         tee_position_m=(1.5, 0.0, 0.0),
     )
 
-    # D15 (P8-7): the value is kept and labelled by its status and coherence
     assert angle_deg is not None and math.isfinite(angle_deg)
     assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
     assert status == "hlcmf_v2_low_coherence"

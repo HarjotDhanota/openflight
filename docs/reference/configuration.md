@@ -84,9 +84,9 @@ Per-board complex array and range calibration. Selected with `--iwr6843-cal`.
 | `convention` | How the correction is applied to the array |
 
 The shipped file is a **validated starting point**, not a guarantee — per-board
-calibration may be required. Its `tilt_deg` and `radar_height_m` describe the
-July mount it was solved on and are not used: the swing server takes the radar's
-tilt and height from the enclosure's rig file (`--rig-geometry`).
+calibration may be required. Its `tilt_deg` and `radar_height_m` are not used:
+the swing server takes the radar's tilt and height from the enclosure's rig file
+(`--rig-geometry`).
 
 ## `config/lenses.json`
 

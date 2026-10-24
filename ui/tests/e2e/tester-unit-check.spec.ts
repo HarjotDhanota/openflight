@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, mockLens, placementBoxState } from './helpers';
+import { DEFAULT_TESTER, mockLens, placementBoxState } from './testerHelpers';
 
 // 19 Oct: the tester flow for outside testers. Step 2 checks the unit (all four
 // sensors, then the tilt sensor's direction by one lift of the front, then the setup);

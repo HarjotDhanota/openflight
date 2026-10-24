@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { mockConfirmedPlacementBox, useTester } from './helpers';
+import { mockConfirmedPlacementBox, useTester } from './testerHelpers';
 
 test.use({ hasTouch: true });
 

@@ -1,9 +1,4 @@
-"""The camera tilt is calibrated from swings (13 Oct, Build C).
-
-A pair is one swing's measured IWR launch-point range and the camera's resting-ball
-row in that swing's own pre-impact frames. The unit's tilt is the median of at least
-two that agree, per lens, in the existing storage, and re-calibrates as before.
-"""
+"""The camera tilt is calibrated from swings: the median of agreeing pairs, per lens."""
 
 from __future__ import annotations
 
@@ -18,7 +13,7 @@ from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_p
 
 FOCAL_PX = 2000.0
 LENS_HEIGHT_M = 0.095
-BALL_CENTRE_M = 0.04267 / 2.0
+BALL_CENTRE_M = 0.0427 / 2.0
 
 
 def _camera(pitch_deg):

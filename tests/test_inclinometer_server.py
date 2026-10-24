@@ -263,7 +263,6 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     assert config["mount_yaw_deg"] == expected.yaw_deg
     assert config["mount_upside_down"] is True
     assert config["mount_source"] == "unit_file"
-    # session_start carries the check result and the corrections (config["inclinometer"])
     assert config["orientation_check"]["check"]["state"] == "passed"
     assert [c["correction"] for c in config["orientation_check"]["corrections"]] == [
         "quarter_left",

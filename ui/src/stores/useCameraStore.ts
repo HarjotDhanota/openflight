@@ -31,10 +31,7 @@ export interface CameraCaptureSettings {
   auto_exposure?: CameraAutoExposureStatus;
 }
 
-/**
- * The kiosk's swing exposure (13 Oct 2026): the resting ball is the light meter,
- * re-checked before every swing. `status` is why the controls are what they are.
- */
+/** Why the swing exposure controls are what they are (the resting ball is the light meter). */
 export type SwingExposureStatus =
   | 'seeded'
   | 'ball_driven'

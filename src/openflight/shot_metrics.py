@@ -1,37 +1,8 @@
-"""Every golf metric of one shot, each with its label, source, range, reason and frame.
+"""Every golf metric of one shot as a labelled record, in one ordered catalogue.
 
-TrackMan's metrics plus ours, in one ordered catalogue (``METRICS``). ``from_record``
-turns one shot record (``Shot.to_dict()`` or a logged ``shot_detected`` entry)
-into one record per metric, so the kiosk, the session log and every reader of
-it read the same values under the same labels. It reads the producers' own
-outputs and the shot's measured fields; it never computes a metric itself.
-
-The catalogue starts with the metrics every unit measures (ball and club speed,
-launch, spin, smash, ball distance, carry, club path and attack angle). A model
-module adds its own metrics in their places (``register_metrics``) and may bring
-a metric's builder (``replace_builder``); the modules declared under the
-``openflight.shot_metrics`` entry point are loaded the first time the catalogue
-is read (``model_metrics``: the full speeds, the collision model's and the arc's
-club metrics, the flight outputs).
-
-Every record has the same keys:
-
-- ``value``: a finite number, or None;
-- ``unit``;
-- ``status``: one of ``LABELS``. ``measured`` (a sensor saw it), ``calculated``
-  (a named model on measured or calculated inputs, D38), ``model_geometry``
-  (rests on assumed swing geometry, D39), ``estimated`` (an OPS-only install's
-  labelled stand-in), ``experimental`` (a reading shown before it is validated, which
-  feeds no other metric), ``not_measured`` (no value; ``reason`` says why, D17);
-- ``source``: the sensor or model that produced the value;
-- ``range``: ``[low, high]`` when the producer states one, else None;
-- ``reason``: why a value is not measured (always set then), else None;
-- ``frame``: the zero of a horizontal metric (``horizontal_frame``), else None;
-- ``note``: a label the value carries (an uncalibrated azimuth, mixed frames);
-- ``normalized``: a flight metric's normalized-air value and range, else None.
-
-A metric that is not built yet is not measured, with the item that builds it as
-its reason (``MetricSpec.pending``).
+``from_record`` turns a shot record into one record per metric (value, unit, status in
+``LABELS``, source, range, reason, frame, note, normalized); it never computes a metric.
+Model modules under the ``openflight.shot_metrics`` entry point add their own metrics.
 """
 
 from __future__ import annotations
@@ -67,8 +38,6 @@ SMASH_SOURCE = "ball speed / club speed (D37)"
 TABLE_CARRY_SOURCE = "ball-speed carry table (OPS-only estimate)"
 COMMITTED_CARRY_SOURCE = "the kiosk's committed carry (no flight record on this shot)"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
-# Where the club path / attack angle the collision model used came from
-# (shot_models.displayed_club_path, displayed_attack_angle).
 _PATH_SOURCES = {
     "canonical": "radar club track",
     "camera_fused_chained": "camera + IWR chained delivery",
@@ -89,8 +58,6 @@ class MetricSpec:
     pending_reason: Optional[str] = None
 
 
-# The metrics every unit measures, in catalogue order. A model module adds its own
-# (``register_metrics``), each after the metric it follows, and may replace a builder.
 _CORE_METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("ball_speed", "Ball speed (radial)", BALL, "mph"),
     MetricSpec("launch_vertical", "Vertical launch", BALL, "deg"),
@@ -104,10 +71,8 @@ _CORE_METRICS: tuple[MetricSpec, ...] = (
     MetricSpec("club_path", "Club path", CLUB, "deg"),
     MetricSpec("attack_angle", "Attack angle", CLUB, "deg"),
 )
-# The entry-point group a model module registers its metrics under.
 ENTRY_POINT_GROUP = "openflight.shot_metrics"
 
-# Club-delivery metric names (club_arc.club_delivery_payload) per metric id.
 _DELIVERY = {
     "club_path": "club_path_deg",
     "attack_angle": "attack_angle_deg",
@@ -134,9 +99,6 @@ def catalog() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------- helpers
-
-
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -160,7 +122,7 @@ def _record(  # pylint: disable=too-many-arguments
     note: Optional[str] = None,
     normalized: Optional[dict] = None,
 ) -> dict[str, Any]:
-    """One record; a missing or non-finite value is not measured, with a reason (D17)."""
+    """One record; a missing or non-finite value is not measured, with a reason."""
     spec = _specs[metric_id]
     number = _finite(value)
     if number is None:
@@ -213,9 +175,6 @@ def _sensor_source(shot: Mapping[str, Any], source: Optional[str]) -> Optional[s
     return MOCK_SOURCE if _mock(shot) else source
 
 
-# ---------------------------------------------------------------- ball
-
-
 def _ball_speed(shot):
     return _record(
         "ball_speed",
@@ -263,7 +222,6 @@ def _collision_metric(shot, name: str) -> Mapping[str, Any]:
 
 def _spin_rate(shot):
     source = shot.get("spin_source")
-    # any value label the producer gave (estimated too); an unlabelled spin is measured
     status = source if source in LABELS and source != NOT_MEASURED else MEASURED
     collision = _collision_metric(shot, "spin_rate")
     reason = (
@@ -279,7 +237,6 @@ def _spin_rate(shot):
         and model_spin is not None
         and model_spin == _finite(shot.get("spin_rpm"))
     ):
-        # the collision model's own spin: its notes (contact quality, no impact location)
         note = collision.get("note")
     return _record(
         "spin_rate",
@@ -299,10 +256,8 @@ def _spin_axis(shot):
     elif is_measured_source(source):
         status = MEASURED
     elif source and source.startswith(ESTIMATED):
-        # a weak horizontal launch under the axis (agent/v-formulas): labelled, not withheld
         status = ESTIMATED
     elif is_calculated_source(source):
-        # the collision model's own label when it weakened it (estimated, model geometry)
         status = (
             collision_status
             if collision_status in (CALCULATED, MODEL_GEOMETRY, ESTIMATED)
@@ -311,7 +266,6 @@ def _spin_axis(shot):
     elif _mock(shot):
         status, source = MEASURED, MOCK_SOURCE
     else:
-        # an unlabelled axis predates E2: the "launch minus path" proxy
         status, source = ESTIMATED, source or "unlabelled spin axis (before E2)"
     collision = _collision_metric(shot, "spin_axis")
     return _record(
@@ -336,9 +290,6 @@ def _smash(shot):
     )
 
 
-# ---------------------------------------------------------------- flight
-
-
 def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]]:
     """The carry the kiosk reports (launch_monitor.Shot.reported_carry_yards), labelled."""
     status = shot.get("carry_status")
@@ -346,8 +297,7 @@ def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]
         return None, None, None
     committed = _finite(shot.get("carry_spin_adjusted"))
     if committed is not None:
-        # a simulated carry is calculated, never measured (D38): "measured" is an older
-        # log's name for it; an unlabelled one (a replay, an older log) is an estimate
+        # a simulated carry is calculated, never measured; unlabelled ones are estimates
         label = {None: ESTIMATED, MEASURED: CALCULATED}.get(status, status)
         return committed, label, COMMITTED_CARRY_SOURCE
     if status in (None, ESTIMATED):
@@ -361,9 +311,6 @@ def _carry(shot):
     """The carry the kiosk reports (a flight model's builder replaces this one)."""
     value, status, source = _reported_carry(shot)
     return _record("carry", value, status, source=source)
-
-
-# ---------------------------------------------------------------- club
 
 
 def _club_speed(shot):
@@ -422,8 +369,6 @@ def _path_or_attack(metric_id: str):
     return build
 
 
-# ---------------------------------------------------------------- ball range
-
 BALL_RANGE_SOURCES = {
     "iwr_post_impact": "IWR post-impact launch point (this shot's own capture)",
     "camera_prior": "camera prior: the resting ball's size, coarse",
@@ -431,7 +376,6 @@ BALL_RANGE_SOURCES = {
 }
 BALL_RANGE_UNVALIDATED = "per-swing IWR range: not validated against a tape yet"
 CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"
-# What does not use the ball's range: the OPS243's own radial speeds and spin.
 RANGE_INDEPENDENT = frozenset({"ball_speed", "club_speed", "smash_factor", "spin_rate"})
 
 
@@ -466,11 +410,7 @@ def _ball_range(shot):
 
 
 def _with_prior_label(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dict[str, Any]]:
-    """Every range-dependent metric of a shot that rested on the camera prior is estimated.
-
-    The prior is a coarse size estimate; a metric built on it carries that weaker label
-    and says why (13 Oct, B3).
-    """
+    """Every range-dependent metric of a shot that rested on the camera prior is estimated."""
     if shot.get("ball_range_source") != "camera_prior":
         return metrics
     for metric_id, record in metrics.items():
@@ -505,10 +445,7 @@ _modules_loaded = False
 
 
 def register_metrics(metrics: Sequence[tuple[MetricSpec, Builder]], *, after: str) -> None:
-    """Add a model's metrics to the catalogue, in order, right after ``after``.
-
-    A metric already in the catalogue is left as it is.
-    """
+    """Add a model's metrics to the catalogue, in order, after ``after``; existing ids are kept."""
     with _lock:
         position = [spec.id for spec in _metrics].index(after) + 1
         for spec, builder in metrics:
@@ -529,11 +466,7 @@ def replace_builder(metric_id: str, builder: Builder) -> None:
 
 
 def _load_metric_modules() -> None:
-    """Import every model module declared under ``ENTRY_POINT_GROUP``, once.
-
-    A module that fails to import is logged and skipped: the catalogue then has
-    the metrics every unit measures, and the others are not reported.
-    """
+    """Import every model module declared under ``ENTRY_POINT_GROUP`` once, logging failures."""
     global _modules_loaded  # pylint: disable=global-statement
     if _modules_loaded:
         return
@@ -588,11 +521,7 @@ def from_record(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def records(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """The shot's logged metric records when it carries them, else rebuilt (older logs).
-
-    A logged record missing a metric (a log from before that metric existed) gets
-    the rebuilt record for it.
-    """
+    """The shot's logged metric records, each missing one rebuilt (older logs)."""
     _load_metric_modules()
     shot = _mapping(shot)
     logged = _mapping(shot.get("metrics"))

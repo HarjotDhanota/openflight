@@ -1,25 +1,8 @@
-"""LCMF-v2 on the exact per-antenna simulator: launch recovery and board orientation.
+"""LCMF on the exact per-antenna simulator: launch recovery and board orientation.
 
-The shots come from ``synth_shot``: every chirp built from the antennas that
-fired and received it, at its own transmit time, with the direct path and
-every floor bounce (DD, DG, GD, GG) at exact length. They pass through the
-whole chain -- IQ16 range snapshots, tracker, TDM correction, LCMF.
-
-What these tests hold, and what they do not:
-
-- The per-antenna channel, ``channel_four4_path_tdm``, which models all four
-  paths, must recover launch within 0.2 deg. Measured 2026-09-30: within
-  0.06 deg over every case below at both floor gains.
-- The reported (fused) angle is NOT held to 0.2 deg. It averages that channel
-  with ``two8``, which models DD and GG only; a physical floor bounce also
-  makes DG and GD, one bounce each and so stronger than GG, and two8 has no
-  column for them. On these shots two8 is off by up to 4.8 deg at floor gain
-  0.35 (6.3 deg at 0.6), so the fused angle is off by about half that. That is
-  LCMF-v1's channel set, kept unchanged here; the fused answer is only
-  required to be accepted.
-- ``amp=100``: the IQ16 range snapshot clips I and Q separately at 32767,
-  which bends each channel's phase differently. At 128 samples, 100 keeps
-  the direct path plus both floor gains' bounces inside it.
+Only the four-path channel is held to 0.2 deg; the fused angle also averages ``two8``,
+which lacks the DG/GD bounces. ``amp=100`` keeps IQ16 snapshots (clipped at 32767 per
+I and Q) unclipped at both floor gains.
 """
 
 from __future__ import annotations
@@ -117,9 +100,7 @@ def _level_board(rotation_deg: float) -> antennas.AntennaLayout:
 
 @pytest.mark.parametrize("image_gain", [0.0, 0.35])
 def test_a_mirrored_board_flips_the_fitted_launch_sign(image_gain):
-    """Boresight level and the ball launched from the array's own height, so
-    the direct path climbs through the boresight: an array read upside down
-    sees it descend, and the fit says so unless the rotation is set right."""
+    """A launch from the array's own height reads as descending on an upside-down board."""
     board = _level_board(90.0)
     centre = board.phase_centre_height_m(0.0)
     raw = _shot(
@@ -144,8 +125,7 @@ def test_a_mirrored_board_flips_the_fitted_launch_sign(image_gain):
 
 
 def test_a_mirrored_board_misreads_the_v3_shot():
-    """Aimed 10 deg up, a mirrored array reflects angles about the boresight,
-    not the horizon: a 5 deg launch reads near 30 and a 30 deg one near 6."""
+    """A mirrored array reflects angles about the boresight, not the horizon."""
     setup, layout = _v3()
     mirrored = antennas.AntennaLayout(-90.0, layout.rx_row_height_m, "test_mirrored")
     for launch_deg in (5.0, 30.0):

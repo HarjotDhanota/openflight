@@ -29,14 +29,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
 
-from openflight.clock_mapping import (
-    QUALIFIED_BACKENDS,
-    EdgeObservation,
+from openflight.clock_mapping import QUALIFIED_BACKENDS, EdgeObservation
+from openflight.ops243 import OPS243Radar
+from openflight.ops_clock_association import (
     associate_edge_detail,
     association_window_ns,
     shared_edge_mapping,
 )
-from openflight.ops243 import OPS243Radar
 from openflight.pi_trace import SCHEMA, VERSION, _finite
 from openflight.trace_routes import (
     DOCUMENT_IDENTITY_KEYS,

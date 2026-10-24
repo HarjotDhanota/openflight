@@ -1,4 +1,4 @@
-"""D37: the smash factor, ball speed over club speed, checked by hand."""
+"""The smash factor, ball speed over club speed, checked by hand."""
 
 import math
 

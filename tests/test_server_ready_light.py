@@ -324,7 +324,10 @@ def test_the_tester_page_holds_the_light_red_and_releases_it(sensors, monkeypatc
         "red",
         "ladder light check running",
     )
-    assert sensors.light()["hold"] == "ladder light check running"
+    assert held.get_json()["hold"] == "ladder light check running"
+    assert [cause["cause"] for cause in sensors.light()["causes"]][0] == (
+        "ladder light check running"
+    )
 
     released = client.post("/api/ready-light/hold", json={"cause": None})
     assert released.get_json()["state"] == "green"

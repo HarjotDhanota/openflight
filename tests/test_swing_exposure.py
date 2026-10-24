@@ -1,8 +1,7 @@
-"""The kiosk's swing exposure policy: the resting ball is the light meter (13 Oct 2026).
+"""The kiosk's swing exposure policy: the resting ball is the light meter.
 
-"Use the lowest exposure unless more is needed": the sensor's own shortest exposure
-(read from the camera's control limits) at gain 1, gain before exposure, never past the
-blur ceiling; re-checked before every swing, with hysteresis; labelled, never blocked.
+Shortest sensor exposure at gain 1, gain before exposure, never past the blur ceiling;
+re-checked before every swing, with hysteresis; labelled, never blocked.
 """
 
 import json
@@ -54,9 +53,6 @@ def reading(*, signal, peak, exposure_us, gain, clipped_pct=0.0, black=BLACK):
     )
 
 
-# --- config and blur ceiling ------------------------------------------------------
-
-
 def test_the_blur_ceiling_is_derived_from_the_mm_budget_and_matches_the_config():
     config = sx.load_config()
 
@@ -82,9 +78,6 @@ def test_modes_are_found_by_their_size():
     assert sx.mode_for_size(1280, 800) == "arm5"
     assert sx.mode_for_size(640, 400) == "arm6"
     assert sx.mode_for_size(320, 200) is None
-
-
-# --- the sensor's limits are read, never assumed ----------------------------------
 
 
 def test_sensor_limits_are_read_from_the_camera_controls():
@@ -127,9 +120,6 @@ def test_without_a_gain_limit_the_driver_cap_stands_in_and_says_so():
     assert read.gain_source == "ov9282_driver_register_cap"
 
 
-# --- the decision ladder ------------------------------------------------------------
-
-
 def test_the_ladder_runs_from_the_sensor_minimum_to_the_blur_ceiling_in_root_two_steps():
     ladder = sx.exposure_ladder(9, 294)
 
@@ -157,9 +147,6 @@ def test_the_gain_cap_is_the_sensor_s_not_an_impossible_eighteen_or_twenty():
     assert env.to_dict()["gain_cap"] == pytest.approx(15.9375)
 
 
-# --- choosing a setting ---------------------------------------------------------------
-
-
 def test_bright_indoor_picks_the_shortest_exposure_a_capped_gain_can_reach():
     env = envelope()
     peak_index = 0.15  # DN above black per us x gain
@@ -180,7 +167,6 @@ def test_gain_fills_first_then_exposure_lengthens_only_at_the_gain_cap():
         choice = sx.choose_setting(peak_index, peak_index, env)
         index = env.ladder.index(choice.setting.exposure_us)
         if index > 0:
-            # one rung shorter would need more than the gain cap
             shorter = env.ladder[index - 1]
             assert choice.wanted_product / shorter > env.gain_cap
 
@@ -194,9 +180,6 @@ def test_the_choice_never_passes_the_blur_ceiling_or_the_gain_cap():
     assert choice.status == "too_dark"
 
 
-# --- the scenarios ----------------------------------------------------------------------
-
-
 def test_full_sun_clipped_at_the_sensor_floor_holds_there_and_says_shade_or_nd():
     policy = sx.SwingExposurePolicy(envelope(minimum=9))
     clipped = reading(signal=234, peak=234, exposure_us=9, gain=1.0, clipped_pct=60.0)
@@ -204,7 +187,7 @@ def test_full_sun_clipped_at_the_sensor_floor_holds_there_and_says_shade_or_nd()
     decision = policy.decide(clipped, sx.Setting(9, 1.0))
 
     assert decision.status == "too_bright"
-    assert decision.target is None  # nothing shorter or lower exists
+    assert decision.target is None
     assert decision.analysis_eligible is False
     assert decision.frame_label == "too bright: shade the ball area (or an ND filter)"
 
@@ -212,8 +195,7 @@ def test_full_sun_clipped_at_the_sensor_floor_holds_there_and_says_shade_or_nd()
 def test_full_sun_walks_down_to_the_floor_from_a_long_setting():
     policy = sx.SwingExposurePolicy(envelope(minimum=9))
     current = sx.Setting(294, 15.9375)
-    # 640x400 in full sun: 7 us x 1 put the 1280x800 ball near 0.6 of clip (30 Sept),
-    # about 20 DN per us x gain, and 640x400 doubles it
+    # full sun: about 20 DN per us x gain at 1280x800; 640x400 doubles it
     sun = 40.0
     for _ in range(10):
         product = current.exposure_us * current.gain
@@ -239,7 +221,7 @@ def test_full_sun_walks_down_to_the_floor_from_a_long_setting():
 
 def test_full_sun_unclipped_at_the_floor_is_ball_driven():
     policy = sx.SwingExposurePolicy(envelope(minimum=7))
-    # 7 us x 1 put the sun ball near 0.6 of clip (30 Sept)
+    # 7 us x 1 puts a sunlit ball near 0.6 of clip
     sunny = reading(signal=110, peak=140, exposure_us=7, gain=1.0)
 
     decision = policy.decide(sunny, sx.Setting(7, 1.0))
@@ -251,7 +233,7 @@ def test_full_sun_unclipped_at_the_floor_is_ball_driven():
 
 
 def test_today_s_room_at_1_32_m_goes_to_the_blur_ceiling_and_the_gain_cap():
-    """13 Oct, 6 mm lens: the ball read 53 DN (peak 0.372 of clip) at 298 us x 12."""
+    """6 mm lens: the ball reads 53 DN (peak 0.372 of clip) at 298 us x 12."""
     policy = sx.SwingExposurePolicy(envelope())
     today = reading(signal=53, peak=0.372 * CLIP_RANGE, exposure_us=298, gain=12.0)
 
@@ -298,7 +280,7 @@ def test_a_dim_ball_below_the_ceiling_is_raised_at_once():
 
     assert decision.target is not None
     assert decision.target.exposure_us * decision.target.gain > 37 * 4.0
-    assert decision.analysis_eligible is False  # the frames it judged were under the gate
+    assert decision.analysis_eligible is False
 
 
 def test_no_ball_keeps_the_last_setting_and_says_why():
@@ -311,7 +293,6 @@ def test_no_ball_keeps_the_last_setting_and_says_why():
     assert decision.target is None
     assert "no ball in the box" in decision.message
     assert "104 us" in decision.message
-    # the setting is the one the last ball judged, so its verdict carries over
     assert decision.analysis_eligible is True
 
 
@@ -340,9 +321,6 @@ def test_arm6_takes_half_the_exposure_for_the_same_light():
     assert half.target.exposure_us < full.target.exposure_us
 
 
-# --- seeding before a ball is seen --------------------------------------------------
-
-
 def test_the_setup_light_index_picks_the_first_setting():
     policy = sx.SwingExposurePolicy(envelope())
     light = 0.15
@@ -360,7 +338,6 @@ def test_without_a_light_index_the_startup_seed_is_clamped_into_the_envelope():
 
     decision = policy.seed(None, sx.Setting(1000, 4.0))
 
-    # 1000 us is past the blur ceiling: the brightness moves into gain, up to the cap
     assert decision.target == sx.Setting(294, 13.61)
     assert decision.reason == "startup_controls_clamped"
 
@@ -372,9 +349,6 @@ def test_a_seed_already_inside_the_envelope_is_kept():
 
     assert decision.target is None
     assert decision.current == sx.Setting(104, 8.0)
-
-
-# --- hysteresis ----------------------------------------------------------------------------
 
 
 def test_a_ball_inside_the_band_holds_even_off_target():
@@ -448,9 +422,6 @@ def test_a_settled_change_lands_inside_the_band():
     assert low <= fraction <= high
 
 
-# --- the reading itself ----------------------------------------------------------------------
-
-
 def test_the_ball_reading_measures_the_core_from_frames():
     image = np.full((100, 100), 20, dtype=np.uint8)
     yy, xx = np.indices(image.shape)
@@ -487,46 +458,12 @@ def test_a_decision_serialises_with_its_inputs():
     assert math.isfinite(payload["predicted"]["signal_dn"])
 
 
-# --- shared gates and the tester ladder's "kiosk would use" ------------------------------
-
-
 def test_the_ball_gate_is_the_one_every_other_judge_uses():
     from openflight.camera import light_judging
 
     assert sx.BALL_GATE_DN == light_judging.BALL_MIN_SIGNAL_DN
     assert sx.BALL_CLIPPED_MAX_PCT == light_judging.CLIPPED_MAX_PCT
     assert sx.BLACK_LEVEL_DN == light_judging.SENSOR_BLACK_LEVEL_DN
-
-
-def test_kiosk_would_use_in_today_s_room():
-    light = 53 / (298 * 12.0)  # the setup's 1280x800 index at 1.32 m, 13 Oct
-
-    full = sx.kiosk_would_use(light, "arm5", limits(9))
-    half = sx.kiosk_would_use(light, "arm6", limits(4))
-
-    assert (full["exposure_us"], full["gain"]) == (294, pytest.approx(15.9375))
-    assert full["text"] == "kiosk would use: 1280×800 · 294 µs × gain 15.94"
-    # 640x400 doubles the light, so the gain need not be capped
-    assert half["exposure_us"] == 294
-    assert half["gain"] < 15.9375
-    assert half["light_index_dn_per_us_gain"] == pytest.approx(2.0 * light)
-
-
-def test_kiosk_would_use_in_sun_sits_at_the_sensor_floor():
-    sun = 0.6 * CLIP_RANGE / 7.0  # 7 us x 1 put the ball at 0.6 of clip (30 Sept)
-
-    full = sx.kiosk_would_use(sun, "arm5", limits(9))
-    half = sx.kiosk_would_use(sun, "arm6", limits(9))
-
-    assert (full["exposure_us"], full["gain"]) == (9, 1.0)
-    assert full["status"] == "ball_driven"
-    assert (half["exposure_us"], half["gain"]) == (9, 1.0)
-    assert half["status"] == "too_bright"
-
-
-def test_kiosk_would_use_needs_the_sensor_minimum_and_a_light():
-    assert sx.kiosk_would_use(0.05, "arm5", None)["status"] == "needs_sensor_minimum"
-    assert sx.kiosk_would_use(None, "arm5", limits())["status"] == "not_measured"
 
 
 def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
@@ -545,9 +482,6 @@ def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
 
 def test_a_size_outside_the_modes_takes_the_shared_mm_budget():
     assert sx.blur_ceiling_us(sx.load_config(), None) == 294
-
-
-# --- the ball-finding sweep (no ball for a while: step the envelope until one shows) ------
 
 
 def _in_envelope(setting, env):
@@ -620,9 +554,7 @@ def test_the_sweep_alternates_brighter_and_darker_from_the_current_setting():
 
 
 def test_a_dark_seed_in_sun_finds_the_ball_by_stepping_darker():
-    """30 Sept sun at 1280x800: 20 DN per us x gain on the peak. At the dark seed's
-    294 us x 15.94 the box is washed out and no ball can be seen; only near the floor
-    is it unclipped enough for the box look to find it."""
+    """Sun at 1280x800 (20 DN per us x gain): the dark seed washes the box out."""
     env = envelope(minimum=9)
     policy = sx.SwingExposurePolicy(env)
     sun = (20.0, lambda peak: peak < CLIP_RANGE)
@@ -632,7 +564,6 @@ def test_a_dark_seed_in_sun_finds_the_ball_by_stepping_darker():
     assert decisions[-1].reading is not None
     assert found.product * 20.0 < CLIP_RANGE
     assert all(_in_envelope(step, env) for step in seen)
-    # every step it took went darker: there is nothing brighter than the ceiling and cap
     products = [step.product for step in seen]
     assert products == sorted(products, reverse=True)
     assert any(d.status == "searching_for_ball" for d in decisions)
@@ -663,7 +594,6 @@ def test_the_found_ball_hands_over_to_normal_metering():
 
     assert after.status in ("ball_driven", "too_dark")
     assert after.reason == "resting_ball"
-    # metering moves at once on the found ball: here to the ceiling and cap
     assert after.setting.same_as(env.top_setting)
 
 
@@ -682,7 +612,6 @@ def test_no_ball_anywhere_holds_the_last_good_setting_and_says_it_searched():
     assert final.setting.same_as(good)
     assert current.same_as(good)
     assert all(_in_envelope(step, env) for step in seen)
-    # every setting the sweep has was tried once
     assert len(seen) >= len(sx.sweep_settings(env, good))
 
 

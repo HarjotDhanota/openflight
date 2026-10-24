@@ -1,7 +1,6 @@
-"""Dump versions 8/9: the observed-evidence block and trailer (W4a).
+"""Dump versions 8/9: the observed-evidence block and trailer.
 
-The evidence values below are made up for known-answer tests only; they are not
-hardware observations.
+The evidence values are made up for known-answer tests, not hardware observations.
 """
 
 from __future__ import annotations
@@ -290,13 +289,12 @@ def _record_offset(version: int, n_frames: int, index: int) -> int:
 
 
 def test_an_unassociated_record_has_no_seq_or_start_tick():
-    """I1: without a fresh armed start, seq and start_tick are unobserved, never stale."""
+    """Without a fresh armed start, seq and start_tick are unobserved, never stale."""
     cube = _cube()
     capture, frames, trailer = _evidence(4, 2)
     frames = _stale_frame(frames, 2)
 
     meta, _cube_out = parse_dump(_pack(cube, capture, frames, trailer))
-    # parse_dump fills frame_evidence for v8/v9; pylint only sees its initial None.
     # pylint: disable=unsubscriptable-object
     record = meta["frame_evidence"][2]
 
@@ -336,7 +334,6 @@ def test_project_tx_pair_keeps_an_unassociated_record_unstamped():
 
     projected = project_tx_pair(raw, (0, 2))
     meta, _cube_out = parse_dump(projected)
-    # parse_dump fills frame_evidence for v8/v9; pylint only sees its initial None.
     # pylint: disable=unsubscriptable-object
 
     assert (meta["frame_evidence"][2]["seq"], meta["frame_evidence"][2]["start_tick"]) == (
@@ -356,8 +353,7 @@ def test_a_version_above_9_is_still_refused():
         parse_dump(bumped)
 
 
-# --- independently encoded fixtures (S5): bytes laid out field by field from
-# firmware/iwr6843/dump_format.h, without dump.py's structs or packer. ---------------------
+# --- fixtures encoded field by field from firmware/iwr6843/dump_format.h, not dump.py ---
 
 
 def _le(value: int, size: int, *, signed: bool = False) -> bytes:
@@ -427,9 +423,6 @@ def test_an_independently_assembled_v8_dump_parses_field_by_field(version):
     assert cube[1, 2, 3, 1] == 48 - 48j
 
 
-# --- final review M3: an unscanned frame's IQ8 values are not measured --------------------
-
-
 @pytest.mark.parametrize("version", [8, 9])
 def test_an_unscanned_record_has_no_iq8_overflow_or_max_abs(version):
     """Frame 0 was not scanned (its wire bytes say 0 and 90): neither value was measured."""
@@ -474,8 +467,7 @@ def test_a_scanned_record_without_its_iq8_values_is_refused():
 
 @pytest.mark.parametrize("key", ["header_nbytes", "range_metadata_nbytes"])
 def test_frame_metadata_sizes_stored_as_none_read_as_absent(key):
-    """A metadata dict carrying None for a size reads it as absent (the header's own size,
-    or the whole frame-metadata table), never a TypeError."""
+    """A metadata None for a size reads as absent, never a TypeError."""
     cube = _cube(n_frames=2)
     raw = pack_dump(
         cube,

@@ -15,12 +15,9 @@ export interface MetricCardProps {
    * the number underneath; the original card leads with the number.
    */
   labelPosition?: 'below' | 'above';
-  /**
-   * The value's label (measured / calculated / model geometry / estimated), shown
-   * as a compact badge on the title. Not measured shows `reason` instead.
-   */
+  /** The value's label, shown as a compact badge on the title. */
   status?: MetricLabel;
-  /** Why the metric is not measured: one short line under the value. */
+  /** Why the metric is not measured. */
   reason?: string;
   confidence?: SpinQuality | null;
   /** Override confidence copy while preserving its dot level. */

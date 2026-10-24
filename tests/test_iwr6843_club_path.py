@@ -166,8 +166,7 @@ def _synth_club(
 def _cal(tee_range_m=1.372):
     cal = Calibration.load("config/iwr6843_calibration_reference.json")
     cal.tee_range_m = tee_range_m
-    # the July mount these synthetic tracks were built for; the board file no
-    # longer carries a height (wiring audit C1)
+    # mount height these synthetic tracks were built for
     cal.meta["radar_height_m"] = 0.1524
     return cal
 
@@ -233,8 +232,7 @@ def test_experimental_path_candidate_unwraps_vertical_references_through_time():
 
 
 def test_aim_offset_is_added():
-    """D36 item 2: the one horizontal offset is added to club path, as to every
-    other horizontal angle (+ = boresight right of the target line)."""
+    """The aim offset is added to club path (+ = boresight right of the target line)."""
     without = club.estimate_club_path(
         _synth_club(0.0), _cal(), ops_club_speed_mph=OPS_CLUB_MPH, impact_t_s=IMPACT_S, tdm_sign=1
     )
@@ -247,7 +245,6 @@ def test_aim_offset_is_added():
         aim_offset_deg=2.0,
     )
     assert with_offset.path_deg == pytest.approx(without.path_deg + 2.0, abs=0.01)
-    # F2: the path names its zero; an aim offset moves it to the target line.
     assert without.club_path_frame == "unit_boresight"
     assert with_offset.club_path_frame == "target_line"
     assert without.to_dict()["club_path_frame"] == "unit_boresight"
@@ -811,7 +808,7 @@ def test_club_search_does_not_fit_the_ball():
 
 
 class TestRangeEvidenceStatus:
-    """F4: the club range track carries its own identity verdict to camera fusion."""
+    """The club range track carries its own identity verdict to camera fusion."""
 
     def test_accepted_track_evidence_is_accepted(self):
         result = club.estimate_club_path(

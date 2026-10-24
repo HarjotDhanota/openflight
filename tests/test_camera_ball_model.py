@@ -25,8 +25,7 @@ def _lit_ball(
     """A matte sphere lit from the upper left, with its cast shadow to the lower right.
 
     ``buried`` hides that fraction of the ball's height, from the bottom, behind
-    ground texture, as grass or carpet pile does. ``door_gap_y`` puts a bright
-    door panel above a dark gap behind the ball.
+    ground texture. ``door_gap_y`` puts a bright door panel above a dark gap behind it.
     """
     rng = np.random.default_rng(seed)
     yy, xx = np.indices((height, width)).astype(np.float64)
@@ -63,7 +62,6 @@ def test_with_the_size_known_the_centre_comes_from_the_lit_rim_and_shading():
     assert fit.x == pytest.approx(300.3, abs=0.6)
     assert fit.y == pytest.approx(260.6, abs=0.6)
     assert fit.radius_px == pytest.approx(16.0, rel=0.02)
-    # the light it recovers comes from the upper left
     assert 200.0 <= fit.light_azimuth_deg <= 250.0
 
 
@@ -119,8 +117,6 @@ def _two_balls(first, second, height=400, width=640, seed=5):
 
 
 def test_a_bright_door_stop_off_to_the_side_loses_to_a_dim_ball_ahead():
-    # proportions from a real room: the door stop's white tip fitted 1.6 times
-    # better than the ball, 31% of the frame's width off to the side
     frames = _two_balls((122.0, 262.0, 10.0, 75.0), (340.0, 250.0, 10.0, 45.0))
 
     ball = detect_reference_ball(frames, expected_diameter_px=20.0)
@@ -151,12 +147,9 @@ def _dim_room(  # pylint: disable=too-many-arguments,too-many-locals
     levels=(18.0, 41.0, 35.7, 11.0),
     seed=11,
 ):
-    """The 2 m placement in a dim room, from a real 994 us x2 frame at 1280x800.
+    """A dim room at 1280x800: a 19.7 px ball lit from overhead, darker underneath than
+    the carpet, with a brighter square door stop far off to the left.
 
-    A 19.7 px ball lit from overhead sits where a dark storage bin (18 DN) meets
-    the carpet (41 DN): its lit top is 11 DN over a shade of 36, so its underside
-    is darker than the carpet it rests on. A door stop's flat, square white tip
-    (65 DN, 11 x 9 px) sits far off to the left on a 35 DN baseboard.
     ``levels`` is (bin, carpet, ball shade, ball diffuse) in DN.
     """
     bin_dn, carpet_dn, shade_dn, diffuse_dn = levels
@@ -178,12 +171,10 @@ def _dim_room(  # pylint: disable=too-many-arguments,too-many-locals
         image[shadow & (yy >= 478)] -= 9.0
         image[inside] = 255.0 if clipped_floor else shade_dn + diffuse_dn * lit[inside]
     if streak:
-        # a bright diagonal edge on the bin, as its plastic catches the light
         along = (xx - 650.0) * 0.8 - (yy - 430.0) * 0.6
         across = (xx - 650.0) * 0.6 + (yy - 430.0) * 0.8
         image[(np.abs(across) <= 2.5) & (np.abs(along) <= 30)] = 70.0
     if stray:
-        # a dark bag strap on the wall high up, where no ball on the floor can be
         image[225:305, 830:925] = 60.0
         image[np.hypot(xx - 876.0, yy - 265.0) <= 12.0] = 14.0
     noise = np.random.default_rng(seed + 1).normal(0, 1.2, (5, height, width))
@@ -191,8 +182,6 @@ def _dim_room(  # pylint: disable=too-many-arguments,too-many-locals
 
 
 def test_a_dim_ball_darker_underneath_than_the_carpet_is_still_a_ball():
-    # its lit top stands only 11 DN over its shade: a fixed floor of DN turned
-    # it away whenever the room or the gain was low
     frames = _dim_room(door_stop=False)
 
     fit = fit_lit_ball(
@@ -214,8 +203,7 @@ def test_the_dim_ball_beats_a_brighter_square_door_stop():
 
 
 def test_a_bright_ball_barely_brighter_underneath_than_the_carpet_is_still_a_ball():
-    # the light on: the top stands 60 DN over the dark bin, the underside 3 DN
-    # over the carpet; how much darker the ring must be is set by the noise
+    # the underside is only 3 DN over the carpet; the ring threshold is set by the noise
     frames = _dim_room(door_stop=False, levels=(40.0, 150.0, 143.0, 60.0))
 
     ball = detect_reference_ball(frames, expected_diameter_px=19.7, expected_row_px=(492.0, 90.0))
@@ -225,8 +213,7 @@ def test_a_bright_ball_barely_brighter_underneath_than_the_carpet_is_still_a_bal
 
 
 def test_a_round_reflection_above_the_rows_the_ball_can_rest_in_is_not_it():
-    # a lit, ball-sized reflection on a storage bin, just beyond the rows the
-    # floor allows: a fit seeded at the rows' edge slides up onto it
+    # a ball-sized reflection just beyond the allowed rows: a fit seeded at the edge slides onto it
     rng = np.random.default_rng(7)
     yy, xx = np.indices((800, 1280)).astype(np.float64)
     image = 120.0 + rng.normal(0, 1.5, (800, 1280))
@@ -243,7 +230,6 @@ def test_a_round_reflection_above_the_rows_the_ball_can_rest_in_is_not_it():
 
 
 def test_a_bright_streak_is_not_a_ball_when_the_floor_is_clipped_white():
-    # the ball on clipped carpet cannot be seen; a streak on the bin must not stand in
     frames = _dim_room(clipped_floor=True, door_stop=False, streak=True)
 
     with pytest.raises(ValueError):
@@ -258,10 +244,7 @@ def test_with_the_size_and_row_known_nothing_elsewhere_stands_in_for_the_ball():
 
 
 def test_a_ball_on_ground_clipped_white_is_not_measured():
-    # clipped white explains any bright sphere exactly, with nothing left over:
-    # a door's dark foot just above made it the best "ball" in the frame
-    # (the layout of a real 994 us x15.9 frame; before, this fitted 231 DN of
-    # diffuse light with a misfit of exactly 0)
+    # clipped white explains any bright sphere exactly, with nothing left over
     rng = np.random.default_rng(4)
     image = np.full((200, 200), 255.0)
     image[:, 106:] = 185.0 + rng.normal(0, 3, (200, 94))

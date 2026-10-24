@@ -393,7 +393,7 @@ def test_capture_monitor_force_closes_serial_when_dump_never_finishes(tmp_path, 
 
 
 def test_trigger_observers_can_be_added_and_removed_after_start(tmp_path):
-    """P7-1: the OPS trigger listens to BCM17 through the IWR monitor's edges."""
+    """The OPS trigger listens to BCM17 through the IWR monitor's edges."""
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
     observed = []
@@ -418,12 +418,7 @@ def test_trigger_observers_can_be_added_and_removed_after_start(tmp_path):
 
 
 def test_observers_hear_every_edge_while_the_iwr_is_dumping(tmp_path):
-    """P7-2: a false edge's 7 s IWR dump must not hide the real impact from the camera.
-
-    Outdoors-test-7: an edge at 10:19:57.933 started a dump; the swing at
-    10:20:00.468 got no camera clip because the camera heard edges only when
-    the IWR queued them.
-    """
+    """A false edge's 7 s IWR dump must not hide the real impact from the camera."""
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
 
@@ -453,7 +448,7 @@ def test_observers_hear_every_edge_while_the_iwr_is_dumping(tmp_path):
 
     assert monitor.notify_trigger(100.0)
     assert radar.read_started.wait(timeout=0.5)
-    # Busy: the IWR skips these, the camera still hears the ones 0.1 s apart.
+    # busy: the IWR skips these, the camera still hears the ones 0.1 s apart
     assert not monitor.notify_trigger(100.05)
     assert not monitor.notify_trigger(102.5)
     assert not monitor.notify_trigger(102.55)

@@ -1,9 +1,7 @@
 """Is the enclosure placed as expected? A check on one LIS3DH reading.
 
-The guard compares the reading's pitch and roll with the expected pose. An
-upside-down or unreadable reading is not ready; one beyond the tolerance is
-ready with a warning, since the correction's accuracy there is not qualified.
-"""
+An upside-down or unreadable reading is not ready; one beyond the tolerance is ready with a
+warning, since the correction's accuracy there is not qualified."""
 
 from __future__ import annotations
 

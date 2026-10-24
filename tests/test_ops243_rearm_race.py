@@ -1,11 +1,7 @@
-"""P7-1: the OPS243 must keep dumping when a GATE edge races its re-arm.
+"""The OPS243 must keep dumping when a GATE edge races its re-arm.
 
-Outdoors-test-7 (30 Sept): from 10:20:24.9 the OPS never dumped again while
-BCM17 kept seeing edges, including two real swings. The re-arm sequence
-(PA, S#16, PA) restarts sampling on the first PA, so a wind edge during it
-starts a dump. ``reset_input_buffer`` then flushed the dump's start marker,
-the wait discarded the markerless rest, the board went idle after the dump,
-and nothing re-armed after the waits timed out.
+The re-arm (PA, S#16, PA) restarts sampling on the first PA, so an edge during it starts a
+dump; flushing the input then lost the dump's start marker and nothing re-armed afterwards.
 """
 
 import json
@@ -29,18 +25,12 @@ def _dump(i_samples=(2168, 2187, 2155, 2154), q_samples=(2048, 2050, 2047, 2049)
     return "\r\n".join(lines).encode("ascii")
 
 
-# A real dump is ~41 KB over 1.77 s; this one is short but streams slowly
-# enough that the re-arm's 0.35 s of command sleeps ends mid-dump.
+# Short, but slow enough that the re-arm's 0.35 s of command sleeps ends mid-dump.
 _PADDED_DUMP = _dump(i_samples=[2048] * 300, q_samples=[2048] * 300)
 
 
 class FakeOps:
-    """OPS243 UART double driven by HOST_INT edges and PA commands.
-
-    Like the board: an edge only starts a dump while armed; a dump streams at
-    a fixed byte rate; after a dump the board is idle until the next PA; a PA
-    that arrives mid-dump is lost.
-    """
+    """OPS243 UART double: edges start dumps only while armed; a mid-dump PA is lost."""
 
     BYTES_PER_MS = 4.0
 
@@ -250,13 +240,7 @@ def test_gate_edges_from_before_the_wait_do_not_end_it():
 
 
 def test_sound_path_never_flushes_a_dump_already_arriving():
-    """D30 (e) / P7-1: upstream's flush must never return on the sound path.
-
-    A dump the GATE edge started before the sound trigger began listening is
-    already in the serial buffer. Any reset_input_buffer before it is read
-    (upstream's ``discard_pending_input=True`` default) drops its start
-    marker: the dump is lost (154 s of OPS data in the field).
-    """
+    """Upstream's flush must never run on the sound path: it drops a waiting dump's marker."""
     i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
     ops = FakeOps(_dump(i_samples, q_samples))
     ops.BYTES_PER_MS = 400.0

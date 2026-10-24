@@ -6,7 +6,7 @@ const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.js
   metrics: Array<{ id: string; group: string }>;
 };
 
-/** The kiosk sizes plus a phone: every metric must fit wherever the owner looks. */
+/** The kiosk sizes plus a phone: every metric must fit. */
 const VIEWPORTS = [...KIOSK_VIEWPORTS, { width: 390, height: 844 }] as const;
 const LABELS = ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental', 'not_measured'];
 const PANEL_GROUPS: Record<'Club' | 'Flight', string[]> = { Club: ['club'], Flight: ['ball', 'flight'] };
@@ -76,7 +76,7 @@ for (const viewport of VIEWPORTS) {
         const expected = catalog.metrics.filter((spec) => groups.includes(spec.group)).map((spec) => spec.id);
         const cells = page.locator('.metric-cell');
         await expect(cells.first()).toBeVisible();
-        // every metric once: in its own cell, or named in its group's one Coming later row (9)
+        // every metric once: in its own cell, or named in its group's one Coming later row
         const shown = await cells.evaluateAll((all) =>
           all.flatMap((cell) =>
             cell.getAttribute('data-metric') === 'coming-later'

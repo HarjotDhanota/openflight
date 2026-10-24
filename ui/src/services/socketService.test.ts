@@ -89,6 +89,6 @@ describe('socketService trace wiring', () => {
   it('a trace report while disconnected is dropped without throwing', () => {
     socketService.disconnect();
 
-    expect(() => socketService.emitTrace('trace_paint', {})).not.toThrow();
+    expect(() => socketService.emit('trace_paint', {})).not.toThrow();
   });
 });

@@ -1,11 +1,7 @@
-"""D36 item 4a: the unit's camera tilt calibration is applied on swings, not only at setup.
+"""The unit's camera tilt calibration is applied on swings, not only at setup.
 
-With a calibrated tilt (P8-5) each swing's camera pitch is that swing's own
-LIS3DH pitch plus the unit's offset, and its focal length the rig's for the
-mode: once-measured calibration, as the setup uses. The per-shot pitch and focal
-length inferred from the resting ball stay as a recorded cross-check, flagged
-beyond a stated tolerance. Without a calibration the swings keep inferring them,
-labelled ``uncalibrated``.
+A swing's pitch is its own LIS3DH pitch plus the unit's offset and its focal length the
+rig's; the resting ball's inference is a recorded cross-check. Uncalibrated swings infer.
 """
 
 from __future__ import annotations
@@ -85,8 +81,8 @@ def _reference(**changes):
     values = {
         "ball_x_px": 320.0,
         "ball_y_px": 200.0,
-        "ball_diameter_px": 480.0 * 0.04267 / 1.5,
-        "ball_diameter_m": 0.04267,
+        "ball_diameter_px": 480.0 * 0.0427 / 1.5,
+        "ball_diameter_m": 0.0427,
         "image_width_px": 640,
         "image_height_px": 400,
         "horizontal_pixel_sign": 1.0,
@@ -143,7 +139,7 @@ def test_the_ball_estimator_uses_the_calibrated_model():
         setup_pitch_deg=0.5,
         setup_focal_px=470.0,
     )
-    anchor = ReferenceBall(x=320.0, y=200.0, diameter_px=480.0 * 0.04267 / 1.5, area_px=100)
+    anchor = ReferenceBall(x=320.0, y=200.0, diameter_px=480.0 * 0.0427 / 1.5, area_px=100)
 
     (focal, pitch, _offset), check = ball_flight._checked_camera_model(  # pylint: disable=protected-access
         anchor, geometry
@@ -205,8 +201,7 @@ def test_the_kiosk_composes_each_swing_from_its_own_reading(monkeypatch):
     assert server_module._swing_camera_pose(shot)["status"] == "uncalibrated"  # pylint: disable=protected-access
 
 
-# D36 item 4c: the LIS3DH roll goes through the same composition on swings as at
-# setup. It waits on the owner's phone-level check (C8), so the gate stays off.
+# The LIS3DH roll goes through the same composition on swings as at setup; its gate is off.
 
 
 def _rolled_reading(roll_deg=-2.9):

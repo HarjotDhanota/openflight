@@ -14,13 +14,10 @@ not flash the radar.
 
 ## OPS-only scope
 
-This is currently an **OPS-only** capture mode. The native OPS trigger has no
-qualified low-latency GPIO fanout edge, and the first UART dump byte arrives too
-late to trigger the short IWR6843 history reliably. OpenFlight therefore rejects
-`--trigger hardware` when `--iwr6843` or `--camera-capture` is enabled. Use
-`--trigger sound` for synchronized OPS/IWR/camera collection until a shared
-soundless edge or an independent IWR trigger is physically qualified. This
-software support does not establish a synchronized soundless fusion trigger.
+This is an **OPS-only** capture mode: the OPS trigger has no low-latency GPIO
+edge to share, and the first UART dump byte arrives too late for the short
+IWR6843 history. OpenFlight rejects `--trigger hardware` when `--iwr6843` or
+`--camera-capture` is enabled. Use `--trigger sound` for OPS/IWR/camera capture.
 
 ## Methodology
 
@@ -52,7 +49,7 @@ The host configures the radar once and then waits for the radar’s completed ro
    lost-dump detector serves both trigger paths: a `Q` array before any capture
    marker, or at least 1,024 unmarked bytes, ends the wait once the line is
    quiet for 0.5 s. The session log records these as `dump_discarded` trigger
-   rejections, the same reason the sound path uses.
+   rejections.
 
 The implementation is intentionally limited to the OPS243 trigger path; the
 experimental analysis and UI work remain outside this focused change.
@@ -101,8 +98,7 @@ The internal trigger does not depend on the SEN-14262 sound edge. Existing sound
 Captures without an outbound reading of at least 35 mph are retained in trigger
 diagnostics but rejected as shots. Session provenance records the trigger mode,
 OPS model and firmware, threshold, magnitude, `S#` split, sample rate, and the
-unavailable auxiliary fanout status. No setting is written to OPS flash by this
-path.
+auxiliary fanout status. Nothing is written to OPS flash.
 
 ## Raspberry Pi retest checklist
 

@@ -7,7 +7,7 @@
 - Real golf balls (not foam), and a lamp if you're indoors.
 - About 10 minutes for the first setup.
 
-> **Which enclosure?** The unit's sensor geometry is set for **Cormac's enclosure with the experimental radar and camera mounts**, where the camera sits directly above the IWR6843's receive (RX) antennas. You can test and send data with any other enclosure, but **tell us if yours isn't that one**: the measurements depend on exactly where the sensors sit.
+> **Which enclosure?** The unit's sensor geometry is set for **the v3 enclosure (open-flight/openflight-enclosure) with the experimental radar and camera mounts**, where the camera sits directly above the IWR6843's receive (RX) antennas. You can test and send data with any other enclosure, but **tell us if yours isn't that one**: the measurements depend on exactly where the sensors sit.
 
 ## Start the unit
 
@@ -92,7 +92,7 @@ Hit balls as normal and watch your numbers. The light at the top tells you when 
 1. Tap **Download** to save the zip on your phone or laptop. It can be about 1 GB.
 2. In your Google Drive (drive.google.com), make a new folder and upload the zip into it. **Hit beside a TrackMan or another launch monitor?** Put its export (CSV) in the same folder.
 3. Share the folder as "Anyone with the link".
-4. Send the link to whoever asked you to test, with a sentence about your setup: indoor or outdoor, the light, **whether your enclosure is Cormac's with the experimental radar and camera mounts (and if not, which one)**, and anything odd that happened.
+4. Send the link to whoever asked you to test, with a sentence about your setup: indoor or outdoor, the light, **whether your enclosure is the v3 one with the experimental radar and camera mounts (and if not, which one)**, and anything odd that happened.
 
 The zip is also saved on the unit in `~/OpenFlight-to-send/`.
 

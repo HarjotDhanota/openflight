@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, useTester } from './helpers';
+import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, useTester } from './testerHelpers';
 
 /**
  * The free-play step as a tester sees it (19 Oct): only free play and its exposure

@@ -16,14 +16,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import driver
+from openflight.iwr6843 import driver, perf_diagnostics
 from openflight.iwr6843.driver import (
     DumpTransferTiming,
     IWR6843DumpRecoveryError,
     IWR6843Radar,
-    parse_perf_stats,
 )
 from openflight.iwr6843.dump import pack_dump
+from openflight.iwr6843.perf_diagnostics import parse_perf_stats
 from tests.iwr6843_firmware_fake import (
     BENCH_REPLY,
     PERF_REPLY,
@@ -1292,7 +1292,7 @@ def test_main_fails_when_a_close_out_reading_is_missing(
 
 def test_the_script_sends_its_raw_replies_with_the_drivers_own_windows(tmp_path):
     """The script keeps raw replies by sending perfstats/l3bench itself, with the windows
-    IWR6843Radar.perf_stats and bench_kernel use; it defines no copy of its own."""
+    perf_diagnostics.perf_stats and bench_kernel use; it defines no copy of its own."""
     clock, windows = Clock(), {}
 
     class WindowRadar(FakeRadar):
@@ -1303,7 +1303,7 @@ def test_the_script_sends_its_raw_replies_with_the_drivers_own_windows(tmp_path)
     _run(tmp_path, WindowRadar(clock), None, clock, soak=1)
 
     assert windows == {
-        "perfstats": driver.PERF_REPLY_WINDOW_S,
-        "l3bench": driver.BENCH_REPLY_WINDOW_S,
+        "perfstats": perf_diagnostics.PERF_REPLY_WINDOW_S,
+        "l3bench": perf_diagnostics.BENCH_REPLY_WINDOW_S,
     }
     assert not hasattr(RUN, "PERF_WINDOW_S") and not hasattr(RUN, "BENCH_WINDOW_S")

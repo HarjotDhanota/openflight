@@ -58,8 +58,7 @@ describe('excludeShotsByProfile', () => {
   });
 });
 
-// A fusion unit (IWR or camera) reports an unmeasured carry as not measured (D17);
-// nothing falls back to the ball-speed table `estimated_carry_yards`.
+// A fusion unit's unmeasured carry never falls back to `estimated_carry_yards`.
 describe('reportedCarryYards', () => {
   const carryShot = (overrides: Partial<Shot>): Shot =>
     ({ ball_speed_mph: 150, estimated_carry_yards: 257, carry_spin_adjusted: null, ...overrides }) as Shot;
@@ -89,7 +88,7 @@ describe('carryLabel', () => {
 
   it('gives a simulated carry built from a measured spin the calculated label, never estimated', () => {
     expect(carryLabel(carryShot({ carry_status: 'calculated', carry_spin_adjusted: 238 }))).toBe('calculated');
-    // an older log's "measured" carry is the same simulated carry (D38)
+    // an older log's "measured" carry is the same simulated carry
     expect(carryLabel(carryShot({ carry_status: 'measured', carry_spin_adjusted: 244 }))).toBe('calculated');
   });
 
@@ -139,7 +138,7 @@ describe('computeStats carry', () => {
   });
 });
 
-// The one missing-value rule inside the carry rule: a non-finite carry is no carry.
+// A non-finite carry is no carry.
 describe('reportedCarryYards with a non-finite carry', () => {
   const carryShot = (overrides: Partial<Shot>): Shot =>
     ({ ball_speed_mph: 150, estimated_carry_yards: 257, carry_spin_adjusted: null, ...overrides }) as Shot;

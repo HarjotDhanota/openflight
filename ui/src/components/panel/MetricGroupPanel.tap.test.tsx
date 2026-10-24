@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** A tap on a cell with a long reason shows the full reason; a second tap folds it (9). */
+/** A tap on a cell with a long reason shows the full reason; a second tap folds it. */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

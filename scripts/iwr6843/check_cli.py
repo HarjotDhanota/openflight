@@ -10,10 +10,36 @@ from datetime import datetime, timezone
 
 import serial
 
-from openflight.iwr6843.driver import IWR6843Radar, no_help_reply_message
+from openflight.iwr6843.driver import (
+    _CP2105_STANDARD_INTERFACE,
+    _PROBE_WINDOW_S,
+    _RESET_ACTION,
+    IWR6843Radar,
+    _probe_help,
+    port_identity,
+)
 
 EVIDENCE_SCHEMA = "openflight.iwr6843.cli_check.v1"
 EVIDENCE_PREFIX = "IWR6843 CLI evidence: "
+
+
+def no_help_reply_message(port: str) -> str:
+    """Why a configured port gave no CLI help, naming the device and the operator action."""
+    identity = port_identity(port)
+    where = port if identity["resolved"] == port else f"{port} -> {identity['resolved']}"
+    interface = identity["cp2105_interface"]
+    if interface:
+        where += f" ({interface})"
+    if interface and identity["usb_interface"] == _CP2105_STANDARD_INTERFACE:
+        action = (
+            "this is the CP2105 Standard interface, which has no CLI: run this check with "
+            "the same adapter's Enhanced if00 port (/dev/serial/by-id/...-if00-port0)"
+        )
+    else:
+        action = f"{_RESET_ACTION}, then run this check again on the same port"
+        if not interface:
+            action = f"confirm it is the CP2105 Enhanced/UARTA interface (if00), then {action}"
+    return f"IWR6843 CLI did not answer help within {_PROBE_WINDOW_S:g} s on {where}; {action}"
 
 
 def _utc_now() -> str:
@@ -55,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         radar = IWR6843Radar(port=args.port, events=events)
         evidence["port"] = radar.port
         try:
-            if b"sensorStart" not in radar.probe_help():
+            if b"sensorStart" not in _probe_help(radar.ser, radar.port, events):
                 raise RuntimeError(no_help_reply_message(radar.port))
         finally:
             radar.close()

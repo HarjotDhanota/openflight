@@ -1,7 +1,4 @@
-/*
- * Club and Flight panels: every metric in a hairline grid of compact cells.
- * The body scrolls when a group does not fit (800×400 kiosk, phones).
- */
+/* Club and Flight panels: metrics in a hairline grid; the body scrolls when a group does not fit. */
 .metric-groups {
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -62,7 +59,6 @@
   min-width: 0;
 }
 
-/* the label badge leads the line under the value, leaving the name its full width */
 .metric-cell__meta {
   display: flex;
   flex-wrap: wrap;
@@ -109,7 +105,6 @@
   color: var(--color-text-faint);
 }
 
-/* (9) a cell with a long reason is one big tap target: the short reason, the full one on tap */
 .metric-cell--tappable {
   min-height: 44px;
   cursor: pointer;
@@ -127,7 +122,6 @@
   overflow: visible;
 }
 
-/* the not-built metrics: one full-width row while they have no value */
 .metric-cell--coming-later {
   grid-column: 1 / -1;
 }

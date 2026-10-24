@@ -1,9 +1,7 @@
-"""One LIS3DH roll convention for both camera paths (wiring audit C8, setup spec A3).
+"""One LIS3DH roll convention for both camera paths.
 
-The scene is built from first principles, independently of the code under test:
-a camera rolled with its target-right side up looks at a level line, and the
-LIS3DH fixed to the same enclosure reads the reaction to gravity in its own axes.
-Each path, given that reading through ``camera_roll``, must see the line level.
+A rolled camera looks at a level line, built independently of the code under test;
+each path, given the LIS3DH reading through ``camera_roll``, must see the line level.
 """
 
 from __future__ import annotations
@@ -84,7 +82,7 @@ def test_the_nominal_rays_see_a_level_line_level(roll_deg):
 
     expected = _elevations(LINE_LFU / np.linalg.norm(LINE_LFU, axis=1, keepdims=True))
     assert _elevations(rays(correction)) == pytest.approx(expected, abs=1e-9)
-    # the other sign, as the nominal path once applied it, tilts the line
+    # the opposite sign tilts the line
     assert np.ptp(_elevations(rays(-correction))) > 0.5
 
 

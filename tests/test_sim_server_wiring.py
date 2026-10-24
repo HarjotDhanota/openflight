@@ -242,7 +242,7 @@ def _strict_json(data):
 
 
 def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypatch):
-    """I1: codec bytes, log_sim_send and the sim_shot emit are all strict JSON."""
+    """Codec bytes, log_sim_send and the sim_shot emit are all strict JSON."""
     import math  # pylint: disable=import-outside-toplevel
 
     from openflight.gspro.codec import GSProCodec  # pylint: disable=import-outside-toplevel
@@ -289,7 +289,7 @@ def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypat
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
 def test_a_non_finite_launch_confidence_still_sends_the_measured_shot(server, bad):
-    """2a: a NaN confidence must not make carry NaN and drop the whole send."""
+    """A NaN confidence must not make carry NaN and drop the whole send."""
     connector = _FakeConnector("gspro")
     server.sim_connectors = [connector]
 

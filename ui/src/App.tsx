@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
 import { useSystemStore } from './stores/useSystemStore';
-import { useShotStore } from './stores/useShotStore';
+import { shotProcessingCoversResult, useShotStore } from './stores/useShotStore';
 import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { useProfileStore } from './stores/useProfileStore';
@@ -10,14 +10,13 @@ import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { useTargetLine } from './hooks/useTargetLine';
 import { socketService } from './services/socketService';
-import { setLiveViewShown } from './services/paintTrace';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { SimNotSentNotice } from './components/SimNotSentNotice';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ReadyLightBar } from './components/ReadyLight';
-import { FreePlayActions, FreePlayControls } from './components/FreePlayControls';
+import { uiExtensions } from './extensions';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
@@ -45,7 +44,6 @@ import { getClubName } from './data/clubs';
 import { clubWithHand } from './utils/handedness';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
-import { isLiveResultCovered } from './utils/liveResultCover';
 import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
 
 import { useI18n } from './i18n/useI18n';
@@ -115,7 +113,7 @@ function AppContent() {
   );
 
   const [currentView, setCurrentView] = useState<PanelView>('live');
-  // what the Live tab's left/right are measured from (13 Oct contract)
+  // what the Live tab's left/right are measured from
   const targetLine = useTargetLine(currentView === 'live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
@@ -143,11 +141,10 @@ function AppContent() {
   const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
 
-  // Stage 1b trace: a result received while the live view is off screen is never
-  // acknowledged as shown, even when the live view returns later.
   useLayoutEffect(() => {
-    setLiveViewShown(!isDisplayRoute && currentView === 'live');
-    return () => setLiveViewShown(false);
+    const shown = !isDisplayRoute && currentView === 'live';
+    uiExtensions.forEach((extension) => extension.onLiveViewShown?.(shown));
+    return () => uiExtensions.forEach((extension) => extension.onLiveViewShown?.(false));
   }, [isDisplayRoute, currentView]);
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
   const activeImplementLabel = isSwingSpeedMode
@@ -268,7 +265,7 @@ function AppContent() {
           {t('replay.open')}
         </PanelAction>
       ) : null}
-      <FreePlayActions />
+      {uiExtensions.map((extension, index) => (extension.LiveActions ? <extension.LiveActions key={index} /> : null))}
       {changeClubAction}
     </>
   );
@@ -291,10 +288,12 @@ function AppContent() {
     <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
 
-      {/* In the flow above the panels, so it never covers the camera feed (P7-14). */}
+      {/* In the flow above the panels, so it never covers the camera feed. */}
       <div className="session-status">
         <ReadyLightBar />
-        <FreePlayControls />
+        {uiExtensions.map((extension, index) =>
+          extension.StatusControls ? <extension.StatusControls key={index} /> : null
+        )}
       </div>
 
       {iwr6843Alert && (
@@ -340,16 +339,14 @@ function AppContent() {
                 isNewShot={profileIsNewShot}
                 headerAction={liveHeaderActions}
                 targetLine={targetLine}
-                acknowledgeable={
-                  !isLiveResultCovered({
-                    replayOpen: activeReplay !== null,
-                    shutdownOpen: showShutdown,
-                    pickerOpen,
-                    menuOpen,
-                    profileDialogOpen: profileDialog !== null,
-                    clearSessionOpen,
-                    processingPhase: shotProcessingPhase,
-                  })
+                resultVisible={
+                  activeReplay === null &&
+                  !showShutdown &&
+                  !pickerOpen &&
+                  !menuOpen &&
+                  profileDialog === null &&
+                  !clearSessionOpen &&
+                  !shotProcessingCoversResult(shotProcessingPhase)
                 }
               />
             </ShotProcessingArea>

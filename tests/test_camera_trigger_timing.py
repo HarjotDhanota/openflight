@@ -1,10 +1,7 @@
-"""The trigger is timed first, and frames are split by exposure time (P6-5).
+"""The trigger is timed first, and frames are split by exposure time.
 
-Outdoors-test-5 showed a ~31 ms host stall at every trigger: the trigger held
-the frame lock while it copied its evidence, so frames 18-20 arrived after the
-trigger's timestamp even though they were exposed before or around it. The
-arrival split (``pre_trigger_count``) keeps its meaning; the exposure split is
-a new field that time comparisons use when a clip carries it.
+A host stall at the trigger can deliver frames exposed before it after its
+timestamp, so time comparisons use the exposure split when a clip carries it.
 """
 
 import json
@@ -200,7 +197,7 @@ def _fusion_context():
         horizontal_pixel_sign=1.0,
         roll_correction_deg=0.0,
         ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.04267,
+        ball_diameter_m=0.0427,
     )
     return fp.build_context(
         geometry=geometry,
@@ -268,7 +265,7 @@ def _live_server(monkeypatch, tmp_path):
         "iwr6843_runtime",
         SimpleNamespace(
             calibration=SimpleNamespace(
-                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.021335
+                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135
             )
         ),
     )

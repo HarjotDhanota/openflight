@@ -8,11 +8,7 @@ import {
   withControlSocket,
 } from './helpers';
 
-/**
- * With the ready light on (a tester's kiosk: swings or free play) the tiles get the
- * band's height less: a three-digit speed's "mph" and the club path's
- * "(D-plane)" note must still fit, and the light keeps its own size.
- */
+/** With the ready light on, a three-digit "mph" and the "(D-plane)" note still fit. */
 async function showReadyLightAndAThreeDigitShot(page: Page) {
   await page.evaluate(async () => {
     const systemPath = '/src/stores/useSystemStore.ts';
@@ -57,7 +53,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
 
       const word = page.locator('.ready-light__word');
       await expect(word).toHaveText('SWING');
-      // the fix gives the tiles room, never by shrinking the ready light
+      // the ready light never shrinks to make room
       const wordSize = await word.evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
       expect(wordSize).toBeGreaterThanOrEqual(viewport.height > 520 ? 64 : 44);
       await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);

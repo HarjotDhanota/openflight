@@ -1,21 +1,5 @@
-"""The ready light (P7-14, decision D13): when the unit is ready for a swing.
-
-One readiness state, computed from what each sensor reports right now:
-
-- red, NOT READY, naming the cause: a hold another page set, a setup problem an
-  extension reports, or a sensor missing, failed or not yet armed;
-- amber, WAIT, with the cause and a rough time left: the OPS243 dumping,
-  draining or re-arming, the IWR6843 dumping, the camera saving a clip or
-  refilling its ring (and whatever an extension's camera rule adds);
-- green, SWING, only when the OPS243 is armed and waiting, the IWR6843 (if
-  fitted) is idle and armed, and the camera (if fitted) is running in the
-  asked setting with a full ring and no clip being saved.
-
-The only timing here is the rough time left shown with amber. The sensors'
-own flags decide the state. A swing the kiosk picks up (a trigger edge or an
-OPS dump) is remembered with its result, once one arrives, so both screens
-can flash and show it.
-"""
+"""The ready light: red (not ready), amber (wait) or green (swing), from each
+sensor's own readiness flags, plus the last swing and its result."""
 
 from __future__ import annotations
 
@@ -30,9 +14,7 @@ logger = logging.getLogger(__name__)
 
 WORDS = {"red": "NOT READY", "amber": "WAIT", "green": "SWING", "off": ""}
 
-# Rough durations for the time left shown with amber, in seconds. The IWR's is
-# the dump's typical 7 s (its last dump's length when known); the OPS phases
-# are short, so a second each is near enough for "wait a moment".
+# Rough amber time-left estimates, s; the IWR's is a typical 7 s dump.
 IWR_TYPICAL_DUMP_S = 7.0
 OPS_PHASES = {
     "dumping": ("OPS243 dumping", 2.0),
@@ -42,33 +24,25 @@ OPS_PHASES = {
 }
 # A camera with no frame for this long has stopped, whatever it says.
 CAMERA_STALE_S = 1.0
-# An edge and the OPS dump it starts, and the ball hitting the net about a
-# second later, are one swing. Nobody swings twice inside this.
+# An edge, its OPS dump and the ball hitting the net about a second later are one swing.
 SWING_MERGE_S = 3.0
 # A result this long after its swing began still belongs to it.
 RESULT_WINDOW_S = 30.0
 RESULT_TEXT = {
     "no_radar_shot": "No radar shot",
     "not_a_shot": "Not a shot",
-    # an OPS shot an extension's gate refused: the setup dropped at the trigger
     "not_counted": "Not counted: setup not ready",
     "paused": "Not counted: paused",
 }
 
 
-# An extra camera rule a kiosk extension adds: (camera, now, red, amber). It runs
-# only once the camera's own checks pass, and may append red or amber causes.
+# A kiosk extension's extra camera rule (camera, now, red, amber), run after the camera's checks.
 CameraRule = Callable[[Mapping, float, list, list], None]
 
 
 @dataclass(frozen=True)
 class SensorStates:
-    """What each sensor reports now. ``None`` for the IWR or camera: not fitted.
-
-    ``setup_problems`` are red causes an extension adds ahead of the sensors';
-    ``camera_rule`` and ``green_note`` let it judge the camera further and note
-    something on a green light; ``amber_causes`` are waits it names (a paused run).
-    """
+    """What each sensor reports now; ``None`` for the IWR or camera means not fitted."""
 
     ops: Mapping | None
     iwr: Mapping | None = None
@@ -167,10 +141,9 @@ def _camera(  # pylint: disable=too-many-return-statements
         camera_rule(camera, now, red, amber)
 
 
-def compute_state(states: SensorStates, now: float, hold: str | None = None) -> dict:
+def compute_state(states: SensorStates, now: float) -> dict:
     """The light for these sensor states: red outranks amber outranks green."""
-    red: list[str] = [hold] if hold else []
-    red.extend(states.setup_problems)
+    red: list[str] = list(states.setup_problems)
     amber: list[tuple[str, float | None]] = []
     _ops(states.ops, now, red, amber)
     if states.iwr is not None:
@@ -187,7 +160,6 @@ def compute_state(states: SensorStates, now: float, hold: str | None = None) -> 
             "causes": [{"cause": cause, "time_left_s": None} for cause in red],
         }
     if amber:
-        # the golfer waits for the longest: name it, and give its time
         cause, left = max(amber, key=lambda item: (item[1] is not None, item[1] or 0.0))
         return {
             "state": "amber",
@@ -211,26 +183,14 @@ def _clock(epoch: float) -> str:
 
 
 class ReadyLight:
-    """The kiosk's one ready light: its state, an outside hold and the last swing."""
+    """The kiosk's one ready light: its state and the last swing."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._hold: str | None = None
         self._key: tuple | None = None
         self._since: float | None = None
         self._swing: dict | None = None
         self._swing_count = 0
-
-    @property
-    def hold(self) -> str | None:
-        """The red cause another page holds, or None."""
-        with self._lock:
-            return self._hold
-
-    def set_hold(self, cause: str | None) -> None:
-        """Hold the light red for a cause another page knows (None clears it)."""
-        with self._lock:
-            self._hold = cause or None
 
     def _new_swing(self, source: str, at: float) -> dict:
         self._swing_count += 1
@@ -247,9 +207,7 @@ class ReadyLight:
     def swing_result(
         self, kind: str, *, ball_speed_mph: float | None = None, at: float | None = None
     ) -> None:
-        """What the swing gave: ``shot`` (with its ball speed), ``no_radar_shot``,
-        ``not_a_shot`` or ``not_counted``. A shot is never replaced by the net's
-        later non-shot."""
+        """What the swing gave; a shot is never replaced by the net's later non-shot."""
         at = time.time() if at is None else float(at)
         if kind == "shot":
             result = {
@@ -268,14 +226,10 @@ class ReadyLight:
                 swing["result"] = result
 
     def update(self, states: SensorStates | None, now: float | None = None) -> dict:
-        """The light now; each change of state or cause is logged once, with its time.
-
-        ``states`` is None where nothing reports readiness (mock or swing-speed
-        modes): the light is off there.
-        """
+        """The light now; each change of state or cause is logged once. ``states`` is
+        None where nothing reports readiness: the light is off."""
         now = time.time() if now is None else float(now)
         with self._lock:
-            hold = self._hold
             if states is None:
                 light = {
                     "state": "off",
@@ -285,7 +239,7 @@ class ReadyLight:
                     "causes": [],
                 }
             else:
-                light = compute_state(states, now, hold)
+                light = compute_state(states, now)
             key = (light["state"], light["cause"])
             if key != self._key:
                 self._key = key
@@ -307,6 +261,5 @@ class ReadyLight:
                 **light,
                 "since": self._since,
                 "checked_at": now,
-                "hold": hold,
                 "swing": swing,
             }

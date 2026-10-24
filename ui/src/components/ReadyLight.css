@@ -1,8 +1,4 @@
-/*
- * The ready light (P7-14): a full-width band read from about 2 m at address.
- * Solid fills with black or white text for contrast in sun, and the word says
- * the state too, so colour is never the only signal.
- */
+/* The ready light: a band read from about 2 m; the word says the state, never colour alone. */
 .ready-light {
   position: relative;
   display: flex;
@@ -91,7 +87,7 @@
   }
 }
 
-/* (16) on the 800×480 and 800×400 screens the band gives the tiles their room back */
+/* on the 800×480 and 800×400 screens the band gives the tiles their room back */
 @media (max-height: 520px) {
   .ready-light {
     min-height: 60px;

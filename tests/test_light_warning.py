@@ -14,7 +14,7 @@ INDOOR_1_32_M = 53.0 / (300.0 * 12.0)
 
 
 def test_the_640x400_mode_factor_is_the_measured_two():
-    """Measured from the paired gain screens in harjot-indoor-test-1/-2 and
+    """Measured from the paired gain screens in indoor-test-1/-2 and
     Outdoors-test-5/-8: 640x400 gives 1.96-2.04x the 1280x800 signal per pixel at the
     same exposure and gain (coordinator, 13 Oct). It supersedes the audit's 'same rows'."""
     assert sl.MODE_SIGNAL_FACTOR == {"arm5": 1.0, "arm6": 2.0}

@@ -1,9 +1,4 @@
-"""An extension's late result reaches the kiosk as an update to a shot already shown.
-
-``after_shot_published`` tells extensions a shot went out (its first result or a
-late update); ``publish_shot_update`` sends the shot again as a ``shot_update``
-and logs a ``shot_updated`` entry, only while the shot's session is still open.
-"""
+"""An extension's late result reaches the kiosk as an update to a shot already shown."""
 
 from __future__ import annotations
 

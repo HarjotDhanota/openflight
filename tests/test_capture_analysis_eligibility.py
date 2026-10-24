@@ -1,11 +1,7 @@
-"""Capture-time analysis eligibility is judged on the setup's ball (P7-8).
+"""Capture-time analysis eligibility is judged on the setup's ball, not the whole zone.
 
-Outdoors-test-7 (30 Sept, full sun): every clip was 19-23 % clipped over the
-whole hitting-zone box, so the kiosk's zone rule (8 %) withheld the camera from
-all 14, while the ladder calls a clipped background amber only. At the setup's
-own 10 us lock the same zone rule said too dark, though the ball sat at 58-75 DN
-above black. With the setup's ball position the clip is judged as the ladder
-judges it: the ball's core clipped 5 % or less, and 20 DN or more above black.
+The ball's core must be clipped 5 % or less and sit 20 DN or more above black;
+a sunlit background alone does not withhold the camera.
 """
 
 import json
@@ -43,7 +39,7 @@ def _sun(kind):
 
 def test_the_setups_own_lock_is_eligible_where_the_zone_rule_said_too_dark():
     frames, setup = _sun("lock")
-    assert measure_exposure(frames[0]).acceptable is False  # the old rule
+    assert measure_exposure(frames[0]).acceptable is False  # the zone rule
 
     judged = lj.capture_analysis_eligibility(frames, BLACK, setup)
 

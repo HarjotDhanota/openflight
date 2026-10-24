@@ -1,9 +1,4 @@
-"""The trigger holds the frame lock only to freeze the ring (P6-7).
-
-In Outdoors-test-5 ``notify_trigger`` ran the evidence provider, its deepcopy,
-``auto_exposure_status()`` and a second deepcopy under the lock ``_on_frame``
-needs, so frame delivery stalled 14-31 ms at every trigger.
-"""
+"""The trigger holds the frame lock only to freeze the ring, so frame delivery never stalls."""
 
 from __future__ import annotations
 
@@ -125,7 +120,6 @@ def test_a_refused_trigger_gathers_nothing_and_queues_nothing(tmp_path):
         runtime._trigger_clocks,
     ):
         assert records.empty()
-    assert runtime._admission_evidence == []
 
 
 def test_the_recorded_controls_are_those_in_force_when_the_ring_froze(tmp_path):
@@ -147,14 +141,3 @@ def test_the_recorded_controls_are_those_in_force_when_the_ring_froze(tmp_path):
     assert (recorded["exposure_us"], recorded["gain"]) == (300, 2.0)
     assert recorded["status"] == "manual"
     assert "observation" in recorded
-
-
-def test_the_admission_copy_is_independent_of_the_queued_evidence(tmp_path):
-    runtime = _runtime(tmp_path, lambda _timestamp: {"warnings": [{"id": "lis3dh"}]})
-    _deliver(runtime, 1, 2)
-
-    assert runtime.notify_trigger(10.0) is True
-    queued = runtime._trigger_evidence.get_nowait()
-    queued["warnings"].clear()
-
-    assert runtime.trigger_evidence_for_shot(10.0) == {"warnings": [{"id": "lis3dh"}]}

@@ -21,6 +21,5 @@ export function kioskRestartingLight(previous: ReadyLight | null): ReadyLight | 
     cause: 'kiosk restarting',
     time_left_s: null,
     causes: [{ cause: 'kiosk restarting', time_left_s: null }],
-    hold: null,
   };
 }

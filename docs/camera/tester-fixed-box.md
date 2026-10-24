@@ -98,10 +98,10 @@ Outcomes (`patch_ball.status`, and `ball.range_status` on the page):
 | `camera_unavailable` | nothing, unless an agreed radar pair lies inside the box's range extent | null |
 | `radar_only_unconfirmed` | that pair's range, labelled unconfirmed | `radar_only_unconfirmed` |
 
-On harjot-indoor-test-2 (ball taped ~1.2 m, door at 1.575 m) the chain selects
+On indoor-test-2 (ball taped ~1.2 m, door at 1.575 m) the chain selects
 the ball at 1.200 m (coherent 1.200 m and magnitude 1.293 m agree) with a side
 offset of −0.14 m, and never the door (`tests/test_indoor_test_2_regression.py`).
-On harjot-indoor-test-1 the radar's two methods never agree on the ball (its
+On indoor-test-1 the radar's two methods never agree on the ball (its
 magnitude change came from 17° above the array), so that setup now saves no
 distance where it once took the magnitude's 1.18 m alone.
 

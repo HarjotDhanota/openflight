@@ -68,7 +68,6 @@ class TestTheFile:
         assert loaded.ops_offset_mm is None
 
     def test_a_missing_field_is_refused_not_defaulted(self, tmp_path):
-        # C9: a file without iwr_boresight_pitch_deg used to load with None
         data = dataclasses.asdict(rig())
         data.pop("iwr_boresight_pitch_deg")
         path = tmp_path / "old.json"
@@ -121,15 +120,13 @@ class TestTheFile:
         setup = RigGeometry.from_json(V3).enclosure_setup()
         assert setup.missing == ()
         assert setup.camera_mount_height_m == pytest.approx(0.095, abs=5e-4)
-        # lens 95, RX row 44 below it, phase centre 7.85 above that (audit F11)
+        # lens 95, RX row 44 below it, phase centre 7.85 above that
         assert setup.radar_height_m == pytest.approx(0.0522, abs=5e-4)
         assert setup.radar_rx_row_height_m == pytest.approx(0.0444, abs=5e-4)
         assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=2.5e-3)
         assert setup.iwr_tilt_deg == pytest.approx(10.0)
 
     def test_the_v3_file_records_how_the_iwr_board_is_turned(self):
-        # F11: seen from the front, USB top right and the RX row vertical on the
-        # left is the board turned +90 deg (ECAD +X up), as reported.
         loaded = RigGeometry.from_json(V3)
         assert loaded.iwr_board_rotation_deg == 90.0
         assert "2026-09-29" in loaded.provenance
@@ -159,7 +156,6 @@ class TestTheEnclosureSetup:
         assert setup.missing == ()
 
     def test_lateral_sign_is_camera_relative_to_radar(self):
-        # radar 75 mm to the image right of the lens -> camera is 75 mm left of it
         setup = rig(iwr_offset_mm=(75.0, 44.0, 0.0)).enclosure_setup()
         assert setup.camera_lateral_offset_m == pytest.approx(-0.075)
 
@@ -188,9 +184,6 @@ class TestTheEnclosureSetup:
         json.dumps(rig().enclosure_setup().as_dict())
 
     def test_the_tee_lateral_offset_comes_from_the_rig_not_july(self):
-        # F10: the ball is teed on the camera's axis, so its lateral offset from
-        # the IWR is the camera's; the v3 lens sits centred above the RX row,
-        # whose phase centre is 1.86 mm to target-left of it (F11).
         v3 = RigGeometry.from_json(V3).enclosure_setup()
         assert v3.tee_lateral_offset_m == pytest.approx(0.001858, abs=1e-5)
         offset = rig(iwr_offset_mm=(75.0, 44.0, 0.0)).enclosure_setup()
@@ -300,7 +293,6 @@ def test_the_v3_unit_declares_its_turned_lis3dh():
     )
 
     assert rig.lis3dh_mount_yaw_deg == 180.0
-    # the expectation is in the enclosure's axes, so the turn does not move it
     assert rig.expected_inclinometer_orientation().pitch_deg == 0.0
 
 
@@ -315,13 +307,11 @@ def test_an_offset_to_the_right_of_the_lens_is_positive_lateral_like_the_camera_
 
 
 class TestTheRadarPhaseCentre:
-    """F11: the two-ray model wants the virtual array's vertical phase centre."""
+    """The two-ray model wants the virtual array's vertical phase centre."""
 
     def test_levm_layout_puts_the_phase_centre_off_the_rx_row(self):
         from openflight.rig_geometry import levm_vertical_phase_centre_offset_mm
 
-        # TX1/TX3 x RX1-4 (TI swrr178 patch centres): the phase centre is half
-        # the TX-pair-to-RX-row vector, (7.97, -1.86) mm in the board frame.
         assert levm_vertical_phase_centre_offset_mm(90.0) == pytest.approx(7.969, abs=0.01)
         assert levm_vertical_phase_centre_offset_mm(-90.0) == pytest.approx(-7.969, abs=0.01)
         assert levm_vertical_phase_centre_offset_mm(0.0) == pytest.approx(-1.858, abs=0.01)
@@ -333,9 +323,7 @@ class TestTheRadarPhaseCentre:
             levm_vertical_phase_centre_offset_mm,
         )
 
-        # +90 deg: the TX pair sits 15.9 mm above the RX row and 3.7 mm across
-        # it, toward the viewer's right (target-left). Aimed 10 deg up, the
-        # board's own "up" leans back, away from the target.
+        # +90 deg, aimed 10 deg up: the board's "up" leans back
         right, down, forward = levm_phase_centre_offset_mm(90.0, 10.0)
         in_plane = levm_vertical_phase_centre_offset_mm(90.0)
         assert in_plane == pytest.approx(7.969, abs=0.01)
@@ -400,10 +388,7 @@ class TestTheRadarPhaseCentre:
 
 class TestTheOpsPosition:
     def test_the_v3_ops_sits_85_mm_left_of_the_teed_ball(self):
-        # F12: OPS (-85, 47, -20) and IWR (0, 44, -30) in camera right/down/forward mm.
-        # F11: the ranges start at the phase centre, 7.85 mm above, 1.38 mm
-        # behind and 1.86 mm target-left of the RX row; the ball stays teed
-        # straight downrange of the RX row.
+        # OPS (-85, 47, -20) and IWR (0, 44, -30) in camera right/down/forward mm
         rig_v3 = RigGeometry.from_json(V3)
         radar_height = rig_v3.enclosure_setup().radar_height_m
         forward, lateral, above = rig_v3.ops_ball_geometry_m(
@@ -415,7 +400,6 @@ class TestTheOpsPosition:
         assert above == pytest.approx(0.02135 - (0.051 - 0.003))
 
     def test_the_ops_height_does_not_move_with_the_radar_origin(self):
-        # the OPS sits 3 mm above the RX row whatever point the radar ranges from
         heights = []
         for rotation in (None, 90.0):
             turned = rig(iwr_board_rotation_deg=rotation)

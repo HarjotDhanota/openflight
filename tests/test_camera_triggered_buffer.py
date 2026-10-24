@@ -226,7 +226,7 @@ def test_capture_persistence_uses_fast_uncompressed_npz(tmp_path, monkeypatch):
 
 
 def test_a_clip_records_the_controls_requested_and_applied_at_its_trigger(tmp_path):
-    """Wiring audit T4: a 30 us ladder clip must not read as the 300 us startup snapshot."""
+    """A 30 us ladder clip must not read as the 300 us startup snapshot."""
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,
         settings=CameraCaptureSettings(fps=120.0, exposure_us=300, gain=2.0, auto_exposure=False),
@@ -571,20 +571,6 @@ def test_trigger_evidence_provider_failure_blocks_without_losing_trigger(tmp_pat
     assert evidence["blockers"] == [
         {"id": "provider", "reason": "RuntimeError: sensor read failed"}
     ]
-
-
-def test_shot_admission_uses_frozen_trigger_evidence_after_provider_recovers(tmp_path):
-    current = {"ready": False, "blockers": [{"id": "lis3dh", "reason": "moving"}]}
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path, trigger_evidence_provider=lambda _timestamp: current
-    )
-    runtime._running = True
-    runtime._ring = SimpleNamespace(trigger=lambda _timestamp: True)
-
-    runtime.notify_trigger(10.0)
-    current["ready"] = True
-
-    assert runtime.trigger_evidence_for_shot(10.0)["ready"] is False
 
 
 def test_triggers_are_refused_while_the_save_backlog_is_full(tmp_path):

@@ -381,21 +381,6 @@ def test_read_dump_rejects_partial_transport_without_sending_a_followup_command(
     assert radar.ser.writes == [b"l3dump\n"]
 
 
-def test_post_dump_health_requires_active_cli_response(monkeypatch):
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    monkeypatch.setattr(radar, "cmd", lambda command, window: f"{command}\nactive=1\nDone\n")
-
-    radar.verify_post_dump_cli()
-
-
-def test_post_dump_health_rejects_wedged_cli(monkeypatch):
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    monkeypatch.setattr(radar, "cmd", lambda *_args: "")
-
-    with pytest.raises(RuntimeError, match="post-dump CLI health check"):
-        radar.verify_post_dump_cli()
-
-
 def test_read_dump_sizes_v5_header_extension():
     report = {key: index + 40 for index, key in enumerate(TEMP_REPORT_KEYS)}
     raw = pack_dump(
@@ -435,7 +420,7 @@ def test_dump_waits_through_a_multi_second_stall_for_done_before_stopping(monkey
     radar = _simulated_radar(monkeypatch, firmware, clock)
 
     assert radar.read_dump() == firmware.raw
-    radar.verify_post_dump_cli()
+    radar.stats()
     radar.stop_sensor()
     radar.close()
 

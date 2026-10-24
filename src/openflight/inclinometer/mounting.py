@@ -11,14 +11,9 @@ from .service import Accelerometer
 class MountedAccelerometer:
     """A sensor whose board is turned about the vertical, read in the enclosure's axes.
 
-    Pitch is read from the board's +Y axis, which the design points at the
-    enclosure's front. A board turned by ``yaw_deg`` (counter-clockwise seen from
-    above) reads X and Y rotated by that much; at 180 degrees both are reversed,
-    and a front tipped up would otherwise read as tipped down.
-
-    ``upside_down`` turns the board over about its own Y axis first (X and Z read
-    reversed), for a board fitted component side down. The tester's orientation
-    check finds both for each unit (``orientation_check.Mount``).
+    Pitch is read from the board's +Y axis (the enclosure's front). ``yaw_deg`` is
+    counter-clockwise seen from above; ``upside_down`` turns the board over about
+    its own Y axis first (X and Z reversed).
     """
 
     def __init__(self, sensor: Accelerometer, yaw_deg: float, *, upside_down: bool = False):

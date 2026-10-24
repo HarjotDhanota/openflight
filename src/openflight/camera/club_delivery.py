@@ -36,7 +36,6 @@ from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
 
-# OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
 
 # --- scene / mask constants -------------------------------------------------
@@ -66,14 +65,12 @@ BALL_THRESHOLD_FLOOR = 120.0
 BALL_THRESHOLD_SCALE = 0.9
 
 BALL_PATCH_RADIUS_FRAC = 0.4
-# The ball's core counts as present while it moves by less than this, or by
-# less than half the ball's own contrast when that is smaller (dim light, P6-4).
+# The ball's core counts as present while it changes by less than this, or by
+# less than half the ball's own contrast when that is smaller (dim light).
 BALL_PRESENT_DELTA = 30.0
 BALL_PRESENT_CONTRAST_FRACTION = 0.5
-# In dim light the change must also clear the resting frames' own noise.
 BALL_PRESENT_NOISE_SIGMAS = 6.0
-# The surround the ball's contrast is measured against, in ball diameters from
-# its centre, and the smoothing that keeps pixel noise out of a dim ball's change.
+# Contrast surround (inner, outer radius) and denoise sigma, in ball diameters.
 BALL_SURROUND_RADII_FRAC = (0.65, 0.9)
 BALL_DENOISE_SIGMA_FRAC = 0.07
 MIN_CLUB_COMPONENT_PX = 40
@@ -115,17 +112,12 @@ APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1), (-
 
 
 def _image_scale(shape: tuple[int, ...]) -> float:
-    """Scale pixel windows tuned at 640x400 to the active mode's focal length.
-
-    The scale follows the focal length, not the frame size: 320x200 is a crop of
-    the 640x400 mode and keeps its windows, 1280x800 doubles them (wiring audit C6).
-    """
+    """Scale pixel windows tuned at 640x400 to the active mode's focal length."""
     return ball_pixels.pixel_scale(shape[-1])
 
 
-# The DTL trace's search window bounds motion inside a 640x400 frame, and at
-# 110 px it cannot fit a 200-row crop, so that legacy estimator keeps scaling
-# with the frame size (wiring audit C6 applies to the chained delivery).
+# The DTL trace's 110 px search window cannot fit a 200-row crop, so it scales
+# with the frame size rather than the focal length.
 _TRACE_REFERENCE_FRAME = (640, 400)
 
 
@@ -137,11 +129,7 @@ def _frame_scale(shape: tuple[int, ...]) -> float:
 
 @dataclass(frozen=True)
 class HeadPosition:
-    """One club-head position in the unit-boresight frame, on the camera clock.
-
-    ``lateral_m`` is + right of the unit boresight, ``forward_m`` downrange and
-    ``up_m`` up, all from the radar origin (this module's frame).
-    """
+    """One club-head position from the radar origin (lateral + right), on the camera clock."""
 
     t_s: float
     lateral_m: float
@@ -169,17 +157,12 @@ class CameraDeliveryGeometry:
     roll_correction_deg: float = 0.0
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
-    # The one horizontal offset (D36 item 2): -(target yaw), + when the
-    # boresight points right of the target line. Added to club path exactly as
-    # to the camera's horizontal launch, so both stay in one frame (F9). None: no
-    # target line set.
+    # -(target yaw), + when the boresight points right of the target line; added
+    # to club path as to horizontal launch. None: no target line set.
     horizontal_offset_deg: float | None = None
-    # The resting ball's side offset from the radar's axis, + target-right: the
-    # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
+    # Resting ball's offset from the radar axis, + target-right; 0 = dead ahead.
     ball_lateral_offset_m: float = 0.0
-    # D36 item 4a: the unit's calibrated camera pitch (this swing's LIS3DH pitch
-    # plus the P8-5 offset) and the rig's focal length for the mode. None: the
-    # resting ball sets both, as before, labelled uncalibrated.
+    # Calibrated camera pitch and focal length. None: the resting ball sets both.
     setup_pitch_deg: float | None = None
     setup_focal_px: float | None = None
 
@@ -233,19 +216,9 @@ class ChainedDelivery:
     attack_confidence_tier: str = "withheld"
     # The IWR club track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
-    # Every club path is measured from the unit's boresight (audit F2) until a
-    # horizontal offset moves it to the target line (D36 item 2).
     club_path_frame: str = "unit_boresight"
-    # Labels on the values that no longer withhold them (D15, P8-7): a dim
-    # scene, a trigger-derived contact, an unchecked or implausible speed.
     notes: tuple[str, ...] = ()
-    # Where the camera's pitch and focal length came from, with the resting
-    # ball's own inference as a cross-check (D36 item 4a)
     camera_model: dict | None = None
-    # E1: the head's 3D position in each tracked frame (camera rays on the IWR
-    # club range sphere, unit-boresight frame), the contact time, both on the
-    # camera clock ``clock``, the horizontal offset the published path used, and
-    # the resting ball's position. The club arc (``openflight.club_arc``) reads them.
     head_positions: tuple[HeadPosition, ...] = ()
     contact_t_s: float | None = None
     clock: str | None = None
@@ -255,18 +228,14 @@ class ChainedDelivery:
 
 @dataclass(frozen=True)
 class ApproachPairEstimate:
-    """One short camera/IWR velocity interval around impact.
-
-    ``speed_ratio_ops`` is None when there was no OPS club speed to check it by.
-    """
+    """One short camera/IWR velocity interval around impact."""
 
     path_deg: float
     attack_angle_deg: float
     speed_ratio_ops: float | None
     velocity_mad_mph: float
     n_features: int
-    # E1: the median (lateral, up, forward) position of the plausible features
-    # in each of the two frames; None when the interval had no IWR depth
+    # Median (lateral, up, forward) per frame; None without IWR depth.
     positions_m: tuple[tuple[float, float, float], ...] | None = None
 
 
@@ -325,7 +294,7 @@ def _pixels_to_world(
 
 
 def _camera_model(ball, geometry: CameraDeliveryGeometry) -> tuple[float, float, np.ndarray, dict]:
-    """The unit's calibrated pitch and focal length, else the resting ball's (D36 item 4a)."""
+    """The unit's calibrated pitch and focal length, else the resting ball's."""
     return resting_ball_camera_model(
         setup_pitch_deg=geometry.setup_pitch_deg,
         setup_focal_px=geometry.setup_focal_px,
@@ -361,12 +330,7 @@ def _velocity_angles(velocity: np.ndarray) -> tuple[float, float]:
 
 
 def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDelivery:
-    """Report every path with the one horizontal offset (audit F9, D36 item 2).
-
-    The gates above judge path in the measurement frame; only the published
-    values move. No target line (None) leaves the unit's boresight as the zero; a
-    zero offset leaves the values but names the target-line frame.
-    """
+    """Turn every published path by the horizontal offset; gates stay in the measurement frame."""
     if offset_deg is None:
         return delivery
 
@@ -556,7 +520,6 @@ def delivery_from_feature_tracks(
         )
     if times.shape != (3,) or ranges.shape != (3,) or np.any(np.diff(times) <= 0.0):
         return ChainedDelivery(status="rejected_invalid_timing", n_features=len(pixels))
-    # The radar gives the depth here; OPS only checks the speed (P8-7).
     ops_known = bool(ops_club_speed_mph) and math.isfinite(ops_club_speed_mph)
 
     # IWR supplies one depth history for the club candidate. Never project
@@ -623,8 +586,6 @@ def delivery_from_feature_tracks(
         "cross_path_deg": round(cross_path, 2),
         "cross_attack_angle_deg": round(cross_aoa, 2),
     }
-    # D15 (P8-7): implausible speed, spread or angles label the values; the
-    # values stay (status chained_outside_bounds, tier low).
     notes = []
     if speed_ratio is None:
         notes.append("no OPS club speed: speed ratio unchecked")
@@ -739,9 +700,8 @@ def camera_ops_delivery_from_feature_pair(
     A down-the-line camera measures lateral and vertical image motion but not
     forward velocity directly. At the known contact point, the two perspective
     flow equations plus the OPS velocity magnitude form a closed 3D solution.
-    The teed ball supplies the pitch reference. It does not set the yaw: path
-    is measured from the unit's boresight, like the chained branch and the
-    IWR, so where the golfer tees the ball never moves the zero (audit F2).
+    The teed ball supplies the pitch reference, not the yaw: path is measured
+    from the unit's boresight.
     """
     pixels = np.asarray(feature_pixels, dtype=float)
     times = np.asarray(timestamps_s, dtype=float)
@@ -761,7 +721,6 @@ def camera_ops_delivery_from_feature_pair(
     focal_px = ball.diameter_px * camera_ball_range_m / geometry.ball_diameter_m
     calibrated = geometry.setup_pitch_deg is not None and geometry.setup_focal_px is not None
     if calibrated:
-        # D36 item 4a: the unit's calibration, as the chained branch uses
         focal_px = float(geometry.setup_focal_px)
     if not math.isfinite(focal_px) or focal_px <= 0.0:
         return None
@@ -1021,12 +980,7 @@ def _head_positions(
     impact_idx: int,
     camera_s: np.ndarray,
 ) -> tuple[HeadPosition, ...]:
-    """One head position per tracked frame: the median over the intervals that saw it.
-
-    Each interval's features were seeded afresh, so a frame seen by two intervals
-    has two slightly different head points; their median is the frame's. A
-    consistent physical head point is W9's work.
-    """
+    """One head position per tracked frame: the median over the intervals that saw it."""
     by_frame: dict[int, list] = {}
     for offsets, estimate in pair_estimates.items():
         for offset, position in zip(offsets, estimate.positions_m or ()):
@@ -1059,12 +1013,7 @@ def estimate_chained_delivery(
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
-    Frames are timed by ``sensor_timestamp_ns`` (exposure) when the clip has
-    usable ones, else by host arrival, which a delivery stall distorts by up to
-    31 ms around impact (P6-8). Every time in the estimate comes from that one
-    clock: the radar is reached only through the contact anchor, the IWR impact
-    time plus camera time since the camera's contact, so no conversion between
-    the camera and host clocks is needed.
+    Every time comes from one frame clock; the radar is reached only through the contact anchor.
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1072,8 +1021,7 @@ def estimate_chained_delivery(
     range_evidence = accepted_range_evidence(range_evidence)
     notes: list[str] = []
     if ops_club_speed_mph is None:
-        # Without the IWR range the camera + OPS solution closes depth with the
-        # OPS club speed, so it has no input; with the range, OPS only checks it.
+        # Without the IWR range, depth comes from the OPS club speed.
         if range_evidence is None:
             return ChainedDelivery(status="rejected_no_ops_speed")
         notes.append("no OPS club speed: speed ratio unchecked")
@@ -1092,7 +1040,6 @@ def estimate_chained_delivery(
         return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes))
     scale = ball_pixels.pixel_scale(frames.shape[2])
     if ball is None:
-        # this shot's own frames only: no earlier shot's ball stands in (D17)
         try:
             ball = detect_reference_ball(frames, pixel_scale=scale)
         except ValueError:
@@ -1127,8 +1074,7 @@ def estimate_chained_delivery(
             return ChainedDelivery(
                 status="rejected_no_impact", scene_p995=scene_p995, notes=tuple(notes)
             )
-        # D15 (P8-7): the trigger fires 0.5-4 ms after contact, so the frame
-        # exposed at the trigger stands in for the unseen departure, labelled.
+        # The trigger fires 0.5-4 ms after contact; its frame stands in, labelled.
         contact = CameraContact(
             impact_frame=int(trigger_index),
             contact_ns=float(timestamps_ns[trigger_index]),
@@ -1371,14 +1317,7 @@ def _adaptive_thresholds(background: np.ndarray) -> tuple[float, float, float, f
 
 
 def _ball_presence(frames: np.ndarray, ball) -> np.ndarray:
-    """Per frame, whether the teed ball's core still looks as it did at rest.
-
-    A bright ball keeps the fixed ``BALL_PRESENT_DELTA`` on the core's mean. When
-    half the ball's contrast against its surround is less than that (dusk, a
-    distant ball), the threshold scales to the clip: half that contrast, which
-    must clear ``BALL_PRESENT_NOISE_SIGMAS`` times the resting frames' noise.
-    Bright clips therefore keep the answers they had before P6-4.
-    """
+    """Per frame, whether the teed ball's core still looks as it did at rest."""
     radius = max(3, int(round(ball.diameter_px * BALL_PATCH_RADIUS_FRAC)))
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     distance_sq = (xx - ball.x) ** 2 + (yy - ball.y) ** 2
@@ -1403,12 +1342,8 @@ def _dim_ball_presence(
 ) -> np.ndarray:
     """Presence of a ball whose contrast is below the fixed threshold.
 
-    A dusk ball's lit cap sits above its surround and its shaded body below, so
-    a plain mean can stay put as it leaves; the change is the core's mean
-    absolute difference from rest instead. Light smoothing first keeps pixel
-    noise, which is as large as a dim ball's contrast, from filling that change.
-    A patch whose contrast does not clear its own noise has no ball to lose, and
-    stays present in every frame.
+    Uses the mean absolute change from rest: a dim ball's lit cap and shaded body
+    can cancel in a plain mean.
     """
     from scipy import ndimage  # pylint: disable=import-outside-toplevel
 
@@ -1442,9 +1377,8 @@ def _detect_impact_index(
 ) -> int | None:
     """Last frame the teed ball's core pixels are undisturbed (halo-robust).
 
-    Triggered captures only search the physically plausible contact window.
-    Otherwise, a late club/ball/background brightness match can look like the
-    teed ball and incorrectly move impact to the final frame.
+    Triggered captures search only the plausible contact window, so a late
+    brightness match cannot move impact to the final frame.
     """
     present = _ball_presence(frames, ball)
     indexes = np.nonzero(present)[0]
@@ -1453,15 +1387,13 @@ def _detect_impact_index(
 
     if trigger_index is not None:
         search_start = max(0, trigger_index - IMPACT_PRE_TRIGGER_MAX)
-        # Keep one following frame available for the chained delivery estimate.
         search_end = min(len(frames) - 2, trigger_index + IMPACT_POST_TRIGGER_MAX)
         indexes = indexes[(indexes >= search_start) & (indexes <= search_end)]
         if len(indexes) == 0:
             return None
 
-    # The first departure near the trigger is the teed ball leaving. Later
-    # present/absent transitions are club blur or the launched ball crossing
-    # the same patch. Untriggered replay retains the historical reverse scan.
+    # Near the trigger the first departure is the teed ball; later ones are club blur
+    # or the launched ball. Untriggered replay scans in reverse.
     candidates = indexes if trigger_index is not None else reversed(indexes)
     for idx in candidates:
         after = present[idx + 1 : idx + 3]
@@ -1474,13 +1406,7 @@ def _detect_impact_index(
 
 @dataclass(frozen=True)
 class CameraContact:
-    """When the camera saw the teed ball leave, found from the ball, not the trigger.
-
-    ``contact_ns`` is midway between the last frame the ball's core is
-    undisturbed and the next one, on the clock ``timestamp_source`` names.
-    Club delivery and ball flight time the IWR range from it (audit F7), and
-    F3 scores the radar's impact time against it.
-    """
+    """When the camera saw the teed ball leave, found from the ball, not the trigger."""
 
     impact_frame: int
     contact_ns: float
@@ -1491,12 +1417,7 @@ class CameraContact:
 def frame_clock(
     host_timestamp_ns: np.ndarray, sensor_timestamp_ns: np.ndarray | None = None
 ) -> tuple[np.ndarray, str]:
-    """Pick the per-frame clock: sensor timestamps when usable, else host arrival.
-
-    Host times are when each frame reached the Pi, so they carry delivery
-    jitter; sensor times are when it was exposed. Either works for intervals
-    within one clip as long as every time in a calculation comes from one clock.
-    """
+    """Pick the per-frame clock: sensor timestamps when usable, else host arrival."""
     host = np.asarray(host_timestamp_ns, dtype=np.int64)
     if sensor_timestamp_ns is not None:
         sensor = np.asarray(sensor_timestamp_ns)

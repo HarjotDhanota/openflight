@@ -1,9 +1,7 @@
-"""No code path outside the rig file supplies enclosure geometry (wiring audit C1).
+"""No code path outside the rig file supplies enclosure geometry.
 
-The July and August enclosures live on as literals: the 8.25 in camera height,
-the 0.152/0.1524 m radar height and the 64 mm tee offset. Any of them in src/
-means a code path that can hand the swing server a geometry the rig file never
-stated.
+Old enclosure literals (8.25 in camera height, 0.152/0.1524 m radar height,
+64 mm tee offset) must not appear in src/.
 """
 
 from __future__ import annotations

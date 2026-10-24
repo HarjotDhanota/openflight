@@ -2,7 +2,7 @@
 
 Everything is reduced to what the tests read, well under 2 MB in all:
 
-* ``harjot-indoor-test-1`` (setup-20260930-c77d227da087, 30 Sept, indoors on
+* ``indoor-test-1`` (setup-20260930-c77d227da087, 30 Sept, indoors on
   carpet; the ball's centre taped at about 1.25 m from the radar). The radar's two
   captures as per-channel means and power profiles. The camera never saved a frame
   with the ball in it, so the camera fixture is a CROP of the light screen's
@@ -29,8 +29,8 @@ from openflight.iwr6843.range_evidence import static_channel_profile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CALIBRATION = REPO_ROOT / "config" / "iwr6843_calibration_reference.json"
-INDOOR = "harjot-indoor-test-1/calibration/tee-range/guided/epochs/setup-20260930-c77d227da087"
-INDOOR_SCREEN = "harjot-indoor-test-1/arm5/gain/20260930_144449/exp0300_gain8_median.pgm"
+INDOOR = "calibration/tee-range/guided/epochs/setup-20260930-c77d227da087"
+INDOOR_SCREEN = "arm5/gain/20260930_144449/exp0300_gain8_median.pgm"
 OUTDOOR = "Outdoors-test-7/calibration/tee-range/guided/epochs/setup-20260930-5a7821af3641"
 # the crop keeps the rows and columns a patch around the ball can reach
 INDOOR_CROP = (250, 330, 1030, 650)  # x0, y0, x1, y1
@@ -92,13 +92,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("handoff", type=Path, help="the pi-handoff folder")
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--indoor-session",
+        default="indoor-test-1",
+        help="the indoor session's folder name inside the handoff",
+    )
     args = parser.parse_args(argv)
     out = args.output
     out.mkdir(parents=True, exist_ok=True)
 
     indoor = radar_fixture(
-        args.handoff / INDOOR,
-        name="harjot-indoor-test-1-c77d227da087",
+        args.handoff / args.indoor_session / INDOOR,
+        name="indoor-test-1-c77d227da087",
         note=(
             "30 Sept 14:45, indoors on carpet, the ball near a door; its centre taped at "
             "about 1.25 m from the radar. The coherent difference accepted 1.575 m "
@@ -122,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(outdoor), encoding="utf-8"
     )
 
-    screen = read_pgm(args.handoff / INDOOR_SCREEN)
+    screen = read_pgm(args.handoff / args.indoor_session / INDOOR_SCREEN)
     x0, y0, x1, y1 = INDOOR_CROP
     np.savez_compressed(
         out / "indoor-c77d227da087-scene.npz",

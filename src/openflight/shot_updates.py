@@ -1,10 +1,4 @@
-"""Apply late ``shot_updated`` log entries to the shot they update.
-
-A shot published before its IWR or camera enrichment finished is logged twice:
-``shot_detected`` with the first result, then ``shot_updated`` (same schema,
-same ``shot_number``) once the enrichment lands. Readers that want each shot's
-latest values, counted once, fold the updates in with :func:`apply_shot_updates`.
-"""
+"""Fold late ``shot_updated`` log entries into the ``shot_detected`` entry they update."""
 
 from __future__ import annotations
 
@@ -37,16 +31,11 @@ def merge_shot_update(detected: Mapping[str, Any], update: Mapping[str, Any]) ->
 def apply_shot_updates(events: Iterable[Any]) -> list[Any]:
     """Return ``events`` with each shot's updates folded into its ``shot_detected``.
 
-    The folded entry keeps its position and ``ts``, so each shot is still
-    counted once and in detection order; ``shot_updated`` entries are removed.
-    The latest update wins. An update whose ``shot_detected`` is missing from
-    the same session stands in for it, once, at the latest update's position.
-    Updates never cross a ``session_start`` (shot numbers restart per session).
-    Anything that is not a well-formed shot entry passes through unchanged, and
-    the input entries are never mutated.
+    The folded entry keeps its position and ``ts``; the latest update wins. An update
+    without its ``shot_detected`` stands in for it, once. Updates never cross a
+    ``session_start``. Input entries are never mutated.
     """
     events = list(events)
-    # Last update per (session segment, shot number), and where it sits.
     latest: dict[tuple[int, int], tuple[int, Mapping[str, Any]]] = {}
     detected: set[tuple[int, int]] = set()
     segment = 0
@@ -78,11 +67,7 @@ def apply_shot_updates(events: Iterable[Any]) -> list[Any]:
 
 
 def read_session_jsonl(path: str | Path) -> list[dict[str, Any]]:
-    """A session JSONL file's entries with shot updates folded in.
-
-    Blank, unparseable and non-object lines are skipped, as the analysis
-    readers always have.
-    """
+    """A session JSONL file's entries with shot updates folded in; bad lines are skipped."""
     entries = []
     with Path(path).open(encoding="utf-8", errors="replace") as handle:
         for line in handle:

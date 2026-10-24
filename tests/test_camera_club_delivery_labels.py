@@ -1,4 +1,4 @@
-"""Club delivery measures and labels; it refuses only where the maths has no input (P8-7)."""
+"""Club delivery measures and labels; it refuses only where the maths has no input."""
 
 from __future__ import annotations
 

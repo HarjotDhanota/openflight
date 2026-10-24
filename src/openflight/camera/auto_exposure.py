@@ -1,11 +1,6 @@
 """The hitting zone's exposure rating for the high-speed OV9281 camera.
 
-The kiosk's swing exposure is chosen from the resting ball by
-``swing_exposure.SwingExposurePolicy`` (13 Oct 2026). Its old stepped list
-(``EXPOSURE_STEPS``: 100-1250 us, gains to 20, decided once at startup and locked)
-is retired: it metered the zone, not the ball, ran far past the blur ceiling and
-asked for gains the sensor clamps at 15.94. What stays here is the zone rating that
-manual-exposure clips, the tester ladder and the live view still read.
+The swing exposure itself is chosen by ``swing_exposure.SwingExposurePolicy``.
 """
 
 from __future__ import annotations
@@ -25,8 +20,7 @@ ExposureQualityStatus = Literal[
 ]
 ExposureRecommendation = Literal["brighter", "darker", "hold"]
 ZoneSource = Literal["placement_box", "fixed"]
-# The fallback hitting zone when no placement box was confirmed: rows 45-90 %,
-# columns 20-80 % of the frame.
+# The fallback hitting zone when no placement box was confirmed.
 FIXED_ZONE_FRACTIONS = (0.2, 0.45, 0.8, 0.9)  # x0, y0, x1, y1
 
 
@@ -44,8 +38,6 @@ class ExposureObservation:
     contrast: float | None = None
     clipped_pct: float | None = None
     dark_pct: float | None = None
-    # Which hitting zone was rated: the tester's confirmed placement box, or the
-    # fixed centre-lower box when none was given (P7-15).
     zone_source: ZoneSource = "fixed"
     zone_box_px: tuple[int, int, int, int] | None = None
 
@@ -62,9 +54,8 @@ class ExposureObservation:
         return payload
 
 
-# The resting ball is ~0.4 % of a 320x200 frame, so a fully saturated ball
-# clears a 2 % clip gate and its edge is gone. Its diameter sets range,
-# scale and height; keep the brightest ball-sized patch off the rail.
+# The resting ball is ~0.4 % of a 320x200 frame, so a saturated ball would pass
+# a 2 % clip gate; its diameter sets range, so keep its peak off the rail.
 BALL_CLIP_PCT = 0.1
 
 
@@ -73,9 +64,7 @@ def hitting_zone(
 ) -> tuple[tuple[int, int, int, int], ZoneSource]:
     """The hitting zone in this frame's pixels (x0, y0, x1, y1) and where it came from.
 
-    ``zone_box`` is the tester's confirmed placement box in this mode's pixels; it
-    is kept inside the frame. Without one the fixed centre-lower box stands in
-    (P7-15).
+    ``zone_box`` is the confirmed placement box in this mode's pixels, clipped to the frame.
     """
     if zone_box is not None:
         x0, y0, x1, y1 = (int(value) for value in zone_box)
@@ -98,11 +87,7 @@ def hitting_zone(
 def measure_exposure(
     image: np.ndarray, zone_box: Sequence[int] | None = None
 ) -> ExposureObservation:
-    """Rate exposure in the hitting zone of one grayscale frame.
-
-    The zone is the tester's placement box when one is given, else the fixed
-    centre-lower box (P7-15).
-    """
+    """Rate exposure in the hitting zone of one grayscale frame."""
     pixels = np.asarray(image)
     if pixels.ndim != 2 or not pixels.size:
         return ExposureObservation(

@@ -23,7 +23,7 @@ samples happen to sit.
 The LEVM's board-specific electrical phase zero is removed first via
 ``phase_reference_rad``. Installation yaw remains a separate additive
 ``aim_offset_deg``: -(target yaw), added to the path as to every horizontal
-angle (``openflight.horizontal_frame``, D36 item 2). Keeping those corrections
+angle (``openflight.horizontal_frame``). Keeping those corrections
 separate is important: a constant phase bias rotates every recovered
 Cartesian position, so it also rotates the fitted velocity direction and does
 not cancel out of club path.
@@ -115,12 +115,7 @@ CLUB_MAX_IMPACT_ERROR_M = 0.20
 
 
 def club_gate_m(tee_range_m: float, tee_uncertainty_m: float = 0.0) -> tuple[float, float]:
-    """The club search gate: the approach up to the ball, widened by the range's uncertainty.
-
-    ``tee_uncertainty_m`` is 0 for a measured launch point and the camera prior's
-    uncertainty when the prior stands in (13 Oct): the gate then spans every place the
-    ball can be.
-    """
+    """The club search gate: the approach up to the ball, widened by the range's uncertainty."""
     unc = max(0.0, float(tee_uncertainty_m))
     return (
         max(0.35, tee_range_m - CLUB_APPROACH_DEPTH_M - unc),
@@ -150,9 +145,8 @@ CLUB_MAX_PHASE_DEVIATION_RAD = 0.6
 class ClubRangeEvidence:
     """Transient club range trajectory shared with camera fusion.
 
-    ``status`` is the verdict of the track's own identity gates (OPS speed
-    projection and tee contact), not of the phase-based path: camera fusion
-    uses only the range, so an azimuth rejection leaves the track accepted.
+    ``status`` is the verdict of the track's identity gates (OPS speed, tee
+    contact), not of the phase-based path.
     """
 
     track: tracking.BallTrack
@@ -196,8 +190,6 @@ class ClubPathResult:
     path_pre_frames: int = 0
     path_post_frames: int = 0
     path_post_speed_scale: float = 1.0
-    # The path's zero: the IWR's boresight, fixed to the unit's, until an aim
-    # offset moves it to the target line (audit F2, D36 item 2).
     club_path_frame: str = "unit_boresight"
     # Kept in memory only. Session JSON already records the scalar track
     # diagnostics above; serializing the fitted object would couple replay
@@ -695,8 +687,7 @@ def estimate_club_path(
     low, high = CLUB_SPEED_PROJECTION_RANGE
     speed_mismatch = not low <= selection.speed_ratio <= high
     impact_mismatch = selection.impact_error_m > impact_error_limit_m(cal.tee_range_uncertainty_m)
-    # A track that fails its identity gates is kept for replay but must never
-    # become camera depth (audit F4).
+    # a track failing its identity gates is kept for replay but never becomes camera depth
     track_status = (
         "rejected_club_speed_mismatch"
         if speed_mismatch

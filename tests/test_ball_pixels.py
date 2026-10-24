@@ -1,8 +1,4 @@
-"""Ball pixel limits follow the camera mode (wiring audit B3, 29 Sept).
-
-The detectors were tuned on the 640x400 mode; at 1280x800 the same ball is twice
-as wide, and a ball 1.0-1.3 m out (31-40 px) failed every fixed 9-30 px gate.
-"""
+"""Ball pixel limits follow the camera mode (tuned at 640x400; twice as wide at 1280x800)."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -30,9 +26,8 @@ def test_pixel_scale_follows_the_mode_not_the_crop():
 
 
 def test_mode_focal_follows_binning_from_the_rig_file():
-    """C2: focal follows the sensor's binning, not the output width."""
+    """Focal follows the sensor's binning, not the output width."""
     rig = RigGeometry.from_json(V3)
-    # the v3 file's 466.67 px is the 2x-binned pitch its 320x200 crop is read at
     assert (rig.image_width, rig.image_height) == (320, 200)
     assert ball_pixels.mode_focal_px(1280, rig) == pytest.approx(933.3334)
     assert ball_pixels.mode_focal_px(640, rig) == pytest.approx(466.6667)
@@ -40,7 +35,6 @@ def test_mode_focal_follows_binning_from_the_rig_file():
     calibrated = replace(rig, focal_px=480.0)
     assert ball_pixels.mode_focal_px(1280, calibrated) == pytest.approx(960.0)
     assert ball_pixels.mode_focal_px(320, calibrated) == pytest.approx(480.0)
-    # a file measured at 1:1 converts the other way
     full = replace(rig, focal_px=940.0, image_width=1280, image_height=800)
     assert ball_pixels.mode_focal_px(640, full) == pytest.approx(470.0)
     assert ball_pixels.mode_focal_px(320, full) == pytest.approx(470.0)
@@ -97,7 +91,7 @@ def test_ball_flight_selects_a_1280_reference_ball():
         camera_height_m=0.095,
         radar_height_m=0.051,
         tee_range_m=1.13,
-        ball_height_m=0.021335,
+        ball_height_m=0.02135,
         image_width_px=1280,
         image_height_px=800,
     )
@@ -115,7 +109,7 @@ def test_ball_flight_selects_a_1280_reference_ball():
     [((24, 200, 320), 1.0), ((24, 400, 640), 1.0), ((24, 800, 1280), 2.0)],
 )
 def test_club_windows_scale_with_focal_length_not_image_size(shape, scale):
-    """C6: 320x200 is a crop with 640x400's focal, so its windows are not halved."""
+    """320x200 is a crop with 640x400's focal, so its windows are not halved."""
     from openflight.camera.club_delivery import _image_scale  # noqa: PLC0415
 
     assert _image_scale(shape) == pytest.approx(scale)

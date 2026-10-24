@@ -21,7 +21,6 @@ from openflight.constants import BALL_DIAMETER_MM
 # (x_px, y_px, diameter_px) arrays -> which seeds a resting ball could be
 SeedFilter = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
 
-# OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
 IMPACT_BALL_PATCH_RADIUS_FRAC = 0.4
 IMPACT_BALL_PRESENT_DELTA = 30.0
@@ -71,10 +70,8 @@ class ShaftTrack:
     reason: str
 
 
-# A room-lit ball is brighter than what surrounds it but rarely saturates: a
-# ceiling light leaves a small highlight on top and a face near the mat's own
-# level. It is found as the disk that stands out most from the ring around it,
-# within the hitting zone, and only when it clearly beats every other disk.
+# A room-lit ball rarely saturates: it is the disk that stands out most from the
+# ring around it, and only when it clearly beats every other disk.
 DISK_MIN_CONTRAST_DN = 20.0
 DISK_MIN_NOISE_MULTIPLE = 6.0
 DISK_MIN_MARGIN = 1.25
@@ -105,8 +102,6 @@ def _brighter_all_round(
     image: np.ndarray, row: int, col: int, radius: float, margin: float
 ) -> bool:
     """Whether the middle outshines the ring around it in at least six of eight directions."""
-    # only the window the ring reaches is read: the same pixels, without building
-    # index grids over the whole picture for every seed (13 Oct Save speed)
     reach = int(math.ceil(2.3 * radius)) + 1
     top, left = max(0, row - reach), max(0, col - reach)
     image = image[top : row + reach + 1, left : col + reach + 1]
@@ -129,31 +124,17 @@ def _brighter_all_round(
 
 
 BALL_CANDIDATES = 6
-# The resting-ball range search fits at most this many places, merged over
-# every size it tries; each lit-sphere fit costs a few tenths of a second.
 REFERENCE_SEED_FITS = 8
-# The setup Save confirms the stable live ball instead of re-searching (13 Oct light
-# audit section 5: 16.5-18.2 s on the Pi): the disk pass still covers the whole box,
-# then only the ball at its held size and seeds scoring at least this share of the
-# ball's own disk score (its rivals) are fitted, each from one size start.
+# Confirming a held ball fits only rivals scoring at least this share of its disk score.
 CONFIRM_RIVAL_FRACTION = 0.8
-# The most seeds the confirm search weighs as rivals (each is a cheap disk check), and
-# the most rivals it fits: the strongest by disk score, which decide an ambiguity.
 CONFIRM_MAX_SEEDS = 64
 CONFIRM_MAX_RIVALS = 3
-# A ball's shaded underside can sit within a few DN of the carpet it rests on,
-# however bright its top: the ring need only be darker by more than the noise.
+# A ball's shaded underside can sit within a few DN of the carpet it rests on.
 ALL_ROUND_MARGIN_NOISE = 3.0
-# The fits run on the median of the frames, whose noise is a single frame's
-# times sqrt(pi / 2) over the root of their number; 8-bit steps and fixed
-# pattern keep it from reading below about one DN.
+# Noise of a median of n frames: one frame's * sqrt(pi / 2) / sqrt(n), floored at ~1 DN.
 MEDIAN_NOISE_FACTOR = math.sqrt(math.pi / 2.0)
 PICTURE_NOISE_FLOOR_DN = 1.0
-# The unit sits behind the ball looking down the target line, so the ball is
-# near the middle of the picture across; a softly weighted preference. A
-# frame's width spans about 69 degrees through the 2.8 mm lens at every
-# readout mode, so this is about 10 degrees: a ball 0.35 m off the line at
-# 2 m keeps most of its weight, a door stop 22 degrees off keeps a tenth.
+# Soft preference for the middle across: about 10 deg of the 2.8 mm lens's 69 deg width.
 LATERAL_SIGMA_FRACTION = 0.13
 
 
@@ -168,11 +149,7 @@ def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-ma
 ) -> list[ReferenceBall]:
     """Return ranked lit spheres near one expected size and optional floor row.
 
-    A door panel over the dark gap beneath it, or a bright patch of carpet, can
-    stand out as much as the ball; none of them looks like a lit sphere. A door
-    stop's white tip can, so the fit is weighed by where the ball has to be:
-    near the middle across, and, given ``expected_row`` (row, band), at the row
-    its distance, the camera's tilt and the lens height put it on the floor.
+    Fits are weighted toward the middle across and toward ``expected_row`` (row, band).
     """
     x0, y0, x1, y1 = window
     if expected_row is not None:
@@ -182,8 +159,6 @@ def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-ma
         if y1 <= y0:
             return []
     coarse_r = expected_radius / factor
-    # only noise is ruled out here: a dim ball can sit below the contrast a
-    # size-free search needs, and the lit-sphere fit is the real test
     floor = max(8.0, 3.0 * noise / factor)
     score = _disk_contrast(coarse, coarse_r)[y0:y1, x0:x1]
     peaks = (score == ndimage.maximum_filter(score, size=max(3, int(coarse_r)))) & (score >= floor)
@@ -193,8 +168,7 @@ def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-ma
         row, col = int(rows[i]), int(cols[i])
         if not all(math.hypot(col - c, row - r) > coarse_r for r, c in kept):
             continue
-        # an edge, like a door's foot over the gap beneath it, scores along its
-        # whole length; a ball is brighter than its surroundings all round
+        # an edge scores along its whole length; a ball is brighter all round
         margin = ALL_ROUND_MARGIN_NOISE * noise / factor
         if _brighter_all_round(coarse, row + y0, col + x0, coarse_r, margin):
             kept.append((row, col))
@@ -210,8 +184,6 @@ def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-ma
             noise_dn=noise,
             expected_radius=expected_radius,
         )
-        # a fit can slide off its seed onto something else: above or below the
-        # rows the ball can rest in, it is not the ball
         if fit is not None and (
             expected_row is None or abs(fit.y - expected_row[0]) <= expected_row[1]
         ):
@@ -243,7 +215,7 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-position
     noise: float,
     expected_row: tuple[float, float] | None = None,
 ) -> ReferenceBall | None:
-    """Return the existing single best size-constrained detector result."""
+    """Return the best size-constrained candidate, or None."""
     candidates = _lit_ball_candidates_near_size(
         image,
         coarse,
@@ -269,17 +241,10 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
 ) -> list[ReferenceBall]:
     """Enumerate distinct lit-sphere fits over a caller-supplied size range.
 
-    ``confirm_anchor`` (x, y, diameter in pixels: a ball already found and held
-    still) switches to confirming it: the anchor is fitted at its held size, and
-    every other seed whose disk score is at least ``rival_fraction`` of the anchor's
-    is fitted from one size start at the size it matched. A rival is still found,
-    so an ambiguous box still reads ambiguous.
-
-    The cheap disk filter runs at every size; its peaks from all sizes are
-    merged first, so each place in the picture is fitted once, at the size it
-    matches best. ``seed_filter`` drops places a resting ball cannot be (above
-    the horizon, say) before they use up one of the ``max_fits`` fits.
-    ``hold_diameter_px`` holds the fitted size, for re-finding a ball already sized.
+    Disk-filter peaks from all sizes are merged, so each place is fitted once at its
+    best size. ``seed_filter`` drops impossible places before they use up ``max_fits``;
+    ``hold_diameter_px`` holds the fitted size. ``confirm_anchor`` (x, y, diameter px)
+    fits that held ball plus rivals scoring at least ``rival_fraction`` of its disk score.
     """
     if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
@@ -332,8 +297,6 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
                 )
             )
 
-    # an edge, like a door's foot over the gap beneath it, scores along its
-    # whole length; a ball is brighter than its surroundings all round
     margin = ALL_ROUND_MARGIN_NOISE * picture_noise / factor
     cap = CONFIRM_MAX_SEEDS if confirm_anchor is not None else max_fits
     kept: list[tuple[float, float, float, float]] = []
@@ -364,10 +327,9 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
                 :CONFIRM_MAX_RIVALS
             ]
             if anchor_score is not None
-            # the disk pass did not see the anchor: weigh the strongest seeds as before
+            # the disk pass missed the anchor: fit the strongest seeds
             else others[:max_fits]
         )
-        # the anchor's centre and size come from an earlier fit: one start, its lean
         targets = [(ax, ay, aradius, aradius, None, False)] + [
             (x, y, radius, None, (1.0,), True) for _score, x, y, radius in rivals
         ]
@@ -432,7 +394,6 @@ def _contrast_ball(
         picture_noise = max(
             PICTURE_NOISE_FLOOR_DN, MEDIAN_NOISE_FACTOR * noise * factor / math.sqrt(count)
         )
-        # the size is known: a search free of it can only find something else
         return _lit_ball_near_size(
             image,
             coarse,
@@ -443,7 +404,6 @@ def _contrast_ball(
             expected_row,
         )
 
-    # 1. where: the best disk over plausible ball sizes, in the binned frame
     radii = np.geomspace(2.5, max(3.0, 0.04 * coarse.shape[1]), num=12)
     maps = [_disk_contrast(coarse, float(radius))[y0:y1, x0:x1] for radius in radii]
     peaks = [np.unravel_index(int(np.argmax(score)), score.shape) for score in maps]
@@ -452,8 +412,7 @@ def _contrast_ball(
     if contrast < floor:
         return None
     row, col = peaks[best]
-    # the largest scale still scoring near the best keeps the inner square
-    # inside the ball, so it sits at the ball's own radius
+    # the largest scale still scoring near the best sits at the ball's own radius
     radius = max(
         float(r)
         for r, score in zip(radii, maps)
@@ -466,8 +425,6 @@ def _contrast_ball(
         if rival > 0 and contrast / rival < DISK_MIN_MARGIN:
             return None
 
-    # 2. how big and exactly where: the lit part places it on the binned frame;
-    # the whole ball is then measured at full resolution
     cx, cy, r = _fit_disk(coarse, float(col + x0), float(row + y0), radius)
     return _measure_ball(image, (cx + 0.5) * factor - 0.5, (cy + 0.5) * factor - 0.5, r * factor)
 
@@ -487,9 +444,7 @@ def _disk_score(image: np.ndarray, cx: float, cy: float, r: float) -> float:
 def _fit_disk(image: np.ndarray, x: float, y: float, radius: float) -> tuple[float, float, float]:
     """Every radius against every nearby centre: the disk that stands out most.
 
-    Searched jointly because fitting centre and size in turns can settle on a
-    highlight's small disk. On a ball lit from one side this is the lit part,
-    so it places the measurement rather than making it.
+    Searched jointly: fitting centre and size in turns can settle on a highlight.
     """
     step = max(0.5, 0.1 * radius)
     span = max(2.0, 0.6 * radius)
@@ -510,13 +465,7 @@ RIM_HALF_ARC_DEG = 80.0
 
 
 def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> ReferenceBall | None:
-    """The whole ball, from the rim on its lit side.
-
-    A ball lit from one side has a sharp rim facing the light and a shaded
-    side that fades to the ground's own level, often beside its cast shadow.
-    The bright patch finds the lit part and which way the light comes from; a
-    circle through the lit half of the rim then gives the whole ball.
-    """
+    """The whole ball, from a circle through the lit half of its rim."""
     height, width = image.shape
     reach = int(np.ceil(3.0 * radius)) + 2
     top, left = max(0, int(y) - reach), max(0, int(x) - reach)
@@ -563,10 +512,7 @@ def _fit_lit_rim(
 ) -> tuple[float, float, float] | None:
     """A circle through the rim's sharp, lit side.
 
-    Rays leave the lit patch's centre across the half facing the light (all
-    the way round when the light is square on); on each, the rim is the
-    outermost strong fall in brightness, so a logo or the highlight's own edge
-    inside the ball is passed over.
+    On each ray the rim is the outermost strong fall, so a logo or highlight edge is passed over.
     """
     smooth = ndimage.gaussian_filter(patch, 0.7)
     lean = float(np.hypot(*toward_light))
@@ -628,18 +574,10 @@ def detect_reference_ball(
 ) -> ReferenceBall:
     """Find the stationary ball in bright- or dark-on-ground lighting.
 
-    ``pixel_scale`` is the ball's size relative to the 640x400 mode the pixel
-    limits were tuned in (2 at 1280x800); by default it follows the frame width.
-
-    ``expected_diameter_px`` is the size the ball must have at the distance the
-    radar or the tape gives, through the lens's focal length. With it, the ball
-    is the lit sphere of that size, placed by its lit rim and shading, so its
-    centre holds when grass or carpet hides its underside. Without it, the size
-    is read from the pixels, which a room-lit ball leaves loose by a tenth.
-    ``expected_row_px`` (row, band) is where the ball resting on the floor must
-    appear, from the same distance, the camera's tilt and the lens height.
-    With the size known, a frame with no such ball raises rather than offering
-    whatever else stands out: too dark, clipped white, or no ball there.
+    ``pixel_scale`` is relative to 640x400 (2 at 1280x800), by default from the frame width.
+    ``expected_diameter_px`` (from the measured range) fits the lit sphere of that size, and
+    ``expected_row_px`` (row, band) is where it must rest; with the size known, a frame
+    with no such ball raises.
     """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
@@ -828,10 +766,8 @@ def detect_impact_reference_ball(  # pylint: disable=too-many-locals
 ) -> ReferenceBall:  # pylint: disable=no-member
     """Find the teed ball from the region that persistently departs after impact.
 
-    Pixel limits were tuned at 640x400 and scale with ``pixel_scale`` (by default
-    from the frame width), areas with its square. ``region`` (x0, y0, x1, y1) is
-    where the setup saw the ball (P8-7); without it the fixed lower band
-    (rows 62-95 %, columns 12-88 %) stands in.
+    Pixel limits scale with ``pixel_scale`` (640x400 = 1), areas with its square.
+    ``region`` (x0, y0, x1, y1) is where setup saw the ball; otherwise a fixed lower band.
     """
     if frames.ndim != 3 or len(frames) < 20:
         raise ValueError("frames must have shape (n, height, width) with n >= 20")

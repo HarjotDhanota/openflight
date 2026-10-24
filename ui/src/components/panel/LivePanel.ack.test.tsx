@@ -13,7 +13,7 @@ import { socketService } from '../../services/socketService';
 import { makeShot, nextFrames, stubLayoutGlobals, traceTag } from '../../test/liveTraceFixtures';
 import { LivePanel } from './LivePanel';
 
-vi.mock('../../services/socketService', () => ({ socketService: { emitTrace: vi.fn() } }));
+vi.mock('../../services/socketService', () => ({ socketService: { emit: vi.fn() } }));
 
 // Node 25 ships its own (method-less without --localstorage-file) localStorage global,
 // which shadows jsdom's; the stores read it at import, so give them a working one first.
@@ -32,7 +32,7 @@ vi.hoisted(() => {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
 });
 
-const emitTrace = vi.mocked(socketService.emitTrace);
+const emitTrace = vi.mocked(socketService.emit);
 const tag = traceTag;
 
 let container: HTMLDivElement;
@@ -48,7 +48,7 @@ function render(shot: Shot | null, acknowledgeable = true, shots: Shot[] = shot 
         profileName="James"
         clubLabel="DR"
         onSelectMetric={() => {}}
-        acknowledgeable={acknowledgeable}
+        resultVisible={acknowledgeable}
       />
     );
   });
@@ -244,7 +244,7 @@ describe('LivePanel post-render acknowledgement', () => {
             profileName="James"
             clubLabel="DR"
             onSelectMetric={() => {}}
-            acknowledgeable
+            resultVisible
           />
         );
       });
@@ -273,7 +273,7 @@ describe('LivePanel post-render acknowledgement', () => {
               profileName="James"
               clubLabel="DR"
               onSelectMetric={() => {}}
-              acknowledgeable
+              resultVisible
             />
           </StrictMode>
         );

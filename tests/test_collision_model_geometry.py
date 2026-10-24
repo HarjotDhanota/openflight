@@ -17,10 +17,10 @@ import numpy as np
 import pytest
 
 from openflight import collision_model as cm, server as server_module, shot_models
-from openflight.ballistics import resolve_launch
 from openflight.club_arc import ARC_PRIOR_SOURCE, MODEL_GEOMETRY
 from openflight.clubs import ClubType
 from openflight.flight import FLIGHT_METRICS, compute_flight
+from openflight.flight_sim import resolve_launch
 from openflight.launch_monitor import Shot
 from openflight.sim import resolver
 from openflight.sim.resolver import resolve_shot

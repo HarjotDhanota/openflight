@@ -68,7 +68,6 @@ export function formatMetricValue(record: ShotMetric, unitSystem: UnitSystem, id
     case 'mm':
       return [signed(value.toFixed(0), value, id), 'mm'];
     case 'm':
-      // the ball's distance (13 Oct): to the centimetre
       return [value.toFixed(2), 'm'];
     case '':
       return [value.toFixed(2), ''];

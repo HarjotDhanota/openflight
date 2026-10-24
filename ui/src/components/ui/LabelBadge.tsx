@@ -9,13 +9,7 @@ interface LabelBadgeProps {
   compact?: boolean;
 }
 
-/**
- * One badge per label, each visibly different (D38, D39):
- * measured is a plain outline, calculated a solid accent outline, model geometry
- * a dashed accent outline, estimated a filled accent block with the ≈ mark, and
- * experimental a dotted outline in its own colour, titled "not yet validated".
- * Not measured has no badge: the metric shows why instead.
- */
+/** One visibly different badge per label; not measured has no badge (the metric shows why). */
 export function LabelBadge({ status, compact = false }: LabelBadgeProps) {
   if (!isValueLabel(status)) return null;
   const name = t(`label.${status}` as MessageKey);

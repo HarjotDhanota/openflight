@@ -1,9 +1,4 @@
-"""The TrackMan-style fixed placement box (contract ``placement-box``, 13 Oct).
-
-The box is fixed: it covers ball positions on the ground 1.8-2.9 m out along the
-lens's boresight and 0.3 m either side, drawn through the selected lens with a
-margin for the camera tilt's uncertainty. The box never yields a distance.
-"""
+"""The fixed placement box: ground 1.8-2.9 m out along the boresight, 0.3 m either side."""
 
 import math
 
@@ -13,7 +8,7 @@ import pytest
 from openflight.camera import ground_patch, placement_box
 from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
 
-RADIUS_M = 0.04267 / 2.0
+RADIUS_M = 0.0427 / 2.0
 
 
 def _v3(width=1280, height=800, *, focal_scale=1.0, pitch_deg=0.0):
@@ -50,7 +45,6 @@ def test_the_fixed_box_covers_the_window_on_the_ground():
     assert corners[:, 0].max() == pytest.approx(0.3)
     assert corners[:, 1].min() == pytest.approx(1.8)
     assert corners[:, 1].max() == pytest.approx(2.9)
-    # a GroundPatch with its own depth survives the round trip through a record
     again = ground_patch.GroundPatch.from_dict(box.to_dict())
     np.testing.assert_allclose(again.corners(0.0), corners)
 
@@ -61,8 +55,7 @@ def test_the_fixed_box_covers_the_window_on_the_ground():
 def test_a_ball_anywhere_in_the_window_is_inside_the_drawn_box_at_an_unknown_tilt(
     forward_m, lateral_m, true_pitch_deg
 ):
-    """Drawn at the nominal (level) pitch, the box holds the ball whatever the camera's
-    true pitch within the uncalibrated +-4.5 deg (indoor-test-1 measured 2-4 deg)."""
+    """Drawn at level pitch, the box holds the ball for any true pitch within +-4.5 deg."""
     nominal = _v3()
     truth = _v3(pitch_deg=true_pitch_deg)
     projection = placement_box.project_fixed_box(nominal, calibrated=False, roll_deg=0.0)
@@ -113,16 +106,14 @@ def test_the_ray_window_follows_the_camera_s_direction_and_the_box_s_depth():
     pixel = project_to_pixel(camera, (0.1, 2.2, RADIUS_M))
 
     loose = placement_box.ray_window(camera, pixel, pad_deg=3.0, far_cap_m=4.4)
-    # a calibrated tilt's own uncertainty (a tenth of a degree from a validated pair)
     tight = placement_box.ray_window(camera, pixel, pad_deg=0.1, far_cap_m=4.4)
 
     expected = math.dist((0.1, 2.2, RADIUS_M), camera.radar_origin_lfu)
     assert tight["nominal_m"] == pytest.approx(expected, abs=1e-3)
     assert tight["window_m"][0] < expected < tight["window_m"][1]
-    # at 95 mm a 3 deg pad reaches the horizon: the far side is capped (the net)
+    # at 95 mm a 3 deg pad reaches the horizon: the far side is capped
     assert loose["window_m"][1] == pytest.approx(4.4)
     assert loose["window_m"][0] < tight["window_m"][0]
-    # even then the row is a poor ruler at 95 mm: a tenth of a degree is +-0.1 m here
     assert tight["window_m"][1] - tight["window_m"][0] < 0.3
 
 
@@ -167,15 +158,13 @@ def test_a_fit_a_few_pixels_past_the_outline_still_counts_with_a_margin():
 
 
 def test_the_size_window_is_the_ball_s_physical_range_not_the_tilt_s():
-    """A ball's size does not depend on the camera's pitch: the smallest ball the box
-    looks for stands just past the window (2.9 m + 0.6 m), not at the horizon."""
+    """The smallest ball the box looks for stands just past the window, not at the horizon."""
     camera = _v3()
     config = placement_box.load_config()
 
     projection = placement_box.project_fixed_box(camera, calibrated=False, roll_deg=0.0)
 
     far = config.placement_window_m[1] + config.size_far_margin_m
-    smallest = camera.focal_size_px * 0.04267 / far / (1.0 + ground_patch.SIZE_TOLERANCE)
+    smallest = camera.focal_size_px * 0.0427 / far / (1.0 + ground_patch.SIZE_TOLERANCE)
     assert projection.diameter_px[0] == pytest.approx(smallest, rel=1e-3)
-    # the near end stays the padded one: a ball short of the window still fits
-    assert projection.diameter_px[1] > camera.focal_size_px * 0.04267 / 1.2
+    assert projection.diameter_px[1] > camera.focal_size_px * 0.0427 / 1.2

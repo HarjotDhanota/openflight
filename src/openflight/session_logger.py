@@ -366,13 +366,7 @@ class SessionLogger:
         update: Dict[str, Any],
         expected_session_uuid: Optional[str] = None,
     ) -> bool:
-        """Log a later, fuller version of an already-logged shot.
-
-        Written as a ``shot_updated`` entry with the same schema as
-        ``shot_detected`` and the same ``shot_number``. It replaces that shot's
-        metrics for readers that apply updates, and never counts as another
-        shot: ``shots_detected`` and the ``shot_detected`` lines are unchanged.
-        """
+        """Log a fuller version of a logged shot (``shot_updated``); never counted as another."""
         if not self.enabled:
             return False
         if isinstance(shot.shot_number, bool) or not isinstance(shot.shot_number, int):
@@ -478,40 +472,13 @@ class SessionLogger:
         with self._write_lock:
             return self._session_uuid if self._session_file else None
 
-    def log_fusion_diagnostic(self, expected_session_uuid: str, snapshot: Dict[str, Any]) -> bool:
-        """Write a snapshot only to the exact session pinned at shot admission."""
+    def log_pinned(self, entry_type: str, expected_session_uuid: str, data: Dict[str, Any]) -> bool:
+        """Write one strict-JSON entry only to the session pinned at shot admission."""
         if not self.enabled:
             return False
         line = (
             json.dumps(
-                {"ts": datetime.now().isoformat(), "type": "fusion_diagnostic", **snapshot},
-                allow_nan=False,
-            )
-            + "\n"
-        )
-        with self._write_lock:
-            if (
-                not self._session_file
-                or self._session_uuid != expected_session_uuid
-                or snapshot.get("session_uuid") != expected_session_uuid
-            ):
-                return False
-            self._session_file.write(line)
-            self._session_file.flush()
-            return True
-
-    def log_shot_enrichment(
-        self,
-        expected_session_uuid: str,
-        lifecycle: Dict[str, Any],
-    ) -> bool:
-        """Record deadline continuation and how each late enrichment result was applied."""
-        if not self.enabled:
-            return False
-        line = (
-            json.dumps(
-                {"ts": datetime.now().isoformat(), "type": "shot_enrichment", **lifecycle},
-                allow_nan=False,
+                {"ts": datetime.now().isoformat(), "type": entry_type, **data}, allow_nan=False
             )
             + "\n"
         )
@@ -521,6 +488,10 @@ class SessionLogger:
             self._session_file.write(line)
             self._session_file.flush()
             return True
+
+    def log_shot_enrichment(self, expected_session_uuid: str, lifecycle: Dict[str, Any]) -> bool:
+        """Record deadline continuation and how each late enrichment result was applied."""
+        return self.log_pinned("shot_enrichment", expected_session_uuid, lifecycle)
 
     def log_camera_capture(
         self,
@@ -623,11 +594,7 @@ class SessionLogger:
         ball_range: Optional[Dict[str, Any]] = None,
         gate_event: Optional[Dict[str, Any]] = None,
     ):
-        """Log the TI raw-dump reference and complete LCMF evidence.
-
-        ``launch_range`` is the shot's own IWR launch-point estimate and ``ball_range``
-        the range its metrics used, with source and label (13 Oct).
-        """
+        """Log the TI raw-dump reference and complete LCMF evidence, with the shot's IWR ranges."""
         if not self.enabled:
             return
         self._write_entry(
@@ -705,11 +672,7 @@ class SessionLogger:
         missing: List[str],
         shot_timestamp: str,
     ):
-        """Log a shot withheld from the connected simulators, with the reason (D31).
-
-        A fusion unit sends only what it measured: a shot missing a field the
-        simulator protocol requires is not sent, and no shot number is spent.
-        """
+        """Log a shot withheld from the simulators, with the reason; no shot number is spent."""
         if not self.enabled:
             return
 
@@ -823,8 +786,7 @@ class SessionLogger:
                 "ball_speed_mph": ball_speed_mph,
                 "club_speed_mph": club_speed_mph,
                 "spin_rpm": spin_rpm,
-                # a diagnostic: the ball-speed table at detection, not the shot's
-                # carry (that is the shot_detected entry's carry_spin_adjusted)
+                # a diagnostic: the ball-speed table at detection, not the shot's carry
                 "table_carry_estimate_yards": table_carry_estimate_yards,
                 "latency_ms": latency_ms,
                 "stage_timing": stage_timing,
@@ -907,8 +869,7 @@ class SessionLogger:
             impact_first_ball_timestamp_ms: First ball-like frame start time
             impact_first_ball_center_ms: First ball-like frame center time
             impact_min_transition_delta_mph: Minimum speed jump for transition
-            trigger_latency_ms: Legacy whole trigger-strategy wall duration (ms),
-                including golfer idle wait. See stage_timing for authoritative boundaries.
+            trigger_latency_ms: Whole trigger-strategy wall duration (ms), including idle wait
             stage_timing: Versioned monotonic duration/provenance contract
             smash_factor: Ball speed / club speed ratio
             spin_rpm: Detected spin rate in RPM

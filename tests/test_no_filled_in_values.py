@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import server as server_module, shot_models
-from openflight.ballistics import resolve_launch
 from openflight.clubs import ClubType
+from openflight.flight_sim import resolve_launch
 from openflight.launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from openflight.sim.resolver import resolve_shot
 from openflight.sim.types import PlayerState
@@ -267,7 +267,7 @@ def _measure_launch(shot, *, horizontal=True, spin_axis=True):
 
 
 def _ballistic_carry(shot, *, substitutes):
-    from openflight.ballistics import simulate
+    from openflight.flight_sim import simulate
 
     conditions = resolve_launch(shot, substitutes=substitutes)
     assert conditions is not None
@@ -498,7 +498,7 @@ def test_a_fusion_unit_says_carry_not_measured_from_first_emit_to_session_log(
         "get_session_logger",
         lambda: SimpleNamespace(
             log_shot=lambda shot, pipeline_ms=None, **_k: logged.append(shot.to_dict()) or True,
-            log_fusion_diagnostic=lambda *_a, **_k: None,
+            log_pinned=lambda *_a, **_k: None,
         ),
     )
     server_module._reset_shot_sequence()  # pylint: disable=protected-access

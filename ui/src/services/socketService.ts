@@ -18,7 +18,7 @@ import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSessionClub } from './sessionClubSync';
 import { ingestHandedness } from '../utils/handedness';
-import { answerClockPing, noteShotReceived } from './paintTrace';
+import { uiExtensions } from '../extensions';
 import { remainingShotsAfterClear } from './sessionClear';
 import { useProfileStore } from '../stores/useProfileStore';
 import type { ProfilesSnapshot } from '../types/profile';
@@ -46,13 +46,15 @@ class SocketService {
     }
   }
 
-  /** Stage 1b trace reports (clock pongs, post-render and not-shown reports). */
-  emitTrace(event: string, payload: unknown) {
+  /** Send one event to the kiosk; dropped while disconnected. */
+  emit(event: string, payload: unknown) {
     this.socket?.emit(event, payload);
   }
 
   private setupListeners() {
     if (!this.socket) return;
+    const socket = this.socket;
+    uiExtensions.forEach((extension) => extension.onSocket?.(socket));
 
     this.socket.on('connect', () => {
       console.log('Connected to server');
@@ -62,9 +64,7 @@ class SocketService {
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
-      // Stage 1b trace: ask for a clock ping at once (a traced server answers this
-      // socket only; an untraced one ignores the event).
-      this.socket?.emit('trace_clock_hello');
+      uiExtensions.forEach((extension) => extension.onConnect?.(socket));
     });
 
     this.socket.on('disconnect', () => {
@@ -85,19 +85,14 @@ class SocketService {
       }
     });
 
-    // The trace notes the receive time first; it never throws, so the shot is always handled.
     this.socket.on('shot', (data: ShotMessage) => {
-      noteShotReceived(data?.shot, 'shot', data?.trace);
+      uiExtensions.forEach((extension) => extension.onShotMessage?.('shot', data));
       handleShotMessage(data);
     });
 
     this.socket.on('shot_update', (data: ShotUpdateMessage) => {
-      noteShotReceived(data?.shot, 'shot_update', data?.trace);
+      uiExtensions.forEach((extension) => extension.onShotMessage?.('shot_update', data));
       handleShotUpdate(data);
-    });
-
-    this.socket.on('trace_clock_ping', (data: { ping_seq: number }) => {
-      answerClockPing(data, (event, payload) => this.emitTrace(event, payload));
     });
 
     // Swing-speed mode also emits a normal `shot` event, handled above, so the

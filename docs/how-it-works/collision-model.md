@@ -246,7 +246,7 @@ the far side of b from v. That fixes it: `n = cos θ · b + sin θ · u`, with u
 the unit vector in that plane, normal to b, pointing away from v. Face angle
 and dynamic loft are the azimuth and elevation of n (`rigid_body_face`).
 
-**The constant.** c = 7.5005 mm, which is I = 0.352 · m r² for r = 21.335 mm
+**The constant.** c = 7.5005 mm, which is I = 0.351 · m r² for r = 21.35 mm
 (a uniform sphere would be 0.4). It comes from a clean-room study of the
 6 May 2026 TM4 export: the relation held for driver, 7-iron and wedge with a
 relative spread of 2.5 × 10⁻⁴. With it, the code rebuilds TM4's face angle to

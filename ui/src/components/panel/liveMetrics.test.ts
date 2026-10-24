@@ -153,7 +153,6 @@ describe('buildLiveMetrics', () => {
 
     expect(measured).toMatchObject({ value: '214', unit: 'yds' });
     expect(measured.status).toBe('calculated');
-    // the integration's bug: a calculated carry on a measured spin was badged estimated
     expect(calculated).toMatchObject({ value: '214', status: 'calculated' });
   });
 
@@ -452,7 +451,7 @@ describe('face angle', () => {
   });
 
   it('rides on the camera path the server built it from, not an accepted IWR path', () => {
-    // Server displayed_club_path() mirrors this precedence (audit F1).
+    // Server displayed_club_path() mirrors this precedence.
     const metrics = buildLiveMetrics(
       makeShot({
         club_path_deg: null,

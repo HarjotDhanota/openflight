@@ -7,23 +7,19 @@ const METRIC_SPEED_UNIT = 'km/h';
 const IMPERIAL_DISTANCE_UNIT = 'yds';
 const METRIC_DISTANCE_UNIT = 'm';
 
-/** Placeholder for a metric the shot has no value for (the server sends a non-finite one as null). */
+/** Placeholder for a metric the shot has no value for. */
 export const NO_VALUE = '—';
 
-/**
- * The one missing-value rule: a metric is shown only when it is a finite number.
- * null (the server's not-measured), undefined, NaN and infinities are all missing.
- */
+/** The one missing-value rule: a metric is shown only when it is a finite number. */
 export function isMeasured(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-/** The unit to show beside a value: none when the value is missing (never "— mph"). */
+/** The unit to show beside a value: none when the value is missing. */
 export function unitIfMeasured(value: unknown, unit: string): string | undefined {
   return isMeasured(value) ? unit : undefined;
 }
 
-/** The first measured value, or null when none is. */
 export function firstMeasured(...values: unknown[]): number | null {
   const found = values.find(isMeasured);
   return found === undefined ? null : found;

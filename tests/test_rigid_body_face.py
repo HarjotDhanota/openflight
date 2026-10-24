@@ -69,7 +69,7 @@ def _face(
 
 def test_the_constant_is_i_over_m_r_for_the_stated_ball():
     assert cm.RIGID_BODY_C_M == pytest.approx(7.5005e-3)
-    assert cm.RIGID_BODY_C_M / cm.RIGID_BODY_BALL_RADIUS_M == pytest.approx(0.352, abs=5e-4)
+    assert cm.RIGID_BODY_C_M / cm.RIGID_BODY_BALL_RADIUS_M == pytest.approx(0.3513, abs=5e-4)
 
 
 def test_hand_computed_straight_strike():

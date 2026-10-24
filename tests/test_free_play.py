@@ -68,7 +68,7 @@ def test_free_play_starts_without_a_gain_screen_or_ladder(
     setup_saw_ball(tmp_path)
     catalogue = ts.lens_profiles.load_catalogue()
     settings_path = tmp_path / "lens-settings.json"
-    store = ts.lens_profiles.LensSettingsStore(settings_path, catalogue)
+    store = ts.lens_settings.LensSettingsStore(settings_path, catalogue)
     store.save_settings(
         catalogue.reference_lens_id, {"modes": ["arm5", "arm6"], "default_arm": default_arm}
     )
@@ -275,11 +275,14 @@ def test_shot_geometry_warning_preserves_radial_speed_and_freezes_exposure():
     from openflight.launch_monitor import Shot
 
     shot = Shot(ball_speed_mph=150, club_speed_mph=100, timestamp=datetime.now())
-    shot.free_play_run_id = "run-one"
-    shot.geometry_unverified = True
-    shot.free_play_exposure = {"status": "recorded", "decision": {"setting": {"exposure_us": 100}}}
+    shot.extras["free_play_run_id"] = "run-one"
+    shot.extras["geometry_unverified"] = True
+    shot.extras["free_play_exposure"] = {
+        "status": "recorded",
+        "decision": {"setting": {"exposure_us": 100}},
+    }
     record = shot.to_dict()
-    shot.free_play_exposure["decision"]["setting"]["exposure_us"] = 200
+    shot.extras["free_play_exposure"]["decision"]["setting"]["exposure_us"] = 200
     assert record["exposure_decision"]["decision"]["setting"]["exposure_us"] == 100
     assert record["metrics"]["ball_speed"]["value"] == 150
     assert not record["metrics"]["ball_speed"].get("geometry_validation")
@@ -559,7 +562,7 @@ def free_play_app(tmp_path, modes=("arm5", "arm6"), default_arm="arm5", ladder=N
     setup_locked_ball(tmp_path)
     catalogue = ts.lens_profiles.load_catalogue()
     settings_path = tmp_path / "lens-settings.json"
-    store = ts.lens_profiles.LensSettingsStore(settings_path, catalogue)
+    store = ts.lens_settings.LensSettingsStore(settings_path, catalogue)
     settings = {"modes": list(modes), "default_arm": default_arm}
     if ladder is not None:
         settings["ladder"] = ladder

@@ -17,7 +17,6 @@ V3 = "config/enclosure_v3_rig_geometry.json"
 
 @pytest.fixture(autouse=True)
 def _restore_module_globals():
-    """Each test loads geometry into module state; put it back afterwards."""
     saved = (server.rig_geometry, dict(server.rig_geometry_config))
     yield
     server.rig_geometry, server.rig_geometry_config = saved[0], saved[1]
@@ -36,9 +35,7 @@ class TestTheGeometryReplacesTheFlags:
         block = config["rig_geometry"]
         assert block["enabled"] is True
         assert block["path"].endswith("enclosure_v3_rig_geometry.json")
-        # first_look decides whether numbers may be attributed to sensors by
-        # the presence of exactly this block, so the derived values ride in it.
-        # the virtual array's phase centre, 7.85 mm above the RX row (audit F11)
+        # first_look reads this block; the phase centre is 7.85 mm above the RX row
         assert block["derived"]["radar_height_m"] == pytest.approx(0.0522, abs=5e-4)
         assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.0444, abs=5e-4)
         assert block["derived"]["provenance"]
@@ -78,17 +75,13 @@ class TestTheTiltArithmetic:
         return configured_deg + (measured_deg - expected_deg)
 
     def test_a_level_enclosure_on_a_level_floor_keeps_its_mount_angle(self):
-        # v3: shell level, radar on a +10 deg mount, LIS3DH reads 0.
         assert self._effective(10.0, 0.0, 0.0) == pytest.approx(10.0)
 
     def test_a_level_enclosure_on_a_sloping_floor_is_corrected(self):
-        # The floor drops the nose 2 deg; the radar really points 8 deg up.
         assert self._effective(10.0, -2.0, 0.0) == pytest.approx(8.0)
 
     def test_a_leaning_housing_is_not_double_counted(self):
-        # v42: housing leans 10 deg and the LIS3DH, parallel to it, reads +10.
-        # Summing would hand the LCMF 20 deg -- roughly 20 deg of launch angle
-        # at the ~2 deg per degree of tilt the estimator carries.
+        # housing leans 10 deg and the LIS3DH, parallel to it, reads +10
         assert self._effective(10.0, 10.0, 10.0) == pytest.approx(10.0)
         naive = 10.0 + 10.0
         assert naive == pytest.approx(20.0), "the defect this test exists to prevent"
@@ -97,8 +90,6 @@ class TestTheTiltArithmetic:
         assert self._effective(10.0, 12.5, 10.0) == pytest.approx(12.5)
 
     def test_an_unknown_expectation_falls_back_to_the_raw_reading(self):
-        # No geometry file: expected is None, the server reads it as 0.0, and
-        # the behaviour is the old one rather than a crash.
         server.init_rig_geometry(None)
         expected = server._expected_inclinometer_orientation().get("pitch_deg") or 0.0
         assert self._effective(10.0, 1.5, expected) == pytest.approx(11.5)
@@ -144,7 +135,7 @@ class TestTheFileTravelsWithItsProvenance:
 
 
 class TestTheSwingServerNeedsTheRigFile:
-    """C1 (decision D6): no swing server run falls back to July or August geometry."""
+    """No swing server run falls back to a built-in geometry."""
 
     @staticmethod
     def _main(monkeypatch, tmp_path, argv):
@@ -161,7 +152,6 @@ class TestTheSwingServerNeedsTheRigFile:
             raise Started
 
         monkeypatch.setattr(server, "init_iwr6843", fake_init_iwr6843)
-        # nothing past argument handling may reach hardware or serve
         monkeypatch.setattr(server, "init_camera_capture", started)
         monkeypatch.setattr(server, "start_monitor", started)
         monkeypatch.setattr(server.socketio, "run", started)
@@ -202,7 +192,6 @@ class TestTheSwingServerNeedsTheRigFile:
         assert received["tilt_deg"] == pytest.approx(10.0)
 
     def test_the_board_rotation_comes_from_the_rig_file(self, monkeypatch, tmp_path):
-        """LCMF places each antenna off the phase centre by the board's turn."""
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
         assert received["board_rotation_deg"] == 90.0
 
@@ -223,14 +212,13 @@ class TestTheSwingServerNeedsTheRigFile:
         assert layout.rx_row_height_m == pytest.approx(0.195 - 0.0506, abs=1e-6)
 
     def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
-        # the 0.20955 m (8.25 in) July height is gone: no rig, no height, no start
         with pytest.raises(SystemExit):
             self._main(monkeypatch, tmp_path, ["--camera-capture"])
         assert "--rig-geometry" in capsys.readouterr().err
 
 
 class TestTheBoardCalibrationCarriesNoInstallation:
-    """C1: the corner-reflector JSON's July mount (0.1524 m, 10.4 deg) is not the rig."""
+    """The corner-reflector calibration JSON's mount is not the rig."""
 
     def test_its_radar_height_never_reaches_the_calibration(self):
         from openflight.iwr6843.calibration import Calibration  # noqa: PLC0415
@@ -328,7 +316,6 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         assert layout.basis == antennas.RIG_BASIS
         assert layout.board_rotation_deg == 90.0
         assert layout.rx_row_height_m == pytest.approx(0.0444)
-        # the server's radar height stays the phase centre's, which others read
         assert runtime.calibration.radar_height_m == pytest.approx(0.05225, abs=1e-5)
         effective = runtime.calibration_provenance["effective"]
         assert effective["iwr_board_rotation_deg"] == 90.0
@@ -337,8 +324,7 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         assert server.iwr6843_runtime_config["antenna_layout"] == layout.as_dict()
 
     def test_a_rig_without_the_rotation_reads_its_height_as_the_rx_row(self, monkeypatch, tmp_path):
-        """Such a rig's radar height IS the RX row (EnclosureSetup, F11), and
-        the board is taken as turned +90 deg, as the legacy reading does."""
+        """Such a rig's radar height is the RX row and the board is taken as turned +90 deg."""
         from openflight.iwr6843 import antennas  # noqa: PLC0415
 
         runtime = self._init_v3(
@@ -368,7 +354,7 @@ class TestTheBoardCalibrationCarriesNoInstallation:
 
 
 class TestThe320x200StripIsRefusedForMeasurement:
-    """C12: 320x200 is a movable crop whose strip offset the camera models do not apply."""
+    """320x200 is a movable crop whose strip offset the camera models do not apply."""
 
     @staticmethod
     def _capture(*offsets, status="uniform"):

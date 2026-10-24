@@ -56,13 +56,12 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
   const measured = isMeasured(record.value) && record.status !== 'not_measured';
   const reason = record.reason || t('label.not_measured');
   const short = shortReason(record.reason);
-  // a developer's reason is cut off by the cell: say it plainly, the full one on a tap (9)
+  // a long reason is cut off by the cell: show it plainly, the full one on a tap
   const tappable = !measured && Boolean(record.reason) && short !== record.reason;
   const { open, props } = useTapToggle(tappable);
   const details: string[] = [];
   if (measured && spec.id === 'ball_range') {
-    // where this shot's distance came from (13 Oct): its own radar launch point, or
-    // the setup camera's coarse estimate standing in
+    // the shot's own radar launch point, or the setup camera's coarse estimate
     details.push(t(record.status === 'measured' ? 'metrics.ballRangeRadar' : 'metrics.ballRangeCamera'));
   }
   if (measured) {
@@ -124,7 +123,7 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
   );
 }
 
-/** The metrics not built yet, in one row while they have no value; a tap lists why (9). */
+/** The metrics not built yet, in one row while they have no value; a tap lists why. */
 function ComingLaterCell({ items }: { items: Array<{ spec: MetricSpec; record: ShotMetric | undefined }> }) {
   const { t } = useI18n();
   const { open, props } = useTapToggle(true);
@@ -160,10 +159,7 @@ interface MetricGroupPanelProps {
   sessionShots?: readonly Shot[];
 }
 
-/**
- * Club and Flight panels: every metric of the shot, grouped, each with its label
- * badge, a not-measured metric with its reason (D15, D17, D38, D39), and the face view.
- */
+/** Club and Flight panels: every metric grouped, with its label badge or not-measured reason. */
 export function MetricGroupPanel({
   view,
   shot,

@@ -10,9 +10,8 @@ Gotchas baked in (each cost a debugging session):
 - One serial handle only — two handles on one tty steal each other's bytes.
 - The CP2105 can stall a stream for seconds (cp210x -110 control timeouts)
   and resume; the reader waits out gaps up to ``stall_tolerance_s``.
-- Linux raises DTR/RTS on every tty open before pyserial can clear them, so
-  auto-detection never opens the CP2105 Standard interface: the CLI is only
-  on Enhanced/UARTA (interface 00) and that probe would be a blind line pulse.
+- Linux pulses DTR/RTS on open, so auto-detection never opens the CP2105
+  Standard interface (the CLI is only on Enhanced, if00).
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from __future__ import annotations
 import glob
 import logging
 import os
-import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -37,11 +35,6 @@ _CP2105_USB_ID = ("10c4", "ea70")
 _CP2105_INTERFACE_NAMES = {0: "CP2105 Enhanced if00", 1: "CP2105 Standard if01"}
 _CP2105_STANDARD_INTERFACE = 1
 _PROBE_WINDOW_S = 1.5
-# Reply windows for the W4a firmware's perfstats and l3bench (l3bench passes over the whole
-# stopped ring). Public so a caller that sends these commands itself, to keep the raw
-# reply, waits exactly as long as perf_stats and bench_kernel do.
-PERF_REPLY_WINDOW_S = 2.0
-BENCH_REPLY_WINDOW_S = 10.0
 _BY_ID_GLOB = "/dev/serial/by-id/*"
 _RESET_ACTION = "press RESET on the IWR6843 board once with its switches in functional mode"
 
@@ -61,9 +54,8 @@ class IWR6843DumpRecoveryError(RuntimeError):
 class DumpTransferTiming:
     """Host ``time.monotonic_ns()`` marks of one ``l3dump`` transfer.
 
-    Each mark is taken when the host read that returned those bytes came back, so it
-    bounds their arrival from above; ``request_written_ns`` is taken after ``write``
-    returned. A mark the transfer never reached is None, never estimated.
+    Each mark is taken when its read returned (an upper bound on arrival); a mark
+    the transfer never reached is None.
     """
 
     request_written_ns: int
@@ -75,214 +67,6 @@ class DumpTransferTiming:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-_NOT_IN_BUILD = "not_in_build"
-_NOT_CREATED = "not_created"
-_NO_SAMPLES = "no samples"
-_MARGIN_UNSET = 0xFFFFFFFF  # margin_min before any margin was measured
-
-# perfstats line tag -> {firmware field -> (result key, value kind)}.
-# Kinds: "int"; "pair" (used/size); "pair?" (a pair, or the marker not_created).
-_PERF_GRAMMAR: dict[str, dict[str, tuple[str, str]]] = {
-    "perf": {
-        name: (name, "int")
-        for name in (
-            "tick_hz",
-            "rearm_max",
-            "rearms",
-            "task_max",
-            "task_runs",
-            "margin_min",
-            "margin_frames",
-            "scan_max",
-            "scan_frames",
-            "scan_total_hi",
-            "scan_total_lo",
-            "pack_max",
-            "packs",
-            "pack_overlap",
-            "iq8_overflow",
-            "iq8_overflow_saturated",
-        )
-    },
-    "heap": {
-        "size": ("heap_size", "int"),
-        "free": ("heap_free", "int"),
-        "free_min": ("heap_free_min", "int"),
-        "largest": ("heap_largest", "int"),
-    },
-    "stacks": {
-        "init": ("stack_init", "pair?"),
-        "ctrl": ("stack_ctrl", "pair?"),
-        "rearm": ("stack_rearm", "pair?"),
-        "cli": ("stack_cli", "pair?"),
-        "hwi": ("stack_hwi", "pair"),
-    },
-}
-# "perf scan=not_in_build pack=not_in_build": a build without the IQ8 scan and EDMA pack.
-_PERF_NO_SCAN_WORDS = (f"scan={_NOT_IN_BUILD}", f"pack={_NOT_IN_BUILD}")
-_PERF_SCAN_RESULT_KEYS = (
-    "scan_max",
-    "scan_frames",
-    "scan_total",
-    "pack_max",
-    "packs",
-    "pack_overlap",
-    "iq8_overflow",
-    "iq8_overflow_saturated",
-)
-_PERF_SCAN_KEYS = (
-    "scan_max",
-    "scan_frames",
-    "scan_total_hi",
-    "scan_total_lo",
-    "pack_max",
-    "packs",
-    "pack_overlap",
-    "iq8_overflow",
-    "iq8_overflow_saturated",
-)
-# Required in every build; the scan group is added unless the no-scan marker line is present.
-_PERF_REQUIRED = (
-    "tick_hz",
-    "rearm_max",
-    "rearms",
-    "task_max",
-    "task_runs",
-    "margin_min",
-    "margin_frames",
-    "heap_size",
-    "heap_free",
-    "heap_free_min",
-    "heap_largest",
-    "stack_init",
-    "stack_ctrl",
-    "stack_rearm",
-    "stack_cli",
-    "stack_hwi",
-)
-# Result key -> the count that says whether it was ever measured.
-_PERF_COUNTED = {
-    "rearm_max": "rearms",
-    "task_max": "task_runs",
-    "margin_min": "margin_frames",
-    "scan_max": "scan_frames",
-    "scan_total": "scan_frames",
-    "iq8_overflow": "scan_frames",
-    "pack_max": "packs",
-    "pack_overlap": "packs",
-}
-_BENCH_LINE = re.compile(r"bench samples=(\d+) cycles=(\d+) sum_hi=(\d+) sum_lo=(\d+)")
-
-
-def parse_perf_stats(text: str) -> dict[str, Any]:
-    """Parse the firmware's four ``perfstats`` lines (``l3_cli_perfStats``); refuse anything else.
-
-    Values the firmware did not measure are ``None`` with their reason in
-    ``result["unavailable"]``, never 0: ``not_in_build`` (scan and pack in a build
-    without them), ``not_created`` (a task with no handle) and ``no samples`` (a maximum
-    or total whose own count is 0, or ``margin_min`` at its 4294967295 sentinel with
-    ``margin_frames=0``). ``scan_total`` is the 64-bit sum of ``scan_total_hi/lo``.
-    ``iq8_overflow_saturated`` is a bool: True means ``iq8_overflow`` is a floor (at least
-    that many components), not a count. Fields are ints; ``stack_*`` are
-    ``{"used", "size"}``; the counts (``rearms``, ``task_runs``, ``margin_frames``,
-    ``scan_frames``, ``packs``) stay ints, 0 included.
-    """
-    values: dict[str, Any] = {}
-    unavailable: dict[str, str] = {}
-    markers: set[str] = set()
-    for line in text.splitlines():
-        words = line.strip().split()
-        if not words or words[0] not in _PERF_GRAMMAR:
-            continue
-        tag = words[0]
-        for word in words[1:]:
-            if tag == "perf" and word in _PERF_NO_SCAN_WORDS:
-                markers.add(word.partition("=")[0])
-            else:
-                _read_perf_word(tag, word, values, unavailable)
-    if markers:
-        if markers != {"scan", "pack"} or any(key in values for key in _PERF_SCAN_KEYS):
-            raise ValueError(
-                "perfstats scan/pack marker line is incomplete or mixed with scan fields"
-            )
-    required = _PERF_REQUIRED + (() if markers else _PERF_SCAN_KEYS)
-    missing = [key for key in required if key not in values]
-    if missing:
-        raise ValueError(f"perfstats reply lacks {missing} (firmware without W4a evidence?)")
-    if values["tick_hz"] == 0:
-        raise ValueError("unreadable perfstats field tick_hz=0")
-    if markers:
-        for key in _PERF_SCAN_RESULT_KEYS:
-            values[key] = None
-            unavailable[key] = _NOT_IN_BUILD
-    else:
-        flag = values["iq8_overflow_saturated"]
-        if flag not in (0, 1):
-            raise ValueError(f"unreadable perfstats field iq8_overflow_saturated={flag}")
-        values["iq8_overflow_saturated"] = bool(flag)
-        values["scan_total"] = (values.pop("scan_total_hi") << 32) | values.pop("scan_total_lo")
-    for key, count_key in _PERF_COUNTED.items():
-        if key not in unavailable:
-            _gate_unmeasured(values, unavailable, key, count_key)
-    values["unavailable"] = unavailable
-    return values
-
-
-def _read_perf_word(
-    tag: str, word: str, values: dict[str, Any], unavailable: dict[str, str]
-) -> None:
-    """Store one ``name=value`` word of a perfstats line under its result key."""
-    name, _, raw = word.partition("=")
-    if name not in _PERF_GRAMMAR[tag]:
-        raise ValueError(f"unexpected perfstats field {word!r} on the {tag} line")
-    key, kind = _PERF_GRAMMAR[tag][name]
-    if key in values:
-        raise ValueError(f"duplicate perfstats field {key}")
-    first, slash, second = raw.partition("/")
-    if kind == "int" and first.isdigit() and not slash:
-        values[key] = int(first)
-    elif kind.startswith("pair") and first.isdigit() and second.isdigit():
-        values[key] = {"used": int(first), "size": int(second)}
-    elif kind == "pair?" and raw == _NOT_CREATED:
-        values[key] = None
-        unavailable[key] = _NOT_CREATED
-    else:
-        raise ValueError(f"unreadable perfstats field {word!r} ({key})")
-
-
-def _gate_unmeasured(
-    values: dict[str, Any], unavailable: dict[str, str], key: str, count_key: str
-) -> None:
-    """None (reason "no samples") for a value whose own count is 0; refuse a contradiction."""
-    sentinel = _MARGIN_UNSET if key == "margin_min" else 0
-    if values[count_key] == 0:
-        if values[key] != sentinel:
-            raise ValueError(f"perfstats {key}={values[key]} beside {count_key}=0")
-        values[key] = None
-        unavailable[key] = _NO_SAMPLES
-    elif key == "margin_min" and values[key] == sentinel:
-        raise ValueError(
-            f"perfstats margin_min is the unmeasured sentinel beside "
-            f"margin_frames={values[count_key]}"
-        )
-
-
-def parse_bench(text: str) -> dict[str, Any]:
-    """Parse the ``l3bench`` reply; the sum is exact (two 32-bit halves)."""
-    if "stop the sensor" in text:
-        raise RuntimeError("l3bench refused: stop the sensor before l3bench")
-    match = _BENCH_LINE.search(text)
-    if match is None:
-        raise RuntimeError(f"no l3bench reply in {text.strip()[:120]!r}")
-    samples, cycles, high, low = (int(group) for group in match.groups())
-    return {
-        "samples": samples,
-        "cycles": cycles,
-        "sum": (high << 32) | low,
-        "cycles_per_sample": cycles / samples if samples else None,
-    }
 
 
 def _read_sysfs(directory: str, name: str) -> str:
@@ -334,25 +118,6 @@ def port_identity(port: str) -> dict[str, Any]:
         "usb_interface": usb[2] if usb else None,
         "cp2105_interface": _CP2105_INTERFACE_NAMES.get(_cp2105_interface(usb)),
     }
-
-
-def no_help_reply_message(port: str) -> str:
-    """Why a configured port gave no CLI help, naming the device and the operator action."""
-    identity = port_identity(port)
-    where = port if identity["resolved"] == port else f"{port} -> {identity['resolved']}"
-    interface = identity["cp2105_interface"]
-    if interface:
-        where += f" ({interface})"
-    if interface and identity["usb_interface"] == _CP2105_STANDARD_INTERFACE:
-        action = (
-            "this is the CP2105 Standard interface, which has no CLI: run this check with "
-            "the same adapter's Enhanced if00 port (/dev/serial/by-id/...-if00-port0)"
-        )
-    else:
-        action = f"{_RESET_ACTION}, then run this check again on the same port"
-        if not interface:
-            action = f"confirm it is the CP2105 Enhanced/UARTA interface (if00), then {action}"
-    return f"IWR6843 CLI did not answer help within {_PROBE_WINDOW_S:g} s on {where}; {action}"
 
 
 def _record(events: list[dict] | None, event: str, port: str, **fields: Any) -> None:
@@ -511,9 +276,7 @@ class IWR6843Radar:
         resp = b""
         deadline = time.time() + window
         while time.time() < deadline:
-            # read(n) blocks for the whole port timeout until n bytes arrive, so ask
-            # only for what is waiting (or one byte, which returns as it lands);
-            # a fixed 512 cost 0.3 s per command, about 4.5 s per configuration.
+            # read(n) blocks for the port timeout until n bytes arrive: ask for what is waiting
             resp += self.ser.read(max(1, self.ser.in_waiting))
             if b"Done" in resp or b"Error" in resp:
                 break
@@ -563,7 +326,6 @@ class IWR6843Radar:
         if "Error" in response:
             raise RuntimeError(f"config rejected: {command!r}: {response.strip()}")
         if "Done" not in response:
-            # What came back separates a silent board from a partial or garbled reply.
             reply = (
                 f"reply without Done: {response[-80:]!r}"
                 if response
@@ -579,8 +341,7 @@ class IWR6843Radar:
 
         The firmware's geometry guard rejects a cfg whose loops/samples don't
         match the flashed build — that surfaces here as RuntimeError.
-        ``responses``, when given, receives every (command, reply) pair in order,
-        so a caller can keep the firmware's own ``Capture plan:`` line.
+        ``responses``, when given, receives every (command, reply) pair in order.
         """
 
         def send(command: str, window: float) -> str:
@@ -660,8 +421,6 @@ class IWR6843Radar:
                 break
         if expected is None:
             if MAGIC not in buf and b"Error" in buf:
-                # The handler refused before any payload (e.g. capture inactive
-                # after a board reset); the CLI answered, so its state is known.
                 raise RuntimeError(
                     f"IWR6843 rejected l3dump: {bytes(buf).decode(errors='replace').strip()[:200]}"
                 )
@@ -717,33 +476,9 @@ class IWR6843Radar:
                 response.extend(chunk)
         return bytes(response)
 
-    def probe_help(self) -> bytes:
-        """Send `help` once on the owned port and return the raw reply."""
-        return _probe_help(self.ser, self.port, self._events)
-
     def stats(self) -> str:
         """Firmware health line (frames/wraps/active/calib/rf_faults)."""
         return self.cmd("stats", 2.0)
-
-    def perf_stats(self) -> dict[str, Any]:
-        """The W4a firmware's ``perfstats`` high-water marks (ValueError on old images)."""
-        return parse_perf_stats(self.cmd("perfstats", PERF_REPLY_WINDOW_S))
-
-    def bench_kernel(self) -> dict[str, Any]:
-        """Time one pass over the stopped ring (``l3bench``); the sensor must be stopped."""
-        return parse_bench(self.cmd("l3bench", BENCH_REPLY_WINDOW_S))
-
-    def verify_post_dump_cli(self) -> None:
-        """Require the restarted sensor and CLI after a completed binary dump."""
-        health = self.cmd("stats", 6.0)
-        try:
-            self._require_done("post-dump stats", health)
-        except RuntimeError as error:
-            raise RuntimeError(f"IWR6843 post-dump CLI health check failed: {error}") from error
-        if "active=1" not in health:
-            raise RuntimeError(
-                f"IWR6843 post-dump CLI health check found inactive capture: {health.strip()}"
-            )
 
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""

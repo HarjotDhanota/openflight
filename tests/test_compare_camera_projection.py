@@ -6,12 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from openflight.camera.optical_calibration import calibrate_checkerboard, validate_mode_profile
-from tests.test_optical_calibration import (
-    _board as calibration_board,
-    _profile as calibration_profile,
-    _synthetic_observations,
-)
+from openflight.camera.checkerboard_calibration import calibrate_checkerboard
+from openflight.camera.optical_calibration import validate_mode_profile
+from tests.test_checkerboard_calibration import _board as calibration_board, _synthetic_observations
+from tests.test_optical_calibration import _profile as calibration_profile
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "analysis" / "compare_camera_projection.py"
 SPEC = importlib.util.spec_from_file_location("compare_camera_projection", SCRIPT)

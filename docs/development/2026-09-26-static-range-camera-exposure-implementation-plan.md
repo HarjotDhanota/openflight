@@ -32,7 +32,7 @@ reviewable commits.
 5. Inspect `git status`, `git diff`, and all untracked files before making a
    change.
 6. If available on this machine, the external audit is at
-   `C:\Users\harjo\Downloads\Untitled.md`.
+   `<downloads>\Untitled.md`.
 
 Use `uv` for Python commands. Do not weaken tests, suppress failures, or claim
 hardware qualification from Windows/offline tests.
@@ -92,7 +92,7 @@ Safety rules:
 
 The downloaded tester bundle is:
 
-`C:\Users\harjo\Downloads\harjot-pilot-test-2-session-bundle-20260926T063433Z.zip`
+`<downloads>\pilot-test-2-session-bundle-20260926T063433Z.zip`
 
 Its three complete setup epochs expose the current selector failure:
 
@@ -524,7 +524,7 @@ adjacent boundaries must be combined.
 Start by preserving evidence about the current worktree:
 
 ```powershell
-cd C:\Users\harjo\Desktop\Coding\OpenFlight\openflight-tester-pilot
+cd <fork checkout>
 git status --short
 git diff --check
 git diff --stat
@@ -534,7 +534,7 @@ git diff
 Regenerate/check the captured fixtures:
 
 ```powershell
-uv run --extra camera python scripts/analysis/extract_static_range_regressions.py --bundle "C:\Users\harjo\Downloads\harjot-pilot-test-2-session-bundle-20260926T063433Z.zip" --output-dir tests/fixtures/iwr6843_static_range --check
+uv run --extra camera python scripts/analysis/extract_static_range_regressions.py --bundle "<downloads>\pilot-test-2-session-bundle-20260926T063433Z.zip" --output-dir tests/fixtures/iwr6843_static_range --check
 ```
 
 The last known passing focused radar run was:
@@ -600,7 +600,7 @@ The implementation is not complete until all of the following are true:
 ## Suggested prompt for the implementing agent
 
 > Continue the partially implemented static-range and camera-exposure work in
-> `C:\Users\harjo\Desktop\Coding\OpenFlight\openflight-tester-pilot`. Read the
+> `<fork checkout>`. Read the
 > root `AGENTS.md`, `ui/AGENTS.md`, and
 > `docs/development/2026-09-26-static-range-camera-exposure-implementation-plan.md`
 > completely before editing. The partial implementation is committed; inspect

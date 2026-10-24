@@ -55,7 +55,7 @@ export function PanelFooter({
   const showUnits = VIEWS_WITH_UNITS.has(currentView);
   const storePowerStatus = useSystemStore((state) => state.powerStatus);
   const powerStatus = powerStatusProp !== undefined ? powerStatusProp : storePowerStatus;
-  // (17) the tabs scroll sideways on an 800-wide screen: a › says more are there, and taps along
+  // the tabs scroll sideways on narrow screens: a › says more are there, and taps along
   const tabsWrapRef = useRef<HTMLDivElement>(null);
   const [moreTabs, setMoreTabs] = useState({ left: false, right: false });
   useEffect(() => {

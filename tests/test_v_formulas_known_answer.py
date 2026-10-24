@@ -32,10 +32,10 @@ import pytest
 
 import openflight.server as server_module
 from openflight import collision_forward, shot_models
-from openflight.ballistics import AIR_DENSITY_STD, LaunchConditions, simulate
 from openflight.club_arc import LOW_POINT_OFFSETS_MM, prior_for_club
 from openflight.clubs import ClubType
 from openflight.flight import AIR_DENSITY_NORMALIZED, FLIGHT_METRICS
+from openflight.flight_sim import AIR_DENSITY_STD, LaunchConditions, simulate
 from openflight.horizontal_frame import offset_from_target_yaw
 from openflight.launch_monitor import SMASH_RADIAL_RATIO, Shot
 from openflight.rig_geometry import RigGeometry

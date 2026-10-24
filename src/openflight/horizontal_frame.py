@@ -1,28 +1,8 @@
-"""One zero model for every horizontal angle (D36 item 2).
+"""One zero model for every horizontal angle.
 
-Every horizontal angle the unit reports -- camera and IWR horizontal launch,
-IWR and camera club path, the D-plane face angle and the spin-axis proxy --
-goes through the same two layers:
-
-1. **Each sensor's own boresight zero.** The IWR's is its board's horizontal
-   phase reference (``--iwr6843-horizontal-phase-reference-rad``); the
-   camera's is its optical axis. After this layer an angle is measured from
-   the unit's boresight, + right.
-2. **One horizontal offset, ADDED once to every angle.** It is the negative of
-   the target yaw: the target yaw is the target line's direction from the unit
-   boresight, + when the target line lies right of it, seen from behind the
-   unit, and the offset is ``-yaw`` (equivalently: + when the boresight points
-   right of the target line). So a ball hit straight down the target line, which
-   reads +yaw from the boresight, reports 0, and + still means right of the
-   target line.
-
-The offset reaches the kiosk through ``--camera-capture-horizontal-offset-deg``
-and ``--iwr6843-azimuth-offset-deg``, with the same value (the D34 target-line
-hand-off passes it to both); two different values are refused
-(``resolve_horizontal_offset``). An angle reported with no offset (None:
-no target line was set) is in the ``unit_boresight`` frame; with one, in the
-``target_line`` frame, even when it is exactly 0 (a target line straight down the
-boresight is still a target line).
+Each sensor's angle is first measured from the unit boresight (+ right); one offset,
+``-target_yaw`` (target yaw + when the target line is right of the boresight), is then added,
+so a ball straight down the target line reads 0. No offset: ``unit_boresight`` frame.
 """
 
 from __future__ import annotations
@@ -31,8 +11,7 @@ from typing import Optional
 
 UNIT_BORESIGHT = "unit_boresight"
 TARGET_LINE = "target_line"
-# A value derived from angles in two different frames (e.g. face angle from a
-# target-line launch and a boresight path).
+# a value derived from angles in two different frames
 MIXED = "mixed"
 
 CAMERA_OFFSET_FLAG = "--camera-capture-horizontal-offset-deg"
@@ -78,12 +57,7 @@ def combined_frame(*frames: Optional[str]) -> Optional[str]:
 def resolve_horizontal_offset(
     *, camera_deg: Optional[float], iwr_deg: Optional[float]
 ) -> Optional[float]:
-    """The one horizontal offset from the two kiosk flags.
-
-    Either flag alone sets it for every sensor. Both given must carry the same
-    value; anything else is refused rather than silently giving the camera and
-    the IWR two different target lines.
-    """
+    """The one horizontal offset from the two kiosk flags; two different values are refused."""
     if camera_deg is not None and iwr_deg is not None and camera_deg != iwr_deg:
         raise ValueError(
             f"{CAMERA_OFFSET_FLAG} ({camera_deg:+g}) and {IWR_OFFSET_FLAG} ({iwr_deg:+g}) differ. "

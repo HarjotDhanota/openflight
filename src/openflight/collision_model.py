@@ -15,7 +15,7 @@ missing input makes every metric built on it "not measured", with the reason.
        ball speed x sin(theta) = c x spin,   c = I / (m r)
 
    the tangential-impulse identity m v_t r = I omega (Cross & Nathan 2007, below;
-   Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.352 m r^2, r = 21.335 mm), fitted
+   Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.351 m r^2, r = 21.35 mm), fitted
    in a clean-room study of the 6 May 2026 TM4 export. The collision model's own
    spin is built from face and loft, so it never feeds them: without a measured
    spin, face and loft come from the inverse of the fitted launch model
@@ -109,7 +109,7 @@ from typing import Optional
 from . import collision_forward, metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
-from .constants import MPH_TO_MPS as MPH_TO_M_S
+from .constants import BALL_DIAMETER_M, BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 from .horizontal_frame import MIXED, combined_frame
 from .numeric import finite as _finite
 from .source_labels import (  # noqa: F401  (the predicates are re-exported)
@@ -212,14 +212,14 @@ def _anchor_lofts() -> tuple[float, float, float]:
 
 # ---- Penner 2001 constants (Sec. II A) -----------------------------------------------
 PENNER_BALL_MASS_KG = 0.0459
-PENNER_BALL_DIAMETER_M = 0.0427
+PENNER_BALL_DIAMETER_M = BALL_DIAMETER_M
 PENNER_HEAD_MASS_KG = 0.200
 PENNER_INERTIA_FACTOR = 0.4  # I = (2/5) m r^2, uniform solid sphere
 # Henrikson et al. 2020, Sec. 2.2: 0.40 urethane, 0.35 surlyn (sled on a grooved,
 # blasted iron-type plate). The lower one bounds the rolling regime.
 FRICTION_MU_DRY_MIN = 0.35
 
-RIGID_BODY_BALL_RADIUS_M = 0.021335
+RIGID_BODY_BALL_RADIUS_M = BALL_RADIUS_M
 RIGID_BODY_C_M = 7.5005e-3
 
 IRON_AXIS_FACTOR_BASE = 0.81385

@@ -106,7 +106,6 @@ def _load_session_entries(path: Path) -> tuple[list[dict], list[dict]]:
                 shot_entries.append(entry)
             elif entry.get("type") == "rolling_buffer_capture":
                 captures.append(entry)
-    # each shot once, with any late update applied
     shots = [e for e in apply_shot_updates(shot_entries) if e.get("type") == "shot_detected"]
     return shots, captures
 
@@ -156,7 +155,9 @@ def _post_onset_envelope(
 def _current_window(processor: RollingBufferProcessor, post_onset: np.ndarray) -> WindowSpec:
     transient_samples = int(processor.SAMPLE_RATE / processor.SPIN_BANDPASS_BW_HZ)
     if len(post_onset) > 2 * transient_samples + processor.SPIN_MIN_SAMPLES:
-        return WindowSpec("current_full_trimmed", transient_samples, len(post_onset) - transient_samples)
+        return WindowSpec(
+            "current_full_trimmed", transient_samples, len(post_onset) - transient_samples
+        )
     return WindowSpec("current_full_trimmed", 0, len(post_onset))
 
 
@@ -191,7 +192,7 @@ def _sliding_energy_window(
     best_start = None
     best_energy = -1.0
     for start in range(search_start, search_end - duration_samples + 1, step_samples):
-        segment = post_onset[start:start + duration_samples]
+        segment = post_onset[start : start + duration_samples]
         energy = float(np.mean(segment * segment))
         if energy > best_energy:
             best_energy = energy
@@ -227,7 +228,7 @@ def _detect_spin_in_window(
     spec: WindowSpec,
     expected_spin_rpm: Optional[float],
 ) -> SpinResult:
-    ball_envelope = envelope[spec.start_sample:spec.end_sample].copy()
+    ball_envelope = envelope[spec.start_sample : spec.end_sample].copy()
     if len(ball_envelope) < processor.SPIN_MIN_SAMPLES:
         return SpinResult.no_spin_detected(
             f"Ball signal too short ({len(ball_envelope)} samples, need {processor.SPIN_MIN_SAMPLES})"
@@ -310,9 +311,7 @@ def _detect_spin_in_window(
             candidates=candidates,
         )
 
-    if at_lower_rail and (
-        modulation_depth is None or modulation_depth < 0.012
-    ):
+    if at_lower_rail and (modulation_depth is None or modulation_depth < 0.012):
         return SpinResult.no_spin_detected(
             f"Lower-rail peak at {spin_rpm:.0f} RPM "
             f"(mod {modulation_depth or 0:.4f}, envelope-DC leakage suspected)",
@@ -389,11 +388,7 @@ def _detect_spin_in_window(
 
 
 def _result_is_reportable(spin: SpinResult) -> bool:
-    return bool(
-        spin.spin_rpm > 0
-        and not spin.at_lower_rail
-        and not spin.at_upper_rail
-    )
+    return bool(spin.spin_rpm > 0 and not spin.at_lower_rail and not spin.at_upper_rail)
 
 
 def _rows(
@@ -453,46 +448,41 @@ def _rows(
             )
             reportable = _result_is_reportable(spin)
             spin_tm = trackman["spin_tm"]
-            rows.append({
-                "shot_number": shot_number,
-                "club": normalized_club,
-                "strategy": spec.name,
-                "window_start_ms": round(spec.start_sample / processor.SAMPLE_RATE * 1000, 1),
-                "window_ms": round(spec.sample_count / processor.SAMPLE_RATE * 1000, 1),
-                "ball_speed_of": round(processed.ball_speed_mph, 3),
-                "ball_speed_tm": trackman.get("ball_speed_tm"),
-                "expected_spin_rpm": round(expected_spin),
-                "spin_tm": spin_tm,
-                "spin_rpm": round(spin.spin_rpm) if spin.spin_rpm > 0 else None,
-                "spin_error_rpm": (
-                    round(spin.spin_rpm - spin_tm, 1)
-                    if reportable else None
-                ),
-                "reportable": reportable,
-                "quality": spin.quality,
-                "confidence": spin.confidence,
-                "snr": spin.snr,
-                "modulation_depth": (
-                    round(spin.modulation_depth, 4)
-                    if spin.modulation_depth is not None else None
-                ),
-                "seam_cycles": (
-                    round(spin.seam_cycles, 2)
-                    if spin.seam_cycles is not None else None
-                ),
-                "at_lower_rail": spin.at_lower_rail,
-                "at_upper_rail": spin.at_upper_rail,
-                "rejection_reason": spin.rejection_reason,
-                "selected_candidate_rank": (
-                    selected_candidate.rank if selected_candidate else None
-                ),
-                "top_candidate_rpm": (
-                    round(top_candidate.rpm) if top_candidate else None
-                ),
-                "top_candidate_snr": (
-                    round(top_candidate.snr, 2) if top_candidate else None
-                ),
-            })
+            rows.append(
+                {
+                    "shot_number": shot_number,
+                    "club": normalized_club,
+                    "strategy": spec.name,
+                    "window_start_ms": round(spec.start_sample / processor.SAMPLE_RATE * 1000, 1),
+                    "window_ms": round(spec.sample_count / processor.SAMPLE_RATE * 1000, 1),
+                    "ball_speed_of": round(processed.ball_speed_mph, 3),
+                    "ball_speed_tm": trackman.get("ball_speed_tm"),
+                    "expected_spin_rpm": round(expected_spin),
+                    "spin_tm": spin_tm,
+                    "spin_rpm": round(spin.spin_rpm) if spin.spin_rpm > 0 else None,
+                    "spin_error_rpm": (round(spin.spin_rpm - spin_tm, 1) if reportable else None),
+                    "reportable": reportable,
+                    "quality": spin.quality,
+                    "confidence": spin.confidence,
+                    "snr": spin.snr,
+                    "modulation_depth": (
+                        round(spin.modulation_depth, 4)
+                        if spin.modulation_depth is not None
+                        else None
+                    ),
+                    "seam_cycles": (
+                        round(spin.seam_cycles, 2) if spin.seam_cycles is not None else None
+                    ),
+                    "at_lower_rail": spin.at_lower_rail,
+                    "at_upper_rail": spin.at_upper_rail,
+                    "rejection_reason": spin.rejection_reason,
+                    "selected_candidate_rank": (
+                        selected_candidate.rank if selected_candidate else None
+                    ),
+                    "top_candidate_rpm": (round(top_candidate.rpm) if top_candidate else None),
+                    "top_candidate_snr": (round(top_candidate.snr, 2) if top_candidate else None),
+                }
+            )
     return rows
 
 
@@ -514,14 +504,18 @@ def _summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for strategy, strategy_rows in sorted(by_strategy.items()):
         reportable = [row for row in strategy_rows if row["reportable"]]
         errors = [float(row["spin_error_rpm"]) for row in reportable]
-        summary.append({
-            "strategy": strategy,
-            "shots": len(strategy_rows),
-            "reported": len(reportable),
-            "bias": statistics.mean(errors) if errors else None,
-            "mae": statistics.mean(abs(error) for error in errors) if errors else None,
-            "rmse": math.sqrt(statistics.mean(error * error for error in errors)) if errors else None,
-        })
+        summary.append(
+            {
+                "strategy": strategy,
+                "shots": len(strategy_rows),
+                "reported": len(reportable),
+                "bias": statistics.mean(errors) if errors else None,
+                "mae": statistics.mean(abs(error) for error in errors) if errors else None,
+                "rmse": math.sqrt(statistics.mean(error * error for error in errors))
+                if errors
+                else None,
+            }
+        )
     return summary
 
 

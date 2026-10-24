@@ -1,4 +1,4 @@
-"""P7-14: each sensor reports its own ready-light state, read without its locks."""
+"""Each sensor reports its own ready-light state, read without its locks."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
 from openflight.ops243 import OPS243Radar
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
-
-# ---------------------------------------------------------------- OPS243
 
 
 def _dump() -> bytes:
@@ -123,9 +121,6 @@ def test_ops_cancelled_wait_is_stopped():
     assert radar.trigger_phase[0] == "stopped"
 
 
-# ---------------------------------------------------------------- IWR6843
-
-
 class _Serial:
     is_open = True
 
@@ -202,13 +197,9 @@ def test_iwr_snapshot_reports_idle_armed_then_its_dump(tmp_path):
     radar.release.set()
     assert _wait_for(lambda: not monitor.ready_snapshot()["dumping"])
     done = monitor.ready_snapshot()
-    # the next rough time left is this dump's length
     assert done["typical_dump_s"] < 2.5
     monitor.stop()
     assert not monitor.ready_snapshot()["running"]
-
-
-# ---------------------------------------------------------------- camera
 
 
 class FakeRequest:

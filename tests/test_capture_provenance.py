@@ -75,14 +75,13 @@ class TestABallSizedHighlightIsNotGood:
         assert observation.status == "good"
 
     def test_a_saturated_ball_makes_the_scene_marginal_and_asks_for_darker(self):
-        # ~0.4 % of the frame, well under the old 2 % gate that let it through
+        # ~0.4 % of the frame
         observation = auto_exposure.measure_exposure(_frame(110, clipped_px=110))
         assert observation.status == "marginal"
         assert observation.recommendation == "darker"
         assert "ball-sized highlight" in observation.message
 
     def test_a_specular_speck_is_still_tolerated(self):
-        # a handful of pixels is a highlight on a glossy ball, not a lost edge
         observation = auto_exposure.measure_exposure(_frame(110, clipped_px=4))
         assert observation.status == "good"
 

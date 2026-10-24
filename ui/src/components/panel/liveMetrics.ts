@@ -24,10 +24,7 @@ export interface LiveMetric {
   value: string;
   unit?: string;
   subtext?: string;
-  /**
-   * The shown value's label: the server's (`Shot.metrics`) when it has one, else
-   * read from the shot's own source fields. Rendered as a badge on the title.
-   */
+  /** The shown value's label (server's `Shot.metrics` first); rendered as a badge. */
   status?: MetricLabel;
   /** Why the metric is not measured, when the tile shows no value. */
   reason?: string;
@@ -76,10 +73,7 @@ function shotShape(spinAxisDeg: number | null | undefined): string | undefined {
   return t('shape.straight');
 }
 
-/**
- * A fusion unit's smash is radial ball over radial club speed, not TrackMan's
- * full-speed ratio: it is labelled, not hidden (D21, D37).
- */
+/** A fusion unit's smash is radial ball over radial club speed, so it is labelled. */
 export function smashSubtext(shot: Shot): string | undefined {
   return isMeasured(shot.smash_factor) && shot.smash_factor_status === 'radial_ratio' ? 'radial ratio' : undefined;
 }
@@ -100,12 +94,10 @@ const TILE_METRIC: Record<string, string> = {
 
 const METRIC_UNIT: Record<string, string> = Object.fromEntries(METRIC_CATALOG.map((spec) => [spec.id, spec.unit]));
 
-/** A label only for a value that is shown; a missing value has none. */
 function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel | undefined {
   return isMeasured(value) ? status : undefined;
 }
 
-/** The spin's own label from the vocabulary; an unlabelled spin is measured. */
 function spinLabel(shot: Shot): MetricLabel {
   return isValueLabel(shot.spin_source) ? shot.spin_source : 'measured';
 }
@@ -120,11 +112,7 @@ function fromServer(metric: LiveMetric, record: ShotMetric, unitSystem: UnitSyst
   return SERVER_CLEARS_CONFIDENCE.has(metric.id) ? { ...shown, confidence: null, confidenceLabel: undefined } : shown;
 }
 
-/**
- * Put the server's label (and, for a value the tile lacks, its value and reason)
- * on a tile built from the shot's fields. A shot from before `Shot.metrics` keeps
- * the tile exactly as built.
- */
+/** Put the server's label (and, for a value the tile lacks, its value and reason) on a tile. */
 function withServerLabel(shot: Shot, metric: LiveMetric, unitSystem: UnitSystem): LiveMetric {
   const record = shotMetric(shot, TILE_METRIC[metric.id]);
   if (!record) return metric;
@@ -145,7 +133,6 @@ function withFaceAngle(
   faceStatus?: string | null
 ): string | undefined {
   if (!isMeasured(faceDeg)) return subtext;
-  // an uncalibrated radar start direction is labelled, not hidden (P8-7)
   const basis = faceStatus === 'd_plane_estimate_azimuth_uncalibrated' ? 'D-plane, azimuth uncalibrated' : 'D-plane';
   const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
   return subtext ? `${subtext} · ${face}` : face;
@@ -167,13 +154,11 @@ function experimentalStatus(status: string | null | undefined): string {
 
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
-  // a fusion unit's unmeasured carry shows as no value, never the table (D17)
   const carry = reportedCarryYards(shot);
   const carryIsCommitted = carry !== null && isMeasured(shot.carry_spin_adjusted);
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
-  // The horizontal tile reads its own axis (audit F5). Shots recorded before
-  // the per-axis fields existed fall back to the shared ones.
+  // Shots recorded before the per-axis fields existed fall back to the shared ones.
   const horizontalConfidence = launchAngleQuality(
     shot.launch_angle_horizontal_confidence !== undefined
       ? shot.launch_angle_horizontal_confidence
@@ -186,7 +171,6 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const horizontalSourceLabel = shot.launch_angle_horizontal_source
     ? HORIZONTAL_SOURCE_LABELS[shot.launch_angle_horizontal_source]
     : undefined;
-  // A radar horizontal without the board's phase reference has its own zero (audit F8).
   const horizontalSubtext =
     shot.launch_angle_horizontal_status === 'azimuth_uncalibrated' ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;

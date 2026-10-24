@@ -4,10 +4,7 @@ import { parseTargetLine, type TargetLine } from '../utils/targetLine';
 
 const POLL_MS = 5000;
 
-/**
- * Polls the kiosk's GET /api/target-line. Null until it answers, and null again
- * when it cannot (an older server without the route), so nothing is drawn then.
- */
+/** Polls GET /api/target-line; null until it answers and whenever it cannot. */
 export function useTargetLine(enabled = true): TargetLine | null {
   const [line, setLine] = useState<TargetLine | null>(null);
   useEffect(() => {

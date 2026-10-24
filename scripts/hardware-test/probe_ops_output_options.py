@@ -29,8 +29,8 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from openflight import ops_output_probe as probe  # noqa: E402
-from openflight.clock_mapping import BUFFER_SEGMENTS  # noqa: E402
 from openflight.ops243 import OPS243Radar, is_uart_port, parse_firmware_version  # noqa: E402
+from openflight.ops_clock_association import BUFFER_SEGMENTS  # noqa: E402
 
 QUERIES = ["??", "?V", "?B", "I?", "O?", "R?", "P?", "A?"]
 EXPECTED_FIRMWARE = "1.3.0"

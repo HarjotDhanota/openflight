@@ -12,7 +12,7 @@ from openflight.camera.moving_iwr_anchor import (
 )
 from openflight.camera.reference_ball_range import BallPlaneCamera, NominalRayModel
 
-BALL_DIAMETER_M = 0.04267
+BALL_DIAMETER_M = 0.0427
 
 
 def _camera(width: int, height: int, focal_px: float, *, qualified: bool = True):
@@ -71,7 +71,7 @@ def _shot(width=640, height=400, focal_px=500.0, *, qualified=True):
     camera = _camera(width, height, focal_px, qualified=qualified)
     times_s = np.arange(10) / 120.0
     velocity = np.asarray([0.6, 17.5, 5.0])
-    impact = np.asarray([0.02, 1.45, 0.021335])
+    impact = np.asarray([0.02, 1.45, 0.02135])
     points = [impact + velocity * time for time in times_s]
     projected = [_project(camera, point) for point in points]
     path = [(x, y, focal_px * BALL_DIAMETER_M / distance) for x, y, distance in projected]
@@ -148,7 +148,7 @@ def test_true_path_beats_bright_false_blob_path():
 def test_two_equally_physical_crossing_paths_are_withheld_as_ambiguous():
     camera, _frames, timestamps, series, clock, speed, _impact = _shot()
     times_s = timestamps / 1e9
-    starts = (np.asarray([-0.10, 1.45, 0.021335]), np.asarray([0.10, 1.45, 0.021335]))
+    starts = (np.asarray([-0.10, 1.45, 0.02135]), np.asarray([0.10, 1.45, 0.02135]))
     velocities = (np.asarray([1.0, 17.5, 5.0]), np.asarray([-1.0, 17.5, 5.0]))
     paths = []
     for start, velocity in zip(starts, velocities):
@@ -380,7 +380,7 @@ def test_timed_path_starting_more_than_two_frames_after_impact_is_withheld():
 def test_backprojected_impact_pixel_outside_image_is_retained_and_rejected():
     camera = _camera(640, 400, 500.0)
     times_s = np.arange(10) / 120.0
-    impact = np.asarray([-1.0, 1.45, 0.021335])
+    impact = np.asarray([-1.0, 1.45, 0.02135])
     velocity = np.asarray([30.0, 17.5, 5.0])
     points = [impact + velocity * time for time in times_s]
     projected = [_project(camera, point) for point in points]

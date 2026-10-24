@@ -8,10 +8,9 @@ from typing import Any
 
 
 def finite(value: Any) -> bool:
-    """True for a finite real number, numpy scalars included (np.float32, np.int64).
+    """True for a finite real number, numpy scalars included.
 
-    bool (and numpy's bool_, which is not a numbers.Real), None, strings, complex,
-    NaN and inf are not, nor is an int too large for a float (it would overflow).
+    Not bool, None, strings, complex, NaN, inf, or an int too large for a float.
     """
     if not isinstance(value, numbers.Real) or isinstance(value, bool):
         return False

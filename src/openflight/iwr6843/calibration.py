@@ -35,9 +35,7 @@ class Calibration:
     range_bias_m: float
     source: str = "unset"
     tee_range_m: float | None = None  # the shot's launch-point range (slant)
-    # 13 Oct: how sure that range is. 0 for a range taken as measured; the camera
-    # prior's uncertainty when the prior stands in for a shot the IWR did not range,
-    # which widens the club gate and the club's contact check by as much.
+    # 0 when measured; else the camera prior's uncertainty, which widens the club gate.
     tee_range_uncertainty_m: float = 0.0
     # Ball height at launch ABOVE THE FLOOR (ball on mat ~0.04 m). The old
     # field meant "above the radar plane" and silently anchored every tee
@@ -45,22 +43,14 @@ class Calibration:
     # (SW read -12 deg). Floor-referenced + radar height fixes the anchor.
     tee_ball_height_m: float = 0.04
     meta: dict = field(default_factory=dict)
-    # The tee's lateral offset from the RX row, from the rig (0 for the v3
-    # enclosure). It replaces the July rig's fixed 64 mm (audit F10).
     lateral_tee_offset_m: float = 0.0
-    # Where each LEVM antenna sits (an ``antennas.AntennaLayout``), from the
-    # rig. None means the session recorded only ``radar_height_m``: LCMF then
-    # takes that height as the RX-row centre of a board turned +90 deg.
+    # Where each LEVM antenna sits; None: LCMF takes ``radar_height_m`` as the RX-row
+    # centre of a board turned +90 deg.
     antennas: AntennaLayout | None = None
 
     @property
     def radar_height_m(self) -> float:
-        """Antenna centre height above the floor, installed from the enclosure's rig file.
-
-        The board calibration's own ``radar_height_m`` is the July corner-reflector
-        mount, not this enclosure, so ``load`` never carries it here and there is
-        no default (wiring audit C1).
-        """
+        """Antenna centre height above the floor, from the enclosure's rig file only."""
         if self.meta.get("radar_height_m") is None:
             raise ValueError(
                 "IWR6843 radar height is not set; it comes from the enclosure's rig file"
@@ -78,8 +68,7 @@ class Calibration:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
         corr = np.exp(-1j * np.asarray(raw["elem_phase_rad"])) / np.asarray(raw["elem_gain"])
-        # The solve's mount height describes the rig it was measured on; the
-        # installed height is set from the rig file (wiring audit C1).
+        # The solve's mount height is the rig it was measured on, not this one.
         meta = {key: value for key, value in raw.items() if key != "radar_height_m"}
         return cls(
             elem_correction=corr,

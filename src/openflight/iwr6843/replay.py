@@ -50,8 +50,7 @@ class ReplayRecord:
     track_inliers: int | None = None
     track_start_range_m: float | None = None
     error: str | None = None
-    # Which estimator produced the angle and where it placed the antennas: a
-    # replay of an older session runs today's model, not the one it recorded.
+    # a replay of an older session runs today's model, not the one it recorded
     estimator: str | None = None
     antenna_basis: str | None = None
 
@@ -262,9 +261,7 @@ def build_replay_calibration(
     """Load array calibration and apply replay geometry overrides.
 
     Without ``board_rotation_deg`` the radar height is a legacy single height
-    (July/August sessions, no rig): LCMF reads it as the RX-row centre of a
-    board turned +90 deg (`lcmf.antenna_layout`). With it, the height is the
-    rig-derived phase centre's, as sessions since F11 record it.
+    (`lcmf.antenna_layout`); with it, the rig-derived phase centre's.
     """
     return clone_calibration(
         Calibration.load(str(calibration_path)),

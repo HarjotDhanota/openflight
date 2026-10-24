@@ -47,7 +47,6 @@ from typing import Callable, List, Optional
 import serial
 import serial.tools.list_ports
 
-from . import instrumentation
 from .serial_latency import log_usb_serial_latency_timer
 
 # Configure logging for raw radar data
@@ -119,11 +118,7 @@ def _parse_ops_clock(response: str) -> Optional[float]:
 
 
 def _kernel_console_devices(kernel_cmdline: Optional[str] = None) -> set:
-    """Device names and paths the kernel console writes to (``console=``).
-
-    Both the alias (``serial0``) and the device it resolves to are returned,
-    so a console named either way is recognised.
-    """
+    """Device names and paths the kernel console writes to, aliases resolved."""
     if kernel_cmdline is None:
         try:
             with open("/proc/cmdline", encoding="ascii", errors="ignore") as handle:
@@ -145,10 +140,7 @@ def _kernel_console_devices(kernel_cmdline: Optional[str] = None) -> set:
 
 
 def parse_firmware_version(reply: str) -> Optional[str]:
-    """The version from a ``?V`` reply (a ``{"Version": ...}`` line), or None.
-
-    Framing garbage from a wrong-baud read cannot produce such a line.
-    """
+    """The version from a ``?V`` reply (a ``{"Version": ...}`` line), or None."""
     for line in reply.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -254,23 +246,19 @@ class OPS243Radar:
     # drain must bail out loudly instead of hanging the monitor thread.
     REARM_DRAIN_TIMEOUT_S = 5.0
 
-    # A GATE edge reaches the first dump byte in ~0.08 s (Outdoors-test-7).
-    # An edge with no dump after this long means the board is not armed.
+    # A GATE edge reaches the first dump byte in ~0.08 s; no dump after this
+    # long means the board is not armed.
     GATE_EDGE_DUMP_TIMEOUT_S = 0.3
 
-    # More markerless bytes than any CLI or clock reply: the body of a dump
-    # whose start was lost. The board sits idle after it until re-armed.
+    # More markerless bytes than any CLI or clock reply: a dump that lost its start.
     DISCARDED_DUMP_MIN_BYTES = 1024
     DISCARDED_DUMP_QUIET_S = 0.5
 
     # Common USB identifiers for OPS243
     VENDOR_IDS = [0x0483]  # STMicroelectronics
 
-    # GPIO-header UARTs probed when no USB radar is found (19 Oct). A raw UART
-    # has no descriptors, so a candidate is only used when an OPS243 answers
-    # ``?V`` on it. On a Pi 5 the 40-pin header is ttyAMA0; serial0 is probed
-    # only when it names a different device (older Pis) and never when it
-    # points at ttyAMA10, the Pi 5 debug-header UART.
+    # GPIO-header UARTs probed (with ``?V``) when no USB radar is found. Pi 5:
+    # ttyAMA0; serial0 for older Pis; ttyAMA10 is the Pi 5 debug UART.
     GPIO_UART_PORTS = ("/dev/ttyAMA0", "/dev/serial0")
     _DEBUG_UART_NAMES = ("ttyAMA10",)
 
@@ -309,18 +297,11 @@ class OPS243Radar:
         self._internal_trigger_firmware_version = None
         self._hardware_trigger_recovery_required = False
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
-        # What the last UART baud negotiation did (None: not negotiated, e.g. USB):
-        # found_baud, target_baud, switch_command (sent, even if it failed), final_baud.
         self.last_baud_negotiation: Optional[dict] = None
-        # Where the trigger path is, as (phase, host epoch it began), for the ready
-        # light (P7-14), which reads it without the serial lock. One tuple, so a
-        # reader never pairs one phase with another's time.
+        # (phase, host epoch it began); one tuple so lock-free readers never mix two phases
         self.trigger_phase: Optional[tuple[str, float]] = None
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
-        # The S# split this process last wrote, as (segments, reason): recorded once
-        # the write returns (the board sends no readback, so it is written, not
-        # confirmed); segments is None, with the reason, otherwise (R-F9).
         self._pre_trigger_split: tuple[Optional[int], Optional[str]] = (
             None,
             "not_written_this_session",
@@ -352,14 +333,8 @@ class OPS243Radar:
     ) -> List[str]:
         """Return the GPIO-header UARTs worth an OPS243 ``?V`` probe, in order.
 
-        Skips devices that do not exist, a second name for a device already
-        listed, the Pi 5 debug UART, and any UART the kernel console owns
-        (a probe would type into a login prompt).
-
-        Args:
-            candidates: Device paths to consider; defaults to GPIO_UART_PORTS.
-            kernel_cmdline: The kernel command line; read from /proc/cmdline
-                when None.
+        Skips missing devices, duplicates, the Pi 5 debug UART, and any UART the
+        kernel console owns (a probe would type into a login prompt).
         """
         if candidates is None:
             candidates = cls.GPIO_UART_PORTS
@@ -381,8 +356,7 @@ class OPS243Radar:
     def _connect_gpio_uart(self, timeout: float) -> str:
         """Find an OPS243 on a GPIO-header UART, leaving it open and negotiated.
 
-        Returns the port. Raises ConnectionError, with ``self.port`` back at
-        None and nothing open, when no candidate answers.
+        Raises ConnectionError, with nothing open, when no candidate answers.
         """
         tried = []
         for candidate in self.find_gpio_uart_ports():
@@ -422,9 +396,8 @@ class OPS243Radar:
         unknown at connect time (19,200 from the factory, or whatever a
         previous session left in flash).
 
-        With no port given, a USB radar is used when one enumerates; otherwise
-        each GPIO-header UART is probed and the first that answers ``?V`` is
-        used. An explicit port is never second-guessed.
+        With no port given, a USB radar is preferred, then the first GPIO-header
+        UART that answers ``?V``.
 
         Args:
             timeout: Serial read timeout in seconds
@@ -584,7 +557,7 @@ class OPS243Radar:
 
         logger.info("[OPS] Switching UART %d -> %d baud (%s)", current, target, command)
         if getattr(self, "last_baud_negotiation", None) is not None:
-            self.last_baud_negotiation["switch_command"] = command  # attempted, before the write
+            self.last_baud_negotiation["switch_command"] = command
         self.serial.write(command.encode("ascii"))
         self.serial.flush()
         time.sleep(0.2)
@@ -793,7 +766,6 @@ class OPS243Radar:
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
-        instrumentation.mark("ops_clock_sync_started", instrumentation.current_ops_attempt())
 
         reads: List[dict] = []
 
@@ -943,12 +915,6 @@ class OPS243Radar:
             )
         else:
             logger.warning("[OPS] Clock sync: no valid C? responses (%d attempts)", len(reads))
-        instrumentation.mark(
-            "ops_clock_sync_done",
-            instrumentation.current_ops_attempt(),
-            method=clock_sync_method,
-            usable=usable_for_trigger_timestamps,
-        )
         return summary
 
     def get_info(self) -> dict:
@@ -1714,16 +1680,11 @@ class OPS243Radar:
             cancel_event: Stops an idle wait promptly during shutdown. Once a
                 dump has started, it is allowed to finish normally.
             on_first_byte: Called once when a hardware-triggered dump begins.
-            gate_edge_time: Returns the host epoch of the latest BCM17 GATE edge
-                (the edge that drives HOST_INT), or None. An edge seen during
-                this wait with no dump within GATE_EDGE_DUMP_TIMEOUT_S ends the
-                wait, so the caller can re-arm a board that is not armed.
+            gate_edge_time: Returns the host epoch of the latest BCM17 GATE edge,
+                or None. An edge with no dump within GATE_EDGE_DUMP_TIMEOUT_S
+                ends the wait so the caller can re-arm.
 
-        Serial input is never cleared here, on either trigger path (P7-1): a
-        dump can already be arriving, and output before its capture marker is
-        skipped. A dump that lost its start (a ``Q`` array, or at least
-        DISCARDED_DUMP_MIN_BYTES, before any marker) ends the wait once the
-        line is quiet, with outcome "discarded_dump", so the caller re-arms.
+        Serial input is never cleared here: a dump can already be arriving.
 
         Returns:
             Raw response string containing JSON lines, or empty string on timeout.
@@ -1736,9 +1697,7 @@ class OPS243Radar:
         if dump_grace is None:
             dump_grace = self.transfer_budget_s(floor=8.0)
 
-        # No flush here (P7-1): a dump that an edge started during the re-arm
-        # is already in the buffer, and flushing its start marker lost it for
-        # good. Stale CLI and clock replies are discarded below until a marker.
+        # No flush: a dump started during the re-arm may already be buffered.
 
         response_lines = []
         idle_bytes = bytearray()
@@ -1752,6 +1711,7 @@ class OPS243Radar:
         outcome = "timeout"
         self.last_hardware_trigger_first_byte_timestamp = None
         self.last_hardware_trigger_missed_edge_timestamp = None
+        self.last_hardware_trigger_dump_pending_at_start = None
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
         saw_orphan_marker = False
@@ -1759,25 +1719,12 @@ class OPS243Radar:
             logger.info(
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
             )
-        # Armed while this wait listens, unless the last re-arm never finished (its
-        # writes timed out): then the board may not be armed, and the light waits.
         previous_phase = getattr(self, "trigger_phase", None)
         unconfirmed = recovery_required or (
             previous_phase is not None and previous_phase[0] == "rearming"
         )
         self._set_trigger_phase("rearming" if unconfirmed else "armed")
-        split, split_reason = getattr(
-            self, "_pre_trigger_split", (None, "not_written_this_session")
-        )
-        instrumentation.mark(
-            "ops_wait_armed",
-            instrumentation.current_ops_attempt(),
-            pre_trigger_segments=split,
-            pre_trigger_segments_reason=split_reason,
-            arm_writes_complete=not unconfirmed,
-        )
 
-        # Bytes already here can be a dump an edge started during the re-arm.
         pending_at_start = self.serial.in_waiting
         while time.time() < deadline:
             waiting = self.serial.in_waiting
@@ -1801,8 +1748,6 @@ class OPS243Radar:
                         time.sleep(0.01)
                         continue
                     capture_start = min(marker_offsets)
-                    # The marker's offset in everything read this wait (idle_bytes
-                    # starts after the bytes already discarded).
                     marker_offset = discarded_bytes + capture_start
                     discarded_bytes += capture_start
                     chunk = bytes(idle_bytes[capture_start:])
@@ -1813,20 +1758,16 @@ class OPS243Radar:
                         self._hardware_trigger_recovery_required = False
                         logger.info("[OPS] Re-arm recovery: fresh capture boundary found")
                     if marker_offset < pending_at_start:
-                        # Its first byte arrived before this wait: the time below is late.
-                        # The trace says so (A-I2), and the summary leaves the attempt
-                        # unanchored rather than tie it to a later edge.
+                        # its first byte arrived before this wait, so the time below is late
                         logger.info(
                             "[OPS] Hardware trigger: dump was already arriving when the wait "
                             "began (%d bytes); an edge raced the re-arm",
                             pending_at_start,
                         )
-                        instrumentation.mark(
-                            "ops_dump_pending_at_wait_start",
-                            instrumentation.current_ops_attempt(),
-                            pending_bytes=pending_at_start,
-                            marker_offset=marker_offset,
-                        )
+                        self.last_hardware_trigger_dump_pending_at_start = {
+                            "pending_bytes": pending_at_start,
+                            "marker_offset": marker_offset,
+                        }
                     first_byte_timestamp = time.time()
 
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
@@ -1873,13 +1814,8 @@ class OPS243Radar:
                         break
                 if not capture_started:
                     now = time.time()
-                    # The body of a dump whose start was lost: the board is
-                    # idle now, so end the wait and let the caller re-arm.
-                    # This is the one lost-dump detector for both trigger
-                    # paths: a Q array before any capture marker (only dumps
-                    # carry one), or enough unmarked bytes to be a dump body.
-                    # Waiting for a quiet line lets the tail finish so the
-                    # re-arm drain sees silence.
+                    # a dump that lost its start leaves the board idle: once the
+                    # line is quiet, end the wait so the caller re-arms
                     if (
                         (saw_orphan_marker or discarded_bytes >= self.DISCARDED_DUMP_MIN_BYTES)
                         and last_discard_time is not None
@@ -1905,7 +1841,6 @@ class OPS243Radar:
             outcome = "capture"
         self.last_hardware_trigger_outcome = outcome
         self.last_hardware_trigger_discarded_bytes = discarded_bytes
-        # The host now reads and judges the dump, then re-arms; nobody listens.
         self._set_trigger_phase("stopped" if outcome == "cancelled" else "draining")
 
         if outcome == "discarded_dump":
@@ -1951,20 +1886,6 @@ class OPS243Radar:
             pre_trigger_segments: Number of pre-trigger segments (0-32).
                 Each segment = 128 samples = ~4.27ms at 30ksps.
         """
-        attempt_id = instrumentation.current_ops_attempt()
-        instrumentation.mark(
-            "ops_rearm_started",
-            attempt_id,
-            pre_trigger_segments=max(0, min(32, pre_trigger_segments)),
-        )
-        outcome = "exception"
-        try:
-            outcome = self._rearm_rolling_buffer_body(pre_trigger_segments)
-        finally:
-            instrumentation.mark("ops_rearm_done", attempt_id, outcome=outcome)
-
-    def _rearm_rolling_buffer_body(self, pre_trigger_segments: int) -> str:
-        """The re-arm itself; returns "rearmed", or "write_timeout" when the radar is busy."""
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
         self._set_trigger_phase("rearming")
@@ -2029,7 +1950,6 @@ class OPS243Radar:
             time.sleep(0.15)
 
         try:
-            # The split is recorded only after the trailing PA returns.
             self._write_pre_trigger_split(pre_trigger_segments, write_rearm_commands)
         except serial.SerialTimeoutException:
             # Radar not servicing commands (likely mid-dump from an
@@ -2041,22 +1961,14 @@ class OPS243Radar:
                 "re-arm will be retried after the next capture cycle"
             )
             self._pre_trigger_split = (None, "rearm_write_timed_out")
-            return "write_timeout"
+            return
 
-        # No flush here (P7-1): the first PA restarts sampling, so an edge
-        # during the commands above starts a dump whose start marker a flush
-        # would discard. The next wait skips the command replies itself.
-        # Armed, but nobody reads until the next wait: the light still waits.
+        # No flush: an edge after the first PA may already have started a dump.
         self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
-        return "rearmed"
 
     def _write_pre_trigger_split(self, segments: int, write: Callable[[], object]) -> None:
-        """Run one S# write and record the split once it returns (R-F9).
-
-        Written, not confirmed: there is no readback. If the write raises, the
-        split stays unknown (None, "split_write_incomplete") and the error propagates.
-        """
+        """Run one S# write and record the split once it returns (there is no readback)."""
         self._pre_trigger_split = (None, "split_write_incomplete")
         write()
         self._pre_trigger_split = (segments, None)

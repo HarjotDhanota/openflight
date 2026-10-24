@@ -36,17 +36,14 @@ from openflight.iwr6843.tracking import accepted_range_evidence
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
 MAX_IWR_FALLBACK_ABS_DEG = 20.0
-# The resting-ball gate: diameter in pixels at the 640x400 tuning scale (scaled by
-# ball_pixels for other modes), and centre as fractions of the frame.
+# The resting-ball gate: diameter in px at 640x400 (scaled by ball_pixels for
+# other modes), centre as fractions of the frame.
 REFERENCE_BALL_DIAMETER_PX = ball_pixels.REFERENCE_BALL_DIAMETER_PX
-# The per-frame motion limits below were tuned on 640x400 captures at about 300 fps.
+# Per-frame motion limits below were tuned at 640x400, about 300 fps.
 REFERENCE_FRAME_INTERVAL_S = 1.0 / 300.0
 REFERENCE_BALL_X_FRACTION = (0.1, 0.9)
 REFERENCE_BALL_Y_FRACTION = (0.4, 0.95)
-# With the setup's ball (P7-8's --camera-setup-ball), the gate is that ball: a
-# resting ball within a few diameters of where the setup saw it (a re-teed ball
-# anywhere in the placement box), at a size its distance allows (P8-7). The
-# fixed fractions above stand in only when there is no setup ball.
+# With a setup ball the gate follows it; the fixed fractions apply only without one.
 SETUP_BALL_SEARCH_DIAMETERS = 3.0
 SETUP_BALL_SIZE_RATIO = (0.6, 1.6)
 
@@ -94,7 +91,6 @@ def gate_admits(gate: dict[str, Any], candidate) -> bool:
     )
 
 
-# OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
 
 
@@ -123,9 +119,8 @@ class CameraBallGeometry:
     # Camera optical-center position relative to radar center. Positive is
     # target-right when viewed from behind the sensors looking downrange.
     camera_lateral_offset_m: float = 0.0
-    # The one horizontal offset (D36 item 2, ``openflight.horizontal_frame``):
-    # -(target yaw), + when the boresight points right of the target line.
-    # Added once to every reported horizontal angle. None: no target line set.
+    # -(target yaw), + when the boresight points right of the target line; added
+    # once to every reported horizontal angle. None: no target line set.
     horizontal_offset_deg: float | None = None
     # Convert saved-image horizontal pixels back to physical target direction.
     # Mirrored operator previews use -1; unmirrored captures use +1.
@@ -136,12 +131,9 @@ class CameraBallGeometry:
     image_height_px: int = 400
     camera_forward_offset_m: float = 0.0
     calibrated_model: Any = None
-    # The resting ball's side offset from the radar's axis, + target-right: the
-    # setup's camera-radar pair (D36 item 4b), else 0 (assumed dead ahead).
+    # Resting ball's side offset from the radar axis, + target-right; 0 = dead ahead.
     ball_lateral_offset_m: float = 0.0
-    # D36 item 4a: the unit's calibrated camera pitch (this swing's LIS3DH pitch
-    # plus the P8-5 offset) and the rig's focal length for the mode. None: the
-    # resting ball sets both, as before, labelled uncalibrated.
+    # Calibrated camera pitch and focal length; None: the resting ball sets both.
     setup_pitch_deg: float | None = None
     setup_focal_px: float | None = None
 
@@ -190,8 +182,6 @@ class CameraBallEstimate:
     reference_ball_diagnostics: dict[str, Any] | None = None
     # The IWR ball track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
-    # How the IWR range was timed: from the ball's departure frame, or not at
-    # all when the camera never saw it leave (audit F7).
     timing_anchor: str | None = None
     contact_frame: int | None = None
     timestamp_source: str | None = None
@@ -202,10 +192,8 @@ class CameraBallEstimate:
     jackknife_mad_deg: float | None = None
     profile_span_deg: float | None = None
     impact_delay_ms: float | None = None
-    # unit_boresight or target_line (D36 item 2); set with horizontal_deg
+    # unit_boresight or target_line; set with horizontal_deg
     horizontal_frame: str | None = None
-    # Where the camera's pitch and focal length came from, with the resting
-    # ball's own inference as a cross-check (D36 item 4a)
     camera_model: dict[str, Any] | None = None
 
 
@@ -258,12 +246,8 @@ def _checked_camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
 ) -> tuple[tuple[float, float, np.ndarray], dict | None]:
-    """The model and the record of where it came from (D36 item 4a).
-
-    With the unit's tilt calibrated the swing's pitch and focal length are the
-    calibration's; the stationary regulation-size ball's own inference is the
-    recorded cross-check. Without it the ball sets both, labelled uncalibrated.
-    """
+    """The model and its provenance: calibrated tilt sets pitch and focal length,
+    else the resting ball does, labelled uncalibrated."""
     if geometry.calibrated_model is not None:
         return (1.0, 0.0, np.zeros(3)), None
     ball_position = geometry.ball_position_lfu
@@ -500,14 +484,8 @@ def _reference_candidate(candidate: ReferenceBall | None, reason: str | None) ->
 def _select_reference_ball(  # pylint: disable=too-many-locals
     frames, trigger_frame: int, geometry, *, setup_ball: dict | None = None
 ):
-    """Choose between scene and impact evidence while retaining both observations.
-
-    Only this shot's frames decide: two detectors that disagree withhold the ball,
-    and no earlier shot's ball stands in for a missing one (D17).
-
-    ``setup_ball`` (x, y, diameter_px in this mode) is where the setup saw the
-    resting ball; the gate and both detectors' search follow it (P8-7).
-    """
+    """Choose between scene and impact evidence, keeping both; detectors that
+    disagree withhold the ball."""
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
@@ -882,7 +860,7 @@ def _horizontal(velocity: np.ndarray) -> float:
 
 
 def _apply_horizontal_offset(angle_deg: float, offset_deg: float) -> float:
-    """Report an angle from the boresight with the one horizontal offset (D36 item 2)."""
+    """Report an angle from the boresight with the one horizontal offset."""
     return float(to_reported_deg(angle_deg, offset_deg))
 
 
@@ -1036,10 +1014,7 @@ def estimate_camera_ball_flight(
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
-    ``trigger_frame_index`` is the last frame exposed at or before the trigger,
-    from the clip's exposure split (P6-5). Clips without one locate the trigger
-    frame as they always did: the host arrival time nearest ``trigger_ns``.
-    Sensor timestamps, when given, time everything else.
+    ``trigger_frame_index``: last frame exposed by the trigger, else nearest ``trigger_ns``.
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1080,8 +1055,8 @@ def estimate_camera_ball_flight(
             reference_ball_diagnostics=reference_diagnostics,
         )
     clock_ns, timestamp_source = frame_clock(timestamps_ns, sensor_timestamps_ns)
-    # The sound trigger fires 0.5-4 ms after contact, so the IWR range is
-    # timed from the ball's own departure frame, as club delivery does (F7).
+    # The sound trigger fires 0.5-4 ms after contact, so the IWR range is timed
+    # from the ball's departure frame.
     contact = camera_contact_time(
         frames,
         clock_ns,
@@ -1101,7 +1076,6 @@ def estimate_camera_ball_flight(
                 timestamp_source=timestamp_source,
             )
     if range_evidence is None:
-        # the ball's distance is the IWR's: no ball-size depth stands in (D17)
         return CameraBallEstimate(
             "rejected_no_iwr_range",
             reference_ball_diagnostics=reference_diagnostics,
@@ -1174,8 +1148,6 @@ def estimate_camera_ball_flight(
     parameter_mad = float(np.median(np.abs(horizontal - median_horizontal)))
     window_mad = float(np.median([estimate.window_mad_deg for estimate in estimates]))
     tier = _confidence_tier(len(estimates), parameter_mad, window_mad)
-    # D15 (P8-7): a scattered sweep is measured and labelled "low consensus",
-    # not refused; its spread stays in parameter_mad_deg and window_mad_deg.
     if tier == "withheld":
         tier = "low"
     representative = min(estimates, key=lambda item: abs(item.horizontal_deg - median_horizontal))
@@ -1222,8 +1194,7 @@ def select_camera_assisted_horizontal(
         else None
     )
     if estimate.confidence_tier == "low" and camera_deg is not None:
-        # A low-consensus camera value is shown, labelled, but never outranks a
-        # plausible radar horizontal (P8-7).
+        # a low-consensus value never outranks a plausible radar horizontal
         if iwr_horizontal_deg is not None and abs(iwr_horizontal_deg) <= MAX_IWR_FALLBACK_ABS_DEG:
             return HorizontalFusionDecision(
                 iwr_horizontal_deg,

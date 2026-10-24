@@ -1,12 +1,8 @@
 """Behavioural model of the single-port L3 firmware CLI for host-driver tests.
 
-It reproduces the parts of ``firmware/iwr6843/l3_dump.c`` the host lifecycle
-depends on: ``l3dump`` writes the binary payload first, then restarts the HWA
-and RF front end, and only then returns so the CLI prints ``Done``. While that
-handler runs the CLI task is not reading lines, and the dump-cancel poll
-consumes any byte left in the SCI receive register, so host commands written
-during the handler are lost rather than queued. Time is simulated so a
-multi-second CP2105 stall costs no wall time.
+``l3dump`` writes its payload, restarts the front end, then prints ``Done``; host
+commands written meanwhile are lost, not queued (as in ``firmware/iwr6843/l3_dump.c``).
+Time is simulated, so a multi-second CP2105 stall costs no wall time.
 """
 
 from __future__ import annotations

@@ -1,14 +1,8 @@
-"""The ball-departure detector in dim light (P6-4).
+"""The ball-departure detector in dim light.
 
-The fixture is cropped from the six swings of Outdoors-test-5 (29 Sept 2026, at
-dusk, 1280x800 at 8.685 ms per frame): 24 frames of 64x64 px around the teed
-ball, with the clip's timestamps, pre-trigger count and the crop's offset. The
-ball centres were marked by hand on renders of the resting frames (the whole
-ball, lit cap and shaded body, 21 px across).
-
-At dusk the ball's lit cap is 5-10 DN above the mat behind it and its shaded
-body 6-10 DN below, so it changes the patch by far less than the fixed 30 DN
-the detector used to demand, and its two halves cancel in a plain mean.
+The fixture is six real dusk swings at 1280x800 (64x64 px crops, hand-marked ball
+centres). The ball's lit cap and shaded body sit 5-10 DN either side of the mat, far
+under a fixed 30 DN threshold, and cancel in a plain mean.
 """
 
 from pathlib import Path
@@ -26,12 +20,8 @@ from openflight.camera.club_motion import ReferenceBall
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ball_departure" / "outdoors-test-5-dusk.npz"
 
-# The ball is last at rest in frame 18 and gone in frame 19 in all six swings.
-# In swings 3-6 the club head already covers part of the ball's core in frame
-# 18 (its sole over the upper half in 3, 4 and 6, the dark head over the left
-# half in 5), so by the detector's own rule - the last frame the ball's core is
-# undisturbed, the same rule it applies on bright clips - frame 17 is the answer
-# there.
+# The ball leaves after frame 18; in swings 3-6 the head already covers its core
+# in frame 18, so the last undisturbed frame is 17.
 EXPECTED_LAST_UNDISTURBED = {1: 18, 2: 18, 3: 17, 4: 17, 5: 17, 6: 17}
 
 
@@ -81,7 +71,7 @@ def test_the_departure_needs_no_trigger_hint(archive, swing):
 
 
 def test_the_contact_time_comes_back_on_a_dusk_swing(archive):
-    """F7's contact time returned nothing on all six swings before the fix."""
+    """The contact time is found on a dusk swing."""
     frames, ball = _swing(archive, 1)
     clock, source = frame_clock(archive["s1_host_timestamp_ns"], archive["s1_sensor_timestamp_ns"])
 
@@ -107,7 +97,7 @@ def _bright_scene(frame_count: int, *, seed: int) -> tuple[np.ndarray, Reference
 
 
 def _legacy_detect(frames, ball, trigger_index):
-    """The detector as it was before P6-4, for bright-clip comparisons."""
+    """The fixed-threshold detector, for bright-clip comparisons."""
     radius = max(3, int(round(ball.diameter_px * 0.4)))
     yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     disk = (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= radius * radius
