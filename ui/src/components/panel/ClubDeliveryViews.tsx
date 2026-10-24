@@ -180,9 +180,17 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           <stop offset=".8" stopColor="#12161b" />
           <stop offset="1" stopColor="#050709" />
         </radialGradient>
-        <linearGradient id={`${id}face`} x1={lightX < 0 ? 0 : 1} x2={lightX < 0 ? 1 : 0} y1="0" y2=".6">
-          <stop className="face-impact__face-hi" offset="0" />
-          <stop className="face-impact__face-lo" offset="1" />
+        <linearGradient
+          id={`${id}face`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          x2={-p.faceHeight * Math.sin((p.loft * Math.PI) / 180)}
+          y1="0"
+          y2="0"
+        >
+          <stop className={lightX < 0 ? 'face-impact__face-lo' : 'face-impact__face-hi'} offset="0" stopOpacity=".9" />
+          <stop className="face-impact__face-lo" offset=".4" stopOpacity=".55" />
+          <stop className="face-impact__face-lo" offset="1" stopOpacity="0" />
         </linearGradient>
         <linearGradient id={`${id}back`} gradientUnits="userSpaceOnUse" x1={paths.bx - p.sole} x2={paths.bx}>
           <stop offset="0" stopColor="#101820" stopOpacity=".22" />
@@ -330,7 +338,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           {top ? (
             <path
               className="club-projection__topline"
-              d={paths.topFace}
+              d={p.depth ? head : paths.topFace}
               fill={`url(#${id}${p.depth ? 'face' : 'metal'})`}
               stroke={p.depth ? 'none' : '#edf2f5'}
               strokeOpacity=".6"
