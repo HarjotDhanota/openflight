@@ -21,9 +21,36 @@ interface FaceImpactViewProps {
   metricRow?: ReactNode;
 }
 
+// Fixed illustrative contact texture; neither its outline nor its size is measured.
+const contactNoise = (seed: number) => {
+  const value = Math.sin(seed * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+};
+const CONTACT_SHAPE =
+  Array.from({ length: 96 }, (_, i) => {
+    const angle = (i * Math.PI) / 48;
+    const radius = 1 + 0.035 * Math.sin(7 * angle) + 0.025 * Math.cos(17 * angle);
+    return `${i ? 'L' : 'M'} ${(10 * radius * Math.cos(angle)).toFixed(3)} ${(11 * radius * Math.sin(angle)).toFixed(3)}`;
+  }).join(' ') + ' Z';
+const CONTACT_DIMPLES = Array.from({ length: 7 }, (_, row) =>
+  Array.from({ length: 7 }, (_, col) => {
+    const seed = row * 7 + col + 1;
+    return [
+      (col - 3) * 3.5 + (row % 2) * 1.75 + (contactNoise(seed) - 0.5) * 0.45,
+      (row - 3) * 3.2 + (contactNoise(seed + 51) - 0.5) * 0.4,
+      1.15 + contactNoise(seed + 102) * 0.4,
+    ];
+  })
+).flat();
+const CONTACT_GRAIN = Array.from({ length: 380 }, (_, i) => {
+  const x = contactNoise(i + 1) * 24 - 12;
+  const y = contactNoise(i + 401) * 26 - 13;
+  return `M ${x.toFixed(3)} ${y.toFixed(3)} l ${(0.08 + contactNoise(i + 801) * 0.32).toFixed(3)} ${(contactNoise(i + 1201) * 0.35).toFixed(3)}`;
+}).join(' ');
+
 /** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
  * the club's earlier shots faint, centre lines through the reading's face centre; mirrored for a
- * left-hander. The dot sits at the unrounded mm values, the svg's units. */
+ * left-hander. The impact anchor sits at the unrounded mm values, the svg's units. */
 export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactViewProps) {
   const { t } = useI18n();
   const id = useId();
@@ -37,8 +64,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   ].map((part) => `${id}${part}`);
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
+  const blade = category === 'iron' || category === 'wedge';
   const hosel = hoselParts(shape.hosel);
   const lie = (shape.hosel.lieDeg * Math.PI) / 180;
+  const jointStart = blade ? shape.hosel.tube[0][0] : 0;
   const tubeWidth = Math.max(...shape.hosel.tube.map(([, width]) => width));
   const crossTube = (side: number) => ({
     x: shape.hosel.ground[0] + (side * tubeWidth * Math.sin(lie)) / 2,
@@ -53,6 +82,12 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   const mirror = left ? 'scale(-1 1)' : undefined;
   const rotation = faceDeliveryRotation(shot, category) * (left ? -1 : 1);
   const angle = (rotation * Math.PI) / 180;
+  const lightX = (left ? -1 : 1) * (-0.6 * Math.cos(angle) - 0.8 * Math.sin(angle));
+  const lightY = 0.6 * Math.sin(angle) - 0.8 * Math.cos(angle);
+  const litTubeSide = lightX * Math.sin(lie) + lightY * Math.cos(lie) < 0 ? -1 : 1;
+  const lightSpan = Math.max(maxX - minX, maxY - minY);
+  const lightCentreX = (minX + maxX) / 2;
+  const lightCentreY = (minY + maxY) / 2;
   const corners = [viewMinX, viewMaxX].flatMap((x) =>
     [minY, maxY].map((y) => [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)])
   );
@@ -99,13 +134,38 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
           preserveAspectRatio="xMidYMid meet"
         >
           <defs>
+            <radialGradient id={`${id}contact-dimple`}>
+              <stop offset=".7" stopColor="#000" />
+              <stop offset="1" stopColor="#000" stopOpacity="0" />
+            </radialGradient>
+            <mask id={`${id}contact-mask`} maskUnits="userSpaceOnUse" x="-12" y="-13" width="24" height="26">
+              <path d={CONTACT_SHAPE} fill="#fff" />
+              {CONTACT_DIMPLES.map(([x, y, radius], i) => (
+                <circle
+                  key={i}
+                  cx={x}
+                  cy={y}
+                  r={radius}
+                  fill={`url(#${id}contact-dimple)`}
+                  opacity={i % 4 === 0 ? '.6' : '.95'}
+                />
+              ))}
+              <path d={CONTACT_GRAIN} fill="none" stroke="#000" strokeWidth=".16" strokeLinecap="round" opacity=".65" />
+            </mask>
             <clipPath id={clipId}>
               <rect x={viewMinX} y={minY} width={viewMaxX - viewMinX} height={maxY - minY} />
             </clipPath>
             <clipPath id={faceClipId}>
               <path d={shape.face} transform={mirror} />
             </clipPath>
-            <linearGradient id={steelId} gradientUnits="userSpaceOnUse" x1={minX} y1={minY} x2={maxX} y2={maxY}>
+            <linearGradient
+              id={steelId}
+              gradientUnits="userSpaceOnUse"
+              x1={lightCentreX + (lightX * lightSpan) / 2}
+              y1={lightCentreY + (lightY * lightSpan) / 2}
+              x2={lightCentreX - (lightX * lightSpan) / 2}
+              y2={lightCentreY - (lightY * lightSpan) / 2}
+            >
               <stop className="face-impact__steel-hi" offset="0" />
               <stop className="face-impact__steel-mid" offset="0.28" />
               <stop className="face-impact__steel-lo" offset="0.46" />
@@ -116,10 +176,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <linearGradient
               id={`${id}tube`}
               gradientUnits="userSpaceOnUse"
-              x1={crossTube(-1).x}
-              y1={crossTube(-1).y}
-              x2={crossTube(1).x}
-              y2={crossTube(1).y}
+              x1={crossTube(litTubeSide).x}
+              y1={crossTube(litTubeSide).y}
+              x2={crossTube(-litTubeSide).x}
+              y2={crossTube(-litTubeSide).y}
             >
               <stop className="face-impact__steel-lo" offset="0" />
               <stop className="face-impact__steel-mid" offset="0.2" />
@@ -131,10 +191,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <linearGradient
               id={`${id}ferrule`}
               gradientUnits="userSpaceOnUse"
-              x1={crossTube(-1).x}
-              y1={crossTube(-1).y}
-              x2={crossTube(1).x}
-              y2={crossTube(1).y}
+              x1={crossTube(litTubeSide).x}
+              y1={crossTube(litTubeSide).y}
+              x2={crossTube(-litTubeSide).x}
+              y2={crossTube(-litTubeSide).y}
             >
               <stop offset="0" stopColor="#101214" />
               <stop offset="0.36" stopColor="#62676c" />
@@ -144,8 +204,8 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             </linearGradient>
             <radialGradient
               id={`${id}reflection`}
-              cx="32%"
-              cy="15%"
+              cx={`${50 + lightX * 30}%`}
+              cy={`${50 + lightY * 40}%`}
               r="85%"
               gradientTransform="translate(0 .08) scale(1 .85)"
             >
@@ -153,25 +213,25 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
               <stop offset="0.46" stopColor="#fff" stopOpacity="0" />
               <stop offset="1" stopColor="#080b10" stopOpacity="0.26" />
             </radialGradient>
-            <linearGradient id={`${id}radius`} x1="0" y1="0" x2="0.18" y2="1">
+            <linearGradient id={`${id}radius`} x1={lightX < 0 ? 0 : 1} y1="0" x2={lightX < 0 ? 0.18 : 0.82} y2="1">
               <stop offset="0" stopColor="#fff" stopOpacity="0.55" />
               <stop offset="0.42" stopColor="#fff" stopOpacity="0.04" />
               <stop offset="0.75" stopColor="#080b10" stopOpacity="0.45" />
               <stop offset="1" stopColor="#fff" stopOpacity="0.7" />
             </linearGradient>
             <clipPath id={`${id}head-clip`}>
-              <path d={shape.head} />
+              <path d={blade ? shape.silhouette : shape.head} />
             </clipPath>
             <linearGradient
               id={`${id}joint-fade`}
               gradientUnits="userSpaceOnUse"
-              x1={shape.hosel.ground[0]}
-              y1={shape.hosel.ground[1]}
+              x1={shape.hosel.ground[0] + jointStart * Math.cos(lie)}
+              y1={shape.hosel.ground[1] - jointStart * Math.sin(lie)}
               x2={hosel.shaftLine[0][0]}
               y2={hosel.shaftLine[0][1]}
             >
-              <stop offset="0.35" stopColor="#fff" stopOpacity="0" />
-              <stop offset="0.7" stopColor="#fff" />
+              <stop offset={blade ? '0' : '0.35'} stopColor="#fff" stopOpacity="0" />
+              <stop offset={blade ? '0.65' : '0.7'} stopColor="#fff" />
             </linearGradient>
             <mask
               id={`${id}joint`}
@@ -246,16 +306,21 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 </g>
                 <path className="face-impact__shaft" d={hosel.shaft} fill={`url(#${shaftId})`} />
                 <path className="face-impact__head" d={shape.head} fill={`url(#${steelId})`} />
-                <path className="face-impact__head-reflection" d={shape.head} fill={`url(#${id}reflection)`} />
+                {blade ? <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} /> : null}
+                <path
+                  className="face-impact__head-reflection"
+                  d={blade ? shape.silhouette : shape.head}
+                  fill={`url(#${id}reflection)`}
+                />
                 <path
                   className="face-impact__leading-radius"
-                  d={shape.head}
+                  d={blade ? shape.silhouette : shape.head}
                   fill="none"
                   stroke={`url(#${id}radius)`}
                   strokeWidth="1.5"
                   clipPath={`url(#${id}head-clip)`}
                 />
-                <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} />
+                {!blade ? <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} /> : null}
                 <path d={hosel.tube} fill={`url(#${id}tube)`} mask={`url(#${id}joint)`} />
                 {hosel.collar ? (
                   <path className="face-impact__collar" d={hosel.collar} fill={`url(#${id}tube)`} />
@@ -280,6 +345,17 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 <line className="face-impact__centre-line" x1={viewMinX} x2={viewMaxX} y1={0} y2={0} />
                 <line className="face-impact__centre-line" x1={0} x2={0} y1={minY} y2={maxY} />
               </g>
+              {read && reading.height !== null ? (
+                <g className="face-impact__contact" clipPath={`url(#${faceClipId})`}>
+                  <title>{t('faceImpact.illustrativeMark')}</title>
+                  <g className="face-impact__imprint" transform={`translate(${cx} ${cy}) scale(${left ? -1 : 1} 1)`}>
+                    <g mask={`url(#${id}contact-mask)`}>
+                      <path className="face-impact__contact-shape" d={CONTACT_SHAPE} />
+                      <path className="face-impact__contact-grain" d={CONTACT_GRAIN} transform="translate(.2 -.25)" />
+                    </g>
+                  </g>
+                </g>
+              ) : null}
               <g className="face-impact__face-marks" transform={mirror}>
                 {shape.grooves.map((groove) => (
                   <line
@@ -350,7 +426,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 className={`face-impact__dot${reading.height === null ? ' face-impact__dot--offset-only' : ''}`}
                 cx={cx}
                 cy={cy}
-                r={2.6}
+                r={reading.height === null ? 2.6 : 0.75}
               />
             ) : null}
           </g>
@@ -390,7 +466,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
           </p>
         ) : null}
         <p className="face-impact__caption">
-          {t('faceImpact.illustrative')}
+          {t(read && reading.height !== null ? 'faceImpact.illustrativeMark' : 'faceImpact.illustrative')}
           {earlier.length ? ` · ${t('faceImpact.earlier', { count: String(earlier.length) })}` : ''}
         </p>
       </div>

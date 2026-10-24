@@ -18,7 +18,91 @@ import {
 import { formatMetricValue } from './metricFormat';
 import './ClubDeliveryViews.css';
 
-const BALL_RADIUS_MM = 21.35; // the 42.7 mm ball the shot models use
+const BALL_DIAMETER_MM = 42.7; // the ball the shot models use
+const BALL_RADIUS_MM = BALL_DIAMETER_MM / 2;
+
+// Original close packing with tetrahedral symmetry; seeds are unit vectors and radii in mm.
+const BALL_DIMPLE_SEEDS = [
+  [0.57735, 0.57735, 0.57735, 2.25],
+  [-0.419281, 0.887907, 0.189273, 1.95],
+  [0.952466, -0.285945, -0.10509, 1.8],
+  [-0.686759, 0.191472, 0.701214, 1.8],
+  [0.54091, -0.784576, -0.30308, 2.05],
+  [0.474321, 0.506992, -0.719708, 2.05],
+  [0.091642, 0.086345, -0.992041, 2.05],
+  [0.538191, -0.30756, -0.784702, 2.1],
+  [0.951702, 0.107761, 0.287489, 1.7],
+  [0.416953, -0.19249, 0.888312, 2.25],
+  [0.579892, -0.808157, 0.102995, 2.25],
+  [-0.572251, -0.115115, 0.811959, 2.05],
+  [0.847251, 0.373012, 0.37819, 1.9],
+  [-0.389126, -0.841892, -0.373896, 2.1],
+  [0.649594, -0.398874, -0.647246, 2.1],
+  [0.104049, -0.110497, -0.988415, 2.1],
+  [-0.651313, 0.666408, 0.362892, 1.4],
+  [-0.709842, -0.704218, 0.014202, 2.05],
+  [-0.962904, -0.056652, -0.263829, 1.8],
+  [-0.689036, 0.693753, -0.20961, 2.1],
+  [0.60948, -0.482612, 0.628983, 1.4],
+  [-0.903171, 0.00272, -0.429271, 2.1],
+  [-0.422183, 0.885362, -0.194669, 1.95],
+  [-0.728372, -0.484078, 0.484914, 1.95],
+  [-0.940592, -0.232648, -0.247308, 1.95],
+  [0.554489, -0.776719, 0.298747, 1.95],
+  [0.95863, -0.275762, 0.070593, 1.9],
+  [0.266778, -0.268663, -0.925554, 1.7],
+  [-0.88569, 0.419963, -0.197951, 1.9],
+  [0.812755, -0.102604, -0.5735, 2.05],
+  [-0.772999, 0.552936, 0.311021, 2.25],
+  [0.093022, -0.811161, 0.577377, 2.05],
+  [0.900608, 0.4345, 0.010739, 2.05],
+];
+const ballCentres = new Map<string, number[]>();
+for (const [x, y, z, radius] of BALL_DIMPLE_SEEDS) {
+  for (const p of [
+    [x, y, z],
+    [y, z, x],
+    [z, x, y],
+  ]) {
+    for (const signs of [
+      [1, 1, 1],
+      [1, -1, -1],
+      [-1, 1, -1],
+      [-1, -1, 1],
+    ]) {
+      const q = p.map((v, i) => v * signs[i]);
+      ballCentres.set(q.map((v) => v.toFixed(5)).join(','), [...q, radius]);
+    }
+  }
+}
+const BALL_DIMPLES = [...ballCentres.values()].flatMap(([sx, sy, sz, radius]) => {
+  const u = sx * Math.cos(0.36) + sz * Math.sin(0.36);
+  const w = -sx * Math.sin(0.36) + sz * Math.cos(0.36);
+  const v = sy * Math.cos(0.48) - w * Math.sin(0.48);
+  const z = sy * Math.sin(0.48) + w * Math.cos(0.48);
+  // A finite viewing distance gives the cover the reference photo's broader front dimples.
+  const perspective = 0.2;
+  if (z <= perspective) return [];
+  const scale = Math.sqrt(1 - perspective ** 2) / (1 - perspective * z);
+  const angle = Math.atan2(v, u);
+  const ring = Math.sqrt(BALL_RADIUS_MM ** 2 - radius ** 2);
+  const x = ring * u * scale,
+    y = ring * v * scale;
+  const rx = (radius * scale * (z - perspective)) / (1 - perspective * z);
+  const ry = radius * scale;
+  return {
+    transform: `translate(${x} ${y}) rotate(${(angle * 180) / Math.PI}) scale(${rx} ${ry})`,
+    // Compensate for the ellipse transform to keep the shading gradient fixed on screen.
+    lightAngles: [-1, 1].map(
+      (lx) =>
+        (Math.atan2((Math.cos(angle) - lx * Math.sin(angle)) * ry, (lx * Math.cos(angle) + Math.sin(angle)) * rx) *
+          180) /
+          Math.PI -
+        90
+    ),
+    opacity: 0.55 + 0.45 * z,
+  };
+});
 
 export function DeliveryNumbers({ shot, view }: { shot: Shot; view: DeliveryView }) {
   const { t } = useI18n();
@@ -67,10 +151,26 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
   const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
   const shaftEnd = top ? shaftY + 24 : -64;
   const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
+  const ferruleBase = ferruleEnd + (top ? -8 : 8);
+  const ferruleRadius = 4.8 + (1.6 * 8) / Math.abs(ferruleEnd - shaftY);
+  const shaftRadius = 4.6 - (0.4 * (ferruleEnd - shaftY)) / (shaftEnd - shaftY);
+  const crownJoin = shaftY + (top ? -10 : 10);
+  const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  const heelCorner = paths.top.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+  const neck = top
+    ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${ferruleBase - 12} ${heelCorner[0] + 4} ${heelCorner[1] + 6} ${heelCorner[0] - 2} ${heelCorner[1] - 1} L ${heelCorner[0] - 5} ${heelCorner[1] - 9} L ${shaftX + 4} ${heelCorner[1] - 9} C ${shaftX + 4} ${heelCorner[1] + 2} ${shaftX + ferruleRadius} ${ferruleBase - 12} ${shaftX + ferruleRadius} ${ferruleBase} Z`
+    : `M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - ferruleRadius} ${shaftY + 8} ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX + ferruleRadius} ${ferruleBase} C ${shaftX + ferruleRadius} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
-  const xs = coords.filter((_, i) => i % 2 === 0).concat([shaftX - 14, shaftX + 7]);
-  const ys = coords.filter((_, i) => i % 2 === 1).concat([shaftY, shaftEnd, ferruleEnd]);
+  const headXs = coords.filter((_, i) => i % 2 === 0);
+  const headYs = coords.filter((_, i) => i % 2 === 1);
+  const xs = headXs.concat([shaftX - 14, shaftX + 7]);
+  const ys = headYs.concat([shaftY, shaftEnd, ferruleEnd]);
   const angle = (rotation * Math.PI) / 180;
+  const lightX = (left ? -0.6 : 0.6) * Math.cos(angle) - 0.8 * Math.sin(angle);
+  const lightY = -(left ? -0.6 : 0.6) * Math.sin(angle) - 0.8 * Math.cos(angle);
+  const centreX = (Math.min(...headXs) + Math.max(...headXs)) / 2;
+  const centreY = (Math.min(...headYs) + Math.max(...headYs)) / 2;
+  const lightSpan = Math.max(Math.max(...headXs) - Math.min(...headXs), Math.max(...headYs) - Math.min(...headYs));
   const bounds = [Math.min(...xs) - 3, Math.max(...xs) + 3].flatMap((x) =>
     [Math.min(...ys) - 3, Math.max(...ys) + 3].map((y) => [
       x * Math.cos(angle) - y * Math.sin(angle),
@@ -91,6 +191,45 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
     Math.max(...bx) - Math.min(...bx) + 20,
     Math.max(...by) - Math.min(...by) + 20,
   ];
+  const ferrule = (
+    <>
+      <path
+        d={`M ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX - shaftRadius} ${ferruleEnd} L ${shaftX + shaftRadius} ${ferruleEnd} L ${shaftX + ferruleRadius} ${ferruleBase} Z`}
+        fill={`url(#${id}ferrule)`}
+      />
+      <line
+        x1={shaftX - ferruleRadius}
+        x2={shaftX + ferruleRadius}
+        y1={ferruleBase}
+        y2={ferruleBase}
+        stroke="#b9c2cb"
+        strokeWidth=".35"
+        strokeOpacity=".35"
+      />
+    </>
+  );
+  const hosel = (
+    <g className="club-projection__hosel">
+      <path
+        className="club-projection__shaft"
+        d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
+        fill={`url(#${id}shaft)`}
+      />
+      {p.depth ? (
+        <>
+          <path className="club-projection__neck" d={woodNeck} fill={`url(#${id}crown)`} />
+          <path d={woodNeck} fill={`url(#${id}ferrule)`} mask={`url(#${id}joint)`} />
+        </>
+      ) : !top ? (
+        <>
+          <path className="club-projection__neck" d={neck} fill={`url(#${id}metal)`} />
+          <path d={neck} fill={`url(#${id}back)`} />
+          <path d={neck} fill={`url(#${id}neck)`} mask={`url(#${id}joint)`} />
+        </>
+      ) : null}
+      {!top || p.depth ? ferrule : null}
+    </g>
+  );
   return (
     <svg
       className="club-projection"
@@ -103,46 +242,147 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
       aria-label={t(top ? 'clubViews.top' : 'clubViews.side')}
     >
       <defs>
-        <linearGradient id={`${id}metal`} x1="0" y1="0" x2="1" y2=".7">
+        <linearGradient
+          id={`${id}metal`}
+          gradientUnits="userSpaceOnUse"
+          x1={centreX + (lightX * lightSpan) / 2}
+          y1={centreY + (lightY * lightSpan) / 2}
+          x2={centreX - (lightX * lightSpan) / 2}
+          y2={centreY - (lightY * lightSpan) / 2}
+        >
           <stop className="face-impact__steel-hi" offset="0" />
-          <stop className="face-impact__steel-mid" offset=".3" />
-          <stop className="face-impact__steel-lo" offset=".49" />
-          <stop className="face-impact__steel-hi" offset=".56" />
-          <stop className="face-impact__steel-mid" offset=".72" />
+          <stop className="face-impact__steel-mid" offset=".55" />
           <stop className="face-impact__steel-lo" offset="1" />
         </linearGradient>
-        <radialGradient id={`${id}crown`} cx="30%" cy="24%" r="76%">
+        <radialGradient
+          id={`${id}crown`}
+          gradientUnits="userSpaceOnUse"
+          cx={centreX + lightX * lightSpan * 0.25}
+          cy={centreY + lightY * lightSpan * 0.25}
+          r={lightSpan * 0.85}
+        >
           <stop offset="0" stopColor="#666e76" />
           <stop offset=".38" stopColor="#292e34" />
           <stop offset=".8" stopColor="#12161b" />
           <stop offset="1" stopColor="#050709" />
         </radialGradient>
-        <linearGradient id={`${id}face`} x1="0" x2="1" y1="0" y2=".4">
+        <linearGradient
+          id={`${id}face`}
+          gradientUnits="userSpaceOnUse"
+          x1={lightX < 0 ? -p.faceHeight * Math.sin((p.loft * Math.PI) / 180) : 0}
+          x2={lightX < 0 ? 0 : -p.faceHeight * Math.sin((p.loft * Math.PI) / 180)}
+          y1="0"
+          y2="0"
+        >
           <stop className="face-impact__face-hi" offset="0" />
           <stop className="face-impact__face-lo" offset="1" />
         </linearGradient>
-        <linearGradient id={`${id}shaft`}>
+        <linearGradient id={`${id}back`} gradientUnits="userSpaceOnUse" x1={paths.bx - p.sole} x2={paths.bx}>
+          <stop offset="0" stopColor="#101820" stopOpacity=".22" />
+          <stop offset="1" stopColor="#101820" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id={`${id}shaft`} x1={lightX < 0 ? 0 : 1} x2={lightX < 0 ? 1 : 0}>
           <stop offset="0" stopColor={p.depth ? '#101418' : '#505860'} />
           <stop offset=".36" stopColor={p.depth ? '#717983' : '#f3f5f8'} />
           <stop offset=".55" stopColor={p.depth ? '#323940' : '#acb4be'} />
           <stop offset="1" stopColor="#151a20" />
         </linearGradient>
-        <linearGradient id={`${id}ferrule`}>
+        <linearGradient id={`${id}ferrule`} x1={lightX < 0 ? 0 : 1} x2={lightX < 0 ? 1 : 0}>
           <stop offset="0" stopColor="#090c10" />
           <stop offset=".4" stopColor="#636b72" />
           <stop offset="1" stopColor="#090c10" />
         </linearGradient>
-        <linearGradient id={`${id}neck`} gradientUnits="userSpaceOnUse" x1={shaftX - 6.4} x2={shaftX + 6.4}>
-          <stop offset="0" stopColor="#59616b" />
-          <stop offset=".38" stopColor="#e5ebf0" />
-          <stop offset=".6" stopColor="#adb5be" />
-          <stop offset="1" stopColor="#626c76" />
+        <linearGradient
+          id={`${id}neck`}
+          gradientUnits="userSpaceOnUse"
+          x1={shaftX + (lightX < 0 ? -6.4 : 6.4)}
+          x2={shaftX + (lightX < 0 ? 6.4 : -6.4)}
+        >
+          <stop offset="0" className="face-impact__steel-lo" />
+          <stop offset=".38" className="face-impact__steel-hi" />
+          <stop offset=".6" className="face-impact__steel-mid" />
+          <stop offset="1" className="face-impact__steel-lo" />
         </linearGradient>
-        <radialGradient id={`${id}ball`} cx="30%" cy="25%" r="75%">
+        <linearGradient
+          id={`${id}joint-fade`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          x2="0"
+          y1={p.depth ? crownJoin : top ? paths.heel - 10 : paths.by - 3}
+          y2={p.depth ? ferruleBase : top ? shaftY + 4 : shaftY + 10}
+        >
+          <stop offset="0" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#fff" />
+        </linearGradient>
+        <mask id={`${id}joint`}>
+          <path d={p.depth ? woodNeck : neck} fill={`url(#${id}joint-fade)`} />
+        </mask>
+        <mask
+          id={`${id}body`}
+          maskUnits="userSpaceOnUse"
+          x={Math.min(...xs) - 10}
+          y={Math.min(...ys) - 10}
+          width={Math.max(...xs) - Math.min(...xs) + 20}
+          height={Math.max(...ys) - Math.min(...ys) + 20}
+        >
+          <path
+            d={FACE_SHAPES[category].face}
+            transform={paths.topShellTransform}
+            fill="#fff"
+            stroke="#fff"
+            strokeWidth="4.8"
+            strokeLinejoin="round"
+          />
+          <path d={neck} fill="#fff" />
+        </mask>
+        <linearGradient
+          id={`${id}heel-edge-fade`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          x2="0"
+          y1={paths.heel - 12}
+          y2={paths.heel - 3}
+        >
           <stop offset="0" stopColor="#fff" />
-          <stop offset=".55" stopColor="#e5e9ec" />
-          <stop offset="1" stopColor="#87909b" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+        <mask id={`${id}heel-edge`}>
+          <rect
+            x={Math.min(...xs) - 10}
+            y={Math.min(...ys) - 10}
+            width={Math.max(...xs) - Math.min(...xs) + 20}
+            height={Math.max(...ys) - Math.min(...ys) + 20}
+            fill={`url(#${id}heel-edge-fade)`}
+          />
+        </mask>
+        <radialGradient id={`${id}ball`} cx={left ? '30%' : '70%'} cy="25%" r="75%">
+          <stop offset="0" stopColor="#fff" />
+          <stop offset=".35" stopColor="#f8f8f6" />
+          <stop offset=".7" stopColor="#e2e2e0" />
+          <stop offset="1" stopColor="#a9aaa9" />
         </radialGradient>
+        <linearGradient id={`${id}dimple`} x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0" stopColor="#626260" stopOpacity=".25" />
+          <stop offset=".4" stopColor="#858581" stopOpacity=".12" />
+          <stop offset=".65" stopColor="#fff" stopOpacity=".08" />
+          <stop offset="1" stopColor="#fff" stopOpacity=".5" />
+        </linearGradient>
+        <radialGradient id={`${id}dimple-edge`}>
+          <stop offset=".82" stopColor="#fff" />
+          <stop offset=".94" stopColor="#bbb" />
+          <stop offset="1" stopColor="#000" />
+        </radialGradient>
+        <mask id={`${id}dimple-rim`} maskUnits="userSpaceOnUse" x="-1" y="-1" width="2" height="2">
+          <circle r="1" fill={`url(#${id}dimple-edge)`} />
+        </mask>
+        <radialGradient id={`${id}ball-sheen`} cx={left ? '28%' : '72%'} cy="22%" r="60%">
+          <stop offset="0" stopColor="#fff" stopOpacity=".45" />
+          <stop offset=".5" stopColor="#fff" stopOpacity=".12" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <clipPath id={`${id}ball-clip`}>
+          <circle cx={ballX} cy={ballY} r={BALL_RADIUS_MM} />
+        </clipPath>
         <clipPath id={`${id}clip`}>
           <path d={head} />
         </clipPath>
@@ -167,13 +407,6 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
       <g className="club-projection__hand" transform={left ? undefined : 'scale(-1 1)'}>
         <line className="club-projection__target" x1="-137" x2="146" y1="0" y2="0" />
         <g className="club-projection__head" transform={`rotate(${rotation})`}>
-          {top && !p.depth ? (
-            <path
-              className="club-projection__neck"
-              d={`M ${shaftX - 6.4} ${shaftY} C ${shaftX - 6.4} ${shaftY - 12} ${shaftX - 14} ${paths.heel - 6} ${shaftX - 14} ${paths.heel - 14} L ${shaftX + 3} ${paths.heel - 14} C ${shaftX + 6.4} ${paths.heel - 4} ${shaftX + 6.4} ${shaftY - 8} ${shaftX + 6.4} ${shaftY} Z`}
-              fill={`url(#${id}neck)`}
-            />
-          ) : null}
           {!top && !p.depth ? (
             <path
               d={`M ${paths.tx - p.topline} ${paths.ty + 7} Q ${paths.bx - p.sole - 4} ${paths.by - 14} ${paths.bx - p.sole + 3} ${paths.by - 2}`}
@@ -183,47 +416,24 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
               strokeWidth="1.2"
             />
           ) : null}
-          {!top && !p.depth ? (
-            <path
-              className="club-projection__neck"
-              d={`M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - 6.4} ${shaftY + 8} ${shaftX - 6.4} ${shaftY} L ${shaftX + 6.4} ${shaftY} C ${shaftX + 6.4} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`}
-              fill={`url(#${id}neck)`}
-            />
-          ) : null}
-          <path
-            className="club-projection__shaft"
-            d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
-            fill={`url(#${id}shaft)`}
-          />
-          <path
-            d={`M ${shaftX - 6.4} ${shaftY} L ${shaftX - 4.8} ${ferruleEnd} L ${shaftX + 4.8} ${ferruleEnd} L ${shaftX + 6.4} ${shaftY} Z`}
-            fill={`url(#${id}${p.depth ? 'ferrule' : 'neck'})`}
-          />
-          <path
-            d={`M ${shaftX - 4.8} ${ferruleEnd} l 0 ${top ? -6 : 6} l 9.6 0 l 0 ${top ? 6 : -6} Z`}
-            fill={`url(#${id}ferrule)`}
-          />
-          <line
-            x1={shaftX - 5.2}
-            x2={shaftX + 5.2}
-            y1={ferruleEnd + (top ? -8 : 8)}
-            y2={ferruleEnd + (top ? -8 : 8)}
-            stroke="#b9c2cb"
-            strokeWidth=".65"
-            strokeOpacity=".65"
-          />
+          {top ? hosel : null}
           {top && !p.depth ? (
-            <path
+            <rect
               className="club-projection__blade-shell"
-              d={FACE_SHAPES[category].face}
-              transform={paths.topShellTransform}
+              x={Math.min(...xs) - 10}
+              y={Math.min(...ys) - 10}
+              width={Math.max(...xs) - Math.min(...xs) + 20}
+              height={Math.max(...ys) - Math.min(...ys) + 20}
               fill={`url(#${id}metal)`}
-              stroke={`url(#${id}metal)`}
-              strokeWidth="4.8"
-              strokeLinejoin="round"
+              mask={`url(#${id}body)`}
             />
           ) : null}
-          <path className="club-projection__outline" d={head} fill={`url(#${id}${p.depth ? 'crown' : 'metal'})`} />
+          <path
+            className="club-projection__outline"
+            d={head}
+            fill={`url(#${id}${p.depth ? 'crown' : 'metal'})`}
+            mask={top && !p.depth ? `url(#${id}heel-edge)` : undefined}
+          />
           <path
             d={head}
             fill="none"
@@ -231,21 +441,86 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
             strokeOpacity={p.depth ? '.24' : '.6'}
             strokeWidth="1.1"
             clipPath={`url(#${id}clip)`}
+            mask={top && !p.depth ? `url(#${id}heel-edge)` : undefined}
           />
           {top ? (
             <path
               className="club-projection__topline"
               d={paths.topFace}
               fill={`url(#${id}${p.depth ? 'face' : 'metal'})`}
+              clipPath={p.depth ? `url(#${id}clip)` : undefined}
               stroke={p.depth ? 'none' : '#edf2f5'}
               strokeOpacity=".6"
               strokeWidth="1.4"
+              mask={!p.depth ? `url(#${id}heel-edge)` : undefined}
             />
           ) : (
-            <path className="club-projection__face-edge" d={paths.sideFace} />
+            <path
+              className="club-projection__face-edge"
+              d={paths.sideFace}
+              clipPath={!p.depth ? `url(#${id}clip)` : undefined}
+            />
           )}
+          {top && p.depth ? (
+            <path
+              d={paths.topFaceJoin}
+              fill="none"
+              stroke="#c5ccd2"
+              strokeOpacity=".32"
+              strokeWidth=".7"
+              clipPath={`url(#${id}clip)`}
+            />
+          ) : null}
+          {top && !p.depth ? (
+            <path className="club-projection__neck" d={neck} fill={`url(#${id}neck)`} mask={`url(#${id}joint)`} />
+          ) : null}
+          {top && !p.depth ? ferrule : null}
+          {!top && !p.depth ? <path d={head} fill={`url(#${id}back)`} /> : null}
+          {top && !p.depth ? (
+            <g clipPath={`url(#${id}face-clip)`}>
+              {FACE_SHAPES[category].grooves.map((groove) => {
+                const x = groove.y * Math.sin((p.loft * Math.PI) / 180);
+                return (
+                  <line
+                    key={groove.y}
+                    x1={x}
+                    x2={x}
+                    y1={groove.from}
+                    y2={groove.to}
+                    stroke="var(--face-art-groove)"
+                    strokeOpacity=".65"
+                    strokeWidth={0.6 * Math.sin((p.loft * Math.PI) / 180)}
+                  />
+                );
+              })}
+            </g>
+          ) : null}
+          {!top ? hosel : null}
         </g>
         <circle className="club-projection__ball" cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball)`} />
+        <g clipPath={`url(#${id}ball-clip)`}>
+          <g transform={`translate(${ballX} ${ballY})`} fill={`url(#${id}dimple)`}>
+            {BALL_DIMPLES.map((dimple, i) => (
+              <g key={i} transform={dimple.transform} opacity={dimple.opacity}>
+                <circle
+                  r="1"
+                  mask={`url(#${id}dimple-rim)`}
+                  transform={`rotate(${dimple.lightAngles[left ? 1 : 0]})`}
+                />
+              </g>
+            ))}
+          </g>
+          <circle cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball-sheen)`} />
+          <circle
+            cx={ballX}
+            cy={ballY}
+            r={BALL_RADIUS_MM}
+            fill="none"
+            stroke="#fff"
+            strokeOpacity=".25"
+            strokeWidth=".3"
+          />
+        </g>
         {(
           [
             ['face', face],
