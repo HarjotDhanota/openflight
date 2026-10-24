@@ -177,7 +177,7 @@ async function inFace(page: Page): Promise<{ origin: boolean; dot: boolean }> {
 }
 
 /** The dot's distance from the centre-line crossing on screen, back in mm (+ toe, + up). */
-async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number }> {
+async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number; imprintError: number }> {
   return page.locator('.face-impact').evaluate((view) => {
     const delivery = view.querySelector('.face-impact__delivery') as SVGGElement;
     const dot = view.querySelector('.face-impact__dot') as SVGCircleElement;
@@ -189,6 +189,8 @@ async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number 
     const screen = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(matrix);
     const crossing = screen(upright.x1.baseVal.value, across.y1.baseVal.value);
     const centre = screen(dot.cx.baseVal.value, dot.cy.baseVal.value);
+    const imprint = view.querySelector('.face-impact__imprint') as SVGGElement;
+    const contactCentre = new DOMPoint(0, 0).matrixTransform(imprint.getScreenCTM()!);
     const mirror = view.getAttribute('data-handed') === 'left' ? 1 : -1;
     const rim = screen(ellipse.cx.baseVal.value + ellipse.rx.baseVal.value, ellipse.cy.baseVal.value);
     const ellipseCentre = screen(ellipse.cx.baseVal.value, ellipse.cy.baseVal.value);
@@ -202,6 +204,7 @@ async function dotMm(page: Page): Promise<{ toe: number; up: number; rx: number 
       toe: mirror * along(right),
       up: -along(down),
       rx: Math.hypot(rim.x - ellipseCentre.x, rim.y - ellipseCentre.y) / scale,
+      imprintError: Math.hypot(contactCentre.x - centre.x, contactCentre.y - centre.y) / scale,
     };
   });
 }
@@ -263,6 +266,7 @@ for (const viewport of [
         expect(Math.abs(mm.toe - 9)).toBeLessThanOrEqual(0.1);
         expect(Math.abs(mm.up - 4)).toBeLessThanOrEqual(0.1);
         expect(Math.abs(mm.rx - 4)).toBeLessThanOrEqual(0.1);
+        expect(mm.imprintError).toBeLessThanOrEqual(0.1);
         await expect(view.locator('.face-impact__centre-line')).toHaveCount(2);
         await expect(view).not.toContainText('grid');
         expect(await overflowing(page)).toEqual([]);
@@ -284,6 +288,7 @@ for (const viewport of [
         const mm = await dotMm(page);
         expect(Math.abs(mm.toe - 12)).toBeLessThanOrEqual(0.1);
         expect(Math.abs(mm.up - 6)).toBeLessThanOrEqual(0.1);
+        expect(mm.imprintError).toBeLessThanOrEqual(0.1);
         expect(await overflowing(page)).toEqual([]);
         expect(await artefacts(page)).toEqual([]);
         await keep(page, `face-impact-${category}-left-${size}`);

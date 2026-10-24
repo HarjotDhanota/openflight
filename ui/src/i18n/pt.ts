@@ -296,6 +296,7 @@ export const pt: Messages = {
   'faceImpact.centre': 'Centro',
   'faceImpact.heightNotMeasured': 'Alto/baixo não medido: {reason}',
   'faceImpact.illustrative': 'Face ilustrativa',
+  'faceImpact.illustrativeMark': 'Face e marca de impacto ilustrativas',
   'faceImpact.earlier': '{count} anteriores com este taco',
   'live.targetLineSet': 'Linha do alvo definida {yaw} ±{spread}',
   'live.targetLineSetNoSpread': 'Linha do alvo definida {yaw}',

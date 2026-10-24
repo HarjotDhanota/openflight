@@ -73,17 +73,28 @@ hand metadata therefore follow the current kiosk setting.
 Blade address silhouettes project the existing fair face contour by
 `(x, y) -> (y sin(static loft), x)` about its centre. The metal shell adds the
 2.4 mm edge band and a topline that recedes by its thickness times cosine of loft;
-the heel neck is drawn separately from the planar blade. The address surface is
-smooth metal with a light topline/edge band; no face grooves are drawn there.
-Face-on geometry and wood head shapes are shared with the face view. Short visible shaft sections and a viewport fitted to the rotated
+the heel neck is drawn separately from the planar blade. The address surface
+carries the face's projected grooves, clipped to the blade, over metal shading
+with a light topline/edge band. Face-on geometry and wood head shapes are shared
+with the face view. Short visible shaft sections and a viewport fitted to the rotated
 head, ball and arrows keep the drawings readable without changing the head/ball
-size ratio. Side blades sit in front of the hosel, exposing the lofted face line,
+size ratio. In the heel-side view the hosel is nearest the golfer and is drawn
+in front of the head for both hands. Drawing it behind the head would instead
+give the overlap cue of a toe-side view. The blade retains its lofted face line,
 rounded leading edge, sole/bounce and fuller back profile.
 Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
 impact centre. The ball is 42.7 mm
 in diameter and sits beyond the arrows on the target side; its position is
-illustrative, not a measured ball location. The side face normal and loft arrow
+illustrative, not a measured ball location. Ball and head share one millimetre
+scale; each panel fits its own viewport, so pixel diameters differ between panels
+while proportions hold. Browser tests recover the ball diameter through the head's
+screen transform for every club, hand and kiosk size. The cover is original
+artwork: 388 dimples in tetrahedral close packing, eight illustrative diameter
+classes from 2.8 to 4.5 mm, shaded recesses and a broad highlight, all inside the
+ball outline. It is not a manufacturer's dimple layout; there are no logos,
+alignment marks, image textures or filters.
+The side face normal and loft arrow
 share the same angle. Spin loft is the backend's 3D face-normal/path separation,
 not generally dynamic loft minus attack angle. Face-on still looks from the
 target: RH toe left, LH toe right. The face-on assembly rotates about its
