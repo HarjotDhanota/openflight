@@ -1,9 +1,9 @@
 """The tester API contract of 13 Oct 2026, backend side.
 
 ``GET|POST /api/tester/placement-box`` (the fixed box, the ball in it, the net line),
-``GET|POST /api/tester/lens``, ``GET /api/tester/testers`` and the extras on
-``GET /api/tester/status`` (``ball_at_address``, ``live_metrics``, ``kiosk``,
-``lens_id``).
+``GET|POST /api/tester/lens`` and the extras on ``GET /api/tester/status``
+(``ball_at_address``, ``live_metrics``, ``kiosk``, ``lens_id``). Nothing lists the
+tester IDs saved on the unit: a tester types their own.
 """
 
 from __future__ import annotations
@@ -253,21 +253,17 @@ def test_the_selected_lens_drives_the_box_and_reaches_the_kiosk(tmp_path, inputs
     assert state["evidence"]["placement_box"]["lens"]["effective_lens_id"] == "6mm"
 
 
-def test_the_testers_endpoint_lists_testers_and_suggests_a_new_id(tmp_path, inputs, monkeypatch):
+def test_no_route_lists_the_tester_ids_saved_on_the_unit(tmp_path, inputs, monkeypatch):
     app, tester = app_for(tmp_path, inputs, monkeypatch)
     client = app.test_client()
-    (tmp_path / "sessions" / "not-a-tester").mkdir(parents=True)
-    (tmp_path / "sessions" / "tester-2026-10-13-1").mkdir()
-    (tmp_path / "sessions" / "tester-2026-10-13-1" / "setup_eligibility.jsonl").write_text("")
+    (tmp_path / "sessions" / "tester-2026-10-23-1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "sessions" / "tester-2026-10-23-1" / "setup_eligibility.jsonl").write_text("")
 
-    found = client.get("/api/tester/testers").get_json()
-    named = ts.known_testers(tmp_path / "sessions", ts.datetime(2026, 10, 13))
+    listed = client.get("/api/tester/testers")
 
-    assert tester in found["testers"]
-    assert "tester-2026-10-13-1" in found["testers"]
-    assert "not-a-tester" not in found["testers"]
-    assert named["suggested_new"] == "tester-2026-10-13-2"
-    assert ts.SAFE_SEGMENT.fullmatch(found["suggested_new"])
+    assert listed.status_code == 404
+    assert not hasattr(ts, "known_testers")
+    assert "tester-2026-10-23-1" not in listed.get_data(as_text=True)
 
 
 def test_the_status_carries_the_kiosk_ball_at_address_and_live_metrics(
