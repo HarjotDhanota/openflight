@@ -61,8 +61,9 @@ Measurement guidance:
 
 - Add an elevated mat to ball height. A 1 inch mat adds approximately `0.0254 m`.
 - A typical iron ball center is around `0.040 m`; a driver tee is higher.
-- Run the setup again after moving the rig: its sections are checked against the
-  lens, the rig file and the camera tilt at every start.
+- Run the setup again by hand after moving the unit. A move is not detected: the
+  setup's sections are checked only against the lens, the rig file and the camera
+  tilt, and moving the unit changes none of them.
 
 The checked-in reference calibration contains the array correction used by the
 validated radar. It provides a known starting point, not a universal factory

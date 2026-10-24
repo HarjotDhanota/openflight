@@ -8408,6 +8408,13 @@ def main():
             sys.exit(1)
 
     apply_saved_setup()
+    net = setup_handoff_config["net_range"]
+    if args.iwr6843 and net.get("assumed"):
+        logger.warning(
+            "[SERVER] Net range %.2f m is ASSUMED: the setup record has no measured net "
+            "range; a nearer net can enter the ball gates",
+            net["net_range_m"],
+        )
 
     if args.inclinometer:
         startup_status.start("inclinometer", "Connecting inclinometer")

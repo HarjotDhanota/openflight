@@ -167,15 +167,16 @@ def test_the_monitor_looks_at_the_camera_s_latest_frame_only_when_idle(kiosk_sta
     assert isinstance(Frame.image, np.ndarray)
 
 
-def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypatch, tmp_path):
-    from tests.setup_files import write_setup  # noqa: PLC0415
+class _Started(Exception):
+    pass
 
+
+def _start_iwr_kiosk(monkeypatch, tmp_path, setup_file) -> dict:
+    """main() with --iwr6843 and a stand-in radar, up to the monitor's start (after the
+    setup's apply); the arguments the radar was started with."""
     seen: dict = {}
     calibration = Calibration.identity()
     calibration.meta["radar_height_m"] = 0.0522
-
-    class Started(Exception):
-        pass
 
     def init_iwr6843(**kwargs):
         seen.update(kwargs)
@@ -186,7 +187,7 @@ def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypa
         return True
 
     def started(**_kwargs):
-        raise Started
+        raise _Started
 
     monkeypatch.setattr(server, "init_iwr6843", init_iwr6843)
     monkeypatch.setattr(server, "start_monitor", started)
@@ -200,12 +201,12 @@ def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypa
         "setup_handoff_config",
         "iwr6843_runtime",
         "iwr6843_runtime_config",
+        # a record's aim moves the target line; it must not outlive the test
+        "horizontal_offset_deg",
+        "_target_line_revision",
+        "_target_line_since",
     ):
         monkeypatch.setattr(server, name, getattr(server, name))
-    setup_file = tmp_path / "setup.json"
-    write_setup(
-        setup_file, ball_range={"range_m": 2.2, "uncertainty_m": 0.1, "side_offset_m": -0.14}
-    )
     monkeypatch.setattr(
         server.sys,
         "argv",
@@ -221,15 +222,48 @@ def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypa
             str(setup_file),
         ],
     )
-
-    with pytest.raises(Started):
+    with pytest.raises(_Started):
         server.main()
+    return seen
+
+
+def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypatch, tmp_path):
+    from tests.setup_files import write_setup  # noqa: PLC0415
+
+    setup_file = tmp_path / "setup.json"
+    write_setup(
+        setup_file, ball_range={"range_m": 2.2, "uncertainty_m": 0.1, "side_offset_m": -0.14}
+    )
+
+    seen = _start_iwr_kiosk(monkeypatch, tmp_path, setup_file)
 
     # the radar starts on the rig's camera axis; the record's side offset replaces it
     assert seen["lateral_tee_offset_m"] == pytest.approx(server._rig_tee_lateral_offset_m())  # noqa: SLF001
     assert server.iwr6843_runtime.calibration.lateral_tee_offset_m == pytest.approx(-0.14)
     assert server.iwr6843_runtime.range_prior.range_m == pytest.approx(2.2)
     assert server.setup_handoff_config["scene"]["tee_side_offset_m"] == pytest.approx(-0.14)
+
+
+def test_an_assumed_net_range_is_warned_at_start(monkeypatch, tmp_path, caplog):
+    caplog.set_level("WARNING", logger="openflight.server")
+
+    _start_iwr_kiosk(monkeypatch, tmp_path, tmp_path / "no-setup.json")
+
+    assert server.setup_handoff_config["net_range"]["assumed"] is True
+    assert any("Net range 4.60 m is ASSUMED" in r.getMessage() for r in caplog.records)
+
+
+def test_a_measured_net_range_is_not_warned_about(monkeypatch, tmp_path, caplog):
+    from tests.setup_files import write_setup  # noqa: PLC0415
+
+    caplog.set_level("WARNING", logger="openflight.server")
+    setup_file = tmp_path / "setup.json"
+    write_setup(setup_file, aim_yaw_deg=1.0, net_range_m=3.9)
+
+    _start_iwr_kiosk(monkeypatch, tmp_path, setup_file)
+
+    assert server.setup_handoff_config["net_range"]["net_range_m"] == pytest.approx(3.9)
+    assert not any("ASSUMED" in r.getMessage() for r in caplog.records)
 
 
 def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_state, monkeypatch):
