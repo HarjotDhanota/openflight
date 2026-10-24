@@ -55,6 +55,12 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   const mirror = left ? 'scale(-1 1)' : undefined;
   const rotation = faceDeliveryRotation(shot, category) * (left ? -1 : 1);
   const angle = (rotation * Math.PI) / 180;
+  const lightX = (left ? -1 : 1) * (-0.6 * Math.cos(angle) - 0.8 * Math.sin(angle));
+  const lightY = 0.6 * Math.sin(angle) - 0.8 * Math.cos(angle);
+  const litTubeSide = lightX * Math.sin(lie) + lightY * Math.cos(lie) < 0 ? -1 : 1;
+  const lightSpan = Math.max(maxX - minX, maxY - minY);
+  const lightCentreX = (minX + maxX) / 2;
+  const lightCentreY = (minY + maxY) / 2;
   const corners = [viewMinX, viewMaxX].flatMap((x) =>
     [minY, maxY].map((y) => [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)])
   );
@@ -107,7 +113,14 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <clipPath id={faceClipId}>
               <path d={shape.face} transform={mirror} />
             </clipPath>
-            <linearGradient id={steelId} gradientUnits="userSpaceOnUse" x1={minX} y1={minY} x2={maxX} y2={maxY}>
+            <linearGradient
+              id={steelId}
+              gradientUnits="userSpaceOnUse"
+              x1={lightCentreX + (lightX * lightSpan) / 2}
+              y1={lightCentreY + (lightY * lightSpan) / 2}
+              x2={lightCentreX - (lightX * lightSpan) / 2}
+              y2={lightCentreY - (lightY * lightSpan) / 2}
+            >
               <stop className="face-impact__steel-hi" offset="0" />
               <stop className="face-impact__steel-mid" offset="0.28" />
               <stop className="face-impact__steel-lo" offset="0.46" />
@@ -118,10 +131,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <linearGradient
               id={`${id}tube`}
               gradientUnits="userSpaceOnUse"
-              x1={crossTube(-1).x}
-              y1={crossTube(-1).y}
-              x2={crossTube(1).x}
-              y2={crossTube(1).y}
+              x1={crossTube(litTubeSide).x}
+              y1={crossTube(litTubeSide).y}
+              x2={crossTube(-litTubeSide).x}
+              y2={crossTube(-litTubeSide).y}
             >
               <stop className="face-impact__steel-lo" offset="0" />
               <stop className="face-impact__steel-mid" offset="0.2" />
@@ -133,10 +146,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <linearGradient
               id={`${id}ferrule`}
               gradientUnits="userSpaceOnUse"
-              x1={crossTube(-1).x}
-              y1={crossTube(-1).y}
-              x2={crossTube(1).x}
-              y2={crossTube(1).y}
+              x1={crossTube(litTubeSide).x}
+              y1={crossTube(litTubeSide).y}
+              x2={crossTube(-litTubeSide).x}
+              y2={crossTube(-litTubeSide).y}
             >
               <stop offset="0" stopColor="#101214" />
               <stop offset="0.36" stopColor="#62676c" />
@@ -146,8 +159,8 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             </linearGradient>
             <radialGradient
               id={`${id}reflection`}
-              cx="32%"
-              cy="15%"
+              cx={`${50 + lightX * 30}%`}
+              cy={`${50 + lightY * 40}%`}
               r="85%"
               gradientTransform="translate(0 .08) scale(1 .85)"
             >
@@ -155,7 +168,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
               <stop offset="0.46" stopColor="#fff" stopOpacity="0" />
               <stop offset="1" stopColor="#080b10" stopOpacity="0.26" />
             </radialGradient>
-            <linearGradient id={`${id}radius`} x1="0" y1="0" x2="0.18" y2="1">
+            <linearGradient id={`${id}radius`} x1={lightX < 0 ? 0 : 1} y1="0" x2={lightX < 0 ? 0.18 : 0.82} y2="1">
               <stop offset="0" stopColor="#fff" stopOpacity="0.55" />
               <stop offset="0.42" stopColor="#fff" stopOpacity="0.04" />
               <stop offset="0.75" stopColor="#080b10" stopOpacity="0.45" />
