@@ -98,10 +98,16 @@ head's screen transform for both projections, all clubs/hands and both kiosk
 sizes, guarding against independent ball scaling or stretching.
 The ball finish takes its white urethane appearance and dimple density from
 the owner's [Pro V1 reference](https://www.titleist.com.sg/golf-balls/25-prov1).
-Its 194 visible dimple centres use an original spherical distribution, not the
-manufacturer's tetrahedral layout. Shallow shaded ellipses compress toward the
-silhouette; a broad highlight softens the cover. Dimple radii and shading are
-illustrative, not measured product geometry. All detail stays inside the
+Its 388 centres use original close packing with tetrahedral rotational symmetry,
+expanded from 33 seed positions. They replace the first ball's spiral layout.
+Radii vary with neighbour spacing, giving broader, closely packed groups.
+A finite-distance cover projection (viewpoint five sphere radii from the centre)
+magnifies front dimples and hides centres beyond the tangent horizon. The
+silhouette remains 42.67 mm; this is an illustrative cover treatment within the
+schematic, not the club's camera model. Shallow shaded ellipses compress toward
+the silhouette; a broad highlight softens the cover. Dimple radii, coordinates,
+viewpoint and shading are illustrative, not measured product geometry or a copy
+of the manufacturer's layout. All detail stays inside the
 42.67 mm outline, with screen-light direction preserved for both hands. No
 logos, alignment markings, image textures or filter effects are used.
 The side face normal and loft arrow
