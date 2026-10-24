@@ -47,6 +47,11 @@ each stage.
 
     Where each radar goes and why the geometry matters.
 
+- :material-crosshairs-gps: **[Setting up](setting-up.md)**
+
+    The kiosk's Setup screen: the ball box, the aim, the ball range, and what
+    the ready light says about them.
+
 </div>
 
 ## In one paragraph

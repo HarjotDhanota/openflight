@@ -30,7 +30,7 @@ Leave the terminal open; **Ctrl+C** in it stops everything. Then open the tester
 
 ## Set up (once per spot)
 
-Work down the page. Each step opens when the one before it is done, and the bar at the top says where you are.
+Work down the page. Each step opens when the one before it is done, and the bar at the top says where you are. Steps 3, 4 and 6 write one setup record, `setup.json`, in your tester folder. The kiosk the page starts loads it at start. If you change the lens, the unit or the box, the steps that depended on it show as needing redoing: redo them.
 
 **1. Tester and lens.** Type your tester ID in the box and tap **Use this ID** (or press Enter). Use the same ID every time you test, so your sessions stay together; it can have letters, numbers, dots, dashes and underscores. Tap **Indoors** or **Outdoors**, **Right-handed** or **Left-handed**, then the lens fitted to the unit (**Stock 2.8 mm** unless you've changed it).
 
@@ -46,11 +46,11 @@ Work down the page. Each step opens when the one before it is done, and the bar 
 
 <img src="images/2c-confirm-the-setup.png" width="480" alt="Step 2 C: the tilt sensor checked, the box ticked, and Confirm the setup">
 
-**3. Ball in the box.** Stand the unit **1.8–2.9 m (6–9.5 ft) behind the ball**, pointing down your target line. The camera opens here; if it doesn't, tap **Show the camera**. Put a ball in the **yellow box** and wait for the **green check**. Drag the **blue line** to where the floor meets your net or screen, then tap **Confirm the ball in the box**.
+**3. Ball in the box.** Stand the unit **1.8–2.9 m (6–9.5 ft) behind the ball**, pointing down your target line. The camera opens here; if it doesn't, tap **Show the camera**. Put a ball in the **yellow box** and wait for the **green check**. Drag the **blue line** to where the floor meets your net or screen, then tap **Confirm the ball in the box**. This writes the box into your setup record (`setup.json`, in your tester folder), and the net distance from the blue line goes with it. If you leave the line, the net distance stays the 4.6 m default, labelled not measured.
 
 <img src="images/3-ball-in-box.png" width="480" alt="Step 3: the ball in the yellow box with a green check, the blue line, and Confirm the ball in the box">
 
-**4. Aim at your target (optional).** Drag the yellow line onto your target and tap **Confirm the aim point**. For a far target, tap **Full screen with magnifier** first. Or tap **Skip for now**.
+**4. Aim at your target (optional).** Drag the yellow line onto your target and tap **Confirm the aim point**. For a far target, tap **Full screen with magnifier** first. Or tap **Skip for now**. The aim is saved in the same setup record; skipping saves that too, and left and right then come from where the unit points.
 
 <img src="images/4-aim.png" width="480" alt="Step 4: the yellow aim line, with Full screen with magnifier, Confirm the aim point and Skip for now">
 
@@ -58,7 +58,7 @@ Work down the page. Each step opens when the one before it is done, and the bar 
 
 <img src="images/5-light.png" width="480" alt="Step 5: Measuring the light: done, with light sufficient for both modes">
 
-**6. Ball range.** Leave the ball in the box. The camera opens by itself; when it says **ball found and steady, tap Save the ball**, tap **Save the ball**. The step is done when it says **Ball found**. If the light note under it asks for more light, add a lamp; you can play either way.
+**6. Ball range.** Leave the ball in the box. The camera opens by itself; when it says **ball found and steady, tap Save the ball**, tap **Save the ball**. The step is done when it says **Ball found**; the range is saved in the setup record, from the camera, and the radar refines it on each shot. If the light note under it asks for more light, add a lamp; you can play either way.
 
 <img src="images/6-ball-range-steady.png" width="480" alt="Step 6: ball found and steady, tap Save the ball"> <img src="images/6-ball-range-saved.png" width="480" alt="Step 6 done: Ball found, with the light note">
 
