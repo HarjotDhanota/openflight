@@ -39,6 +39,18 @@ def _no_live_impact_worker(monkeypatch):
         monkeypatch.setattr(live.extension, "configure", lambda args, parser: None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_setup_record(tmp_path_factory, monkeypatch):
+    """Keep main() off ~/.config/openflight/setup.json, and each test's setup service its own."""
+    from openflight import server  # pylint: disable=import-outside-toplevel
+
+    path = tmp_path_factory.mktemp("setup") / "setup.json"
+    monkeypatch.setattr(server, "_default_setup_path", lambda: path)
+    monkeypatch.setattr(server, "setup_service", None)
+    monkeypatch.setattr(server, "_setup_logged_revision", None)
+    monkeypatch.setattr(server, "camera_lens", None)
+
+
 class MockSimServer:
     """Tiny TCP server that records bytes and can send scripted replies."""
 

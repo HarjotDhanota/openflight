@@ -310,6 +310,8 @@ _ready_light_thread: threading.Thread | None = None
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 rig_geometry = None
+# the lens on the unit (lens_profiles.ActiveLens), from init_camera_lens
+camera_lens = None
 rig_geometry_config: dict = {"enabled": False}
 setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
 ball_at_address_monitor = None
@@ -1411,7 +1413,8 @@ def _kld7_angle_log_payload(
 
 def init_rig_geometry(path) -> None:
     """Load the enclosure file; its constants override the typed geometry flags, logged."""
-    global rig_geometry, rig_geometry_config  # pylint: disable=global-statement
+    global rig_geometry, rig_geometry_config, camera_lens  # pylint: disable=global-statement
+    camera_lens = None
     if path is None:
         rig_geometry = None
         rig_geometry_config = {"enabled": False}
@@ -1441,7 +1444,7 @@ def init_rig_geometry(path) -> None:
 
 def init_camera_lens(lens_id: str | None) -> None:
     """Put the selected lens's focal length under every camera metric, and record it."""
-    global rig_geometry  # pylint: disable=global-statement
+    global rig_geometry, camera_lens  # pylint: disable=global-statement
     if rig_geometry is None:
         return
     from .camera import lens_profiles  # noqa: PLC0415
@@ -1455,6 +1458,7 @@ def init_camera_lens(lens_id: str | None) -> None:
     if lens_id is not None:
         rig_geometry = lens_profiles.rig_with_lens(rig_geometry, lens)
     rig_geometry_config["lens"] = lens.to_dict()
+    camera_lens = lens
     logger.info("[SERVER] Camera lens: %s", lens.label())
 
 
@@ -1820,8 +1824,11 @@ def api_ball_at_address():
     return jsonify(latest)
 
 
+DEFAULT_SETUP_PATH = Path("~/.config/openflight/setup.json")
+
+
 def _default_setup_path() -> Path:
-    return Path.home() / ".config" / "openflight" / "setup.json"
+    return DEFAULT_SETUP_PATH.expanduser()
 
 
 def _add_setup_arguments(parser) -> None:
@@ -1840,15 +1847,31 @@ def _add_setup_arguments(parser) -> None:
 def setup_start_context() -> StartContext:
     """What the saved setup is checked against: the lens, the rig file and the camera tilt."""
     lens = rig_geometry_config.get("lens") or {}
-    tilt = _unit_camera_tilt()
-    source = (setup_handoff_config.get("camera_tilt") or {}).get("source")
+    tilt = _setup_camera_tilt()
     return StartContext(
         lens_id=lens.get("effective_lens_id") or lens.get("lens_id"),
         rig_sha256=rig_geometry_config.get("rig_geometry_params_sha256") or "no_rig_geometry",
         tilt_offset_deg=tilt["offset_deg"] if tilt is not None else None,
-        # the box's calibrated tilt margin only for the tilt from the unit's calibration file
-        tilt_calibrated=tilt is not None and source == "unit_calibration",
+        tilt_calibrated=tilt is not None,
     )
+
+
+def _setup_camera_tilt() -> dict | None:
+    """The unit's camera tilt, only when it came from the unit's calibration file; the
+    setup then measures with it and the calibrated box margin, as the tester's setup does."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    source = (setup_handoff_config.get("camera_tilt") or {}).get("source")
+    tilt = _unit_camera_tilt() if source == "unit_calibration" else None
+    stored = camera_tilt.load_calibration(camera_tilt_calibration_path)
+    if (
+        tilt is not None
+        and stored is not None
+        and math.isclose(float(stored["offset_deg"]), tilt["offset_deg"], abs_tol=1e-4)
+    ):
+        # the file's uncertainty and date, as the tester's setup reads them
+        return {**stored, "offset_deg": tilt["offset_deg"]}
+    return tilt
 
 
 def _setup_lis3dh() -> tuple[float | None, float | None, str]:
@@ -1869,9 +1892,10 @@ def setup_camera_view():
     """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
     not apply (a ``setup_service.CameraView``); None without a camera.
 
-    Built as the tester's setup camera is: the rig's lens and radar, this mode's focal
-    length, the LIS3DH's pitch composed with the unit's camera tilt. A camera it cannot
-    model raises ValueError with the reason.
+    Built as the tester's setup camera is: with calibrated fusion loaded, the calibrated
+    optical model at the LIS3DH's pose; otherwise the rig's lens and radar, this mode's
+    focal length, the LIS3DH's pitch composed with the unit's calibrated camera tilt. A
+    camera it cannot model raises ValueError with the reason.
     """
     from .camera import camera_roll, camera_tilt  # noqa: PLC0415
     from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
@@ -1885,20 +1909,26 @@ def setup_camera_view():
     width, height = int(runtime.settings.width), int(runtime.settings.height)
     if (width, height) == (320, 200):
         raise ValueError("320x200 is refused for measurement: its strip offset is not modelled")
-    if rig_geometry is None or rig_geometry.lens_height_above_floor_mm is None:
-        raise ValueError("the setup needs the rig file's lens height (--rig-geometry)")
+    if rig_geometry is None:
+        raise ValueError("the setup needs the rig file (--rig-geometry)")
     pitch, measured_roll, status = _setup_lis3dh()
+    expected = rig_geometry.expected_inclinometer_orientation()
+    expected_roll = float(expected.roll_deg or 0.0)
+    unapplied_roll = measured_roll - expected_roll if measured_roll is not None else None
+    if camera_optical_calibration is not None and camera_placement is not None:
+        camera = _calibrated_setup_camera(width, height, pitch, measured_roll)
+        return CameraView(camera, unapplied_roll)
+    if rig_geometry.lens_height_above_floor_mm is None:
+        raise ValueError("the setup needs the rig file's lens height (--rig-geometry)")
     if pitch is None:
         # the rig's boresight would pass for a measurement and move every floor range
         raise ValueError(
             f"the LIS3DH reading has no camera pitch ({status}); wait for a stable reading"
         )
-    expected = rig_geometry.expected_inclinometer_orientation()
-    expected_roll = float(expected.roll_deg or 0.0)
     camera_pitch = float(rig_geometry.boresight_pitch_deg) + (
         pitch - float(expected.pitch_deg or 0.0)
     )
-    applied = camera_tilt.applied_pitch(camera_pitch, _unit_camera_tilt())
+    applied = camera_tilt.applied_pitch(camera_pitch, _setup_camera_tilt())
     angular = (
         max(
             camera_tilt.CALIBRATED_ANGULAR_UNCERTAINTY_DEG,
@@ -1913,7 +1943,13 @@ def setup_camera_view():
         camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
     )
     camera = BallPlaneCamera.nominal(
-        focal_px=mode_focal_px(width, rig_geometry),
+        # the lens's own focal length for this mode, as the tester's setup takes it: a
+        # checkerboard lens is measured per mode, not scaled from the rig file's mode
+        focal_px=(
+            float(camera_lens.focal_px(width))
+            if camera_lens is not None
+            else mode_focal_px(width, rig_geometry)
+        ),
         image_width_px=width,
         image_height_px=height,
         pitch_deg=float(applied["pitch_deg"]),
@@ -1927,7 +1963,38 @@ def setup_camera_view():
         focal_relative_uncertainty=0.08,
         vertical_offset=applied,
     )
-    return CameraView(camera, measured_roll - expected_roll)
+    return CameraView(camera, unapplied_roll)
+
+
+def _calibrated_setup_camera(width: int, height: int, pitch, roll):
+    """The calibrated optical model at the LIS3DH's pose, as the swings and the tester use it."""
+    from .camera import camera_roll  # noqa: PLC0415
+    from .camera.calibrated_projection import build_calibrated_camera_model  # noqa: PLC0415
+    from .camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
+
+    artifact = camera_optical_calibration
+    saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
+    if (saved.get("width"), saved.get("height")) != (width, height):
+        raise ValueError("calibrated camera mode does not match the active capture mode")
+    reference_roll = (camera_placement.get("reference_pose_deg") or {}).get("roll")
+    model = build_calibrated_camera_model(
+        artifact,
+        camera_placement,
+        observed_pitch_deg=pitch,
+        observed_roll_deg=(
+            camera_roll.calibrated_observed_roll_deg(roll, reference_roll)
+            if isinstance(reference_roll, (int, float))
+            else roll
+        ),
+    )
+    return replace(
+        BallPlaneCamera.calibrated(model),
+        vertical_offset={
+            "status": "not_applied",
+            "reason": "a calibrated optical model carries its own principal point and "
+            "placement pose",
+        },
+    )
 
 
 def setup_camera_frames() -> np.ndarray | None:
@@ -2024,6 +2091,17 @@ def setup_in_force() -> dict | None:
     }
 
 
+def _is_pixel(value) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+            for v in value
+        )
+    )
+
+
 def _setup_refusal(reason: str, status: int):
     service = setup_service
     snapshot = service.snapshot() if service is not None else None
@@ -2054,9 +2132,15 @@ def api_setup_action(section: str):
             400,
         )
     if section == "aim":
-        for key in ("aim_px", "floor_line_px"):
-            if body.get(key) is not None and not isinstance(body[key], list):
-                return _setup_refusal(f"{key} must be a list of pixels", 400)
+        aim_px, floor_line_px = body.get("aim_px"), body.get("floor_line_px")
+        if aim_px is not None and not _is_pixel(aim_px):
+            return _setup_refusal("aim_px must be [x, y], finite numbers", 400)
+        if floor_line_px is not None and not (
+            isinstance(floor_line_px, list)
+            and len(floor_line_px) == 2
+            and all(_is_pixel(end) for end in floor_line_px)
+        ):
+            return _setup_refusal("floor_line_px must be two [x, y] points, finite numbers", 400)
         result = service.aim(
             action, aim_px=body.get("aim_px"), floor_line_px=body.get("floor_line_px")
         )

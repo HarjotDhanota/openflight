@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from openflight import server
-from openflight.camera import placement_box
+from openflight.camera import camera_tilt, placement_box
 from openflight.camera.capture_runtime import CameraCaptureSettings
 from openflight.inclinometer.models import OrientationSnapshot, SnapshotSelection
 from openflight.setup_record import SECTIONS, load, save, section_inputs
@@ -155,6 +155,43 @@ def test_bad_action_is_400_and_refusal_is_409(kiosk, scene):
     assert no_ball.status_code == 409 and no_ball.get_json()["reason"] == "no_ball"
     assert no_box.status_code == 409 and "confirm the box first" in no_box.get_json()["reason"]
     assert not kiosk.path.exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"aim_px": [None, None]},
+        {"aim_px": [1.0]},
+        {"aim_px": [1.0, "2"]},
+        {"aim_px": [True, 2.0]},
+        {"aim_px": {"x": 1, "y": 2}},
+        {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0], [None, 3.0]]},
+        {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0]]},
+        {"aim_px": [640.0, 300.0], "floor_line_px": [1.0, 2.0]},
+    ],
+)
+def test_malformed_aim_pixels_are_400(kiosk, scene, body):
+    _start(kiosk)
+    scene.in_box = BALL_PX
+    kiosk.client.post("/api/setup/box", json={"action": "confirm"})
+
+    response = kiosk.client.post("/api/setup/aim", json={"action": "confirm", **body})
+
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False and "px" in response.get_json()["reason"]
+    assert response.get_json()["setup"]["aim"]["state"] == "not_set"
+
+
+def test_non_finite_aim_pixels_are_400(kiosk, scene):
+    _start(kiosk)
+
+    response = kiosk.client.post(
+        "/api/setup/aim",
+        data='{"action": "confirm", "aim_px": [NaN, 2.0]}',
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
 
 
 def test_aim_and_range_go_through_the_api_and_the_target_line_route(kiosk, scene):
@@ -310,7 +347,7 @@ def _start_kiosk(kiosk, monkeypatch, tmp_path):
 
     monkeypatch.setattr(server, "start_monitor", stop)
 
-    def run(*extra):
+    def run(*extra, setup_file=True):
         monkeypatch.setattr(
             server.sys,
             "argv",
@@ -322,8 +359,7 @@ def _start_kiosk(kiosk, monkeypatch, tmp_path):
                 str(tmp_path / "profiles.json"),
                 "--rig-geometry",
                 str(RIG),
-                "--setup-file",
-                str(kiosk.path),
+                *(["--setup-file", str(kiosk.path)] if setup_file else []),
                 *extra,
             ],
         )
@@ -382,17 +418,27 @@ def test_the_setup_file_defaults_to_the_unit_s_config():
     default = parser.parse_args([]).setup_file
     chosen = parser.parse_args(["--setup-file", "elsewhere.json"]).setup_file
 
-    assert Path(default) == Path.home() / ".config" / "openflight" / "setup.json"
+    assert server.DEFAULT_SETUP_PATH == Path("~/.config/openflight/setup.json")
+    # under test the default is conftest's own file, never the developer's
+    assert Path(default) == server._default_setup_path()  # noqa: SLF001
+    assert Path(default) != server.DEFAULT_SETUP_PATH.expanduser()
     assert Path(chosen) == Path("elsewhere.json")
+
+
+def test_without_setup_file_main_reads_the_default_record(kiosk, start_kiosk, monkeypatch):
+    default = server._default_setup_path()  # noqa: SLF001
+    _saved_record(default, lens_id="stock-2.8mm", rig_sha256=_rig_sha256())
+    monkeypatch.setattr(kiosk, "path", default)
+
+    started = start_kiosk(setup_file=False)
+
+    assert started["box"]["state"] == "confirmed"
+    assert server.camera_ball_box_px == (480, 380, 800, 520)
 
 
 @pytest.mark.parametrize(
     ("source", "moved_deg", "state"),
-    [
-        ("unit_calibration", "inside", "confirmed"),
-        ("unit_calibration", "beyond", "stale"),
-        (None, "beyond", "confirmed"),
-    ],
+    [("unit_calibration", "inside", "confirmed"), ("unit_calibration", "beyond", "stale")],
 )
 def test_the_tilt_margin_follows_where_the_applied_tilt_came_from(
     kiosk, start_kiosk, source, moved_deg, state
@@ -412,6 +458,16 @@ def test_the_tilt_margin_follows_where_the_applied_tilt_came_from(
     assert started["box"]["state"] == state
     if state == "stale":
         assert f"{calibrated:g} deg margin" in started["box"]["reason"]
+
+
+def test_a_camera_tilt_not_from_the_calibration_file_is_not_the_setup_s(kiosk, start_kiosk):
+    _saved_record(kiosk.path, lens_id="stock-2.8mm", rig_sha256=_rig_sha256(), tilt_deg=None)
+
+    started = start_kiosk("--camera-vertical-offset-deg", "3.0")
+
+    assert started["box"]["state"] == "confirmed"
+    context = server.setup_start_context()
+    assert context.tilt_offset_deg is None and context.tilt_calibrated is False
 
 
 def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(monkeypatch):
@@ -452,10 +508,15 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     assert view.camera.camera_origin_lfu[2] == pytest.approx(0.095)
     assert view.camera.vertical_offset["status"] == "calibrated"
     assert view.camera.vertical_offset["pitch_deg"] == pytest.approx(camera_pitch + 1.5)
-    assert view.camera.angular_uncertainty_deg < 3.0
+    assert view.camera.angular_uncertainty_deg == camera_tilt.CALIBRATED_ANGULAR_UNCERTAINTY_DEG
     assert view.roll_deg == pytest.approx(
         np.degrees(np.arctan2(0.05, 1.0)) - (expected.roll_deg or 0.0)
     )
+    server.setup_handoff_config["camera_tilt"] = {"vertical_offset_deg": 1.5, "source": None}
+    typed = server.setup_camera_view()
+    assert typed.camera.vertical_offset["status"] == "uncalibrated"
+    assert typed.camera.vertical_offset["pitch_deg"] == pytest.approx(camera_pitch)
+    assert typed.camera.angular_uncertainty_deg == camera_tilt.UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
     monkeypatch.setattr(server, "inclinometer_service", None)
     with pytest.raises(ValueError, match="LIS3DH"):
         server.setup_camera_view()
