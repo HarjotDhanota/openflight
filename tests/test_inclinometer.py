@@ -332,3 +332,57 @@ def test_the_shot_waits_briefly_for_the_reading_after_impact():
 
     assert selection.rule == "confirmed_after_impact"
     assert len(waited) == 1
+
+
+# A still unit is never "moved": the confirming window must be quiet, and the move
+# tolerance grows with the two windows' own scatter (the reviewer's heavy-shake case).
+
+
+def _shaken_shot(seed, *, shake_before, shake_after, moved_deg=0.0, latency=0.1):
+    import random  # noqa: PLC0415
+
+    rng = random.Random(seed)
+    service = InclinometerService(sensor=None)
+    impact = 1000.0
+    clock = {"t": impact - 30.0 + rng.random() * 0.1}
+
+    def feed_one():
+        t = clock["t"]
+        shaky = impact - shake_before <= t <= impact + shake_after
+        noise = rng.gauss(0, 2.0) if shaky else rng.gauss(0, 0.02)
+        pitch = math.radians(noise + (moved_deg if t > impact else 0.0))
+        service.add_sample(AccelerationSample(t, 0.0, math.sin(pitch), math.cos(pitch)))
+        clock["t"] += 0.1
+
+    while clock["t"] <= impact + latency:
+        feed_one()
+
+    def sleep(_seconds):
+        if clock["t"] > impact + latency + 1.0:
+            raise TimeoutError
+        feed_one()
+
+    try:
+        return service.snapshot_for_shot(impact, wait_s=5.0, sleep=sleep).status
+    except TimeoutError:
+        return "unconfirmed"
+
+
+@pytest.mark.parametrize("shake", [(0.3, 0.6), (1.0, 1.0)])
+def test_heavy_shake_on_a_still_unit_is_never_read_as_moved(shake):
+    before, after = shake
+    outcomes = {_shaken_shot(seed, shake_before=before, shake_after=after) for seed in range(20)}
+    assert "moved" not in outcomes
+    # seed 12 was the reviewer's false "moved"
+    assert _shaken_shot(12, shake_before=before, shake_after=after) != "moved"
+
+
+def test_a_real_half_degree_move_after_a_shake_is_still_caught():
+    assert _shaken_shot(3, shake_before=0.3, shake_after=0.1, moved_deg=0.5) == "moved"
+
+
+def test_a_unit_rocking_side_to_side_gives_no_stable_reading():
+    service = _service()
+    for index in range(12):
+        service.add_sample(_tilted(1.0 + 0.1 * index, roll_deg=1.0 if index % 2 else -1.0))
+    assert service.snapshot_for_impact(2.2).status == "no_stable_preimpact_reading"

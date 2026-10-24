@@ -36,6 +36,7 @@ class OrientationSnapshot:
     sample_count: int
     # the window's first sample; None (a snapshot built by hand) is its last
     window_start_timestamp: float | None = None
+    roll_std_deg: float = 0.0
 
     @property
     def roll_deg(self) -> float:
@@ -54,7 +55,7 @@ class OrientationSnapshot:
         data = asdict(self)
         for key in ("x_g", "y_g", "z_g", "gravity_g"):
             data[key] = round(data[key], 4)
-        for key in ("raw_pitch_deg", "calibrated_pitch_deg", "pitch_std_deg"):
+        for key in ("raw_pitch_deg", "calibrated_pitch_deg", "pitch_std_deg", "roll_std_deg"):
             data[key] = round(data[key], 3)
         data["roll_deg"] = round(self.roll_deg, 3)
         data["stable"] = True
