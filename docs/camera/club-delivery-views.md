@@ -88,7 +88,15 @@ Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
 impact centre. The ball is 42.67 mm
 in diameter and sits beyond the arrows on the target side; its position is
-illustrative, not a measured ball location. The side face normal and loft arrow
+illustrative, not a measured ball location. The diameter uses the
+[equipment-rule minimum](https://www.usga.org/equipment-standards/equipment-rules-2019/equipment-rules/part-4-rule-4.html),
+not a measurement of the shot's ball. Ball and head share the same millimetre
+scale. Each panel fits independently, so pixel diameters can differ between
+panels and clubs while preserving physical proportions. The owner retained
+this fitting on 24 October 2026. Browser tests recover ball diameter using the
+head's screen transform for both projections, all clubs/hands and both kiosk
+sizes, guarding against independent ball scaling or stretching.
+The side face normal and loft arrow
 share the same angle. Spin loft is the backend's 3D face-normal/path separation,
 not generally dynamic loft minus attack angle. Face-on still looks from the
 target: RH toe left, LH toe right. The face-on assembly rotates about its

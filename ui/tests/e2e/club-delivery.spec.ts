@@ -231,6 +231,9 @@ for (const viewport of [
                 const face = svg.querySelector('.club-projection__arrow--face') as SVGLineElement;
                 const path = svg.querySelector('.club-projection__arrow--path') as SVGLineElement;
                 const matrix = group.getScreenCTM()!;
+                const head = svg.querySelector('.club-projection__outline') as SVGPathElement;
+                const headMatrix = head.getScreenCTM()!;
+                const ball = svg.querySelector('.club-projection__ball')!.getBoundingClientRect();
                 const origin = new DOMPoint(0, 0).matrixTransform(matrix);
                 const target = new DOMPoint(100, 0).matrixTransform(matrix);
                 const sign = Math.sign(target.x - origin.x);
@@ -243,6 +246,8 @@ for (const viewport of [
                   );
                 };
                 return {
+                  ballWidthMm: ball.width / Math.hypot(headMatrix.a, headMatrix.b),
+                  ballHeightMm: ball.height / Math.hypot(headMatrix.c, headMatrix.d),
                   sign,
                   face: angle(face),
                   path: angle(path),
@@ -251,6 +256,8 @@ for (const viewport of [
                 };
               });
               expect(result.sign).toBe(hand === 'right' ? -1 : 1);
+              expect(result.ballWidthMm).toBeCloseTo(42.67, 4);
+              expect(result.ballHeightMm).toBeCloseTo(42.67, 4);
               expect(result.path).toBeCloseTo(view === 'top' ? 4.23 : -4.2, 5);
               expect(result.face).toBeCloseTo(result.displayedFace, 5);
               expect(result.path).toBeCloseTo(result.displayedPath, 5);
