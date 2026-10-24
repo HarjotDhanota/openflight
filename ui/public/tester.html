@@ -968,6 +968,25 @@
         border-radius: 7px;
         background: var(--panel);
       }
+      .tester-entry__label {
+        display: block;
+        margin: 4px 0 6px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .tester-entry {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .tester-entry input {
+        flex: 1 1 16em;
+        min-width: 0;
+      }
+      .tester-entry input[aria-invalid='true'] {
+        border-color: var(--bad);
+      }
       .lens {
         margin: 12px 0;
         padding: 10px 12px;
@@ -1591,11 +1610,25 @@
             Tester ID: <b id="tester-current-id">not chosen</b>
             <button type="button" id="tester-change">Change tester</button>
           </p>
-          <div class="tester-picker" id="tester-picker" hidden>
-            <p class="note" id="tester-picker-note">Tap your tester ID, or start a new one. No typing needed.</p>
-            <div class="chips" id="tester-list" role="group" aria-label="Saved tester IDs"></div>
-            <button type="button" class="chip chip--new" id="tester-new" hidden>New tester</button>
-          </div>
+          <form class="tester-picker" id="tester-picker" novalidate hidden>
+            <label class="tester-entry__label" for="tester-entry">Your tester ID</label>
+            <div class="tester-entry">
+              <input
+                type="text"
+                id="tester-entry"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                aria-describedby="tester-entry-hint tester-entry-error"
+              />
+              <button type="submit" id="tester-use">Use this ID</button>
+              <button type="button" id="tester-cancel" hidden>Cancel</button>
+            </div>
+            <p class="note" id="tester-entry-hint">
+              Letters, numbers, dots, dashes and underscores; start with a letter or number; up to 80 characters.
+            </p>
+            <p class="problem" id="tester-entry-error" role="alert" hidden></p>
+          </form>
           <input type="hidden" id="tester-id" value="" />
         </div>
         <div class="field-row">
@@ -2244,13 +2277,14 @@
       const PACKAGE_TIMEOUT_MS = 300000;
       // Save re-runs the full-frame ball search, which takes several seconds on a Pi.
       const TEE_RANGE_ACTION_TIMEOUT_MS = 90000;
+      // The tester ID is kept for this browser tab only, so a reload keeps it but a new
+      // visit starts empty: the next tester never sees the last one's ID.
       try {
-        const savedTesterId = localStorage.getItem(TESTER_ID_STORAGE_KEY);
+        const savedTesterId = sessionStorage.getItem(TESTER_ID_STORAGE_KEY);
         if (savedTesterId) el('tester-id').value = savedTesterId;
       } catch {
         // Storage can be unavailable in locked-down kiosk browser profiles.
       }
-      // the tester ID is picked by touch (GET /api/tester/testers); never typed
       const currentTester = () => el('tester-id').value.trim();
 
       function payload() {
@@ -2440,7 +2474,7 @@
         renderLis3dhCheck();
         if (!setupEligibility) {
           el('setup-summary').className = 'problem';
-          el('setup-summary').textContent = currentTester() ? 'Checking the unit…' : 'Pick your tester ID in step 1 first.';
+          el('setup-summary').textContent = currentTester() ? 'Checking the unit…' : 'Enter your tester ID in step 1 first.';
           el('setup-checks').innerHTML = '';
           el('unit-sensors').hidden = true;
           el('setup-authority').textContent = 'No server confirmation loaded. Acquisition controls remain blocked.';
@@ -2492,7 +2526,7 @@
         if (!currentTester()) {
           setupEligibility = null;
           renderSetupEligibility();
-          el('setup-summary').textContent = 'Pick your tester ID in step 1 first.';
+          el('setup-summary').textContent = 'Enter your tester ID in step 1 first.';
           return false;
         }
         const testerId = el('tester-id').value.trim();
@@ -3406,7 +3440,7 @@
         let problem = false;
         const ball = placementState?.ball;
         if (!currentTester()) {
-          text = 'Pick your tester ID in step 1 first.';
+          text = 'Enter your tester ID in step 1 first.';
         } else if (placementError) {
           text = placementError;
           problem = true;
@@ -3878,7 +3912,7 @@
         let text;
         let problem = false;
         if (!currentTester()) {
-          text = 'Pick your tester ID in step 1 first.';
+          text = 'Enter your tester ID in step 1 first.';
         } else if (aimError) {
           text = aimError;
           problem = true;
@@ -6356,17 +6390,16 @@
           renderPhotoHandoff();
         }
       });
-      // --- step 1: the tester ID, picked by touch (GET /api/tester/testers); never typed ---
-      let testerList = null;
-      let testerListError = null;
+      // --- step 1: the tester ID, typed into one box. The page never lists the IDs saved
+      // on the unit, so no tester sees another's; typing an existing ID resumes its data. ---
+      // the server's SAFE_SEGMENT rule (tester_server.py), checked here before anything is sent
+      const TESTER_ID_RULE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
       let testerPickerOpen = false;
-      // a new ID when the server cannot suggest one: today's date and a counter
-      function localNewTesterId() {
-        const day = new Date().toISOString().slice(0, 10);
-        const known = new Set(testerList?.testers || []);
-        let n = 1;
-        while (known.has(`tester-${day}-${n}`)) n += 1;
-        return `tester-${day}-${n}`;
+      function showTesterEntryError(message) {
+        el('tester-entry-error').textContent = message || '';
+        el('tester-entry-error').hidden = !message;
+        if (message) el('tester-entry').setAttribute('aria-invalid', 'true');
+        else el('tester-entry').removeAttribute('aria-invalid');
       }
       function renderTesterPicker() {
         const current = currentTester();
@@ -6374,55 +6407,39 @@
         const open = testerPickerOpen || !current;
         el('tester-picker').hidden = !open;
         el('tester-change').hidden = !current || open;
-        const ids = testerList?.testers || [];
-        el('tester-list').replaceChildren(
-          ...ids.map((id) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'chip';
-            button.textContent = id;
-            button.setAttribute('aria-pressed', String(id === current));
-            button.addEventListener('click', () => selectTester(id));
-            return button;
-          })
-        );
-        const suggested = testerList?.suggested_new || (testerListError ? localNewTesterId() : null);
-        el('tester-new').hidden = !suggested || ids.includes(suggested);
-        el('tester-new').dataset.testerId = suggested || '';
-        el('tester-new').textContent = `New tester: ${suggested || ''}`;
-        el('tester-picker-note').className = testerListError ? 'problem' : 'note';
-        el('tester-picker-note').textContent = testerListError
-          ? `The saved tester IDs are unavailable (${testerListError}). Start a new one, or press Change tester to try again.`
-          : !testerList
-            ? 'Loading the tester IDs…'
-            : ids.length
-              ? 'Tap your tester ID, or start a new one. No typing needed.'
-              : 'No tester IDs yet: start a new one.';
-      }
-      async function refreshTesters() {
-        try {
-          const response = await fetchWithTimeout('/api/tester/testers', { cache: 'no-store' });
-          const body = await readJson(response);
-          if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
-          testerList = {
-            testers: Array.isArray(body.testers) ? body.testers.filter((id) => typeof id === 'string') : [],
-            suggested_new: typeof body.suggested_new === 'string' ? body.suggested_new : null,
-          };
-          testerListError = null;
-        } catch (error) {
-          testerListError = error.message;
+        el('tester-cancel').hidden = !current;
+        if (!open) {
+          el('tester-entry').value = '';
+          showTesterEntryError(null);
         }
-        renderTesterPicker();
       }
       el('tester-change').addEventListener('click', () => {
         testerPickerOpen = true;
+        el('tester-entry').value = '';
+        showTesterEntryError(null);
         renderTesterPicker();
-        refreshTesters();
+        el('tester-entry').focus();
       });
-      el('tester-new').addEventListener('click', () => {
-        const id = el('tester-new').dataset.testerId;
-        if (!id) return;
-        if (testerList && !testerList.testers.includes(id)) testerList.testers = [...testerList.testers, id];
+      el('tester-cancel').addEventListener('click', () => {
+        testerPickerOpen = false;
+        renderTesterPicker();
+      });
+      el('tester-entry').addEventListener('input', () => showTesterEntryError(null));
+      // the form's submit is both the "Use this ID" button and Enter in the box
+      el('tester-picker').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const id = el('tester-entry').value.trim();
+        if (!id) {
+          showTesterEntryError('Type your tester ID first.');
+          return;
+        }
+        if (!TESTER_ID_RULE.test(id)) {
+          showTesterEntryError(
+            'That ID can’t be used. Use only letters, numbers, dots, dashes and underscores, start with a letter or number, and keep it to 80 characters.'
+          );
+          return;
+        }
+        showTesterEntryError(null);
         selectTester(id);
       });
 
@@ -6436,7 +6453,7 @@
         el('tester-id').value = id;
         suiteActionVersion += 1;
         try {
-          localStorage.setItem(TESTER_ID_STORAGE_KEY, currentTester());
+          sessionStorage.setItem(TESTER_ID_STORAGE_KEY, currentTester());
         } catch {
           // The current page still works when browser storage is unavailable.
         }
@@ -6644,7 +6661,7 @@
         const status = el('lens-status');
         status.className = lensNoticeProblem || (lensError && !lensState) ? 'problem' : 'note';
         status.textContent = !currentTester()
-          ? 'Pick your tester ID first.'
+          ? 'Enter your tester ID first.'
           : lensError && !lensState
             ? `The lens choice is unavailable (${lensError}). The steps carry on with the unit's current lens.`
             : lensNotice || (current ? `Lens: ${current.label}.` : lensState ? 'Tap the lens fitted to the unit.' : 'Loading the lenses…');
@@ -7054,7 +7071,6 @@
       buildLadderControls();
       renderVerdict(null);
       renderSteps();
-      refreshTesters();
       refreshLens();
       refreshHanded();
       refresh();

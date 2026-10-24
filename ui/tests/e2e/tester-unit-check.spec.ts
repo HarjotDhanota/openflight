@@ -119,7 +119,7 @@ interface Stage {
 
 async function stage(page: Page, o: Stage) {
   // the tester already chosen, as a returning tester's page has it (helpers' useTester)
-  await page.addInitScript((id) => localStorage.setItem('openflight-tester-id', id), DEFAULT_TESTER);
+  await page.addInitScript((id) => sessionStorage.setItem('openflight-tester-id', id), DEFAULT_TESTER);
   await mockLens(page);
   await page.route('**/api/tester/setup-eligibility?**', (route) => json(route, (o.setup ?? (() => READY))()));
   await page.route('**/api/tester/lis3dh-check', (route) =>
