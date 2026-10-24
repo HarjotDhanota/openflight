@@ -885,6 +885,12 @@ def _ready_light_states(states):
             *states.amber_causes,
             *((PAUSE_CAUSES[free_play_pause["cause"]],) if free_play_pause else ()),
         ),
+        # the exposure ladder (the study-mode kiosk) records no ball range
+        setup_optional=(
+            ("ball_range",)
+            if study_mode_enabled and not free_play_config.get("enabled")
+            else states.setup_optional
+        ),
     )
 
 

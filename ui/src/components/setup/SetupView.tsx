@@ -9,7 +9,7 @@ import { PanelAction } from '../panel/PanelAction';
 import { PanelHeader } from '../panel/PanelHeader';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { isInImage, toCamera, toScreen, type Px, type SetupViewRect } from './setupGeometry';
-import { boxOutline } from './setupOverlay';
+import { savedMarks } from './setupOverlay';
 import {
   SETUP_STEPS,
   aimWords,
@@ -17,6 +17,7 @@ import {
   hasCamera,
   ballWords,
   boxWords,
+  canSetUp,
   firstStepToDo,
   isUsable,
   netWords,
@@ -74,8 +75,8 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
     setStepIndex(firstStepToDo(setup));
   }
   const step = SETUP_STEPS[stepIndex];
-  // without a camera no step can be done: nothing is attempted
-  const cameraOk = setup !== null && hasCamera(setup);
+  // without a camera (or the tilt sensor) no step can be done: nothing is attempted
+  const cameraOk = setup !== null && canSetUp(setup);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [lookRefusal, setLookRefusal] = useState<string | null>(null);
@@ -135,7 +136,7 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
       measuredOnArrival.current = false;
       return;
     }
-    if (measuredOnArrival.current || !setup || !hasCamera(setup)) return;
+    if (measuredOnArrival.current || !setup || !canSetUp(setup)) return;
     measuredOnArrival.current = true;
     if (isUsable(setup.box) && setup.ball_range.state !== 'set') {
       // started after this render, as a tap would: the measurement's busy flag is not
@@ -168,8 +169,14 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
     };
   }, [step, hasSetup]);
 
-  if (!setup || !hasCamera(setup)) {
-    const line = setup ? t('setup.needsCamera') : loadFailed ? t('setup.unreachable') : t('setup.loading');
+  if (!setup || !canSetUp(setup)) {
+    const line = !setup
+      ? loadFailed
+        ? t('setup.unreachable')
+        : t('setup.loading')
+      : hasCamera(setup)
+        ? t('setup.cannotSetUp', { reason: setup.live.setup_blocked_reason ?? '' })
+        : t('setup.needsCamera');
     return (
       <div className="panel setup-view">
         <PanelHeader title={t('nav.setup')} />
@@ -189,15 +196,18 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
 
   const liveBox = setup.live.box;
   const boxReady = isUsable(setup.box);
-  const savedAim = setup.aim.state === 'set' ? (setup.aim.aim_px ?? null) : null;
+  // the live look and the taps are in the still's pixels; saved marks are moved into them
+  const saved = savedMarks(setup, imagePx);
+  const savedAim = saved.aim;
   const aimPoint = aimTap ?? savedAim;
-  const savedFloor = setup.aim.state === 'set' ? (setup.aim.floor_line ?? null) : null;
+  const savedFloor = saved.floor;
   const floorLine: Px[] = floorTaps ?? savedFloor ?? [];
   // a saved floor line the service measured nothing from is drawn as not used
   const floorRejected = floorTaps === null && savedFloor !== null && setup.net_range.source !== 'camera_floor_line';
-  const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (setup.box.ball_px ?? liveBox?.ball_px ?? null);
-  const ballDiameter = step === 'box' ? liveBox?.diameter_px : setup.box.diameter_px;
-  const outline = boxOutline(setup, { live: true });
+  const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (saved.ball ?? liveBox?.ball_px ?? null);
+  const ballDiameter = step === 'box' ? liveBox?.diameter_px : saved.diameter;
+  const looked = liveBox?.outline_px;
+  const outline = looked && looked.length > 2 ? looked : saved.outline;
 
   const onStageClick = (event: MouseEvent<HTMLDivElement>) => {
     if (step !== 'aim' || !view || !boxReady) return;
@@ -269,11 +279,11 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
             <circle key={index} className="setup-view__floor-point" cx={screen(px)[0]} cy={screen(px)[1]} r={5} />
           ))
         : null}
-      {step === 'aim' && aimPoint && setup.box.ball_px ? (
+      {step === 'aim' && aimPoint && saved.ball ? (
         <line
           className={`setup-view__aim-line${samePx(aimPoint, savedAim) && floorTaps === null ? ' setup-view__aim-line--saved' : ''}`}
-          x1={screen(setup.box.ball_px)[0]}
-          y1={screen(setup.box.ball_px)[1]}
+          x1={screen(saved.ball)[0]}
+          y1={screen(saved.ball)[1]}
           x2={screen(aimPoint)[0]}
           y2={screen(aimPoint)[1]}
         />

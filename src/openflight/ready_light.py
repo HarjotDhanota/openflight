@@ -72,6 +72,9 @@ class SensorStates:
     ball_look: Mapping | None = None
     # an extension's own causes from the snapshot (``setup_ready_causes``)
     setup_causes: Sequence[SetupCause] = ()
+    # setup sections this run does not use (an extension's: the tester's exposure ladder
+    # records no ball range), so never "setup incomplete"
+    setup_optional: Sequence[str] = ()
 
 
 def _left(typical: float | None, since: float | None, now: float) -> float | None:
@@ -166,19 +169,29 @@ def _state_words(state) -> str:
     return str(state).replace("_", " ")
 
 
-def setup_causes(setup: Mapping | None, ball_look: Mapping | None, now: float) -> list[SetupCause]:
-    """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit without a
-    camera, which can never set up, and nothing about the ball without a recent look.
+def setup_causes(
+    setup: Mapping | None, ball_look: Mapping | None, now: float, optional: Sequence[str] = ()
+) -> list[SetupCause]:
+    """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit that can
+    never set up (no camera, no tilt sensor), and nothing about the ball without a recent look.
 
-    A section saved but not put into effect (``unapplied``) is incomplete too.
+    A section saved but not put into effect (``unapplied``) is incomplete too; one in
+    ``optional`` never is.
     """
-    if setup is None or not (setup.get("live") or {}).get("camera_available", True):
+    live = (setup or {}).get("live") or {}
+    if setup is None or not live.get("camera_available", True):
+        return []
+    if not live.get("setup_possible", True):
         return []
     unapplied = setup.get("unapplied") or {}
     causes: list[SetupCause] = []
     missing = []
     for name, words in SETUP_SECTIONS:
+        if name in optional:
+            continue
         state = (setup.get(name) or {}).get("state", "not_set")
+        if name == "net_range" and (setup.get("aim") or {}).get("state", "not_set") in UNUSABLE:
+            continue  # the net is set with the aim: "aim not set" says both
         if state in UNUSABLE:
             missing.append(f"{words} {_state_words(state)}")
         elif name in unapplied:
@@ -206,7 +219,7 @@ def compute_state(states: SensorStates, now: float) -> dict:
     if states.camera is not None:
         _camera(states.camera, now, red, amber, states.camera_rule)
     for level, cause in (
-        *setup_causes(states.setup, states.ball_look, now),
+        *setup_causes(states.setup, states.ball_look, now, states.setup_optional),
         *states.setup_causes,
     ):
         if level == "red":

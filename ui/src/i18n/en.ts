@@ -344,6 +344,7 @@ export const en = {
   'setup.state.notConfirmed': 'Not confirmed',
   'setup.cameraNotReady': 'The camera has no picture yet. Try again.',
   'setup.needsCamera': 'Setup needs the camera, and this kiosk has none.',
+  'setup.cannotSetUp': "Setup can't run on this kiosk: {reason}.",
   'setup.range.instruction': 'Measured from the ball in the box.',
   'setup.range.fromCamera': '{value} m ± {spread}, from the camera; the radar refines it each shot',
   'setup.range.fromRadar': '{value} m ± {spread}, from the radar',

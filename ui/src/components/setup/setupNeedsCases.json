@@ -26,7 +26,15 @@
       "unapplied": {},
       "camera": true,
       "needs": true,
-      "cause": "setup incomplete: aim not set, net range stale"
+      "cause": "setup incomplete: aim not set"
+    },
+    {
+      "name": "a stale net range beside a set aim",
+      "sections": { "net_range": { "state": "stale", "reason": "floor line changed" } },
+      "unapplied": {},
+      "camera": true,
+      "needs": true,
+      "cause": "setup incomplete: net range stale"
     },
     {
       "name": "a box that failed to apply",
@@ -49,6 +57,15 @@
       "sections": { "box": { "state": "not_set" }, "aim": { "state": "not_set" } },
       "unapplied": {},
       "camera": false,
+      "needs": false,
+      "cause": null
+    },
+    {
+      "name": "a unit that cannot set up (no tilt sensor)",
+      "sections": { "box": { "state": "not_set" }, "aim": { "state": "not_set" } },
+      "unapplied": {},
+      "camera": true,
+      "possible": false,
       "needs": false,
       "cause": null
     }

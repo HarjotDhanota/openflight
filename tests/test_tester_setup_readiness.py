@@ -176,7 +176,6 @@ def test_camera_runtime_gets_trigger_provider_only_when_tester_gate_required(mon
             stream="raw",
             rotate_180=False,
             mirror_horizontal=False,
-            roll_correction_deg=0.0,
             scaler_crop=None,
             mount_height_m=0.095,
             lateral_offset_m=0.0,

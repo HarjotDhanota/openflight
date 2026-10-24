@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import time
 from copy import deepcopy
-from dataclasses import replace
 from typing import Any, Callable
 
 from openflight.camera import swing_exposure as sx
-from openflight.camera.capture_runtime import CameraCaptureRuntime, _nearest_trigger_index, logger
+from openflight.camera.capture_runtime import (
+    CameraCaptureRuntime,
+    _nearest_trigger_index,
+    logger,
+    replace_settings,
+)
 
 
 class TesterRuntimeMixin:
@@ -137,7 +141,7 @@ class TesterRuntimeMixin:
             return self.auto_exposure_status()
 
         def seed() -> sx.SwingExposureDecision:
-            self.settings = replace(self.settings, auto_exposure=True)
+            replace_settings(self, auto_exposure=True)
             return self._seed_swing_exposure()
 
         decision = self._while_no_clip_is_collected(seed, timeout_s, "the automatic exposure")

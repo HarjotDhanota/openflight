@@ -122,7 +122,7 @@ def test_init_inclinometer_is_fail_soft(monkeypatch):
     monkeypatch.setattr("openflight.inclinometer.InclinometerService", BrokenService)
     monkeypatch.setattr(server, "log_session_error", lambda *_args, **_kwargs: None)
 
-    assert server.init_inclinometer(zero_offset_deg=1.5) is False
+    assert server.init_inclinometer() is False
     assert server.inclinometer_service is None
     assert server.inclinometer_runtime_config["requested"] is True
     assert server.inclinometer_runtime_config["error"] == "I2C unavailable"
@@ -203,7 +203,7 @@ def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypat
     monkeypatch.setattr(server, "inclinometer_service", None)
     monkeypatch.setattr(server, "inclinometer_runtime_config", {})
 
-    assert server.init_inclinometer(zero_offset_deg=0.0) is True
+    assert server.init_inclinometer() is True
     assert isinstance(made["sensor"], MountedAccelerometer)
     assert made["sensor"].yaw_deg == 180.0
     assert server.inclinometer_runtime_config["mount_yaw_deg"] == 180.0
@@ -253,7 +253,7 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     store.apply_correction("upside_down")
     store.record_pass({"front_up_deg": 5.8})
 
-    assert server.init_inclinometer(zero_offset_deg=0.0, mount_file=path) is True
+    assert server.init_inclinometer(mount_file=path) is True
 
     sensor = made["sensor"]
     assert isinstance(sensor, MountedAccelerometer)
@@ -274,7 +274,7 @@ def test_init_inclinometer_without_a_unit_file_keeps_the_rig_mount(monkeypatch, 
     made = {}
     _fake_lis3dh(monkeypatch, made)
 
-    assert server.init_inclinometer(zero_offset_deg=0.0, mount_file=tmp_path / "none.json")
+    assert server.init_inclinometer(mount_file=tmp_path / "none.json")
 
     assert made["sensor"].yaw_deg == 180.0
     assert server.inclinometer_runtime_config["mount_source"] == "rig_file"

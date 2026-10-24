@@ -9,6 +9,8 @@ import pytest
 from openflight.setup_record import (
     SCHEMA,
     SECTIONS,
+    SaveRefused,
+    SetupFileChanged,
     StartContext,
     evaluate,
     load,
@@ -186,3 +188,34 @@ def test_section_inputs_rejects_unknown_names():
         section_inputs("box", colour="red")
     with pytest.raises(ValueError):
         section_inputs("garage")
+
+
+def test_save_refuses_a_file_another_writer_changed(tmp_path):
+    path = tmp_path / "setup.json"
+    mine = load(path)
+    theirs = load(path)
+    save(path, theirs)
+
+    with pytest.raises(SetupFileChanged, match="changed"):
+        save(path, mine)
+
+    assert load(path)["revision"] == 1 and mine["revision"] == 0
+
+
+def test_save_will_not_overwrite_a_file_of_an_unknown_schema(tmp_path):
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps({"schema": "openflight.setup.v9", "revision": 3}), encoding="utf-8")
+
+    with pytest.raises(SaveRefused, match="schema"):
+        save(path, load(path))
+
+    assert json.loads(path.read_text(encoding="utf-8"))["schema"] == "openflight.setup.v9"
+
+
+def test_save_replaces_a_corrupt_file(tmp_path):
+    path = tmp_path / "setup.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    save(path, load(path))
+
+    assert load(path)["revision"] == 1

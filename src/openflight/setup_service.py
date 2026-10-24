@@ -21,7 +21,16 @@ import numpy as np
 
 from openflight import kiosk_extensions
 from openflight.camera import ground_patch, placement_box, reference_ball_range, target_line
-from openflight.setup_record import SECTIONS, StartContext, evaluate, load, save, section_inputs
+from openflight.setup_record import (
+    SECTIONS,
+    SaveRefused,
+    SetupFileChanged,
+    StartContext,
+    evaluate,
+    load,
+    save,
+    section_inputs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +42,12 @@ SAME_BALL_PX = 3.0
 # ... and its outline did not move (a new tilt or roll pad moves it)
 SAME_OUTLINE_PX = 0.5
 TOO_UNCERTAIN = "too uncertain to measure"
+# each section's actions, as the kiosk's API takes them
+ACTIONS = {
+    "box": ("show", "confirm", "clear"),
+    "aim": ("show", "confirm", "skip", "clear"),
+    "range": ("measure", "clear"),
+}
 
 
 class CameraView(NamedTuple):
@@ -59,6 +74,29 @@ class _Refused(Exception):
 
 def _usable(section: dict) -> bool:
     return section.get("state") not in ("not_set", "stale")
+
+
+def box_picture_size(box) -> tuple[int, int]:
+    """The capture size the box's pixels are in; ValueError when it has none."""
+    size = box.get("image_size_px")
+    if not size or len(size) != 2:
+        raise ValueError("the box has no picture size: confirm the box again")
+    width, height = int(size[0]), int(size[1])
+    if width <= 0 or height <= 0:
+        raise ValueError(f"the box's picture size {size} is not a picture: confirm the box again")
+    return width, height
+
+
+def box_scale(box, width: int, height: int) -> float:
+    """The factor taking the box's pixels into a ``width`` x ``height`` capture: 1280x800 and
+    640x400 are one field of view, binned. ValueError for a picture of another shape."""
+    confirmed_w, confirmed_h = box_picture_size(box)
+    if confirmed_w * height != confirmed_h * width:
+        raise ValueError(
+            f"the box was confirmed on a {confirmed_w}x{confirmed_h} picture and the camera "
+            f"runs at {width}x{height}: confirm the box again"
+        )
+    return width / confirmed_w
 
 
 # The service writes its sections with these builders, as may anything else that writes a
@@ -116,9 +154,12 @@ def _same_outline(kept, outline) -> bool:
     )
 
 
-def aim_section(line: dict, *, floor, floor_line_used: bool, box_id: str) -> dict:
-    """An aim from a bounded ``target_line.target_line_record``."""
-    return {
+def aim_section(
+    line: dict, *, floor, floor_line_used: bool, box_id: str, image_size_px=None
+) -> dict:
+    """An aim from a bounded ``target_line.target_line_record``; ``image_size_px`` is the
+    capture size its ``aim_px`` and floor line are in (an older aim's are the box's)."""
+    section = {
         "state": "set",
         "aim_px": line["aim_px"],
         "floor_line": floor,
@@ -132,6 +173,9 @@ def aim_section(line: dict, *, floor, floor_line_used: bool, box_id: str) -> dic
         "source": line["source"],
         "inputs": section_inputs("aim", box_id=box_id),
     }
+    if image_size_px is not None:
+        section["image_size_px"] = [int(image_size_px[0]), int(image_size_px[1])]
+    return section
 
 
 def skipped_aim_section(box_id: str) -> dict:
@@ -237,6 +281,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         box_config: placement_box.PlacementBoxConfig | None = None,
         between_shots: Callable[[Callable[[], Any]], Any] = lambda apply: apply(),
         camera_available: Callable[[], bool] = lambda: True,
+        setup_blocked: Callable[[], str | None] = lambda: None,
     ):
         self._path = Path(path)
         self._ctx = ctx
@@ -247,6 +292,8 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         # runs one change's applies together, so no shot lands between two sections
         self._between_shots = between_shots
         self._camera_available = camera_available
+        # why this kiosk, as started, can never set up (no tilt sensor ...), or None
+        self._setup_blocked = setup_blocked
         self._config = box_config or placement_box.load_config()
         self._action_lock = threading.Lock()
         self._record = load(self._path)
@@ -278,12 +325,16 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
 
     def snapshot(self) -> dict:
         """The record against the start context, the last live look, and why any is not in effect."""
+        camera = bool(self._camera_available())
+        blocked = self._setup_blocked() if camera else "no camera"
         return {
             **self._evaluated(),
-            # a unit without a camera can never set up, so the screen need not offer it
+            # a unit that can never set up is not offered the screen, nor held red for it
             "live": {
                 **copy.deepcopy(self._live),
-                "camera_available": bool(self._camera_available()),
+                "camera_available": camera,
+                "setup_possible": blocked is None,
+                "setup_blocked_reason": blocked,
             },
             "unapplied": dict(self._apply_errors),
         }
@@ -346,28 +397,42 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 return self._result(False, str(refusal))
             before = self._evaluated()
             looked = copy.deepcopy(self._live)
+            refused = None
             try:
                 changes = perform[action](before, payload)
                 if changes:
-                    record = copy.deepcopy(self._record)
-                    record.update(changes)
-                    try:
-                        save(self._path, record)
-                    except OSError as exc:
-                        raise _Refused(f"could not save the setup: {exc}") from exc
-                    self._record = record
+                    self._save(changes)
             except _Refused as refusal_:
-                return self._result(False, str(refusal_))
+                refused = str(refusal_)
             after = self._evaluated()
+            if refused is not None and after == before:
+                return self._result(False, refused)
+            # a refusal that reloaded another writer's record still puts that one into effect
             failed = self._apply({n for n in SECTIONS if after[n] != before[n]}, after)
-            result = self._result(not failed, "; ".join(failed) or None)
+            ok = refused is None and not failed
+            result = self._result(ok, refused or "; ".join(failed) or None)
             # a look every few seconds is news only when it saw something new, and never
             # an action for the hooks
             if action != "show" or self._live != looked:
                 self.on_change(result["setup"])
-            if not failed and action != "show":
+            if ok and action != "show":
                 kiosk_extensions.call_all("after_setup_action", section, action, result)
             return result
+
+    def _save(self, changes: dict) -> None:
+        record = copy.deepcopy(self._record)
+        record.update(changes)
+        try:
+            save(self._path, record)
+        except SetupFileChanged as exc:
+            # the other writer's record is the one to build on from here
+            self._record = load(self._path)
+            raise _Refused(f"{exc}: reloaded it, try again") from exc
+        except SaveRefused as exc:
+            raise _Refused(str(exc)) from exc
+        except OSError as exc:
+            raise _Refused(f"could not save the setup: {exc}") from exc
+        self._record = record
 
     def _result(self, ok: bool, reason: str | None) -> dict:
         return {"ok": ok, "reason": reason, "setup": self.snapshot()}
@@ -401,7 +466,9 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             else:
                 self._unapplied.discard(name)
                 self._apply_errors.pop(name, None)
-        self._applied_revision = self.revision
+        # each shot records the revision in effect, which a failed section is not
+        if not failed:
+            self._applied_revision = self.revision
         return failed
 
     def _cleared(self, *names: str) -> dict:
@@ -572,7 +639,13 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 "the camera cannot bound this aim point: aim at a farther target, or skip it"
             )
         return {
-            "aim": aim_section(line, floor=floor, floor_line_used=used_floor, box_id=box["id"]),
+            "aim": aim_section(
+                line,
+                floor=floor,
+                floor_line_used=used_floor,
+                box_id=box["id"],
+                image_size_px=(camera.image_width_px, camera.image_height_px),
+            ),
             "net_range": stamped_net(net, floor, self._ctx),
         }
 
@@ -583,10 +656,27 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             "net_range": stamped_net(default_net("aim point skipped"), None, self._ctx),
         }
 
+    def _box_here(self, camera, box: dict) -> dict:
+        """The box's ball and outline in this camera's pixels (the box may be another mode's)."""
+        try:
+            scale = box_scale(box, int(camera.image_width_px), int(camera.image_height_px))
+        except ValueError as exc:
+            raise _Refused(str(exc)) from exc
+        here = {
+            **box,
+            "ball_px": [float(box["ball_px"][0]) * scale, float(box["ball_px"][1]) * scale],
+            "diameter_px": float(box["diameter_px"]) * scale,
+            "image_size_px": [int(camera.image_width_px), int(camera.image_height_px)],
+        }
+        if box.get("outline_px") is not None:
+            here["outline_px"] = ground_patch.scale_outline(box["outline_px"], scale)
+        return here
+
     def _box_ball_lfu(self, camera, box: dict) -> tuple[float, float]:
+        ball_px = self._box_here(camera, box)["ball_px"]
         try:
             hit = reference_ball_range.ray_to_ball_center_plane(
-                camera, box["ball_px"], ball_center_height_m=ground_patch.BALL_CENTER_HEIGHT_M
+                camera, ball_px, ball_center_height_m=ground_patch.BALL_CENTER_HEIGHT_M
             )
         except ValueError as exc:
             raise _Refused(f"the box's ball has no floor point: {exc}") from exc
@@ -597,6 +687,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
     def _range_measure(self, record: dict, _payload: dict) -> dict:
         box = self._need_box(record)
         camera, roll = self._view()
+        here = self._box_here(camera, box)
         frames = self._frames()
         projection = placement_box.project_fixed_box(
             camera, calibrated=self._ctx.tilt_calibrated, roll_deg=roll, config=self._config
@@ -606,9 +697,9 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             camera,
             ground_patch.PatchSearch.from_projection(projection),
             confirm_anchor={
-                "x_px": box["ball_px"][0],
-                "y_px": box["ball_px"][1],
-                "diameter_px": box["diameter_px"],
+                "x_px": here["ball_px"][0],
+                "y_px": here["ball_px"][1],
+                "diameter_px": here["diameter_px"],
             },
         )
         ball = found["result"].selected

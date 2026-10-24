@@ -534,3 +534,24 @@ def test_a_clip_saving_outranks_a_setting_change_in_the_wait_cause():
 
     assert light["state"] == "amber"
     assert light["cause"] == "camera saving a clip"
+
+
+def test_a_ladder_kiosk_is_not_red_for_the_ball_range_it_never_records(sensors, monkeypatch):
+    snapshot = {
+        "box": {"state": "confirmed"},
+        "aim": {"state": "set"},
+        "ball_range": {"state": "not_set", "reason": "not set"},
+        "net_range": {"state": "default"},
+        "scene": {"state": "not_set"},
+        "live": {"camera_available": True},
+        "unapplied": {},
+    }
+    monkeypatch.setattr(server, "setup_service", SimpleNamespace(snapshot=lambda: snapshot))
+    monkeypatch.setattr(server, "ball_at_address_monitor", None)
+    assert sensors.light()["cause"] == "setup incomplete: ball range not set"
+
+    monkeypatch.setattr(tester_hooks, "study_mode_enabled", True)
+
+    assert sensors.light()["state"] == "green"
+    snapshot["box"] = {"state": "not_set"}
+    assert sensors.light()["cause"] == "setup incomplete: box not set"

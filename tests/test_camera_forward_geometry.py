@@ -265,7 +265,6 @@ def test_capture_records_forward_offset_in_session_config(monkeypatch, tmp_path)
         stream="raw",
         rotate_180=False,
         mirror_horizontal=False,
-        roll_correction_deg=0,
         scaler_crop=None,
         mount_height_m=0.095,
         lateral_offset_m=0,

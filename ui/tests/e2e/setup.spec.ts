@@ -245,6 +245,28 @@ test.describe('a kiosk without a camera', () => {
     await page.waitForTimeout(2500);
     expect(mock.posts).toEqual([]);
   });
+
+  test('offers no setup without the tilt sensor, and says what is missing', async ({ page }) => {
+    const mock = await open(page, 'RH');
+    mock.snapshot = {
+      ...mock.snapshot,
+      live: {
+        camera_available: true,
+        setup_possible: false,
+        setup_blocked_reason: 'the setup needs the tilt sensor (LIS3DH, --inclinometer)',
+      },
+    };
+    await page.reload();
+    await page.getByRole('button', { name: 'Close Select club' }).click();
+    await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
+    await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
+    await expect(page.locator('.nav__setup-dot')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Setup', exact: true }).click();
+    await expect(page.locator('.setup-view')).toHaveText(/needs the tilt sensor/);
+    await expect(page.locator('.setup-view__steps')).toHaveCount(0);
+    await page.waitForTimeout(2500);
+    expect(mock.posts).toEqual([]);
+  });
 });
 
 for (const size of SIZES) {

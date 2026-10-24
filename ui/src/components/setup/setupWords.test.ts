@@ -130,6 +130,8 @@ describe('setup words', () => {
     // a unit without a camera can never set up: never offer it
     expect(needsSetup(snapshot({ live: { camera_available: false } }))).toBe(false);
     expect(needsSetup(snapshot({ live: { camera_available: true } }))).toBe(true);
+    // nor one that lacks what setup needs (the tilt sensor): it would nag forever
+    expect(needsSetup(snapshot({ live: { camera_available: true, setup_possible: false } }))).toBe(false);
   });
 
   // the same table runs the kiosk's setup_incomplete cause in tests/test_ready_light.py
@@ -143,7 +145,7 @@ describe('setup words', () => {
         ball_range: sections.ball_range,
         net_range: sections.net_range,
         scene: sections.scene,
-        live: { camera_available: item.camera },
+        live: { camera_available: item.camera, setup_possible: 'possible' in item ? item.possible : true },
         unapplied: item.unapplied as Record<string, string>,
       };
       expect(needsSetup(setup)).toBe(item.needs);

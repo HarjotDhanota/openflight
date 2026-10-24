@@ -346,6 +346,7 @@ export const fr: Messages = {
   'setup.state.notConfirmed': 'Non confirmé',
   'setup.cameraNotReady': 'La caméra n’a pas encore d’image. Réessayez.',
   'setup.needsCamera': 'Le réglage a besoin de la caméra, et ce kiosque n’en a pas.',
+  'setup.cannotSetUp': 'Le réglage ne peut pas se faire sur ce kiosque : {reason}.',
   'setup.range.instruction': 'Mesurée sur la balle dans le cadre.',
   'setup.range.fromCamera': '{value} m ± {spread}, par la caméra ; le radar l’affine à chaque coup',
   'setup.range.fromRadar': '{value} m ± {spread}, par le radar',

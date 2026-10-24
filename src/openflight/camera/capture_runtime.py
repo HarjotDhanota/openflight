@@ -39,6 +39,16 @@ from openflight.gpio_factory import ensure_lgpio_pin_factory
 
 logger = logging.getLogger(__name__)
 
+# settings are replaced whole from the exposure loop and from the kiosk's setup
+_settings_lock = threading.Lock()
+
+
+def replace_settings(runtime, **changes) -> None:
+    """Replace some of a runtime's settings without losing another thread's replace."""
+    with _settings_lock:
+        runtime.settings = replace(runtime.settings, **changes)
+
+
 CameraCaptureStream = Literal["raw", "main-y"]
 
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
@@ -714,11 +724,7 @@ class CameraCaptureRuntime:
                 }
             )
             self._controls_purpose = purpose
-        self.settings = replace(
-            self.settings,
-            exposure_us=exposure_us,
-            gain=gain,
-        )
+        replace_settings(self, exposure_us=exposure_us, gain=gain)
         logger.info(
             "[CAMERA] Live controls updated: exposure=%dus gain=%.2f",
             exposure_us,
@@ -1389,11 +1395,7 @@ class CameraCaptureRuntime:
                     gain,
                 )
             if same_mode and within and 0 < exposure_us < frame_period_us and gain > 0:
-                self.settings = replace(
-                    self.settings,
-                    exposure_us=exposure_us,
-                    gain=gain,
-                )
+                replace_settings(self, exposure_us=exposure_us, gain=gain)
                 self._last_persisted_controls = (exposure_us, gain)
                 index = saved.get("light_index_median")
                 if index is not None and math.isfinite(float(index)) and float(index) > 0:

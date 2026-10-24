@@ -336,9 +336,8 @@ def test_a_range_change_keeps_the_outline(kiosk):
 def test_the_preview_the_overlays_draw_on_is_not_rolled():
     """The Camera and Live views draw setup pixels on /api/camera/preview.jpg, which the
     capture rotates by its roll correction: the kiosk must start the camera unrolled."""
-    assert inspect.signature(server.init_camera_capture).parameters[
-        "roll_correction_deg"
-    ].default == pytest.approx(0.0)
+    assert "roll_correction_deg" not in inspect.signature(server.init_camera_capture).parameters
+    assert CameraCaptureSettings().roll_correction_deg == 0.0
     calls = re.findall(r"init_camera_capture\((.*?)\):", inspect.getsource(server.main), re.S)
     assert calls, "the kiosk no longer starts the camera through init_camera_capture"
     assert all("roll_correction_deg" not in call for call in calls)

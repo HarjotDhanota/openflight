@@ -45,7 +45,7 @@ from .clubs.physics import (
     get_club_simulation_profile,
     mock_attack_angle_mean_deg,
 )
-from .constants import BALL_DIAMETER_MM
+from .constants import BALL_DIAMETER_MM, DEFAULT_NET_RANGE_M
 from .horizontal_frame import (
     frame_for,
     to_reported_deg,
@@ -322,16 +322,9 @@ BALL_AT_ADDRESS_EVERY_S = 1.0
 setup_service = None
 # the applied setup revision the session log last recorded
 _setup_logged_revision: int | None = None
-SETUP_ACTIONS = {
-    "box": ("show", "confirm", "clear"),
-    "aim": ("show", "confirm", "skip", "clear"),
-    "range": ("measure", "clear"),
-}
 # the setup searches the latest few frames, as the tester's live view does
 SETUP_FRAMES = 5
 MIN_SETUP_FRAMES = 3
-# The net's apparent range when the range setup measured none; flagged when used.
-DEFAULT_NET_RANGE_M = 4.6
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
 # The floor-bounce model needs the radar above the hitting surface; a solved lens
 # height that puts it lower than this is refused.
@@ -1590,25 +1583,15 @@ def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict, list | None]
     1280x800 and 640x400 are one field of view, binned, so a box moves between them by
     scaling. An older box without an outline is tested as its rectangle (None)."""
     from .camera import ground_patch  # noqa: PLC0415
+    from .setup_service import box_picture_size, box_scale  # noqa: PLC0415
 
-    size = box.get("image_size_px")
-    if not size or len(size) != 2:
-        raise ValueError("the box has no picture size: confirm the box again")
-    confirmed_w, confirmed_h = int(size[0]), int(size[1])
-    if confirmed_w <= 0 or confirmed_h <= 0:
-        raise ValueError(f"the box's picture size {size} is not a picture: confirm the box again")
     settings = getattr(camera_capture_runtime, "settings", None)
     width, height = (
         (int(settings.width), int(settings.height))
         if settings is not None
-        else (confirmed_w, confirmed_h)
+        else box_picture_size(box)
     )
-    if confirmed_w * height != confirmed_h * width:
-        raise ValueError(
-            f"the box was confirmed on a {confirmed_w}x{confirmed_h} picture and the camera "
-            f"runs at {width}x{height}: confirm the box again"
-        )
-    scale = width / confirmed_w
+    scale = box_scale(box, width, height)
     zone = tuple(int(round(float(value) * scale)) for value in box["box_px"])
     if len(zone) != 4 or not (0 <= zone[0] < zone[2] <= width and 0 <= zone[1] < zone[3] <= height):
         raise ValueError(f"the box {zone} is outside the {width}x{height} picture")
@@ -1630,7 +1613,9 @@ def _set_box(zone, setup_ball, outline=None) -> None:
     camera_ball_box_px = zone
     runtime = camera_capture_runtime
     if runtime is not None:
-        runtime.settings = replace(runtime.settings, setup_ball=setup_ball, hitting_zone=zone)
+        from .camera.capture_runtime import replace_settings  # noqa: PLC0415
+
+        replace_settings(runtime, setup_ball=setup_ball, hitting_zone=zone)
     if camera_capture_config.get("enabled"):
         camera_capture_config["setup_ball"] = dict(setup_ball) if setup_ball else None
         camera_capture_config["hitting_zone"] = list(zone) if zone else None
@@ -1869,6 +1854,23 @@ def _setup_lis3dh() -> tuple[float | None, float | None, str]:
     return float(reading.calibrated_pitch_deg), float(roll), selection.status
 
 
+def setup_blocked_reason() -> str | None:
+    """Why this kiosk, as started, can never set up, or None: what setup_camera_view always
+    refuses without (a camera, the rig file, and the tilt sensor unless the camera is
+    calibrated)."""
+    if camera_capture_runtime is None:
+        return "no camera"
+    if rig_geometry is None:
+        return "the setup needs the rig file (--rig-geometry)"
+    if camera_optical_calibration is not None and camera_placement is not None:
+        return None
+    if rig_geometry.lens_height_above_floor_mm is None:
+        return "the setup needs the rig file's lens height (--rig-geometry)"
+    if inclinometer_service is None:
+        return "the setup needs the tilt sensor (LIS3DH, --inclinometer)"
+    return None
+
+
 def setup_camera_view():
     """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
     not apply (a ``setup_service.CameraView``); None without a camera.
@@ -1890,8 +1892,9 @@ def setup_camera_view():
     width, height = int(runtime.settings.width), int(runtime.settings.height)
     if (width, height) == (320, 200):
         raise ValueError("320x200 is refused for measurement: its strip offset is not modelled")
-    if rig_geometry is None:
-        raise ValueError("the setup needs the rig file (--rig-geometry)")
+    blocked = setup_blocked_reason()
+    if blocked is not None:
+        raise ValueError(blocked)
     pitch, measured_roll, status = _setup_lis3dh()
     expected = rig_geometry.expected_inclinometer_orientation()
     expected_roll = float(expected.roll_deg or 0.0)
@@ -1899,8 +1902,6 @@ def setup_camera_view():
     if camera_optical_calibration is not None and camera_placement is not None:
         camera = _calibrated_setup_camera(width, height, pitch, measured_roll)
         return CameraView(camera, unapplied_roll)
-    if rig_geometry.lens_height_above_floor_mm is None:
-        raise ValueError("the setup needs the rig file's lens height (--rig-geometry)")
     if pitch is None:
         # the rig's boresight would pass for a measurement and move every floor range
         raise ValueError(
@@ -2010,6 +2011,7 @@ def init_setup_service(path):
         ),
         between_shots=_when_idle,
         camera_available=lambda: camera_capture_runtime is not None,
+        setup_blocked=lambda: setup_blocked_reason(),
     )
     service.on_change = _on_setup_change
     setup_service = service
@@ -2101,6 +2103,8 @@ def api_setup():
 @app.route("/api/setup/<any(box, aim, range):section>", methods=["POST"])
 def api_setup_action(section: str):
     """One setup action, ``{action, ...}``: 400 for a bad request, 409 when it is refused."""
+    from .setup_service import ACTIONS  # noqa: PLC0415
+
     service = setup_service
     if service is None:
         return _setup_refusal("the setup service is not running", 503)
@@ -2108,9 +2112,9 @@ def api_setup_action(section: str):
     if not isinstance(body, dict):
         return _setup_refusal("the body must be a JSON object with an action", 400)
     action = body.get("action")
-    if action not in SETUP_ACTIONS[section]:
+    if action not in ACTIONS[section]:
         return _setup_refusal(
-            f"unknown {section} action {action!r}: one of {', '.join(SETUP_ACTIONS[section])}",
+            f"unknown {section} action {action!r}: one of {', '.join(ACTIONS[section])}",
             400,
         )
     if section == "aim":
@@ -2135,10 +2139,14 @@ def api_setup_action(section: str):
 
 @app.route("/api/setup/view.jpg")
 def api_setup_view():
-    """The capture's latest frame, in the pixels the setup's box and points are in."""
+    """The capture's latest frame, in the pixels the setup's box and points are in, or
+    narrowed to ``?width=`` (160 to 1280)."""
     runtime = camera_capture_runtime
     if runtime is None:
         return "Camera capture not enabled", 404
+    max_width = request.args.get("width", type=int)
+    if "width" in request.args and (max_width is None or not 160 <= max_width <= 1280):
+        return "The view width must be between 160 and 1280 pixels", 400
     frames = runtime.recent_frames(1, timeout_s=0.5)
     if not frames:
         return "No camera frame yet", 503
@@ -2147,6 +2155,13 @@ def api_setup_view():
 
         quality = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # pylint: disable=no-member
         image = np.ascontiguousarray(frames[-1].image)
+        if max_width is not None and image.shape[1] > max_width:
+            height = round(image.shape[0] * max_width / image.shape[1])
+            image = cv2.resize(  # pylint: disable=no-member
+                image,
+                (max_width, height),
+                interpolation=cv2.INTER_AREA,  # pylint: disable=no-member
+            )
         ok, encoded = cv2.imencode(".jpg", image, quality)  # pylint: disable=no-member
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[SETUP] could not encode the camera view", exc_info=True)
@@ -2624,7 +2639,6 @@ def init_camera_capture(
     stream: str,
     rotate_180: bool,
     mirror_horizontal: bool,
-    roll_correction_deg: float = 0.0,
     scaler_crop: tuple[int, int, int, int] | None,
     mount_height_m: float,
     lateral_offset_m: float,
@@ -2657,7 +2671,6 @@ def init_camera_capture(
             stream=stream,
             rotate_180=rotate_180,
             mirror_horizontal=mirror_horizontal,
-            roll_correction_deg=roll_correction_deg,
             scaler_crop=scaler_crop,
             gpio_pin=gpio_pin,
             auto_exposure=auto_exposure,
@@ -2977,7 +2990,6 @@ def _iwr6843_startup_recovery(error: object) -> str:
 
 def init_inclinometer(
     *,
-    zero_offset_deg: float = 0.0,
     bus_number: int = 1,
     address: int = 0x18,
     mount_file: Path | None = None,
@@ -3002,7 +3014,7 @@ def init_inclinometer(
         mount_yaw = mount.yaw_deg
         if mount_yaw or mount.upside_down:
             sensor = MountedAccelerometer(sensor, mount_yaw, upside_down=mount.upside_down)
-        service = InclinometerService(sensor, zero_offset_deg=zero_offset_deg)
+        service = InclinometerService(sensor)
         service.start()
         startup = service.wait_for_stable(timeout_s=2.0)
         inclinometer_service = service
@@ -3012,7 +3024,8 @@ def init_inclinometer(
             "i2c_bus": bus_number,
             "i2c_address": f"0x{address:02x}",
             "sample_hz": service.sample_hz,
-            "zero_offset_deg": zero_offset_deg,
+            # the kiosk takes no typed zero offset; the tester's setup gate reads this
+            "zero_offset_deg": 0.0,
             "mount_yaw_deg": mount_yaw,
             "mount_upside_down": mount.upside_down,
             "mount_source": mount_source,
@@ -3063,7 +3076,6 @@ def init_inclinometer(
             "sensor": "lis3dh",
             "i2c_bus": bus_number,
             "i2c_address": f"0x{address:02x}",
-            "zero_offset_deg": zero_offset_deg,
             "error": str(error),
         }
         return False

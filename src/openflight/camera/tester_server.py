@@ -103,7 +103,7 @@ from openflight.camera.tee_range_flow import (
 from openflight.camera.track_review import register_track_review
 from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.clubs.types import ClubType
-from openflight.constants import BALL_DIAMETER_MM
+from openflight.constants import BALL_DIAMETER_MM, DEFAULT_NET_RANGE_M
 from openflight.inclinometer import guided_check, orientation_check
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
@@ -1141,8 +1141,6 @@ NET_SEARCH_WINDOW_M = (2.0, 6.0)
 # A reflector must stand this far above the window's median to count as the net;
 # the tail of nearer clutter (a door at 1.73 m on 29 Sept) reaches about 6.5 dB.
 NET_MIN_PEAK_DB = 10.0
-# The swing server's assumption when no net is measured; flagged when it is used.
-DEFAULT_NET_RANGE_M = 4.6
 
 
 def empty_capture_net_range(record: Mapping, window_m: Sequence[float] | None = None) -> dict:

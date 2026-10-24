@@ -14,6 +14,7 @@ export interface SetupSection {
   outline_px?: Px[];
   ball_px?: Px | null;
   diameter_px?: number | null;
+  /** The capture size the section's pixels are in (box; aim, else the box's). */
   image_size_px?: Px;
   aim_px?: Px;
   floor_line?: [Px, Px] | null;
@@ -38,6 +39,9 @@ export interface SetupLive {
   aim?: { default_aim_px: Px };
   /** False on a unit without a camera: no step can be done there. */
   camera_available?: boolean;
+  /** False when the kiosk as started can never set up (no tilt sensor, ...); the reason says why. */
+  setup_possible?: boolean;
+  setup_blocked_reason?: string | null;
 }
 
 /** GET /api/setup and the `setup_changed` event. */

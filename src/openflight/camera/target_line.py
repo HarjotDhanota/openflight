@@ -61,6 +61,7 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 
 from openflight.camera import camera_roll, ground_patch
+from openflight.constants import DEFAULT_NET_RANGE_M
 
 SCHEMA = "openflight.tester_target_line.v1"
 SOURCE = "aim_point"
@@ -80,8 +81,6 @@ AIM_PIXEL_UNCERTAINTY_PX = 2.0
 TOUCH_UNCERTAINTY_SCREEN_PX = 12.5
 DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX = 30.0
 FLOOR_LINE_PIXEL_UNCERTAINTY_PX = 2.0
-# The net distance a setup falls back to when its floor line measures nothing.
-DEFAULT_NET_RANGE_M = 4.6
 # A re-confirmed aim point (or floor line end) that moved less than this has not moved.
 AIM_MOVE_TOLERANCE_PX = 4.0
 # The stock lens's barrel, as a one-term radial model at 1280 px wide (Outdoors-test-5,

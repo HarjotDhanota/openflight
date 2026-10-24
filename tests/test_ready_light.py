@@ -353,10 +353,8 @@ def test_ready_light_red_when_setup_incomplete():
 
     light = compute_state(_states(setup=setup, ball_look=_look("in_box")), NOW)
 
-    assert (light["state"], light["cause"]) == (
-        "red",
-        "setup incomplete: aim not set, net range stale",
-    )
+    # the net is set with the aim: an unset aim says it once
+    assert (light["state"], light["cause"]) == ("red", "setup incomplete: aim not set")
 
 
 def test_setup_incomplete_ignores_the_lens_height():
@@ -400,6 +398,27 @@ def test_a_unit_without_a_camera_has_no_setup_causes():
     assert light["state"] == "green"
 
 
+def test_a_unit_that_cannot_set_up_has_no_setup_causes():
+    setup = _setup(box={"state": "not_set"})
+    setup["live"] = {
+        "camera_available": True,
+        "setup_possible": False,
+        "setup_blocked_reason": "the setup needs the tilt sensor",
+    }
+
+    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
+
+    assert light["state"] == "green"
+
+
+def test_a_section_the_run_does_not_need_is_not_incomplete():
+    setup = _setup(ball_range={"state": "not_set", "reason": "not set"})
+
+    assert compute_state(_states(setup=setup), NOW)["state"] == "red"
+    light = compute_state(_states(setup=setup, setup_optional=("ball_range",)), NOW)
+    assert light["state"] == "green"
+
+
 def test_sensor_faults_come_before_setup_incomplete():
     setup = _setup(box={"state": "not_set"})
 
@@ -431,7 +450,7 @@ def test_setup_incomplete_agrees_with_the_setup_screens_needs_setup(case):
     setup = {
         **NEEDS["base"],
         **case["sections"],
-        "live": {"camera_available": case["camera"]},
+        "live": {"camera_available": case["camera"], "setup_possible": case.get("possible", True)},
         "unapplied": case["unapplied"],
     }
 

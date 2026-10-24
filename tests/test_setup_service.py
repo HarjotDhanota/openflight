@@ -770,3 +770,117 @@ def test_an_older_box_without_an_outline_is_a_new_box_when_reconfirmed(make, sce
 
     assert result["setup"]["box"]["id"] != first
     assert result["setup"]["box"]["outline_px"]
+
+
+def _binned(width, height) -> BallPlaneCamera:
+    """CAMERA's field of view at another capture size (binned when the aspect matches)."""
+    return BallPlaneCamera.nominal(
+        focal_px=933.3334 * width / 1280,
+        image_width_px=width,
+        image_height_px=height,
+        pitch_deg=0.0,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.6),
+        radar_origin_lfu=(0.0, -0.0014, 0.55),
+        angular_uncertainty_deg=3.0,
+        focal_relative_uncertainty=0.08,
+    )
+
+
+def test_a_box_confirmed_at_1280_measures_the_same_aim_and_range_at_640(make, scene):
+    mode = [CAMERA]
+    service, _recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
+    _confirm_box(service, scene)
+    in_mode = service.aim("confirm", aim_px=AIM_PX)["setup"]["aim"]
+    assert in_mode["image_size_px"] == [1280, 800]
+    assert service.range("measure")["ok"]
+    anchor_in_mode = scene.calls[-1]["confirm_anchor"]
+
+    mode[0] = _binned(640, 400)
+    result = service.aim("confirm", aim_px=[AIM_PX[0] / 2, AIM_PX[1] / 2])
+
+    assert result["ok"], result["reason"]
+    aim = result["setup"]["aim"]
+    assert aim["yaw_deg"] == pytest.approx(in_mode["yaw_deg"], abs=1e-3)
+    assert aim["ball_lfu_m"] == pytest.approx(in_mode["ball_lfu_m"], abs=1e-4)
+    assert aim["image_size_px"] == [640, 400]
+    assert service.range("measure")["ok"]
+    anchor = scene.calls[-1]["confirm_anchor"]
+    assert anchor["x_px"] == pytest.approx(anchor_in_mode["x_px"] / 2)
+    assert anchor["y_px"] == pytest.approx(anchor_in_mode["y_px"] / 2)
+    assert anchor["diameter_px"] == pytest.approx(anchor_in_mode["diameter_px"] / 2)
+
+
+def test_a_box_from_a_picture_of_another_shape_refuses_aim_and_range(make, scene):
+    mode = [CAMERA]
+    service, recorder = make(camera_provider=lambda: CameraView(mode[0], 0.0))
+    _confirm_box(service, scene)
+    mode[0] = _binned(1280, 720)
+
+    aim = service.aim("confirm", aim_px=AIM_PX)
+    rng = service.range("measure")
+
+    for result in (aim, rng):
+        assert result["ok"] is False
+        assert "1280x800" in result["reason"] and "1280x720" in result["reason"]
+    assert recorder.calls["aim"] == [] and recorder.calls["ball_range"] == []
+
+
+def test_a_second_writer_does_not_overwrite_the_first(make, scene, tmp_path):
+    first, _recorder = make()
+    second, _recorder = make()
+    _confirm_box(first, scene)
+    saved = load(tmp_path / "setup.json")
+
+    result = second.box("confirm")
+
+    assert result["ok"] is False and "changed" in result["reason"]
+    assert load(tmp_path / "setup.json") == saved
+    # the second writer now holds the first's record, and its next action builds on it
+    assert second.revision == saved["revision"]
+    assert result["setup"]["box"]["id"] == saved["box"]["id"]
+    assert second.aim("skip")["ok"] and load(tmp_path / "setup.json")["revision"] == 2
+
+
+def test_a_file_of_a_newer_schema_is_not_overwritten(make, scene, tmp_path):
+    path = tmp_path / "setup.json"
+    path.write_text('{"schema": "openflight.setup.v9", "revision": 4}', encoding="utf-8")
+    service, recorder = make()
+    scene.in_box = BALL_PX
+
+    result = service.box("confirm")
+
+    assert result["ok"] is False and "schema" in result["reason"]
+    assert path.read_text(encoding="utf-8") == '{"schema": "openflight.setup.v9", "revision": 4}'
+    assert recorder.calls["box"] == []
+
+
+def test_a_failed_applier_does_not_advance_the_applied_revision(make, scene):
+    service, _recorder = make()
+    assert service.apply_saved() == [] and service.applied_revision == 0
+    broken = [True]
+
+    def box(_section):
+        if broken:
+            raise RuntimeError("camera busy")
+
+    service._appliers.box = box  # noqa: SLF001
+    scene.in_box = BALL_PX
+
+    assert service.box("confirm")["ok"] is False
+    assert service.revision == 1 and service.applied_revision == 0
+    broken.clear()
+    assert service.apply_all() == [] and service.applied_revision == 1
+
+
+def test_the_snapshot_says_whether_setup_is_possible_and_why_not(make):
+    able, _recorder = make()
+    no_tilt, _recorder = make(setup_blocked=lambda: "the setup needs the tilt sensor")
+    no_camera, _recorder = make(camera_available=lambda: False)
+
+    assert able.snapshot()["live"]["setup_possible"] is True
+    assert able.snapshot()["live"]["setup_blocked_reason"] is None
+    assert no_tilt.snapshot()["live"]["setup_possible"] is False
+    assert no_tilt.snapshot()["live"]["setup_blocked_reason"] == "the setup needs the tilt sensor"
+    assert no_camera.snapshot()["live"]["setup_possible"] is False

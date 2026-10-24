@@ -2,7 +2,8 @@
 
 Each section stores the inputs it was confirmed against; evaluate() marks it stale
 when they differ from the start context or a section it builds on is stale. A
-missing, corrupt or future-schema file reads as all not_set. Roll is never an input.
+missing, corrupt or future-schema file reads as all not_set; a save never replaces a
+future-schema file, nor one another writer saved since it was loaded. Roll is never an input.
 """
 
 from __future__ import annotations
@@ -44,6 +45,14 @@ def section_inputs(name: str, **values) -> dict:
     return dict(values)
 
 
+class SaveRefused(Exception):
+    """The file on disk must not be replaced; the message says why."""
+
+
+class SetupFileChanged(SaveRefused):
+    """Another writer saved the file since this record was loaded."""
+
+
 def _not_set(reason: str) -> dict:
     record = {"schema": SCHEMA, "revision": 0}
     for name in SECTIONS:
@@ -51,29 +60,50 @@ def _not_set(reason: str) -> dict:
     return record
 
 
-def load(path: Path) -> dict:
-    path = Path(path)
+def _read(path: Path) -> tuple[dict | None, str | None]:
+    """The file's record, or None and why it cannot be read."""
     if not path.is_file():
-        return _not_set("no setup file")
+        return None, "no setup file"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return _not_set("unreadable")
+        return None, "unreadable"
     if not isinstance(data, dict) or data.get("schema") != SCHEMA:
-        return _not_set("unknown schema")
+        return None, "unknown schema"
     if any(name in data and not isinstance(data[name], dict) for name in SECTIONS):
-        return _not_set("unreadable")
+        return None, "unreadable"
     revision = data.get("revision")
     data["revision"] = revision if isinstance(revision, int) else 0
+    return data, None
+
+
+def load(path: Path) -> dict:
+    data, reason = _read(Path(path))
+    if data is None:
+        return _not_set(reason)
     for name in SECTIONS:
         data.setdefault(name, {"state": "not_set", "reason": "not set"})
     return data
 
 
 def save(path: Path, record: dict) -> None:
+    """Replace the file with ``record`` at the next revision. Refused (``SaveRefused``) over a
+    file of a schema this code does not read, or one saved since ``record`` was loaded."""
     path = Path(path)
+    base = int(record.get("revision", 0))
+    on_disk, reason = _read(path)
+    if reason == "unknown schema":
+        raise SaveRefused(
+            f"the setup file's schema is not {SCHEMA} (a newer kiosk's?): it is left as it is; "
+            "move it aside to set up here"
+        )
+    if on_disk is not None and on_disk["revision"] != base:
+        raise SetupFileChanged(
+            f"the setup file changed underneath (revision {on_disk['revision']} on disk, "
+            f"{base} here)"
+        )
     record["schema"] = SCHEMA
-    record["revision"] = int(record.get("revision", 0)) + 1
+    record["revision"] = base + 1
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     try:

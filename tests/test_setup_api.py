@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
@@ -240,6 +241,39 @@ def test_the_view_is_the_latest_camera_frame(kiosk, monkeypatch):
     assert shown.data[:2] == b"\xff\xd8"
     assert waiting.status_code == 503
     assert absent.status_code == 404
+
+
+def test_the_view_takes_a_width_up_to_1280(kiosk):
+    class Frame:
+        image = np.full((800, 1280), 40, dtype=np.uint8)
+
+    kiosk.camera.recent_frames = lambda count, timeout_s=2.0: [Frame()]
+
+    small = kiosk.client.get("/api/setup/view.jpg?width=640")
+
+    assert small.status_code == 200
+    decoded = cv2.imdecode(np.frombuffer(small.data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert decoded.shape == (400, 640)
+    for bad in ("1281", "100", "wide"):
+        assert kiosk.client.get(f"/api/setup/view.jpg?width={bad}").status_code == 400, bad
+
+
+def test_a_kiosk_without_the_tilt_sensor_says_setup_cannot_run(kiosk, monkeypatch):
+    for name in ("rig_geometry", "rig_geometry_config"):
+        monkeypatch.setattr(server, name, getattr(server, name))
+    server.init_rig_geometry(RIG)
+    monkeypatch.setattr(server, "camera_optical_calibration", None)
+    monkeypatch.setattr(server, "camera_placement", None)
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    _start(kiosk)
+
+    live = kiosk.client.get("/api/setup").get_json()["live"]
+
+    assert live["setup_possible"] is False
+    assert "tilt sensor" in live["setup_blocked_reason"]
+    monkeypatch.setattr(server, "inclinometer_service", SimpleNamespace())
+    live = kiosk.client.get("/api/setup").get_json()["live"]
+    assert live["setup_possible"] is True and live["setup_blocked_reason"] is None
 
 
 def test_session_start_and_shot_carry_setup(kiosk, scene):
@@ -529,9 +563,17 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     assert typed.camera.vertical_offset["status"] == "uncalibrated"
     assert typed.camera.vertical_offset["pitch_deg"] == pytest.approx(camera_pitch)
     assert typed.camera.angular_uncertainty_deg == camera_tilt.UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG
-    monkeypatch.setattr(server, "inclinometer_service", None)
-    with pytest.raises(ValueError, match="LIS3DH"):
+    no_reading = SimpleNamespace(
+        snapshot_for_impact=lambda _t: SnapshotSelection(None, "no_stable_preimpact_reading")
+    )
+    monkeypatch.setattr(server, "inclinometer_service", no_reading)
+    with pytest.raises(ValueError, match="wait for a stable reading"):
         server.setup_camera_view()
+    # without the sensor there is nothing to wait for
+    monkeypatch.setattr(server, "inclinometer_service", None)
+    with pytest.raises(ValueError, match=r"needs the tilt sensor \(LIS3DH, --inclinometer\)"):
+        server.setup_camera_view()
+    assert "tilt sensor" in server.setup_blocked_reason()
     monkeypatch.setattr(server, "camera_capture_runtime", None)
     assert server.setup_camera_view() is None
 
