@@ -7880,8 +7880,21 @@ def create_app(
             enclosure.set_mount(mount)
 
     mount_store = orientation_check.MountStore(lis3dh_mount_path, rig_yaw_deg=rig_lis3dh_yaw())
+
+    def rig_lis3dh_roll() -> float:
+        from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+        try:
+            rig = RigGeometry.from_json(rig_geometry)
+        except (OSError, TypeError, ValueError, KeyError):
+            return 0.0
+        return float(rig.expected_inclinometer_orientation().roll_deg or 0.0)
+
     orientation = guided_check.GuidedCheck(
-        mount_store, lambda: enclosure.reading(), on_mount_change=apply_mount
+        mount_store,
+        lambda: enclosure.reading(),
+        on_mount_change=apply_mount,
+        expected_roll_deg=rig_lis3dh_roll(),
     )
 
     def hardware_rows(tester_id: str) -> list[dict]:
@@ -8345,7 +8358,8 @@ def create_app(
         """Step 2's tilt sensor check: gravity, lift the front and hold, correct by tap.
 
         GET advances the check from the current reading; POST ``start``,
-        ``cancel``, or ``correct`` with one of ``orientation_check.CORRECTIONS``.
+        ``cancel``, ``correct`` with one of ``orientation_check.CORRECTIONS``, or
+        ``turned`` once the unit is turned round (then back) for the roll's zero.
         The corrected mount is saved for this unit and read by the tester at once.
         """
         if request.method == "GET":
@@ -8365,7 +8379,9 @@ def create_app(
                 return jsonify(orientation.cancel())
             if action == "correct":
                 return jsonify(orientation.correct(str(payload.get("correction", ""))))
-            raise ValueError("action must be start, cancel or correct")
+            if action == "turned":
+                return jsonify(orientation.turned())
+            raise ValueError("action must be start, cancel, correct or turned")
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 

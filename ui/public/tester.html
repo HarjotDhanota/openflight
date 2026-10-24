@@ -1718,6 +1718,7 @@
             </p>
             <div class="steps">
               <button type="button" class="primary" id="lis3dh-start">Start the tilt check</button>
+              <button type="button" class="primary" id="lis3dh-turned" hidden>Done: it is turned</button>
             </div>
             <div class="lis3dh-fixes" id="lis3dh-fixes" hidden>
               <p class="guide" id="lis3dh-fix-prompt">Tap how the sensor is fitted (the marked one is what it read):</p>
@@ -2580,7 +2581,8 @@
 
       // B (19 Oct): which way round the LIS3DH is fitted. Gravity says upside down or not;
       // lifting the FRONT says which way it faces. A wrong reading offers the fix by tap.
-      // Then lifting the LEFT side verifies the roll, which is applied only once verified.
+      // Then lifting the LEFT side verifies the roll, and turning the unit round and back
+      // zeroes it; the roll is applied only after both.
       let lis3dhState = null;
       let lis3dhAvailable = true;
       let lis3dhPending = false;
@@ -2598,11 +2600,31 @@
           'waiting',
           'Put the front back down, then lift the left side (your left, standing behind the unit), in the middle, about two fingers high. Hold it until this changes.',
         ],
-        passed: ['Tilt sensor checked: the front and the left read up', 'found', 'Put the unit back down on its feet.'],
+        turn_round: [
+          'Left checked. Now turn the unit round (180°) on the same spot',
+          'waiting',
+          'Put the left side down, turn the unit to face the other way without sliding it off its spot, then tap <b>Done: it is turned</b>.',
+        ],
+        turn_back: [
+          'Now turn it back to face the target, on the same spot',
+          'waiting',
+          'Turn the unit back the way it was, then tap <b>Done: it is turned</b>.',
+        ],
+        reading_turned: ['Reading the tilt sensor…', 'waiting', 'Keep the unit still on its feet.'],
+        zero_unrepeatable: [
+          'The unit did not sit the same way twice',
+          'problem',
+          'Set it down on the same spot each time, flat on its feet, and try again.',
+        ],
+        passed: [
+          'Tilt sensor checked: the front, the left and the zero',
+          'found',
+          'The unit is ready. Leave it standing where it is.',
+        ],
         passed_roll_unverified: [
           'Tilt sensor checked: the front reads up; the roll is not checked yet',
           'found',
-          'Tap <b>Check it again</b> to check the roll too: the front, then the left side.',
+          'Tap <b>Check it again</b> to check the roll too: the front, the left side, then turning it round.',
         ],
         roll_reversed: [
           'The left side read the wrong way: the roll is not verified on this unit',
@@ -2638,7 +2660,7 @@
         const box = el('lis3dh-check');
         box.hidden = !lis3dhAvailable || !currentTester();
         const state = lis3dhState?.state || 'not_run';
-        const text = state === 'passed' && lis3dhState?.roll_verified === false ? 'passed_roll_unverified' : state;
+        const text = state === 'passed' && lis3dhState?.roll_applied === false ? 'passed_roll_unverified' : state;
         const [status, tone, prompt] = LIS3DH_TEXT[text] || [state, 'waiting', ''];
         box.dataset.state = state;
         el('lis3dh-status').textContent = status;
@@ -2653,7 +2675,11 @@
           button.disabled = lis3dhPending;
         }
         const start = el('lis3dh-start');
-        start.hidden = ['level', 'lift', 'lift_left'].includes(state) || fixing;
+        const turning = ['turn_round', 'turn_back'].includes(state);
+        const turned = el('lis3dh-turned');
+        turned.hidden = !turning;
+        turned.disabled = lis3dhPending;
+        start.hidden = ['level', 'lift', 'lift_left', 'reading_turned'].includes(state) || fixing || turning;
         start.textContent = state === 'not_run' ? 'Start the tilt check' : state === 'passed' ? 'Check it again' : 'Try again';
         start.classList.toggle('primary', state !== 'passed');
         start.disabled = lis3dhPending || !currentTester();
@@ -2700,6 +2726,7 @@
         refreshSetupEligibility();
       }
       el('lis3dh-start').addEventListener('click', () => submitLis3dhCheck({ action: 'start' }));
+      el('lis3dh-turned').addEventListener('click', () => submitLis3dhCheck({ action: 'turned' }));
       el('lis3dh-fixes').addEventListener('click', (event) => {
         const button = event.target.closest('button[data-correction]');
         if (button && !button.disabled) submitLis3dhCheck({ action: 'correct', correction: button.dataset.correction });

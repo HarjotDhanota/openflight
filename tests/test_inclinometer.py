@@ -386,3 +386,16 @@ def test_a_unit_rocking_side_to_side_gives_no_stable_reading():
     for index in range(12):
         service.add_sample(_tilted(1.0 + 0.1 * index, roll_deg=1.0 if index % 2 else -1.0))
     assert service.snapshot_for_impact(2.2).status == "no_stable_preimpact_reading"
+
+
+def test_a_board_turned_round_reads_the_target_right_side_up_as_a_positive_roll():
+    """From the board's own axes, through the v3 mount (yaw 180), to the shot's roll."""
+    roll = math.radians(3.0)
+    enclosure = (math.sin(roll), 0.0, math.cos(roll))  # target-right side up
+    raw = (-enclosure[0], -enclosure[1], enclosure[2])  # the board points the other way
+    service = InclinometerService(MountedAccelerometer(_Board(None), 180.0), window_samples=3)
+    for timestamp in (1.0, 1.1, 1.2):
+        service.sensor.sensor.sample = AccelerationSample(timestamp, *raw)
+        service.add_sample(service.sensor.read())
+
+    assert service.snapshot_for_impact(1.3).snapshot.roll_deg == pytest.approx(3.0)

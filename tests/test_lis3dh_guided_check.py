@@ -122,6 +122,10 @@ class TestLeftLiftVerdict:
         assert gc.left_lift_verdict(self.LEVEL, {"status": "moving"})["state"] == "waiting"
 
 
+SURFACE_ROLL_DEG = 1.5
+SEAT_ROLL_DEG = 0.8
+
+
 class FakeClock:
     def __init__(self):
         self.now = 1000.0
@@ -134,16 +138,20 @@ class TestGuidedCheck:
     """The tester page's check: start, lift, correct, again, pass."""
 
     def make(self, tmp_path, true_mount, rig_yaw=180.0, mirrored_x=False):
-        state = {"front_up": 0.0, "left_up": 0.0, "status": "stable"}
+        # on a floor rolled 1.5 deg (target-right up), the board seated 0.8 deg rolled
+        state = {"front_up": 0.0, "left_up": 0.0, "turned": False, "status": "stable"}
         store = oc.MountStore(tmp_path / "lis3dh-mount.json", rig_yaw_deg=rig_yaw)
 
         def read():
             if state["status"] != "stable":
                 return {"status": state["status"]}
+            floor = math.radians(SURFACE_ROLL_DEG) * (-1.0 if state["turned"] else 1.0)
+            roll = floor + math.radians(SEAT_ROLL_DEG) - math.radians(state["left_up"])
+            front = math.radians(state["front_up"])
             gravity = (
-                enclosure_gravity_left_up(state["left_up"])
-                if state["left_up"]
-                else enclosure_gravity(state["front_up"])
+                math.sin(roll) * math.cos(front),
+                math.sin(front),
+                math.cos(roll) * math.cos(front),
             )
             x, y, z = store.mount().apply(*board_reads(true_mount, gravity))
             return reading(-x if mirrored_x else x, y, z)
@@ -160,26 +168,64 @@ class TestGuidedCheck:
         state["left_up"] = LIFT_DEG
         return after_front, down, check.status()
 
-    def test_a_board_that_matches_passes_after_the_front_and_the_left(self, tmp_path):
+    def reverse(self, check, state):
+        """Put the left side down, turn the unit round and back, tapping after each."""
+        state["left_up"] = 0.0
+        assert check.status()["state"] == "turn_round"
+        state["turned"] = True
+        assert check.turned()["state"] == "turn_back"
+        state["turned"] = False
+        return check.turned()
+
+    def test_a_board_that_matches_passes_the_front_the_left_and_the_zero(self, tmp_path):
         check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0))
         assert check.status()["state"] == "not_run"
         assert check.start()["state"] == "lift"
         assert check.status()["state"] == "lift"
         after_front, down, status = self.lift_front_then_left(check, state)
         assert after_front["state"] == "lift_left"
-        assert after_front["front_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
+        assert after_front["front_up_deg"] == pytest.approx(LIFT_DEG, abs=0.1)
         assert after_front["passed"] is True and after_front["roll_verified"] is False
         assert down["state"] == "lift_left"
+        # the direction is verified; the roll waits for its zero
+        assert status["state"] == "turn_round"
+        assert status["roll_verified"] is True and status["roll_applied"] is False
+        assert status["left_up_deg"] == pytest.approx(LIFT_DEG, abs=0.1)
+
+        status = self.reverse(check, state)
+
         assert status["state"] == "passed"
-        assert status["roll_verified"] is True
-        assert status["left_up_deg"] == pytest.approx(LIFT_DEG, abs=0.05)
-        assert store.passed() is True and store.roll_verified() is True
+        assert status["roll_applied"] is True
+        # the floor's 1.5 deg cancels: the zero is the board's own 0.8 deg
+        assert status["roll_zero_deg"] == pytest.approx(SEAT_ROLL_DEG, abs=0.02)
+        assert store.roll_calibration()["applied"] is True
+
+    def test_a_reversal_that_did_not_sit_the_same_way_is_tried_again(self, tmp_path):
+        check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0))
+        check.start()
+        self.lift_front_then_left(check, state)
+        state["left_up"] = 0.0
+        check.status()
+        state["turned"] = True
+        check.turned()
+        state["left_up"] = 2.0  # turned back, but propped up on something
+        state["turned"] = False
+        status = check.turned()
+        assert status["state"] == "zero_unrepeatable"
+        assert store.roll_calibration()["applied"] is False
+        assert store.roll_verified() is True
+
+    def test_a_tap_outside_the_reversal_is_refused(self, tmp_path):
+        check, _state, _store, _clock = self.make(tmp_path, oc.Mount(180.0))
+        with pytest.raises(ValueError):
+            check.turned()
 
     def test_a_roll_that_reads_the_wrong_way_is_not_verified(self, tmp_path):
         check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0), mirrored_x=True)
         check.start()
         _front, _down, status = self.lift_front_then_left(check, state)
         assert status["state"] == "roll_reversed"
+        assert status["roll_applied"] is False
         assert status["roll_verified"] is False
         assert store.passed() is True and store.roll_verified() is False
 
@@ -196,12 +242,13 @@ class TestGuidedCheck:
         check, state, store, _clock = self.make(tmp_path, oc.Mount(180.0))
         check.start()
         self.lift_front_then_left(check, state)
-        assert store.roll_verified() is True
-        state["left_up"] = 0.0
+        self.reverse(check, state)
+        assert store.roll_calibration()["applied"] is True
         check.start()
         state["front_up"] = LIFT_DEG
         assert check.status()["state"] == "lift_left"
         assert store.roll_verified() is False
+        assert store.roll_calibration()["zero_deg"] is None
 
     def test_a_quarter_turned_board_is_named_then_passes(self, tmp_path):
         check, state, store, _clock = self.make(tmp_path, oc.Mount(90.0))

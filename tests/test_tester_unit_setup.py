@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
 from openflight import unit_check
 from openflight.camera import tester_server as ts
 from openflight.inclinometer import MountedAccelerometer, orientation_check as oc
@@ -259,10 +261,18 @@ class TestOrientationCheck:
         assert eligibility(client)["eligible"] is True
         tilt.left_up_deg = 6.0
         status = client.get("/api/tester/lis3dh-check").get_json()
+        assert status["state"] == "turn_round"
+        assert status["roll_verified"] is True and status["roll_applied"] is False
+        # turned round and back by tap: the zero, and only then the roll applies
+        tilt.left_up_deg = 0.0
+        assert self.post(client, action="turned")["state"] == "turn_back"
+        status = self.post(client, action="turned")
         assert status["state"] == "passed"
-        assert status["roll_verified"] is True
+        assert status["roll_applied"] is True
         saved = json.loads((tmp_path / "config" / oc.FILE_NAME).read_text(encoding="utf-8"))
         assert saved["roll_verified"] is True
+        assert saved["roll_zero_deg"] == pytest.approx(0.0, abs=1e-6)
+        assert tilt.reading()["roll_deg"] == 0.0
 
     def test_a_turned_board_is_corrected_by_tap_and_saved_for_the_unit(self, tmp_path):
         tilt = SimTilt(oc.Mount(90.0))

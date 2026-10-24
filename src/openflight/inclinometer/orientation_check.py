@@ -5,7 +5,9 @@ about the board's Y (X and Z reversed), ``R`` turns counter-clockwise seen from 
 Corrections apply after the current mount; upside down also mirrors the yaw.
 
 ``roll_verified`` is true once the check's roll step (the unit's left side lifted, the
-roll read moving down) passed under the current mount; only then is the roll applied.
+roll read moving down) passed under the current mount. ``roll_zero_deg`` is the board's
+own roll beyond the rig's expected mount roll, found by reversal: the unit read, turned
+180 deg on the same spot, and turned back. The roll is applied only with both.
 """
 
 from __future__ import annotations
@@ -23,6 +25,37 @@ FILE_NAME = "lis3dh-mount.json"
 
 
 CORRECTIONS = ("turned_around", "quarter_left", "quarter_right", "upside_down")
+
+# The reversal's two readings in the same facing must agree this well, or the unit did
+# not sit the same way twice (or was propped up) and the zero is not taken.
+ROLL_ZERO_MAX_REPEATABILITY_DEG = 1.0
+# The smallest residual the applied roll keeps: a still window's own scatter.
+ROLL_ZERO_MIN_RESIDUAL_DEG = 0.1
+
+
+def reversal_roll_zero(
+    first_deg: float, turned_deg: float, back_deg: float, *, expected_roll_deg: float = 0.0
+) -> dict[str, Any]:
+    """The roll zero from a reversal: read, turned 180 deg on the same spot, turned back.
+
+    The surface's tilt changes sign with the turn and the board's own roll (its seat and
+    the sensor's zero-g offset) does not, so the mean of the two facings is the board's
+    roll on a level floor; ``roll_zero_deg`` is what it reads beyond the rig's expected
+    mount roll. ``repeatability_deg`` (the same facing, read twice) sizes the residual.
+    """
+    facing = 0.5 * (float(first_deg) + float(back_deg))
+    level = 0.5 * (facing + float(turned_deg))
+    repeatability = abs(float(back_deg) - float(first_deg))
+    return {
+        "roll_zero_deg": level - float(expected_roll_deg),
+        "level_roll_deg": level,
+        "expected_roll_deg": float(expected_roll_deg),
+        "surface_roll_deg": 0.5 * (facing - float(turned_deg)),
+        "repeatability_deg": repeatability,
+        "residual_deg": max(ROLL_ZERO_MIN_RESIDUAL_DEG, repeatability),
+        "readings_deg": [float(first_deg), float(turned_deg), float(back_deg)],
+        "repeatable": repeatability <= ROLL_ZERO_MAX_REPEATABILITY_DEG,
+    }
 
 
 def default_mount_path() -> Path:
@@ -170,13 +203,23 @@ class MountStore:
             and check.get("state") == "passed"
             and check.get("mount") == mount.as_dict()
         )
+        verified = passed and document.get("roll_verified") is True
+        zero = document.get("roll_zero") if verified else None
+        zero_deg = zero.get("roll_zero_deg") if isinstance(zero, Mapping) else None
+        residual = zero.get("residual_deg") if isinstance(zero, Mapping) else None
         return {
             "mount": mount.as_dict(),
             "source": "rig_file" if not document else "unit_file",
             "rig_mount": self.rig_mount.as_dict(),
             "check": check,
             "corrections": list(document.get("corrections") or []),
-            "roll_verified": passed and document.get("roll_verified") is True,
+            "roll_verified": verified,
+            "roll_calibration": {
+                "verified": verified,
+                "zero_deg": zero_deg,
+                "residual_deg": residual if zero_deg is not None else None,
+                "applied": verified and zero_deg is not None,
+            },
         }
 
     def passed(self) -> bool:
@@ -189,8 +232,12 @@ class MountStore:
         )
 
     def roll_verified(self) -> bool:
-        """Whether the roll step passed under this mount: the roll may be applied."""
+        """Whether the roll step passed under this mount (its direction)."""
         return bool(self.record()["roll_verified"])
+
+    def roll_calibration(self) -> dict[str, Any]:
+        """``verified``, ``zero_deg``, ``residual_deg`` and ``applied`` (both present)."""
+        return dict(self.record()["roll_calibration"])
 
     def _base(self) -> dict[str, Any]:
         document = dict(self._document or {})
@@ -208,6 +255,8 @@ class MountStore:
             document["mount"] = after.as_dict()
             document["check"] = None
             document["roll_verified"] = False
+            document.pop("roll_zero", None)
+            document.pop("roll_zero_deg", None)
             document["corrections"] = [
                 *document["corrections"],
                 {
@@ -231,8 +280,10 @@ class MountStore:
                 "mount": mount.as_dict(),
                 **dict(detail),
             }
-            # a new check: the roll step must pass again
+            # a new check: the roll step and its zero must pass again
             document["roll_verified"] = False
+            document.pop("roll_zero", None)
+            document.pop("roll_zero_deg", None)
             self._write(document)
 
     def record_roll(self, detail: Mapping[str, Any], *, verified: bool) -> None:
@@ -250,6 +301,23 @@ class MountStore:
                 },
             }
             document["roll_verified"] = bool(verified)
+            document.pop("roll_zero", None)
+            document.pop("roll_zero_deg", None)
+            self._write(document)
+
+    def record_roll_zero(self, zero: Mapping[str, Any]) -> None:
+        """A repeatable reversal's zero (``reversal_roll_zero``), after a verified roll."""
+        if not self.roll_verified():
+            raise ValueError("the roll zero follows a verified roll step")
+        if zero.get("repeatable") is not True:
+            raise ValueError("the reversal did not repeat: the zero is not taken")
+        with self._lock:
+            document = self._base()
+            document["roll_zero"] = {
+                **dict(zero),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            document["roll_zero_deg"] = float(zero["roll_zero_deg"])
             self._write(document)
 
 
