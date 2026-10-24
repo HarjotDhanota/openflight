@@ -82,6 +82,7 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         self._record = load(self._path)
         self._live: dict[str, Any] = {}
         self._unapplied: set[str] = set()
+        self._apply_errors: dict[str, str] = {}
         self.on_change: Callable[[dict], None] = lambda snapshot: None
 
     @property
@@ -94,8 +95,12 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         return evaluate(self._record, self._ctx, tilt_margin_deg=margin)
 
     def snapshot(self) -> dict:
-        """The record as it stands against the start context, plus the last live look."""
-        return {**self._evaluated(), "live": copy.deepcopy(self._live)}
+        """The record against the start context, the last live look, and why any is not in effect."""
+        return {
+            **self._evaluated(),
+            "live": copy.deepcopy(self._live),
+            "unapplied": dict(self._apply_errors),
+        }
 
     def apply_all(self) -> list[str]:
         """Put every section into effect, as at kiosk start; the sections that failed."""
@@ -176,9 +181,11 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("[SETUP] applying %s failed", name, exc_info=True)
                 self._unapplied.add(name)
+                self._apply_errors[name] = str(exc)
                 failed.append(f"could not apply {name}: {exc}")
             else:
                 self._unapplied.discard(name)
+                self._apply_errors.pop(name, None)
         return failed
 
     def _cleared(self, *names: str) -> dict:
@@ -284,6 +291,8 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
                 "box_px": list(projection.box_px),
                 "ball_px": centre,
                 "diameter_px": float(ball["diameter_px"]),
+                # the pixel space of box_px, ball_px and diameter_px: a capture mode, not an input
+                "image_size_px": list(projection.image_size_px),
                 "source": placement_box.SOURCE,
                 "uncertainty": {
                     "tilt_pad_deg": projection.tilt_pad_deg,

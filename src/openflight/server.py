@@ -1588,19 +1588,52 @@ def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> N
 
 
 def apply_setup_box(box: dict | None) -> None:
-    """Put the setup's box into effect: the resting-ball monitor, the capture's zone and ball."""
+    """Put the setup's box into effect: the resting-ball monitor, the capture's zone and ball.
+
+    A box from a picture of another shape, or outside this one, is cleared and the reason
+    raised, so the setup shows it as needing confirming again.
+    """
     if box is None:
-        zone = setup_ball = None
-    else:
-        zone = tuple(int(round(float(value))) for value in box["box_px"])
-        if len(zone) != 4 or not (0 <= zone[0] < zone[2] and 0 <= zone[1] < zone[3]):
-            raise ValueError(f"the box must be x0,y0,x1,y1 inside the picture, not {zone}")
-        setup_ball = {
-            "x": float(box["ball_px"][0]),
-            "y": float(box["ball_px"][1]),
-            "diameter_px": float(box["diameter_px"]),
-        }
+        _when_idle(lambda: _set_box(None, None))
+        return
+    try:
+        zone, setup_ball = _box_in_this_picture(box)
+    except (KeyError, TypeError, ValueError):
+        _when_idle(lambda: _set_box(None, None))
+        raise
     _when_idle(lambda: _set_box(zone, setup_ball))
+
+
+def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict]:
+    """The box and its ball in the running capture's pixels: 1280x800 and 640x400 are
+    one field of view, binned, so a box moves between them by scaling."""
+    size = box.get("image_size_px")
+    if not size or len(size) != 2:
+        raise ValueError("the box has no picture size: confirm the box again")
+    confirmed_w, confirmed_h = int(size[0]), int(size[1])
+    if confirmed_w <= 0 or confirmed_h <= 0:
+        raise ValueError(f"the box's picture size {size} is not a picture: confirm the box again")
+    settings = getattr(camera_capture_runtime, "settings", None)
+    width, height = (
+        (int(settings.width), int(settings.height))
+        if settings is not None
+        else (confirmed_w, confirmed_h)
+    )
+    if confirmed_w * height != confirmed_h * width:
+        raise ValueError(
+            f"the box was confirmed on a {confirmed_w}x{confirmed_h} picture and the camera "
+            f"runs at {width}x{height}: confirm the box again"
+        )
+    scale = width / confirmed_w
+    zone = tuple(int(round(float(value) * scale)) for value in box["box_px"])
+    if len(zone) != 4 or not (0 <= zone[0] < zone[2] <= width and 0 <= zone[1] < zone[3] <= height):
+        raise ValueError(f"the box {zone} is outside the {width}x{height} picture")
+    setup_ball = {
+        "x": float(box["ball_px"][0]) * scale,
+        "y": float(box["ball_px"][1]) * scale,
+        "diameter_px": float(box["diameter_px"]) * scale,
+    }
+    return zone, setup_ball
 
 
 def _set_box(zone, setup_ball) -> None:

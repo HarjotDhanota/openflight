@@ -167,6 +167,7 @@ def test_confirm_box_saves_and_applies(make, scene, tmp_path):
     assert box["state"] == "confirmed"
     assert box["id"] and box["box_px"]
     assert box["ball_px"] == pytest.approx(BALL_PX) and box["diameter_px"] == 24.0
+    assert box["image_size_px"] == [1280, 800]
     assert box["source"] == placement_box.SOURCE and box["uncertainty"]["tilt_pad_deg"] > 0
     assert box["inputs"] == section_inputs(
         "box", lens_id="stock-2.8", rig_sha256="rig-a", tilt_deg=2.0
@@ -465,6 +466,26 @@ def test_an_applier_that_fails_is_reported_and_the_record_is_kept(make, scene, t
 
     assert result["ok"] is False and "camera busy" in result["reason"]
     assert load(tmp_path / "setup.json")["box"]["state"] == "confirmed"
+
+
+def test_a_box_the_kiosk_cannot_use_shows_why_until_it_applies(make, scene):
+    service, _recorder = make()
+    refusal = ["the box was confirmed on a 1280x720 picture"]
+
+    def applier(_section):
+        if refusal:
+            raise ValueError(refusal[0])
+
+    service._appliers.box = applier
+    scene.in_box = BALL_PX
+    service.box("confirm")
+
+    failed = service.apply_all()
+
+    assert failed == ["could not apply box: the box was confirmed on a 1280x720 picture"]
+    assert service.snapshot()["unapplied"] == {"box": refusal[0]}
+    refusal.clear()
+    assert service.apply_all() == [] and service.snapshot()["unapplied"] == {}
 
 
 def test_a_failed_apply_is_retried_by_the_same_action_and_by_apply_all(make, scene):

@@ -19,6 +19,7 @@ BOX = {
     "box_px": [480.0, 380.0, 800.0, 520.0],
     "ball_px": [640.0, 450.0],
     "diameter_px": 20.0,
+    "image_size_px": [1280, 800],
     "source": "placement_box",
     "uncertainty": {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0},
 }
@@ -43,7 +44,7 @@ def _kiosk(monkeypatch):
     calibration = Calibration.identity()
     calibration.meta["radar_height_m"] = 0.051
     iwr = IWR6843Runtime(capture_monitor=None, calibration=calibration, net_range_m=4.6)
-    camera = SimpleNamespace(settings=CameraCaptureSettings())
+    camera = SimpleNamespace(settings=CameraCaptureSettings(width=1280, height=800))
     monkeypatch.setattr(server, "iwr6843_runtime", iwr)
     monkeypatch.setattr(server, "iwr6843_runtime_config", {"enabled": True})
     monkeypatch.setattr(server, "camera_capture_runtime", camera)
@@ -124,6 +125,45 @@ def test_clearing_box_stops_ball_at_address(kiosk):
     assert kiosk.camera.settings.hitting_zone is None
     assert server.camera_capture_config["setup_ball"] is None
     assert server.camera_capture_config["hitting_zone"] is None
+
+
+def test_a_box_confirmed_at_1280x800_is_halved_at_640x400(kiosk):
+    kiosk.camera.settings = CameraCaptureSettings(width=640, height=400)
+
+    server.apply_setup_box(BOX)
+
+    assert server.camera_ball_box_px == (240, 190, 400, 260)
+    assert kiosk.camera.settings.hitting_zone == (240, 190, 400, 260)
+    assert kiosk.camera.settings.setup_ball == {"x": 320.0, "y": 225.0, "diameter_px": 10.0}
+    assert server.ball_at_address_monitor.box == (240, 190, 400, 260)
+
+
+@pytest.mark.parametrize(
+    "size, reason",
+    [([1280, 720], "1280x720"), (None, "no picture size")],
+)
+def test_a_box_from_another_picture_shape_is_cleared_with_a_reason(kiosk, size, reason):
+    server.apply_setup_box(BOX)
+    stale = {key: value for key, value in BOX.items() if key != "image_size_px"}
+    if size is not None:
+        stale["image_size_px"] = size
+
+    with pytest.raises(ValueError, match=reason):
+        server.apply_setup_box(stale)
+
+    assert server.camera_ball_box_px is None
+    assert server.ball_at_address_monitor is None
+    assert kiosk.camera.settings.hitting_zone is None
+
+
+def test_a_box_outside_the_picture_is_refused(kiosk):
+    server.apply_setup_box(BOX)
+
+    with pytest.raises(ValueError, match="outside the 1280x800 picture"):
+        server.apply_setup_box({**BOX, "box_px": [480, 380, 1300, 520]})
+
+    assert server.camera_ball_box_px is None
+    assert server.ball_at_address_monitor is None
 
 
 def test_a_box_without_a_camera_starts_no_monitor(kiosk, monkeypatch):
