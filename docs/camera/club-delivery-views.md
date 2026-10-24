@@ -73,8 +73,9 @@ hand metadata therefore follow the current kiosk setting.
 Blade address silhouettes project the existing fair face contour by
 `(x, y) -> (y sin(static loft), x)` about its centre. The metal shell adds the
 2.4 mm edge band and a topline that recedes by its thickness times cosine of loft;
-the heel neck is drawn separately from the planar blade. The address surface is
-smooth metal with a light topline/edge band; no face grooves are drawn there.
+the heel neck is drawn separately from the planar blade. At the owner's request,
+the address surface retains the face's projected grooves, clipped to the blade,
+over metal shading with a light topline/edge band.
 This replaces the first
 round's rectangular blade outlines without changing face-on geometry or wood
 head shapes. Short visible shaft sections and a viewport fitted to the rotated

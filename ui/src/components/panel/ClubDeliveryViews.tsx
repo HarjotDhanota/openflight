@@ -242,6 +242,25 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           ) : (
             <path className="club-projection__face-edge" d={paths.sideFace} />
           )}
+          {top && !p.depth ? (
+            <g clipPath={`url(#${id}face-clip)`}>
+              {FACE_SHAPES[category].grooves.map((groove) => {
+                const x = groove.y * Math.sin((p.loft * Math.PI) / 180);
+                return (
+                  <line
+                    key={groove.y}
+                    x1={x}
+                    x2={x}
+                    y1={groove.from}
+                    y2={groove.to}
+                    stroke="var(--face-art-groove)"
+                    strokeOpacity=".65"
+                    strokeWidth={0.6 * Math.sin((p.loft * Math.PI) / 180)}
+                  />
+                );
+              })}
+            </g>
+          ) : null}
         </g>
         <circle className="club-projection__ball" cx={ballX} cy={ballY} r="21.335" fill={`url(#${id}ball)`} />
         {(
