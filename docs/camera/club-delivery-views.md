@@ -96,6 +96,14 @@ panels and clubs while preserving physical proportions. The owner retained
 this fitting on 24 October 2026. Browser tests recover ball diameter using the
 head's screen transform for both projections, all clubs/hands and both kiosk
 sizes, guarding against independent ball scaling or stretching.
+The ball finish takes its white urethane appearance and dimple density from
+the owner's [Pro V1 reference](https://www.titleist.com.sg/golf-balls/25-prov1).
+Its 194 visible dimple centres use an original spherical distribution, not the
+manufacturer's tetrahedral layout. Shallow shaded ellipses compress toward the
+silhouette; a broad highlight softens the cover. Dimple radii and shading are
+illustrative, not measured product geometry. All detail stays inside the
+42.67 mm outline, with screen-light direction preserved for both hands. No
+logos, alignment markings, image textures or filter effects are used.
 The side face normal and loft arrow
 share the same angle. Spin loft is the backend's 3D face-normal/path separation,
 not generally dynamic loft minus attack angle. Face-on still looks from the

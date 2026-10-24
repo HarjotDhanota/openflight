@@ -21,6 +21,25 @@ import './ClubDeliveryViews.css';
 const BALL_DIAMETER_MM = 42.67;
 const BALL_RADIUS_MM = BALL_DIAMETER_MM / 2;
 
+// Original spherical distribution at the reference ball's dimple density.
+const BALL_DIMPLES = Array.from({ length: 194 }, (_, i) => {
+  const z = (i + 0.5) / 194;
+  const angle = i * Math.PI * (3 - Math.sqrt(5));
+  const radius = 1.7 + (i % 3) * 0.1;
+  const ring = Math.sqrt((BALL_RADIUS_MM ** 2 - radius ** 2) * (1 - z ** 2));
+  const x = ring * Math.cos(angle),
+    y = ring * Math.sin(angle);
+  const rx = radius * z;
+  const dx = rx * Math.cos(angle),
+    dy = rx * Math.sin(angle);
+  const point = (a: number, b: number) => `${a.toFixed(3)} ${b.toFixed(3)}`;
+  const arc = `${point(rx, radius)} ${((angle * 180) / Math.PI).toFixed(3)} 0 1`;
+  return {
+    d: `M ${point(x - dx, y - dy)} A ${arc} ${point(x + dx, y + dy)} A ${arc} ${point(x - dx, y - dy)} Z`,
+    opacity: 0.55 + 0.45 * z,
+  };
+});
+
 export function DeliveryNumbers({ shot, view }: { shot: Shot; view: DeliveryView }) {
   const { t } = useI18n();
   return (
@@ -273,10 +292,25 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           />
         </mask>
         <radialGradient id={`${id}ball`} cx={left ? '30%' : '70%'} cy="25%" r="75%">
-          <stop offset="0" stopColor="#fff" />
-          <stop offset=".55" stopColor="#e5e9ec" />
-          <stop offset="1" stopColor="#87909b" />
+          <stop offset="0" stopColor="#fffffc" />
+          <stop offset=".35" stopColor="#f5f5f1" />
+          <stop offset=".7" stopColor="#d9dddc" />
+          <stop offset="1" stopColor="#99a2a7" />
         </radialGradient>
+        <linearGradient id={`${id}dimple`} x1={left ? '0%' : '100%'} y1="0%" x2={left ? '100%' : '0%'} y2="100%">
+          <stop offset="0" stopColor="#59636b" stopOpacity=".4" />
+          <stop offset=".45" stopColor="#7c878d" stopOpacity=".12" />
+          <stop offset=".65" stopColor="#fff" stopOpacity=".04" />
+          <stop offset="1" stopColor="#fff" stopOpacity=".7" />
+        </linearGradient>
+        <radialGradient id={`${id}ball-sheen`} cx={left ? '28%' : '72%'} cy="22%" r="60%">
+          <stop offset="0" stopColor="#fff" stopOpacity=".65" />
+          <stop offset=".5" stopColor="#fff" stopOpacity=".12" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </radialGradient>
+        <clipPath id={`${id}ball-clip`}>
+          <circle cx={ballX} cy={ballY} r={BALL_RADIUS_MM} />
+        </clipPath>
         <clipPath id={`${id}clip`}>
           <path d={head} />
         </clipPath>
@@ -392,6 +426,23 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
           {!top ? hosel : null}
         </g>
         <circle className="club-projection__ball" cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball)`} />
+        <g clipPath={`url(#${id}ball-clip)`}>
+          <g transform={`translate(${ballX} ${ballY})`} fill={`url(#${id}dimple)`}>
+            {BALL_DIMPLES.map((dimple, i) => (
+              <path key={i} d={dimple.d} opacity={dimple.opacity} />
+            ))}
+          </g>
+          <circle cx={ballX} cy={ballY} r={BALL_RADIUS_MM} fill={`url(#${id}ball-sheen)`} />
+          <circle
+            cx={ballX}
+            cy={ballY}
+            r={BALL_RADIUS_MM}
+            fill="none"
+            stroke="#fff"
+            strokeOpacity=".25"
+            strokeWidth=".3"
+          />
+        </g>
         {(
           [
             ['face', face],
