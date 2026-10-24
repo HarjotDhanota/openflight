@@ -1,10 +1,7 @@
 """The OPS243 readings around impact, kept on the shot as raw evidence.
 
-A processed rolling-buffer capture is reduced to its outbound readings from the
-window that starts at impact up to ``MAX_REFERRAL_MS`` after it, all on the OPS's
-own clock (window starts, milliseconds from the capture start), with the impact
-time, its source and how sure it is. Models that project the radial speed read
-this track; it holds no model of its own.
+Outbound readings from impact to ``MAX_REFERRAL_MS`` after it, on the OPS's own clock,
+with the impact time, its source and uncertainty. Holds no model of its own.
 """
 
 from __future__ import annotations
@@ -14,23 +11,17 @@ from typing import Any, Optional
 from .constants import MPH_TO_MPS
 from .numeric import finite as _finite
 
-# Readings later than this after impact are not used: the referral and the
-# ball's straight-line position both grow with time, and an early reading is
-# what "referred to separation" means.
+# Later readings are not used: the referral error grows with time after impact.
 MAX_REFERRAL_MS = 30.0
 
-# A sound-trigger impact (no OPS club-to-ball transition) after the acoustic
-# walk-back: the trigger's own jitter and detector latency are not measured on
-# this rig, so the tolerance is stated wide.
+# Impact tolerance for a sound trigger: its jitter and latency are unmeasured, so wide.
 SOUND_TRIGGER_IMPACT_TOLERANCE_MS = 3.0
 
 
 def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS) -> Optional[dict]:
-    """The OPS readings around impact from a processed capture, all on the OPS's own clock.
+    """The OPS readings around impact from a processed capture, or None without an impact.
 
-    Every outbound reading from a window that starts within a window of the
-    impact up to ``max_referral_ms`` after it; timestamps are window starts,
-    milliseconds from the capture start. None when the capture has no impact.
+    Timestamps are FFT window starts, milliseconds from the capture start.
     """
     impact = getattr(processed, "impact", None)
     impact_ms = getattr(impact, "timestamp_ms", None)

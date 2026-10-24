@@ -160,22 +160,18 @@ TRAINING_IMPLEMENT_LABELS = {
 kld7_vertical = None
 kld7_horizontal = None
 
-# TI IWR6843 L3 rolling-buffer capture + LCMF launch angle.
 iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
 camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
-# openflight.camera.fusion_processing.VERSION, kept here so the server needn't import the
-# camera stack for an unavailable context (test_per_shot_reference_ball holds them equal)
+# Mirrors camera.fusion_processing.VERSION without importing the camera stack.
 CAMERA_FUSION_CONTEXT_VERSION = 2
 camera_optical_calibration: dict | None = None
 camera_placement: dict | None = None
-# The one horizontal offset (D36 item 2): -(target yaw), + when the unit's
-# boresight points right of the target line, added to every horizontal angle.
-# None until a flag sets it.
+# The one horizontal offset: -(target yaw), + when the boresight points right of
+# the target line, added to every horizontal angle. None until a flag sets it.
 horizontal_offset_deg: float | None = None
-# How many times the target line moved this session, and when it last did.
 _target_line_revision = 0
 _target_line_since: str | None = None
 
@@ -217,10 +213,8 @@ def _finite_number(value, name: str) -> float:
 def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
     """Move every horizontal angle to a new target line between two shots.
 
-    ``line`` is the aim step's hand-off: ``set`` with ``yaw_deg`` and
-    ``kiosk_offset_deg``, or ``skipped`` (the unit boresight). The swap waits until
-    no accepted shot is still being processed and holds new shots off while every
-    consumer takes the offset, so each shot is wholly in one frame.
+    ``line`` is the aim step's hand-off (``set`` or ``skipped``). New shots wait
+    while every consumer takes the offset, so each shot is wholly in one frame.
     """
     global horizontal_offset_deg, _target_line_revision, _target_line_since  # pylint: disable=global-statement
     status = line.get("status") if isinstance(line, dict) else None
@@ -271,8 +265,6 @@ def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
         time.sleep(0.05)
 
 
-# The ready light (P7-14): one readiness state from what the sensors report,
-# carried to the kiosk screen on the socket and to the tester page over HTTP.
 ready_light = ReadyLight()
 READY_LIGHT_PERIOD_S = 0.2
 _ready_light_published: tuple | None = None
@@ -281,23 +273,17 @@ _ready_light_thread: threading.Thread | None = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
-rig_geometry = None  # the enclosure's RigGeometry when --rig-geometry was given
+rig_geometry = None
 rig_geometry_config: dict = {"enabled": False}
-# What the range setup handed this session (tee range, lens and ball heights) and
-# where each value came from; recorded in session_start (wiring audit S3, C4, C5).
 setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
-# The resting ball re-located inside the tester's fixed box before each swing (13 Oct)
 ball_at_address_monitor = None
 _ball_at_address_thread: threading.Thread | None = None
 BALL_AT_ADDRESS_EVERY_S = 1.0
-# The net's apparent range when the range setup measured none; flagged when used
-# (wiring audit C7, decision D7).
+# The net's apparent range when the range setup measured none; flagged when used.
 DEFAULT_NET_RANGE_M = 4.6
-# a ball resting on the surface: its centre is one radius up
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
-# Heights are above the hitting surface. The radar's floor-bounce model needs the
-# radar above the surface it reflects from, so a solved lens height that would put
-# the radar lower than this is refused (see _apply_solved_camera_height).
+# The floor-bounce model needs the radar above the hitting surface; a solved lens
+# height that puts it lower than this is refused.
 MIN_RADAR_CLEARANCE_M = 0.010
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
@@ -333,29 +319,17 @@ shutdown_cleanup_started = False
 # One active hardware job plus two waiting shots is enough for normal golf
 # cadence without allowing a stuck peripheral to consume memory indefinitely.
 _SHOT_ENRICHMENT_QUEUE_CAPACITY = 2
-# How long a shot's first, ordered result waits for optional enrichment before
-# it is published OPS-only. Not a cutoff: the enrichment keeps running, and
-# when it completes it is applied to the same shot as a late update
-# (_publish_late_enrichment). Nothing is dropped for missing this timer.
+# How long a shot's first result waits for enrichment before it is published
+# OPS-only; the enrichment keeps running and lands later as an update.
 _SHOT_ENRICHMENT_DEADLINE_S = 20.0
 # Active hardware work, the two queued jobs, and one overflow result. If more
-# shots arrive, the oldest shot's first result is published OPS-only so ordered
-# finalization keeps advancing without retaining an unbounded number of full
-# Shot objects; its enrichment still lands later as an update.
+# shots arrive, the oldest is published OPS-only and updated later.
 _SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
-# Shots that arrive while the enrichment queue is full wait here instead of
-# losing their IWR and camera metrics. An entry is the Shot object and its
-# emit settings only (a few KB): the IWR dump and the camera clip it will use
-# were already recorded by those runtimes, which re-arm on their own threads
-# and keep the recordings whether or not a shot is waiting. Enrichment takes
-# about one IWR dump (~7-8 s) per shot, so the queue only fills when more than
-# three shots land inside one dump; reaching this bound as well takes twelve
-# shots in a row each arriving faster than the one before was enriched, far
-# beyond normal swing pace (a shot every 15 s or more). Past it, enrichment is
-# abandoned loudly (enrichment_abandoned), never silently.
+# Shots that arrive while the enrichment queue is full wait here (a few KB each;
+# their IWR dump and clip are already recorded). Enrichment takes ~7-8 s per
+# shot, so this fills only at far above swing pace; past it, enrichment is
+# abandoned loudly (enrichment_abandoned).
 _DEFERRED_ENRICHMENT_CAPACITY = 8
-# Every shot whose enrichment can still report back: the active job, the
-# queued jobs and the deferred backlog. Bounds _shot_awaiting_late_enrichment.
 _SHOT_AWAITING_LATE_CAPACITY = 1 + _SHOT_ENRICHMENT_QUEUE_CAPACITY + _DEFERRED_ENRICHMENT_CAPACITY
 shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
     maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
@@ -376,7 +350,6 @@ _shot_finalization_running = False
 _shot_finalization_worker: threading.Thread | None = None
 # The shot the worker is publishing right now; a late update for it waits.
 _shot_finalization_current: Shot | None = None
-# Shots published OPS-only whose enrichment is still running, oldest first.
 _shot_awaiting_late_enrichment: dict[int, "_AwaitingLateEnrichment"] = {}
 
 
@@ -416,8 +389,6 @@ class _PendingShotFinalization:
     enrichment: _ShotEnrichmentResult
     diagnostic_logger: Any | None = None
     diagnostic_session_uuid: str | None = None
-    # A placeholder for a shot whose enrichment was deferred: publish it
-    # OPS-only at its turn, then let the deferred enrichment update it.
     awaits_late_enrichment: bool = False
 
 
@@ -455,8 +426,6 @@ class _LateShotUpdate:
             "reason": "late_enrichment",
             "first_result_reason": self.first_result_reason,
             "late_by_ms": self.late_by_ms,
-            # Simulators (GSPro, OpenGolfSim, ...) took the first result and have
-            # no way to amend a shot, so a late update is never re-sent to them.
             "simulators": "not_resent",
         }
 
@@ -501,11 +470,9 @@ def _log_shot_enrichment_lifecycle(
                 "state": state,
                 "reason": reason,
                 "background_work": background_work,
-                # A late result updates the same shot in the UI and the log.
                 "late_result_policy": "apply_as_update",
                 "result_discarded": result_discarded,
                 "late_by_ms": late_by_ms,
-                # Simulators get the first result only; they can't take an update.
                 "simulators": "first_result_only",
                 "enrichment_outcome": (
                     enrichment.diagnostic_outcome if enrichment is not None else None
@@ -537,12 +504,7 @@ def _assign_shot_number(shot: Shot) -> None:
 def _emit_shot_payload(
     shot: Shot, event: str, payload: dict, *, final: bool, update_kind: str
 ) -> None:
-    """Emit one shot payload inside every extension's emit observer (a trace, say).
-
-    ``final`` is True on every emit from ``_finalize_shot_detected`` (the first
-    finalized result and each late update); ``update_kind`` is "first",
-    "late_update" or "status". An emit error still reaches the caller's handler.
-    """
+    """Emit one shot payload inside every extension's emit observer."""
     with kiosk_extensions.observing_shot_emit(
         shot, event, payload, final=final, update_kind=update_kind
     ):
@@ -550,7 +512,7 @@ def _emit_shot_payload(
 
 
 def _non_finite_float(value) -> bool:
-    """A float that is NaN or infinite (the one check, numeric.finite)."""
+    """A float that is NaN or infinite."""
     return isinstance(value, float) and not _finite(value)
 
 
@@ -669,11 +631,8 @@ def _shot_finalization_worker_loop() -> None:
                         del _shot_finalization_registered[next_shot_number]
                         _shot_finalization_ready.pop(next_shot_number, None)
                         if pending is None or pending.awaits_late_enrichment:
-                            # Published OPS-only now; the running or deferred
-                            # enrichment will update this same shot when it
-                            # completes. Registered in the same critical
-                            # section, so a result arriving now always finds the
-                            # shot in one of the two maps.
+                            # Registered in the same critical section, so a late
+                            # result always finds the shot in one of the two maps.
                             abandoned = _await_late_enrichment_locked(
                                 registered,
                                 _ops_only_reason(pending, deadline_expired=deadline_expired),
@@ -832,10 +791,8 @@ def _await_late_enrichment_locked(
 ) -> list[_AwaitingLateEnrichment]:
     """Keep an OPS-only shot for its late result; caller holds the condition lock.
 
-    Returns the oldest entries dropped to stay within _SHOT_AWAITING_LATE_CAPACITY.
-    In normal running that never happens: every entry is a shot whose enrichment
-    is active, queued or deferred, and those together hold at most that many.
-    It only bounds memory if an enrichment worker died without reporting back.
+    Returns the oldest entries dropped to stay within _SHOT_AWAITING_LATE_CAPACITY,
+    which happens only if an enrichment worker died without reporting back.
     """
     _shot_awaiting_late_enrichment[registered.shot.shot_number] = _AwaitingLateEnrichment(
         registered=registered,
@@ -1258,10 +1215,7 @@ def _select_horizontal_radar_launch(kld7_angle, horizontal_limit: float) -> tupl
 
 
 def _fusion_unit() -> bool:
-    """Whether this kiosk measures angles (IWR or camera), so it fills nothing in (D17).
-
-    The same sensors that make a shot's enrichment slow (_has_slow_shot_enrichment).
-    """
+    """Whether this kiosk measures angles (IWR or camera), so it fills nothing in."""
     return iwr6843_runtime is not None or camera_capture_runtime is not None
 
 
@@ -1276,13 +1230,7 @@ def _estimate_launch_from_finite_inputs(shot: Shot) -> tuple[float, float]:
 
 
 def _ensure_user_facing_launch_angles(shot: Shot) -> None:
-    """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in.
-
-    An OPS-only kiosk has nothing to measure angles with, so simulators get a
-    club-table vertical and a neutral horizontal, labelled estimated. A fusion
-    unit leaves a missing angle missing (D17).
-    """
-    # A non-finite angle is a missing one: it gets exactly the missing-value handling.
+    """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in."""
     if _fusion_unit():
         if not _finite(shot.launch_angle_vertical) or not _finite(shot.launch_angle_horizontal):
             logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
@@ -1303,7 +1251,6 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
         )
 
     if not _finite(shot.launch_angle_horizontal):
-        # the legacy neutral estimate, for an install with no angle sensors at all
         shot.launch_angle_horizontal = 0.0
         if shot.launch_angle_horizontal_confidence is None:
             if estimated is None:
@@ -1429,8 +1376,6 @@ def init_rig_geometry(path) -> None:
         "path": str(Path(path).expanduser()),
         "derived": setup.as_dict(),
         "snapshot": snapshot,
-        # One meaning per hash name (wiring audit C3): the tester's setup evidence
-        # binds the file's bytes, the server checks the loaded parameters.
         "rig_geometry_file_sha256": hashlib.sha256(
             Path(path).expanduser().read_bytes()
         ).hexdigest(),
@@ -1445,14 +1390,7 @@ def init_rig_geometry(path) -> None:
 
 
 def init_camera_lens(lens_id: str | None) -> None:
-    """Put the selected lens's focal length under every camera metric, and record it.
-
-    The rig file's focal length is the stock lens's; ``--camera-lens-id`` names the
-    lens on the unit (config/lenses.json), whose focal length (nominal, or from a
-    checkerboard calibration kept for it) replaces it in this session's rig. The
-    rig file's own parameters stay the setup's binding. Without the flag the rig
-    file's lens is recorded as such.
-    """
+    """Put the selected lens's focal length under every camera metric, and record it."""
     global rig_geometry  # pylint: disable=global-statement
     if rig_geometry is None:
         return
@@ -1489,10 +1427,7 @@ def target_line_config(args) -> dict:
 
 
 def range_prior_from_args(args):
-    """The camera's coarse range prior the setup handed over, or None (13 Oct).
-
-    A prior without its uncertainty is refused: a prior is a range plus how sure it is.
-    """
+    """The camera's coarse range prior the setup handed over, or None; needs its uncertainty."""
     from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
 
     range_m = getattr(args, "iwr6843_tee_prior_m", None)
@@ -1509,8 +1444,7 @@ def range_prior_from_args(args):
 
 
 def _look_range_prior(look: dict | None):
-    """A shot's own resting-ball look as its range prior, when it has a range and an
-    uncertainty (the setup handed a camera prior over)."""
+    """A shot's own resting-ball look as its range prior, when it has a range and uncertainty."""
     from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
 
     if not isinstance(look, dict) or look.get("range_m") is None:
@@ -1529,11 +1463,7 @@ def _look_range_prior(look: dict | None):
 
 
 def shot_iwr_calibration(shot):
-    """The IWR calibration with this shot's own range, for its range-dependent metrics.
-
-    The session's calibration is never changed: each shot's range (its IWR launch point,
-    or the camera prior, labelled) is its own (13 Oct). Without one, the session's.
-    """
+    """The IWR calibration with this shot's own range; the session's is never changed."""
     calibration = getattr(iwr6843_runtime, "calibration", None)
     if calibration is None or getattr(shot, "ball_range_m", None) is None:
         return calibration
@@ -1556,8 +1486,7 @@ def shot_ball_at_address(trigger_at: float | None) -> dict | None:
 
 
 def shot_reference_ball(trigger_at: float | None) -> dict | None:
-    """Where this shot's resting ball is: its own re-located look in the box, else the
-    setup's ball. The camera's resting-ball gate is drawn around it."""
+    """Where this shot's resting ball is: its own look in the box, else the setup's ball."""
     look = shot_ball_at_address(trigger_at)
     if look is not None and look.get("state") == "in_box" and look.get("center_px"):
         return {
@@ -1604,11 +1533,7 @@ def _ball_at_address_loop() -> None:
 
 
 def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> None:
-    """Re-locate the resting ball in the box about once a second, between clips.
-
-    With the setup's camera prior (13 Oct) each look is a per-shot prior; a configured
-    range (``--iwr6843-tee-m``) keeps the old radar-range looks.
-    """
+    """Re-locate the resting ball in the box about once a second, between clips."""
     global ball_at_address_monitor, _ball_at_address_thread  # pylint: disable=global-statement
     from .camera.ball_at_address import BallAtAddress  # noqa: PLC0415
 
@@ -1630,7 +1555,7 @@ def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None) -> N
 
 @app.route("/api/target-line")
 def api_target_line():
-    """The target line this session's yaw flags came from (contract 13 Oct)."""
+    """The target line this session's yaw flags came from."""
     line = setup_handoff_config.get("target_line") or {}
     status = line.get("status") or "not_set"
     shown = status == "set"
@@ -1663,12 +1588,7 @@ def api_ball_at_address():
 
 
 def _apply_solved_camera_height(args, enclosure) -> None:
-    """Use the setup's solved lens height; the radar keeps its offset below the lens.
-
-    Heights are above the hitting surface the setup ball rested on. The setup only
-    hands a height over when the unit is clearly not standing on that surface (on
-    a box, for example); otherwise the rig file's nominal heights stand.
-    """
+    """Use the setup's solved lens height above the hitting surface; the radar keeps its offset."""
     solved = float(args.solved_camera_height_m)
     if not 0.0 < solved < 1.0:
         raise ValueError("--solved-camera-height-m must be between 0 and 1 m")
@@ -1685,8 +1605,7 @@ def _apply_solved_camera_height(args, enclosure) -> None:
             )
         args.iwr6843_radar_height_m = radar_height
     args.camera_capture_mount_height_m = solved
-    # "derived" stays what the rig file says; the scene's values live apart, so a
-    # solved height is never read back as the enclosure's (wiring audit C4, C13).
+    # "derived" stays the rig file's; a solved height is never read back as the enclosure's
     if rig_geometry_config.get("enabled"):
         rig_geometry_config["solved_camera_height"] = {
             "camera_mount_height_m": solved,
@@ -1704,13 +1623,7 @@ def _apply_solved_camera_height(args, enclosure) -> None:
 
 
 def init_setup_handoff(args, enclosure) -> None:
-    """Record what the range setup handed this session, and where each value came from.
-
-    Recording only: the tee range and heights named here are the ones already
-    applied. The radar-solved lens height is kept even when the rig file's height
-    is used (wiring audit C4), and a one-radius ball height is labelled as assumed
-    on the surface (C5).
-    """
+    """Record what the range setup handed this session, and where each value came from."""
     global setup_handoff_config  # pylint: disable=global-statement
     tee = args.iwr6843_tee_m
     nominal = getattr(enclosure, "camera_mount_height_m", None)
@@ -1734,7 +1647,6 @@ def init_setup_handoff(args, enclosure) -> None:
             "source": args.iwr6843_tee_range_source
             or ("command_line" if tee is not None else "pending"),
             "candidate_id": args.iwr6843_tee_range_candidate,
-            # 13 Oct: the camera's coarse estimate, a prior each shot's capture refines
             **(
                 {
                     "prior": {
@@ -1763,7 +1675,6 @@ def init_setup_handoff(args, enclosure) -> None:
                 if math.isclose(ball_height, BALL_RADIUS_M, abs_tol=1e-6)
                 else "command_line"
             ),
-            # D36 item 4b: where the resting ball sits aside of the radar's axis
             "tee_side_offset_m": getattr(args, "tee_side_offset_m", None),
             "tee_side_offset_source": (
                 "setup_patch_pair"
@@ -1777,12 +1688,8 @@ def init_setup_handoff(args, enclosure) -> None:
             "range_space": "apparent",
             "assumed": args.iwr6843_net_range_source == "default_not_measured",
         },
-        # 13 Oct: the aim point's target line, and the lens every camera metric used
         "target_line": target_line_config(args),
         "lens": rig_geometry_config.get("lens"),
-        # P8-5, D36 item 4a: applied on swings as each one's LIS3DH pitch plus this
-        # offset with the rig's mode focal length; the resting ball's per-shot
-        # inference is kept as a cross-check
         "camera_tilt": {
             "vertical_offset_deg": getattr(args, "camera_vertical_offset_deg", None),
             "source": getattr(args, "camera_vertical_offset_source", None) or "uncalibrated",
@@ -1824,12 +1731,10 @@ def _rig_override(name: str, flag_value, rig_value):
 
 
 def _swing_camera_pose(shot: Shot) -> dict:
-    """This swing's camera pose: its own LIS3DH pitch plus the unit's offset (D36 item 4a).
+    """This swing's camera pose: its own LIS3DH pitch plus ``--camera-vertical-offset-deg``.
 
-    The offset is the P8-5 calibration the tester handed over
-    (``--camera-vertical-offset-deg``); the focal length is the rig's for the mode.
-    Without either, or without a stable reading, the pose says why and the
-    estimators infer pitch and focal length from the resting ball, labelled.
+    Without either, or a stable reading, the pose says why and the estimators infer
+    pitch and focal length from the resting ball, labelled.
     """
     from .camera import camera_tilt  # noqa: PLC0415
 
@@ -1875,7 +1780,6 @@ def _session_start_config() -> dict:
     config["tee_range_handoff"] = deepcopy(setup_handoff_config["tee_range"])
     config["scene"] = deepcopy(setup_handoff_config["scene"])
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
-    # the unit's camera tilt the setup handed over (P8-5), recorded beside the geometry
     config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
     kiosk_extensions.call_all("session_start_config", config)
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
@@ -1900,7 +1804,6 @@ def _session_start_config() -> dict:
             "validation": "unvalidated",
             "optical_calibration_sha256": geometry_fingerprint(camera_optical_calibration),
             "placement_sha256": geometry_fingerprint(camera_placement),
-            # the placement binds the loaded parameters' fingerprint (C3)
             "rig_geometry_params_sha256": camera_placement.get("rig_geometry_sha256"),
         }
     else:
@@ -1921,12 +1824,7 @@ FEET_PER_M = 3.28084
 
 
 def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, str]:
-    """OPS-to-ball forward, above and lateral feet for the cosine candidate, and a source.
-
-    With a rig file the OPS's own offsets place it (audit F12); without one the
-    IWR's range and height stand in for the OPS's, which the candidate names
-    as a proxy and withholds.
-    """
+    """OPS-to-ball forward, above and lateral feet for the cosine candidate, and a source."""
     geometry = (
         rig_geometry.ops_ball_geometry_m(
             tee_slant_range_m=calibration.tee_range_m,
@@ -1953,9 +1851,7 @@ calculated_spin_enabled = False
 def _null_non_finite(value, path: str, not_measured: list[dict]):
     """``value`` with every non-finite float replaced by None, each one named in ``not_measured``.
 
-    A NaN or infinite metric was not measured: it goes out as null with the reason,
-    never as a filled-in number and never by dropping the shot (owner rule). Strict
-    JSON has no NaN/Infinity, so a raw one would also make the browser drop the packet.
+    Strict JSON has no NaN/Infinity; a raw one would make the browser drop the packet.
     """
     if _non_finite_float(value):
         not_measured.append({"id": path, "reason": f"non_finite_value:{value!r}"})
@@ -1973,16 +1869,12 @@ def _null_non_finite(value, path: str, not_measured: list[dict]):
     return value
 
 
-# The source labels that describe each metric. When the metric is nulled for being
-# non-finite it reads like a missing one, so its labels become None (the fields'
-# "no source" value): a nulled value never keeps a measuring source's name.
+# The source labels of each metric; a metric nulled as non-finite loses them too.
 _SOURCE_LABELS_OF_METRIC = {
     "launch_angle_vertical": ("launch_angle_vertical_source", "angle_source"),
     "launch_angle_horizontal": ("launch_angle_horizontal_source", "launch_angle_horizontal_frame"),
     "spin_rpm": ("spin_source",),
-    # a nulled committed carry is not measured, simulated or calculated
     "carry_spin_adjusted": ("carry_status",),
-    # a nulled smash factor has no ratio left to label (D37)
     "smash_factor": ("smash_factor_status",),
     "experimental_face_angle_deg": (
         "experimental_face_angle_path_source",
@@ -1997,10 +1889,7 @@ _SOURCE_LABELS_OF_METRIC = {
 def shot_to_dict(shot: Shot) -> dict:
     """Return the UI shot schema with display-oriented rounding.
 
-    Never raises on a non-finite metric: it is sent as null and listed in
-    ``metrics_not_measured`` as ``{"id", "reason"}`` (the shape the shot's other
-    evidence lists use); None when every metric is finite. Such a metric's source
-    labels go out as None too (_SOURCE_LABELS_OF_METRIC), like a missing metric's.
+    A non-finite metric is sent as null and listed in ``metrics_not_measured``.
     """
     raw = shot.to_dict()
     for log_only_field in ("mode", "readings", "readings_count"):
@@ -2032,7 +1921,6 @@ def shot_to_dict(shot: Shot) -> dict:
     }.items():
         if data[field] is not None:
             data[field] = round(data[field], digits) if digits is not None else round(data[field])
-    # a fusion unit's payload has no table carry range at all (D17)
     if data["carry_range"] is not None:
         data["carry_range"] = [
             round(value) if value is not None else None for value in data["carry_range"]
@@ -2068,9 +1956,6 @@ def apply_club_selection(payload):
         return {"error": "Unknown is not a selectable club"}, 400
 
     with club_selection_lock:
-        # Without a monitor (startup, or tests) the selection is still recorded
-        # and broadcast, as the Socket.IO handler always did; the monitor picks
-        # up later changes once it exists.
         if monitor is not None:
             try:
                 monitor.set_club(club)
@@ -2116,13 +2001,8 @@ def _broadcast_club_selection(club: ClubType) -> None:
 def dispatch_phone_control_command(command_type, payload):
     """Route a BLE phone command through the Socket.IO operations.
 
-    Each command calls the same function its Socket.IO counterpart does, so the
-    kiosk and every other client see identical broadcasts.
-
-    BLE has no authentication, so it is read-and-select only: profile add,
-    rename and remove, ``clear_session`` and ``delete_shot`` stay on
-    Socket.IO. Phones still hear about those changes through the
-    ``profiles``, ``session_cleared`` and ``shot_deleted`` events.
+    BLE has no authentication, so it is read-and-select only: profile edits,
+    ``clear_session`` and ``delete_shot`` stay on Socket.IO.
     """
     handlers = {
         "set_club": apply_club_selection,
@@ -2145,11 +2025,7 @@ def static_files(path):
 
 @app.route("/api/shots/latest")
 def api_latest_shot():
-    """The session's latest shot payload (every metric, labelled) and the metric catalog.
-
-    The tester page reads it beside each swing's picture verdict; the kiosk UI gets
-    the same payload over the socket.
-    """
+    """The session's latest shot payload (every metric, labelled) and the metric catalog."""
     shots = _session_shots()
     return jsonify({"shot": shots[-1] if shots else None, "catalog": shot_metrics.catalog()})
 
@@ -2237,7 +2113,6 @@ def init_camera_capture(
             trigger_evidence_provider=kiosk_extensions.first("trigger_evidence_provider"),
             on_trigger_rejected=_log_camera_trigger_rejection,
         )
-        # the swing exposure meters on the resting ball the box look finds (13 Oct)
         camera_capture_runtime.set_resting_ball_locator(resting_ball_look)
         camera_capture_runtime.start()
         settings = camera_capture_runtime.settings
@@ -2268,13 +2143,11 @@ def init_camera_capture(
             "lateral_offset_m": lateral_offset_m,
             "forward_offset_m": forward_offset_m,
             "horizontal_offset_deg": horizontal_offset_deg,
-            # D36 item 4b: the setup pair's side offset, None when it measured none
             "tee_side_offset_m": tee_side_offset_m,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
             "setup_ball": dict(settings.setup_ball) if settings.setup_ball else None,
             "hitting_zone": list(settings.hitting_zone) if settings.hitting_zone else None,
-            # the lens every camera metric of this session used (13 Oct)
             "lens": dict(settings.lens) if settings.lens else None,
         }
         logger.info("[SERVER] Camera capture initialized: %s", camera_capture_config)
@@ -2318,8 +2191,7 @@ def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: 
         check_placement_against_rig,
     )
 
-    # a placement measures the RX row, so it is checked against the rig's RX
-    # row, not the phase centre derived from it (audit F11)
+    # a placement measures the RX row, not the phase centre derived from it
     check_placement_against_rig(
         placement,
         rig_params_sha256=(rig_geometry_config.get("snapshot") or {}).get("sha256"),
@@ -2360,11 +2232,9 @@ def init_iwr6843(
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the LCMF launch estimator.
 
-    ``tilt_deg`` and ``radar_height_m`` are the enclosure's, from the rig file (or
-    the setup's solved height); the board calibration's July mount never stands in
-    for them (wiring audit C1). ``board_rotation_deg`` is the rig's
-    ``iwr_board_rotation_deg``: with it LCMF places each antenna off the phase
-    centre ``radar_height_m`` names.
+    ``tilt_deg`` and ``radar_height_m`` come from the rig file (or the setup's solved
+    height), never the board calibration. With ``board_rotation_deg`` LCMF places
+    each antenna off the phase centre ``radar_height_m`` names.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     for name, value in (("tilt_deg", tilt_deg), ("radar_height_m", radar_height_m)):
@@ -2405,9 +2275,7 @@ def init_iwr6843(
         calibration.tilt_rad = math.radians(float(tilt_deg))
         calibration.meta["radar_height_m"] = float(radar_height_m)
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
-        # A rig without the board's rotation derives its radar height at the
-        # RX row (EnclosureSetup, audit F11), which is what the legacy layout
-        # reads a single height as, on a board turned +90 deg.
+        # without a board rotation the radar height is the RX row's (legacy layout)
         calibration.antennas = (
             antennas.layout_from_phase_centre(
                 phase_centre_height_m=float(radar_height_m),
@@ -2445,7 +2313,6 @@ def init_iwr6843(
             # registration. Auto sign selection can choose the mirror solution
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
-            # 13 Oct: the camera's coarse range, a prior each shot's capture refines
             range_prior=range_prior,
             calibration_provenance={
                 "schema_version": 1,
@@ -2539,13 +2406,7 @@ def init_inclinometer(
     address: int = 0x18,
     mount_file: Path | None = None,
 ) -> bool:
-    """Start the optional LIS3DH service without risking radar availability.
-
-    ``mount_file`` is this unit's checked LIS3DH mount (the tester's orientation
-    check, ``orientation_check``); without one the rig file's yaw stands. Its
-    mount, check and corrections go into session_start with the rest of this
-    config.
-    """
+    """Start the optional LIS3DH service without risking radar availability."""
     global inclinometer_service  # pylint: disable=global-statement
     global inclinometer_runtime_config  # pylint: disable=global-statement
 
@@ -2564,7 +2425,6 @@ def init_inclinometer(
         )
         mount_yaw = mount.yaw_deg
         if mount_yaw or mount.upside_down:
-            # a board turned in the housing reads the housing's tilt turned with it
             sensor = MountedAccelerometer(sensor, mount_yaw, upside_down=mount.upside_down)
         service = InclinometerService(sensor, zero_offset_deg=zero_offset_deg)
         service.start()
@@ -2581,7 +2441,6 @@ def init_inclinometer(
             "mount_upside_down": mount.upside_down,
             "mount_source": mount_source,
             "mount_file": str(mount_file) if mount_file is not None else None,
-            # the tester's orientation check and the corrections it saved for this unit
             "orientation_check": mount_record,
             "startup": startup.to_dict(),
         }
@@ -3028,12 +2887,7 @@ def _current_club_id() -> str:
 
 
 def _session_stats() -> dict:
-    """The monitor's session stats with every non-finite value sent as null.
-
-    Defence in depth (A-I1): ``summarize_shots`` already skips non-finite values, but
-    any NaN that reached a strict-JSON emit would make the browser drop the packet,
-    and stats ride on every later shot.
-    """
+    """The monitor's session stats with every non-finite value sent as null."""
     if not monitor:
         return {}
     return _null_non_finite(monitor.get_session_stats(), "stats", [])
@@ -3166,16 +3020,14 @@ def start_power_monitor(provider: str) -> None:
     logger.info("[POWER] Battery monitoring enabled with provider=%s", provider)
 
 
-# Trigger outcomes that mean the OPS243 never dumped for an edge (P7-1).
+# Trigger outcomes that mean the OPS243 never dumped for an edge.
 _NO_RADAR_SHOT_REASONS = {"edge_without_dump", "dump_discarded"}
 
 
 def _ready_light_states() -> SensorStates | None:
     """What each sensor reports now, read from flags: never a serial or frame lock.
 
-    None, and the light off, where nothing reports readiness (the shot simulator,
-    swing-speed mode or the streaming speed trigger). Extensions may add their own
-    causes (``KioskExtension.ready_light_states``).
+    None (light off) where nothing reports readiness: the simulator or a speed trigger.
     """
     if monitor is not None and (
         mock_mode or getattr(monitor, "trigger_type", None) not in ("sound", "hardware")
@@ -3255,7 +3107,7 @@ def _ready_light_edge(timestamp: float) -> None:
 def _ready_light_trigger_outcome(event: dict) -> None:
     """A trigger the OPS path rejected: the swing gave no shot."""
     if event.get("accepted"):
-        return  # its shot, or its failure, is reported on its own
+        return
     reason = event.get("reason")
     ready_light.swing_result("no_radar_shot" if reason in _NO_RADAR_SHOT_REASONS else "not_a_shot")
 
@@ -3642,7 +3494,7 @@ def handle_shutdown():
 def on_shot_processing(state: str) -> None:
     """Forward the rolling-buffer processing lifecycle to the UI."""
     if state == "capturing":
-        ready_light.swing_detected("ops_dump")  # the OPS243 dump began: a swing
+        ready_light.swing_detected("ops_dump")
     socketio.emit("shot_processing", {"state": state})
     try:
         _publish_phone_event(build_shot_processing_event(state))
@@ -3683,7 +3535,7 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
     if not targets:
         return
     try:
-        # a fusion unit sends only what it measured (D17, D31)
+        # a fusion unit sends only what it measured
         resolved = resolve_shot(shot, sim_player_state, substitutes=not _fusion_unit())
     except IncompleteShotError as e:
         _report_shot_not_sent(shot, targets, e)
@@ -3833,8 +3685,6 @@ def _sim_on_inbound(target: str, event) -> None:
 # Shot.spin_method for the --calculated-spin formula's value
 EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a published model)"
 # spin_source values a model wrote; anything else is the radar's (or None)
-# a model's spin labels: calculated, model geometry (D39), or estimated (built on an
-# estimated input, V-formulas C2); none is ever measured
 _MODEL_SPIN_SOURCES = MODEL_LABELS
 
 
@@ -3848,10 +3698,8 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     kept in spin_rpm_measured for offline scoring. Returns True when
     the shot was rewritten.
 
-    This formula is empirical, not a published collision model (E2). Its value
-    is always recorded in spin_rpm_calculated_empirical; when the published
-    collision model (collision_model) produced a calculated spin for this shot,
-    that one is the spin used.
+    The empirical value is always kept in spin_rpm_calculated_empirical; a shot
+    model's spin, when there is one, is the spin used.
     """
     if shot.launch_angle_vertical is None:
         return False
@@ -3870,7 +3718,6 @@ def _apply_calculated_spin(shot: Shot) -> bool:
         shot.spin_method_measured = shot.spin_method
     shot.spin_rpm = spin_calc
     shot.spin_method = method
-    # a model's output has no measurement confidence; spin_source labels it (D17)
     shot.spin_confidence = None
     shot.spin_source = "calculated"
     shot.spin_rejection_reason = None
@@ -4004,19 +3851,14 @@ def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
 
 
 def _iwr_azimuth_status() -> str | None:
-    """Mark IWR horizontal values while the board has no horizontal phase reference.
-
-    An electrical phase bias shifts the radar horizontal and rotates the IWR
-    club path, so neither shares the camera's zero until the reference is
-    calibrated in situ from camera tracks (audit F8, decision D3).
-    """
+    """Mark IWR horizontal values while the board has no horizontal phase reference."""
     if getattr(iwr6843_runtime, "horizontal_phase_reference_rad", None) is None:
         return "azimuth_uncalibrated"
     return None
 
 
 def _attach_ball_range(shot: Shot, shot_result) -> None:
-    """The range this shot's metrics used, with its source, uncertainty and label (13 Oct)."""
+    """The range this shot's metrics used, with its source, uncertainty and label."""
     launch = getattr(shot_result, "launch_range", None)
     chosen = getattr(shot_result, "ball_range", None)
     shot.iwr_launch_range = launch.to_dict() if launch is not None else None
@@ -4051,8 +3893,6 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             else None
         )
         club = shot.club.value
-        # 13 Oct: the resting ball re-located in the box before this swing is the
-        # shot's own range PRIOR; the shot's own capture measures its launch point
         at_address = shot_ball_at_address(shot.impact_timestamp)
         own_prior = _look_range_prior(at_address)
         snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
@@ -4176,8 +4016,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot.launch_angle_horizontal_status = _iwr_azimuth_status()
                 shot.launch_angle_horizontal_frame = horizontal_frame
             elif horizontal_deg is not None:
-                # a low-coherence horizontal is shown under its own source and
-                # never handed to the camera as the IWR's evidence (P8-7)
+                # a low-coherence horizontal is shown but never handed to the camera
                 shot.launch_angle_horizontal = horizontal_deg
                 shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
                     horizontal_confidence
@@ -4409,15 +4248,12 @@ def _fuse_camera_club_delivery(
                 if archive is None:
                     fused = ChainedDelivery(status="rejected_missing_camera_frames")
                 else:
-                    # Impact is compared against the frame exposed at the trigger
-                    # when the clip records it (P6-5); older clips keep their split.
                     trigger_index = exposure_trigger_index(archive, len(archive["frames"]))
                     if trigger_index is None and "pre_trigger_count" in archive:
                         trigger_index = int(archive["pre_trigger_count"]) - 1
                     if iwr6843_runtime is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
-                        # this shot's own range (13 Oct), never the session's
                         calibration = shot_iwr_calibration(shot)
                         if calibration.tee_range_m is None:
                             fused = ChainedDelivery(status="rejected_missing_tee_geometry")
@@ -4482,16 +4318,15 @@ def _fuse_camera_club_delivery(
         )
 
 
-# How far each horizontal-launch source may be trusted as the displayed value.
-# Camera ball flight is diagnostic: only a camera bearing on accepted IWR depth
-# outranks a radar horizontal, and size-only camera depth ranks below it.
+# How far each horizontal-launch source may be trusted as the displayed value;
+# only a camera bearing on accepted IWR depth outranks a radar horizontal.
 _HORIZONTAL_SOURCE_RANK = {
     "estimated": -1,
     # a low-coherence IWR horizontal: shown, but any camera horizontal outranks it
     "radar_low_coherence": -0.5,
     "camera_only_experimental": 0,
     "camera_legacy_fallback": 0,
-    # a scattered camera sweep, shown labelled but never over the radar (P8-7)
+    # a scattered camera sweep, shown labelled but never over the radar
     "camera_low_consensus": 0,
     "radar": 1,
     "camera_assisted_experimental": 2,
@@ -4506,11 +4341,7 @@ def _apply_camera_horizontal_decision(
     *,
     frame: str | None = None,
 ) -> None:
-    """Display a camera-fusion horizontal only when it outranks the current one (F6).
-
-    ``frame`` is the camera estimate's horizontal frame (D36 item 2); a
-    decision that falls back to radar keeps the IWR value's own frame.
-    """
+    """Display a camera-fusion horizontal only when it outranks the current one."""
     if selected_deg is None:
         return
     if shot.launch_angle_horizontal is not None:
@@ -4523,7 +4354,6 @@ def _apply_camera_horizontal_decision(
     shot.launch_angle_horizontal_confidence = confidence
     shot.launch_angle_horizontal_source = source
     shot.launch_angle_horizontal_frame = frame or _horizontal_frame()
-    # A camera decision that falls back to radar hands back the IWR's value.
     shot.launch_angle_horizontal_status = _iwr_azimuth_status() if source == "radar" else None
 
 
@@ -4555,7 +4385,6 @@ def _fuse_camera_ball_flight(
             elif iwr6843_runtime is None:
                 estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
             else:
-                # this shot's own range (13 Oct), never the session's
                 calibration = shot_iwr_calibration(shot)
                 if calibration.tee_range_m is None:
                     estimate = CameraBallEstimate(status="rejected_missing_tee_geometry")
@@ -4665,12 +4494,9 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     }
 
 
-# 320x200 is a vertically movable strip of the 2x-binned mode (the OV9281
-# driver's strip_y_offset). The camera models put the principal point at the
-# image centre, so a moved strip would tilt every elevation by its offset over
-# the focal length (70 px is 8.5 deg). Applying the offset needs its sign and
-# scale confirmed on the unit, and the mode is not in use, so it is refused for
-# measurement unless the capture's startup offset reads 0 (wiring audit C12).
+# 320x200 is a vertically movable strip of the 2x-binned mode (strip_y_offset).
+# The camera models put the principal point at the image centre, so a moved strip
+# tilts every elevation; the mode is refused unless the startup offset reads 0.
 STRIP_CROP_MODE = (320, 200)
 
 
@@ -4696,14 +4522,12 @@ def _strip_offset_refusal(camera_capture) -> str | None:
     )
 
 
-# 13 Oct (Build C): the unit's camera-tilt file the swings calibrate, per lens, and
-# the fixed box in this mode's pixels where the resting ball is looked for
 camera_tilt_calibration_path: Path | None = None
 camera_ball_box_px: tuple | None = None
 
 
 def _lis3dh_camera_pitch(inclinometer) -> float | None:
-    """This swing's camera pitch from its own stable LIS3DH reading (D36 item 4a)."""
+    """This swing's camera pitch from its own stable LIS3DH reading."""
     from .camera import camera_tilt  # noqa: PLC0415
 
     # pylint: disable-next=protected-access
@@ -4715,12 +4539,7 @@ def _lis3dh_camera_pitch(inclinometer) -> float | None:
 
 
 def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
-    """One swing's camera-tilt pair: its measured IWR launch point and the resting ball's
-    row in its own pre-impact frames (13 Oct, Build C; openflight.camera.swing_tilt).
-
-    Recorded in the unit's per-lens tilt file the tester handed over; two that agree
-    calibrate the tilt. A shot ranged only by the camera prior is never a pair.
-    """
+    """Record one swing's camera-tilt pair (IWR launch point, resting-ball image row)."""
     from .camera import swing_tilt  # noqa: PLC0415
 
     def skipped(reason: str) -> None:
@@ -4816,8 +4635,7 @@ def _fuse_camera_measurements(
             else True
         )
     )
-    # D15 (P8-7): the lighting and optical-quality verdicts label the camera's
-    # values; they no longer withhold them. analysis_eligible stays recorded.
+    # lighting and optical-quality verdicts label the camera's values, never withhold them
     from openflight.camera.fusion_processing import lighting_note  # noqa: PLC0415
 
     camera_notes: list[str] = []
@@ -4857,7 +4675,6 @@ def _fuse_camera_measurements(
                 EffectiveCameraGeometryInputs,
             )
 
-            # this shot's own range (13 Oct), never the session's
             geometry = EffectiveCameraGeometryInputs.from_live(
                 camera_capture_config, shot_iwr_calibration(shot)
             )
@@ -4906,8 +4723,7 @@ def _fuse_camera_measurements(
                     raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
                 from openflight.camera import camera_roll  # noqa: PLC0415
 
-                # one roll convention with the tester and the nominal rays; recorded,
-                # not applied, until its direction is confirmed on the unit (C8)
+                # recorded, not applied, until its direction is confirmed on the unit
                 observed_roll = camera_roll.calibrated_observed_roll_deg(
                     camera_roll.lis3dh_roll_deg(*gravity),
                     (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0),
@@ -4948,16 +4764,13 @@ def _fuse_camera_measurements(
                 session_uuid=session_uuid,
                 shot_number=shot_number,
                 notes=camera_notes,
-                # the shot's own resting ball, re-located in the box (13 Oct)
                 setup_ball=shot_reference_ball(shot.impact_timestamp),
                 camera_pose=_swing_camera_pose(shot),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
             shot.camera_fusion_processing = result
-            # the club stage's labels ride beside its values (D15, P8-7)
             club_notes = [f"club: {note}" for note in result["club_delivery"].get("notes") or ()]
-            # D36 item 4a: the calibrated pose against the resting ball's, when they disagree
             ball_check = result["ball_estimate"].get("camera_model") or {}
             if ball_check.get("disagrees"):
                 club_notes.insert(0, f"ball: {ball_check['warning']}")
@@ -5024,7 +4837,6 @@ def _fuse_camera_measurements(
                 shot.calibrated_camera_status = "rejected"
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
             if "tee_slant_range_m" in str(error):
-                # the tee contract stands (P8-7 gate 2); the shot names what it lacked
                 from openflight.camera.geometry_contract import NO_TEE_RANGE  # noqa: PLC0415
 
                 camera_notes.append(NO_TEE_RANGE)
@@ -5265,9 +5077,6 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
 
                 kld7_horizontal.reset()
 
-            # The spin axis comes from the collision model (_attach_collision_model,
-            # E2) at the end of enrichment, no longer from launch minus path here.
-
             if kld7_vertical or kld7_horizontal:
                 kld7_ms = (time.monotonic() - kld7_start) * 1000
                 logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
@@ -5364,7 +5173,6 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
-    # a shot model (an extension's) builds face, loft and spin axis from the inputs
     kiosk_extensions.call_all("after_enrichment", shot)
 
     return _ShotEnrichmentResult(
@@ -5395,16 +5203,11 @@ def _attach_ball_speed_contract(shot: Shot) -> None:
             geometry_source=geometry_source,
             ops_ball_lateral_ft=lateral_ft,
         )
-    # a shot model (an extension's) projects the radial speeds to full speeds
     kiosk_extensions.call_all("after_speed_contract", shot)
 
 
 def _shot_speed_correction_geometry(shot: Shot):
-    """The cosine candidate's geometry: the shot's own range on an IWR unit (13 Oct).
-
-    A K-LD7 unit keeps its configured distance. An IWR shot without a range has no
-    geometry, and no candidate: nothing is filled in.
-    """
+    """The cosine candidate's geometry: the shot's own range on an IWR unit, else None."""
     if iwr6843_runtime is None:
         return (
             ball_speed_correction_distance_ft,
@@ -5422,12 +5225,7 @@ def _shot_speed_correction_geometry(shot: Shot):
 
 
 def _carry_log_text(shot: Shot, source: str | None) -> str:
-    """The carry the UI shows, named, beside the table estimate it replaces (P6-6).
-
-    The UI shows ``Shot.reported_carry_yards``; logging the table unlabelled once
-    made one shot read as having three carries. A fusion unit has no table carry
-    (D17), so its line names only the carry it reports, or none.
-    """
+    """The carry the UI shows (``Shot.reported_carry_yards``), named, beside the table estimate."""
     carry = shot.reported_carry_yards
     if carry is None:
         return "carry not measured"
@@ -5442,29 +5240,20 @@ def _carry_log_text(shot: Shot, source: str | None) -> str:
 
 
 def _open_carry_status(shot: Shot) -> None:
-    """Name the carry before the first emit: a fusion unit's is not measured until simulated.
-
-    The initial OPS emit runs before enrichment and finalization; without this the
-    UI would fall back to the ball-speed table on a fusion unit (D17).
-    """
+    """Name the carry before the first emit: a fusion unit's is not measured until simulated."""
     shot.carry_status = CARRY_NOT_MEASURED if _fusion_unit() else CARRY_ESTIMATED
 
 
 def _open_smash_factor_status(shot: Shot) -> None:
-    """Label a fusion unit's smash a radial ratio before the first emit (D21, D37).
-
-    Ball and club speed are both OPS243 line-of-sight readings (ball_speed_contract
-    "radial"), not the full speeds TrackMan's smash factor divides. An OPS-only
-    unit's smash stays unlabelled, as before.
-    """
+    """Label a fusion unit's smash a radial (line-of-sight) ratio before the first emit."""
     shot.smash_factor_status = SMASH_RADIAL_RATIO if _fusion_unit() else None
 
 
 def _ballistic_carry(shot: Shot, *, fusion: bool) -> kiosk_extensions.CarryOutcome:
     """The simulator's carry on the shot's launch, or why there is none.
 
-    A fusion unit simulates only a measured spin, horizontal launch and spin axis
-    (D17); an OPS-only unit lets resolve_launch fill the club-typical spin.
+    A fusion unit simulates only a measured spin, horizontal launch and spin axis;
+    an OPS-only unit lets resolve_launch fill the club-typical spin.
     """
     inputs = [shot.ball_speed_mph, shot.launch_angle_vertical]
     if fusion:
@@ -5500,14 +5289,9 @@ def _finalize_shot_detected(
 ) -> None:
     """Apply required fallbacks, persist once, and publish the final shot.
 
-    With ``late_update`` the shot was already published OPS-only and this is
-    its late enrichment: the same path runs, but the session log records a
-    ``shot_updated`` entry (not another ``shot_detected``), the first
-    publication's timing is kept, and simulators and the debug log are not
-    sent the shot again.
-
-    ``awaits_late_result`` marks an OPS-only first result whose IWR or camera
-    enrichment is still running: phones get it as provisional, not final (D30).
+    With ``late_update`` this is a late enrichment of a shot already published:
+    the log records ``shot_updated`` and simulators are not sent it again.
+    ``awaits_late_result`` sends phones an OPS-only first result as provisional.
     """
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
@@ -5518,25 +5302,19 @@ def _finalize_shot_detected(
     # rejected or missing axes fall back to conservative estimates.
     _ensure_user_facing_launch_angles(shot)
 
-    # OPS speed remains the canonical radial observation. The historical
-    # peak-radial correction is retained only as an unvalidated candidate.
+    # OPS speed remains the canonical radial observation.
     _attach_ball_speed_contract(shot)
 
-    # Calculated spin and carry continue to consume the canonical OPS radial speed.
     if calculated_spin_enabled:
         _apply_calculated_spin(shot)
 
     # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
     # ballistics is enabled and a vertical launch angle is available; fall
     # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing → resolve_launch returns None), on an OPS-only unit only:
-    # a fusion unit that cannot simulate has no carry (D17). This is the only
-    # place that writes carry_spin_adjusted for a live shot.
+    # angle missing → resolve_launch returns None), on an OPS-only unit only.
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
-        # A flight model (an extension's) simulates every flight output and commits
-        # the carry; without one, the drag + Magnus simulator does.
         outcome = kiosk_extensions.first(
             "simulate_carry", shot, fusion=fusion, enabled=ballistics_enabled
         ) or _ballistic_carry(shot, fusion=fusion)
@@ -5642,8 +5420,7 @@ def _finalize_shot_detected(
             ),
         }
         if session_log and late_update is not None:
-            # Replace, never add: a late update is its own entry type, so the
-            # shot is still counted once (shots_detected, shot_detected lines).
+            # a late update is its own entry type, so the shot is counted once
             logged = hasattr(session_log, "log_shot_update") and (
                 session_log.log_shot_update(
                     shot,
@@ -5721,11 +5498,7 @@ def _finalize_shot_detected(
             exc=e,
         )
 
-    # Phones get the shot under the event_id of any provisional shot published
-    # for it. While a late IWR or camera result can still update it, it stays
-    # provisional (D30): the late result is the same shot's final version.
-    # Phone transports are independent of WebSocket delivery; a stalled client
-    # cannot affect recording or the UI.
+    # A shot a late result can still update stays provisional on phones.
     if shot_data is not None:
         phone_final, phone_enrichment = _phone_shot_state(
             emit_event,
@@ -5738,10 +5511,7 @@ def _finalize_shot_detected(
         _tell_extensions_shot_published(shot, "first" if late_update is None else "late_update")
 
     if late_update is not None:
-        # Simulators (GSPro, OpenGolfSim, E6, ...) were sent this shot's first
-        # result and have no way to amend a shot: re-sending would play it as a
-        # second shot. The debug log, likewise, counts shots. The late update
-        # reaches the UI and the session log only.
+        # simulators would play a re-send as a second shot; the debug log counts shots
         return
 
     # Forward to simulator connectors (optional)
@@ -5778,10 +5548,8 @@ def _finish_shot_detected(
     initial_ui_ms: float | None = None,
 ) -> None:
     """Attempt optional enrichment, then always perform required finalization."""
-    # Optional hardware may return after the coordinator has published this
-    # shot OPS-only. Enrich a shallow dataclass copy so the retained OPS object
-    # is never changed mid-publication; the coordinator copies the result onto
-    # it, on time or as a late update (_publish_late_enrichment).
+    # Enrich a copy so the retained OPS object is never changed mid-publication;
+    # the coordinator copies the result onto it, on time or as a late update.
     enriched_shot = (
         replace(shot, stage_timing=clone_stage_timing(shot.stage_timing))
         if _has_slow_shot_enrichment(shot)
@@ -5822,11 +5590,7 @@ def _queue_shot_finalization(
     final_shot: Shot | None = None,
     awaits_late_enrichment: bool = False,
 ) -> None:
-    """Record a ready shot for the exclusive finalization worker.
-
-    ``awaits_late_enrichment`` queues a placeholder for a shot whose enrichment
-    was deferred: it is published OPS-only at its turn and updated later.
-    """
+    """Record a ready shot for the exclusive finalization worker."""
     _queue_ordered_shot_finalization(
         _PendingShotFinalization(
             shot=final_shot if final_shot is not None else shot,
@@ -5844,11 +5608,7 @@ def _queue_ordered_shot_finalization(
     *,
     source_shot: Shot,
 ) -> None:
-    """Make a completed shot visible to the ordered finalization worker.
-
-    A result for a shot already published OPS-only (deadline or capacity) is
-    applied to that same shot as a late update instead.
-    """
+    """Make a completed shot visible to the ordered finalization worker, or apply it late."""
 
     shot_number = pending.shot.shot_number
     if shot_number is None:
@@ -5858,8 +5618,7 @@ def _queue_ordered_shot_finalization(
         registered = _shot_finalization_registered.get(shot_number)
         if registered is not None and registered.shot is source_shot:
             waiting = _shot_finalization_ready.get(shot_number)
-            # A deferred shot's enrichment can finish before its OPS-only turn
-            # comes: it then replaces the placeholder and is published on time.
+            # an enrichment finishing before its OPS-only turn replaces the placeholder
             if waiting is not None and (
                 pending.awaits_late_enrichment or not waiting.awaits_late_enrichment
             ):
@@ -5877,24 +5636,20 @@ def _queue_ordered_shot_finalization(
         awaiting = _shot_awaiting_late_enrichment.get(shot_number)
         if awaiting is not None and awaiting.registered.shot is source_shot:
             del _shot_awaiting_late_enrichment[shot_number]
-            # The worker may still be publishing the OPS-only result this
-            # amends; never let the update reach the UI or log before it.
-            # Waiting releases the lock, so the worker is never blocked.
+            # The update must not overtake the OPS-only result the worker may
+            # still be publishing; waiting releases the lock.
             _shot_finalization_condition.wait_for(
                 lambda: _shot_finalization_current is not source_shot
             )
         else:
             awaiting = None
 
-    # Outside the lock: a late update is published on the enrichment's own
-    # thread, so it never holds up the ordered first results of later shots.
+    # Outside the lock, so it never holds up later shots' first results.
     if awaiting is not None:
         _publish_late_enrichment(awaiting, pending)
         return
 
-    # Neither registered nor awaiting: a duplicate result for a shot already
-    # finalized with its enrichment, or a result from a session that has since
-    # been reset (its shot numbers now belong to new shots). Nothing to update.
+    # a duplicate result, or one from a session that has since been reset
     logger.warning(
         "[SERVER] Enrichment result for shot #%d matches no shot awaiting one; not applied",
         shot_number,
@@ -5922,10 +5677,7 @@ def _tell_extensions_shot_published(shot: Shot, update_kind: str) -> None:
 def publish_shot_update(shot: Shot, *, update: dict, session_uuid: str | None) -> bool:
     """Send a shot already shown again, after an extension added a late result to it.
 
-    The UI gets a ``shot_update`` (it replaces the shot in place) and the session
-    log a ``shot_updated`` entry with ``update``; simulators and phones are not
-    sent it again. Nothing is sent, and False is returned, once the shot's session
-    has ended.
+    Simulators and phones are not sent it again; returns False once its session has ended.
     """
     session_log = get_session_logger()
     active = getattr(session_log, "active_session_uuid", None) if session_log else None
@@ -5952,12 +5704,7 @@ def _publish_late_enrichment(
     awaiting: _AwaitingLateEnrichment,
     pending: _PendingShotFinalization,
 ) -> None:
-    """Apply a late enrichment to the shot already published OPS-only, as an update.
-
-    Reuses the ordinary finalization path, so the UI gets a ``shot_update``
-    for the same shot number (it replaces the shot in place) and the session
-    log a ``shot_updated`` entry. Simulators are not re-sent the shot.
-    """
+    """Apply a late enrichment to the shot already published OPS-only, as an update."""
     registered = awaiting.registered
     shot = registered.shot
     late_by_ms = round((time.monotonic() - awaiting.first_result_monotonic) * 1000.0, 1)
@@ -6075,14 +5822,10 @@ def _phone_shot_state(
     *,
     awaits_late_result: bool,
 ) -> tuple[bool, dict | None]:
-    """Map the fork's enrichment result onto a phone shot's ``final``/``enrichment`` (D30).
+    """Map the enrichment result onto a phone shot's ``final``/``enrichment``.
 
-    A shot whose late IWR or camera result can still arrive is not terminal:
-    it goes out provisional (``final`` false, ``pending``) and the late result
-    follows as the same shot's final version (same ``event_id``). Otherwise only
-    shots that were published provisionally (``emit_event`` is ``shot_update``)
-    carry an ``enrichment`` object; the rest never waited. A partial result is
-    ``skipped`` with the fork's ``diagnostic_reason``.
+    A shot whose late result can still arrive goes out provisional (``pending``);
+    only provisionally published shots carry an ``enrichment`` object.
     """
     if awaits_late_result:
         return False, {"status": "pending"}
@@ -6215,10 +5958,7 @@ def _has_slow_shot_enrichment(shot: Shot) -> bool:
 def _drain_shot_enrichment_queue() -> None:
     """Finish deferred shots in detection order, one hardware consumer at a time.
 
-    Queued jobs come first, then the deferred backlog: nothing is queued while
-    the backlog holds a shot, so this is always impact order. That order
-    matters: matching a newer impact discards older unmatched IWR and camera
-    captures as stale.
+    Order matters: matching a newer impact discards older unmatched captures as stale.
     """
     global shot_enrichment_task  # pylint: disable=global-statement
 
@@ -6264,8 +6004,7 @@ def _defer_shot_enrichment(
 ) -> bool:
     """Queue optional hardware work without blocking the OPS capture callback.
 
-    Returns True when the job is queued, False when the queue is full and it
-    waits in the deferred backlog (its result then arrives as a late update).
+    Returns True when queued, False when it waits in the deferred backlog.
     Raises ``queue.Full`` only when the backlog is at its hard bound too.
     """
     global shot_enrichment_task  # pylint: disable=global-statement
@@ -6385,8 +6124,6 @@ def _handle_shot_detected(shot: Shot) -> None:
         )
     else:
         if not queued:
-            # Its IWR dump and camera clip are already recorded; they are
-            # processed when the queue drains and update this same shot.
             logger.warning(
                 "[SERVER] Shot enrichment queue is full (%d waiting); shot #%d's IWR "
                 "and camera processing is deferred and will update it",
@@ -6717,8 +6454,7 @@ def start_monitor(
             _ready_light_trigger_outcome(data)
             socketio.emit("trigger_diagnostic", data)
 
-        # Before the capture thread starts and before BCM17 is armed, so an
-        # extension that observes them sees the first capture and edge too.
+        # before capture and BCM17 arm, so an extension sees the first edge too
         kiosk_extensions.call_all("before_monitor_start")
         monitor.start(  # pylint: disable=unexpected-keyword-arg
             shot_callback=on_shot_detected,
@@ -6729,7 +6465,6 @@ def start_monitor(
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
             _attach_gate_edge_listener()
-            # every BCM17 edge flashes the ready light, busy or not (P7-14)
             iwr6843_runtime.capture_monitor.add_trigger_observer(_ready_light_edge)
     else:
         monitor.start(  # pylint: disable=unexpected-keyword-arg
@@ -6745,10 +6480,9 @@ def _gate_edge_listener():
 
 
 def _attach_gate_edge_listener() -> None:
-    """Let the OPS wait hear each BCM17 edge the IWR monitor sees (P7-1).
+    """Let the OPS wait hear each BCM17 edge the IWR monitor sees.
 
-    The edge that drives HOST_INT reaches the Pi on BCM17 too; an edge with no
-    dump behind it means the OPS is not armed, and the trigger re-arms it.
+    An edge with no dump behind it means the OPS is not armed; the trigger re-arms it.
     """
     listener = _gate_edge_listener()
     iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
@@ -7230,7 +6964,7 @@ def _add_battery_arguments(parser):
 
 
 def _add_box_kiosk_arguments(parser):
-    """The tester's fixed box, lens and target line, as the kiosk takes them (13 Oct)."""
+    """The tester's fixed box, lens and target line, as the kiosk takes them."""
     parser.add_argument(
         "--camera-lens-id",
         default=None,
@@ -7368,7 +7102,6 @@ def main():
     """Run the server."""
     import argparse  # pylint: disable=import-outside-toplevel
 
-    # installed extensions add their flags and hooks before the flags are parsed
     kiosk_extensions.load_installed()
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
@@ -7999,7 +7732,6 @@ def main():
     global golfer_handed  # pylint: disable=global-statement
     golfer_handed = args.handed
     _apply_kld7_device_defaults(args)
-    # D36 item 2: one horizontal offset for every horizontal angle, through both flags.
     global horizontal_offset_deg  # pylint: disable=global-statement
     try:
         horizontal_offset_deg = resolve_horizontal_offset(
@@ -8008,8 +7740,7 @@ def main():
         )
     except ValueError as error:
         parser.error(str(error))
-    # None stays None: an unset target line is the boresight frame, an explicit 0.0
-    # (D34's yaw of 0) the target line (horizontal_frame.frame_for)
+    # None is the boresight frame; an explicit 0.0 is the target line
     args.camera_capture_horizontal_offset_deg = horizontal_offset_deg
     args.iwr6843_azimuth_offset_deg = horizontal_offset_deg
     if args.iwr6843_tee_range_pending:
@@ -8026,7 +7757,6 @@ def main():
     )
 
     if args.camera_shot_analysis:
-        # The flag turns the camera on, so every unit it runs on is a fusion unit.
         parser.error(
             "--camera-shot-analysis is refused on fusion units (--iwr6843 or camera "
             "capture, which this flag turns on): it takes ball distance from the ball's "
@@ -8086,8 +7816,6 @@ def main():
         (args.iwr6843_tee_m is not None and args.iwr6843_tee_m <= 0) or args.iwr6843_net_m <= 0
     ):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
-    # Without the rig file the radar would run on the board calibration's July
-    # mount (0.1524 m, 10.4 deg); start-kiosk.sh always passes one (decision D6).
     if args.iwr6843 and args.rig_geometry is None:
         parser.error(
             "--iwr6843 requires --rig-geometry: the radar's height, tilt and offset come "
@@ -8227,7 +7955,6 @@ def main():
     global ball_speed_correction_lateral_ft, ball_speed_correction_geometry_source
     # Cosine correction rides on whichever vertical radar supplies launch.
     # LCMF itself always receives the original OPS radial speed first.
-    # an IWR unit's candidate takes each shot's own range (13 Oct)
     ball_speed_correction_enabled = args.kld7 or bool(args.iwr6843)
     ball_speed_correction_distance_ft = args.kld7_ball_distance
     ball_speed_correction_ball_above_radar_ft = -args.kld7_radar_height_inches / 12.0
@@ -8376,7 +8103,6 @@ def main():
                     camera_ball_box, camera_setup_ball, args.iwr6843_tee_m, range_prior
                 )
 
-    # after the camera, before any shot
     kiosk_extensions.call_all("after_camera_setup")
 
     if args.iwr6843:
@@ -8409,10 +8135,7 @@ def main():
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             # Raw cloud uploads need the dumps on disk to send them.
             save_dumps=args.debug or _cloud_raw_uploads_enabled(),
-            # The tee sits on the camera's axis; without a rig it is assumed
-            # directly downrange of the IWR, never July's 64 mm (audit F10).
-            # the ball's side offset from the radar's axis as the setup measured it
-            # (13 Oct); else the rig's camera axis (audit F10)
+            # the setup's measured side offset, else the rig's camera axis, else downrange
             lateral_tee_offset_m=(
                 float(args.tee_side_offset_m)
                 if args.tee_side_offset_m is not None

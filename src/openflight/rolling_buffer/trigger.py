@@ -369,8 +369,7 @@ class SoundTrigger(TriggerStrategy):
     def notify_gate_edge(self, timestamp: Optional[float] = None) -> None:
         """Record a BCM17 GATE edge, the same edge that drives the OPS HOST_INT.
 
-        Called from the GPIO observer, so it only stores the time. The wait uses
-        it to catch a board that saw the edge but was not armed to dump.
+        Called from the GPIO observer, so it only stores the time.
         """
         edge_time = time.time() if timestamp is None else float(timestamp)
         with self._gate_edge_lock:
@@ -381,11 +380,9 @@ class SoundTrigger(TriggerStrategy):
             return self._last_gate_edge_time
 
     def _rearm_after_empty_wait(self, radar: "OPS243Radar", capture_timer: OpsCaptureTimer):
-        """Re-arm after a wait that ended without a capture (P7-1).
+        """Re-arm after a wait that ended without a capture.
 
-        After a dump the board sits idle until PA. If that dump was lost (its
-        start flushed, or an edge the board never answered), only a re-arm
-        brings the board back; in Outdoors-test-7 nothing did, for 154 s.
+        After a dump the board sits idle until PA, so a lost dump needs a re-arm.
         """
         outcome = getattr(radar, "last_hardware_trigger_outcome", None)
         if outcome == "missed_edge":
@@ -823,9 +820,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
                 logger.info("[TRIGGER] OPS hardware trigger wait cancelled")
                 return None
             if getattr(radar, "last_hardware_trigger_outcome", None) == "discarded_dump":
-                # A dump lost its start and the board went idle: only a PA
-                # re-arm brings it back (the same lost-dump detector as the
-                # sound path, so the same diagnostic reason).
+                # A dump lost its start and the board went idle: only a PA re-arm brings it back.
                 discarded = getattr(radar, "last_hardware_trigger_discarded_bytes", 0)
                 logger.warning(
                     "[TRIGGER] OPS dump arrived without its start (%d bytes) - re-arming the radar",

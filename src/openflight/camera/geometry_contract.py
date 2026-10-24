@@ -12,13 +12,11 @@ from .club_delivery import GOLF_BALL_DIAMETER_M, CameraDeliveryGeometry
 from .geometry import forward_distance_from_slant_range
 
 SCHEMA = "openflight.camera.effective_geometry"
-# Where the resting ball sits aside (D36 item 4b): the setup's validated pair, or
-# assumed dead ahead of the radar when the setup measured no side offset.
+# Source of the resting ball's side offset: the setup's pair, or assumed dead ahead.
 TEE_LATERAL_ASSUMED = "assumed_directly_downrange"
 TEE_LATERAL_MEASURED = "setup_patch_pair"
 VERSION = 1
-# What a swing without a tee range cannot have, said the same way on every metric
-# it prevents (P8-7 gate 2; the setup side owns handing one over).
+# The reason on every metric a swing without a tee range cannot have.
 NO_TEE_RANGE = (
     "no tee range: the setup handed the swings none, and the IWR launch and the "
     "camera's geometry both need one"
@@ -79,8 +77,7 @@ class EffectiveCameraGeometryInputs:
     ball_diameter_m: float
     calibrated_model_snapshot: Mapping[str, Any] | None = None
     calibrated_mode_evidence: Mapping[str, Any] | None = None
-    # D36 item 4b: the setup pair's side offset of the resting ball from the
-    # radar's axis (+ target-right), or 0 when the setup measured none
+    # resting ball's side offset from the radar's axis (+ target-right)
     ball_lateral_offset_m: float = 0.0
     ball_lateral_offset_source: str = TEE_LATERAL_ASSUMED
 
@@ -284,8 +281,7 @@ class EffectiveCameraGeometryInputs:
             roll_correction_deg=self.roll_correction_deg,
             ball_diameter_m=self.ball_diameter_m,
             calibrated_model=self.calibrated_model(),
-            # The recorded name predates it, but the target-line correction
-            # turns club path with the ball's horizontal launch (audit F9).
+            # the target-line correction turns club path as well as horizontal launch
             horizontal_offset_deg=self.ball_horizontal_output_offset_deg,
             ball_lateral_offset_m=self.ball_lateral_offset_m,
         )

@@ -44,19 +44,14 @@ def pre_trigger_count_by_exposure(
 ) -> int:
     """Frames whose exposure began at or before the trigger, on the sensor's clock.
 
-    ``TriggeredCapture.pre_trigger_count`` counts the frames that had ARRIVED
-    before the trigger, which a host stall moves; this counts by exposure.
+    ``pre_trigger_count`` counts by arrival, which a host stall moves; this counts by exposure.
     """
     timestamps = np.asarray(sensor_timestamps_ns, dtype=np.int64)
     return int(np.count_nonzero(timestamps <= int(trigger_sensor_clock_ns)))
 
 
 def exposure_trigger_index(archive: Mapping[str, Any], frame_count: int) -> int | None:
-    """The last frame exposed at or before the trigger, when the clip records it (P6-5).
-
-    Clips saved before ``pre_trigger_count_by_exposure`` existed return None, so
-    their callers keep the index they always used and replay as they did.
-    """
+    """The last frame exposed at or before the trigger, or None for clips without that count."""
     if "pre_trigger_count_by_exposure" not in archive:
         return None
     try:
@@ -171,9 +166,7 @@ class TriggeredFrameBuffer:
     def state_nowait(self) -> tuple[bool, bool, int]:
         """(collecting a tail, a capture awaiting handoff, pre-trigger frames held).
 
-        Read without the lock, for a reader that must never delay a frame (the
-        ready light, P7-14). Each value is current; together they may straddle
-        one frame.
+        Read without the lock so it never delays a frame; the values may straddle one frame.
         """
         return self._capturing, self._ready is not None, len(self._pre)
 

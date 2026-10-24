@@ -1,18 +1,8 @@
 """Late-Flight Complex Multipath Fusion launch estimator, per-antenna paths (LCMF-v2).
 
-The model consumes an IWR6843 L3 dump plus an independently measured OPS243
-ball speed, and fits the calibrated eight-channel snapshots along the ball's
-range walk with a dictionary of direct and floor-bounced paths.
-
-This is no longer the frozen 2026-07-16 TrackMan candidate (LCMF-v1). v1 put
-every antenna at one radar height on idealised lambda/2 indices; v2 places
-each LEVM antenna from the rig (`openflight.iwr6843.antennas`) and uses exact
-path lengths for DD, DG, GD and GG, so the TX pair and the RX row, about 16 mm
-apart on the v3 enclosure, meet the floor bounce at their own angles, and the
-element order follows the board's rotation. The July TrackMan validation does
-not carry over: v2 is unvalidated against a reference instrument until a new
-paired session exists. The remaining constants (gates, grid, channel models)
-are v1's.
+Fits an IWR6843 L3 dump's eight-channel snapshots along the ball's range walk, given
+an OPS243 ball speed, with direct and floor-bounced paths placed per antenna from the
+rig (`openflight.iwr6843.antennas`). Not yet validated against a reference instrument.
 """
 
 from __future__ import annotations
@@ -56,8 +46,6 @@ MAX_PER_FRAME = 4
 MPH_PER_MS = tracking.MPH_PER_MS
 HORIZONTAL_TAIL_FRAMES = 8
 HORIZONTAL_COHERENCE_MIN = 0.90
-# HLCMF-v2 fits a direction of motion through each frame's position, so it
-# needs positions at three or more instants (two would fit any line exactly).
 HORIZONTAL_MOTION_MIN_FRAMES = 3
 
 # One collapsed channel must not drag the answer down. 8.0 sits in an observed
@@ -75,9 +63,7 @@ SINGLE_CHANNEL_CONFIDENCE_FACTOR = 0.7
 class BallRangeEvidence:
     """Transient fitted ball trajectory shared with camera fusion.
 
-    ``status`` is the LCMF status of the estimate that produced the track;
-    camera fusion uses the track as depth only when it starts with
-    "accepted" (``tracking.accepted_range_evidence``).
+    Camera fusion uses it as depth only when ``status`` starts with "accepted".
     """
 
     track: tracking.BallTrack
@@ -110,7 +96,7 @@ class LCMFResult:
     horizontal_raw_deg: float | None = None
     horizontal_confidence: float | None = None
     horizontal_status: str | None = None
-    # unit_boresight or target_line, set with the horizontal offset (D36 item 2)
+    # unit_boresight or target_line
     horizontal_frame: str | None = None
     effective_tdm_tau_s: float = doa.TDM_TAU_S
     effective_loop_period_s: float = tracking.LOOP_PRI_S
@@ -203,8 +189,7 @@ def _result_from_track(
     effective_loop_period_s: float = tracking.LOOP_PRI_S,
     evidence_status: str | None = None,
 ) -> LCMFResult:
-    """``evidence_status`` overrides the range evidence's status: a launch measured
-    on a reject-quality track is shown, but its range never becomes depth."""
+    """``evidence_status`` overrides the range evidence's status."""
     track = shot.track
     impact_t_s = impact_time_s(
         track,
@@ -328,13 +313,7 @@ def _candidate_trajectory(
 
 
 def antenna_layout(cal: Calibration) -> antennas.AntennaLayout:
-    """The calibration's antenna layout, or the legacy one its radar height implies.
-
-    A session with a rig carries its layout (`init_iwr6843`). One without --
-    July/August, offline tools given only a height and a tilt -- has its
-    height taken as the RX-row centre of a board turned +90 deg
-    (`antennas.legacy_layout`), so its replays differ from what it recorded.
-    """
+    """The calibration's antenna layout, or the legacy one its radar height implies."""
     if cal.antennas is not None:
         return cal.antennas
     return antennas.legacy_layout(cal.radar_height_m)
@@ -345,14 +324,8 @@ def _model_geometry(
 ) -> dict:
     """The setup geometry the multipath dictionary is built on.
 
-    Every antenna is placed from the layout at the calibration's aim, which a
-    shot's inclinometer reading may have moved. The tee range starts at the
-    virtual array's phase centre: the static range estimate is the bistatic
-    mean over the eight TX/RX pairs, which differs from the distance to the
-    phase centre by hundredths of a millimetre at the tee. The ball sits at
-    its measured height and the rig's lateral offset from that phase centre;
-    both the range inversion and the tee's forward position use the offset
-    (audit F10).
+    The tee range is measured from the virtual array's phase centre (the
+    bistatic mean over the eight pairs differs by hundredths of a millimetre).
     """
     layout = antenna_layout(cal)
     positions = layout.positions_m(cal.tilt_rad)
@@ -394,10 +367,9 @@ def _spatial_dictionary(
 ) -> np.ndarray:
     """Build the DD/DG/GD/GG moving-ball dictionary from exact per-antenna paths.
 
-    With ' an antenna mirrored in the hitting surface and B the candidate ball,
-    DD = |TX-B| + |B-RX|, DG = |TX-B| + |B-RX'|, GD = |TX'-B| + |B-RX| and
-    GG = |TX'-B| + |B-RX'|, each steered as exp(+j*2*pi*path/lambda), the
-    data's convention (`antennas.PHASE_SIGN`).
+    With ' an antenna mirrored in the hitting surface and B the ball,
+    DD = |TX-B| + |B-RX|, DG = |TX-B| + |B-RX'|, GD = |TX'-B| + |B-RX|,
+    GG = |TX'-B| + |B-RX'|, each steered as exp(+j*2*pi*path/lambda).
     """
     tx_order = doa.validate_tx_order(geometry["tx_order"])
     paths, direct_vr, image_vr = _candidate_paths(launch_rad, range_m, geometry)
@@ -768,10 +740,9 @@ def _tx2_phase_snapshots(
 ) -> tuple[tracking.Geometry, list[tuple[float, ...]]] | None:
     """Motion-corrected TX2 phase along the fitted ball track.
 
-    Returns the capture geometry and one ``(frame, time_s, phase_rad,
-    weight)`` per usable loop, or None for a capture without TX2 or a track.
-    With ``separate_references`` each loop is ``(frame, time_s, phase_vs_tx1,
-    phase_vs_tx3, weight)`` (``doa.tx2_reference_phases_at``) instead.
+    Returns the geometry and one ``(frame, time_s, phase_rad, weight)`` per
+    usable loop, or None; ``separate_references`` gives ``(frame, time_s,
+    phase_vs_tx1, phase_vs_tx3, weight)`` instead.
     """
     if prepared is None:
         meta, cube = parse_dump(raw)
@@ -830,13 +801,10 @@ def _tx2_horizontal_proxy(
     phase_velocity_ms: float | None = None,
     prepared: PreparedLCMFCapture | None = None,
 ) -> tuple[float | None, float | None, str | None]:
-    """HLCMF-v1, SUPERSEDED by ``_tx2_horizontal_motion`` (D36 item 3).
+    """HLCMF-v1: the ball's late-flight bearing, an offline comparator only.
 
-    The frame-balanced late-flight BEARING of the ball: the final eight
-    observed frames' TX2 phase fused with equal frame influence. Seen from a
-    radar behind a tee 1-2.5 m away that bearing is not the launch direction:
-    at 2.2-4.6 m it reads about 0.5-0.7 x the true angle. Kept as an offline
-    comparator only; production reports HLCMF-v2.
+    From behind a tee 1-2.5 m away the bearing reads about 0.5-0.7x the launch
+    direction, so production uses ``_tx2_horizontal_motion``.
     """
     collected = _tx2_phase_snapshots(
         raw,
@@ -855,13 +823,12 @@ def _tx2_horizontal_proxy(
         phase_reference_rad=phase_reference_rad,
     )
     if coherence < HORIZONTAL_COHERENCE_MIN:
-        # measured and labelled (D15, P8-7); consumers read the status
         return angle_deg, coherence, "hlcmf_v1_low_coherence"
     return angle_deg, coherence, "hlcmf_v1_accepted"
 
 
 def _continuous_phase(values: np.ndarray) -> np.ndarray:
-    """Follow a wrapped phase through time by its shortest step (as club path)."""
+    """Follow a wrapped phase through time by its shortest step."""
     if values.size < 2:
         return values.copy()
     steps = np.angle(np.exp(1j * np.diff(values)))
@@ -869,7 +836,7 @@ def _continuous_phase(values: np.ndarray) -> np.ndarray:
 
 
 def _median_pairwise_slope(times: np.ndarray, values: np.ndarray) -> float:
-    """Theil-Sen slope: the median over every pair of instants (as club path)."""
+    """Theil-Sen slope: the median over every pair of instants."""
     dt = times[:, None] - times[None, :]
     valid = np.triu(np.ones(dt.shape, dtype=bool), k=1) & (np.abs(dt) > 1e-9)
     slopes = (values[:, None] - values[None, :])[valid] / dt[valid]
@@ -888,27 +855,16 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     phase_velocity_ms: float | None = None,
     prepared: PreparedLCMFCapture | None = None,
 ) -> tuple[float | None, float | None, str | None]:
-    """HLCMF-v2: horizontal launch as the ball's DIRECTION OF MOTION (D36 item 3).
+    """HLCMF-v2: horizontal launch as the ball's direction of motion.
 
-    Each frame's TX2 phase (the board's phase reference removed) is the ball's
-    lateral direction cosine. It is taken against TX1 and TX3 separately, each
-    followed through time, and then midpointed, as club path does: averaging
-    the two vertical reference VOLTAGES (HLCMF-v1) cancels them once the ball
-    climbs about 15 degrees off the boresight, and the late frames' bearings
-    went wrong with it. With that
-    frame's range from the ball track it places the ball laterally: ``y =
-    r * sin(bearing)``. Its downrange position is what the range has left
-    once the lateral offset and the ball's height above the radar are taken
-    out: ``x = sqrt(r**2 - y**2 - z**2)``. The height comes from this shot's
-    own vertical launch along the straight line from the tee
-    (``tee_position_m``: forward, lateral and height from the radar's phase
-    centre, the calibration's tee). Launch direction is then
-    ``atan2(v_y, v_x)`` of the robust velocity through those positions, as
-    ``club.estimate_club_path`` does for the club: geometry, no fitted scale.
-    Gravity's few centimetres over the window are left out.
-
-    The coherence gate is HLCMF-v1's: the equal-weight resultant length of the
-    per-frame phases. Positive starts right of the boresight, negative left.
+    Each frame's TX2 phase is the ball's lateral direction cosine, taken
+    against TX1 and TX3 separately, unwrapped and midpointed (averaging the
+    reference voltages cancels them about 15 deg off boresight). With the
+    track range r: ``y = r*sin(bearing)``, ``x = sqrt(r**2 - y**2 - z**2)``,
+    z from this shot's vertical launch along the line from ``tee_position_m``
+    (forward, lateral, height from the phase centre). Launch direction is
+    ``atan2(v_y, v_x)`` of the robust velocity; gravity is ignored.
+    Positive starts right of the boresight.
     """
     collected = _tx2_phase_snapshots(
         raw,
@@ -945,7 +901,7 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     phases = np.asarray(frame_phases)
     if phase_reference_rad is not None:
         phases = np.angle(np.exp(1j * (phases - phase_reference_rad)))
-    # TrackMan sign: positive right of the boresight (as HLCMF-v1)
+    # positive right of the boresight
     bearing_rad = -doa.tx2_phase_to_axis_angle_rad(phases)
     t_array = np.asarray(times)
     ranges_m = (
@@ -965,7 +921,6 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     v_forward = _median_pairwise_slope(t_array, downrange_m)
     angle_deg = math.degrees(math.atan2(v_lateral, v_forward))
     if coherence < HORIZONTAL_COHERENCE_MIN:
-        # measured and labelled (D15, P8-7); consumers read the status
         return angle_deg, coherence, "hlcmf_v2_low_coherence"
     return angle_deg, coherence, "hlcmf_v2_accepted"
 
@@ -987,10 +942,9 @@ def estimate_lcmf_v1(
 ) -> LCMFResult:
     """Estimate vertical launch from one TI dump and OPS ball speed.
 
-    The entry point keeps its v1 name for its callers; the estimator behind
-    it is ``NAME`` (per-antenna paths). ``track_override`` is an
-    offline-research hook for evaluating an independently selected range
-    walk. Normal production calls leave it unset.
+    The estimator is ``NAME``; the v1 name is kept for callers.
+    ``track_override`` is an offline-research hook for evaluating an
+    independently selected range walk. Normal production calls leave it unset.
     """
     if ball_speed_mph <= 0:
         raise ValueError("ball_speed_mph must be positive")
@@ -1040,12 +994,10 @@ def estimate_lcmf_v1(
             effective_tdm_tau_s=tdm_tau_s,
             effective_loop_period_s=loop_period_s,
         )
-    # D15 (P8-7): a reject-quality track is measured and labelled, not refused;
-    # its range evidence stays rejected so the camera never uses it as depth.
+    # a reject-quality track is measured and labelled; its range never becomes depth
     track_warning = shot.quality == "reject"
     evidence_status = "rejected_track_quality" if track_warning else None
     if shot.tdm_sign_used not in (-1, 1):
-        # a reject-quality track is never signed: no value exists, say why
         return _result_from_track(
             "rejected_track_quality" if track_warning else "rejected_missing_tdm_sign",
             shot,
@@ -1121,7 +1073,6 @@ def estimate_lcmf_v1(
             evidence_status=evidence_status,
         )
     try:
-        # HLCMF-v2 places the ball in height from this shot's own vertical launch
         horizontal_deg, horizontal_conf, horizontal_status = _tx2_horizontal_motion(
             full_raw,
             shot,

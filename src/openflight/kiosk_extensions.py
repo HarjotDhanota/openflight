@@ -1,13 +1,8 @@
 """Optional kiosk extensions: the one registration point for add-ons to the kiosk server.
 
-A plain kiosk runs with none. An extension subclasses ``KioskExtension``, overrides
-only the hooks it needs (every hook here is a no-op), and registers itself with
-``register``. Installed packages can declare extensions under the
-``openflight.kiosk_extensions`` entry-point group; the kiosk loads them at start-up
-with ``load_installed``. Loading imports the module, which registers its extension.
-
-Hooks are called in registration order. A hook that answers a question (a bool or
-a callable) takes the first extension that gives a non-default answer.
+An extension subclasses ``KioskExtension``, overrides the hooks it needs and calls
+``register``; installed packages declare one under the ``openflight.kiosk_extensions``
+entry-point group. Hooks run in registration order.
 """
 
 from __future__ import annotations
@@ -26,9 +21,7 @@ ENTRY_POINT_GROUP = "openflight.kiosk_extensions"
 class CarryOutcome(NamedTuple):
     """What a flight model did with a shot's carry.
 
-    ``source`` names the carry it committed ("ballistic"), or None. With no carry,
-    ``table_reason`` says why an OPS-only unit takes the table estimate instead;
-    both None means the model decided there is no carry (a fusion unit, D17).
+    Both None means the model decided there is no carry (a fusion unit).
     """
 
     source: Optional[str]
@@ -39,8 +32,6 @@ class KioskExtension:  # pylint: disable=unused-argument
     """Base class for kiosk extensions: every hook does nothing."""
 
     name = "extension"
-
-    # --- start-up and shutdown -------------------------------------------------------
 
     def add_arguments(self, parser) -> None:
         """Add this extension's command-line flags to the kiosk's parser."""
@@ -60,11 +51,8 @@ class KioskExtension:  # pylint: disable=unused-argument
     def on_shutdown(self) -> None:
         """During hardware cleanup at exit."""
 
-    # --- questions the kiosk asks ----------------------------------------------------
-
     def diagnostic_camera(self) -> bool:
-        """True when a study page drives the camera: raw frames are kept for it and
-        its controls may exceed the armed exposure profile."""
+        """True when a study page drives the camera and may exceed the armed profile."""
         return False
 
     def camera_runtime_class(self, base: type) -> Optional[type]:
@@ -76,11 +64,8 @@ class KioskExtension:  # pylint: disable=unused-argument
         return None
 
     def iwr_optional(self) -> Optional[str]:
-        """Why the run continues without a requested IWR6843 that failed to start, or
-        None (the kiosk then exits)."""
+        """Why the run may continue without a failed IWR6843, or None to exit."""
         return None
-
-    # --- per-session and per-shot ------------------------------------------------------
 
     def session_start_config(self, config: dict) -> None:
         """Add this extension's keys to the configuration recorded at session start."""
@@ -108,8 +93,6 @@ class KioskExtension:  # pylint: disable=unused-argument
     def on_camera_capture(self, shot, camera_capture) -> None:
         """A camera clip matched this shot (before it is logged)."""
 
-    # --- shot models: what a model builds from the measured inputs --------------------
-
     def on_club_delivery(self, shot, delivery) -> None:
         """The camera's club delivery for this shot (a result, or a dict with its status)."""
 
@@ -126,17 +109,12 @@ class KioskExtension:  # pylint: disable=unused-argument
     def simulate_carry(self, shot, *, fusion: bool, enabled: bool) -> Optional["CarryOutcome"]:
         """Simulate the flight and commit the carry, or None without a flight model.
 
-        ``fusion`` is a unit with an IWR6843 or camera (no table carry, D17);
-        ``enabled`` is --ballistics.
+        ``fusion``: a unit with an IWR6843 or camera (no table carry).
         """
         return None
 
     def after_shot_published(self, shot, *, update_kind: str) -> None:
-        """A finalized shot went out to the kiosk ("first" result or "late_update").
-
-        Work started here must not hold up the kiosk; a result it finds later goes
-        out with ``server.publish_shot_update``.
-        """
+        """A finalized shot went out ("first" or "late_update"); must not block the kiosk."""
 
     def observe_shot_emit(
         self, shot, event: str, payload: dict, *, final: bool, update_kind: str
@@ -184,11 +162,7 @@ def registered() -> tuple[KioskExtension, ...]:
 
 
 def load_installed() -> list[str]:
-    """Import every extension declared in the entry-point group; return their names.
-
-    An extension that fails to import is logged and skipped: the kiosk starts
-    without it rather than not at all.
-    """
+    """Import every declared extension, logging and skipping failures; return their names."""
     loaded = []
     for entry_point in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP):
         try:

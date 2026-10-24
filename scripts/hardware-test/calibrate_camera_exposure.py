@@ -206,11 +206,7 @@ def score_result(result: dict, args: argparse.Namespace) -> float:
 
 
 def miss_reason(best: dict, results: list[dict], args: argparse.Namespace) -> str:
-    """Why no tested setting was acceptable, in the direction the best one missed.
-
-    A dusk scene whose brighter settings clip the sky was once told to reduce
-    its brightness; the advice follows what the best setting got wrong.
-    """
+    """Why no tested setting was acceptable, in the direction the best one missed."""
     problems = []
     too_dark = best["mean"] < args.target_mean_low
     too_bright = best["mean"] > args.target_mean_high
@@ -243,11 +239,7 @@ def miss_reason(best: dict, results: list[dict], args: argparse.Namespace) -> st
 
 
 def black_level_dn(metadata: dict) -> float | None:
-    """The sensor black level in 8-bit raw DN, from libcamera's SensorBlackLevels.
-
-    libcamera reports it on a 16-bit scale (4096 on the OV9281, i.e. 16 DN in the
-    R8 stream every analysis uses).
-    """
+    """The sensor black level in 8-bit raw DN (libcamera reports a 16-bit scale)."""
     levels = metadata.get("SensorBlackLevels")
     if not levels:
         return None
@@ -262,11 +254,8 @@ def summarize_images(
 ) -> dict:
     """Calculate image exposure statistics for one setting.
 
-    The hitting zone is recorded too: outdoors the sky clips at any usable
-    setting, so whole-frame clipping alone would call every setting too bright.
-    It is the tester's placement box when given (``zone_box``), else the fixed
-    centre-lower region (rows 45-90 %, columns 20-80 %); ``zone_source`` says
-    which.
+    The hitting zone is recorded too, since outdoors the sky clips at any usable
+    setting: ``zone_box`` when given, else rows 45-90 %, columns 20-80 %.
     """
     height, width = images.shape[1:3]
     if zone_box is not None:

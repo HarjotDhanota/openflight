@@ -38,8 +38,7 @@ MPH_TO_FTS = 1.4666667
 DRAG_MPH_PER_MS = 0.027  # iron-speed drag deceleration of the ball
 EXPERIMENTAL_MODEL = "legacy_peak_radial_v1"
 MEASURED_DIRECTION_SOURCES = frozenset({"radar", "camera"})
-# OPS-relative ball geometry that was measured: by tape from the OPS, or from
-# the rig file's OPS offsets applied to the IWR's own tee range (audit F12).
+# Measured OPS-relative ball geometry: by tape, or the rig's OPS offsets on the IWR tee range.
 MEASURED_OPS_GEOMETRY_SOURCES = frozenset({"ops_measured", "ops_rig_offsets"})
 MAX_WINDOW_MS = 250.0
 

@@ -1,35 +1,8 @@
-"""Each swing's launch-point range from its own IWR capture (13 Oct decision "a").
+"""Each swing's launch-point range from its own IWR capture.
 
-The resting ball's distance is no longer measured by static empty/ball captures at
-setup: indoors the scene changes between the two captures by 63-68 dB (sum) against
-a ball echo of about 66 dB at 2.1 m, so the method fails beyond about 1.5 m
-(iwr-range-research.md). TrackMan's radar needs motion too. Each swing's capture
-does have motion: the ball's range walk after impact, and the club's approach.
-
-**Method.** The ball's walk is searched from just short of the camera prior to the
-net, at the OPS243's ball speed (radial speed 0.75-1.05 of it). The launch point is
-where it began:
-
-* ``club_ball_intersection``: the club's approach walk (searched in the frames before
-  the ball's first sample, at the OPS243 club speed) meets the ball's walk at impact,
-  because the club reaches the ball there. That meeting fixes both the impact instant
-  and the range. With the ball at ``v_b`` and the club at ``v_c``, a line error of
-  ``s_b`` and ``s_c`` moves the meeting range by
-  ``sqrt((v_b s_c)^2 + (v_c s_b)^2) / (v_b - v_c)``: about 3x the line errors.
-* ``ball_track_start``: without a club walk, the ball's walk at its first sample,
-  which comes up to a frame after impact; half a frame of ball travel is in the
-  uncertainty.
-
-The radar's range bias is removed. The camera prior only sizes the search and checks
-the answer: a launch point more than ``PRIOR_AGREEMENT_SIGMAS`` combined sigmas from
-it is not used (kept as ``candidate_range_m`` for review).
-
-**Not validated against a tape.** The first gate is the next session's per-swing
-range against a taped ball (``scripts/analysis/grade_launch_range.py``).
-
-Every value carries its label: ``measured`` (this shot's IWR walk), ``estimated``
-(the camera prior standing in), or ``not_measured`` with the reason.
-"""
+The ball's post-impact range walk is searched at the OPS243 ball speed. The launch point is
+where the club's approach walk meets it, or without one the walk's first sample. The camera
+prior sizes the search and checks the answer; values are measured, estimated or not_measured."""
 
 from __future__ import annotations
 
@@ -46,42 +19,28 @@ SCHEMA = "openflight.iwr_launch_range.v1"
 SOURCE = "iwr_post_impact"
 CAMERA_PRIOR_SOURCE = "camera_prior"
 
-# Radial ball speed against the OPS243's (both sit behind the ball, so the radial
-# speed is the ball speed times a projection near 1; the walk's own slope reads up to
-# a few per cent off it). The floor keeps the slower post-impact club out.
+# Radial ball speed as a fraction of the OPS243's; the floor keeps the slower club out.
 BALL_SPEED_FRACTION = (0.85, 1.10)
-# The club's radial speed against the OPS club speed (iwr6843.club's window).
 CLUB_SPEED_FRACTION = (0.70, 1.20)
 CLUB_TRACK_SPEED_LIMIT_MS = (12.0, 60.0)
-# Around the ball walk's start, where the club's approach is searched. The start can
-# come early: the club's last samples lie within the line's tolerance of the ball's
-# walk extended back (they close at only v_b - v_c), so the window reaches past it.
+# Club search window around the ball walk's start, which can come early.
 CLUB_WINDOW_BEFORE_S = 0.015
 CLUB_WINDOW_AFTER_S = 0.006
-# Without a club walk, the walk's start may be the club's last samples: within the
-# line tolerance (1.2 bins) of a ball line it closes on at ~0.25 v_b, i.e. up to
-# ~0.2 m short. Half of that is carried as an uncertainty, not corrected.
+# Without a club walk the start may be up to ~0.2 m short; half is carried as uncertainty.
 CLUB_CONTAMINATION_M = 0.11
-# The ball must outrun the club by this much for their meeting to be well posed.
 MIN_SPEED_GAP_MS = 4.0
-# The search starts this many prior sigmas (and a margin) short of the prior.
 PRIOR_SEARCH_SIGMAS = 3.0
 SEARCH_MARGIN_M = 0.10
 MIN_SEARCH_FLOOR_M = 0.50
 DEFAULT_SEARCH_FLOOR_M = 0.60
 MAX_RANGE_M = 4.7
 NET_MARGIN_M = 0.25
-# A launch point this many combined sigmas from the camera prior is not used.
 PRIOR_AGREEMENT_SIGMAS = 3.0
-# Provisional model floor: the club's reflecting centre against the ball's near face
-# at contact, and the ball's first instants in the club's range bin. Not measured.
+# Provisional, unmeasured floor: club reflecting centre vs ball near face at contact.
 MODEL_FLOOR_M = 0.02
-# The ball's walk needs this support before its start or slope is trusted.
 MIN_BALL_INLIERS = 12
 MIN_BALL_SPAN_S = 0.006
-# Where the walk starts: the first frame holding at least this many of its samples
-# whose next frame does too. A stray noise peak on the line before impact, or the
-# club's last samples within the line's tolerance, must not start it early.
+# The walk starts at the first frame with this many samples whose next frame has them too.
 WALK_START_MIN_SAMPLES = 2
 # the RANSAC line's inlier tolerance, in bins, as tracking.find_ball uses
 _TRACK_TOLERANCE_BINS = 1.2
@@ -199,11 +158,7 @@ class ShotBallRange:
 def shot_ball_range(
     estimate: LaunchRangeEstimate | None, prior: LaunchRangePrior | None
 ) -> ShotBallRange:
-    """The shot's own IWR launch point; else the camera prior, labelled; else none.
-
-    Never a default number: without either, every range-dependent metric of the shot
-    is not measured, and says why.
-    """
+    """The shot's own IWR launch point; else the camera prior, labelled; else not measured."""
     if estimate is not None and estimate.measured:
         return ShotBallRange(
             range_m=estimate.range_m,
@@ -291,12 +246,7 @@ def refit_segment(
     before_s: float | None = None,
     tolerance_bins: float = _TRACK_TOLERANCE_BINS,
 ) -> tracking.BallTrack:
-    """The walk refitted on its own samples on one side of impact only.
-
-    The ball's walk extended back before impact runs within the line tolerance of the
-    club's last samples, and the club's past impact runs on slower: each line is
-    refitted on its own side so neither drags the other's meeting point.
-    """
+    """The walk refitted on one side of impact only, so neither line drags the other."""
     _loops, times, bins = detections
     keep = np.abs(bins - track.bin_at(times)) < tolerance_bins
     if after_s is not None:
@@ -326,11 +276,7 @@ def walk_start_s(
     track: tracking.BallTrack,
     gate: tuple[float, float],
 ) -> float:
-    """When the walk's samples start holding frame after frame (see WALK_START_MIN_SAMPLES).
-
-    ``BallTrack.t_first`` is its earliest inlier, which a single noise peak on the
-    extended line can pull before impact.
-    """
+    """When the walk's samples start holding frame after frame (``t_first`` can be a noise peak)."""
     geometry = prepared.geometry
     loops, times, bins = _gate_detections(prepared, scope, gate)
     if loops.size == 0:
@@ -419,10 +365,7 @@ def _meeting(  # pylint: disable=too-many-arguments
     club: tracking.BallTrack,
     start_s: float,
 ) -> tuple[float, tracking.BallTrack, tracking.BallTrack] | str:
-    """Where the club's approach meets the ball's walk, each refitted on its own side.
-
-    Returns (impact time, ball walk, club walk), or why they do not meet.
-    """
+    """Where the club's approach meets the ball's walk: (impact time, ball, club) or why not."""
     geometry = prepared.geometry
     ball_detections = _gate_detections(prepared, scope, gate)
     club_gate = (
@@ -458,10 +401,7 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
     net_range_m: float | None,
     range_bias_m: float = 0.0,
 ) -> LaunchRangeEstimate:
-    """This shot's launch-point range from its own capture (see the module docstring).
-
-    ``prepared`` is the capture's vertical TX pair (``prepare_lcmf_capture(raw).vertical``).
-    """
+    """This shot's launch-point range; ``prepared`` is the capture's vertical TX pair."""
     gate = search_gate_m(prior, net_range_m)
     common: dict[str, Any] = {"search_gate_m": gate, "range_bias_m": range_bias_m, "prior": prior}
     if not ball_speed_mph or ball_speed_mph <= 0.0:

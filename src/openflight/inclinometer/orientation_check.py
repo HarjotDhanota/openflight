@@ -1,19 +1,8 @@
-"""Which way round the LIS3DH board sits in this unit, and where the unit keeps it.
+"""Which way round the LIS3DH board sits in this unit; kept locally, never in the rig file.
 
-The rig file says how the board is mounted (``lis3dh_mount_yaw_deg``); a unit whose
-board is fitted differently keeps its own mount beside its local settings, never in
-the shared rig file.
-
-**The mount.** A board reading ``(x, y, z)`` is read in the enclosure's axes as
-``R(yaw) . F^upside_down . (x, y, z)``: ``F`` turns the board over about its own
-Y axis (X and Z reversed), then ``R`` turns it about the vertical,
-counter-clockwise seen from above (``MountedAccelerometer``'s convention). Every
-board lying flat in the housing is one of these eight.
-
-**A correction** is applied after the current mount, in the enclosure's axes: a
-quarter turn left adds +90 degrees of yaw (the front-up reading showed on +X), a
-quarter turn right -90 (on -X), turned around 180 (on -Y); upside down turns the
-board over about the enclosure's Y axis, which also mirrors the yaw.
+A board reading in enclosure axes is ``R(yaw) . F^upside_down . (x, y, z)``: ``F`` flips
+about the board's Y (X and Z reversed), ``R`` turns counter-clockwise seen from above.
+Corrections apply after the current mount; upside down also mirrors the yaw.
 """
 
 from __future__ import annotations

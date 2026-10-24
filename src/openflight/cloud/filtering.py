@@ -143,16 +143,11 @@ def _filter_entries(
     Captures the ``session_uuid`` from ``session_start`` during the same pass
     so we don't need a second read to resolve the upload id.
 
-    In both modes a late ``shot_updated`` replaces its shot's kept
-    ``shot_detected`` line with the shot's final values, in the same
-    ``shot_detected`` format, so the upload contract is unchanged and the shot
-    is counted once. If the final line would exceed the mode's line limit the
-    first result is kept and the update is counted in ``dropped_oversize``.
-    Filtered mode never uploads the ``shot_updated`` as its own entry.
+    A late ``shot_updated`` is merged into its shot's kept ``shot_detected``
+    line (an oversize result keeps the first and counts in ``dropped_oversize``).
 
-    In ``raw_mode`` every type except ``RAW_EXCLUDED_TYPES`` is kept (the raw
-    ``shot_updated`` line too, as recorded), and the ``iwr6843_capture`` entries
-    are collected as the shot's dump files.
+    In ``raw_mode`` every type except ``RAW_EXCLUDED_TYPES`` is kept, and the
+    ``iwr6843_capture`` entries are collected as the shot's dump files.
     """
     kept_lines: List[str] = []
     kept_type_counts: Dict[str, int] = {}
@@ -160,8 +155,6 @@ def _filter_entries(
     embedded_uuid = ""
     captures: Dict[int, CaptureRef] = {}
     max_line_bytes = MAX_RAW_LINE_BYTES if raw_mode else MAX_LINE_BYTES
-    # Kept shot_detected line per shot number, so a late shot_updated can
-    # replace it with the shot's final values in the same shot_detected format.
     shot_line_index: Dict[int, int] = {}
 
     for raw, entry in _iter_entries(lines):
@@ -191,7 +184,6 @@ def _filter_entries(
                 kept_type_counts[SHOT_DETECTED] = kept_type_counts.get(SHOT_DETECTED, 0) + 1
             if not raw_mode:
                 continue
-            # Raw mode keeps the update's own line too, below, as recorded.
         if raw_mode:
             if not isinstance(entry_type, str) or entry_type in RAW_EXCLUDED_TYPES:
                 continue

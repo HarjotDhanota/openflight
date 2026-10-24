@@ -30,17 +30,14 @@ FAST_TRACK_MS = 26.5  # RADIAL m/s: slowest real SW ball reads ~27.5
 #                               (66 mph x cos projection); flying tee ~25
 FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
 MAX_RADIAL_ACCEL = 200.0  # m/s^2 sanity for the quadratic refit
-# The one m/s-to-mph factor for the IWR package (audit F13).
+# The one m/s-to-mph factor for the IWR package.
 MPH_PER_MS = 2.23694
 
 
 def accepted_range_evidence(evidence):
     """Return fitted range evidence only when its radar estimator accepted the track.
 
-    Rejected tracks keep their evidence, and its status, for replay and
-    diagnostics, but they never become camera depth (audit F4). Evidence
-    recorded before it carried a status is treated as accepted, as it was
-    then.
+    Rejected evidence never becomes camera depth; evidence without a status counts as accepted.
     """
     if evidence is None:
         return None

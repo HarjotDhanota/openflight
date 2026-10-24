@@ -43,23 +43,15 @@ CameraCaptureStream = Literal["raw", "main-y"]
 
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
-# The swing exposure re-checks the resting ball this often between clips (13 Oct 2026:
-# no startup lock), judging the latest few frames taken at the controls in force.
 SWING_EXPOSURE_EVERY_S = 1.0
 SWING_EXPOSURE_FRAMES = 3
-# A resting-ball look older than this is not a ball for the exposure.
 SWING_EXPOSURE_LOOK_MAX_AGE_S = 5.0
 SWING_EXPOSURE_DECISIONS_KEPT = 20
-# A look at the box must be taken this long after the last control change to count:
-# new controls reach the frames a few frames late, and a look at the old controls
-# would step a ball-finding sweep past the setting that shows the ball.
+# New controls reach the frames a few frames late; a look sooner than this saw the old ones.
 SWING_EXPOSURE_LOOK_SETTLE_S = 0.2
-# Completed clips waiting for the disk. Each full-resolution clip is about 25 MB in
-# RAM; a false-trigger storm on a slow card must not grow this without bound.
+# Each full-resolution clip is about 25 MB in RAM; bounded against false-trigger storms.
 MAX_PENDING_SAVES = 3
 MAX_REMEMBERED_REJECTIONS = 64
-# What ``pre_trigger_count_by_exposure`` counts (P6-5). ``pre_trigger_count``
-# still counts the frames that had arrived when the ring froze.
 EXPOSURE_SPLIT_DEFINITION = (
     "frames whose SensorTimestamp is at or before the trigger's CLOCK_BOOTTIME time; "
     "libcamera stamps SensorTimestamp on CLOCK_BOOTTIME at the start of the first "
@@ -68,11 +60,7 @@ EXPOSURE_SPLIT_DEFINITION = (
 
 
 def _boottime_ns() -> int | None:
-    """CLOCK_BOOTTIME now: libcamera's SensorTimestamp clock, or None where there is none.
-
-    It equals CLOCK_MONOTONIC (the host timestamps' clock) until the system
-    suspends, so each trigger records both rather than assuming they agree.
-    """
+    """CLOCK_BOOTTIME now (libcamera's SensorTimestamp clock), or None where there is none."""
     clock = getattr(time, "CLOCK_BOOTTIME", None)
     if clock is None:
         return None
@@ -112,21 +100,12 @@ class CameraCaptureSettings:
     auto_exposure_state_path: Path | None = None
     armed_profile: Mapping | None = None
     diagnostic_capture: bool = False
-    # Where the tester setup saw the resting ball in this mode (x, y, diameter_px).
-    # With it, a manual-exposure clip's analysis eligibility is judged on the ball,
-    # not the hitting-zone box (P7-8).
     setup_ball: Mapping | None = None
-    # The tester's confirmed placement box in this mode (x0, y0, x1, y1): the
-    # hitting zone the exposure meter and the zone rule judge. Without it the
-    # fixed centre-lower box stands in (P7-15).
+    # The confirmed placement box (x0, y0, x1, y1); None uses the fixed centre-lower box.
     hitting_zone: tuple[int, int, int, int] | None = None
-    # The lens on the unit (lens_profiles.ActiveLens.to_dict), recorded in every clip.
     lens: Mapping | None = None
-    # The setup's measured light: the 1280x800 resting ball's DN above black per
-    # us x gain. It seeds the swing exposure before the first ball look; the mode's
-    # measured signal factor carries it to 640x400 (13 Oct).
+    # Setup light: 1280x800 resting-ball DN above black per us x gain; seeds the swing exposure.
     light_index_dn_per_us_gain: float | None = None
-    # Where the sensor's control limits read at startup are kept for other pages.
     sensor_limits_path: Path | None = None
 
     @property
@@ -245,13 +224,7 @@ def ensure_picamera2_import_path() -> bool:
 
 
 def resolved_camera_config(camera) -> dict | None:
-    """What libcamera actually configured, as JSON-safe values.
-
-    The requested size and frame rate are not evidence that the sensor ran that
-    readout; a mode study needs the resolved configuration on every capture.
-    Never raises: a camera that cannot report it yields None, and the absence is
-    itself recorded.
-    """
+    """What libcamera actually configured, as JSON-safe values; None if it cannot report."""
     try:
         config = camera.camera_configuration() or {}
     except Exception:  # pylint: disable=broad-exception-caught
@@ -459,11 +432,9 @@ class CameraCaptureRuntime:
         self._camera_control_lock = threading.Lock()
         self._controls_purpose = "capture"
         self._trigger_exposure_lock = threading.Lock()
-        # Serializes whole triggers so their records queue in ring order while the
-        # frame lock above is held only to freeze the ring (P6-7).
+        # Serializes whole triggers so their records queue in ring order.
         self._trigger_order_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
-        # The swing exposure (13 Oct): built once the camera reports its limits.
         self._sensor_limits: sx.SensorLimits | None = None
         self._swing_policy: sx.SwingExposurePolicy | None = None
         self._ball_locator: Callable[[], Mapping | None] | None = None
@@ -479,9 +450,7 @@ class CameraCaptureRuntime:
         self._auto_exposure_last_check_epoch: float | None = None
         self._auto_exposure_last_adjustment_epoch: float | None = None
         self._auto_exposure_capture_deferred = False
-        # For the ready light (P7-14), plain values it reads without a lock: the
-        # last frame's arrival, the last accepted trigger, the save in progress,
-        # and the last clip's trigger-to-saved time (its rough time left).
+        # Read without a lock by the ready light.
         self._last_frame_ns: int | None = None
         self._clip_started_at: float | None = None
         self._saving_since: float | None = None
@@ -531,9 +500,8 @@ class CameraCaptureRuntime:
         try:
             seeded = None
             if self.settings.auto_exposure:
-                # Seeded before streaming starts: picamera2 sends controls set before
-                # start() with the first request, so no frame is taken at the startup
-                # controls (free play once started at a near-black 8 us x 1).
+                # picamera2 sends controls set before start() with the first request,
+                # so no frame is taken at the startup controls.
                 seeded = self._seed_swing_exposure()
             self._camera.start()
             self._wait_for_prebuffer()
@@ -639,11 +607,7 @@ class CameraCaptureRuntime:
         return self._auto_exposure_payload(self._auto_exposure_snapshot())
 
     def _auto_exposure_snapshot(self, *, history: bool = True) -> dict:
-        """The controls and controller state in force now; cheap enough for the frame lock.
-
-        Measuring the frame is left to ``_auto_exposure_payload``, which may run
-        after the lock is released: the snapshot keeps the frame it describes.
-        """
+        """The controls and controller state in force now; cheap enough for the frame lock."""
         settings = self.settings
         with self._auto_exposure_lock:
             decision = self._auto_exposure_decision
@@ -660,9 +624,8 @@ class CameraCaptureRuntime:
                     "blur_ceiling_us": (
                         self._swing_policy.envelope.blur_ceiling_us if self._swing_policy else None
                     ),
-                    # the decision log is for the live page; a clip keeps only its own
                     "recent_decisions": list(self._swing_decisions) if history else None,
-                    # D15: the ball's verdict labels the clip, never withholds it
+                    # the ball's verdict labels the clip, never withholds it
                     "analysis_eligibility": {
                         "rule": "resting_ball",
                         "eligible": decision.analysis_eligible,
@@ -692,7 +655,7 @@ class CameraCaptureRuntime:
                 frame.image if frame is not None else np.asarray([]),
                 zone_box=settings.hitting_zone,
             )
-            # held controls: the zone (or the setup's ball, P7-8) judges, not the policy
+            # held controls: the zone (or the setup's ball) judges, not the policy
             for key in ("analysis_eligibility", "frame_label", "reason", "target", "reading"):
                 payload.pop(key, None)
             payload.update(
@@ -720,11 +683,7 @@ class CameraCaptureRuntime:
     def update_image_controls(
         self, *, exposure_us: int, gain: float, purpose: str = "capture"
     ) -> dict:
-        """Apply exposure and gain without stopping the rolling buffer.
-
-        ``still_photo`` controls are recorded on every capture so metrics from a
-        swing that lands during the photo are withheld, never silently measured.
-        """
+        """Apply exposure and gain without stopping the rolling buffer."""
         exposure_us = int(exposure_us)
         gain = float(gain)
         if purpose not in {"capture", "still_photo"}:
@@ -926,11 +885,7 @@ class CameraCaptureRuntime:
         }
 
     def ready_snapshot(self) -> dict:
-        """What the ready light needs (P7-14), read from plain values.
-
-        Never takes the frame lock or the ring's lock, so the light can poll it
-        without delaying a frame; ``status()`` takes both.
-        """
+        """What the ready light needs; never takes the frame lock or the ring's lock."""
         collecting, awaiting, buffered = self._ring.state_nowait()
         last_frame_ns = self._last_frame_ns
         resolved = ((self._startup_capture_mode or {}).get("resolved_config") or {}).get("raw")
@@ -999,8 +954,7 @@ class CameraCaptureRuntime:
         self, timestamp: float | None = None, *, gate_event: GateEvent | None = None
     ) -> bool:
         """Freeze the camera ring on a sound-trigger edge."""
-        # Timed before anything else (P6-5): gathering the evidence under the frame
-        # lock once stalled delivery 14-31 ms and stamped the trigger that late.
+        # Timed first: gathering evidence under the frame lock delayed the stamp 14-31 ms.
         trigger_host_ns = time.monotonic_ns()
         trigger_boottime_ns = _boottime_ns()
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
@@ -1013,8 +967,7 @@ class CameraCaptureRuntime:
                 f"{self._ready.qsize()} completed clips are still waiting for the disk",
             )
         with self._trigger_order_lock:
-            # Frame delivery needs this lock, so it covers only the freeze and a
-            # cheap snapshot of the controls in force at it (P6-7).
+            # Frame delivery needs this lock: hold it only for the freeze and a controls snapshot.
             with self._trigger_exposure_lock:
                 accepted = self._ring.trigger(trigger_host_ns)
                 exposure = self._auto_exposure_snapshot(history=False) if accepted else None
@@ -1024,8 +977,7 @@ class CameraCaptureRuntime:
             self._clip_started_at = trigger_epoch
             evidence = self._gather_trigger_evidence(trigger_epoch)
             auto_exposure = self._auto_exposure_payload(exposure)
-            # One trigger at a time reaches here, so these queue in ring order and
-            # the save loop pairs each capture with its own records.
+            # One trigger at a time: the save loop pairs each capture with its own records.
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(auto_exposure)
             self._trigger_evidence.put(evidence)
@@ -1092,13 +1044,7 @@ class CameraCaptureRuntime:
                 self._condition.wait(timeout=remaining)
 
     def _judged_on_setup_ball(self, auto_exposure: dict, images: np.ndarray) -> dict:
-        """A manual clip's analysis eligibility, judged on the setup's ball (P7-8).
-
-        The zone rule (8 % of the hitting-zone box clipped) withheld every sunny
-        clip on 30 Sept; with the setup's ball the ladder's light rule decides, and
-        the zone rule's answer is kept beside it. Without a setup ball, or under
-        automatic exposure, the zone rule stands.
-        """
+        """A manual clip's analysis eligibility, judged on the setup's ball when there is one."""
         ball = self.settings.setup_ball
         if ball is None or self.settings.auto_exposure:
             return auto_exposure
@@ -1106,7 +1052,6 @@ class CameraCaptureRuntime:
         zone_rule = {
             "analysis_eligible": auto_exposure.get("analysis_eligible"),
             "status": observation.get("status") if isinstance(observation, Mapping) else None,
-            # the placement box, or the fixed box without one (P7-15)
             "zone_source": (
                 observation.get("zone_source") if isinstance(observation, Mapping) else None
             ),
@@ -1172,15 +1117,8 @@ class CameraCaptureRuntime:
         )
         self._wait_for_prebuffer()
 
-    # --- the swing exposure (13 Oct 2026) ---------------------------------------------
-
     def configure_swing_exposure(self, limits: sx.SensorLimits | None) -> None:
-        """Build the swing exposure policy from the limits this camera reported.
-
-        The limits are recorded (for the tester ladder, which has no camera of its own
-        in this mode) whether or not exposure is automatic. Without them the policy
-        does not run: the sensor's shortest exposure is never assumed.
-        """
+        """Build the swing exposure policy from the camera's limits; none runs without them."""
         self._sensor_limits = limits
         if limits is None:
             self._swing_policy = None
@@ -1224,12 +1162,8 @@ class CameraCaptureRuntime:
                 logger.warning("[CAMERA] Could not record the sensor limits", exc_info=True)
 
     def set_resting_ball_locator(self, locator: Callable[[], Mapping | None] | None) -> None:
-        """Where the resting ball is: the kiosk's latest look in the box (``ball_at_address``).
-
-        The locator returns that look (``state``, ``center_px``, ``diameter_px``,
-        ``observed_at``), or None when there is no box; the setup's ball spot then
-        stands in.
-        """
+        """Set the callable returning the kiosk's latest ball look (``state``, ``center_px``,
+        ``diameter_px``, ``observed_at``) or None; the setup's ball spot then stands in."""
         self._ball_locator = locator
 
     def _seed_light_index(self) -> tuple[float | None, str]:
@@ -1269,11 +1203,7 @@ class CameraCaptureRuntime:
         return decision
 
     def _start_auto_exposure(self, seeded: sx.SwingExposureDecision | None = None) -> None:
-        """Seed the controls, then keep re-checking between clips.
-
-        ``seeded`` is a seed already applied before the camera started streaming;
-        without one the seed is applied now and the ring refilled at it.
-        """
+        """Seed the controls unless ``seeded`` already was, then keep re-checking."""
         self._auto_exposure_stop.clear()
         if seeded is None:
             decision = self._seed_swing_exposure()
@@ -1350,12 +1280,7 @@ class CameraCaptureRuntime:
         return False
 
     def _run_auto_exposure_cycle(self) -> sx.SwingExposureDecision | None:
-        """One look at the resting ball; move the controls for the next swing if needed.
-
-        The frames are read and the ball measured outside the frame lock (frame
-        delivery takes it); only the decision and the control change hold it, so a
-        trigger never lands between them.
-        """
+        """One look at the resting ball; the frame lock covers only the decision and control."""
         policy = self._swing_policy
         if policy is None or not self.settings.auto_exposure or self._metering_held():
             return None  # held controls are never metered or swept
@@ -1708,9 +1633,8 @@ class CameraCaptureRuntime:
                 "settings": frozen_settings or {},
                 "settings_scope": "capture_startup" if frozen_settings else "unavailable",
                 "auto_exposure": auto_exposure,
-                # ``settings`` is the startup snapshot; ladder rungs, gain corrections
-                # and photos change the controls after it, so each clip states the
-                # request in force at its trigger and what the trigger frame got (T4).
+                # ``settings`` is the startup snapshot; controls change after it, so each
+                # clip records the request in force and what the trigger frame got.
                 "controls_at_trigger": {
                     "requested": {
                         "exposure_us": auto_exposure.get("exposure_us"),
@@ -1725,7 +1649,6 @@ class CameraCaptureRuntime:
                 },
                 "capture_mode": capture_mode,
                 "tester_setup": trigger_evidence,
-                # the lens every camera number of this clip comes through (13 Oct)
                 "lens": dict(self.settings.lens) if self.settings.lens else None,
             }
         )

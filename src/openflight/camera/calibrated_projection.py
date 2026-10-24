@@ -19,8 +19,6 @@ from .optical_calibration import ARTIFACT_VERSION, validate_mode_profile
 
 _BROWN_ORDER = ("k1", "k2", "p1", "p2", "k3")
 
-# OpenCV's Python extension members are not visible to Pylint. The inspector is
-# intentionally branchy because every contradicted capture field must remain explicit.
 # pylint: disable=no-member,catching-non-exception,bad-exception-cause
 # pylint: disable=too-many-branches,too-many-return-statements,too-many-arguments
 # pylint: disable=too-many-positional-arguments
@@ -300,14 +298,7 @@ def check_placement_against_rig(
     rig_params_sha256: str | None,
     iwr_offset_mm: Any,
 ) -> None:
-    """Refuse a placement written for another rig, or whose origins contradict it.
-
-    The placement must name the loaded rig's parameter fingerprint, and its
-    camera-to-radar origins must match the rig's IWR offset carried through the
-    declared mount and alignment. The swing server and the tester's setup run
-    the same checks, so a mismatch is refused at setup rather than at the kiosk
-    (wiring audit C11).
-    """
+    """Refuse a placement for another rig (fingerprint) or whose origins contradict the rig's."""
     if not rig_params_sha256 or placement.get("rig_geometry_sha256") != rig_params_sha256:
         raise ValueError("camera placement rig_geometry_sha256 does not match the loaded rig")
     if iwr_offset_mm is None:

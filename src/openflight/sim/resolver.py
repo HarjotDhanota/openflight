@@ -27,25 +27,14 @@ from openflight.sim.types import (
 )
 from openflight.source_labels import is_estimated_source, is_model_geometry_source
 
-# The one club-typical spin table (clubs.physics, E4), used only on an OPS-only
-# install when a measured spin is absent or low-confidence; the kiosk's ballistics
-# reads the same table, so a shot's simulator spin and its estimated carry agree.
-# Labelled an estimate (CLUB_TYPICAL_SPIN_LABEL); never used on a fusion unit (D31).
+# OPS-only fallback spin (labelled estimated, as in the kiosk's ballistics); never on fusion.
 SPIN_MODEL_RPM: Mapping[ClubType, float] = CLUB_TYPICAL_SPIN_RPM
 
 _DEFAULT_SPIN_RPM = CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
 
-# D31: simulators get measured or calculated values only. Whether they also get
-# values built on model geometry (D39: a spin, spin axis or carry built on the arc
-# prior, and the arc's model-geometry club path) is the owner's open decision.
-# Off: those values are never sent, and a fusion shot that needs one is refused
-# with a reason naming model geometry. On: each is sent labelled "model_geometry".
+# Off: a fusion unit's model-geometry or estimated values are never sent and a shot
+# needing one is refused. On: each is sent under its label. OPS-only is unaffected.
 SIMULATORS_ACCEPT_MODEL_GEOMETRY = False
-# The same for a fusion unit's "estimated" values: a spin or spin axis built on an
-# estimated input (a weak horizontal launch), and a carry flown on one or on the
-# OPS line-of-sight ball speed (V-formulas C1, C2). Off: never sent; a fusion shot
-# that needs one is refused, naming it "estimated (<reason>)". An OPS-only unit's
-# labelled estimates are unchanged.
 SIMULATORS_ACCEPT_ESTIMATED = False
 
 MODEL_GEOMETRY = "model_geometry"
@@ -71,19 +60,13 @@ def _estimated_axis(shot: Shot) -> bool:
 
 
 def _estimated_reason(shot: Shot, metric: str) -> str:
-    """The collision model's reason for an estimated spin or axis (C2)."""
+    """The collision model's reason for an estimated spin or axis."""
     metrics = (shot.collision_model or {}).get("metrics") or {}
     return (metrics.get(metric) or {}).get("reason") or "an input estimated"
 
 
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
-    """Measured spin if high-confidence, else a calculated one under its own label, else None.
-
-    A calculated spin is a model's output from the shot's own measured inputs (the E2
-    collision model, or the --calculated-spin formula): it goes out labelled
-    "calculated", never "measured" (D31, D38). A spin built on model geometry (D39)
-    goes out, labelled "model_geometry", only with SIMULATORS_ACCEPT_MODEL_GEOMETRY.
-    """
+    """Measured spin if high-confidence, else a calculated one under its own label, else None."""
     if (
         _finite(shot.spin_rpm)
         and shot.spin_rpm > 0
@@ -107,10 +90,8 @@ def _spin_axis_provenance(shot: Shot) -> Optional[str]:
     if _model_geometry_axis(shot):
         return MODEL_GEOMETRY if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
     if is_estimated_source(shot.spin_axis_source):
-        # built on an estimated input (V-formulas C2): not sent (D31) unless switched on
         return ESTIMATED if SIMULATORS_ACCEPT_ESTIMATED else None
-    # no sensor measures the spin axis: the collision model's (E2), or any other the
-    # kiosk computed, is calculated, never measured (V-formulas C8)
+    # no sensor measures the spin axis: it is calculated, never measured
     return "calculated"
 
 
@@ -141,10 +122,8 @@ def _withheld_estimated(shot: Shot) -> List[str]:
 def _unmeasured_required_fields(shot: Shot) -> List[str]:
     """The fields OpenConnect requires that this shot did not measure, in protocol order.
 
-    BallData Speed, VLA, HLA, TotalSpin and SpinAxis are required (BackSpin and
-    SideSpin only without TotalSpin, and derived from it here); CarryDistance and
-    every ClubData field are optional. Ball speed is checked before this. A
-    non-finite value (NaN, inf) is an unmeasured one, exactly like None.
+    Required: VLA, HLA, TotalSpin and SpinAxis (ball speed is checked before this);
+    carry and club data are optional. A non-finite value counts as unmeasured.
     """
     missing = []
     if not _finite(shot.launch_angle_vertical):
@@ -163,35 +142,24 @@ def _resolve_carry(
 ) -> Optional[float]:
     """The carry to send, optional in OpenConnect; tags its provenance when there is one.
 
-    The carry the kiosk reports: the server's committed carry (ballistic
-    simulator, or on an OPS-only unit the spin table), the bare launch-angle
-    table only for shots that never went through finalization, and None for a
-    fusion shot whose carry is not measured (D17). None is not sent: simulators
-    fly the ball from speed, launch and spin themselves.
+    None is not sent: simulators fly the ball from speed, launch and spin themselves.
     """
     carry = shot.reported_carry_yards
     if carry is None:
         return None
     if shot.carry_status == CARRY_ESTIMATED and not substitutes:
-        # a fusion unit's flight on an estimated input (C1, C2): not sent (D31)
         if not SIMULATORS_ACCEPT_ESTIMATED:
             return None
         provenance["carry"] = ESTIMATED
     elif shot.carry_status == CARRY_MODEL_GEOMETRY:
-        # flown on a spin or spin axis built on model geometry (D39): not sent (D31)
         if not SIMULATORS_ACCEPT_MODEL_GEOMETRY:
             return None
         provenance["carry"] = MODEL_GEOMETRY
     elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED) and not substitutes:
-        # a fusion unit's simulated carry: always the flight model's output, so at
-        # most "calculated" even when flown on a measured spin (V-formulas C8);
-        # "measured" survives only in older logs
+        # a simulated carry is a flight model's output: at most "calculated"
         provenance["carry"] = "calculated"
     else:
-        # An OPS-only carry flies a club-typical spin (or reads the ball-speed table),
-        # so it is an estimate whatever the launch angle (E4; trackman-comparison §5
-        # item 4). The old "measured when a launch angle was present" badge read as a
-        # measured carry.
+        # an OPS-only carry flies a club-typical spin, so it is always an estimate
         provenance["carry"] = "estimated"
     return float(carry)
 
@@ -201,9 +169,7 @@ def _resolve_club_fields(
 ) -> Tuple[Optional[float], Optional[float]]:
     """Club speed and path, both optional in OpenConnect; tags their provenance.
 
-    A missing club speed is None (``ContainsClubData`` false). A missing path is
-    0, labelled estimated, on an OPS-only unit; on a fusion unit both are left
-    out entirely, with no provenance (D17).
+    A missing path is 0, labelled estimated, only with ``substitutes``.
     """
     club_speed: Optional[float] = None
     if _finite(shot.club_speed_mph) and shot.club_speed_mph > 0:
@@ -227,7 +193,7 @@ def _resolve_club_fields(
 
 
 def _model_geometry_club_path(shot: Shot) -> Optional[float]:
-    """E1's selected club path when it is model geometry (D39) and finite, else None."""
+    """The selected club path when it is model geometry and finite, else None."""
     metrics = (shot.club_delivery or {}).get("metrics") or {}
     entry = metrics.get("club_path_deg")
     if not isinstance(entry, dict) or entry.get("status") != MODEL_GEOMETRY:
@@ -253,14 +219,9 @@ def resolve_shot(
     (so all connectors share a number for the same shot), and only for a shot
     that is sent.
 
-    One rule: a non-finite input (NaN, inf) is a missing input, treated exactly
-    like None; no NaN reaches any simulator.
-
-    ``substitutes`` lets an OPS-only install, which has nothing to measure the
-    rest with, fill a missing launch, spin, spin axis and club path from club
-    tables or 0, labelled estimated. A fusion unit passes False (D17, D31): a
-    required field it did not measure raises UnmeasuredShotError, so the shot is
-    not sent, and an optional one (club speed, club path, carry) is left out.
+    A non-finite input is treated as None. ``substitutes`` (OPS-only) fills missing
+    fields from club tables or 0, labelled estimated; without it a missing required
+    field raises UnmeasuredShotError and missing optional ones are left out.
     """
     if not _finite(shot.ball_speed_mph) or shot.ball_speed_mph <= 0:
         raise IncompleteShotError("ball_speed_mph is required")
@@ -273,8 +234,7 @@ def resolve_shot(
                 estimated=_withheld_estimated(shot),
             )
 
-    # E3 (D31): a simulator flies the ball's full speed. The calculated full speed
-    # (measured projection) replaces the OPS radial reading when there is one.
+    # a simulator flies the full speed: the calculated one replaces the OPS radial reading
     full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
     if full.get("status") == "calculated" and _finite(full.get("value_mph")):
         ball_speed = float(full["value_mph"])
@@ -319,8 +279,6 @@ def resolve_shot(
     axis_rad = math.radians(spin_axis)
     back_spin = total_spin * math.cos(axis_rad)
     side_spin = total_spin * math.sin(axis_rad)
-    # a component is as good as its weaker source: estimated, model geometry,
-    # calculated, then measured
     derived_prov = min((spin_prov, axis_prov), key=_PROVENANCE_ORDER.index)
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov

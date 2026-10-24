@@ -23,14 +23,9 @@ Fixed-width version 5 and configurable-capture version 7 append a temperature
 report. The older variable-width v5/v6 formats remain parseable without one.
 Sample format 5 keeps the version 6 timed descriptors but stores each
 frame as int8 I/Q plus a uint16 frame scale.
-Versions 8 (with the temperature report) and 9 (without it) keep the version 6/7 timed
-layout and add observed evidence: after the per-frame descriptors (and the IQ8 scale
-table) comes a 40-byte capture evidence block ("ILE1": the R4F cycle-counter rate and the
-request, freeze, RF-stop and header ticks) and one 20-byte record per frame (frame-start
-sequence number, frame-start and HWA-output ticks, IQ8 pre-narrowing overflow count and
-maximum magnitude, flags); after the payload comes an 8-byte trailer ("ILT1", the tick when
-the last payload byte was handed to the UART). Descriptor deltas stay the firmware's plan:
-``frame_time_source`` says so. Older dumps carry no evidence and report None.
+Versions 8 (with the temperature report) and 9 (without it) add observed evidence to
+the 6/7 timed layout: a capture evidence block ("ILE1") and one record per frame after
+the descriptors, and a trailer ("ILT1") after the payload. Older dumps report None.
 """
 
 from __future__ import annotations
@@ -69,8 +64,7 @@ TIMED_FRAME_DESCRIPTOR = struct.Struct("<BBH")
 DUMP_VERSION_EVIDENCE_TEMPERATURE = 8
 DUMP_VERSION_EVIDENCE = 9
 EVIDENCE_VERSIONS = (DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_EVIDENCE)
-# Mirrors firmware/iwr6843/dump_format.h l3_capture_evidence_t (40 B); its last byte is
-# the reserved pad ("x"): ten named fields follow the magic and the two sizes.
+# Mirrors firmware/iwr6843/dump_format.h l3_capture_evidence_t (40 B, last byte padding).
 CAPTURE_EVIDENCE = struct.Struct("<4sHHIIIIIIIBBBx")
 CAPTURE_EVIDENCE_MAGIC = b"ILE1"
 CAPTURE_EVIDENCE_KEYS = (
@@ -92,8 +86,7 @@ DUMP_TRAILER = struct.Struct("<4sI")
 DUMP_TRAILER_MAGIC = b"ILT1"
 FRAME_FLAG_ASSOCIATED = 0x01
 FRAME_FLAG_IQ8_SCANNED = 0x02
-# L3_FRAME_NO_STAMP: what the firmware writes into seq and start_tick when a record is not
-# associated with a fresh armed frame start. The flag decides; the parser reports None.
+# L3_FRAME_NO_STAMP: seq and start_tick of an unassociated record; the parser reports None.
 FRAME_NO_STAMP = 0
 CAPTURE_FLAG_IQ8_SCAN = 0x01
 FRAME_TIME_SOURCE_PLANNED = "planned_descriptor"
@@ -142,11 +135,9 @@ def _evidence_bytes(
     )
     records = b"".join(
         FRAME_EVIDENCE.pack(
-            # Like the firmware: an unassociated record never carries stale stamps.
             int(record["seq"]) if record["associated"] else FRAME_NO_STAMP,
             int(record["start_tick"]) if record["associated"] else FRAME_NO_STAMP,
             int(record["done_tick"]),
-            # Like the firmware: an unscanned slot carries zeroes, never a measurement.
             int(record["iq8_overflow"]) if record["iq8_scanned"] else 0,
             int(record["iq8_max_abs"]) if record["iq8_scanned"] else 0,
             (FRAME_FLAG_ASSOCIATED if record["associated"] else 0)
@@ -185,8 +176,7 @@ def _parse_evidence(raw: bytes, meta: dict, offset: int) -> None:
 
 
 def _frame_record(seq, start_tick, done_tick, overflow, max_abs, flags) -> dict:
-    """One frame record; without a fresh armed start, seq and start_tick were not observed,
-    and without the IQ8 scan, iq8_overflow and iq8_max_abs were not measured (None)."""
+    """One frame record; fields the flags mark as unobserved are None."""
     associated = bool(flags & FRAME_FLAG_ASSOCIATED)
     scanned = bool(flags & FRAME_FLAG_IQ8_SCANNED)
     return {
@@ -494,7 +484,6 @@ def payload_nbytes(meta: dict, raw: bytes | None = None) -> int:
         sample_count = meta["n_frames"] * meta["n_samples"]
     bytes_per_complex = 2 if meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED else 4
     iq_nbytes = sample_count * meta["chirps_per_frame"] * meta["n_rx"] * bytes_per_complex
-    # An absent part is 0 B (its real size); a size stored as None reads as absent.
     metadata_nbytes = meta.get("frame_metadata_nbytes") or 0
     return metadata_nbytes + iq_nbytes + (meta.get("trailer_nbytes") or 0)
 

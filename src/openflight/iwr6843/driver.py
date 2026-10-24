@@ -10,9 +10,8 @@ Gotchas baked in (each cost a debugging session):
 - One serial handle only — two handles on one tty steal each other's bytes.
 - The CP2105 can stall a stream for seconds (cp210x -110 control timeouts)
   and resume; the reader waits out gaps up to ``stall_tolerance_s``.
-- Linux raises DTR/RTS on every tty open before pyserial can clear them, so
-  auto-detection never opens the CP2105 Standard interface: the CLI is only
-  on Enhanced/UARTA (interface 00) and that probe would be a blind line pulse.
+- Linux pulses DTR/RTS on open, so auto-detection never opens the CP2105
+  Standard interface (the CLI is only on Enhanced, if00).
 """
 
 from __future__ import annotations
@@ -55,9 +54,8 @@ class IWR6843DumpRecoveryError(RuntimeError):
 class DumpTransferTiming:
     """Host ``time.monotonic_ns()`` marks of one ``l3dump`` transfer.
 
-    Each mark is taken when the host read that returned those bytes came back, so it
-    bounds their arrival from above; ``request_written_ns`` is taken after ``write``
-    returned. A mark the transfer never reached is None, never estimated.
+    Each mark is taken when its read returned (an upper bound on arrival); a mark
+    the transfer never reached is None.
     """
 
     request_written_ns: int
@@ -278,9 +276,7 @@ class IWR6843Radar:
         resp = b""
         deadline = time.time() + window
         while time.time() < deadline:
-            # read(n) blocks for the whole port timeout until n bytes arrive, so ask
-            # only for what is waiting (or one byte, which returns as it lands);
-            # a fixed 512 cost 0.3 s per command, about 4.5 s per configuration.
+            # read(n) blocks for the port timeout until n bytes arrive: ask for what is waiting
             resp += self.ser.read(max(1, self.ser.in_waiting))
             if b"Done" in resp or b"Error" in resp:
                 break
@@ -330,7 +326,6 @@ class IWR6843Radar:
         if "Error" in response:
             raise RuntimeError(f"config rejected: {command!r}: {response.strip()}")
         if "Done" not in response:
-            # What came back separates a silent board from a partial or garbled reply.
             reply = (
                 f"reply without Done: {response[-80:]!r}"
                 if response
@@ -346,8 +341,7 @@ class IWR6843Radar:
 
         The firmware's geometry guard rejects a cfg whose loops/samples don't
         match the flashed build — that surfaces here as RuntimeError.
-        ``responses``, when given, receives every (command, reply) pair in order,
-        so a caller can keep the firmware's own ``Capture plan:`` line.
+        ``responses``, when given, receives every (command, reply) pair in order.
         """
 
         def send(command: str, window: float) -> str:
@@ -427,8 +421,6 @@ class IWR6843Radar:
                 break
         if expected is None:
             if MAGIC not in buf and b"Error" in buf:
-                # The handler refused before any payload (e.g. capture inactive
-                # after a board reset); the CLI answered, so its state is known.
                 raise RuntimeError(
                     f"IWR6843 rejected l3dump: {bytes(buf).decode(errors='replace').strip()[:200]}"
                 )

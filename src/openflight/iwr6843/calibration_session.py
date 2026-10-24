@@ -89,10 +89,8 @@ def clone_calibration(
 ) -> Calibration:
     """Copy calibration constants while replacing session geometry.
 
-    A new ``radar_height_m`` is the phase centre's when ``board_rotation_deg``
-    comes with it (a rig-derived height, placed at the resulting tilt);
-    without one it is a legacy single height, and the antenna layout is
-    dropped so LCMF reads it as the RX-row centre (`lcmf.antenna_layout`).
+    With ``board_rotation_deg`` a new ``radar_height_m`` is the phase centre's; without
+    it the layout is dropped and LCMF reads the height as the RX-row centre.
     """
     del net_range_m
     cloned = Calibration(

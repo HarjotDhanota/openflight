@@ -20,9 +20,7 @@ BROWSER_PID=""
 BROWSER_PGID=""
 BROWSER_LAUNCHED=false
 SERVER_ARGS=()
-# The tester server starts the kiosk with --no-browser (or OPENFLIGHT_NO_BROWSER=1):
-# the fullscreen kiosk window would cover the tester page (2a). The kiosk UI is then
-# opened from the tester page's "Kiosk view" button in a normal window or tab.
+# --no-browser (or OPENFLIGHT_NO_BROWSER=1): the tester page opens the kiosk UI itself.
 case "${OPENFLIGHT_NO_BROWSER:-}" in
     1|true|yes) NO_BROWSER=true ;;
     *) NO_BROWSER=false ;;
@@ -136,10 +134,7 @@ normalize_mock_swing_speed() {
 
 normalize_mock_swing_speed
 
-# openflight.service runs this script with no arguments, so the OPS243 port can also
-# come from OPENFLIGHT_OPS_PORT (a drop-in Environment= line, docs/setup/auto-start.md).
-# An explicit --radar-port/--ops-port wins. Unset, the driver tries USB and then the
-# GPIO UART (/dev/ttyAMA0) on its own.
+# OPENFLIGHT_OPS_PORT sets the OPS243 port for openflight.service; --radar-port/--ops-port wins.
 has_radar_port=false
 for argument in "${SERVER_ARGS[@]}"; do
     case "$argument" in
@@ -150,9 +145,7 @@ if [ "$has_radar_port" = false ] && [ -n "${OPENFLIGHT_OPS_PORT:-}" ]; then
     SERVER_ARGS+=(--port "$OPENFLIGHT_OPS_PORT")
 fi
 
-# The swing server takes the enclosure's geometry only from a rig file and
-# refuses --iwr6843 without one (wiring audit C1, decision D6). Default to the
-# measured v3 enclosure unless the caller names another file.
+# The swing server refuses --iwr6843 without a rig file; default to the v3 enclosure.
 DEFAULT_RIG_GEOMETRY="$PROJECT_DIR/config/enclosure_v3_rig_geometry.json"
 has_rig_geometry=false
 for argument in "${SERVER_ARGS[@]}"; do
@@ -348,9 +341,7 @@ start_startup_splash() {
     stop_startup_splash_server
 }
 
-# Under systemd (openflight.service) stderr is the journal. The unit's StartLimitBurst
-# stops the retries after a few failures; say so, and how to recover or switch off.
-# INVOCATION_ID alone also marks a desktop autostart service, so check the cgroup too.
+# Under systemd stderr is the journal; INVOCATION_ID alone also marks desktop autostart.
 explain_service_failure() {
     [ -n "${INVOCATION_ID:-}" ] || return 0
     grep -qs '/openflight\.service$' "/proc/$$/cgroup" || return 0
@@ -438,9 +429,8 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 UV_SYNC_ARGS=(--quiet)
-# One interpreter on the Pi (13 Oct): a camera start, or any start on a unit whose venv
-# already sees system site packages (the tester built it) or whose system Python has
-# picamera2, uses /usr/bin/python3 and never rebuilds the venv for .python-version.
+# One interpreter on the Pi: camera starts, or units whose venv sees system site
+# packages or whose system Python has picamera2, use /usr/bin/python3.
 if has_camera_arg || use_pi_system_python; then
     ensure_system_python_venv || show_startup_failure \
         "server" \

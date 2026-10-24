@@ -1,24 +1,8 @@
-"""The unit's camera tilt, calibrated from swings (13 Oct, decision "a", Build C).
+"""The unit's camera tilt, calibrated from swings.
 
-Until 13 Oct a setup's validated camera-radar pair calibrated the camera's vertical
-offset (P8-5). The setup no longer measures the resting ball with the radar, so a
-pair now comes from a swing:
-
-* the swing's **measured** IWR launch-point range (``ball_range_source`` is
-  ``iwr_post_impact``; a shot that fell back to the camera prior is never a pair,
-  since the prior is the camera's own size estimate);
-* the camera's resting-ball row in that swing's **own pre-impact frames** (the
-  median of the frames before the club arrives, inside the fixed box);
-* the LIS3DH pitch frozen for that shot.
-
-``camera_tilt.solve_vertical_offset`` turns one pair into an offset, and
-``camera_tilt.record_pair`` keeps the existing storage, per unit and lens, outside
-the rig file: the median of at least ``camera_tilt.MIN_PAIRS`` pairs that agree
-calibrates the unit (``median_of_swing_pairs``), later pairs check it, and
-disagreeing ones re-calibrate it, as before.
-
-The per-swing IWR range is not validated against a tape yet, so neither is a tilt
-calibrated from it.
+A pair is one swing's measured IWR launch-point range (never the camera prior), the
+resting-ball row in that swing's own pre-impact frames, and its LIS3DH pitch;
+``camera_tilt`` solves and stores the pairs per unit and lens.
 """
 
 from __future__ import annotations

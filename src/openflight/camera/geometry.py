@@ -179,12 +179,10 @@ def intersect_radar_range_sphere(
     return camera + distance[..., None] * rays
 
 
-# D36 item 4a: with the unit's camera tilt calibrated (P8-5), a swing's pitch and
-# focal length are once-measured calibration; the resting ball's own inference
-# is kept as a cross-check and flagged beyond these.
-# The tilt calibration's own check tolerance (camera_tilt.CHECK_TOLERANCE_DEG).
+# The resting ball's own inference is flagged when it departs from the calibrated
+# setup values by more than these (pitch: camera_tilt.CHECK_TOLERANCE_DEG).
 SETUP_PITCH_CHECK_TOLERANCE_DEG = 1.5
-# One pixel of diameter on a 10-20 px resting ball is 5-10 % of its focal length.
+# one pixel of a 10-20 px ball's diameter is 5-10 % of its focal length
 SETUP_FOCAL_CHECK_TOLERANCE_REL = 0.10
 
 
@@ -196,11 +194,8 @@ def resting_ball_camera_model(
 ) -> tuple[float, float, np.ndarray, dict]:
     """The swing's focal scale and pitch, and the record of where they came from.
 
-    With both setup values (the unit's tilt calibration composed with this
-    shot's LIS3DH pitch, and the rig's focal length for the mode) they are the
-    model, and the resting ball's inference (``reference_ball_camera_model``
-    on ``reference``) is the recorded cross-check. Without them the resting
-    ball sets the model, as before, labelled ``uncalibrated``.
+    With both setup values they are the model and the resting ball's inference is
+    the recorded cross-check; without them the resting ball sets it, ``uncalibrated``.
     """
     try:
         inferred = reference_ball_camera_model(**reference)

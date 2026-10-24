@@ -1,40 +1,8 @@
-"""The unit's camera tilt, calibrated from the median of validated pairs (P8-5).
+"""The unit's camera tilt offset, calibrated from the median of validated camera-radar pairs.
 
-The nominal camera model takes its pitch from the LIS3DH and puts the principal
-point at the image centre. Neither is the camera's true vertical: the camera is
-mounted in the enclosure at a small pitch of its own, and the lens's centre sits
-some rows off the image's middle. At 95 mm above the ground both move a ball's
-row a long way (indoor-test-1: the floor met the door about 50 px lower
-than the level, image-centred model predicts, about 3 deg).
-
-Each ball the camera and radar agree on (P8-4) measures the two together as one
-vertical offset: the pitch the camera must have for the ball's row to be where
-the radar's distance, the lens height and the ball's radius put it, less the
-LIS3DH's pitch at the time. One pair never calibrates the unit: the offset is the
-median of at least ``MIN_PAIRS`` validated pairs that agree (a single wrong pair,
-indoor-test-1's, once calibrated a unit for good). It is stored per unit
-and per lens, beside the unit's other local settings (``~/.config/openflight/``),
-never in the shared rig file.
-
-**Composition.** The camera's pitch in the world is the enclosure's pitch (the
-LIS3DH, read each session) composed with the camera's fixed pitch on the
-enclosure plus the principal point's row (this offset): world <- enclosure <-
-camera. Both are rotations about the same lateral axis (the LIS3DH roll is
-recorded but not applied until C8, camera_roll), so they compose by adding their angles:
-``pitch = LIS3DH pitch now + offset``. The offset is stored relative to the
-LIS3DH reading it was solved at, so a unit set down at another tilt the next day
-gets that day's LIS3DH pitch plus the same offset, never the first day's whole
-solved pitch added on top of today's reading, which would count the enclosure's
-tilt twice. The principal point's row is treated as a pitch: exact at the
-image's middle column, and within a few hundredths of a degree across the rows
-a ball at address uses.
-
-The offset is bounded (``MAX_OFFSET_DEG``); a solve beyond it is refused with a
-warning, since it means the ball, the radar's distance or the lens height is
-wrong, not the camera. Later validated pairs check it and warn when they
-disagree; ``RECALIBRATE_AFTER`` disagreeing checks in a row, on the same side,
-re-calibrate from their median and say so; ``reset_calibration`` starts over (a
-lens change). Nothing is replaced silently, and there is no typed input.
+World pitch = LIS3DH pitch now + a fixed offset (the camera's pitch on the enclosure plus
+the principal point's row), stored per unit and lens relative to the LIS3DH reading so the
+enclosure's tilt is never counted twice. Out-of-bound solves are refused, never stored.
 """
 
 from __future__ import annotations
@@ -56,8 +24,7 @@ FILE_NAME = "camera-vertical-offset.json"
 MAX_OFFSET_DEG = 8.0
 # a later validated pair more than this far from the stored offset is flagged
 CHECK_TOLERANCE_DEG = 1.5
-# the solve searches this far either side of the LIS3DH's pitch, well past the
-# bound, so an implausible solve is refused with its value rather than lost
+# searched well past the bound, so an implausible solve is refused with its value
 SEARCH_SPAN_DEG = 25.0
 # what one ball's geometry leaves uncertain besides the radar's own range
 PIXEL_UNCERTAINTY_PX = 1.0
@@ -233,8 +200,7 @@ def _median(values: Sequence[float]) -> float:
 
 
 def _agreeing(entries: Sequence[Mapping]) -> list[Mapping]:
-    """The pairs that agree with their median: within half the check tolerance of it,
-    so any two of them lie within the tolerance of each other."""
+    """The pairs within half the check tolerance of their median."""
     if not entries:
         return []
     middle = _median([float(entry["offset_deg"]) for entry in entries])
@@ -252,8 +218,7 @@ def _calibrated(
     method: str,
     over: Sequence[Mapping] | None = None,
 ) -> dict:
-    """The calibration: the median over ``over`` (every pair by default), once
-    ``support`` (the pairs that agree) is large enough."""
+    """The calibration: the median over ``over`` (default ``support``)."""
     offsets = [float(entry["offset_deg"]) for entry in (over if over is not None else support)]
     spread = float(np.std(offsets)) if len(offsets) > 1 else 0.0
     single = [float(entry.get("uncertainty_deg") or 0.0) for entry in support]
@@ -281,16 +246,8 @@ def record_pair(
 ) -> dict:
     """Add a validated pair: calibrate from the median, check, or re-calibrate.
 
-    ``method`` names the calibration: ``median_of_validated_pairs`` for setup pairs
-    (before 13 Oct), ``median_of_swing_pairs`` for swings (each swing's IWR launch
-    point and the resting ball's row, openflight.camera.swing_tilt).
-
-    Returns what happened: ``pending`` (too few agreeing pairs yet),
-    ``calibrated`` (the median of ``MIN_PAIRS`` or more that agree), ``checked``
-    (a later pair, with a warning when it disagrees by more than
-    ``CHECK_TOLERANCE_DEG``), ``recalibrated`` (``RECALIBRATE_AFTER`` checks in a
-    row disagreed on the same side) or ``refused`` (beyond ``MAX_OFFSET_DEG``,
-    not stored).
+    Returns ``action``: pending, calibrated, checked (warns past ``CHECK_TOLERANCE_DEG``),
+    recalibrated (``RECALIBRATE_AFTER`` same-side disagreements) or refused (not stored).
     """
     path = Path(path)
     offset = float(solved["offset_deg"])
@@ -451,20 +408,12 @@ def swing_camera_pose(
     inclinometer: Mapping | None,
     calibration: Mapping | None,
 ) -> dict:
-    """The camera pose one swing measures with, composed exactly as the setup's (D36 item 4).
+    """The camera pose one swing measures with, composed exactly as the setup's.
 
-    The camera's LIS3DH pitch is the rig's boresight pitch moved by how far this
-    swing's own reading departs from the placement the rig expects (the tester's
-    ``camera_pitch_deg``); ``applied_pitch`` composes it with the unit's offset;
-    the focal length is the rig's for this mode (``ball_pixels.mode_focal_px``).
-    Both are once-measured calibration. Without the unit's calibration, a stable
-    reading or a rig, the pose says why and the estimators keep inferring the
-    pitch and focal length from the resting ball, labelled uncalibrated.
-
-    The roll (item 4c) goes through ``camera_roll`` as the setup's does: this
-    swing's LIS3DH roll less the rig's expected one, as a clockwise image-roll
-    correction. While the gate (``camera_roll.LIS3DH_ROLL_APPLIED``, C8) is off
-    it is recorded and not applied.
+    Pitch: the rig's boresight pitch moved by this swing's LIS3DH departure from the
+    rig's expected reading, plus the unit's offset; focal length: the rig's for this mode.
+    Without all three inputs the pose says why and stays uncalibrated. Roll goes
+    through ``camera_roll`` and is applied only when its gate is on.
     """
     from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
 
@@ -546,9 +495,7 @@ def _swing_roll(rig: Any, inclinometer: Mapping | None) -> dict:
 def with_swing_pose(geometry: Any, pose: Mapping | None) -> Any:
     """A nominal camera geometry with this swing's calibrated pose, if it has one.
 
-    The roll correction is added to the geometry's configured one, and only once
-    the gate applies it. A calibrated optical model carries its own pose (its roll
-    goes through the same gate) and is left as it is.
+    A calibrated optical model carries its own pose and is left as it is.
     """
     if pose is None or getattr(geometry, "calibrated_model", None) is not None:
         return geometry

@@ -3,8 +3,7 @@
 MPH_TO_MPS = 0.44704
 GRAVITY = 9.81  # m/s^2
 
-# A golf ball's size: 42.7 mm, what modern balls measure and what the flight and
-# collision models were fitted with. Every camera, rig and model calculation uses it.
+# A golf ball's diameter as modern balls measure and the flight models were fitted with.
 BALL_DIAMETER_MM = 42.7
 BALL_DIAMETER_M = 0.0427
 BALL_RADIUS_M = 0.02135

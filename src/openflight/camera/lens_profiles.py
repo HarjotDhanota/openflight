@@ -1,22 +1,9 @@
 """The lens on the unit's camera: its profile and its focal length per mode.
 
-The profiles live in ``config/lenses.json``; the tester's choice is kept with the
-unit's local settings (``lens_settings``), never in the shared rig file.
-
-**Focal length.** The rig file's ``focal_px`` describes the reference (stock)
-lens. Another lens's *nominal* focal length is the rig's scaled by
-``focal_mm / reference_focal_mm``, per mode by the binning ratio as before
-(``ball_pixels.mode_focal_px``). When a checkerboard calibration artifact for the
-lens exists (``checkerboard_calibration.calibrate_checkerboard``, its
-``mode_profile.lens_id``), its fitted focal length replaces the nominal one and
-the lens reports ``intrinsics: calibrated``; otherwise ``nominal``, and every
-camera-derived number says so in its label.
-
-**What the lens drives.** Every camera calculation takes its focal length from
-the selected lens: the placement box, the ball's size-to-distance, the camera
-tilt solve (stored per lens), the aim yaw, and the kiosk's camera metrics
-(``--camera-lens-id``). A lens never chosen leaves ``lens_id`` null; the
-calculations then use the rig file's own lens (the reference) and say so.
+Profiles live in ``config/lenses.json``. A lens's nominal focal length is the rig file's
+(reference lens) scaled by ``focal_mm / reference_focal_mm``; a checkerboard calibration
+for the lens replaces it (``intrinsics: calibrated``). With no lens chosen, the rig file's
+own lens is used.
 """
 
 from __future__ import annotations
@@ -29,7 +16,6 @@ from typing import Any, Mapping, Sequence
 
 SCHEMA = "openflight.camera_lenses.v1"
 DEFAULT_LENSES_PATH = Path(__file__).resolve().parents[3] / "config" / "lenses.json"
-# the ladder's camera modes, and their output sizes
 ARM_SIZES = {"arm5": (1280, 800), "arm6": (640, 400)}
 NOT_SELECTED_BASIS = "not_selected_rig_file_lens"
 SELECTED_BASIS = "selected_by_the_tester"
@@ -222,10 +208,8 @@ def find_calibration(
 ) -> dict[str, Any] | None:
     """A checkerboard calibration for this lens, if one is kept: its focal length per mode.
 
-    ``sources`` are artifact files or directories of them. An artifact counts
-    when it fitted (``status: candidate``) and its mode profile names this
-    ``lens_id``; a mode it was not fitted in takes its focal length by the
-    binning ratio. The newest file wins.
+    ``sources`` are artifact files or directories of them; the newest fitted
+    artifact naming this ``lens_id`` wins. Other modes scale by the binning ratio.
     """
     if lens_id is None:
         return None

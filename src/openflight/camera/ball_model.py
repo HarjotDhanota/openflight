@@ -1,11 +1,7 @@
 """A lit golf ball's image fitted to the pixels: centre, size and light direction.
 
-A resting ball is a sphere of known size under the room's light. Its image is a
-disk whose brightness follows that light: bright towards it, fading to the
-terminator, a dark self-shadowed side, all set against the ground. Fitting the
-whole picture uses the shaded side even where its rim has no edge against the
-ground or the ball's own cast shadow, because where the lit side fades, and
-where the terminator falls, both depend on the ball's size.
+The whole shaded disk is fitted, not just its edge: where the lit side fades and where the
+terminator falls both depend on the ball's size, even where the rim has no edge to the ground.
 """
 
 from __future__ import annotations
@@ -18,24 +14,17 @@ import numpy as np
 from scipy import ndimage, optimize
 
 EDGE_BLUR_PX = 0.7  # optics and focus soften the rim by about this much
-# Draw the finite-difference variants together (same steps as scipy's 2-point).
 BATCHED_JACOBIAN = True
-# The gates are in the picture's own noise, not in DN: a dim room or a low gain
-# leaves a real ball's lit top only 11 DN over its shade, and its contrast
-# rises and falls with the light while the noise sets what can be seen.
+# The gates are in the picture's own noise, not DN: contrast moves with the light.
 MIN_DIFFUSE_NOISE_MULTIPLE = 5.0  # the lit top stands this far over the shade
 MAX_MISFIT_FRACTION = 0.35  # of the diffuse brightness left unexplained, at most
-# A ball's lit rim steps down to the ground beyond it. A half-lit sphere can
-# otherwise mimic a shadow's straight edge on a wall, where no such step exists.
+# A ball's lit rim steps down to the ground; a shadow's straight edge on a wall does not.
 MIN_RIM_STEP_FRACTION = 0.2  # of the diffuse brightness
 MIN_RIM_STEP_NOISE_MULTIPLE = 3.0
-# The lit rim's edge lies on the circle of the size the distance gives: within
-# 0.02 to 0.09 of the radius on real balls from 0.6 to 2 m, against 0.09 to
-# 0.6 for a door stop, a streak of light on a storage bin, a door's corner and
-# clipped white.
+# The lit rim's edge lies on the circle the distance gives: within 0.02-0.09 of the radius on
+# real balls at 0.6-2 m, against 0.09-0.6 for look-alikes (door stop, light streak, clipped white).
 MAX_RIM_OFFSET_FRACTION = 0.12
-# Room lights and the sun are above the ball: in image axes (y down) the light
-# comes from the upper half, horizontal-left through overhead to horizontal-right.
+# Lights are above the ball: in image axes (y down) the light comes from the upper half.
 LIGHT_AZIMUTH_DEG = (170.0, 370.0)
 
 
@@ -79,11 +68,7 @@ def _render(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
 
 
 def _render_batch(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
-    """``_render`` for many parameter sets at once, as one (n, H, W) array.
-
-    The fit's patches are small, so per-call overhead dominates; drawing every
-    finite-difference variant in one call is several times cheaper on a Pi.
-    """
+    """``_render`` for many parameter sets at once, as one (n, H, W) array; cheaper on a Pi."""
     p = np.asarray(params, dtype=np.float64)[:, :, None, None]
     cx, cy, radius, azimuth, tilt, shade, diffuse, ground, ground_x, ground_y = (
         p[:, index] for index in range(10)
@@ -146,23 +131,11 @@ def fit_lit_ball(
     size_starts: Sequence[float] | None = None,
     extra_light_starts: bool = True,
 ) -> LitBall | None:
-    """Fit a lit sphere near (x, y); ``expected_radius`` holds its size.
+    """Fit a lit sphere near (x, y); ``expected_radius`` holds its size to ``size_tolerance``.
 
-    ``size_starts`` are the free size's starting points, as fractions of ``radius``:
-    three by default; one, (1.0,), when the seed's own matched size is trusted (the
-    setup Save's confirm search, 13 Oct light audit section 5). ``extra_light_starts``
-    False starts the light only from its measured lean: for a centre an earlier fit
-    already placed, where the lean cannot point the wrong way.
-
-    On a real ball in room light the size is not in the pixels: the shaded
-    side meets its own shadow with no edge, and a glossy, dimpled ball with a
-    logo is not the matte sphere the model draws, so a free size drifts by a
-    fifth either way. The size the ball must have at the distance the radar or
-    the tape gives, through the lens's focal length, is held to within
-    ``size_tolerance``; the pixels then place the centre and the light.
+    ``size_starts`` are the free size's starting fractions of ``radius``; ``extra_light_starts``
+    False starts the light only from its measured lean, for a centre already placed.
     """
-    # a big ball is fitted on a patch binned 2x2: a 38 px ball is still 19 px,
-    # and the fit is four times cheaper
     binning = 2 if max(radius, expected_radius or 0.0) > 12.0 else 1
     if binning > 1:
         fit = fit_lit_ball(
@@ -215,9 +188,7 @@ def fit_lit_ball(
     azimuth = math.atan2(min(lean_y, -1e-6), lean_x) % (2 * math.pi)
     if math.degrees(azimuth) < LIGHT_AZIMUTH_DEG[0]:
         azimuth += 2 * math.pi
-    # away from the light, the rim fades into the ball's own cast shadow: those
-    # pixels would let a model without a shadow grow the ball into it, so the
-    # size is left to the lit rim and the shading inside
+    # the rim away from the light fades into the cast shadow: size comes from the lit rim
     away = (np.cos(azimuth) * (xx - px) + np.sin(azimuth) * (yy - py)) < 0
     use = ~(away & (distance > 0.85 * radius)) if total > 0 else np.ones_like(away)
     low_r, high_r = (
@@ -231,8 +202,7 @@ def fit_lit_ball(
 
     best = None
     sizes = (1.0,) if expected_radius else tuple(size_starts or (0.85, 1.0, 1.2))
-    # the lean can point the wrong way when the seed sits off the ball's centre,
-    # so the fit also starts from the upper left and the upper right
+    # an off-centre seed can turn the lean the wrong way: also start upper left and right
     lights = [azimuth] + [
         math.radians(a)
         for a in (225.0, 315.0)
@@ -279,8 +249,7 @@ def fit_lit_ball(
                     else "2-point"
                 ),
                 bounds=(lower, upper),
-                # grass, carpet pile and the cast shadow hide parts of the
-                # ball: Cauchy lets those pixels go rather than drag the fit
+                # grass, carpet and the cast shadow hide parts of the ball: Cauchy lets them go
                 loss="cauchy",
                 f_scale=3.0,
                 max_nfev=120,
@@ -294,8 +263,7 @@ def fit_lit_ball(
     cx, cy, r, azimuth, tilt, shade, diffuse, ground, _gx, _gy = best.x
     misfit = np.abs(_render(best.x, yy, xx) - patch)
     misfit_dn = float(np.median(misfit[use & (np.hypot(xx - cx, yy - cy) <= 1.3 * r)]) * 1.4826)
-    # no model explains pixels better than their own noise: clipped white
-    # otherwise fits any bright sphere with nothing left over
+    # no model beats the pixels' own noise: clipped white fits any bright sphere otherwise
     misfit_dn = max(misfit_dn, noise_dn)
     if diffuse < MIN_DIFFUSE_NOISE_MULTIPLE * noise_dn or misfit_dn > MAX_MISFIT_FRACTION * diffuse:
         return None
@@ -334,11 +302,7 @@ def _lit_rim_step(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: fl
 
 
 def _lit_rim_offset(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float) -> float:
-    """How far the lit rim's edge lies from the fitted circle, as a fraction of its radius.
-
-    On each ray across the lit side the edge is where the brightness falls
-    fastest; a ray with no rim on it finds its fall anywhere, far from the circle.
-    """
+    """How far the lit rim's edge lies from the fitted circle, as a fraction of its radius."""
     smooth = ndimage.gaussian_filter(patch, EDGE_BLUR_PX)
     angles = azimuth + np.radians(np.arange(-60.0, 61.0, 6.0))
     radii = np.arange(0.4 * r, 1.6 * r, 0.25)

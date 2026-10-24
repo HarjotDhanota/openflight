@@ -447,8 +447,6 @@ class RollingBufferMonitor:
 
         for diag in diagnostics:
             diag["trigger_type"] = self.trigger_type
-            # Preserve the legacy number exactly. Its two historical sources
-            # have different meanings, documented by the structured contract.
             strategy_latency = diag.get("trigger_latency_ms")
             latency = strategy_latency or wall_clock_ms
             diag["latency_ms"] = latency
@@ -797,8 +795,7 @@ class RollingBufferMonitor:
                         spin_phase_snr=shot.spin_phase_snr,
                         spin_phase_agreement_pct=shot.spin_phase_agreement_pct,
                         spin_phase_confirmed=shot.spin_phase_confirmed,
-                        # diagnostic only: the ball-speed table at detection, never the
-                        # shot's carry (finalization commits that; D17 on fusion units)
+                        # diagnostic only: the ball-speed table at detection, never the shot's carry
                         table_carry_estimate_yards=shot.estimated_carry_yards,
                     )
                     trigger_event_recorded = True
@@ -808,8 +805,6 @@ class RollingBufferMonitor:
                         self._shot_callback(shot)
                         callback_ms = (time.time() - callback_start) * 1000
                         total_ms = (time.time() - trigger_start) * 1000
-                        # The server logs the carry it shows later, after enrichment;
-                        # this is the table estimate at detection (P6-6).
                         logger.info(
                             "[SHOT] #%d: ball=%.1f mph, club=%s, %s=%s yds | "
                             "trigger=%.0fms, process=%.0fms, callback=%.0fms, total=%.0fms",

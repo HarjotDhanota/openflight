@@ -47,14 +47,11 @@ class IncompleteShotError(Exception):
 
 
 class UnmeasuredShotError(IncompleteShotError):
-    """A fusion unit did not measure a field the simulator protocol requires (D31).
+    """A fusion unit did not measure a field the simulator protocol requires.
 
-    Nothing is filled in on a fusion unit (D17), so the shot is not sent.
-    ``missing`` names the unmeasured fields, in protocol order; the message is
-    the reason the screen and the sim-send log show, e.g. "spin not measured".
-    ``model_geometry`` names those among them the shot does have, but only as
-    model geometry (D39), which simulators are not sent (D31). ``estimated`` names
-    those the shot has only as estimates, each "name estimated (reason)" (V-formulas C6).
+    Nothing is filled in on a fusion unit, so the shot is not sent. ``missing`` is in
+    protocol order; ``model_geometry`` and ``estimated`` name fields the shot has only
+    in those forms, which simulators are not sent.
     """
 
     def __init__(
@@ -130,13 +127,9 @@ class ResolvedShot:
 
     Field names are *logical* (protocol-neutral); each codec maps them to its
     own wire names. ``provenance`` tags each logical field "measured",
-    "calculated" (a model's value from the shot's own measured inputs, E2) or
-    "estimated" so the UI can render per-field badges identically for any sim
-    ("model_geometry" only with resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY, off by default).
-
-    An optional field the shot has no value for (``carry_yards``, ``club_path_deg``,
-    ``club_speed_mph`` on a fusion unit, D17) is None with no provenance entry: it
-    is left out of ``as_values`` and each codec leaves it off the wire.
+    "calculated" or "estimated" so the UI can render per-field badges identically
+    for any sim. An optional field with no value is None with no provenance entry
+    and is left off the wire.
     """
 
     shot_number: int
@@ -154,10 +147,7 @@ class ResolvedShot:
     provenance: Dict[str, str] = field(default_factory=dict)
 
     def as_values(self) -> Dict[str, Optional[float]]:
-        """Logical field -> value map (keys match ``provenance``) for the UI.
-
-        A field that is not sent (None, with no provenance) is left out.
-        """
+        """Logical field -> value map (keys match ``provenance``); unsent fields are omitted."""
         values = {
             "ball_speed": self.ball_speed_mph,
             "vla": self.vla,

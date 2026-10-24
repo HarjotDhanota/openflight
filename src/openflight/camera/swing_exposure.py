@@ -1,24 +1,8 @@
-"""The kiosk's swing exposure policy: the resting ball is the light meter (13 Oct 2026).
+"""Swing exposure policy: meter on the resting ball, use the lowest exposure that is enough.
 
-The owner's rule: *use the lowest exposure unless more is needed.*
-
-* **Limits are read, not assumed.** The shortest exposure is the sensor's own, read
-  for each mode from the camera's control limits (picamera2
-  ``camera_controls["ExposureTime"]``); the gain runs from the sensor's minimum to
-  its analogue cap (``camera_controls["AnalogueGain"]``, about 15.94 on the OV9281).
-* **The blur ceiling** is the longest exposure that keeps the club sharp: a
-  millimetre budget over the measured club-edge speed (``config/swing_exposure.json``
-  carries the inputs and the derivation). It never moves with the lens.
-* **The decision ladder** runs down from the ceiling in about sqrt(2) steps to the
-  sensor minimum.
-* **The resting ball decides.** Its brightest part (p95 of the core) is aimed at
-  ``TARGET_PEAK_FRACTION`` of the clip range: the shortest exposure at which a gain
-  within the cap gets there, gain first, exposure only once the gain is capped.
-  Too bright at the floor, or too dark at the ceiling and cap, keeps the limit and
-  labels the frames (D15: measure, label, don't block).
-* **Hysteresis.** A ball inside ``HOLD_BAND`` holds; a mild move needs
-  ``confirm_looks`` looks in a row; a clipped ball or one under the gate moves at
-  once. No ball keeps the last setting and says why.
+Exposure runs from the sensor minimum (read from picamera2 ``camera_controls``) up to a
+blur ceiling derived in ``config/swing_exposure.json``; gain fills first, exposure grows
+only at the gain cap. The ball's p95 is aimed at ``TARGET_PEAK_FRACTION``, with hysteresis.
 """
 
 from __future__ import annotations
@@ -39,39 +23,26 @@ DECISION_SCHEMA = "openflight.swing_exposure_decision.v1"
 POLICY_NAME = "resting_ball_lowest_exposure_unless_more_is_needed"
 POLICY_VERSION = 1
 
-# The OV9281's black level in the raw R8 stream (static_exposure.SENSOR_BLACK_LEVEL_DN)
-# and its clip level; the clip range is what a peak fraction is a share of.
+# OV9281 raw R8 black and clip levels; a peak fraction is a share of the range between.
 BLACK_LEVEL_DN = 16.0
 CLIP_LEVEL_DN = 250.0
-# The ball gate every other judge uses (static_exposure, the ladder): the ball core's
-# median at least 20 DN above black, at most 5 % of the core clipped.
+# Ball gate shared with static_exposure: core median >= 20 DN above black, <= 5 % clipped.
 BALL_GATE_DN = 20.0
 BALL_CLIPPED_MAX_PCT = 5.0
-# The ball's brightest part (p95 of the core) is aimed here, as a share of the range
-# between black and clip: the static search's 0.6 rounded into the middle of the
-# owner's 0.5-0.6, clear of clipping and far above the gate for a white ball.
+# Target for the core's p95, as a share of the clip range: clear of clipping, well above the gate.
 TARGET_PEAK_FRACTION = 0.55
-# A ball whose peak sits inside this band is left alone (hysteresis).
 HOLD_BAND = (0.40, 0.75)
 # A clipped ball's light is only a lower bound: each look darkens by this factor.
 SATURATED_STEP = 0.25
-# Looks in a row a mild (in-gate, unclipped) change waits for.
 CONFIRM_LOOKS = 2
-# Exposure stays this far inside the frame period (as static_exposure's ceiling does).
 FRAME_MARGIN_US = 200
-# The OV9282 driver's analogue gain register tops out at 0xFF / 16 (light audit
-# section 2). Only used when the camera reports no AnalogueGain limits, and labelled.
+# OV9282 driver analogue gain register cap (0xFF / 16); used only when the camera reports no limits.
 DRIVER_GAIN_CAP = 255.0 / 16.0
 LADDER_STEP = math.sqrt(2.0)
 
-# The ball-finding sweep (coordinator review, 13 Oct): after this many looks in a row
-# with no resting ball, the policy steps through its own envelope (never past the blur
-# ceiling or the gain cap) until a look finds the ball, then meters on it. A sweep that
-# finds none holds the last good setting (else the seed) and waits this long before
-# searching again, unless the box or the light index changes. It never meters the zone.
+# Looks with no ball before sweeping the envelope; a failed sweep holds for the cool-down.
 SWEEP_AFTER_LOOKS = 3
 SWEEP_COOLDOWN_S = 30.0
-# Steps of exposure x gain: a factor of 2 is well inside what the box look tolerates.
 SWEEP_STEP = 2.0
 NO_BALL_FOUND_MESSAGE = "no ball found in the box (searched the full range)"
 
@@ -89,11 +60,7 @@ DecisionStatus = Literal[
 ]
 
 
-# --- config -------------------------------------------------------------------------
-
-
 def _derived_ceiling_us(config: Mapping[str, Any], arm_id: str | None) -> int:
-    # a size outside the config's modes (the legacy 320x200) takes the shared budget
     mode = config["modes"][arm_id] if arm_id is not None else {}
     budget = {**config["blur_budget_mm"], **(mode.get("blur_budget_mm") or {})}
     speed = {**config["club_edge_speed_m_s"], **(mode.get("club_edge_speed_m_s") or {})}
@@ -125,11 +92,7 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
 
 
 def blur_ceiling_us(config: Mapping[str, Any], arm_id: str | None) -> int:
-    """The longest exposure that keeps the club inside the mm blur budget, for a mode.
-
-    ``None`` (a size the config has no mode for) takes the shared budget: a
-    millimetre budget does not depend on the readout.
-    """
+    """The longest exposure that keeps the club inside the mm blur budget, for a mode."""
     return _derived_ceiling_us(config, arm_id)
 
 
@@ -145,9 +108,6 @@ def mode_for_size(width: int, height: int, config: Mapping[str, Any] | None = No
         if (int(mode["width"]), int(mode["height"])) == (int(width), int(height)):
             return arm_id
     return None
-
-
-# --- the sensor's limits ------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -231,11 +191,7 @@ def record_sensor_limits(
     lens_id: str | None = None,
     recorded_by: str = "kiosk",
 ) -> None:
-    """Keep the limits a camera reported for one mode, for pages that have no camera open.
-
-    The lens is recorded with them; the exposure limits are the sensor's and do not
-    depend on it.
-    """
+    """Keep the limits a camera reported for one mode, for pages that have no camera open."""
     from datetime import datetime, timezone  # noqa: PLC0415
 
     target = Path(path).expanduser()
@@ -279,15 +235,8 @@ def recorded_sensor_limits(path: Path | str, width: int, height: int) -> dict | 
     return dict(entry)
 
 
-# --- the envelope and its ladder ------------------------------------------------------------
-
-
 def exposure_ladder(minimum_us: int, ceiling_us: int, step: float = LADDER_STEP) -> tuple[int, ...]:
-    """Exposures from the sensor minimum to the ceiling, about ``step`` apart.
-
-    Anchored on the ceiling and run downward, so the rungs above the bottom one do
-    not depend on the sensor minimum.
-    """
+    """Exposures from the sensor minimum to the ceiling, ``step`` apart, anchored on the ceiling."""
     minimum, ceiling = int(minimum_us), int(ceiling_us)
     if ceiling <= minimum:
         return (minimum,)
@@ -407,9 +356,6 @@ def build_envelope(
     )
 
 
-# --- the resting ball ------------------------------------------------------------------------
-
-
 def ball_core(image: np.ndarray, x: float, y: float, diameter: float) -> np.ndarray:
     """The ball's core pixels: inside 0.8 of its radius, clear of the rim."""
     yy, xx = np.indices(image.shape)
@@ -516,9 +462,6 @@ def read_ball(
     )
 
 
-# --- choosing a setting ----------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Choice:
     setting: Setting
@@ -543,14 +486,7 @@ def setting_for_product(wanted: float, envelope: Envelope) -> Setting:
 
 
 def sweep_settings(envelope: Envelope, current: Setting) -> list[Setting]:
-    """The settings a ball-finding sweep tries, in order, starting next to ``current``.
-
-    Exposure x gain runs from the floor (sensor minimum x gain 1) to the top (blur
-    ceiling x gain cap) in ``SWEEP_STEP`` steps, each split the policy's own way
-    (shortest exposure, gain first). The sweep alternates one step brighter, one step
-    darker, outward from the current setting, and carries on along one side once the
-    other is used up. Every setting is inside the envelope.
-    """
+    """The settings a ball-finding sweep tries, alternating brighter/darker out from ``current``."""
     floor, top = envelope.floor_setting.product, envelope.top_setting.product
     products = []
     product = floor
@@ -596,9 +532,7 @@ def choose_setting(peak_index: float, median_index: float, envelope: Envelope) -
     """The setting that puts a ball of this light at the target peak.
 
     ``peak_index`` and ``median_index`` are the ball's p95 and median in DN above black
-    per microsecond x gain. The shortest exposure on the ladder at which a gain within
-    the cap brings the peak to ``TARGET_PEAK_FRACTION`` wins; gain fills first, the
-    exposure grows only at the cap, and nothing passes the ceiling.
+    per microsecond x gain.
     """
     target_dn = TARGET_PEAK_FRACTION * envelope.clip_range_dn
     wanted = target_dn / peak_index if peak_index > 0 and math.isfinite(peak_index) else math.inf
@@ -611,9 +545,6 @@ def choose_setting(peak_index: float, median_index: float, envelope: Envelope) -
         predicted_peak_fraction=fraction,
         predicted_signal_dn=signal,
     )
-
-
-# --- the decision ------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -697,7 +628,6 @@ class SwingExposurePolicy:
         self._pending_count = 0
         self._last_eligible: bool | None = None
         self._seen_ball = False
-        # the ball-finding sweep
         self._no_ball_looks = 0
         self._sweep: list[Setting] | None = None
         self._sweep_index = 0
@@ -746,9 +676,7 @@ class SwingExposurePolicy:
         """The first setting, before any ball is seen.
 
         ``light_index`` is the ball core's median DN above black per us x gain in this
-        mode (the setup's 1280x800 index times the mode's signal factor). It stands in
-        for the peak until the first ball look, which then decides. Without one, the
-        startup controls are moved inside the envelope, their brightness kept.
+        mode; it stands in for the peak until the first ball look.
         """
         env = self.envelope
         if light_index is not None and math.isfinite(light_index) and light_index > 0:

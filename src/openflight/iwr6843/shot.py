@@ -41,15 +41,12 @@ TH_GATE_RAD = -0.0436  # -2.5 deg: late-track corrupted zone starts
 POLICY_FAR = {"dominance": True, "x_max_m": 3.8}
 POLICY_ANCHORED = {"anchor_tee": True, "th_gate_rad": TH_GATE_RAD}
 # MTI notch comb: a ball whose loop-to-loop phase 4*pi*v*T/lambda is ~0 mod
-# 2pi looks static within a burst. The spacing is lambda / (2 T) for the
-# dump's own same-TX loop period T (``notch_spacing_ms``): 26.9 m/s on a 2-TX
-# capture (90 us loop), 17.9 m/s on the production 3-TX capture (135 us loop;
-# D36 item 1 -- a fixed 26.93 m/s, the 2-TX value, was used for both).
+# 2pi looks static within a burst; spacing lambda / (2 T) per dump
+# (``notch_spacing_ms``): 26.9 m/s at 2 TX, 17.9 m/s at 3 TX.
 # Dirichlet attenuation width: suppression is >50% only within ~2 m/s of a
-# notch center (tuned on 2-TX dumps). n=1 is EXCLUDED: on 2-TX dumps (26.9)
-# wedge balls there are close-range/strong enough to survive, and treating
-# them as notched costs the anchor (SW 2.1 -> 7 deg regression when tried);
-# on 3-TX dumps n=1 (17.9) is below every class's ball-speed floor.
+# notch center. n=1 is EXCLUDED: at 2 TX wedge balls there survive and
+# treating them as notched costs the anchor; at 3 TX it is below every
+# class's ball-speed floor.
 NOTCH_HALF_WIDTH_MS = 2.5
 NOTCH_MIN_ORDER = 2
 FAST_BALL_MS = 55.0
@@ -72,9 +69,7 @@ CLUB_MIN_BALL_MS: dict[str, float] = {
 def notch_spacing_ms(loop_period_s: float) -> float:
     """Burst-MTI notch spacing, m/s, for one dump's same-TX loop period.
 
-    Burst MTI subtracts each bin's mean over the loops of a burst, and those
-    loops are ``loop_period_s`` apart. A target advancing a whole number of
-    half wavelengths per loop has the same phase in every loop and cancels.
+    A target advancing a whole number of half wavelengths per loop cancels.
     """
     return LAM / (2.0 * loop_period_s)
 

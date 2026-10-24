@@ -95,8 +95,6 @@ class IWR6843CaptureMonitor:
         self._running = False
         self._armed = False
         self._capture_active = False
-        # For the ready light (P7-14): when the dump in flight began, and how long
-        # the last good one took (the next wait's rough time left).
         self._capture_started_at: float | None = None
         self._last_dump_duration_s: float | None = None
         self._sequence = 0
@@ -195,15 +193,13 @@ class IWR6843CaptureMonitor:
     def edge_tick_reading(self) -> dict:
         """monotonic, gpiozero active_time, monotonic; plus the pin factory and versions.
 
-        active_time is an age in the pin factory's tick clock. Only the LGPIO factory
-        forwards the kernel event tick (clock_mapping.QUALIFIED_BACKENDS decides); the
-        bracket bounds when the age was read. Kernel IRQ latency before the tick is
-        not in this reading and is never estimated.
+        active_time is an age in the pin factory's tick clock; the bracket bounds when
+        it was read.
         """
         return read_edge_tick(self._button)
 
     def ready_snapshot(self) -> dict:
-        """What the ready light needs (P7-14), read from flags without the condition lock."""
+        """What the ready light needs, read from flags without the condition lock."""
         worker = self._worker
         port = getattr(self.radar, "ser", None)
         return {
@@ -222,11 +218,7 @@ class IWR6843CaptureMonitor:
         }
 
     def on_debounced_edge(self, event: GateEvent, since_last_observed_s: float) -> None:
-        """An edge the 0.1 s debounce hid from every observer; does nothing here.
-
-        The OPS HOST_INT hears every edge in hardware, so a debounced edge can still
-        start or overlap a dump: an extension may observe it.
-        """
+        """An edge the 0.1 s debounce hid from every observer; a hook, no-op here."""
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
@@ -250,9 +242,7 @@ class IWR6843CaptureMonitor:
                 queued = False
             else:
                 self._last_observed_edge_timestamp = edge_timestamp
-                # The IWR skips any edge while its seven-second UART dump is in
-                # flight, but the observers (camera, OPS) still hear it (P7-2): a
-                # false edge's dump once hid a real impact from the camera.
+                # the IWR skips edges during its ~7 s dump; observers still hear them
                 queued = self._events.empty() and not self._capture_active
                 if queued:
                     self._last_edge_timestamp = edge_timestamp
@@ -267,7 +257,6 @@ class IWR6843CaptureMonitor:
                 observers = tuple(self._trigger_observers)
                 event_observers = tuple(self._gate_event_observers)
         if since_last_observed_s is not None:
-            # Outside the lock, like the observers; the debounce result is unchanged.
             self.on_debounced_edge(event, since_last_observed_s)
             return False
         for observer in event_observers:
@@ -354,7 +343,7 @@ class IWR6843CaptureMonitor:
                 gate_event=event,
             )
             with self._condition:
-                # the duration first: the ready light reads these without the lock
+                # duration first: the ready light reads these without the lock
                 if capture.valid:
                     self._last_dump_duration_s = capture.dump_duration_s
                 self._capture_active = False
