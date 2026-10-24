@@ -70,12 +70,18 @@ supplies handedness when present; otherwise all three drawings use the current
 kiosk hand, defaulting to RH only when neither is known. Historical shots without
 hand metadata therefore follow the current kiosk setting.
 
-Blade top faces and score lines project the existing fair face contour by
+Blade address silhouettes project the existing fair face contour by
 `(x, y) -> (y sin(static loft), x)` about its centre. The metal shell adds the
 2.4 mm edge band and a topline that recedes by its thickness times cosine of loft;
-the heel neck is drawn separately from the planar blade. This replaces the first
+the heel neck is drawn separately from the planar blade. The address surface is
+smooth metal with a light topline/edge band; no face grooves are drawn there.
+This replaces the first
 round's rectangular blade outlines without changing face-on geometry or wood
-head shapes. Top heads rotate by signed face angle so their normal follows the
+head shapes. Short visible shaft sections and a viewport fitted to the rotated
+head, ball and arrows keep the drawings readable without changing the head/ball
+size ratio. Side blades sit in front of the hosel, exposing the lofted face line,
+rounded leading edge, sole/bounce and fuller back profile.
+Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
 impact centre. The ball is 42.67 mm
 in diameter and sits beyond the arrows on the target side; its position is
@@ -154,9 +160,11 @@ The SVG viewport now encloses the rotated assembly; additional 45/75-degree
 lie cases catch clipping that the old fixed viewport allowed. The paths, centre,
 rim, grooves and physical scale relative to the impact dot are unchanged.
 
-Dynamic lie remains a pending backend measurement; browser fixtures supply it
-to exercise the renderer. The real unavailable reading stays a dash. Its visual
-projection follows the schematic rule above, not a full shaft-lean reconstruction.
+Dynamic lie now has an owner-approved [camera-based estimate](dynamic-lie.md),
+always labelled model geometry. A missing shaft reading stays a dash. The main
+review screenshots use that unavailable state; separate synthetic tilt fixtures
+carry the MODEL label. Its visual projection follows the schematic rule above,
+not a full shaft-lean reconstruction.
 The top blade uses static category loft, while the side uses dynamic loft: these
 are metric illustrations rather than three camera projections of a fitted 3D
 club pose. This audit verifies signs, arithmetic and rendering against supplied

@@ -27,7 +27,7 @@ async function open(page: Page, club = '7-iron', hand = 'right') {
       const values = {
         impact_height: 4,
         impact_offset: 9,
-        dynamic_lie: 64.6,
+        dynamic_lie: null,
         face_angle: -3.17,
         club_path: 4.23,
         face_to_path: -7.4,
@@ -46,10 +46,10 @@ async function open(page: Page, club = '7-iron', hand = 'right') {
         metrics[key] = {
           value,
           unit: key.startsWith('impact') ? 'mm' : 'deg',
-          status: key.startsWith('impact') ? 'experimental' : 'measured',
+          status: key === 'dynamic_lie' ? 'not_measured' : key.startsWith('impact') ? 'experimental' : 'measured',
           source: 'browser fixture',
-          range: key.startsWith('impact') ? [value - 3, value + 3] : null,
-          reason: null,
+          range: key.startsWith('impact') ? [(value ?? 0) - 3, (value ?? 0) + 3] : null,
+          reason: key === 'dynamic_lie' ? 'no camera shaft reading in this layout fixture' : null,
           frame: null,
           note: null,
           normalized: null,
@@ -73,6 +73,10 @@ async function fit(page: Page, view: string) {
     const projection = card.querySelector('.club-projection') as SVGSVGElement | null;
     if (projection) {
       const area = projection.getBoundingClientRect();
+      const outline = projection.querySelector('.club-projection__outline')!.getBoundingClientRect();
+      const ball = projection.querySelector('.club-projection__ball')!.getBoundingClientRect();
+      const occupiedHeight = Math.max(outline.bottom, ball.bottom) - Math.min(outline.top, ball.top);
+      if (occupiedHeight / area.height < 0.5) issues.push('head and ball occupy less than half the drawing height');
       for (const selector of [
         '.club-projection__head',
         '.club-projection__ball',
@@ -214,20 +218,12 @@ for (const viewport of [
               expect(face.toeSide).toBe(hand === 'right' ? -1 : 1);
               expect(face.offset).toBeCloseTo(9, 5);
               expect(face.height).toBeCloseTo(4, 5);
-              const loft =
-                club === 'driver'
-                  ? 13.2
-                  : club === '3-wood'
-                    ? 16.5
-                    : club === '5-hybrid'
-                      ? 20.1
-                      : club === 'sw'
-                        ? 51.3
-                        : 29.4;
-              expect(face.lie).toBeCloseTo(
-                (Math.atan(Math.tan((64.6 * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180)) * 180) / Math.PI,
-                1
-              );
+              const staticLie = await page.evaluate(async (club) => {
+                const { FACE_SHAPES, faceCategory } = await import('/src/components/panel/faceImpact.ts');
+                return FACE_SHAPES[faceCategory(club)].hosel.lieDeg;
+              }, club);
+              expect(face.lie).toBeCloseTo(staticLie, 1);
+              await expect(card.locator('[data-view-metric="dynamic_lie"] dd')).toHaveText('—');
               expect(face.outside).toEqual([]);
             } else {
               const result = await card.locator('.club-projection').evaluate((svg) => {
@@ -284,13 +280,23 @@ for (const viewport of [
                 impact_offset: offset,
                 impact_height: height,
               }))
-                metrics[key] = { ...metrics[key], value };
+                metrics[key] = {
+                  ...metrics[key],
+                  value,
+                  status: key === 'dynamic_lie' ? 'model_geometry' : 'experimental',
+                  reason: null,
+                  note: key === 'dynamic_lie' ? 'Synthetic model-geometry fixture; not a live measurement' : null,
+                };
               useShotStore.getState().updateShot({ ...shot, metrics });
             },
             { lie, offset, height, hand }
           );
           await expect(page.locator('.panel-header__club')).toContainText(
             hand === 'left' ? 'Left-handed' : 'Right-handed'
+          );
+          await expect(page.locator('[data-view-metric="dynamic_lie"] .label-badge')).toHaveAttribute(
+            'data-label',
+            'model_geometry'
           );
           const face = await auditFace(page);
           expect(face.heelSide).toBe(hand === 'right' ? 1 : -1);

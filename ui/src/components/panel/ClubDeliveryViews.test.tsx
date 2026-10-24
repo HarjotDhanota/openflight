@@ -71,6 +71,13 @@ function svg(shot: Shot, view: 'top' | 'side') {
 const attr = (element: Element, name: string) => Number(element.getAttribute(name));
 
 describe('club delivery drawings', () => {
+  it.each(['iron', 'wedge'] as const)('%s address surface has no face grooves and exposes the topline', (category) => {
+    const element = svg(shot(category), 'top');
+    expect(
+      element.querySelector('.club-projection__head')!.querySelectorAll('line[stroke="var(--face-art-groove)"]')
+    ).toHaveLength(0);
+    expect(element.querySelector('.club-projection__topline')).not.toBeNull();
+  });
   it('uses kiosk handedness without camera metadata and keeps a recorded shot’s hand', () => {
     const host = document.createElement('div');
     const root = createRoot(host);

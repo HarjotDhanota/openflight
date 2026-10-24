@@ -143,7 +143,7 @@ export function clubProfilePaths(category: FaceCategory) {
   const soleY = by + (wood ? 4 : p.sole * Math.tan((p.bounce * Math.PI) / 180));
   const side = wood
     ? `M ${point(tx, ty)} C ${point(tx - 5, crown)} ${point(-depth * 0.2, crown)} ${point(-depth * 0.4, crown + 3)} C ${point(-depth * 0.7, crown + 7)} ${point(-depth, 0)} ${point(-depth, by - 5)} C ${point(-depth, soleY)} ${point(-depth * 0.3, soleY)} ${point(bx - 4, by + 2)} Q ${point(bx + 1, by + 1)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`
-    : `M ${point(tx, ty)} Q ${point(tx - p.topline / 2, ty - 2)} ${point(tx - p.topline, ty)} C ${point(tx - p.topline - 2, ty + 10)} ${point(bx - p.sole - 6, by - 10)} ${point(bx - p.sole, soleY - 2)} Q ${point(bx - p.sole / 2, soleY + 1)} ${point(bx - 2, by + 1)} Q ${point(bx + 1, by)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`;
+    : `M ${point(tx, ty)} Q ${point(tx - p.topline / 2, ty - 2)} ${point(tx - p.topline, ty)} C ${point(tx - p.topline, ty + p.faceHeight * 0.3)} ${point(bx - p.sole - 3, by - 14)} ${point(bx - p.sole, soleY - 3)} Q ${point(bx - p.sole / 2, soleY + 1)} ${point(bx - 2, by + 1)} Q ${point(bx + 1, by)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`;
   const topShellTransform = `matrix(0 1 ${Math.sin(radians) + back / p.faceHeight} 0 ${-back / 2} 0)`;
   return {
     top,
