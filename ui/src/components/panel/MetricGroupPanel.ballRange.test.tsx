@@ -58,35 +58,21 @@ describe('ball distance in the Flight details', () => {
     expect(formatMetricValue(ballRange({}), 'imperial', 'ball_range')).toEqual(['2.08', 'm']);
   });
 
-  it('says a measured distance came from the radar on this swing', () => {
+  it.each([
+    ['a measured distance came from the radar on this swing', {}, '2.08', 'radar, this swing'],
+    [
+      'a camera-prior distance is the camera estimate (coarse)',
+      { value: 2.11, status: 'estimated' as const, range: [1.79, 2.43] as [number, number] },
+      '2.11',
+      'camera estimate (coarse)',
+    ],
+  ])('says %s', (_name, overrides, value, words) => {
     const html = cell(
       renderToString(
-        <MetricGroupPanel
-          view="flight"
-          shot={shot(ballRange({}))}
-          profileName="H"
-          clubLabel="7"
-          unitSystem="imperial"
-        />
+        <MetricGroupPanel view="flight" shot={shot(ballRange(overrides))} profileName="H" clubLabel="7" unitSystem="imperial" />
       )
     );
-    expect(html).toContain('2.08');
-    expect(html).toContain('radar, this swing');
-  });
-
-  it('says a camera-prior distance is the camera estimate (coarse)', () => {
-    const html = cell(
-      renderToString(
-        <MetricGroupPanel
-          view="flight"
-          shot={shot(ballRange({ value: 2.11, status: 'estimated', range: [1.79, 2.43] }))}
-          profileName="H"
-          clubLabel="7"
-          unitSystem="imperial"
-        />
-      )
-    );
-    expect(html).toContain('2.11');
-    expect(html).toContain('camera estimate (coarse)');
+    expect(html).toContain(value);
+    expect(html).toContain(words);
   });
 });

@@ -126,25 +126,16 @@ def _confirm_box(service, scene):
     return result
 
 
-def test_confirm_box_refused_without_a_ball(make, scene):
+@pytest.mark.parametrize(("wide", "reason"), [(None, "no_ball"), ([40.0, 40.0], "outside_box")])
+def test_confirm_box_refused_without_a_ball_in_the_box(make, scene, wide, reason):
     service, recorder = make()
+    scene.wide = wide
 
     result = service.box("confirm")
 
-    assert result["ok"] is False and result["reason"] == "no_ball"
+    assert result["ok"] is False and result["reason"] == reason
     assert result["setup"]["box"]["state"] == "not_set"
     assert service.revision == 0
-    assert recorder.calls["box"] == []
-
-
-def test_confirm_box_outside_refused(make, scene):
-    service, recorder = make()
-    scene.wide = [40.0, 40.0]
-
-    result = service.box("confirm")
-
-    assert result["ok"] is False and result["reason"] == "outside_box"
-    assert result["setup"]["box"]["state"] == "not_set"
     assert recorder.calls["box"] == []
 
 
@@ -272,28 +263,25 @@ def test_aim_confirm_stores_record_and_net_from_floor_line(make, scene):
     assert recorder.calls["aim"] == [aim] and recorder.calls["net_range"] == [net]
 
 
-def test_aim_skip_keeps_default_net(make, scene):
+@pytest.mark.parametrize(
+    ("action", "kwargs", "state"),
+    [("skip", {}, "skipped"), ("confirm", {"aim_px": AIM_PX}, "set")],
+    ids=["skipped", "no floor line"],
+)
+def test_an_aim_without_a_floor_line_keeps_the_labelled_default_net(
+    make, scene, action, kwargs, state
+):
     service, recorder = make()
     _confirm_box(service, scene)
 
-    result = service.aim("skip")
+    result = service.aim(action, **kwargs)
 
     assert result["ok"], result["reason"]
-    assert result["setup"]["aim"]["state"] == "skipped"
+    assert result["setup"]["aim"]["state"] == state
     net = result["setup"]["net_range"]
     assert net["source"] == "default_not_measured" and net["value_m"] == 4.6
     assert net["reason"] and "uncertainty_m" not in net
     assert recorder.calls["net_range"] == [net]
-
-
-def test_aim_without_a_floor_line_is_a_labelled_default_net(make, scene):
-    service, _recorder = make()
-    _confirm_box(service, scene)
-
-    result = service.aim("confirm", aim_px=AIM_PX)
-
-    assert result["setup"]["aim"]["state"] == "set"
-    assert result["setup"]["net_range"]["source"] == "default_not_measured"
 
 
 def test_a_floor_line_more_uncertain_than_it_is_long_is_the_default(make, scene, monkeypatch):
@@ -488,17 +476,6 @@ def test_a_finished_action_announces_the_change_then_runs_the_after_hook(make, s
     assert order == ["before_setup_action", ("changed", "confirmed"), "after_setup_action"]
 
 
-def test_an_applier_that_fails_is_reported_and_the_record_is_kept(make, scene, tmp_path):
-    service, recorder = make()
-    service._appliers.box = lambda section: (_ for _ in ()).throw(RuntimeError("camera busy"))
-    scene.in_box = BALL_PX
-
-    result = service.box("confirm")
-
-    assert result["ok"] is False and "camera busy" in result["reason"]
-    assert load(tmp_path / "setup.json")["box"]["state"] == "confirmed"
-
-
 def test_a_box_the_kiosk_cannot_use_shows_why_until_it_applies(make, scene):
     service, _recorder = make()
     refusal = ["the box (800, 380, 480, 520) is not a rectangle"]
@@ -555,17 +532,6 @@ def test_show_looks_without_saving(make, scene):
     assert result["setup"]["box"]["state"] == "not_set"
 
 
-def test_a_saved_setup_is_loaded_and_applied_at_start(make, scene, tmp_path):
-    service, _recorder = make()
-    _confirm_box(service, scene)
-    restarted, recorder = make()
-
-    restarted.apply_all()
-
-    assert recorder.calls["box"][0]["state"] == "confirmed"
-    assert recorder.calls["aim"] == [None]
-
-
 def test_a_tilt_change_stales_the_box_on_restart(make, scene):
     service, _recorder = make()
     _confirm_box(service, scene)
@@ -617,6 +583,10 @@ def test_at_start_only_the_sections_once_set_are_applied(make, scene):
     for name in ("aim", "ball_range", "net_range", "scene"):
         assert recorder.calls[name] == [], name
     assert restarted.applied_revision == restarted.revision == 1
+    # apply_all applies every section, an unset one as None
+    again, recorder = make()
+    again.apply_all()
+    assert recorder.calls["box"][0]["state"] == "confirmed" and recorder.calls["aim"] == [None]
 
 
 def test_at_start_a_stale_section_is_applied_as_none_so_it_clears(make, scene):
@@ -733,14 +703,6 @@ def test_a_look_that_sees_nothing_new_announces_nothing(make, scene):
     assert after == ["after_setup_action"]
 
 
-def test_the_snapshot_says_whether_the_kiosk_has_a_camera(make):
-    with_camera, _recorder = make()
-    without, _recorder = make(camera_available=lambda: False)
-
-    assert with_camera.snapshot()["live"]["camera_available"] is True
-    assert without.snapshot()["live"]["camera_available"] is False
-
-
 def test_the_box_keeps_the_outline_the_user_confirmed(make, scene):
     service, _recorder = make()
 
@@ -810,7 +772,9 @@ def test_a_file_of_a_newer_schema_is_not_overwritten(make, scene, tmp_path):
     assert recorder.calls["box"] == []
 
 
-def test_a_failed_applier_does_not_advance_the_applied_revision(make, scene):
+def test_a_failed_applier_is_reported_keeps_the_record_and_the_applied_revision(
+    make, scene, tmp_path
+):
     service, _recorder = make()
     assert service.apply_saved() == [] and service.applied_revision == 0
     broken = [True]
@@ -822,7 +786,10 @@ def test_a_failed_applier_does_not_advance_the_applied_revision(make, scene):
     service._appliers.box = box  # noqa: SLF001
     scene.in_box = BALL_PX
 
-    assert service.box("confirm")["ok"] is False
+    result = service.box("confirm")
+
+    assert result["ok"] is False and "camera busy" in result["reason"]
+    assert load(tmp_path / "setup.json")["box"]["state"] == "confirmed"
     assert service.revision == 1 and service.applied_revision == 0
     broken.clear()
     assert service.apply_all() == [] and service.applied_revision == 1
@@ -839,5 +806,7 @@ def test_the_snapshot_says_whether_setup_is_possible_and_why_not(make):
     assert no_tilt.snapshot()["live"]["setup_possible"] is False
     assert no_tilt.snapshot()["live"]["setup_blocked_reason"] == "the setup needs the tilt sensor"
     assert no_camera.snapshot()["live"]["setup_possible"] is False
+    assert able.snapshot()["live"]["camera_available"] is True
+    assert no_camera.snapshot()["live"]["camera_available"] is False
     assert no_tilt.snapshot()["live"]["setup_fault"] is False
     assert failed.snapshot()["live"]["setup_fault"] is True

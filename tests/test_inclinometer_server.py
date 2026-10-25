@@ -13,7 +13,10 @@ from openflight import server
 from openflight.inclinometer import OrientationSnapshot, SnapshotSelection
 from openflight.iwr6843.calibration import Calibration
 from openflight.launch_monitor import Shot
+from openflight.rig_geometry import RigGeometry
 from openflight.session_logger import SessionLogger
+
+RIG = Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
 
 
 class FakeInclinometer:
@@ -251,7 +254,6 @@ def test_the_shot_records_which_rule_chose_its_reading(monkeypatch):
 def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
     """The camera's tilt correction does not wait on the ranging radar."""
     from openflight.camera import camera_tilt
-    from openflight.rig_geometry import RigGeometry
 
     monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_stable_selection()))
     monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
@@ -265,9 +267,7 @@ def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
     assert shot.inclinometer["roll_calibration"] is None
     assert "effective_iwr_tilt_deg" not in shot.inclinometer
     pose = camera_tilt.swing_camera_pose(
-        rig=RigGeometry.from_json(
-            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
-        ),
+        rig=RigGeometry.from_json(RIG),
         image_width_px=1280,
         inclinometer=shot.inclinometer,
         calibration={"offset_deg": 1.0},
@@ -275,30 +275,23 @@ def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
     assert pose["status"] == "calibrated"
 
 
-def test_both_sensors_are_named_when_both_take_the_reading(monkeypatch):
-    calibration = Calibration.identity()
-    monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_stable_selection()))
-    monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
-    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
-    monkeypatch.setattr(server, "camera_capture_runtime", object())
-    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), impact_timestamp=100.0)
-
-    server._snapshot_inclinometer_for_shot(shot)
-
-    assert shot.inclinometer["applied_to"] == ["camera", "iwr6843"]
-
-
 @pytest.mark.parametrize(
-    ("camera", "iwr", "waits"), [(None, None, False), (object(), None, True), (None, True, True)]
+    ("camera", "iwr", "applied_to"),
+    [
+        (False, False, []),
+        (True, False, ["camera"]),
+        (False, True, ["iwr6843"]),
+        (True, True, ["camera", "iwr6843"]),
+    ],
 )
 def test_a_shot_waits_for_confirmation_only_when_a_sensor_takes_the_reading(
-    monkeypatch, camera, iwr, waits
+    monkeypatch, camera, iwr, applied_to
 ):
     """An OPS-only kiosk with --inclinometer never holds the OPS callback for a reading."""
     sensor = FakeInclinometer(_stable_selection())
     monkeypatch.setattr(server, "inclinometer_service", sensor)
     monkeypatch.setattr(server, "inclinometer_runtime_config", {"zero_offset_deg": 0.0})
-    monkeypatch.setattr(server, "camera_capture_runtime", camera)
+    monkeypatch.setattr(server, "camera_capture_runtime", object() if camera else None)
     monkeypatch.setattr(
         server,
         "iwr6843_runtime",
@@ -308,7 +301,8 @@ def test_a_shot_waits_for_confirmation_only_when_a_sensor_takes_the_reading(
 
     server._snapshot_inclinometer_for_shot(shot)
 
-    assert (sensor.kwargs.get("wait_s", 1.0) > 0.0) is waits
+    assert (sensor.kwargs.get("wait_s", 1.0) > 0.0) is bool(applied_to)
+    assert shot.inclinometer["applied_to"] == applied_to
 
 
 def test_the_inclinometer_starts_without_the_iwr(monkeypatch, tmp_path):
@@ -322,7 +316,7 @@ def test_the_inclinometer_starts_without_the_iwr(monkeypatch, tmp_path):
             "--inclinometer",
             "--camera-capture",
             "--rig-geometry",
-            str(Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"),
+            str(RIG),
             "--startup-status-file",
             str(tmp_path / "status.json"),
         ],
@@ -374,49 +368,6 @@ def test_session_log_records_orientation_used_for_shot(tmp_path):
     logger.end_session()
 
 
-def test_init_inclinometer_reads_a_turned_board_in_the_enclosures_axes(monkeypatch):
-    from openflight.inclinometer import MountedAccelerometer
-    from openflight.rig_geometry import RigGeometry
-
-    made = {}
-
-    class Board:
-        def __init__(self, **_kwargs):
-            pass
-
-    class Service:
-        sample_hz = 10.0
-
-        def __init__(self, sensor, **_kwargs):
-            made["sensor"] = sensor
-
-        def start(self):
-            pass
-
-        def wait_for_stable(self, timeout_s):
-            from openflight.inclinometer import SnapshotSelection
-
-            return SnapshotSelection(snapshot=None, status="no_stable_preimpact_reading")
-
-    monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
-    monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
-    monkeypatch.setattr(
-        server,
-        "rig_geometry",
-        RigGeometry.from_json(
-            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
-        ),
-    )
-    # init_inclinometer installs its service for the whole server: put it back after
-    monkeypatch.setattr(server, "inclinometer_service", None)
-    monkeypatch.setattr(server, "inclinometer_runtime_config", {})
-
-    assert server.init_inclinometer() is True
-    assert isinstance(made["sensor"], MountedAccelerometer)
-    assert made["sensor"].yaw_deg == 180.0
-    assert server.inclinometer_runtime_config["mount_yaw_deg"] == 180.0
-
-
 def _fake_lis3dh(monkeypatch, made):
     class Board:
         def __init__(self, **_kwargs):
@@ -436,15 +387,7 @@ def _fake_lis3dh(monkeypatch, made):
 
     monkeypatch.setattr("openflight.inclinometer.LIS3DH", Board)
     monkeypatch.setattr("openflight.inclinometer.InclinometerService", Service)
-    from openflight.rig_geometry import RigGeometry
-
-    monkeypatch.setattr(
-        server,
-        "rig_geometry",
-        RigGeometry.from_json(
-            Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
-        ),
-    )
+    monkeypatch.setattr(server, "rig_geometry", RigGeometry.from_json(RIG))
     monkeypatch.setattr(server, "inclinometer_service", None)
     monkeypatch.setattr(server, "inclinometer_runtime_config", {})
 
@@ -482,13 +425,20 @@ def test_init_inclinometer_applies_the_units_checked_mount(monkeypatch, tmp_path
     ]
 
 
-def test_init_inclinometer_without_a_unit_file_keeps_the_rig_mount(monkeypatch, tmp_path):
+def test_init_inclinometer_without_a_unit_file_reads_a_turned_board_in_the_rig_s_axes(
+    monkeypatch, tmp_path
+):
+    from openflight.inclinometer import MountedAccelerometer
+
     made = {}
     _fake_lis3dh(monkeypatch, made)
 
     assert server.init_inclinometer(mount_file=tmp_path / "none.json")
 
+    assert isinstance(made["sensor"], MountedAccelerometer)
     assert made["sensor"].yaw_deg == 180.0
-    assert server.inclinometer_runtime_config["mount_source"] == "rig_file"
-    assert server.inclinometer_runtime_config["orientation_check"]["check"] is None
-    assert server.inclinometer_runtime_config["roll_calibration"]["applied"] is False
+    config = server.inclinometer_runtime_config
+    assert config["mount_yaw_deg"] == 180.0
+    assert config["mount_source"] == "rig_file"
+    assert config["orientation_check"]["check"] is None
+    assert config["roll_calibration"]["applied"] is False

@@ -35,18 +35,6 @@ class TestLogError:
         assert logger.session_path is None
 
 
-def test_pinned_shot_write_rejects_session_rollover_without_incrementing_stats(tmp_path):
-    logger = SessionLogger(log_dir=tmp_path, enabled=True)
-    logger.start_session(mode="rolling-buffer", trigger_type="sound")
-    pinned = logger.active_session_uuid
-    with logger._write_lock:
-        logger._session_uuid = "replacement-session"
-    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=1)
-    assert logger.log_shot(shot, expected_session_uuid=pinned) is False
-    assert logger.stats["shots_detected"] == 0
-    assert "shot_detected" not in logger.session_path.read_text(encoding="utf-8")
-
-
 class TestLogShotUpdate:
     """A late update replaces a logged shot; it never counts as another shot."""
 
@@ -81,32 +69,41 @@ class TestLogShotUpdate:
         assert updates[0]["pipeline_timing"]["authoritative_contract"] == "stage_timing"
         assert logger.stats["shots_detected"] == 1
 
-    def test_update_rejects_session_rollover(self, tmp_path):
+    @pytest.mark.parametrize("update", [False, True], ids=["shot", "update"])
+    def test_a_pinned_write_after_a_session_rollover_is_refused(self, tmp_path, update):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")
-        shot = self._logged_shot(logger)
+        shot = (
+            self._logged_shot(logger)
+            if update
+            else Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=1)
+        )
         pinned = logger.active_session_uuid
         with logger._write_lock:
             logger._session_uuid = "replacement-session"
 
-        assert (
-            logger.log_shot_update(shot, update={"reason": "x"}, expected_session_uuid=pinned)
-            is False
-        )
-        assert "shot_updated" not in logger.session_path.read_text(encoding="utf-8")
+        if update:
+            written = logger.log_shot_update(
+                shot, update={"reason": "x"}, expected_session_uuid=pinned
+            )
+        else:
+            written = logger.log_shot(shot, expected_session_uuid=pinned)
 
-    def test_update_requires_the_shot_number_it_replaces(self, tmp_path):
+        assert written is False
+        assert logger.stats["shots_detected"] == int(update)
+        text = logger.session_path.read_text(encoding="utf-8")
+        assert "shot_updated" not in text and ("shot_detected" in text) is update
+
+    def test_update_requires_the_shot_number_it_replaces_and_a_logging_unit(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")
         shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
 
         assert logger.log_shot_update(shot, update={"reason": "x"}) is False
         assert "shot_updated" not in logger.session_path.read_text(encoding="utf-8")
-
-    def test_update_skipped_when_disabled(self, tmp_path):
-        logger = SessionLogger(log_dir=tmp_path, enabled=False)
-        shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now(), shot_number=1)
-        assert logger.log_shot_update(shot, update={"reason": "x"}) is False
+        disabled = SessionLogger(log_dir=tmp_path / "off", enabled=False)
+        shot.shot_number = 1
+        assert disabled.log_shot_update(shot, update={"reason": "x"}) is False
 
 
 class TestLogSessionError:
@@ -251,24 +248,16 @@ class TestLogShot:
             },
         }
 
-        assert logger.log_shot_publication(
-            session_uuid,
-            {
-                "session_uuid": session_uuid,
+        def row(uuid):
+            return {
+                "session_uuid": uuid,
                 "shot_number": 7,
                 "emit_event": "shot",
                 "stage_timing": timing,
-            },
-        )
-        assert not logger.log_shot_publication(
-            "replacement-session",
-            {
-                "session_uuid": "replacement-session",
-                "shot_number": 7,
-                "emit_event": "shot",
-                "stage_timing": timing,
-            },
-        )
+            }
+
+        assert logger.log_shot_publication(session_uuid, row(session_uuid))
+        assert not logger.log_shot_publication("replacement-session", row("replacement-session"))
 
         entries = [json.loads(line) for line in logger.session_path.read_text().splitlines()]
         publication = [entry for entry in entries if entry["type"] == "shot_publication"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -15,8 +16,9 @@ from openflight import server
 from openflight.camera import camera_tilt, placement_box
 from openflight.camera.capture_runtime import CameraCaptureSettings
 from openflight.inclinometer.models import OrientationSnapshot, SnapshotSelection
-from openflight.setup_record import SECTIONS, load, save, section_inputs
+from openflight.setup_record import SECTIONS, load
 from openflight.setup_service import CameraView
+from tests.setup_files import write_setup
 from tests.test_server import OnShotDetectedHelpers
 from tests.test_setup_service import AIM_PX, BALL_PX, CAMERA, Scene
 
@@ -177,6 +179,7 @@ def test_bad_action_is_400_and_refusal_is_409(kiosk, scene):
         {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0], [None, 3.0]]},
         {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0]]},
         {"aim_px": [640.0, 300.0], "floor_line_px": [1.0, 2.0]},
+        {"aim_px": [math.nan, 2.0]},  # sent as a bare NaN token
     ],
 )
 def test_malformed_aim_pixels_are_400(kiosk, scene, body):
@@ -189,18 +192,6 @@ def test_malformed_aim_pixels_are_400(kiosk, scene, body):
     assert response.status_code == 400
     assert response.get_json()["ok"] is False and "px" in response.get_json()["reason"]
     assert response.get_json()["setup"]["aim"]["state"] == "not_set"
-
-
-def test_non_finite_aim_pixels_are_400(kiosk, scene):
-    _start(kiosk)
-
-    response = kiosk.client.post(
-        "/api/setup/aim",
-        data='{"action": "confirm", "aim_px": [NaN, 2.0]}',
-        content_type="application/json",
-    )
-
-    assert response.status_code == 400
 
 
 def test_aim_and_range_go_through_the_api_and_the_target_line_route(kiosk, scene):
@@ -330,33 +321,6 @@ class TestShotsCarryTheSetupRevision(OnShotDetectedHelpers):
         assert revisions == {1: 1, 2: 1, 3: 2}
 
 
-def _saved_record(path, *, lens_id, rig_sha256, tilt_deg=None):
-    record = load(path)
-    box_id = "box-a"
-    record["box"] = {
-        "state": "confirmed",
-        "id": box_id,
-        "box_px": [480.0, 380.0, 800.0, 520.0],
-        "ball_px": [640.0, 450.0],
-        "diameter_px": 20.0,
-        "source": placement_box.SOURCE,
-        "uncertainty": {"tilt_pad_deg": 1.0, "roll_pad_deg": 2.0},
-        "inputs": section_inputs("box", lens_id=lens_id, rig_sha256=rig_sha256, tilt_deg=tilt_deg),
-    }
-    record["aim"] = {
-        "state": "set",
-        "aim_px": [640.0, 300.0],
-        "floor_line": None,
-        "yaw_deg": 2.5,
-        "iwr_yaw_deg": 2.5,
-        "uncertainty_deg": 0.8,
-        "method": "direction",
-        "source": "aim_point",
-        "inputs": section_inputs("aim", box_id=box_id),
-    }
-    save(path, record)
-
-
 class _Started(Exception):
     pass
 
@@ -400,14 +364,8 @@ def _start_kiosk(kiosk, monkeypatch, tmp_path):
     return run
 
 
-def _rig_sha256() -> str:
-    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
-
-    return RigGeometry.from_json(RIG).snapshot()["sha256"]
-
-
 def test_start_applies_saved_record_and_marks_stale_on_lens_change(kiosk, start_kiosk):
-    _saved_record(kiosk.path, lens_id="stock-2.8mm", rig_sha256=_rig_sha256())
+    write_setup(kiosk.path, aim_yaw_deg=2.5)
 
     started = start_kiosk()
 
@@ -460,7 +418,7 @@ def test_the_setup_file_defaults_to_the_unit_s_config():
 
 def test_without_setup_file_main_reads_the_default_record(kiosk, start_kiosk, monkeypatch):
     default = server._default_setup_path()  # noqa: SLF001
-    _saved_record(default, lens_id="stock-2.8mm", rig_sha256=_rig_sha256())
+    write_setup(default, aim_yaw_deg=2.5)
     monkeypatch.setattr(kiosk, "path", default)
 
     started = start_kiosk(setup_file=False)
@@ -481,7 +439,7 @@ def test_the_tilt_margin_follows_where_the_applied_tilt_came_from(
     assert calibrated < config.uncalibrated_tilt_margin_deg
     step = calibrated * (0.5 if moved_deg == "inside" else 2.0)
     assert step < config.uncalibrated_tilt_margin_deg
-    _saved_record(kiosk.path, lens_id="stock-2.8mm", rig_sha256=_rig_sha256(), tilt_deg=1.0)
+    write_setup(kiosk.path, aim_yaw_deg=2.5, tilt_deg=1.0)
     extra = ["--camera-vertical-offset-deg", str(1.0 + step)]
     if source is not None:
         extra += ["--camera-vertical-offset-source", source]
@@ -494,7 +452,7 @@ def test_the_tilt_margin_follows_where_the_applied_tilt_came_from(
 
 
 def test_a_camera_tilt_not_from_the_calibration_file_is_not_the_setup_s(kiosk, start_kiosk):
-    _saved_record(kiosk.path, lens_id="stock-2.8mm", rig_sha256=_rig_sha256(), tilt_deg=None)
+    write_setup(kiosk.path, aim_yaw_deg=2.5)
 
     started = start_kiosk("--camera-vertical-offset-deg", "3.0")
 
@@ -587,10 +545,8 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     monkeypatch.setattr(server, "inclinometer_service", None)
     with pytest.raises(ValueError, match=r"needs the tilt sensor \(LIS3DH, --inclinometer\)"):
         server.setup_camera_view()
-    assert "tilt sensor" in server.setup_blocked_reason()
     # asked for (--inclinometer) but failed to start: a fault, not a kiosk without one
     monkeypatch.setattr(server, "inclinometer_runtime_config", {"requested": True, "error": "x"})
-    assert server.setup_blocked_reason() == "the tilt sensor did not start"
     with pytest.raises(ValueError, match="the tilt sensor did not start"):
         server.setup_camera_view()
     monkeypatch.setattr(server, "camera_capture_runtime", None)

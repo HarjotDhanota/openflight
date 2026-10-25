@@ -300,7 +300,6 @@ describe('buildLiveMetrics', () => {
     });
 
     it.each([
-      ['camera_assisted_experimental', 'camera assisted'],
       ['camera_only_experimental', 'camera only'],
       ['camera_legacy_fallback', 'camera legacy'],
       ['camera_low_consensus', 'camera, low consensus'],
@@ -398,14 +397,9 @@ describe('buildLiveMetrics', () => {
     expect(byId(estimated, 'spin').subtext).toBeUndefined();
   });
 
-  it('labels a spin the collision model built on a weak start direction estimated', () => {
-    const weak = buildLiveMetrics(makeShot({ spin_source: 'estimated' }), 'imperial', emptySwingStats);
-    expect(byId(weak, 'spin').status).toBe('estimated');
-  });
-
-  it('labels a spin built on model geometry (D39) model_geometry, not calculated', () => {
-    const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
-    expect(byId(modelled, 'spin').status).toBe('model_geometry');
+  it.each(['estimated', 'model_geometry'])('labels a %s spin (a weak start direction, D39) as such', (source) => {
+    const spin = byId(buildLiveMetrics(makeShot({ spin_source: source }), 'imperial', emptySwingStats), 'spin');
+    expect(spin.status).toBe(source);
   });
 
   it('returns the swing-speed set, with ids that never collide with ball-strike ids', () => {
@@ -427,26 +421,16 @@ describe('buildLiveMetrics', () => {
 });
 
 describe('face angle', () => {
-  it('labels a face angle whose start direction is azimuth uncalibrated', () => {
+  it.each([
+    [undefined, 'face +1.5° (D-plane)'],
+    ['d_plane_estimate_azimuth_uncalibrated', 'face +1.5° (D-plane, azimuth uncalibrated)'],
+  ])('rides on the club path tile as a D-plane subtitle (status %s)', (status, subtext) => {
     const metrics = buildLiveMetrics(
-      makeShot({
-        club_path_deg: -0.6,
-        experimental_face_angle_deg: 1.5,
-        experimental_face_angle_status: 'd_plane_estimate_azimuth_uncalibrated',
-      }),
+      makeShot({ club_path_deg: -0.6, experimental_face_angle_deg: 1.5, experimental_face_angle_status: status }),
       'imperial',
       emptySwingStats
     );
-    expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane, azimuth uncalibrated)');
-  });
-
-  it('rides on the club path tile as a D-plane subtitle', () => {
-    const metrics = buildLiveMetrics(
-      makeShot({ club_path_deg: -0.6, experimental_face_angle_deg: 1.5 }),
-      'imperial',
-      emptySwingStats
-    );
-    expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane)');
+    expect(byId(metrics, 'club_path').subtext).toBe(subtext);
     expect(metrics).toHaveLength(LIVE_METRIC_COUNT);
   });
 

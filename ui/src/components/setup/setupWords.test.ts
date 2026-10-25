@@ -125,13 +125,7 @@ describe('setup words', () => {
     expect(needsSetup(done)).toBe(false);
     expect(needsSetup({ ...done, aim: { state: 'skipped' } })).toBe(false);
     expect(needsSetup({ ...done, ball_range: { state: 'stale', reason: 'box changed (a -> b)' } })).toBe(true);
-    // the lens height has no step on this screen: the kiosk runs on the enclosure's value
-    expect(needsSetup({ ...done, scene: { state: 'stale', reason: 'box changed' } })).toBe(false);
-    // a unit without a camera can never set up: never offer it
-    expect(needsSetup(snapshot({ live: { camera_available: false } }))).toBe(false);
-    expect(needsSetup(snapshot({ live: { camera_available: true } }))).toBe(true);
-    // nor one that lacks what setup needs (the tilt sensor): it would nag forever
-    expect(needsSetup(snapshot({ live: { camera_available: true, setup_possible: false } }))).toBe(false);
+    // the lens height, no camera and no tilt sensor are in the shared table below
   });
 
   // the same table runs the kiosk's setup_incomplete cause in tests/test_ready_light.py

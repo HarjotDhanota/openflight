@@ -43,32 +43,20 @@ def _finalize(shot):
     server._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
 
 
-def test_an_ops_only_unit_takes_the_table_carry_without_a_flight_model(plain_kiosk):
+@pytest.mark.parametrize("fusion", [False, True], ids=["ops_only", "fusion"])
+def test_only_an_ops_only_unit_has_a_carry_and_no_model_output_is_attached(plain_kiosk, fusion):
+    if fusion:
+        plain_kiosk.setattr(server, "iwr6843_runtime", SimpleNamespace())
     shot = _shot()
 
     _finalize(shot)
 
     assert shot.flight is None
-    assert shot.carry_status == CARRY_ESTIMATED
-    assert shot.carry_spin_adjusted is not None and shot.carry_spin_adjusted > 0
-
-
-def test_a_fusion_unit_has_no_carry_without_a_flight_model(plain_kiosk):
-    plain_kiosk.setattr(server, "iwr6843_runtime", SimpleNamespace())
-    shot = _shot()
-
-    _finalize(shot)
-
-    assert shot.flight is None
-    assert shot.carry_status == CARRY_NOT_MEASURED
-    assert shot.carry_spin_adjusted is None
-
-
-def test_no_model_output_is_attached(plain_kiosk):
-    shot = _shot()
-
-    _finalize(shot)
-
+    if fusion:
+        assert shot.carry_status == CARRY_NOT_MEASURED and shot.carry_spin_adjusted is None
+    else:
+        assert shot.carry_status == CARRY_ESTIMATED
+        assert shot.carry_spin_adjusted is not None and shot.carry_spin_adjusted > 0
     assert shot.collision_model is None and shot.club_delivery is None
     assert shot.ball_speed_full is None and shot.smash_factor_full is None
     assert shot.ball_speed_contract == "radial"

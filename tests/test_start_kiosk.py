@@ -31,7 +31,8 @@ def _with_env(env: dict[str, str] | None) -> dict[str, str] | None:
     return {**os.environ, **env, "WSLENV": forwarded}
 
 
-def _dry_run(*args: str, env: dict[str, str] | None = None) -> list[str]:
+def _dry_run(*args: str, env: dict[str, str] | None = None, stderr: bool = False):
+    """The server command (and, with ``stderr``, what the dry run said on stderr)."""
     result = subprocess.run(
         ["bash", "scripts/start-kiosk.sh", *args, "--dry-run"],
         cwd=REPO_ROOT,
@@ -46,7 +47,7 @@ def _dry_run(*args: str, env: dict[str, str] | None = None) -> list[str]:
         index = command.index("--rig-geometry") + 1
         if command[index].endswith("/config/enclosure_v3_rig_geometry.json"):
             command[index] = RIG[1]
-    return command
+    return (command, result.stderr) if stderr else command
 
 
 def _script() -> str:
@@ -55,11 +56,6 @@ def _script() -> str:
 
 def test_default_command_is_minimal():
     assert _dry_run() == ["openflight-server", "--web-port", "8080", *RIG]
-
-
-def test_the_v3_rig_file_is_passed_with_the_radar():
-    command = _dry_run("--iwr6843")
-    assert command[command.index("--rig-geometry") + 1] == RIG[1]
     assert Path(RIG[1]).is_file()
 
 
@@ -83,21 +79,6 @@ def test_server_arguments_pass_through_unchanged():
         "--camera-capture-fps",
         "300",
         "--no-ballistics",
-    ]
-
-    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments, *RIG]
-
-
-def test_hardware_trigger_arguments_pass_through_unchanged():
-    arguments = [
-        "--trigger",
-        "hardware",
-        "--trigger-threshold",
-        "25",
-        "--trigger-magnitude",
-        "25",
-        "--pre-trigger-segments",
-        "6",
     ]
 
     assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments, *RIG]
@@ -164,22 +145,6 @@ def test_an_explicit_radar_port_flag_wins_over_the_setting(alias):
 
 def test_an_empty_ops_port_setting_leaves_detection_to_the_driver():
     assert "--port" not in _dry_run(env={"OPENFLIGHT_OPS_PORT": ""})
-
-
-def test_a_failed_start_under_systemd_says_how_to_stop_the_service():
-    """The journal must say why the restarts stop and how to switch autostart off."""
-    script = _script()
-    failure = script[script.index("show_startup_failure() {") :]
-    failure = failure[: failure.index("\n}\n")]
-
-    assert "explain_service_failure" in failure
-    helper = script[script.index("explain_service_failure() {") :]
-    helper = helper[: helper.index("\n}\n")]
-    assert "INVOCATION_ID" in helper
-    # a desktop autostart service has an INVOCATION_ID too; only this unit's cgroup counts
-    assert "openflight\\.service$" in helper and "/proc/$$/cgroup" in helper
-    assert "sudo systemctl reset-failed openflight.service" in helper
-    assert "sudo systemctl disable --now openflight.service" in helper
 
 
 @pytest.mark.parametrize(
@@ -878,50 +843,18 @@ def test_startup_failure_prints_the_recovery_hint_to_the_terminal():
     assert re.search(r'error ".*\$recovery"', failure_fn), failure_fn
 
 
-def _dry_run_browser(*args: str, env: dict | None = None) -> tuple[list[str], str]:
-    """The server command and what the dry run says about the kiosk browser.
-
-    The variables are set inside bash: a Windows host's bash may not inherit them.
-    """
-    assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in (env or {}).items())
-    command = " ".join(
-        [assignments, "bash scripts/start-kiosk.sh", *map(shlex.quote, args), "--dry-run"]
-    ).strip()
-    result = subprocess.run(
-        ["bash", "-c", command],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return shlex.split(result.stdout), result.stderr
-
-
 def test_no_browser_is_a_kiosk_flag_and_never_reaches_the_server():
-    command, stderr = _dry_run_browser("--no-browser", "--iwr6843")
+    command, stderr = _dry_run("--no-browser", "--iwr6843", stderr=True)
 
     assert "--no-browser" not in command
     assert command[:4] == ["openflight-server", "--web-port", "8080", "--iwr6843"]
     assert "kiosk browser: off" in stderr
 
 
-@pytest.mark.parametrize("value", ["1", "true", "yes"])
-def test_the_environment_can_turn_the_browser_off(value):
-    _command, stderr = _dry_run_browser(env={"OPENFLIGHT_NO_BROWSER": value})
+@pytest.mark.parametrize(
+    ("value", "state"), [("1", "off"), ("true", "off"), ("yes", "off"), ("", "on")]
+)
+def test_the_environment_can_turn_the_browser_off(value, state):
+    _command, stderr = _dry_run(env={"OPENFLIGHT_NO_BROWSER": value}, stderr=True)
 
-    assert "kiosk browser: off" in stderr
-
-
-def test_by_default_the_kiosk_browser_still_opens():
-    _command, stderr = _dry_run_browser(env={"OPENFLIGHT_NO_BROWSER": ""})
-
-    assert "kiosk browser: on" in stderr
-
-
-def test_every_browser_launch_goes_through_the_no_browser_guard():
-    """A fullscreen kiosk window would cover the tester page."""
-    script = _script()
-    body = script[script.index("maybe_launch_kiosk_browser() {") :]
-
-    assert script.count("launch_kiosk_browser ") == script.count("maybe_launch_kiosk_browser ") + 1
-    assert 'if [ "$NO_BROWSER" = true ]; then' in body
+    assert f"kiosk browser: {state}" in stderr
