@@ -73,7 +73,9 @@
   "tests/test_v_formulas_known_answer.py",
   "tests/tm_owner_export.py",
   "tests/test_fallback_labels.py",
-  "tests/test_fallback_orchestration.py"
+  "tests/test_fallback_orchestration.py",
+  "tests/test_attack_angle_chain.py",
+  "tests/test_head_track_feeds_on.py"
  ],
  "decisions": {
   "pi_trace": "The Pi trace is RESEARCH end to end: product code carries no trace calls. instrumentation.py holds the recorder hooks, trace_points.py wraps the kiosk's own paths (the OPS wait, re-arm and clock sync, the capture timer, the IWR debounce, the server's enrichment steps) once research_hooks is loaded, and research_hooks installs the recorder for --pi-trace. The product keeps two seams: IWR6843CaptureMonitor.on_debounced_edge and server._await_camera_prefetch, plus the kiosk_extensions on_shot_detected hook and Shot.extras.",
@@ -1411,6 +1413,8 @@
   "docs/camera/camera-fallback.md": "DOCS-USER",
   "scripts/analysis/camera_fallback_fixtures.py": "RESEARCH",
   "tests/fixtures/camera_fallback/outdoor-test-1-shot-28-launch.npz": "RESEARCH",
-  "tests/test_camera_fallback_field.py": "RESEARCH"
+  "tests/test_camera_fallback_field.py": "RESEARCH",
+  "tests/test_attack_angle_chain.py": "FUSION",
+  "tests/test_head_track_feeds_on.py": "FUSION"
  }
 }
