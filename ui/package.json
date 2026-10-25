@@ -12,6 +12,8 @@
     "dev": "vite",
     "dev:mock": "concurrently -k \"npm:mock-server\" \"npm:dev\"",
     "mock-server": "tsx mock-server/index.ts",
+    "replay-server": "tsx mock-server/replay.ts",
+    "dev:replay": "concurrently -k \"npm:replay-server\" \"npm:dev\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
