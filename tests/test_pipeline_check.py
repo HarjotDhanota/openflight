@@ -467,3 +467,14 @@ class TestCameraVerticalOffset:
 
         assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
         assert "recorded no camera tilt" in row["evidence"]
+
+
+def test_the_pipeline_check_reads_the_kiosk_s_weak_horizontal_sources():
+    """One rule for a horizontal too weak to stand as measured (Harjot-outdoor-test-1)."""
+    from openflight.source_labels import (  # pylint: disable=import-outside-toplevel
+        WEAK_HORIZONTAL_SOURCES,
+    )
+
+    assert check._LOW_LAUNCH_SOURCES == frozenset(  # pylint: disable=protected-access
+        WEAK_HORIZONTAL_SOURCES
+    )

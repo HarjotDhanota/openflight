@@ -14,7 +14,6 @@ import pytest
 
 from openflight import (
     full_speed,
-    pipeline_check,
     server as server_module,
     shot_metrics,
     shot_models,
@@ -265,9 +264,3 @@ def test_a_simulator_is_told_a_weak_horizontal_is_estimated(source):
 
     assert resolved.hla == pytest.approx(1.5)
     assert resolved.provenance["hla"] == "estimated"
-
-
-def test_the_pipeline_check_reads_the_same_weak_sources():
-    assert pipeline_check._LOW_LAUNCH_SOURCES == frozenset(  # pylint: disable=protected-access
-        WEAK_HORIZONTAL_SOURCES
-    )
