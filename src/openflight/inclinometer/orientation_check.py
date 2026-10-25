@@ -1,13 +1,8 @@
 """Which way round the LIS3DH board sits in this unit; kept locally, never in the rig file.
 
-A board reading in enclosure axes is ``R(yaw) . F^upside_down . (x, y, z)``: ``F`` flips
-about the board's Y (X and Z reversed), ``R`` turns counter-clockwise seen from above.
-Corrections apply after the current mount; upside down also mirrors the yaw.
-
-``roll_verified`` is true once the check's roll step (the unit's left side lifted, the
-roll read moving down) passed under the current mount. ``roll_zero_deg`` is the board's
-own roll beyond the rig's expected mount roll, found by reversal: the unit read, turned
-180 deg on the same spot, and turned back. The roll is applied only with both.
+A board reading in enclosure axes is ``R(yaw) . F^upside_down . (x, y, z)``: ``F`` flips about
+the board's Y (X and Z reversed), ``R`` turns counter-clockwise seen from above. Corrections
+apply after the current mount; the roll applies only once verified and zeroed by reversal.
 """
 
 from __future__ import annotations

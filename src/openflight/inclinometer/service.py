@@ -213,12 +213,9 @@ class InclinometerService:
     ) -> SnapshotSelection:
         """The reading a shot is corrected with, and the rule that chose it.
 
-        ``recent_stable``: the newest stable reading at most ``max_snapshot_age_s``
-        before impact, steady through it. Otherwise that reading, up to
-        ``MAX_CONFIRMED_AGE_S`` old, stands once the first stable reading taken wholly
-        after impact and quiet (waited for up to ``wait_s``) agrees with it in pitch and
-        roll (``confirmed_after_impact``, ``move_tolerance_deg``); a unit that moved
-        gets none (``moved``).
+        ``recent_stable``: the newest stable reading within ``max_snapshot_age_s`` of impact.
+        Else a reading up to ``MAX_CONFIRMED_AGE_S`` old stands once the first quiet reading
+        after impact agrees with it (``confirmed_after_impact``); a unit that moved gets none.
         """
         with self._lock:
             candidates = [item for item in self._history if item.timestamp <= impact_timestamp]
