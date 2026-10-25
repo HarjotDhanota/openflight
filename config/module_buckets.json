@@ -1064,6 +1064,7 @@
   "tests/test_spin_axis_models.py": "FUSION",
   "tests/test_spin_estimate.py": "PRODUCT",
   "tests/test_spin_synth.py": "PRODUCT",
+  "tests/test_stage_isolation.py": "FUSION",
   "tests/test_start_kiosk.py": "PRODUCT",
   "tests/test_start_tester.py": "TESTER",
   "tests/test_startup_splash_server.py": "PRODUCT",

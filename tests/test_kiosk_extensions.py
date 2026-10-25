@@ -158,3 +158,41 @@ def test_installed_extensions_are_loaded_and_a_broken_one_is_skipped(isolated, m
     )
     assert ke.load_installed() == ["good"]
     assert ke.registered() == (good,)
+
+
+class Raising(ke.KioskExtension):
+    name = "raising"
+
+    def on_shot_accepted(self, shot):
+        raise RuntimeError(f"broken on {shot}")
+
+    def trigger_evidence_provider(self):
+        raise RuntimeError("no provider")
+
+
+def test_one_raising_extension_does_not_stop_the_others_and_its_error_still_reaches_the_caller(
+    isolated,
+):
+    ke.register(Raising())
+    later = ke.register(Recorder("later"))
+
+    with pytest.raises(RuntimeError, match="broken on shot-1"):
+        ke.call_all("on_shot_accepted", "shot-1")
+
+    assert later.calls == [("accepted", "shot-1")]
+
+
+def test_a_question_skips_a_raising_extension_for_a_later_answer(isolated):
+    provider = object()
+    ke.register(Raising())
+    ke.register(Recorder("later", provider=provider))
+
+    assert ke.first("trigger_evidence_provider") is provider
+
+
+def test_a_question_nobody_answers_raises_the_skipped_error(isolated):
+    ke.register(Raising())
+    ke.register(Recorder("later"))
+
+    with pytest.raises(RuntimeError, match="no provider"):
+        ke.first("trigger_evidence_provider")
