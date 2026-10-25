@@ -166,7 +166,7 @@ BRIGHT = 0.70 * CLIP_RANGE
         # a dark room at the ceiling and the cap; a ball in the hold band though off target
         (9, (4, 6, 294, 15.9375), (294, 15.9375), ("too_dark", None, False, "too dark: add light")),
         (9, (110, BRIGHT, 104, 8.0), (104, 8.0), ("ball_driven", None, True, None)),
-        # 6 mm lens, today's room at 1.32 m and at 2.14 m: both go to the ceiling and the cap
+        # 6 mm lens, a room at 1.32 m and at 2.14 m: both go to the ceiling and the cap
         (9, (53, 0.372 * CLIP_RANGE, 298, 12.0), (300, 12.0), ("ball_driven", TOP, True, None)),
         (9, (26, 0.145 * CLIP_RANGE, 298, 12.0), (300, 12.0), ("ball_driven", TOP, True, None)),
     ],

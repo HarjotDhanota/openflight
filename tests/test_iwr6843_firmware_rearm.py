@@ -222,7 +222,6 @@ def test_the_default_release_name_is_not_a_release():
 
 
 def test_a_bare_builds_image_is_ignored_and_the_rollback_image_is_not():
-    """A bare local build leaves no untracked file; the tracked rollback image is never ignored."""
     default = _default_release_name()
 
     assert _git("check-ignore", "-q", "--no-index", f"firmware/releases/{default}").returncode == 0

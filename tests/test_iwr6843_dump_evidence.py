@@ -263,7 +263,6 @@ def _record_offset(version: int, n_frames: int, index: int) -> int:
 
 
 def test_an_unassociated_record_has_no_seq_or_start_tick():
-    """Without a fresh armed start, seq and start_tick are unobserved, never stale."""
     cube = _cube()
     capture, frames, trailer = _evidence(4, 2)
     frames = _stale_frame(frames, 2)
@@ -279,7 +278,6 @@ def test_an_unassociated_record_has_no_seq_or_start_tick():
 
 
 def test_the_packer_writes_the_no_stamp_value_for_an_unassociated_record():
-    """Like the firmware, the packer never writes stale stamps into an unassociated record."""
     cube = _cube()
     capture, frames, trailer = _evidence(4, 2)
 
@@ -290,7 +288,6 @@ def test_the_packer_writes_the_no_stamp_value_for_an_unassociated_record():
 
 
 def test_an_associated_record_without_a_seq_is_refused():
-    """An associated record must carry the stamps it claims to have observed."""
     cube = _cube()
     capture, frames, trailer = _evidence(4, 2)
     records = list(frames)
@@ -301,7 +298,6 @@ def test_an_associated_record_without_a_seq_is_refused():
 
 
 def test_project_tx_pair_keeps_an_unassociated_record_unstamped():
-    """A repack keeps the no-stamp record, and the evidence bytes, unchanged."""
     cube = _cube()
     capture, frames, trailer = _evidence(4, 2)
     raw = _pack(cube, capture, _stale_frame(frames, 2), trailer)
@@ -353,7 +349,6 @@ def test_a_scanned_record_without_its_iq8_values_is_refused():
 
 @pytest.mark.parametrize("key", ["header_nbytes", "range_metadata_nbytes"])
 def test_frame_metadata_sizes_stored_as_none_read_as_absent(key):
-    """A metadata None for a size reads as absent, never a TypeError."""
     cube = _cube(n_frames=2)
     raw = pack_dump(
         cube,

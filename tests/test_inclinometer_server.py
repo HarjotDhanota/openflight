@@ -252,7 +252,6 @@ def test_the_shot_records_which_rule_chose_its_reading(monkeypatch):
 
 
 def test_the_camera_takes_a_stable_reading_without_the_iwr(monkeypatch):
-    """The camera's tilt correction does not wait on the ranging radar."""
     from openflight.camera import camera_tilt
 
     monkeypatch.setattr(server, "inclinometer_service", FakeInclinometer(_stable_selection()))

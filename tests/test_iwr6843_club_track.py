@@ -145,7 +145,6 @@ def test_time_window_excludes_a_later_mover():
 
 
 def test_accepted_range_evidence_passes_only_accepted_tracks():
-    """Camera depth takes only tracks their radar estimator accepted."""
     from types import SimpleNamespace  # noqa: PLC0415
 
     from openflight.iwr6843.tracking import accepted_range_evidence  # noqa: PLC0415

@@ -485,7 +485,6 @@ def test_lcmf_ball_range_evidence_is_transient():
 
 
 def test_lcmf_range_evidence_carries_the_estimator_status(monkeypatch):
-    """A rejected ball track keeps its evidence, marked rejected."""
     from openflight.iwr6843 import lcmf  # noqa: PLC0415
 
     monkeypatch.setattr(lcmf, "impact_time_s", lambda *_args, **_kwargs: 0.012)

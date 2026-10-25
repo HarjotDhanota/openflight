@@ -156,7 +156,6 @@ def test_a_mirrored_board_misreads_the_v3_shot():
 
 
 def test_the_v3_tee_starts_at_the_phase_centre():
-    """The simulator and the model put the resting ball at the same point."""
     from tests.test_iwr6843_pipeline import synth_ball_position  # noqa: PLC0415
 
     setup, layout = _v3()

@@ -1,6 +1,6 @@
 """Firmware contract for the IWR6843 frame-evidence block.
 
-Host-compiled checks build only this fork's headers, never TI's SDK, and skip without a compiler.
+Host-compiled checks build only the repo's own headers, never TI's SDK, and skip without a compiler.
 """
 
 from __future__ import annotations

@@ -224,7 +224,7 @@ def test_two_equally_plausible_floor_balls_are_withheld_as_ambiguous():
 
 
 def test_bright_things_above_the_horizon_do_not_crowd_out_a_dimmer_floor_ball():
-    # field failure 2026-09-29: door knobs and clothes filled every fit slot
+    # door knobs and clothes above the horizon must not fill every fit slot
     camera = _camera(640, 400, 466.6667, pitch_deg=1.75, camera_origin=(0.0, 0.0, 0.08))
     pixel, ball = _sphere(camera, (0.02, 1.25, 0.02135), 70.0)
     decoys = [(60.0 + 55.0 * i, 40.0 + 12.0 * (i % 3), ball[2], 170.0) for i in range(10)]
@@ -325,7 +325,7 @@ def test_a_unit_standing_on_a_box_still_finds_a_ball_on_the_floor():
 
 
 def test_the_hitting_area_edge_is_judged_by_distance_along_the_lens_ray():
-    # wiring audit S7: mixing slant range with lens-ray distance moved the edges ~3 cm
+    # mixing slant range with lens-ray distance moves the edges ~3 cm
     # pylint: disable=import-outside-toplevel,protected-access
     from openflight.camera import reference_ball_range as rbr
 
@@ -349,7 +349,7 @@ def test_the_hitting_area_edge_is_judged_by_distance_along_the_lens_ray():
 
 
 def test_stored_candidates_are_read_under_their_old_names_too():
-    # wiring audit S11: the size-derived fields were called floor_* before policy 3
+    # the size-derived fields' old names are floor_*
     # pylint: disable=import-outside-toplevel
     from openflight.camera.reference_ball_range import stored_candidate_value
 
