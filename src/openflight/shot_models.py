@@ -192,7 +192,8 @@ def attack_angle_resolution(shot: Shot) -> Resolution:
 
     def camera_head_track():
         if not head_track:
-            return "the camera head track did not run"
+            status = shot.experimental_fused_status
+            return "the camera head track did not run" + (f" ({status})" if status else "")
         if not _finite(fused) or withheld:
             return "the camera head track flagged its attack angle"
         return Candidate(
