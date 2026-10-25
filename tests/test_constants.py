@@ -23,7 +23,6 @@ def test_values():
         ("openflight.camera.impact_session", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.camera.club_motion", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
         ("openflight.camera.impact_location", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
-        ("openflight.rig_geometry", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
         ("openflight.server", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
         ("openflight.camera.club_delivery", "GOLF_BALL_DIAMETER_M", "BALL_DIAMETER_M"),
         ("openflight.camera.ground_patch", "GOLF_BALL_DIAMETER_M", "BALL_DIAMETER_M"),
