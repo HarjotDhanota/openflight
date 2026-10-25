@@ -525,7 +525,7 @@
   "src/openflight/camera/track_review.py": "TESTER",
   "src/openflight/camera/tracker.py": "FUSION",
   "src/openflight/camera/triggered_buffer.py": "FUSION",
-  "src/openflight/camera/worker_lifetime.py": "TESTER",
+  "src/openflight/camera/worker_lifetime.py": "PRODUCT",
   "src/openflight/capture_facts.py": "TESTER",
   "src/openflight/clock_mapping.py": "FUSION",
   "src/openflight/cloud/__init__.py": "PRODUCT",
