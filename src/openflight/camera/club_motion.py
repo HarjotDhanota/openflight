@@ -18,7 +18,7 @@ from openflight.camera import ball_pixels
 from openflight.camera.ball_model import fit_lit_ball
 from openflight.constants import BALL_DIAMETER_MM
 
-# (x_px, y_px, diameter_px) arrays -> which seeds a resting ball could be
+# (x_px, y_px, diameter_px) -> boolean mask of seeds a resting ball could be
 SeedFilter = Callable[[np.ndarray, np.ndarray, float], np.ndarray]
 
 # pylint: disable=no-member
@@ -36,7 +36,7 @@ class ReferenceBall:
     y: float
     diameter_px: float
     area_px: int
-    # the lit-sphere fit's diffuse brightness over its misfit, where a fit found it
+    # diffuse brightness over misfit; None without a lit-sphere fit
     fit_quality: float | None = None
 
 
@@ -70,8 +70,7 @@ class ShaftTrack:
     reason: str
 
 
-# A room-lit ball rarely saturates: it is the disk that stands out most from the
-# ring around it, and only when it clearly beats every other disk.
+# A room-lit ball rarely saturates: find it as the disk standing out most from its ring.
 DISK_MIN_CONTRAST_DN = 20.0
 DISK_MIN_NOISE_MULTIPLE = 6.0
 DISK_MIN_MARGIN = 1.25
@@ -101,7 +100,6 @@ def _bin(image: np.ndarray, factor: int) -> np.ndarray:
 def _brighter_all_round(
     image: np.ndarray, row: int, col: int, radius: float, margin: float
 ) -> bool:
-    """Whether the middle outshines the ring around it in at least six of eight directions."""
     reach = int(math.ceil(2.3 * radius)) + 1
     top, left = max(0, row - reach), max(0, col - reach)
     image = image[top : row + reach + 1, left : col + reach + 1]
@@ -134,7 +132,7 @@ ALL_ROUND_MARGIN_NOISE = 3.0
 # Noise of a median of n frames: one frame's * sqrt(pi / 2) / sqrt(n), floored at ~1 DN.
 MEDIAN_NOISE_FACTOR = math.sqrt(math.pi / 2.0)
 PICTURE_NOISE_FLOOR_DN = 1.0
-# Soft preference for the middle across: about 10 deg of the 2.8 mm lens's 69 deg width.
+# ~10 deg of the 2.8 mm lens's 69 deg width
 LATERAL_SIGMA_FRACTION = 0.13
 
 
@@ -147,10 +145,7 @@ def _lit_ball_candidates_near_size(  # pylint: disable=too-many-arguments,too-ma
     noise: float,
     expected_row: tuple[float, float] | None = None,
 ) -> list[ReferenceBall]:
-    """Return ranked lit spheres near one expected size and optional floor row.
-
-    Fits are weighted toward the middle across and toward ``expected_row`` (row, band).
-    """
+    """Return ranked lit spheres near one size and optional ``expected_row`` (row, band)."""
     x0, y0, x1, y1 = window
     if expected_row is not None:
         row, band = expected_row
@@ -215,7 +210,6 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-position
     noise: float,
     expected_row: tuple[float, float] | None = None,
 ) -> ReferenceBall | None:
-    """Return the best size-constrained candidate, or None."""
     candidates = _lit_ball_candidates_near_size(
         image,
         coarse,
@@ -241,10 +235,8 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
 ) -> list[ReferenceBall]:
     """Enumerate distinct lit-sphere fits over a caller-supplied size range.
 
-    Disk-filter peaks from all sizes are merged, so each place is fitted once at its
-    best size. ``seed_filter`` drops impossible places before they use up ``max_fits``;
-    ``hold_diameter_px`` holds the fitted size. ``confirm_anchor`` (x, y, diameter px)
-    fits that held ball plus rivals scoring at least ``rival_fraction`` of its disk score.
+    ``seed_filter`` drops impossible places before they use up ``max_fits``. ``confirm_anchor``
+    (x, y, diameter px) fits that held ball plus rivals scoring ``rival_fraction`` of its score.
     """
     if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
@@ -442,10 +434,7 @@ def _disk_score(image: np.ndarray, cx: float, cy: float, r: float) -> float:
 
 
 def _fit_disk(image: np.ndarray, x: float, y: float, radius: float) -> tuple[float, float, float]:
-    """Every radius against every nearby centre: the disk that stands out most.
-
-    Searched jointly: fitting centre and size in turns can settle on a highlight.
-    """
+    """Fit radius and centre jointly: fitting them in turns can settle on a highlight."""
     step = max(0.5, 0.1 * radius)
     span = max(2.0, 0.6 * radius)
     offsets = np.arange(-span, span + step / 2, step)
@@ -486,7 +475,7 @@ def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> Refer
     ys, xs = np.nonzero(blob)
     lit_r = math.sqrt(len(xs) / math.pi)
     if not 0.6 * radius <= lit_r <= 1.75 * radius:
-        return None  # it ran into the ground, or found only a speck
+        return None
     bx, by = float(xs.mean()), float(ys.mean())
     weight = patch[ys, xs] - ground
     toward_light = np.array(
@@ -510,10 +499,7 @@ def _fit_lit_rim(
     toward_light: np.ndarray,
     contrast: float,
 ) -> tuple[float, float, float] | None:
-    """A circle through the rim's sharp, lit side.
-
-    On each ray the rim is the outermost strong fall, so a logo or highlight edge is passed over.
-    """
+    """A circle through the rim's lit side: the outermost strong fall per ray skips logo edges."""
     smooth = ndimage.gaussian_filter(patch, 0.7)
     lean = float(np.hypot(*toward_light))
     if lean >= 0.08 * radius:
@@ -531,7 +517,7 @@ def _fit_lit_rim(
     for ray, fall in enumerate(falls):
         strongest = float(fall.max())
         if strongest < 0.1 * contrast:
-            continue  # no rim on this ray: occluded, or it runs along the shadow
+            continue
         peaks = [
             i
             for i in range(1, len(fall) - 1)
@@ -574,10 +560,8 @@ def detect_reference_ball(
 ) -> ReferenceBall:
     """Find the stationary ball in bright- or dark-on-ground lighting.
 
-    ``pixel_scale`` is relative to 640x400 (2 at 1280x800), by default from the frame width.
-    ``expected_diameter_px`` (from the measured range) fits the lit sphere of that size, and
-    ``expected_row_px`` (row, band) is where it must rest; with the size known, a frame
-    with no such ball raises.
+    ``pixel_scale`` is relative to 640x400 (default from the frame width). With
+    ``expected_diameter_px`` (and ``expected_row_px``: row, band) a miss raises.
     """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
@@ -764,10 +748,9 @@ def detect_impact_reference_ball(  # pylint: disable=too-many-locals
     pixel_scale: float | None = None,
     region: tuple[int, int, int, int] | None = None,
 ) -> ReferenceBall:  # pylint: disable=no-member
-    """Find the teed ball from the region that persistently departs after impact.
+    """Find the teed ball by its persistent departure around impact.
 
-    Pixel limits scale with ``pixel_scale`` (640x400 = 1), areas with its square.
-    ``region`` (x0, y0, x1, y1) is where setup saw the ball; otherwise a fixed lower band.
+    ``pixel_scale`` is relative to 640x400; ``region`` (x0, y0, x1, y1) defaults to a lower band.
     """
     if frames.ndim != 3 or len(frames) < 20:
         raise ValueError("frames must have shape (n, height, width) with n >= 20")
