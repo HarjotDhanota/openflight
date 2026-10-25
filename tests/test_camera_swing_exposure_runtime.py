@@ -104,7 +104,7 @@ def test_the_sensor_limits_are_read_from_the_camera_and_recorded(tmp_path):
 
     runtime.configure_swing_exposure(capture_runtime.read_sensor_limits(camera))
 
-    recorded = sx.recorded_sensor_limits(tmp_path / "limits.json", 640, 400)
+    recorded = json.loads((tmp_path / "limits.json").read_text())["modes"]["640x400"]
     assert recorded["exposure_min_us"] == 4
     assert recorded["lens_id"] == "6mm"
     status = runtime.auto_exposure_status()

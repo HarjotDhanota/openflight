@@ -2131,7 +2131,8 @@ def solved_range(
     associated (``setup_ball``: x, y, diameter_px); a cloth or a spare ball once
     was (P6-6).
     """
-    from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: PLC0415
+    from openflight.camera.teed_ball_solve import solve_setup  # noqa: PLC0415
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
 
     runs = sorted((arm_dir / "gain").glob("*/results.json"))
     if not runs:
@@ -2403,7 +2404,7 @@ def recorded_sensor_limits() -> dict[str, swing_exposure.SensorLimits | None]:
     for arm_id in study_ladder.RUNG_FPS:
         arm = ARMS[arm_id]
         entry = (
-            swing_exposure.recorded_sensor_limits(_sensor_limits_path, arm.width, arm.height)
+            study_ladder.recorded_sensor_limits(_sensor_limits_path, arm.width, arm.height)
             if _sensor_limits_path is not None
             else None
         )

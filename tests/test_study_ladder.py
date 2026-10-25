@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight.camera import study_ladder as sl
+from openflight.camera import study_ladder as sl, swing_exposure as sx
+from tests.test_swing_exposure import limits
 
 # where the setup saw the ball: _capture and _ball_frames draw it here
 SETUP_BALL = {"x": 640.0, "y": 520.0, "diameter_px": 20.0}
@@ -2108,3 +2109,17 @@ def test_a_press_is_refused_while_the_ladder_changes_mode_or_is_stopped(tmp_path
     with pytest.raises(RuntimeError, match="stopped"):
         runner.jump("full-150")
     assert runner.state.current.rung_id == "full-300"
+
+
+def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
+    path = tmp_path / "camera-sensor-limits.json"
+    sx.record_sensor_limits(path, 1280, 800, limits(9), lens_id="6mm")
+    sx.record_sensor_limits(path, 640, 400, limits(4), lens_id="6mm", recorded_by="tester")
+
+    full = sl.recorded_sensor_limits(path, 1280, 800)
+    half = sl.recorded_sensor_limits(path, 640, 400)
+
+    assert full["exposure_min_us"] == 9 and full["lens_id"] == "6mm"
+    assert half["exposure_min_us"] == 4 and half["recorded_by"] == "tester"
+    assert sl.recorded_sensor_limits(path, 320, 200) is None
+    assert sl.recorded_sensor_limits(tmp_path / "missing.json", 1280, 800) is None

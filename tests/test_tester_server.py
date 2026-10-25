@@ -1263,7 +1263,7 @@ class TestLiveEndpoints:
 
     def test_the_live_view_records_the_mode_s_sensor_limits(self, tmp_path):
         """13 Oct: the ladder's shortest rungs wait for the sensor's own minimum."""
-        from openflight.camera import swing_exposure  # noqa: PLC0415
+        from openflight.camera.study_ladder import recorded_sensor_limits  # noqa: PLC0415
 
         class LimitedCamera(FakeCamera):
             camera_controls = {"ExposureTime": (4, 3_000, 300), "AnalogueGain": (1.0, 15.9375, 1)}
@@ -1280,10 +1280,10 @@ class TestLiveEndpoints:
         client = app.test_client()
         body = {"tester_id": "20260922-name", "arm_id": "arm6", "environment": "indoors"}
         assert client.post("/api/tester/live", json={**body, "gain": 2}).status_code == 200
-        assert _wait(lambda: swing_exposure.recorded_sensor_limits(path, 640, 400) is not None)
+        assert _wait(lambda: recorded_sensor_limits(path, 640, 400) is not None)
         client.post("/api/tester/live", json={"action": "stop"})
 
-        recorded = swing_exposure.recorded_sensor_limits(path, 640, 400)
+        recorded = recorded_sensor_limits(path, 640, 400)
         assert recorded["exposure_min_us"] == 4
         assert recorded["recorded_by"] == "tester_live_view"
         assert "lens_id" in recorded  # the unit's lens choice (none chosen here)

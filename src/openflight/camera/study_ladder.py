@@ -20,6 +20,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 
@@ -159,13 +160,34 @@ def rung_light_support(
     return support
 
 
+def recorded_sensor_limits(path: Path | str, width: int, height: int) -> dict | None:
+    """The recorded limits for one mode (with when and by what), or None if never read."""
+    try:
+        payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("schema") != swing_exposure.SENSOR_LIMITS_SCHEMA
+    ):
+        return None
+    entry = (payload.get("modes") or {}).get(swing_exposure._size_key(width, height))
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        swing_exposure.SensorLimits.from_dict(entry)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return dict(entry)
+
+
 def rungs_below_sensor_minimum(
     sensor_min_us: dict[str, int | None], *, rungs: tuple[Rung, ...] = LADDER
 ) -> dict[str, str]:
     """The rungs the sensor cannot take, each with why (13 Oct).
 
     ``sensor_min_us`` is each mode's shortest exposure as its camera reported it
-    (``swing_exposure.recorded_sensor_limits``). A mode with none recorded offers
+    (``recorded_sensor_limits``). A mode with none recorded offers
     nothing under ``PROVEN_SHORTEST_US``.
     """
     below = {}

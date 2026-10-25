@@ -12,8 +12,9 @@ import math
 import numpy as np
 import pytest
 
+from openflight.constants import BALL_DIAMETER_MM
 from openflight.iwr6843 import Calibration, antennas, estimate_lcmf_v1
-from openflight.rig_geometry import BALL_DIAMETER_MM, RigGeometry
+from openflight.rig_geometry import RigGeometry
 from tests.test_iwr6843_pipeline import range_snapshot_dump, synth_shot
 
 V3_RIG = "config/enclosure_v3_rig_geometry.json"

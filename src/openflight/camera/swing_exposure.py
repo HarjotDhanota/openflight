@@ -217,24 +217,6 @@ def record_sensor_limits(
     temporary.replace(target)
 
 
-def recorded_sensor_limits(path: Path | str, width: int, height: int) -> dict | None:
-    """The recorded limits for one mode (with when and by what), or None if never read."""
-    try:
-        payload = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(payload, Mapping) or payload.get("schema") != SENSOR_LIMITS_SCHEMA:
-        return None
-    entry = (payload.get("modes") or {}).get(_size_key(width, height))
-    if not isinstance(entry, Mapping):
-        return None
-    try:
-        SensorLimits.from_dict(entry)
-    except (KeyError, TypeError, ValueError):
-        return None
-    return dict(entry)
-
-
 def exposure_ladder(minimum_us: int, ceiling_us: int, step: float = LADDER_STEP) -> tuple[int, ...]:
     """Exposures from the sensor minimum to the ceiling, ``step`` apart, anchored on the ceiling."""
     minimum, ceiling = int(minimum_us), int(ceiling_us)

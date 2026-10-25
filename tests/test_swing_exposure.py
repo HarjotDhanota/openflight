@@ -466,20 +466,6 @@ def test_the_ball_gate_is_the_one_every_other_judge_uses():
     assert sx.BLACK_LEVEL_DN == light_judging.SENSOR_BLACK_LEVEL_DN
 
 
-def test_sensor_limits_are_recorded_per_mode_with_the_lens(tmp_path):
-    path = tmp_path / "camera-sensor-limits.json"
-    sx.record_sensor_limits(path, 1280, 800, limits(9), lens_id="6mm")
-    sx.record_sensor_limits(path, 640, 400, limits(4), lens_id="6mm", recorded_by="tester")
-
-    full = sx.recorded_sensor_limits(path, 1280, 800)
-    half = sx.recorded_sensor_limits(path, 640, 400)
-
-    assert full["exposure_min_us"] == 9 and full["lens_id"] == "6mm"
-    assert half["exposure_min_us"] == 4 and half["recorded_by"] == "tester"
-    assert sx.recorded_sensor_limits(path, 320, 200) is None
-    assert sx.recorded_sensor_limits(tmp_path / "missing.json", 1280, 800) is None
-
-
 def test_a_size_outside_the_modes_takes_the_shared_mm_budget():
     assert sx.blur_ceiling_us(sx.load_config(), None) == 294
 
