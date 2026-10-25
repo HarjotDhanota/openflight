@@ -7,12 +7,19 @@ so a ball straight down the target line reads 0. No offset: ``unit_boresight`` f
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
+
+from .numeric import finite_float
 
 UNIT_BORESIGHT = "unit_boresight"
 TARGET_LINE = "target_line"
 # a value derived from angles in two different frames
 MIXED = "mixed"
+
+# The widest a struck ball leaves the line: a shank, roughly 45 degrees off it. A
+# horizontal launch beyond this is not the ball's (a phase wrap, the club, a reflection),
+# so the kiosk withholds it rather than show it or feed it to another metric.
+MAX_PLAUSIBLE_LAUNCH_DEG = 45.0
 
 
 def _wrap_deg(angle_deg):
@@ -49,3 +56,14 @@ def combined_frame(*frames: Optional[str]) -> Optional[str]:
     if not known:
         return None
     return known.pop() if len(known) == 1 else MIXED
+
+
+def implausible_launch_reason(horizontal_deg: Any) -> Optional[str]:
+    """Why a horizontal launch is no golf ball's, or None for a plausible (or missing) one."""
+    value = finite_float(horizontal_deg)
+    if value is None or abs(value) <= MAX_PLAUSIBLE_LAUNCH_DEG:
+        return None
+    return (
+        f"{value:+.1f}° is beyond ±{MAX_PLAUSIBLE_LAUNCH_DEG:.0f}°, wider than a shank leaves: "
+        "not the ball's launch direction"
+    )

@@ -31,6 +31,7 @@ from typing import Any, Iterable, Mapping
 
 from openflight.review_metrics import QUALIFIED_TEE_SOURCES, finite, mapping
 from openflight.shot_metrics import LABELS, MEASURED, METRICS, NOT_MEASURED, SPECS
+from openflight.source_labels import WEAK_HORIZONTAL_SOURCES
 
 SCHEMA = "openflight.pipeline_check.v1"
 PASS, FAIL, NOT_REACHED, NOT_REQUESTED = "pass", "fail", "not_reached", "not_requested"
@@ -1109,7 +1110,7 @@ def metric_stage(  # pylint: disable=too-many-return-statements
 
 
 # Start directions shown only as labelled values (P8-7).
-_LOW_LAUNCH_SOURCES = frozenset({"camera_low_consensus", "radar_low_coherence"})
+_LOW_LAUNCH_SOURCES = frozenset(WEAK_HORIZONTAL_SOURCES)
 
 
 def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> dict:

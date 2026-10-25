@@ -25,7 +25,11 @@ from openflight.sim.types import (
     ResolvedShot,
     UnmeasuredShotError,
 )
-from openflight.source_labels import is_estimated_source, is_model_geometry_source
+from openflight.source_labels import (
+    horizontal_launch_label,
+    is_estimated_source,
+    is_model_geometry_source,
+)
 
 # OPS-only fallback spin (labelled estimated, as in the kiosk's ballistics); never on fusion.
 SPIN_MODEL_RPM: Mapping[ClubType, float] = CLUB_TYPICAL_SPIN_RPM
@@ -254,9 +258,7 @@ def resolve_shot(
 
     if _finite(shot.launch_angle_horizontal):
         hla = float(shot.launch_angle_horizontal)
-        provenance["hla"] = (
-            "estimated" if shot.launch_angle_horizontal_source == "estimated" else "measured"
-        )
+        provenance["hla"] = horizontal_launch_label(shot.launch_angle_horizontal_source)
     else:
         hla = 0.0
         provenance["hla"] = "estimated"

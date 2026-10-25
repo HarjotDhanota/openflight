@@ -50,8 +50,8 @@ The candidate is one file per session, so it can be supplied once with
 the exact session-file SHA-256, and the captured runtime content-manifest hash
 when the source snapshot is present and valid. Its grouping identity uses the
 same allowlisted content-manifest hash computed over the replay checkout, keyed
-by repository-relative path, so equal values mean replay read the same source
-the capture snapshotted; loaded module bytes can still differ. Arm (session
+by repository-relative path and read with LF line endings, so equal values mean
+replay read the same source the capture snapshotted, on a Pi or a Windows checkout; loaded module bytes can still differ. Arm (session
 location), rig-geometry snapshot hash, applied exposure and gain (median of the
 per-frame values in `frames.npz`), setup hash and placement warning are read
 from the recording; `source_identity_evidence` names where each came from, and a

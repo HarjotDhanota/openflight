@@ -21,6 +21,21 @@ MODEL_LABELS = (LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
 SPIN_AXIS_MODEL_GEOMETRY_PREFIX = "model geometry"
 SPIN_AXIS_ESTIMATED_PREFIX = "estimated"
 
+# Horizontal-launch sources too weak to stand as measured (P8-7), each with what makes it
+# weak: shown, labelled "estimated" with every output built on them, and never an input
+# of the full ball speed (``full_speed.MEASURED_HORIZONTAL_SOURCES``).
+WEAK_HORIZONTAL_SOURCES = {
+    "radar_low_coherence": "low-coherence",
+    "camera_low_consensus": "low-consensus",
+}
+
+
+def horizontal_launch_label(source: Optional[str]) -> str:
+    """The label a Shot horizontal launch carries for its ``launch_angle_horizontal_source``."""
+    if source == LABEL_ESTIMATED or source in WEAK_HORIZONTAL_SOURCES:
+        return LABEL_ESTIMATED
+    return LABEL_MEASURED
+
 
 def is_measured_source(source: Optional[str]) -> bool:
     """Whether a Shot source label names a measured value (a sensor saw it)."""

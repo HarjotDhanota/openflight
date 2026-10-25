@@ -509,3 +509,81 @@ def test_the_send_folder_is_shown_from_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     assert session_bundle.display_path(tmp_path / "OpenFlight-to-send") == "~/OpenFlight-to-send"
     assert session_bundle.display_path(Path("/srv/x")).endswith("x")
+
+
+KIOSK_LOG = f"{TESTER}/arm5/logs/free_play.log"
+
+
+def _kiosk_log(root: Path, data: bytes) -> Path:
+    path = root / KIOSK_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_a_kiosk_log_still_written_is_packaged_to_its_last_complete_line(tmp_path):
+    """Harjot-outdoor-test-1: the free-play kiosk stays up while its run is packaged and
+    keeps logging, so its log grew under the bundle and packaging failed (SnapshotChanged)."""
+    root = capture_tree(tmp_path / "pi")
+    log = _kiosk_log(root, b"started\nshot 33 accepted\nGET /api/free-pl")
+    logged = []
+
+    def kiosk_keeps_logging(_done, _total, name, phase):
+        if phase == "writing" and name == KIOSK_LOG and not logged:
+            logged.append(name)
+            with log.open("ab") as handle:
+                handle.write(b"ay 200\nGET /api/free-play 200\n")
+
+    built = session_bundle.build_bundle(
+        root, TESTER, viewer=None, provenance={}, progress=kiosk_keeps_logging
+    )
+
+    assert logged
+    manifest = session_bundle.validate_bundle(Path(built["path"]))
+    entry = next(item for item in manifest["entries"] if item["path"] == KIOSK_LOG)
+    with zipfile.ZipFile(built["path"]) as archive:
+        packaged = archive.read(KIOSK_LOG)
+    assert packaged == b"started\nshot 33 accepted\n"
+    assert entry["size_bytes"] == len(packaged)
+    assert entry["sha256"] == hashlib.sha256(packaged).hexdigest()
+
+
+def test_a_kiosk_log_cut_short_while_packaged_discards_the_bundle(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    log = _kiosk_log(root, b"started\nshot 1 accepted\n")
+    cut = []
+
+    def truncate_while_read(_done, _total, name, phase):
+        if phase == "writing" and name == KIOSK_LOG and not cut:
+            cut.append(name)
+            log.write_bytes(b"")
+
+    with pytest.raises(session_bundle.SnapshotChanged, match="free_play.log changed while"):
+        session_bundle.build_bundle(
+            root, TESTER, viewer=None, provenance={}, progress=truncate_while_read
+        )
+    assert _no_bundle_files(root)
+
+
+def test_an_unchanged_session_with_a_kiosk_log_mid_line_reuses_its_bundle(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    _kiosk_log(root, b"started\nGET /api/free-pl")
+
+    first = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    second = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+
+    assert second["reused"] is True and second["name"] == first["name"]
+
+
+def test_a_kiosk_log_that_gained_lines_makes_a_new_bundle(tmp_path):
+    root = capture_tree(tmp_path / "pi")
+    log = _kiosk_log(root, b"started\n")
+    first = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    with log.open("ab") as handle:
+        handle.write(b"closed\n")
+
+    second = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+
+    assert second["reused"] is False and second["name"] != first["name"]
+    with zipfile.ZipFile(second["path"]) as archive:
+        assert archive.read(KIOSK_LOG) == b"started\nclosed\n"

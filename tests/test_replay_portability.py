@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
+import zipfile
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -294,4 +296,50 @@ def test_software_hash_equals_the_capture_snapshot_hash_for_the_same_source(tmp_
     recorded = capture_runtime_provenance(tmp_path / "log", "s1", repo_root=repository)
     assert recorded["source_snapshot"]["content_manifest_sha256"] == (
         source_content_manifest_sha256(repository)
+    )
+
+
+def _checkout(root: Path, newline: bytes, lock: bytes) -> Path:
+    """The same committed source as a checkout on one platform writes it to disk."""
+    (root / "src" / "openflight").mkdir(parents=True)
+    (root / "config").mkdir()
+    files = {
+        "src/openflight/module.py": b'"""Doc."""\nVALUE = 1\n',
+        "pyproject.toml": b"[project]\nname='x'\n",
+        "config/enclosure_rig_geometry.json": b'{\n  "offset": 0.03\n}\n',
+    }
+    for name, data in files.items():
+        (root / name).write_bytes(data.replace(b"\n", newline))
+    # uv.lock is gitignored: each machine resolves its own
+    (root / "uv.lock").write_bytes(lock)
+    return root
+
+
+def test_software_hash_is_the_same_on_a_pi_and_a_windows_checkout(tmp_path):
+    """Harjot-outdoor-test-1: the Pi and Windows hashed one commit differently (CRLF, uv.lock)."""
+    pi = _checkout(tmp_path / "pi", b"\n", b'version = 1\n[[package]]\nname = "astroid"\n')
+    windows = _checkout(
+        tmp_path / "windows", b"\r\n", b'version = 1\r\n[[package]]\r\nname = "bidict"\r\n'
+    )
+
+    assert source_content_manifest_sha256(pi) == source_content_manifest_sha256(windows)
+    (windows / "src" / "openflight" / "module.py").write_bytes(b'"""Doc."""\r\nVALUE = 2\r\n')
+    assert source_content_manifest_sha256(pi) != source_content_manifest_sha256(windows)
+
+
+def test_a_windows_capture_snapshot_holds_the_bytes_its_manifest_hashes(tmp_path):
+    windows = _checkout(tmp_path / "windows", b"\r\n", b"version = 1\r\n")
+    recorded = capture_runtime_provenance(tmp_path / "log", "s1", repo_root=windows)
+
+    snapshot = tmp_path / "log" / recorded["source_snapshot"]["basename"]
+    with zipfile.ZipFile(snapshot) as archive:
+        manifest = json.loads(archive.read("runtime_provenance_manifest.json"))
+        member = archive.read("src/openflight/module.py")
+    assert member == b'"""Doc."""\nVALUE = 1\n'
+    assert manifest["files"]["src/openflight/module.py"]["sha256"] == (
+        hashlib.sha256(member).hexdigest()
+    )
+    assert "uv.lock" not in manifest["files"]
+    assert recorded["source_snapshot"]["content_manifest_sha256"] == (
+        source_content_manifest_sha256(windows)
     )

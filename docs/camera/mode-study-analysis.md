@@ -187,8 +187,9 @@ validation with a separate label.
   a mode using count agreement as proof of matched-shot accuracy.
 - **Software identity:** new sessions preserve `runtime_source_<session_uuid>.zip`
   beside the log. The export carries that recorded archive and verifies its hash.
-  It includes allowlisted source, project locks and rig/calibration files present
-  at startup, with Git and runtime metadata. It is a disk snapshot, not proof of
+  It includes allowlisted source, `pyproject.toml` and rig/calibration files present
+  at startup (text read with LF line endings; the machine-resolved, gitignored
+  `uv.lock` is left out, its key versions are in the runtime metadata), with Git and runtime metadata. It is a disk snapshot, not proof of
   already-imported code or device firmware. Legacy/missing evidence is labeled
   unavailable; it is never replaced with current analysis-machine source.
 - **Camera geometry replay:** new `session_start.config.effective_camera_geometry`

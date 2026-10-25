@@ -13,8 +13,15 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
-from .source_labels import is_calculated_source, is_measured_source, is_model_geometry_source
+from .source_labels import (
+    WEAK_HORIZONTAL_SOURCES,
+    horizontal_launch_label,
+    is_calculated_source,
+    is_measured_source,
+    is_model_geometry_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,23 +208,51 @@ def _launch_vertical(shot):
 
 
 def _launch_horizontal(shot):
+    """The horizontal launch: estimated on a weak source, withheld beyond a shank's reach."""
     source = shot.get("launch_angle_horizontal_source") or shot.get("angle_source")
-    uncalibrated = shot.get("launch_angle_horizontal_status") == "azimuth_uncalibrated"
+    value = shot.get("launch_angle_horizontal")
+    reason = shot.get("launch_angle_horizontal_reason") or (
+        "horizontal launch not measured on this shot"
+    )
+    implausible = implausible_launch_reason(value)
+    if implausible is not None:
+        value, reason = None, f"{source or 'horizontal launch'} {implausible}"
+    notes = [
+        f"{WEAK_HORIZONTAL_SOURCES[source]} horizontal: too weak to stand as measured"
+        if source in WEAK_HORIZONTAL_SOURCES
+        else None,
+        "azimuth uncalibrated: the IWR start direction has its own zero"
+        if shot.get("launch_angle_horizontal_status") == "azimuth_uncalibrated"
+        else None,
+    ]
     return _record(
         "launch_horizontal",
-        shot.get("launch_angle_horizontal"),
-        _launch_status(source),
+        value,
+        horizontal_launch_label(source),
         source=source,
-        reason="horizontal launch not measured on this shot",
+        reason=reason,
         frame=shot.get("launch_angle_horizontal_frame"),
-        note="azimuth uncalibrated: the IWR start direction has its own zero"
-        if uncalibrated
-        else None,
+        note="; ".join(note for note in notes if note) or None,
     )
 
 
 def _collision_metric(shot, name: str) -> Mapping[str, Any]:
     return _mapping(_mapping(_mapping(shot.get("collision_model")).get("metrics")).get(name))
+
+
+OPS_SPIN_UNVALIDATED = "OPS spin not validated against a reference"
+
+
+def _experimental_spin_note(shot) -> str:
+    """Why an OPS spin of experimental quality is not a measurement, rail included."""
+    confidence = _finite(shot.get("spin_confidence"))
+    parts = [f"confidence {confidence:.2f}" if confidence is not None else None]
+    parts.append(OPS_SPIN_UNVALIDATED)
+    if shot.get("spin_at_upper_rail"):
+        parts.append("at the search band's upper rail")
+    elif shot.get("spin_at_lower_rail"):
+        parts.append("at the search band's lower rail")
+    return "; ".join(part for part in parts if part)
 
 
 def _spin_rate(shot):
@@ -231,6 +266,8 @@ def _spin_rate(shot):
     )
     quality = shot.get("spin_quality")
     note = f"confidence {quality}" if status == MEASURED and quality else None
+    if status == MEASURED and quality == EXPERIMENTAL:
+        status, note = EXPERIMENTAL, _experimental_spin_note(shot)
     model_spin = _finite(shot.get("spin_rpm_collision"))
     if (
         status != MEASURED

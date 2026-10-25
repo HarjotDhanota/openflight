@@ -403,6 +403,36 @@ describe('buildLiveMetrics', () => {
     expect(byId(weak, 'spin').status).toBe('estimated');
   });
 
+  it.each(['radar_low_coherence', 'camera_low_consensus'])(
+    'labels a %s horizontal estimated, never measured (24 Oct field session)',
+    (source) => {
+      const metrics = buildLiveMetrics(
+        makeShot({ launch_angle_horizontal: 3.2, launch_angle_horizontal_source: source }),
+        'imperial',
+        emptySwingStats
+      );
+      expect(byId(metrics, 'launch_h')).toMatchObject({ value: '+3.2', status: 'estimated' });
+    }
+  );
+
+  it('labels an experimental-quality OPS spin experimental, never measured', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ spin_rpm: 10986.33, spin_source: null, spin_quality: 'experimental', spin_confidence: 0.11 }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin')).toMatchObject({ status: 'experimental', confidence: 'experimental' });
+  });
+
+  it('keeps a model spin label over the radar quality', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ spin_source: 'estimated', spin_quality: 'experimental' }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin').status).toBe('estimated');
+  });
+
   it('labels a spin built on model geometry (D39) model_geometry, not calculated', () => {
     const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
     expect(byId(modelled, 'spin').status).toBe('model_geometry');
@@ -588,6 +618,39 @@ describe('buildLiveMetrics with the server labels (Shot.metrics)', () => {
     );
     expect(byId(metrics, 'club_path')).toMatchObject({ value: '-3.3', unit: '°', status: 'model_geometry' });
     expect(byId(metrics, 'club_aoa')).toMatchObject({ value: '-4.5', status: 'calculated' });
+  });
+
+  it('hides a horizontal launch the server withholds, with its reason (shot 14, 24 Oct)', () => {
+    const reason = 'radar_low_coherence +70.6° is beyond ±45°, wider than a shank leaves';
+    const metrics = buildLiveMetrics(
+      makeShot({
+        launch_angle_horizontal: 70.63,
+        launch_angle_horizontal_source: 'radar_low_coherence',
+        launch_angle_horizontal_confidence: 0.89,
+        metrics: { launch_horizontal: record({ reason, source: 'radar_low_coherence' }) },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    const tile = byId(metrics, 'launch_h');
+    expect(tile).toMatchObject({ value: NO_VALUE, reason });
+    expect(tile.unit).toBeUndefined();
+    expect(tile.status).toBeUndefined();
+    expect(tile.confidence ?? null).toBeNull();
+  });
+
+  it('takes the experimental spin label from the server record', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        spin_rpm: 10986.33,
+        spin_source: null,
+        spin_quality: 'experimental',
+        metrics: { spin_rate: record({ value: 10986.33, unit: 'rpm', status: 'experimental' }) },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin').status).toBe('experimental');
   });
 
   it('shows why a metric is not measured, compactly', () => {

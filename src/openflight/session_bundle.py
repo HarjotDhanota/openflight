@@ -262,10 +262,52 @@ def _unique_output(directory: Path, tester_id: str, created_at: datetime) -> Pat
     return candidate
 
 
+def _appended_log(arcname: str, tester_id: str) -> bool:
+    """A log a running process may still append to while its bundle is made.
+
+    The free-play kiosk stays up (its page visible) until its run is packaged, and keeps
+    writing its job log (``<arm>/logs/free_play.log``); the tester service writes its own.
+    """
+    path = PurePosixPath(arcname)
+    return _role(arcname, tester_id) == "diagnostics" or (
+        path.parent.name == "logs" and path.suffix == ".log"
+    )
+
+
+def _complete_lines(path: Path, size: int) -> int:
+    """The length of the first ``size`` bytes up to their last newline: no half-written line."""
+    with path.open("rb") as handle:
+        end = size
+        while end > 0:
+            start = max(0, end - CHUNK_BYTES)
+            handle.seek(start)
+            newline = handle.read(end - start).rfind(b"\n")
+            if newline >= 0:
+                return start + newline + 1
+            end = start
+    return 0
+
+
+def _snapshot_length(path: Path, arcname: str, tester_id: str, size: int) -> int:
+    """How many bytes of a file a bundle carries: all of it, or a live log's complete lines."""
+    return _complete_lines(path, size) if _appended_log(arcname, tester_id) else size
+
+
+def _changed(arcname: str) -> SnapshotChanged:
+    return SnapshotChanged(
+        f"{arcname} changed while it was being packaged; package again once nothing is writing"
+    )
+
+
 def _write_member(
-    archive: zipfile.ZipFile, source: Path, arcname: str, advance, *, may_grow: bool
+    archive: zipfile.ZipFile, source: Path, arcname: str, advance, *, tester_id: str
 ) -> tuple[int, str, list[int] | None]:
-    """Copy and hash one file; evidence that changes while it is read aborts the bundle."""
+    """Copy and hash one file; evidence that changes while it is read aborts the bundle.
+
+    A live log is carried up to its last complete line when the bundle starts reading
+    it: what is appended meanwhile is left for the next bundle, but a log cut short or
+    replaced aborts this one, like any other evidence that changes.
+    """
     info = zipfile.ZipInfo(arcname, date_time=_ZIP_EPOCH)
     info.compress_type = (
         zipfile.ZIP_STORED
@@ -275,25 +317,35 @@ def _write_member(
     digest = hashlib.sha256()
     size = 0
     before = _stamp(source)
+    length = _snapshot_length(source, arcname, tester_id, before[0])
     with source.open("rb") as handle, archive.open(info, "w", force_zip64=True) as member:
-        while chunk := handle.read(CHUNK_BYTES):
+        while size < length and (chunk := handle.read(min(CHUNK_BYTES, length - size))):
             digest.update(chunk)
             member.write(chunk)
             size += len(chunk)
             advance(len(chunk), arcname)
-    unchanged = _stamp(source) == before and size == before[0]
-    if not unchanged and not may_grow:
-        raise SnapshotChanged(
-            f"{arcname} changed while it was being packaged; package again once nothing is writing"
+    after = _stamp(source)
+    unchanged = after == before and size == length
+    if not unchanged:
+        # a service log may also rotate under us; a job log must be the same file, grown
+        same_file_grown = after[2:4] == before[2:4] and after[0] >= before[0]
+        appended = size == length and (
+            _role(arcname, tester_id) == "diagnostics"
+            or (_appended_log(arcname, tester_id) and same_file_grown)
         )
+        if not appended:
+            raise _changed(arcname)
     return size, digest.hexdigest(), before if unchanged else None
 
 
-def _file_sha256(path: Path) -> str:
+def _file_sha256(path: Path, length: int | None = None) -> str:
+    """The SHA-256 of a file, or of its first ``length`` bytes."""
     digest = hashlib.sha256()
+    remaining = path.stat().st_size if length is None else length
     with path.open("rb") as handle:
-        while chunk := handle.read(CHUNK_BYTES):
+        while remaining > 0 and (chunk := handle.read(min(CHUNK_BYTES, remaining))):
             digest.update(chunk)
+            remaining -= len(chunk)
     return digest.hexdigest()
 
 
@@ -379,7 +431,8 @@ def _reusable_latest(
     }
     candidates = [(p, name) for p, name in entries if _role(name, tester_id) != "diagnostics"]
     if {name for _p, name in candidates} != set(previous) or any(
-        p.stat().st_size != previous[name]["size_bytes"] for p, name in candidates
+        _snapshot_length(p, name, tester_id, p.stat().st_size) != previous[name]["size_bytes"]
+        for p, name in candidates
     ):
         return None
     total = sum(p.stat().st_size for p, _name in candidates)
@@ -390,16 +443,17 @@ def _reusable_latest(
         known = index["files"].get(name)
         stamp = _stamp(source)
         checked.append((source, stamp))
+        length = _snapshot_length(source, name, tester_id, stamp[0])
         if isinstance(known, dict) and known.get("stamp") == stamp:
             sha256 = known["sha256"]
         else:
-            sha256 = _file_sha256(source)
+            sha256 = _file_sha256(source, length)
             index["files"][name] = {"stamp": stamp, "sha256": sha256}
         done += stamp[0]
         if progress is not None:
             progress(done, total, name, "checking")
         listed.append(
-            {"path": name, "size_bytes": stamp[0], "sha256": sha256, "role": _role(name, tester_id)}
+            {"path": name, "size_bytes": length, "sha256": sha256, "role": _role(name, tester_id)}
         )
     if content_fingerprint(tester_id, listed, provenance) != manifest.get("content_fingerprint"):
         return None
@@ -483,11 +537,7 @@ def _build_locked(  # pylint: disable=too-many-arguments,too-many-positional-arg
             with zipfile.ZipFile(stream, "w", allowZip64=True) as archive:
                 for path, arcname in entries:
                     size, sha256, stamp = _write_member(
-                        archive,
-                        path,
-                        arcname,
-                        advance,
-                        may_grow=_role(arcname, tester_id) == "diagnostics",
+                        archive, path, arcname, advance, tester_id=tester_id
                     )
                     records.append(
                         {

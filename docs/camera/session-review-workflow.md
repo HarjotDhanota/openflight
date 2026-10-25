@@ -138,6 +138,14 @@ Review follow-up (2026-09-25):
 - The archive SHA-256 comes from the bytes as they are written (members use
   ZIP data descriptors), so there is no silent re-read at the end; progress is
   reported in bytes while checking and writing.
+- Live logs (24 Oct, Harjot-outdoor-test-1): the free-play kiosk stays up until
+  its run is packaged and keeps writing `<arm>/logs/free_play.log`, so packaging
+  right after Stop failed with "free_play.log changed while it was being
+  packaged". A job log (`<arm>/logs/*.log`) or a service log is now carried up
+  to its last complete line when the bundle starts reading it; lines appended
+  meanwhile wait for the next bundle. A job log cut short or replaced still
+  discards the bundle, as does any other evidence that changes, so no bundle
+  holds a half-written file.
 - Every attempt carries the camera facts needed to read its frames: saved
   dimensions, stream, crop, strip offset, rotate_180, mirror and roll (flagged
   when they differ from the session), delivered fps and gaps, pre/post-trigger

@@ -36,10 +36,10 @@ def _repo(tmp_path: Path) -> Path:
 def test_capture_preserves_dirty_and_untracked_source_at_session_start(tmp_path):
     repo = _repo(tmp_path)
     source = repo / "src/openflight/server.py"
-    source.write_text("VALUE = 2\n", encoding="utf-8")
+    source.write_bytes(b"VALUE = 2\n")
     untracked = repo / "src/openflight/rolling_buffer/new_estimator.py"
     untracked.parent.mkdir()
-    untracked.write_text("ESTIMATOR = 3\n", encoding="utf-8")
+    untracked.write_bytes(b"ESTIMATOR = 3\n")
     expected_source = source.read_bytes()
     expected_untracked = untracked.read_bytes()
 
