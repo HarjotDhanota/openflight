@@ -29,7 +29,6 @@ class EventLog(OnShotDetectedHelpers.RecordingSessionLog):
 
 @pytest.fixture
 def kiosk(monkeypatch):
-    """A kiosk started on the unit boresight, with a camera and an IWR6843 to update."""
     iwr = IWR6843Runtime(capture_monitor=None, calibration=None, net_range_m=None)
     monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
     monkeypatch.setattr(server_module, "iwr6843_runtime", iwr)
@@ -49,7 +48,7 @@ def kiosk(monkeypatch):
     return SimpleNamespace(iwr=iwr, log=log)
 
 
-def test_every_consumer_takes_the_new_offset(kiosk):
+def test_every_consumer_takes_the_new_offset_and_the_session_log_has_it(kiosk):
     assert server_module._reported_horizontal_deg(5.0) == pytest.approx(5.0)
 
     record = server_module.apply_target_line(SET)
@@ -70,6 +69,14 @@ def test_every_consumer_takes_the_new_offset(kiosk):
     assert record["revision"] == 1
     assert record["frame"] == "target_line"
     assert record["since"]
+    [(kind, data)] = kiosk.log.events
+    assert kind == "target_line_changed"
+    assert data["previous"]["revision"] == 0
+    assert data["previous"]["frame"] == "unit_boresight"
+    assert data["target_line"]["revision"] == 1
+    assert data["target_line"]["yaw_deg"] == 3.0
+    assert data["target_line"]["horizontal_offset_deg"] == -3.0
+    assert data["target_line"]["since"]
 
 
 def test_skipping_returns_every_angle_to_the_unit_boresight(kiosk):
@@ -82,18 +89,6 @@ def test_skipping_returns_every_angle_to_the_unit_boresight(kiosk):
     assert record["revision"] == 2
     served = server_module.app.test_client().get("/api/target-line").get_json()
     assert served["status"] == "not_set"
-
-
-def test_the_change_is_in_the_session_log_with_its_time(kiosk):
-    server_module.apply_target_line(SET)
-    [(kind, data)] = kiosk.log.events
-    assert kind == "target_line_changed"
-    assert data["previous"]["revision"] == 0
-    assert data["previous"]["frame"] == "unit_boresight"
-    assert data["target_line"]["revision"] == 1
-    assert data["target_line"]["yaw_deg"] == 3.0
-    assert data["target_line"]["horizontal_offset_deg"] == -3.0
-    assert data["target_line"]["since"]
 
 
 @pytest.mark.parametrize(
@@ -114,19 +109,19 @@ def test_a_malformed_line_changes_nothing(kiosk, line):
     assert not kiosk.log.events
 
 
-def test_the_swap_waits_for_the_shot_still_being_processed(kiosk, monkeypatch):
-    answers = iter([True, True, False])
-    monkeypatch.setattr(server_module, "shot_processing_pending", lambda: next(answers))
-    server_module.apply_target_line(SET, timeout_s=5.0)
-    assert server_module.horizontal_offset_deg == -3.0
-
-
-def test_a_shot_that_never_finishes_refuses_the_swap(kiosk, monkeypatch):
+def test_the_swap_waits_for_the_shot_being_processed_and_refuses_one_that_never_finishes(
+    kiosk, monkeypatch
+):
     monkeypatch.setattr(server_module, "shot_processing_pending", lambda: True)
     with pytest.raises(RuntimeError, match="still being processed"):
         server_module.apply_target_line(SET, timeout_s=0.1)
     assert server_module.horizontal_offset_deg is None
     assert not kiosk.log.events
+
+    answers = iter([True, True, False])
+    monkeypatch.setattr(server_module, "shot_processing_pending", lambda: next(answers))
+    server_module.apply_target_line(SET, timeout_s=5.0)
+    assert server_module.horizontal_offset_deg == -3.0
 
 
 class TestShotsBeforeAndAfterAMove(OnShotDetectedHelpers):

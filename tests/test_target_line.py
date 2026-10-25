@@ -1,8 +1,4 @@
-"""The target line from a camera aim point.
-
-Synthetic cameras with known answers: a target at a known yaw is projected into the
-picture, and its pixel must give that yaw back, far (a direction) and near (a screen).
-"""
+"""The target line from a camera aim point: a target projected at a known yaw gives it back."""
 
 import math
 
@@ -10,37 +6,21 @@ import numpy as np
 import pytest
 
 from openflight.camera import target_line as tl
-from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
+from openflight.camera.reference_ball_range import project_to_pixel
+from tests.camera_helpers import V3_FOCAL_1280 as FOCAL_1280, v3_camera
 
-FOCAL_1280 = 933.3334
 BALL = (0.0, 1.25)
 
 
-def _camera(*, pitch_deg=0.0, roll_correction_deg=0.0, focal=FOCAL_1280):
-    """The v3 unit at 1280x800: lens 95 mm up, the IWR just below it."""
-    return BallPlaneCamera.nominal(
-        focal_px=focal,
-        image_width_px=1280,
-        image_height_px=800,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=roll_correction_deg,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0588),
-        angular_uncertainty_deg=3.0,
-        focal_relative_uncertainty=0.08,
-    )
+def _camera(**changes):
+    return v3_camera(angular_uncertainty_deg=3.0, **changes)
 
 
 def _target(ball, yaw_deg, distance_m, height_m):
     """A point ``distance_m`` from the ball along ``yaw_deg`` (+ right), ``height_m`` up."""
     yaw = math.radians(yaw_deg)
     return np.asarray(
-        [
-            ball[0] + distance_m * math.sin(yaw),
-            ball[1] + distance_m * math.cos(yaw),
-            height_m,
-        ]
+        [ball[0] + distance_m * math.sin(yaw), ball[1] + distance_m * math.cos(yaw), height_m]
     )
 
 
@@ -98,27 +78,26 @@ def test_a_near_aim_on_a_screen_uses_the_floor_line(yaw_deg, ball):
         assert abs(as_direction.yaw_deg - yaw_deg) > 0.5
 
 
-def test_a_floor_line_above_the_horizon_falls_back_to_a_direction_and_says_so():
+@pytest.mark.parametrize(
+    ("yaw_deg", "floor", "reason"),
+    [
+        # a floor line above the horizon row 400
+        (3.0, [[200.0, 300.0], [1000.0, 300.0]], "floor_line_at_or_above_the_horizon"),
+        # a screen 1 m from the lens, short of the ball
+        (2.0, "short", "screen_not_beyond_the_ball"),
+    ],
+)
+def test_an_unusable_floor_line_falls_back_to_a_direction_and_says_so(yaw_deg, floor, reason):
     camera = _camera()
-    aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 1.0))
-    floor = [[200.0, 300.0], [1000.0, 300.0]]  # above the horizon row 400
+    aim = _pixel(camera, _target(BALL, yaw_deg, 2000.0, 1.0))
+    if floor == "short":
+        floor = _screen_floor_line(camera, (0.0, 0.0), 1.0)
 
     solved = tl.solve_yaw(camera, BALL, aim, floor)
 
     assert solved.method == "direction"
-    assert solved.fallback_reason == "floor_line_at_or_above_the_horizon"
-    assert solved.yaw_deg == pytest.approx(3.0, abs=0.01)
-
-
-def test_a_screen_nearer_than_the_ball_is_refused_as_a_floor_point():
-    camera = _camera()
-    aim = _pixel(camera, _target(BALL, 2.0, 100.0, 1.0))
-    floor = _screen_floor_line(camera, (0.0, 0.0), 1.0)  # 1 m from the lens, short of the ball
-
-    solved = tl.solve_yaw(camera, BALL, aim, floor)
-
-    assert solved.method == "direction"
-    assert solved.fallback_reason == "screen_not_beyond_the_ball"
+    assert solved.fallback_reason == reason
+    assert solved.yaw_deg == pytest.approx(yaw_deg, abs=0.01)
 
 
 def test_the_record_carries_the_hand_off_sign_and_its_uncertainty():
@@ -134,7 +113,6 @@ def test_the_record_carries_the_hand_off_sign_and_its_uncertainty():
     assert record["kiosk_offset_deg"] == pytest.approx(-record["yaw_deg"])
     assert record["aim_px"] == pytest.approx(aim, abs=0.01)
     parts = record["uncertainty"]["parts_deg"]
-    # +-30 frame px of aim at 933 px
     assert parts["aim_pixel_deg"] == pytest.approx(math.degrees(30.0 / FOCAL_1280), rel=0.1)
     assert record["uncertainty"]["roll_applied"] is False
     assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(2.9)
@@ -157,13 +135,24 @@ def test_the_unapplied_roll_costs_little_at_the_horizon_and_more_high_on_a_scree
     assert up_high["uncertainty"]["parts_deg"]["roll_deg"] > 0.5
 
 
-def test_a_missing_roll_reading_is_padded_like_the_patch():
+@pytest.mark.parametrize(("applied", "roll_deg", "pad_deg"), [(False, None, 3.0), (True, 0.0, 0.3)])
+def test_a_missing_roll_is_padded_like_the_patch_and_an_applied_one_by_its_residual(
+    applied, roll_deg, pad_deg
+):
+    from dataclasses import replace  # noqa: PLC0415
+
+    from openflight.camera import camera_roll  # noqa: PLC0415
+
     camera = _camera()
-    aim = _pixel(camera, _target(BALL, 0.0, 100.0, 1.0))
+    if applied:
+        zeroed = {"verified": True, "zero_deg": 0.0, "residual_deg": 0.3, "applied": True}
+        camera = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, zeroed))
+    aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 0.3))
 
-    record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=None)
+    record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=4.0, roll_deg=roll_deg)
 
-    assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(3.0)
+    assert record["uncertainty"]["roll_applied"] is applied
+    assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(pad_deg)
 
 
 def test_a_floor_point_record_names_its_method_and_target():
@@ -182,18 +171,13 @@ def test_a_floor_point_record_names_its_method_and_target():
     assert "floor_line_px_deg" in record["uncertainty"]["parts_deg"]
 
 
-def test_a_large_yaw_warns_to_turn_the_unit():
+def test_a_large_yaw_warns_to_turn_the_unit_and_an_aim_outside_the_picture_is_refused():
     camera = _camera()
     aim = _pixel(camera, _target(BALL, 20.0, 100.0, 0.5))
 
-    record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0)
-
-    assert record["warnings"]
-
-
-def test_an_aim_outside_the_picture_is_refused():
+    assert tl.target_line_record(camera, BALL, aim, tilt_pad_deg=1.0, roll_deg=0.0)["warnings"]
     with pytest.raises(ValueError):
-        tl.target_line_record(_camera(), BALL, [1400.0, 300.0], tilt_pad_deg=1.0, roll_deg=0.0)
+        tl.target_line_record(camera, BALL, [1400.0, 300.0], tilt_pad_deg=1.0, roll_deg=0.0)
 
 
 def test_the_default_aim_is_straight_ahead_on_the_horizon():
@@ -214,15 +198,10 @@ def test_moves_compare_in_pixels_within_the_tolerance():
     assert tl.target_line_moved(None, base)
 
 
-def test_the_hand_off_records_one_offset_for_camera_and_iwr():
+def test_the_hand_off_records_one_offset_for_camera_and_iwr_and_its_one_plus_minus():
     camera = _camera()
-    record = tl.target_line_record(
-        camera,
-        BALL,
-        _pixel(camera, _target(BALL, 2.5, 2000.0, 0.3)),
-        tilt_pad_deg=4.0,
-        roll_deg=0.0,
-    )
+    aim = _pixel(camera, _target(BALL, 2.5, 2000.0, 0.3))
+    record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=4.0, roll_deg=0.0)
 
     handed = tl.handoff(record, target_distance_m=4.6, distance_basis="default_not_measured")
 
@@ -236,13 +215,20 @@ def test_the_hand_off_records_one_offset_for_camera_and_iwr():
     assert handed["method"] == "direction"
     assert handed["uncertainty"]["parallax_basis"] == "default_not_measured"
     assert handed["uncertainty"]["total_deg"] >= record["uncertainty"]["total_deg"]
+    assert handed["total_uncertainty_deg"] == pytest.approx(
+        handed["uncertainty"]["total_deg"], abs=1e-3
+    )
 
 
-def test_no_aim_point_says_so():
-    handed = tl.handoff(None, target_distance_m=None, distance_basis=None)
+def test_no_or_a_skipped_aim_point_says_so():
+    missing = tl.handoff(None, target_distance_m=None, distance_basis=None)
+    skipped = tl.handoff(tl.skipped_record(), target_distance_m=None, distance_basis=None)
 
-    assert handed["status"] == "not_set"
-    assert handed["yaw_deg"] is None
+    assert missing["status"] == "not_set"
+    assert missing["yaw_deg"] is None
+    assert skipped["status"] == "skipped"
+    assert skipped["kiosk_offset_deg"] is None
+    assert "boresight" in skipped["reason"]
 
 
 def test_the_alignment_stick_check_records_the_difference_and_whether_it_agrees():
@@ -279,7 +265,7 @@ def test_the_tilt_term_covers_what_a_wrong_pitch_does_to_the_yaw(pitch_error_deg
 
 def test_the_unapplied_roll_term_covers_a_rolled_camera():
     model = _camera()
-    true = _camera(roll_correction_deg=-2.0)  # a camera rolled 2 deg, corrected as -2
+    true = _camera(roll_deg=-2.0)  # a camera rolled 2 deg, corrected as -2
     aim = _pixel(true, (0.3, 4.5, 1.4))
     truth = tl.solve_yaw(true, BALL, aim).yaw_deg
 
@@ -291,7 +277,7 @@ def test_the_unapplied_roll_term_covers_a_rolled_camera():
 
 
 def test_a_floor_line_that_falls_back_under_a_perturbation_is_unbounded_and_warns():
-    """A tilt pad that pushes the floor line above the horizon must not read as a tighter yaw."""
+    # a tilt pad pushing the floor line above the horizon must not read as a tighter yaw
     camera = _camera()
     aim = _pixel(camera, _target(BALL, 2.0, 3.3, 0.6))
     floor = _screen_floor_line(camera, BALL, 3.3)
@@ -340,45 +326,3 @@ def test_the_one_plus_minus_the_page_shows_includes_the_parallax():
         math.hypot(record["uncertainty"]["total_deg"], parallax), abs=1e-3
     )
     assert record["total_uncertainty_deg"] > record["uncertainty"]["total_deg"]
-
-
-def test_the_hand_off_tells_the_kiosk_the_line_and_its_one_plus_minus():
-    camera = _camera()
-    record = tl.target_line_record(
-        camera,
-        BALL,
-        _pixel(camera, _target(BALL, 2.5, 2000.0, 0.3)),
-        tilt_pad_deg=1.0,
-        roll_deg=0.0,
-    )
-
-    handed = tl.handoff(record, target_distance_m=2.2, distance_basis="test")
-
-    assert handed["yaw_deg"] == pytest.approx(record["yaw_deg"], abs=1e-4)
-    assert handed["total_uncertainty_deg"] == pytest.approx(
-        handed["uncertainty"]["total_deg"], abs=1e-3
-    )
-    assert handed["source"] == "aim_point"
-
-
-def test_a_skipped_aim_point_hands_over_the_boresight_frame_labelled():
-    handed = tl.handoff(tl.skipped_record(), target_distance_m=None, distance_basis=None)
-
-    assert handed["status"] == "skipped"
-    assert handed["kiosk_offset_deg"] is None
-    assert "boresight" in handed["reason"]
-
-
-def test_a_camera_that_applies_the_roll_carries_only_its_residual():
-    from dataclasses import replace  # noqa: PLC0415
-
-    from openflight.camera import camera_roll  # noqa: PLC0415
-
-    zeroed = {"verified": True, "zero_deg": 0.0, "residual_deg": 0.3, "applied": True}
-    camera = replace(_camera(), roll=camera_roll.roll_record(-2.9, 0.0, zeroed))
-    aim = _pixel(camera, _target(BALL, 3.0, 2000.0, 0.3))
-
-    record = tl.target_line_record(camera, BALL, aim, tilt_pad_deg=4.0, roll_deg=0.0)
-
-    assert record["uncertainty"]["roll_applied"] is True
-    assert record["uncertainty"]["roll_pad_deg"] == pytest.approx(0.3)

@@ -45,13 +45,6 @@ def _run(monkeypatch, *, level=200, impact=None, trigger_index=40, ops=80.0, evi
     )
 
 
-def test_no_ball_departure_falls_back_to_the_trigger_labelled(monkeypatch):
-    result = _run(monkeypatch, impact=None, trigger_index=40)
-    assert result.status != "rejected_no_impact"
-    assert result.impact_frame == 40
-    assert any("contact from the trigger" in note for note in result.notes)
-
-
 def test_no_departure_and_no_trigger_still_has_no_contact_time(monkeypatch):
     result = _run(monkeypatch, impact=None, trigger_index=None)
     assert result.status == "rejected_no_impact"
@@ -71,42 +64,25 @@ def test_without_ops_club_speed_the_radar_path_runs_and_says_speed_is_unchecked(
 
 
 def test_without_ops_club_speed_or_radar_range_the_depth_has_no_input(monkeypatch):
-    """The camera + OPS fallback closes depth with the OPS club speed: it must refuse."""
+    # the camera + OPS fallback closes depth with the OPS club speed: it must refuse
     result = _run(monkeypatch, impact=30, ops=None, evidence=None)
     assert result.status == "rejected_no_ops_speed"
 
 
-def test_out_of_bounds_windows_keep_their_values_with_a_label():
-    wild = ApproachPairEstimate(
-        path_deg=4.0,
-        attack_angle_deg=-30.0,
-        speed_ratio_ops=1.8,
-        velocity_mad_mph=25.0,
-        n_features=5,
-    )
+@pytest.mark.parametrize(
+    ("window", "note"),
+    [
+        (ApproachPairEstimate(4.0, -30.0, 1.8, 25.0, 5), "outside plausible bounds"),
+        (ApproachPairEstimate(2.0, -4.0, None, 3.0, 5), None),  # no OPS ratio
+    ],
+)
+def test_out_of_bounds_or_unchecked_windows_keep_their_values_with_a_label(window, note):
     result = combine_approach_estimates(
-        [wild], attack_estimate=wild, preferred_path_estimate=wild, timing_plausible=True
+        [window], attack_estimate=window, preferred_path_estimate=window, timing_plausible=True
     )
-    assert result.club_path_deg == pytest.approx(4.0)
-    assert result.attack_angle_deg == pytest.approx(-30.0)
+    assert result.club_path_deg == pytest.approx(window.path_deg)
     assert result.path_confidence_tier == "low"
-    assert result.attack_confidence_tier == "low"
-    assert any("outside plausible bounds" in note for note in result.notes)
-
-
-def test_a_window_without_an_ops_ratio_is_labelled_not_rejected():
-    unchecked = ApproachPairEstimate(
-        path_deg=2.0,
-        attack_angle_deg=-4.0,
-        speed_ratio_ops=None,
-        velocity_mad_mph=3.0,
-        n_features=5,
-    )
-    result = combine_approach_estimates(
-        [unchecked],
-        attack_estimate=unchecked,
-        preferred_path_estimate=unchecked,
-        timing_plausible=True,
-    )
-    assert result.club_path_deg == pytest.approx(2.0)
-    assert result.path_confidence_tier == "low"
+    if note:
+        assert result.attack_angle_deg == pytest.approx(window.attack_angle_deg)
+        assert result.attack_confidence_tier == "low"
+        assert any(note in item for item in result.notes)

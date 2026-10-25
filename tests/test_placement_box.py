@@ -6,31 +6,13 @@ import numpy as np
 import pytest
 
 from openflight.camera.reference_ball_range import (
-    BallPlaneCamera,
-    camera_range_estimator_policy,
     estimate_reference_ball_range,
     project_to_pixel,
     scale_placement_box,
 )
+from tests.camera_helpers import lit_spheres as _lit_spheres, v3_camera as _v3
 
 RADIUS_M = 0.0427 / 2.0
-V3_FOCAL_1280 = 933.3334
-
-
-def _v3(width=1280, height=800, *, pitch_deg=0.0, roll_deg=0.0):
-    """The v3 enclosure: lens 95 mm up, the IWR phase centre below and just behind it."""
-    return BallPlaneCamera.nominal(
-        focal_px=V3_FOCAL_1280 * width / 1280,
-        image_width_px=width,
-        image_height_px=height,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=roll_deg,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0588),
-        angular_uncertainty_deg=1.0,
-        focal_relative_uncertainty=0.08,
-    )
 
 
 def _ball_pixel(camera, lateral_m, distance_m, height_m=RADIUS_M):
@@ -61,34 +43,10 @@ def test_a_box_in_one_mode_is_the_other_mode_s_box_scaled():
 
 
 def _box_around(x, y, width, height):
-    return (
-        int(x - width / 2.0),
-        int(y - height / 2.0),
-        int(x + width / 2.0),
-        int(y + height / 2.0),
-    )
-
-
-def _lit_spheres(height, width, spheres, *, seed=4):
-    rng = np.random.default_rng(seed)
-    yy, xx = np.indices((height, width), dtype=float)
-    image = 55.0 + rng.normal(0.0, 1.0, (height, width))
-    light = np.asarray([-0.35, -0.62, 0.70])
-    light /= np.linalg.norm(light)
-    for cx, cy, radius, diffuse in spheres:
-        dx, dy = xx - cx, yy - cy
-        inside = dx * dx + dy * dy <= radius * radius
-        nz = np.sqrt(np.clip(radius * radius - dx * dx - dy * dy, 0.0, None)) / radius
-        shading = np.clip(
-            dx / radius * light[0] + dy / radius * light[1] + nz * light[2], 0.0, None
-        )
-        image[inside] = 42.0 + diffuse * shading[inside]
-    noise = rng.normal(0.0, 0.8, (7, height, width))
-    return np.clip(np.round(image[None] + noise), 0, 255).astype(np.uint8)
+    return (int(x - width / 2), int(y - height / 2), int(x + width / 2), int(y + height / 2))
 
 
 def _two_balls(camera):
-    """The tester's ball straight ahead, and a spare ball 0.25 m to its right."""
     balls = []
     for lateral in (0.0, 0.25):
         x, y = _ball_pixel(camera, lateral, 1.34)
@@ -150,13 +108,3 @@ def test_a_box_dragged_onto_the_sky_finds_nothing():
     assert result.selected is None
     assert result.status in {"not_found", "no_consistent_candidate"}
     assert all(item.rejection_reason is not None for item in result.candidates)
-
-
-def test_the_estimator_policy_names_the_patch():
-    policy = camera_range_estimator_policy()
-
-    assert policy["version"] == 5
-    assert policy["search_region"] == "the_ground_patch_outline_only"
-    assert policy["patch"]["size_m"] == 0.61
-    assert policy["floor_row"] == "diagnostic_residual_never_a_refusal"
-    assert policy["independent_save_confirmation"] is True

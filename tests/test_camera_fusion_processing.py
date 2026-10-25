@@ -63,10 +63,27 @@ def _archive():
     }
 
 
+def _record_range_evidence(monkeypatch):
+    seen = {}
+
+    def ball_estimator(*_args, range_evidence, **_kwargs):
+        seen["ball"] = range_evidence
+        return CameraBallEstimate(status="ok")
+
+    def club_estimator(*_args, range_evidence, **_kwargs):
+        seen["club"] = range_evidence
+        return ChainedDelivery(status="ok")
+
+    monkeypatch.setattr(fp, "estimate_camera_ball_flight", ball_estimator)
+    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    return seen
+
+
 def test_context_is_hashed_serializable_and_tamper_evident():
     context = _context()
     result = fp.process_camera_fusion(context, _archive())
     assert result["context_sha256"] == context["sha256"]
+    assert result["notes"] == []  # eligible lighting carries no notes
     changed = {**context, "ops_ball_speed_mph": 101.0}
     with pytest.raises(ValueError, match="fingerprint"):
         fp.process_camera_fusion(changed, _archive())
@@ -114,62 +131,52 @@ def test_real_range_evidence_is_strict_json_and_round_trips(monkeypatch):
         frame_period_s=np.float64(0.01),
         trigger_frame=1,
     )
-    evidence = BallRangeEvidence(track, geometry, np.float64(0.02))
+    numpy_scalars = {
+        name: np.float64(_context_kwargs()[name])
+        for name in (
+            "ops_ball_speed_mph",
+            "ops_club_speed_mph",
+            "iwr_vertical_deg",
+            "iwr_horizontal_deg",
+            "iwr_horizontal_confidence",
+        )
+    }
     context = fp.build_context(
-        geometry=_geometry(),
-        lighting_eligible=True,
-        ball_range_evidence=evidence,
-        club_range_evidence=ClubRangeEvidence(track, geometry, np.float64(0.02)),
-        ops_ball_speed_mph=np.float64(100),
-        ops_club_speed_mph=np.float64(75),
-        iwr_vertical_deg=np.float64(18),
-        iwr_horizontal_deg=np.float64(1),
-        iwr_horizontal_confidence=np.float64(0.8),
-        club=ClubType.IRON_7,
-        capture_npz_sha256="capture-hash",
-        session_uuid="session-a",
-        shot_number=3,
+        **{
+            **_context_kwargs(),
+            **numpy_scalars,
+            "ball_range_evidence": BallRangeEvidence(track, geometry, np.float64(0.02)),
+            "club_range_evidence": ClubRangeEvidence(track, geometry, np.float64(0.02)),
+        }
     )
     json.dumps(context, allow_nan=False)
-    seen = {}
-
-    def ball_estimator(*_args, range_evidence, **_kwargs):
-        seen["ball"] = range_evidence
-        return CameraBallEstimate(status="ok")
-
-    def club_estimator(*_args, range_evidence, **_kwargs):
-        seen["club"] = range_evidence
-        return ChainedDelivery(status="ok")
-
-    monkeypatch.setattr(fp, "estimate_camera_ball_flight", ball_estimator)
-    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    seen = _record_range_evidence(monkeypatch)
     result = fp.process_camera_fusion(context, _archive())
     json.dumps(result, allow_nan=False)
     assert seen["ball"].track.speed_ms == 45.0
     assert seen["club"].geometry.n_samples == 64
 
 
-def test_malformed_club_trigger_does_not_discard_ball_result(monkeypatch):
+@pytest.mark.parametrize(
+    ("pre_trigger_count", "why"),
+    [("bad", "ValueError"), (np.asarray(0, dtype=np.int64), "outside")],
+)
+def test_a_bad_club_trigger_is_isolated_to_the_club_stage(monkeypatch, pre_trigger_count, why):
     monkeypatch.setattr(
         fp,
         "estimate_camera_ball_flight",
         lambda *_a, **_k: CameraBallEstimate(status="ok", horizontal_deg=2.5),
     )
-    archive = {**_archive(), "pre_trigger_count": "bad"}
+    archive = {**_archive(), "pre_trigger_count": pre_trigger_count}
     result = fp.process_camera_fusion(_context(), archive)
     assert result["ball_estimate"]["status"] == "ok"
     assert result["club_delivery"]["status"] == "error"
-    assert "ValueError" in result["errors"]["club"]
+    assert why in result["errors"]["club"]
 
 
 def test_ball_detector_anchor_is_shared_with_club_stage(monkeypatch):
     diagnostics = {
-        "selected_candidate": {
-            "x": 3.0,
-            "y": 4.0,
-            "diameter_px": 12.0,
-            "area_px": 100,
-        },
+        "selected_candidate": {"x": 3.0, "y": 4.0, "diameter_px": 12.0, "area_px": 100},
         "selected_source": "detector_agreement:detected",
     }
     monkeypatch.setattr(
@@ -210,55 +217,21 @@ def test_archive_contract_rejects_malformed_inputs(change, message):
         fp.process_camera_fusion(_context(), {**_archive(), **change})
 
 
-def test_out_of_range_pre_trigger_count_is_isolated_to_club_stage(monkeypatch):
-    monkeypatch.setattr(
-        fp,
-        "estimate_camera_ball_flight",
-        lambda *_a, **_k: CameraBallEstimate(status="ok"),
-    )
-    result = fp.process_camera_fusion(
-        _context(), {**_archive(), "pre_trigger_count": np.asarray(0, dtype=np.int64)}
-    )
-    assert result["ball_estimate"]["status"] == "ok"
-    assert result["club_delivery"]["status"] == "error"
-    assert "outside" in result["errors"]["club"]
-
-
 def test_range_evidence_status_rides_in_the_frozen_context(monkeypatch):
-    """A rejected track keeps its evidence for replay, with its status."""
     track = BallTrack(45.0, -2.0, 40.0, 0.2, 8, 0.01, 0.04, False)
     geometry = Geometry(4, 8, 2, 4, 64, 0.01, 1)
     context = fp.build_context(
-        geometry=_geometry(),
-        lighting_eligible=True,
-        ball_range_evidence=BallRangeEvidence(
-            track, geometry, 0.02, status="rejected_track_quality"
-        ),
-        club_range_evidence=ClubRangeEvidence(
-            track, geometry, 0.02, status="rejected_club_speed_mismatch"
-        ),
-        ops_ball_speed_mph=100.0,
-        ops_club_speed_mph=75.0,
-        iwr_vertical_deg=None,
-        iwr_horizontal_deg=None,
-        iwr_horizontal_confidence=None,
-        club=ClubType.IRON_7,
-        capture_npz_sha256="capture-hash",
-        session_uuid="session-a",
-        shot_number=3,
+        **{
+            **_context_kwargs(),
+            "ball_range_evidence": BallRangeEvidence(
+                track, geometry, 0.02, status="rejected_track_quality"
+            ),
+            "club_range_evidence": ClubRangeEvidence(
+                track, geometry, 0.02, status="rejected_club_speed_mismatch"
+            ),
+        }
     )
-    seen = {}
-
-    def ball_estimator(*_args, range_evidence, **_kwargs):
-        seen["ball"] = range_evidence
-        return CameraBallEstimate(status="ok")
-
-    def club_estimator(*_args, range_evidence, **_kwargs):
-        seen["club"] = range_evidence
-        return ChainedDelivery(status="ok")
-
-    monkeypatch.setattr(fp, "estimate_camera_ball_flight", ball_estimator)
-    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    seen = _record_range_evidence(monkeypatch)
     fp.process_camera_fusion(context, _archive())
 
     assert context["ball_range_evidence"]["status"] == "rejected_track_quality"
@@ -276,7 +249,6 @@ def test_context_recorded_before_range_status_replays_as_accepted(monkeypatch):
 
 
 def test_ineligible_lighting_is_a_note_and_both_stages_still_run(monkeypatch):
-    """The capture-time lighting verdict labels the result; it never blocks."""
     ran = []
     monkeypatch.setattr(
         fp,
@@ -320,12 +292,7 @@ def test_a_context_recorded_before_notes_names_its_ineligible_lighting(monkeypat
     assert result["notes"] == ["lighting: capture-time lighting was not analysis eligible"]
 
 
-def test_eligible_lighting_carries_no_notes():
-    assert fp.process_camera_fusion(_context(), _archive())["notes"] == []
-
-
 def test_the_setup_ball_rides_in_the_context_to_the_ball_gate(monkeypatch):
-    """The setup's ball, not fixed fractions, is the resting-ball gate."""
     seen = {}
     monkeypatch.setattr(
         fp,

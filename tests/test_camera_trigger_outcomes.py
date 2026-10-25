@@ -93,37 +93,20 @@ class _SessionLog:
         self.captures.append(entry)
 
 
+FAILED_SAVE = SimpleNamespace(
+    trigger_timestamp=100.0, path=None, metadata={}, error="disk full", valid=False, sequence=1
+)
+
+
 @pytest.mark.parametrize(
     ("capture", "rejection", "error"),
     [
-        (
-            None,
-            {"reason": "save_backlog_full", "trigger_timestamp": 100.0},
-            "camera_trigger_rejected:save_backlog_full",
-        ),
-        (
-            None,
-            {"reason": "ring_busy", "trigger_timestamp": 100.0},
-            "camera_trigger_rejected:ring_busy",
-        ),
-        (
-            None,
-            {"reason": "camera_stopped", "trigger_timestamp": 100.0},
-            "camera_trigger_rejected:camera_stopped",
+        *(
+            (None, {"reason": why, "trigger_timestamp": 100.0}, f"camera_trigger_rejected:{why}")
+            for why in ("save_backlog_full", "ring_busy", "camera_stopped")
         ),
         (None, None, "no_matching_camera_capture"),
-        (
-            SimpleNamespace(
-                trigger_timestamp=100.0,
-                path=None,
-                metadata={},
-                error="disk full",
-                valid=False,
-                sequence=1,
-            ),
-            None,
-            "camera_save_failed: disk full",
-        ),
+        (FAILED_SAVE, None, "camera_save_failed: disk full"),
     ],
 )
 def test_the_session_log_names_why_a_shot_has_no_clip(monkeypatch, capture, rejection, error):

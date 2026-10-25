@@ -667,6 +667,7 @@
   "src/openflight/unit_check.py": "TESTER",
   "tests/__init__.py": "PRODUCT",
   "tests/ble_harness.py": "PRODUCT",
+  "tests/camera_helpers.py": "FUSION",
   "tests/conftest.py": "PRODUCT",
   "tests/every_metric.py": "FUSION",
   "tests/fixtures/ball_departure/outdoors-test-5-dusk.npz": "RESEARCH",

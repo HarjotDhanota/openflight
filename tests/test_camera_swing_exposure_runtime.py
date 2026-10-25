@@ -1,8 +1,4 @@
-"""The capture runtime's swing exposure: the resting ball meters, before every swing.
-
-The runtime reads the sensor's limits at configure, seeds from the setup's light
-index, then re-checks the resting ball between clips for the next swing.
-"""
+"""The capture runtime's swing exposure: the resting ball meters, before every swing."""
 
 import json
 import threading
@@ -126,22 +122,7 @@ def test_a_camera_without_exposure_limits_holds_its_controls_and_says_so(tmp_pat
     assert "limits" in status["message"]
 
 
-def test_the_setup_light_index_seeds_the_first_setting(tmp_path):
-    runtime = _runtime(tmp_path, light_index_dn_per_us_gain=0.1)
-
-    runtime._seed_swing_exposure()
-
-    expected = sx.choose_setting(0.1, 0.1, runtime._swing_policy.envelope).setting
-    assert (runtime.settings.exposure_us, runtime.settings.gain) == (
-        expected.exposure_us,
-        expected.gain,
-    )
-    status = runtime.auto_exposure_status()
-    assert status["status"] == "seeded"
-    assert status["reason"] == "setup_light_index"
-
-
-def test_640x400_seeds_from_twice_the_setup_light(tmp_path):
+def test_the_setup_light_index_seeds_the_first_setting_and_640x400_doubles_it(tmp_path):
     full = _runtime(tmp_path / "a", light_index_dn_per_us_gain=0.1)
     half = _runtime(
         tmp_path / "b", width=640, height=400, fps=288.0, light_index_dn_per_us_gain=0.1
@@ -150,6 +131,10 @@ def test_640x400_seeds_from_twice_the_setup_light(tmp_path):
     full._seed_swing_exposure()
     half._seed_swing_exposure()
 
+    expected = sx.choose_setting(0.1, 0.1, full._swing_policy.envelope).setting
+    assert (full.settings.exposure_us, full.settings.gain) == (expected.exposure_us, expected.gain)
+    status = full.auto_exposure_status()
+    assert (status["status"], status["reason"]) == ("seeded", "setup_light_index")
     product_full = full.settings.exposure_us * full.settings.gain
     product_half = half.settings.exposure_us * half.settings.gain
     assert product_half == pytest.approx(product_full / 2.0, rel=0.03)
@@ -158,9 +143,7 @@ def test_640x400_seeds_from_twice_the_setup_light(tmp_path):
 
 def test_without_a_light_index_a_seed_past_the_ceiling_moves_inside_it(tmp_path):
     runtime = _runtime(tmp_path, exposure_us=1000, gain=4.0)
-
     runtime._seed_swing_exposure()
-
     assert (runtime.settings.exposure_us, runtime.settings.gain) == (294, 13.61)
 
 
@@ -220,60 +203,44 @@ def test_a_recheck_before_each_swing_changes_the_next_shot_s_controls(tmp_path):
     assert second_shot["exposure_us"] == decision.target.exposure_us
 
 
-def test_too_bright_at_the_floor_labels_the_shot_and_never_blocks(tmp_path):
-    runtime = _runtime(tmp_path, exposure_us=9, gain=1.0)
-    _add_frames(runtime, 240)
+@pytest.mark.parametrize(
+    ("exposure_us", "gain", "signal", "status", "label"),
+    [
+        (9, 1.0, 240, "too_bright", sx.TOO_BRIGHT_LABEL),
+        (294, CAP, 5, "too_dark", sx.TOO_DARK_LABEL),
+    ],
+)
+def test_out_of_range_light_labels_the_shot_and_never_blocks(
+    tmp_path, exposure_us, gain, signal, status, label
+):
+    runtime = _runtime(tmp_path, exposure_us=exposure_us, gain=gain)
+    _add_frames(runtime, signal)
 
-    decision = runtime._run_auto_exposure_cycle()
-
-    assert decision.status == "too_bright"
+    assert runtime._run_auto_exposure_cycle().status == status
     assert runtime._camera.controls == []
-    status = runtime.auto_exposure_status()
-    assert status["analysis_eligible"] is False
-    assert status["frame_label"] == sx.TOO_BRIGHT_LABEL
-    assert status["analysis_eligibility"]["reason"] == sx.TOO_BRIGHT_LABEL
+    payload = runtime.auto_exposure_status()
+    assert payload["analysis_eligible"] is False
+    assert payload["frame_label"] == label
+    assert payload["analysis_eligibility"]["reason"] == label
 
 
-def test_too_dark_at_the_ceiling_labels_the_shot(tmp_path):
-    runtime = _runtime(tmp_path, exposure_us=294, gain=CAP)
-    _add_frames(runtime, 5)
-
-    decision = runtime._run_auto_exposure_cycle()
-
-    assert decision.status == "too_dark"
-    assert runtime.auto_exposure_status()["frame_label"] == sx.TOO_DARK_LABEL
-
-
-def test_no_ball_holds_the_setting_and_says_why(tmp_path):
+@pytest.mark.parametrize(
+    ("look", "age_s", "why"),
+    [
+        ({"state": "not_seen", "reason": "no ball in the box"}, 0.0, "no ball in the box"),
+        ({"state": "in_box", "center_px": [BALL[0], BALL[1]], "diameter_px": BALL[2]}, 60.0, "old"),
+    ],
+)
+def test_no_ball_or_a_stale_look_holds_the_setting_and_says_why(tmp_path, look, age_s, why):
     runtime = _runtime(tmp_path, locator=False)
-    runtime.set_resting_ball_locator(
-        lambda: {"state": "not_seen", "reason": "no ball in the box", "observed_at": time.time()}
-    )
+    runtime.set_resting_ball_locator(lambda: {**look, "observed_at": time.time() - age_s})
     _add_frames(runtime, 53)
 
     decision = runtime._run_auto_exposure_cycle()
 
     assert decision.status == "holding_no_ball"
-    assert "no ball in the box" in decision.message
+    assert why in decision.message
     assert runtime._camera.controls == []
-
-
-def test_a_stale_look_is_not_a_ball(tmp_path):
-    runtime = _runtime(tmp_path, locator=False)
-    runtime.set_resting_ball_locator(
-        lambda: {
-            "state": "in_box",
-            "center_px": [BALL[0], BALL[1]],
-            "diameter_px": BALL[2],
-            "observed_at": time.time() - 60.0,
-        }
-    )
-    _add_frames(runtime, 53)
-
-    decision = runtime._run_auto_exposure_cycle()
-
-    assert decision.status == "holding_no_ball"
-    assert "old" in decision.message
 
 
 def test_without_a_box_the_setup_ball_spot_is_checked(tmp_path, monkeypatch):
@@ -331,12 +298,14 @@ def test_the_armed_profile_caps_the_policy(tmp_path):
     assert runtime.settings.gain <= 8.0
 
 
-def test_each_decision_is_kept_with_its_inputs(tmp_path):
+def test_each_decision_is_kept_with_its_inputs_but_a_clip_keeps_only_its_own(tmp_path):
     runtime = _runtime(tmp_path)
     _add_frames(runtime, 53)
     runtime._run_auto_exposure_cycle()
     _add_frames(runtime, _light_at(runtime, 53 / 3600.0))
     runtime._run_auto_exposure_cycle()
+    assert runtime.notify_trigger()
+    recorded = runtime._trigger_auto_exposure.get_nowait()
 
     decisions = runtime.auto_exposure_status()["recent_decisions"]
 
@@ -344,6 +313,9 @@ def test_each_decision_is_kept_with_its_inputs(tmp_path):
     assert decisions[0]["reading"]["exposure_us"] == 300
     assert decisions[0]["target"] == {"exposure_us": 294, "gain": CAP}
     assert decisions[0]["light_index"]["peak"] > 0
+    assert recorded["recent_decisions"] is None
+    assert recorded["status"] == "ball_driven"
+    assert recorded["exposure_us"] == 294
 
 
 def test_the_loop_keeps_checking_after_the_first_decision(tmp_path, monkeypatch):
@@ -397,32 +369,6 @@ def test_a_trigger_waits_for_a_control_change_in_progress(tmp_path):
     assert trigger_state["exposure_us"] == runtime.settings.exposure_us == 294
 
 
-def test_manual_controls_are_not_labelled_by_the_policy(tmp_path):
-    runtime = _runtime(tmp_path, auto_exposure=False)
-    _add_frames(runtime, 53)
-
-    status = runtime.auto_exposure_status()
-
-    assert status["status"] == "manual"
-    assert "analysis_eligibility" not in status
-    assert "frame_label" not in status
-
-
-def test_a_clip_keeps_its_own_decision_not_the_log(tmp_path):
-    runtime = _runtime(tmp_path)
-    _add_frames(runtime, 53)
-    runtime._run_auto_exposure_cycle()
-    _add_frames(runtime, _light_at(runtime, 53 / 3600.0))
-
-    assert runtime.notify_trigger()
-    recorded = runtime._trigger_auto_exposure.get_nowait()
-
-    assert recorded["recent_decisions"] is None
-    assert recorded["status"] == "ball_driven"
-    assert recorded["exposure_us"] == 294
-    assert runtime.auto_exposure_status()["recent_decisions"]
-
-
 def _not_seen(box=(40, 40, 80, 80)):
     return lambda: {
         "state": "not_seen",
@@ -437,17 +383,25 @@ def _look_cycle(runtime, signal=5):
     return runtime._run_auto_exposure_cycle()
 
 
-def test_three_looks_without_a_ball_start_a_sweep_inside_the_envelope(tmp_path):
-    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
+def _sweeping(tmp_path, **overrides):
+    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0, **overrides)
     runtime.set_resting_ball_locator(_not_seen())
+    return runtime, [_look_cycle(runtime) for _ in range(3)]
 
-    first = _look_cycle(runtime)
-    second = _look_cycle(runtime)
-    third = _look_cycle(runtime)
+
+def _fail_sweep(runtime):
+    for _ in range(40):
+        decision = _look_cycle(runtime)
+        if decision is not None and decision.reason == "no_ball_searched":
+            return decision
+    raise AssertionError("the sweep never ended")
+
+
+def test_three_looks_without_a_ball_start_a_sweep_inside_the_envelope(tmp_path):
+    runtime, (first, second, third) = _sweeping(tmp_path)
 
     assert first.status == second.status == "holding_no_ball"
     assert third.status == "searching_for_ball"
-    assert runtime._camera.controls  # the sweep moved the controls
     applied = runtime._camera.controls[-1]
     envelope = runtime._swing_policy.envelope
     assert envelope.ladder[0] <= applied["ExposureTime"] <= envelope.exposure_ceiling_us
@@ -455,61 +409,44 @@ def test_three_looks_without_a_ball_start_a_sweep_inside_the_envelope(tmp_path):
     assert runtime.auto_exposure_status()["status"] == "searching_for_ball"
 
 
-def test_a_clip_in_progress_pauses_the_sweep(tmp_path):
-    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
-    runtime.set_resting_ball_locator(_not_seen())
-    for _ in range(3):
-        _look_cycle(runtime)
+def test_a_clip_in_progress_or_a_stale_look_pauses_the_sweep(tmp_path):
+    runtime, _looks = _sweeping(tmp_path)
     step = runtime._swing_policy._sweep_index
     controls = list(runtime._camera.controls)
     _add_frames(runtime, 5)
     assert runtime._ring.trigger()
 
-    paused = runtime._run_auto_exposure_cycle()
-
-    assert paused is None
+    assert runtime._run_auto_exposure_cycle() is None
     assert runtime._camera.controls == controls
     assert runtime._swing_policy._sweep_index == step
     assert runtime.auto_exposure_status()["capture_deferred"] is True
 
-
-def test_a_look_from_before_the_last_change_is_not_judged(tmp_path):
-    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
-    runtime.set_resting_ball_locator(_not_seen())
-    for _ in range(3):
-        _look_cycle(runtime)
+    runtime, _looks = _sweeping(tmp_path / "stale")
     step = runtime._swing_policy._sweep_index
     old = time.time() - 0.5
     runtime.set_resting_ball_locator(
         lambda: {"state": "not_seen", "reason": "no ball in the box", "observed_at": old}
     )
-
-    stale = _look_cycle(runtime)
-
-    assert stale is None
+    assert _look_cycle(runtime) is None
     assert runtime._swing_policy._sweep_index == step
 
 
-def test_a_moved_box_restarts_the_search_after_a_failed_sweep(tmp_path):
-    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
-    runtime.set_resting_ball_locator(_not_seen())
-    decision = None
-    for _ in range(40):
-        decision = _look_cycle(runtime)
-        if decision is not None and decision.reason == "no_ball_searched":
-            break
-    assert decision.reason == "no_ball_searched"
-    assert sx.NO_BALL_FOUND_MESSAGE in decision.message
+def test_a_moved_box_or_a_new_light_index_restarts_the_search_after_a_failed_sweep(tmp_path):
+    runtime, _looks = _sweeping(tmp_path)
+    assert sx.NO_BALL_FOUND_MESSAGE in _fail_sweep(runtime).message
     cooling = _look_cycle(runtime)
     assert cooling.reason == "no_ball_searched" and cooling.target is None
 
     runtime.set_resting_ball_locator(_not_seen(box=(50, 50, 90, 90)))
-    restarted = _look_cycle(runtime)
+    assert _look_cycle(runtime).status == "searching_for_ball"
 
-    assert restarted.status == "searching_for_ball"
+    runtime, _looks = _sweeping(tmp_path / "light")
+    _fail_sweep(runtime)
+    runtime.restart_ball_search("the setup measured a new light index")
+    assert _look_cycle(runtime).status == "searching_for_ball"
 
 
-def test_manual_exposure_never_sweeps(tmp_path):
+def test_manual_exposure_is_never_labelled_and_never_sweeps(tmp_path):
     runtime = _runtime(tmp_path, locator=False, auto_exposure=False, exposure_us=104, gain=8.0)
     runtime.set_resting_ball_locator(_not_seen())
 
@@ -517,25 +454,13 @@ def test_manual_exposure_never_sweeps(tmp_path):
         assert _look_cycle(runtime) is None
 
     assert runtime._camera.controls == []
-
-
-def test_a_new_light_index_restarts_the_search_past_the_cool_down(tmp_path):
-    runtime = _runtime(tmp_path, locator=False, exposure_us=104, gain=8.0)
-    runtime.set_resting_ball_locator(_not_seen())
-    for _ in range(40):
-        decision = _look_cycle(runtime)
-        if decision is not None and decision.reason == "no_ball_searched":
-            break
-
-    runtime.restart_ball_search("the setup measured a new light index")
-    restarted = _look_cycle(runtime)
-
-    assert restarted.status == "searching_for_ball"
+    status = runtime.auto_exposure_status()
+    assert status["status"] == "manual"
+    assert "analysis_eligibility" not in status
+    assert "frame_label" not in status
 
 
 class _StartCamera(FakeCamera):
-    """A Picamera2 stand-in that records the order of configure, controls and start."""
-
     calls: list = []
 
     def __init__(self):
@@ -594,7 +519,6 @@ def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, mon
         names = [name for name, _value in _StartCamera.calls]
         seeded = runtime.settings.exposure_us
         assert seeded > 8
-        # the seed reaches the sensor before streaming starts: no frame at 8 us x 1
         assert names.index("set_controls") < names.index("start")
         assert ("set_controls", seeded) in _StartCamera.calls
     finally:

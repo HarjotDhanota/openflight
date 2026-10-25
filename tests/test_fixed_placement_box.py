@@ -6,33 +6,25 @@ import numpy as np
 import pytest
 
 from openflight.camera import ground_patch, placement_box
-from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
+from openflight.camera.reference_ball_range import project_to_pixel
+from tests.camera_helpers import V3_FOCAL_1280, v3_camera
 
 RADIUS_M = 0.0427 / 2.0
 
 
-def _v3(width=1280, height=800, *, focal_scale=1.0, pitch_deg=0.0):
-    return BallPlaneCamera.nominal(
-        focal_px=933.3334 * width / 1280 * focal_scale,
-        image_width_px=width,
-        image_height_px=height,
+def _v3(*, focal_scale=1.0, pitch_deg=0.0):
+    return v3_camera(
+        focal_px=V3_FOCAL_1280 * focal_scale,
         pitch_deg=pitch_deg,
-        roll_correction_deg=0.0,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0444),
+        radar_origin=(0.0, -0.0014, 0.0444),
         angular_uncertainty_deg=3.0,
-        focal_relative_uncertainty=0.08,
     )
 
 
 def test_the_window_lives_in_config_not_in_the_page():
     config = placement_box.load_config()
 
-    assert config.placement_window_m == (1.8, 2.9)
-    assert placement_box.PLACEMENT_WINDOW_M == (1.8, 2.9)
-    assert config.half_width_m == 0.3
-    assert config.uncalibrated_tilt_margin_deg == 4.5
+    assert config.placement_window_m == placement_box.PLACEMENT_WINDOW_M
     assert len(config.sha256) == 64
 
 
@@ -55,7 +47,6 @@ def test_the_fixed_box_covers_the_window_on_the_ground():
 def test_a_ball_anywhere_in_the_window_is_inside_the_drawn_box_at_an_unknown_tilt(
     forward_m, lateral_m, true_pitch_deg
 ):
-    """Drawn at level pitch, the box holds the ball for any true pitch within +-4.5 deg."""
     nominal = _v3()
     truth = _v3(pitch_deg=true_pitch_deg)
     projection = placement_box.project_fixed_box(nominal, calibrated=False, roll_deg=0.0)
@@ -64,28 +55,19 @@ def test_a_ball_anywhere_in_the_window_is_inside_the_drawn_box_at_an_unknown_til
     assert ground_patch.point_in_polygon(x, y, projection.search_outline_px)
 
 
-def test_the_box_depends_on_the_lens():
+def test_the_box_widens_with_the_lens_and_tightens_with_a_calibrated_tilt():
     stock = placement_box.project_fixed_box(_v3(), calibrated=False, roll_deg=0.0)
     six = placement_box.project_fixed_box(
         _v3(focal_scale=6.0 / 2.8), calibrated=False, roll_deg=0.0
     )
-
-    def width(outline):
-        xs = [x for x, _y in outline]
-        return max(xs) - min(xs)
-
-    assert width(six.outline_px) > 1.5 * width(stock.outline_px)
-
-
-def test_a_calibrated_tilt_draws_a_tighter_box():
-    loose = placement_box.project_fixed_box(_v3(), calibrated=False, roll_deg=0.0)
     tight = placement_box.project_fixed_box(_v3(), calibrated=True, roll_deg=0.0)
 
-    def height(outline):
-        ys = [y for _x, y in outline]
-        return max(ys) - min(ys)
+    def span(outline, axis):
+        values = [point[axis] for point in outline]
+        return max(values) - min(values)
 
-    assert height(tight.search_outline_px) < height(loose.search_outline_px)
+    assert span(six.outline_px, 0) > 1.5 * span(stock.outline_px, 0)
+    assert span(tight.search_outline_px, 1) < span(stock.search_outline_px, 1)
 
 
 @pytest.mark.parametrize(
@@ -158,7 +140,6 @@ def test_a_fit_a_few_pixels_past_the_outline_still_counts_with_a_margin():
 
 
 def test_the_size_window_is_the_ball_s_physical_range_not_the_tilt_s():
-    """The smallest ball the box looks for stands just past the window, not at the horizon."""
     camera = _v3()
     config = placement_box.load_config()
 

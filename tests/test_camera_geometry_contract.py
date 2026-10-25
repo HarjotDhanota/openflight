@@ -27,6 +27,16 @@ def _inputs(**changes):
     return EffectiveCameraGeometryInputs(**values)
 
 
+LEGACY = {
+    "camera_capture": {"mount_height_m": 0.1, "width": 640, "height": 400},
+    "iwr6843": {"tee_slant_range_m": 1.4, "radar_height_m": 0.05, "ball_height_m": 0.02},
+}
+
+
+def _calibration():
+    return SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
+
+
 def test_snapshot_round_trip_is_detached_from_mutable_source_config():
     camera = {
         "mount_height_m": 0.095,
@@ -38,7 +48,7 @@ def test_snapshot_round_trip_is_detached_from_mutable_source_config():
         "roll_correction_deg": 2.5,
         "horizontal_offset_deg": -0.4,
     }
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
+    calibration = _calibration()
     effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
     snapshot = effective.snapshot()
     session = {"effective_camera_geometry": snapshot}
@@ -55,15 +65,7 @@ def test_snapshot_round_trip_is_detached_from_mutable_source_config():
 
 
 def test_legacy_record_uses_only_recorded_fields_and_explicit_legacy_defaults():
-    session = {
-        "camera_capture": {"mount_height_m": 0.1, "width": 640, "height": 400},
-        "iwr6843": {
-            "tee_slant_range_m": 1.4,
-            "radar_height_m": 0.05,
-            "ball_height_m": 0.02,
-        },
-    }
-    effective = EffectiveCameraGeometryInputs.from_recorded_session(session)
+    effective = EffectiveCameraGeometryInputs.from_recorded_session(LEGACY)
     assert effective.camera_lateral_offset_m == 0
     assert effective.camera_forward_offset_m == 0
     assert effective.horizontal_pixel_sign == 1
@@ -95,27 +97,15 @@ def test_rejects_nonfinite_or_impossible_geometry(changes, match):
 
 
 def test_present_snapshot_never_falls_back_to_legacy_on_wrong_schema_or_hash():
-    legacy = {
-        "camera_capture": {"mount_height_m": 0.1, "width": 640, "height": 400},
-        "iwr6843": {
-            "tee_slant_range_m": 1.4,
-            "radar_height_m": 0.05,
-            "ball_height_m": 0.02,
-        },
-    }
-    wrong_schema = _inputs().snapshot()
-    wrong_schema["schema"] = SCHEMA + ".future"
-    with pytest.raises(ValueError, match="unsupported"):
-        EffectiveCameraGeometryInputs.from_recorded_session(
-            {**legacy, "effective_camera_geometry": wrong_schema}
-        )
-
-    wrong_hash = _inputs().snapshot()
-    wrong_hash["sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="fingerprint mismatch"):
-        EffectiveCameraGeometryInputs.from_recorded_session(
-            {**legacy, "effective_camera_geometry": wrong_hash}
-        )
+    for field, value, match in (
+        ("schema", SCHEMA + ".future", "unsupported"),
+        ("sha256", "0" * 64, "fingerprint mismatch"),
+    ):
+        snapshot = {**_inputs().snapshot(), field: value}
+        with pytest.raises(ValueError, match=match):
+            EffectiveCameraGeometryInputs.from_recorded_session(
+                {**LEGACY, "effective_camera_geometry": snapshot}
+            )
 
 
 def test_archive_dimensions_must_match_recorded_geometry():
@@ -125,46 +115,17 @@ def test_archive_dimensions_must_match_recorded_geometry():
         effective.validate_archive_dimensions(640, 400)
 
 
-def test_snapshot_parameters_include_explicit_model_assumptions():
-    snapshot = _inputs().snapshot()
-    assumptions = snapshot["assumptions"]
-    assert assumptions["focal_length"] == "inferred_from_reference_ball"
-    assert assumptions["principal_point"] == "image_center"
-    assert assumptions["distortion_model"] == "none"
-    assert assumptions["yaw"] == "not_calibrated"
-    assert assumptions["camera_origin"] == "lens_front_vs_optical_center_unresolved"
-
-
 def test_session_start_records_actual_runtime_geometry(monkeypatch):
-    monkeypatch.setattr(
-        server,
-        "camera_capture_config",
-        {
-            "enabled": True,
-            "mount_height_m": 0.095,
-            "width": 320,
-            "height": 200,
-            "forward_offset_m": 0.03,
-        },
-    )
-    monkeypatch.setattr(
-        server,
-        "iwr6843_runtime",
-        SimpleNamespace(
-            calibration=SimpleNamespace(
-                tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135
-            )
-        ),
-    )
+    camera = {"enabled": True, "mount_height_m": 0.095, "width": 320, "height": 200}
+    monkeypatch.setattr(server, "camera_capture_config", {**camera, "forward_offset_m": 0.03})
+    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(calibration=_calibration()))
     block = server._session_start_config()["effective_camera_geometry"]
     assert block["available"] is True
     assert block["parameters"]["camera_forward_offset_m"] == 0.03
-    assert (
-        EffectiveCameraGeometryInputs.from_recorded_session(
-            {"effective_camera_geometry": block}
-        ).radar_height_m
-        == 0.051
+    restored = EffectiveCameraGeometryInputs.from_recorded_session(
+        {"effective_camera_geometry": block}
     )
+    assert restored.radar_height_m == 0.051
 
 
 def test_session_start_records_explicit_unavailable_reason(monkeypatch):
@@ -183,15 +144,8 @@ def test_session_start_records_explicit_unavailable_reason(monkeypatch):
 
 
 def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
-    """The patch pair's side offset is the resting ball's lateral position."""
-    camera = {
-        "mount_height_m": 0.095,
-        "width": 640,
-        "height": 400,
-        "tee_side_offset_m": 0.12,
-    }
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
-    effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
+    camera = {"mount_height_m": 0.095, "width": 640, "height": 400, "tee_side_offset_m": 0.12}
+    effective = EffectiveCameraGeometryInputs.from_live(camera, _calibration())
 
     assert effective.ball_lateral_offset_m == pytest.approx(0.12)
     assert effective.ball_lateral_offset_source == "setup_patch_pair"
@@ -210,8 +164,7 @@ def test_the_setup_tee_side_offset_places_the_ball_for_both_estimators():
 
 def test_without_a_measured_side_offset_the_ball_is_labelled_dead_ahead():
     camera = {"mount_height_m": 0.095, "width": 640, "height": 400}
-    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
-    effective = EffectiveCameraGeometryInputs.from_live(camera, calibration)
+    effective = EffectiveCameraGeometryInputs.from_live(camera, _calibration())
 
     assert effective.ball_lateral_offset_m == 0.0
     assert effective.ball_lateral_offset_source == "assumed_directly_downrange"

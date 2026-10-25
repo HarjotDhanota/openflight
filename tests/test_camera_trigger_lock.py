@@ -76,7 +76,7 @@ def test_frames_keep_arriving_while_the_evidence_is_gathered(tmp_path):
 
 
 def test_a_slow_trigger_keeps_its_records_ahead_of_the_next_one(tmp_path):
-    """The save loop pairs the n-th capture with the n-th records, so order must hold."""
+    # the save loop pairs the n-th capture with the n-th records, so order must hold
     entered, release = threading.Event(), threading.Event()
     calls = []
 
@@ -113,17 +113,12 @@ def test_a_refused_trigger_gathers_nothing_and_queues_nothing(tmp_path):
     assert runtime.notify_trigger(10.0) is False
 
     assert calls == []
-    for records in (
-        runtime._trigger_epochs,
-        runtime._trigger_auto_exposure,
-        runtime._trigger_evidence,
-        runtime._trigger_clocks,
-    ):
-        assert records.empty()
+    for name in ("epochs", "auto_exposure", "evidence", "clocks"):
+        assert getattr(runtime, f"_trigger_{name}").empty()
 
 
 def test_the_recorded_controls_are_those_in_force_when_the_ring_froze(tmp_path):
-    """A rung change while the evidence is gathered must not rewrite the trigger's controls."""
+    # a rung change while the evidence is gathered must not rewrite the trigger's controls
     holder = {}
 
     def provider(_timestamp):

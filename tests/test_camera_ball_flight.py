@@ -175,10 +175,10 @@ def test_horizontal_launch_uses_measured_vertical_and_tracked_centroids(monkeypa
     assert result.depth_source == "ops_speed_iwr_vertical"
 
 
-def test_horizontal_launch_reports_with_the_horizontal_offset(monkeypatch):
-    """The unwired comparator uses the same zero model as the kiosk."""
+def _launch(monkeypatch, **synthetic):
+    """``estimate_horizontal_launch`` over a synthetic tracked path, for a given geometry."""
     geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
-        horizontal_offset_deg=1.0
+        **synthetic
     )
     timestamps = np.concatenate(([0], candidate_times))
     frames = np.zeros(
@@ -188,16 +188,25 @@ def test_horizontal_launch_reports_with_the_horizontal_offset(monkeypatch):
     monkeypatch.setattr(ball_flight_module, "detect_impact_frame", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(ball_flight_module, "_track_launch_ball", lambda *_args, **_kwargs: track)
 
-    result = estimate_horizontal_launch(
-        frames,
-        timestamps,
-        trigger_ns=0,
-        geometry=geometry,
-        ops_ball_speed_mph=speed_ms * 2.23694,
-        vertical_deg=20.0,
-        vertical_source="radar",
-        reference_ball=anchor,
-    )
+    def launch(geometry=geometry):
+        return estimate_horizontal_launch(
+            frames,
+            timestamps,
+            trigger_ns=0,
+            geometry=geometry,
+            ops_ball_speed_mph=speed_ms * 2.23694,
+            vertical_deg=20.0,
+            vertical_source="radar",
+            reference_ball=anchor,
+        )
+
+    return geometry, launch
+
+
+def test_horizontal_launch_reports_with_the_horizontal_offset(monkeypatch):
+    _geometry, launch = _launch(monkeypatch, horizontal_offset_deg=1.0)
+
+    result = launch()
 
     assert result.horizontal_deg == pytest.approx(5.0, abs=0.25)
     assert result.horizontal_frame == "target_line"
@@ -341,7 +350,6 @@ def test_path_estimate_accounts_for_camera_lateral_translation():
 
 
 def test_path_estimate_applies_setup_level_horizontal_offset():
-    """The horizontal offset (+ = boresight right of target) is added."""
     geometry, _anchor, model, candidates, timestamps, evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0,
         horizontal_offset_deg=-0.45,
@@ -498,73 +506,25 @@ def test_lcmf_range_evidence_carries_the_estimator_status(monkeypatch):
     assert accepted.range_evidence.status == "accepted"
 
 
-def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
-    """The camera falls back to its own size-based depth and says so."""
-    anchor = ReferenceBall(160.0, 150.0, 14.0, 150)
-    seen = []
-    monkeypatch.setattr(
-        ball_flight_module,
-        "_select_reference_ball",
-        lambda *_args, **_kwargs: (anchor, {"selected_source": "test"}),
+def _fit(geometry, model, candidates, timestamps, evidence, speed_ms, contact_ns=0):
+    result = _path_estimate(
+        path=list(enumerate(candidates)),
+        frame_indices=list(range(len(candidates))),
+        timestamps_ns=timestamps,
+        contact_ns=contact_ns,
+        range_evidence=evidence,
+        ops_ball_speed_mph=speed_ms * 2.23694,
+        iwr_vertical_deg=20.0,
+        model=model,
+        geometry=geometry,
+        thresholds=(100, 12, 5),
     )
-    monkeypatch.setattr(
-        ball_flight_module, "_camera_model", lambda *_args, **_kwargs: (480.0, 0.0, None)
-    )
-    candidate = BallCandidate(160.0, 140.0, 150, 14, 14, 0.8, 0.9, 220.0)
-    monkeypatch.setattr(ball_flight_module, "_candidates", lambda *_a, **_k: [candidate])
-    monkeypatch.setattr(
-        ball_flight_module,
-        "_pixel_paths",
-        lambda nodes, *_a, **_k: [[(index, candidate) for index in range(4)]],
-    )
-    monkeypatch.setattr(ball_flight_module, "_clean_launch_path", lambda path, _frames: path)
-
-    def path_estimate(*, range_evidence, **_kwargs):
-        seen.append(range_evidence)
-        return 1.0, ball_flight_module._PathEstimate(
-            horizontal_deg=3.0,
-            vertical_deg=20.0,
-            speed_mph=100.0,
-            speed_error_mph=0.0,
-            fit_median_m=0.001,
-            step_speed_mad_mph=0.5,
-            window_mad_deg=0.2,
-            n_points=6,
-            first_frame=10,
-            last_frame=15,
-        )
-
-    monkeypatch.setattr(ball_flight_module, "_path_estimate", path_estimate)
-    rejected = BallRangeEvidence(
-        track=SimpleNamespace(),
-        geometry=SimpleNamespace(range_res_m=0.046875),
-        impact_t_s=0.012,
-        status="rejected_track_quality",
-    )
-
-    estimate = estimate_camera_ball_flight(
-        np.zeros((30, 200, 320), dtype=np.uint8),
-        np.arange(30, dtype=np.int64) * 3_500_000,
-        trigger_ns=10 * 3_500_000,
-        range_evidence=rejected,
-        geometry=CameraBallGeometry(
-            camera_height_m=0.095,
-            radar_height_m=0.051,
-            tee_range_m=1.5,
-            ball_height_m=0.02135,
-            image_width_px=320,
-            image_height_px=200,
-        ),
-        ops_ball_speed_mph=100.0,
-    )
-    assert not seen
-    assert estimate.status == "rejected_no_iwr_range"
-    assert estimate.range_evidence_status == "rejected_track_quality"
+    assert result is not None
+    return result[1]
 
 
 def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
-    """A flight whose radar track and camera frames share one physical clock
-    (sensor clock 1.7 s ahead, IWR impact 12 ms into its capture)."""
+    """Radar track and frames on one clock: sensor 1.7 s ahead, IWR impact 12 ms in."""
     geometry, _anchor, model, candidates, _timestamps, _evidence, speed_ms = _synthetic_path(
         horizontal_deg=4.0
     )
@@ -595,29 +555,11 @@ def _timed_flight(*, trigger_after_contact_s: float = 0.0026):
 
 
 def test_flight_timed_from_contact_recovers_the_launch():
-    """Contact 2.6 ms before the trigger; timing from contact recovers H and V."""
-    geometry, model, candidates, sensor_ns, evidence, speed_ms, contact_ns, trigger_ns = (
-        _timed_flight()
-    )
+    # contact 2.6 ms before the trigger
+    *flight, contact_ns, trigger_ns = _timed_flight()
 
-    def estimate(anchor_ns):
-        result = _path_estimate(
-            path=list(enumerate(candidates)),
-            frame_indices=list(range(len(candidates))),
-            timestamps_ns=sensor_ns,
-            contact_ns=anchor_ns,
-            range_evidence=evidence,
-            ops_ball_speed_mph=speed_ms * 2.23694,
-            iwr_vertical_deg=20.0,
-            model=model,
-            geometry=geometry,
-            thresholds=(100, 12, 5),
-        )
-        assert result is not None
-        return result[1]
-
-    from_contact = estimate(contact_ns)
-    from_trigger = estimate(trigger_ns)
+    from_contact = _fit(*flight, contact_ns=contact_ns)
+    from_trigger = _fit(*flight, contact_ns=trigger_ns)
 
     assert from_contact.horizontal_deg == pytest.approx(4.0, abs=0.05)
     assert from_contact.vertical_deg == pytest.approx(20.0, abs=0.05)
@@ -670,15 +612,40 @@ _GEOMETRY_320 = CameraBallGeometry(
 )
 
 
+def _evidence(**changes):
+    return BallRangeEvidence(
+        track=SimpleNamespace(),
+        geometry=SimpleNamespace(range_res_m=0.046875),
+        impact_t_s=0.012,
+        **changes,
+    )
+
+
+def test_rejected_iwr_ball_track_is_not_used_as_camera_depth(monkeypatch):
+    seen = []
+    _stub_the_sweep(monkeypatch, seen)
+    host = np.arange(40, dtype=np.int64) * 3_500_000
+
+    estimate = estimate_camera_ball_flight(
+        _departing_ball_clip(19),
+        host,
+        trigger_ns=int(host[20]),
+        range_evidence=_evidence(status="rejected_track_quality"),
+        geometry=_GEOMETRY_320,
+        ops_ball_speed_mph=100.0,
+    )
+
+    assert not seen
+    assert estimate.status == "rejected_no_iwr_range"
+    assert estimate.range_evidence_status == "rejected_track_quality"
+
+
 def test_ball_flight_times_the_radar_from_the_departure_frame_on_the_sensor_clock(monkeypatch):
-    """The live estimator hands the ball's departure time, not the trigger, to the fit."""
     seen = []
     _stub_the_sweep(monkeypatch, seen)
     host = np.arange(40, dtype=np.int64) * 3_500_000 + 5_000_000_000
     sensor = np.arange(40, dtype=np.int64) * 3_500_000 + 1_000_000_000 - 700_000
-    evidence = BallRangeEvidence(
-        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
-    )
+    evidence = _evidence()
 
     estimate = estimate_camera_ball_flight(
         _departing_ball_clip(19),
@@ -703,15 +670,12 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
     seen = []
     _stub_the_sweep(monkeypatch, seen)
     host = np.arange(40, dtype=np.int64) * 3_500_000
-    evidence = BallRangeEvidence(
-        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
-    )
 
     estimate = estimate_camera_ball_flight(
         _departing_ball_clip(39),  # the ball never leaves
         host,
         trigger_ns=int(host[20]),
-        range_evidence=evidence,
+        range_evidence=_evidence(),
         geometry=_GEOMETRY_320,
         ops_ball_speed_mph=100.0,
     )
@@ -723,7 +687,6 @@ def test_ball_flight_without_a_departure_does_not_time_the_radar_from_the_trigge
 
 
 def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch):
-    """A scattered sweep still reports its median, as low consensus."""
     seen = []
     _stub_the_sweep(monkeypatch, seen)
     monkeypatch.setattr(
@@ -735,15 +698,12 @@ def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch
         ),
     )
     host = np.arange(40, dtype=np.int64) * 3_500_000
-    evidence = BallRangeEvidence(
-        track=SimpleNamespace(), geometry=SimpleNamespace(range_res_m=0.046875), impact_t_s=0.012
-    )
 
     estimate = estimate_camera_ball_flight(
         _departing_ball_clip(19),
         host,
         trigger_ns=int(host[20]),
-        range_evidence=evidence,
+        range_evidence=_evidence(),
         geometry=_GEOMETRY_320,
         ops_ball_speed_mph=100.0,
     )
@@ -754,52 +714,30 @@ def test_a_low_consensus_flight_is_measured_and_labelled_not_refused(monkeypatch
     assert estimate.vertical_deg == pytest.approx(20.0)
 
 
-def test_a_low_consensus_camera_never_replaces_the_radar_horizontal():
-    decision = select_camera_assisted_horizontal(
+def test_a_low_consensus_camera_stands_in_labelled_only_when_there_is_no_radar():
+    preferred = select_camera_assisted_horizontal(
         _estimate("low", 6.0), iwr_horizontal_deg=1.0, iwr_confidence=0.6
     )
-    assert decision.selected_deg == 1.0 and decision.source == "radar"
-    assert decision.camera_horizontal_deg == 6.0
-    assert decision.status == "camera_low_consensus_iwr_preferred"
-
-
-def test_a_low_consensus_camera_stands_in_labelled_when_there_is_no_radar():
-    decision = select_camera_assisted_horizontal(
+    alone = select_camera_assisted_horizontal(
         _estimate("low", 6.0), iwr_horizontal_deg=None, iwr_confidence=None
     )
-    assert decision.selected_deg == 6.0
-    assert decision.source == "camera_low_consensus"
-    assert decision.status == "camera_low_consensus"
+
+    assert preferred.selected_deg == 1.0 and preferred.source == "radar"
+    assert preferred.camera_horizontal_deg == 6.0
+    assert preferred.status == "camera_low_consensus_iwr_preferred"
+    assert alone.selected_deg == 6.0
+    assert alone.source == "camera_low_consensus"
+    assert alone.status == "camera_low_consensus"
 
 
 def test_a_side_offset_tee_is_fitted_from_where_it_sits(monkeypatch):
-    """Told the tee's side offset, the fit starts the flight there."""
     import dataclasses  # noqa: PLC0415
 
-    geometry, anchor, _model, candidates, candidate_times, _evidence, speed_ms = _synthetic_path(
-        horizontal_deg=4.0, tee_x_m=0.30
-    )
-    timestamps = np.concatenate(([0], candidate_times))
-    frames = np.zeros(
-        (len(timestamps), geometry.image_height_px, geometry.image_width_px), dtype=np.uint8
-    )
-    track = {index + 1: candidate for index, candidate in enumerate(candidates)}
-    monkeypatch.setattr(ball_flight_module, "detect_impact_frame", lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(ball_flight_module, "_track_launch_ball", lambda *_args, **_kwargs: track)
+    geometry, launch = _launch(monkeypatch, horizontal_deg=4.0, tee_x_m=0.30)
 
-    def fitted(told_m):
-        return estimate_horizontal_launch(
-            frames,
-            timestamps,
-            trigger_ns=0,
-            geometry=dataclasses.replace(geometry, ball_lateral_offset_m=told_m),
-            ops_ball_speed_mph=speed_ms * 2.23694,
-            vertical_deg=20.0,
-            vertical_source="radar",
-            reference_ball=anchor,
-        )
+    told = launch(dataclasses.replace(geometry, ball_lateral_offset_m=0.30))
+    untold = launch(dataclasses.replace(geometry, ball_lateral_offset_m=0.0))
 
-    told, untold = fitted(0.30), fitted(0.0)
     assert told.horizontal_deg == pytest.approx(4.0, abs=0.25)
     assert untold.horizontal_deg is None or abs(untold.horizontal_deg - 4.0) > 2 * abs(
         told.horizontal_deg - 4.0
@@ -813,18 +751,6 @@ def test_a_camera_ball_straight_down_the_target_line_reports_zero():
         horizontal_offset_deg=-3.0,
     )
 
-    result = _path_estimate(
-        path=list(enumerate(candidates)),
-        frame_indices=list(range(len(candidates))),
-        timestamps_ns=timestamps,
-        contact_ns=0,
-        range_evidence=evidence,
-        ops_ball_speed_mph=speed_ms * 2.23694,
-        iwr_vertical_deg=20.0,
-        model=model,
-        geometry=geometry,
-        thresholds=(100, 12, 5),
-    )
+    fitted = _fit(geometry, model, candidates, timestamps, evidence, speed_ms)
 
-    assert result is not None
-    assert result[1].horizontal_deg == pytest.approx(0.0, abs=0.15)
+    assert fitted.horizontal_deg == pytest.approx(0.0, abs=0.15)

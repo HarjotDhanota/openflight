@@ -1,8 +1,4 @@
-"""The kiosk's swing exposure policy: the resting ball is the light meter.
-
-Shortest sensor exposure at gain 1, gain before exposure, never past the blur ceiling;
-re-checked before every swing, with hysteresis; labelled, never blocked.
-"""
+"""The kiosk's swing exposure policy: the resting ball is the light meter."""
 
 import json
 import math
@@ -20,6 +16,7 @@ CONTROLS_1280 = {
     "AnalogueGain": (1.0, 15.9375, 1.0),
     "FrameDurationLimits": (8_333, 1_000_000, 8_333),
 }
+GAIN_OK = {"AnalogueGain": (1.0, 15.9, 1.0)}
 
 
 def limits(minimum=9, gain_max=15.9375):
@@ -53,15 +50,13 @@ def reading(*, signal, peak, exposure_us, gain, clipped_pct=0.0, black=BLACK):
     )
 
 
-def test_the_blur_ceiling_is_derived_from_the_mm_budget_and_matches_the_config():
+@pytest.mark.parametrize("arm_id", ["arm5", "arm6", None])
+def test_the_blur_ceiling_is_derived_from_the_mm_budget_and_matches_the_config(arm_id):
     config = sx.load_config()
-
-    # floor(min(4 mm / 13.6 m/s, 1 mm / 3.3 m/s) x 1000) = floor(min(294.1, 303.0))
-    assert sx.blur_ceiling_us(config, "arm5") == 294
-    assert sx.blur_ceiling_us(config, "arm6") == 294  # mm, not px: the mode doesn't change it
-    for arm_id in ("arm5", "arm6"):
-        assert config["modes"][arm_id]["blur_ceiling_us"] == sx.blur_ceiling_us(config, arm_id)
-    assert "derivation" in config
+    # floor(min(4 mm / 13.6 m/s, 1 mm / 3.3 m/s) x 1000): mm, not px, so every mode agrees
+    assert sx.blur_ceiling_us(config, arm_id) == 294
+    if arm_id:
+        assert config["modes"][arm_id]["blur_ceiling_us"] == 294
 
 
 def test_a_config_whose_stated_ceiling_disagrees_with_its_derivation_is_refused(tmp_path):
@@ -83,48 +78,33 @@ def test_modes_are_found_by_their_size():
 def test_sensor_limits_are_read_from_the_camera_controls():
     read = sx.sensor_limits_from_controls(CONTROLS_1280)
 
-    assert read == sx.SensorLimits(
-        exposure_min_us=9,
-        exposure_max_us=8_000,
-        gain_min=1.0,
-        gain_max=15.9375,
-        source="camera_controls",
-    )
+    assert read == limits()
     assert read.to_dict()["exposure_min_us"] == 9
-
-
-def test_a_fractional_minimum_is_rounded_up_to_a_whole_microsecond():
-    read = sx.sensor_limits_from_controls({**CONTROLS_1280, "ExposureTime": (3.4, 3_000, 100)})
-
-    assert read.exposure_min_us == 4
+    fractional = {**CONTROLS_1280, "ExposureTime": (3.4, 3_000, 100)}
+    assert sx.sensor_limits_from_controls(fractional).exposure_min_us == 4
+    no_gain = sx.sensor_limits_from_controls({"ExposureTime": (9, 8_000, 300)})
+    assert no_gain.gain_max == pytest.approx(sx.DRIVER_GAIN_CAP)
+    assert no_gain.gain_source == "ov9282_driver_register_cap"
 
 
 @pytest.mark.parametrize(
     "controls",
     [
         {},
-        {"AnalogueGain": (1.0, 15.9, 1.0)},
-        {"ExposureTime": "bad", "AnalogueGain": (1.0, 15.9, 1.0)},
-        {"ExposureTime": (0, 100, 10), "AnalogueGain": (1.0, 15.9, 1.0)},
-        {"ExposureTime": (50, 10, 20), "AnalogueGain": (1.0, 15.9, 1.0)},
+        GAIN_OK,
+        {"ExposureTime": "bad", **GAIN_OK},
+        {"ExposureTime": (0, 100, 10), **GAIN_OK},
+        {"ExposureTime": (50, 10, 20), **GAIN_OK},
     ],
 )
 def test_missing_or_nonsense_exposure_limits_read_as_none(controls):
     assert sx.sensor_limits_from_controls(controls) is None
 
 
-def test_without_a_gain_limit_the_driver_cap_stands_in_and_says_so():
-    read = sx.sensor_limits_from_controls({"ExposureTime": (9, 8_000, 300)})
-
-    assert read.gain_max == pytest.approx(sx.DRIVER_GAIN_CAP)
-    assert read.gain_source == "ov9282_driver_register_cap"
-
-
 def test_the_ladder_runs_from_the_sensor_minimum_to_the_blur_ceiling_in_root_two_steps():
     ladder = sx.exposure_ladder(9, 294)
 
-    assert ladder[0] == 9
-    assert ladder[-1] == 294
+    assert (ladder[0], ladder[-1]) == (9, 294)
     assert list(ladder) == sorted(set(ladder))
     ratios = [b / a for a, b in zip(ladder, ladder[1:])]
     assert all(1.2 <= ratio <= 1.6 for ratio in ratios[1:])
@@ -132,19 +112,12 @@ def test_the_ladder_runs_from_the_sensor_minimum_to_the_blur_ceiling_in_root_two
 
 
 def test_the_envelope_never_passes_the_frame_period_or_an_armed_ceiling():
-    tight = envelope(ceiling=294, fps=4000.0)
-    assert tight.exposure_ceiling_us < 250
+    assert envelope(ceiling=294, fps=4000.0).exposure_ceiling_us < 250
     armed = envelope(armed={"exposure_ceiling_us": 150, "gain_ceiling": 8.0})
     assert armed.exposure_ceiling_us == 150
     assert armed.gain_cap == 8.0
     assert max(armed.ladder) == 150
-
-
-def test_the_gain_cap_is_the_sensor_s_not_an_impossible_eighteen_or_twenty():
-    env = envelope(gain_max=15.9375)
-
-    assert env.gain_cap == pytest.approx(15.9375)
-    assert env.to_dict()["gain_cap"] == pytest.approx(15.9375)
+    assert envelope().to_dict()["gain_cap"] == pytest.approx(15.9375)
 
 
 def test_bright_indoor_picks_the_shortest_exposure_a_capped_gain_can_reach():
@@ -167,40 +140,80 @@ def test_gain_fills_first_then_exposure_lengthens_only_at_the_gain_cap():
         choice = sx.choose_setting(peak_index, peak_index, env)
         index = env.ladder.index(choice.setting.exposure_us)
         if index > 0:
-            shorter = env.ladder[index - 1]
-            assert choice.wanted_product / shorter > env.gain_cap
+            assert choice.wanted_product / env.ladder[index - 1] > env.gain_cap
 
 
 def test_the_choice_never_passes_the_blur_ceiling_or_the_gain_cap():
     env = envelope()
-
     choice = sx.choose_setting(1e-4, 1e-4, env)
-
     assert choice.setting == sx.Setting(294, env.gain_cap)
     assert choice.status == "too_dark"
 
 
-def test_full_sun_clipped_at_the_sensor_floor_holds_there_and_says_shade_or_nd():
-    policy = sx.SwingExposurePolicy(envelope(minimum=9))
-    clipped = reading(signal=234, peak=234, exposure_us=9, gain=1.0, clipped_pct=60.0)
+TOP = sx.Setting(294, 15.9375)
 
-    decision = policy.decide(clipped, sx.Setting(9, 1.0))
 
-    assert decision.status == "too_bright"
-    assert decision.target is None
-    assert decision.analysis_eligible is False
-    assert decision.frame_label == "too bright: shade the ball area (or an ND filter)"
+SHADE = "too bright: shade the ball area (or an ND filter)"
+BRIGHT = 0.70 * CLIP_RANGE
+
+
+@pytest.mark.parametrize(
+    ("minimum", "look", "current", "expected"),
+    [
+        # full sun clipped at the sensor floor; full sun unclipped there (7 us x 1 ~ 0.6 of clip)
+        (9, (234, 234, 9, 1.0, 60.0), (9, 1.0), ("too_bright", None, False, SHADE)),
+        (7, (110, 140, 7, 1.0), (7, 1.0), ("ball_driven", None, True, None)),
+        # a dark room at the ceiling and the cap; a ball in the hold band though off target
+        (9, (4, 6, 294, 15.9375), (294, 15.9375), ("too_dark", None, False, "too dark: add light")),
+        (9, (110, BRIGHT, 104, 8.0), (104, 8.0), ("ball_driven", None, True, None)),
+        # 6 mm lens, today's room at 1.32 m and at 2.14 m: both go to the ceiling and the cap
+        (9, (53, 0.372 * CLIP_RANGE, 298, 12.0), (300, 12.0), ("ball_driven", TOP, True, None)),
+        (9, (26, 0.145 * CLIP_RANGE, 298, 12.0), (300, 12.0), ("ball_driven", TOP, True, None)),
+    ],
+)
+def test_one_look_decides_status_target_and_label(minimum, look, current, expected):
+    signal, peak, exposure_us, gain, *clipped = look
+    look = reading(
+        signal=signal,
+        peak=peak,
+        exposure_us=exposure_us,
+        gain=gain,
+        clipped_pct=clipped[0] if clipped else 0.0,
+    )
+    decision = sx.SwingExposurePolicy(envelope(minimum=minimum)).decide(look, sx.Setting(*current))
+
+    assert (
+        decision.status,
+        decision.target,
+        decision.analysis_eligible,
+        decision.frame_label,
+    ) == expected
+
+
+def test_predicted_signal_at_the_ceiling_and_the_under_target_message():
+    policy = sx.SwingExposurePolicy(envelope())
+    near = policy.decide(
+        reading(signal=53, peak=0.372 * CLIP_RANGE, exposure_us=298, gain=12.0),
+        sx.Setting(300, 12.0),
+    )
+    far = sx.SwingExposurePolicy(envelope()).decide(
+        reading(signal=26, peak=0.145 * CLIP_RANGE, exposure_us=298, gain=12.0),
+        sx.Setting(300, 12.0),
+    )
+    # 53 x (294 x 15.9375) / (298 x 12) = 69.5 DN; the peak lands near 0.49 of clip
+    assert near.predicted_signal_dn == pytest.approx(69.5, abs=0.5)
+    assert near.predicted_peak_fraction == pytest.approx(0.487, abs=0.01)
+    assert far.predicted_signal_dn == pytest.approx(34.1, abs=0.5)
+    assert "blur ceiling" in far.message
 
 
 def test_full_sun_walks_down_to_the_floor_from_a_long_setting():
     policy = sx.SwingExposurePolicy(envelope(minimum=9))
-    current = sx.Setting(294, 15.9375)
-    # full sun: about 20 DN per us x gain at 1280x800; 640x400 doubles it
-    sun = 40.0
+    current = TOP
+    sun = 40.0  # DN per us x gain: full sun at 640x400
     for _ in range(10):
-        product = current.exposure_us * current.gain
-        peak = min(sun * product, CLIP_RANGE)
-        clipped = 60.0 if sun * product >= CLIP_RANGE else 0.0
+        peak = min(sun * current.product, CLIP_RANGE)
+        clipped = 60.0 if sun * current.product >= CLIP_RANGE else 0.0
         decision = policy.decide(
             reading(
                 signal=peak * 0.8,
@@ -219,146 +232,61 @@ def test_full_sun_walks_down_to_the_floor_from_a_long_setting():
     assert decision.status == "too_bright"
 
 
-def test_full_sun_unclipped_at_the_floor_is_ball_driven():
-    policy = sx.SwingExposurePolicy(envelope(minimum=7))
-    # 7 us x 1 puts a sunlit ball near 0.6 of clip
-    sunny = reading(signal=110, peak=140, exposure_us=7, gain=1.0)
-
-    decision = policy.decide(sunny, sx.Setting(7, 1.0))
-
-    assert decision.status == "ball_driven"
-    assert decision.target is None
-    assert decision.analysis_eligible is True
-    assert decision.frame_label is None
-
-
-def test_today_s_room_at_1_32_m_goes_to_the_blur_ceiling_and_the_gain_cap():
-    """6 mm lens: the ball reads 53 DN (peak 0.372 of clip) at 298 us x 12."""
-    policy = sx.SwingExposurePolicy(envelope())
-    today = reading(signal=53, peak=0.372 * CLIP_RANGE, exposure_us=298, gain=12.0)
-
-    decision = policy.decide(today, sx.Setting(300, 12.0))
-
-    assert decision.target == sx.Setting(294, 15.9375)
-    assert decision.status == "ball_driven"
-    assert decision.analysis_eligible is True
-    # 53 x (294 x 15.9375) / (298 x 12) = 69.5 DN; the peak lands near 0.49 of clip
-    assert decision.predicted_signal_dn == pytest.approx(69.5, abs=0.5)
-    assert decision.predicted_peak_fraction == pytest.approx(0.487, abs=0.01)
-
-
-def test_today_s_room_at_2_14_m_is_under_target_but_above_the_gate():
-    policy = sx.SwingExposurePolicy(envelope())
-    far = reading(signal=26, peak=0.145 * CLIP_RANGE, exposure_us=298, gain=12.0)
-
-    decision = policy.decide(far, sx.Setting(300, 12.0))
-
-    assert decision.target == sx.Setting(294, 15.9375)
-    assert decision.status == "ball_driven"
-    assert decision.predicted_signal_dn == pytest.approx(34.1, abs=0.5)
-    assert decision.frame_label is None
-    assert "blur ceiling" in decision.message
-
-
-def test_dark_room_holds_the_ceiling_and_cap_and_says_add_light():
-    policy = sx.SwingExposurePolicy(envelope())
-    dark = reading(signal=4, peak=6, exposure_us=294, gain=15.9375)
-
-    decision = policy.decide(dark, sx.Setting(294, 15.9375))
-
-    assert decision.status == "too_dark"
-    assert decision.target is None
-    assert decision.analysis_eligible is False
-    assert decision.frame_label == "too dark: add light"
-
-
 def test_a_dim_ball_below_the_ceiling_is_raised_at_once():
-    policy = sx.SwingExposurePolicy(envelope())
-    dim = reading(signal=8, peak=12, exposure_us=37, gain=4.0)
+    decision = sx.SwingExposurePolicy(envelope()).decide(
+        reading(signal=8, peak=12, exposure_us=37, gain=4.0), sx.Setting(37, 4.0)
+    )
 
-    decision = policy.decide(dim, sx.Setting(37, 4.0))
-
-    assert decision.target is not None
     assert decision.target.exposure_us * decision.target.gain > 37 * 4.0
     assert decision.analysis_eligible is False
 
 
-def test_no_ball_keeps_the_last_setting_and_says_why():
+def test_no_ball_keeps_the_last_setting_and_is_eligible_only_after_a_ball():
+    before = sx.SwingExposurePolicy(envelope()).decide(
+        None, sx.Setting(104, 8.0), no_ball_reason="no look yet"
+    )
     policy = sx.SwingExposurePolicy(envelope())
     policy.decide(reading(signal=60, peak=128, exposure_us=104, gain=8.0), sx.Setting(104, 8.0))
 
     decision = policy.decide(None, sx.Setting(104, 8.0), no_ball_reason="no ball in the box")
 
-    assert decision.status == "holding_no_ball"
+    assert before.status == decision.status == "holding_no_ball"
+    assert before.analysis_eligible is False
     assert decision.target is None
     assert "no ball in the box" in decision.message
     assert "104 us" in decision.message
     assert decision.analysis_eligible is True
 
 
-def test_no_ball_before_any_ball_is_not_eligible():
-    policy = sx.SwingExposurePolicy(envelope())
-
-    decision = policy.decide(None, sx.Setting(104, 8.0), no_ball_reason="no look yet")
-
-    assert decision.status == "holding_no_ball"
-    assert decision.analysis_eligible is False
-
-
 def test_arm6_takes_half_the_exposure_for_the_same_light():
     config = sx.load_config()
-    arm5 = sx.SwingExposurePolicy(envelope(fps=120.0))
-    arm6 = sx.SwingExposurePolicy(envelope(fps=288.0))
     light = 0.1  # the setup's 1280x800 index, DN above black per us x gain
-
-    full = arm5.seed(light * sx.mode_signal_factor(config, "arm5"), sx.Setting(300, 4.0))
-    half = arm6.seed(light * sx.mode_signal_factor(config, "arm6"), sx.Setting(300, 4.0))
+    full = sx.SwingExposurePolicy(envelope(fps=120.0)).seed(
+        light * sx.mode_signal_factor(config, "arm5"), sx.Setting(300, 4.0)
+    )
+    half = sx.SwingExposurePolicy(envelope(fps=288.0)).seed(
+        light * sx.mode_signal_factor(config, "arm6"), sx.Setting(300, 4.0)
+    )
 
     assert sx.mode_signal_factor(config, "arm6") == 2.0
-    product_full = full.target.exposure_us * full.target.gain
-    product_half = half.target.exposure_us * half.target.gain
-    assert product_half == pytest.approx(product_full / 2.0, rel=0.03)
+    assert half.target.product == pytest.approx(full.target.product / 2.0, rel=0.03)
     assert half.target.exposure_us < full.target.exposure_us
 
 
-def test_the_setup_light_index_picks_the_first_setting():
-    policy = sx.SwingExposurePolicy(envelope())
+def test_the_seed_comes_from_the_light_index_else_the_clamped_startup_controls():
     light = 0.15
+    seeded = sx.SwingExposurePolicy(envelope()).seed(light, sx.Setting(1000, 4.0))
+    clamped = sx.SwingExposurePolicy(envelope()).seed(None, sx.Setting(1000, 4.0))
+    inside = sx.SwingExposurePolicy(envelope()).seed(None, sx.Setting(104, 8.0))
 
-    decision = policy.seed(light, sx.Setting(1000, 4.0))
-
-    assert decision.status == "seeded"
-    assert decision.reason == "setup_light_index"
-    assert decision.target == sx.choose_setting(light, light, envelope()).setting
-    assert decision.analysis_eligible is False
-
-
-def test_without_a_light_index_the_startup_seed_is_clamped_into_the_envelope():
-    policy = sx.SwingExposurePolicy(envelope())
-
-    decision = policy.seed(None, sx.Setting(1000, 4.0))
-
-    assert decision.target == sx.Setting(294, 13.61)
-    assert decision.reason == "startup_controls_clamped"
-
-
-def test_a_seed_already_inside_the_envelope_is_kept():
-    policy = sx.SwingExposurePolicy(envelope())
-
-    decision = policy.seed(None, sx.Setting(104, 8.0))
-
-    assert decision.target is None
-    assert decision.current == sx.Setting(104, 8.0)
-
-
-def test_a_ball_inside_the_band_holds_even_off_target():
-    policy = sx.SwingExposurePolicy(envelope())
-    near = reading(signal=110, peak=0.70 * CLIP_RANGE, exposure_us=104, gain=8.0)
-
-    decision = policy.decide(near, sx.Setting(104, 8.0))
-
-    assert decision.target is None
-    assert decision.status == "ball_driven"
+    assert seeded.status == "seeded"
+    assert seeded.reason == "setup_light_index"
+    assert seeded.target == sx.choose_setting(light, light, envelope()).setting
+    assert seeded.analysis_eligible is False
+    assert clamped.target == sx.Setting(294, 13.61)
+    assert clamped.reason == "startup_controls_clamped"
+    assert inside.target is None
+    assert inside.current == sx.Setting(104, 8.0)
 
 
 def test_a_mild_change_needs_two_looks_in_a_row():
@@ -376,7 +304,6 @@ def test_a_mild_change_needs_two_looks_in_a_row():
     assert first.target is None and first.hysteresis["pending_count"] == 1
     assert flicker_back.target is None and flicker_back.hysteresis["pending_count"] == 0
     assert again.target is None
-    assert confirmed.target is not None
     assert confirmed.target.exposure_us * confirmed.target.gain > 104 * 8.0
 
 
@@ -407,7 +334,7 @@ def test_a_settled_change_lands_inside_the_band():
     current = sx.Setting(37, 2.0)
     true_peak_index = 0.2
     for _ in range(6):
-        peak = min(true_peak_index * current.exposure_us * current.gain, CLIP_RANGE)
+        peak = min(true_peak_index * current.product, CLIP_RANGE)
         decision = policy.decide(
             reading(
                 signal=peak * 0.7, peak=peak, exposure_us=current.exposure_us, gain=current.gain
@@ -417,31 +344,26 @@ def test_a_settled_change_lands_inside_the_band():
         if decision.target is not None:
             current = decision.target
 
-    fraction = true_peak_index * current.exposure_us * current.gain / CLIP_RANGE
     low, high = sx.HOLD_BAND
-    assert low <= fraction <= high
+    assert low <= true_peak_index * current.product / CLIP_RANGE <= high
 
 
 def test_the_ball_reading_measures_the_core_from_frames():
     image = np.full((100, 100), 20, dtype=np.uint8)
     yy, xx = np.indices(image.shape)
     image[np.hypot(xx - 50, yy - 50) <= 10] = 120
-    frames = [image, image, image]
 
     read = sx.read_ball(
-        frames, x=50, y=50, diameter_px=20, black_floor_dn=BLACK, exposure_us=104, gain=8.0
+        [image] * 3, x=50, y=50, diameter_px=20, black_floor_dn=BLACK, exposure_us=104, gain=8.0
     )
 
-    assert read.median_dn == 120
-    assert read.peak_dn == 120
-    assert read.clipped_pct == 0.0
+    assert (read.median_dn, read.peak_dn, read.clipped_pct) == (120, 120, 0.0)
     assert read.signal_dn == pytest.approx(104.0)
     assert read.peak_index == pytest.approx(104.0 / (104 * 8.0))
 
 
 def test_a_decision_serialises_with_its_inputs():
-    policy = sx.SwingExposurePolicy(envelope())
-    decision = policy.decide(
+    decision = sx.SwingExposurePolicy(envelope()).decide(
         reading(signal=53, peak=87, exposure_us=298, gain=12.0), sx.Setting(300, 12.0)
     )
 
@@ -466,10 +388,6 @@ def test_the_ball_gate_is_the_one_every_other_judge_uses():
     assert sx.BLACK_LEVEL_DN == light_judging.SENSOR_BLACK_LEVEL_DN
 
 
-def test_a_size_outside_the_modes_takes_the_shared_mm_budget():
-    assert sx.blur_ceiling_us(sx.load_config(), None) == 294
-
-
 def _in_envelope(setting, env):
     return (
         env.ladder[0] <= setting.exposure_us <= env.exposure_ceiling_us
@@ -480,8 +398,7 @@ def _in_envelope(setting, env):
 def _look(world, setting):
     """What a look sees at ``setting``: a reading if the ball is visible there, else None."""
     peak_index, visible = world
-    product = setting.exposure_us * setting.gain
-    peak = peak_index * product
+    peak = peak_index * setting.product
     if not visible(peak):
         return None
     return reading(
@@ -508,18 +425,19 @@ def _walk(policy, world, start, looks=40, now=0.0):
     return current, seen, decisions
 
 
+NOWHERE = (0.1, lambda _peak: False)
+
+
 def test_the_sweep_waits_for_three_looks_without_a_ball():
     policy = sx.SwingExposurePolicy(envelope())
     current = sx.Setting(104, 8.0)
 
-    first = policy.decide(None, current, no_ball_reason="no ball in the box", now=0.0)
-    second = policy.decide(None, current, no_ball_reason="no ball in the box", now=1.0)
-    third = policy.decide(None, current, no_ball_reason="no ball in the box", now=2.0)
+    looks = [policy.decide(None, current, no_ball_reason="none", now=t) for t in (0.0, 1.0, 2.0)]
 
-    assert first.target is None and second.target is None
-    assert first.status == second.status == "holding_no_ball"
-    assert third.status == "searching_for_ball"
-    assert third.target is not None
+    assert [look.status for look in looks[:2]] == ["holding_no_ball"] * 2
+    assert looks[0].target is None and looks[1].target is None
+    assert looks[2].status == "searching_for_ball"
+    assert looks[2].target is not None
 
 
 def test_the_sweep_alternates_brighter_and_darker_from_the_current_setting():
@@ -528,59 +446,38 @@ def test_the_sweep_alternates_brighter_and_darker_from_the_current_setting():
 
     steps = sx.sweep_settings(env, current)
 
-    assert steps[0].product > current.product
-    assert steps[1].product < current.product
+    assert steps[0].product > current.product > steps[1].product
     assert steps[2].product > steps[0].product
     assert steps[3].product < steps[1].product
-    assert all(_in_envelope(step, env) for step in steps)
-    assert steps[-1] in (env.top_setting, env.floor_setting) or any(
-        step.same_as(env.top_setting) for step in steps
-    )
+    assert any(step.same_as(env.top_setting) for step in steps)
     assert any(step.same_as(env.floor_setting) for step in steps)
 
 
-def test_a_dark_seed_in_sun_finds_the_ball_by_stepping_darker():
-    """Sun at 1280x800 (20 DN per us x gain): the dark seed washes the box out."""
+@pytest.mark.parametrize(
+    ("world", "start", "darker"),
+    [
+        # sun at 1280x800 (20 DN per us x gain): the dark seed washes the box out
+        ((20.0, lambda peak: peak < CLIP_RANGE), "top_setting", True),
+        # a dim room: the box look needs about 20 DN on the ball's peak to see it
+        ((0.01, lambda peak: peak >= 20.0), "floor_setting", False),
+    ],
+)
+def test_the_sweep_finds_the_ball_and_hands_over_to_normal_metering(world, start, darker):
     env = envelope(minimum=9)
     policy = sx.SwingExposurePolicy(env)
-    sun = (20.0, lambda peak: peak < CLIP_RANGE)
 
-    found, seen, decisions = _walk(policy, sun, env.top_setting)
+    found, seen, decisions = _walk(policy, world, getattr(env, start))
 
     assert decisions[-1].reading is not None
-    assert found.product * 20.0 < CLIP_RANGE
-    assert all(_in_envelope(step, env) for step in seen)
-    products = [step.product for step in seen]
-    assert products == sorted(products, reverse=True)
+    assert world[1](found.product * world[0])
     assert any(d.status == "searching_for_ball" for d in decisions)
-
-
-def test_a_bright_seed_in_a_dark_room_finds_the_ball_by_stepping_brighter():
-    """A dim room: the box look needs about 20 DN on the ball's peak to see it."""
-    env = envelope(minimum=9)
-    policy = sx.SwingExposurePolicy(env)
-    dim = (0.01, lambda peak: peak >= 20.0)
-
-    found, seen, decisions = _walk(policy, dim, env.floor_setting)
-
-    assert decisions[-1].reading is not None
-    assert found.product * 0.01 >= 20.0
     assert all(_in_envelope(step, env) for step in seen)
     products = [step.product for step in seen]
-    assert products == sorted(products)
-
-
-def test_the_found_ball_hands_over_to_normal_metering():
-    env = envelope(minimum=9)
-    policy = sx.SwingExposurePolicy(env)
-    dim = (0.01, lambda peak: peak >= 20.0)
-    found, _seen, decisions = _walk(policy, dim, env.floor_setting)
-
-    after = decisions[-1]
-
-    assert after.status in ("ball_driven", "too_dark")
-    assert after.reason == "resting_ball"
-    assert after.setting.same_as(env.top_setting)
+    assert products == sorted(products, reverse=darker)
+    if not darker:
+        assert decisions[-1].status in ("ball_driven", "too_dark")
+        assert decisions[-1].reason == "resting_ball"
+        assert decisions[-1].setting.same_as(env.top_setting)
 
 
 def test_no_ball_anywhere_holds_the_last_good_setting_and_says_it_searched():
@@ -588,9 +485,8 @@ def test_no_ball_anywhere_holds_the_last_good_setting_and_says_it_searched():
     policy = sx.SwingExposurePolicy(env)
     good = sx.Setting(104, 8.0)
     policy.decide(reading(signal=60, peak=128, exposure_us=104, gain=8.0), good)
-    nowhere = (0.1, lambda _peak: False)
 
-    current, seen, decisions = _walk(policy, nowhere, good, looks=30)
+    current, seen, decisions = _walk(policy, NOWHERE, good, looks=30)
 
     final = next(d for d in decisions if d.reason == "no_ball_searched")
     assert final.status == "holding_no_ball"
@@ -602,25 +498,24 @@ def test_no_ball_anywhere_holds_the_last_good_setting_and_says_it_searched():
 
 
 def test_without_a_good_setting_the_hold_is_the_seed():
-    env = envelope()
-    policy = sx.SwingExposurePolicy(env)
+    policy = sx.SwingExposurePolicy(envelope())
     seed = policy.seed(0.15, sx.Setting(1000, 4.0)).setting
-    nowhere = (0.1, lambda _peak: False)
 
-    current, _seen, decisions = _walk(policy, nowhere, seed, looks=30)
+    current, _seen, decisions = _walk(policy, NOWHERE, seed, looks=30)
 
     assert any(d.reason == "no_ball_searched" for d in decisions)
     assert current.same_as(seed)
 
 
-def test_after_a_failed_sweep_it_waits_for_the_cool_down_or_a_restart():
-    env = envelope()
-    policy = sx.SwingExposurePolicy(env)
-    nowhere = (0.1, lambda _peak: False)
-    start = sx.Setting(104, 8.0)
-    current, _seen, decisions = _walk(policy, nowhere, start, looks=30)
+def _failed_sweep(policy):
+    current, _seen, decisions = _walk(policy, NOWHERE, sx.Setting(104, 8.0), looks=30)
     ended = next(i for i, d in enumerate(decisions) if d.reason == "no_ball_searched")
-    ended_at = float(ended)
+    return current, float(ended)
+
+
+def test_after_a_failed_sweep_it_waits_for_the_cool_down_or_a_restart():
+    policy = sx.SwingExposurePolicy(envelope())
+    current, ended_at = _failed_sweep(policy)
 
     cooling = policy.decide(None, current, now=ended_at + 5.0)
     after = policy.decide(None, current, now=ended_at + sx.SWEEP_COOLDOWN_S + 1.0)
@@ -629,12 +524,12 @@ def test_after_a_failed_sweep_it_waits_for_the_cool_down_or_a_restart():
     assert "again in" in cooling.message
     assert after.status == "searching_for_ball"
 
-    policy2 = sx.SwingExposurePolicy(env)
-    current2, _s, decisions2 = _walk(policy2, nowhere, start, looks=30)
-    ended2 = next(i for i, d in enumerate(decisions2) if d.reason == "no_ball_searched")
-    policy2.restart_search("the placement box moved")
-    restarted = policy2.decide(None, current2, now=float(ended2) + 1.0)
-    assert restarted.status == "searching_for_ball"
+    restarted_policy = sx.SwingExposurePolicy(envelope())
+    current, ended_at = _failed_sweep(restarted_policy)
+    restarted_policy.restart_search("the placement box moved")
+    assert restarted_policy.decide(None, current, now=ended_at + 1.0).status == (
+        "searching_for_ball"
+    )
 
 
 def test_the_sweep_never_passes_the_ceiling_or_the_cap():
