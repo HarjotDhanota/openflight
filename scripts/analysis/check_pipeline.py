@@ -36,11 +36,7 @@ from types import SimpleNamespace
 from typing import Any, Iterator, Mapping
 
 from openflight import pipeline_check as check
-from openflight.camera.capture_runtime import (
-    CameraCaptureRuntime,
-    parse_hitting_zone,
-    parse_setup_ball,
-)
+from openflight.camera.capture_runtime import CameraCaptureRuntime
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
 from openflight.raw_radar_replay import load_session_events, locate_recorded_capture
@@ -801,8 +797,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         injection = Injection(
             tee_range_m=args.inject_tee_range,
-            setup_ball=parse_setup_ball(args.inject_setup_ball),
-            box=parse_hitting_zone(args.inject_box),
+            setup_ball=check.parse_setup_ball(args.inject_setup_ball),
+            box=check.parse_hitting_zone(args.inject_box),
         )
     except ValueError as error:
         parser.error(str(error))

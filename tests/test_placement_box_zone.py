@@ -17,12 +17,9 @@ import pytest
 from openflight import tee_range
 from openflight.camera import study_ladder as sl, tester_server as ts
 from openflight.camera.auto_exposure import measure_exposure
-from openflight.camera.capture_runtime import (
-    CameraCaptureRuntime,
-    CameraCaptureSettings,
-    parse_hitting_zone,
-)
+from openflight.camera.capture_runtime import CameraCaptureRuntime, CameraCaptureSettings
 from openflight.camera.triggered_buffer import CameraFrame, TriggeredCapture
+from openflight.pipeline_check import parse_hitting_zone
 
 # A confirmed box around the ball the ladder tests draw at (640, 520), 1280x800.
 BOX = (562, 470, 718, 600)

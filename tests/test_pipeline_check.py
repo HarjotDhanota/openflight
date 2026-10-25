@@ -467,3 +467,15 @@ class TestCameraVerticalOffset:
 
         assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
         assert "recorded no camera tilt" in row["evidence"]
+
+
+def test_the_setup_ball_argument_is_three_positive_numbers():
+    assert check.parse_setup_ball("778.4,464.6,30.9") == {
+        "x": 778.4,
+        "y": 464.6,
+        "diameter_px": 30.9,
+    }
+    assert check.parse_setup_ball(None) is None
+    for bad in ("1,2", "1,2,0", "a,b,c", "1,2,nan", "-1,2,3"):
+        with pytest.raises(ValueError):
+            check.parse_setup_ball(bad)
