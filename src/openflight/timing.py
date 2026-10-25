@@ -167,7 +167,6 @@ class OpsCaptureTimer:
 
     @classmethod
     def start(cls) -> "OpsCaptureTimer":
-        """Start an OPS capture timer."""
         return cls(wait_started_ns=time.monotonic_ns())
 
     def first_marker_callback(self, callback: Callable[[], None] | None = None) -> None:

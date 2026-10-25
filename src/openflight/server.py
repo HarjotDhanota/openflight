@@ -484,7 +484,6 @@ def _log_shot_enrichment_lifecycle(
     enrichment: _ShotEnrichmentResult | None = None,
     late_by_ms: float | None = None,
 ) -> None:
-    """Persist whether deadline work continued and how its late result was applied."""
     if diagnostic_logger is None or session_uuid is None:
         return
     log_lifecycle = getattr(diagnostic_logger, "log_shot_enrichment", None)
@@ -3598,7 +3597,6 @@ def _ready_light_states() -> SensorStates | None:
 
 
 def _publish_ready_light() -> dict:
-    """Compute the light and send it to the kiosk screen when it changed."""
     global _ready_light_published  # pylint: disable=global-statement
     payload = ready_light.update(_ready_light_states())
     swing = payload["swing"] or {}
@@ -4034,7 +4032,6 @@ def on_shot_processing(state: str) -> None:
 
 
 def _report_shot_not_sent(shot: Shot, targets: List[str], error: IncompleteShotError) -> None:
-    """Tell the screen and the sim-send log why a shot was not sent to the simulators."""
     reason = str(error)
     missing = list(getattr(error, "missing", []))
     shot_timestamp = shot.timestamp.isoformat()
@@ -7030,7 +7027,6 @@ def start_monitor(
 
 
 def _gate_edge_listener():
-    """The running sound trigger's BCM17 edge hook, when there is one."""
     return getattr(getattr(monitor, "trigger", None), "notify_gate_edge", None)
 
 
@@ -7046,7 +7042,6 @@ def _attach_gate_edge_listener() -> None:
 
 
 def _detach_gate_edge_listener() -> None:
-    """Stop feeding BCM17 edges to a sound trigger that is being stopped."""
     listener = _gate_edge_listener()
     iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
     if listener is not None and iwr_monitor is not None:
