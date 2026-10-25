@@ -20,8 +20,18 @@ down. A gap is closed by adding a route, never by a special case.
 | Side offset | the setup's measured offset; the resting ball on its camera bearing | measured; experimental |
 | Spin | an accepted OPS spin; the collision model's spin; the OPS reading below the confidence floor | measured; the model's label (experimental when it rests on the camera head track or an experimental launch); experimental, feeding nothing |
 
-Club path and attack keep their own chain (`shot_models.displayed_club_path`, the club
-arc, and whatever club-delivery result the camera gives).
+No formula spin is a route (owner decision, 25 Oct 2026): the kinematic `170 v sin(LA)^1.2`
+and its TrackMan refit missed TrackMan by about 30 % and 26 % median (58 % on woods), so a
+shot with none of the three has no spin, and no carry, with the reason "no trustworthy
+spin: ..." naming each route.
+
+Club path keeps its own chain (`shot_models.displayed_club_path`, the club arc, and
+whatever club-delivery result the camera gives). The attack angle is a `source_chain`
+resolution (`shot_models.attack_angle_resolution`, recorded in
+`Shot.input_sources["attack_angle"]`): the radar club track; the camera + IWR (or OPS)
+fused delivery; an accepted IWR attack; the camera head track (experimental); the IWR
+attack-angle candidate (estimated, 25 Oct 2026); the E1 arc. See
+`docs/reference/metric-coverage.md`.
 
 ## The ball's own size (`camera/resting_ball_range.py`)
 

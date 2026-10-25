@@ -27,8 +27,11 @@ from openflight.sim.types import (
 )
 from openflight.source_labels import (
     LABEL_EXPERIMENTAL,
+    MODEL_LABELS,
+    experimental_collision_inputs,
     horizontal_launch_label,
     is_estimated_source,
+    is_measured_source,
     is_model_geometry_source,
     launch_label,
 )
@@ -66,6 +69,25 @@ def _estimated_reason(shot: Shot, metric: str) -> str:
     return (metrics.get(metric) or {}).get("reason") or "an input estimated"
 
 
+def _experimental_spin(shot: Shot) -> bool:
+    """A model's spin built on an experimental collision input (the camera head track or
+    an experimental launch): never sent, whatever the switches (owner decision 5)."""
+    return (
+        shot.spin_source in MODEL_LABELS
+        and _finite(shot.spin_rpm)
+        and bool(experimental_collision_inputs(shot.collision_model))
+    )
+
+
+def _experimental_axis(shot: Shot) -> bool:
+    """A computed spin axis built on an experimental collision input: never sent."""
+    return (
+        _finite(shot.spin_axis_deg)
+        and not is_measured_source(shot.spin_axis_source)
+        and bool(experimental_collision_inputs(shot.collision_model))
+    )
+
+
 def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
     """Measured spin if high-confidence, else a calculated one under its own label, else None."""
     if (
@@ -75,6 +97,8 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
         return float(shot.spin_rpm), "measured"
+    if _experimental_spin(shot):
+        return None
     if shot.spin_source == "calculated" and _finite(shot.spin_rpm) and shot.spin_rpm:
         return float(shot.spin_rpm), "calculated"
     if SIMULATORS_ACCEPT_MODEL_GEOMETRY and _model_geometry_spin(shot):
@@ -86,7 +110,7 @@ def _measured_total_spin(shot: Shot) -> Optional[Tuple[float, str]]:
 
 def _spin_axis_provenance(shot: Shot) -> Optional[str]:
     """The label the shot's spin axis goes out under, or None when it is not sent."""
-    if not _finite(shot.spin_axis_deg):
+    if not _finite(shot.spin_axis_deg) or _experimental_axis(shot):
         return None
     if _model_geometry_axis(shot):
         return MODEL_GEOMETRY if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
@@ -101,9 +125,13 @@ def _withheld_model_geometry(shot: Shot) -> List[str]:
     if SIMULATORS_ACCEPT_MODEL_GEOMETRY:
         return []
     withheld = []
-    if _measured_total_spin(shot) is None and _model_geometry_spin(shot):
+    if (
+        _measured_total_spin(shot) is None
+        and _model_geometry_spin(shot)
+        and not _experimental_spin(shot)
+    ):
         withheld.append("spin")
-    if _model_geometry_axis(shot):
+    if _model_geometry_axis(shot) and not _experimental_axis(shot):
         withheld.append("spin axis")
     return withheld
 
@@ -113,9 +141,13 @@ def _withheld_estimated(shot: Shot) -> List[str]:
     if SIMULATORS_ACCEPT_ESTIMATED:
         return []
     withheld = []
-    if _measured_total_spin(shot) is None and _estimated_spin(shot):
+    if (
+        _measured_total_spin(shot) is None
+        and _estimated_spin(shot)
+        and not _experimental_spin(shot)
+    ):
         withheld.append(f"spin estimated ({_estimated_reason(shot, 'spin_rate')})")
-    if _estimated_axis(shot):
+    if _estimated_axis(shot) and not _experimental_axis(shot):
         withheld.append(f"spin axis estimated ({_estimated_reason(shot, 'spin_axis')})")
     return withheld
 
@@ -140,9 +172,10 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
     ):
         missing.append("horizontal launch (experimental)")
     if _measured_total_spin(shot) is None:
-        missing.append("spin")
+        # built on the camera head track or an experimental launch: shown, never flown
+        missing.append("spin (experimental)" if _experimental_spin(shot) else "spin")
     if _spin_axis_provenance(shot) is None:
-        missing.append("spin axis")
+        missing.append("spin axis (experimental)" if _experimental_axis(shot) else "spin axis")
     return missing
 
 
@@ -152,7 +185,8 @@ def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
     None is not sent: simulators fly the ball from speed, launch and spin themselves.
     """
     carry = shot.reported_carry_yards
-    if carry is None:
+    if carry is None or _experimental_spin(shot) or _experimental_axis(shot):
+        # a carry flown on an experimental spin or axis is never sent (decision 5)
         return None
     if shot.carry_status == CARRY_ESTIMATED:
         if not SIMULATORS_ACCEPT_ESTIMATED:

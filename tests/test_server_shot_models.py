@@ -84,6 +84,9 @@ class TestFaceAngleFromTheCollisionModel:
 
     def test_without_a_reference_face_angle_uses_camera_paths_only(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)
+        # no attack: the face from the horizontal ratio alone (the IWR attack candidate
+        # is an estimated attack route since decision 3: test_attack_angle_chain)
+        shot.experimental_attack_angle_deg = None
         # The camera horizontal (camera bearing on accepted IWR depth) outranks
         # the radar one and carries no azimuth mark.
         server_module._apply_camera_horizontal_decision(
@@ -108,6 +111,7 @@ class TestFaceAngleFromTheCollisionModel:
 
         An uncalibrated start direction is an estimated input, so the face is estimated."""
         shot = self._run(monkeypatch, phase_reference=None)
+        shot.experimental_attack_angle_deg = None  # the horizontal ratio alone, as above
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 

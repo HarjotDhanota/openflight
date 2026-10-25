@@ -184,6 +184,49 @@ function experimentalStatus(status: string | null | undefined): string {
   return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
 }
 
+// The IWR attack that passed its fit gates but no acceptance gate (server IWR_CANDIDATE_STATUS).
+const IWR_CANDIDATE_STATUS = 'candidate_available';
+
+type AttackSource = 'canonical' | 'fused' | 'iwr' | 'head_track' | 'iwr_candidate' | null;
+
+/** The tile's own label per route; the server's record label replaces it when there is one. */
+const ATTACK_STATUS: Record<string, MetricLabel | undefined> = {
+  canonical: 'measured',
+  head_track: 'experimental',
+  iwr_candidate: 'estimated',
+};
+
+function attackRoute(
+  shot: Shot,
+  { headTrack, fusedRejected }: { headTrack: boolean; fusedRejected: boolean }
+): { value: number | null; source: AttackSource } {
+  const fused = shot.experimental_fused_attack_angle_deg;
+  const fusedShown =
+    isMeasured(fused) && !fusedRejected && shot.experimental_fused_attack_angle_confidence !== 'withheld';
+  const iwr = shot.experimental_attack_angle_deg;
+  const iwrStatus = shot.experimental_attack_angle_status ?? '';
+  if (isMeasured(shot.club_angle_deg)) return { value: shot.club_angle_deg, source: 'canonical' };
+  if (!headTrack && fusedShown) return { value: fused, source: 'fused' };
+  if (iwrStatus.startsWith('accepted') && isMeasured(iwr)) return { value: iwr, source: 'iwr' };
+  if (headTrack && fusedShown) return { value: fused, source: 'head_track' };
+  if (iwrStatus === IWR_CANDIDATE_STATUS && isMeasured(iwr)) return { value: iwr, source: 'iwr_candidate' };
+  return { value: null, source: null };
+}
+
+function attackSubtext(
+  shot: Shot,
+  source: AttackSource,
+  fusedSubtext: string,
+  fusedDeliveryAttempted: boolean
+): string | undefined {
+  if (source === 'canonical') return undefined;
+  if (source === 'fused' || source === 'head_track') return fusedSubtext;
+  if (source === 'iwr') return experimentalStatus(shot.experimental_attack_angle_status);
+  if (source === 'iwr_candidate') return 'IWR candidate';
+  if (fusedDeliveryAttempted) return experimentalStatus(shot.experimental_fused_status);
+  return shot.experimental_attack_angle_status ? experimentalStatus(shot.experimental_attack_angle_status) : undefined;
+}
+
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
   const carry = reportedCarryYards(shot);
@@ -213,13 +256,14 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const fusedRejected = fusedStatus.startsWith('rejected') || fusedStatus === 'error';
   const cameraFused = fusedDeliveryAttempted && !fusedRejected && !headTrack;
   const fusedSubtext = headTrack ? 'camera head track' : 'camera fused';
-  const attackAngle = firstMeasured(
-    shot.club_angle_deg,
-    shot.experimental_fused_attack_angle_deg,
-    !fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null
-  );
+  // Server shot_models.attack_angle_resolution(): canonical, camera fused, an accepted
+  // IWR attack, the camera head track, the IWR candidate (estimated); the arc's value
+  // arrives through the server's record. A rejected or withheld fused value is never shown.
+  const attack = attackRoute(shot, { headTrack, fusedRejected });
+  const attackAngle = attack.value;
   const attackIsExperimental =
     !isMeasured(shot.club_angle_deg) &&
+    attack.source !== 'iwr_candidate' &&
     (shot.experimental_fused_attack_angle_deg != null ||
       shot.experimental_fused_status != null ||
       shot.experimental_attack_angle_deg != null ||
@@ -352,18 +396,18 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.clubAoa'),
       value: formatOptionalAngle(attackAngle, true),
       unit: angleUnit(attackAngle),
-      subtext: isMeasured(shot.club_angle_deg)
-        ? undefined
-        : fusedDeliveryAttempted
-          ? shot.experimental_fused_attack_angle_deg != null
-            ? fusedSubtext
-            : experimentalStatus(shot.experimental_fused_status)
-          : attackIsExperimental
-            ? experimentalStatus(shot.experimental_attack_angle_status)
-            : undefined,
-      confidence: attackIsExperimental ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental') : null,
-      confidenceLabel: shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined,
-      status: isMeasured(shot.club_angle_deg) ? 'measured' : undefined,
+      subtext: attackSubtext(shot, attack.source, fusedSubtext, fusedDeliveryAttempted),
+      confidence: attackIsExperimental
+        ? attack.source === 'iwr'
+          ? 'experimental'
+          : (shot.experimental_fused_attack_angle_confidence ?? 'experimental')
+        : null,
+      confidenceLabel:
+        (attack.source === 'fused' || attack.source === 'head_track') &&
+        shot.experimental_fused_attack_angle_confidence
+          ? 'experimental'
+          : undefined,
+      status: ATTACK_STATUS[attack.source ?? ''],
     },
   ];
   return tiles.map((tile) => withServerLabel(shot, tile, unitSystem));

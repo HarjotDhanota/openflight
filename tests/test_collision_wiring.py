@@ -161,7 +161,8 @@ def test_a_missing_input_leaves_spin_and_axis_not_measured(overrides):
     assert shot.collision_model["metrics"]["spin_axis"]["reason"]
 
 
-def test_an_iwr_attack_candidate_is_not_an_input():
+def test_an_iwr_attack_candidate_is_an_estimated_input():
+    """Owner decision 3: the candidate is a route, estimated, with its reason."""
     shot = _delivered_shot(
         experimental_fused_attack_angle_deg=None,
         experimental_fused_status=None,
@@ -175,8 +176,11 @@ def test_an_iwr_attack_candidate_is_not_an_input():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.face_angle_deg is not None  # the accepted IWR path is used
-    assert shot.dynamic_loft_deg is None
-    assert "attack angle" in shot.collision_model["metrics"]["dynamic_loft"]["reason"]
+    attack = shot.collision_model["inputs"]["attack_angle"]
+    assert attack["value"] == -4.0 and attack["label"] == "estimated"
+    assert attack["source"] == shot_models.IWR_CANDIDATE_SOURCE
+    assert shot.dynamic_loft_deg is not None
+    assert shot.collision_model["metrics"]["dynamic_loft"]["status"] == "estimated"
 
 
 def test_a_canonical_attack_angle_is_used_first():

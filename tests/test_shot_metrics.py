@@ -374,7 +374,7 @@ def test_a_non_finite_impact_value_is_not_measured():
     assert record["status"] == "not_measured"
 
 
-def test_a_head_track_path_is_an_experimental_record_and_feeds_no_face_angle():
+def test_a_head_track_path_is_an_experimental_record_and_its_face_angle_is_too():
     from openflight import shot_models  # noqa: PLC0415
 
     shot = Shot(
@@ -409,4 +409,6 @@ def test_a_head_track_path_is_an_experimental_record_and_feeds_no_face_angle():
     assert metrics["club_path"]["status"] == "experimental"
     assert metrics["club_path"]["source"] == shot_metrics.HEAD_TRACK_SOURCE_LABEL
     assert metrics["attack_angle"]["status"] == "experimental"
-    assert metrics["face_angle"]["value"] is None
+    # it feeds the collision model (owner decision 5): the face inherits experimental
+    assert metrics["face_angle"]["value"] is not None
+    assert metrics["face_angle"]["status"] == "experimental"

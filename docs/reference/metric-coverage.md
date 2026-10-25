@@ -22,8 +22,8 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `measured` | A sensor saw it | plain outline, "MEAS" |
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
-| `estimated` | An OPS-only install's labelled stand-in, a weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, or an IWR one whose azimuth is uncalibrated, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
-| `experimental` | Shown before it is validated. Fed to no other metric: the camera's impact location, read live after the shot; the camera head track's club path and attack angle; an OPS spin of experimental quality (the ungated multitaper; its note gives the confidence and the search band's rail). Fed on, so every model output built on one is experimental too (`shot_metrics.with_input_labels`; `docs/camera/camera-fallback.md`): a camera launch with no validated geometry (the camera fallback's, `camera_fallback`, and the older camera horizontals), a range from the resting ball's own size (`camera_ball_size`) and a camera club delivery on the chained estimator | dotted outline in its own colour, "EXP", titled "not yet validated" |
+| `estimated` | A weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, or an IWR one whose azimuth is uncalibrated, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
+| `experimental` | Shown before it is validated. An experimental input feeds on, and every output built on it inherits `experimental`, with a note naming it (`shot_metrics.with_input_labels`; `docs/camera/camera-fallback.md`): a camera launch with no validated geometry (the camera fallback's, `camera_fallback`, and the older camera horizontals), a range from the resting ball's own size (`camera_ball_size`), a camera club delivery on the chained estimator, and the camera head track's club path and attack angle (25 Oct 2026). Simulators never receive an experimental value or one built on it. Two experimental readings still feed nothing: the camera's impact location, read live after the shot, and an OPS spin below the confidence floor or of experimental quality (the ungated multitaper; its note gives the confidence and the search band's rail) | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 Nothing is filled in, on any install (owner decision 1, 25 Oct 2026). OPS-only
@@ -77,6 +77,30 @@ Details and sources are in `docs/how-it-works/collision-model.md`.
 | Low point distance | The arc's geometry plus a per-club offset for the 7-iron, driver and PW, fitted by the maintainer to a TM4 normalized export, 6 May 2026; other clubs the geometry alone, noted | the arc's label |
 | Curve | TrackMan's definition: the landing point's distance from the launch-direction line, with carry as the straight-line distance (`metric_definitions.curve`). Matches that export to 1e-9 ft | the flight's label |
 
+## Attack angle: the chain (25 Oct 2026)
+
+`shot_models.attack_angle_resolution` takes the first route that gives a value and keeps
+every earlier route's refusal in `Shot.input_sources["attack_angle"]`; the kiosk's attack
+tile (`liveMetrics.ts`) shows the same order.
+
+| # | Route | Label | Into the collision model |
+|---|---|---|---|
+| 1 | the radar club track (`club_angle_deg`) | `measured` | measured |
+| 2 | the camera + IWR (or OPS) fused delivery, unless fusion rejected it or withheld its confidence | `measured` on the shot, `experimental` in its record (inferred camera geometry) | measured |
+| 3 | an accepted IWR attack | `measured` | measured |
+| 4 | the camera head track | `experimental` | `estimated`, reason "camera head track (experimental)" |
+| 5 | the IWR attack-angle candidate (`candidate_available` only; out of bounds, noisy fit and the club-speed or contact mismatches are refused with their status) | `estimated`, note "passed its fit gates but no acceptance gate, and not validated against TrackMan" | `estimated` with that reason |
+| 6 | the E1 arc | `calculated` or `model_geometry` | its label |
+
+The head track goes before the candidate although its label is weaker. Its error is
+quantified per shot: a sigma from its own budget (contact time, ball range, focal
+length, pitch, the hosel standing in for the face centre), 2.8-10.1°, median 3.8°, on
+the 15 head-track attacks of Harjot-outdoor-test-1. The candidate has no per-shot
+uncertainty, and the last radar attack candidate checked against TrackMan (2026-08-07)
+ran 9-22° off, depending on the club. Every output built on the candidate (dynamic loft, spin loft,
+D-plane tilt, spin axis, the collision spin and the flight) is `estimated` with its note,
+and simulators do not get it while `SIMULATORS_ACCEPT_ESTIMATED` is off.
+
 ## Club path and attack angle from the camera head track (experimental)
 
 When the club-delivery chain finds no stable clubhead or no ball,
@@ -87,8 +111,25 @@ are `experimental`, source "camera head track: hosel + OPS speed (experimental)"
 with a per-shot sigma in the delivery's `head_track` record. A value beyond
 +-15 deg, or two chords turning outside 0.5-2x the published arc's rate, is
 withheld with the reason. The kiosk shows it after a camera + IWR fused path and
-an accepted IWR path. It fills a metric only where the arc measured nothing, and
-feeds no other metric: no arc, face angle, spin, flight or simulator.
+an accepted IWR path, and it fills a metric only where the arc measured nothing.
+
+It feeds the collision model (owner decision 5, 25 Oct 2026). The model has no
+experimental label (it would read one as missing), so the path and attack enter as
+`estimated` with the reason "camera head track (experimental)". Their own records are
+`experimental`, and so is every output built on them, each with the note "rests on the
+experimental club path" (or attack angle): face angle, dynamic loft, spin loft, face to
+path, D-plane tilt, spin axis, the collision spin, and through the spin and axis carry
+and every flight metric. Simulators never receive them, whatever
+`SIMULATORS_ACCEPT_ESTIMATED` says: the shot goes out refused with "spin
+(experimental)" / "spin axis (experimental)" (`sim/resolver.py`).
+
+It does not feed the E1 arc (swing plane, swing direction, low point). The arc needs
+3-D head positions; the head track's depths are not measured but walked back from
+contact at the forward speed its own OPS-speed constraint gives, and with its two or
+three hosel points the arc fit would fall back to the same published plane and radius
+prior the head track already turned its chords with. An arc on those points would
+restate the head track's assumptions as swing plane and low point, so those stay
+`not_measured`.
 
 ## Impact location (experimental, live)
 

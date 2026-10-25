@@ -571,6 +571,76 @@ describe('face angle', () => {
     expect(byId(withIwr, 'club_path')).toMatchObject({ value: '+2.5', subtext: 'accepted' });
   });
 
+  // Server shot_models.attack_angle_resolution(): canonical, camera fused, accepted IWR,
+  // camera head track, the IWR candidate (estimated), then the arc (owner decision 3).
+  describe('attack tile chain', () => {
+    const candidate = {
+      club_angle_deg: null,
+      experimental_attack_angle_deg: -6.5,
+      experimental_attack_angle_status: 'candidate_available',
+    };
+    const headTrack = {
+      experimental_fused_status: 'camera_head_track',
+      experimental_fused_attack_angle_deg: -4.2,
+      experimental_fused_attack_angle_confidence: 'experimental',
+    };
+
+    it('shows the IWR candidate, labelled estimated, when nothing stronger gave one', () => {
+      const tile = byId(buildLiveMetrics(makeShot(candidate), 'imperial', emptySwingStats), 'club_aoa');
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+    });
+
+    it('puts the head track before the IWR candidate', () => {
+      const tile = byId(
+        buildLiveMetrics(makeShot({ ...candidate, ...headTrack }), 'imperial', emptySwingStats),
+        'club_aoa'
+      );
+      expect(tile).toMatchObject({ value: '-4.2', subtext: 'camera head track' });
+    });
+
+    it('puts an accepted IWR attack before the head track', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({ ...headTrack, ...candidate, experimental_attack_angle_status: 'accepted' }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile.value).toBe('-6.5');
+      expect(tile.subtext).toBe('accepted');
+    });
+
+    it('shows the IWR candidate after a rejected camera fusion, which it never shows', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({
+            ...candidate,
+            experimental_fused_status: 'rejected_no_impact',
+            experimental_fused_attack_angle_deg: -1.0,
+          }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+    });
+
+    it('never shows an IWR candidate its gates flagged', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({ ...candidate, experimental_attack_angle_status: 'candidate_noisy_fit' }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile.value).toBe(NO_VALUE);
+      expect(tile.subtext).toBe('candidate noisy fit');
+    });
+  });
+
   it('rides on the camera path the server built it from, not an accepted IWR path', () => {
     // Server displayed_club_path() mirrors this precedence.
     const metrics = buildLiveMetrics(

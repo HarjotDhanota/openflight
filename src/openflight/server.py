@@ -6265,6 +6265,7 @@ def _resolve_spin(shot: Shot) -> None:
     records the choice.
     """
     from .source_chain import Candidate, Route, resolve  # noqa: PLC0415
+    from .source_labels import LABEL_EXPERIMENTAL, experimental_collision_inputs  # noqa: PLC0415
 
     accepted = (
         shot.spin_source not in _MODEL_SPIN_SOURCES
@@ -6286,7 +6287,14 @@ def _resolve_spin(shot: Shot) -> None:
 
     def collision():
         if shot.spin_source in _MODEL_SPIN_SOURCES and _finite(shot.spin_rpm):
-            return Candidate(float(shot.spin_rpm), shot.spin_source, shot.spin_method or "model")
+            experimental = experimental_collision_inputs(shot.collision_model)
+            label = LABEL_EXPERIMENTAL if experimental else shot.spin_source
+            note = f"rests on experimental {', '.join(experimental)}" if experimental else None
+            return Candidate(
+                float(shot.spin_rpm), label, shot.spin_method or "collision model", note=note
+            )
+        if shot.collision_model is None:
+            return "the shot has no club delivery for the collision model"
         reason = (((shot.collision_model or {}).get("metrics") or {}).get("spin_rate") or {}).get(
             "reason"
         )
