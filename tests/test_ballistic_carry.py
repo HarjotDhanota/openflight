@@ -53,15 +53,13 @@ def _finalize(shot: Shot) -> Shot:
     return shot
 
 
-def test_an_ops_only_unit_flies_the_simulator(ops_only):
-    shot = _finalize(_shot(spin_confidence=0.2))
+@pytest.mark.parametrize(
+    ("unit", "overrides"), [("ops_only", {"spin_confidence": 0.2}), ("fusion", {})]
+)
+def test_the_unit_flies_the_simulator_on_the_inputs_it_trusts(request, unit, overrides):
+    request.getfixturevalue(unit)
 
-    assert shot.carry_spin_adjusted == pytest.approx(simulate(resolve_launch(shot)).carry_yards)
-    assert shot.carry_status == CARRY_ESTIMATED
-
-
-def test_a_fusion_unit_flies_only_measured_inputs(fusion):
-    shot = _finalize(_shot())
+    shot = _finalize(_shot(**overrides))
 
     assert shot.carry_spin_adjusted == pytest.approx(simulate(resolve_launch(shot)).carry_yards)
     assert shot.carry_status == CARRY_ESTIMATED
