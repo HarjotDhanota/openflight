@@ -120,6 +120,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from openflight.camera.club_delivery import HeadPosition
+from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for
@@ -128,6 +129,7 @@ MEASURED = "measured"
 CALCULATED = "calculated"
 MODEL_GEOMETRY = "model_geometry"
 NOT_MEASURED = "not_measured"
+EXPERIMENTAL = "experimental"
 LABEL_RANK = {MEASURED: 3, CALCULATED: 2, MODEL_GEOMETRY: 1, NOT_MEASURED: 0}
 
 RIGHT_HANDED = "RH"
@@ -655,7 +657,8 @@ SELECTION_RULE = (
     "club path and attack angle: the arc's value when its label ranks at least as high as "
     "the chained camera/IWR value's (measured > calculated > model geometry > not measured), "
     "otherwise the chained value; a chained value counts as measured when it exists and is "
-    "not withheld, rejected or an error. Both are recorded under cross_check."
+    "not withheld, rejected or an error. The camera head track's value is experimental and "
+    "fills only a metric the arc did not measure. Both are recorded under cross_check."
 )
 CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
@@ -765,27 +768,36 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
         metrics["low_point_distance_mm"], club
     )
     chained = data or {}
-    chained_source = (
-        CHAINED_OPS_SOURCE if chained.get("status") == "camera_ops_fallback" else CHAINED_IWR_SOURCE
-    )
+    head_track = chained.get("status") == HEAD_TRACK_SOURCE
+    if head_track:
+        chained_source = HEAD_TRACK_SOURCE
+    elif chained.get("status") == "camera_ops_fallback":
+        chained_source = CHAINED_OPS_SOURCE
+    else:
+        chained_source = CHAINED_IWR_SOURCE
     for name, tier_name in (
         ("club_path_deg", "path_confidence_tier"),
         ("attack_angle_deg", "attack_confidence_tier"),
     ):
         measured = _chained_value(chained, name, tier_name)
         arc_rank = LABEL_RANK[metrics[name]["status"]]
-        if measured is not None and arc_rank < LABEL_RANK[MEASURED]:
+        outranks = (
+            arc_rank == LABEL_RANK[NOT_MEASURED] if head_track else arc_rank < LABEL_RANK[MEASURED]
+        )
+        if measured is not None and outranks:
             metrics[name] = {
                 "value": measured,
-                "status": MEASURED,
+                "status": EXPERIMENTAL if head_track else MEASURED,
                 "source": chained_source,
                 "frame": chained.get("club_path_frame") if name == "club_path_deg" else None,
                 "range": None,
                 "reason": None,
             }
         elif metrics[name]["value"] is None and chained:
+            flag = (chained.get("head_track") or {}).get(name.replace("_deg", "_flag"))
             metrics[name]["reason"] = (
                 f"{metrics[name]['reason']}; chained club delivery: {chained.get('status')}"
+                + (f" ({flag})" if flag else "")
             )
 
     def difference(name):
