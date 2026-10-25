@@ -104,22 +104,21 @@ def test_internal_trigger_configuration_restores_all_settings_under_guard(monkey
 
 
 @pytest.mark.parametrize(
-    "version",
-    ["1.3.1", "1.3.0", "1.2.9", "1.4.0", "unknown", "1.3", "v1.3.2", None],
+    ("version", "supported"),
+    [(v, True) for v in ("1.3.2", "1.3.3", "1.3.99")]
+    + [(v, False) for v in ("1.3.1", "1.3.0", "1.2.9", "1.4.0", "unknown", "1.3", "v1.3.2", None)],
 )
-def test_internal_trigger_rejects_unqualified_firmware(monkeypatch, version):
+def test_internal_trigger_accepts_only_1_3_2_and_later_1_3_firmware(
+    monkeypatch, version, supported
+):
     radar = _radar()
     monkeypatch.setattr(radar, "_probe_firmware_version", lambda: version)
 
-    with pytest.raises(RuntimeError, match="firmware v1.3.2"):
-        radar.validate_internal_trigger_firmware()
-
-
-@pytest.mark.parametrize("version", ["1.3.2", "1.3.3", "1.3.99"])
-def test_internal_trigger_accepts_supported_1_3_firmware(monkeypatch, version):
-    radar = _radar()
-    monkeypatch.setattr(radar, "_probe_firmware_version", lambda: version)
-    assert radar.validate_internal_trigger_firmware() == version
+    if supported:
+        assert radar.validate_internal_trigger_firmware() == version
+    else:
+        with pytest.raises(RuntimeError, match="firmware v1.3.2"):
+            radar.validate_internal_trigger_firmware()
 
 
 @pytest.mark.parametrize(
