@@ -279,9 +279,10 @@ def fit_lit_ball(
     if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
         return None
     turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth)
-    if float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION:
-        return None
-    if _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION:
+    if (
+        float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
+        or _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION
+    ):
         return None
     return LitBall(
         x=float(cx + left),
