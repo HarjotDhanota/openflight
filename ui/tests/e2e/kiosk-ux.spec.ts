@@ -19,38 +19,31 @@ test.beforeEach(async () => {
   });
 });
 
-test('the Live tab shows a set target line, signed, with its ±', async ({ page }) => {
-  await page.route('**/api/target-line', (route) =>
-    json(route, { status: 'set', yaw_deg: 2.14, total_uncertainty_deg: 0.8, source: 'aim_point' })
-  );
-  await gotoApp(page);
-  await dismissPicker(page);
-  const line = page.locator('.live-panel__target');
-  await expect(line).toHaveText('Target line set +2.1° ±0.8°');
-  await expect(line).toHaveAttribute('data-status', 'set');
-  const box = await line.boundingBox();
-  expect(box?.height ?? 99).toBeLessThan(24);
-  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
-});
+const TARGET_LINES = [
+  ['set', 200, { status: 'set', yaw_deg: 2.14, total_uncertainty_deg: 0.8, source: 'aim_point' }],
+  ['not set', 200, { status: 'not_set', yaw_deg: null, total_uncertainty_deg: null, source: null }],
+  ['missing', 404, { error: 'not found' }],
+] as const;
 
-test("the Live tab says left/right is from the unit's aim when no target line is set", async ({ page }) => {
-  await page.route('**/api/target-line', (route) =>
-    json(route, { status: 'not_set', yaw_deg: null, total_uncertainty_deg: null, source: null })
-  );
-  await gotoApp(page);
-  await dismissPicker(page);
-  await expect(page.locator('.live-panel__target')).toHaveText(
-    "Target line not set: left/right is from the unit's aim"
-  );
-});
-
-test('a kiosk server without the route draws no target line', async ({ page }) => {
-  await page.route('**/api/target-line', (route) => json(route, { error: 'not found' }, 404));
-  await gotoApp(page);
-  await dismissPicker(page);
-  await expect(page.locator('.live-panel__grid .metric-card').first()).toBeVisible();
-  await expect(page.locator('.live-panel__target')).toHaveCount(0);
-});
+for (const [name, status, payload] of TARGET_LINES) {
+  test(`the Live tab's target line when it is ${name}`, async ({ page }) => {
+    await page.route('**/api/target-line', (route) => json(route, payload, status));
+    await gotoApp(page);
+    await dismissPicker(page);
+    await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
+    const line = page.locator('.live-panel__target');
+    if (name === 'missing') {
+      // a kiosk server without the route draws no target line
+      await expect(line).toHaveCount(0);
+    } else if (name === 'set') {
+      await expect(line).toHaveText('Target line set +2.1° ±0.8°');
+      await expect(line).toHaveAttribute('data-status', 'set');
+      expect((await line.boundingBox())?.height ?? 99).toBeLessThan(24);
+    } else {
+      await expect(line).toHaveText("Target line not set: left/right is from the unit's aim");
+    }
+  });
+}
 
 test('the tab bar shows there are more tabs and a tap on the hint scrolls to them', async ({ page }) => {
   await gotoApp(page);

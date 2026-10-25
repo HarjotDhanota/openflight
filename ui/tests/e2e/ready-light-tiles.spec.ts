@@ -1,5 +1,3 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import {
   drawnAt,
@@ -73,9 +71,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
         const bounds = await tile.boundingBox();
         expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height + 0.5);
       }
-      await page.screenshot({
-        path: test.info().outputPath(`ready-light-tiles-${viewport.width}x${viewport.height}.png`),
-      });
     });
   });
 }
@@ -116,9 +111,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
       test.use({ viewport, hasTouch: true });
 
       test('the target strip opens it over the tiles, and the tiles keep their height', async ({ page }) => {
-        const tag = `${viewport.width}x${viewport.height}-${hand}`;
-        const out = process.env.UX_SHOTS_DIR;
-        if (out) mkdirSync(out, { recursive: true });
         await withControlSocket(async (socket) => {
           await simulateShot(socket);
         });
@@ -140,7 +132,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
         expect(await overflowingLiveMetricValues(page)).toEqual([]);
         expect(await overflowingLiveMetricMetadata(page)).toEqual([]);
         await expect(page.locator('.live-panel__aim-view')).toHaveCount(0);
-        if (out) await page.screenshot({ path: join(out, `task8-live-aim-${tag}-closed.png`) });
 
         await strip.click();
         const line = page.locator(`${AIM_PICTURE} .setup-picture__aim-line`);
@@ -161,7 +152,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
         expect(Math.hypot(ends[2] - ends[0], ends[3] - ends[1])).toBeGreaterThanOrEqual(60);
         const picture = (await page.locator(`${AIM_PICTURE} img`).boundingBox())!;
         expect(Math.min(picture.width, (picture.height * 8) / 5)).toBeGreaterThanOrEqual(290);
-        if (out) await page.screenshot({ path: join(out, `task8-live-aim-${tag}-open.png`) });
 
         await page.locator('.live-panel__aim-view').click();
         await expect(page.locator('.live-panel__aim-view')).toHaveCount(0);
