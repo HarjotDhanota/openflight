@@ -29,6 +29,7 @@ from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
     TriggeredFrameBuffer,
+    delivery_summary,
     pre_trigger_count_by_exposure,
     timing_summary,
     unpack_r8_frame,
@@ -213,6 +214,25 @@ def _nearest_trigger_index(timestamps: list[float], impact: float, tolerance: fl
     if sum(math.isclose(delta, distance) for delta, _ in candidates) != 1:
         return None
     return index
+
+
+def _delivery_note(delivery: Mapping) -> str:
+    """The log's word on dropped frames: how many, where, and the callback's longest wait."""
+    if not delivery.get("dropped_frames"):
+        return ""
+    where = ", ".join(
+        f"{drop['frames_missing']} at {drop['frames_from_trigger_frame']:+d}"
+        for drop in delivery["drops"]
+    )
+    stall = delivery.get("longest_callback_stall") or {}
+    lag = delivery.get("delivery_lag_ms") or {}
+    # a stall that began before the clip shows only as lag on its first frames
+    return (
+        f" ({delivery['dropped_frames']} frame(s) dropped, {where} frames from the trigger;"
+        f" longest callback wait {stall.get('ms', 0.0):.0f} ms after frame"
+        f" {stall.get('frames_from_trigger_frame', 0):+d}, delivery lag up to"
+        f" {lag.get('max', 0.0):.0f} ms)"
+    )
 
 
 def _save_pgm(path: Path, image: np.ndarray) -> None:
@@ -1601,8 +1621,10 @@ class CameraCaptureRuntime:
         )
         trigger_index = max(0, capture.pre_trigger_count - 1)
         summary = timing_summary(capture.frames)
+        delivery = delivery_summary(capture.frames, capture.pre_trigger_count)
         summary.update(
             {
+                "delivery": delivery,
                 "sequence": sequence,
                 "trigger_timestamp": trigger_epoch,
                 "completed_timestamp": time.time(),
@@ -1656,11 +1678,12 @@ class CameraCaptureRuntime:
         )
         (shot_dir / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n")
         logger.info(
-            "[CAMERA] Capture #%d saved: %d frames, %.1ffps, gaps=%d -> %s",
+            "[CAMERA] Capture #%d saved: %d frames, %.1ffps, gaps=%d%s -> %s",
             sequence,
             summary["frame_count"],
             summary["delivered_fps"],
             summary["gap_count"],
+            _delivery_note(delivery),
             shot_dir,
         )
         return SavedCameraCapture(
