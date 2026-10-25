@@ -100,6 +100,9 @@ class LCMFResult:
     horizontal_frame: str | None = None
     effective_tdm_tau_s: float = doa.TDM_TAU_S
     effective_loop_period_s: float = tracking.LOOP_PRI_S
+    # the range walk's competitor when the tracker could not separate the two
+    # (``tracking.TrackAmbiguity.to_dict``), else None
+    track_ambiguity: dict | None = None
     range_evidence: BallRangeEvidence | None = field(
         default=None,
         repr=False,
@@ -139,6 +142,7 @@ class LCMFResult:
             "horizontal_frame": self.horizontal_frame,
             "effective_tdm_tau_s": self.effective_tdm_tau_s,
             "effective_loop_period_s": self.effective_loop_period_s,
+            "track_ambiguity": self.track_ambiguity,
         }
 
 
@@ -213,6 +217,11 @@ def _result_from_track(
         tdm_sign_used=shot.tdm_sign_used,
         effective_tdm_tau_s=effective_tdm_tau_s,
         effective_loop_period_s=effective_loop_period_s,
+        track_ambiguity=(
+            track.ambiguity.to_dict()
+            if track is not None and getattr(track, "ambiguity", None) is not None
+            else None
+        ),
     )
 
 

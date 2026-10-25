@@ -43,8 +43,13 @@ MIN_BALL_INLIERS = 12
 MIN_BALL_SPAN_S = 0.006
 # The walk starts at the first frame with this many samples whose next frame has them too.
 WALK_START_MIN_SAMPLES = 2
-# the RANSAC line's inlier tolerance, in bins, as tracking.find_ball uses
+# the range walk's inlier tolerance, in bins, as tracking.find_ball uses
 _TRACK_TOLERANCE_BINS = 1.2
+# Two competing walks whose launch points lie within this many standard errors of their
+# combined uncertainty are one answer (two-sided ~95 %); further apart, the range is
+# labelled AMBIGUOUS_LABEL.
+COMPETING_SIGMAS = 2.0
+AMBIGUOUS_LABEL = "estimated"
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,13 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
     track: tracking.BallTrack | None = field(default=None, repr=False, compare=False)
     # the partial-dump record when the capture's transfer lost bytes (``partial_dump``)
     partial: dict | None = None
+    # the tracker's competing walk and both launch points (``_settle_competition``)
+    competing: dict | None = None
+
+    @property
+    def ambiguous(self) -> bool:
+        """Whether two IWR walks with different launch points could not be told apart."""
+        return self.competing is not None and self.competing.get("verdict") == "ambiguous"
 
     @property
     def measured(self) -> bool:
@@ -115,6 +127,8 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
     def label(self) -> str:
         if not self.measured:
             return "not_measured"
+        if self.ambiguous:
+            return AMBIGUOUS_LABEL
         return PARTIAL_LABEL if self.partial is not None else "measured"
 
     def to_dict(self) -> dict:
@@ -138,6 +152,7 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
             "scope": self.scope,
             "validated_against_tape": False,
             "partial": self.partial,
+            "competing": self.competing,
         }
 
 
@@ -166,16 +181,17 @@ def shot_ball_range(
 ) -> ShotBallRange:
     """The shot's own IWR launch point; else the camera prior, labelled; else not measured."""
     if estimate is not None and estimate.measured:
+        notes = []
+        if estimate.ambiguous:
+            notes.append(competition_note(estimate.competing))
+        if estimate.partial is not None:
+            notes.append(f"from a partial IWR dump: {estimate.partial.get('missing')}")
         return ShotBallRange(
             range_m=estimate.range_m,
             uncertainty_m=estimate.uncertainty_m,
             source=SOURCE,
             label=estimate.label,
-            reason=(
-                f"from a partial IWR dump: {estimate.partial.get('missing')}"
-                if estimate.partial is not None
-                else None
-            ),
+            reason="; ".join(notes) or None,
         )
     why = estimate.reason if estimate is not None and estimate.reason else "no IWR launch point"
     if prior is not None:
@@ -195,6 +211,24 @@ def shot_ball_range(
         reason=f"the IWR did not measure this shot's launch point ({why}) and there is no "
         "camera prior",
     )
+
+
+def competition_note(competing: dict) -> str:
+    """One line on two competing IWR walks: both launch points and the camera's check."""
+    selected = competing["selected"]["launch_range_m"]
+    other = competing["runner_up"]["launch_range_m"]
+    note = (
+        f"{competing['reason']}: launch points {selected:.2f} m and {other:.2f} m; "
+        f"{selected:.2f} m is reported"
+    )
+    prior = competing.get("camera_prior")
+    if prior is None:
+        return f"{note}; no camera prior to check them against"
+    agrees = prior["agrees_with"]
+    if competing.get("resolved_by") == "camera_prior":
+        return f"{note}, the one the camera prior ({prior['range_m']:.2f} m) agrees with"
+    which = "both" if len(agrees) == 2 else "neither"
+    return f"{note}; the camera prior ({prior['range_m']:.2f} m) agrees with {which}"
 
 
 def search_gate_m(prior: LaunchRangePrior | None, net_range_m: float | None) -> tuple[float, float]:
@@ -307,12 +341,29 @@ def walk_start_s(
 
 
 def _ball_walk(
-    prepared: PreparedShotDump, gate: tuple[float, float], speed_ms: float
+    prepared: PreparedShotDump,
+    gate: tuple[float, float],
+    speed_ms: float,
+    *,
+    prior: LaunchRangePrior | None = None,
+    range_bias_m: float = 0.0,
 ) -> tuple[tracking.BallTrack | None, str]:
-    """The ball's walk in the gate at the OPS speed; the window MTI past a notch."""
+    """The ball's walk in the gate at the OPS speed; the window MTI past a notch.
+
+    The camera prior, when there is one, is the tracker's range anchor (in the radar's
+    apparent range): a walk first seen short of the resting ball is refused."""
     geometry = prepared.geometry
     low, high = BALL_SPEED_FRACTION
     bounds = (low * speed_ms, high * speed_ms)
+    anchor = (
+        tracking.TrackAnchor(
+            range_m=prior.range_m + range_bias_m,
+            range_sd_m=prior.uncertainty_m,
+            source=prior.source,
+        )
+        if prior is not None
+        else None
+    )
 
     def find(scope: str) -> tracking.BallTrack | None:
         return tracking.find_ball(
@@ -321,6 +372,8 @@ def _ball_walk(
             gates_m=(gate,),
             speed_bounds_ms=bounds,
             min_ball_ms=bounds[0],
+            anchor=anchor,
+            ops_speed_ms=speed_ms,
         )
 
     track, scope = find("burst"), "burst"
@@ -403,47 +456,27 @@ def _meeting(  # pylint: disable=too-many-arguments
     return float(final), ball, club
 
 
-def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+def _launch_point(  # pylint: disable=too-many-arguments,too-many-locals
     prepared: PreparedShotDump,
-    *,
-    ball_speed_mph: float | None,
+    scope: str,
+    gate: tuple[float, float],
+    ball: tracking.BallTrack,
     club_speed_mph: float | None,
-    prior: LaunchRangePrior | None,
-    net_range_m: float | None,
-    range_bias_m: float = 0.0,
-) -> LaunchRangeEstimate:
-    """This shot's launch-point range; ``prepared`` is the capture's vertical TX pair."""
-    gate = search_gate_m(prior, net_range_m)
-    common: dict[str, Any] = {"search_gate_m": gate, "range_bias_m": range_bias_m, "prior": prior}
-    if not ball_speed_mph or ball_speed_mph <= 0.0:
-        return LaunchRangeEstimate(
-            status="not_measured", reason="no OPS243 ball speed for this shot", **common
-        )
+) -> dict | str:
+    """One walk's launch point (apparent range, its uncertainty and how), or why not."""
     geometry = prepared.geometry
     res = geometry.range_res_m
-    ball_ms = float(ball_speed_mph) / tracking.MPH_PER_MS
-    ball, scope = _ball_walk(prepared, gate, ball_ms)
-    if ball is None:
-        return LaunchRangeEstimate(
-            status="not_measured", reason="no ball track after impact", **common
-        )
-    common.update(scope=scope, ball_track=_track_facts(ball, res), track=ball)
     if (
         ball.slope_bins <= 0.0
         or ball.n_inliers < MIN_BALL_INLIERS
         or (ball.t_last - ball.t_first) < MIN_BALL_SPAN_S
     ):
-        return LaunchRangeEstimate(
-            status="not_measured",
-            reason=(
-                f"the ball track is too thin to extrapolate ({ball.n_inliers} samples over "
-                f"{1000.0 * (ball.t_last - ball.t_first):.1f} ms)"
-            ),
-            **common,
+        return (
+            f"the ball track is too thin to extrapolate ({ball.n_inliers} samples over "
+            f"{1000.0 * (ball.t_last - ball.t_first):.1f} ms)"
         )
-
     start_s = walk_start_s(prepared, scope, ball, gate)
-    common["ball_track"] = {**common["ball_track"], "walk_start_s": start_s}
+    ball_facts = {**_track_facts(ball, res), "walk_start_s": start_s}
     method, impact_t_s, club, club_facts = "ball_track_start", start_s, None, None
     if club_speed_mph and club_speed_mph > 0.0:
         club = _club_walk(
@@ -457,7 +490,7 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
         else:
             impact_t_s, ball, club = meeting
             method = "club_ball_intersection"
-            common["ball_track"] = {
+            ball_facts = {
                 **_track_facts(ball, res),
                 "walk_start_s": start_s,
                 "refit": "post_impact_samples_only",
@@ -477,8 +510,146 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
         uncertainty = math.hypot(
             _line_sigma_m(ball, impact_t_s, res), start_gap, CLUB_CONTAMINATION_M, MODEL_FLOOR_M
         )
+    return {
+        "method": method,
+        "impact_t_s": impact_t_s,
+        "apparent_m": apparent,
+        "uncertainty_m": float(uncertainty),
+        "ball_track": ball_facts,
+        "club_track": club_facts,
+    }
+
+
+def _point_facts(point: dict | str, range_bias_m: float) -> dict:
+    """A launch point's range, uncertainty and method for the record, or why there is none."""
+    if isinstance(point, str):
+        return {"launch_range_m": None, "why_not": point}
+    return {
+        "launch_range_m": point["apparent_m"] - float(range_bias_m),
+        "launch_uncertainty_m": point["uncertainty_m"],
+        "method": point["method"],
+    }
+
+
+def _settle_competition(  # pylint: disable=too-many-arguments,too-many-locals
+    prepared: PreparedShotDump,
+    scope: str,
+    gate: tuple[float, float],
+    point: dict,
+    ambiguity: tracking.TrackAmbiguity,
+    *,
+    club_speed_mph: float | None,
+    prior: LaunchRangePrior | None,
+    range_bias_m: float,
+) -> tuple[dict, dict]:
+    """(the launch point to report, the competition's record) for an ambiguous walk.
+
+    The runner-up walk's own launch point is worked out the same way. One that cannot be
+    made, or lies outside the searched range, is no answer (``runner_up_unusable``). Two
+    within COMPETING_SIGMAS of their combined uncertainty are one answer (``agree``).
+    Otherwise the range is ``ambiguous``: the camera prior, when it agrees with exactly
+    one of the two (PRIOR_AGREEMENT_SIGMAS), picks that one (``resolved_by``); the label
+    stays AMBIGUOUS_LABEL either way, because the IWR alone could not decide.
+    """
+    other = _launch_point(prepared, scope, gate, ambiguity.runner_up_track, club_speed_mph)
+    if not isinstance(other, str) and not gate[0] <= other["apparent_m"] <= gate[1]:
+        other = f"its launch point {other['apparent_m']:.2f} m lies outside the searched range"
+    record = {
+        "reason": ambiguity.reason,
+        "support_z": ambiguity.support_z,
+        "separation_bins": ambiguity.separation_bins,
+        "selected": {**ambiguity.selected, **_point_facts(point, range_bias_m)},
+        "runner_up": {**ambiguity.runner_up, **_point_facts(other, range_bias_m)},
+        "camera_prior": None,
+        "resolved_by": None,
+    }
+    if isinstance(other, str):
+        return point, {**record, "verdict": "runner_up_unusable"}
+    gap = abs(point["apparent_m"] - other["apparent_m"])
+    if gap <= COMPETING_SIGMAS * math.hypot(point["uncertainty_m"], other["uncertainty_m"]):
+        return point, {**record, "verdict": "agree"}
+    record["verdict"] = "ambiguous"
+    if prior is None:
+        return point, record
+
+    def agrees(candidate: dict) -> bool:
+        true_range = candidate["apparent_m"] - float(range_bias_m)
+        allowed = PRIOR_AGREEMENT_SIGMAS * math.hypot(
+            prior.uncertainty_m, candidate["uncertainty_m"]
+        )
+        return abs(true_range - prior.range_m) <= allowed
+
+    agree_selected, agree_other = agrees(point), agrees(other)
+    swap = agree_other and not agree_selected
+    if swap:
+        record["selected"], record["runner_up"] = record["runner_up"], record["selected"]
+        point, other = other, point
+        agree_selected, agree_other = agree_other, agree_selected
+    record["camera_prior"] = {
+        **prior.to_dict(),
+        "agrees_with": [
+            name for name, ok in (("selected", agree_selected), ("runner_up", agree_other)) if ok
+        ],
+    }
+    record["resolved_by"] = "camera_prior" if agree_selected != agree_other else None
+    record["swapped"] = swap
+    return point, record
+
+
+def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+    prepared: PreparedShotDump,
+    *,
+    ball_speed_mph: float | None,
+    club_speed_mph: float | None,
+    prior: LaunchRangePrior | None,
+    net_range_m: float | None,
+    range_bias_m: float = 0.0,
+) -> LaunchRangeEstimate:
+    """This shot's launch-point range; ``prepared`` is the capture's vertical TX pair.
+
+    When the tracker could not separate the ball's walk from a different one, both
+    launch points are worked out (``_settle_competition``) and, if they differ, the
+    estimate carries ``competing`` and the label AMBIGUOUS_LABEL."""
+    gate = search_gate_m(prior, net_range_m)
+    common: dict[str, Any] = {"search_gate_m": gate, "range_bias_m": range_bias_m, "prior": prior}
+    if not ball_speed_mph or ball_speed_mph <= 0.0:
+        return LaunchRangeEstimate(
+            status="not_measured", reason="no OPS243 ball speed for this shot", **common
+        )
+    geometry = prepared.geometry
+    res = geometry.range_res_m
+    ball_ms = float(ball_speed_mph) / tracking.MPH_PER_MS
+    ball, scope = _ball_walk(prepared, gate, ball_ms, prior=prior, range_bias_m=range_bias_m)
+    if ball is None:
+        return LaunchRangeEstimate(
+            status="not_measured", reason="no ball track after impact", **common
+        )
+    common.update(scope=scope, ball_track=_track_facts(ball, res), track=ball)
+    point = _launch_point(prepared, scope, gate, ball, club_speed_mph)
+    if isinstance(point, str):
+        return LaunchRangeEstimate(status="not_measured", reason=point, **common)
+    if ball.ambiguity is not None:
+        point, competing = _settle_competition(
+            prepared,
+            scope,
+            gate,
+            point,
+            ball.ambiguity,
+            club_speed_mph=club_speed_mph,
+            prior=prior,
+            range_bias_m=range_bias_m,
+        )
+        common["competing"] = competing
+        if competing.get("swapped"):
+            common["track"] = ball.ambiguity.runner_up_track
+    apparent, uncertainty = point["apparent_m"], point["uncertainty_m"]
     true_range = apparent - float(range_bias_m)
-    common.update(club_track=club_facts, method=method, impact_t_s=impact_t_s)
+    common.update(
+        ball_track=point["ball_track"],
+        club_track=point["club_track"],
+        method=point["method"],
+        impact_t_s=point["impact_t_s"],
+    )
     if not gate[0] <= apparent <= gate[1]:
         return LaunchRangeEstimate(
             status="not_measured",
@@ -509,12 +680,14 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
 
 
 __all__ = [
+    "AMBIGUOUS_LABEL",
     "CAMERA_PRIOR_SOURCE",
     "LaunchRangeEstimate",
     "LaunchRangePrior",
     "SCHEMA",
     "SOURCE",
     "ShotBallRange",
+    "competition_note",
     "estimate_launch_range",
     "search_gate_m",
     "shot_ball_range",
