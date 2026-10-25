@@ -63,6 +63,7 @@ from .flight_sim import (
 )
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
+from .source_labels import EXPERIMENTAL_LAUNCH_SOURCES
 
 FLIGHT_METRICS = (
     "carry",
@@ -356,10 +357,21 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
         return []
     reasons = []
     _speed, speed_label = ball_speed_for_flight(shot)
+    full = getattr(shot, "ball_speed_full", None)
+    full = full if isinstance(full, dict) else {}
     if speed_label.startswith("radial"):
-        full = getattr(shot, "ball_speed_full", None)
-        why = (full or {}).get("reason") if isinstance(full, dict) else None
+        why = full.get("reason")
         reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
+    elif full.get("status") == STATUS_ESTIMATED:
+        reasons.append(f"full ball speed estimated ({full.get('note') or 'a weak input'})")
+    # a camera launch with no validated geometry (source_labels): experimental, so the
+    # flight is at best estimated here and shot_metrics labels it experimental
+    for name, source in (
+        ("vertical launch", shot.launch_angle_vertical_source),
+        ("horizontal launch", shot.launch_angle_horizontal_source),
+    ):
+        if source in EXPERIMENTAL_LAUNCH_SOURCES:
+            reasons.append(f"{name} from the {EXPERIMENTAL_LAUNCH_SOURCES[source]} (experimental)")
     # a collision spin or axis built on an estimated input (C2), with that input's reason
     metrics = (getattr(shot, "collision_model", None) or {}).get("metrics") or {}
     estimated_spin = conditions.spin_source == STATUS_ESTIMATED

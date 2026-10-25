@@ -415,7 +415,8 @@ def test_a_camera_delivery_without_a_low_point_carries_the_contact_note():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     record = _spin_record(shot)
-    assert record["status"] == "calculated"
+    # built on the camera's club delivery (an inferred geometry): experimental (25 Oct)
+    assert record["status"] == "experimental"
     assert record["value"] == pytest.approx(shot.spin_rpm_collision)
     assert record["note"].startswith(cm.NOTE_CONTACT)
     assert "no low point" in record["note"]
@@ -432,7 +433,8 @@ def test_without_camera_club_data_there_is_no_low_point_to_miss():
     for shot in (no_hook, no_camera):
         shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
         record = _spin_record(shot)
-        assert record["status"] == "calculated"
+        # built on the camera's club delivery (an inferred geometry): experimental (25 Oct)
+        assert record["status"] == "experimental"
         assert cm.NOTE_CONTACT not in (record["note"] or "")
 
 

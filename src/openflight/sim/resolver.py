@@ -26,9 +26,11 @@ from openflight.sim.types import (
     UnmeasuredShotError,
 )
 from openflight.source_labels import (
+    LABEL_EXPERIMENTAL,
     horizontal_launch_label,
     is_estimated_source,
     is_model_geometry_source,
+    launch_label,
 )
 
 # OPS-only fallback spin (labelled estimated, as in the kiosk's ballistics); never on fusion.
@@ -132,8 +134,16 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
     missing = []
     if not _finite(shot.launch_angle_vertical):
         missing.append("vertical launch")
+    elif launch_label(shot.launch_angle_vertical_source) == LABEL_EXPERIMENTAL:
+        # a camera launch with no validated geometry is shown, never flown (D31)
+        missing.append("vertical launch (experimental)")
     if not _finite(shot.launch_angle_horizontal):
         missing.append("horizontal launch")
+    elif (
+        launch_label(shot.launch_angle_horizontal_source, shot.launch_angle_horizontal_status)
+        == LABEL_EXPERIMENTAL
+    ):
+        missing.append("horizontal launch (experimental)")
     if _measured_total_spin(shot) is None:
         missing.append("spin")
     if _spin_axis_provenance(shot) is None:
@@ -249,9 +259,7 @@ def resolve_shot(
 
     if _finite(shot.launch_angle_vertical):
         vla = float(shot.launch_angle_vertical)
-        provenance["vla"] = (
-            "estimated" if shot.launch_angle_vertical_source == "estimated" else "measured"
-        )
+        provenance["vla"] = launch_label(shot.launch_angle_vertical_source)
     else:
         vla = get_club_physics(shot.club).optimal_launch_deg
         provenance["vla"] = "estimated"

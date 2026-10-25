@@ -36,10 +36,25 @@ AZIMUTH_UNCALIBRATED = "azimuth_uncalibrated"
 AZIMUTH_UNCALIBRATED_NOTE = "azimuth uncalibrated: the IWR start direction has its own zero"
 
 
-def horizontal_launch_label(source: Optional[str], status: Optional[str] = None) -> str:
-    """The label a Shot horizontal launch carries for its ``launch_angle_horizontal_source``
-    and ``launch_angle_horizontal_status``: "estimated" on a weak source or an
-    uncalibrated azimuth, else "measured"."""
+# Launch sources read by a camera with no validated geometry (an inferred pose, the
+# lens's listed focal length): shown, labelled "experimental" until checked against
+# TrackMan. camera_fallback is the camera's own launch on a shot the IWR did not measure.
+CAMERA_FALLBACK_SOURCE = "camera_fallback"
+EXPERIMENTAL_LAUNCH_SOURCES = {
+    CAMERA_FALLBACK_SOURCE: "camera fallback launch (the IWR did not measure this shot)",
+    "camera_assisted_experimental": "camera horizontal on the IWR's depth",
+    "camera_only_experimental": "camera-only horizontal",
+    "camera_legacy_fallback": "camera horizontal after the calibrated model was refused",
+}
+EXPERIMENTAL_LAUNCH_NOTE = "experimental: the camera's geometry is not validated against TrackMan"
+
+
+def launch_label(source: Optional[str], status: Optional[str] = None) -> str:
+    """The label a Shot launch angle carries for its source (and horizontal status):
+    "experimental" from a camera with no validated geometry, "estimated" on a weak source
+    or an uncalibrated azimuth, else "measured"."""
+    if source in EXPERIMENTAL_LAUNCH_SOURCES:
+        return LABEL_EXPERIMENTAL
     if (
         source == LABEL_ESTIMATED
         or source in WEAK_HORIZONTAL_SOURCES
@@ -47,6 +62,16 @@ def horizontal_launch_label(source: Optional[str], status: Optional[str] = None)
     ):
         return LABEL_ESTIMATED
     return LABEL_MEASURED
+
+
+def horizontal_launch_label(source: Optional[str], status: Optional[str] = None) -> str:
+    """The label a Shot horizontal launch carries (``launch_label``)."""
+    return launch_label(source, status)
+
+
+def is_experimental_launch_source(source: Optional[str]) -> bool:
+    """Whether a launch source is a camera value labelled experimental."""
+    return source in EXPERIMENTAL_LAUNCH_SOURCES
 
 
 def is_measured_source(source: Optional[str]) -> bool:

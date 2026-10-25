@@ -97,7 +97,7 @@ def _evaluate(track, **overrides):
         vertical_deg=16.0,
         vertical_source="radar",
         horizontal_deg=2.0,
-        horizontal_source="camera_assisted_experimental",
+        horizontal_source="radar",
         horizontal_status=None,
         horizontal_frame="unit_boresight",
         horizontal_offset_deg=None,
@@ -523,3 +523,30 @@ def test_an_unbounded_range_is_none_never_infinite(monkeypatch):
     assert result["range_mph"] is None
     assert result["uncertainty_mph"]["tee_range"] is None
     assert result["range_basis"].startswith("unbounded")
+
+
+@pytest.mark.parametrize(
+    "override, words",
+    [
+        ({"vertical_source": "camera_fallback"}, "vertical launch from camera fallback"),
+        ({"horizontal_source": "camera_fallback"}, "horizontal launch from camera fallback"),
+        ({"horizontal_source": "camera_assisted_experimental"}, "camera horizontal"),
+        ({"tee_range_source": "camera_ball_size"}, "resting ball's own size"),
+        ({"tee_range_source": "camera_prior"}, "camera prior"),
+    ],
+)
+def test_a_camera_launch_or_a_stand_in_range_makes_the_full_speed_estimated(override, words):
+    """The value is projected, never calculated: no simulator flies it (D31)."""
+    result = _evaluate(_track(120.0, 16.0, 2.0), **override)
+
+    assert result["status"] == "estimated"
+    assert result["value_mph"] is not None
+    assert words in result["note"]
+    assert any(words in item for item in result["weak_inputs"])
+
+
+def test_a_measured_launch_on_the_shot_s_own_range_stays_calculated():
+    result = _evaluate(_track(120.0, 16.0, 2.0), tee_range_source="iwr_post_impact")
+
+    assert result["status"] == CALCULATED
+    assert result["weak_inputs"] == []

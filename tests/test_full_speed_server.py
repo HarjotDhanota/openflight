@@ -36,7 +36,7 @@ def _shot(**overrides):
         launch_angle_vertical=16.0,
         launch_angle_vertical_source="radar",
         launch_angle_horizontal=2.0,
-        launch_angle_horizontal_source="camera_assisted_experimental",
+        launch_angle_horizontal_source="radar",
         launch_angle_horizontal_frame="unit_boresight",
     )
     values.update(overrides)
@@ -173,3 +173,15 @@ def test_the_flight_model_s_field_is_none_when_not_measured(fusion_geometry):
 
     assert shot.ball_speed_full["status"] == NOT_MEASURED
     assert shot.ball_speed_full_mph is None
+
+
+def test_a_camera_launch_gives_an_estimated_full_speed_the_flight_still_uses(fusion_geometry):
+    """The camera fallback's launch: the full speed is projected, labelled, never sent."""
+    shot = _shot(launch_angle_vertical_source="camera_fallback")
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full["status"] == "estimated"
+    assert "camera fallback" in shot.ball_speed_full["note"]
+    # the flight flies it, labelled by it; simulators take only a calculated one
+    assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]

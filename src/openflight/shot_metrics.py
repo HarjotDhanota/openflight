@@ -15,14 +15,19 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
+from .source_chain import weakest_label
 from .source_labels import (
     AZIMUTH_UNCALIBRATED,
     AZIMUTH_UNCALIBRATED_NOTE,
+    EXPERIMENTAL_LAUNCH_NOTE,
+    EXPERIMENTAL_LAUNCH_SOURCES,
+    MODEL_LABELS,
     WEAK_HORIZONTAL_SOURCES,
     horizontal_launch_label,
     is_calculated_source,
     is_measured_source,
     is_model_geometry_source,
+    launch_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,8 +199,10 @@ def _ball_speed(shot):
     )
 
 
-def _launch_status(source: Optional[str]) -> str:
-    return ESTIMATED if source == "estimated" else MEASURED
+def _experimental_launch_note(source: Optional[str]) -> Optional[str]:
+    if source not in EXPERIMENTAL_LAUNCH_SOURCES:
+        return None
+    return f"{EXPERIMENTAL_LAUNCH_SOURCES[source]}: {EXPERIMENTAL_LAUNCH_NOTE}"
 
 
 def _launch_vertical(shot):
@@ -203,9 +210,11 @@ def _launch_vertical(shot):
     return _record(
         "launch_vertical",
         shot.get("launch_angle_vertical"),
-        _launch_status(source),
+        launch_label(source),
         source=source,
-        reason="vertical launch not measured on this shot",
+        reason=shot.get("launch_angle_vertical_reason")
+        or "vertical launch not measured on this shot",
+        note=_experimental_launch_note(source),
     )
 
 
@@ -226,6 +235,7 @@ def _launch_horizontal(shot):
         if source in WEAK_HORIZONTAL_SOURCES
         else None,
         AZIMUTH_UNCALIBRATED_NOTE if status == AZIMUTH_UNCALIBRATED else None,
+        _experimental_launch_note(source),
     ]
     return _record(
         "launch_horizontal",
@@ -369,6 +379,19 @@ def _delivery_entry(shot, metric_id: str) -> Mapping[str, Any]:
 
 _LEGACY_DELIVERY = {"club_path": "club_path_deg", "attack_angle": "club_angle_deg"}
 _COLLISION_INPUT = {"club_path": "club_path", "attack_angle": "attack_angle"}
+CAMERA_CLUB_NOTE = (
+    "camera club delivery on an inferred camera geometry: experimental, "
+    "not validated against TrackMan"
+)
+
+
+def _camera_club_label(record: dict, source: Optional[str]) -> dict:
+    """A camera club value labelled measured is experimental: its geometry is inferred."""
+    if record.get("status") == MEASURED and str(source or "").startswith("camera"):
+        note = record.get("note")
+        record["status"] = EXPERIMENTAL
+        record["note"] = f"{note}; {CAMERA_CLUB_NOTE}" if note else CAMERA_CLUB_NOTE
+    return record
 
 
 def _path_or_attack(metric_id: str):
@@ -381,16 +404,19 @@ def _path_or_attack(metric_id: str):
         if _finite(used.get("value")) is not None:
             source = used.get("source")
             same_as_arc = delivery and delivery.get("source") == source
-            return _record(
-                metric_id,
-                used["value"],
-                used.get("label"),
-                source=_PATH_SOURCES.get(source, source),
-                range_=delivery.get("range") if same_as_arc else None,
-                frame=used.get("frame") if metric_id == "club_path" else None,
+            return _camera_club_label(
+                _record(
+                    metric_id,
+                    used["value"],
+                    used.get("label"),
+                    source=_PATH_SOURCES.get(source, source),
+                    range_=delivery.get("range") if same_as_arc else None,
+                    frame=used.get("frame") if metric_id == "club_path" else None,
+                ),
+                source,
             )
         if _finite(delivery.get("value")) is not None:
-            return _from_producer(metric_id, delivery)
+            return _camera_club_label(_from_producer(metric_id, delivery), delivery.get("source"))
         legacy = shot.get(_LEGACY_DELIVERY[metric_id])
         if _finite(legacy) is not None:
             return _record(
@@ -411,10 +437,22 @@ def _path_or_attack(metric_id: str):
 BALL_RANGE_SOURCES = {
     "iwr_post_impact": "IWR post-impact launch point (this shot's own capture)",
     "camera_prior": "camera prior: the resting ball's size, coarse",
+    "camera_ball_size": "this shot's resting ball: its outline size at the lens's focal length",
     "configured_tee": "a fixed range set in code (not used by the kiosk)",
 }
 BALL_RANGE_UNVALIDATED = "per-swing IWR range: not validated against a tape yet"
 CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"
+BALL_SIZE_RANGE_NOTE = (
+    "rests on the resting ball's own size for its distance (experimental, not validated "
+    "against a tape)"
+)
+# The label every range-dependent value takes from the range's source, and why.
+RANGE_SOURCE_LABELS = {
+    "camera_prior": (ESTIMATED, CAMERA_PRIOR_NOTE),
+    "camera_ball_size": (EXPERIMENTAL, BALL_SIZE_RANGE_NOTE),
+}
+# Sensor readings that do not rest on the ball's range. The spin is one only when the
+# OPS measured it: a model's spin is built on the launch and the club (audit 25 Oct).
 RANGE_INDEPENDENT = frozenset({"ball_speed", "club_speed", "smash_factor", "spin_rate"})
 
 
@@ -431,6 +469,7 @@ def _ball_range(shot):
     status = {
         "iwr_post_impact": MEASURED,
         "camera_prior": ESTIMATED,
+        "camera_ball_size": EXPERIMENTAL,
         "configured_tee": MEASURED,
     }.get(source, ESTIMATED)
     return _record(
@@ -442,23 +481,103 @@ def _ball_range(shot):
         reason=shot.get("ball_range_reason") or "the ball's distance was not measured",
         note=BALL_RANGE_UNVALIDATED
         if source == "iwr_post_impact"
-        else CAMERA_PRIOR_NOTE
-        if source == "camera_prior"
+        else RANGE_SOURCE_LABELS[source][1]
+        if source in RANGE_SOURCE_LABELS
         else None,
     )
 
 
-def _with_prior_label(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dict[str, Any]]:
-    """Every range-dependent metric of a shot that rested on the camera prior is estimated."""
-    if shot.get("ball_range_source") != "camera_prior":
-        return metrics
-    for metric_id, record in metrics.items():
-        if metric_id in RANGE_INDEPENDENT or metric_id == "ball_range":
+# What each model output is built on (the inputs' metric ids). A record a model built
+# takes the weakest label among these, so a value never reads stronger than its
+# weakest input (D17, 25 Oct): measured > calculated > model geometry > estimated >
+# experimental. Readings a sensor took (ball and club speed, launch, club path) are
+# not in here: they carry their own label.
+_D_PLANE = ("launch_vertical", "launch_horizontal", "club_path", "attack_angle")
+_FLIGHT = ("ball_speed_full", "launch_vertical", "launch_horizontal", "spin_rate", "spin_axis")
+UPSTREAM = {
+    "ball_speed_full": ("launch_vertical", "launch_horizontal"),
+    "smash_factor_full": ("ball_speed_full", "club_speed_full"),
+    "spin_rate": (*_D_PLANE, "ball_speed_full"),
+    "spin_axis": _D_PLANE,
+    "face_angle": (*_D_PLANE, "ball_speed_full"),
+    "face_to_path": ("face_angle", "club_path"),
+    "dynamic_loft": (*_D_PLANE, "ball_speed_full"),
+    "spin_loft": ("dynamic_loft", "attack_angle"),
+    "d_plane_tilt": ("face_angle", "club_path", "spin_loft"),
+    "spin_index": ("spin_rate", "spin_loft"),
+    "smash_index": ("ball_speed_full", "spin_loft"),
+    **{
+        name: _FLIGHT
+        for name in (
+            "carry",
+            "carry_side",
+            "total",
+            "total_side",
+            "apex",
+            "landing_angle",
+            "hang_time",
+            "curve",
+        )
+    },
+}
+_LOWERABLE = (CALCULATED, MODEL_GEOMETRY, ESTIMATED)
+
+
+def _lower(record: dict[str, Any], label: str, why: str) -> bool:
+    """Take ``label`` when it is weaker than the record's own; True when it changed."""
+    status = record.get("status")
+    if status not in (*_LOWERABLE, MEASURED) or record.get("value") is None:
+        return False
+    weaker = weakest_label(status, label)
+    if weaker == status:
+        return False
+    note = record.get("note")
+    record["status"] = weaker
+    record["note"] = f"{note}; {why}" if note else why
+    return True
+
+
+def _model_spin(shot) -> bool:
+    """Whether the shot's spin is a model's (built on its launch and club), not the OPS's."""
+    return shot.get("spin_source") in MODEL_LABELS
+
+
+def _range_label(metrics: dict[str, dict[str, Any]], shot) -> None:
+    """Every range-dependent value takes the label of the range it rested on."""
+    label, why = RANGE_SOURCE_LABELS.get(shot.get("ball_range_source"), (None, None))
+    if label is None:
+        return
+    for metric_id, entry in metrics.items():
+        if metric_id == "ball_range":
             continue
-        if record.get("status") in (MEASURED, CALCULATED, MODEL_GEOMETRY):
-            note = record.get("note")
-            record["status"] = ESTIMATED
-            record["note"] = f"{note}; {CAMERA_PRIOR_NOTE}" if note else CAMERA_PRIOR_NOTE
+        if metric_id in RANGE_INDEPENDENT and not (metric_id == "spin_rate" and _model_spin(shot)):
+            continue
+        _lower(entry, label, why)
+
+
+def with_input_labels(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dict[str, Any]]:
+    """Every value takes its weakest input's label: the range's, then each model input's."""
+    _range_label(metrics, shot)
+    changed = True
+    while changed:
+        changed = False
+        for metric_id, inputs in UPSTREAM.items():
+            entry = metrics.get(metric_id)
+            if entry is None or entry.get("status") not in _LOWERABLE:
+                continue
+            if metric_id == "spin_rate" and not _model_spin(shot):
+                continue
+            for name in inputs:
+                upstream = metrics.get(name) or {}
+                status = upstream.get("status")
+                if status not in (EXPERIMENTAL, *_LOWERABLE) or upstream.get("value") is None:
+                    continue
+                if name == "spin_rate" and not _model_spin(shot):
+                    # an OPS spin below the confidence floor feeds no model
+                    continue
+                spec = _specs.get(name)
+                title = spec.label.lower() if spec else name
+                changed |= _lower(entry, status, f"rests on the {status} {title}")
     return metrics
 
 
@@ -556,7 +675,7 @@ def from_record(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     shot = _mapping(shot)
     with _lock:
         built = [(spec.id, _builders[spec.id]) for spec in _metrics]
-    return _with_prior_label({metric_id: build(shot) for metric_id, build in built}, shot)
+    return with_input_labels({metric_id: build(shot) for metric_id, build in built}, shot)
 
 
 def records(shot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

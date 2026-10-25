@@ -290,9 +290,7 @@ def test_an_experimental_value_keeps_its_label_and_its_range():
 
 def test_the_camera_prior_never_relabels_an_experimental_value():
     metrics = {"impact_offset": {"status": shot_metrics.EXPERIMENTAL, "value": 4.0, "note": None}}
-    shot_metrics._with_prior_label(  # pylint: disable=protected-access
-        metrics, {"ball_range_source": "camera_prior"}
-    )
+    shot_metrics.with_input_labels(metrics, {"ball_range_source": "camera_prior"})
     assert metrics["impact_offset"]["status"] == "experimental"
 
 

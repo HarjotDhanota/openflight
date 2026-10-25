@@ -43,6 +43,8 @@ from openflight.numeric import finite as _finite
 from openflight.source_labels import (
     AZIMUTH_UNCALIBRATED,
     AZIMUTH_UNCALIBRATED_NOTE,
+    EXPERIMENTAL_LAUNCH_NOTE,
+    EXPERIMENTAL_LAUNCH_SOURCES,
     MODEL_LABELS,
     WEAK_HORIZONTAL_SOURCES,
     is_measured_source,
@@ -151,7 +153,7 @@ def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
         frame=shot.launch_angle_horizontal_frame,
         name="launch direction",
     )
-    if not measured.present:
+    if not measured.present or measured.label != collision_model.LABEL_MEASURED:
         return measured
     confidence = shot.launch_angle_horizontal_confidence
     weak = shot.launch_angle_horizontal_source
@@ -182,6 +184,17 @@ def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_
         return collision_model.Input(None, reason=f"{name} not measured")
     if source == "estimated":
         return collision_model.Input(None, reason=f"{name} is a table estimate, not measured")
+    if source in EXPERIMENTAL_LAUNCH_SOURCES:
+        # a camera launch with no validated geometry: used, and every output built on it
+        # is at best "estimated" here (shot_metrics labels it experimental), with the reason
+        return collision_model.Input(
+            value,
+            collision_model.LABEL_ESTIMATED,
+            source,
+            frame,
+            reason=f"{name} from the {EXPERIMENTAL_LAUNCH_SOURCES[source]} "
+            f"({EXPERIMENTAL_LAUNCH_NOTE})",
+        )
     return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
 
 
@@ -277,11 +290,18 @@ def _low_point_input(shot: Shot) -> collision_model.Input | None:
 def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
     """The full ball speed, calculated; the radial speed never stands in for it."""
     speed = shot.ball_speed_full_mph
+    full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
     if _finite(speed) and speed > 0:
+        if full.get("status") == collision_model.STATUS_ESTIMATED:
+            return collision_model.Input(
+                float(speed),
+                collision_model.LABEL_ESTIMATED,
+                "full ball speed",
+                reason=f"full ball speed estimated ({full.get('note') or 'a weak input'})",
+            )
         return collision_model.Input(
             float(speed), collision_model.LABEL_CALCULATED, "full ball speed"
         )
-    full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
     why = full.get("reason") or "not computed on this shot yet"
     return collision_model.Input(None, reason=f"full ball speed not measured ({why})")
 
@@ -512,10 +532,11 @@ def _attach_full_speeds(shot: Shot) -> None:
         ball_height_m=calibrated("tee_ball_height_m"),
         tee_side_offset_m=(server.setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
     )
-    # the flight model (E4) reads the value alone: calculated, or None
+    # the flight model (E4) reads the value alone: calculated or estimated (on a camera
+    # launch or a stand-in range, labelled so where it is used), or None
     shot.ball_speed_full_mph = (
         shot.ball_speed_full["value_mph"]
-        if shot.ball_speed_full.get("status") == "calculated"
+        if shot.ball_speed_full.get("status") in ("calculated", "estimated")
         else None
     )
     shot.club_speed_full = evaluate_full_club_speed(

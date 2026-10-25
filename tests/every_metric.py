@@ -135,6 +135,11 @@ def fusion_shot(**overrides) -> Shot:
         "spin_source": "measured",
         "spin_method": "envelope",
         "smash_factor_status": SMASH_RADIAL_RATIO,
+        # a radar club delivery: a camera one on today's inferred geometry is experimental
+        # (test_fallback_labels), and this shot pins the measured and calculated labels
+        "club_path_deg": -2.0,
+        "club_path_frame": "target_line",
+        "club_angle_deg": -4.0,
     }
     values.update(overrides)
     shot = Shot(**values)

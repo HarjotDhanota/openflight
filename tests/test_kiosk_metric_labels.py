@@ -77,7 +77,9 @@ def test_a_weak_horizontal_source_is_estimated(source):
     ("source", "label"),
     [
         ("radar", "measured"),
-        ("camera_assisted_experimental", "measured"),
+        # a camera horizontal on an inferred geometry is never measured (audit 25 Oct)
+        ("camera_assisted_experimental", "experimental"),
+        ("camera_fallback", "experimental"),
         ("estimated", "estimated"),
     ],
 )

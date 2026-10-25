@@ -77,9 +77,15 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     ops_speed_track,
 )
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
-from .source_labels import LABEL_MEASURED, horizontal_launch_label
+from .source_labels import (
+    EXPERIMENTAL_LAUNCH_SOURCES,
+    LABEL_ESTIMATED,
+    LABEL_EXPERIMENTAL,
+    launch_label,
+)
 
 CALCULATED = "calculated"
+ESTIMATED = "estimated"
 NOT_MEASURED = "not_measured"
 METHOD = "measured_projection_v1"
 BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
@@ -134,9 +140,17 @@ UNMODELLED = (
 )
 
 MEASURED_VERTICAL_SOURCES = frozenset({"radar", "camera"})
-MEASURED_HORIZONTAL_SOURCES = frozenset(
-    {"radar", "camera_assisted_experimental", "camera_only_experimental", "camera_legacy_fallback"}
-)
+MEASURED_HORIZONTAL_SOURCES = frozenset({"radar"})
+# Camera launches with no validated geometry (source_labels): the full speed is still
+# projected on them, labelled "estimated" with the reason, never "calculated", so no
+# simulator flies it (D31) and every place shows it as a weak value.
+VERTICAL_SOURCES = MEASURED_VERTICAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
+HORIZONTAL_SOURCES = MEASURED_HORIZONTAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
+# A range that is a stand-in, not the shot's own IWR launch point (13 Oct, 25 Oct).
+WEAK_RANGE_SOURCES = {
+    "camera_prior": "the tee range is the camera prior's (coarse)",
+    "camera_ball_size": "the tee range is the resting ball's own size (experimental)",
+}
 
 
 # ---------------------------------------------------------------- physics
@@ -315,12 +329,12 @@ def _horizontal_boresight(
 ) -> tuple[Optional[float], Optional[str]]:
     if not _finite(horizontal_deg):
         return None, "horizontal launch is not measured"
-    if source not in MEASURED_HORIZONTAL_SOURCES:
+    if source not in HORIZONTAL_SOURCES:
         return None, f"horizontal launch source {source!r} is not a measured horizontal launch"
     implausible = implausible_launch_reason(horizontal_deg)
     if implausible is not None:
         return None, f"horizontal launch {implausible}"
-    if horizontal_launch_label(source, status) != LABEL_MEASURED:
+    if launch_label(source, status) == LABEL_ESTIMATED:
         # the kiosk's own label: an uncalibrated azimuth is "estimated", never an input
         return None, (
             f"horizontal launch {source!r} is estimated: it has no horizontal phase reference "
@@ -378,7 +392,7 @@ def evaluate_full_ball_speed(
     }
     if not _finite(vertical_deg) or abs(float(vertical_deg)) >= 90.0:
         return _not_measured("vertical launch is not measured", inputs=inputs)
-    if vertical_source not in MEASURED_VERTICAL_SOURCES:
+    if vertical_source not in VERTICAL_SOURCES:
         return _not_measured(
             f"vertical launch source {vertical_source!r} is not a measured vertical launch",
             inputs=inputs,
@@ -548,8 +562,17 @@ def evaluate_full_ball_speed(
     }
     half_width = math.sqrt(sum(term**2 for term in budget.values()))
     bounded = math.isfinite(half_width)
+    weak = [
+        f"{name} launch from {EXPERIMENTAL_LAUNCH_SOURCES[source]} ({LABEL_EXPERIMENTAL})"
+        for name, source in (("vertical", vertical_source), ("horizontal", horizontal_source))
+        if source in EXPERIMENTAL_LAUNCH_SOURCES
+    ]
+    if tee_range_source in WEAK_RANGE_SOURCES:
+        weak.append(WEAK_RANGE_SOURCES[tee_range_source])
     return {
-        "status": CALCULATED,
+        "status": ESTIMATED if weak else CALCULATED,
+        "weak_inputs": weak,
+        "note": "; ".join(weak) or None,
         "value_mph": value,
         "range_mph": [value - half_width, value + half_width] if bounded else None,
         "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances"

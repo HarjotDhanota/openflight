@@ -1,4 +1,5 @@
 """Tests for sim.resolver — the shared fallback table + provenance."""
+
 import math
 from datetime import datetime
 
@@ -11,17 +12,22 @@ from openflight.sim.types import IncompleteShotError, PlayerState
 
 
 def _shot(**kw) -> Shot:
-    base = dict(ball_speed_mph=140.0, timestamp=datetime(2026, 4, 26, 12, 0, 0),
-                club=ClubType.DRIVER)
+    base = dict(
+        ball_speed_mph=140.0, timestamp=datetime(2026, 4, 26, 12, 0, 0), club=ClubType.DRIVER
+    )
     base.update(kw)
     return Shot(**base)
 
 
 def test_full_measured_shot():
     shot = _shot(
-        club_speed_mph=110.0, launch_angle_vertical=12.0,
-        launch_angle_horizontal=1.5, spin_rpm=2500.0, spin_confidence=0.9,
-        spin_axis_deg=-3.0, club_path_deg=0.5,
+        club_speed_mph=110.0,
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.5,
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        club_path_deg=0.5,
     )
     r = resolve_shot(shot, PlayerState())
     assert r.ball_speed_mph == 140.0
@@ -257,8 +263,10 @@ def test_server_estimated_launch_angles_are_tagged_estimated():
     # server._ensure_user_facing_launch_angles fills missing angles before the
     # sim fan-out and marks them with source "estimated".
     shot = _shot(
-        launch_angle_vertical=11.0, launch_angle_vertical_source="estimated",
-        launch_angle_horizontal=0.0, launch_angle_horizontal_source="estimated",
+        launch_angle_vertical=11.0,
+        launch_angle_vertical_source="estimated",
+        launch_angle_horizontal=0.0,
+        launch_angle_horizontal_source="estimated",
     )
     r = resolve_shot(shot, PlayerState())
     assert r.vla == 11.0
@@ -272,10 +280,35 @@ def test_measured_vla_with_estimated_hla_keeps_each_angle_s_own_label():
     # A vertical angle radar alone gives a measured VLA, and the server fills in
     # the neutral 0.0 HLA. An OPS-only carry stays "estimated" whatever the launch angle.
     shot = _shot(
-        launch_angle_vertical=12.0, launch_angle_vertical_source="radar",
-        launch_angle_horizontal=0.0, launch_angle_horizontal_source="estimated",
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=0.0,
+        launch_angle_horizontal_source="estimated",
     )
     r = resolve_shot(shot, PlayerState())
     assert r.provenance["vla"] == "measured"
     assert r.provenance["hla"] == "estimated"
     assert r.provenance["carry"] == "estimated"
+
+
+@pytest.mark.parametrize(
+    ("field", "words"),
+    [
+        ("launch_angle_vertical_source", "vertical launch (experimental)"),
+        ("launch_angle_horizontal_source", "horizontal launch (experimental)"),
+    ],
+)
+def test_a_fusion_shot_on_the_camera_fallback_launch_is_shown_but_never_flown(field, words):
+    from openflight.sim.types import UnmeasuredShotError  # noqa: PLC0415
+
+    shot = _shot(
+        launch_angle_vertical=12.0,
+        launch_angle_horizontal=1.5,
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        **{field: "camera_fallback"},
+    )
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState(), substitutes=False)
+    assert words in str(refused.value)
