@@ -39,7 +39,6 @@ from openflight.gpio_factory import ensure_lgpio_pin_factory
 
 logger = logging.getLogger(__name__)
 
-# settings are replaced whole from the exposure loop and from the kiosk's setup
 _settings_lock = threading.Lock()
 
 
@@ -230,7 +229,6 @@ def resolved_camera_config(camera) -> dict | None:
 
 
 def _json_safe(value):
-    """Convert common libcamera value objects to JSON-compatible values."""
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, numbers.Integral):
@@ -462,7 +460,7 @@ class CameraCaptureRuntime:
         if self.settings.scaler_crop is not None:
             self._camera.set_controls({"ScalerCrop": self.settings.scaler_crop})
         self._resolved_config = resolved_camera_config(self._camera)
-        # this mode's limits, read after configure (they are per mode), never assumed
+        # per-mode limits, read after configure, never assumed
         self.configure_swing_exposure(read_sensor_limits(self._camera))
         self._startup_capture_mode = self._capture_mode_startup_snapshot()
         self._camera.post_callback = self._on_frame
@@ -622,7 +620,6 @@ class CameraCaptureRuntime:
 
     @staticmethod
     def _auto_exposure_payload(snapshot: Mapping) -> dict:
-        """The status dict from one snapshot, measuring its frame in manual mode."""
         payload = dict(snapshot["payload"])
         settings = snapshot["settings"]
         if not settings.auto_exposure:
@@ -738,7 +735,6 @@ class CameraCaptureRuntime:
         return payload
 
     def _driver_offset_readback(self) -> dict:
-        """Read the OV9281 driver offset once for this camera startup."""
         try:
             raw_value = self._vertical_offset_path.read_text(encoding="ascii").strip()
         except OSError:
@@ -884,7 +880,6 @@ class CameraCaptureRuntime:
         }
 
     def _reject_trigger(self, trigger_epoch: float, reason: str, detail: str | None) -> bool:
-        """Remember why a trigger edge produced no capture, and report it."""
         rejection = {
             "trigger_timestamp": trigger_epoch,
             "reason": reason,
@@ -1205,7 +1200,6 @@ class CameraCaptureRuntime:
     def _resting_ball(
         self, frames: tuple[CameraFrame, ...], look: Mapping | None
     ) -> tuple[sx.BallReading | None, str | None]:
-        """The resting ball's reading in these frames, or why there is none."""
         images = [frame.image for frame in frames]
         last = frames[-1]
         common = {
@@ -1306,7 +1300,6 @@ class CameraCaptureRuntime:
     def _record_swing_decision(
         self, decision: sx.SwingExposureDecision, *, checked_at: float
     ) -> None:
-        """Keep and log every decision with its inputs."""
         payload = decision.to_dict()
         with self._auto_exposure_lock:
             previous = self._auto_exposure_decision

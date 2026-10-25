@@ -1,21 +1,10 @@
-"""The TrackMan-style fixed placement box (owner decision 1a, 13 Oct 2026).
+"""The fixed placement box drawn over the live view, computed from the rig file and lens.
 
-The unit stands 1.8-2.9 m behind the ball on the target line. A **fixed** box is
-drawn over the live camera view and the tester puts the ball into it; nothing is
-dragged. The box is computed from the rig file and the selected lens's focal
-length: it covers ball positions on the ground across the placement window
-(``PLACEMENT_WINDOW_M``, forward of the lens along its boresight, from
-``config/placement_box.json``) and ``half_width_m`` either side, drawn with a
-margin for the camera tilt's uncertainty (+-3 deg until the unit's tilt is
-calibrated, then 1 deg) and the LIS3DH roll the camera does not apply.
-
-**The box never yields a distance.** The camera finds the ball inside it and
-gives its *direction*; the IWR gives the distance, searched in the window the
-camera's ray spans across the box's depth and short of the net
-(``ray_window``); the ball's size is only a sanity check. Once the tilt is
-calibrated the camera's ray (row) distance is its own main distance.
-
-A ball outside the window is labelled, never blocked (D15): ``distance_note``.
+It covers ground positions across ``PLACEMENT_WINDOW_M`` (forward of the lens along its
+boresight) and ``half_width_m`` either side, with a margin for the tilt and unapplied roll.
+**The box never yields a distance:** the camera gives the ball's direction and the IWR
+the distance, searched along that ray (``ray_window``). A ball outside is labelled, never
+blocked (``distance_note``).
 """
 
 from __future__ import annotations
@@ -114,7 +103,7 @@ def load_config(path: Path | None = None) -> PlacementBoxConfig:
     )
 
 
-# where the tester stands the unit: config, never a page input (D15, no typed inputs)
+# config, never a page input
 PLACEMENT_WINDOW_M = load_config().placement_window_m
 
 
@@ -161,7 +150,6 @@ class _PitchedRays:  # pylint: disable=too-few-public-methods
         )
 
     def rays(self, pixels_px: Any) -> np.ndarray:
-        """The model's rays, turned."""
         return np.asarray(self._model.rays(pixels_px), dtype=float) @ self._turn.T
 
 
@@ -177,12 +165,7 @@ def _padded_outline(
 ) -> np.ndarray:
     """The on-screen rectangle that holds every ball in the box at a pitch within +-pad.
 
-    The box's ball-centre corners, and the ground's, are projected through the camera
-    pitched up and down by the pad (each pitch moves a ball almost straight up or down the
-    picture, by more than ``f tan(pad)`` off the axis), lifted and lowered at the
-    ends by the roll pad, and bounded by a rectangle. Ordered near-left,
-    near-right, far-right, far-left, as the ground outline is. A TrackMan-style box
-    on screen is a rectangle too.
+    Corners are ordered near-left, near-right, far-right, far-left, as the ground outline.
     """
     # the ball centres, and the ground under them, so the drawn box holds both
     corners = np.vstack([box.corners(ground_patch.BALL_CENTER_HEIGHT_M), box.corners(0.0)])
@@ -209,11 +192,8 @@ def project_fixed_box(
 ) -> ground_patch.PatchProjection:
     """The fixed box in one camera mode's pixels, and the windows taken from it.
 
-    ``outline_px`` is the box on the ground (drawn); ``ball_outline_px`` where the
-    centres of balls resting in it appear at the model's pitch; ``search_outline_px``
-    (the contract's ``box_outline_px``) holds them at any pitch within the tilt
-    margin. The radar and size windows are taken over the ball outline padded by
-    the window pad.
+    ``search_outline_px`` (the contract's ``box_outline_px``) holds ball centres at any
+    pitch within the tilt margin; ``ball_outline_px`` holds them at the model's pitch.
     """
     config = config or load_config()
     box = fixed_box(camera, config)
@@ -235,9 +215,8 @@ def project_fixed_box(
     nearest_lens, farthest_lens = float(np.min(lens)), float(np.max(lens))
     nearest, farthest = float(np.min(slant)), float(np.max(slant))
     tolerance = ground_patch.SIZE_TOLERANCE
-    # a ball's size does not move with the camera's pitch: the smallest the box looks
-    # for stands just past the window, not where a padded row meets the horizon (a
-    # 4 m, 8 px floor let small clutter use up the fits, indoor-test-2)
+    # size does not move with pitch: the smallest ball stands just past the window,
+    # not where a padded row meets the horizon
     size_far = min(farthest_lens, config.placement_window_m[1] + config.size_far_margin_m)
     _nominal_lens, nominal_slant = ground_patch._ball_plane_distances(  # noqa: SLF001
         camera, ball, ground_patch.BALL_CENTER_HEIGHT_M
@@ -323,13 +302,10 @@ def ray_window(
     far_cap_m: float,
     near_cap_m: float = 0.1,
 ) -> dict[str, Any]:
-    """The radar slant ranges a ball seen at this pixel can lie at.
+    """The radar slant ranges a ball seen at this pixel can lie at (row angle +-``pad_deg``).
 
-    The camera gives the ball's direction; its distance along that direction is
-    uncertain by the tilt pad (the row's angle +-``pad_deg``). At 95 mm a few
-    degrees reach the horizon, so the far side is capped (the net, or the box's
-    reach). ``nominal_m`` is the ray's own distance at the model's pitch: the
-    camera's main distance once the tilt is calibrated.
+    The far side is capped (the net, or the box's reach); ``nominal_m`` is the ray's
+    distance at the model's pitch.
     """
     nominal = _plane_range(camera, pixel)
     low = _plane_range(pitched(camera, -abs(pad_deg)), pixel)
@@ -356,8 +332,7 @@ def classify_ball(
 ) -> dict[str, Any]:
     """The ball's state from the in-box search and, when it found nothing, a wider one.
 
-    ``waiting`` until there is a look; a miss while the picture's brightness is
-    still being set is ``waiting`` too, never ``no_ball``.
+    A miss while brightness is still being set is ``waiting``, never ``no_ball``.
     """
     if not isinstance(in_box, Mapping):
         return {"state": "waiting", "selected": None}

@@ -1,25 +1,9 @@
-"""Per-shot re-location of the resting ball inside the fixed box (13 Oct 2026).
+"""Per-shot re-location of the resting ball inside the setup's box, and its range.
 
-The setup measures the ball once; a tester then tees the next ball wherever it
-lands in the box. Before each swing the kiosk looks at its own latest camera
-frame, finds the resting ball inside the setup record's box, and gives
-that shot its own range:
-
-* the setup's radar range, while the ball sits where the setup measured it
-  (within ``SAME_SPOT_DIAMETERS`` of the setup ball, ``setup_radar_range``);
-* else that range scaled by the setup ball's size over this ball's
-  (``camera_size_ratio_to_the_setup_radar_range``): a relative size, which the
-  lens's focal length cancels out of, anchored on the radar's distance. It is
-  labelled, never passed off as a radar range.
-
-Since 13 Oct (decision "a") the setup hands over the camera's coarse size estimate
-as a PRIOR (``setup_range_kind="camera_prior"``, with its uncertainty): each look is
-then a per-shot prior, scaled with its uncertainty, and the shot's own IWR capture
-measures the distance.
-
-A ball outside the box, or none, is the shot's label (``outside_box``,
-``not_seen``) and carries no range; nothing is filled in. A shot takes the last
-look before its trigger, and none older than ``MAX_LOOK_AGE_S``.
+Within ``SAME_SPOT_DIAMETERS`` of the setup ball the setup's range is used; elsewhere it is
+scaled by the setup ball's size over this ball's (focal length cancels), labelled, never a
+radar range. A ball outside the box or unseen carries no range. A shot takes the last look
+before its trigger, none older than ``MAX_LOOK_AGE_S``.
 """
 
 from __future__ import annotations
@@ -65,14 +49,14 @@ class BallAtAddress:
         outline_px: Sequence[Sequence[float]] | None = None,
     ):
         self.box = tuple(int(value) for value in box_px)
-        # the polygon the user confirmed; None (an older box) is the box_px rectangle
+        # None (an older box) is the box_px rectangle
         self.outline_px = _outline(outline_px)
         self.setup_ball = dict(setup_ball) if setup_ball else None
         self.setup_range_m = float(setup_range_m) if setup_range_m else None
         self.setup_range_uncertainty_m = (
             float(setup_range_uncertainty_m) if setup_range_uncertainty_m else None
         )
-        # what the setup's range is: "radar_range" before 13 Oct, "camera_prior" since
+        # "radar_range" or "camera_prior"
         self.setup_range_kind = str(setup_range_kind)
         self.lens = dict(lens) if lens else None
         self._lock = threading.Lock()
@@ -172,7 +156,6 @@ class BallAtAddress:
             "diameter_px": diameter,
             "range_m": round(range_m, 4) if range_m is not None else None,
             "range_source": source,
-            # the setup prior's relative uncertainty, carried to this look's range
             "range_uncertainty_m": (
                 round(self.setup_range_uncertainty_m * range_m / self.setup_range_m, 4)
                 if range_m is not None and self.setup_range_uncertainty_m and self.setup_range_m
