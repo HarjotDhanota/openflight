@@ -426,10 +426,7 @@ int main(int argc, char **argv) {
     sys.byteorder != "little", reason="the R4F and the EDMA model here are little-endian"
 )
 def test_the_scan_rule_is_exactly_the_values_the_low_byte_copy_changes(tmp_path):
-    """The firmware's scan, run on each int16, flags exactly what the pack changes.
-
-    The EDMA pack copies each int16's low (little-endian) byte into an int8.
-    """
+    """The firmware's scan, run on each int16, flags exactly what the pack changes."""
     import numpy as np
 
     out = tmp_path / "scan_each_value.bin"
