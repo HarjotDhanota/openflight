@@ -242,6 +242,7 @@ def _launch_horizontal(shot):
         value, reason = None, f"{source or 'horizontal launch'} {implausible}"
     label, why = shot_launch_label(shot, "horizontal")
     notes = [why, _experimental_launch_note(source) if label == EXPERIMENTAL else None]
+    notes.append(_mapping(shot.get("iwr_azimuth_check")).get("note"))
     return _record(
         "launch_horizontal",
         value,
