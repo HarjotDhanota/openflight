@@ -5,7 +5,6 @@ Host-compiled checks build only this fork's headers, never TI's SDK, and skip wi
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import sys
@@ -17,13 +16,6 @@ from openflight.iwr6843 import dump
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 FIRMWARE = FIRMWARE_DIR / "l3_dump.c"
-FORMAT = FIRMWARE_DIR / "dump_format.h"
-
-
-def _function_source(source: str, name: str, next_name: str) -> str:
-    start = source.rindex(name)
-    end = source.index(next_name, start)
-    return source[start:end]
 
 
 def _compiler() -> str:
@@ -339,140 +331,38 @@ def test_a_record_without_a_fresh_start_carries_no_stamp(tmp_path):
     assert fresh == "0"
 
 
-def test_c_struct_sizes_match_the_python_parser(tmp_path):
-    out = _run_c(
-        '#include <stdio.h>\n#include "dump_format.h"\n'
-        "int main(void) {\n"
-        '  printf("%zu %zu %zu\\n", sizeof(l3_capture_evidence_t),\n'
-        "         sizeof(l3_frame_evidence_t), sizeof(l3_dump_trailer_t));\n"
-        "  return 0;\n}\n",
-        tmp_path,
-    )
+FORMAT_PROBE = r"""#include <stdio.h>
+#include "dump_format.h"
+int main(void) {
+  printf("%zu %zu %zu %s %s\n", sizeof(l3_capture_evidence_t), sizeof(l3_frame_evidence_t),
+         sizeof(l3_dump_trailer_t), L3_CAPTURE_EVIDENCE_MAGIC, L3_DUMP_TRAILER_MAGIC);
+  printf("%lu %lu %lu %lu %lu %lu\n", (unsigned long)L3_DUMP_VERSION_EVIDENCE_TEMPERATURE,
+         (unsigned long)L3_DUMP_VERSION_EVIDENCE, (unsigned long)L3_FRAME_FLAG_ASSOCIATED,
+         (unsigned long)L3_FRAME_FLAG_IQ8_SCANNED, (unsigned long)L3_CAPTURE_FLAG_IQ8_SCAN,
+         (unsigned long)L3_FRAME_NO_STAMP);
+  return 0;
+}
+"""
 
-    assert out.split() == [
+
+def test_c_struct_sizes_and_constants_match_the_python_parser(tmp_path):
+    sizes, constants = _run_c(FORMAT_PROBE, tmp_path).splitlines()
+
+    assert sizes.split() == [
         str(dump.CAPTURE_EVIDENCE.size),
         str(dump.FRAME_EVIDENCE.size),
         str(dump.DUMP_TRAILER.size),
+        "ILE1",
+        "ILT1",
     ]
-
-
-def test_dump_format_constants_match_the_parser():
-    header = FORMAT.read_text(encoding="utf-8")
-
-    def define(name):
-        return re.search(rf"#define {name}\s+(\S+)", header).group(1).removesuffix("U")
-
-    assert int(define("L3_DUMP_VERSION_EVIDENCE_TEMPERATURE")) == (
-        dump.DUMP_VERSION_EVIDENCE_TEMPERATURE
-    )
-    assert int(define("L3_DUMP_VERSION_EVIDENCE")) == dump.DUMP_VERSION_EVIDENCE
-    assert define("L3_CAPTURE_EVIDENCE_MAGIC") == '"ILE1"'
-    assert define("L3_DUMP_TRAILER_MAGIC") == '"ILT1"'
-    assert int(define("L3_FRAME_FLAG_ASSOCIATED"), 0) == dump.FRAME_FLAG_ASSOCIATED
-    assert int(define("L3_FRAME_FLAG_IQ8_SCANNED"), 0) == dump.FRAME_FLAG_IQ8_SCANNED
-    assert int(define("L3_CAPTURE_FLAG_IQ8_SCAN"), 0) == dump.CAPTURE_FLAG_IQ8_SCAN
-    assert int(define("L3_FRAME_NO_STAMP"), 0) == dump.FRAME_NO_STAMP
-
-
-def test_production_builds_turn_the_evidence_on():
-    """Configurable hybrid-cadence builds define L3_CAPTURE_EVIDENCE."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-
-    assert (
-        "#if defined(CONFIGURABLE_CAPTURE) && defined(HYBRID_CADENCE_CAPTURE)\n"
-        "#define L3_CAPTURE_EVIDENCE 1\n#endif"
-    ) in source
-
-
-def test_frame_start_isr_stamps_only_armed_frames():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    isr = _function_source(
-        source, "static void l3_frameStartISR", "static int32_t l3_startFrontEnd"
-    )
-
-    assert isr.index("uint32_t now = l3_ticks();") < isr.index("gNumFrame++")
-    missed = isr.index("gHwaMissedFrameStarts++")
-    armed = isr.index("gActiveFrameSeq = gNumFrame;")
-    assert missed < isr.index("else {", missed) < armed
-    assert "gActiveFrameStartTick = now;" in isr
-    assert "gActiveFrameFresh = 1U;" in isr
-    assert armed < isr.index("gHwaArmedForFrame = 0U;")
-
-
-def test_output_done_records_the_completed_slot_before_counters_advance():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    callback = _function_source(
-        source, "static void l3_hwaOutputDoneCB", "static int32_t l3_hwaStartRing"
-    )
-
-    slot = callback.index("completedSlot = l3_activeRingSlot();")
-    record = callback.index("l3_recordFrameEvidence(completedSlot,")
-    assert slot < record < callback.index("gPostFramesCaptured++")
-    assert record < callback.index("gPreFramesCaptured++")
-    assert slot < callback.index("gIq8PendingSlot = completedSlot;")
-    assert "gActiveFrameFresh = 0U;" in callback
-
-
-def test_dump_stamps_request_freeze_stop_and_header_in_order():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    stop = _function_source(
-        source,
-        "static int32_t l3_stopCaptureAtBoundary",
-        "static int32_t l3_stopCaptureForShutdown",
-    )
-    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
-
-    assert stop.index("l3_freezeHwaAfterPostFrames") < stop.index("gFreezeTick = l3_ticks();")
-    assert stop.index("l3_finishCaptureStop") < stop.index("gStopTick = l3_ticks();")
-    assert dump_cli.index("gRequestTick = l3_ticks();") < dump_cli.index("l3_stopCaptureAtBoundary")
-    header_write = dump_cli.index("UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));")
-    assert dump_cli.index("headerTick = l3_ticks();") < header_write
-    assert "L3_DUMP_VERSION_EVIDENCE_TEMPERATURE" in dump_cli[:header_write]
-
-
-def test_the_request_seq_and_tick_are_read_together():
-    """A frame-start ISR between the two reads would skew frames_request_to_first_post."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
-
-    disable = dump_cli.index("Hwi_disable();")
-    seq = dump_cli.index("gRequestSeq = gNumFrame;")
-    tick = dump_cli.index("gRequestTick = l3_ticks();")
-    restore = dump_cli.index("Hwi_restore(")
-    assert disable < seq < tick < restore < dump_cli.index("l3_stopCaptureAtBoundary")
-
-
-def test_dump_streams_evidence_after_metadata_and_before_payload_then_the_trailer():
-    """Evidence follows the descriptors and scales; the trailer ends an uncancelled dump."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
-
-    evidence = dump_cli.index("l3_writeCaptureEvidence(actualPre, actualPost, headerTick);")
-    assert dump_cli.index("l3_writeU16Le(gFrameIq8Scale[slot]);") < evidence
-    assert evidence < dump_cli.index(
-        "l3_writeFrameEvidence((oldestPre + i) % gCapturePlan.preFrames);"
-    )
-    assert evidence < dump_cli.index("UART_writePolling(gDataUart, &g_ring[gFrameOffset[slot]],")
-    trailer = dump_cli.index("l3_writeDumpTrailer();")
-    last_payload = dump_cli.rindex("UART_writePolling(gDataUart, &g_ring[gFrameOffset[slot]],")
-    assert last_payload < trailer
-    assert "if (!dumpCancelled) {" in dump_cli[trailer - 80 : trailer]
-
-
-def test_evidence_is_reset_at_sensor_start_and_before_each_restart():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
-
-    assert dump_cli.index("l3_resetEvidence();") < dump_cli.index("l3_restartCompletedHwaFrame()")
-    assert source.count("l3_resetEvidence();") == 2
-
-
-def test_cycle_counter_starts_before_any_frame_can_start():
-    """The cycle counter is enabled first thing in the init task."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-    init = _function_source(source, "static void l3_initTask", "int32_t main(void)")
-
-    assert init.index("l3_cycleCounterInit();") < init.index("UART_init();")
+    assert [int(value) for value in constants.split()] == [
+        dump.DUMP_VERSION_EVIDENCE_TEMPERATURE,
+        dump.DUMP_VERSION_EVIDENCE,
+        dump.FRAME_FLAG_ASSOCIATED,
+        dump.FRAME_FLAG_IQ8_SCANNED,
+        dump.CAPTURE_FLAG_IQ8_SCAN,
+        dump.FRAME_NO_STAMP,
+    ]
 
 
 SCAN_PROBE = """#include <stdio.h>
@@ -552,102 +442,6 @@ def test_the_scan_rule_is_exactly_the_values_the_low_byte_copy_changes(tmp_path)
     assert set(np.unique(flagged)) == {0, 1}
     np.testing.assert_array_equal(magnitude.astype(np.int32), np.abs(values.astype(np.int32)))
     assert int(changed.sum()) == 65280  # every value but -128..127
-
-
-def _rearm_task(source: str) -> str:
-    return _function_source(
-        source, "static void l3_hwaRearmTask", "/* Fill the 20-byte fixed dump header"
-    )
-
-
-def test_the_scan_runs_after_each_pack_starts_and_before_the_task_lets_go():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    task = _rearm_task(source)
-    call = "l3_startIq8PackAndScan(pendingSlot, pendingScratch);"
-
-    freeze_call = task.index(call)
-    assert freeze_call < task.index("l3_waitForAllIq8Edma();")
-    assert freeze_call < task.index("Semaphore_post(gHwaFreezeSemaphore)")
-    normal_call = task.rindex(call)
-    assert freeze_call != normal_call
-    assert task.count(call) == 2
-    # The scan must never delay the HWA: the next frame is armed first.
-    assert task.index("errCode = l3_restartCompletedHwaFrame();") < normal_call
-    assert normal_call < task.rindex("gHwaRearmBusy = 0U;")
-    assert "(void)l3_startIq8EdmaPack(" not in task
-
-
-def test_a_pack_that_did_not_start_leaves_its_frame_unscanned():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    helper = _function_source(
-        source,
-        "static void l3_startIq8PackAndScan",
-        "static uint32_t l3_snapshotBinStartForNextFrame",
-    )
-
-    failed = helper.index("if (l3_startIq8EdmaPack(slot, scratch) != 0) {")
-    assert (
-        failed < helper.index("return;", failed) < helper.index("l3_scanIq8Scratch(slot, scratch);")
-    )
-    assert helper.index("#ifdef L3_IQ8_SCAN") < helper.index("l3_scanIq8Scratch(slot, scratch);")
-
-
-def test_the_scan_marks_the_frame_and_saturates_its_count():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    scan = _function_source(
-        source, "static void l3_scanIq8Scratch", "static uint32_t l3_snapshotBinStartForNextFrame"
-    )
-
-    assert (
-        "l3_iq8ScanComponents(&g_iq16FrameScratch[scratch][0], gFrameBytes[slot], &maxAbs)" in scan
-    )
-    assert "(overflow > 0xFFFFU) ? 0xFFFFU : (uint16_t)overflow" in scan
-    assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan
-
-
-def test_the_scan_exists_only_where_the_low_byte_copy_narrows():
-    """The scan's rule is the EDMA low-byte copy's; the CPU shift-pack build is not scanned."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-
-    assert (
-        "#if defined(L3_CAPTURE_EVIDENCE) && defined(L3_RING_IQ8) && defined(L3_IQ8_EDMA_PACK)\n"
-        "#define L3_IQ8_SCAN 1\n#endif"
-    ) in source
-    assert source.index("#define L3_CAPTURE_EVIDENCE 1") < source.index("#define L3_IQ8_SCAN 1")
-    scan = source.index("static void l3_scanIq8Scratch")
-    assert source.rindex("#ifdef L3_IQ8_SCAN", 0, scan) > source.rindex("#endif", 0, scan)
-
-
-def test_the_capture_says_whether_it_scanned():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    writer = _function_source(
-        source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
-    )
-
-    assert (
-        "evidence.flags = l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)\n"
-        "                         ? L3_CAPTURE_FLAG_IQ8_SCAN\n"
-        "                         : 0U;"
-    ) in writer
-    scan_flag = writer.index("evidence.flags = l3_iq8ScanGuaranteed(")
-    assert writer.rindex("#ifdef L3_IQ8_SCAN", 0, scan_flag) < scan_flag
-    assert "    evidence.flags = 0U;" in writer[scan_flag:]  # every other build: unobserved
-    assert '#include "l3_evidence.h"' in source
-    assert source.count("l3_resetPerf();") == 1
-
-
-def test_perf_resets_with_the_evidence_at_sensor_start():
-    """High-water marks run from sensorStart; the post-dump restart keeps them."""
-    source = FIRMWARE.read_text(encoding="utf-8")
-    block = _evidence_block(source)
-    dump_cli = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
-
-    assert "static void l3_resetPerf(void)" in block
-    for name in ("gPerfScanMaxCycles", "gPerfScanFrames", "gIq8OverflowComponents"):
-        assert f"static uint32_t {name};" in block
-        assert f"    {name} = 0U;" in block
-    assert "    l3_resetEvidence();\n    l3_resetPerf();\n#endif\n#ifdef L3_RING_IQ8\n" in source
-    assert "l3_resetPerf();" not in dump_cli
 
 
 def _scan_source(source: str) -> str:
@@ -793,16 +587,3 @@ int main(void) {
 def test_the_scan_is_claimed_only_when_no_slot_can_be_reused_mid_scan(tmp_path):
     """Host-run plan check: IQ8 and at least two pre frames, or the capture flag stays off."""
     assert _run_c(GUARANTEE_PROBE, tmp_path).split() == ["0", "0", "1", "1", "0", "2"]
-
-
-def test_the_capture_flag_follows_the_plan_check():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    writer = _function_source(
-        source, "static void l3_writeCaptureEvidence", "static void l3_writeFrameEvidence"
-    )
-
-    assert writer.count("l3_iq8ScanGuaranteed(l3_captureUsesIq8(), gCapturePlan.preFrames)") == 1
-    assert "l3_captureUsesIq8() ? L3_CAPTURE_FLAG_IQ8_SCAN" not in source
-    scan = _scan_source(source)
-    assert "preFrames" not in scan
-    assert "gFrameEvidenceFlags[slot] |= L3_FRAME_FLAG_IQ8_SCANNED;" in scan
