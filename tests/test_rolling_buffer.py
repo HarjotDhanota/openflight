@@ -1948,8 +1948,8 @@ class TestFindClubSpeedOverlap:
     def processor(self):
         return RollingBufferProcessor()
 
-    def test_club_at_same_timestamp_as_ball(self, processor):
-        """Club reading at the same timestamp as ball should be found."""
+    def test_club_in_the_balls_own_window_is_not_club_speed(self, processor):
+        """A window that already holds the ball is read after the ball's onset."""
         readings = [
             SpeedReading(speed_mph=60.0, magnitude=200.0, timestamp_ms=10.0, direction="outbound"),
             SpeedReading(speed_mph=80.0, magnitude=300.0, timestamp_ms=10.0, direction="outbound"),
@@ -1960,8 +1960,8 @@ class TestFindClubSpeedOverlap:
             timeline, ball_speed_mph=80.0, ball_timestamp_ms=10.0
         )
 
-        assert club_speed == 60.0
-        assert club_ts == 10.0
+        assert club_speed is None
+        assert club_ts is None
 
     def test_club_before_ball_still_works(self, processor):
         """Club at earlier timestamp should still be found."""
@@ -1996,11 +1996,11 @@ class TestFindClubSpeedOverlap:
         """Only speeds within 67-85% of ball speed should be candidates."""
         readings = [
             # Too slow (< 67% of 100)
-            SpeedReading(speed_mph=60.0, magnitude=200.0, timestamp_ms=10.0, direction="outbound"),
+            SpeedReading(speed_mph=60.0, magnitude=200.0, timestamp_ms=5.0, direction="outbound"),
             # Too fast (> 85% of 100)
-            SpeedReading(speed_mph=90.0, magnitude=200.0, timestamp_ms=10.0, direction="outbound"),
+            SpeedReading(speed_mph=90.0, magnitude=200.0, timestamp_ms=5.0, direction="outbound"),
             # Just right (75% of 100)
-            SpeedReading(speed_mph=75.0, magnitude=200.0, timestamp_ms=10.0, direction="outbound"),
+            SpeedReading(speed_mph=75.0, magnitude=200.0, timestamp_ms=5.0, direction="outbound"),
             # Ball
             SpeedReading(speed_mph=100.0, magnitude=400.0, timestamp_ms=10.0, direction="outbound"),
         ]
@@ -2015,8 +2015,8 @@ class TestFindClubSpeedOverlap:
     def test_highest_magnitude_selected(self, processor):
         """Among valid candidates, highest magnitude should win."""
         readings = [
-            SpeedReading(speed_mph=70.0, magnitude=100.0, timestamp_ms=10.0, direction="outbound"),
-            SpeedReading(speed_mph=75.0, magnitude=250.0, timestamp_ms=10.0, direction="outbound"),
+            SpeedReading(speed_mph=70.0, magnitude=100.0, timestamp_ms=5.0, direction="outbound"),
+            SpeedReading(speed_mph=75.0, magnitude=250.0, timestamp_ms=5.0, direction="outbound"),
             SpeedReading(speed_mph=100.0, magnitude=400.0, timestamp_ms=10.0, direction="outbound"),
         ]
         timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
@@ -2103,10 +2103,14 @@ class TestFindClubSpeedOverlap:
         assert club_ts == 29.0
 
     def test_ball_contaminated_plateau_falls_back_to_credible_candidate(self, processor):
-        """A non-wedge plateau above 95% of ball speed is likely the ball."""
+        """Readings at 96-98% of ball speed are the ball, not a club plateau.
+
+        They mark the ball's onset, so the fallback reads the credible
+        candidate whose window ends before them.
+        """
         ball_timestamp_ms = 30.0
         readings = [
-            SpeedReading(75.0, 500.0, 10.0, "outbound"),
+            SpeedReading(75.0, 500.0, 6.0, "outbound"),
             SpeedReading(96.0, 20.0, 12.0, "outbound"),
             SpeedReading(97.0, 20.0, 14.0, "outbound"),
             SpeedReading(98.0, 20.0, 16.0, "outbound"),
@@ -2126,7 +2130,179 @@ class TestFindClubSpeedOverlap:
         )
 
         assert club_speed == 75.0
-        assert club_ts == 10.0
+        assert club_ts == 6.0
+
+    @staticmethod
+    def _ridge(start_ms, end_ms, speed_at_start, mph_per_ms, magnitude=12.0):
+        """One club-head reading per ms on a rising line-of-sight ridge."""
+        return [
+            SpeedReading(
+                speed_at_start + mph_per_ms * (t - start_ms), magnitude, float(t), "outbound"
+            )
+            for t in range(int(start_ms), int(end_ms) + 1)
+        ]
+
+    def test_plateau_is_anchored_on_the_first_ball_reading_not_the_strongest(self, processor):
+        """The strongest ball return can arrive long after the ball first appears.
+
+        Anchoring the onset search on it put the plateau inside the ball line,
+        and the magnitude fallback then picked a strong early shaft return.
+        """
+        readings = self._ridge(30, 48, 50.0, 1.0)
+        # Strong shaft/body return early in the swing, inside the smash bracket.
+        readings.append(SpeedReading(62.0, 40.0, 32.0, "outbound"))
+        # Ball line from 52 ms; its strongest window is 28 ms later.
+        readings.extend(SpeedReading(90.0, 4.0, float(t), "outbound") for t in range(52, 91))
+        readings.append(SpeedReading(90.2, 20.0, 80.0, "outbound"))
+        timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline, ball_speed_mph=90.2, ball_timestamp_ms=80.0, club_type=ClubType.IRON_7
+        )
+
+        # Plateau 34-48 ms of the ridge (54-68 mph); its 0.7 quantile.
+        assert club_speed == pytest.approx(64.0)
+        assert club_ts == 44.0
+
+    def test_head_dropout_before_the_ball_does_not_drag_the_plateau_down(self, processor):
+        """Weak, slower windows where the head's return was lost are not the head."""
+        ridge = self._ridge(40, 53, 66.0, 1.2)
+        ball = [SpeedReading(93.0, 15.0, float(t), "outbound") for t in range(60, 70)]
+        dropout = [
+            SpeedReading(72.4, 3.0, 54.0, "outbound"),
+            SpeedReading(73.0, 3.0, 55.0, "outbound"),
+            SpeedReading(74.2, 3.0, 56.0, "outbound"),
+        ]
+        clean = processor.find_club_speed(
+            SpeedTimeline(readings=ridge + ball, sample_rate_hz=937.5),
+            ball_speed_mph=93.0,
+            ball_timestamp_ms=60.0,
+            club_type=ClubType.IRON_7,
+        )
+        with_dropout = processor.find_club_speed(
+            SpeedTimeline(readings=ridge + dropout + ball, sample_rate_hz=937.5),
+            ball_speed_mph=93.0,
+            ball_timestamp_ms=60.0,
+            club_type=ClubType.IRON_7,
+        )
+
+        assert with_dropout == clean
+        assert with_dropout[1] < 54.0
+
+    def test_a_strong_dip_on_the_ridge_does_not_end_the_plateau(self, processor):
+        """A brief dip with the head still strongly seen is the head, not a dropout."""
+        ridge = self._ridge(40, 56, 60.0, 0.5)
+        ridge[8] = SpeedReading(ridge[8].speed_mph - 4.5, 12.0, ridge[8].timestamp_ms, "outbound")
+        ball = [SpeedReading(85.0, 15.0, float(t), "outbound") for t in range(60, 70)]
+        timeline = SpeedTimeline(readings=ridge + ball, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline, ball_speed_mph=85.0, ball_timestamp_ms=60.0, club_type=ClubType.IRON_7
+        )
+
+        # Plateau runs to 56 ms (onset 60 - guard 4), past the dip at 48 ms.
+        assert club_ts > 48.0
+        assert club_speed == pytest.approx(60.0 + 0.5 * (club_ts - 40.0))
+
+    def test_fallback_never_reads_the_club_after_the_ball_onset(self, processor):
+        """Without a pre-ball ridge, a strong post-impact club return is not club speed."""
+        readings = [SpeedReading(90.0, 5.0, float(t), "outbound") for t in range(50, 80)]
+        readings.append(SpeedReading(90.0, 30.0, 70.0, "outbound"))
+        # The decelerated club after impact: strong and inside the smash bracket.
+        readings.extend(SpeedReading(65.0, 30.0, float(t), "outbound") for t in range(55, 63))
+        timeline = SpeedTimeline(readings=readings, sample_rate_hz=937.5)
+
+        club_speed, club_ts = processor.find_club_speed(
+            timeline, ball_speed_mph=90.0, ball_timestamp_ms=70.0, club_type=ClubType.IRON_7
+        )
+
+        assert club_speed is None
+        assert club_ts is None
+
+
+class TestBallLineOnset:
+    """The ball line's first appearance, measured against the noise floor."""
+
+    @pytest.fixture
+    def processor(self):
+        return RollingBufferProcessor()
+
+    @staticmethod
+    def _tone(processor, speed_mph, amplitude, start, stop, n=4096):
+        freq_hz = (speed_mph / processor.MPS_TO_MPH) * 2 / processor.WAVELENGTH_M
+        t = np.arange(n) / processor.SAMPLE_RATE
+        gate = (np.arange(n) >= start) & (np.arange(n) < stop)
+        return amplitude * gate * np.exp(2j * np.pi * freq_hz * t)
+
+    @staticmethod
+    def _capture(signal, seed=0):
+        rng = np.random.default_rng(seed)
+        noise = rng.normal(0, 20.0, size=(2, len(signal)))
+        i = np.round(2048 + signal.real + noise[0]).astype(int)
+        q = np.round(2048 + signal.imag + noise[1]).astype(int)
+        return IQCapture(
+            sample_time=100.0, trigger_time=100.068, i_samples=i.tolist(), q_samples=q.tolist()
+        )
+
+    def test_a_ball_line_below_the_peak_threshold_is_still_found(self, processor):
+        """Shot 20: the ball is clear of the noise but never a reported peak until late."""
+        start = 1800  # 60 ms
+        signal = self._tone(processor, 76.0, 40.0, start, 4096)
+        signal += self._tone(processor, 40.0, 600.0, start, 2600)  # post-impact club
+        capture = self._capture(signal)
+
+        readings = processor.process_overlapping(capture).readings
+        assert not [r for r in readings if abs(r.speed_mph - 76.0) <= 3.0]
+
+        onset_ms = processor._ball_line_onset_ms(capture, 76.0)
+
+        # Within half a 256-sample window of the ball's first sample.
+        half_window_ms = processor.BALL_LINE_WINDOW_SIZE / 2 / processor.SAMPLE_RATE * 1000.0
+        assert onset_ms is not None
+        assert abs(onset_ms - 60.0) <= half_window_ms
+
+    def test_a_strong_ball_line_is_dated_no_later_than_its_first_sample(self, processor):
+        capture = self._capture(self._tone(processor, 76.0, 400.0, 1800, 4096))
+
+        onset_ms = processor._ball_line_onset_ms(capture, 76.0)
+
+        assert onset_ms is not None
+        assert onset_ms <= 60.0
+
+    def test_a_strong_club_return_well_below_the_ball_is_not_the_ball(self, processor):
+        """The 256-sample window resolves a club ridge 8 mph below the ball speed."""
+        capture = self._capture(self._tone(processor, 68.0, 600.0, 1200, 2400))
+
+        assert processor._ball_line_onset_ms(capture, 76.0) is None
+
+    def test_a_club_closing_on_the_ball_speed_does_not_date_the_ball_line(self, processor):
+        """A club 4 mph under the ball spills its skirt into the ball band's lower edge."""
+        signal = self._tone(processor, 79.0, 600.0, 900, 1800)  # club, 30-60 ms
+        signal += self._tone(processor, 83.0, 300.0, 1800, 4096)  # ball from 60 ms
+        capture = self._capture(signal)
+
+        onset_ms = processor._ball_line_onset_ms(capture, 83.0)
+
+        half_window_ms = processor.BALL_LINE_WINDOW_SIZE / 2 / processor.SAMPLE_RATE * 1000.0
+        assert onset_ms is not None
+        assert abs(onset_ms - 60.0) <= half_window_ms
+
+    def test_an_unfilled_buffer_start_is_not_a_ball_line(self, processor):
+        """Shot 23: the first ~40 ms were zeros; a constant window has no noise floor."""
+        signal = self._tone(processor, 69.0, 300.0, 2000, 4096)
+        capture = self._capture(signal)
+        capture.i_samples[:1200] = [0] * 1200
+        capture.q_samples[:1200] = [0] * 1200
+
+        onset_ms = processor._ball_line_onset_ms(capture, 69.0)
+
+        assert onset_ms is not None
+        assert onset_ms > 1200 / processor.SAMPLE_RATE * 1000.0
+
+    def test_a_brief_burst_at_ball_speed_is_not_a_ball_line(self, processor):
+        capture = self._capture(self._tone(processor, 76.0, 300.0, 1800, 1830))
+
+        assert processor._ball_line_onset_ms(capture, 76.0) is None
 
 
 class TestImpactEstimate:
@@ -2261,12 +2437,19 @@ class TestMultiPeakIntegration:
         n_samples = 4096
         t = np.arange(n_samples) / processor.SAMPLE_RATE
 
-        # Club at ~60 mph (outbound), Ball at ~80 mph (outbound)
+        # Club at ~60 mph (outbound) until impact half way through the buffer,
+        # then Ball at ~80 mph (outbound). Club speed is only read before the ball.
         club_freq = (60 / processor.MPS_TO_MPH) * 2 / processor.WAVELENGTH_M
         ball_freq = (80 / processor.MPS_TO_MPH) * 2 / processor.WAVELENGTH_M
+        club_gate = np.arange(n_samples) < n_samples // 2
+        ball_gate = ~club_gate
 
-        i_signal = 400 * np.cos(2 * np.pi * club_freq * t) + 300 * np.cos(2 * np.pi * ball_freq * t)
-        q_signal = 400 * np.sin(2 * np.pi * club_freq * t) + 300 * np.sin(2 * np.pi * ball_freq * t)
+        i_signal = 400 * club_gate * np.cos(2 * np.pi * club_freq * t) + 300 * ball_gate * np.cos(
+            2 * np.pi * ball_freq * t
+        )
+        q_signal = 400 * club_gate * np.sin(2 * np.pi * club_freq * t) + 300 * ball_gate * np.sin(
+            2 * np.pi * ball_freq * t
+        )
 
         i_samples = (i_signal + 2048).astype(int).tolist()
         q_samples = (q_signal + 2048).astype(int).tolist()
