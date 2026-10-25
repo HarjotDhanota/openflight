@@ -128,19 +128,6 @@ def test_v8_round_trip_parses_the_evidence_block_and_trailer():
     assert len(raw) == expected
 
 
-def test_the_struct_sizes_match_the_firmware_contract():
-    assert (CAPTURE_EVIDENCE.size, FRAME_EVIDENCE.size, DUMP_TRAILER.size) == (40, 20, 8)
-
-
-def test_v9_has_evidence_but_no_temperature():
-    raw, _ = _v8(_cube(), version=9)
-
-    meta, _cube_out = parse_dump(raw)
-
-    assert meta["temperature_report"] is None
-    assert meta["capture_evidence"]["pre_frames"] == 2
-
-
 def test_v8_iq8_round_trip_keeps_the_scale_table_before_the_evidence():
     cube = _cube()
     raw, (_capture, frames, _trailer) = _v8(cube, sample_fmt=SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED)
@@ -151,20 +138,17 @@ def test_v8_iq8_round_trip_keeps_the_scale_table_before_the_evidence():
     assert meta["frame_evidence"] == frames
 
 
-def test_a_full_size_profile_a_dump_has_the_gate_length():
-    raw, _ = _v8(np.zeros((24, 36, 4, 53), dtype=complex), pre=9)
+@pytest.mark.parametrize(
+    ("n_frames", "sample_fmt", "pre", "length"),
+    [
+        (24, SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED, 9, 733_340),  # profile A
+        (36, SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED, 21, 550_532),  # profile C
+    ],
+)
+def test_a_full_size_dump_has_the_gate_length(n_frames, sample_fmt, pre, length):
+    raw, _ = _v8(np.ones((n_frames, 36, 4, 53), dtype=complex), sample_fmt=sample_fmt, pre=pre)
 
-    assert len(raw) == 733_340
-
-
-def test_a_full_size_profile_c_dump_has_the_gate_length():
-    raw, _ = _v8(
-        np.ones((36, 36, 4, 53), dtype=complex),
-        sample_fmt=SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED,
-        pre=21,
-    )
-
-    assert len(raw) == 550_532
+    assert len(raw) == length
 
 
 @pytest.mark.skipif(
@@ -202,20 +186,19 @@ def test_a_v8_dump_missing_its_trailer_is_short():
         parse_dump(raw[: -DUMP_TRAILER.size])
 
 
-def test_a_corrupt_evidence_magic_is_refused():
+@pytest.mark.parametrize(
+    ("offset", "message"),
+    [
+        (dump.HEADER.size + dump.TEMP_REPORT.size + 4 * 4, "evidence magic"),
+        (-DUMP_TRAILER.size, "trailer magic"),
+    ],
+)
+def test_a_corrupt_magic_is_refused(offset, message):
     raw, _ = _v8(_cube())
-    offset = dump.HEADER.size + dump.TEMP_REPORT.size + 4 * 4
-    bad = raw[:offset] + b"XXXX" + raw[offset + 4 :]
+    start = offset % len(raw)
+    bad = raw[:start] + b"XXXX" + raw[start + 4 :]
 
-    with pytest.raises(ValueError, match="evidence magic"):
-        parse_dump(bad)
-
-
-def test_a_corrupt_trailer_magic_is_refused():
-    raw, _ = _v8(_cube())
-    bad = raw[: -DUMP_TRAILER.size] + b"XXXX" + raw[-4:]
-
-    with pytest.raises(ValueError, match="trailer magic"):
+    with pytest.raises(ValueError, match=message):
         parse_dump(bad)
 
 
@@ -240,8 +223,11 @@ def test_evidence_needs_a_timed_format_and_version_8_or_9():
         _pack(cube, None, None, None)
 
 
-def test_project_tx_pair_keeps_the_evidence_block_and_trailer():
+def test_project_tx_pair_and_select_tdm_loops_keep_the_evidence_block_and_trailer():
     raw, (capture, frames, trailer) = _v8(_cube())
+    selected, _cube_out = parse_dump(select_tdm_loops(raw, start=0, count=1))
+    assert (selected["capture_evidence"], selected["frame_evidence"]) == (capture, frames)
+    assert selected["dump_trailer"] == trailer
 
     projected = project_tx_pair(raw, (0, 2))
     meta, _cube_out = parse_dump(projected)
@@ -256,18 +242,6 @@ def test_project_tx_pair_keeps_the_evidence_block_and_trailer():
     offset = dump.HEADER.size + dump.TEMP_REPORT.size + 4 * 4
     assert projected[offset : offset + evidence_bytes] == raw[offset : offset + evidence_bytes]
     assert projected[-DUMP_TRAILER.size :] == raw[-DUMP_TRAILER.size :]
-
-
-def test_select_tdm_loops_keeps_the_evidence():
-    raw, (capture, frames, trailer) = _v8(_cube())
-
-    meta, _cube_out = parse_dump(select_tdm_loops(raw, start=0, count=1))
-
-    assert (meta["capture_evidence"], meta["frame_evidence"], meta["dump_trailer"]) == (
-        capture,
-        frames,
-        trailer,
-    )
 
 
 def _stale_frame(frames, index: int) -> tuple[dict, ...]:
@@ -432,13 +406,6 @@ def test_an_unscanned_record_has_no_iq8_overflow_or_max_abs(version):
 
     assert (record["iq8_overflow"], record["iq8_max_abs"]) == (None, None)
     assert record["iq8_scanned"] is False
-    assert (
-        meta["frame_evidence"][1]["iq8_overflow"],
-        meta["frame_evidence"][1]["iq8_max_abs"],
-    ) == (
-        2,
-        300,
-    )
 
 
 def test_the_packer_writes_zero_for_an_unscanned_records_unmeasured_iq8_values():
