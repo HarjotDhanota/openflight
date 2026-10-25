@@ -15,8 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-SCHEMA_VERSION = 1
-_PROJECT_FILES = ("pyproject.toml", "uv.lock", "requirements.txt", "requirements.lock")
+# 2: text is hashed with LF line endings and machine-resolved lock files are left out,
+# so one commit hashes the same on the Pi and a Windows checkout (Harjot-outdoor-test-1).
+SCHEMA_VERSION = 2
+# Only the committed project file: uv.lock (and any requirements lock) is gitignored and
+# resolved by each machine; the dependency versions are recorded under "runtime" instead.
+_PROJECT_FILES = ("pyproject.toml",)
 _SENSITIVE_WORDS = ("credential", "secret", "token", "password", "private", "session")
 _CONFIG_PATTERNS = ("*rig_geometry.json", "*calibration*.json", "iwr6843_*.cfg")
 _DEPENDENCIES = (
@@ -67,9 +71,14 @@ def _allowed_files(root: Path) -> list[Path]:
 
 
 def _read_files(root: Path, files: list[Path]) -> dict[str, bytes]:
+    """Each file's bytes as the repository holds them: CRLF read back as LF.
+
+    Every allowlisted file is text; a Windows checkout (core.autocrlf) writes CRLF where
+    the Pi's has LF, and the snapshot must name the same source either way.
+    """
     contents = {}
     for path in files:
-        contents[path.relative_to(root).as_posix()] = path.read_bytes()
+        contents[path.relative_to(root).as_posix()] = path.read_bytes().replace(b"\r\n", b"\n")
     return contents
 
 
@@ -121,8 +130,8 @@ def _content_manifest(file_bytes: Mapping[str, bytes]) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "scope": (
-            "Allowlisted OpenFlight runtime/fusion source, project locks, and "
-            "rig/calibration config"
+            "Allowlisted OpenFlight runtime/fusion source, the project file, and "
+            "rig/calibration config, with LF line endings"
         ),
         "files": {
             relative: {"sha256": _sha256(data), "size_bytes": len(data)}
@@ -165,8 +174,9 @@ def capture_runtime_provenance(
         "schema_version": SCHEMA_VERSION,
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "scope": (
-            "Allowlisted runtime/fusion Python source, dependency project/lock files, and "
-            "non-sensitive rig/calibration configuration present on disk at session startup."
+            "Allowlisted runtime/fusion Python source, the project file, and non-sensitive "
+            "rig/calibration configuration present on disk at session startup, with LF "
+            "line endings."
         ),
         "limitations": [
             "This is a disk snapshot at session startup; already-imported module bytes may differ.",
