@@ -9,6 +9,7 @@ real (OPS) shots, and hands over to the automatic swing exposure after the last.
 import json
 
 import numpy as np
+import pytest
 
 from openflight.camera import free_play_ladder as fpl, study_ladder, swing_exposure as sx
 
@@ -505,3 +506,39 @@ def test_the_setting_change_runs_off_the_shot_callback_thread(tmp_path):
     while running.progress()["changing"] and time.monotonic() < deadline:
         time.sleep(0.01)
     assert running.progress()["changing"] is False
+
+
+def test_a_ball_teed_elsewhere_in_the_box_is_found(tmp_path):
+    # Harjot-outdoor-test-1: 18 of 33 swings were amber "resting ball not found" with the
+    # ball in the box, more than one setup diameter from where the setup saw it
+    clip = tmp_path / "camera_009"
+    clip.mkdir()
+    yy, xx = np.indices((800, 1280), dtype=np.float32)
+    image = np.full((800, 1280), 60.0, np.float32)
+    dx, dy = (xx - 700.0) / 10.0, (yy - 520.0) / 10.0
+    inside = dx * dx + dy * dy <= 1.0
+    nz = np.sqrt(np.clip(1.0 - dx * dx - dy * dy, 0.0, None))
+    image[inside] = (80.0 + 140.0 * np.clip(-0.4 * dx - 0.5 * dy + 0.77 * nz, 0.0, None))[inside]
+    rng = np.random.default_rng(2)
+    frames = np.clip(np.round(image[None] + rng.normal(0, 0.8, (12, 800, 1280))), 0, 255)
+    np.savez(
+        clip / "frames.npz",
+        frames=frames.astype(np.uint8),
+        exposure_us=np.full(12, 150, np.int32),
+        analogue_gain=np.full(12, 4.0, np.float32),
+    )
+    (clip / "metadata.json").write_text(json.dumps({"delivered_fps": 120.0, "gap_count": 0}))
+
+    verdict = fpl.judge_swing(
+        clip,
+        arm_id="arm5",
+        rung_id="full-150",
+        exposure_us=150,
+        gain=4.0,
+        expected_ball=BALL,  # 60 px (3 diameters) left of this ball
+        zone_box=(480, 400, 900, 640),
+    )
+
+    assert verdict["color"] == "green", verdict["reasons"]
+    assert verdict["ball_usable"] is True
+    assert verdict["ball"]["x"] == pytest.approx(700.0, abs=1.5)

@@ -20,6 +20,7 @@ from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
     TriggeredFrameBuffer,
+    delivery_summary,
     timing_summary,
     unpack_r8_frame,
     unpack_yuv420_y_plane,
@@ -710,3 +711,83 @@ def test_a_saved_seed_outside_the_armed_profile_is_not_restored(tmp_path):
     )
 
     assert (runtime.settings.exposure_us, runtime.settings.gain) == (300, 4.0)
+
+
+PERIOD_NS = 8_686_000  # the OV9281 at 1280x800 "120 fps": 115.1 fps delivered
+
+
+def _starved_clip(*, stall_after=9, missing=4, stall_ms=79.0, frames=24, pre=18):
+    """Harjot-outdoor-test-1 clip 010: the callback stalled 79 ms; 7 queued frames then
+    arrived together and the sensor's next 4 found no free buffer."""
+    sensor, host = [], []
+    index = 0
+    for position in range(frames):
+        sensor_ms = index * PERIOD_NS / 1e6
+        if position == stall_after + 1:
+            arrival = host[-1] + stall_ms
+        elif stall_after + 1 < position <= stall_after + 7:
+            arrival = host[-1] + 1.0  # the queue drains
+        else:
+            arrival = sensor_ms + 9.0
+        sensor.append(int(round(sensor_ms * 1e6)))
+        host.append(arrival)
+        index += 1 + (missing if position == stall_after + 7 else 0)
+    clip = tuple(
+        CameraFrame(
+            image=np.zeros((2, 3), np.uint8),
+            sensor_timestamp_ns=s,
+            host_timestamp_ns=int(round(h * 1e6)),
+            exposure_us=200,
+            analogue_gain=12.0,
+        )
+        for s, h in zip(sensor, host)
+    )
+    return TriggeredCapture(frames=clip, pre_trigger_count=pre, trigger_host_timestamp_ns=0)
+
+
+def test_delivery_summary_counts_dropped_frames_and_finds_the_stall():
+    capture = _starved_clip()
+
+    summary = delivery_summary(capture.frames, capture.pre_trigger_count)
+
+    assert summary["dropped_frames"] == 4
+    assert summary["drops"] == [
+        {
+            "after_frame": 16,
+            "frames_missing": 4,
+            "interval_ms": pytest.approx(5 * PERIOD_NS / 1e6, abs=0.01),
+            "frames_from_trigger_frame": -1,
+        }
+    ]
+    stall = summary["longest_callback_stall"]
+    assert stall["after_frame"] == 9 and stall["ms"] == pytest.approx(79.0, abs=0.01)
+    assert stall["frames_from_trigger_frame"] == -8
+    assert summary["delivery_lag_ms"]["max"] == pytest.approx(79.0 + 9.0 - PERIOD_NS / 1e6)
+    assert summary["queue_burst_frames"] == 6
+
+
+def test_delivery_summary_of_a_clean_clip_is_quiet():
+    frames = tuple(make_frame(index, interval_ns=PERIOD_NS) for index in range(24))
+
+    summary = delivery_summary(frames, 18)
+
+    assert summary["dropped_frames"] == 0 and summary["drops"] == []
+    assert summary["longest_callback_stall"]["ms"] == pytest.approx(PERIOD_NS / 1e6)
+    assert summary["queue_burst_frames"] == 0
+
+
+def test_a_saved_clip_records_its_delivery_and_logs_its_drops(tmp_path, caplog):
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+
+    with caplog.at_level("INFO", logger=capture_runtime.__name__):
+        saved = runtime._save_capture(1, 123.0, _starved_clip())
+
+    written = json.loads((saved.path / "metadata.json").read_text(encoding="utf-8"))
+    assert written["gap_count"] == 1
+    assert written["delivery"]["dropped_frames"] == 4
+    assert written["delivery"]["longest_callback_stall"]["ms"] == pytest.approx(79.0, abs=0.01)
+    line = next(r.getMessage() for r in caplog.records if "saved" in r.getMessage())
+    assert "gaps=1" in line
+    assert "4 frame(s) dropped, 4 at -1 frames from the trigger" in line
+    assert "longest callback wait 79 ms after frame -8" in line
+    assert "delivery lag up to 79 ms" in line

@@ -319,6 +319,8 @@ _ball_at_address_thread: threading.Thread | None = None
 # (setup_range_m, range_prior) the monitor takes, kept for a box set after the range
 _ball_at_address_range: tuple = (None, None)
 BALL_AT_ADDRESS_EVERY_S = 1.0
+# the looks' search runs in a worker process, started by the look loop's first look
+_ball_look_worker = None
 # The per-unit setup record and the actions on it (setup_service.SetupService), from main()
 setup_service = None
 # the applied setup revision the session log last recorded
@@ -1523,8 +1525,14 @@ def resting_ball_look() -> dict | None:
     return monitor.latest() or {"state": "unknown", "reason": "no look at the box yet"}
 
 
-def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
-    """One look at the camera's latest frame, unless it is busy with a clip."""
+def ball_at_address_look(monitor, runtime, *, now: float, locate=None) -> dict | None:
+    """One look at the camera's latest frame, unless it is busy with a clip.
+
+    ``locate`` runs the search (the look loop's worker process); a worker that could not
+    answer skips this look.
+    """
+    from .camera.ball_at_address import LookUnavailable  # noqa: PLC0415
+
     if monitor is None or runtime is None:
         return None
     try:
@@ -1536,14 +1544,29 @@ def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
     frames = runtime.recent_frames(1, timeout_s=0.5)
     if not frames:
         return None
-    return monitor.observe(frames[-1].image, at=now)
+    try:
+        return monitor.observe(frames[-1].image, at=now, locate=locate)
+    except LookUnavailable as exc:
+        logger.warning("[BALL_AT_ADDRESS] look skipped: %s", exc)
+        return None
 
 
 def _ball_at_address_loop() -> None:
+    global _ball_look_worker  # pylint: disable=global-statement
+    from .camera.ball_at_address import LookWorker  # noqa: PLC0415
+
+    # Off the kiosk's interpreter lock: on this thread the search starved the camera's
+    # frame callback and frames were lost (Harjot-outdoor-test-1, 24 Oct)
+    _ball_look_worker = _ball_look_worker or LookWorker()
     while True:
         time.sleep(BALL_AT_ADDRESS_EVERY_S)
         try:
-            ball_at_address_look(ball_at_address_monitor, camera_capture_runtime, now=time.time())
+            ball_at_address_look(
+                ball_at_address_monitor,
+                camera_capture_runtime,
+                now=time.time(),
+                locate=_ball_look_worker.locate,
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.warning("[BALL_AT_ADDRESS] look failed", exc_info=True)
 

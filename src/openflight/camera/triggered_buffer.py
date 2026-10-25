@@ -243,6 +243,69 @@ def unpack_yuv420_y_plane(
     return image
 
 
+# A frame reaching the callback this soon after the one before was queued behind a stall.
+QUEUED_ARRIVAL_MS = 2.0
+DELIVERY_LAG_CLOCKS = (
+    "host_timestamp_ns (CLOCK_MONOTONIC at the frame callback) minus SensorTimestamp "
+    "(CLOCK_BOOTTIME at the first row's exposure): one clock unless the Pi has slept"
+)
+
+
+def delivery_summary(frames: Sequence[CameraFrame], pre_trigger_count: int) -> dict:
+    """How the frames reached the callback: dropped frames, and the longest stall.
+
+    A drop is an interval of whole frame periods with frames missing in between (the
+    sensor ran on; no buffer was free). ``longest_callback_stall`` is the longest wait
+    between two callbacks; ``queue_burst_frames`` counts frames that arrived within
+    ``QUEUED_ARRIVAL_MS`` of the one before, queued while the callback could not run.
+    Frame positions are counted from the trigger frame (the last before the trigger, 0).
+    """
+    trigger_frame = int(pre_trigger_count) - 1
+    if len(frames) < 2:
+        return {
+            "dropped_frames": 0,
+            "drops": [],
+            "longest_callback_stall": None,
+            "queue_burst_frames": 0,
+            "delivery_lag_ms": None,
+            "delivery_lag_clocks": DELIVERY_LAG_CLOCKS,
+        }
+    sensor = np.asarray([frame.sensor_timestamp_ns for frame in frames], dtype=np.int64)
+    host = np.asarray([frame.host_timestamp_ns for frame in frames], dtype=np.int64)
+    intervals_ms = np.diff(sensor) / 1e6
+    period_ms = float(np.median(intervals_ms))
+    drops = []
+    for index in np.nonzero(intervals_ms > 1.5 * period_ms)[0]:
+        missing = max(1, int(round(intervals_ms[index] / period_ms)) - 1)
+        drops.append(
+            {
+                "after_frame": int(index),
+                "frames_missing": missing,
+                "interval_ms": float(intervals_ms[index]),
+                "frames_from_trigger_frame": int(index) - trigger_frame,
+            }
+        )
+    arrivals_ms = np.diff(host) / 1e6
+    longest = int(np.argmax(arrivals_ms))
+    lag_ms = (host - sensor) / 1e6
+    return {
+        "dropped_frames": int(sum(drop["frames_missing"] for drop in drops)),
+        "drops": drops,
+        "longest_callback_stall": {
+            "after_frame": longest,
+            "ms": float(arrivals_ms[longest]),
+            "frames_from_trigger_frame": longest - trigger_frame,
+        },
+        "queue_burst_frames": int(np.count_nonzero(arrivals_ms < QUEUED_ARRIVAL_MS)),
+        "delivery_lag_ms": {
+            "median": float(np.median(lag_ms)),
+            "max": float(lag_ms.max()),
+            "max_at_frame": int(np.argmax(lag_ms)),
+        },
+        "delivery_lag_clocks": DELIVERY_LAG_CLOCKS,
+    }
+
+
 def timing_summary(frames: Sequence[CameraFrame]) -> dict[str, float | int]:
     """Summarize delivered cadence and discontinuities for a capture."""
     if len(frames) < 2:
