@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from flask import Flask, Response, g, jsonify, request, send_file
+from flask import Flask, Response, g, has_request_context, jsonify, request, send_file
 
 from openflight import (
     session_bundle,
@@ -171,6 +171,11 @@ LIVE_FRAME_STALE_S = 2.5
 LIVE_THREAD_JOIN_TIMEOUT_S = 5.0
 GUIDED_RANGE_STABLE_COUNT = 3
 GUIDED_RANGE_STABLE_SPAN_S = 1.0
+# The ball range's streak survives this many missed looks in a row (no ball selected,
+# or the LIS3DH not still for a moment): field 24 Oct, any one of them started the
+# streak over. Save stays off on a missed look; a real move or another ball resets.
+GUIDED_RANGE_MISS_TOLERANCE = 2
+GUIDED_RANGE_WAITING_FOR_TILT = "waiting for a stable LIS3DH reading"
 # the picture's own reading of the ball's size, against the size the tape
 # predicts, beyond which the tape or the lens is suspect
 SIZE_CHECK_FRACTION = 0.25
@@ -316,6 +321,133 @@ def settle_reading(
         sleep(0.1)
         reading = read()
     return reading
+
+
+# The confirmation's baseline is the median of the still readings over this window,
+# a few of the service's 0.8 s windows: field 24 Oct, the one snapshot it kept was
+# taken while the unit was being set down and sat 0.46 deg off the still unit.
+CONFIRM_BASELINE_WINDOW_S = 2.5
+CONFIRM_BASELINE_INTERVAL_S = 0.2
+# the angles a baseline or a steady reading takes as medians
+MEDIAN_ANGLE_KEYS = ("pitch_deg", "calibrated_pitch_deg", "camera_pitch_deg", "roll_deg")
+
+
+def _median_angles(latest: Mapping, still: Sequence[Mapping]) -> dict:
+    """``latest`` with each angle every still reading carries replaced by their median."""
+    merged = dict(latest)
+    for key in MEDIAN_ANGLE_KEYS:
+        values = [item.get(key) for item in still]
+        if values and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+        ):
+            merged[key] = round(float(np.median(values)), 2)
+    return merged
+
+
+def median_reading(
+    read,
+    *,
+    window_s: float | None = None,
+    interval_s: float | None = None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> dict:
+    """The still LIS3DH readings over ``window_s``, as one reading with median angles.
+
+    The last still reading carries the medians; with none still in the window, the
+    last reading as it is (the confirmation then refuses it).
+    """
+    window = CONFIRM_BASELINE_WINDOW_S if window_s is None else float(window_s)
+    interval = CONFIRM_BASELINE_INTERVAL_S if interval_s is None else float(interval_s)
+    started = clock()
+    still: list[dict] = []
+    reading = read()
+    samples = 1
+    while True:
+        if reading.get("status") == "stable":
+            still.append(dict(reading))
+        if clock() - started >= window:
+            break
+        sleep(interval)
+        reading = read()
+        samples += 1
+    if not still:
+        return reading
+    return {
+        **_median_angles(still[-1], still),
+        "baseline_samples": samples,
+        "baseline_still_samples": len(still),
+        "baseline_window_s": round(clock() - started, 2),
+    }
+
+
+# A poll's reading that is momentarily not still stands on the last still one for
+# this long: a hand near the unit, or the service between windows, is not a move.
+READING_HOLD_S = 10.0
+# what a drawing (the box, the aim) is projected with: the recent still readings' median
+STEADY_WINDOW_S = 5.0
+HOLDABLE_STATUSES = frozenset({"moving", "stale", "no_stable_preimpact_reading"})
+
+
+class SteadyReading:
+    """The enclosure's reading as the page's polls and drawings take it (field 24 Oct).
+
+    A reading that is momentarily moving or stale is held over from the last still
+    one (``held_over`` says so, and the setup's move watch never counts it); a sensor
+    that is off or failing is never held. ``steady`` is the median of the still
+    readings of the last ``window_s``, so a drawing does not jitter with the noise.
+    """
+
+    def __init__(
+        self,
+        read: Callable[[], Mapping],
+        *,
+        hold_s: float = READING_HOLD_S,
+        window_s: float = STEADY_WINDOW_S,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._read = read
+        self.hold_s = float(hold_s)
+        self.window_s = float(window_s)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._still: deque[tuple[float, dict]] = deque()
+
+    def _observe(self) -> tuple[dict, float]:
+        current = dict(self._read())
+        now = self._clock()
+        with self._lock:
+            if current.get("status") == "stable":
+                self._still.append((now, current))
+            keep = max(self.hold_s, self.window_s)
+            while self._still and now - self._still[0][0] > keep:
+                self._still.popleft()
+        return current, now
+
+    def reading(self) -> dict:
+        """The reading now, or the last still one held over a moment's motion."""
+        current, now = self._observe()
+        if current.get("status") == "stable" or current.get("status") not in HOLDABLE_STATUSES:
+            return current
+        with self._lock:
+            if not self._still:
+                return current
+            last_at, last = self._still[-1]
+        if now - last_at > self.hold_s:
+            return current
+        return {**last, "held_over": current.get("status"), "held_s": round(now - last_at, 2)}
+
+    def steady(self) -> dict:
+        """The reading with the recent still readings' median angles, for a drawing."""
+        current = self.reading()
+        if current.get("status") != "stable":
+            return current
+        now = self._clock()
+        with self._lock:
+            recent = [item for at, item in self._still if now - at <= self.window_s]
+        if not recent:
+            return current
+        return {**_median_angles(current, recent), "steady_samples": len(recent)}
 
 
 class TeeRangeSetupAdmissionError(RuntimeError):
@@ -4437,10 +4569,40 @@ class BoxPreviewExposure:
 # a miss counts as "no ball" only once the picture's brightness has settled, or
 # after this long.
 BOX_BALL_SETTLE_S = 6.0
+# Field 24 Oct: the ball state followed each 1 s look, and a box confirmed on a look
+# 13.2 s old. A found ball is confirmable once this many looks in a row found it,
+# stays found through this many missed looks, and is confirmed only on a found look
+# at most this old.
+BOX_BALL_FOUND_LOOKS = 2
+BOX_BALL_MISS_TOLERANCE = 2
+BOX_BALL_LOOK_MAX_AGE_S = 2.0
+# a look that takes longer than this is logged: the next field test can see why
+# the looks stopped coming
+BOX_BALL_SLOW_LOOK_S = 2.0
 # a wider ground region the box step searches when the box holds no ball, to say
 # "outside the box" rather than "no ball": the hitting area either side and beyond
 BOX_WIDE_SEARCH_WINDOW_M = (0.7, 4.0)
 BOX_WIDE_SEARCH_HALF_WIDTH_M = 1.2
+
+
+def _same_box_ball(previous: Mapping, selected: Mapping) -> bool:
+    """Whether a found look is the ball the last look found: the same place and size.
+
+    The guided comparison (``_same_guided_candidate``) also compares radar ranges,
+    which the box's ball never has, so it called every look a new ball and the
+    box's ``stable_s`` stayed 0 (field 24 Oct).
+    """
+    if previous.get("state") != "found" or not previous.get("center_px"):
+        return False
+    try:
+        x, y = (float(value) for value in previous["center_px"])
+        diameter = float(previous.get("diameter_px") or 0.0)
+        other = float(selected["diameter_px"])
+        size = max(diameter, other, 1.0)
+        moved = math.hypot(x - float(selected["x_px"]), y - float(selected["y_px"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return moved <= max(3.0, 0.2 * size) and abs(diameter - other) <= max(2.0, 0.15 * size)
 
 
 class BoxBallLocator:
@@ -4451,6 +4613,10 @@ class BoxBallLocator:
     holds none, in a wider region, so the page can say ``outside_box``; the state
     and its plain message come from ``placement_box.classify_ball``. Nothing it
     finds is a distance: the IWR gives that.
+
+    A found ball stays found through ``BOX_BALL_MISS_TOLERANCE`` missed looks, and is
+    ``confirmable`` once ``BOX_BALL_FOUND_LOOKS`` looks in a row found it and the last
+    of them is at most ``BOX_BALL_LOOK_MAX_AGE_S`` old.
     """
 
     def __init__(  # pylint: disable=too-many-arguments
@@ -4473,6 +4639,11 @@ class BoxBallLocator:
         self._on_change = on_change
         self._started = clock()
         self._lock = threading.Lock()
+        # the found streak, the misses since the last found look, and its time
+        self._found_looks = 0
+        self._misses = 0
+        self._found_at: float | None = None
+        self._failure: str | None = None
         self._state: dict = self._ball_payload({"state": "waiting", "selected": None}, None)
 
     def _ball_payload(self, classified: Mapping, stable_since: float | None) -> dict:
@@ -4481,6 +4652,7 @@ class BoxBallLocator:
         now = self._clock()
         return {
             "state": state,
+            "looked_at": now,
             "center_px": (
                 [round(float(selected["x_px"]), 1), round(float(selected["y_px"]), 1)]
                 if selected
@@ -4500,6 +4672,7 @@ class BoxBallLocator:
             self.brightness.status()["state"] in {"settled", "limit"}
             or self._clock() - self._started >= BOX_BALL_SETTLE_S
         )
+        started = time.monotonic()
         try:
             _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
             wide = None
@@ -4508,27 +4681,80 @@ class BoxBallLocator:
             classified = placement_box.classify_ball(
                 in_box, wide, outline_px=self.box.outline_px, settled=settled
             )
-        except (RuntimeError, ValueError, TypeError) as exc:
-            logger.info("[BOX_BALL] the ball search failed: %s", exc)
+            failure = None
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # any failure is a missed look, and said once: field 24 Oct, the looks
+            # stopped for 13 s and nothing in the log said why
+            failure = f"{type(exc).__name__}: {exc}"
             classified = {"state": "waiting", "selected": None}
+        took = time.monotonic() - started
+        if took > BOX_BALL_SLOW_LOOK_S:
+            logger.info("[BOX_BALL] a look at the ball took %.1f s", took)
         with self._lock:
+            if failure is not None and failure != self._failure:
+                logger.info("[BOX_BALL] the ball search failed: %s", failure)
+            self._failure = failure
             previous = self._state
+            classified = self._hold_found(previous, classified)
             stable_since = None
             if classified["state"] == "found":
-                same = previous.get("state") == "found" and _same_guided_candidate(
-                    {
-                        "x_px": (previous.get("center_px") or [0, 0])[0],
-                        "y_px": (previous.get("center_px") or [0, 0])[1],
-                        "diameter_px": previous.get("diameter_px") or 0.0,
-                    },
-                    classified["selected"],
-                )
+                same = _same_box_ball(previous, classified["selected"])
                 stable_since = previous.get("stable_since") if same else self._clock()
             self._state = self._ball_payload(classified, stable_since)
-            current = dict(self._state)
+            current = self._with_freshness(dict(self._state))
+        if previous.get("state") != current["state"]:
+            logger.info(
+                "[BOX_BALL] ball %s -> %s (found looks %d, misses %d)",
+                previous.get("state"),
+                current["state"],
+                self._found_looks,
+                self._misses,
+            )
         if self._on_change is not None:
             self._on_change(current)
         return {**result, "ball_state": classified["state"]}
+
+    def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
+        """Count the found streak; a found ball stays found through a few misses."""
+        if classified["state"] == "found":
+            same = _same_box_ball(previous, classified["selected"])
+            self._found_looks = self._found_looks + 1 if same else 1
+            self._misses = 0
+            self._found_at = self._clock()
+            return dict(classified)
+        if previous.get("state") == "found" and self._misses < BOX_BALL_MISS_TOLERANCE:
+            # a missed look: the ball found a moment ago is still the ball
+            self._misses += 1
+            center = previous.get("center_px") or [0.0, 0.0]
+            return {
+                "state": "found",
+                "selected": {
+                    "x_px": center[0],
+                    "y_px": center[1],
+                    "diameter_px": previous.get("diameter_px") or 0.0,
+                },
+            }
+        self._found_looks = 0
+        self._misses = 0
+        self._found_at = None
+        return dict(classified)
+
+    def _with_freshness(self, state: dict) -> dict:
+        """Add how old the look is and whether a confirm may take it (under the lock)."""
+        now = self._clock()
+        if state.get("stable_since") is not None:
+            state["stable_s"] = round(now - float(state["stable_since"]), 2)
+        looked = self._found_at if state.get("state") == "found" else state.get("looked_at")
+        age = max(0.0, now - float(looked)) if looked is not None else None
+        state["look_age_s"] = round(age, 2) if age is not None else None
+        state["missed_looks"] = self._misses if state.get("state") == "found" else 0
+        state["confirmable"] = bool(
+            state.get("state") == "found"
+            and self._found_looks >= BOX_BALL_FOUND_LOOKS
+            and age is not None
+            and age <= BOX_BALL_LOOK_MAX_AGE_S
+        )
+        return state
 
     def status(self) -> dict:
         return self.brightness.status()
@@ -4536,10 +4762,7 @@ class BoxBallLocator:
     def ball(self) -> dict:
         """The ball's state now, as the contract's ``ball`` block carries it."""
         with self._lock:
-            state = dict(self._state)
-        if state.get("stable_since") is not None:
-            state["stable_s"] = round(self._clock() - float(state["stable_since"]), 2)
-        return state
+            return self._with_freshness(dict(self._state))
 
 
 # The ladder's blur ceiling for a mode and lens: the exposure at which the 7-iron
@@ -4914,6 +5137,7 @@ class GuidedRangeAnalyzer:
         self._stable_anchor: dict | None = None
         self._stable_count = 0
         self._stable_started_at: float | None = None
+        self._stable_misses = 0
         self._last_observation_id: int | None = None
         # whether the last pose check found the rig moved, so each change is logged once
         self._pose_moved = False
@@ -4921,7 +5145,7 @@ class GuidedRangeAnalyzer:
     def _orientation_problem(self) -> str | None:
         current = self._orientation_reader()
         if current.get("status") != "stable":
-            return "waiting for a stable LIS3DH reading"
+            return GUIDED_RANGE_WAITING_FOR_TILT
         deltas: dict[str, float] = {}
         for name in ("camera_pitch_deg", "roll_deg"):
             try:
@@ -5002,25 +5226,37 @@ class GuidedRangeAnalyzer:
             analysis["selected"] = None
         selected = analysis.get("selected")
         with self._lock:
-            if problem or not isinstance(selected, Mapping) or analysis["status"] != "selected":
+            looked = (
+                not problem and isinstance(selected, Mapping) and analysis["status"] == "selected"
+            )
+            # a missed look (no ball selected, or the LIS3DH not still a moment) keeps
+            # the streak for a few looks; a pose change or another ball does not
+            missed = not looked and problem in {None, GUIDED_RANGE_WAITING_FOR_TILT}
+            if missed and self._stable_anchor is not None:
+                self._stable_misses += 1
+            if not looked and (not missed or self._stable_misses > GUIDED_RANGE_MISS_TOLERANCE):
                 self._stable_anchor = None
                 self._stable_count = 0
                 self._stable_started_at = None
-            elif self._stable_anchor is None or not _same_guided_candidate(
-                self._stable_anchor, selected
+                self._stable_misses = 0
+            elif looked and (
+                self._stable_anchor is None
+                or not _same_guided_candidate(self._stable_anchor, selected)
             ):
                 self._stable_anchor = dict(selected)
                 self._stable_count = 1
                 self._stable_started_at = now
-            else:
+                self._stable_misses = 0
+            elif looked:
                 self._stable_count += 1
+                self._stable_misses = 0
             span = (
                 max(0.0, now - self._stable_started_at)
                 if self._stable_started_at is not None
                 else 0.0
             )
             eligible = bool(
-                not problem
+                looked
                 and self._stable_count >= GUIDED_RANGE_STABLE_COUNT
                 and span >= GUIDED_RANGE_STABLE_SPAN_S
             )
@@ -7147,6 +7383,7 @@ class LiveView:
         except (OSError, TypeError, ValueError):
             focal = None
         last_context, last_sequence, last_at, context_started = None, 0, 0.0, 0.0
+        last_failure: str | None = None
         while not stop_event.wait(min(0.1, LIVE_BALL_EVERY_S)):
             with self._lock:
                 if generation != self._run_generation or self._arm != arm:
@@ -7173,7 +7410,14 @@ class LiveView:
             if analyzer is not None:
                 try:
                     association = dict(analyzer(frames, frame_sequence, applied))
+                    last_failure = None
                 except Exception as exc:  # pylint: disable=broad-exception-caught
+                    failure = f"{type(analyzer).__name__}: {type(exc).__name__}: {exc}"
+                    if failure != last_failure:
+                        # said once per failure: field 24 Oct, the box's looks stopped
+                        # for 13 s and nothing in the log said why
+                        logger.warning("[LIVE] the live analyzer failed: %s", failure)
+                    last_failure = failure
                     association = {
                         "status": "analysis_error",
                         "confidence": "withheld",
@@ -7768,6 +8012,9 @@ def create_app(
         live.sensor_limits_path = sensor_limits_path
         live.lens_id = lens_store.selected
     enclosure = tilt or EnclosureTilt(rig_geometry)
+    # the page's polls and drawings: a moment's motion held over, the box drawn from
+    # the recent still readings' median (field 24 Oct); actions read the enclosure
+    steady = SteadyReading(lambda: enclosure.reading())
     setup = setup_policy or SetupEligibility(
         rig_geometry,
         sessions_root,
@@ -8097,7 +8344,7 @@ def create_app(
             result["stage"] = "runtime"
             result["runtime"] = runtime
             return with_unit_checks(result)
-        return with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
+        return with_unit_checks(setup.evaluate(tester_id, steady.reading()))
 
     def setup_command_config(result: Mapping) -> dict:
         return {
@@ -8112,10 +8359,31 @@ def create_app(
     def blocked_setup(result: dict):
         return jsonify({"error": "tester setup is not eligible", "setup_eligibility": result}), 409
 
+    def settled_reading() -> dict:
+        """A still LIS3DH reading for a range action: the one its request took before
+        the range's lock, so the wait for it (up to 3 s) never holds the lock."""
+        if has_request_context():
+            taken = g.get("openflight_settled_reading")
+            if taken is not None:
+                return dict(taken)
+        return settle_reading(enclosure.reading)
+
+    def steady_baseline() -> dict:
+        """A frozen pose for a range step: the recent still readings' median, so one
+        noisy snapshot is not what every later reading is held to within 0.5 deg."""
+        reading = steady.steady()
+        if reading.get("status") == "stable" and not reading.get("held_over"):
+            return reading
+        return settled_reading()
+
+    def settle_before_lock() -> None:
+        """Take this request's still reading now, before it takes ``tee_range_lock``."""
+        g.openflight_settled_reading = settle_reading(enclosure.reading)
+
     def bound_range_setup(tester_id: str, state, action: str) -> tuple[dict, dict]:
         if state is None:
             raise RuntimeError("start automatic tee range before this step")
-        reading = settle_reading(enclosure.reading)
+        reading = settled_reading()
         eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
         if not eligibility["eligible"]:
             raise TeeRangeSetupAdmissionError(
@@ -8335,7 +8603,11 @@ def create_app(
         tester_id = str(payload.get("tester_id", ""))
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
-        reading = enclosure.reading()
+        # a confirmation's baseline, which a later move is measured from, is settled
+        # over a few of the service's windows: never one snapshot of the unit being
+        # set down (field 24 Oct)
+        confirming = request.method == "POST" and payload.get("action") == "confirm"
+        reading = median_reading(enclosure.reading) if confirming else steady.reading()
         try:
             if request.method == "POST":
                 if payload.get("action") != "confirm":
@@ -8393,8 +8665,12 @@ def create_app(
         return FlowStore(tester_root(sessions_root, tester_id))
 
     def patch_camera(arm_id: str = PLACEMENT_BOX_ARM) -> tuple[BallPlaneCamera, dict, float | None]:
-        """The camera model the box is drawn through (1280x800 by default), the tilt, the roll."""
-        reading = enclosure.reading()
+        """The camera model the box is drawn through (1280x800 by default), the tilt, the roll.
+
+        The tilt is the recent still readings' median, so the drawing does not move
+        with the LIS3DH's noise (field 24 Oct: about 4 px).
+        """
+        reading = steady.steady()
         model = camera_for(ARMS[arm_id], reading)
         return model, reading, _placement_roll_deg(rig_geometry, reading)
 
@@ -8498,6 +8774,20 @@ def create_app(
             },
         }
 
+    def box_ball_now(tester_id: str) -> dict:
+        """The box's ball as of the newest look: the live locator's while it looks for
+        this tester, else the last look it kept."""
+        owner = live_owner_snapshot()
+        locator = box_locator["value"]
+        if (
+            locator is not None
+            and owner
+            and owner.get("kind") == "placement_box"
+            and owner.get("tester_id") == tester_id
+        ):
+            return locator.ball()
+        return dict(box_ball_last.get(tester_id) or {})
+
     def ball_block(tester_id: str, ranged: Mapping, previewing: bool) -> dict:
         """The contract's ``ball``: what the camera sees in the box, and its measured range."""
         locator = box_locator["value"]
@@ -8522,6 +8812,10 @@ def create_app(
             "range_status": ranged.get("range_status") or ("pending" if state == "found" else None),
             "message": message,
             "updated_at_utc": ball.get("updated_at_utc"),
+            # found in enough looks in a row, the last of them fresh: Confirm may take it
+            "confirmable": bool(ball.get("confirmable", state == "found")),
+            "look_age_s": ball.get("look_age_s"),
+            "missed_looks": ball.get("missed_looks", 0),
         }
 
     def placement_box_status(
@@ -8579,8 +8873,14 @@ def create_app(
         )
         confirmed = confirmed_placement_box(root, eligibility)
         if confirmed is not None and confirmed.get("mode") == placement_box.MODE:
+            # drawn as it was confirmed, at its confirm-time tilt: never projected
+            # again from the live pitch, which moved it about 4 px (field 24 Oct)
+            frozen = box_mode_view(confirmed, arm_id)
             return {
                 **payload,
+                "box_outline_px": frozen["box_outline_px"],
+                "frame_size_px": frozen["frame_size_px"],
+                "box_arm_id": frozen["arm_id"],
                 "state": "confirmed",
                 "box": {key: confirmed.get(key) for key in BOX_DISPLAY_KEYS},
                 "confirmed_at_utc": confirmed.get("confirmed_at_utc"),
@@ -8710,8 +9010,18 @@ def create_app(
         root = tester_root(sessions_root, tester_id)
         camera, reading, roll = patch_camera()
         binding = placement_box_binding(eligibility)
-        ball = dict(box_ball_last.get(tester_id) or {})
-        ball.pop("stable_since", None)
+        ball = box_ball_now(tester_id)
+        if ball.get("state") == "found" and not ball.get("confirmable", True):
+            # field 24 Oct: a box confirmed on a look 13.2 s old; only a fresh one
+            age = ball.get("look_age_s")
+            raise RuntimeError(
+                "the camera has not seen the ball for "
+                f"{age:.0f} s: wait for the check to turn green again, then confirm"
+                if isinstance(age, (int, float)) and age > BOX_BALL_LOOK_MAX_AGE_S
+                else "the camera is still checking the ball: confirm once the check is green"
+            )
+        for key in ("stable_since", "looked_at", "confirmable", "missed_looks"):
+            ball.pop(key, None)
         record = {
             **fixed_box_record(camera, reading, roll, lens=current_lens(), config=box_config),
             "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -8821,10 +9131,13 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         arm_id = payload.get("arm_id")
         try:
+            if request.method == "GET":
+                # read-only: never queued behind a range action's lock (field 24 Oct:
+                # 5.6-5.8 s behind a Save, past the page's 5 s timeout)
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
+                return jsonify(placement_box_status(tester_id, eligibility, arm_id))
             with tee_range_lock:
-                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
-                if request.method == "GET":
-                    return jsonify(placement_box_status(tester_id, eligibility, arm_id))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
                 action = str(payload.get("action", ""))
                 if action not in {"show", "confirm", "set_net_line"}:
                     raise ValueError("unknown placement-box action")
@@ -9093,10 +9406,12 @@ def create_app(
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
         try:
+            if request.method == "GET":
+                # read-only, as the box's: never queued behind a range action's lock
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
+                return jsonify(aim_point_status(tester_id, eligibility))
             with tee_range_lock:
-                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
-                if request.method == "GET":
-                    return jsonify(aim_point_status(tester_id, eligibility))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
                 action = str(payload.get("action", ""))
                 if action not in {"show", "confirm", "skip"}:
                     raise ValueError("unknown aim-point action")
@@ -9754,7 +10069,7 @@ def create_app(
         store = range_store(tester_id)
         params = TesterParameters(tester_id, arm_id, "indoors")
         black_floor = read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn")
-        tilt_snapshot = enclosure.reading()
+        tilt_snapshot = steady_baseline()
         model = camera_for(params.arm, tilt_snapshot)
         camera_input_identity = _guided_camera_input_identity(
             params.arm,
@@ -10402,6 +10717,8 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         request_id = str(payload.get("request_id", "")).strip()
         try:
+            if request.method == "POST":
+                settle_before_lock()
             if request.method == "POST" and payload.get("action") == "evaluate_camera_arm5":
                 # the Save's search runs outside tee_range_lock so page requests never
                 # queue behind it (13 Oct light audit section 5)
@@ -10451,7 +10768,7 @@ def create_app(
                     bound_range_setup(tester_id, state, f"idempotent_{action}")
                     return jsonify({"state": state.to_dict(), "idempotent": True})
                 if action in {"start", "start_over", "ball_moved"}:
-                    reading = enclosure.reading()
+                    reading = steady_baseline()
                     eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
                     if not eligibility["eligible"]:
                         return blocked_setup(eligibility)

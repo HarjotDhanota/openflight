@@ -693,6 +693,18 @@
           font-size: 0.95rem;
         }
       }
+      /* field 24 Oct: the setup band's step label could wrap onto a second line at some
+         steps; the bars grew, the live views under them shrank and the page jumped.
+         The compact band is one line at every step, whatever its label says. */
+      .ready-light.ready-light--compact {
+        flex-wrap: nowrap;
+      }
+      .ready-light.ready-light--compact .ready-light__word,
+      .ready-light.ready-light--compact .ready-light__cause {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       @media (max-width: 560px) {
         .ready-light {
           flex-wrap: wrap;
@@ -1930,6 +1942,10 @@
           <div id="first-club" role="group" aria-labelledby="first-club-label"></div>
           <span class="note" id="first-club-hint">Tap a club. Change it any time on the kiosk.</span>
         </div>
+        <div class="setup-warning" id="free-play-range-warning" role="status" hidden>
+          <p id="free-play-range-text"></p>
+          <button type="button" id="free-play-range-retry">Try the ball range again</button>
+        </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
         <p class="note" id="free-play-status" role="status"></p>
@@ -2373,6 +2389,21 @@
         }
       }
 
+      // Field 24 Oct: one poll that took a step back (a LIS3DH blip) reset steps 3 and 4,
+      // hid their live views and lost the dragged aim. A poll that would undo a done step
+      // is believed only once it repeats; an action's own answer is taken at once.
+      const NEGATIVE_POLLS_TO_DROP = 2;
+      const negativePolls = {};
+      // true: keep the step as it was, this poll is the first of its kind
+      function holdThroughNegativePoll(name, wasPositive, isPositive) {
+        if (isPositive || !wasPositive) {
+          negativePolls[name] = 0;
+          return false;
+        }
+        negativePolls[name] = (negativePolls[name] || 0) + 1;
+        return negativePolls[name] < NEGATIVE_POLLS_TO_DROP;
+      }
+
       function setupReady() {
         return Boolean(
           currentTester() &&
@@ -2551,6 +2582,8 @@
           if (version !== setupRequestVersion || testerId !== el('tester-id').value.trim()) return false;
           if (!response.ok) throw new Error(body.error || `setup check failed (${response.status})`);
           const prior = setupEligibility;
+          const samePrior = Boolean(prior && prior.tester_id === body.tester_id && prior.config_hash === body.config_hash);
+          if (holdThroughNegativePoll('setup', samePrior && prior.eligible, body.eligible)) return setupReady();
           if (
             !prior ||
             prior.tester_id !== body.tester_id ||
@@ -2805,7 +2838,9 @@
         const sizes = { arm5: '1280×800', arm6: '640×400' };
         const screens = studyArms.filter((a) => sizes[a.arm_id] && a.gain_screen);
         const stale = screens.find((a) => a.gain_screen.stale);
-        lightMeasured = !stale && screens.some((a) => a.arm_id === 'arm5');
+        // field 24 Oct: done after 1280×800 alone, step 6 then took the hardware from the
+        // 640×400 measurement still running; the light is measured once its loop ends
+        lightMeasured = !lightLoopRunning && !stale && screens.some((a) => a.arm_id === 'arm5');
         const node = el('light-age');
         if (stale) {
           node.className = 'problem';
@@ -2835,6 +2870,7 @@
       }
 
       function render(body) {
+        hardwareJobRunning = body.job?.state === 'running';
         if ('free_play' in body) renderFreePlay(body.free_play);
         if (body.failed) {
           el('status').dataset.state = 'error';
@@ -3283,9 +3319,12 @@
         }
       });
       el('step-light').addEventListener('click', async () => {
-        if (!boxConfirmed()) return;
+        if (!boxConfirmed() || lightLoopRunning) return;
         const context = suiteContext();
         const version = ++suiteActionVersion;
+        lightLoopRunning = true;
+        lightMeasured = false;
+        renderSteps();
         try {
           if (!(await requireSetupEligibility())) return;
           for (const arm of ['arm5', 'arm6']) {
@@ -3313,6 +3352,10 @@
             (dark ? ' — swings are still recorded, as evidence only' : '');
         } catch (e) {
           el('light-verdict').textContent = `failed: ${e.message}`;
+        } finally {
+          lightLoopRunning = false;
+          // the light's screens as the server now has them: step 6 may open after this
+          refresh();
         }
       });
 
@@ -3371,9 +3414,16 @@
         radar_only_unconfirmed: 'radar only: the camera has not confirmed it',
         pending: 'waiting for the radar',
       };
+      // an older server says nothing of confirmable: its found ball is confirmable
+      const ballConfirmable = (ball) => ball?.state === 'found' && ball.confirmable !== false;
       function ballStatusText(ball) {
         if (!ball) return BALL_STATE_TEXT.waiting;
         let text = ball.message || BALL_STATE_TEXT[ball.state] || String(ball.state);
+        if (ball.state === 'found' && !ballConfirmable(ball)) {
+          return Number(ball.look_age_s) > 2
+            ? 'Checking the ball again: the camera has not seen it for a moment. Keep it still in the box.'
+            : 'Ball seen: checking it again before you confirm…';
+        }
         if (ball.state === 'found') {
           text = `✓ ${text}`;
           if (Number.isFinite(ball.range_m)) {
@@ -3527,11 +3577,14 @@
         el('placement-show').hidden = !placing || placementPreviewShowing;
         el('placement-show').disabled = placementActionPending;
         el('placement-confirm').hidden = !placing;
-        el('placement-confirm').disabled = placementActionPending || ball?.state !== 'found';
+        // a found ball the camera has seen in enough looks in a row, the last one fresh
+        // (field 24 Oct: a box was confirmed on a look 13 s old)
+        el('placement-confirm').disabled = placementActionPending || !ballConfirmable(ball);
         el('placement-move').hidden = !confirmed || placementMoving;
         el('placement-move').disabled = placementActionPending;
         const status = el('placement-ball-status');
-        status.dataset.state = ball?.state || 'waiting';
+        // a found ball still being checked reads as waiting, never a green check
+        status.dataset.state = ball?.state === 'found' && !ballConfirmable(ball) ? 'waiting' : ball?.state || 'waiting';
         status.textContent = placing ? ballStatusText(ball) : '';
         el('placement-net-status').textContent = placing ? netLineText(placementState?.net_line) : '';
         el('placement-distance').textContent = placing ? placementState?.distance_note || '' : '';
@@ -3549,6 +3602,10 @@
         renderSteps();
       }
 
+      // the picture this tester's view last showed: kept on screen, at its size, while the
+      // view closes and opens again, so the step never collapses and jumps (field 24 Oct)
+      let placementFrameTester = null;
+      let placementFrameShown = false;
       function syncPlacementPreview() {
         const key = placementPlacing() ? currentTester() : null;
         if (key === placementPreviewKey) return;
@@ -3556,9 +3613,14 @@
         placementPreviewVersion += 1;
         placementFrameLoading = false;
         placementPendingFrame = null;
+        placementFrameShown = false;
         const frame = el('placement-camera-frame');
-        frame.hidden = true;
-        frame.removeAttribute('src');
+        if (placementFrameTester !== currentTester()) {
+          // another tester's picture is never shown
+          frame.hidden = true;
+          frame.removeAttribute('src');
+          placementFrameTester = null;
+        }
         el('placement-brightness').hidden = true;
         if (key !== null) {
           placementCameraStatus('Opening the camera…');
@@ -3577,7 +3639,9 @@
           placementPendingFrame = null;
           placementFrameLoading = false;
           if (version === placementPreviewVersion && placementPlacing()) {
-            const first = el('placement-camera-frame').hidden;
+            const first = !placementFrameShown;
+            placementFrameShown = true;
+            placementFrameTester = currentTester();
             frame.hidden = false;
             el('placement-camera-frame').replaceWith(frame);
             renderPlacementOverlay();
@@ -3678,6 +3742,11 @@
           const body = await readJson(response);
           if (version !== placementRequestVersion || testerId !== currentTester()) return;
           if (!response.ok) throw new Error(body.error || `ball box check failed (${response.status})`);
+          const priorBox = placementState?.tester_id === body.tester_id ? placementState?.state : null;
+          const boxStepBack =
+            (priorBox === 'confirmed' && body.state !== 'confirmed') ||
+            (priorBox === 'needs_confirmation' && ['setup_not_confirmed', 'unavailable'].includes(body.state));
+          if (holdThroughNegativePoll('placement', boxStepBack, false)) return;
           placementState = body;
           if (body.state !== 'confirmed') placementMoving = false;
           if (!body.previewing) placementPreviewShowing = false;
@@ -3879,8 +3948,13 @@
         if (!aimForTester()) return null;
         const model = aimState?.projection || null;
         const frame = aimFrameSize();
-        const key = `${currentTester()}|${aimState.state}|${aimMoving}|${aimState.reason ?? ''}`;
-        if (aimDraftKey !== key || !aimDraft) {
+        // the drag is kept through every poll (field 24 Oct: a poll's state was part of
+        // this key, so a flicker threw the dragged line away): only another tester, a
+        // move asked for, or another box starts it again from the server's proposal
+        const patchKey = (aimState.patch?.centre_lfu_m || []).join(',');
+        const key = `${currentTester()}|${aimMoving}|${patchKey}`;
+        const otherTester = !String(aimDraftKey ?? '').startsWith(`${currentTester()}|`);
+        if (!aimDraft || (aimDraftKey !== key && (aimState.patch || otherTester))) {
           // pre-filled from the last confirmed aim point (the server's proposal)
           const start = aimState.state === 'confirmed' ? aimState.target_line : aimState.aim;
           aimDraft = {
@@ -4042,6 +4116,9 @@
         renderSteps();
       }
 
+      // as the box's: the last picture stays at its size while the view closes and opens
+      let aimFrameTester = null;
+      let aimFrameShown = false;
       function syncAimPreview() {
         const key = aimPlacing() ? currentTester() : null;
         if (key === aimPreviewKey) return;
@@ -4049,9 +4126,13 @@
         aimPreviewVersion += 1;
         aimFrameLoading = false;
         aimPendingFrame = null;
+        aimFrameShown = false;
         const frame = el('aim-camera-frame');
-        frame.hidden = true;
-        frame.removeAttribute('src');
+        if (aimFrameTester !== currentTester()) {
+          frame.hidden = true;
+          frame.removeAttribute('src');
+          aimFrameTester = null;
+        }
         el('aim-brightness').hidden = true;
         if (key !== null) {
           aimCameraStatus('Opening the camera…');
@@ -4068,7 +4149,9 @@
           aimPendingFrame = null;
           aimFrameLoading = false;
           if (version === aimPreviewVersion && aimPlacing()) {
-            const first = el('aim-camera-frame').hidden;
+            const first = !aimFrameShown;
+            aimFrameShown = true;
+            aimFrameTester = currentTester();
             frame.hidden = false;
             el('aim-camera-frame').replaceWith(frame);
             if (aimFullOpen) el('aim-full-frame').src = frame.src;
@@ -4172,6 +4255,11 @@
           const body = await readJson(response);
           if (version !== aimRequestVersion || testerId !== currentTester()) return;
           if (!response.ok) throw new Error(body.error || `aim point check failed (${response.status})`);
+          const priorAim = aimState?.tester_id === body.tester_id ? aimState?.state : null;
+          const aimStepBack =
+            (['confirmed', 'skipped'].includes(priorAim) && !['confirmed', 'skipped'].includes(body.state)) ||
+            (priorAim === 'needs_confirmation' && ['setup_not_confirmed', 'needs_patch', 'unavailable'].includes(body.state));
+          if (holdThroughNegativePoll('aim', aimStepBack, false)) return;
           aimState = body;
           if (body.state !== 'confirmed' && body.state !== 'skipped') aimMoving = false;
           if (!body.previewing) aimPreviewShowing = false;
@@ -4982,6 +5070,8 @@
       let rangeAutoKey = null;
       function maybeAutoStartRange() {
         if (teeRangeRequestRunning || !teeRangeKnown() || !boxConfirmed() || !setupReady()) return;
+        // never while step 5's light loop, or any job, has the camera and the radars
+        if (lightLoopRunning || hardwareJobRunning) return;
         if (currentStep() !== 6) return;
         const phase = teeRangeState?.phase;
         const action = !teeRangeState ? 'start' : phase === 'needs_camera_arm5' ? 'start_camera_arm5' : null;
@@ -5225,6 +5315,10 @@
         submitTeeRange(el('tee-range-action').dataset.action || 'start');
       });
       el('tee-range-restart').addEventListener('click', () => submitTeeRange('start_over'));
+      el('free-play-range-retry').addEventListener('click', async () => {
+        await submitTeeRange('start_over');
+        el('step-6').scrollIntoView({ block: 'start' });
+      });
       el('tee-range-diagnostic').addEventListener('click', () => {
         const action = el('tee-range-diagnostic').dataset.action;
         if (action) submitTeeRange(action);
@@ -5632,6 +5726,29 @@
           ['recording', 'stopping', 'packaging', 'ready'].includes(freePlayState?.phase);
         renderFreePlayResolution();
         renderFirstClub();
+        renderFreePlayRangeWarning();
+      }
+
+      // Field 24 Oct: free play started with no ball range, and every camera number was
+      // withheld for all 33 shots with nothing said. One plain verdict before Start, and
+      // one tap to try the range again; free play may still start (no manual inputs).
+      function teeRangeHasNoDistance() {
+        if (!teeRangeComplete()) return false;
+        return teeRangeState?.phase === 'raw_only' || teeRangeDisplay?.canonical?.state === 'withheld';
+      }
+      function renderFreePlayRangeWarning() {
+        const node = el('free-play-range-warning');
+        const active = ['recording', 'stopping', 'packaging', 'ready', 'closed'].includes(freePlayState?.phase);
+        const show = Boolean(currentTester()) && teeRangeHasNoDistance() && !active;
+        node.hidden = !show;
+        if (!show) return;
+        const [plain] = teeRangePlain(teeRangeState, teeRangeDisplay);
+        const why = String(plain || '').replace(/^Ball range:\s*/, '');
+        el('free-play-range-text').textContent =
+          'Camera numbers will be withheld for every shot this session: the ball range was not found' +
+          (why ? ` (${why})` : '') +
+          '. Radar numbers still record. Try the ball range again, or start free play without them.';
+        el('free-play-range-retry').disabled = teeRangeRequestRunning || !boxConfirmed();
       }
 
       // the kiosk's club grid (ui/src/data/clubs.ts), asked once before free play starts
@@ -7051,6 +7168,9 @@
 
       // (10) one step sequence, and a sticky “You are here” that scrolls to the next open step
       let lightMeasured = false;
+      // step 5's two-mode light loop, and a job the status poll says is running
+      let lightLoopRunning = false;
+      let hardwareJobRunning = false;
       let ladderFinished = false;
       const STEP_TITLES = {
         1: 'Tester and lens',

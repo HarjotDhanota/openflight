@@ -174,7 +174,8 @@ test('posts exact config-bound attestation and a server restart revokes eligibil
   await expect(page.locator('#setup-authority')).toContainText('runtime sensors: ops, camera, iwr6843, lis3dh');
 
   confirmed = false;
-  await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'false', { timeout: 3000 });
+  // a revocation is believed once a second poll repeats it (24 Oct): two 2 s polls
+  await expect(page.locator('#setup-gate')).toHaveAttribute('data-ready', 'false', { timeout: 6000 });
   await expect(page.getByRole('button', { name: 'Start the exposure ladder' })).toBeDisabled();
 });
 
