@@ -1,13 +1,16 @@
 """A lit golf ball's image fitted to the pixels: centre, size and light direction.
 
-The whole shaded disk is fitted, not just its edge: where the lit side fades and where the
-terminator falls both depend on the ball's size, even where the rim has no edge to the ground.
+The whole shaded disk is fitted, not just its edge: that finds the ball and the light, and
+tells a ball from look-alikes. A free size, and the centre with it, are then measured on the
+ball's outline (``measure_rim``): under an open sky the light wraps round the ball, which
+one point light cannot draw, and the fitted sphere grows down into the shaded underside and
+the shadow beneath it (Harjot-outdoor-test-1 setup: 58.98 px for a ball about 43 px across).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 import numpy as np
@@ -34,6 +37,34 @@ RIM_TOP_HALF_ARC_DEG = 18.0
 RIM_FLANK_ARC_DEG = (30.0, 48.0)
 # Lights are above the ball: in image axes (y down) the light comes from the upper half.
 LIGHT_AZIMUTH_DEG = (170.0, 370.0)
+# A free size is measured on the outline all round but the bottom, where the underside rests
+# in its own cast shadow: rays every few degrees, up to this far either side of straight
+# down left out. On each ray the outline steps the way the sphere says: down where the rim
+# is lit and brighter than the ground, up where it is in shade and darker (a sunlit ball's
+# far side, Outdoors-test-7); any other ray has no say.
+RIM_SIZE_SHADOW_HALF_ARC_DEG = 45.0
+RIM_SIZE_RAY_STEP_DEG = 4.0
+RIM_SIZE_REACH = (0.5, 1.4)  # of the sphere's radius, out from its centre
+RIM_SIZE_GROUND_FROM = 1.2  # the ground beyond the rim, as far out as the reach
+# A rim lit, and brighter or darker than the ground, by this fraction of the diffuse
+# brightness: less, near the terminator, and the fading light inside it is taken for the edge.
+RIM_SIZE_MIN_STEP_FRACTION = 0.2
+# The steps sought, per pixel along the ray, as a fraction of the diffuse brightness: the
+# sides step far less than the lit top (Harjot-outdoor-test-1 at dusk: under a tenth).
+RIM_SIZE_MIN_EDGE_FRACTION = 0.04
+# A ray agrees with a circle when one of its steps lies this close to it.
+RIM_SIZE_TOLERANCE_PX = 1.0
+RIM_SIZE_TOLERANCE_FRACTION = 0.03  # of the radius, for a near ball
+RIM_SIZE_TRIALS = 200
+RIM_SIZE_MIN_RAYS = 16  # of the 68
+# The outline lies within these fractions of the sphere's radius, its centre within the
+# lower fraction's remainder of the sphere's. Harjot-outdoor-test-1: outlines 0.72-0.93 of
+# a sphere grown into the shade, 1.19-1.23 of one stopped small on its seed's bound.
+RIM_SIZE_RADIUS_FRACTION = (0.6, 1.4)
+# A sphere its outline agrees with this closely stands: near the terminator the outline
+# lies up to a pixel inside, a tenth of a 12 px ball's size (a sunlit ball 2-4 % small),
+# where a sphere grown into the shade is 7-39 % too large.
+RIM_SIZE_AGREES_FRACTION = 0.05
 
 
 @dataclass(frozen=True)
@@ -143,10 +174,180 @@ def fit_lit_ball(
 
     ``size_starts`` are the free size's starting fractions of ``radius``; ``extra_light_starts``
     False starts the light only from its measured lean, for a centre already placed.
+    A free size, and its centre, are then measured on the ball's outline (``measure_rim``).
     """
+    fit = _fit_sphere(
+        image,
+        x,
+        y,
+        radius,
+        noise_dn=noise_dn,
+        expected_radius=expected_radius,
+        size_tolerance=size_tolerance,
+        size_starts=size_starts,
+        extra_light_starts=extra_light_starts,
+    )
+    if fit is None or expected_radius:
+        return fit
+    return measure_rim(image, fit)
+
+
+def measure_rim(image: np.ndarray, fit: LitBall) -> LitBall:
+    """``fit`` with its centre and size from the circle its outline follows, at full resolution.
+
+    The outline is sought all round but the bottom, never in the shaded underside or the
+    shadow under it. The sphere stands where no circle of about its size follows the outline.
+    """
+    radius = fit.radius_px
+    reach = int(math.ceil((RIM_SIZE_REACH[1] + 0.2) * radius)) + 3
+    height, width = image.shape
+    top, left = max(0, int(fit.y) - reach), max(0, int(fit.x) - reach)
+    bottom, right = min(height, int(fit.y) + reach + 1), min(width, int(fit.x) + reach + 1)
+    edges, ray_count = _rim_edges(
+        image[top:bottom, left:right].astype(np.float64), fit, fit.x - left, fit.y - top
+    )
+    circle = _outline_circle(edges, ray_count, fit.x - left, fit.y - top, radius)
+    if circle is None or abs(circle[2] / radius - 1.0) <= RIM_SIZE_AGREES_FRACTION:
+        return fit
+    return replace(fit, x=circle[0] + left, y=circle[1] + top, radius_px=circle[2])
+
+
+def _rim_edges(patch: np.ndarray, fit: LitBall, x: float, y: float) -> tuple[np.ndarray, int]:
+    """Every step out of the ball on the rays about (x, y): rows of (ray, x, y, step), and
+    how many rays there are. A step is a fall where the sphere's rim is brighter than the
+    ground and a rise where it is darker, in DN per pixel."""
+    radius = fit.radius_px
+    half = math.radians(180.0 - RIM_SIZE_SHADOW_HALF_ARC_DEG)
+    angles = -math.pi / 2.0 + np.arange(-half, half + 1e-9, math.radians(RIM_SIZE_RAY_STEP_DEG))
+    tilt, azimuth = math.radians(fit.light_tilt_deg), math.radians(fit.light_azimuth_deg)
+    # the sphere just inside its rim (0.9 of the radius out) against the ground
+    lit = np.clip(
+        0.9 * math.sin(tilt) * np.cos(angles - azimuth) + 0.44 * math.cos(tilt), 0.0, None
+    )
+    smooth = ndimage.gaussian_filter(patch, EDGE_BLUR_PX)
+    steps = np.arange(RIM_SIZE_REACH[0] * radius, RIM_SIZE_REACH[1] * radius, 0.25)
+    xs = x + steps[None, :] * np.cos(angles)[:, None]
+    ys = y + steps[None, :] * np.sin(angles)[:, None]
+    values = ndimage.map_coordinates(
+        smooth, [ys.ravel(), xs.ravel()], order=1, mode="nearest"
+    ).reshape(xs.shape)
+    # the ground each ray runs out onto, past the rim of a sphere grown into the shade
+    beyond = np.median(values[:, steps >= RIM_SIZE_GROUND_FROM * radius], axis=1)
+    least = RIM_SIZE_MIN_STEP_FRACTION * fit.diffuse_dn
+    lit_rim = np.minimum(fit.shade_dn + fit.diffuse_dn * lit, 255.0) - beyond > least
+    # where the rim is in shade a fall may be the terminator: only a rise down to the
+    # shade (a sunlit ball's far side) says where the outline is
+    lit_well = fit.diffuse_dn * lit >= least
+    shaded_rim = ~lit_well & (fit.shade_dn < beyond - least)
+    sign = np.where(lit_rim & lit_well, 1.0, np.where(shaded_rim, -1.0, 0.0))
+    out = -np.gradient(values, 0.25, axis=1) * sign[:, None]
+    before, here, after = out[:, :-2], out[:, 1:-1], out[:, 2:]
+    floor = RIM_SIZE_MIN_EDGE_FRACTION * fit.diffuse_dn
+    rays, index = np.nonzero((here >= floor) & (here >= before) & (here > after))
+    left, peak, right = before[rays, index], here[rays, index], after[rays, index]
+    curvature = left - 2.0 * peak + right
+    with np.errstate(divide="ignore", invalid="ignore"):
+        offset = np.where(curvature < 0.0, 0.5 * (left - right) / curvature, 0.0)
+    distance = steps[index + 1] + 0.25 * offset
+    turn = angles[rays]
+    edges = np.column_stack([rays, x + distance * np.cos(turn), y + distance * np.sin(turn), peak])
+    return edges.astype(np.float64), len(angles)
+
+
+def _circle_through(points: np.ndarray) -> tuple[float, float, float]:
+    """The algebraic least-squares circle through the points."""
+    a = np.column_stack([points[:, 0], points[:, 1], np.ones(len(points))])
+    b = -(points[:, 0] ** 2 + points[:, 1] ** 2)
+    d, e, f = np.linalg.lstsq(a, b, rcond=None)[0]
+    cx, cy = -d / 2.0, -e / 2.0
+    return float(cx), float(cy), math.sqrt(max(cx * cx + cy * cy - f, 0.0))
+
+
+def _rays_agreeing(edges: np.ndarray, ray_count: int, circle, tolerance: float) -> np.ndarray:
+    """Each ray's strongest step on the circle, as an index into ``edges``; -1 for none."""
+    cx, cy, r = circle
+    near = np.abs(np.hypot(edges[:, 1] - cx, edges[:, 2] - cy) - r) <= tolerance
+    chosen = np.full(ray_count, -1)
+    strength = np.zeros(ray_count)
+    for index in np.flatnonzero(near):
+        ray = int(edges[index, 0])
+        if edges[index, 3] > strength[ray]:
+            strength[ray], chosen[ray] = edges[index, 3], index
+    return chosen
+
+
+def _outline_circle(
+    edges: np.ndarray, ray_count: int, x: float, y: float, radius: float
+) -> tuple[float, float, float] | None:
+    """The circle of about ``radius`` near (x, y) the most rays have a step on; None when
+    too few do.
+
+    A ray can step more than once (a logo, the lit cap's own edge, a bright patch of net or
+    a mat edge behind the ball): circles through steps on three rays, one from each third of
+    the rays, are tried, and the one most rays agree with is refitted through them.
+    """
+    if len(edges) < 3:
+        return None
+    rays = edges[:, 0].astype(int)
+    thirds = [
+        np.flatnonzero((rays * 3 >= part * ray_count) & (rays * 3 < (part + 1) * ray_count))
+        for part in range(3)
+    ]
+    if any(part.size == 0 for part in thirds):
+        return None
+    tolerance = max(RIM_SIZE_TOLERANCE_PX, RIM_SIZE_TOLERANCE_FRACTION * radius)
+    low, high = RIM_SIZE_RADIUS_FRACTION
+
+    def plausible(circle) -> bool:
+        cx, cy, r = circle
+        return (
+            low * radius <= r <= high * radius
+            and math.hypot(cx - x, cy - y) <= (1.0 - low) * radius
+        )
+
+    rng = np.random.default_rng(0)  # the same picture always gives the same circle
+    best, best_score = None, -1.0
+    for _trial in range(RIM_SIZE_TRIALS):
+        picked = [int(rng.choice(part)) for part in thirds]
+        try:
+            circle = _circle_through(edges[picked, 1:3])
+        except np.linalg.LinAlgError:
+            continue
+        if not plausible(circle):
+            continue
+        agreeing = _rays_agreeing(edges, ray_count, circle, tolerance)
+        agreeing = agreeing[agreeing >= 0]
+        # the most rays; between as many, the stronger steps
+        score = len(agreeing) + 1e-3 * float(np.sqrt(edges[agreeing, 3]).sum())
+        if score > best_score:
+            best, best_score = circle, score
+    if best is None:
+        return None
+    for _round in range(3):
+        agreeing = _rays_agreeing(edges, ray_count, best, tolerance)
+        agreeing = agreeing[agreeing >= 0]
+        if len(agreeing) < RIM_SIZE_MIN_RAYS:
+            return None
+        best = _circle_through(edges[agreeing, 1:3])
+    return best if plausible(best) else None
+
+
+def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+    image: np.ndarray,
+    x: float,
+    y: float,
+    radius: float,
+    *,
+    noise_dn: float,
+    expected_radius: float | None,
+    size_tolerance: float,
+    size_starts: Sequence[float] | None,
+    extra_light_starts: bool,
+) -> LitBall | None:
+    """The lit sphere's own fit: centre, size and light, and the look-alike gates."""
     binning = 2 if max(radius, expected_radius or 0.0) > 12.0 else 1
     if binning > 1:
-        fit = fit_lit_ball(
+        fit = _fit_sphere(
             _bin2(image),
             (x + 0.5) / 2 - 0.5,
             (y + 0.5) / 2 - 0.5,

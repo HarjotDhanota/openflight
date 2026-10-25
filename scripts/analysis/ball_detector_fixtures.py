@@ -9,6 +9,11 @@ Outdoors at dusk on 24 Oct 2026, OV9281 with the 6 mm lens at 1280x800, 7-iron:
 * ``shot-14``: all 24 frames of shot 14's clip (145 us x 12), CROPPED around the
   resting ball. The scene detector measured the ball 40.6 px across; the impact
   detector only its lit cap, 23.2 px, and the shot was withheld.
+* ``setup-ball``: the same setup capture's median, CROPPED around the ball. The box step
+  measured it 58.98 px across, the lit sphere grown into its shaded underside and shadow.
+* ``shot-10`` and ``shot-05``: the first ten frames of each clip, CROPPED around the
+  resting ball (shot 10, its lit cap 34.5 px to the scene detector) and around the gap in
+  the net the scene detector took for a 33 px ball (shot 5, no ball on the mat).
 
     uv run python scripts/analysis/ball_detector_fixtures.py \
         ../pi-handoff/Harjot-outdoor-test-1 tests/fixtures/ball_detector
@@ -28,6 +33,10 @@ SETUP_CROP = (290, 330, 990, 540)  # x0, y0, x1, y1: the box's width, the mat's 
 RUN = "arm5/paired/run-01"
 SHOT = 14
 SHOT_CROP = (745, 365, 850, 465)
+SETUP_BALL_CROP = (640, 340, 810, 500)
+# shot: (x0, y0, x1, y1) around the resting ball, or what the scene detector took for one
+SHOT_FRAME_CROPS = {10: (774, 359, 894, 479), 5: (571, 331, 691, 451)}
+SHOT_FRAME_COUNT = 10
 
 
 def _capture_dir(session: Path, shot: int) -> Path:
@@ -61,6 +70,21 @@ def main() -> int:
         origin_px=np.asarray((x0, y0)),
         box_px=np.asarray((301, 296, 975, 676)),
     )
+
+    x0, y0, x1, y1 = SETUP_BALL_CROP
+    np.savez_compressed(
+        args.output / "outdoor-test-1-87a0393da1ec-setup-ball.npz",
+        frame=np.round(np.median(frames, axis=0)).astype(np.uint8)[y0:y1, x0:x1],
+        origin_px=np.asarray((x0, y0)),
+    )
+    for shot, (x0, y0, x1, y1) in SHOT_FRAME_CROPS.items():
+        with np.load(_capture_dir(args.session, shot) / "frames.npz") as data:
+            crop = data["frames"][:SHOT_FRAME_COUNT, y0:y1, x0:x1]
+        np.savez_compressed(
+            args.output / f"outdoor-test-1-shot-{shot:02d}-resting.npz",
+            frames=crop,
+            origin_px=np.asarray((x0, y0)),
+        )
 
     clip = _capture_dir(args.session, SHOT)
     with np.load(clip / "frames.npz") as data:
