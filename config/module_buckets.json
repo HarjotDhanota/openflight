@@ -846,6 +846,7 @@
   "tests/test_gspro_codec.py": "PRODUCT",
   "tests/test_gspro_messages.py": "PRODUCT",
   "tests/test_gspro_state.py": "PRODUCT",
+  "tests/test_handedness_control.py": "PRODUCT",
   "tests/test_hardware_trigger.py": "FUSION",
   "tests/test_horizontal_frame.py": "FUSION",
   "tests/test_impact_isolation.py": "FUSION",

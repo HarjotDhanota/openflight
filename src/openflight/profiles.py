@@ -168,6 +168,16 @@ class ProfileStore:
         self.save()
         return True
 
+    def set_setting(self, profile_id: Any, key: str, value: Any) -> bool:
+        """Store one value in a profile's ``settings``, uninterpreted. Refused for an unknown id."""
+        with self._lock:
+            profile = self._find(profile_id)
+            if profile is None:
+                return False
+            profile.settings[key] = value
+        self.save()
+        return True
+
     def set_active(self, profile_id: Any) -> bool:
         """Change the active profile. Refused for an unknown id."""
         with self._lock:

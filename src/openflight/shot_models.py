@@ -49,12 +49,13 @@ def _attach_club_arc(shot: Shot, delivery) -> None:
     """E1: the shot's club delivery from the arc, beside the chained cross-check.
 
     ``delivery`` is the chained club delivery (dataclass or its persisted dict),
-    or None. Right-handed unless the golfer is set left-handed (owner rule).
+    or None. Right-handed unless the golfer is set left-handed (owner rule), in the
+    hand the shot was detected with.
     """
     from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
 
     shot.club_delivery = club_delivery_payload(
-        delivery, club=shot.club, handedness=server.golfer_handedness()["handed"]
+        delivery, club=shot.club, handedness=server.shot_handedness(shot)
     )
 
 
@@ -387,7 +388,7 @@ def _attach_collision_model(shot: Shot) -> None:
     """
     result = collision_model.evaluate(
         club=shot.club,
-        handedness=server.golfer_handedness()["handed"],
+        handedness=server.shot_handedness(shot),
         low_point_distance_mm=_low_point_input(shot),
         **_collision_inputs(shot),
     )

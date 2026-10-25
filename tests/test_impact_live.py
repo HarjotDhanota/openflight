@@ -370,6 +370,16 @@ def test_a_left_handed_golfer_is_sent_as_left(kiosk, monkeypatch):
     assert kiosk.runner.jobs[0]["handedness"] == "left"
 
 
+def test_the_hand_the_shot_was_hit_with_is_sent_not_the_hand_now(kiosk, monkeypatch):
+    shot = _kiosk_shot(1)
+    shot.handed = "LH"
+    monkeypatch.setattr(server_module, "golfer_handed", "RH")
+    kiosk.extension.on_camera_capture(shot, _capture())
+    kiosk.extension.after_shot_published(shot, update_kind="first")
+    assert kiosk.runner.jobs[0]["handedness"] == "left"
+    assert kiosk.runner.jobs[0]["shot"]["handed"] == "LH"
+
+
 def test_the_worker_process_reads_a_clip_and_stops(tmp_path):
     results = []
     runner = live.ProcessRunner(results.append, settings={"swings_needed": 1})
