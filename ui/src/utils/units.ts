@@ -68,3 +68,20 @@ export function formatCarryRange(carryRange: [number, number], unitSystem: UnitS
   const max = formatDistance(carryRange[1], unitSystem, 0);
   return `${min}-${max} ${getDistanceUnit(unitSystem)}`;
 }
+
+const HPA_TO_INHG = 0.02953;
+const FEET_TO_METERS = 0.3048;
+
+export function formatTemperature(temperatureC: number, unitSystem: UnitSystem): string {
+  return unitSystem === 'metric' ? `${temperatureC.toFixed(1)} °C` : `${(temperatureC * 1.8 + 32).toFixed(1)} °F`;
+}
+
+/** inHg to 0.01 and hPa to 1 are about the same step. */
+export function formatPressure(pressureHpa: number, unitSystem: UnitSystem): string {
+  return unitSystem === 'metric' ? `${pressureHpa.toFixed(0)} hPa` : `${(pressureHpa * HPA_TO_INHG).toFixed(2)} inHg`;
+}
+
+export function formatAltitude(altitudeFt: number, unitSystem: UnitSystem): string {
+  const value = unitSystem === 'metric' ? altitudeFt * FEET_TO_METERS : altitudeFt;
+  return `${Math.round(value).toLocaleString('en-US')} ${unitSystem === 'metric' ? 'm' : 'ft'}`;
+}

@@ -73,3 +73,18 @@ export interface DebugShotLog {
   } | null;
   club: string;
 }
+
+/** The air the next shot's raw flight uses (server `air_conditions`). */
+export interface AirConditions {
+  air_density_kg_m3: number;
+  /** "bme280": the sensor's reading; "isa_default": standard air, with the reason. */
+  source: 'bme280' | 'isa_default';
+  temperature_c: number | null;
+  /** Absolute station pressure. */
+  pressure_hpa: number | null;
+  humidity_pct: number | null;
+  measured_at: number | null;
+  age_s: number | null;
+  reason: string | null;
+  density_altitude_ft: number | null;
+}
