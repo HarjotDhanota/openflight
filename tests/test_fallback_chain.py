@@ -112,7 +112,11 @@ def test_the_resolved_range_goes_on_the_shot_with_its_trail():
 
 
 def test_radar_launch_wins_and_the_camera_fallback_stays_a_second_opinion():
-    shot = _shot(launch_angle_vertical=14.0, launch_angle_vertical_source="radar")
+    shot = _shot(
+        launch_angle_vertical=14.0,
+        launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
+    )
     fallback = {
         "status": "accepted",
         "vertical_deg": 12.0,
@@ -263,16 +267,19 @@ def test_a_failing_fallback_stage_is_its_own_error_and_the_rest_still_runs(monke
     assert "club_delivery" in result and "ball_estimate" in result
 
 
-def test_a_weak_radar_horizontal_yields_to_the_fallback_and_stays_behind_it():
+def test_a_weak_radar_horizontal_stands_before_the_fallback_and_after_it_is_gone():
     shot = _shot(launch_angle_horizontal=3.2, launch_angle_horizontal_source="radar_low_coherence")
     fallback = {"status": "accepted", "vertical_deg": 12.0, "horizontal_deg": 1.0, "n_points": 4}
 
-    assert chain.launch_resolutions(shot, fallback)["launch_horizontal"].source == "camera_fallback"
+    # both experimental on a nominal lens, no sigma on the radar's: the radar wins (Q5)
+    assert chain.launch_resolutions(shot, fallback)["launch_horizontal"].source == (
+        "radar_low_coherence"
+    )
     withheld = chain.launch_resolutions(shot, {"status": "withheld_residual", "reason": "x"})
     weak = withheld["launch_horizontal"]
     assert (weak.source, weak.label, weak.route) == (
         "radar_low_coherence",
-        "estimated",
+        "experimental",
         "weak_sensor",
     )
 
@@ -284,3 +291,59 @@ def test_an_implausible_sensor_horizontal_is_refused_with_why():
 
     assert not resolved.present
     assert "shank" in resolved.reason
+
+
+PARTIAL = {
+    "ball_range_m": 1.91,
+    "ball_range_source": "iwr_post_impact",
+    "ball_range_uncertainty_m": 0.115,
+    "ball_range_label": "iwr_partial",
+    "ball_range_reason": "from a partial IWR dump: frames 40-52",
+}
+
+
+def test_a_partial_dump_range_keeps_its_label_and_its_reason():
+    resolution = chain.ball_range_resolution(
+        shot_range=PARTIAL,
+        prior=SimpleNamespace(range_m=2.3, uncertainty_m=0.2, source="setup"),
+        size_route=lambda: pytest.fail("the size route must not run"),
+    )
+
+    assert (resolution.value, resolution.label, resolution.source) == (
+        1.91,
+        "iwr_partial",
+        "iwr_post_impact",
+    )
+    assert resolution.note == "from a partial IWR dump: frames 40-52"
+
+
+def test_a_partial_dump_range_goes_on_the_shot_with_its_reason():
+    shot = _shot()
+
+    chain.apply_ball_range(shot, chain.ball_range_resolution(shot_range=PARTIAL))
+
+    assert shot.ball_range_label == "iwr_partial"
+    assert shot.ball_range_reason == "from a partial IWR dump: frames 40-52"
+    assert shot.input_sources["ball_range"]["label"] == "iwr_partial"
+
+
+COMPETING = {
+    "ball_range_m": 2.10,
+    "ball_range_source": "iwr_post_impact",
+    "ball_range_uncertainty_m": 0.05,
+    "ball_range_label": "estimated",
+    "ball_range_reason": "two IWR tracks compete: launch points 2.10 m and 2.31 m; camera 2.12 m",
+}
+
+
+def test_an_iwr_range_two_tracks_compete_for_keeps_estimated_and_its_reason():
+    shot = _shot()
+    resolution = chain.ball_range_resolution(
+        shot_range=COMPETING, size_route=lambda: pytest.fail("never run")
+    )
+
+    chain.apply_ball_range(shot, resolution)
+
+    assert (resolution.label, resolution.source) == ("estimated", "iwr_post_impact")
+    assert shot.ball_range_label == "estimated"
+    assert shot.ball_range_reason.startswith("two IWR tracks compete")

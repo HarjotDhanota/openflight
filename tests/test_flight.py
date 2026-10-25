@@ -165,9 +165,9 @@ def test_a_calculated_spin_and_axis_flow_through_under_their_labels():
     assert flight["as_measured"]["metrics"]["carry"]["status"] == "calculated"
 
 
-def test_an_unlabelled_spin_axis_is_named_as_the_kiosk_proxy():
+def test_an_unlabelled_spin_axis_does_not_invent_its_origin():
     flight = _fusion(_shot())
-    assert "proxy" in flight["inputs"]["spin_axis"]["label"]
+    assert flight["inputs"]["spin_axis"]["label"] == "spin axis of unrecorded origin (older log)"
 
 
 def test_an_ops_only_shot_has_no_flight_and_substitutes_nothing():
@@ -323,6 +323,7 @@ def test_neither_the_simulator_nor_the_kiosk_fills_in_a_spin():
         launch_angle_vertical=18.0,
         launch_angle_horizontal=1.0,
         spin_axis_deg=2.0,
+        spin_axis_source="calculated (D-plane tilt)",
     )
     with pytest.raises(UnmeasuredShotError) as raised:
         resolve_shot(shot, PlayerState())

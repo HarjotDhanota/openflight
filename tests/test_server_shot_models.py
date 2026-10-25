@@ -87,11 +87,15 @@ class TestFaceAngleFromTheCollisionModel:
         # no attack: the face from the horizontal ratio alone (the IWR attack candidate
         # is an estimated attack route since decision 3: test_attack_angle_chain)
         shot.experimental_attack_angle_deg = None
-        # The camera horizontal (camera bearing on accepted IWR depth) outranks
-        # the radar one and carries no azimuth mark.
+        # With no radar horizontal shown, the camera's (camera bearing on accepted IWR
+        # depth) is, and carries no azimuth mark. It never outranks a radar one that has
+        # no sigma (Q5, test_label_policy).
+        shot.launch_angle_horizontal = None
+        shot.experimental_camera_horizontal_status = "camera_assisted_high"
         server_module._apply_camera_horizontal_decision(
             shot, 2.0, 0.75, "camera_assisted_experimental"
         )
+        assert shot.launch_angle_horizontal_source == "camera_assisted_experimental"
         assert shot.launch_angle_horizontal_status is None
 
         shot_models._attach_collision_model(shot)
@@ -181,6 +185,7 @@ class TestCarryComputation:
             club=ClubType.DRIVER,
             launch_angle_vertical=11.0,
             launch_angle_vertical_source="radar",
+            inclinometer={"applied_to": ["camera", "iwr6843"]},
             launch_angle_confidence=0.8,
             launch_angle_horizontal=0.5,
             launch_angle_horizontal_source="radar",

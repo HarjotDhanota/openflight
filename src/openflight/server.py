@@ -4781,6 +4781,8 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 reason=reason,
             )
         elif measurement.accepted:
+            # an ambiguous track's launch is estimated (source_labels.shot_launch_label)
+            shot.iwr6843_launch_status = getattr(measurement, "status", None)
             shot.launch_angle_vertical = measurement.angle_deg
             # Device-level provenance is retained in iwr6843_capture. The
             # public Shot contract uses "radar" for all measured radar angles.
@@ -5155,21 +5157,29 @@ def _target_line_sigma_deg() -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
-# How far each horizontal-launch source may be trusted as the displayed value;
-# only a camera bearing on accepted IWR depth outranks a radar horizontal.
-_HORIZONTAL_SOURCE_RANK = {
-    "estimated": -1,
-    # a low-coherence IWR horizontal: shown, but any camera horizontal outranks it
-    "radar_low_coherence": -0.5,
-    "camera_only_experimental": 0,
-    "camera_legacy_fallback": 0,
-    # a scattered camera sweep, shown labelled but never over the radar
-    "camera_low_consensus": 0,
-    # the camera's own launch on a shot the IWR did not measure (experimental)
-    "camera_fallback": 0,
-    "radar": 1,
-    "camera_assisted_experimental": 2,
-}
+def _horizontal_option(shot: Shot, source: str | None, status: str | None):
+    """A horizontal on offer, labelled by the policy (``source_labels.HorizontalOption``);
+    the camera fallback's carries its own sigma, no other source attaches one yet."""
+    from .source_labels import (  # noqa: PLC0415
+        CAMERA_FALLBACK_SOURCE,
+        HorizontalOption,
+        camera_horizontal_tier,
+        launch_label,
+    )
+
+    sigma = None
+    if source == CAMERA_FALLBACK_SOURCE and isinstance(shot.camera_fallback_launch, dict):
+        sigma = shot.camera_fallback_launch.get("horizontal_sd_deg")
+    return HorizontalOption(
+        label=launch_label(
+            source,
+            status,
+            camera_tier=camera_horizontal_tier(shot),
+            intrinsics=shot.camera_lens_intrinsics,
+        ),
+        sigma_deg=sigma,
+        radar=str(source or "").startswith("radar"),
+    )
 
 
 def _apply_camera_horizontal_decision(
@@ -5180,12 +5190,19 @@ def _apply_camera_horizontal_decision(
     *,
     frame: str | None = None,
 ) -> None:
-    """Display a camera-fusion horizontal only when it outranks the current one."""
+    """Display a camera-fusion horizontal only when it outranks the current one (Q5,
+    ``source_labels.prefers_horizontal``): never an experimental value over one that is
+    not, the smaller sigma where both have one, else the radar's. The radar's own value
+    handed back by the fusion always stands."""
+    from .source_labels import prefers_horizontal  # noqa: PLC0415
+
     if selected_deg is None:
         return
-    if shot.launch_angle_horizontal is not None:
-        current_rank = _HORIZONTAL_SOURCE_RANK.get(shot.launch_angle_horizontal_source, 1)
-        if _HORIZONTAL_SOURCE_RANK.get(source, 0) < current_rank:
+    if shot.launch_angle_horizontal is not None and source != "radar":
+        current = _horizontal_option(
+            shot, shot.launch_angle_horizontal_source, shot.launch_angle_horizontal_status
+        )
+        if not prefers_horizontal(_horizontal_option(shot, source, None), over=current):
             return
     if source == "radar":
         frame = shot.launch_angle_horizontal_frame
@@ -5421,6 +5438,9 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
     if getattr(shot, "ball_range_source", None) != "iwr_post_impact":
         skipped("the shot's ball range was not measured by the IWR")
         return
+    if getattr(shot, "ball_range_label", None) not in (None, "measured"):
+        skipped(f"the IWR launch point is {shot.ball_range_label} ({shot.ball_range_reason})")
+        return
     if rig_geometry is None or getattr(rig_geometry, "lens_height_above_floor_mm", None) is None:
         skipped("no rig geometry with a lens height")
         return
@@ -5456,6 +5476,8 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
                 "ball_range_m": shot.ball_range_m,
                 "ball_range_source": shot.ball_range_source,
                 "ball_range_uncertainty_m": shot.ball_range_uncertainty_m,
+                "ball_range_label": shot.ball_range_label,
+                "ball_range_reason": shot.ball_range_reason,
             },
             ball_px=ball,
             lis3dh_pitch_deg=_lis3dh_camera_pitch(getattr(shot, "inclinometer", None)),
@@ -5494,6 +5516,13 @@ def _camera_origin_lfu() -> tuple[float, float, float]:
     )
 
 
+def _camera_lens_intrinsics() -> str | None:
+    """The lens's intrinsics state for a camera shot's labels: "calibrated" or
+    "nominal" (lens_profiles.ActiveLens), None without a lens record."""
+    lens = rig_geometry_config.get("lens") or camera_capture_config.get("lens")
+    return lens.get("intrinsics") if isinstance(lens, dict) else None
+
+
 def _mode_focal(width_px: int) -> tuple[float | None, str | None, float]:
     """This mode's focal length, its source and relative 1-sigma (``mode_focal``)."""
     from .camera.fallback_chain import mode_focal  # noqa: PLC0415
@@ -5520,11 +5549,14 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
     with its error and the chain goes on (``camera.fallback_chain``).
     """
     try:
+        from .camera import fallback_chain  # noqa: PLC0415
         from .camera.fallback_chain import (  # noqa: PLC0415
+            CALIBRATED_FOCAL_SOURCE,
             apply_ball_range,
             ball_range_resolution,
-            size_range_route,
         )
+
+        size_range_route = fallback_chain.size_range_route
 
         prior = _look_range_prior(shot_ball_at_address(shot.impact_timestamp)) or getattr(
             iwr6843_runtime, "range_prior", None
@@ -5538,12 +5570,14 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
         if ball_height is None:
             ball_height = scene.get("ball_height_m")
         width = int(np.shape(camera_archive["frames"])[-1]) if camera_archive else 0
-        focal, _focal_source, _sd = _mode_focal(width) if width else (None, None, 0.0)
+        focal, focal_source, _sd = _mode_focal(width) if width else (None, None, 0.0)
+        # a calibrated lens's focal is the unit's calibration (its tighter sigma and label)
+        calibrated = focal_source == CALIBRATED_FOCAL_SOURCE
         size_route = size_range_route(
             camera_archive,
             seed=shot_reference_ball(shot.impact_timestamp),
-            lens_focal_px=focal,
-            calibrated_focal_px=None,
+            lens_focal_px=None if calibrated else focal,
+            calibrated_focal_px=focal if calibrated else None,
             camera_origin_lfu=_camera_origin_lfu(),
             radar_origin_lfu=(0.0, 0.0, float(radar_height or _camera_origin_lfu()[2])),
             ball_height_m=ball_height,
@@ -5555,6 +5589,7 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
                 "ball_range_m": shot.ball_range_m,
                 "ball_range_source": shot.ball_range_source,
                 "ball_range_uncertainty_m": shot.ball_range_uncertainty_m,
+                "ball_range_label": shot.ball_range_label,
                 "ball_range_reason": shot.ball_range_reason,
             },
             prior=prior,
@@ -5641,6 +5676,8 @@ def _fuse_camera_measurements(
     camera_archive=_CAMERA_ARCHIVE_UNSET,
 ) -> None:
     """Decode one camera clip and share it across all live estimators."""
+    # every camera value's label follows the lens (source_labels.camera_club_label)
+    shot.camera_lens_intrinsics = _camera_lens_intrinsics()
     captured_auto_exposure = (
         camera_capture.metadata.get("auto_exposure")
         if camera_capture is not None
@@ -6372,6 +6409,10 @@ def _resolve_spin(shot: Shot) -> None:
     def ops():
         if accepted:
             return Candidate(float(shot.spin_rpm), "measured", shot.spin_method or "ops")
+        if shot.spin_source in _MODEL_SPIN_SOURCES:
+            if _finite(shot.spin_rpm_measured):
+                return "the OPS spin reading was not accepted; collision spin replaced it"
+            return shot.spin_rejection_reason or "no OPS spin reading"
         if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
             return (
                 f"the OPS reading's confidence {shot.spin_confidence:.2f} is below the "

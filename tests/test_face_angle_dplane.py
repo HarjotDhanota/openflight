@@ -25,6 +25,8 @@ def test_face_angle_is_mostly_start_direction_and_partly_path():
         launch_angle_horizontal_confidence=0.9,
     )
     shot.experimental_fused_club_path_deg = -4.0
+    shot.experimental_fused_club_path_confidence = "high"
+    shot.camera_lens_intrinsics = "calibrated"
 
     shot_models._attach_collision_model(shot)
 

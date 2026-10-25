@@ -248,6 +248,10 @@ class Input:
 
     ``value`` None (or non-finite) is a missing input; ``reason`` says why.
     ``frame`` is the horizontal frame for a horizontal angle, else None.
+    ``experimental``: the value is experimental under the owner's label policy
+    (source_labels). The model has no experimental label (it would read one as missing),
+    so such an input enters "estimated" with its reason and this flag; every output built
+    on it is experimental in its record, and no simulator gets it.
     """
 
     value: Optional[float]
@@ -255,6 +259,7 @@ class Input:
     source: Optional[str] = None
     frame: Optional[str] = None
     reason: Optional[str] = None
+    experimental: bool = False
 
     def __post_init__(self) -> None:
         if _finite(self.value):

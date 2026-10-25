@@ -62,7 +62,10 @@ def _collision(metric_id: str):
         if not entry:
             reason = GYRO_REASON if metric_id == "gyro" else NO_COLLISION_MODEL
             return sm.build_record(metric_id, None, None, reason=reason)
-        return sm.producer_record(metric_id, entry)
+        record = sm.producer_record(metric_id, entry)
+        if record["value"] is not None:
+            record["note"] = sm.centre_strike_note(shot, record.get("note"), entry.get("reason"))
+        return record
 
     return build
 

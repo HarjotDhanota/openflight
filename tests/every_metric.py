@@ -130,6 +130,8 @@ def fusion_shot(**overrides) -> Shot:
         "launch_angle_vertical": 18.0,
         "launch_angle_vertical_source": "radar",
         "launch_angle_vertical_confidence": 0.9,
+        # the LIS3DH's reading corrected the IWR's tilt (else the vertical is estimated)
+        "inclinometer": {"applied_to": ["camera", "iwr6843"]},
         "spin_rpm": 6800.0,
         "spin_confidence": 0.9,
         "spin_source": "measured",

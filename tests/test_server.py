@@ -1615,7 +1615,7 @@ class TestShotToDict:
         assert result["experimental_camera_iwr_delta_deg"] == -17.3
         assert "iwr6843_ball_range_evidence" not in result
 
-    def test_live_fusion_selects_camera_and_preserves_iwr(self, monkeypatch, tmp_path):
+    def test_live_fusion_keeps_radar_without_comparable_uncertainties(self, monkeypatch, tmp_path):
         import numpy as np
 
         from openflight.camera import ball_flight
@@ -1680,8 +1680,9 @@ class TestShotToDict:
 
         server_module._fuse_camera_ball_flight(shot, capture)
 
-        assert shot.launch_angle_horizontal == 0.6
-        assert shot.launch_angle_horizontal_source == "camera_assisted_experimental"
+        assert shot.launch_angle_horizontal == 17.9
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_deg == 0.6
         assert shot.experimental_camera_horizontal_status == "camera_assisted_high"
         assert shot.iwr6843_horizontal_deg == 17.9
         assert estimate_call["geometry"].horizontal_offset_deg == -0.45
@@ -3664,6 +3665,7 @@ class OnShotDetectedHelpers:
             launch_angle_horizontal_confidence=horizontal_confidence,
             launch_angle_vertical=14.0,
             launch_angle_vertical_source="radar",
+            inclinometer={"applied_to": ["camera", "iwr6843"]},
             club_path_deg=-1.5,
             club_angle_deg=2.0,
         )
@@ -6323,7 +6325,7 @@ class TestIwrAzimuthCalibration:
         assert shot.launch_angle_horizontal_source == "radar_low_coherence"
         assert shot.iwr6843_horizontal_deg is None
         server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
-        assert shot.launch_angle_horizontal == pytest.approx(4.0)
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
 
     def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)
@@ -6437,6 +6439,8 @@ class TestBallisticCarryPrecedence:
             launch_angle_horizontal=1.0 if launch_angle is not None else None,
             launch_angle_horizontal_source="radar" if launch_angle is not None else None,
             spin_axis_deg=2.0 if launch_angle is not None else None,
+            spin_axis_source="calculated (D-plane tilt)",
+            inclinometer={"applied_to": ["iwr6843"]},
             carry_spin_adjusted=prefilled_carry,
             mode="rolling-buffer",
         )

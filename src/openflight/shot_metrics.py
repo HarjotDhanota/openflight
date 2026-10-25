@@ -17,18 +17,21 @@ from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
 from .source_chain import weakest_label
 from .source_labels import (
-    AZIMUTH_UNCALIBRATED,
-    AZIMUTH_UNCALIBRATED_NOTE,
     CAMERA_HEAD_TRACK_SOURCE,
+    CENTRE_STRIKE_NOTE,
+    EXPERIMENTAL_INPUT_SOURCES,
     EXPERIMENTAL_LAUNCH_NOTE,
     EXPERIMENTAL_LAUNCH_SOURCES,
+    IWR_COMPETING_NOTE,
+    IWR_PARTIAL_NOTE,
+    LABEL_IWR_PARTIAL,
     MODEL_LABELS,
-    WEAK_HORIZONTAL_SOURCES,
-    horizontal_launch_label,
+    SPIN_AXIS_UNRECORDED_NOTE,
     is_calculated_source,
     is_measured_source,
     is_model_geometry_source,
-    launch_label,
+    record_label,
+    shot_launch_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,8 +61,8 @@ _PATH_SOURCES = {
     "camera_fused_chained": "camera + IWR chained delivery",
     "camera_fused_ops": "camera + OPS chained delivery",
     "iwr": "IWR club track",
-    # the IWR attack that passed its fit gates but no acceptance gate (decision 3)
-    "iwr_candidate": "IWR attack-angle candidate (estimated)",
+    # the IWR attack that passed its fit gates but failed its acceptance gate (Q4)
+    "iwr_candidate": "IWR attack-angle candidate (experimental)",
     CAMERA_HEAD_TRACK_SOURCE: HEAD_TRACK_SOURCE_LABEL,
 }
 
@@ -210,15 +213,19 @@ def _experimental_launch_note(source: Optional[str]) -> Optional[str]:
 
 
 def _launch_vertical(shot):
+    """The vertical launch under the policy's label: estimated on the IWR's configured
+    tilt (no LIS3DH reading applied), the camera fallback's by the lens."""
     source = shot.get("launch_angle_vertical_source") or shot.get("angle_source")
+    label, why = shot_launch_label(shot, "vertical")
+    notes = [why, _experimental_launch_note(source) if label == EXPERIMENTAL else None]
     return _record(
         "launch_vertical",
         shot.get("launch_angle_vertical"),
-        launch_label(source),
+        label,
         source=source,
         reason=shot.get("launch_angle_vertical_reason")
         or "vertical launch not measured on this shot",
-        note=_experimental_launch_note(source),
+        note="; ".join(dict.fromkeys(note for note in notes if note)) or None,
     )
 
 
@@ -226,7 +233,6 @@ def _launch_horizontal(shot):
     """The horizontal launch: estimated on a weak source or an uncalibrated azimuth, withheld
     beyond a shank's reach."""
     source = shot.get("launch_angle_horizontal_source") or shot.get("angle_source")
-    status = shot.get("launch_angle_horizontal_status")
     value = shot.get("launch_angle_horizontal")
     reason = shot.get("launch_angle_horizontal_reason") or (
         "horizontal launch not measured on this shot"
@@ -234,21 +240,16 @@ def _launch_horizontal(shot):
     implausible = implausible_launch_reason(value)
     if implausible is not None:
         value, reason = None, f"{source or 'horizontal launch'} {implausible}"
-    notes = [
-        f"{WEAK_HORIZONTAL_SOURCES[source]} horizontal: too weak to stand as measured"
-        if source in WEAK_HORIZONTAL_SOURCES
-        else None,
-        AZIMUTH_UNCALIBRATED_NOTE if status == AZIMUTH_UNCALIBRATED else None,
-        _experimental_launch_note(source),
-    ]
+    label, why = shot_launch_label(shot, "horizontal")
+    notes = [why, _experimental_launch_note(source) if label == EXPERIMENTAL else None]
     return _record(
         "launch_horizontal",
         value,
-        horizontal_launch_label(source, status),
+        label,
         source=source,
         reason=reason,
         frame=shot.get("launch_angle_horizontal_frame"),
-        note="; ".join(note for note in notes if note) or None,
+        note="; ".join(dict.fromkeys(note for note in notes if note)) or None,
     )
 
 
@@ -294,7 +295,7 @@ def _spin_rate(shot):
         and model_spin is not None
         and model_spin == _finite(shot.get("spin_rpm"))
     ):
-        note = collision.get("note")
+        note = _centre_strike_note(shot, collision.get("note"), collision.get("reason"))
     return _record(
         "spin_rate",
         shot.get("spin_rpm"),
@@ -322,9 +323,13 @@ def _spin_axis(shot):
         )
     elif _mock(shot):
         status, source = MEASURED, MOCK_SOURCE
+    elif _finite(shot.get("spin_axis_deg")) is not None:
+        # an older log's axis whose source names no label: weaker than measured
+        status, source = ESTIMATED, source or SPIN_AXIS_UNRECORDED_NOTE
     else:
-        status, source = ESTIMATED, source or "unlabelled spin axis (before E2)"
+        status = None
     collision = _collision_metric(shot, "spin_axis")
+    computed = status in (CALCULATED, MODEL_GEOMETRY, ESTIMATED) and collision
     return _record(
         "spin_axis",
         shot.get("spin_axis_deg"),
@@ -332,7 +337,25 @@ def _spin_axis(shot):
         source=source,
         reason=collision.get("reason") or "spin axis not measured on this shot",
         frame=shot.get("spin_axis_frame"),
+        note=_centre_strike_note(shot, collision.get("note"), collision.get("reason"))
+        if computed
+        else None,
     )
+
+
+def _centre_strike_note(shot, note: Optional[str], reason: Optional[str] = None) -> Optional[str]:
+    """A collision output's note with the model's own assumption (Q2): a centre-face
+    strike, while no impact location reached the model."""
+    note = "; ".join(dict.fromkeys(text for text in (note, reason) if text)) or None
+    inputs = _mapping(_mapping(shot.get("collision_model")).get("inputs"))
+    if "impact_offset_mm" in inputs or "impact_height_mm" in inputs:
+        return note
+    if note and "centre-face strike" in note:
+        return note
+    return f"{CENTRE_STRIKE_NOTE}; {note}" if note else CENTRE_STRIKE_NOTE
+
+
+centre_strike_note = _centre_strike_note
 
 
 def _smash(shot):
@@ -398,14 +421,19 @@ HEAD_TRACK_CLUB_NOTE = (
 
 
 def _camera_club_label(record: dict, source: Optional[str]) -> dict:
-    """A camera club value labelled measured is experimental: its geometry is inferred.
+    """An older log's (or the arc's) camera club value labelled measured is experimental:
+    its record carries no tier and lens label (source_labels.camera_club_label).
 
     The head track's value enters the collision model "estimated" (it has no
     experimental label); its own record is experimental, and with_input_labels lifts
     every output built on it to experimental (owner decision 5, 25 Oct 2026).
     """
     status = record.get("status")
-    head_track = source == CAMERA_HEAD_TRACK_SOURCE and status in (MEASURED, ESTIMATED)
+    head_track = source == CAMERA_HEAD_TRACK_SOURCE and status in (
+        MEASURED,
+        ESTIMATED,
+        EXPERIMENTAL,
+    )
     if head_track or (status == MEASURED and str(source or "").startswith("camera")):
         why = HEAD_TRACK_CLUB_NOTE if head_track else CAMERA_CLUB_NOTE
         note = record.get("note")
@@ -424,21 +452,29 @@ def _path_or_attack(metric_id: str):
         if _finite(used.get("value")) is not None:
             source = used.get("source")
             same_as_arc = delivery and delivery.get("source") == source
-            return _camera_club_label(
-                _record(
-                    metric_id,
-                    used["value"],
-                    used.get("label"),
-                    source=_PATH_SOURCES.get(source, source),
-                    range_=delivery.get("range") if same_as_arc else None,
-                    frame=used.get("frame") if metric_id == "club_path" else None,
-                    # an estimated input says why (the IWR candidate's reason, say)
-                    note=used.get("reason")
-                    if used.get("label") == ESTIMATED and source != CAMERA_HEAD_TRACK_SOURCE
-                    else None,
-                ),
-                source,
+            # the input's own policy label: its flag says experimental (an older log
+            # without the flag is read by its source, _camera_club_label)
+            experimental = (
+                bool(used["experimental"])
+                if "experimental" in used
+                else source in EXPERIMENTAL_INPUT_SOURCES
             )
+            status = EXPERIMENTAL if experimental else used.get("label")
+            record = _record(
+                metric_id,
+                used["value"],
+                status,
+                source=_PATH_SOURCES.get(source, source),
+                range_=delivery.get("range") if same_as_arc else None,
+                frame=used.get("frame") if metric_id == "club_path" else None,
+                # a weaker input says why (the IWR candidate's reason, a nominal lens)
+                note=used.get("reason")
+                if status in (ESTIMATED, EXPERIMENTAL) and source != CAMERA_HEAD_TRACK_SOURCE
+                else None,
+            )
+            if "experimental" in used and source != CAMERA_HEAD_TRACK_SOURCE:
+                return record
+            return _camera_club_label(record, source)
         if _finite(delivery.get("value")) is not None:
             source = delivery.get("source")
             return _camera_club_label(
@@ -476,11 +512,33 @@ BALL_SIZE_RANGE_NOTE = (
     "rests on the resting ball's own size for its distance (experimental, not validated "
     "against a tape)"
 )
+BALL_SIZE_RANGE_CALIBRATED_NOTE = (
+    "rests on the resting ball's own size through a calibrated lens (estimated, not "
+    "validated against a tape)"
+)
 # The label every range-dependent value takes from the range's source, and why.
 RANGE_SOURCE_LABELS = {
     "camera_prior": (ESTIMATED, CAMERA_PRIOR_NOTE),
     "camera_ball_size": (EXPERIMENTAL, BALL_SIZE_RANGE_NOTE),
 }
+
+
+def _range_source_label(shot) -> tuple[Optional[str], Optional[str]]:
+    """(label, why) every range-dependent value takes from the shot's range, or (None,
+    None) for a measured one. The chain's own label decides where it is weaker than the
+    source alone says: a partial IWR dump (estimated), the resting ball's size through a
+    calibrated lens (estimated, Q6; experimental through a nominal one)."""
+    source, label = shot.get("ball_range_source"), shot.get("ball_range_label")
+    if source == "iwr_post_impact" and label == LABEL_IWR_PARTIAL:
+        return record_label(LABEL_IWR_PARTIAL), IWR_PARTIAL_NOTE
+    if source == "iwr_post_impact" and label == ESTIMATED:
+        # two IWR tracks compete for the launch point (iwr6843.launch_range): its reason
+        return ESTIMATED, shot.get("ball_range_reason") or IWR_COMPETING_NOTE
+    if source == "camera_ball_size" and label == ESTIMATED:
+        return ESTIMATED, BALL_SIZE_RANGE_CALIBRATED_NOTE
+    return RANGE_SOURCE_LABELS.get(source, (None, None))
+
+
 # Sensor readings that do not rest on the ball's range. The spin is one only when the
 # OPS measured it: a model's spin is built on the launch and the club (audit 25 Oct).
 RANGE_INDEPENDENT = frozenset({"ball_speed", "club_speed", "smash_factor", "spin_rate"})
@@ -500,8 +558,21 @@ def _ball_range(shot):
         "iwr_post_impact": MEASURED,
         "camera_prior": ESTIMATED,
         "camera_ball_size": EXPERIMENTAL,
-        "configured_tee": MEASURED,
+        # a fixed range set in code is assumed, not measured (not used by the kiosk)
+        "configured_tee": ESTIMATED,
     }.get(source, ESTIMATED)
+    weaker, why = _range_source_label(shot)
+    if weaker is not None:
+        status = weaker
+    note = BALL_RANGE_UNVALIDATED if source == "iwr_post_impact" else why
+    if source == "iwr_post_impact" and shot.get("ball_range_label") in (
+        LABEL_IWR_PARTIAL,
+        ESTIMATED,
+    ):
+        # the IWR range's own reason (which frames it lost, which tracks compete)
+        note = "; ".join(
+            dict.fromkeys(text for text in (shot.get("ball_range_reason"), why, note) if text)
+        )
     return _record(
         "ball_range",
         value,
@@ -509,11 +580,7 @@ def _ball_range(shot):
         source=BALL_RANGE_SOURCES.get(source, source),
         range_=span,
         reason=shot.get("ball_range_reason") or "the ball's distance was not measured",
-        note=BALL_RANGE_UNVALIDATED
-        if source == "iwr_post_impact"
-        else RANGE_SOURCE_LABELS[source][1]
-        if source in RANGE_SOURCE_LABELS
-        else None,
+        note=note,
     )
 
 
@@ -567,6 +634,13 @@ def _lower(record: dict[str, Any], label: str, why: str) -> bool:
     return True
 
 
+def _add_note(record: dict[str, Any], why: Optional[str]) -> None:
+    """Append ``why`` to a record's note once (a value only)."""
+    note = record.get("note") or ""
+    if why and record.get("value") is not None and why not in note:
+        record["note"] = f"{note}; {why}" if note else why
+
+
 def _model_spin(shot) -> bool:
     """Whether the shot's spin is a model's (built on its launch and club), not the OPS's."""
     return shot.get("spin_source") in MODEL_LABELS
@@ -574,7 +648,7 @@ def _model_spin(shot) -> bool:
 
 def _range_label(metrics: dict[str, dict[str, Any]], shot) -> None:
     """Every range-dependent value takes the label of the range it rested on."""
-    label, why = RANGE_SOURCE_LABELS.get(shot.get("ball_range_source"), (None, None))
+    label, why = _range_source_label(shot)
     if label is None:
         return
     for metric_id, entry in metrics.items():
@@ -582,7 +656,9 @@ def _range_label(metrics: dict[str, dict[str, Any]], shot) -> None:
             continue
         if metric_id in RANGE_INDEPENDENT and not (metric_id == "spin_rate" and _model_spin(shot)):
             continue
-        _lower(entry, label, why)
+        if not _lower(entry, label, why) and entry.get("status") == label:
+            # already that weak for another reason: the range still says it rests on it
+            _add_note(entry, why)
 
 
 def with_input_labels(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dict[str, Any]]:

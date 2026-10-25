@@ -1,8 +1,9 @@
-"""The attack-angle chain, with the IWR candidate as an estimated route (owner decision 3).
+"""The attack-angle chain, with the IWR candidate as a route of its own (owner decision 3).
 
 Routes, best first: the canonical radar club track; the camera + IWR (or OPS) fused
-delivery; an accepted IWR attack; the camera head track (experimental); the IWR
-attack-angle candidate (estimated); the E1 arc. The head track goes before the
+delivery (labelled by its tier and the lens); an accepted IWR attack; the camera head
+track (experimental); the IWR attack-angle candidate (experimental: it failed its
+acceptance gate, Q4 25 Oct 2026); the E1 arc. The head track goes before the
 candidate: it carries a per-shot sigma from its own error budget (2.8-10.1 deg on
 Harjot-outdoor-test-1), while the candidate
 has none and the last radar candidate checked against TrackMan ran 9-22 deg off by
@@ -94,7 +95,8 @@ def _attack(shot: Shot) -> dict:
     "fields, route, value, label",
     [
         ({"club_angle_deg": -2.5, **_fused(), **_iwr_candidate()}, "canonical", -2.5, "measured"),
-        ({**_fused(), **_iwr_candidate()}, "camera_fused", -3.1, "measured"),
+        # a medium tier is not high: experimental (source_labels.camera_club_label)
+        ({**_fused(), **_iwr_candidate()}, "camera_fused", -3.1, "experimental"),
         (
             {**_head_track(), **_iwr_candidate("accepted", -5.0)},
             "iwr_accepted",
@@ -102,7 +104,7 @@ def _attack(shot: Shot) -> dict:
             "measured",
         ),
         ({**_head_track(), **_iwr_candidate()}, "camera_head_track", -4.2, "experimental"),
-        (_iwr_candidate(), "iwr_candidate", -6.5, "estimated"),
+        (_iwr_candidate(), "iwr_candidate", -6.5, "experimental"),
     ],
     ids=["canonical", "fused", "accepted-iwr", "head-track", "iwr-candidate"],
 )
@@ -146,20 +148,26 @@ def test_a_flagged_iwr_candidate_is_refused_with_its_status(status):
     assert status in dict(resolution.tried)["iwr_candidate"]
 
 
-def test_the_iwr_candidate_enters_the_collision_model_estimated_with_its_reason():
+def test_the_iwr_candidate_label_is_one_named_constant_set_experimental():
+    assert shot_models.IWR_CANDIDATE_LABEL == "experimental"
+
+
+def test_the_iwr_candidate_enters_the_collision_model_estimated_flagged_experimental():
     shot = _shot(**_iwr_candidate())
 
     attack = _attack(shot)
 
+    # the model has no experimental label: it enters estimated with its reason, flagged
     assert attack["value"] == pytest.approx(-6.5)
     assert attack["label"] == collision_model.LABEL_ESTIMATED
+    assert attack["experimental"] is True
     assert attack["source"] == shot_models.IWR_CANDIDATE_SOURCE
     assert attack["reason"] == shot_models.IWR_CANDIDATE_REASON
     assert shot.input_sources["attack_angle"]["route"] == "iwr_candidate"
-    assert shot.input_sources["attack_angle"]["label"] == "estimated"
+    assert shot.input_sources["attack_angle"]["label"] == "experimental"
 
 
-def test_the_iwr_candidate_record_and_its_outputs_are_estimated_with_the_reason():
+def test_the_iwr_candidate_record_and_its_outputs_are_experimental_with_the_reason():
     shot = _shot(**_iwr_candidate())
     shot.ball_speed_full = full_ball_speed()
     shot.ball_speed_full_mph = shot.ball_speed_full["value_mph"]
@@ -168,12 +176,12 @@ def test_the_iwr_candidate_record_and_its_outputs_are_estimated_with_the_reason(
     metrics = shot_metrics.records(shot.to_dict())
 
     attack = metrics["attack_angle"]
-    assert attack["status"] == "estimated"
-    assert attack["source"] == "IWR attack-angle candidate (estimated)"
+    assert attack["status"] == "experimental"
+    assert attack["source"] == "IWR attack-angle candidate (experimental)"
     assert shot_models.IWR_CANDIDATE_REASON in attack["note"]
     for name in ("dynamic_loft", "spin_loft"):
         assert metrics[name]["value"] is not None, name
-        assert metrics[name]["status"] == "estimated", name
+        assert metrics[name]["status"] == "experimental", name
 
 
 def test_the_head_track_outranks_the_iwr_candidate_but_not_an_accepted_iwr_attack():
@@ -213,7 +221,7 @@ def test_with_nothing_the_attack_is_not_measured_with_every_reason():
         assert f"{name}:" in attack["reason"]
 
 
-def test_simulators_get_no_axis_built_on_the_estimated_candidate_by_default():
+def test_simulators_get_no_axis_built_on_the_experimental_candidate():
     shot = _shot(**_iwr_candidate(), club_path_deg=None, club_path_frame=None)
     shot.experimental_club_path_deg = -2.0
     shot.experimental_club_path_status = "accepted"
@@ -224,4 +232,4 @@ def test_simulators_get_no_axis_built_on_the_estimated_candidate_by_default():
         pytest.skip("no axis built on this geometry")
     with pytest.raises(UnmeasuredShotError) as refused:
         resolve_shot(shot, PlayerState())
-    assert "spin axis" in refused.value.missing
+    assert "spin axis (experimental)" in refused.value.missing

@@ -48,6 +48,7 @@ def _head_track_shot(**overrides) -> Shot:
         "club": ClubType.IRON_7,
         "launch_angle_vertical": 18.0,
         "launch_angle_vertical_source": "radar",
+        "inclinometer": {"applied_to": ["camera", "iwr6843"]},
         "launch_angle_vertical_confidence": 0.9,
         "launch_angle_horizontal": 1.0,
         "launch_angle_horizontal_source": "radar",

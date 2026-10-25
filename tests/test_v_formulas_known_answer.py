@@ -279,6 +279,8 @@ def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False):
         launch_angle_horizontal_confidence=0.9,
         launch_angle_horizontal_frame=server_module._horizontal_frame(),
         mode="rolling-buffer",
+        camera_lens_intrinsics="calibrated",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
     )
     track = ops_track(truth["ball_speed"], truth["launch_v"], launch_h_bore, ops_m, ball_bore)
     shot.ball_speed_mph = track["canonical_radial_mph"]

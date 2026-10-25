@@ -22,8 +22,9 @@ def record(status, value=1.0, note=None, source=None):
         ("radar", None, "measured"),
         ("camera", None, "measured"),
         ("estimated", None, "estimated"),
-        ("radar_low_coherence", None, "estimated"),
-        ("camera_low_consensus", None, "estimated"),
+        # Q3: a value that failed its own gate is experimental
+        ("radar_low_coherence", None, "experimental"),
+        ("camera_low_consensus", None, "experimental"),
         ("radar", "azimuth_uncalibrated", "estimated"),
         ("camera_fallback", None, "experimental"),
         ("camera_assisted_experimental", None, "experimental"),
@@ -37,7 +38,7 @@ def test_each_launch_source_has_one_label(source, status, label):
 
 def test_the_horizontal_label_is_the_launch_label():
     assert source_labels.horizontal_launch_label("camera_fallback") == "experimental"
-    assert source_labels.horizontal_launch_label("radar_low_coherence") == "estimated"
+    assert source_labels.horizontal_launch_label("radar_low_coherence") == "experimental"
 
 
 def test_a_camera_fallback_vertical_is_experimental_and_says_why():
