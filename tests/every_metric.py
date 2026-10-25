@@ -1,6 +1,6 @@
 """Shared fixtures for the every-metric coverage tests (V-wiring).
 
-``EXPECTED_METRIC_IDS`` is the owner's metric list (TrackMan's metrics plus
+``EXPECTED_METRIC_IDS`` is the project's metric list (TrackMan's metrics plus
 ours), written out by hand so a metric dropped from the catalog fails every
 coverage test that is parametrized over it. ``fusion_shot`` builds one shot the
 way the kiosk does, with every Part E producer attached (E1 arc, E2 collision,

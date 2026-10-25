@@ -3,7 +3,7 @@
 Carry, carry side, total, total side, apex, landing angle, hang time and curve,
 each with a status, a source, a range and a reason. Nothing is filled in on a
 fusion unit: without spin or spin axis there is no flight. The as-measured
-flight uses the shot's own air density when one is supplied (the owner's hook)
+flight uses the shot's own air density when one is supplied (the caller's hook)
 and ISA otherwise, saying which; the normalized flight is TrackMan's
 "no wind, 0 ft altitude, 77 F". Launch values are the same in both.
 """

@@ -471,7 +471,7 @@ def test_humid_air_density_from_temperature_pressure_and_humidity():
     assert humid_air_density_kg_m3(25.0, 101325.0, 0.0) == pytest.approx(
         101325.0 / (287.05 * 298.15)
     )
-    # 50 %: the owner's August value
+    # 50 %: the August research's value
     assert humid_air_density_kg_m3(25.0, 101325.0, 50.0) == pytest.approx(1.1769, abs=5e-5)
     # moist air is lighter
     assert humid_air_density_kg_m3(25.0, 101325.0, 100.0) < humid_air_density_kg_m3(

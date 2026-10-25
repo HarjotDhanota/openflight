@@ -1,7 +1,7 @@
 """Every golf metric on the Shot, each with its label, source, range, reason and frame.
 
 ``openflight.shot_metrics`` turns one shot record (``Shot.to_dict()`` or a logged
-``shot_detected`` entry) into one record per metric. Every place the owner looks
+``shot_detected`` entry) into one record per metric. Every place a golfer looks
 (kiosk, tester page, session log, review, pipeline check) reads these records,
 so a metric dropped here is dropped everywhere; these tests pin the list.
 """

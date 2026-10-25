@@ -291,7 +291,7 @@ def test_an_unknown_club_still_gets_a_rigid_body_face():
     assert result.metrics["dynamic_loft"].value == pytest.approx(25.0, abs=1e-9)
 
 
-# ---- the owner's TM4 export ------------------------------------------------------------
+# ---- the in-repo TM4 export ----------------------------------------------------------
 
 
 def _owner_measured_spin_shots():

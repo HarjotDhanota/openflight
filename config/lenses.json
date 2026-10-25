@@ -12,7 +12,7 @@
       "hfov_deg": 118.0,
       "hfov_source": "seller_listing",
       "tv_distortion_pct": -17.0,
-      "provenance": "The OV9281 module's stock M12 lens, as the owner's listing specifies it: 2.8 mm, f/2.2, 118 deg horizontal, TV distortion about -17 %. Field frames (Outdoors-test-5, 30 Sept) measured about 16 % barrel at the 1280 frame's edge."
+      "provenance": "The OV9281 module's stock M12 lens, as its seller's listing specifies it: 2.8 mm, f/2.2, 118 deg horizontal, TV distortion about -17 %. Field frames (Outdoors-test-5, 30 Sept) measured about 16 % barrel at the 1280 frame's edge."
     },
     {
       "lens_id": "6mm",

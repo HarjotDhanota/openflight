@@ -5,7 +5,7 @@ icon: lucide/circle-dashed
 # Club delivery arc
 
 How the kiosk gets **club path, attack angle, swing plane, swing direction and
-low point** from one shot. It is Part E item E1, under the owner's decisions D38
+low point** from one shot. It is Part E item E1, under the project's decisions D38
 (published sources first, refitted to TrackMan 4 later) and D39 (assumed swing
 geometry is allowed, labelled "model geometry", until the new 6 mm and 8 mm
 lenses give enough frames to measure the arc). The code is
@@ -173,7 +173,7 @@ the two selected entries.
 
 **Simulators (D31).** Nothing changed: the simulator resolver still sends only
 `shot.club_path_deg`. Whether a model-geometry club path should go to
-simulators is an open decision for the owner (see below). It is the one switch
+simulators is an open decision (see below). It is the one switch
 `sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`); set to
 `True`, the arc's model-geometry path goes out labelled `"model_geometry"`.
 

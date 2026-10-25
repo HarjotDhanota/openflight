@@ -23,10 +23,10 @@ Every metric carries ``value``, ``unit``, ``status``, ``source``, ``range`` and
 Two flights from the same launch (TrackMan's "raw" and "normalized"):
 
 - ``as_measured``: in the shot's own air. The density is ``Shot.air_density_kg_m3``
-  when supplied (the owner's density hook; this module never measures weather),
+  when supplied (the caller's density hook; this module never measures weather),
   else the ISA sea-level 1.225 kg/m3, labelled "ISA default".
 - ``normalized``: TrackMan's reference, 77 F (25 C) and sea level (1013.25 hPa),
-  calm ("normalized to no wind conditions at 0 ft altitude, 77 F", the owner's
+  calm ("normalized to no wind conditions at 0 ft altitude, 77 F", a TM4
   export; "Default values are 77°F and sea level", TrackMan's normalization page),
   with a relative humidity TrackMan does not publish, set here as
   ``NORMALIZED_REFERENCE_RH_PCT`` (50 %). The density is computed from the three.
@@ -106,7 +106,7 @@ FLIGHT_MODEL_LABEL = f"{ACTIVE_AERO_MODEL.label}, RK4 point mass"
 # Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
 # calm. TrackMan publishes no humidity (its normalization page and help articles
 # give altitude and temperature only), so the relative humidity is a named
-# assumption: 50 %, as the owner's August research took it (1.1769 kg/m3); dry air
+# assumption: 50 %, as the August research took it (1.1769 kg/m3); dry air
 # (0 %) gives 1.1839 kg/m3 and saturated air (100 %) 1.1700.
 NORMALIZED_TEMPERATURE_C = 25.0
 NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
@@ -157,7 +157,7 @@ AIR_DENSITY_PLAUSIBLE_KG_M3 = (0.6, 1.6)
 
 DENSITY_HOOK = (
     "Shot.air_density_kg_m3 (kg/m3), set per shot before finalization by the "
-    "owner's density source; when unset the as-measured flight uses ISA 1.225 kg/m3"
+    "caller's density source; when unset the as-measured flight uses ISA 1.225 kg/m3"
 )
 
 

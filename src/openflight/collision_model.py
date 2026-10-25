@@ -159,7 +159,7 @@ SOURCE_RIGID_BODY = (
     "I/(m r) = 7.50 mm (Cross & Nathan 2007; Penner 2001)"
 )
 SOURCE_AXIS_IRON = (
-    "D-plane tilt x (0.81385 + 0.00342 x dynamic loft), clean-room fit to the owner's "
+    "D-plane tilt x (0.81385 + 0.00342 x dynamic loft), clean-room fit to one session's "
     "TM4 irons (16 shots, 0.014 deg)"
 )
 FACE_METHOD_RIGID_BODY = "rigid_body"

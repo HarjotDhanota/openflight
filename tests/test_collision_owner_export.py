@@ -1,4 +1,4 @@
-"""The collision model against the owner's own export session.
+"""The collision model against the in-repo TM4 export session.
 
 The export (``session_logs/OpenFlight-Test.Normalized.csv``, 24 shots: driver,
 7-iron, pitching wedge) records each shot's club delivery, impact location, ball
