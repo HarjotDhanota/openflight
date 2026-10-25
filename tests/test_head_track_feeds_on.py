@@ -6,9 +6,9 @@ model has no experimental label, and would treat one as missing).
 ``shot_metrics.with_input_labels`` then lifts every output built on them to
 experimental, with a note: face angle, dynamic loft, spin loft, face to path, D-plane
 tilt, spin axis, the collision spin, and through them carry and the flight metrics.
-Simulators never receive them. The E1 arc gets no head-track positions: the track's
-depths are walked back from the OPS speed it then reports, so an arc fitted to them
-would only restate the head track's own assumptions.
+Simulators never receive them. The E1 arc fits the head track's hosel positions under
+their label: experimental, or model geometry for an output the published prior sets
+(the swing plane from two or three points), with the reason.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from openflight.sim import resolver
 from openflight.sim.resolver import resolve_shot
 from openflight.sim.types import PlayerState, UnmeasuredShotError
 from tests.every_metric import full_ball_speed
+from tests.test_club_arc import HEAD_TRACK_SIGMA_M, HEAD_TRACK_TIMES, _synthetic_swing
 
 HEAD_TRACK = "camera_head_track"
 EXPERIMENTAL_OUTPUTS = (
@@ -38,7 +39,15 @@ EXPERIMENTAL_OUTPUTS = (
 )
 
 
-def _head_track_shot(**overrides) -> Shot:
+def _head_track_positions() -> list[dict]:
+    positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
+    return [
+        {"t_s": p.t_s, "lateral_m": p.lateral_m, "up_m": p.up_m, "forward_m": p.forward_m}
+        for p in positions
+    ]
+
+
+def _head_track_shot(head_positions=(), **overrides) -> Shot:
     """A 7-iron with a measured radar launch, a weak OPS spin and only the head track's
     club data, built as the kiosk builds it."""
     values = {
@@ -69,9 +78,10 @@ def _head_track_shot(**overrides) -> Shot:
             "path_confidence_tier": "experimental",
             "attack_confidence_tier": "experimental",
             "club_path_frame": "target_line",
-            "head_positions": [],
+            "head_positions": list(head_positions),
             "contact_t_s": 0.0,
             "horizontal_offset_deg": 0.0,
+            "head_track": {"label": "experimental", "position_sigma_m": HEAD_TRACK_SIGMA_M},
         },
     )
     shot.experimental_fused_status = HEAD_TRACK
@@ -197,12 +207,35 @@ def test_a_measured_route_outranks_the_head_track():
 @pytest.mark.parametrize(
     "name", ["swing_plane", "swing_direction", "low_point_distance", "low_point_height"]
 )
-def test_the_arc_gets_no_head_track_positions(name):
-    """Its depths are walked back from the OPS speed it reports: no independent 3-D points."""
+def test_without_head_track_positions_the_arc_is_not_measured(name):
     record = _records(_head_track_shot())[name]
 
     assert record["value"] is None and record["status"] == "not_measured"
     assert "no club-head positions" in record["reason"]
+
+
+def test_the_arc_on_head_track_positions_is_the_prior_s_plane_and_experimental_otherwise():
+    records = _records(_head_track_shot(head_positions=_head_track_positions()))
+
+    plane = records["swing_plane"]
+    assert plane["value"] is not None and plane["status"] == "model_geometry"
+    assert "prior sets it" in plane["note"]
+    for name in ("swing_direction", "low_point_distance", "low_point_height", "low_point_side"):
+        record = records[name]
+        assert record["value"] is not None, name
+        assert record["status"] == "experimental", name
+        assert "head track" in record["note"], name
+
+
+def test_the_head_track_low_point_reaches_the_contact_note_estimated_with_its_reason():
+    shot = _head_track_shot(head_positions=_head_track_positions())
+
+    low_point = shot_models._low_point_input(shot)  # pylint: disable=protected-access
+
+    assert low_point.present
+    assert low_point.label == collision_model.LABEL_ESTIMATED
+    assert low_point.reason == shot_models.HEAD_TRACK_REASON
+    assert low_point.experimental
 
 
 def test_the_spin_chain_takes_the_collision_spin_labelled_experimental():

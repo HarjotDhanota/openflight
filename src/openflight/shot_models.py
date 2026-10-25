@@ -458,6 +458,15 @@ def _low_point_input(shot: Shot) -> collision_model.Input | None:
     if not isinstance(entry, dict) or entry.get("reason") == NO_CAMERA_DELIVERY:
         return None
     value, label = entry.get("value"), entry.get("status")
+    if _finite(value) and label == LABEL_EXPERIMENTAL:
+        # the head track's positions (club_arc): the model has no experimental label
+        return collision_model.Input(
+            float(value),
+            LABEL_ESTIMATED,
+            entry.get("source"),
+            reason=HEAD_TRACK_REASON,
+            experimental=True,
+        )
     if _finite(value):
         return collision_model.Input(float(value), label, entry.get("source"))
     return collision_model.Input(None, reason=entry.get("reason") or "no low point")

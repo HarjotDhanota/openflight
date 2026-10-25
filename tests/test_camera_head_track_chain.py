@@ -24,6 +24,7 @@ from tests.test_camera_head_track import (
     HEIGHT,
     WIDTH,
     Swing,
+    _hosel,
     _project,
     _render,
     _truth,
@@ -98,8 +99,22 @@ def test_no_stable_clubhead_falls_back_to_the_head_track(no_stable_clubhead):
     assert delivery.head_track["label"] == "experimental"
     assert delivery.head_track["club_path_sigma_deg"] > 0
     assert any("rejected_no_stable_clubhead" in note for note in delivery.notes)
-    # not fed to the arc: its labels would call experimental pixels calculated
-    assert delivery.head_positions == ()
+
+
+def test_the_head_track_hands_its_hosel_positions_to_the_arc(no_stable_clubhead):
+    """Each tracked frame's hosel, in the radar-centred frame the arc and the ball share."""
+    swing = Swing()
+    delivery = _run(swing, head_track=_context(swing))
+
+    assert delivery.status == SOURCE
+    assert len(delivery.head_positions) == len(delivery.head_track["positions"]) >= 2
+    for position in delivery.head_positions:
+        truth = _hosel(swing, position.t_s * 1e9)  # lateral, up, forward from the foot
+        found = np.array([position.lateral_m, position.up_m, position.forward_m])
+        assert np.linalg.norm(found - truth) < 0.05
+        assert position.t_s < delivery.contact_t_s
+    assert delivery.contact_t_s == pytest.approx(CONTACT_NS / 1e9)
+    assert delivery.horizontal_offset_deg == pytest.approx(YAW_OFFSET_DEG)
 
 
 def test_without_a_head_track_context_the_rejection_stands(no_stable_clubhead):
@@ -128,6 +143,8 @@ def test_a_flagged_angle_is_withheld_with_its_reason(no_stable_clubhead):
     assert delivery.attack_confidence_tier == "withheld"
     assert delivery.head_track["attack_angle_deg"] < -15.0
     assert any("flagged" in note for note in delivery.notes)
+    # a flagged angle withholds the positions too: the arc must not show it another way
+    assert delivery.head_positions == ()
 
 
 def test_no_ball_found_uses_the_setup_ball_and_the_lens_focal_length():

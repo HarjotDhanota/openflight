@@ -29,6 +29,33 @@ Only positions **before contact** go into the fit, because TrackMan measures clu
 delivery from pre-impact motion only. The camera + OPS fallback has no depth, so
 it gives no positions.
 
+### Hosel-track fallback
+
+When the feature/range intersection fails, `camera/head_track.py` now supplies
+its two or three pre-impact hosel positions. It reconstructs transverse position
+from normalized image offsets and walks depth back from contact using OPS speed.
+These are experimental positions. A rejected or flagged direction withholds the
+positions too, so the arc cannot bypass the direction gate.
+
+The positions move from the camera origin into the radar-centred frame before
+the arc fit. Their timestamps and contact share the camera clock; the target-line
+rotation is applied once. The head track's original path and attack remain
+selected when the competing arc value is also experimental.
+
+For a prior-assisted fit, `arc.prior_share` splits each output's linearized
+variance between position rows and the two prior rows. `prior_sensitivity` gives
+the output change per degree of assumed plane and per 0.1 m of assumed radius.
+A prior share of at least 90% is explicitly labelled model geometry at the
+producer, with the percentage in its note; other outputs inherit experimental.
+Published records can weaken these further through their input labels. A plane
+near the prior is not an independent measurement of that golfer's swing plane.
+
+These ranges condition on the reconstructed depths and the stated pixel noise.
+They omit correlated reconstruction bias, so they are not accuracy claims.
+`iwr6843_club_range_evidence` alone supplies range versus time, not 3D positions:
+its angles are not stored in that object. It already supplies depth for camera
+feature intersections; no independent 3D arc is fabricated from its scalar range.
+
 ## The model: a circle in a plane
 
 The arc is a circle of radius `R` in a plane tilted `θ` from the horizon. The
@@ -152,8 +179,8 @@ shows it yet.
 }
 ```
 
-- `status` is one of `measured`, `calculated`, `model_geometry` or
-  `not_measured`.
+- `status` is one of `measured`, `calculated`, `model_geometry`, `estimated`,
+  `experimental` or `not_measured`.
 - `source` is one of:
   - `club_arc:shot_fit` (calculated);
   - `club_arc:published_prior` (model geometry);
@@ -164,7 +191,7 @@ shows it yet.
 
 **Selection rule for path and attack.** The arc's value is used when its label
 ranks at least as high as the chained camera/IWR value's. The ranking is measured
-> calculated > model geometry > not measured. Otherwise the chained value is
+> calculated > model geometry > estimated > experimental > not measured. Otherwise the chained value is
 used. A chained value counts as measured when it exists and is not withheld,
 rejected or an error. The arc is at best "calculated", so today the chained
 value wins whenever it exists, and the arc fills path or attack only when the
@@ -172,8 +199,8 @@ chained value is missing. Both values are always recorded under `cross_check`.
 For E2's collision model, `club_arc.selected_path_and_attack(payload)` returns
 the two selected entries.
 
-**Simulators (D31).** Nothing changed: the simulator resolver still sends only
-`shot.club_path_deg`. Whether a model-geometry club path should go to
+**Simulators (D31).** The resolver reads the selected path
+from the published metric record. Experimental values never reach simulators. Whether a model-geometry club path should go to
 simulators is an open decision for the owner (see below). It is the one switch
 `sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`); set to
 `True`, the arc's model-geometry path goes out labelled `"model_geometry"`.

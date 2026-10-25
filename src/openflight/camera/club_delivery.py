@@ -1304,6 +1304,13 @@ def _head_track_fallback(
         impact_frame=track.last_rest_frame,
         contact_t_s=track.contact_ns / 1e9,
         clock=timestamp_source,
+        # a flagged angle withholds the positions too: the arc would show it another way
+        head_positions=() if flags else _head_track_positions(track, geometry),
+        horizontal_offset_deg=(
+            float(geometry.horizontal_offset_deg)
+            if geometry.horizontal_offset_deg is not None
+            else None
+        ),
         head_track=record,
         notes=(
             *rejected.notes,
@@ -1314,6 +1321,21 @@ def _head_track_fallback(
         ),
     )
     return _in_output_frame(delivery, geometry.horizontal_offset_deg)
+
+
+def _head_track_positions(track, geometry: CameraDeliveryGeometry) -> tuple[HeadPosition, ...]:
+    """The head track's hosel points moved from the camera's optical centre to the radar-
+    centred frame the arc and the resting ball share, on the frame clock."""
+    lateral, forward, up = (float(value) for value in geometry.camera_origin)
+    return tuple(
+        HeadPosition(
+            t_s=float(point["t_ns"]) / 1e9,
+            lateral_m=lateral + float(point["lateral_m"]),
+            up_m=up + float(point["up_m"]),
+            forward_m=forward + float(point["forward_m"]),
+        )
+        for point in track.positions
+    )
 
 
 def _head_track_camera(ball, geometry: CameraDeliveryGeometry, context: HeadTrackContext):
