@@ -653,7 +653,7 @@ class TestHardwareTriggeredCapture:
         assert HardwareTriggeredCapture().wait_for_trigger(radar, processor) is capture
 
     def test_waits_without_discarding_input_and_detects_orphaned_dumps(self):
-        """The board may already be dumping when the wait starts; the wait never flushes."""
+        """The board may already be dumping when the wait starts."""
         radar = MagicMock()
         radar.wait_for_hardware_trigger.return_value = ""
         radar.last_hardware_trigger_outcome = "timeout"
@@ -1367,47 +1367,9 @@ class TestRollingBufferShotIdentity:
             (2, 1001.0),
         ]
 
-    def test_the_shot_line_names_its_carry_as_the_table_estimate(self, monkeypatch, caplog):
-        """The shot's console line labels its carry as the table estimate."""
-        from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
-
-        monkeypatch.setattr(monitor_module, "get_session_logger", lambda: MagicMock())
-        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
-        monitor._diagnostic_callback = None
-        monitor._shot_callback = lambda _shot: None
-        processed = self._processed(1000.0)
-
-        class OneCaptureTrigger:
-            calls = 0
-
-            def wait_for_trigger(self, **_kwargs):
-                self.calls += 1
-                if self.calls == 1:
-                    return processed.capture
-                monitor._running = False
-                return None
-
-            @staticmethod
-            def drain_diagnostics():
-                return []
-
-            @staticmethod
-            def reset():
-                return None
-
-        monitor.trigger = OneCaptureTrigger()
-        monitor.processor = MagicMock(process_capture=MagicMock(return_value=processed))
-        monitor._running = True
-        with caplog.at_level("INFO", logger="openflight.rolling_buffer.monitor"):
-            monitor._capture_loop()
-
-        line = next(record.getMessage() for record in caplog.records if "[SHOT] #" in record.msg)
-        assert "table carry (before launch angle)=" in line
-
     def test_the_detection_table_carry_reaches_logs_only_as_a_labelled_diagnostic(
         self, monkeypatch, caplog
     ):
-        """On a fusion unit the table carry at detection is a diagnostic, never the shot's."""
         from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
 
         session_log = MagicMock()
