@@ -5,10 +5,12 @@
 // chromium / google-chrome / firefox) with one pinned Chromium version.
 
 import { app, BrowserWindow, Menu } from 'electron';
+import { allowedOrigins, isNavigationAllowed } from './navigationPolicy.js';
 import { resolveTargetUrl } from './resolveTargetUrl.js';
 import { kioskWindowOptions } from './windowOptions.js';
 
 const targetUrl = resolveTargetUrl(process.env, process.argv);
+const origins = allowedOrigins(process.env, targetUrl);
 
 Menu.setApplicationMenu(null);
 
@@ -17,8 +19,15 @@ function createWindow() {
 
   win.setMenuBarVisibility(false);
   // The kiosk shell only ever shows the OpenFlight UI itself; deny any
-  // attempt (e.g. target="_blank" links) to pop a second window.
+  // attempt (e.g. target="_blank" links) to pop a second window. window.open()
+  // then returns null, and the tester page's Kiosk view navigates this window.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // ...and it goes only to the origins the launcher allowed (navigationPolicy.js).
+  const refuseOtherOrigins = (event) => {
+    if (!isNavigationAllowed(event.url, origins)) event.preventDefault();
+  };
+  win.webContents.on('will-frame-navigate', refuseOtherOrigins);
+  win.webContents.on('will-redirect', refuseOtherOrigins);
   win.loadURL(targetUrl);
 
   win.on('closed', () => {

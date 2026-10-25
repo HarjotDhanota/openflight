@@ -1142,6 +1142,8 @@
   "ui/AGENTS.md": "PRODUCT",
   "ui/README.md": "PRODUCT",
   "ui/electron/main.js": "PRODUCT",
+  "ui/electron/navigationPolicy.js": "PRODUCT",
+  "ui/electron/navigationPolicy.test.js": "PRODUCT",
   "ui/electron/resolveTargetUrl.js": "PRODUCT",
   "ui/electron/resolveTargetUrl.test.js": "PRODUCT",
   "ui/electron/windowOptions.js": "TESTER",

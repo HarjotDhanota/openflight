@@ -15,4 +15,28 @@ describe('kioskWindowOptions', () => {
     expect(kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '' })).toMatchObject({ kiosk: true });
     expect(kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '0' })).toMatchObject({ kiosk: true });
   });
+
+  it("sizes the window from OPENFLIGHT_KIOSK_WINDOW_SIZE, to try another screen's size", () => {
+    const options = kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '1', OPENFLIGHT_KIOSK_WINDOW_SIZE: '800x480' });
+    expect(options).toMatchObject({ width: 800, height: 480 });
+  });
+
+  it('reads the multiplication sign too', () => {
+    const options = kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '1', OPENFLIGHT_KIOSK_WINDOW_SIZE: '800×480' });
+    expect(options).toMatchObject({ width: 800, height: 480 });
+  });
+
+  it('keeps 1024×600 for a size it cannot read', () => {
+    for (const size of ['', 'big', '800', '0x0', '80x48', '-800x480']) {
+      expect(
+        kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '1', OPENFLIGHT_KIOSK_WINDOW_SIZE: size })
+      ).toMatchObject({ width: 1024, height: 600 });
+    }
+  });
+
+  it('leaves a fullscreen window at the size of the screen it is on', () => {
+    const options = kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOW_SIZE: '800x480' });
+    expect(options).not.toHaveProperty('width');
+    expect(options).not.toHaveProperty('height');
+  });
 });
