@@ -1,21 +1,8 @@
-"""The shot models' hooks into the kiosk: club arc (E1), collision model (E2),
-full speeds (E3) and the flight model (E4).
+"""The shot models' kiosk extension: club arc, collision model, full speeds and flight.
 
-``openflight.server`` measures and publishes; it builds no model of its own. This
-module registers ``extension`` on import (an ``openflight.kiosk_extensions`` entry
-point loads it at kiosk start-up) and, through the ``KioskExtension`` hooks:
-
-- attaches the arc's club delivery to each camera club delivery (E1);
-- runs the collision model on the measured inputs once enrichment is done: face
-  angle, dynamic loft, spin loft, face to path, D-plane tilt, spin and spin axis
-  (E2), and hands its spin to --calculated-spin;
-- adds the full ball speed, full club speed and full smash beside the radial
-  speeds (E3);
-- simulates the flight and commits the carry (E4).
-
-A kiosk without this module still measures and publishes every radar and camera
-value; it reports none of these models' outputs, an OPS-only unit takes the
-table carry, and a fusion unit has no carry (D17).
+Registers ``extension`` on import (an ``openflight.kiosk_extensions`` entry point). Without
+it the kiosk still measures and publishes every radar and camera value, an OPS-only unit
+takes the table carry, and a fusion unit has no carry.
 """
 
 from __future__ import annotations
@@ -46,11 +33,7 @@ logger = logging.getLogger("openflight.server")
 
 
 def _attach_club_arc(shot: Shot, delivery) -> None:
-    """E1: the shot's club delivery from the arc, beside the chained cross-check.
-
-    ``delivery`` is the chained club delivery (dataclass or its persisted dict),
-    or None. Right-handed unless the golfer is set left-handed (owner rule).
-    """
+    """The shot's club delivery from the arc, beside the chained cross-check (RH unless LH)."""
     from openflight.club_arc import club_delivery_payload  # noqa: PLC0415
 
     shot.club_delivery = club_delivery_payload(
@@ -61,14 +44,10 @@ def _attach_club_arc(shot: Shot, delivery) -> None:
 def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     """Return the club path the kiosk shows, when it is accepted, and its source.
 
-    The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
-    canonical field, then the camera-fused path, and the IWR path only when
-    camera fusion did not run (the kiosk hides it otherwise). Candidate,
-    out-of-bounds, noisy, rejected and withheld paths return (None, None), so
-    face angle is never built on a path the kiosk does not show as a
-    measurement (audit F1). An IWR path without a horizontal phase reference
-    carries status "azimuth_uncalibrated", not "accepted", so it is left out
-    too (audit F8).
+    Mirrors the kiosk's club-path tile (ui liveMetrics.ts): the canonical field, the
+    camera-fused path, then the IWR path only when camera fusion did not run. Any path not
+    accepted (including "azimuth_uncalibrated") returns (None, None), so face angle is
+    never built on a path the kiosk does not show as a measurement.
     """
     if shot.club_path_deg is not None:
         return shot.club_path_deg, "canonical"
@@ -93,7 +72,6 @@ def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
 
 
 def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
-    """The frame of the club path ``displayed_club_path`` chose (D36 item 2)."""
     if path_source == "canonical":
         return shot.club_path_frame
     if path_source in ("camera_fused_chained", "camera_fused_ops"):
@@ -107,9 +85,8 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
     """The attack angle the collision model may use, and its source.
 
     Mirrors the kiosk's attack tile (ui liveMetrics.ts): the canonical field, then the
-    camera-fused attack unless fusion rejected it or withheld its confidence. The IWR
-    attack angle is only ever a candidate ("candidate_available"), so, like a path
-    that is not accepted (audit F1), it is never a collision input.
+    camera-fused attack unless rejected or withheld. The IWR attack angle is only ever a
+    candidate, so it is never a collision input.
     """
     if _finite(shot.club_angle_deg):
         return shot.club_angle_deg, "canonical"
@@ -129,11 +106,9 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
 
 
 def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
-    """The horizontal launch as a collision input, "estimated" when it is weak (C2).
+    """The horizontal launch as a collision input, "estimated" when it is weak.
 
-    A low-coherence IWR horizontal, or one whose confidence is below the spin axis's
-    floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
-    every output built on it is labelled "estimated", with this reason.
+    Weak: a low-coherence IWR horizontal, or confidence below ``SPIN_AXIS_MIN_CONFIDENCE``.
     """
     measured = _measured_angle_input(
         shot.launch_angle_horizontal,
@@ -172,18 +147,15 @@ def _measured_angle_input(value, source, *, frame=None, name: str) -> collision_
     return collision_model.Input(value, collision_model.LABEL_MEASURED, source, frame)
 
 
-# E1 arc labels the collision model takes as inputs: a "measured" arc entry is the
-# chained value displayed_club_path / displayed_attack_angle already read.
+# Arc labels the collision model takes as inputs: a "measured" arc entry is the chained
+# value displayed_club_path / displayed_attack_angle already read.
 _ARC_INPUT_LABELS = (collision_model.LABEL_CALCULATED, collision_model.LABEL_MODEL_GEOMETRY)
 
 
 def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Input:
-    """E1's selected arc value for ``name`` under its own label, or a missing input.
+    """The arc's selected value for ``name`` under its own label, or a missing input.
 
-    Used only when the kiosk has no accepted measured value. The arc's value enters
-    as "calculated" (fitted from the shot alone) or "model_geometry" (leaning on the
-    published prior, D39), and every collision output built on it inherits that label.
-    A not-measured or non-finite arc value is a missing input (nothing is filled in).
+    Used only without an accepted measured value; outputs built on it inherit its label.
     """
     from openflight.club_arc import selected_path_and_attack  # noqa: PLC0415
 
@@ -200,12 +172,7 @@ def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Inpu
 
 
 def _collision_inputs(shot: Shot) -> dict:
-    """The shot's own collision inputs, each labelled (E2).
-
-    The kiosk's accepted measured path and attack come first. Without one, E1's arc
-    value enters under its own label ("calculated", or "model_geometry" for the arc
-    prior, D39), which every output built on it then inherits.
-    """
+    """The shot's own collision inputs, each labelled; measured path and attack come first."""
     path, path_source = displayed_club_path(shot)
     attack, attack_source = displayed_attack_angle(shot)
     launch_source = shot.launch_angle_horizontal_source
@@ -246,8 +213,7 @@ def _collision_inputs(shot: Shot) -> dict:
 
 
 def _low_point_input(shot: Shot) -> collision_model.Input | None:
-    """E1's low point under its own label (the contact note only); a missing input when
-    the camera's club delivery gave none; None without camera club data."""
+    """The arc's low point (contact note only); None without camera club data."""
     from openflight.club_arc import NO_CAMERA_DELIVERY  # noqa: PLC0415
 
     delivery = shot.club_delivery if isinstance(shot.club_delivery, dict) else {}
@@ -276,8 +242,7 @@ def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
 def _spin_input(shot: Shot) -> collision_model.Input:
     """The shot's spin under its own label: an accepted measured spin, or a model's spin.
 
-    A model's spin enters labelled, so the collision model can refuse it for face and
-    loft; a measured spin below the confidence floor is not an input.
+    A model's spin enters labelled, so the collision model can refuse it for face and loft.
     """
     if _accepted_measured_spin(shot):
         return collision_model.Input(
@@ -310,9 +275,7 @@ def _accepted_measured_spin(shot: Shot) -> bool:
 def _collision_spin_status(shot: Shot) -> str | None:
     """The label of this shot's collision spin, "calculated" or "model_geometry", or None.
 
-    Either becomes the shot's spin, under its own label, when there is no accepted
-    measured spin. A spin built on model geometry (D39) feeds the flight model (D38)
-    labelled so, but is not "measured or calculated" (D31): simulators do not get it.
+    A model-geometry spin feeds the flight model, labelled, but simulators do not get it.
     """
     metrics = (shot.collision_model or {}).get("metrics", {})
     status = metrics.get("spin_rate", {}).get("status")
@@ -322,8 +285,7 @@ def _collision_spin_status(shot: Shot) -> str | None:
 
 
 def _collision_spin_feeds(shot: Shot) -> bool:
-    """Whether this shot's collision spin is calculated (the --calculated-spin formula
-    yields to it; a model-geometry spin yields to that formula's calculated value)."""
+    """Whether the collision spin is calculated (then --calculated-spin yields to it)."""
     return _collision_spin_status(shot) == "calculated"
 
 
@@ -348,11 +310,7 @@ def _collision_spin_method(shot: Shot) -> str:
 
 
 def _attach_spin_axis(shot: Shot, result) -> None:
-    """The model's axis on the shot under its label; a measured axis is never replaced.
-
-    A weak horizontal launch does not withhold the axis: that input is "estimated"
-    (``_horizontal_launch_input``) and so is the axis, with the reason.
-    """
+    """The model's axis on the shot under its label; a measured axis is never replaced."""
     if _finite(shot.spin_axis_deg) and is_measured_source(shot.spin_axis_source):
         return
     axis = result.metrics["spin_axis"]
@@ -377,11 +335,9 @@ def _attach_spin_axis(shot: Shot, result) -> None:
 
 
 def _attach_collision_model(shot: Shot) -> None:
-    """Face, loft, spin loft, face to path, D-plane tilt, spin and spin axis (E2).
+    """Face, loft, spin loft, face to path, D-plane tilt, spin and spin axis.
 
-    Replaces the fixed 0.8-weight face estimate and the "launch minus path" spin-axis
-    proxy with ``collision_model`` (published sources, labelled calculated). Each run
-    starts from scratch, so a late re-run never keeps an earlier run's values.
+    Each run starts from scratch, so a late re-run never keeps an earlier run's values.
     """
     result = collision_model.evaluate(
         club=shot.club,
@@ -453,7 +409,7 @@ def _attach_collision_model(shot: Shot) -> None:
         )
 
 
-# E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
+# Why the OPS club speed cannot be projected yet.
 CLUB_SPEED_NOT_FULL_REASON = (
     "the OPS club speed is a percentile over 4-18 ms before impact, not one FFT-window "
     "reading, and the head's direction at that time needs the swing arc (E1) and a fixed "
@@ -462,18 +418,13 @@ CLUB_SPEED_NOT_FULL_REASON = (
 
 
 def _attach_full_speeds(shot: Shot) -> None:
-    """E3: full ball speed by measured projection, full club speed and full smash.
-
-    The canonical radial ball speed is unchanged; each full speed is its own field
-    with its status, range and reason (openflight.full_speed).
-    """
+    """Full ball speed by measured projection, full club speed and full smash; radial unchanged."""
     from openflight.full_speed import (  # noqa: PLC0415
         evaluate_full_ball_speed,
         evaluate_full_club_speed,
         evaluate_full_smash,
     )
 
-    # this shot's own range and how sure it is (13 Oct)
     calibration = server.shot_iwr_calibration(shot)
 
     def calibrated(name: str):
@@ -499,7 +450,7 @@ def _attach_full_speeds(shot: Shot) -> None:
         ball_height_m=calibrated("tee_ball_height_m"),
         tee_side_offset_m=(server.setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
     )
-    # the flight model (E4) reads the value alone: calculated, or None
+    # the flight model reads the value alone: calculated, or None
     shot.ball_speed_full_mph = (
         shot.ball_speed_full["value_mph"]
         if shot.ball_speed_full.get("status") == "calculated"
@@ -517,12 +468,7 @@ def _attach_full_speeds(shot: Shot) -> None:
 
 
 def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensions.CarryOutcome:
-    """E4: every flight output, as measured and normalized, and the as-measured carry.
-
-    The as-measured flight uses the shot's supplied air density, or ISA; every
-    output is labelled. A fusion unit builds carry only from measured inputs
-    (D17); an OPS-only unit that cannot simulate takes the table estimate.
-    """
+    """Every flight output (as measured and normalized) and the as-measured carry."""
     flight = compute_flight(shot, substitutes=not fusion, enabled=enabled)
     shot.flight = flight.to_dict()
     conditions, trajectory = flight.conditions, flight.as_measured
@@ -545,7 +491,7 @@ def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensi
             # an estimated input (the OPS line-of-sight ball speed): the flight's label
             shot.carry_status = CARRY_ESTIMATED
         else:
-            # the flight's own label: a simulated carry is calculated (D38)
+            # the flight's own label: a simulated carry is calculated
             shot.carry_status = CARRY_CALCULATED
         logger.info(
             "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
@@ -563,8 +509,6 @@ def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensi
 
 
 class ShotModelsExtension(kiosk_extensions.KioskExtension):
-    """The club arc, collision model, full speeds and flight model (E1-E4)."""
-
     name = "shot models"
 
     def on_club_delivery(self, shot, delivery) -> None:

@@ -1,103 +1,8 @@
-"""Collision model for the club-face, spin and index metrics (Part E, item E2).
+"""Collision model: club face, dynamic loft, spin, spin axis and the spin and smash indices.
 
-Every number here comes from a published source, read from the paper itself, or
-from the named clean-room fit to a TM4 normalized export, 6 May 2026; the
-derivations and units are in ``docs/how-it-works/collision-model.md``. The forward model
-(``collision_forward``) has constants fitted by the maintainer. Each shot
-uses only its own inputs; a model constant is fixed, a shot's input never is. A
-missing input makes every metric built on it "not measured", with the reason.
-
-1. **Face angle and dynamic loft.** With a measured spin, from the ball and the
-   club's direction by the rigid-body relation (``rigid_body_face``): the face
-   normal lies in the plane of the ball's launch direction and the club's
-   direction, beyond the ball from the club, at an angle theta from the ball with
-
-       ball speed x sin(theta) = c x spin,   c = I / (m r)
-
-   the tangential-impulse identity m v_t r = I omega (Cross & Nathan 2007, below;
-   Penner 2001, Eq. (11)). c = 7.5005 mm (I = 0.351 m r^2, r = 21.35 mm), fitted
-   in a clean-room study of the 6 May 2026 TM4 export. The collision model's own
-   spin is built from face and loft, so it never feeds them: without a measured
-   spin, face and loft come from the inverse of the fitted launch model
-   (``collision_forward.face_and_loft_from_launch``), and say why. Without the
-   horizontal launch or path, the loft alone comes from the vertical plane;
-   without the vertical launch or attack, the face alone from the published
-   horizontal ratio below.
-
-   **Published launch ratios (kept as a reference).** Wood, Henrikson & Broadie, "The
-   Influence of Face Angle and Club Path on the Resultant Launch Angle of a Golf
-   Ball", *Proceedings* 2(6):249 (2018),
-   doi:10.3390/proceedings2060249, define the launch ratios per plane:
-
-       horizontal ratio = (launch direction - club path) / (face angle - club path)
-       vertical ratio   = (vertical launch - attack angle) / (dynamic loft - attack angle)
-
-   and measure them (Table 1, 157 golfers, Vicon + Foresight GC2): horizontal
-   76 % driver, 69 % 7-iron, 61 % 58 deg wedge; vertical 83 / 81 / 72 %. Inverted:
-
-       face = path + (launch direction - path) / w_h
-       loft = attack + (vertical launch - attack) / w_v
-
-   Clubs between the paper's three categories interpolate linearly in nominal loft
-   (``weights_for_loft``); outside them the nearest category's weights apply.
-   Both PING papers support a ratio that falls as loft rises: Wood et al. 2018
-   (Fig. 3c,d and Conclusions: "higher numbers when the dynamic loft is lower")
-   and Henrikson, Wood, Broadie & Nuttall 2020, *Proceedings* 49(1):27,
-   doi:10.3390/proceedings2020049027 (Fig. 6: "the launch ratio monotonically
-   decreases for increasing loft" for dry contact). The linear shape between
-   anchors is our choice, not the paper's. The fitted launch model's inverse
-   replaced these ratios: on the fitting hold-out its face is 0.002-0.015 deg RMS
-   off, the ratios' 0.8-1.0 deg.
-
-2. **Spin loft, face to path, D-plane tilt:** ``metric_definitions`` (D37).
-
-3. **Calculated spin rate: the impulse model** (``collision_forward``): the ball
-   leaves the face rolling or still sliding (Penner 2001; Cross 2002), at the face
-   centre unless an impact location is measured. Penner's own model below is kept
-   as the published baseline. A. R. Penner, "The physics of golf: The
-   optimum loft of a driver", *Am. J. Phys.* 69, 563-568 (2001),
-   doi:10.1119/1.1344164. Clubhead a free flat plate of mass M, ball a uniform
-   solid sphere (I = 2/5 m r^2), ball rolling when it leaves the face. Eqs. (5),
-   (7), (8), (10), (11):
-
-       e     = 0.86 - 0.0029 v cos(theta)                    (v in m/s)
-       v_n   = (1 + e) v cos(theta) / (1 + m/M)
-       v_p   = v sin(theta) / (1 + m/M + m r^2 / I)
-       omega = m v_p r / I                                    (rad/s)
-
-   theta is the angle between the club's direction and the face normal: Penner's
-   club moves horizontally, so it is his dynamic loft; in 3D it is the spin loft
-   (the collision happens in the D plane). Constants as Penner states them:
-   m = 45.9 g, diameter 4.27 cm, M = 200 g. Rolling needs Coulomb friction
-   mu >= v_p / v_n; a spin loft needing more than 0.35, the lower of the dry
-   ball-face values Henrikson et al. 2020 measured (0.35 surlyn, 0.40 urethane),
-   is outside the model and is not calculated.
-
-4. **Spin axis.** Irons and wedges: tan(axis) = tan(D-plane tilt) x (0.81385 +
-   0.00342 x dynamic loft), the clean-room fit to that export's irons.
-   Drivers, woods and hybrids: the fitted forward model's centre axis. With a
-   measured impact location the forward model's gear effect (after R. Cross &
-   A. M. Nathan, "Experimental study of the gear effect in ball collisions",
-   *Am. J. Phys.* 75, 658-664 (2007), doi:10.1119/1.2713788) adds its back and
-   side spin. Without one, the face centre, with the note ``NOTE_NO_GEAR``.
-
-5. **Gyro:** Penner's collision is planar: the spin vector is normal to the D
-   plane, so gyro is zero by construction, not a result. It is "not measured".
-
-6. **Spin index and smash index:** the shot's measured spin over the expected spin,
-   and its ball speed over the expected ball speed, in percent
-   (``collision_forward.expected_spin_rpm``, ``expected_ball_speed_mph``). A club
-   without fitted indices says so (``NOTE_NO_FITTED_INDEX``).
-
-7. **Contact quality.** A calculated spin assumes a clean, dry strike. An iron or
-   wedge with an attack angle of -2 deg or shallower, a strike more than 8 mm above
-   the face centre, or an iron or wedge whose camera club delivery gave no low point
-   may be a flier or a heavy strike, which spins far less: the spin keeps its
-   value, with ``NOTE_CONTACT`` and the reasons.
-
-Labels: an output is ``calculated`` unless an input is ``model_geometry`` (D39),
-which it then inherits. Horizontal outputs carry their inputs' frame
-(``horizontal_frame``), ``mixed`` when the inputs disagree.
+Derivations, sources and units: docs/how-it-works/collision-model.md. A missing input makes
+each metric built on it "not measured", with the reason; outputs are ``calculated`` unless
+an input is ``model_geometry``, which they inherit. Horizontal outputs keep their inputs' frame.
 """
 
 from __future__ import annotations
@@ -127,8 +32,7 @@ from .source_labels import (  # noqa: F401  (the predicates are re-exported)
 
 MODEL_VERSION = "e2-2026-10-20-fitted"
 
-# Input labels (source_labels: measured, calculated, model geometry, estimated) and
-# output statuses.
+# Output statuses (the input labels are source_labels').
 STATUS_CALCULATED = shot_metrics.CALCULATED
 STATUS_MODEL_GEOMETRY = shot_metrics.MODEL_GEOMETRY
 STATUS_ESTIMATED = shot_metrics.ESTIMATED
@@ -169,9 +73,8 @@ NOTE_RIGID_BODY_NOT_USED = "rigid-body relation not used"
 CIRCULAR_SPIN_REASON = (
     "spin was calculated from face and loft (collision model): using it for them would be circular"
 )
-# Shot.spin_axis_source for a calculated axis (read by E4's flight and the simulators;
-# both start with "calculated"). An axis built on a model-geometry input (D39) starts
-# with "model geometry" instead and names those inputs.
+# Shot.spin_axis_source values for a calculated axis; one built on a model-geometry
+# input starts with "model geometry" instead and names those inputs.
 FACE_BASIS_INVERSION = "fitted launch-model inversion"
 FACE_BASIS_RIGID_BODY = "rigid-body face"
 AXIS_BASIS_IRON = "model: D-plane tilt x TM4 iron factor"
@@ -190,24 +93,20 @@ SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_MODEL}; an input estimated"
 
 RAD_S_TO_RPM = collision_forward.RAD_S_TO_RPM
 
-# ---- Wood, Henrikson & Broadie 2018, Table 1 ----------------------------------------
+# Wood, Henrikson & Broadie 2018, Proceedings 2(6):249, Table 1:
 # (category, horizontal ratio toward face angle, vertical ratio toward dynamic loft)
 PING_2018_ANCHORS = (
     ("driver", 0.76, 0.83),
     ("7-iron", 0.69, 0.81),
     ("58-degree wedge", 0.61, 0.72),
 )
-# The paper states the wedge's loft (58 deg) but not the driver's or the 7-iron's
-# ("a club loft ... appropriate for their swing speed"); those two anchors sit at the
-# fork's nominal lofts for the same clubs (clubs.physics).
+# The paper gives only the wedge's loft; the driver and 7-iron anchors sit at the
+# nominal lofts in clubs.physics.
 PING_2018_WEDGE_LOFT_DEG = 58.0
 
 
 def combined_frame(*frames: Optional[str]) -> Optional[str]:
-    """The one frame a value built from these angles is in, or ``mixed``.
-
-    Unknown (None) frames are ignored; with none known the result is None.
-    """
+    """The one frame values built from these angles are in, ``mixed``, or None if none known."""
     known = {frame for frame in frames if frame is not None}
     if not known:
         return None
@@ -222,7 +121,7 @@ def _anchor_lofts() -> tuple[float, float, float]:
     )
 
 
-# ---- Penner 2001 constants (Sec. II A) -----------------------------------------------
+# Penner 2001 (Am. J. Phys. 69, 563), Sec. II A
 PENNER_BALL_MASS_KG = collision_forward.BALL_MASS_KG
 PENNER_BALL_DIAMETER_M = BALL_DIAMETER_M
 PENNER_HEAD_MASS_KG = 0.200
@@ -256,9 +155,8 @@ _IRON_AXIS_CLUBS = frozenset(
 
 @dataclass(frozen=True)
 class Input:
-    """One shot's input with its label (measured / calculated / model_geometry).
+    """One labelled shot input; a None or non-finite ``value`` is missing (``reason``).
 
-    ``value`` None (or non-finite) is a missing input; ``reason`` says why.
     ``frame`` is the horizontal frame for a horizontal angle, else None.
     """
 
@@ -309,7 +207,7 @@ def _not_measured(unit: str, reason: str, source: Optional[str] = None) -> Metri
 
 
 def _status_from(*labels: Optional[str]) -> str:
-    """The weakest input label: estimated, then model geometry (D39), else calculated."""
+    """The weakest input label: estimated, then model geometry, else calculated."""
     if LABEL_ESTIMATED in labels:
         return STATUS_ESTIMATED
     if LABEL_MODEL_GEOMETRY in labels or STATUS_MODEL_GEOMETRY in labels:
@@ -332,9 +230,6 @@ def _frame_note(frame: Optional[str]) -> Optional[str]:
     if frame == MIXED:
         return "horizontal inputs in two frames (unit boresight and target line)"
     return None
-
-
-# ---- weights -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -385,9 +280,6 @@ def weights_for_club(club: ClubType) -> Optional[LaunchWeights]:
     return weights_for_loft(club_nominal_loft_deg(club))
 
 
-# ---- D-plane inversion ---------------------------------------------------------------
-
-
 def forward_launch(
     *,
     face_angle_deg: float,
@@ -414,9 +306,6 @@ def invert_d_plane(
     face = club_path_deg + (launch_horizontal_deg - club_path_deg) / weights.horizontal
     loft = attack_angle_deg + (launch_vertical_deg - attack_angle_deg) / weights.vertical
     return face, loft
-
-
-# ---- rigid-body face from the ball ---------------------------------------------------
 
 
 def spin_built_from_face(spin: Input) -> bool:
@@ -505,9 +394,6 @@ def rigid_body_face(
     return face, loft
 
 
-# ---- Penner 2001 ---------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class PennerImpact:
     restitution: float
@@ -579,9 +465,6 @@ def calculated_spin(*, club_speed: Input, spin_loft: Metric) -> Metric:
     )
 
 
-# ---- spin axis and gear effect -------------------------------------------------------
-
-
 def cross_nathan_gear_spin_rad_s(
     *,
     normal_speed_m_s: float,
@@ -597,11 +480,8 @@ def cross_nathan_gear_spin_rad_s(
 
         omega = -(1 + e) d b v_y1 / (1.4 r [b^2 + I_B (1/m + 1/M)])
 
-    d: centre of mass depth behind the face; b: impact offset along the face;
-    I_B: head moment of inertia about the rotation axis through its centre of mass.
-    Sign as in the paper (Fig. 2): positive b gives a negative (counter-clockwise
-    seen from above) ball spin. Normal incidence; the paper's Appendix treats
-    oblique impacts.
+    d: centre-of-mass depth behind the face; b: impact offset along the face; I_B: head
+    inertia about its centre of mass. Positive b gives negative (CCW from above) spin.
     """
     denominator = (
         1.4
@@ -648,11 +528,8 @@ def spin_axis(
 ) -> Metric:
     """Spin axis (deg, + = curves right): the D-plane tilt, plus gear effect when given.
 
-    ``gear_sidespin_rpm`` is the gear effect's spin component about the vertical, in
-    the spin-axis sign (+ curves right); it needs a measured impact location (E5) and
-    the head's centre-of-mass depth and inertia. The D-plane spin (``spin_rate``) at
-    tilt t has components S cos t (back) and S sin t (side), so the tilted axis is
-    atan2(S sin t + g, S cos t).
+    ``gear_sidespin_rpm`` (needs a measured impact location) is in the spin-axis sign; the
+    tilted axis is atan2(S sin t + g, S cos t) for spin S at tilt t.
     """
     if not d_plane_tilt.present:
         return _not_measured(
@@ -697,7 +574,7 @@ _INPUT_NAMES = {
     "impact_offset_mm": "impact offset",
     "impact_height_mm": "impact height",
 }
-# E1's arc sources (club_arc.ARC_PRIOR_SOURCE, ARC_FIT_SOURCE), in words
+# club_arc's arc sources (ARC_PRIOR_SOURCE, ARC_FIT_SOURCE), in words
 _SOURCE_NAMES = {
     "club_arc:published_prior": "the arc prior",
     "club_arc:shot_fit": "the arc fit",
@@ -705,10 +582,9 @@ _SOURCE_NAMES = {
 
 
 def model_geometry_inputs(inputs: dict) -> list[str]:
-    """Each present model-geometry input (D39), named with its source, in input order.
+    """Each present model-geometry input, named with its source, in input order.
 
-    ``inputs`` maps input names to ``Input`` or to their recorded dicts
-    (``CollisionResult.to_dict()["inputs"]``).
+    ``inputs`` maps names to ``Input`` or their recorded dicts (``CollisionResult.to_dict()``).
     """
     named = []
     for key, value in (inputs or {}).items():
@@ -760,9 +636,6 @@ GYRO_REASON = (
     "the collision model is planar: Penner's spin vector is normal to the D-plane, "
     "so gyro is zero by construction, not a result"
 )
-
-
-# ---- the whole model -----------------------------------------------------------------
 
 
 def _input_record(name: str, value: Input) -> dict:
@@ -1121,13 +994,11 @@ def evaluate(
     handedness: Optional[str] = None,
     low_point_distance_mm: Optional[Input] = None,
 ) -> CollisionResult:
-    """Every E2 metric for one shot, from that shot's inputs.
+    """Every collision-model metric for one shot, from that shot's inputs.
 
-    ``spin_rpm`` and ``ball_speed_mph`` (the full speed) feed the rigid-body face when
-    the spin is measured; ``ball_speed_mph`` also feeds the smash index. A measured
-    impact location (+ toe, + up, mm) drives the gear effect; ``handedness`` is
-    right-handed unless "LH". ``low_point_distance_mm`` (E1's arc) feeds only the
-    contact note; None means no camera club data, so no low point to miss.
+    ``ball_speed_mph`` is the full speed; impact location is mm (+ toe, + up) and drives
+    the gear effect; ``handedness`` is RH unless "LH". ``low_point_distance_mm`` feeds only
+    the contact note (None: no camera club data).
     """
     inputs = {
         "club_path": club_path,

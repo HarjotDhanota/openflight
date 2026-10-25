@@ -1,62 +1,8 @@
-"""Forward collision model: club delivery to ball launch, and its inverse.
+"""Forward collision model: club delivery and impact location to ball launch, and its inverse.
 
-From a club delivery (club speed, attack angle, club path, face angle, dynamic loft)
-and an impact location, the model gives the ball's speed, launch angle, launch
-direction, spin rate and spin axis. Its structure is published physics. The launch
-and centre-speed constants, the spin, loss and gear gains and the index constants
-were fitted by the maintainer, per club category (driver and woods, irons and
-hybrids, wedges); the ball, the face friction and the restitution are published
-values, and the head masses, centre-of-mass depths and moments of inertia are
-typical values, assumed. Derivations and fits: ``docs/how-it-works/collision-model.md``.
-
-1. **D plane.** The ball leaves in the plane of the club's direction and the face
-   normal, between them (Jorgensen, *The Physics of Golf*, 1999), at an angle
-   ``delta`` from the face normal. The spin loft ``SL`` is the angle between them.
-2. **Launch.** While the ball rolls up the face its tangential to normal speed ratio
-   grows with ``tan SL`` (Penner 2001, Eqs. (8)-(10)); once rolling needs more
-   friction than the face has, the ball slides and the ratio grows more slowly
-   (Penner 2001, Sec. II). A p-norm minimum joins the two lines:
-
-       tan(delta) = K(L) * min_p(tan SL, sliding line(tan SL))
-
-3. **Ball speed.** Normal impulse (Penner 2001, Eq. (7)): the normal speed is a
-   fraction of the club's, so ``ball speed = V * S(L) * cos SL / cos delta``. An
-   off-centre strike meets a smaller effective head mass (Cross & Nathan 2007;
-   Penner 2001), centre of mass at the face centre:
-
-       f = (1 + m/M) / (1 + m/M + c_x m x^2 / I_z + c_y m y^2 / I_x)
-
-4. **Spin.** Rigid-ball impulse (Penner 2001, Eqs. (7)-(11); Cross 2002): the ball
-   leaves rolling (grip) or, when that needs more friction than the face has,
-   still sliding (slip), whichever spin is smaller:
-
-       v_n  = (1 + e) V cos SL / (1 + m/M)
-       grip = g V sin SL / (kappa r K),  K = 1 + 1/kappa + m/M + m d^2 / I_x
-       slip = mu v_n / (kappa r)
-
-   ``m d^2 / I_x`` is the head's rotation about its centre of mass (Penner 2001).
-5. **Spin axis.** The D-plane tilt ``T`` (``metric_definitions``) scaled toward
-   zero: ``tan(axis) = tan(T) * (a(L) + b * launch angle)``.
-6. **Gear effect** (Cross & Nathan 2007, linear, from the same impulse algebra):
-   with the ball's normal speed ``v_n``,
-
-       side = -hand g_x m d x v_n / (I_z kappa r K_z),  back = -g_y m d y v_n / (I_x kappa r K)
-
-   ``K_z`` is ``K`` with ``I_z``. A toe strike draws a right-hander and fades a
-   left-hander. Without an impact location there is no gear effect.
-
-``L`` is the club's nominal loft (``clubs.physics``); a hybrid launches like an
-iron ``HYBRID_LOFT_SHIFT_DEG`` weaker. A constant that varies with ``L`` is given
-by its values at the category's two anchor lofts, linear between and beyond them.
-
-The inverse gives face and loft from the launch and the club's direction, by
-solving the launch relation for ``delta``: the face normal then lies in the D plane
-beyond the launch from the club, as in the rigid-body face (``collision_model``).
-
-The expected spin and ball speed behind the spin and smash indices: ``V k sin SL``
-(Penner 2001, Eq. (11)) and ``V (a cos SL + c)`` for the clubs with fitted indices;
-other clubs take their category's ``k`` and the published normal and rolling
-speeds (Penner 2001, Eqs. (7), (8)) times a category gain.
+Published structure (D plane, Penner 2001 impulse, Cross & Nathan 2007 gear effect) with
+per-category constants fitted by the maintainer; the equations, symbols and fits are in
+docs/how-it-works/collision-model.md. A toe strike draws a right-hander.
 """
 
 from __future__ import annotations
@@ -154,7 +100,7 @@ _HYBRIDS = frozenset({ClubType.HYBRID_3, ClubType.HYBRID_5, ClubType.HYBRID_7, C
 
 @dataclass(frozen=True)
 class CategoryConstants:
-    """One category's constants (units in the module docstring)."""
+    """One category's constants (symbols and units: docs/how-it-works/collision-model.md)."""
 
     loft_anchors_deg: tuple[float, float]
     launch_ratio: Pair

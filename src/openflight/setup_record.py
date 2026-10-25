@@ -61,7 +61,6 @@ def _not_set(reason: str) -> dict:
 
 
 def _read(path: Path) -> tuple[dict | None, str | None]:
-    """The file's record, or None and why it cannot be read."""
     if not path.is_file():
         return None, "no setup file"
     try:

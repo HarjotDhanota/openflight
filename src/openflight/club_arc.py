@@ -1,113 +1,8 @@
-"""Club delivery from a circular arc: path, attack, swing plane, swing direction, low point (E1).
+"""Club delivery from a circular arc fitted near impact (docs/how-it-works/club-arc.md).
 
-Part E, Tier 2 (MASTER-PLAN D38, D39). Near impact the club head's path is
-fitted as a **circular arc in a plane**, from the shot's own head positions:
-camera rays intersected with the IWR club range sphere, each on the camera's
-clock, plus the camera's contact time (``camera/club_delivery.py``). Every
-output is read off that arc at the impact time.
-
-Model
------
-The arc is a circle of radius ``R`` in a plane tilted ``theta`` from the
-horizon. The plane's base line (its horizontal line) has bearing ``psi`` from
-the target line. ``e1`` is the base line's unit vector, pointing downrange;
-``e2`` is the in-plane unit vector perpendicular to it, rising toward the
-golfer (the circle's centre side): ``e2 = cos(theta) h + sin(theta) z`` with
-``h`` the horizontal unit vector toward the golfer, to the target-LEFT for a
-right-handed golfer (the default) and to the target-RIGHT for an explicit
-left-handed one. With ``L`` the arc's lowest point, the head at time ``t`` is
-
-    P(t) = L + R sin(phi) e1 + R (1 - cos(phi)) e2,   phi = omega (t - t_L)
-
-so the head moves at a constant angular speed ``omega`` through the low point
-at ``t_L``. Eight parameters: theta, psi, R, L (3), omega, t_L. Before the low
-point (phi < 0) the head moves down and away from the golfer, so a right-hander
-hitting down on a square plane swings in-to-out: path ~ psi - atan(tan(phi)
-cos(theta)), which is TrackMan's familiar "hitting down moves the path right".
-
-Why a circle near impact: high-speed (2,000 fps) measurements fit the head's
-path near impact with a circle to about 1 mm RMS (Krasna et al. 2019, Table 3),
-and the head's motion from mid-downswing to mid-follow-through is planar to
-0.3 cm RMS (Kwon et al. 2012, Table III).
-
-Labels (D39)
-------------
-- **calculated**: the shot's own points fix the arc (``CONDITIONING`` below).
-  The fit uses no prior at all.
-- **model geometry**: fewer than 3 positions, or a fit the points do not fix.
-  The radius and plane angle are then constrained by a **published per-club
-  prior** (``prior_for_club``) in a maximum a posteriori fit; every other
-  parameter still comes from this shot. The prior's source is recorded.
-- **not measured**: no or one head position, no impact time, positions far from
-  impact, or no prior for an unknown club when the points alone do not fix the
-  arc. Nothing is filled in.
-
-The arc is never "measured": a measured tangent needs 4-6 frames from the new
-lenses (Part E, Tier 2, "method later").
-
-Published priors (D38: published sources first, refitted to TM4 in E8)
----------------------------------------------------------------------
-- **Swing plane:** Kwon, Como, Singhal, Lee & Han (2012), "Assessment of
-  planarity of the golf swing based on the functional swing plane of the
-  clubhead and motion planes of the body points", *Sports Biomechanics*
-  11(2):127-148, doi:10.1080/14763141.2012.660799, Table III: the clubhead's
-  functional swing plane slope (mid-downswing to mid-follow-through, 14 skilled
-  golfers, 250 Hz) is 47.2 +- 2.3 deg (driver), 55.8 +- 1.5 (5-iron) and
-  59.1 +- 1.9 (pitching wedge). TrackMan's own guidance agrees for the driver
-  ("typically between 45-50 deg"; support article "Parameters | Swing Plane").
-- **Radius:** Krasna, Coh, Prebil & Mackala (2019), "Comparative analysis of
-  golf clubhead motion at impact", *Facta Universitatis: Physical Education and
-  Sport* 17(3):437-452, doi:10.22190/FUPES191205039K, Table 3: the radius of a
-  circle fitted to the clubhead path near impact (3 scratch golfers, 2,000 fps).
-  Mean +- SD over the trials: driver 1.077 +- 0.044 m (n = 8), 6-iron
-  1.002 +- 0.014 m (n = 5), pitching wedge 0.993 +- 0.039 m (n = 5).
-  Note the near-impact radius is about 1.0 m, well under arm-plus-club length:
-  the hub is not fixed (Nesbit & McGinnis 2009, *J Sports Sci Med* 8:235-246).
-- Other clubs are interpolated linearly in nominal loft
-  (``clubs.physics``) between those anchors and clamped outside them (no
-  extrapolation). That interpolation is our choice, not a published value.
-
-Definitions (TrackMan's public pages, D37)
-------------------------------------------
-- Club path: "The in-to-out or out-to-in movement of the club head's geometric
-  center at the time of maximum compression"; + right of the target line
-  regardless of dexterity (https://www.trackman.com/blog/40-trackman-parameters,
-  https://www.trackman.com/blog/club-path). Here: the azimuth of the arc's
-  tangent at impact.
-- Attack angle: "The up or down movement of the club head's geometric center at
-  the time of maximum compression"; + up (same pages,
-  https://www.trackman.com/blog/attack-angle). Here: the tangent's elevation.
-- Swing plane: "The vertical angle between the plane created by the club head's
-  geometric center movement and the horizon" (40-trackman-parameters). Here:
-  theta.
-- Swing direction: "The angle between the base of the plane created by the club
-  head's geometric center movement and the target line" (40-trackman-parameters;
-  https://www.trackman.com/blog/what-is-swing-direction: negative is "over the
-  top" for a right-hander). Here: psi, + right of the target line.
-- Low point: "Distance from the club head's geometric center to the lowest point
-  on the swing arc at the time of maximum compression" (40-trackman-parameters);
-  a negative attack angle puts it after impact
-  (https://www.trackman.com/blog/low-point). TrackMan's support pages
-  "Parameters | Low Point Height" and "| Low Point Side" (Tee to Green) give
-  the vertical and the perpendicular-to-target-line horizontal distances from
-  the head's position at impact to "where the swing would bottom out". Here:
-  ``L - P(t_impact)`` in the target-line frame: distance along the target line
-  (+ after the ball), height (+ above the head at impact), side (+ right).
-  The reported low point distance adds a per-club offset for the 7-iron, driver
-  and pitching wedge (``LOW_POINT_OFFSETS_MM``): the reported distance is the arc's
-  geometry plus a constant per club, fitted by the maintainer to a TM4 normalized
-  export, 6 May 2026 (``session_logs/OpenFlight-Test.Normalized.csv``; 9, 8 and 7 shots, 1.5 mm
-  RMS after the offset). Other clubs have no fitted offset yet and report the arc's
-  geometry alone, with a note.
-
-Frame (D36): positions arrive in the unit-boresight frame; they are turned by
-the one horizontal offset (``horizontal_frame``) before the fit, so every
-horizontal output is in ``frame_for(offset)``: ``target_line`` with an offset,
-``unit_boresight`` without one. Vertical outputs have no horizontal frame.
-
-Limits: the head point is the median of the tracked head features in each
-frame, not TrackMan's geometric centre (W9); constant angular speed over the
-last few frames; pre-impact frames only.
+Path, attack, swing plane, swing direction and low point are read off the arc at impact.
+Positions are turned by the horizontal offset before the fit, so horizontal outputs are in
+``frame_for(offset)``; path, swing direction and low-point side are + right of the target line.
 """
 
 from __future__ import annotations
@@ -138,22 +33,21 @@ KRASNA_2019 = (
     "Krasna, Coh, Prebil & Mackala 2019, Facta Universitatis PE&S 17(3):437-452, "
     "doi:10.22190/FUPES191205039K, Table 3 (fitted near-impact circle radius)"
 )
-# (club, mean, SD) anchors; the SD is the published between-golfer spread
+# (club, mean, SD) deg from KWON_2012; the SD is the between-golfer spread
 PLANE_ANCHORS_DEG = (
     (ClubType.DRIVER, 47.2, 2.3),
     (ClubType.IRON_5, 55.8, 1.5),
     (ClubType.PW, 59.1, 1.9),
 )
-# Krasna 2019 Table 3 rC, mean and SD over each club's trials (computed here)
+# (club, mean, SD) m from KRASNA_2019's rC, over each club's trials
 RADIUS_ANCHORS_M = (
     (ClubType.DRIVER, 1.077, 0.044),
     (ClubType.IRON_6, 1.002, 0.014),
     (ClubType.PW, 0.993, 0.039),
 )
 
-# The 3D head-position noise floor the conditioning test assumes: about one pixel
-# across the head at 2 m with the stock lens in 640x400 (~4 mm), rounded up. An
-# engineering assumption, replaced by the measured scatter once the pilot has it.
+# Assumed 3-D head-position noise floor: ~1 px across the head at 2 m with the stock lens
+# in 640x400 (~4 mm), rounded up.
 POSITION_NOISE_FLOOR_M = 0.005
 # "calculated" needs every 1-sigma, data-only uncertainty within these, the fit's
 # RMS residual within RESIDUAL_MAX_NOISE noise floors, at least 3 positions, and
@@ -187,6 +81,9 @@ _OUTPUTS = (
 )
 _N_PARAMS = 8
 _SINGULAR_RATIO_MIN = 1e-10
+# The arc: P(t) = L + R sin(phi) e1 + R (1 - cos(phi)) e2, phi = omega (t - t_L); e1 the
+# plane's horizontal base line (bearing psi from the target line, downrange), and
+# e2 = cos(theta) h + sin(theta) z with h horizontal toward the golfer (target-left for RH).
 # Parameter bounds: theta, psi, R, L (3), omega, t_L
 _LOWER = np.array(
     [math.radians(5.0), math.radians(-80.0), 0.3, -np.inf, -np.inf, -np.inf, 1.0, -np.inf]
@@ -239,7 +136,6 @@ class ClubArc:
     low_point_from_ball_mm: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        """A JSON-ready copy."""
         data = asdict(self)
         data["ranges"] = {name: list(bounds) for name, bounds in self.ranges.items()}
         return data
@@ -302,7 +198,10 @@ def _positions_at(params: np.ndarray, times: np.ndarray, side: float) -> np.ndar
 
 
 def _outputs(params: np.ndarray, impact_t_s: float, side: float) -> np.ndarray:
-    """The seven outputs at impact, in the fit's (reported) frame."""
+    """The seven outputs at impact, in the fit's (reported) frame.
+
+    The low point is L - P(t_impact): forward (+ after the ball), up, and side (+ right).
+    """
     theta, psi = params[0], params[1]
     omega, t_low = params[6], params[7]
     e1, e2 = _basis(theta, psi, side)
@@ -435,9 +334,9 @@ def fit_club_arc(
 ) -> ClubArc:
     """Fit the shot's head positions with a circular arc and read it at impact.
 
-    ``impact_t_s`` is on the positions' clock. ``ball_position`` (its ``t_s``
-    ignored) adds the low point's offset from the resting ball. See the module
-    docstring for the model, the labels and the sources.
+    ``impact_t_s`` is on the positions' clock; ``ball_position`` (``t_s`` ignored) adds the
+    low point's offset from the resting ball. Calculated when the shot's own points fix the
+    arc (CONDITIONING); otherwise model geometry, with the per-club prior on R and theta.
     """
     handed = normalize_handedness(handedness)
     frame = frame_for(horizontal_offset_deg)
@@ -644,10 +543,6 @@ def _result(
     )
 
 
-# ---------------------------------------------------------------------------
-# The shot's club-delivery payload
-# ---------------------------------------------------------------------------
-
 SELECTION_RULE = (
     "club path and attack angle: the arc's value when its label ranks at least as high as "
     "the chained camera/IWR value's (measured > calculated > model geometry > not measured), "
@@ -658,6 +553,7 @@ CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
 ARC_FIT_SOURCE = "club_arc:shot_fit"
 NO_CAMERA_DELIVERY = "no camera club delivery"
+# Added to the arc's low-point distance per club; fitted to a TM4 normalized export.
 LOW_POINT_OFFSETS_MM = {ClubType.IRON_7: 2.3, ClubType.DRIVER: -28.3, ClubType.PW: 5.5}
 NOTE_NO_LOW_POINT_OFFSET = "arc geometry only: no per-club offset fitted for this club"
 ARC_PRIOR_SOURCE = "club_arc:published_prior"
@@ -726,11 +622,10 @@ def _with_low_point_offset(entry: dict, club: Any) -> dict:
 
 
 def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]) -> dict:
-    """The shot's club delivery: every E1 metric with status, source, frame, range, reason.
+    """The shot's club delivery: every arc metric with status, source, frame, range, reason.
 
-    ``delivery`` is the camera's ``ChainedDelivery`` (or its dict, as the fusion
-    processing persists it), carrying ``head_positions``, ``contact_t_s`` and
-    ``horizontal_offset_deg``; None when the camera stage did not run.
+    ``delivery`` is the camera's ``ChainedDelivery`` or its persisted dict (``head_positions``,
+    ``contact_t_s``, ``horizontal_offset_deg``); None when the camera stage did not run.
     """
     handed = normalize_handedness(handedness)
     data = _as_mapping(delivery)
@@ -822,7 +717,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
 
 
 def selected_path_and_attack(payload: Optional[Mapping]) -> dict:
-    """The selected club path and attack angle entries (for E2's collision model)."""
+    """The selected club path and attack angle entries (for the collision model)."""
     metrics = (payload or {}).get("metrics") or {}
     return {
         "club_path_deg": metrics.get("club_path_deg"),

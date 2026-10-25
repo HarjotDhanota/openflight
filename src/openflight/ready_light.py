@@ -72,8 +72,7 @@ class SensorStates:
     ball_look: Mapping | None = None
     # an extension's own causes from the snapshot (``setup_ready_causes``)
     setup_causes: Sequence[SetupCause] = ()
-    # setup sections this run does not use (an extension's: the tester's exposure ladder
-    # records no ball range), so never "setup incomplete"
+    # setup sections this run does not use, so never "setup incomplete"
     setup_optional: Sequence[str] = ()
 
 
@@ -172,12 +171,10 @@ def _state_words(state) -> str:
 def setup_causes(
     setup: Mapping | None, ball_look: Mapping | None, now: float, optional: Sequence[str] = ()
 ) -> list[SetupCause]:
-    """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber); none on a unit that can
-    never set up (no camera, no tilt sensor) unless that is a fault (the sensor did not
-    start), and nothing about the ball without a recent look.
+    """``setup_incomplete`` (red) and ``ball_not_in_box`` (amber) causes, or none.
 
-    A section saved but not put into effect (``unapplied``) is incomplete too; one in
-    ``optional`` never is.
+    None on a unit that can never set up (unless that is a fault), nothing about the ball
+    without a recent look; a saved but unapplied section is incomplete, an optional one never.
     """
     live = (setup or {}).get("live") or {}
     if setup is None or not live.get("camera_available", True):

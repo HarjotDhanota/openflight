@@ -24,7 +24,7 @@ LCMF_TX = ("TX1", "TX3")
 RX = ("RX1", "RX2", "RX3", "RX4")
 
 # Carrier phase GROWS with path length, exp(+j*2*pi*path/lambda); with the board turned
-# +90 deg slot 0 is the TOP element (TX3, RX4), as a test pins.
+# +90 deg slot 0 is the TOP element (TX3, RX4).
 PHASE_SIGN = +1.0
 
 LEGACY_BOARD_ROTATION_DEG = 90.0

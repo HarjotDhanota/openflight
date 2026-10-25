@@ -1,15 +1,7 @@
-"""The shot models' metrics in the shot-metric catalogue (E1-E6).
+"""The shot models' metrics in the shot-metric catalogue.
 
-``openflight.shot_metrics`` holds the catalogue and the metrics every unit
-measures. This module adds, in their places in the catalogue, the metrics the
-shot models produce: the full speeds (E3), the collision model's face, loft,
-spin loft, spin and smash indices, face to path, D-plane tilt and gyro (E2), the arc's swing plane,
-direction and low point (E1), every flight output (E4), the camera's experimental
-impact location (read after the shot; it feeds no other metric), and the metric
-estimated from the camera shaft (dynamic lie, E6). It also gives carry its
-flight-model builder. It is loaded through the ``openflight.shot_metrics``
-entry point the first time the catalogue is read, and reads only the records
-the models left on the shot.
+Loaded through the ``openflight.shot_metrics`` entry point the first time the catalogue is
+read; it reads only the records the models left on the shot.
 """
 
 from __future__ import annotations
