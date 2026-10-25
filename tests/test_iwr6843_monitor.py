@@ -458,3 +458,54 @@ def test_observers_hear_every_edge_while_the_iwr_is_dumping(tmp_path):
     assert observed == [100.0, 102.5]
     assert radar.reads == 1
     monitor.stop()
+
+
+def test_the_monitor_reads_dumps_through_its_own_serial_process(tmp_path, monkeypatch):
+    import functools  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from openflight.iwr6843 import monitor as monitor_module  # noqa: PLC0415
+    from openflight.iwr6843.serial_process import IWR6843SerialProcess  # noqa: PLC0415
+    from tests import iwr6843_line_rate_fake as line  # noqa: PLC0415
+
+    opened = []
+
+    def serial_process(port=None):
+        process = IWR6843SerialProcess(
+            port=port,
+            radar_factory=line.FACTORY,
+            factory_kwargs={"frames": 4},
+            popen=functools.partial(subprocess.Popen, cwd=Path(__file__).resolve().parents[1]),
+        )
+        opened.append(process)
+        return process
+
+    monkeypatch.setattr(monitor_module, "IWR6843SerialProcess", serial_process)
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        port="/dev/fake-iwr6843",
+        button_factory=FakeButton,
+        save_dumps=True,
+    )
+    try:
+        monitor.start()
+        assert opened and opened[0].pid != os.getpid()
+        assert monitor.port == "/dev/fake-iwr6843"
+        assert monitor.ready_snapshot()["serial_open"]
+        edge = time.time()
+        assert monitor.notify_trigger(edge)
+
+        capture = monitor.capture_for_shot(edge, timeout_s=15.0)
+    finally:
+        monitor.stop()
+
+    assert capture is not None and capture.valid, capture.error if capture else None
+    assert capture.raw == line.make_dump(4)
+    assert capture.path.read_bytes() == capture.raw
+    assert capture.uart_transport_duration_ns > 0
+    assert not monitor.ready_snapshot()["serial_open"]

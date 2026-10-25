@@ -16,6 +16,7 @@ from openflight.gate_timing import GateEvent, read_edge_tick, warm_edge_reading_
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.iwr6843.serial_process import IWR6843SerialProcess
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,8 @@ class IWR6843CaptureMonitor:
 
     The GPIO callback only timestamps and queues the edge. Serial transfer is
     handled on a dedicated thread because one 768 KiB dump takes several
-    seconds at the firmware UART rate.
+    seconds at the firmware UART rate; by default the bytes are read by the
+    radar's own serial process, which no kiosk thread can starve.
     """
 
     def __init__(
@@ -77,7 +79,7 @@ class IWR6843CaptureMonitor:
         output_dir: str | Path,
         port: str | None = None,
         gpio_pin: int = 17,
-        radar: IWR6843Radar | None = None,
+        radar: IWR6843Radar | IWR6843SerialProcess | None = None,
         button_factory: Callable | None = None,
         match_tolerance_s: float = 0.75,
         save_dumps: bool = False,
@@ -89,7 +91,7 @@ class IWR6843CaptureMonitor:
         self.gpio_pin = gpio_pin
         self.match_tolerance_s = match_tolerance_s
         self.save_dumps = save_dumps
-        self.radar = radar or IWR6843Radar(port=port)
+        self.radar = radar or IWR6843SerialProcess(port=port)
         self._button_factory = button_factory
         self._button = None
         self._running = False
@@ -201,7 +203,8 @@ class IWR6843CaptureMonitor:
     def ready_snapshot(self) -> dict:
         """What the ready light needs, read from flags without the condition lock."""
         worker = self._worker
-        port = getattr(self.radar, "ser", None)
+        # the serial process reports its own port; an in-process radar has ``ser``
+        port = self.radar if hasattr(self.radar, "is_open") else getattr(self.radar, "ser", None)
         return {
             "running": self._running,
             "armed": self._armed,
