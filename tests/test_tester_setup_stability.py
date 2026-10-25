@@ -25,7 +25,7 @@ import pytest
 
 from openflight.camera import tester_server as ts
 from openflight.camera.setup_eligibility import SetupEligibility
-from tests.test_tester_box_contract import inputs  # noqa: F401  (fixture)
+from tests.test_tester_box_contract import _locator, inputs  # noqa: F401  (fixture)
 from tests.test_tester_tee_range_flow import app_for, box_state, confirm_box, post
 
 STILL = {
@@ -351,6 +351,153 @@ def test_a_confirmed_box_is_drawn_from_its_record_not_the_live_tilt(
     assert flat(halved["box_outline_px"]) == pytest.approx(
         [value / 2.0 for value in flat(first["box_outline_px"])], abs=0.1
     )
+
+
+# --- the ball: a found look persists, a confirm takes only a fresh one ------------
+
+
+def test_one_missed_look_keeps_the_ball_found(monkeypatch):
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    found = {"status": "selected", "selected": inside}
+    missed = {"status": "not_found", "selected": None}
+    locator, _live, _record = _locator(
+        monkeypatch, [found, found, missed, missed, missed, missed, missed, missed]
+    )
+    clock = Clock()
+    locator._clock = clock  # pylint: disable=protected-access
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+
+    locator(frames, 1, [(300, 4.0)] * 3)
+    assert locator.ball()["state"] == "found"
+    assert locator.ball()["confirmable"] is False  # one look is not yet a ball
+    locator(frames, 2, [(300, 4.0)] * 3)
+    assert locator.ball()["confirmable"] is True
+    for sequence in (3, 4):
+        clock.now += 1.1
+        locator(frames, sequence, [(300, 4.0)] * 3)
+        ball = locator.ball()
+        assert ball["state"] == "found", "up to two misses are tolerated"
+        assert ball["center_px"] == [640.0, 440.0]
+    # two misses on, the last found look is 2.2 s old: no longer confirmable
+    assert locator.ball()["confirmable"] is False
+    locator(frames, 5, [(300, 4.0)] * 3)
+    assert locator.ball()["state"] != "found"
+
+
+def test_a_look_older_than_two_seconds_is_not_confirmable(monkeypatch):
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    found = {"status": "selected", "selected": inside}
+    locator, _live, _record = _locator(monkeypatch, [found, found])
+    clock = Clock()
+    locator._clock = clock  # pylint: disable=protected-access
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    locator(frames, 1, [(300, 4.0)] * 3)
+    clock.now += 1.0
+    locator(frames, 2, [(300, 4.0)] * 3)
+    assert locator.ball()["confirmable"] is True
+
+    clock.now += ts.BOX_BALL_LOOK_MAX_AGE_S + 0.5
+    stale = locator.ball()
+    assert stale["confirmable"] is False
+    assert stale["look_age_s"] == pytest.approx(ts.BOX_BALL_LOOK_MAX_AGE_S + 0.5)
+
+
+def test_a_failed_look_is_logged_once_and_never_freezes_the_last_ball(monkeypatch, caplog):
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    locator, _live, _record = _locator(monkeypatch, [{"status": "selected", "selected": inside}])
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    locator(frames, 1, [(300, 4.0)] * 3)
+
+    def broken(*_args, **_kwargs):
+        raise IndexError("candidate list empty")
+
+    monkeypatch.setattr(ts, "_guided_camera_analysis", broken)
+    with caplog.at_level("INFO", logger=ts.logger.name):
+        for sequence in range(2, 6):
+            locator(frames, sequence, [(300, 4.0)] * 3)
+    failures = [r for r in caplog.records if "ball search failed" in r.getMessage()]
+    assert len(failures) == 1
+    assert "IndexError" in failures[0].getMessage()
+    assert locator.ball()["state"] == "waiting"
+
+
+def test_a_box_is_confirmed_only_on_a_fresh_found_look(tmp_path, inputs, monkeypatch):
+    """Field 24 Oct: the box was confirmed on a look 13.2 s old (stable_s 0.0)."""
+    from tests.test_tester_tee_range_flow import FakeLive  # pylint: disable=import-outside-toplevel
+
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    assert (
+        client.post(
+            "/api/tester/placement-box", json={"tester_id": tester, "action": "show"}
+        ).status_code
+        == 200
+    )
+    locator = live.analyzer
+    clock = Clock()
+    locator._clock = clock  # pylint: disable=protected-access
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    monkeypatch.setattr(
+        ts,
+        "_guided_camera_analysis",
+        lambda *_args, **_kwargs: (None, {"status": "selected", "selected": dict(inside)}),
+    )
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    for sequence in (1, 2):
+        locator(frames, sequence, [(300, 4.0)] * 3)
+        clock.now += 1.0
+    shown = box_state(client, tester)["ball"]
+    assert shown["state"] == "found"
+    assert shown["confirmable"] is True
+
+    # the looks stop coming: the found ball goes stale, and a confirm refuses it
+    clock.now += 12.0
+    stale = box_state(client, tester)["ball"]
+    assert stale["state"] == "found"
+    assert stale["confirmable"] is False
+    refused = confirm_box(client, tester, "box-stale")
+    assert refused.status_code == 409
+    assert "has not seen the ball for 13 s" in refused.get_json()["error"]
+
+    # a fresh look again: the box is confirmed with it
+    for sequence in (3, 4):
+        locator(frames, sequence, [(300, 4.0)] * 3)
+        clock.now += 0.5
+    confirmed = confirm_box(client, tester, "box")
+    assert confirmed.status_code == 200, confirmed.get_json()
+    record = json.loads(
+        (ts.tester_root(tmp_path / "sessions", tester) / ts.PLACEMENT_BOX_FILE).read_text("utf-8")
+    )
+    seen = record["ball_at_confirm"]
+    assert seen["state"] == "found"
+    assert seen["look_age_s"] <= ts.BOX_BALL_LOOK_MAX_AGE_S
+    assert seen["stable_s"] >= 1.0
+
+
+def test_a_failing_live_analyzer_is_logged_once(monkeypatch, caplog):
+    from tests.test_tester_server import (  # pylint: disable=import-outside-toplevel
+        FakeCamera,
+        _wait,
+    )
+
+    monkeypatch.setattr(ts, "LIVE_BALL_EVERY_S", 0.05)
+    calls = []
+
+    def broken(_frames, _sequence, _applied=()):
+        calls.append(1)
+        raise KeyError("diameter_px")
+
+    live = ts.LiveView(camera_factory=FakeCamera)
+    with caplog.at_level("WARNING", logger=ts.logger.name):
+        live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=broken)
+        try:
+            assert _wait(lambda: len(calls) >= 3)
+        finally:
+            live.stop()
+    failures = [r.getMessage() for r in caplog.records if "live analyzer failed" in r.getMessage()]
+    assert len(failures) == 1
+    assert "KeyError" in failures[0]
 
 
 @pytest.mark.parametrize("miss", ["not_found", "lis3dh_moving"])

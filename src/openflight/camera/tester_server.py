@@ -4568,10 +4568,40 @@ class BoxPreviewExposure:
 # a miss counts as "no ball" only once the picture's brightness has settled, or
 # after this long.
 BOX_BALL_SETTLE_S = 6.0
+# Field 24 Oct: the ball state followed each 1 s look, and a box confirmed on a look
+# 13.2 s old. A found ball is confirmable once this many looks in a row found it,
+# stays found through this many missed looks, and is confirmed only on a found look
+# at most this old.
+BOX_BALL_FOUND_LOOKS = 2
+BOX_BALL_MISS_TOLERANCE = 2
+BOX_BALL_LOOK_MAX_AGE_S = 2.0
+# a look that takes longer than this is logged: the next field test can see why
+# the looks stopped coming
+BOX_BALL_SLOW_LOOK_S = 2.0
 # a wider ground region the box step searches when the box holds no ball, to say
 # "outside the box" rather than "no ball": the hitting area either side and beyond
 BOX_WIDE_SEARCH_WINDOW_M = (0.7, 4.0)
 BOX_WIDE_SEARCH_HALF_WIDTH_M = 1.2
+
+
+def _same_box_ball(previous: Mapping, selected: Mapping) -> bool:
+    """Whether a found look is the ball the last look found: the same place and size.
+
+    The guided comparison (``_same_guided_candidate``) also compares radar ranges,
+    which the box's ball never has, so it called every look a new ball and the
+    box's ``stable_s`` stayed 0 (field 24 Oct).
+    """
+    if previous.get("state") != "found" or not previous.get("center_px"):
+        return False
+    try:
+        x, y = (float(value) for value in previous["center_px"])
+        diameter = float(previous.get("diameter_px") or 0.0)
+        other = float(selected["diameter_px"])
+        size = max(diameter, other, 1.0)
+        moved = math.hypot(x - float(selected["x_px"]), y - float(selected["y_px"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return moved <= max(3.0, 0.2 * size) and abs(diameter - other) <= max(2.0, 0.15 * size)
 
 
 class BoxBallLocator:
@@ -4582,6 +4612,10 @@ class BoxBallLocator:
     holds none, in a wider region, so the page can say ``outside_box``; the state
     and its plain message come from ``placement_box.classify_ball``. Nothing it
     finds is a distance: the IWR gives that.
+
+    A found ball stays found through ``BOX_BALL_MISS_TOLERANCE`` missed looks, and is
+    ``confirmable`` once ``BOX_BALL_FOUND_LOOKS`` looks in a row found it and the last
+    of them is at most ``BOX_BALL_LOOK_MAX_AGE_S`` old.
     """
 
     def __init__(  # pylint: disable=too-many-arguments
@@ -4604,6 +4638,11 @@ class BoxBallLocator:
         self._on_change = on_change
         self._started = clock()
         self._lock = threading.Lock()
+        # the found streak, the misses since the last found look, and its time
+        self._found_looks = 0
+        self._misses = 0
+        self._found_at: float | None = None
+        self._failure: str | None = None
         self._state: dict = self._ball_payload({"state": "waiting", "selected": None}, None)
 
     def _ball_payload(self, classified: Mapping, stable_since: float | None) -> dict:
@@ -4612,6 +4651,7 @@ class BoxBallLocator:
         now = self._clock()
         return {
             "state": state,
+            "looked_at": now,
             "center_px": (
                 [round(float(selected["x_px"]), 1), round(float(selected["y_px"]), 1)]
                 if selected
@@ -4631,6 +4671,7 @@ class BoxBallLocator:
             self.brightness.status()["state"] in {"settled", "limit"}
             or self._clock() - self._started >= BOX_BALL_SETTLE_S
         )
+        started = time.monotonic()
         try:
             _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
             wide = None
@@ -4639,27 +4680,80 @@ class BoxBallLocator:
             classified = placement_box.classify_ball(
                 in_box, wide, outline_px=self.box.outline_px, settled=settled
             )
-        except (RuntimeError, ValueError, TypeError) as exc:
-            logger.info("[BOX_BALL] the ball search failed: %s", exc)
+            failure = None
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # any failure is a missed look, and said once: field 24 Oct, the looks
+            # stopped for 13 s and nothing in the log said why
+            failure = f"{type(exc).__name__}: {exc}"
             classified = {"state": "waiting", "selected": None}
+        took = time.monotonic() - started
+        if took > BOX_BALL_SLOW_LOOK_S:
+            logger.info("[BOX_BALL] a look at the ball took %.1f s", took)
         with self._lock:
+            if failure is not None and failure != self._failure:
+                logger.info("[BOX_BALL] the ball search failed: %s", failure)
+            self._failure = failure
             previous = self._state
+            classified = self._hold_found(previous, classified)
             stable_since = None
             if classified["state"] == "found":
-                same = previous.get("state") == "found" and _same_guided_candidate(
-                    {
-                        "x_px": (previous.get("center_px") or [0, 0])[0],
-                        "y_px": (previous.get("center_px") or [0, 0])[1],
-                        "diameter_px": previous.get("diameter_px") or 0.0,
-                    },
-                    classified["selected"],
-                )
+                same = _same_box_ball(previous, classified["selected"])
                 stable_since = previous.get("stable_since") if same else self._clock()
             self._state = self._ball_payload(classified, stable_since)
-            current = dict(self._state)
+            current = self._with_freshness(dict(self._state))
+        if previous.get("state") != current["state"]:
+            logger.info(
+                "[BOX_BALL] ball %s -> %s (found looks %d, misses %d)",
+                previous.get("state"),
+                current["state"],
+                self._found_looks,
+                self._misses,
+            )
         if self._on_change is not None:
             self._on_change(current)
         return {**result, "ball_state": classified["state"]}
+
+    def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
+        """Count the found streak; a found ball stays found through a few misses."""
+        if classified["state"] == "found":
+            same = _same_box_ball(previous, classified["selected"])
+            self._found_looks = self._found_looks + 1 if same else 1
+            self._misses = 0
+            self._found_at = self._clock()
+            return dict(classified)
+        if previous.get("state") == "found" and self._misses < BOX_BALL_MISS_TOLERANCE:
+            # a missed look: the ball found a moment ago is still the ball
+            self._misses += 1
+            center = previous.get("center_px") or [0.0, 0.0]
+            return {
+                "state": "found",
+                "selected": {
+                    "x_px": center[0],
+                    "y_px": center[1],
+                    "diameter_px": previous.get("diameter_px") or 0.0,
+                },
+            }
+        self._found_looks = 0
+        self._misses = 0
+        self._found_at = None
+        return dict(classified)
+
+    def _with_freshness(self, state: dict) -> dict:
+        """Add how old the look is and whether a confirm may take it (under the lock)."""
+        now = self._clock()
+        if state.get("stable_since") is not None:
+            state["stable_s"] = round(now - float(state["stable_since"]), 2)
+        looked = self._found_at if state.get("state") == "found" else state.get("looked_at")
+        age = max(0.0, now - float(looked)) if looked is not None else None
+        state["look_age_s"] = round(age, 2) if age is not None else None
+        state["missed_looks"] = self._misses if state.get("state") == "found" else 0
+        state["confirmable"] = bool(
+            state.get("state") == "found"
+            and self._found_looks >= BOX_BALL_FOUND_LOOKS
+            and age is not None
+            and age <= BOX_BALL_LOOK_MAX_AGE_S
+        )
+        return state
 
     def status(self) -> dict:
         return self.brightness.status()
@@ -4667,10 +4761,7 @@ class BoxBallLocator:
     def ball(self) -> dict:
         """The ball's state now, as the contract's ``ball`` block carries it."""
         with self._lock:
-            state = dict(self._state)
-        if state.get("stable_since") is not None:
-            state["stable_s"] = round(self._clock() - float(state["stable_since"]), 2)
-        return state
+            return self._with_freshness(dict(self._state))
 
 
 # The ladder's blur ceiling for a mode and lens: the exposure at which the 7-iron
@@ -7291,6 +7382,7 @@ class LiveView:
         except (OSError, TypeError, ValueError):
             focal = None
         last_context, last_sequence, last_at, context_started = None, 0, 0.0, 0.0
+        last_failure: str | None = None
         while not stop_event.wait(min(0.1, LIVE_BALL_EVERY_S)):
             with self._lock:
                 if generation != self._run_generation or self._arm != arm:
@@ -7317,7 +7409,14 @@ class LiveView:
             if analyzer is not None:
                 try:
                     association = dict(analyzer(frames, frame_sequence, applied))
+                    last_failure = None
                 except Exception as exc:  # pylint: disable=broad-exception-caught
+                    failure = f"{type(analyzer).__name__}: {type(exc).__name__}: {exc}"
+                    if failure != last_failure:
+                        # said once per failure: field 24 Oct, the box's looks stopped
+                        # for 13 s and nothing in the log said why
+                        logger.warning("[LIVE] the live analyzer failed: %s", failure)
+                    last_failure = failure
                     association = {
                         "status": "analysis_error",
                         "confidence": "withheld",
@@ -8669,6 +8768,20 @@ def create_app(
             },
         }
 
+    def box_ball_now(tester_id: str) -> dict:
+        """The box's ball as of the newest look: the live locator's while it looks for
+        this tester, else the last look it kept."""
+        owner = live_owner_snapshot()
+        locator = box_locator["value"]
+        if (
+            locator is not None
+            and owner
+            and owner.get("kind") == "placement_box"
+            and owner.get("tester_id") == tester_id
+        ):
+            return locator.ball()
+        return dict(box_ball_last.get(tester_id) or {})
+
     def ball_block(tester_id: str, ranged: Mapping, previewing: bool) -> dict:
         """The contract's ``ball``: what the camera sees in the box, and its measured range."""
         locator = box_locator["value"]
@@ -8693,6 +8806,10 @@ def create_app(
             "range_status": ranged.get("range_status") or ("pending" if state == "found" else None),
             "message": message,
             "updated_at_utc": ball.get("updated_at_utc"),
+            # found in enough looks in a row, the last of them fresh: Confirm may take it
+            "confirmable": bool(ball.get("confirmable", state == "found")),
+            "look_age_s": ball.get("look_age_s"),
+            "missed_looks": ball.get("missed_looks", 0),
         }
 
     def placement_box_status(
@@ -8887,8 +9004,18 @@ def create_app(
         root = tester_root(sessions_root, tester_id)
         camera, reading, roll = patch_camera()
         binding = placement_box_binding(eligibility)
-        ball = dict(box_ball_last.get(tester_id) or {})
-        ball.pop("stable_since", None)
+        ball = box_ball_now(tester_id)
+        if ball.get("state") == "found" and not ball.get("confirmable", True):
+            # field 24 Oct: a box confirmed on a look 13.2 s old; only a fresh one
+            age = ball.get("look_age_s")
+            raise RuntimeError(
+                "the camera has not seen the ball for "
+                f"{age:.0f} s: wait for the check to turn green again, then confirm"
+                if isinstance(age, (int, float)) and age > BOX_BALL_LOOK_MAX_AGE_S
+                else "the camera is still checking the ball: confirm once the check is green"
+            )
+        for key in ("stable_since", "looked_at", "confirmable", "missed_looks"):
+            ball.pop(key, None)
         record = {
             **fixed_box_record(camera, reading, roll, lens=current_lens(), config=box_config),
             "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
