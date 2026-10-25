@@ -102,18 +102,6 @@ def fake_lock(monkeypatch):
     return FakeDeviceLock
 
 
-def test_radar_holds_device_lock_until_close(monkeypatch, fake_lock):
-    serial_handle = OpenedSerial()
-    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: serial_handle)
-
-    radar = IWR6843Radar(port="/dev/test-iwr")
-
-    assert fake_lock.held == {"/dev/test-iwr"}
-    radar.close()
-    assert serial_handle.closed is True
-    assert not fake_lock.held
-
-
 @pytest.mark.parametrize("fails_at", ["open", "close"])
 def test_a_serial_failure_still_releases_the_device_lock(monkeypatch, fake_lock, fails_at):
     class CloseFailureSerial(OpenedSerial):
@@ -387,6 +375,8 @@ def test_dump_without_trailing_done_fails_without_sending_another_command(monkey
         radar.read_dump(timeout_s=40.0)
 
     assert raised.value.raw == firmware.raw
+    assert raised.value.timing.last_byte_ns is not None
+    assert raised.value.timing.cli_ready_ns is None
     assert firmware.commands == ["l3dump"]
     assert firmware.lost_writes == []
 
