@@ -12,6 +12,8 @@ import struct
 import uuid
 from typing import Iterable, Mapping
 
+from ..numeric import finite_float
+
 SERVICE_UUID = "B6F633F2-E6E3-45AE-84B4-968ECCA2D9C7"
 SHOT_CHARACTERISTIC_UUID = "ED365FE6-3ABF-4FC3-8E44-D9525A22DABD"
 CONTROL_CHARACTERISTIC_UUID = "7BA96E63-12C2-4CE0-BB84-3513C7FD1474"
@@ -27,6 +29,19 @@ HEADER_SIZE = _HEADER.size
 FRAGMENT_PAYLOAD_SIZE = FRAME_SIZE - HEADER_SIZE
 MAX_FRAGMENT_COUNT = 255
 MAX_MESSAGE_SIZE = FRAGMENT_PAYLOAD_SIZE * MAX_FRAGMENT_COUNT
+
+PHONE_METRICS = {
+    "ball_speed": "ball_speed_mph",
+    "carry": "estimated_carry_yards",
+    "club_speed": "club_speed_mph",
+    "smash_factor": "smash_factor",
+    "launch_vertical": "launch_angle_vertical",
+    "launch_horizontal": "launch_angle_horizontal",
+    "spin_rate": "spin_rpm",
+    "spin_axis": "spin_axis_deg",
+    "club_path": "club_path_deg",
+    "attack_angle": None,
+}
 
 # Present on every shot, ``null`` when unknown.
 _OPTIONAL_SHOT_FIELDS = (
@@ -160,7 +175,53 @@ def build_shot_event(
         if enrichment is not None
         else None
     )
+    records = shot_data.get("metrics")
+    event["metrics"] = {} if isinstance(records, Mapping) else None
+    if isinstance(records, Mapping):
+        for metric_id, field in PHONE_METRICS.items():
+            record = records.get(metric_id)
+            if not isinstance(record, Mapping):
+                continue
+            value = finite_float(record.get("value"))
+            if record.get("status") == "not_measured":
+                value = None
+            event["metrics"][metric_id] = {
+                "value": value,
+                "status": record.get("status") if value is not None else "not_measured",
+                "reason": record.get("reason"),
+            }
+            if field is not None:
+                event[field] = value
+            if metric_id == "carry":
+                event["carry_range"] = (
+                    record.get("range", event["carry_range"]) if value is not None else None
+                )
+    _fit_metric_reasons(event)
     return event
+
+
+def _fit_metric_reasons(event: dict) -> None:
+    """Keep values and labels intact; shorten reason prefixes only to fit BLE bytes."""
+    if len(encode_message(event)) <= MAX_MESSAGE_SIZE:
+        return
+    records = event["metrics"] or {}
+    reasons = {key: record["reason"] for key, record in records.items() if record.get("reason")}
+
+    def fits(limit: int) -> bool:
+        for key, reason in reasons.items():
+            records[key]["reason"] = reason if len(reason) <= limit else reason[:limit] + "…"
+        return len(encode_message(event)) <= MAX_MESSAGE_SIZE
+
+    if not fits(0):
+        raise ValueError("Phone shot exceeds the BLE byte limit even with metric reasons shortened")
+    low, high = 0, max(map(len, reasons.values()), default=0)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle - 1
+    fits(low)
 
 
 def encode_shot_event(

@@ -109,6 +109,24 @@ def test_subscriber_is_seeded_with_state_then_latest_shot():
     assert events[1][1]["ball_speed_mph"] == 151.0
 
 
+def test_live_and_replayed_phone_shots_share_the_canonical_records():
+    broker = ShotStreamBroker()
+    first = broker.subscribe()
+    records = {"launch_horizontal": {"value": None, "status": "not_measured", "reason": "withheld"}}
+    broker.publish_shot(_shot_data(launch_angle_horizontal=70.6, metrics=records), final=False)
+    provisional = _drain(first)[0][1]
+    assert provisional["launch_angle_horizontal"] is None
+    assert provisional["metrics"]["launch_horizontal"]["reason"] == "withheld"
+    records = {"launch_horizontal": {"value": -2.5, "status": "experimental", "reason": None}}
+    broker.publish_shot(_shot_data(launch_angle_horizontal=70.6, metrics=records), final=True)
+    final = _drain(first)[0][1]
+    replay = _drain(broker.subscribe())[0][1]
+    assert final == replay
+    assert final["event_id"] == provisional["event_id"]
+    assert final["launch_angle_horizontal"] == -2.5
+    assert final["metrics"]["launch_horizontal"]["status"] == "experimental"
+
+
 def test_stream_route_seeds_current_state_then_session_shots(monkeypatch, tmp_path):
     broker = ShotStreamBroker(heartbeat_interval_s=0.01)
     # The session, not the broker's latest shot, decides what a client is

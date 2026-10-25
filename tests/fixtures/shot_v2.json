@@ -1,28 +1,77 @@
 {
-  "ball_speed_mph": 106.1,
-  "carry_range": [
-    144,
-    160
-  ],
+  "ball_speed_mph": 106.06110678531351,
+  "carry_range": null,
   "club": "7-iron",
-  "club_path_deg": 2.5,
-  "club_speed_mph": 83.5,
+  "club_path_deg": 1.0,
+  "club_speed_mph": 83.46606225865393,
   "enrichment": {
     "status": "complete"
   },
-  "estimated_carry_yards": 152,
+  "estimated_carry_yards": null,
   "event_id": "05dd37ec-49ed-596b-b1a4-953d54e4f239",
   "final": true,
   "launch_angle_confidence": 0.6,
   "launch_angle_horizontal": -0.7,
   "launch_angle_vertical": 21.2,
+  "metrics": {
+    "attack_angle": {
+      "reason": null,
+      "status": "measured",
+      "value": -3.5
+    },
+    "ball_speed": {
+      "reason": null,
+      "status": "measured",
+      "value": 106.06110678531351
+    },
+    "carry": {
+      "reason": "flight model does not run on mock shots",
+      "status": "not_measured",
+      "value": null
+    },
+    "club_path": {
+      "reason": null,
+      "status": "measured",
+      "value": 1.0
+    },
+    "club_speed": {
+      "reason": null,
+      "status": "measured",
+      "value": 83.46606225865393
+    },
+    "launch_horizontal": {
+      "reason": null,
+      "status": "measured",
+      "value": -0.7
+    },
+    "launch_vertical": {
+      "reason": null,
+      "status": "measured",
+      "value": 21.2
+    },
+    "smash_factor": {
+      "reason": null,
+      "status": "calculated",
+      "value": 1.2707093627663844
+    },
+    "spin_axis": {
+      "reason": null,
+      "status": "measured",
+      "value": -1.3
+    },
+    "spin_rate": {
+      "reason": null,
+      "status": "measured",
+      "value": 6482.486475060634
+    }
+  },
   "profile_id": "0f8e4b2a9c7d4e1f8a6b3c5d7e9f1a2b",
   "profile_name": "Zoë",
   "schema_version": 2,
   "shot_number": 7,
-  "smash_factor": 1.27,
-  "spin_axis_deg": -1.6,
-  "spin_rpm": 6482,
+  "smash_factor": 1.2707093627663844,
+  "spin_axis_deg": -1.3,
+  "spin_rpm": 6482.486475060634,
   "spin_source": null,
   "timestamp": "2026-09-25T14:03:07.412345",
   "type": "shot"

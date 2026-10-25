@@ -278,12 +278,13 @@ Sent on the shot characteristic, and as `event: shot` on the network stream:
 | `event_id` | UUID string | Stable per shot: the provisional and final versions of one shot share it. **Upsert by `event_id`** |
 | `final` | bool | `false`: OPS-only provisional shot, sent while optional hardware (IWR6843, camera) is still working, including an OPS-only first result whose late IWR or camera result can still arrive. `true`: the final shot |
 | `timestamp`, `club` | string | Detection time and the club the shot was hit with |
-| `ball_speed_mph`, `estimated_carry_yards` | number | |
+| `ball_speed_mph`, `estimated_carry_yards` | number or null | The corresponding published metric value; null when unavailable |
 | `club_speed_mph`, `smash_factor`, `launch_angle_vertical`, `launch_angle_horizontal`, `spin_rpm`, `club_path_deg`, `spin_axis_deg` | number or null | `null` when the active hardware could not produce it |
 | `shot_number` | int or null | Per-monitor-run sequence; not reused after a delete |
 | `profile_id`, `profile_name` | string or null | Profile the shot was attributed to at detection |
 | `carry_range` | `[low, high]` or null | Carry range in yards |
 | `spin_source` | string or null | Where `spin_rpm` came from |
+| `metrics` | object or null | Published values, labels and refusal reasons for the ten Live metrics; null on legacy shots without records |
 | `launch_angle_confidence` | number or null | 0–1 |
 | `enrichment` | object or null | `{"status":"pending"}` on a provisional shot; `{"status":"complete"}` or `{"status":"skipped","reason":...}` on a final shot that had a provisional, where the reason says why no IWR or camera result will follow (for example `worker_unavailable`, `enrichment_backlog_full`, `late_result_abandoned`); `null` when the shot never waited for optional hardware |
 
@@ -291,9 +292,29 @@ Every key is always present; unknown values are `null`. A shot with no optional
 hardware configured is sent once, final. The contract fixture is
 `tests/fixtures/shot_v2.json`, built from a real mock shot:
 
+The fixture contains the complete message. The additive `metrics` field looks like
+this (other shot fields omitted here):
+
 ```json
-{"ball_speed_mph":106.1,"carry_range":[144,160],"club":"7-iron","club_path_deg":2.5,"club_speed_mph":83.5,"enrichment":{"status":"complete"},"estimated_carry_yards":152,"event_id":"05dd37ec-49ed-596b-b1a4-953d54e4f239","final":true,"launch_angle_confidence":0.6,"launch_angle_horizontal":-0.7,"launch_angle_vertical":21.2,"profile_id":"0f8e4b2a9c7d4e1f8a6b3c5d7e9f1a2b","profile_name":"Zoë","schema_version":2,"shot_number":7,"smash_factor":1.27,"spin_axis_deg":-1.6,"spin_rpm":6482,"spin_source":null,"timestamp":"2026-09-25T14:03:07.412345","type":"shot"}
+{"schema_version":2,"type":"shot","metrics":{"launch_horizontal":{"value":null,"status":"not_measured","reason":"horizontal launch withheld"},"launch_vertical":{"value":14.2,"status":"experimental","reason":null}}}
 ```
+
+`metrics` includes the records present for `ball_speed`, `carry`, `club_speed`,
+`smash_factor`, `launch_vertical`, `launch_horizontal`, `spin_rate`, `spin_axis`,
+`club_path` and `attack_angle`. Each entry carries `value`, `status` and `reason`.
+Values use the native units of the corresponding fields: mph, yards, degrees,
+rpm, or a unitless smash ratio. Attack angle is in degrees and has no older
+scalar field. Status is `measured`, `calculated`, `model_geometry`, `estimated`,
+`experimental` or `not_measured`. This is display provenance; experimental values
+can reach phones but remain barred from simulator output.
+
+When a record exists, its value replaces the corresponding scalar field. A
+withheld value is null in both places, and a withheld carry also clears
+`carry_range`. Phones should prefer these records and display a refusal reason
+when the value is null. Do not derive provenance from `spin_source` or the old
+aggregate `launch_angle_confidence`. Legacy shots without records keep their
+old scalar fields and send `metrics: null`; older schema-2 servers may omit
+`metrics` entirely. No existing key or framing version is removed.
 
 ### Events
 
@@ -340,7 +361,12 @@ A BLE message is at most 255 fragments × 15 bytes = 3,825 bytes. Tests encode
 a worst-case shot (longest float representations everywhere, a 40-character
 profile name of six-byte escapes) and a `profiles` event with twelve such names
 (3,610 bytes) and require both to fit. The publisher refuses, and logs, any
-message that would not fit instead of sending a truncated one.
+message that would not fit. Metric reasons alone may be shortened to keep a shot
+inside that byte limit: the encoder finds a common character limit using the
+actual encoded UTF-8 JSON size and adds an ellipsis to shortened prefixes.
+Values and statuses are never removed for size. A reason is preserved in full
+when the message fits. BLE, network live events and reconnect catch-up share
+this bounded representation; the server's full metric record is unchanged.
 
 ## Delivery behavior
 

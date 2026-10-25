@@ -12,6 +12,7 @@ from openflight.ble.protocol import (
     FRAGMENT_PAYLOAD_SIZE,
     FRAME_SIZE,
     MAX_MESSAGE_SIZE,
+    PHONE_METRICS,
     SCHEMA_VERSION,
     SERVICE_UUID,
     SHOT_CHARACTERISTIC_UUID,
@@ -57,6 +58,7 @@ SHOT_KEYS = {
     "spin_source",
     "launch_angle_confidence",
     "enrichment",
+    "metrics",
 }
 
 
@@ -119,6 +121,118 @@ def test_missing_measurements_are_explicit_nulls():
 
     for key in ("club_speed_mph", "launch_angle_vertical", "spin_rpm", "spin_axis_deg"):
         assert event[key] is None
+
+
+def _record(value, status="measured", reason=None, **extra):
+    return {
+        "value": value,
+        "unit": "deg",
+        "status": status,
+        "source": "x",
+        "reason": reason,
+        **extra,
+    }
+
+
+def test_metrics_carry_each_shown_metric_s_value_label_and_reason():
+    records = {
+        "launch_vertical": _record(14.2, "experimental", note="camera fallback"),
+        "attack_angle": _record(None, "not_measured", "no ball range: depth needed"),
+        "dynamic_lie": _record(61.0, "experimental"),
+    }
+
+    event = build_shot_event(_shot_data(metrics=records), final=True)
+
+    assert event["metrics"] == {
+        "launch_vertical": {"value": 14.2, "status": "experimental", "reason": None},
+        "attack_angle": {
+            "value": None,
+            "status": "not_measured",
+            "reason": "no ball range: depth needed",
+        },
+    }
+    assert set(PHONE_METRICS) >= set(event["metrics"])
+
+
+def test_a_value_the_server_withheld_is_never_sent():
+    """The 24 Oct shot 14 sent the +70.6 deg horizontal its record had refused."""
+    records = {
+        "launch_horizontal": _record(None, "not_measured", "radar_low_coherence beyond reach"),
+        "club_path": _record(None, "not_measured", "no accepted club path"),
+        "spin_rate": _record(6482, "experimental"),
+    }
+    data = _shot_data(launch_angle_horizontal=70.6261883479819, metrics=records)
+
+    event = build_shot_event(data, final=True)
+
+    assert event["launch_angle_horizontal"] is None
+    assert event["club_path_deg"] is None
+    assert event["spin_rpm"] == 6482  # shown by the server, under its label
+    assert event["metrics"]["launch_horizontal"]["reason"] == "radar_low_coherence beyond reach"
+
+
+def test_a_shot_without_records_sends_metrics_null_and_its_fields_as_before():
+    event = build_shot_event(_shot_data(), final=True)
+
+    assert event["metrics"] is None
+    assert event["launch_angle_horizontal"] == -0.7
+
+
+def test_an_event_rebuilt_from_its_own_metrics_is_unchanged():
+    records = {"launch_horizontal": _record(None, "not_measured", "withheld")}
+    event = build_shot_event(_shot_data(metrics=records), final=True)
+
+    assert build_shot_event(event, final=True) == event
+
+
+@pytest.mark.parametrize("value", [0, 3.25])
+def test_all_legacy_numeric_fields_follow_their_own_record(value):
+    records = {metric: _record(value, "experimental") for metric in PHONE_METRICS}
+    event = build_shot_event(_shot_data(metrics=records), final=True)
+    for metric, field in PHONE_METRICS.items():
+        assert event["metrics"][metric]["value"] == value
+        assert event["metrics"][metric]["status"] == "experimental"
+        if field:
+            assert event[field] == value
+
+
+def test_a_refused_carry_cannot_leak_its_raw_value_or_range():
+    event = build_shot_event(
+        _shot_data(metrics={"carry": _record(None, "not_measured", "no spin")}), final=True
+    )
+    assert event["estimated_carry_yards"] is None
+    assert event["carry_range"] is None
+
+
+def test_a_refused_record_cannot_leak_a_stale_record_value():
+    event = build_shot_event(
+        _shot_data(metrics={"launch_horizontal": _record(70.6, "not_measured", "withheld")}),
+        final=True,
+    )
+    assert event["launch_angle_horizontal"] is None
+    assert event["metrics"]["launch_horizontal"]["value"] is None
+
+
+def test_the_kiosk_s_own_shot_withholds_the_shank_horizontal_from_phones():
+    from datetime import datetime  # noqa: PLC0415
+
+    from openflight import server  # noqa: PLC0415
+    from openflight.launch_monitor import Shot  # noqa: PLC0415
+
+    shot = Shot(
+        ball_speed_mph=96.0,
+        club_speed_mph=74.0,
+        timestamp=datetime(2026, 10, 24, 17, 32, 0),
+        launch_angle_horizontal=70.6261883479819,
+        launch_angle_horizontal_source="radar_low_coherence",
+    )
+
+    event = build_shot_event(server.shot_to_dict(shot), final=True)
+
+    assert event["launch_angle_horizontal"] is None
+    assert event["metrics"]["launch_horizontal"]["status"] == "not_measured"
+    assert event["metrics"]["launch_horizontal"]["reason"]
+    assert event["metrics"]["ball_speed"] == {"value": 96.0, "status": "measured", "reason": None}
 
 
 def test_missing_session_fields_are_null_and_blanks_become_null():
@@ -297,6 +411,39 @@ def test_worst_case_shot_fits_in_one_ble_message():
 
     assert len(payload) <= MAX_MESSAGE_SIZE
     assert len(fragment_payload(payload, sequence=0)) <= 255
+
+    # with every shown metric's record, each reason as long and as escaped as can be
+    data["metrics"] = {
+        metric: _record(_worst_float(), "model_geometry", "" * 5000) for metric in PHONE_METRICS
+    }
+    payload = encode_shot_event(data, final=False, enrichment={"status": "pending"})
+
+    assert len(payload) <= MAX_MESSAGE_SIZE
+    assert len(json.loads(payload)["metrics"]) == len(PHONE_METRICS)
+
+
+def test_long_reasons_are_shortened_only_as_far_as_the_ble_message_needs():
+    reason = "camera_fallback: no ball range: " + "the depth is needed " * 40
+    data = _shot_data(metrics={"attack_angle": _record(None, "not_measured", reason)})
+
+    event = build_shot_event(data, final=True)
+    assert event["metrics"]["attack_angle"]["reason"] == reason  # one long reason fits
+
+    data["metrics"] = {metric: _record(None, "not_measured", reason) for metric in PHONE_METRICS}
+    event = build_shot_event(data, final=True)
+    shortened = event["metrics"]["attack_angle"]["reason"]
+    assert len(encode_message(event)) <= MAX_MESSAGE_SIZE
+    assert shortened.endswith("…") and reason.startswith(shortened[:-1])
+
+
+@pytest.mark.parametrize("text", ["\x01", "🏌", '"', "\\"])
+def test_reason_budget_counts_encoded_bytes_without_mutating_records(text):
+    reason = text * 5000
+    records = {metric: _record(None, "not_measured", reason) for metric in PHONE_METRICS}
+    event = build_shot_event(_shot_data(metrics=records), final=True)
+    assert len(encode_message(event)) <= MAX_MESSAGE_SIZE
+    assert all(record["reason"] == reason for record in records.values())
+    assert build_shot_event(event, final=True) == event
 
 
 @pytest.mark.parametrize("worst_char", ["\x01", "\U0001f3cc", '"', "\\"])
