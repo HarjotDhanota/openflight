@@ -5317,6 +5317,7 @@ def _fuse_camera_measurements(
         try:
             from openflight.camera.fusion_processing import (  # noqa: PLC0415
                 build_context,
+                lens_record_focal_px,
                 process_camera_fusion,
             )
             from openflight.camera.geometry_contract import (  # noqa: PLC0415
@@ -5419,6 +5420,9 @@ def _fuse_camera_measurements(
                 notes=camera_notes,
                 setup_ball=shot_reference_ball(shot.impact_timestamp),
                 camera_pose=_swing_camera_pose(shot),
+                lens_focal_px=lens_record_focal_px(
+                    rig_geometry_config.get("lens"), int(np.shape(camera_archive["frames"])[-1])
+                ),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)

@@ -263,3 +263,64 @@ def test_a_ball_whose_centre_is_just_inside_the_outline_s_edge_is_found_whole():
     assert result.selected.y_px == pytest.approx(ball_px[1], abs=2.0)
     roi = result.diagnostics["roi_px"]
     assert roi[3] >= ball_px[1] + diameter / 2.0
+
+
+BALL_DETECTOR = Path(__file__).parent / "fixtures" / "ball_detector"
+
+
+def empty_mat_scene():
+    """Harjot-outdoor-test-1's setup frame (dusk, 6 mm lens, 3000 us x 1): the ball
+    on the mat, a stray ball beyond it, and the mat's lit back edge, empty elsewhere."""
+    data = np.load(BALL_DETECTOR / "outdoor-test-1-87a0393da1ec-empty-mat-edge.npz")
+    crop = data["frame"].astype(np.float32)
+    x0, y0 = (int(value) for value in data["origin_px"])
+    pad = ((y0, 800 - y0 - crop.shape[0]), (x0, 1280 - x0 - crop.shape[1]))
+    x_lo, y_lo, x_hi, y_hi = (float(value) for value in data["box_px"])
+    search = PatchSearch(
+        outline_px=((x_lo, y_hi), (x_hi, y_hi), (x_hi, y_lo), (x_lo, y_lo)),
+        diameter_px=(19.52, 193.16),
+        centre_lateral_m=0.0,
+        half_size_m=0.3,
+        radar_window_m=(0.4797, 4.1),
+    )
+    return _frames(np.pad(crop, pad, mode="edge")), search
+
+
+def six_mm(pitch_deg=0.22):
+    return BallPlaneCamera.nominal(
+        focal_px=2000.0,
+        image_width_px=1280,
+        image_height_px=800,
+        pitch_deg=pitch_deg,
+        roll_correction_deg=0.0,
+        mirror_horizontal=False,
+        camera_origin_lfu=(0.0, 0.0, 0.095),
+        radar_origin_lfu=(-0.0019, -0.0314, 0.0522),
+        angular_uncertainty_deg=3.0,
+        focal_relative_uncertainty=0.08,
+    )
+
+
+def test_the_empty_mat_edge_is_not_a_ball_and_the_ball_on_the_mat_wins():
+    """Harjot-outdoor-test-1: fits that slid along the mat's back edge stopped one
+    seed radius down, all on one row (427.3), and outscored the ball: "more than one
+    ball-like thing is in the box"."""
+    frames, search = empty_mat_scene()
+
+    result = estimate_patch_ball(
+        frames, six_mm(), search=search, ball_center_height_m=BALL_CENTER_HEIGHT_M
+    )
+
+    assert result.status == "selected", [
+        (round(c.x_px), round(c.y_px, 1), round(c.diameter_px, 1), c.fit_quality)
+        for c in result.candidates
+    ]
+    ball = result.selected
+    # the ball's lit top is at row 400 and its sides at columns 703 and 744 (rendered)
+    assert ball.x_px == pytest.approx(723.0, abs=4.0)
+    assert ball.y_px == pytest.approx(421.0, abs=4.0)
+    assert 38.0 <= ball.diameter_px <= 50.0
+    plausible = [c for c in result.candidates if c.rejection_reason is None]
+    assert not any(abs(c.x_px - 723.0) > 30.0 and abs(c.y_px - 427.3) < 3.0 for c in plausible)
+    ratio = result.diagnostics["second_to_best_quality"]
+    assert ratio is None or ratio < 0.75

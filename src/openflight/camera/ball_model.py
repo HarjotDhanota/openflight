@@ -24,6 +24,14 @@ MIN_RIM_STEP_NOISE_MULTIPLE = 3.0
 # The lit rim's edge lies on the circle the distance gives: within 0.02-0.09 of the radius on
 # real balls at 0.6-2 m, against 0.09-0.6 for look-alikes (door stop, light streak, clipped white).
 MAX_RIM_OFFSET_FRACTION = 0.12
+# A ball's lit rim curves with the circle; a straight lit edge (an empty mat's back edge, a
+# kerb) runs on past it. Along rays 30-48 deg either side of the light, a line tangent at
+# the top lies 1/cos - 1 (0.15-0.5) of the radius further out than at the top; a ball's
+# rim, about 0. Harjot-outdoor-test-1 (dusk): fits on the empty mat's back edge 0.22-0.25,
+# and the balls -0.06-0.05, however well sized; the mat's edge outscored the ball.
+MAX_RIM_FLANK_BULGE_FRACTION = 0.15
+RIM_TOP_HALF_ARC_DEG = 18.0
+RIM_FLANK_ARC_DEG = (30.0, 48.0)
 # Lights are above the ball: in image axes (y down) the light comes from the upper half.
 LIGHT_AZIMUTH_DEG = (170.0, 370.0)
 
@@ -270,7 +278,11 @@ def fit_lit_ball(
     step = _lit_rim_step(patch, cx, cy, r, azimuth)
     if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
         return None
-    if _lit_rim_offset(patch, cx, cy, r, azimuth) > MAX_RIM_OFFSET_FRACTION:
+    turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth)
+    if (
+        float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
+        or _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION
+    ):
         return None
     return LitBall(
         x=float(cx + left),
@@ -301,14 +313,27 @@ def _lit_rim_step(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: fl
     return band(0.7, 0.92) - band(1.15, 1.45)
 
 
-def _lit_rim_offset(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float) -> float:
-    """How far the lit rim's edge lies from the fitted circle, as a fraction of its radius."""
+def _lit_rim_offsets(
+    patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Where the lit rim's edge lies on rays either side of the light: each ray's turn
+    from the light in degrees, and its edge's distance past the circle over the radius."""
     smooth = ndimage.gaussian_filter(patch, EDGE_BLUR_PX)
-    angles = azimuth + np.radians(np.arange(-60.0, 61.0, 6.0))
+    turns = np.arange(-60.0, 61.0, 6.0)
+    angles = azimuth + np.radians(turns)
     radii = np.arange(0.4 * r, 1.6 * r, 0.25)
     xs = cx + radii[None, :] * np.cos(angles)[:, None]
     ys = cy + radii[None, :] * np.sin(angles)[:, None]
     values = ndimage.map_coordinates(smooth, [ys.ravel(), xs.ravel()], order=1, mode="nearest")
     falls = -np.gradient(values.reshape(xs.shape), 0.25, axis=1)
     edges = radii[np.argmax(falls, axis=1)]
-    return float(np.median(np.abs(edges - r)) / r)
+    return turns, (edges - r) / r
+
+
+def _rim_flank_bulge(turns: np.ndarray, offsets: np.ndarray) -> float:
+    """How much further out the lit rim's edge lies on the flanks than at the top."""
+    away = np.abs(turns)
+    low, high = RIM_FLANK_ARC_DEG
+    flanks = offsets[(away >= low) & (away <= high)]
+    top = offsets[away <= RIM_TOP_HALF_ARC_DEG]
+    return float(np.median(flanks) - np.median(top))

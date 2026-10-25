@@ -254,3 +254,40 @@ def test_a_ball_on_ground_clipped_white_is_not_measured():
     fit = fit_lit_ball(image, 98.0, 118.0, 9.85, noise_dn=1.5, expected_radius=9.85)
 
     assert fit is None
+
+
+def _lit_strip(height=200, width=320, seed=2):
+    """An empty mat's back edge at dusk: a lit strip between a dark gap and the mat."""
+    rows = np.arange(height, dtype=float)
+    profile = np.interp(
+        rows, [0, 95, 103, 110, 113, 123, 130, height], [70, 70, 42, 42, 145, 145, 90, 90]
+    )
+    rng = np.random.default_rng(seed)
+    return np.repeat(profile[:, None], width, axis=1) + rng.normal(0.0, 0.5, (height, width))
+
+
+def test_a_straight_lit_strip_is_not_a_ball():
+    """Harjot-outdoor-test-1: the fit slid along the mat's back edge until its centre
+    stopped on the seed's bound, one radius down, and called the strip a ball."""
+    image = _lit_strip()
+
+    fit = fit_lit_ball(image, 145.5, 117.5, 9.8, noise_dn=1.0)
+
+    assert fit is None
+
+
+def test_a_ball_resting_on_the_lit_strip_is_still_a_ball():
+    image = _lit_strip()
+    yy, xx = np.indices(image.shape, dtype=float)
+    dx, dy = (xx - 160.0) / 21.0, (yy - 120.0) / 21.0
+    nz = np.sqrt(np.clip(1.0 - dx * dx - dy * dy, 0.0, None))
+    inside = dx * dx + dy * dy <= 1.0
+    lit = np.clip(-0.6 * dy + 0.8 * nz, 0.0, None)
+    image[inside] = (60.0 + 190.0 * lit)[inside]
+
+    fit = fit_lit_ball(image, 158.0, 112.0, 19.0, noise_dn=1.0)
+
+    assert fit is not None
+    assert fit.x == pytest.approx(160.0, abs=1.5)
+    assert fit.y == pytest.approx(120.0, abs=1.5)
+    assert fit.diameter_px == pytest.approx(42.0, rel=0.1)

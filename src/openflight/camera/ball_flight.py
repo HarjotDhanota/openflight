@@ -480,15 +480,69 @@ def _reference_candidate(candidate: ReferenceBall | None, reason: str | None) ->
     }
 
 
+# Two detectors on one ball (their centres agree) that measure it at different sizes:
+# the one whose size is the ball's expected size, within the band two agreeing detectors
+# may differ by, is taken. Harjot-outdoor-test-1 shot 14, at dusk: the impact detector's
+# fixed 45 DN departure threshold kept only the lit upper half, 23.2 px, of a ball the
+# scene detector measured at 40.6 px and its distance puts at 45.5 px.
+EXPECTED_SIZE_RATIO = (0.75, 1.33)
+
+
+def expected_reference_diameter(
+    geometry, setup_ball: dict | None, *, lens_focal_px: float | None = None
+) -> tuple[float | None, str | None]:
+    """The resting ball's expected diameter in pixels, and what says so.
+
+    Its distance from the lens (the tee range) with the unit's calibrated focal length,
+    else the lens's; without either, the size the setup's (or this shot's) look measured.
+    """
+    focal, source = None, None
+    if getattr(geometry, "setup_focal_px", None) is not None:
+        focal, source = float(geometry.setup_focal_px), "calibrated_focal_and_tee_range"
+    elif lens_focal_px is not None and math.isfinite(float(lens_focal_px)) and lens_focal_px > 0:
+        focal, source = float(lens_focal_px), "lens_focal_and_tee_range"
+    if focal is not None:
+        distance = float(np.linalg.norm(geometry.ball_position_lfu - geometry.camera_origin))
+        if distance > 0.0:
+            return focal * geometry.ball_diameter_m / distance, source
+    if setup_ball and setup_ball.get("diameter_px"):
+        return float(setup_ball["diameter_px"]), "setup_ball"
+    return None, None
+
+
+def _resolve_by_size(
+    scene: ReferenceBall, impact: ReferenceBall, expected_px: float | None
+) -> str | None:
+    """Which detector alone measured the ball at its expected size, if exactly one did."""
+    if expected_px is None:
+        return None
+    low, high = EXPECTED_SIZE_RATIO
+    sized = [
+        name
+        for name, candidate in (("scene", scene), ("impact", impact))
+        if low <= candidate.diameter_px / expected_px <= high
+    ]
+    return sized[0] if len(sized) == 1 else None
+
+
 # pylint: disable-next=too-many-branches
 def _select_reference_ball(  # pylint: disable=too-many-locals
-    frames, trigger_frame: int, geometry, *, setup_ball: dict | None = None
+    frames,
+    trigger_frame: int,
+    geometry,
+    *,
+    setup_ball: dict | None = None,
+    lens_focal_px: float | None = None,
 ):
     """Choose between scene and impact evidence, keeping both; detectors that
-    disagree withhold the ball."""
+    disagree withhold the ball, unless they sit on one ball and only one of them
+    measured it at its expected size."""
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
+    expected_px, expected_source = expected_reference_diameter(
+        geometry, setup_ball, lens_focal_px=lens_focal_px
+    )
     gate = reference_ball_gate(setup_ball, geometry.image_width_px, geometry.image_height_px)
     region = tuple(int(round(value)) for value in gate["region_px"]) if setup_ball else None
     for name, detector, kwargs in (
@@ -536,9 +590,14 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
     if scene is not None and impact is not None:
         distance = math.hypot(scene.x - impact.x, scene.y - impact.y)
         size_ratio = impact.diameter_px / scene.diameter_px
-        agreement = distance <= max(8.0, 0.75 * scene.diameter_px) and 0.75 <= size_ratio <= 1.33
+        same_place = distance <= max(8.0, 0.75 * scene.diameter_px)
+        agreement = same_place and 0.75 <= size_ratio <= 1.33
+        sized = _resolve_by_size(scene, impact, expected_px) if same_place else None
         if agreement:
             selected, selected_source = impact, "detector_agreement"
+        elif sized is not None:
+            selected = scene if sized == "scene" else impact
+            selected_source = f"{sized}_by_expected_size"
         else:
             selected_source = "detector_disagreement"
     elif scene is not None or impact is not None:
@@ -553,6 +612,7 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
         "selected_source": selected_source,
         "selected_candidate": vars(selected).copy() if selected is not None else None,
         "disagreement": agreement is False,
+        "expected_diameter": {"diameter_px": expected_px, "source": expected_source},
         "gate": gate,
     }
     return selected, diagnostics
@@ -1011,10 +1071,12 @@ def estimate_camera_ball_flight(
     sensor_timestamps_ns: np.ndarray | None = None,
     trigger_frame_index: int | None = None,
     setup_ball: dict | None = None,
+    lens_focal_px: float | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
     ``trigger_frame_index``: last frame exposed by the trigger, else nearest ``trigger_ns``.
+    ``lens_focal_px`` (the lens's focal length) sizes the resting ball from its distance.
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1030,7 +1092,7 @@ def estimate_camera_ball_flight(
         else int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
     )
     anchor, reference_diagnostics = _select_reference_ball(
-        frames, trigger_frame, geometry, setup_ball=setup_ball
+        frames, trigger_frame, geometry, setup_ball=setup_ball, lens_focal_px=lens_focal_px
     )
     if anchor is None:
         return CameraBallEstimate(

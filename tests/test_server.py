@@ -1807,6 +1807,50 @@ class TestShotToDict:
         assert seen["session_uuid"] == "session-old"
         assert shot.camera_fusion_context == {"sha256": "context"}
 
+    def test_camera_fusion_freezes_the_lens_focal_length_for_the_capture_width(
+        self, monkeypatch, tmp_path
+    ):
+        """The ball stage sizes the resting ball from its distance with the lens's focal."""
+        from openflight.camera import fusion_processing
+        from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 1280), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+            pre_trigger_count=np.int32(4),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path, metadata={})
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=4)
+        shot.camera_fusion_session_uuid = "session-a"
+        monkeypatch.setattr(
+            server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
+        )
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime", SimpleNamespace(calibration=SimpleNamespace())
+        )
+        monkeypatch.setattr(server_module, "camera_capture_config", {})
+        monkeypatch.setattr(
+            server_module,
+            "rig_geometry_config",
+            {"lens": {"focal_px_by_arm": {"arm5": 2000.0001, "arm6": 1000.0001}}},
+        )
+        monkeypatch.setattr(
+            EffectiveCameraGeometryInputs, "from_live", lambda *_a, **_k: SimpleNamespace()
+        )
+        seen = {}
+
+        def fake_build_context(**kwargs):
+            seen.update(kwargs)
+            raise ValueError("stop after freezing the context")
+
+        monkeypatch.setattr(fusion_processing, "build_context", fake_build_context)
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        assert seen["lens_focal_px"] == pytest.approx(2000.0001)
+
     def test_live_camera_fusion_matches_shared_core_replay(self, monkeypatch, tmp_path):
         from openflight.camera.fusion_processing import process_camera_fusion
 
