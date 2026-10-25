@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from openflight.camera.ball_model import fit_lit_ball
 from openflight.camera.club_motion import detect_reference_ball
@@ -291,3 +292,49 @@ def test_a_ball_resting_on_the_lit_strip_is_still_a_ball():
     assert fit.x == pytest.approx(160.0, abs=1.5)
     assert fit.y == pytest.approx(120.0, abs=1.5)
     assert fit.diameter_px == pytest.approx(42.0, rel=0.1)
+
+
+def _sky_lit_ball(radius=21.0, cx=100.3, cy=100.6, *, size=200, seed=1):
+    """A ball lit by an open sky at dusk: brightness falls smoothly from its clipped top
+    right round to its shaded underside, which sits darker than the ground, over a dark
+    cast shadow just under it. The point-light model cannot draw that falloff, so its free
+    size grows down into the shade and shadow (60 px for this 42 px ball, seeded at 27 px)."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.indices((size, size)).astype(np.float64)
+    image = 85.0 + rng.normal(0.0, 2.0, (size, size))
+    dx, dy = xx - cx, yy - cy
+    shadow = (dx / radius) ** 2 + ((yy - (cy + 0.95 * radius)) / (0.3 * radius)) ** 2 <= 1.0
+    image[shadow] = 45.0 + rng.normal(0.0, 2.0, int(shadow.sum()))
+    inside = dx * dx + dy * dy <= radius * radius
+    nz = np.sqrt(np.clip(1.0 - (dx * dx + dy * dy) / radius**2, 0.0, None))
+    facing = -dy / radius * np.sin(np.radians(80.0)) + nz * np.cos(np.radians(80.0))
+    image[inside] = (40.0 + 320.0 * (1.0 + facing) / 2.0)[inside]
+    image = ndimage.gaussian_filter(image, 1.0)
+    return np.clip(np.round(image + rng.normal(0.0, 1.0, image.shape)), 0, 255)
+
+
+@pytest.mark.parametrize("start_radius", [16.0, 18.0, 21.0, 24.0, 27.0])
+def test_the_size_comes_from_the_lit_rim_not_the_shaded_underside_or_its_shadow(start_radius):
+    """Harjot-outdoor-test-1 setup: a ball about 42 px across measured 58.98 px."""
+    image = _sky_lit_ball()
+
+    fit = fit_lit_ball(image, 101.0, 98.0, start_radius, noise_dn=1.0)
+
+    assert fit is not None
+    # within 3 % of the true 42 px, and the centre where the ball is, not dragged down
+    assert fit.diameter_px == pytest.approx(42.0, rel=0.03)
+    assert fit.x == pytest.approx(100.3, abs=0.75)
+    assert fit.y == pytest.approx(100.6, abs=0.75)
+
+
+@pytest.mark.parametrize("start_radius", [13.0, 16.0, 19.0])
+def test_a_sunlit_balls_far_side_darker_than_the_ground_still_counts_in_its_size(start_radius):
+    """Outdoors-test-7, full sun: the shaded side is an edge up to the ground, not down."""
+    frames = _lit_ball(400, 640, 300.3, 260.6, 16.0)
+
+    fit = fit_lit_ball(np.median(frames, axis=0), 299.0, 258.0, start_radius, noise_dn=1.0)
+
+    assert fit is not None
+    assert fit.diameter_px == pytest.approx(32.0, rel=0.04)
+    assert fit.x == pytest.approx(300.3, abs=0.75)
+    assert fit.y == pytest.approx(260.6, abs=0.75)

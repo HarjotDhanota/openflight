@@ -3,7 +3,9 @@
 Harjot-outdoor-test-1, shot 14 (dusk, 6 mm lens, 145 us x 12): the scene detector
 measured the ball 40.6 px across; the impact detector, thresholding the ball's
 departure at a fixed 45 DN, kept only its lit upper half, 23.2 px. Both sat on the
-ball 6.6 px apart, and the shot was withheld as a detector disagreement.
+ball 6.6 px apart, and the shot was withheld as a detector disagreement. With a setup
+ball the scene ball is measured as the setup's is, a lit sphere sized on its outline:
+41.9 px, centred at (794.0, 421.5).
 """
 
 from pathlib import Path
@@ -50,8 +52,8 @@ def test_shot_14_takes_the_scene_ball_whose_size_the_ball_s_look_confirms():
     )
 
     assert selected is not None
-    assert selected.x == pytest.approx(797.6, abs=0.5)
-    assert selected.diameter_px == pytest.approx(40.6, abs=0.5)
+    assert selected.x == pytest.approx(794.0, abs=0.5)
+    assert selected.diameter_px == pytest.approx(41.9, abs=0.5)
     assert diagnostics["agreement"] is False
     assert diagnostics["selected_source"] == "scene_by_expected_size"
     assert diagnostics["expected_diameter"] == {
@@ -69,7 +71,7 @@ def test_shot_14_takes_the_scene_ball_whose_size_its_distance_predicts():
         lens_focal_px=SIX_MM_FOCAL_PX,
     )
 
-    assert selected.diameter_px == pytest.approx(40.6, abs=0.5)
+    assert selected.diameter_px == pytest.approx(41.9, abs=0.5)
     assert diagnostics["selected_source"] == "scene_by_expected_size"
     expected = diagnostics["expected_diameter"]
     assert expected["source"] == "lens_focal_and_tee_range"
