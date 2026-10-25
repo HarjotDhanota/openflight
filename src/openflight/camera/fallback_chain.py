@@ -173,15 +173,17 @@ def size_range_route(  # pylint: disable=too-many-arguments
     def route():
         if archive is None or "frames" not in archive:
             return "no camera frames for this shot"
-        if not seed or not all(finite(seed.get(key)) for key in ("x", "y", "diameter_px")):
-            return "no resting-ball seed: neither this shot's look nor the setup found the ball"
         if not finite(ball_height_m):
             return "no ball height for the resting ball"
         frames = np.asarray(archive["frames"])
+        found = resting_ball_seed(frames, seed, first_post_index(archive, len(frames)))
+        if found is None:
+            return "no resting ball: neither the shot's look, the setup nor a search found it"
         return resting_ball_range.resting_ball_range(
             frames,
             first_post_index=first_post_index(archive, len(frames)),
-            seed=(float(seed["x"]), float(seed["y"]), float(seed["diameter_px"])),
+            frame_interval_s=frame_interval_s(archive),
+            seed=found,
             lens_focal_px=lens_focal_px,
             calibrated_focal_px=calibrated_focal_px,
             camera_origin_lfu=np.asarray(camera_origin_lfu, dtype=float),
@@ -194,6 +196,43 @@ def size_range_route(  # pylint: disable=too-many-arguments
         )
 
     return route
+
+
+def frame_interval_s(archive: Mapping[str, Any]) -> float:
+    """The clip's median frame interval, from its sensor (else host) timestamps."""
+    stamps = archive.get("sensor_timestamp_ns")
+    stamps = np.asarray(stamps if stamps is not None else archive.get("host_timestamp_ns", []))
+    if stamps.size < 2:
+        return 1.0 / 120.0
+    return float(np.median(np.diff(stamps.astype(np.int64)))) / 1e9
+
+
+def resting_ball_seed(
+    frames: np.ndarray, seed: Optional[Mapping[str, Any]], first_post: int
+) -> Optional[tuple[float, float, float]]:
+    """Where to look for the resting ball: the shot's look or the setup's ball, else the
+    scene detector's ball in the hitting zone (the gate a clip without a setup uses)."""
+    if seed and all(finite(seed.get(key)) for key in ("x", "y", "diameter_px")):
+        return float(seed["x"]), float(seed["y"]), float(seed["diameter_px"])
+    from . import ball_pixels  # noqa: PLC0415
+    from .ball_flight import reference_ball_gate  # noqa: PLC0415
+    from .club_motion import detect_reference_ball  # noqa: PLC0415
+
+    height, width = frames.shape[-2:]
+    gate = reference_ball_gate(None, width, height)
+    region = tuple(int(round(value)) for value in gate["region_px"])
+    try:
+        found = detect_reference_ball(
+            frames[: max(3, first_post - 4)],
+            pixel_scale=ball_pixels.pixel_scale(width),
+            roi=region,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    smallest, largest = gate["diameter_px"]
+    if not smallest <= found.diameter_px <= largest:
+        return None
+    return float(found.x), float(found.y), float(found.diameter_px)
 
 
 def first_post_index(archive: Mapping[str, Any], frame_count: int) -> int:
@@ -305,13 +344,14 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
     if details.get("status") == "measured_from_size":
         rest_px, rest_d = tuple(details["rest_px"]), float(details["diameter_px"])
     else:
-        seed = context.get("setup_ball") or {}
-        if not all(finite(seed.get(key)) for key in ("x", "y", "diameter_px")):
-            return {"status": "withheld_no_resting_ball", "reason": "no resting-ball seed"}
+        seed = resting_ball_seed(frames, context.get("setup_ball"), first_post)
+        if seed is None:
+            return {"status": "withheld_no_resting_ball", "reason": "no resting ball found"}
         size = resting_ball_range.measure_resting_ball_size(
             frames,
             first_post_index=first_post,
-            seed=(float(seed["x"]), float(seed["y"]), float(seed["diameter_px"])),
+            seed=seed,
+            frame_interval_s=frame_interval_s(archive),
         )
         if size is None:
             return {

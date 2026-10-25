@@ -90,9 +90,12 @@ NOISE_SIGMAS = 5.0
 MIN_THRESHOLD_DN = 12.0
 # Where a track may start: from half a ball to this many balls from its rest.
 START_REACH_DIAMETERS = (0.5, 10.0)
-# A next point may sit this far from the straight continuation (pixels, or the step).
-CONTINUATION_TOLERANCE_PX = 25.0
-BACKGROUND_FRAMES = (9, 3)  # frames first_post-9 .. first_post-4
+# A next point may sit this far from the straight continuation, in resting-ball
+# diameters (25 px of a 43 px ball at 1280x800), or one ball / the first step.
+CONTINUATION_TOLERANCE_DIAMETERS = 0.6
+# The background: the frames exposed 75-25 ms before the first post-trigger frame
+# (frames pre-9 .. pre-4 at 120 fps), before the club reaches the ball.
+BACKGROUND_WINDOW_S = (0.075, 0.025)
 
 
 def launch_direction(vertical_deg: float, horizontal_deg: float) -> np.ndarray:
@@ -310,19 +313,21 @@ def _crowding(changed: np.ndarray, x: float, y: float, diameter: float) -> float
     return float(changed[y0:y1, x0:x1][ring].mean()) if ring.any() else 0.0
 
 
-def _grow(start: tuple[int, dict], candidates: dict, rest: tuple[float, float], last: int):
+def _grow(
+    start: tuple[int, dict], candidates: dict, rest: tuple[float, float], last: int, diameter: float
+):
     track = [start]
     for frame in range(start[0] + 1, last + 1):
         if len(track) == 1:
             first = track[0][1]
             step = (first["x"] - rest[0], first["y"] - rest[1])
             predicted = (first["x"] + 0.6 * step[0], first["y"] + 0.6 * step[1])
-            tolerance = max(40.0, math.hypot(*step))
+            tolerance = max(diameter, math.hypot(*step))
         else:
             (frame_a, a), (frame_b, b) = track[-2], track[-1]
             gap = (frame - frame_b) / (frame_b - frame_a)
             predicted = (b["x"] + (b["x"] - a["x"]) * gap, b["y"] + (b["y"] - a["y"]) * gap)
-            tolerance = CONTINUATION_TOLERANCE_PX
+            tolerance = CONTINUATION_TOLERANCE_DIAMETERS * diameter
         pool = [
             candidate
             for candidate in candidates.get(frame, ())
@@ -362,8 +367,9 @@ def track_launch_ball(  # pylint: disable=too-many-locals
 ) -> list[TrackPoint]:
     """The ball's blobs after impact: the longest straight run that starts from its rest."""
     count, height, width = frames.shape
-    start_bg = first_post_index - BACKGROUND_FRAMES[0]
-    end_bg = first_post_index - BACKGROUND_FRAMES[1]
+    interval = float(np.median(np.diff(times_s))) if len(times_s) > 1 else 1.0 / 120.0
+    start_bg = first_post_index - int(round(BACKGROUND_WINDOW_S[0] / interval))
+    end_bg = first_post_index - int(round(BACKGROUND_WINDOW_S[1] / interval))
     if start_bg < 0 or end_bg - start_bg < 3 or first_post_index >= count:
         return []
     rest_x, rest_y = (float(value) for value in rest_px)
@@ -393,7 +399,9 @@ def track_launch_ball(  # pylint: disable=too-many-locals
                 continue
             if candidate["diameter_px"] > 1.2 * rest_diameter_px:
                 continue
-            track = _grow((frame, candidate), candidates, (rest_x, rest_y), count - 1)
+            track = _grow(
+                (frame, candidate), candidates, (rest_x, rest_y), count - 1, rest_diameter_px
+            )
             if len(track) > len(best) or (
                 len(track) == len(best) and _straightness(track) < _straightness(best)
             ):
@@ -696,6 +704,7 @@ def estimate_camera_ball_launch(
         "ball_distance_m": distance,
         "distance_source": geometry.distance_source,
         "ball_lfu_m": [float(value) for value in ball],
+        "origin_lfu_m": [float(value) for value in camera.origin_lfu],
         "rest_px": [float(value) for value in geometry.rest_px],
         "rest_diameter_px": float(geometry.rest_diameter_px),
     }

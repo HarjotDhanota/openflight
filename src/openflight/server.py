@@ -5616,6 +5616,7 @@ def _fuse_camera_measurements(
             )
     _resolve_shot_ball_range(shot, camera_archive)
     fallback_result = None
+    shared_error = None
     if camera_archive is not None:
         try:
             from openflight.camera.fusion_processing import (  # noqa: PLC0415
@@ -5790,6 +5791,7 @@ def _fuse_camera_measurements(
             _apply_camera_fallback_launch(shot, fallback_result)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
+            shared_error = f"{type(error).__name__}: {error}"
             shot.camera_fusion_context = {
                 "schema": "openflight.camera.fusion_context",
                 "version": CAMERA_FUSION_CONTEXT_VERSION,
@@ -5820,7 +5822,7 @@ def _fuse_camera_measurements(
             "status": "not_run",
             "reason": "no camera clip for this shot"
             if camera_archive is None
-            else "the shared camera fusion did not run",
+            else f"the shared camera fusion did not run ({shared_error or 'no context'})",
         },
     )
     if shot.calibrated_camera_status == "rejected":
@@ -6329,8 +6331,21 @@ def _apply_fallback_spin(shot: Shot) -> bool:
         label = "calculated" if full is not None and full_status == "calculated" else "estimated"
         return Candidate(float(spin), label, KINEMATIC_SPIN_METHOD)
 
+    def ops_below_floor():
+        # the OPS's own reading below the floor stays on the shot under its own label
+        # (experimental quality, D17): it feeds no model
+        if _finite(shot.spin_rpm) and shot.spin_source not in _MODEL_SPIN_SOURCES:
+            return Candidate(float(shot.spin_rpm), "experimental", shot.spin_method or "ops")
+        return "no OPS spin"
+
     resolution = resolve(
-        "spin", [Route("ops", ops), Route("collision", collision), Route("kinematic", kinematic)]
+        "spin",
+        [
+            Route("ops", ops),
+            Route("collision", collision),
+            Route("kinematic", kinematic),
+            Route("ops_below_floor", ops_below_floor),
+        ],
     )
     sources = dict(shot.input_sources or {})
     sources["spin"] = resolution.to_dict()

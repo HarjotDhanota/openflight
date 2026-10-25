@@ -23,7 +23,7 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
 | `estimated` | An OPS-only install's labelled stand-in, a weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, or an IWR one whose azimuth is uncalibrated, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
-| `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot; an OPS spin of experimental quality (the ungated multitaper, not validated against a reference; its note gives the confidence and says when it sits on the search band's rail) | dotted outline in its own colour, "EXP", titled "not yet validated" |
+| `experimental` | Shown before it is validated: the camera's impact location, read live after the shot, and an OPS spin of experimental quality (the ungated multitaper; its note gives the confidence and the search band's rail), neither fed to another metric; a camera launch with no validated geometry (the camera fallback's, `camera_fallback`, and the older camera horizontals), a range from the resting ball's own size (`camera_ball_size`) and a camera club delivery, each fed on, so every model output built on one is experimental too (`shot_metrics.with_input_labels`; `docs/camera/camera-fallback.md`) | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.
@@ -36,9 +36,19 @@ simulator reads it; the metric is `not_measured` with the reason
 
 `ball_range` (13 Oct) is the range the shot's range-dependent metrics used: its own
 IWR launch point (`measured`, noted "not validated against a tape yet"), else the
-setup's camera prior (`estimated`), else `not_measured` with the reason. When the
-camera prior stood in, every metric that rests on the range (all but the OPS243's
-radial speeds, radial smash and spin rate) is `estimated` and its note says so.
+setup's camera prior (`estimated`), else this shot's resting ball's own size
+(`camera_ball_size`, `experimental`, 25 Oct), else `not_measured` with every route's
+reason (`Shot.input_sources`). When the camera prior stood in, every metric that rests
+on the range (all but the OPS243's radial speeds, radial smash and its own spin rate; a
+model's spin rests on it) is `estimated` and its note says so; on the ball's own size,
+`experimental`.
+
+Every value takes the weakest label of the inputs it is built on (25 Oct): measured >
+calculated > model geometry > estimated > experimental. When the IWR measured no launch,
+the camera fallback's (`camera_fallback`) feeds the full ball speed, the collision
+model, the spin and the flight, each labelled experimental; simulators never fly it. A
+shot stage that fails is that stage's own reason (`Shot.stage_errors`); the shot still
+publishes everything else.
 An older log's `measured` carry is read as `calculated`.
 
 ## Face, loft, spin axis and curve

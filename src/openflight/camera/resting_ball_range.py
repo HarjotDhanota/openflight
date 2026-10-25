@@ -37,9 +37,11 @@ MIN_DIAMETER_SD_PX = 1.0
 # Short windows: the lit-sphere fit now and then grows into the shade on one window
 # (Harjot-outdoor-test-1: 2-4 of 25 windows 15-20 % large); the median of five holds.
 WINDOW_FRAMES = 3
+# At most this many windows, spread over the frames before the club arrives.
+MAX_WINDOWS = 6
 # The frames before the club arrives: a fast swing's club is near the ball in the last
-# three or four frames before the trigger (Harjot-outdoor-test-1 shots 20, 22).
-CLUB_ARRIVAL_FRAMES = 4
+# 25-35 ms before the trigger (Harjot-outdoor-test-1 shots 20, 22: 3-4 frames at 120 fps).
+CLUB_ARRIVAL_S = 0.030
 # Where around the seed the ball may rest, in the seed's diameters, and how big it may be.
 SEED_REACH_DIAMETERS = 4.0
 SEED_SIZE_RATIO = (0.6, 1.6)
@@ -69,11 +71,16 @@ class SizeDistance:
 
 
 def measure_resting_ball_size(
-    frames: np.ndarray, *, first_post_index: int, seed: Sequence[float]
+    frames: np.ndarray,
+    *,
+    first_post_index: int,
+    seed: Sequence[float],
+    frame_interval_s: float = 1.0 / 120.0,
 ) -> Optional[RestingBallSize]:
     """The resting ball near ``seed`` (x, y, diameter px) in the pre-impact frames, or None."""
     seed_x, seed_y, seed_d = (float(value) for value in seed)
-    before = frames[: max(3, int(first_post_index) - CLUB_ARRIVAL_FRAMES)]
+    arrival = max(1, math.ceil(CLUB_ARRIVAL_S / max(frame_interval_s, 1e-4) - 1e-9))
+    before = frames[: max(3, int(first_post_index) - arrival)]
     height, width = before.shape[-2:]
     reach = SEED_REACH_DIAMETERS * seed_d
     region = (
@@ -94,7 +101,9 @@ def measure_resting_ball_size(
     # the fit starts from the detector's own size when it is plausible, else the seed's
     start_d = found.diameter_px if low <= found.diameter_px <= high else seed_d
     sizes, centres = [], []
-    for start in range(0, max(1, len(before) - WINDOW_FRAMES + 1), WINDOW_FRAMES):
+    starts = range(0, max(1, len(before) - WINDOW_FRAMES + 1), WINDOW_FRAMES)
+    step = max(1, math.ceil(len(starts) / MAX_WINDOWS))
+    for start in list(starts)[::step]:
         window = before[start : start + WINDOW_FRAMES]
         if len(window) < 3:
             continue
@@ -169,6 +178,7 @@ def resting_ball_range(  # pylint: disable=too-many-arguments,too-many-locals
     frames: np.ndarray,
     *,
     first_post_index: int,
+    frame_interval_s: float = 1.0 / 120.0,
     seed: Sequence[float],
     lens_focal_px: Optional[float],
     calibrated_focal_px: Optional[float],
@@ -190,7 +200,9 @@ def resting_ball_range(  # pylint: disable=too-many-arguments,too-many-locals
             "reason": "no calibrated or listed focal length for this lens and mode",
         }
     focal_px, focal_source, focal_rel_sd = focal
-    size = measure_resting_ball_size(frames, first_post_index=first_post_index, seed=seed)
+    size = measure_resting_ball_size(
+        frames, first_post_index=first_post_index, seed=seed, frame_interval_s=frame_interval_s
+    )
     if size is None:
         return {
             **record,
