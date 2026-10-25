@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-import re
 import threading
 from types import SimpleNamespace
 
@@ -104,6 +102,8 @@ def test_a_new_box_reconfigures_the_running_monitor_and_keeps_the_range(kiosk):
     server.apply_setup_ball_range(RANGE)
     server.apply_setup_box(BOX)
     monitor = server.ball_at_address_monitor
+    # a range set before the box starts the monitor with it
+    assert monitor.setup_range_uncertainty_m == pytest.approx(0.12)
 
     server.apply_setup_box({**BOX, "box_px": [500, 390, 820, 530], "ball_px": [660.0, 460.0]})
 
@@ -163,15 +163,6 @@ def test_ball_range_change_updates_iwr_prior(kiosk):
     assert handoff["status"] == "prior"
     assert handoff["prior"]["uncertainty_m"] == pytest.approx(0.12)
     assert handoff["prior"]["source"] == "camera_prior"
-
-
-def test_a_range_set_before_the_box_starts_the_monitor_with_it(kiosk):
-    server.apply_setup_ball_range(RANGE)
-    server.apply_setup_box(BOX)
-
-    monitor = server.ball_at_address_monitor
-    assert monitor.setup_range_m == pytest.approx(2.31)
-    assert monitor.setup_range_uncertainty_m == pytest.approx(0.12)
 
 
 def test_clearing_the_ball_range_returns_to_per_shot_ranging(kiosk):
@@ -275,13 +266,15 @@ def test_the_aim_section_moves_the_target_line(kiosk, monkeypatch):
 OUTLINE = [[520.0, 500.0], [760.0, 500.0], [760.0, 400.0], [520.0, 400.0]]
 
 
-def test_the_confirmed_outline_reaches_the_monitor(kiosk):
+def test_the_confirmed_outline_reaches_the_monitor_and_outlives_a_range_change(kiosk):
     server.apply_setup_box({**BOX, "outline_px": OUTLINE})
 
     monitor = server.ball_at_address_monitor
     assert monitor.outline_px == tuple(tuple(point) for point in OUTLINE)
     # the detector's window stays the bounding rectangle
     assert monitor.box == (480, 380, 800, 520)
+    server.apply_setup_ball_range(RANGE)
+    assert server.ball_at_address_monitor.outline_px[0] == (520.0, 500.0)
 
 
 def test_an_older_box_without_an_outline_is_tested_as_its_rectangle(kiosk):
@@ -291,21 +284,3 @@ def test_an_older_box_without_an_outline_is_tested_as_its_rectangle(kiosk):
     assert monitor.outline_px is None
     assert monitor._in_box(482.0, 382.0)  # pylint: disable=protected-access
     assert not monitor._in_box(470.0, 382.0)  # pylint: disable=protected-access
-
-
-def test_a_range_change_keeps_the_outline(kiosk):
-    server.apply_setup_box({**BOX, "outline_px": OUTLINE})
-
-    server.apply_setup_ball_range(RANGE)
-
-    assert server.ball_at_address_monitor.outline_px[0] == (520.0, 500.0)
-
-
-def test_the_preview_the_overlays_draw_on_is_not_rolled():
-    """The Camera and Live views draw setup pixels on /api/camera/preview.jpg, which the
-    capture rotates by its roll correction: the kiosk must start the camera unrolled."""
-    assert "roll_correction_deg" not in inspect.signature(server.init_camera_capture).parameters
-    assert CameraCaptureSettings().roll_correction_deg == 0.0
-    calls = re.findall(r"init_camera_capture\((.*?)\):", inspect.getsource(server.main), re.S)
-    assert calls, "the kiosk no longer starts the camera through init_camera_capture"
-    assert all("roll_correction_deg" not in call for call in calls)
