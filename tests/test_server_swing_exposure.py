@@ -39,16 +39,13 @@ def _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra):
     return received
 
 
-def test_the_setup_light_index_reaches_the_camera(monkeypatch, tmp_path):
-    received = _run_kiosk_until_camera_init(monkeypatch, tmp_path, "--camera-light-index", "0.0148")
+@pytest.mark.parametrize("light_index", [None, 0.0148])
+def test_the_setup_light_index_reaches_the_camera(monkeypatch, tmp_path, light_index):
+    extra = [] if light_index is None else ["--camera-light-index", str(light_index)]
 
-    assert received["light_index_dn_per_us_gain"] == pytest.approx(0.0148)
+    received = _run_kiosk_until_camera_init(monkeypatch, tmp_path, *extra)
 
-
-def test_without_a_light_index_none_is_passed(monkeypatch, tmp_path):
-    received = _run_kiosk_until_camera_init(monkeypatch, tmp_path)
-
-    assert received["light_index_dn_per_us_gain"] is None
+    assert received["light_index_dn_per_us_gain"] == light_index
 
 
 class _Monitor:
