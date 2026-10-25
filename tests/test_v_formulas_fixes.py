@@ -31,6 +31,7 @@ def _fusion_shot(**overrides):
         spin_axis_deg=2.0,
         spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         ball_speed_full_mph=155.0,
+        inclinometer={"applied_to": ["iwr6843"]},
     )
     values.update(overrides)
     return Shot(**values)
@@ -157,6 +158,8 @@ def _collision_shot(**overrides):
         experimental_fused_attack_angle_confidence="high",
         ball_speed_contract="full",
         mode="rolling-buffer",
+        camera_lens_intrinsics="calibrated",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
     )
     values.update(overrides)
     return Shot(**values)
@@ -221,11 +224,16 @@ def test_a_flight_on_an_estimated_spin_and_axis_is_estimated():
 
 
 def test_simulators_do_not_get_an_estimated_spin_axis():
-    from openflight.sim.resolver import _spin_axis_provenance  # noqa: PLC2701
+    from openflight.sim.resolver import resolve_shot
+    from openflight.sim.types import PlayerState, UnmeasuredShotError
 
-    shot = _collision_shot(launch_angle_horizontal_source="radar_low_coherence")
+    shot = _collision_shot(
+        launch_angle_horizontal_confidence=0.5, spin_rpm=7000.0, spin_confidence=0.9
+    )
     _attach_collision(shot)
-    assert _spin_axis_provenance(shot) is None
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState())
+    assert refused.value.missing == ["spin axis"]
 
 
 def test_estimated_is_the_weakest_collision_input_label():
@@ -379,6 +387,7 @@ def _sim_shot(**overrides):
         spin_axis_source=cm.SPIN_AXIS_SOURCE_MODEL,
         carry_spin_adjusted=250.0,
         carry_status="calculated",
+        inclinometer={"applied_to": ["iwr6843"]},
     )
     values.update(overrides)
     return Shot(**values)
@@ -429,14 +438,14 @@ def test_a_fusion_shot_with_only_an_estimated_spin_axis_is_refused_naming_it():
     with pytest.raises(UnmeasuredShotError) as refused:
         resolve_shot(shot, PlayerState())
     assert refused.value.missing == ["spin axis"]
-    assert "estimated (horizontal launch confidence 0.50 below 0.6)" in str(refused.value)
+    assert "horizontal launch confidence 0.50 below 0.6" in str(refused.value)
 
 
 def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
     from openflight.sim.resolver import resolve_shot
     from openflight.sim.types import PlayerState, UnmeasuredShotError
 
-    shot = _collision_shot(launch_angle_horizontal_source="radar_low_coherence")
+    shot = _collision_shot(launch_angle_horizontal_confidence=0.5)
     _attach_collision(shot)
     assert shot.spin_source == "estimated"
 
@@ -444,7 +453,7 @@ def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
         resolve_shot(shot, PlayerState())
     message = str(refused.value)
     assert "spin" in refused.value.missing
-    assert "estimated (horizontal launch is low-coherence (radar_low_coherence))" in message
+    assert "horizontal launch confidence 0.50 below 0.6" in message
 
 
 # ---- C7: the normalized reference is TrackMan's 77 F, sea level, with a named humidity ----
@@ -555,11 +564,10 @@ def test_the_ops_only_server_path_fills_no_launch_and_sends_nothing(monkeypatch)
     assert raised.value.missing == ["vertical launch", "horizontal launch", "spin", "spin axis"]
 
 
-def test_a_spin_axis_is_never_measured():
+def test_a_computed_spin_axis_goes_out_calculated():
     from openflight.sim.resolver import resolve_shot
     from openflight.sim.types import PlayerState
 
-    # no sensor measures the spin axis: an unlabelled one is the kiosk's computation
-    resolved = resolve_shot(_sim_shot(spin_axis_source=None), PlayerState())
+    resolved = resolve_shot(_sim_shot(), PlayerState())
     assert resolved.provenance["spin_axis"] == "calculated"
     assert resolved.provenance["back_spin"] == "calculated"

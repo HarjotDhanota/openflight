@@ -67,6 +67,7 @@ def test_shot_reaches_both_sims():
                 spin_rpm=2600.0,
                 spin_confidence=0.9,
                 spin_axis_deg=1.0,
+                spin_axis_source="calculated (D-plane tilt)",
             )
             resolved = resolve_shot(shot, PlayerState())
             for c in connectors:

@@ -3,7 +3,8 @@
 The IWR6843 is the ball's primary sensor. When it measures a shot nothing here changes.
 When its launch, its launch-point range or the setup's tee range is missing or refused,
 the kiosk resolves every metric it still can from the camera clip, automatically, and
-labels each value `experimental` until it is validated against TrackMan.
+labels each value from the observation's gates and geometry. Reference validation is
+tracked separately from the source label.
 
 ## One chain per input (`source_chain`)
 
@@ -14,9 +15,9 @@ down. A gap is closed by adding a route, never by a special case.
 
 | Input | Routes, in order | Labels |
 |---|---|---|
-| Ball range | the shot's IWR launch point; the camera prior (the setup's ball range, or the shot's resting-ball look); the resting ball's own size in this clip | measured; estimated; experimental |
-| Vertical launch | the radar (IWR LCMF, K-LD7); the camera fallback | measured; experimental |
-| Horizontal launch | the radar or a camera horizontal on the IWR's depth; the camera fallback; a low-coherence or low-consensus horizontal | as `source_labels.launch_label`; experimental; estimated |
+| Ball range | the shot's IWR launch point; the camera prior; the resting ball's own size in this clip | IWR measured, or estimated for partial/ambiguous evidence; prior estimated; ball size estimated with calibrated intrinsics, otherwise experimental |
+| Vertical launch | the radar (IWR LCMF, K-LD7); the camera fallback | radar estimated when using configured tilt or a weaker IWR range; camera estimated with calibrated intrinsics, otherwise experimental |
+| Horizontal launch | radar and camera candidates, ranked by their attached uncertainties when both have them; radar wins otherwise | experimental never replaces non-experimental; a failed coherence/consensus gate is experimental |
 | Side offset | the setup's measured offset; the resting ball on its camera bearing | measured; experimental |
 | Spin | an accepted OPS spin; the collision model's spin; the OPS reading below the confidence floor | measured; the model's label (experimental when it rests on the camera head track or an experimental launch); experimental, feeding nothing |
 
@@ -73,14 +74,26 @@ horizontal beyond 45 deg, or a camera speed more than 3 sigma and 25 % off the O
 
 ## Labels downstream
 
-A camera launch with no validated geometry is `experimental`, never measured: the
-fallback's and the older camera horizontals (`camera_assisted_experimental`,
-`camera_only_experimental`, `camera_legacy_fallback`) alike. Every model output takes the
+The source policy lives in `source_labels`. A high-tier camera + IWR club reading or
+camera-assisted horizontal is measured with calibrated lens intrinsics, estimated with
+nominal intrinsics. Lower tiers and camera + OPS club readings stay experimental. The
+camera ball-launch fallback is estimated with calibrated intrinsics and experimental
+otherwise. Camera-only and legacy fallback horizontals remain experimental. Lens state
+and the accepted IWR launch status are recorded on each shot.
+
+Every model output takes the
 weakest label of what it is built on (`shot_metrics.UPSTREAM`): the full ball speed,
 spin, spin axis, face, loft, D-plane tilt, the indices and every flight metric. A range
 from the camera prior makes every range-dependent value estimated, one from the ball's
-own size experimental; a model's spin is range-dependent, the OPS's is not. Simulators
-never fly an experimental launch (D31).
+own size follows the lens-dependent label above. A model's spin is range-dependent,
+the OPS's is not. Partial IWR evidence keeps `iwr_partial` in the route record and reads
+as estimated in metric records. Partial or ambiguous ranges never calibrate tilt.
+
+Collision outputs state the centre-face-strike assumption; flight sources name the air
+density used. Model assumptions alone do not lower a calculated value. Failed sensor
+gates do: the IWR attack candidate is experimental and its dependent outputs inherit it.
+Simulator admission and provenance use the published metric records. Experimental
+required inputs are always refused, even with estimated/model-geometry opt-ins enabled.
 
 ## Kiosk and replay
 

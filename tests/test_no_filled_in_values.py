@@ -31,6 +31,8 @@ def _shot(**overrides):
         "club": ClubType.DRIVER,
     }
     values.update(overrides)
+    if values.get("spin_axis_deg") is not None:
+        values.setdefault("spin_axis_source", "calculated (D-plane tilt)")
     return Shot(**values)
 
 
@@ -191,6 +193,7 @@ def _calculated():
         spin_rpm=2600,
         spin_source="calculated",
         spin_confidence=None,
+        inclinometer={"applied_to": ["iwr6843"]},
     )
 
 

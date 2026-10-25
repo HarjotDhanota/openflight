@@ -13,7 +13,10 @@ from openflight.sim.types import IncompleteShotError, PlayerState, UnmeasuredSho
 
 def _shot(**kw) -> Shot:
     base = dict(
-        ball_speed_mph=140.0, timestamp=datetime(2026, 4, 26, 12, 0, 0), club=ClubType.DRIVER
+        ball_speed_mph=140.0,
+        timestamp=datetime(2026, 4, 26, 12, 0, 0),
+        club=ClubType.DRIVER,
+        spin_axis_source="calculated (D-plane tilt)",
     )
     base.update(kw)
     return Shot(**base)
@@ -204,7 +207,7 @@ def test_no_resolved_value_can_leave_non_finite(monkeypatch):
     """Last line: whatever produced it, a non-finite resolved value is never sent."""
     from openflight.sim import resolver
 
-    monkeypatch.setattr(resolver, "_measured_total_spin", lambda _shot: (math.nan, "measured"))
+    monkeypatch.setattr(resolver, "_measured_total_spin", lambda _shot, _metrics: (math.nan, "measured"))
     with pytest.raises(IncompleteShotError, match="total_spin"):
         resolve_shot(_shot(**_MEASURED), PlayerState())
 
@@ -258,13 +261,33 @@ def test_a_spin_component_is_as_good_as_its_weaker_source(monkeypatch):
     assert estimated_axis.provenance["side_spin"] == "estimated"
 
 
-def test_a_weak_horizontal_keeps_its_own_estimated_label():
-    # a low-coherence IWR horizontal is a weak measured angle, not a filled-in one
+def test_a_horizontal_that_failed_its_gate_is_never_flown(monkeypatch):
+    from openflight.sim import resolver
+
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
     shot = _shot(**_MEASURED, launch_angle_vertical_source="radar")
     shot.launch_angle_horizontal_source = "radar_low_coherence"
-    r = resolve_shot(shot, PlayerState())
-    assert r.provenance["vla"] == "measured"
-    assert r.provenance["hla"] == "estimated"
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState())
+    assert "horizontal launch (experimental)" in refused.value.missing
+
+
+def test_an_axis_of_unknown_origin_keeps_the_record_s_estimated_label(monkeypatch):
+    from openflight.sim import resolver
+
+    shot = _shot(**_MEASURED, spin_axis_source=None)
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState())
+    assert refused.value.missing == ["spin axis"]
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
+    assert resolve_shot(shot, PlayerState()).provenance["spin_axis"] == "estimated"
+
+
+@pytest.mark.parametrize("speed", [0.0, -5.0])
+def test_a_non_positive_optional_club_speed_is_left_out(speed):
+    resolved = resolve_shot(_shot(**_MEASURED, club_speed_mph=speed), PlayerState())
+    assert resolved.club_speed_mph is None
+    assert "club_speed" not in resolved.provenance
 
 
 @pytest.mark.parametrize(

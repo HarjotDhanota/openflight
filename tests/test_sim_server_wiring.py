@@ -53,7 +53,7 @@ def _shot():
     return Shot(ball_speed_mph=140.0, timestamp=datetime(2026, 6, 13, 12, 0, 0),
                 club=ClubType.DRIVER, launch_angle_vertical=12.0,
                 launch_angle_horizontal=1.0, spin_rpm=2600.0, spin_confidence=0.9,
-                spin_axis_deg=1.0)
+                spin_axis_deg=1.0, spin_axis_source="calculated (D-plane tilt)")
 
 
 def test_forward_fans_out_to_connected_only(server):

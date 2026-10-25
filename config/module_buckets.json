@@ -75,7 +75,8 @@
   "tests/test_fallback_labels.py",
   "tests/test_fallback_orchestration.py",
   "tests/test_attack_angle_chain.py",
-  "tests/test_head_track_feeds_on.py"
+  "tests/test_head_track_feeds_on.py",
+  "tests/test_label_policy.py"
  ],
  "decisions": {
   "pi_trace": "The Pi trace is RESEARCH end to end: product code carries no trace calls. instrumentation.py holds the recorder hooks, trace_points.py wraps the kiosk's own paths (the OPS wait, re-arm and clock sync, the capture timer, the IWR debounce, the server's enrichment steps) once research_hooks is loaded, and research_hooks installs the recorder for --pi-trace. The product keeps two seams: IWR6843CaptureMonitor.on_debounced_edge and server._await_camera_prefetch, plus the kiosk_extensions on_shot_detected hook and Shot.extras.",
@@ -935,6 +936,7 @@
   "tests/test_iwr6843_tx2_phase.py": "FUSION",
   "tests/test_kiosk_extensions.py": "PRODUCT",
   "tests/test_kiosk_metric_labels.py": "FUSION",
+  "tests/test_label_policy.py": "FUSION",
   "tests/test_kiosk_ready_light.py": "PRODUCT",
   "tests/test_kiosk_spin_label.py": "FUSION",
   "tests/test_kiosk_without_shot_models.py": "PRODUCT",

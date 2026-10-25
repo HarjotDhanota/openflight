@@ -22,6 +22,8 @@ def _shot():
         spin_rpm=6500.0,
         spin_confidence=0.9,
         spin_axis_deg=1.0,
+        spin_axis_source="calculated (D-plane tilt)",
+        inclinometer={"applied_to": ["iwr6843"]},
     )
 
 
