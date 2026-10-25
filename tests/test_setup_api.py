@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -178,6 +179,7 @@ def test_bad_action_is_400_and_refusal_is_409(kiosk, scene):
         {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0], [None, 3.0]]},
         {"aim_px": [640.0, 300.0], "floor_line_px": [[1.0, 2.0]]},
         {"aim_px": [640.0, 300.0], "floor_line_px": [1.0, 2.0]},
+        {"aim_px": [math.nan, 2.0]},  # sent as a bare NaN token
     ],
 )
 def test_malformed_aim_pixels_are_400(kiosk, scene, body):
@@ -190,18 +192,6 @@ def test_malformed_aim_pixels_are_400(kiosk, scene, body):
     assert response.status_code == 400
     assert response.get_json()["ok"] is False and "px" in response.get_json()["reason"]
     assert response.get_json()["setup"]["aim"]["state"] == "not_set"
-
-
-def test_non_finite_aim_pixels_are_400(kiosk, scene):
-    _start(kiosk)
-
-    response = kiosk.client.post(
-        "/api/setup/aim",
-        data='{"action": "confirm", "aim_px": [NaN, 2.0]}',
-        content_type="application/json",
-    )
-
-    assert response.status_code == 400
 
 
 def test_aim_and_range_go_through_the_api_and_the_target_line_route(kiosk, scene):

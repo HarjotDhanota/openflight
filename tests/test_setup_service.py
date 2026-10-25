@@ -532,17 +532,6 @@ def test_show_looks_without_saving(make, scene):
     assert result["setup"]["box"]["state"] == "not_set"
 
 
-def test_a_saved_setup_is_loaded_and_applied_at_start(make, scene, tmp_path):
-    service, _recorder = make()
-    _confirm_box(service, scene)
-    restarted, recorder = make()
-
-    restarted.apply_all()
-
-    assert recorder.calls["box"][0]["state"] == "confirmed"
-    assert recorder.calls["aim"] == [None]
-
-
 def test_a_tilt_change_stales_the_box_on_restart(make, scene):
     service, _recorder = make()
     _confirm_box(service, scene)
@@ -594,6 +583,10 @@ def test_at_start_only_the_sections_once_set_are_applied(make, scene):
     for name in ("aim", "ball_range", "net_range", "scene"):
         assert recorder.calls[name] == [], name
     assert restarted.applied_revision == restarted.revision == 1
+    # apply_all applies every section, an unset one as None
+    again, recorder = make()
+    again.apply_all()
+    assert recorder.calls["box"][0]["state"] == "confirmed" and recorder.calls["aim"] == [None]
 
 
 def test_at_start_a_stale_section_is_applied_as_none_so_it_clears(make, scene):
