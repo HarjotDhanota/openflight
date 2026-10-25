@@ -245,9 +245,11 @@ def _function_source(module, name):
 def test_the_shot_and_clip_hooks_are_wired():
     # counted in the serialized shot callback, judged where the clip is matched
     assert 'call_all("on_shot_accepted", shot)' in _function_source(server, "_handle_shot_detected")
-    assert 'call_all("on_camera_capture", shot, camera_capture)' in _function_source(
+    assert "_log_camera_capture_match, shot, camera_capture" in _function_source(
         server, "_enrich_shot_from_optional_hardware"
     )
+    hook = _function_source(server, "_log_camera_capture_match")
+    assert '"on_camera_capture",' in hook and "kiosk_extensions.call_all," in hook
     assert "_count_free_play_shot(shot)" in _function_source(tester_hooks, "_on_shot_accepted")
     assert "_judge_free_play_clip(shot, camera_capture)" in _function_source(
         tester_hooks, "_on_camera_capture"
