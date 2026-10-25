@@ -32,7 +32,6 @@ import './SetupView.css';
 
 const VIEW_URL = `${getServerOrigin()}/api/setup/view.jpg`;
 const VIEW_REFRESH_MS = 2000;
-// how often the box step asks the kiosk to look for the ball again
 const LOOK_MS = 2000;
 
 const STEP_LABELS: Record<SetupStep, MessageKey> = {

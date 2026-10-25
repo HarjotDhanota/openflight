@@ -158,9 +158,8 @@ describe('faceImpact', () => {
     expect(blade).toBeLessThanOrEqual(87);
   });
 
-  /* The face's height at the centre (bottom edge to top line) is the population mean
-   * (docs/camera/impact-location.md): woods' visible face height, irons' at C. So is a wood face's
-   * width; a blade's face is its head inset by the band, so its width follows the head. */
+  /* Face height at the centre (bottom edge to top line) and a wood face's width are population
+   * means (docs/camera/impact-location.md); a blade's face width follows its head. */
   it.each([
     ['driver', 110, 50.4],
     ['fairway', 90, 30],
