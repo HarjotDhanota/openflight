@@ -1399,6 +1399,7 @@
   "ui/tests/e2e/kiosk-ux.spec.ts": "PRODUCT",
   "ui/tests/e2e/live-metrics-layout.spec.ts": "PRODUCT",
   "ui/tests/e2e/live-metrics-records.spec.ts": "PRODUCT",
+  "ui/tests/e2e/conditions.spec.ts": "PRODUCT",
   "ui/tests/e2e/metric-panels.spec.ts": "PRODUCT",
   "ui/tests/e2e/ready-light-tiles.spec.ts": "PRODUCT",
   "ui/tests/e2e/session-review.spec.ts": "TESTER",
