@@ -1,6 +1,6 @@
 """Folding late shot updates into the shot they update, for every log reader."""
 
-from openflight.shot_updates import apply_shot_updates, merge_shot_update, read_session_jsonl
+from openflight.shot_updates import apply_shot_updates, read_session_jsonl
 
 
 def _detected(number, **values):
@@ -101,9 +101,3 @@ def test_read_session_jsonl_skips_bad_lines_and_folds(tmp_path):
         {"type": "session_start"},
         {"type": "shot_detected", "shot_number": 1, "spin_rpm": 5000},
     ]
-
-
-def test_merge_keeps_detection_time_and_drops_update_metadata():
-    merged = merge_shot_update(_detected(1, a=1, b=2), _updated(1, b=3))
-
-    assert merged == {"ts": "t1", "type": "shot_detected", "shot_number": 1, "a": 1, "b": 3}

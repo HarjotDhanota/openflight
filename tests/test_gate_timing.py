@@ -107,19 +107,22 @@ def test_camera_keeps_callback_time_without_inventing_a_missing_event_time(tmp_p
     assert clocks["gate_event"]["kernel_mono_interval_ns"] is None
 
 
+def _busy_monitor(tmp_path, **observers) -> IWR6843CaptureMonitor:
+    """An armed monitor already mid-capture: every edge is fanned out, none captured."""
+    monitor = IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=object(), **observers
+    )
+    monitor._running = monitor._armed = monitor._capture_active = True
+    return monitor
+
+
 def test_a_delayed_observer_does_not_cause_the_gpio_to_be_read_again(tmp_path, monkeypatch):
     heard, readings = [], [_reading()]
 
     def delay(_event):
         readings.append(_reading(age_ns=30_200_000))
 
-    monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=object(),
-        gate_event_observers=[delay, heard.append],
-    )
-    monitor._running = monitor._armed = monitor._capture_active = True
+    monitor = _busy_monitor(tmp_path, gate_event_observers=[delay, heard.append])
     monkeypatch.setattr(monitor, "edge_tick_reading", lambda: readings.pop(0))
     assert not monitor.notify_trigger(10.0)
     assert heard[0].kernel_mono_interval_ns == (800_000, 800_100)
@@ -154,14 +157,9 @@ def test_one_read_is_shared_with_capture_and_camera(tmp_path, monkeypatch):
 
 def test_busy_iwr_fans_out_new_events_and_debounce_hides_them(tmp_path, monkeypatch):
     heard, legacy = [], []
-    monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=object(),
-        gate_event_observers=[heard.append],
-        trigger_observers=[legacy.append],
+    monitor = _busy_monitor(
+        tmp_path, gate_event_observers=[heard.append], trigger_observers=[legacy.append]
     )
-    monitor._running = monitor._armed = monitor._capture_active = True
     monkeypatch.setattr(monitor, "edge_tick_reading", lambda: _reading())
     assert not monitor.notify_trigger(10.0)
     assert not monitor.notify_trigger(10.01)
@@ -177,12 +175,6 @@ def test_failed_event_observer_does_not_hide_edge_from_others(tmp_path):
     def broken(_event):
         raise RuntimeError("consumer failed")
 
-    monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=object(),
-        gate_event_observers=[broken, heard.append],
-    )
-    monitor._running = monitor._armed = monitor._capture_active = True
+    monitor = _busy_monitor(tmp_path, gate_event_observers=[broken, heard.append])
     assert not monitor.notify_trigger(10.0)
     assert len(heard) == 1

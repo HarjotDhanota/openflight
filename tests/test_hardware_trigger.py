@@ -186,19 +186,24 @@ def test_factory_and_monitor_configure_hardware_mode_on_connect():
     )
 
 
-def test_hardware_strategy_rearms_accepts_and_records_diagnostics():
-    capture = IQCapture(sample_time=0.0, trigger_time=0.1, i_samples=[2048], q_samples=[2048])
+def _strategy_fakes(parse, readings=()):
     radar = MagicMock()
     radar.wait_for_hardware_trigger.return_value = '{"Q":[1]}'
-    radar.last_hardware_trigger_first_byte_timestamp = 12345.678
     radar.rearm_internal_speed_trigger.return_value = True
-    radar._internal_trigger_firmware_version = "1.3.2"
     processor = MagicMock()
-    processor.parse_capture.return_value = capture
-    processor.process_standard.return_value = SpeedTimeline(
-        readings=[SpeedReading(100.0, 900.0, 68.0, "outbound")],
-        sample_rate_hz=937.5,
-    )
+    if isinstance(parse, Exception):
+        processor.parse_capture.side_effect = parse
+    else:
+        processor.parse_capture.return_value = parse
+    processor.process_standard.return_value = SpeedTimeline(list(readings), 937.5)
+    return radar, processor
+
+
+def test_hardware_strategy_rearms_accepts_and_records_diagnostics():
+    capture = IQCapture(sample_time=0.0, trigger_time=0.1, i_samples=[2048], q_samples=[2048])
+    radar, processor = _strategy_fakes(capture, [SpeedReading(100.0, 900.0, 68.0, "outbound")])
+    radar.last_hardware_trigger_first_byte_timestamp = 12345.678
+    radar._internal_trigger_firmware_version = "1.3.2"
 
     trigger = HardwareTriggeredCapture()
     assert trigger.wait_for_trigger(radar, processor, timeout=1.0) is capture
@@ -210,36 +215,18 @@ def test_hardware_strategy_rearms_accepts_and_records_diagnostics():
     assert diagnostic["iwr_camera_fanout"] == "unavailable_no_qualified_trigger_edge"
 
 
-@pytest.mark.parametrize("parse_result", [None, ValueError("bad dump")])
-def test_hardware_strategy_rearms_after_parse_failure(parse_result):
-    radar = MagicMock()
-    radar.wait_for_hardware_trigger.return_value = "not-json"
-    radar.rearm_internal_speed_trigger.return_value = True
-    processor = MagicMock()
-    if isinstance(parse_result, Exception):
-        processor.parse_capture.side_effect = parse_result
-    else:
-        processor.parse_capture.return_value = parse_result
+@pytest.mark.parametrize(
+    ("parse", "reason"),
+    [
+        (None, "parse_failed"),
+        (ValueError("bad dump"), "parse_failed"),
+        (IQCapture(0.0, 0.1, [2048], [2048]), "no_ball_speed"),  # a false trigger
+    ],
+)
+def test_hardware_strategy_rearms_and_refuses_an_unusable_dump(parse, reason):
+    radar, processor = _strategy_fakes(parse)
 
     trigger = HardwareTriggeredCapture()
     assert trigger.wait_for_trigger(radar, processor) is None
     radar.rearm_internal_speed_trigger.assert_called_once_with(30)
-    assert trigger.drain_diagnostics()[0]["reason"] == "parse_failed"
-
-
-def test_hardware_strategy_rejects_false_trigger_after_rearm():
-    radar = MagicMock()
-    radar.wait_for_hardware_trigger.return_value = '{"Q":[1]}'
-    radar.rearm_internal_speed_trigger.return_value = True
-    processor = MagicMock()
-    processor.parse_capture.return_value = IQCapture(
-        sample_time=0.0,
-        trigger_time=0.1,
-        i_samples=[2048],
-        q_samples=[2048],
-    )
-    processor.process_standard.return_value = SpeedTimeline([], 937.5)
-
-    trigger = HardwareTriggeredCapture()
-    assert trigger.wait_for_trigger(radar, processor) is None
-    assert trigger.drain_diagnostics()[0]["reason"] == "no_ball_speed"
+    assert trigger.drain_diagnostics()[0]["reason"] == reason
