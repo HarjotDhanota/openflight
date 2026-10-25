@@ -205,12 +205,18 @@ def test_gate_edge_without_a_dump_is_logged_and_rearmed():
     assert [diag["reason"] for diag in diagnostics] == ["edge_without_dump"]
 
 
-def test_gate_edge_that_starts_a_dump_is_not_flagged():
+def _ball_dump_ops():
+    """A real-looking ball dump that streams in quickly, and a radar without clock sync."""
     i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
     ops = FakeOps(_dump(i_samples, q_samples))
     ops.BYTES_PER_MS = 400.0
     radar = _radar(ops)
     radar.read_clock_sync = lambda **_kwargs: {"clock_sync_method": "no_valid_reads"}
+    return ops, radar
+
+
+def test_gate_edge_that_starts_a_dump_is_not_flagged():
+    ops, radar = _ball_dump_ops()
 
     trigger = SoundTrigger(pre_trigger_segments=16)
 
@@ -241,11 +247,7 @@ def test_gate_edges_from_before_the_wait_do_not_end_it():
 
 def test_sound_path_never_flushes_a_dump_already_arriving():
     """Upstream's flush must never run on the sound path: it drops a waiting dump's marker."""
-    i_samples, q_samples = synth_capture(rpm=3000, ball_speed_mph=80.0, amplitude=400.0)
-    ops = FakeOps(_dump(i_samples, q_samples))
-    ops.BYTES_PER_MS = 400.0
-    radar = _radar(ops)
-    radar.read_clock_sync = lambda **_kwargs: {"clock_sync_method": "no_valid_reads"}
+    ops, radar = _ball_dump_ops()
     flushes_before_read = []
     dump_read = []
     real_reset = ops.reset_input_buffer

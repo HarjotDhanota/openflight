@@ -112,18 +112,22 @@ def _zone_rule_payload(image):
     }
 
 
-def test_a_manual_clip_is_judged_on_the_setup_ball_when_the_kiosk_has_one(tmp_path):
-    frames, setup = _sun("lock")
+def _save_manual_clip(tmp_path, frames, **settings):
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,
         settings=CameraCaptureSettings(
-            width=1280, height=800, fps=120.0, auto_exposure=False, setup_ball=setup
+            width=1280, height=800, fps=120.0, auto_exposure=False, **settings
         ),
     )
-
-    saved = runtime._save_capture(  # pylint: disable=protected-access
+    return runtime._save_capture(  # pylint: disable=protected-access
         1, 123.0, _capture(frames), auto_exposure=_zone_rule_payload(frames[-1])
     )
+
+
+def test_a_manual_clip_is_judged_on_the_setup_ball_when_the_kiosk_has_one(tmp_path):
+    frames, setup = _sun("lock")
+
+    saved = _save_manual_clip(tmp_path, frames, setup_ball=setup)
 
     written = json.loads((saved.path / "metadata.json").read_text(encoding="utf-8"))
     assert saved.metadata["auto_exposure"]["analysis_eligible"] is True
@@ -140,14 +144,8 @@ def test_a_manual_clip_is_judged_on_the_setup_ball_when_the_kiosk_has_one(tmp_pa
 
 def test_without_a_setup_ball_the_zone_rule_stands(tmp_path):
     frames, _setup = _sun("lock")
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path,
-        settings=CameraCaptureSettings(width=1280, height=800, fps=120.0, auto_exposure=False),
-    )
 
-    saved = runtime._save_capture(  # pylint: disable=protected-access
-        1, 123.0, _capture(frames), auto_exposure=_zone_rule_payload(frames[-1])
-    )
+    saved = _save_manual_clip(tmp_path, frames)
 
     assert saved.metadata["auto_exposure"]["analysis_eligible"] is False
     assert "analysis_eligibility" not in saved.metadata["auto_exposure"]
