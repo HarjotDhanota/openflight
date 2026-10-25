@@ -364,6 +364,18 @@ direction), then a turn round and back on the same spot (the roll's zero).
 C: confirm the setup. The engineering rows and notes are folded under **Details
 (for the maintainer)**.
 
+The tilt check's two roll steps:
+
+1. **Direction.** Lift the unit's left side about 2 cm; the roll must read negative
+   (`roll_verified: true`).
+2. **Zero, by reversal.** Turn the unit 180° on the same spot and tap, then turn it
+   back and tap. The floor's tilt changes sign with the turn and the board's own roll
+   (its seat and the sensor's zero-g offset) does not, so the mean of the two facings
+   is the board's roll on a level floor. `roll_zero_deg` (beyond the rig's expected
+   mount roll) and its repeatability go in `~/.config/openflight/lis3dh-mount.json`;
+   a reversal that does not repeat within 1° is tried again. The setup's pads keep
+   that repeatability (at least 0.1°).
+
 **Step 3: the ball box.** Set the unit 1.8–2.9 m behind the ball, pointing down
 the target line. The live picture opens by itself with a yellow box drawn on it:
 the box does not move. Put the ball in the box; a green check appears when the

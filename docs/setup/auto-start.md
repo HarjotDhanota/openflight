@@ -97,19 +97,6 @@ On the command line, `./scripts/start-kiosk.sh --radar-port /dev/ttyAMA0` does
 the same and beats the environment variable. On a Pi 5 use `/dev/ttyAMA0`, not
 `/dev/serial0`, which points at the separate debug-header UART.
 
-### A unit used with the tester
-
-The tester and the kiosk service both want the camera, the radars and the
-Python environment, and `start-tester.sh` refuses to start while the service
-is running. `stop` only lasts until the next boot, so on a unit used with the
-tester turn the service off for good:
-
-```bash
-sudo systemctl disable --now openflight.service
-```
-
-Turn it back on with `sudo systemctl enable --now openflight.service`.
-
 ## Kiosk mode (fullscreen, recommended)
 
 ```bash
