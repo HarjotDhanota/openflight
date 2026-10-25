@@ -109,7 +109,8 @@ def test_ops_wait_phase_after_a_rearm_or_cancel(phase, cancelled, armed, final):
     if cancelled:
         cancel.set()
 
-    assert radar.wait_for_hardware_trigger(timeout=0.1, dump_grace=0.1, cancel_event=cancel) == ""
+    grace = None if cancelled else 0.1  # a cancelled wait takes the default transfer budget
+    assert radar.wait_for_hardware_trigger(timeout=0.1, dump_grace=grace, cancel_event=cancel) == ""
     if armed is not None:
         assert ("armed" in port.seen) is armed
     if final:

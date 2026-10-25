@@ -3716,19 +3716,20 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         """On a fusion unit both speeds are OPS radial readings, so smash says so."""
         emitted, session_log = self._record_finalization(monkeypatch)
         worker_targets = []
-        monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
-        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
         monkeypatch.setattr(server_module, "iwr6843_runtime", object() if fusion else None)
-        monkeypatch.setattr(
-            server_module.socketio,
-            "start_background_task",
-            lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
-        )
-        monkeypatch.setattr(
-            server_module,
-            "_enrich_shot_from_optional_hardware",
-            lambda _shot: server_module._ShotEnrichmentResult(),
-        )
+        if fusion:
+            monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
+            monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+            monkeypatch.setattr(
+                server_module.socketio,
+                "start_background_task",
+                lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
+            )
+            monkeypatch.setattr(
+                server_module,
+                "_enrich_shot_from_optional_hardware",
+                lambda _shot: server_module._ShotEnrichmentResult(),
+            )
 
         on_shot_detected(self._shot())
         if fusion:
