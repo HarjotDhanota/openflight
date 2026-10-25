@@ -1373,6 +1373,13 @@
   "ui/tsconfig.app.json": "PRODUCT",
   "ui/tsconfig.json": "PRODUCT",
   "ui/tsconfig.node.json": "PRODUCT",
-  "ui/vite.config.ts": "PRODUCT"
+  "ui/vite.config.ts": "PRODUCT",
+  "src/openflight/source_chain.py": "FUSION",
+  "src/openflight/camera/ball_launch_fallback.py": "FUSION",
+  "src/openflight/camera/resting_ball_range.py": "FUSION",
+  "tests/test_source_chain.py": "FUSION",
+  "tests/test_ball_launch_fallback.py": "FUSION",
+  "tests/test_resting_ball_range.py": "FUSION",
+  "tests/camera_fallback_scene.py": "FUSION"
  }
 }
