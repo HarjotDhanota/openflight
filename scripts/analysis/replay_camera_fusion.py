@@ -16,7 +16,12 @@ from typing import Any
 
 import numpy as np
 
-from openflight.camera.fusion_processing import build_context, lighting_note, process_camera_fusion
+from openflight.camera.fusion_processing import (
+    build_context,
+    lens_record_focal_px,
+    lighting_note,
+    process_camera_fusion,
+)
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
 from openflight.raw_radar_replay import locate_recorded_capture
@@ -242,6 +247,10 @@ def reconstruct_context(
         shot_number=shot["shot_number"],
         notes=[] if eligible else [lighting_note(auto_exposure)],
         setup_ball=camera.get("setup_ball"),
+        lens_focal_px=lens_record_focal_px(
+            camera.get("lens") or _mapping(config.get("rig_geometry")).get("lens"),
+            int(geometry.image_width_px),
+        ),
     )
     return context, notes
 

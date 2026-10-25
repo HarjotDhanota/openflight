@@ -20,6 +20,7 @@ from openflight.camera.club_delivery import (
 )
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.camera.lens_profiles import ARM_SIZES
 from openflight.camera.triggered_buffer import exposure_trigger_index
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubRangeEvidence
@@ -127,6 +128,27 @@ def _restore_range(snapshot: Any, kind: str):
     )
 
 
+def _positive_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def lens_record_focal_px(lens: Mapping[str, Any] | None, width_px: int) -> float | None:
+    """A lens record's focal length for a capture this wide; None for another mode."""
+    by_arm = lens.get("focal_px_by_arm") if isinstance(lens, Mapping) else None
+    if not isinstance(by_arm, Mapping):
+        return None
+    for arm_id, (width, _height) in ARM_SIZES.items():
+        value = by_arm.get(arm_id)
+        if width == int(width_px) and _positive_number(value):
+            return float(value)
+    return None
+
+
 def build_context(
     *,
     geometry: EffectiveCameraGeometryInputs,
@@ -145,10 +167,12 @@ def build_context(
     notes: list[str] | None = None,
     setup_ball: Mapping[str, Any] | None = None,
     camera_pose: Mapping[str, Any] | None = None,
+    lens_focal_px: float | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
     ``notes`` are the capture's lighting and optical-quality labels; they never block.
+    ``lens_focal_px`` is the lens's focal length in this capture's pixels, when known.
     """
     payload = {
         "schema": SCHEMA,
@@ -173,6 +197,9 @@ def build_context(
     if camera_pose is not None:
         # without a pose, replay uses the resting ball's camera model
         payload["camera_pose"] = dict(camera_pose)
+    if lens_focal_px is not None:
+        # sizes the resting ball from its distance; contexts frozen before carry none
+        payload["lens_focal_px"] = float(lens_focal_px)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
     return payload
@@ -221,6 +248,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             sensor_timestamps_ns=_sensor_timestamps(archive),
             trigger_frame_index=exposure_trigger_index(archive, len(frames)),
             setup_ball=context.get("setup_ball"),
+            lens_focal_px=context.get("lens_focal_px"),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")

@@ -255,3 +255,26 @@ def test_a_shot_whose_frames_are_missing_still_refuses(tmp_path):
 
     with pytest.raises(ValueError, match="not in the session folder|frames"):
         replay_recorded_shot(session_file, 3)
+
+
+def test_a_reconstructed_context_carries_the_session_lens_s_focal_length():
+    # pylint: disable=import-outside-toplevel
+    from scripts.analysis.replay_camera_fusion import reconstruct_context
+
+    start = {
+        "session_uuid": "session-a",
+        "config": {
+            "camera_capture": {
+                "mount_height_m": 0.095,
+                "width": 1280,
+                "height": 800,
+                "lens": {"focal_px_by_arm": {"arm5": 2000.0001, "arm6": 1000.0001}},
+            },
+            "iwr6843": {"tee_slant_range_m": 1.9, "radar_height_m": 0.052, "ball_height_m": 0.021},
+        },
+    }
+    shot = {"shot_number": 3, "ball_speed_mph": 60.0, "club": "7-iron"}
+
+    context, _notes = reconstruct_context(start, shot, {"metadata": {}}, "capture-hash")
+
+    assert context["lens_focal_px"] == pytest.approx(2000.0001)
