@@ -72,9 +72,8 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     ops_speed_track,
 )
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
+from .shot_metrics import CALCULATED, NOT_MEASURED
 
-CALCULATED = "calculated"
-NOT_MEASURED = "not_measured"
 METHOD = "measured_projection_v1"
 BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
 CLUB_SOURCE = "measured projection: OPS radial + measured club direction + rig geometry"

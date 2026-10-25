@@ -42,7 +42,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from . import metric_definitions
+from . import metric_definitions, shot_metrics
 from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
 from .collision_model import (
     is_estimated_source,
@@ -86,10 +86,10 @@ _UNITS = {
 }
 _TOTAL_METRICS = ("total", "total_side")
 
-STATUS_CALCULATED = "calculated"
-STATUS_MODEL_GEOMETRY = "model_geometry"
-STATUS_ESTIMATED = "estimated"
-STATUS_NOT_MEASURED = "not_measured"
+STATUS_CALCULATED = shot_metrics.CALCULATED
+STATUS_MODEL_GEOMETRY = shot_metrics.MODEL_GEOMETRY
+STATUS_ESTIMATED = shot_metrics.ESTIMATED
+STATUS_NOT_MEASURED = shot_metrics.NOT_MEASURED
 # weakest first: a flight output takes the weakest label among its inputs
 STATUS_ORDER = (
     STATUS_NOT_MEASURED,

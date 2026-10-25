@@ -106,7 +106,7 @@ import math
 from dataclasses import asdict, dataclass, field, replace
 from typing import Optional
 
-from . import collision_forward, metric_definitions
+from . import collision_forward, metric_definitions, shot_metrics
 from .ballistics import BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
@@ -129,10 +129,10 @@ MODEL_VERSION = "e2-2026-10-20-fitted"
 
 # Input labels (source_labels: measured, calculated, model geometry, estimated) and
 # output statuses.
-STATUS_CALCULATED = "calculated"
-STATUS_MODEL_GEOMETRY = "model_geometry"
-STATUS_ESTIMATED = "estimated"
-STATUS_NOT_MEASURED = "not_measured"
+STATUS_CALCULATED = shot_metrics.CALCULATED
+STATUS_MODEL_GEOMETRY = shot_metrics.MODEL_GEOMETRY
+STATUS_ESTIMATED = shot_metrics.ESTIMATED
+STATUS_NOT_MEASURED = shot_metrics.NOT_MEASURED
 _INPUT_LABELS = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
 
 SOURCE_INVERSION = "D-plane inversion of the fitted launch model"

@@ -14,18 +14,22 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .numeric import finite_float as _finite
-from .source_labels import is_calculated_source, is_measured_source, is_model_geometry_source
+from .source_labels import (
+    LABEL_CALCULATED as CALCULATED,
+    LABEL_ESTIMATED as ESTIMATED,
+    LABEL_EXPERIMENTAL as EXPERIMENTAL,
+    LABEL_MEASURED as MEASURED,
+    LABEL_MODEL_GEOMETRY as MODEL_GEOMETRY,
+    is_calculated_source,
+    is_measured_source,
+    is_model_geometry_source,
+)
 
 logger = logging.getLogger(__name__)
 
 SCHEMA = "openflight.shot_metrics"
 VERSION = 1
 
-MEASURED = "measured"
-CALCULATED = "calculated"
-MODEL_GEOMETRY = "model_geometry"
-ESTIMATED = "estimated"
-EXPERIMENTAL = "experimental"
 NOT_MEASURED = "not_measured"
 LABELS = (MEASURED, CALCULATED, MODEL_GEOMETRY, ESTIMATED, EXPERIMENTAL, NOT_MEASURED)
 

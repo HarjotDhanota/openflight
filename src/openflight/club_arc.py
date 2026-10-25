@@ -123,11 +123,8 @@ from openflight.camera.club_delivery import HeadPosition
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for
+from openflight.shot_metrics import CALCULATED, MEASURED, MODEL_GEOMETRY, NOT_MEASURED
 
-MEASURED = "measured"
-CALCULATED = "calculated"
-MODEL_GEOMETRY = "model_geometry"
-NOT_MEASURED = "not_measured"
 LABEL_RANK = {MEASURED: 3, CALCULATED: 2, MODEL_GEOMETRY: 1, NOT_MEASURED: 0}
 
 RIGHT_HANDED = "RH"
