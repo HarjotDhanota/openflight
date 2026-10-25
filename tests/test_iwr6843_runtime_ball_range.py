@@ -128,7 +128,9 @@ def test_without_either_the_range_dependent_estimators_are_withheld():
         result = _runtime(prior=None).process_shot(**SHOT)
 
     process.assert_not_called()
+    assert result.capture is not None and result.capture.valid
     assert result.measurement is None
+    assert result.club_path is None
     assert result.withheld_reason == "tee_range_unresolved"
     assert result.ball_range.range_m is None
     assert result.ball_range.label == "not_measured"
