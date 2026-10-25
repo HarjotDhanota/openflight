@@ -1510,6 +1510,12 @@ def shot_iwr_calibration(shot):
         return calibration
 
 
+def _has_tee_range(shot) -> bool:
+    """True when the camera's geometry has a ball range for this shot (from any route)."""
+    calibration = shot_iwr_calibration(shot)
+    return calibration is not None and getattr(calibration, "tee_range_m", None) is not None
+
+
 def shot_ball_at_address(trigger_at: float | None) -> dict | None:
     """The shot's own resting-ball look: the last one before its trigger, if recent."""
     monitor = ball_at_address_monitor
@@ -5026,6 +5032,8 @@ def _fuse_camera_club_delivery(
             estimate_chained_delivery,
         )
         from openflight.camera.geometry_contract import (  # noqa: PLC0415
+            DEPTH_NEEDED,
+            NO_BALL_RANGE_STATUS,
             EffectiveCameraGeometryInputs,
         )
         from openflight.camera.triggered_buffer import (  # noqa: PLC0415
@@ -5051,7 +5059,9 @@ def _fuse_camera_club_delivery(
                     # else at the camera when the scene has none
                     calibration = shot_iwr_calibration(shot) or _camera_only_calibration(shot)
                     if calibration is None:
-                        fused = ChainedDelivery(status="rejected_no_iwr_runtime")
+                        fused = ChainedDelivery(
+                            status=NO_BALL_RANGE_STATUS, notes=(f"no ball range: {DEPTH_NEEDED}",)
+                        )
                     else:
                         if calibration.tee_range_m is None:
                             fused = ChainedDelivery(status="rejected_missing_tee_geometry")
@@ -5260,6 +5270,7 @@ def _fuse_camera_ball_flight(
             select_camera_assisted_horizontal,
         )
         from openflight.camera.geometry_contract import (  # noqa: PLC0415
+            NO_BALL_RANGE_STATUS,
             EffectiveCameraGeometryInputs,
         )
         from openflight.camera.triggered_buffer import (  # noqa: PLC0415
@@ -5272,7 +5283,7 @@ def _fuse_camera_ball_flight(
             if not frames_path.exists():
                 estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
             elif shot_iwr_calibration(shot) is None:
-                estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
+                estimate = CameraBallEstimate(status=NO_BALL_RANGE_STATUS)
             else:
                 calibration = shot_iwr_calibration(shot)
                 if calibration.tee_range_m is None:
@@ -5937,6 +5948,8 @@ def _fuse_camera_measurements(
                 camera_notes.append(NO_TEE_RANGE)
                 shot.camera_notes = camera_notes
             _record_stage_error(shot, "camera_fusion_shared", error)
+    from openflight.camera.geometry_contract import DEPTH_NEEDED  # noqa: PLC0415
+
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
     _calibrate_camera_tilt_from_swing(shot, camera_archive)
@@ -5947,6 +5960,8 @@ def _fuse_camera_measurements(
             "status": "not_run",
             "reason": "no camera clip for this shot"
             if camera_archive is None
+            else f"no ball range: {DEPTH_NEEDED}"
+            if not _has_tee_range(shot)
             else f"the shared camera fusion did not run ({shared_error or 'no context'})",
         },
     )

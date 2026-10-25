@@ -322,12 +322,33 @@ def test_a_raising_fusion_diagnostic_still_logs_the_shot(kiosk, scene):
     assert logged[0]["stage_errors"]["fusion_diagnostic"] == shot.stage_errors["fusion_diagnostic"]
 
 
-def test_a_shot_without_a_range_records_the_shared_fusion_s_refusal_as_a_stage_error(kiosk, scene):
+def test_a_shot_without_a_range_records_the_shared_fusion_s_refusal_as_a_stage_error(
+    kiosk, scene, tmp_path
+):
     kiosk.setattr(server_module, "_resolve_shot_ball_range", lambda shot, archive: None)
+    (tmp_path / "frames.npz").write_bytes(b"")  # a saved clip, as on the kiosk
+    capture = SimpleNamespace(valid=True, path=tmp_path, metadata={})
     shot = _shot(scene)
 
-    _run(scene, shot)
+    server_module._fuse_camera_measurements(shot, capture, _archive(scene))  # pylint: disable=protected-access
+    kiosk_extensions.call_all("after_enrichment", shot)
+    server_module._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
 
     assert "missing effective camera geometry" in shot.stage_errors["camera_fusion_shared"]
     # the shot itself still resolves what needs no camera geometry
-    assert shot.to_dict()["metrics"]["ball_speed"]["status"] == "measured"
+    metrics = shot.to_dict()["metrics"]
+    assert metrics["ball_speed"]["status"] == "measured"
+    # every camera route that needs the ball's depth is refused for that reason, by name
+    assert shot.experimental_fused_status == "rejected_no_ball_range"
+    for name in ("club_path", "attack_angle"):
+        assert metrics[name]["value"] is None, name
+        assert "rejected_no_ball_range" in metrics[name]["reason"], name
+    assert (
+        "the camera head track did not run (rejected_no_ball_range)"
+        in (metrics["attack_angle"]["reason"])
+    )
+    fallback = shot.camera_fallback_launch
+    assert fallback["status"] == "not_run"
+    assert fallback["reason"].startswith("no ball range")
+    assert "depth" in fallback["reason"]
+    assert "no ball range" in metrics["launch_vertical"]["reason"]

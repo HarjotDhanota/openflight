@@ -86,4 +86,4 @@ def test_without_an_iwr_or_a_ball_range_the_rejection_stands(monkeypatch, tmp_pa
     server._fuse_camera_club_delivery(shot, _capture(tmp_path), camera_archive=_archive())
 
     assert captured == {}
-    assert shot.experimental_fused_status == "rejected_no_iwr_runtime"
+    assert shot.experimental_fused_status == "rejected_no_ball_range"

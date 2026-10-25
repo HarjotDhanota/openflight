@@ -21,6 +21,15 @@ NO_TEE_RANGE = (
     "no tee range: the setup handed the swings none, and the IWR launch and the "
     "camera's geometry both need one"
 )
+# The camera routes refused on a shot with no ball range: each needs the ball's depth.
+# On Harjot-outdoor-test-1 a depth anywhere in the 1.8-2.9 m placement window moved
+# the head track's path by up to 7 deg (shot 33's changed sign) and its attack by 11.
+NO_BALL_RANGE_STATUS = "rejected_no_ball_range"
+DEPTH_NEEDED = (
+    "the camera's club path, attack angle and fallback launch need the ball's depth: "
+    "the head's and the ball's sideways speeds scale with it, and the camera's pitch "
+    "and focal length are inferred at it"
+)
 ASSUMPTIONS = {
     "focal_length": "inferred_from_reference_ball",
     "pitch": "inferred_from_reference_ball",
