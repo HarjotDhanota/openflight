@@ -70,8 +70,12 @@ configuration. It is kept on disk (`setup-confirmation.json` in the tester's
 folder) with a `confirmation_id`, so a tester-server restart keeps it, and a
 re-confirmation without a real change keeps the same identity. Changing a
 configuration invalidates its earlier confirmation, and so does the unit turning
-by more than 0.5° in pitch or roll since it was confirmed (a stable LIS3DH reading
-says so). Recheck and reconfirm after moving the setup or changing its physical
+by more than 1° in pitch or roll since it was confirmed and staying turned: three
+still LIS3DH readings past it over at least 3 s, with none back within 0.75°
+between them. The confirmation's own pose is the median of the still readings over
+2.5 s, never one snapshot. A single reading past 1° is a pending move: the page
+says to keep the unit still and nothing resets. A reading that is moving or stale
+waits; the page's polls hold the last still reading over it for up to 10 s. Recheck and reconfirm after moving the setup or changing its physical
 arrangement; software cannot detect every mechanical change.
 
 An in-progress automatic-range epoch remains bound to the confirmation that

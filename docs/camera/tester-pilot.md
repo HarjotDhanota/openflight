@@ -933,6 +933,9 @@ every earlier frame and failure record for review.
 
 | What you see | Cause | Fix |
 | --- | --- | --- |
+| Steps 3 or 4 go back to an earlier step by themselves, the live view vanishes, or a confirmed ball box asks again (24 Oct) | Fixed: one LIS3DH reading past 0.5° of a single snapshot revoked the setup. Now a move must exceed 1° and last 3 s, and one poll that takes a step back is ignored | If it still happens, send the server log: `[SETUP] eligibility`, `[SETUP] unit moved`, `[BOX_BALL]` and `[LIVE]` lines count every flip and say why |
+| `Checking the ball again: the camera has not seen it for a moment` under the box | The camera's last look at the ball is more than 2 s old, so Confirm waits for a fresh one | Keep the ball still in the box; Confirm turns on again with the camera's next look |
+| `Camera numbers will be withheld for every shot this session: the ball range was not found` at step 7 | The ball range (step 6) finished with no distance | Tap **Try the ball range again**, or start free play anyway: the radar's numbers still record |
 | `IWR6843 did not acknowledge '<config line>'`, at a different line each time, and RESET does not help | The radar board's CP2105 USB bridge stopped answering; `dmesg` shows `cp210x ttyUSB0: failed set request 0x12 status: -110` at each failure. RESET restarts the radar, not the bridge | Unplug the radar's USB cable for 5 s, plug it back in, run **Check the unit** (step 2), then retry. If it keeps happening, try a short thick cable or a powered USB hub |
 | `fatal: ambiguous argument 'origin/feat/tester-capture-pilot'` | `origin` is the upstream repository; the study branch is on the fork | Add the fork as shown in *Before your first run* |
 | `Failed to build lgpio` … `swig: No such file or directory` | Build tools missing | `sudo apt install -y swig liblgpio-dev python3-dev`, then start again |

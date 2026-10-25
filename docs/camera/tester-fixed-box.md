@@ -147,7 +147,9 @@ The setup's side offset reaches the radar launch fit (`lateral_tee_offset_m`).
 The operator's confirmation is kept on disk (`setup-confirmation.json` per
 tester) with a `confirmation_id` that a server restart or a re-confirmation
 without a real change keeps. A real change asks again: another approved
-configuration, the unit turned by more than 0.5° in pitch or roll, another lens,
+configuration, the unit turned by more than 1° in pitch or roll and staying turned
+(three still LIS3DH readings over at least 3 s, against the median of the still
+readings over the 2.5 s the confirmation took), another lens,
 or another box (`placement-box.json`'s binding carries the confirmation id, the
 lens and the box's identity, never a time). An older dragged-patch
 `placement-box.json` is read and asks to be confirmed again.
