@@ -43,6 +43,7 @@ nav = [
       "iwr6843/low-confidence-recovery.md",
     ] },
     "build/inclinometer.md",
+    "build/air-sensor.md",
     "build/battery.md",
     "build/enclosure.md",
   ] },

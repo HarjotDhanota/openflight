@@ -130,6 +130,20 @@ tilt when the rig is placed on uneven ground.
 See the **[LIS3DH Inclinometer Setup Guide](../build/inclinometer.md)** for wiring,
 mounting, calibration, startup flags, and troubleshooting.
 
+### Optional Air-Density Sensor
+
+A BME280 on the same I2C bus measures temperature, station pressure and humidity,
+so the raw flight flies in the air the ball was hit in instead of ISA sea-level
+air. The kiosk finds it at startup; nothing to switch on.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Adafruit BME280 breakout** | Temperature, pressure and humidity over I2C, STEMMA QT connectors. Not a BMP280: it has no humidity sensor and is refused | [Adafruit product 2652](https://www.adafruit.com/product/2652) | $15 |
+| **Qwiic-to-Dupont cable (single)** | The same 150 mm cable as the inclinometer's (SparkFun CAB-17261) | [Mouser](https://www.mouser.com/ProductDetail/SparkFun-Electronics/CAB-17261?qs=DRkmTr78QAQLJE%2FDhtP97Q%3D%3D) | ~$2 |
+
+See the **[BME280 Air-Density Sensor guide](../build/air-sensor.md)** for wiring,
+placement and verification.
+
 ---
 
 ## Angle Radar (K-LD7) — DEPRECATED
@@ -317,6 +331,7 @@ Independent of each other; add the ones you want.
 | Add | What it buys | ~Price |
 |---|---|---|
 | Inclinometer | LIS3DH and its Qwiic-to-Dupont cable, so the rig can sit on uneven ground | $15 |
+| Air-density sensor | BME280 and its Qwiic-to-Dupont cable, so the raw flight uses the measured air | $17 |
 | Camera | InnoMaker OV9281, experimental vision work only | $30 |
 | **Battery power, [X1202](power.md#route-2-the-geekworm-x1202-x1206-ups-hat)** | HAT $48, four 18650s $24, 12 V adapter $15, panel DC jack $8, the lead into the board $2-3, and a 12 mm button with leads $6 — $104 in all. It **replaces** the $14 supply in step 1, so the net add is | **+$90** |
 | Battery power, [X1206](power.md#route-2-the-geekworm-x1202-x1206-ups-hat) instead | the same list with a $52 HAT and four 21700s at $32 | +$102 |

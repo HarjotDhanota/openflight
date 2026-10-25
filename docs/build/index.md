@@ -26,6 +26,10 @@ it is done and verified.
 
     *Optional.* LIS3DH enclosure-level tilt compensation.
 
+- :material-weather-partly-cloudy: **[Air-density sensor](air-sensor.md)**
+
+    *Optional.* BME280: the raw flight flies in the measured air.
+
 - :material-battery-outline: **[Battery](battery.md)**
 
     *Optional.* Geekworm X1202/X1206 UPS with native telemetry.

@@ -61,6 +61,7 @@ Written by `src/openflight/session_logger.py`.
 | `sim_status` | Simulator connection status changed. |
 | `sim_player` | Player state — target, handedness, club. |
 | `power_status` | Battery and external-power status. |
+| `air_conditions` | The air the raw flight uses changed source or reason: the BME280's reading, or ISA with why. |
 
 ## Size
 
