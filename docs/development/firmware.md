@@ -112,16 +112,10 @@ EDMA packs, waits, errors, clipped components, and missed HWA starts rather than
 silently hiding cadence failures.
 
 In evidence builds (dump v8/v9 with EDMA packing) the rearm task scans each
-completed IQ16 scratch frame right after its pack starts, counting the
-components outside int8 (exactly the values the low-byte copy would change) and
-the largest magnitude. A frame the scan did not cover (its pack failed to start,
-a pending frame was overrun, or the build packs on the CPU) carries no scanned
+completed IQ16 scratch frame for components outside int8, the values the
+low-byte copy would change. A frame the scan did not cover carries no scanned
 flag, and the host reports the capture's IQ8 integrity as unobserved, never
-clean. A capture plan with fewer than two pre frames never sets the capture's
-scan flag (the next frame could reuse the slot mid-scan), so it also reads
-unobserved. The scan is a CPU pass (15,264 components per profile C frame), so
-its worst-case elapsed scan time, including pre-emption, is recorded from
-`sensorStart` for `perfstats` (with the scan count and total, for an average).
+clean; so does a capture plan with fewer than two pre frames.
 
 ## Firmware And Host Contract
 
@@ -328,11 +322,7 @@ meta-image, and copies the production image into `firmware/releases/`:
 firmware/releases/$(RELEASE_NAME)
 ```
 
-`RELEASE_NAME` names the file (default `l3_dump_local_build.bin`, never a release
-name); pass a dated name such as `RELEASE_NAME=l3_dump_evidence_20261009.bin` for a
-release. Both targets refuse to overwrite an existing file in `firmware/releases/`,
-including the checked-in rollback image
-`l3_dump_configurable_capture_20260818.bin`, unless `OVERWRITE_RELEASE=1` is given.
+`RELEASE_NAME` and `OVERWRITE_RELEASE` work as in the Docker build above.
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
 `firmware/iwr6843/` and are ignored by Git. Current production images and
@@ -480,7 +470,7 @@ The runtime config controls the capture without rebuilding firmware:
 | `captureFormat iq16\|iq8` | L3 sample representation |
 | `iq8Scale 16\|32\|64\|128\|256` | Fixed power-of-two IQ8 quantization scale used by EDMA packing |
 | `phaseCaptureCfg` | Pre/impact/ball window starts, widths, counts, and stride |
-| `perfstats` | Since `sensorStart`: worst-case elapsed rearm and whole rearm-task times, the smallest arm-to-frame-start margin (it includes the frame-start ISR entry latency, so it can read slightly high), the worst-case elapsed scan time, including pre-emption, with the scan count and total, EDMA-pack maxima, pack overlaps, IQ8 pre-narrowing overflow total (it saturates at `4294967295` instead of wrapping; `iq8_overflow_saturated=1` then marks it as a floor, not a count); the default heap (free low-water sampled at boot, after each dump and at each call, not continuous); task and Hwi stack high-water marks. Times are elapsed ticks of `tick_hz`, pre-emption included. Each maximum has its count (0 means not measured); `margin_min` is `4294967295` when `margin_frames=0`. A build without the IQ8 scan prints `perf scan=not_in_build pack=not_in_build` on line 2 |
+| `perfstats` | Since `sensorStart`: worst-case rearm, scan and EDMA-pack times in `tick_hz` ticks, the smallest arm-to-frame-start margin, the IQ8 overflow total, and heap and stack high-water marks. Each maximum has its count (0 means not measured) |
 | `l3bench` | With the sensor stopped: elapsed ticks for one read-and-accumulate pass over every stored complex sample (a floor for on-chip reduction cost, not any packet's cost) |
 
 Before increasing loops, frames, transmitters, or bins, calculate the ring:

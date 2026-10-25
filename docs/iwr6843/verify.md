@@ -41,9 +41,7 @@ use the experimental profile:
 ```
 
 Passing `--iwr6843-config` explicitly keeps the selected profile visible in the
-launch command and session log. There is no tee-range default: replace the
-placeholder with the current measurement, or omit the option to preserve raw
-captures while withholding range-dependent metrics.
+launch command and session log.
 
 The OPS port can also be supplied as `--ops-port /dev/ttyAMA0`. `--port` means
 the web-server port, so do not use it for the OPS serial device.

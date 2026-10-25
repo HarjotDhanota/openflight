@@ -230,7 +230,7 @@ For each shot, OpenFlight:
 1. Takes the newest stable LIS3DH snapshot before the swing. Within two seconds
    of impact and steady through it, it is used at once (`rule: recent_stable`).
 2. Otherwise, up to 60 seconds old, or shaken by the swing, it is used once the
-   first quiet snapshot after impact agrees with it within 0.3° in pitch and roll
+   first quiet snapshot after impact agrees with it in pitch and roll
    (`rule: confirmed_after_impact`). The shot waits at most a second for it; an
    OPS-only kiosk never waits.
 3. Gives no correction when the unit moved (`status: moved`, "the unit moved"),

@@ -58,8 +58,8 @@ camera and IWR alike; see
 the degree setting as a substitute for the measured distance.
 
 The rig file also gives the forward separation: positive means the camera is
-ahead of the IWR reference, toward the ball. The v3 file places the IWR reference
-30 mm behind the camera, giving a camera offset of **+0.030 m**. Club and ball
+ahead of the IWR reference, toward the ball (**+0.030 m** in the shipped v3 rig
+file). Club and ball
 reconstruction use this offset in camera position and camera-to-ball distance;
 the resting ball's slant range remains measured from the radar. The camera needs
 a rig file: without one the kiosk refuses `--camera-capture`.
@@ -233,74 +233,39 @@ camera restart and is intentionally not part of the live-control path.
 
 ## Automatic Exposure
 
-The rule: **use the lowest exposure unless more is needed**, with
-the resting ball as the light meter. The policy is `camera/swing_exposure.py`; its
-inputs and their derivation are in `config/swing_exposure.json`.
+The rule: **use the lowest exposure unless more is needed**, with the resting ball
+as the light meter. The policy is `camera/swing_exposure.py`; its inputs and their
+derivation are in `config/swing_exposure.json`.
 
-- **The sensor's limits are read, never assumed.** When the camera is configured
-  for a mode, the kiosk reads its shortest and longest exposure and its gain range
-  from picamera2's `camera_controls` (`ExposureTime`, `AnalogueGain`), logs them,
-  and records them per mode (with the lens) in
-  `~/.config/openflight/camera-sensor-limits.json`. The tester's live view records
-  them too. If a camera reports no exposure limits, the policy does not run and the
-  startup controls stand (status **unavailable**).
-- **The blur ceiling** is the longest exposure that keeps the club sharp: at most
-  4 mm of smear on approach and 1 mm near impact, over the measured club-edge
-  speed from behind the ball (13.6 m/s on approach, 3.3 m/s near contact):
-  `floor(min(4 / 13.6, 1 / 3.3) × 1000)` = **294 µs** in both modes. A millimetre
-  budget does not change with the lens or the binning. The frame period, the
-  sensor's own maximum and an armed profile can only lower it.
-- **The decision ladder** runs down from the ceiling in steps of about √2 (294,
-  208, 147, 104, 74, 52, 37, 26, 18, 13, 9 µs …) to the sensor's minimum. Gain runs
-  from the sensor's minimum (1) to its analogue cap (about 15.94 on the OV9281,
-  read from the controls).
-- **Choosing a setting.** The ball's brightest part (p95 of its core) is aimed at
-  **0.55 of clip** (between black, 16 DN, and clip, 250 DN). The policy picks the
-  **shortest** exposure on the ladder at which some gain within the cap gets there,
-  raising gain first and lengthening the exposure only when the gain is capped.
-  The ball must also clear the **20 DN** gate above black that every other judge
-  uses.
-  - *Too much light*: at the sensor's shortest exposure and gain 1 the ball still
-    clips. The setting stays there and clips are labelled **too bright: shade the
-    ball area (or an ND filter)**. An ND filter is new hardware.
-  - *Not enough light*: at the blur ceiling with the gain capped, the ball is still
-    under the gate. The setting stays there and clips are labelled **too dark: add
-    light**. The policy never goes past the ceiling.
+- **Limits.** The kiosk reads each mode's exposure and gain range from the camera
+  and records it in `~/.config/openflight/camera-sensor-limits.json`. A camera that
+  reports no limits leaves the startup controls in place (status **unavailable**).
+- **Blur ceiling.** The longest exposure that keeps the club sharp: 4 mm of smear on
+  approach and 1 mm near impact at the measured club-edge speeds gives **294 µs**.
+  The policy never goes past it.
+- **Choosing a setting.** The ball's brightest part is aimed at 0.55 of clip, using
+  the shortest exposure (in steps of about √2) that some gain within the cap reaches.
+  Gain rises first; exposure lengthens only when the gain is capped.
+  - Still clipping at the shortest exposure and gain 1: clips are labelled **too
+    bright: shade the ball area (or an ND filter)**.
+  - Still too dark at the ceiling with the gain capped: clips are labelled **too
+    dark: add light**.
   - Neither label blocks anything: the shot is analysed and labelled.
-- **Before every swing.** About once a second, between clips, the kiosk measures
-  the resting ball. It uses the ball the look in the setup's box found, or the
-  setup's ball spot (both from the unit's setup record). It judges only frames taken
-  at the controls in force, and moves the controls for the next swing. There is no
-  startup lock. **Hysteresis:**
-  - a ball whose peak is between 0.40 and 0.75 of clip is left alone;
-  - a mild move waits for two looks in a row that agree;
-  - a clipped ball, or one under the gate, moves at once.
-- **No resting ball.** The last setting is kept, with the reason (for example
-  `no ball in the box`, or `the last look at the ball is 12 s old`).
-- **Searching for the ball.** A light far from the start setting can wash the ball
-  out or sink it into the dark, so no look can find it. After three looks in a row
-  with no ball (about 3 s, never during a clip), the policy sweeps its own range.
-  It changes exposure × gain in steps of 2, one step brighter and then one step
-  darker, outward from the current setting, never past the blur ceiling or the gain
-  cap (status **Searching for the ball**). Each step waits for a look taken after
-  the controls changed.
-  - The sweep stops at the first setting where the ball is found, and metering takes
-    over. It never meters the hitting zone.
-  - If the whole range shows no ball, the policy holds the last good setting, or else
-    the seed, and says **no ball found in the box (searched the full range)**.
-  - It searches again after 30 s, or at once when the box moves or the light index
-    changes.
-  - Manual-exposure runs (the tester ladder) are never metered or swept. Every decision
-  is kept with its inputs (the reading, the light index, the envelope and the
-  hysteresis state): the last twenty are in `auto_exposure.recent_decisions` on
-  `/api/camera/exposure-quality`, and each clip's metadata carries the decision in
-  force at its trigger. A change, or a new status, is logged at INFO.
-- **Before the first ball.** `--camera-light-index` passes the setup's measured
-  light: the 1280×800 ball's DN above black per µs × gain. 640×400 doubles it
-  (measured 2.00×). Without it the kiosk uses the light it remembered from its last
-  ball-judged setting. Without either, it moves the startup
-  `--camera-capture-exposure-us` × `--camera-capture-gain` inside the limits,
-  keeping its brightness. The first ball look then decides.
+- **Before every swing.** About once a second, between clips, the kiosk measures the
+  resting ball in the setup's box and sets the controls for the next swing. A ball
+  between 0.40 and 0.75 of clip is left alone; a mild change waits for two looks
+  that agree; a clipped or too-dark ball moves at once.
+- **No ball.** The last setting is kept, with the reason. After about 3 s with no
+  ball, the policy sweeps its range one step brighter, then darker, until the ball
+  is found (status **Searching for the ball**); if none is, it holds the last good
+  setting and says **no ball found in the box (searched the full range)**.
+- **Decisions.** The last twenty, with their inputs, are in
+  `auto_exposure.recent_decisions` on `/api/camera/exposure-quality`, and each
+  clip's metadata carries the decision in force at its trigger.
+- **Before the first ball.** `--camera-light-index` seeds the policy with the setup's
+  measured light. Without it the kiosk uses the light remembered from its last
+  ball-judged setting, else the startup `--camera-capture-exposure-us` ×
+  `--camera-capture-gain`.
 
 The last ball-judged setting and its light are stored at:
 
