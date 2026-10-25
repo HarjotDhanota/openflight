@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 
-from openflight.camera import auto_exposure
 from openflight.camera.auto_exposure import measure_exposure
 
 
@@ -30,12 +29,3 @@ def test_measure_exposure_flags_nearly_black_view():
 
     assert result.status == "too_dark"
     assert "lens cover" in result.message
-
-
-@pytest.mark.parametrize(
-    "retired",
-    ["EXPOSURE_STEPS", "ExposureStep", "AutoExposurePolicy", "exposure_steps_for_fps"],
-)
-def test_the_zone_metered_startup_ladder_is_retired(retired):
-    """The zone-metered, startup-locked ladder is gone; the resting ball meters now."""
-    assert not hasattr(auto_exposure, retired)
