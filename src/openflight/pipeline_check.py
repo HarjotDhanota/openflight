@@ -1123,7 +1123,8 @@ def face_angle_stage(live: Mapping[str, Any], upstream: Mapping[str, dict]) -> d
             text
             for applies, text in (
                 (
-                    status == "d_plane_estimate_azimuth_uncalibrated",
+                    # the face's own label may follow ("_estimated", "_mixed_frames")
+                    str(status).startswith("d_plane_estimate_azimuth_uncalibrated"),
                     "azimuth uncalibrated: the radar start direction has its own zero",
                 ),
                 (

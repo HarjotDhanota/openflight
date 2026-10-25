@@ -77,6 +77,7 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     ops_speed_track,
 )
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
+from .source_labels import LABEL_MEASURED, horizontal_launch_label
 
 CALCULATED = "calculated"
 NOT_MEASURED = "not_measured"
@@ -319,9 +320,11 @@ def _horizontal_boresight(
     implausible = implausible_launch_reason(horizontal_deg)
     if implausible is not None:
         return None, f"horizontal launch {implausible}"
-    if source == "radar" and status == "azimuth_uncalibrated":
+    if horizontal_launch_label(source, status) != LABEL_MEASURED:
+        # the kiosk's own label: an uncalibrated azimuth is "estimated", never an input
         return None, (
-            "the IWR horizontal launch has no horizontal phase reference (azimuth_uncalibrated)"
+            f"horizontal launch {source!r} is estimated: it has no horizontal phase reference "
+            f"({status})"
         )
     if frame == UNIT_BORESIGHT:
         return float(horizontal_deg), None

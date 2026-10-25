@@ -2,7 +2,9 @@
 
 Field session Harjot-outdoor-test-1 (24 Oct 2026): shot 14's low-coherence IWR horizontal
 read +70.6 deg and showed "H. LAUNCH +70.6 MEAS", while the full ball speed refused the
-same input as "not a measured horizontal launch".
+same input as "not a measured horizontal launch". Every IWR horizontal on that rig was
+also azimuth-uncalibrated (its start direction has its own zero): "estimated" until the
+azimuth is calibrated, as the full ball speed already refused it.
 """
 
 from __future__ import annotations
@@ -23,7 +25,11 @@ from openflight.horizontal_frame import MAX_PLAUSIBLE_LAUNCH_DEG, implausible_la
 from openflight.launch_monitor import Shot
 from openflight.sim.resolver import resolve_shot
 from openflight.sim.types import PlayerState
-from openflight.source_labels import WEAK_HORIZONTAL_SOURCES, horizontal_launch_label
+from openflight.source_labels import (
+    AZIMUTH_UNCALIBRATED,
+    WEAK_HORIZONTAL_SOURCES,
+    horizontal_launch_label,
+)
 
 SHOT_14 = {
     "ball_speed_mph": 45.1,
@@ -143,7 +149,13 @@ def test_the_full_ball_speed_refuses_an_implausible_measured_horizontal():
 # ---------------------------------------------------------------- the kiosk's shot
 
 
-def _iwr_shot(monkeypatch, *, horizontal_deg, horizontal_status="hlcmf_v2_low_coherence"):
+def _iwr_shot(
+    monkeypatch,
+    *,
+    horizontal_deg,
+    horizontal_status="hlcmf_v2_low_coherence",
+    phase_reference_rad=None,
+):
     measurement = SimpleNamespace(
         accepted=True,
         angle_deg=13.57,
@@ -165,7 +177,7 @@ def _iwr_shot(monkeypatch, *, horizontal_deg, horizontal_status="hlcmf_v2_low_co
         sequence=1,
     )
     runtime = SimpleNamespace(
-        horizontal_phase_reference_rad=None,
+        horizontal_phase_reference_rad=phase_reference_rad,
         process_shot=lambda **kwargs: SimpleNamespace(
             capture=capture, measurement=measurement, club_path=None
         ),
@@ -264,3 +276,122 @@ def test_a_simulator_is_told_a_weak_horizontal_is_estimated(source):
 
     assert resolved.hla == pytest.approx(1.5)
     assert resolved.provenance["hla"] == "estimated"
+
+
+# ---------------------------------------------------------------- the uncalibrated azimuth
+
+HORIZONTAL_SOURCES = sorted(
+    {"estimated", *WEAK_HORIZONTAL_SOURCES, *full_speed.MEASURED_HORIZONTAL_SOURCES}
+)
+
+
+@pytest.mark.parametrize("source", HORIZONTAL_SOURCES)
+def test_an_uncalibrated_azimuth_is_estimated_whatever_the_source(source):
+    assert horizontal_launch_label(source, AZIMUTH_UNCALIBRATED) == "estimated"
+
+
+def test_a_calibrated_radar_horizontal_stays_measured():
+    assert horizontal_launch_label("radar", None) == "measured"
+    assert horizontal_launch_label("radar") == "measured"
+
+
+@pytest.mark.parametrize("status", [None, AZIMUTH_UNCALIBRATED])
+@pytest.mark.parametrize("source", HORIZONTAL_SOURCES)
+def test_the_full_ball_speed_takes_a_horizontal_only_where_the_label_is_measured(source, status):
+    """One rule: the full ball speed's input is exactly what the kiosk calls measured."""
+    value, reason = full_speed._horizontal_boresight(  # pylint: disable=protected-access
+        2.0, source, status, "unit_boresight", None
+    )
+
+    if horizontal_launch_label(source, status) == "measured":
+        assert (value, reason) == (2.0, None)
+    else:
+        assert value is None
+        assert reason
+
+
+UNCALIBRATED_RADAR = {
+    "launch_angle_horizontal": 2.0,
+    "launch_angle_horizontal_confidence": 0.9,
+    "launch_angle_horizontal_source": "radar",
+    "launch_angle_horizontal_status": AZIMUTH_UNCALIBRATED,
+    "launch_angle_horizontal_frame": "target_line",
+}
+
+
+def test_an_uncalibrated_radar_horizontal_record_is_estimated():
+    record = shot_metrics.from_record(UNCALIBRATED_RADAR)["launch_horizontal"]
+
+    assert record["value"] == pytest.approx(2.0)
+    assert record["status"] == "estimated"
+    assert record["source"] == "radar"
+    assert "azimuth uncalibrated" in record["note"]
+
+
+def _uncalibrated_shot(**extra):
+    return Shot(
+        ball_speed_mph=140.0,
+        timestamp=datetime(2026, 10, 24),
+        club=ClubType.DRIVER,
+        launch_angle_vertical=12.0,
+        launch_angle_vertical_source="radar",
+        spin_rpm=2500.0,
+        spin_confidence=0.9,
+        spin_axis_deg=-3.0,
+        **{**UNCALIBRATED_RADAR, **extra},
+    )
+
+
+def test_the_collision_model_takes_an_uncalibrated_horizontal_as_estimated():
+    shot = _uncalibrated_shot()
+
+    entry = shot_models._horizontal_launch_input(  # pylint: disable=protected-access
+        shot, "radar (azimuth uncalibrated)"
+    )
+
+    assert entry.label == "estimated"
+    assert "azimuth uncalibrated" in entry.reason
+
+
+def test_the_collision_model_takes_a_calibrated_radar_horizontal_as_measured():
+    shot = _uncalibrated_shot(launch_angle_horizontal_status=None)
+
+    entry = shot_models._horizontal_launch_input(shot, "radar")  # pylint: disable=protected-access
+
+    assert entry.label == "measured"
+
+
+def test_a_simulator_is_told_an_uncalibrated_horizontal_is_estimated():
+    resolved = resolve_shot(_uncalibrated_shot(), PlayerState())
+
+    assert resolved.hla == pytest.approx(2.0)
+    assert resolved.provenance["hla"] == "estimated"
+
+
+def test_a_simulator_is_told_a_calibrated_radar_horizontal_is_measured():
+    resolved = resolve_shot(_uncalibrated_shot(launch_angle_horizontal_status=None), PlayerState())
+
+    assert resolved.provenance["hla"] == "measured"
+
+
+def test_the_kiosk_shows_an_uncalibrated_iwr_horizontal_as_estimated(monkeypatch):
+    shot = _iwr_shot(monkeypatch, horizontal_deg=3.2, horizontal_status="hlcmf_v2_accepted")
+
+    assert shot.launch_angle_horizontal_source == "radar"
+    assert shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED
+    record = shot.to_dict()["metrics"]["launch_horizontal"]
+    assert record["status"] == "estimated"
+    assert "azimuth uncalibrated" in record["note"]
+
+
+def test_the_kiosk_shows_a_calibrated_iwr_horizontal_as_measured(monkeypatch):
+    shot = _iwr_shot(
+        monkeypatch,
+        horizontal_deg=3.2,
+        horizontal_status="hlcmf_v2_accepted",
+        phase_reference_rad=0.4,
+    )
+
+    assert shot.launch_angle_horizontal_source == "radar"
+    assert shot.launch_angle_horizontal_status is None
+    assert shot.to_dict()["metrics"]["launch_horizontal"]["status"] == "measured"

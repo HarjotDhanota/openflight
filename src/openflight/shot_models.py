@@ -40,7 +40,13 @@ from openflight.launch_monitor import (
     Shot,
 )
 from openflight.numeric import finite as _finite
-from openflight.source_labels import MODEL_LABELS, WEAK_HORIZONTAL_SOURCES, is_measured_source
+from openflight.source_labels import (
+    AZIMUTH_UNCALIBRATED,
+    AZIMUTH_UNCALIBRATED_NOTE,
+    MODEL_LABELS,
+    WEAK_HORIZONTAL_SOURCES,
+    is_measured_source,
+)
 
 logger = logging.getLogger("openflight.server")
 
@@ -132,10 +138,12 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
 def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
     """The horizontal launch as a collision input, "estimated" when it is weak (C2).
 
-    A weak source (a low-coherence IWR or low-consensus camera horizontal, the same ones
-    the kiosk labels "estimated"), or one whose confidence is below the spin axis's
-    floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
-    every output built on it is labelled "estimated", with this reason.
+    A weak source (a low-coherence IWR or low-consensus camera horizontal), an IWR
+    horizontal whose azimuth is uncalibrated (the same ones the kiosk labels
+    "estimated", ``source_labels.horizontal_launch_label``), or one whose confidence is
+    below the spin axis's floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too
+    weak to stand as one: every output built on it is labelled "estimated", with this
+    reason.
     """
     measured = _measured_angle_input(
         shot.launch_angle_horizontal,
@@ -149,6 +157,8 @@ def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
     weak = shot.launch_angle_horizontal_source
     if weak in WEAK_HORIZONTAL_SOURCES:
         reason = f"horizontal launch is {WEAK_HORIZONTAL_SOURCES[weak]} ({weak})"
+    elif shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED:
+        reason = f"horizontal launch {AZIMUTH_UNCALIBRATED_NOTE} ({weak})"
     elif not _finite(confidence):
         reason = "horizontal launch confidence not given"
     elif confidence < server.SPIN_AXIS_MIN_CONFIDENCE:
@@ -212,7 +222,7 @@ def _collision_inputs(shot: Shot) -> dict:
     path, path_source = displayed_club_path(shot)
     attack, attack_source = displayed_attack_angle(shot)
     launch_source = shot.launch_angle_horizontal_source
-    if launch_source and shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+    if launch_source and shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED:
         launch_source = f"{launch_source} (azimuth uncalibrated)"
     speed = shot.club_speed_mph
     return {
@@ -407,7 +417,7 @@ def _attach_collision_model(shot: Shot) -> None:
     shot.experimental_face_angle_frame = face.frame if face.present else None
     if face.present:
         status = "d_plane_estimate"
-        if shot.launch_angle_horizontal_status == "azimuth_uncalibrated":
+        if shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED:
             status += "_azimuth_uncalibrated"
         if face.status == collision_model.STATUS_ESTIMATED:
             status += "_estimated"

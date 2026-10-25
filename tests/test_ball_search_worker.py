@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from openflight.camera import tester_server as ts
-from tests import test_patch_ball_search as patch_tests
+from tests import test_patch_ball_search_field as patch_tests
 
 
 def test_the_worker_process_finds_the_same_ball():

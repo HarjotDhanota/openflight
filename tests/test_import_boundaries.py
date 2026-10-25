@@ -146,6 +146,52 @@ def test_shipped_python_never_imports_tester_or_research_code():
     assert not crossings, "shipped code imports never-merged code:\n" + "\n".join(crossings)
 
 
+def _string_constants(path: str) -> set[str]:
+    """Every string literal in one Python file, f-string parts included."""
+    tree = ast.parse((REPO / path).read_text(encoding="utf-8"), filename=path)
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def test_shipped_tests_never_load_a_never_merged_fixture():
+    """Real field data stays on the fork: a test that loads it is RESEARCH or TESTER.
+
+    A shipped test that names a never-merged fixture (its file name beside its
+    directory's, or a fixture directory that holds only never-merged files) would go
+    upstream without its data.
+    """
+    files = _files()
+    fixtures = {
+        path: bucket for path, bucket in files.items() if path.startswith("tests/fixtures/")
+    }
+    never_merged = [path for path, bucket in fixtures.items() if bucket in NEVER_MERGED]
+    directories: dict[str, set[str]] = {}
+    for path, bucket in fixtures.items():
+        parts = path.split("/")
+        if len(parts) > 3:
+            directories.setdefault(parts[2], set()).add(bucket)
+    never_merged_directories = {
+        name for name, buckets in directories.items() if buckets <= NEVER_MERGED
+    }
+    crossings = []
+    for path, bucket in sorted(files.items()):
+        if bucket not in SHIPPED or not path.startswith("tests/") or not path.endswith(".py"):
+            continue
+        strings = _string_constants(path)
+        loaded = [
+            target for target in sorted(never_merged) if set(target.split("/")[-2:]) <= strings
+        ]
+        crossings += [f"{path} loads {target} ({files[target]})" for target in loaded]
+        if "fixtures" in strings:
+            named = {target.split("/")[2] for target in loaded}
+            for name in sorted((strings & never_merged_directories) - named):
+                crossings.append(f"{path} loads tests/fixtures/{name}/ (never merged)")
+    assert not crossings, "shipped tests load never-merged fixtures:\n" + "\n".join(crossings)
+
+
 UI_SOURCE = re.compile(r"\.(ts|tsx|js|jsx)$")
 UI_IMPORT = re.compile(r"""(?:import|from)\s*(?:[^'"]*?from\s*)?['"](\.{1,2}/[^'"]+)['"]""")
 

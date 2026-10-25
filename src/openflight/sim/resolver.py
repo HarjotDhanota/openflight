@@ -258,7 +258,9 @@ def resolve_shot(
 
     if _finite(shot.launch_angle_horizontal):
         hla = float(shot.launch_angle_horizontal)
-        provenance["hla"] = horizontal_launch_label(shot.launch_angle_horizontal_source)
+        provenance["hla"] = horizontal_launch_label(
+            shot.launch_angle_horizontal_source, shot.launch_angle_horizontal_status
+        )
     else:
         hla = 0.0
         provenance["hla"] = "estimated"

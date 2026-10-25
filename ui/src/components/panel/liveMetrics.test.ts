@@ -346,7 +346,22 @@ describe('buildLiveMetrics', () => {
       expect(byId(metrics, 'launch_h')).toMatchObject({
         subtext: 'azimuth uncalibrated',
         confidence: 'high',
+        status: 'estimated',
       });
+    });
+
+    it('labels a calibrated radar horizontal measured', () => {
+      const metrics = buildLiveMetrics(
+        makeShot({
+          launch_angle_horizontal_source: 'radar',
+          launch_angle_horizontal_status: null,
+          launch_angle_horizontal_confidence: 0.9,
+        }),
+        'imperial',
+        emptySwingStats
+      );
+
+      expect(byId(metrics, 'launch_h').status).toBe('measured');
     });
 
     it('labels an uncalibrated IWR club path (audit F8)', () => {
@@ -463,6 +478,19 @@ describe('face angle', () => {
         club_path_deg: -0.6,
         experimental_face_angle_deg: 1.5,
         experimental_face_angle_status: 'd_plane_estimate_azimuth_uncalibrated',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane, azimuth uncalibrated)');
+  });
+
+  it('labels an estimated face angle whose start direction is azimuth uncalibrated', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: -0.6,
+        experimental_face_angle_deg: 1.5,
+        experimental_face_angle_status: 'd_plane_estimate_azimuth_uncalibrated_estimated',
       }),
       'imperial',
       emptySwingStats
