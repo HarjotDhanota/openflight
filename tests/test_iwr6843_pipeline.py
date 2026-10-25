@@ -44,6 +44,7 @@ from openflight.iwr6843.lcmf import (
     TX2_LOOP_PERIOD_S,
     TX2_VERTICAL_TDM_TAU_S,
     _frame_balanced_horizontal_mean,
+    _tx2_horizontal_proxy,
     prepare_lcmf_capture,
 )
 from openflight.iwr6843.music import LAM
@@ -1189,23 +1190,27 @@ def test_lcmf_v1_mti_uses_per_frame_capture_geometry(cal, monkeypatch):
     assert all(geometry is not None for geometry in observed_geometry)
 
 
-DIRECTION_OF_MOTION_CASES = [
-    (1.5, 0.0, 18.0),
-    (1.5, 5.0, 18.0),
-    (1.5, -5.0, 18.0),
-    (1.5, 10.0, 18.0),
-    (1.5, -10.0, 18.0),
-    (1.0, 10.0, 18.0),
-    (1.0, -5.0, 18.0),
-    (2.5, 10.0, 18.0),
-    (2.5, -5.0, 18.0),
-    # a wedge's climb cancels the averaged TX1/TX3 reference late in flight
-    (1.0, 0.0, 30.0),
-    (1.0, 10.0, 30.0),
-]
-
-
-def _direction_of_motion_shot(tee_m, horizontal_deg, launch_deg):
+@pytest.mark.parametrize(
+    ("tee_m", "horizontal_deg", "launch_deg"),
+    [
+        (1.5, 0.0, 18.0),
+        (1.5, 5.0, 18.0),
+        (1.5, -5.0, 18.0),
+        (1.5, 10.0, 18.0),
+        (1.5, -10.0, 18.0),
+        (1.0, 10.0, 18.0),
+        (1.0, -5.0, 18.0),
+        (2.5, 10.0, 18.0),
+        (2.5, -5.0, 18.0),
+        # a wedge's climb cancels the averaged TX1/TX3 reference late in flight
+        (1.0, 0.0, 30.0),
+        (1.0, 10.0, 30.0),
+    ],
+)
+def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
+    tee_m, horizontal_deg, launch_deg
+):
+    """Horizontal launch is the ball's direction of motion, not its late-flight bearing."""
     cal = Calibration.identity()
     cal.tilt_rad = np.radians(10.4)
     cal.tee_range_m = tee_m
@@ -1222,21 +1227,72 @@ def _direction_of_motion_shot(tee_m, horizontal_deg, launch_deg):
         frame_period_us=4000,
         trigger_frame=0,
     )
-    return raw, cal
-
-
-@pytest.mark.parametrize(("tee_m", "horizontal_deg", "launch_deg"), DIRECTION_OF_MOTION_CASES)
-def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
-    tee_m, horizontal_deg, launch_deg
-):
-    """Horizontal launch is the ball's direction of motion, not its late-flight bearing."""
-    raw, cal = _direction_of_motion_shot(tee_m, horizontal_deg, launch_deg)
 
     result = estimate_lcmf_v1(raw, cal, ball_speed_mph=45.0 * 2.23694, club="9i")
 
     assert result.accepted
     assert result.horizontal_status == "hlcmf_v2_accepted"
     assert result.horizontal_deg == pytest.approx(horizontal_deg, abs=0.5)
+    # the late-flight bearing on the same capture is biased
+    shot = process_dump(
+        project_tx_pair(raw, (0, 2)),
+        cal,
+        club="9i",
+        loop_period_s=TX2_LOOP_PERIOD_S,
+        tdm_tau_s=TX2_VERTICAL_TDM_TAU_S,
+        tdm_sign_policy="positive",
+    )
+    old_deg, _coherence, old_status = _tx2_horizontal_proxy(
+        raw, shot, tdm_sign=1, phase_velocity_ms=45.0
+    )
+    assert old_status == "hlcmf_v1_accepted"
+    if horizontal_deg:
+        assert abs(old_deg) < 0.75 * abs(horizontal_deg)
+        assert abs(result.horizontal_deg - horizontal_deg) < 0.25 * abs(old_deg - horizontal_deg)
+
+
+def test_tx2_horizontal_uses_tail_of_ball_track_not_fixed_ring_tail():
+    """Boundary-frozen blocks place impact anywhere, so physical slots 9-11 are not special."""
+    n_frames, n_loops, n_tx, n_rx, n_bins = 12, 10, 3, 4, 80
+    start_bin = 20
+    cube = np.zeros((n_frames, n_loops * n_tx, n_rx, n_bins), dtype=complex)
+    track = BallTrack(
+        speed_ms=45.0,
+        slope_bins=960.0,
+        intercept_bins=31.0,
+        rms_bins=0.2,
+        n_inliers=40,
+        t_first=0.012,
+        t_last=0.031,
+        low_confidence=False,
+    )
+    shot = ShotMeasurement(geometry=None, ball_found=True, track=track)
+
+    for frame in range(n_frames):
+        for loop in range(n_loops):
+            time_s = frame * 0.006 + loop * TX2_LOOP_PERIOD_S
+            if not track.t_first <= time_s <= track.t_last:
+                continue
+            local_bin = int(round(track.bin_at(time_s))) - start_bin
+            common = np.exp(1j * 0.7 * loop)
+            cube[frame, loop * n_tx, :, local_bin] = common
+            cube[frame, loop * n_tx + 1, :, local_bin] = common * np.exp(0.25j)
+            cube[frame, loop * n_tx + 2, :, local_bin] = common
+
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=3,
+        frame_period_us=6000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16,
+        range_bin_start=start_bin,
+    )
+
+    angle_deg, coherence, status = _tx2_horizontal_proxy(raw, shot, tdm_sign=1)
+
+    assert angle_deg is not None
+    assert coherence is not None and coherence > 0.25
+    assert status == "hlcmf_v1_accepted"
 
 
 def test_horizontal_fusion_gives_each_frame_equal_influence():
@@ -1254,6 +1310,41 @@ def test_horizontal_fusion_gives_each_frame_equal_influence():
     expected_deg = -np.degrees(np.arcsin(expected_phase / np.pi))
     assert angle_deg == pytest.approx(expected_deg, abs=0.02)
     assert coherence > HORIZONTAL_COHERENCE_MIN
+
+
+def test_horizontal_proxy_withholds_incoherent_frames(monkeypatch):
+    n_frames, n_loops, n_tx, n_rx, n_bins = 12, 10, 3, 4, 80
+    cube = np.zeros((n_frames, n_loops * n_tx, n_rx, n_bins), dtype=complex)
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        version=3,
+        frame_period_us=6000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16,
+        range_bin_start=20,
+    )
+    track = BallTrack(
+        speed_ms=45.0,
+        slope_bins=0.0,
+        intercept_bins=31.0,
+        rms_bins=0.2,
+        n_inliers=80,
+        t_first=0.0,
+        t_last=0.067,
+        low_confidence=False,
+    )
+    shot = ShotMeasurement(geometry=None, ball_found=True, track=track)
+
+    def alternating_frame_phase(_mti, frame, *_args, **_kwargs):
+        return (0.0 if frame % 2 == 0 else np.pi), 1.0
+
+    monkeypatch.setattr(lcmf.doa, "tx2_phase_at", alternating_frame_phase)
+
+    angle_deg, coherence, status = _tx2_horizontal_proxy(raw, shot, tdm_sign=1)
+
+    assert angle_deg is not None and math.isfinite(angle_deg)
+    assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
+    assert status == "hlcmf_v1_low_coherence"
 
 
 def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
