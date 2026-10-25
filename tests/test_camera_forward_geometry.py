@@ -96,6 +96,7 @@ def _live_fusion(monkeypatch, tmp_path, kind, estimator, **config):
     )
     monkeypatch.setattr(module, name, estimator)
     shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
+    shot.iwr6843_horizontal_deg = 1.0
 
     def run(frame_shape):
         archive = {
