@@ -82,25 +82,36 @@ def test_recovers_known_world_points(forward_offset, lateral_offset, kind):
         np.testing.assert_allclose(result, point, atol=1e-9)
 
 
+def _live_fusion(monkeypatch, tmp_path, kind, estimator, **config):
+    """The kiosk's fuse step for ``kind`` with its estimator replaced by ``estimator``."""
+    (tmp_path / "frames.npz").touch()
+    config = {"mount_height_m": 0.095, "width": 320, "height": 200, **config}
+    monkeypatch.setattr(server, "camera_capture_config", config)
+    calibration = SimpleNamespace(tee_range_m=1.5, radar_height_m=0.051, tee_ball_height_m=0.02135)
+    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
+    module, name, fuse = (
+        (club_delivery, "estimate_chained_delivery", server._fuse_camera_club_delivery)
+        if kind == "club"
+        else (ball_flight, "estimate_camera_ball_flight", server._fuse_camera_ball_flight)
+    )
+    monkeypatch.setattr(module, name, estimator)
+    shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
+
+    def run(frame_shape):
+        archive = {
+            "frames": np.zeros((2, *frame_shape)),
+            "host_timestamp_ns": np.array([0, 1]),
+            "trigger_host_timestamp_ns": 0,
+        }
+        fuse(shot, SimpleNamespace(valid=True, path=tmp_path), camera_archive=archive)
+        return shot
+
+    return run
+
+
 @pytest.mark.parametrize("kind", ["club", "ball"])
 @pytest.mark.parametrize("configured_offset", [None, 0.03])
 def test_live_fusion_receives_forward_offset(monkeypatch, tmp_path, kind, configured_offset):
-    (tmp_path / "frames.npz").touch()
-    config = {"mount_height_m": 0.095, "width": 320, "height": 200}
-    if configured_offset is not None:
-        config["forward_offset_m"] = configured_offset
-    monkeypatch.setattr(server, "camera_capture_config", config)
-    monkeypatch.setattr(
-        server,
-        "iwr6843_runtime",
-        SimpleNamespace(
-            calibration=SimpleNamespace(
-                tee_range_m=1.5,
-                radar_height_m=0.051,
-                tee_ball_height_m=0.02135,
-            )
-        ),
-    )
     observed = []
 
     def estimate(*_args, **kwargs):
@@ -109,19 +120,8 @@ def test_live_fusion_receives_forward_offset(monkeypatch, tmp_path, kind, config
             return club_delivery.ChainedDelivery(status="rejected_test")
         return ball_flight.CameraBallEstimate(status="rejected_test")
 
-    module, name, fuse = (
-        (club_delivery, "estimate_chained_delivery", server._fuse_camera_club_delivery)
-        if kind == "club"
-        else (ball_flight, "estimate_camera_ball_flight", server._fuse_camera_ball_flight)
-    )
-    monkeypatch.setattr(module, name, estimate)
-    shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
-    archive = {
-        "frames": np.zeros((2, 200, 320)),
-        "host_timestamp_ns": np.array([0, 1]),
-        "trigger_host_timestamp_ns": 0,
-    }
-    fuse(shot, SimpleNamespace(valid=True, path=tmp_path), camera_archive=archive)
+    config = {} if configured_offset is None else {"forward_offset_m": configured_offset}
+    _live_fusion(monkeypatch, tmp_path, kind, estimate, **config)((200, 320))
 
     assert len(observed) == 1
     assert observed[0].camera_forward_offset_m == (configured_offset or 0.0)
@@ -131,41 +131,11 @@ def test_live_fusion_receives_forward_offset(monkeypatch, tmp_path, kind, config
 def test_live_fusion_rejects_archive_dimension_mismatch_before_estimator(
     monkeypatch, tmp_path, kind
 ):
-    (tmp_path / "frames.npz").touch()
-    monkeypatch.setattr(
-        server,
-        "camera_capture_config",
-        {"mount_height_m": 0.095, "width": 320, "height": 200},
-    )
-    monkeypatch.setattr(
-        server,
-        "iwr6843_runtime",
-        SimpleNamespace(
-            calibration=SimpleNamespace(
-                tee_range_m=1.5,
-                radar_height_m=0.051,
-                tee_ball_height_m=0.02135,
-            )
-        ),
-    )
-
     def unexpected_estimator(*_args, **_kwargs):
         pytest.fail("estimator must not run with mismatched archive dimensions")
 
-    module, name, fuse = (
-        (club_delivery, "estimate_chained_delivery", server._fuse_camera_club_delivery)
-        if kind == "club"
-        else (ball_flight, "estimate_camera_ball_flight", server._fuse_camera_ball_flight)
-    )
-    monkeypatch.setattr(module, name, unexpected_estimator)
-    shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
-    shot.iwr6843_horizontal_deg = 1.0
-    archive = {
-        "frames": np.zeros((2, 100, 160)),
-        "host_timestamp_ns": np.array([0, 1]),
-        "trigger_host_timestamp_ns": 0,
-    }
-    fuse(shot, SimpleNamespace(valid=True, path=tmp_path), camera_archive=archive)
+    run = _live_fusion(monkeypatch, tmp_path, kind, unexpected_estimator)
+    shot = run((100, 160))
 
     status = (
         shot.experimental_fused_status

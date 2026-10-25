@@ -1,8 +1,4 @@
-"""The unit's camera tilt calibration is applied on swings, not only at setup.
-
-A swing's pitch is its own LIS3DH pitch plus the unit's offset and its focal length the
-rig's; the resting ball's inference is a recorded cross-check. Uncalibrated swings infer.
-"""
+"""A swing's pitch is its own LIS3DH pitch plus the unit's tilt offset; the ball is a check."""
 
 from __future__ import annotations
 
@@ -182,7 +178,6 @@ def test_the_frozen_context_carries_the_swing_pose_to_both_estimators(monkeypatc
     for geometry in seen.values():
         assert geometry.setup_pitch_deg == 0.5
         assert geometry.setup_focal_px == 470.0
-    # a context without a pose is the one recorded before, byte for byte
     assert "camera_pose" not in fp.build_context(**_context_kwargs())
 
 
@@ -205,6 +200,13 @@ def test_the_kiosk_composes_each_swing_from_its_own_reading(monkeypatch):
 
 
 # The LIS3DH roll goes through the same composition on swings as at setup; its gate is off.
+ROLLED_GEOMETRY = ball_flight.CameraBallGeometry(
+    camera_height_m=0.095,
+    radar_height_m=0.05,
+    tee_range_m=1.5,
+    ball_height_m=0.0213,
+    roll_correction_deg=0.4,
+)
 
 
 def _rolled_reading(roll_deg=-2.9):
@@ -219,20 +221,13 @@ def test_on_an_unverified_unit_the_roll_is_recorded_not_applied_on_swings():
         inclinometer=_rolled_reading(),
         calibration=None,
     )
-    geometry = ball_flight.CameraBallGeometry(
-        camera_height_m=0.095,
-        radar_height_m=0.05,
-        tee_range_m=1.5,
-        ball_height_m=0.0213,
-        roll_correction_deg=0.4,
-    )
 
     assert pose["roll"]["applied"] is False
     assert pose["roll"]["status"] == "not_verified_on_this_unit"
     assert pose["roll"]["label"] == "roll not verified on this unit"
     assert pose["roll"]["measured_deg"] == pytest.approx(-2.9)
     assert pose["roll"]["roll_correction_deg"] == 0.0
-    assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == 0.4
+    assert camera_tilt.with_swing_pose(ROLLED_GEOMETRY, pose).roll_correction_deg == 0.4
 
 
 def test_on_a_verified_unit_the_swing_applies_the_roll():
@@ -244,16 +239,9 @@ def test_on_a_verified_unit_the_swing_applies_the_roll():
         inclinometer={**_rolled_reading(-2.9), "roll_calibration": ZEROED},
         calibration=None,
     )
-    geometry = ball_flight.CameraBallGeometry(
-        camera_height_m=0.095,
-        radar_height_m=0.05,
-        tee_range_m=1.5,
-        ball_height_m=0.0213,
-        roll_correction_deg=0.4,
-    )
 
     assert pose["roll"]["applied"] is True
     assert pose["roll"]["roll_correction_deg"] == pytest.approx(-(-2.9 - expected))
-    assert camera_tilt.with_swing_pose(geometry, pose).roll_correction_deg == pytest.approx(
+    assert camera_tilt.with_swing_pose(ROLLED_GEOMETRY, pose).roll_correction_deg == pytest.approx(
         0.4 + 2.9 + expected
     )
