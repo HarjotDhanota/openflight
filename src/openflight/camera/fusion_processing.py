@@ -20,6 +20,7 @@ from openflight.camera.club_delivery import (
 )
 from openflight.camera.club_motion import ReferenceBall
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.camera.head_track import head_track_context
 from openflight.camera.lens_profiles import ARM_SIZES
 from openflight.camera.triggered_buffer import exposure_trigger_index
 from openflight.clubs import ClubType
@@ -168,11 +169,16 @@ def build_context(
     setup_ball: Mapping[str, Any] | None = None,
     camera_pose: Mapping[str, Any] | None = None,
     lens_focal_px: float | None = None,
+    handedness: str | None = None,
+    gate_latency_ns: float | None = None,
+    target_yaw_sigma_deg: float | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
     ``notes`` are the capture's lighting and optical-quality labels; they never block.
     ``lens_focal_px`` is the lens's focal length in this capture's pixels, when known.
+    ``handedness``, ``gate_latency_ns`` (the trigger's GPIO edge to camera callback) and
+    ``target_yaw_sigma_deg`` serve the camera head track.
     """
     payload = {
         "schema": SCHEMA,
@@ -200,6 +206,12 @@ def build_context(
     if lens_focal_px is not None:
         # sizes the resting ball from its distance; contexts frozen before carry none
         payload["lens_focal_px"] = float(lens_focal_px)
+    if handedness is not None:
+        payload["handedness"] = str(handedness)
+    if gate_latency_ns is not None:
+        payload["gate_latency_ns"] = float(gate_latency_ns)
+    if target_yaw_sigma_deg is not None:
+        payload["target_yaw_sigma_deg"] = float(target_yaw_sigma_deg)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
     return payload
@@ -275,6 +287,16 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             reference_ball=reference_ball,
             reference_ball_selected=bool(diagnostics),
             sensor_timestamp_ns=_sensor_timestamps(archive),
+            head_track=head_track_context(
+                archive,
+                gate_latency=context.get("gate_latency_ns"),
+                # contexts frozen before the head track carry no hand: right-handed
+                handedness=context.get("handedness") or "RH",
+                club=ClubType(context["club"]),
+                setup_ball=context.get("setup_ball"),
+                lens_focal_px=context.get("lens_focal_px"),
+                yaw_sigma_deg=float(context.get("target_yaw_sigma_deg") or 0.0),
+            ),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         club = ChainedDelivery(status="error")

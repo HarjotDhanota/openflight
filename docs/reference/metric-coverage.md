@@ -23,7 +23,7 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
 | `estimated` | An OPS-only install's labelled stand-in, a weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, or an IWR one whose azimuth is uncalibrated, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
-| `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot; an OPS spin of experimental quality (the ungated multitaper, not validated against a reference; its note gives the confidence and says when it sits on the search band's rail) | dotted outline in its own colour, "EXP", titled "not yet validated" |
+| `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot; the camera head track's club path and attack angle; an OPS spin of experimental quality (the ungated multitaper, not validated against a reference; its note gives the confidence and says when it sits on the search band's rail) | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.
@@ -54,6 +54,19 @@ Details and sources are in `docs/how-it-works/collision-model.md`.
 | Spin index, smash index | Measured spin over the expected spin `V · k · sin(spin loft)`, and ball speed (full) over the expected ball speed `V · (a · cos(spin loft) + c)`, in percent; k, a and c fitted by the maintainer to launch-monitor data for the driver, 7-iron and pitching wedge. Other clubs take their category's k and the published normal-impulse speed times a category gain, noted "no fitted index for this club". The spin index needs a measured spin | `calculated`, or the weakest input's label |
 | Low point distance | The arc's geometry plus a per-club offset for the 7-iron, driver and PW, fitted by the maintainer to a TM4 normalized export, 6 May 2026; other clubs the geometry alone, noted | the arc's label |
 | Curve | TrackMan's definition: the landing point's distance from the launch-direction line, with carry as the straight-line distance (`metric_definitions.curve`). Matches that export to 1e-9 ft | the flight's label |
+
+## Club path and attack angle from the camera head track (experimental)
+
+When the club-delivery chain finds no stable clubhead or no ball,
+`camera/head_track.py` tracks where the shaft axis leaves the heel in the last
+pre-contact frames and turns its chords on to contact (the sound trigger's
+0.5-4 ms window) with the OPS radial club speed and the ball's range. Its values
+are `experimental`, source "camera head track: hosel + OPS speed (experimental)",
+with a per-shot sigma in the delivery's `head_track` record. A value beyond
++-15 deg, or two chords turning outside 0.5-2x the published arc's rate, is
+withheld with the reason. The kiosk shows it after a camera + IWR fused path and
+an accepted IWR path. It fills a metric only where the arc measured nothing, and
+feeds no other metric: no arc, face angle, spin, flight or simulator.
 
 ## Impact location (experimental, live)
 

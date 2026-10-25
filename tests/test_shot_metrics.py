@@ -361,3 +361,41 @@ def test_a_non_finite_impact_value_is_not_measured():
     reading = _impact(impact_offset_mm=float("nan"))
     record = fusion_shot(impact_location=reading).to_dict()["metrics"]["impact_offset"]
     assert record["status"] == "not_measured"
+
+
+def test_a_head_track_path_is_an_experimental_record_and_feeds_no_face_angle():
+    from openflight import shot_models  # noqa: PLC0415
+
+    shot = Shot(
+        ball_speed_mph=120.0,
+        club_speed_mph=85.0,
+        timestamp=datetime(2026, 10, 25, 9, 0, 0),
+        club=ClubType.IRON_7,
+        launch_angle_horizontal=1.0,
+        launch_angle_horizontal_source="camera",
+        launch_angle_horizontal_confidence=0.8,
+    )
+    delivery = {
+        "status": "camera_head_track",
+        "club_path_deg": 3.1,
+        "attack_angle_deg": -4.2,
+        "path_confidence_tier": "experimental",
+        "attack_confidence_tier": "experimental",
+        "club_path_frame": "target_line",
+        "head_positions": [],
+    }
+    shot_models._attach_club_arc(shot, delivery)  # pylint: disable=protected-access
+    shot.experimental_fused_status = "camera_head_track"
+    shot.experimental_fused_club_path_deg = 3.1
+    shot.experimental_fused_attack_angle_deg = -4.2
+    shot.experimental_fused_club_path_confidence = "experimental"
+    shot.experimental_fused_attack_angle_confidence = "experimental"
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+
+    metrics = shot_metrics.records(shot.to_dict())
+
+    assert metrics["club_path"]["value"] == 3.1
+    assert metrics["club_path"]["status"] == "experimental"
+    assert metrics["club_path"]["source"] == shot_metrics.HEAD_TRACK_SOURCE_LABEL
+    assert metrics["attack_angle"]["status"] == "experimental"
+    assert metrics["face_angle"]["value"] is None
