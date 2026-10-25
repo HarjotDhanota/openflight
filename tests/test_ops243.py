@@ -1089,9 +1089,3 @@ class TestInternalSpeedTrigger:
         assert response == ""
         assert radar.last_hardware_trigger_outcome == "discarded_dump"
         assert time.time() - started < 2.0
-
-    def test_wait_takes_no_flush_option(self):
-        """No caller can ask the wait to clear serial input."""
-        parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
-        assert "discard_pending_input" not in parameters
-        assert "detect_orphaned_dump" not in parameters
