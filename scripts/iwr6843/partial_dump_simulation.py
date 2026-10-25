@@ -26,14 +26,12 @@ import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-from openflight.iwr6843 import tracking  # noqa: E402
 from openflight.iwr6843.dump import parse_dump, parse_header  # noqa: E402
 from openflight.iwr6843.monitor import IWR6843Capture  # noqa: E402
 from openflight.iwr6843.partial_dump import (  # noqa: E402
@@ -310,25 +308,15 @@ def frame_drop_control(raw: bytes, shot: ShotContext, baseline: dict) -> list[di
     return rows
 
 
-def seed_envelope(raw: bytes, shot: ShotContext, seeds=(1, 2, 3, 4, 5, 6)) -> list[dict]:
-    """The whole dump's answers under different RANSAC seeds of the ball tracker.
+def seed_envelope(raw: bytes, shot: ShotContext) -> list[dict]:
+    """The whole dump's answer, the yardstick a partial dump's answer is judged against.
 
-    The tracker samples point pairs from a seeded generator (seed 1 in production); a
-    different seed on the same bytes shows how far the estimators move with no data
-    lost at all, the yardstick a partial dump's answer is judged against.
+    Until 25 Oct 2026 the ball tracker sampled point pairs from a seeded generator and
+    this re-ran the dump under seeds 1-6 to show how far the estimators moved with no
+    data lost. The tracker now tries every pair (``tracking.search_range_walks``): the
+    same bytes give one answer, so the envelope is that single run.
     """
-    original = tracking.find_ball
-    rows = []
-    for seed in seeds:
-
-        def reseeded(*args, _seed=seed, **kwargs):
-            if kwargs.get("seed", 1) == 1:
-                kwargs["seed"] = _seed
-            return original(*args, **kwargs)
-
-        with patch.object(tracking, "find_ball", reseeded):
-            rows.append({"seed": seed, **run_runtime(raw, shot)})
-    return rows
+    return [{"seed": None, **run_runtime(raw, shot)}]
 
 
 def _table(rows: list[list], header: list[str]) -> str:
@@ -422,7 +410,7 @@ def summarize(rows: list[dict], envelopes: dict[str, dict] | None = None) -> str
         )
         if envelope:
             ranges = {key: envelope[key] for key in ("launch_deg", "range_m") if key in envelope}
-            out.append(f"seed envelope (seeds 1-6, whole dump): {ranges}")
+            out.append(f"whole-dump answer (the tracker is deterministic): {ranges}")
         out.append(_estimator_table(group, envelope))
     return "\n\n".join(out)
 
@@ -455,7 +443,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--seed-envelope",
         action="store_true",
-        help="instead of simulating loss, re-run each whole dump under six tracker seeds",
+        help="instead of simulating loss, record each whole dump's (deterministic) answer",
     )
     parser.add_argument(
         "--frame-drop-control",

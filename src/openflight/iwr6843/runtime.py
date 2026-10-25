@@ -50,6 +50,9 @@ _TDM_SIGN_BY_POLICY = {"positive": 1, "negative": -1, "auto": 1}
 OPS_TRACK_SPEED_TOLERANCE_FRAC = 0.15
 OPS_GUIDED_MAX_CANDIDATES = 8
 OPS_GUIDED_MIN_LAUNCH_DEG = 2.0
+# A launch angle on a range walk the tracker could not separate from a different walk,
+# when the OPS-guided pass found no replacement.
+TRACK_AMBIGUOUS_STATUS = "accepted_track_ambiguous"
 HORIZONTAL_CONFIDENCE_CEILING = 0.95
 
 
@@ -106,7 +109,7 @@ def _credible_ops_candidates(
     selected: list[RecoveryCandidate] = []
     seen: set[tuple[int, int]] = set()
     for candidate in credible:
-        # RANSAC emits many nearly identical lines. Keep one representative
+        # The candidate search emits many nearly identical lines. Keep one representative
         # per approximately 1 mph / 1.5 ms speed-impact cell.
         key = (
             round(candidate.track.speed_mph),
@@ -164,8 +167,15 @@ def ops_guided_measurement(
         if speed is not None and ball_speed_mph > 0.0
         else float("inf")
     )
-    if sound and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC:
+    # a track the IWR could not tell from a different walk is settled by the OPS speed
+    ambiguous = getattr(baseline, "track_ambiguity", None) is not None
+    if sound and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC and not ambiguous:
         return baseline
+    unresolved = (
+        TRACK_AMBIGUOUS_STATUS
+        if sound and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC
+        else "accepted_track_speed_warning"
+    )
     try:
         candidates = _credible_ops_candidates(
             find_recovery_candidates(
@@ -178,7 +188,7 @@ def ops_guided_measurement(
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[IWR6843] OPS-guided track search failed: %s", error)
-        return replace(baseline, status="accepted_track_speed_warning") if sound else baseline
+        return replace(baseline, status=unresolved) if sound else baseline
     recoveries: list[tuple[RecoveryCandidate, LCMFResult]] = []
     for candidate in candidates:
         result = estimate_lcmf_v1(
@@ -211,7 +221,7 @@ def ops_guided_measurement(
             else "accepted_ops_guided"
         )
         return replace(selected, status=status)
-    return replace(baseline, status="accepted_track_speed_warning") if sound else baseline
+    return replace(baseline, status=unresolved) if sound else baseline
 
 
 @dataclass(frozen=True)
