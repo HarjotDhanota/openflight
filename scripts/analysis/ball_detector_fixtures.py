@@ -14,6 +14,9 @@ Outdoors at dusk on 24 Oct 2026, OV9281 with the 6 mm lens at 1280x800, 7-iron:
 * ``shot-10`` and ``shot-05``: the first ten frames of each clip, CROPPED around the
   resting ball (shot 10, its lit cap 34.5 px to the scene detector) and around the gap in
   the net the scene detector took for a 33 px ball (shot 5, no ball on the mat).
+* ``shot-06`` and ``shot-31``: the same, around resting balls the free-play verdict
+  missed: shot 6's 131 px from where the setup saw its ball (200 us x 12), and shot 31's
+  on the 30 us rung, too dim for the detector at its own brightness.
 
     uv run python scripts/analysis/ball_detector_fixtures.py \
         ../pi-handoff/Harjot-outdoor-test-1 tests/fixtures/ball_detector
@@ -35,7 +38,12 @@ SHOT = 14
 SHOT_CROP = (745, 365, 850, 465)
 SETUP_BALL_CROP = (640, 340, 810, 500)
 # shot: (x0, y0, x1, y1) around the resting ball, or what the scene detector took for one
-SHOT_FRAME_CROPS = {10: (774, 359, 894, 479), 5: (571, 331, 691, 451)}
+SHOT_FRAME_CROPS = {
+    10: (774, 359, 894, 479),
+    5: (571, 331, 691, 451),
+    6: (795, 359, 915, 479),
+    31: (724, 360, 844, 480),
+}
 SHOT_FRAME_COUNT = 10
 
 
