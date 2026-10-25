@@ -45,6 +45,26 @@ def test_ops_speed_track_keeps_outbound_readings_around_impact_on_the_ops_clock(
     assert track["outbound"] == [[37.0, 82.0], [41.0, 115.0], [41.0, 60.0]]
 
 
+def test_ops_speed_track_keeps_the_club_pick_as_one_reading_with_its_window():
+    """The fixed club pick is one observed FFT window: its radial speed and start time."""
+    processed = _processed()
+    processed.club_speed_mph = 80.0
+    processed.club_timestamp_ms = 30.0
+
+    track = ops_speed_track(processed)
+
+    assert track["club_reading"] == {"window_start_ms": 30.0, "radial_mph": 80.0}
+
+
+def test_ops_speed_track_has_no_club_reading_without_a_timed_pick():
+    """A trigger speed standing in for the club has no window time: not one reading."""
+    processed = _processed()
+    processed.club_speed_mph = 80.0
+
+    assert ops_speed_track(processed)["club_reading"] is None
+    assert ops_speed_track(_processed())["club_reading"] is None
+
+
 def test_ops_speed_track_states_the_sound_trigger_tolerance():
     track = ops_speed_track(_processed(impact_source="sound_trigger"))
     assert track["impact_uncertainty_ms"] == SOUND_TRIGGER_IMPACT_TOLERANCE_MS

@@ -672,12 +672,7 @@ def _attach_collision_model(shot: Shot) -> None:
         )
 
 
-# E3: why the OPS club speed cannot be projected yet (W6, W9 and E1 fix it).
-CLUB_SPEED_NOT_FULL_REASON = (
-    "the OPS club speed is a percentile over 4-18 ms before impact, not one FFT-window "
-    "reading, and the head's direction at that time needs the swing arc (E1) and a fixed "
-    "head point (W6, W9)"
-)
+BALL_SPEED_FULL_ROUTES = ("measured_projection", "ops_total_projection")
 
 
 def _tee_side_offset(shot: Shot) -> tuple:
@@ -698,16 +693,62 @@ def _tee_side_offset(shot: Shot) -> tuple:
     return None, None
 
 
+def _full_ball_speed_chain(shot: Shot, measured_projection, total_projection) -> dict:
+    """The full ball speed's routes in order; the winner's record with every refusal kept.
+
+    ``total_projection`` runs the OPS total-speed projection only when the launch-based
+    projection (``measured_projection``) refused. The resolution is recorded under
+    ``input_sources["ball_speed_full"]``; a shot neither route resolves keeps the first
+    route's record with both reasons.
+    """
+    records: dict[str, dict] = {}
+
+    def route(name: str, produce):
+        def run():
+            record = produce()
+            records[name] = record
+            value, status = record.get("value_mph"), record.get("status")
+            if status in (None, "not_measured") or not _finite(value):
+                return record.get("reason") or "not measured"
+            return Candidate(
+                float(value), status, record.get("source") or name, note=record.get("note")
+            )
+
+        return Route(name, run)
+
+    resolution = resolve(
+        "ball_speed_full",
+        [
+            route(BALL_SPEED_FULL_ROUTES[0], measured_projection),
+            route(BALL_SPEED_FULL_ROUTES[1], total_projection),
+        ],
+    )
+    sources = dict(shot.input_sources or {})
+    sources["ball_speed_full"] = resolution.to_dict()
+    shot.input_sources = sources
+    if resolution.present:
+        return {**records[resolution.route], "route": resolution.route}
+    first = records.get(BALL_SPEED_FULL_ROUTES[0]) or {
+        "status": "not_measured",
+        "value_mph": None,
+        "range_mph": None,
+    }
+    return {**first, "route": None, "reason": resolution.reason}
+
+
 def _attach_full_speeds(shot: Shot) -> None:
     """E3: full ball speed by measured projection, full club speed and full smash.
 
     The canonical radial ball speed is unchanged; each full speed is its own field
-    with its status, range and reason (openflight.full_speed).
+    with its status, range and reason (openflight.full_speed). The full ball speed is
+    the launch-based projection, else the OPS total-speed projection; the full club
+    speed is the OPS club reading on the camera head track's direction (experimental).
     """
     from openflight.full_speed import (  # noqa: PLC0415
         evaluate_full_ball_speed,
-        evaluate_full_club_speed,
+        evaluate_full_club_speed_head_track,
         evaluate_full_smash,
+        evaluate_total_speed_projection,
     )
 
     # this shot's own range and how sure it is (13 Oct)
@@ -736,28 +777,47 @@ def _attach_full_speeds(shot: Shot) -> None:
     shot.input_sources = sources
     vertical_label, vertical_note = shot_launch_label(shot, "vertical")
     horizontal_label, horizontal_note = shot_launch_label(shot, "horizontal")
-    shot.ball_speed_full = evaluate_full_ball_speed(
-        vertical_label=vertical_label,
-        vertical_note=vertical_note,
-        horizontal_label=horizontal_label,
-        horizontal_note=horizontal_note,
-        tee_range_label=getattr(shot, "ball_range_label", None),
-        ops_track=shot.ops_speed_track,
-        vertical_deg=shot.launch_angle_vertical,
-        vertical_source=shot.launch_angle_vertical_source,
-        horizontal_deg=shot.launch_angle_horizontal,
-        horizontal_source=shot.launch_angle_horizontal_source,
-        horizontal_status=shot.launch_angle_horizontal_status,
-        horizontal_frame=shot.launch_angle_horizontal_frame,
-        horizontal_offset_deg=server.horizontal_offset_deg,
-        rig=server.rig_geometry,
-        tee_range_m=calibrated("tee_range_m"),
-        tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
-        tee_range_source=getattr(shot, "ball_range_source", None),
-        radar_height_m=calibrated("radar_height_m"),
-        ball_height_m=calibrated("tee_ball_height_m"),
-        tee_side_offset_m=side_offset,
-        tee_side_offset_source=side_source,
+    shot.ball_speed_full = _full_ball_speed_chain(
+        shot,
+        lambda: evaluate_full_ball_speed(
+            vertical_label=vertical_label,
+            vertical_note=vertical_note,
+            horizontal_label=horizontal_label,
+            horizontal_note=horizontal_note,
+            tee_range_label=getattr(shot, "ball_range_label", None),
+            ops_track=shot.ops_speed_track,
+            vertical_deg=shot.launch_angle_vertical,
+            vertical_source=shot.launch_angle_vertical_source,
+            horizontal_deg=shot.launch_angle_horizontal,
+            horizontal_source=shot.launch_angle_horizontal_source,
+            horizontal_status=shot.launch_angle_horizontal_status,
+            horizontal_frame=shot.launch_angle_horizontal_frame,
+            horizontal_offset_deg=server.horizontal_offset_deg,
+            rig=server.rig_geometry,
+            tee_range_m=calibrated("tee_range_m"),
+            tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
+            tee_range_source=getattr(shot, "ball_range_source", None),
+            radar_height_m=calibrated("radar_height_m"),
+            ball_height_m=calibrated("tee_ball_height_m"),
+            tee_side_offset_m=side_offset,
+            tee_side_offset_source=side_source,
+        ),
+        lambda: evaluate_total_speed_projection(
+            vertical_label=vertical_label,
+            vertical_note=vertical_note,
+            tee_range_label=getattr(shot, "ball_range_label", None),
+            ball_radial_mph=shot.ball_speed_mph,
+            vertical_deg=shot.launch_angle_vertical,
+            vertical_source=shot.launch_angle_vertical_source,
+            rig=server.rig_geometry,
+            tee_range_m=calibrated("tee_range_m"),
+            tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
+            tee_range_source=getattr(shot, "ball_range_source", None),
+            radar_height_m=calibrated("radar_height_m"),
+            ball_height_m=calibrated("tee_ball_height_m"),
+            tee_side_offset_m=side_offset,
+            tee_side_offset_source=side_source,
+        ),
     )
     # the flight model (E4) reads the value alone: calculated, estimated or experimental
     # (an experimental value feeds on; every output built on it is labelled so), or None
@@ -766,13 +826,11 @@ def _attach_full_speeds(shot: Shot) -> None:
         if shot.ball_speed_full.get("status") in ("calculated", "estimated", LABEL_EXPERIMENTAL)
         else None
     )
-    shot.club_speed_full = evaluate_full_club_speed(
-        radial_mph=None,
-        head_position_m=None,
-        direction=None,
-        ops_position_m=None,
-        direction_source=None,
-        reason=CLUB_SPEED_NOT_FULL_REASON,
+    delivery = shot.club_delivery if isinstance(shot.club_delivery, dict) else {}
+    shot.club_speed_full = evaluate_full_club_speed_head_track(
+        ops_track=shot.ops_speed_track,
+        head_track=delivery.get("head_track"),
+        rig=server.rig_geometry,
     )
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 

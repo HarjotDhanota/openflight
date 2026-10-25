@@ -175,7 +175,7 @@ def fusion_shot(**overrides) -> Shot:
         direction=None,
         ops_position_m=None,
         direction_source=None,
-        reason=shot_models.CLUB_SPEED_NOT_FULL_REASON,
+        reason="no camera head track direction (not run)",
     )
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
     flight = compute_flight(shot)

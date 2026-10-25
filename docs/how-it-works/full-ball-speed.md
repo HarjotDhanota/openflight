@@ -11,9 +11,10 @@ speed. On a 7-iron it reads about 3 mph low; on a wedge, 4-8 mph low.
 
 OpenFlight keeps that radial reading as the canonical `ball_speed_mph` (see the
 [speed contract](../camera/speed-contract.md)). It also computes the **full**
-ball speed from the shot's own measured geometry, in its own field,
-`ball_speed_full`. This is geometry, not a fitted model: nothing in it was tuned
-to a reference.
+ball speed in `ball_speed_full`, using the shot's own inputs. Two routes run in
+order: a timed launch-based projection, then a peak-radial model if that route
+refuses or raises. `input_sources.ball_speed_full` records the chosen route and
+every preceding refusal. Neither route changes the canonical radial reading.
 
 ## The method
 
@@ -50,14 +51,16 @@ full speed = radial speed / (LOS . dir)
     It adds about 0.03-0.04 mph per millisecond: 0.1 mph for a reading 3 ms
     after impact.
 
-The result is labelled **calculated**, with the source "measured projection: OPS
-radial + measured launch + rig geometry". The legacy peak-radial factor
-(`speed_correction.radial_speed_factor`) is not used. It stays recorded only as a
-comparator (`experimental_ball_speed_total`).
+The result is **calculated** on measured inputs, **estimated** on nominal or
+assumed inputs, and **experimental** on an experimental input. Camera launch
+labels use the recorded lens calibration. A configured IWR tilt or a partial or
+ambiguous IWR range also weakens the result. Failed horizontal gates can still
+feed an experimental projection; they never become measured inputs.
 
-## When it refuses
+## When the first route refuses
 
-The full speed is **not measured**, with the reason, when:
+A refusal tries the peak-radial route below. Full speed is **not measured** only
+when both routes refuse; their reasons are retained. The first route refuses when:
 
 - **the geometry is ill-conditioned.** LOS . dir is below **0.866 (cos 30°)** at
   every candidate reading. The speed error grows as tan(angle) × angle error. At
@@ -65,13 +68,12 @@ The full speed is **not measured**, with the reason, when:
   1.0 % of speed, about 1-1.6 mph at 100-160 mph: the D32 95th-percentile budget
   for full ball speed. Past 30° it grows quickly (40°: 1.5 %). On the v3 rig at
   2.1 m this refuses launches steeper than about 43°;
-- **a launch angle is missing or not measured:**
-    - estimated, low-coherence or low-consensus;
-    - an IWR horizontal with no phase reference;
-    - an angle in an unknown or mixed frame;
+- **a launch angle is absent or unsupported:** a table-estimated vertical,
+  an unknown source, an implausible horizontal, or an unknown/mixed frame.
+  Labelled estimated and experimental sensor angles are allowed with those labels;
 - **a geometry source is missing:** no rig file or OPS offset, no IWR tee range
-  or heights, or no tee side offset from the setup. The ball is never assumed
-  dead ahead, because that would be a filled-in value;
+  or heights, or no tee side offset from setup or the resting-ball camera.
+  The first route never supplies a missing side offset;
 - **there is no OPS ball reading** within 30 ms after a measured impact;
 - **the impact is a sound trigger,** and the rig has no mic offset to walk it
   back.
@@ -125,28 +127,56 @@ This proves the inversion, not the radar. The D32 goal is a median error of
 1 mph or less, and a 95th percentile of 2 mph or less. It is graded only against
 TrackMan shots in the pilot.
 
+## Second ball-speed route: peak radial projection
+
+`ops_total_projection` divides the canonical radial speed by
+`speed_correction.radial_speed_factor`. It predicts the peak radial share over
+an assumed 70 ms window, with the historical 0.027 mph/ms drag rate. It needs
+vertical launch and OPS-relative ball geometry; it assumes flight along the
+boresight and does not use horizontal launch or a timed OPS track. If the setup
+and resting-ball camera provide no side offset, it explicitly assumes zero and
+labels the result estimated. Missing vertical launch or range still refuses.
+The legacy factor's 0.5 safety clamp also refuses rather than publishing a
+clipped value as a solved projection.
+
+The uncertainty record names the launch, range, side-offset, rig-position and
+radial-resolution tolerances, plus a historical 0.5 mph scatter allowance. That
+allowance is not a current-rig accuracy result or a confidence interval. The
+fixed drag, zero horizontal launch and peak-extraction assumptions are recorded
+with the result. Experimental inputs remain experimental in both the producer
+record and the published metric.
+
 ## Club speed and smash
 
-- **Full club speed** uses the same projection and threshold, from one reading at
-  its own time (`full_speed.evaluate_full_club_speed`). It is **not measured**
-  today, for two reasons:
-    - the OPS club speed is a percentile over 4-18 ms before impact, not one
-      reading;
-    - the head moves on a curve, so its direction at that time needs E1's arc and
-      W6/W9's fixed head point.
-- **Smash** (`smash_factor_full`) is D37's `smash_factor` of a full ball speed
-  and a full club speed, labelled calculated. It is never full ÷ radial (D21), so
-  today it is not measured. The shown `smash_factor` stays the radial ÷ radial
-  ratio, labelled `radial_ratio` on fusion units.
+Full club speed uses the actual timed club pick, one FFT reading retained in
+`ops_speed_track.club_reading`. It anchors the OPS and camera clocks at contact,
+walks sound-trigger time back by the ball-to-mic sound flight, and evaluates the
+head track's position and turning direction at that reading's window centre.
 
-## Simulators
+The head state and rig OPS offset share a camera-centred (lateral, up, forward)
+frame. Full speed is the reading divided by LOS dot direction. Projection below
+cos(30 degrees), a flagged track, missing positions, a window crossing contact,
+or a reading more than 30 ms before contact refuses with a reason. The value is
+at the reading's time; no acceleration to contact is invented.
 
-A simulator flies the ball's full speed. When `ball_speed_full` is calculated,
-`sim/resolver.py` sends it with provenance "calculated". Otherwise it sends the
-radial reading, with provenance "measured", as before (D31).
+This route is **experimental**: depth already depends on OPS speed and contact
+range, the camera tracks the hosel while the radar may see a faster toe, and the
+rig offsets do not include enclosure tilt. The reported sensitivity range names
+radial resolution, clock uncertainty, FFT-window variation, path/attack sigmas,
+depth and OPS position. It is not a validated accuracy interval.
 
-The flight model (E4) reads `Shot.ball_speed_full_mph`: the calculated full
-speed in mph, or None when it is not measured.
+`smash_factor_full` divides full ball speed by full club speed under the weaker
+label. A missing full speed refuses; full divided by radial is never used. The
+original `smash_factor` remains the radial ratio on fusion units.
+
+## Simulators and flight
+
+Simulators read canonical metric records. Calculated full speed is sendable;
+estimated and model-geometry values need their explicit opt-ins. Experimental
+values are never sent. When full speed is not sendable, the resolver can use the
+radial speed under its actual label. Optional full club speed obeys the same
+policy. The flight model can consume experimental full ball speed, and outputs
+built on it inherit that label.
 
 ## Code
 

@@ -1,7 +1,9 @@
 """The OPS243 readings around impact, kept on the shot as raw evidence.
 
 Outbound readings from impact to ``MAX_REFERRAL_MS`` after it, on the OPS's own clock,
-with the impact time, its source and uncertainty. Holds no model of its own.
+with the impact time, its source and uncertainty, and the club pick: the one FFT window
+the processor read the club speed from (its start and radial speed). Holds no model of
+its own.
 """
 
 from __future__ import annotations
@@ -47,6 +49,13 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         if reading.is_outbound
         and impact_ms - window_ms <= reading.timestamp_ms <= impact_ms + max_referral_ms
     ]
+    club_ms = getattr(processed, "club_timestamp_ms", None)
+    club_mph = getattr(processed, "club_speed_mph", None)
+    club_reading = (
+        {"window_start_ms": float(club_ms), "radial_mph": float(club_mph)}
+        if _finite(club_ms) and _finite(club_mph)
+        else None
+    )
     return {
         "clock": "ops_capture",
         "timestamps": "fft_window_start_ms_from_capture_start",
@@ -57,4 +66,5 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         "radial_resolution_mph": 0.5 * (sample_rate / fft_size) * (wavelength / 2.0) / MPH_TO_MPS,
         "canonical_radial_mph": float(processed.ball_speed_mph),
         "outbound": outbound,
+        "club_reading": club_reading,
     }

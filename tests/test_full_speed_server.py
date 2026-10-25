@@ -100,14 +100,18 @@ def test_club_speed_is_not_full_and_smash_keeps_its_radial_ratio(fusion_geometry
     server_module._attach_ball_speed_contract(shot)
 
     assert shot.club_speed_full["status"] == NOT_MEASURED
-    assert "FFT-window" in shot.club_speed_full["reason"]
+    assert "no camera head track" in shot.club_speed_full["reason"]
     assert shot.smash_factor_full["status"] == NOT_MEASURED
     assert "club speed is not a full speed" in shot.smash_factor_full["reason"]
     assert shot.smash_factor_status == SMASH_RADIAL_RATIO
     assert shot.smash_factor == pytest.approx(118.0 / 88.0)
 
 
-def test_not_measured_without_the_setup_side_offset(fusion_geometry, monkeypatch):
+def test_without_the_setup_side_offset_the_ops_total_projection_resolves_it(
+    fusion_geometry, monkeypatch
+):
+    """The launch-based projection refuses an unmeasured side offset; the OPS total-speed
+    projection takes the ball dead ahead, estimated, and says so."""
     scene = dict(server_module.setup_handoff_config["scene"])
     scene["tee_side_offset_m"] = None
     monkeypatch.setitem(server_module.setup_handoff_config, "scene", scene)
@@ -115,8 +119,10 @@ def test_not_measured_without_the_setup_side_offset(fusion_geometry, monkeypatch
 
     server_module._attach_ball_speed_contract(shot)
 
-    assert shot.ball_speed_full["status"] == NOT_MEASURED
-    assert "side offset" in shot.ball_speed_full["reason"]
+    assert shot.ball_speed_full["route"] == "ops_total_projection"
+    assert shot.ball_speed_full["status"] == "estimated"
+    tried = shot.input_sources["ball_speed_full"]["tried"]
+    assert "side offset" in tried[0]["reason"]
 
 
 def test_not_measured_on_a_unit_without_the_iwr(monkeypatch):

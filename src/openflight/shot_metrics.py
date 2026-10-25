@@ -617,7 +617,16 @@ UPSTREAM = {
         )
     },
 }
+ROUTE_UPSTREAM = {("ball_speed_full", "ops_total_projection"): ("launch_vertical",)}
+_ROUTE_FIELDS = {"ball_speed_full": "ball_speed_full"}
 _LOWERABLE = (CALCULATED, MODEL_GEOMETRY, ESTIMATED)
+
+
+def _upstream_of(metric_id: str, inputs: tuple, shot) -> tuple:
+    """The inputs this shot's value of ``metric_id`` was built on (its route's, if named)."""
+    field_name = _ROUTE_FIELDS.get(metric_id)
+    route = _mapping(shot.get(field_name)).get("route") if field_name else None
+    return ROUTE_UPSTREAM.get((metric_id, route), inputs)
 
 
 def _lower(record: dict[str, Any], label: str, why: str) -> bool:
@@ -673,7 +682,7 @@ def with_input_labels(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dic
                 continue
             if metric_id == "spin_rate" and not _model_spin(shot):
                 continue
-            for name in inputs:
+            for name in _upstream_of(metric_id, inputs, shot):
                 upstream = metrics.get(name) or {}
                 status = upstream.get("status")
                 if status not in (EXPERIMENTAL, *_LOWERABLE) or upstream.get("value") is None:
