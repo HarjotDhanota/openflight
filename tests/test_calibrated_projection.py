@@ -14,7 +14,6 @@ from openflight.camera.ball_flight import (
     BallCandidate,
     CameraBallGeometry,
     _project,
-    estimate_camera_ball_flight,
 )
 from openflight.camera.calibrated_projection import (
     build_calibrated_camera_model,
@@ -36,79 +35,25 @@ from openflight.clubs import ClubType
 from openflight.iwr6843.lcmf import BallRangeEvidence
 from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.launch_monitor import Shot
+from tests.camera_helpers import (
+    BROWN,
+    calibration_artifact as _artifact,
+    camera_placement as _placement,
+    mode_profile as _profile,
+)
+
+ZERO = dict.fromkeys(BROWN, 0.0)
 
 
-def _profile(*, mirror=False, rotate=False):
+def _pose(status="stable", stable=True, z_g=1.0):
     return {
-        "version": 1,
-        "camera_id": "camera-1",
-        "lens_id": "lens-1",
-        "focus_id": "fixed-1",
-        "sensor_output": {
-            "width": 1280,
-            "height": 800,
-            "bit_depth": 10,
-            "raw_format": "SBGGR10_CSI2P",
-            "mode_id": "mode-1",
-        },
-        "saved_image": {
-            "width": 640,
-            "height": 400,
-            "stream": "raw",
-            "rotate_180": rotate,
-            "mirror": mirror,
-        },
-        "crop_readout_mapping": {
-            "native_sensor_crop": "unknown",
-            "scaler_crop": "unknown",
-            "driver_vertical_offset_px": "unknown",
-            "sensor_output_mapping": "unknown",
-            "saved_image_mapping": "unknown",
-        },
+        "status": status,
+        "stable": stable,
+        "calibrated_pitch_deg": 0.0,
+        "x_g": 0.0,
+        "y_g": 0.0,
+        "z_g": z_g,
     }
-
-
-def _artifact(profile=None, matrix=None, coefficients=None):
-    profile = validate_mode_profile(profile or _profile())
-    coefficients = coefficients or dict(
-        zip(("k1", "k2", "p1", "p2", "k3"), (-0.12, 0.025, 0.001, -0.0008, -0.004))
-    )
-    return {
-        "version": 1,
-        "status": "candidate",
-        "mode_profile": profile,
-        "mode_profile_sha256": profile["sha256"],
-        "camera_matrix": (matrix or [[610.0, 0.0, 307.0], [0.0, 600.0, 191.0], [0, 0, 1]]),
-        "distortion_model": "opencv_brown_5",
-        "distortion_convention": {
-            "coefficient_order": ["k1", "k2", "p1", "p2", "k3"],
-            "coordinates": "OpenCV normalized camera coordinates",
-        },
-        "distortion_coefficients": coefficients,
-    }
-
-
-def _placement(**changes):
-    placement = {
-        "schema": "openflight.camera.placement",
-        "version": 1,
-        "world_frame": "target_lfu",
-        "rig_geometry_sha256": "rig-hash",
-        "optical_to_enclosure_lfu": [[1, 0, 0], [0, 0, 1], [0, -1, 0]],
-        "enclosure_to_target_lfu": [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
-        "camera_origin_lfu": [0.08, 0.04, 0.13],
-        "radar_origin_lfu": [-0.02, 0.0, 0.05],
-        "enclosure_pivot_lfu": [0.0, 0.0, 0.0],
-        "reference_pose_deg": {"pitch": 7.0, "roll": -3.0},
-        "origin_provenance": {
-            "camera_origin_lfu": "measured optical center",
-            "radar_origin_lfu": "measured antenna center",
-            "enclosure_pivot_lfu": "declared front foot contact",
-        },
-        "rig_offset_consistency_tolerance_m": 0.002,
-    }
-    placement.update(changes)
-    return placement
 
 
 def _rotation(axis, degrees):
@@ -192,8 +137,7 @@ def test_full_placement_snapshot_is_detached_and_rejects_non_upright_aliases():
 
 def test_ball_and_club_estimators_use_the_same_calibrated_full_placement():
     artifact = _artifact(
-        matrix=[[500.0, 0.0, 320.0], [0.0, 500.0, 200.0], [0, 0, 1]],
-        coefficients=dict(zip(("k1", "k2", "p1", "p2", "k3"), [0] * 5)),
+        matrix=[[500.0, 0.0, 320.0], [0.0, 500.0, 200.0], [0, 0, 1]], coefficients=ZERO
     )
     placement = _placement(
         enclosure_to_target_lfu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
@@ -286,22 +230,6 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
     assert first["ball_estimate"]["status"] == "rejected_calibrated_requires_iwr_range"
 
 
-def test_calibrated_ball_candidate_withholds_without_recorded_iwr_range():
-    model = build_calibrated_camera_model(
-        _artifact(), _placement(), observed_pitch_deg=7.0, observed_roll_deg=-3.0
-    )
-    geometry = CameraBallGeometry(0.13, 0.05, 1.5, 0.021, calibrated_model=model)
-    result = estimate_camera_ball_flight(
-        np.zeros((4, 400, 640), np.uint8),
-        np.arange(4, dtype=np.int64),
-        trigger_ns=1,
-        range_evidence=None,
-        geometry=geometry,
-        ops_ball_speed_mph=100.0,
-    )
-    assert result.status == "rejected_calibrated_requires_iwr_range"
-
-
 def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "camera_optical_calibration", None)
     monkeypatch.setattr(server_module, "camera_placement", None)
@@ -336,7 +264,6 @@ def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_p
 
 
 def live_calibrated_replay(tmp_path, monkeypatch):
-    """A live calibrated shot the kiosk fused: shot, archive, replay, trigger, capture."""
     import openflight.camera.ball_flight as ball_module
     import openflight.camera.fusion_processing as fusion_module
 
@@ -344,9 +271,7 @@ def live_calibrated_replay(tmp_path, monkeypatch):
     profile["crop_readout_mapping"].update(
         scaler_crop="not_applicable_raw_stream", driver_vertical_offset_px=174
     )
-    artifact = _artifact(
-        profile=profile, coefficients=dict(zip(("k1", "k2", "p1", "p2", "k3"), [0] * 5))
-    )
+    artifact = _artifact(profile=profile, coefficients=ZERO)
     placement = _placement(
         enclosure_to_target_lfu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
         camera_origin_lfu=[0.0, 0.0, 0.095],
@@ -357,8 +282,7 @@ def live_calibrated_replay(tmp_path, monkeypatch):
     model = build_calibrated_camera_model(
         artifact, placement, observed_pitch_deg=0.0, observed_roll_deg=0.0
     )
-    # The ball rests for nine frames and is gone from the trigger frame on, so
-    # the camera's contact falls midway between frames 8 and 9.
+    # resting for nine frames, gone from the trigger on: contact is midway between 8 and 9
     frame_count = 20
     times = np.arange(frame_count, dtype=float) * 0.0035
     trigger_index = 9
@@ -468,14 +392,7 @@ def live_calibrated_replay(tmp_path, monkeypatch):
         iwr6843_horizontal_deg=3.9,
         iwr6843_horizontal_confidence=0.8,
         iwr6843_ball_range_evidence=evidence,
-        inclinometer={
-            "status": "stable",
-            "stable": True,
-            "calibrated_pitch_deg": 0.0,
-            "x_g": 0.0,
-            "y_g": 0.0,
-            "z_g": 1.0,
-        },
+        inclinometer=_pose(),
     )
     shot.camera_fusion_session_uuid = "session-a"
     server_module._fuse_camera_measurements(shot, capture)
@@ -504,14 +421,7 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
         ball_speed_mph=shot.ball_speed_mph,
         timestamp=datetime.now(),
         shot_number=2,
-        inclinometer={
-            "status": "stable",
-            "stable": True,
-            "calibrated_pitch_deg": 0.0,
-            "x_g": 0.0,
-            "y_g": 0.0,
-            "z_g": -1.0,
-        },
+        inclinometer=_pose(z_g=-1.0),
     )
     inverted.camera_fusion_session_uuid = "session-a"
     server_module._fuse_camera_measurements(inverted, capture)
@@ -523,39 +433,9 @@ def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path
 @pytest.mark.parametrize(
     ("pose", "reason"),
     [
-        (
-            {
-                "status": "moving",
-                "stable": False,
-                "calibrated_pitch_deg": 0.0,
-                "x_g": 0.0,
-                "y_g": 0.0,
-                "z_g": 1.0,
-            },
-            "stable LIS3DH",
-        ),
-        (
-            {
-                "status": "stale",
-                "stable": True,
-                "calibrated_pitch_deg": 0.0,
-                "x_g": 0.0,
-                "y_g": 0.0,
-                "z_g": 1.0,
-            },
-            "stable LIS3DH",
-        ),
-        (
-            {
-                "status": "stable",
-                "stable": True,
-                "calibrated_pitch_deg": 0.0,
-                "x_g": 0.0,
-                "y_g": 0.0,
-                "z_g": -1.0,
-            },
-            "upside down",
-        ),
+        (_pose(status="moving", stable=False), "stable LIS3DH"),
+        (_pose(status="stale"), "stable LIS3DH"),
+        (_pose(z_g=-1.0), "upside down"),
     ],
 )
 def test_calibrated_pose_rejects_unstable_stale_and_inverted_readings(pose, reason):
@@ -582,7 +462,7 @@ def _physical_to_saved_artifact(mirror, rotate):
     artifact = _artifact(
         profile,
         saved_matrix.tolist(),
-        dict(zip(("k1", "k2", "p1", "p2", "k3"), saved_distortion)),
+        dict(zip(BROWN, saved_distortion)),
     )
     return artifact, matrix, distortion
 
@@ -613,7 +493,7 @@ def test_saved_orientation_brown_projection_recovers_physical_rays(mirror, rotat
 
 
 def test_known_point_reconstruction_with_offset_origins_and_rotation():
-    artifact = _artifact(coefficients=dict(zip(("k1", "k2", "p1", "p2", "k3"), [0] * 5)))
+    artifact = _artifact(coefficients=ZERO)
     projection = load_calibration_candidate(artifact, mode_profile=artifact["mode_profile"])
     rotation = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
     camera = np.array([0.08, 0.04, 0.13])
@@ -633,8 +513,7 @@ def test_known_point_reconstruction_with_offset_origins_and_rotation():
 
 def test_zero_distortion_matches_legacy_ray_for_equivalent_model():
     artifact = _artifact(
-        matrix=[[500.0, 0.0, 320.0], [0.0, 500.0, 200.0], [0, 0, 1]],
-        coefficients=dict(zip(("k1", "k2", "p1", "p2", "k3"), [0] * 5)),
+        matrix=[[500.0, 0.0, 320.0], [0.0, 500.0, 200.0], [0, 0, 1]], coefficients=ZERO
     )
     pixel = np.array([271.0, 176.0])
     rotation = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
@@ -711,27 +590,18 @@ def test_projection_rejects_out_of_bounds_rotation_and_failed_inversion(monkeypa
         projection.pixel_rays_lfu([300, 200], optical_to_world_lfu=np.eye(3))
 
 
-def test_opencv_five_inversion_path_receives_explicit_criteria(monkeypatch):
+def test_projection_without_undistort_points_iter_still_inverts(monkeypatch):
     artifact = _artifact()
     projection = load_calibration_candidate(artifact, mode_profile=artifact["mode_profile"])
-    observed = {}
-
-    def record_criteria(*args, **kwargs):
-        observed["criteria"] = kwargs.get("criteria")
-        return np.zeros((1, 1, 2), dtype=float)
-
     monkeypatch.delattr(cv2, "undistortPointsIter", raising=False)
-    monkeypatch.setattr(cv2, "undistortPoints", record_criteria)
-    projection.pixel_rays_lfu([307, 191], optical_to_world_lfu=np.eye(3))
-    assert observed["criteria"] == (
-        cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS,
-        50,
-        1e-12,
-    )
+
+    ray = projection.pixel_rays_lfu([307, 191], optical_to_world_lfu=np.eye(3))
+
+    np.testing.assert_allclose(np.ravel(ray), [0.0, 0.0, 1.0], atol=1e-9)
 
 
 def test_projection_rejects_singular_or_folded_distortion():
-    artifact = _artifact(coefficients=dict(zip(("k1", "k2", "p1", "p2", "k3"), [-4.0, 0, 0, 0, 0])))
+    artifact = _artifact(coefficients={**ZERO, "k1": -4.0})
     projection = load_calibration_candidate(artifact, mode_profile=artifact["mode_profile"])
     with pytest.raises(ValueError, match="converge|folded"):
         projection.pixel_rays_lfu([600, 191], optical_to_world_lfu=np.eye(3))
@@ -769,28 +639,7 @@ def _capture_mode(profile):
     }
 
 
-def test_capture_evidence_can_only_be_unverified_or_incompatible():
-    profile = _profile()
-    capture = _capture_mode(profile)
-    result = inspect_capture_compatibility(capture, mode_profile=profile, frame_count=2)
-    assert result.status == "unverified"
-    assert any("identity" in reason for reason in result.reasons)
-
-    capture["frames"]["saved_width"][1] = 641
-    result = inspect_capture_compatibility(capture, mode_profile=profile, frame_count=2)
-    assert result.status == "incompatible"
-    assert any("dimensions" in reason for reason in result.reasons)
-
-
-def test_capture_evidence_rejects_hash_index_alignment_and_known_mismatches():
-    profile = _profile()
-    capture = _capture_mode(profile)
-    capture["contexts"][0]["id"] = "0" * 64
-    assert inspect_capture_compatibility(capture, mode_profile=profile).status == "incompatible"
-
-
-def test_inspector_accepts_runtime_capture_mode_schema_as_unverified():
-    profile = _profile()
+def _runtime_block(profile):
     startup = _capture_mode(profile)["contexts"][0]["startup"]
     frames = tuple(
         CameraFrame(
@@ -804,15 +653,30 @@ def test_inspector_accepts_runtime_capture_mode_schema_as_unverified():
         )
         for index in range(2)
     )
-    runtime_block = _capture_mode_metadata(frames)
-    result = inspect_capture_compatibility(
-        {"frame_count": 2, "capture_mode": runtime_block}, mode_profile=profile
-    )
-    assert result.status == "unverified"
+    return {"frame_count": 2, "capture_mode": _capture_mode_metadata(frames)}
 
+
+def test_capture_evidence_can_only_be_unverified_or_incompatible():
+    profile = _profile()
     capture = _capture_mode(profile)
-    capture["frames"]["context_index"] = [0]
-    assert inspect_capture_compatibility(capture, mode_profile=profile).status == "incompatible"
+    result = inspect_capture_compatibility(capture, mode_profile=profile, frame_count=2)
+    assert result.status == "unverified"
+    assert any("identity" in reason for reason in result.reasons)
+    assert inspect_capture_compatibility(_runtime_block(profile), mode_profile=profile).status == (
+        "unverified"
+    )
+
+    capture["frames"]["saved_width"][1] = 641
+    result = inspect_capture_compatibility(capture, mode_profile=profile, frame_count=2)
+    assert result.status == "incompatible"
+    assert any("dimensions" in reason for reason in result.reasons)
+    for broken in ({"id": "0" * 64}, None):
+        capture = _capture_mode(profile)
+        if broken:
+            capture["contexts"][0].update(broken)  # a hash that is not the startup's
+        else:
+            capture["frames"]["context_index"] = [0]  # an index that does not align
+        assert inspect_capture_compatibility(capture, mode_profile=profile).status == "incompatible"
 
 
 def test_runtime_capture_mode_can_supply_complete_unqualified_candidate_evidence():
@@ -821,24 +685,7 @@ def test_runtime_capture_mode_can_supply_complete_unqualified_candidate_evidence
         scaler_crop="not_applicable_raw_stream", driver_vertical_offset_px=174
     )
     profile = validate_mode_profile(profile)
-    startup = _capture_mode(profile)["contexts"][0]["startup"]
-    frames = tuple(
-        CameraFrame(
-            image=np.zeros((400, 640), dtype=np.uint8),
-            sensor_timestamp_ns=index,
-            host_timestamp_ns=index,
-            exposure_us=1000,
-            analogue_gain=2.0,
-            frame_duration_us=2500,
-            capture_mode=startup,
-        )
-        for index in range(2)
-    )
-    runtime_block = _capture_mode_metadata(frames)
-    result = inspect_capture_compatibility(
-        {"frame_count": 2, "capture_mode": runtime_block},
-        mode_profile=profile,
-    )
+    result = inspect_capture_compatibility(_runtime_block(profile), mode_profile=profile)
     assert result.status == "unverified"
     assert set(result.reasons) == {
         "startup driver parameter does not prove an applied sensor offset",

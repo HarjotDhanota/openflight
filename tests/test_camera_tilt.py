@@ -1,8 +1,4 @@
-"""The unit's camera tilt, calibrated from the median of validated pairs.
-
-The camera's vertical is solved from a radar-ranged ball's image row, kept per
-unit, and composed with each session's LIS3DH pitch.
-"""
+"""The unit's camera tilt: solved from a radar-ranged ball's row, the median of validated pairs."""
 
 import json
 import math
@@ -50,21 +46,23 @@ def test_a_known_offset_is_recovered_from_one_ball():
     assert 0.05 < solved["uncertainty_deg"] < 0.5
 
 
-def test_the_indoor_pair_gives_about_two_degrees():
-    """The ball at (744, 518), the pair's 1.18 m, LIS3DH 1.72 deg."""
+@pytest.mark.parametrize(
+    ("pixel", "range_m", "uncertainty_m", "lis3dh_deg", "low", "high"),
+    [
+        ((744.0, 518.0), 1.176, 0.026, 1.72, 1.6, 2.5),  # the indoor pair
+        ((778.4, 464.6), 1.528, 0.024, 0.3, 0.5, 1.3),  # the outdoors-test-7 pair
+    ],
+)
+def test_recorded_pairs_give_their_offsets(pixel, range_m, uncertainty_m, lis3dh_deg, low, high):
     solved = camera_tilt.solve_vertical_offset(
-        v3_at, (744.0, 518.0), radar_range_m=1.176, radar_uncertainty_m=0.026, lis3dh_pitch_deg=1.72
+        v3_at,
+        pixel,
+        radar_range_m=range_m,
+        radar_uncertainty_m=uncertainty_m,
+        lis3dh_pitch_deg=lis3dh_deg,
     )
 
-    assert 1.6 < solved["offset_deg"] < 2.5
-
-
-def test_the_outdoors_test_7_pair_gives_its_offset():
-    solved = camera_tilt.solve_vertical_offset(
-        v3_at, (778.4, 464.6), radar_range_m=1.528, radar_uncertainty_m=0.024, lis3dh_pitch_deg=0.3
-    )
-
-    assert 0.5 < solved["offset_deg"] < 1.3
+    assert low < solved["offset_deg"] < high
 
 
 PAIR = {"offset_deg": 2.1, "uncertainty_deg": 0.2, "pitch_deg": 3.8, "lis3dh_pitch_deg": 1.7}
@@ -132,16 +130,8 @@ def test_later_pairs_check_and_two_disagreeing_in_a_row_recalibrate(tmp_path):
 def test_an_offset_beyond_eight_degrees_is_refused_with_a_warning(tmp_path, offset):
     path = tmp_path / "camera-vertical-offset.json"
 
-    outcome = camera_tilt.record_pair(
-        path,
-        {
-            "offset_deg": offset,
-            "uncertainty_deg": 0.2,
-            "pitch_deg": offset,
-            "lis3dh_pitch_deg": 0.0,
-        },
-        facts={"epoch_id": "far"},
-    )
+    pair = {**PAIR, "offset_deg": offset, "pitch_deg": offset, "lis3dh_pitch_deg": 0.0}
+    outcome = camera_tilt.record_pair(path, pair, facts={"epoch_id": "far"})
 
     assert outcome["action"] == "refused"
     assert "8" in outcome["warning"]
@@ -174,7 +164,7 @@ def test_the_file_is_json_with_its_schema_and_provenance(tmp_path):
     for epoch in ("one", "two"):
         camera_tilt.record_pair(
             path,
-            {"offset_deg": 2.0, "uncertainty_deg": 0.2, "pitch_deg": 3.7, "lis3dh_pitch_deg": 1.7},
+            {**PAIR, "offset_deg": 2.0, "pitch_deg": 3.7},
             facts={"epoch_id": epoch, "radar_range_m": 1.18, "pixel_px": [744.0, 518.0]},
         )
 

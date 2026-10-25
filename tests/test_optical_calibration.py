@@ -3,49 +3,20 @@
 import pytest
 
 from openflight.camera.optical_calibration import validate_mode_profile
-
-
-def _profile():
-    return {
-        "version": 1,
-        "camera_id": "camera-serial-1",
-        "lens_id": "lens-1",
-        "focus_id": "locked-ring-mark-1",
-        "sensor_output": {
-            "width": 1280,
-            "height": 720,
-            "bit_depth": 10,
-            "raw_format": "SBGGR10",
-            "mode_id": "libcamera-mode-1280x720-10bit",
-        },
-        "saved_image": {
-            "width": 640,
-            "height": 480,
-            "stream": "main",
-            "rotate_180": False,
-            "mirror": False,
-        },
-        "crop_readout_mapping": {
-            "native_sensor_crop": None,
-            "scaler_crop": None,
-            "driver_vertical_offset_px": None,
-            "sensor_output_mapping": None,
-            "saved_image_mapping": None,
-        },
-    }
+from tests.camera_helpers import mode_profile
 
 
 def test_profile_is_canonical_and_requires_explicit_unknown_mapping():
-    first = validate_mode_profile(_profile())
-    reordered = dict(reversed(list(_profile().items())))
+    first = validate_mode_profile(mode_profile())
+    reordered = dict(reversed(list(mode_profile().items())))
     assert validate_mode_profile(reordered)["sha256"] == first["sha256"]
 
-    missing_mapping = _profile()
+    missing_mapping = mode_profile()
     del missing_mapping["crop_readout_mapping"]["scaler_crop"]
     with pytest.raises(ValueError, match="missing explicit fields"):
         validate_mode_profile(missing_mapping)
 
-    unexpected = _profile()
+    unexpected = mode_profile()
     unexpected["derived_scale"] = 0.5
     with pytest.raises(ValueError, match="unknown fields"):
         validate_mode_profile(unexpected)
