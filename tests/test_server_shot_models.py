@@ -33,7 +33,7 @@ from tests.test_server_ball_range import _shot as _range_shot
 class TestSpinAxisFromTheCollisionModel(OnShotDetectedHelpers):
     @staticmethod
     def _expected_spin_axis():
-        """E2: the collision model's centre-strike axis, not horizontal launch minus path."""
+        """The collision model's centre-strike axis, not horizontal launch minus path."""
         return (
             collision_model.evaluate(
                 club=ClubType.DRIVER,
@@ -56,7 +56,7 @@ class TestSpinAxisFromTheCollisionModel(OnShotDetectedHelpers):
         assert shot.spin_axis_source == collision_model.SPIN_AXIS_SOURCE_MODEL
 
     def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
-        """D36 item 2: face to path cancels the horizontal offset only within one frame."""
+        """Face to path cancels the horizontal offset only within one frame."""
         shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
         shot.launch_angle_horizontal_frame = "target_line"
         shot.club_path_frame = "unit_boresight"
@@ -68,7 +68,7 @@ class TestSpinAxisFromTheCollisionModel(OnShotDetectedHelpers):
 
     def test_spin_axis_estimated_when_horizontal_confidence_below_gate(self, monkeypatch):
         """Below the horizontal leg's confidence floor the axis is labelled estimated,
-        never calculated (V-formulas C2; it used to be withheld)."""
+        never calculated."""
         shot = self._spin_axis_shot(
             horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
         )
@@ -98,13 +98,13 @@ class TestFaceAngleFromTheCollisionModel:
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
         shot_models._attach_collision_model(shot)
-        # E2: the PING weight for this club (Wood et al. 2018), not a fixed 0.8
+        # the PING weight for this club (Wood et al. 2018), not a fixed 0.8
         weight = collision_model.weights_for_club(shot.club).horizontal
         assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.0 / weight, abs=0.05)
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
     def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
-        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source."""
+        """Computed, and labelled with the mixed zeros and the path source."""
         shot = self._run(monkeypatch, phase_reference=None)
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
@@ -138,7 +138,7 @@ class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
 
     def _patch_environment(self, monkeypatch):
-        # an OPS-only install: no IWR or camera, so its labelled estimates stand (D17)
+        # an OPS-only install: no IWR or camera, so its labelled estimates stand
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)

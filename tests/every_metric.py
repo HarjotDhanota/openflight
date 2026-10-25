@@ -1,10 +1,7 @@
-"""Shared fixtures for the every-metric coverage tests (V-wiring).
+"""Shared fixtures for the every-metric coverage tests.
 
-``EXPECTED_METRIC_IDS`` is the project's metric list (TrackMan's metrics plus
-ours), written out by hand so a metric dropped from the catalog fails every
-coverage test that is parametrized over it. ``fusion_shot`` builds one shot the
-way the kiosk does, with every Part E producer attached (E1 arc, E2 collision,
-E3 full speeds, E4 flight), so each metric has a value or a stated reason.
+``EXPECTED_METRIC_IDS`` is hand-written so a metric dropped from the catalog fails every
+coverage test; ``fusion_shot`` builds a kiosk-style shot with every Part E producer attached.
 """
 
 from __future__ import annotations
@@ -33,7 +30,7 @@ BALL = (
     "gyro",
     "smash_factor",
     "smash_factor_full",
-    # 13 Oct: the range this shot's range-dependent metrics used
+    # the range the shot's range-dependent metrics used
     "ball_range",
 )
 FLIGHT = (
@@ -100,7 +97,7 @@ def arc_positions():
 
 
 def full_ball_speed(value_mph: float = 124.0) -> dict:
-    """An E3 full ball speed, in the shape openflight.full_speed returns."""
+    """A full ball speed, in the shape openflight.full_speed returns."""
     return {
         "status": "calculated",
         "value_mph": value_mph,

@@ -545,11 +545,7 @@ class _ScheduledSerial:
 
 
 class _StaggeredDrainSerial:
-    """Serial stand-in whose active dump pauses longer than the old quiet gap.
-
-    It runs on its own clock (``monotonic``/``sleep``, patched into ops243) so
-    the drain's timing does not depend on the host clock's resolution.
-    """
+    """Serial stand-in whose active dump pauses longer than the old quiet gap."""
 
     is_open = True
 

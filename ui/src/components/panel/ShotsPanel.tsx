@@ -46,7 +46,6 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
     ];
   }
 
-  // a fusion unit's unmeasured carry shows as no value, never the table
   const carry = reportedCarryYards(shot);
   return [
     formatSpeed(shot.ball_speed_mph, unitSystem, 1),

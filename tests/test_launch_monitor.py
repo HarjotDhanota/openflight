@@ -91,7 +91,6 @@ class TestShot:
 
     @pytest.mark.parametrize("club", [0.0, -100.0])
     def test_smash_factor_none_without_a_positive_club_speed(self, club):
-        """Smash needs a positive club speed; none is filled in."""
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=club, timestamp=datetime.now())
         assert shot.smash_factor is None
 
@@ -101,7 +100,6 @@ class TestShot:
         assert shot.to_dict()["smash_factor_status"] is None
 
     def test_a_radial_ratio_label_rides_with_its_smash_factor(self):
-        """Radial ball over radial club speed is labelled, not passed off as smash."""
         shot = Shot(
             ball_speed_mph=150.0,
             club_speed_mph=100.0,
@@ -284,7 +282,6 @@ _DERIVED = (
     ],
 )
 def test_every_derived_property_treats_a_non_finite_input_exactly_like_none(field, bad):
-    """A non-finite value is a missing value."""
     from datetime import datetime as _dt
 
     measured = dict(

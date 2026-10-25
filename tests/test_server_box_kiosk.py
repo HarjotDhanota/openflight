@@ -256,7 +256,6 @@ def test_only_an_assumed_net_range_is_warned_at_start(monkeypatch, tmp_path, cap
 
 
 def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_state, monkeypatch):
-    """A ball teed elsewhere in the box is found where it now rests."""
     monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
     monitor.observe(_scene([(700.0, 420.0, 16.0)]), at=50.0)
     server.ball_at_address_monitor = monitor

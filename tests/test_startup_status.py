@@ -299,7 +299,6 @@ def test_server_publishes_high_speed_camera_status_without_blocking_ops(
 
 
 def test_camera_shot_analysis_is_refused_before_any_hardware_starts(tmp_path, monkeypatch):
-    """The opt-in analysis is refused on fusion units before any camera or monitor starts."""
     from openflight import server
 
     status_path = tmp_path / "status.json"

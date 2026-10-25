@@ -662,7 +662,6 @@ class TestIWR6843ShotIntegration:
         server_module.iwr6843_runtime = None
 
     def test_init_iwr6843_takes_the_tee_lateral_offset_from_the_rig(self, monkeypatch, tmp_path):
-        """The LCMF inversion's lateral offset is the rig's."""
         runtime = _init_fake_iwr(monkeypatch, tmp_path, tee_range_m=1.3, lateral_tee_offset_m=0.0)
 
         assert runtime.calibration.lateral_tee_offset_m == 0.0
@@ -1781,7 +1780,6 @@ class TestShotToDict:
         )
 
     def test_live_camera_fusion_carries_the_club_stage_notes(self, monkeypatch, tmp_path):
-        """The club stage's labels reach the shot beside its values."""
         shot, capture = self._camera_scene(monkeypatch, tmp_path, frames=24, forward_offset_m=0.03)
         shot.club_speed_mph = 80.0
 
@@ -1794,7 +1792,6 @@ class TestShotToDict:
         ]
 
     def test_a_swing_without_a_tee_range_names_it_on_the_camera(self, monkeypatch, tmp_path):
-        """The tee contract stands; the shot says what it lacked."""
         from openflight.camera.geometry_contract import NO_TEE_RANGE
 
         shot, capture = self._camera_scene(monkeypatch, tmp_path, tee_range_m=None)
@@ -2010,7 +2007,6 @@ class TestShotToDict:
             ], name
 
     def test_a_non_finite_launch_leaves_carry_on_its_no_launch_path(self):
-        """A non-finite value is a missing value: carry is the no-launch carry."""
         when = datetime(2026, 10, 11, 9, 0, 0)
         result = shot_to_dict(
             Shot(ball_speed_mph=120.0, timestamp=when, launch_angle_vertical=math.nan)
@@ -2063,7 +2059,6 @@ class TestShotToDict:
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
     def test_a_nulled_metric_keeps_no_measuring_source_label(self, bad):
-        """A value nulled for being non-finite reads like a missing one: its source is None."""
         when = datetime(2026, 10, 11, 9, 0, 0)
         result = shot_to_dict(
             Shot(
@@ -3581,7 +3576,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert result.clock_domain == "host_monotonic"
 
     def test_camera_prefetch_failure_does_not_discard_iwr_result(self, monkeypatch):
-        """A camera association failure remains isolated from radar enrichment."""
         fused = []
 
         def failing(_impact_timestamp):
@@ -4333,7 +4327,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_finalization_coordinator_empty()
 
     def test_a_shot_with_non_finite_metrics_is_still_emitted_and_logged(self, monkeypatch):
-        """Nothing is dropped. NaN launch and inf spin go out as null."""
         emitted, session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         shot = self._shot()
@@ -4358,7 +4351,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert len(session_log.shots) == 1
 
     def test_a_nan_shot_in_the_history_never_poisons_later_stats(self, monkeypatch):
-        """One NaN shot in the session, then every later emit is strict JSON."""
         emitted, _session_log = self._record_finalization(monkeypatch)
         history = []
         monkeypatch.setattr(
@@ -4391,7 +4383,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_strict_finite_or_null_stats(session_state)
 
     def test_non_finite_stats_from_any_monitor_are_nulled_before_emit(self, monkeypatch):
-        """Stats are nulled before emitting, whatever made them."""
         emitted, _session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(
             server_module,
@@ -4414,7 +4405,6 @@ class TestOnShotDetected(OnShotDetectedHelpers):
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
     def test_table_carry_gets_no_club_speed_when_it_is_non_finite(self, monkeypatch, bad):
-        """A non-finite club speed reaches the table carry as None (missing)."""
         self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         calls = []
@@ -6018,7 +6008,6 @@ def test_live_speed_candidate_matches_shared_replay_without_changing_canonical(m
 
 
 def test_ops_speed_geometry_comes_from_the_rig_ops_offsets(monkeypatch):
-    """With a rig, the cosine candidate uses the OPS's own position."""
     from openflight.rig_geometry import RigGeometry
 
     rig = RigGeometry.from_json("config/enclosure_v3_rig_geometry.json")
@@ -6089,8 +6078,8 @@ def test_live_speed_candidate_withholds_estimated_fallback(monkeypatch):
 
 
 class TestCameraShotAnalysisRefused:
-    """Upstream's --camera-shot-analysis never runs live on a fusion unit: it takes
-    ball distance from pixel size, but the IWR gives distance."""
+    """--camera-shot-analysis never runs live on a fusion unit: it takes ball distance from
+    pixel size, but the IWR gives distance."""
 
     @pytest.mark.parametrize(
         "extra",
@@ -6181,7 +6170,6 @@ class TestIwrAzimuthCalibration:
         return shot
 
     def test_a_low_coherence_radar_horizontal_is_shown_labelled_not_fused(self, monkeypatch):
-        """Shown under its own source, never handed to the camera as IWR's."""
         shot = self._run(
             monkeypatch, phase_reference=-0.5, horizontal_status="hlcmf_v1_low_coherence"
         )
@@ -6214,7 +6202,6 @@ class TestIwrAzimuthCalibration:
         assert shot.experimental_club_path_status == "rejected_phase_span"
 
     def test_a_low_consensus_camera_horizontal_ranks_below_the_radar(self, monkeypatch):
-        """Shown, labelled, and never displacing a radar horizontal."""
         monkeypatch.setattr(
             server_module, "iwr6843_runtime", SimpleNamespace(horizontal_phase_reference_rad=None)
         )

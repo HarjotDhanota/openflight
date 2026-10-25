@@ -1,11 +1,7 @@
-"""A fusion unit reports a missing value as missing (D17); OPS-only installs keep labelled estimates.
+"""A fusion unit reports a missing value as missing; OPS-only installs keep labelled estimates.
 
-With the IWR or the camera running, the kiosk used to fill a missing vertical launch
-from club tables, carry from an "optimal" spin and a club-typical one. On a fusion unit
-a missing launch or spin stays missing, and carry is built only from measured inputs.
-An OPS-only install has nothing to measure angles with, so it keeps its labelled
-estimates for simulators. A calculated spin is a model's output: labelled calculated,
-never high-confidence.
+On a fusion unit a missing launch or spin stays missing and carry is built only from measured
+inputs; an OPS-only install keeps its labelled estimates. A calculated spin is labelled calculated.
 """
 
 from datetime import datetime
@@ -53,8 +49,8 @@ def quiet_finalize(monkeypatch):
 
 @pytest.fixture
 def full_ball_speed(monkeypatch):
-    """E3's full speed stands in as the shot's own ball speed: a flight on the OPS
-    line-of-sight speed is "estimated" (V-formulas C1)."""
+    """The full speed stands in as the ball speed: a flight on the OPS line-of-sight speed is
+    "estimated"."""
 
     def full_speed(shot):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
@@ -167,9 +163,6 @@ def test_ballistics_without_substitutes_needs_measured_spin_axis_and_both_angles
     )
 
 
-# ---- a calculated spin is labelled calculated ------------------------------------------
-
-
 def _calculated():
     shot = _shot(
         launch_angle_vertical=12.0,
@@ -194,17 +187,9 @@ def test_carry_and_simulators_use_a_calculated_spin_under_its_own_label():
 
     assert resolve_launch(shot).spin_source == "calculated"
     resolved = resolve_shot(shot, PlayerState())
-    # a model's spin from measured inputs is calculated, never measured (D31, E2)
+    # a model's spin from measured inputs is calculated, never measured
     assert resolved.provenance["total_spin"] == "calculated"
     assert resolved.total_spin_rpm == pytest.approx(shot.spin_rpm)
-
-
-# ---- carry is committed once, in finalization (upstream #276) ---------------------------
-#
-# The rolling buffer monitor used to pre-fill carry_spin_adjusted with the ball-speed
-# spin table whenever OPS spin was reliable, and finalization only ran the simulator
-# while that field was still None. On a fusion unit a measured launch never reached the
-# simulator, and a shot it could not simulate kept the table number (D17).
 
 
 def _monitor_shot_with_reliable_spin():
@@ -359,12 +344,7 @@ def test_an_ops_only_install_with_ballistics_disabled_keeps_the_spin_table(
     assert shot.carry_spin_adjusted == pytest.approx(_spin_table_carry(shot))
 
 
-# ---- "not measured" everywhere: payload, stats, simulators, logs -----------------------
-#
-# The kiosk used to show (and forward, and average) the ball-speed table
-# ``estimated_carry_yards`` whenever ``carry_spin_adjusted`` was None. On a fusion unit
-# that is a fill-in: an unmeasured carry is "not measured" everywhere. The shot says so
-# in ``carry_status`` so no consumer has to guess.
+# an unmeasured carry is "not measured" everywhere, and ``carry_status`` says so
 
 
 def _payload(shot):
@@ -389,7 +369,6 @@ def test_a_fusion_payload_with_no_carry_says_not_measured_and_carries_no_table(
 def test_a_fusion_payload_with_a_simulated_carry_says_calculated_and_carries_no_table(
     fusion_unit, quiet_finalize, full_ball_speed
 ):
-    """A simulated carry is the flight model's output: its label is the flight's (E-int)."""
     shot = _monitor_shot_with_reliable_spin()
     _measure_launch(shot)
 
@@ -444,7 +423,6 @@ def test_an_ops_only_payload_says_estimated_and_keeps_its_table(
 
 
 def test_an_unfinalized_shot_keeps_its_labelled_table_carry():
-    """Shots that never reached finalization (replays, mock) keep the old fallback."""
     shot = _shot()
 
     assert shot.carry_status is None
@@ -467,7 +445,6 @@ def _await_finalization():
 def test_a_fusion_unit_says_carry_not_measured_from_first_emit_to_session_log(
     monkeypatch, quiet_finalize
 ):
-    """The initial OPS emit (before enrichment) must not show a table carry either."""
     emitted, logged, workers = [], [], []
     monkeypatch.setattr(server_module, "iwr6843_runtime", None)
     monkeypatch.setattr(server_module, "camera_capture_runtime", object())
@@ -536,9 +513,6 @@ def test_the_carry_log_line_names_a_fusion_carry_not_measured_without_the_table(
     assert text == "carry not measured"
 
 
-# ---- simulator connectors ---------------------------------------------------------------
-
-
 def test_the_resolver_sends_no_carry_for_a_fusion_shot_without_one():
     shot = _shot(
         launch_angle_vertical=12.0,
@@ -562,7 +536,7 @@ def test_the_resolver_sends_a_fusion_shot_its_simulated_carry():
     resolved = resolve_shot(shot, PlayerState())
 
     assert resolved.carry_yards == pytest.approx(243.8)
-    # a simulated carry is never measured; on an OPS-only unit it is an estimate (C8)
+    # a simulated carry is never measured; on an OPS-only unit it is an estimate
     assert resolved.provenance["carry"] == "estimated"
 
 
@@ -631,9 +605,6 @@ def test_the_server_forwards_a_fusion_shot_without_carry_to_connected_simulators
     assert "carry" not in sim_shot["provenance"]
 
 
-# ---- the monitor's table carry at detection is a labelled diagnostic -------------------
-
-
 def test_the_session_log_names_the_trigger_table_carry_a_diagnostic(tmp_path):
     import json
 
@@ -652,13 +623,9 @@ def test_the_session_log_names_the_trigger_table_carry_a_diagnostic(tmp_path):
     assert entry["table_carry_estimate_yards"] == 257.0
 
 
-# ---- D31: a fusion unit sends simulators only what it measured -------------------------
-#
-# OpenConnect V1 (GSPro, OpenGolfSim, PAR-TEE) requires BallData Speed, VLA, HLA,
-# TotalSpin and SpinAxis (BackSpin/SideSpin only without TotalSpin); CarryDistance and
-# every ClubData field are optional. On a fusion unit a required field the shot did not
-# measure means the shot is not sent, and the screen and the sim-send log say why; an
-# optional one is left off the wire. An OPS-only unit keeps its labelled estimates.
+# OpenConnect V1 requires BallData Speed, VLA, HLA, TotalSpin and SpinAxis; CarryDistance and
+# every ClubData field are optional. On a fusion unit an unmeasured required field means the
+# shot is not sent (the screen and sim-send log say why); an unmeasured optional one is left off.
 
 
 def _fusion_sim_shot(**overrides):
@@ -752,7 +719,7 @@ def test_a_fully_measured_fusion_shot_is_sent_unchanged():
     ops = resolve_shot(shot, PlayerState())
 
     assert fusion.as_values() == ops.as_values()
-    # the spin axis (and the spin split by it) is the kiosk's computation (C8)
+    # the spin axis (and the spin split by it) is the kiosk's computation
     computed = {"spin_axis", "back_spin", "side_spin", "carry"}
     assert {fusion.provenance[k] for k in fusion.provenance if k not in computed} == {"measured"}
     assert fusion.provenance["spin_axis"] == "calculated"
@@ -876,10 +843,7 @@ def test_the_sim_send_log_records_a_shot_not_sent_with_its_reason(tmp_path):
     }
 
 
-# --- Merge of D31 with the base's rule: a non-finite value is a missing value --------
-# On a fusion unit a NaN or infinite required field is unmeasured exactly like None:
-# the shot is not sent, and the screen and the sim-send log say which field. A
-# non-finite optional field is left out, and a non-finite carry is never reported.
+# a NaN or infinite field is unmeasured exactly like None
 
 _NON_FINITE = [float("nan"), float("inf"), float("-inf")]
 _NON_FINITE_IDS = ["nan", "inf", "-inf"]
@@ -965,7 +929,7 @@ def test_a_non_finite_fusion_carry_is_not_reported_anywhere(bad):
     assert shot.reported_carry_yards is None
     payload = server_module.shot_to_dict(shot)
     assert payload["carry_spin_adjusted"] is None
-    assert payload["estimated_carry_yards"] is None  # no table on a fusion unit (D17)
+    assert payload["estimated_carry_yards"] is None  # no table on a fusion unit
     assert payload["carry_status"] is None  # a nulled carry keeps no "measured" label
     assert {"id": "carry_spin_adjusted", "reason": f"non_finite_value:{bad!r}"} in payload[
         "metrics_not_measured"

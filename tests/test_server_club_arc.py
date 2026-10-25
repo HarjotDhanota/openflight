@@ -1,4 +1,4 @@
-"""E1 in the kiosk: every shot's club delivery rides on Shot and the payload."""
+"""The club arc in the kiosk: every shot's club delivery rides on Shot and the payload."""
 
 from __future__ import annotations
 

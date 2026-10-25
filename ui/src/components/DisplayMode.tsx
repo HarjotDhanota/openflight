@@ -83,7 +83,6 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
   }
 
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
-  // a fusion unit's unmeasured carry shows as no value, never the table
   const carryYards = reportedCarryYards(shot);
   const clubPath = firstMeasured(
     shot.club_path_deg,

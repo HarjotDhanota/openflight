@@ -1,7 +1,7 @@
 """The OPS243 must keep dumping when a GATE edge races its re-arm.
 
-The re-arm (PA, S#16, PA) restarts sampling on the first PA, so an edge during it starts a
-dump; flushing the input then lost the dump's start marker and nothing re-armed afterwards.
+The re-arm (PA, S#16, PA) restarts sampling on the first PA, so an edge during it starts a dump
+whose start marker an input flush would lose.
 """
 
 import json
@@ -246,7 +246,7 @@ def test_gate_edges_from_before_the_wait_do_not_end_it():
 
 
 def test_sound_path_never_flushes_a_dump_already_arriving():
-    """Upstream's flush must never run on the sound path: it drops a waiting dump's marker."""
+    """The input flush must never run on the sound path: it drops a waiting dump's marker."""
     ops, radar = _ball_dump_ops()
     flushes_before_read = []
     dump_read = []

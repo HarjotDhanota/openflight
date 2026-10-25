@@ -1,9 +1,7 @@
-"""E2 wiring: the collision model on the Shot, the payload, carry and simulators.
+"""Collision model wiring: the Shot, the payload, carry and simulators.
 
-The collision model replaces the kiosk's fixed 0.8-weight face estimate and the
-"horizontal launch minus path" spin-axis proxy. Its values are calculated, never
-measured; simulators get them under that label (D31), and a missing input leaves
-every value built on it not measured.
+Its values are calculated, never measured; simulators get them under that label, and a missing
+input leaves every value built on it not measured.
 """
 
 from datetime import datetime
@@ -189,7 +187,6 @@ def test_a_canonical_attack_angle_is_used_first():
 
 
 def test_a_low_confidence_horizontal_launch_gives_an_estimated_spin_axis():
-    """Below the confidence floor the axis is estimated, with the reason (V-formulas C2)."""
     shot = _delivered_shot(
         launch_angle_horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
     )
@@ -248,9 +245,6 @@ def test_the_empirical_formula_still_runs_alone_without_the_published_model():
     assert shot.spin_source == "calculated"
 
 
-# ---- simulators get the calculated labels (D31) -------------------------------------
-
-
 def test_simulators_receive_calculated_spin_and_axis_under_the_calculated_label():
     shot = _delivered_shot()
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
@@ -273,9 +267,6 @@ def test_a_fusion_shot_without_collision_inputs_is_still_not_sent():
         resolve_shot(shot, PlayerState(), substitutes=False)
 
     assert raised.value.missing == ["spin", "spin axis"]
-
-
-# ---- face and loft from a measured spin (rigid-body relation) ----------------------
 
 
 def _measured_spin_shot(**overrides):

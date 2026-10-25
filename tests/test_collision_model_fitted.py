@@ -1,9 +1,7 @@
 """The collision model's outputs from the fitted forward model (collision_forward).
 
-Face and loft come from the rigid-body relation with a measured spin, else from the
-inverse of the fitted launch model; the calculated spin and spin axis come from the
-forward model, with the gear effect only from a measured impact location; the spin
-and smash indices compare a shot with the expected spin and ball speed.
+Face and loft come from the rigid-body relation with a measured spin, else the inverse launch
+model; spin and axis from the forward model, the gear effect only with a measured impact location.
 """
 
 import math
@@ -43,9 +41,6 @@ def _forward_for(result, club, **kwargs):
         dynamic_loft_deg=metrics["dynamic_loft"].value,
         **kwargs,
     )
-
-
-# ---- face and loft -------------------------------------------------------------------
 
 
 def test_without_a_measured_spin_face_and_loft_invert_the_fitted_launch_model():
@@ -118,9 +113,6 @@ def test_an_unknown_club_has_no_face_or_loft():
 
     assert result.metrics["face_angle"].status == cm.STATUS_NOT_MEASURED
     assert "club unknown" in result.metrics["face_angle"].reason
-
-
-# ---- spin and spin axis ------------------------------------------------------------
 
 
 def test_the_calculated_spin_is_the_fitted_models_at_the_face_centre():
@@ -210,9 +202,6 @@ def test_the_forward_prediction_is_recorded():
     assert record["ball_speed_mph"] > 0.0
 
 
-# ---- spin index and smash index ------------------------------------------------------
-
-
 def test_the_spin_index_compares_a_measured_spin_with_the_expected_spin():
     result = _evaluate(
         spin_rpm=_inp(6000.0, frame=None),
@@ -288,8 +277,6 @@ def test_a_club_without_fitted_indices_says_so():
         assert fallback[name].present
         assert fallback[name].note == cm.NOTE_NO_FITTED_INDEX
 
-
-# ---- flier and heavy contact ---------------------------------------------------------
 
 LOW_POINT = _inp(100.0, cm.LABEL_CALCULATED, frame=None)
 

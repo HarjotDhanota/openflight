@@ -326,7 +326,7 @@ def test_the_shot_waits_briefly_for_the_reading_after_impact():
 
 
 # A still unit is never "moved": the confirming window must be quiet, and the move
-# tolerance grows with the two windows' own scatter (the reviewer's heavy-shake case).
+# tolerance grows with the two windows' own scatter.
 
 
 def _shaken_shot(seed, *, shake_before, shake_after, moved_deg=0.0, latency=0.1):
@@ -364,7 +364,7 @@ def test_heavy_shake_on_a_still_unit_is_never_read_as_moved(shake):
     before, after = shake
     outcomes = {_shaken_shot(seed, shake_before=before, shake_after=after) for seed in range(20)}
     assert "moved" not in outcomes
-    # seed 12 was the reviewer's false "moved"
+    # seed 12 is a known false "moved" under heavy shake
     assert _shaken_shot(12, shake_before=before, shake_after=after) != "moved"
 
 

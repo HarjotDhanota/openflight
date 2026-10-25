@@ -490,14 +490,8 @@ class TestMainCLI:
         assert "driver" in out
 
 
-# ---------------------------------------------------------------------------
-# Delivery and face metrics reach the comparison (audit, 1 Oct 2026)
-# ---------------------------------------------------------------------------
-
-
 class TestDeliveryAndFaceComparison:
-    """Club path and attack loaded but never reached the CSV or summary, and face
-    angle, face to path and spin axis were not read from either side."""
+    """Club path, attack, face angle, face to path and spin axis reach the CSV and summary."""
 
     def test_face_and_spin_axis_headers_resolve(self):
         assert ct._build_column_map(["Face Angle", "Face To Path", "Spin Axis"]) == {

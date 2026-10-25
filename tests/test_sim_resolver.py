@@ -111,7 +111,6 @@ def test_an_ops_only_carry_is_always_estimated():
 
 
 def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
-    """A simulated carry is the flight model's output: at most calculated."""
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_horizontal=1.5,

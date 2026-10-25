@@ -94,9 +94,8 @@ const READ_ATTEMPTS = 3;
 const RETRY_MS = 2000;
 
 /**
- * The kiosk's setup record, kept current from `setup_changed` and read again whenever the
- * socket connects (a restarted kiosk may have marked sections stale), and its actions.
- * `loadFailed` says the record could not be read after the retries.
+ * The kiosk's setup record, kept current from `setup_changed` and re-read on every socket connect
+ * (a restarted kiosk may have marked sections stale), with its actions and `loadFailed`.
  */
 export function useSetup(): {
   setup: SetupSnapshot | null;

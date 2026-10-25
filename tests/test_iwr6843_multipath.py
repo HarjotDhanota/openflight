@@ -164,7 +164,7 @@ def test_leave_one_channel_out_error_rejects_dimension_mismatch():
 
 
 class TestLateralTeeOffset:
-    """The LCMF inversion uses this setup's lateral geometry, not July's 64 mm."""
+    """The LCMF inversion uses this setup's lateral geometry, not a fixed 64 mm."""
 
     @staticmethod
     def _cal(lateral_m=0.0):

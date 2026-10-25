@@ -1,10 +1,7 @@
-"""E8a: the flight model's aerodynamic coefficients as a versioned calibration.
+"""The flight model's aerodynamic coefficients as a versioned calibration (flight-fit-v1).
 
-flight-fit-v1 is Ferguson, McNally & McPhee's (2022) functional form refitted to
-TM4's normalized exports on carry, apex, landing angle and hang time jointly. The
-published Ferguson constants are research's (flight_models_superseded). These
-tests pin the selection, the provenance record (D38) and the physical guards; the
-accuracy budgets live in test_ballistics_trackman_regression.py.
+Ferguson, McNally & McPhee's (2022) form refitted to TM4's normalized exports; the accuracy
+budgets live in test_ballistics_trackman_regression.py.
 """
 
 from __future__ import annotations
@@ -91,9 +88,6 @@ def test_simulate_flies_the_active_model_unless_told_otherwise():
     active = simulate(cond, air_density=AIR_DENSITY_NORMALIZED, aero=FLIGHT_FIT_V1)
     assert default.carry_yards == active.carry_yards
     assert default.apex_yards == active.apex_yards
-
-
-# ---- D38 provenance --------------------------------------------------------------------
 
 
 def _sha256(path: Path) -> str:
