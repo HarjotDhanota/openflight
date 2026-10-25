@@ -1478,10 +1478,49 @@ def _look_range_prior(look: dict | None):
         return None
 
 
+@dataclass(frozen=True)
+class SceneCalibration:
+    """The shot's range and the scene's heights, for a unit whose IWR gave no calibration."""
+
+    tee_range_m: float | None
+    tee_range_uncertainty_m: float
+    radar_height_m: float | None
+    tee_ball_height_m: float | None
+
+
+def _scene_calibration(shot) -> SceneCalibration | None:
+    """The scene's radar and ball heights with this shot's own range (no IWR runtime)."""
+    scene = setup_handoff_config.get("scene") or {}
+    radar = scene.get("radar_height_m")
+    if radar is None and rig_geometry is not None:
+        radar = getattr(rig_geometry.enclosure_setup(), "radar_height_m", None)
+    if radar is None:
+        # no radar origin to measure from: the lens is the world's origin
+        radar = camera_capture_config.get("mount_height_m")
+    ball = scene.get("ball_height_m")
+    if radar is None or ball is None:
+        return None
+    return SceneCalibration(
+        tee_range_m=float(shot.ball_range_m),
+        tee_range_uncertainty_m=float(shot.ball_range_uncertainty_m or 0.0),
+        radar_height_m=float(radar),
+        tee_ball_height_m=float(ball),
+    )
+
+
 def shot_iwr_calibration(shot):
-    """The IWR calibration with this shot's own range; the session's is never changed."""
+    """The IWR calibration with this shot's own range; the session's is never changed.
+
+    Without an IWR runtime, a shot whose range another route gave (the camera prior, the
+    resting ball's own size) gets the scene's heights with that range, so the camera's
+    geometry and the full speed still have one (25 Oct audit, gap 1).
+    """
     calibration = getattr(iwr6843_runtime, "calibration", None)
-    if calibration is None or getattr(shot, "ball_range_m", None) is None:
+    if calibration is None:
+        if getattr(shot, "ball_range_m", None) is None:
+            return None
+        return _scene_calibration(shot)
+    if getattr(shot, "ball_range_m", None) is None:
         return calibration
     try:
         return replace(
@@ -4583,11 +4622,13 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
     capture = getattr(shot_result, "capture", None)
     shot.ball_range_m = shot.ball_range_source = shot.ball_range_uncertainty_m = None
     shot.ball_range_label = "not_measured"
-    shot.ball_range_reason = (
-        "no IWR capture matched this shot"
-        if capture is None or not getattr(capture, "valid", False)
-        else "the IWR runtime did not range this shot"
-    )
+    if capture is None:
+        shot.ball_range_reason = "no IWR capture matched this shot"
+    elif not getattr(capture, "valid", False):
+        error = getattr(capture, "error", None)
+        shot.ball_range_reason = f"the IWR capture was not usable ({error or 'invalid capture'})"
+    else:
+        shot.ball_range_reason = "the IWR runtime did not range this shot"
 
 
 def _process_iwr6843_angle(shot: Shot) -> float | None:
@@ -4974,10 +5015,10 @@ def _fuse_camera_club_delivery(
                     trigger_index = exposure_trigger_index(archive, len(archive["frames"]))
                     if trigger_index is None and "pre_trigger_count" in archive:
                         trigger_index = int(archive["pre_trigger_count"]) - 1
-                    if iwr6843_runtime is None:
+                    calibration = shot_iwr_calibration(shot)
+                    if calibration is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
-                        calibration = shot_iwr_calibration(shot)
                         if calibration.tee_range_m is None:
                             fused = ChainedDelivery(status="rejected_missing_tee_geometry")
                         else:
@@ -5051,6 +5092,8 @@ _HORIZONTAL_SOURCE_RANK = {
     "camera_legacy_fallback": 0,
     # a scattered camera sweep, shown labelled but never over the radar
     "camera_low_consensus": 0,
+    # the camera's own launch on a shot the IWR did not measure (experimental)
+    "camera_fallback": 0,
     "radar": 1,
     "camera_assisted_experimental": 2,
 }
@@ -5136,7 +5179,7 @@ def _fuse_camera_ball_flight(
             frames_path = Path(camera_capture.path) / "frames.npz"
             if not frames_path.exists():
                 estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
-            elif iwr6843_runtime is None:
+            elif shot_iwr_calibration(shot) is None:
                 estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
             else:
                 calibration = shot_iwr_calibration(shot)
@@ -5369,6 +5412,156 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
     )
 
 
+def _camera_origin_lfu() -> tuple[float, float, float]:
+    """The lens in the radar-centred frame (lateral, forward, up), from the camera config."""
+    return (
+        float(camera_capture_config.get("lateral_offset_m") or 0.0),
+        float(camera_capture_config.get("forward_offset_m") or 0.0),
+        float(camera_capture_config.get("mount_height_m") or 0.0),
+    )
+
+
+def _mode_focal(width_px: int) -> tuple[float | None, str | None, float]:
+    """This mode's focal length, its source and relative 1-sigma (``mode_focal``)."""
+    from .camera.fallback_chain import mode_focal  # noqa: PLC0415
+
+    return mode_focal(
+        width_px,
+        lens=rig_geometry_config.get("lens") or camera_capture_config.get("lens"),
+        rig=rig_geometry,
+    )
+
+
+def _swing_roll_correction_deg(shot: Shot) -> float:
+    roll = float(camera_capture_config.get("roll_correction_deg") or 0.0)
+    record = (_swing_camera_pose(shot) or {}).get("roll") or {}
+    if record.get("applied") and _finite(record.get("roll_correction_deg")):
+        roll += float(record["roll_correction_deg"])
+    return roll
+
+
+def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
+    """The shot's ball range: its IWR launch point, the camera prior, its resting ball.
+
+    Every route's refusal is kept (``Shot.input_sources``); a failing route is refused
+    with its error and the chain goes on (``camera.fallback_chain``).
+    """
+    try:
+        from .camera.fallback_chain import (  # noqa: PLC0415
+            apply_ball_range,
+            ball_range_resolution,
+            size_range_route,
+        )
+
+        prior = _look_range_prior(shot_ball_at_address(shot.impact_timestamp)) or getattr(
+            iwr6843_runtime, "range_prior", None
+        )
+        scene = setup_handoff_config.get("scene") or {}
+        calibration = getattr(iwr6843_runtime, "calibration", None)
+        radar_height = getattr(calibration, "radar_height_m", None) if calibration else None
+        if radar_height is None:
+            radar_height = scene.get("radar_height_m")
+        ball_height = getattr(calibration, "tee_ball_height_m", None) if calibration else None
+        if ball_height is None:
+            ball_height = scene.get("ball_height_m")
+        width = int(np.shape(camera_archive["frames"])[-1]) if camera_archive else 0
+        focal, _focal_source, _sd = _mode_focal(width) if width else (None, None, 0.0)
+        size_route = size_range_route(
+            camera_archive,
+            seed=shot_reference_ball(shot.impact_timestamp),
+            lens_focal_px=focal,
+            calibrated_focal_px=None,
+            camera_origin_lfu=_camera_origin_lfu(),
+            radar_origin_lfu=(0.0, 0.0, float(radar_height or _camera_origin_lfu()[2])),
+            ball_height_m=ball_height,
+            roll_correction_deg=_swing_roll_correction_deg(shot),
+            horizontal_pixel_sign=-1.0 if camera_capture_config.get("mirror_horizontal") else 1.0,
+        )
+        resolution = ball_range_resolution(
+            shot_range={
+                "ball_range_m": shot.ball_range_m,
+                "ball_range_source": shot.ball_range_source,
+                "ball_range_uncertainty_m": shot.ball_range_uncertainty_m,
+                "ball_range_reason": shot.ball_range_reason,
+            },
+            prior=prior,
+            size_route=size_route,
+        )
+        apply_ball_range(shot, resolution)
+        if resolution.present and resolution.route != "iwr_post_impact":
+            logger.info(
+                "[SERVER] Ball range %.3f m from %s (%s): %s",
+                resolution.value,
+                resolution.source,
+                resolution.label,
+                shot.ball_range_reason,
+            )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Ball range chain failed: %s", error, exc_info=True)
+        sources = dict(shot.input_sources or {})
+        sources["ball_range_error"] = f"{type(error).__name__}: {error}"
+        shot.input_sources = sources
+
+
+def _camera_fallback_inputs(shot: Shot, camera_archive) -> dict:
+    """What the camera fallback needs besides the geometry: focal length, OPS, aim."""
+    from .camera.fallback_chain import fallback_inputs  # noqa: PLC0415
+
+    return fallback_inputs(
+        focal=_mode_focal(int(np.shape(camera_archive["frames"])[-1])),
+        ops_offset_mm=getattr(rig_geometry, "ops_offset_mm", None) if rig_geometry else None,
+        camera_origin_lfu=_camera_origin_lfu(),
+        target_line=setup_handoff_config.get("target_line"),
+        lis3dh_camera_pitch_deg=_lis3dh_camera_pitch(getattr(shot, "inclinometer", None)),
+    )
+
+
+def _apply_camera_fallback_launch(shot: Shot, fallback: dict | None) -> None:
+    """The launch each axis resolves to: the shot's sensors, else the camera fallback.
+
+    The fallback's own launch is kept on every shot with a clip; with a radar launch it
+    is the second opinion it always was.
+    """
+    try:
+        from .camera.fallback_chain import launch_resolutions  # noqa: PLC0415
+
+        shot.camera_fallback_launch = fallback
+        resolved = launch_resolutions(shot, fallback)
+        vertical, horizontal = resolved["launch_vertical"], resolved["launch_horizontal"]
+        if vertical.route == "camera_fallback":
+            shot.launch_angle_vertical = float(vertical.value)
+            shot.launch_angle_vertical_source = vertical.source
+            shot.launch_angle_vertical_confidence = None
+            shot.launch_angle_confidence = None
+            shot.angle_source = vertical.source
+            shot.launch_angle_vertical_reason = None
+            logger.info(
+                "[SERVER] Vertical launch from the camera fallback: %.1f +- %.1f deg "
+                "(experimental)",
+                vertical.value,
+                vertical.uncertainty or float("nan"),
+            )
+        elif not vertical.present:
+            shot.launch_angle_vertical_reason = vertical.reason
+        if horizontal.route == "camera_fallback":
+            _apply_camera_horizontal_decision(
+                shot,
+                float(horizontal.value),
+                None,
+                horizontal.source,
+                frame=fallback.get("horizontal_frame"),
+            )
+        sources = dict(shot.input_sources or {})
+        sources["launch_vertical"] = vertical.to_dict()
+        sources["launch_horizontal"] = horizontal.to_dict()
+        shot.input_sources = sources
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Camera fallback launch failed: %s", error, exc_info=True)
+        sources = dict(shot.input_sources or {})
+        sources["launch_error"] = f"{type(error).__name__}: {error}"
+        shot.input_sources = sources
+
+
 def _fuse_camera_measurements(
     shot: Shot,
     camera_capture,
@@ -5400,6 +5593,7 @@ def _fuse_camera_measurements(
     shot.camera_notes = camera_notes or None
     strip_refusal = _strip_offset_refusal(camera_capture)
     if strip_refusal is not None:
+        _resolve_shot_ball_range(shot, None)
         _withhold_camera_metrics(shot, "rejected_strip_offset_not_modelled", strip_refusal)
         logger.warning("[SERVER] Camera analysis withheld: %s", strip_refusal)
         return
@@ -5420,7 +5614,9 @@ def _fuse_camera_measurements(
                 "[SERVER] Camera analysis runs with an optical-quality note: %s",
                 quality["reason"],
             )
-    if camera_archive is not None and iwr6843_runtime is not None:
+    _resolve_shot_ball_range(shot, camera_archive)
+    fallback_result = None
+    if camera_archive is not None:
         try:
             from openflight.camera.fusion_processing import (  # noqa: PLC0415
                 build_context,
@@ -5431,9 +5627,13 @@ def _fuse_camera_measurements(
                 EffectiveCameraGeometryInputs,
             )
 
-            geometry = EffectiveCameraGeometryInputs.from_live(
-                camera_capture_config, shot_iwr_calibration(shot)
-            )
+            calibration = shot_iwr_calibration(shot)
+            if calibration is None:
+                raise ValueError(
+                    "missing effective camera geometry: tee_slant_range_m "
+                    f"({shot.ball_range_reason or 'no ball range'})"
+                )
+            geometry = EffectiveCameraGeometryInputs.from_live(camera_capture_config, calibration)
             if camera_optical_calibration is not None:
                 from openflight.camera.calibrated_projection import (  # noqa: PLC0415
                     build_calibrated_camera_model,
@@ -5530,10 +5730,13 @@ def _fuse_camera_measurements(
                 lens_focal_px=lens_record_focal_px(
                     rig_geometry_config.get("lens"), int(np.shape(camera_archive["frames"])[-1])
                 ),
+                ball_range=(shot.input_sources or {}).get("ball_range"),
+                camera_fallback=_camera_fallback_inputs(shot, camera_archive),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)
             shot.camera_fusion_processing = result
+            fallback_result = result.get("ball_fallback")
             club_notes = [f"club: {note}" for note in result["club_delivery"].get("notes") or ()]
             ball_check = result["ball_estimate"].get("camera_model") or {}
             if ball_check.get("disagrees"):
@@ -5584,6 +5787,7 @@ def _fuse_camera_measurements(
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
             kiosk_extensions.call_all("on_club_delivery", shot, fused)
+            _apply_camera_fallback_launch(shot, fallback_result)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
             shot.camera_fusion_context = {
@@ -5609,6 +5813,16 @@ def _fuse_camera_measurements(
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
     _calibrate_camera_tilt_from_swing(shot, camera_archive)
+    _apply_camera_fallback_launch(
+        shot,
+        fallback_result
+        or {
+            "status": "not_run",
+            "reason": "no camera clip for this shot"
+            if camera_archive is None
+            else "the shared camera fusion did not run",
+        },
+    )
     if shot.calibrated_camera_status == "rejected":
         if shot.launch_angle_horizontal_source in {
             "camera_assisted_experimental",
@@ -5937,7 +6151,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture, camera_archive)
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
-    kiosk_extensions.call_all("after_enrichment", shot)
+    _isolated_stage(shot, "after_enrichment", kiosk_extensions.call_all, "after_enrichment", shot)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,
@@ -6040,42 +6254,117 @@ def _ballistic_carry(shot: Shot, *, fusion: bool) -> kiosk_extensions.CarryOutco
     return kiosk_extensions.CarryOutcome(source=None, table_reason=reason)
 
 
-def _finalize_shot_detected(
-    shot: Shot,
-    *,
-    emit_event: str,
-    initial_ui_ms: float | None = None,
-    enrichment: _ShotEnrichmentResult | None = None,
-    diagnostic_logger=None,
-    diagnostic_session_uuid: str | None = None,
-    late_update: _LateShotUpdate | None = None,
-    awaits_late_result: bool = False,
-) -> None:
-    """Apply required fallbacks, persist once, and publish the final shot.
+_STAGE_FAILED = object()
 
-    With ``late_update`` this is a late enrichment of a shot already published:
-    the log records ``shot_updated`` and simulators are not sent it again.
-    ``awaits_late_result`` sends phones an OPS-only first result as provisional.
+
+def _isolated_stage(shot: Shot, name: str, stage, *args, **kwargs):
+    """Run one shot stage; an error is the stage's own reason, never the shot's end."""
+    try:
+        return stage(*args, **kwargs)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        message = f"{type(error).__name__}: {error}"
+        errors = dict(shot.stage_errors or {})
+        errors[name] = message
+        shot.stage_errors = errors
+        logger.warning("[SERVER] Shot stage %s failed: %s", name, message, exc_info=True)
+        log_session_error(
+            f"Shot stage {name} failed",
+            component="server",
+            context={"stage": name, "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+        return _STAGE_FAILED
+
+
+# Kinematic spin (spin_estimate): fitted to the 2026-06-08 TrackMan session, 10.5 %
+# median error on TrackMan's own inputs. D38: fitted physics, labelled.
+KINEMATIC_SPIN_METHOD = (
+    "kinematic 170 v sin(LA)^1.2 (spin_estimate, fitted to TrackMan 2026-06-08; "
+    "used when no OPS spin is accepted and the collision model has none)"
+)
+
+
+def _apply_fallback_spin(shot: Shot) -> bool:
+    """The spin's last route: with no accepted OPS spin and no collision spin, the
+    kinematic spin from the ball speed and the vertical launch (D38), labelled by its
+    inputs: calculated on the full ball speed, estimated on the radial one; the launch's
+    own label (a camera fallback's: experimental) reaches it in ``shot_metrics``."""
+    from .source_chain import Candidate, Route, resolve  # noqa: PLC0415
+
+    accepted = (
+        shot.spin_source not in _MODEL_SPIN_SOURCES
+        and _finite(shot.spin_rpm)
+        and shot.spin_rpm > 0
+        and _finite(shot.spin_confidence)
+        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
+    )
+
+    def ops():
+        if accepted:
+            return Candidate(float(shot.spin_rpm), "measured", shot.spin_method or "ops")
+        if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
+            return f"OPS spin confidence {shot.spin_confidence:.2f} below {SPIN_CONFIDENCE_HIGH}"
+        return shot.spin_rejection_reason or "no OPS spin"
+
+    def collision():
+        if shot.spin_source in _MODEL_SPIN_SOURCES and _finite(shot.spin_rpm):
+            return Candidate(float(shot.spin_rpm), shot.spin_source, shot.spin_method or "model")
+        reason = (((shot.collision_model or {}).get("metrics") or {}).get("spin_rate") or {}).get(
+            "reason"
+        )
+        return f"collision model: {reason or 'no spin'}"
+
+    def kinematic():
+        source = shot.launch_angle_vertical_source
+        if source not in ("radar", "camera", "camera_fallback") or not _finite(
+            shot.launch_angle_vertical
+        ):
+            return "no vertical launch from a sensor"
+        full = shot.ball_speed_full_mph if _finite(shot.ball_speed_full_mph) else None
+        speed = full if full is not None else shot.ball_speed_mph
+        spin = calculated_spin_rpm(speed, shot.launch_angle_vertical)
+        if spin is None:
+            return "outside the kinematic model's launch range"
+        full_status = (shot.ball_speed_full or {}).get("status")
+        label = "calculated" if full is not None and full_status == "calculated" else "estimated"
+        return Candidate(float(spin), label, KINEMATIC_SPIN_METHOD)
+
+    resolution = resolve(
+        "spin", [Route("ops", ops), Route("collision", collision), Route("kinematic", kinematic)]
+    )
+    sources = dict(shot.input_sources or {})
+    sources["spin"] = resolution.to_dict()
+    shot.input_sources = sources
+    if resolution.route != "kinematic":
+        return False
+    if shot.spin_source not in _MODEL_SPIN_SOURCES:
+        shot.spin_rpm_measured = shot.spin_rpm
+        shot.spin_method_measured = shot.spin_method
+    shot.spin_rpm = round(float(resolution.value), 0)
+    shot.spin_method = (
+        KINEMATIC_SPIN_METHOD
+        if resolution.label == "calculated"
+        else f"{KINEMATIC_SPIN_METHOD}; on the OPS radial ball speed (no full speed)"
+    )
+    shot.spin_source = resolution.label
+    shot.spin_confidence = None
+    logger.info(
+        "[SERVER] Kinematic spin: %.0f rpm (%s, launch %s)",
+        shot.spin_rpm,
+        resolution.label,
+        shot.launch_angle_vertical_source,
+    )
+    return True
+
+
+def _commit_carry(shot: Shot) -> str | None:
+    """Commit the shot's carry: the flight model's, else (OPS-only) the table's; its source.
+
+    Prefer the physics simulator (drag + Magnus, RK4) when ballistics is enabled and a
+    vertical launch angle is available; fall back to the table estimator otherwise
+    (either ballistics disabled or angle missing: resolve_launch returns None), on an
+    OPS-only unit only.
     """
-    enrichment = enrichment or _ShotEnrichmentResult()
-    iwr6843_ms = enrichment.iwr6843_ms
-    kld7_ms = enrichment.kld7_ms
-    camera_capture_ms = enrichment.camera_capture_ms
-
-    # Always emit user-facing launch angles. Radar/camera measurements win;
-    # rejected or missing axes fall back to conservative estimates.
-    _ensure_user_facing_launch_angles(shot)
-
-    # OPS speed remains the canonical radial observation.
-    _attach_ball_speed_contract(shot)
-
-    if calculated_spin_enabled:
-        _apply_calculated_spin(shot)
-
-    # Compute carry. Prefer the physics simulator (drag + Magnus, RK4) when
-    # ballistics is enabled and a vertical launch angle is available; fall
-    # back to the table estimator otherwise (either ballistics disabled or
-    # angle missing → resolve_launch returns None), on an OPS-only unit only.
     carry_source = None
     fusion = _fusion_unit()
     if shot.mode != "mock":
@@ -6110,6 +6399,59 @@ def _finalize_shot_detected(
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
             )
+    return carry_source
+
+
+def _finalize_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+    enrichment: _ShotEnrichmentResult | None = None,
+    diagnostic_logger=None,
+    diagnostic_session_uuid: str | None = None,
+    late_update: _LateShotUpdate | None = None,
+    awaits_late_result: bool = False,
+) -> None:
+    """Apply required fallbacks, persist once, and publish the final shot.
+
+    With ``late_update`` this is a late enrichment of a shot already published:
+    the log records ``shot_updated`` and simulators are not sent it again.
+    ``awaits_late_result`` sends phones an OPS-only first result as provisional.
+    """
+    enrichment = enrichment or _ShotEnrichmentResult()
+    iwr6843_ms = enrichment.iwr6843_ms
+    kld7_ms = enrichment.kld7_ms
+    camera_capture_ms = enrichment.camera_capture_ms
+
+    # Always emit user-facing launch angles. Radar/camera measurements win;
+    # rejected or missing axes fall back to conservative estimates.
+    # Each stage fails alone: its error becomes its own reason and the shot still logs
+    # and publishes everything else, the OPS ball speed first of all (25 Oct audit).
+    _isolated_stage(shot, "launch_angles", _ensure_user_facing_launch_angles, shot)
+
+    # OPS speed remains the canonical radial observation.
+    if _isolated_stage(shot, "speed_contract", _attach_ball_speed_contract, shot) is _STAGE_FAILED:
+        if not isinstance(shot.ball_speed_full, dict):
+            shot.ball_speed_full = {
+                "status": "not_measured",
+                "value_mph": None,
+                "range_mph": None,
+                "reason": f"the full-speed stage failed: {shot.stage_errors['speed_contract']}",
+            }
+
+    if calculated_spin_enabled:
+        _isolated_stage(shot, "calculated_spin", _apply_calculated_spin, shot)
+    else:
+        _isolated_stage(shot, "spin_fallback", _apply_fallback_spin, shot)
+
+    carry_source = None
+    if shot.mode != "mock":
+        carry_source = _isolated_stage(shot, "carry", _commit_carry, shot)
+        if carry_source is _STAGE_FAILED:
+            carry_source = None
+            shot.carry_spin_adjusted = None
+            shot.carry_status = CARRY_NOT_MEASURED
     if shot.spin_rejection_reason:
         logger.info(
             "[SERVER] Spin unavailable: %s (snr=%s, candidate=%s rpm)",

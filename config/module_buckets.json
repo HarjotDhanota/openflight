@@ -1381,6 +1381,10 @@
   "tests/test_ball_launch_fallback.py": "FUSION",
   "tests/test_resting_ball_range.py": "FUSION",
   "tests/camera_fallback_scene.py": "FUSION",
-  "tests/test_fallback_labels.py": "FUSION"
+  "tests/test_fallback_labels.py": "FUSION",
+  "src/openflight/camera/fallback_chain.py": "FUSION",
+  "tests/test_fallback_chain.py": "FUSION",
+  "tests/test_fallback_orchestration.py": "FUSION",
+  "scripts/analysis/replay_shot_chain.py": "RESEARCH"
  }
 }

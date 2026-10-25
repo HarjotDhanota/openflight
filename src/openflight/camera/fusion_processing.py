@@ -19,8 +19,9 @@ from openflight.camera.club_delivery import (
     estimate_chained_delivery,
 )
 from openflight.camera.club_motion import ReferenceBall
+from openflight.camera.fallback_chain import run_ball_fallback
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
-from openflight.camera.lens_profiles import ARM_SIZES
+from openflight.camera.lens_profiles import lens_record_focal_px  # noqa: F401 (re-exported)
 from openflight.camera.triggered_buffer import exposure_trigger_index
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubRangeEvidence
@@ -128,27 +129,6 @@ def _restore_range(snapshot: Any, kind: str):
     )
 
 
-def _positive_number(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value > 0
-    )
-
-
-def lens_record_focal_px(lens: Mapping[str, Any] | None, width_px: int) -> float | None:
-    """A lens record's focal length for a capture this wide; None for another mode."""
-    by_arm = lens.get("focal_px_by_arm") if isinstance(lens, Mapping) else None
-    if not isinstance(by_arm, Mapping):
-        return None
-    for arm_id, (width, _height) in ARM_SIZES.items():
-        value = by_arm.get(arm_id)
-        if width == int(width_px) and _positive_number(value):
-            return float(value)
-    return None
-
-
 def build_context(
     *,
     geometry: EffectiveCameraGeometryInputs,
@@ -168,11 +148,17 @@ def build_context(
     setup_ball: Mapping[str, Any] | None = None,
     camera_pose: Mapping[str, Any] | None = None,
     lens_focal_px: float | None = None,
+    ball_range: Mapping[str, Any] | None = None,
+    camera_fallback: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
     ``notes`` are the capture's lighting and optical-quality labels; they never block.
     ``lens_focal_px`` is the lens's focal length in this capture's pixels, when known.
+    ``ball_range`` is the resolved range the geometry's tee range came from (its source,
+    label and the resting-ball record when the ball's own size gave it);
+    ``camera_fallback`` the camera fallback's other inputs (focal length and its
+    uncertainty, the OPS's place, the aim's uncertainty, the LIS3DH camera pitch).
     """
     payload = {
         "schema": SCHEMA,
@@ -200,6 +186,11 @@ def build_context(
     if lens_focal_px is not None:
         # sizes the resting ball from its distance; contexts frozen before carry none
         payload["lens_focal_px"] = float(lens_focal_px)
+    if ball_range is not None:
+        payload["ball_range"] = dict(ball_range)
+    if camera_fallback is not None:
+        # contexts frozen before 25 Oct carry none: their replay skips the fallback
+        payload["camera_fallback"] = dict(camera_fallback)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
     return payload
@@ -279,6 +270,14 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     except Exception as error:  # stage isolation is part of the persisted contract
         club = ChainedDelivery(status="error")
         errors["club"] = f"{type(error).__name__}: {error}"
+    fallback = None
+    if "camera_fallback" in context:
+        # contexts frozen before the fallback replay exactly as they were recorded
+        try:
+            fallback = run_ball_fallback(context, archive, geometry=geometry)
+        except Exception as error:  # stage isolation is part of the persisted contract
+            fallback = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+            errors["ball_fallback"] = fallback["reason"]
     decision = select_camera_assisted_horizontal(
         ball,
         iwr_horizontal_deg=context["iwr_horizontal_deg"],
@@ -291,6 +290,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             "ball_estimate": asdict(ball),
             "horizontal_decision": asdict(decision),
             "club_delivery": asdict(club),
+            **({"ball_fallback": fallback} if fallback is not None else {}),
             "errors": errors,
             "notes": notes,
         }

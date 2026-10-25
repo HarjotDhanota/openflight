@@ -494,6 +494,24 @@ CLUB_SPEED_NOT_FULL_REASON = (
 )
 
 
+def _tee_side_offset(shot: Shot) -> tuple:
+    """The resting ball's side offset: the setup's measured one, else this shot's resting
+    ball on its camera bearing (experimental), else none (no ball is assumed dead ahead)."""
+    from openflight.full_speed import CAMERA_SIDE_OFFSET_SOURCE  # noqa: PLC0415
+
+    scene = server.setup_handoff_config.get("scene") or {}
+    if _finite(scene.get("tee_side_offset_m")):
+        return float(scene["tee_side_offset_m"]), "setup"
+    details = ((shot.input_sources or {}).get("ball_range") or {}).get("details") or {}
+    if _finite(details.get("side_offset_m")):
+        return float(details["side_offset_m"]), CAMERA_SIDE_OFFSET_SOURCE
+    fallback = shot.camera_fallback_launch if isinstance(shot.camera_fallback_launch, dict) else {}
+    ball = (fallback.get("camera") or {}).get("ball_lfu_m")
+    if isinstance(ball, list) and len(ball) == 3 and _finite(ball[0]):
+        return float(ball[0]), CAMERA_SIDE_OFFSET_SOURCE
+    return None, None
+
+
 def _attach_full_speeds(shot: Shot) -> None:
     """E3: full ball speed by measured projection, full club speed and full smash.
 
@@ -515,6 +533,21 @@ def _attach_full_speeds(shot: Shot) -> None:
         except ValueError:  # the radar height is unset until the rig sets it
             return None
 
+    side_offset, side_source = _tee_side_offset(shot)
+    sources = dict(shot.input_sources or {})
+    sources["tee_side_offset"] = {
+        "value": side_offset,
+        "source": side_source,
+        "label": None
+        if side_source is None
+        else "measured"
+        if side_source == "setup"
+        else "experimental",
+        "reason": None
+        if side_source
+        else "the setup measured no side offset and this shot's resting ball gave none",
+    }
+    shot.input_sources = sources
     shot.ball_speed_full = evaluate_full_ball_speed(
         ops_track=shot.ops_speed_track,
         vertical_deg=shot.launch_angle_vertical,
@@ -530,7 +563,8 @@ def _attach_full_speeds(shot: Shot) -> None:
         tee_range_source=getattr(shot, "ball_range_source", None),
         radar_height_m=calibrated("radar_height_m"),
         ball_height_m=calibrated("tee_ball_height_m"),
-        tee_side_offset_m=(server.setup_handoff_config.get("scene") or {}).get("tee_side_offset_m"),
+        tee_side_offset_m=side_offset,
+        tee_side_offset_source=side_source,
     )
     # the flight model (E4) reads the value alone: calculated or estimated (on a camera
     # launch or a stand-in range, labelled so where it is used), or None

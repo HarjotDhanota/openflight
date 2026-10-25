@@ -16,6 +16,12 @@ from typing import Any
 
 import numpy as np
 
+from openflight.camera.fallback_chain import (
+    ball_range_resolution,
+    fallback_inputs,
+    mode_focal,
+    size_range_route,
+)
 from openflight.camera.fusion_processing import (
     build_context,
     lens_record_focal_px,
@@ -24,7 +30,9 @@ from openflight.camera.fusion_processing import (
 )
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.clubs import ClubType
+from openflight.iwr6843.launch_range import LaunchRangePrior
 from openflight.raw_radar_replay import locate_recorded_capture
+from openflight.rig_geometry import RigGeometry
 from openflight.shot_updates import apply_shot_updates
 
 
@@ -140,15 +148,17 @@ def replay_frozen_shot(
     capture_bytes = capture_path.read_bytes()
     capture_hash = hashlib.sha256(capture_bytes).hexdigest()
     reconstruction: list[str] = []
+    with np.load(io.BytesIO(capture_bytes), allow_pickle=False) as source:
+        archive = {name: source[name] for name in source.files}
+    archive["_capture_npz_sha256"] = capture_hash
     if recorded_context:
         if capture_hash != context.get("capture_npz_sha256"):
             raise ValueError("camera capture hash does not match the recorded context")
     else:
         # D15 (P8-7): only missing frames refuse; the rest is rebuilt, labelled
-        context, reconstruction = reconstruct_context(start, shot, capture_event, capture_hash)
-    with np.load(io.BytesIO(capture_bytes), allow_pickle=False) as source:
-        archive = {name: source[name] for name in source.files}
-    archive["_capture_npz_sha256"] = capture_hash
+        context, reconstruction = reconstruct_context(
+            start, shot, capture_event, capture_hash, archive=archive
+        )
     replay = process_camera_fusion(context, archive)
     recorded = shot.get("camera_fusion_processing") if recorded_context else None
     mismatches = _comparison_mismatches(recorded, replay) if isinstance(recorded, dict) else None
@@ -182,28 +192,105 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _reconstructed_geometry(config: dict[str, Any]) -> EffectiveCameraGeometryInputs:
-    """The geometry the kiosk would have frozen, from what the session recorded."""
+def _reconstructed_geometry(
+    config: dict[str, Any],
+    *,
+    shot: dict[str, Any] | None = None,
+    archive: dict[str, Any] | None = None,
+) -> tuple[EffectiveCameraGeometryInputs, dict[str, Any] | None]:
+    """The geometry the kiosk would have frozen, and the ball range it rests on.
+
+    Without a recorded tee range the kiosk's own range chain gives one (the shot's IWR
+    launch point, the camera prior, the resting ball's own size in this clip), labelled.
+    """
     recorded = _mapping(config.get("effective_camera_geometry"))
     if recorded.get("available") is True:
-        return EffectiveCameraGeometryInputs.from_recorded_session(
-            {"effective_camera_geometry": recorded}
+        return (
+            EffectiveCameraGeometryInputs.from_recorded_session(
+                {"effective_camera_geometry": recorded}
+            ),
+            None,
         )
-    iwr = _mapping(config.get("iwr6843"))
+    iwr = dict(_mapping(config.get("iwr6843")))
+    camera = _mapping(config.get("camera_capture"))
+    ball_range = None
     if iwr.get("tee_slant_range_m") is None:
-        handoff = _mapping(config.get("tee_range_handoff"))
-        raise ValueError(
-            "cannot reconstruct the camera context: the session recorded no tee range "
-            f"(tee_range_handoff status {handoff.get('status')!r}, source "
-            f"{handoff.get('source')!r}); the camera's geometry needs one"
-        )
-    return EffectiveCameraGeometryInputs.from_recorded_session(
-        {"camera_capture": _mapping(config.get("camera_capture")), "iwr6843": iwr}
+        resolution = _ball_range_chain(config, shot or {}, archive)
+        if not resolution.present:
+            handoff = _mapping(config.get("tee_range_handoff"))
+            raise ValueError(
+                "cannot reconstruct the camera context: the session recorded no tee range "
+                f"(tee_range_handoff status {handoff.get('status')!r}, source "
+                f"{handoff.get('source')!r}) and no route gave one: {resolution.reason}"
+            )
+        ball_range = resolution.to_dict()
+        if resolution.details:
+            ball_range["details"] = dict(resolution.details)
+        scene = _mapping(config.get("scene"))
+        iwr["tee_slant_range_m"] = float(resolution.value)
+        iwr.setdefault("radar_height_m", scene.get("radar_height_m"))
+        iwr.setdefault("ball_height_m", scene.get("ball_height_m"))
+    return (
+        EffectiveCameraGeometryInputs.from_recorded_session(
+            {"camera_capture": camera, "iwr6843": iwr}
+        ),
+        ball_range,
+    )
+
+
+def _camera_origin(camera: dict[str, Any]) -> tuple[float, float, float]:
+    return (
+        float(camera.get("lateral_offset_m") or 0.0),
+        float(camera.get("forward_offset_m") or 0.0),
+        float(camera.get("mount_height_m") or 0.0),
+    )
+
+
+def _rig(config: dict[str, Any]):
+    parameters = _mapping(_mapping(config.get("rig_geometry")).get("snapshot")).get("parameters")
+    return RigGeometry(**parameters) if parameters else None
+
+
+def _ball_range_chain(config: dict[str, Any], shot: dict[str, Any], archive):
+    """The kiosk's ball-range chain (``camera.fallback_chain``) on the recorded session."""
+    camera = _mapping(config.get("camera_capture"))
+    iwr = _mapping(config.get("iwr6843"))
+    scene = _mapping(config.get("scene"))
+    width = int(np.shape(archive["frames"])[-1]) if archive else 0
+    focal = mode_focal(width, lens=camera.get("lens"), rig=_rig(config))[0] if width else None
+    radar_height = iwr.get("radar_height_m") or scene.get("radar_height_m")
+    return ball_range_resolution(
+        shot_range={
+            name: shot.get(name)
+            for name in (
+                "ball_range_m",
+                "ball_range_source",
+                "ball_range_uncertainty_m",
+                "ball_range_reason",
+            )
+        },
+        prior=LaunchRangePrior.from_dict(iwr.get("range_prior")),
+        size_route=size_range_route(
+            archive,
+            seed=camera.get("setup_ball"),
+            lens_focal_px=focal,
+            calibrated_focal_px=None,
+            camera_origin_lfu=_camera_origin(camera),
+            radar_origin_lfu=(0.0, 0.0, float(radar_height or _camera_origin(camera)[2])),
+            ball_height_m=iwr.get("ball_height_m") or scene.get("ball_height_m"),
+            roll_correction_deg=float(camera.get("roll_correction_deg") or 0.0),
+            horizontal_pixel_sign=-1.0 if camera.get("mirror_horizontal") else 1.0,
+        ),
     )
 
 
 def reconstruct_context(
-    start: dict[str, Any], shot: dict[str, Any], capture_event: dict[str, Any], capture_hash: str
+    start: dict[str, Any],
+    shot: dict[str, Any],
+    capture_event: dict[str, Any],
+    capture_hash: str,
+    *,
+    archive: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Rebuild a shot's camera fusion context from the clip, its metadata and the session.
 
@@ -219,7 +306,12 @@ def reconstruct_context(
         f"the kiosk froze none ({recorded.get('reason') or 'no reason recorded'})",
         "IWR range evidence is not in the session log; the replay's IWR stage supplies it",
     ]
-    geometry = _reconstructed_geometry(config)
+    geometry, ball_range = _reconstructed_geometry(config, shot=shot, archive=archive)
+    if ball_range is not None:
+        notes.append(
+            f"the session recorded no tee range: the ball range came from {ball_range['source']} "
+            f"({ball_range['label']})"
+        )
     auto_exposure = _mapping(_mapping(capture_event.get("metadata")).get("auto_exposure"))
     eligible = bool(auto_exposure.get("analysis_eligible", True))
     club = shot.get("club")
@@ -251,6 +343,20 @@ def reconstruct_context(
             camera.get("lens") or _mapping(config.get("rig_geometry")).get("lens"),
             int(geometry.image_width_px),
         ),
+        ball_range=ball_range,
+        camera_fallback=fallback_inputs(
+            focal=mode_focal(
+                int(geometry.image_width_px), lens=camera.get("lens"), rig=_rig(config)
+            ),
+            ops_offset_mm=getattr(_rig(config), "ops_offset_mm", None),
+            camera_origin_lfu=_camera_origin(camera),
+            target_line=_mapping(config.get("target_line")),
+            lis3dh_camera_pitch_deg=None,
+        ),
+    )
+    notes.append(
+        "the camera fallback's aim uncertainty and LIS3DH pitch check are not in the session "
+        "start: the replay carries neither"
     )
     return context, notes
 

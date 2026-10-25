@@ -146,6 +146,9 @@ MEASURED_HORIZONTAL_SOURCES = frozenset({"radar"})
 # simulator flies it (D31) and every place shows it as a weak value.
 VERTICAL_SOURCES = MEASURED_VERTICAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
 HORIZONTAL_SOURCES = MEASURED_HORIZONTAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
+# The side offset from this shot's resting ball (its camera bearing at its range), when
+# the setup measured none: a stand-in, labelled.
+CAMERA_SIDE_OFFSET_SOURCE = "camera_resting_ball"
 # A range that is a stand-in, not the shot's own IWR launch point (13 Oct, 25 Oct).
 WEAK_RANGE_SOURCES = {
     "camera_prior": "the tee range is the camera prior's (coarse)",
@@ -369,6 +372,7 @@ def evaluate_full_ball_speed(
     tee_side_offset_m: Any,
     tee_range_uncertainty_m: Any = None,
     tee_range_source: Any = None,
+    tee_side_offset_source: Any = None,
 ) -> dict:
     """Full ball speed at separation from one OPS reading, or not measured with the reason.
 
@@ -569,6 +573,8 @@ def evaluate_full_ball_speed(
     ]
     if tee_range_source in WEAK_RANGE_SOURCES:
         weak.append(WEAK_RANGE_SOURCES[tee_range_source])
+    if tee_side_offset_source == CAMERA_SIDE_OFFSET_SOURCE:
+        weak.append("the side offset is the resting ball's camera bearing (experimental)")
     return {
         "status": ESTIMATED if weak else CALCULATED,
         "weak_inputs": weak,

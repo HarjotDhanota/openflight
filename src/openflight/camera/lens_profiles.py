@@ -332,3 +332,24 @@ def rig_with_lens(rig: Any, lens: ActiveLens) -> Any:
     from dataclasses import replace  # noqa: PLC0415
 
     return replace(rig, focal_px=lens.focal_px(int(rig.image_width)))
+
+
+def _positive_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def lens_record_focal_px(lens: Mapping[str, Any] | None, width_px: int) -> float | None:
+    """A lens record's focal length for a capture this wide; None for another mode."""
+    by_arm = lens.get("focal_px_by_arm") if isinstance(lens, Mapping) else None
+    if not isinstance(by_arm, Mapping):
+        return None
+    for arm_id, (width, _height) in ARM_SIZES.items():
+        value = by_arm.get(arm_id)
+        if width == int(width_px) and _positive_number(value):
+            return float(value)
+    return None

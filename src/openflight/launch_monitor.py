@@ -254,6 +254,8 @@ class Shot:
     launch_angle_horizontal_frame: Optional[str] = None
     # Why a horizontal a sensor gave is not on the shot (beyond a shank's reach, say).
     launch_angle_horizontal_reason: Optional[str] = None
+    # Why there is no vertical launch: every route's refusal (radar, camera fallback).
+    launch_angle_vertical_reason: Optional[str] = None
     club_path_frame: Optional[str] = None
     experimental_club_path_frame: Optional[str] = None
     experimental_fused_club_path_frame: Optional[str] = None
@@ -367,6 +369,14 @@ class Shot:
     ball_range_uncertainty_m: Optional[float] = None
     ball_range_label: Optional[str] = None
     ball_range_reason: Optional[str] = None
+    # Each upstream input's resolution (source_chain): the route that gave it, its label,
+    # source and uncertainty, and why every earlier route gave nothing.
+    input_sources: Optional[dict] = None
+    # The camera fallback's own launch (camera/ball_launch_fallback), kept on every shot
+    # with a clip: the value when the IWR has none, a second opinion when it has one.
+    camera_fallback_launch: Optional[dict] = None
+    # Shot stages that failed (name -> error): each fails alone, the shot still publishes.
+    stage_errors: Optional[dict] = None
     iwr_launch_range: Optional[dict] = None
     camera_tilt_swing_pair: Optional[dict] = None
     impact_location: Optional[dict] = None
@@ -529,6 +539,7 @@ class Shot:
             "launch_angle_horizontal_status": self.launch_angle_horizontal_status,
             "launch_angle_horizontal_frame": self.launch_angle_horizontal_frame,
             "launch_angle_horizontal_reason": self.launch_angle_horizontal_reason,
+            "launch_angle_vertical_reason": self.launch_angle_vertical_reason,
             "angle_source": self.angle_source,
             "club_angle_deg": self.club_angle_deg,
             "club_path_deg": self.club_path_deg,
@@ -547,6 +558,9 @@ class Shot:
             "ball_range_uncertainty_m": self.ball_range_uncertainty_m,
             "ball_range_label": self.ball_range_label,
             "ball_range_reason": self.ball_range_reason,
+            "input_sources": deepcopy(self.input_sources),
+            "camera_fallback_launch": deepcopy(self.camera_fallback_launch),
+            "stage_errors": deepcopy(self.stage_errors),
             "iwr_launch_range": deepcopy(self.iwr_launch_range),
             "camera_tilt_swing_pair": deepcopy(self.camera_tilt_swing_pair),
             "experimental_fused_attack_angle_confidence": (
