@@ -55,7 +55,7 @@ MPH_PER_MS = tracking.MPH_PER_MS
 
 # The search gate is ASYMMETRIC about the tee, because the clubhead cannot be
 # beyond the ball before it strikes the ball. Admitting the post-tee region
-# lets most-inliers RANSAC prefer a slow body/hands mover (~10 m/s, projection
+# lets the most-inliers search prefer a slow body/hands mover (~10 m/s, projection
 # 0.28-0.32) over the real clubhead (~30 m/s): with a symmetric +/-0.6 m gate
 # that happened on 5 of the 14 2026-07-25 captures, and the club was found on
 # only 12. Capping at the tee finds it on 14 of 14.
@@ -379,7 +379,7 @@ def find_club(
       the ball.
     - The gate's upper edge at the tee. Before impact the clubhead is always
       short of the ball, so anything beyond the tee is body, hands, or clutter
-      -- and being slower, it wins most-inliers RANSAC when admitted.
+      -- and being slower, it wins the most-inliers search when admitted.
     """
     lo, hi = club_gate_m(tee_range_m, tee_uncertainty_m)
     ops_speed_ms = ops_club_speed_mph / MPH_PER_MS

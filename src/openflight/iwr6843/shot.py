@@ -53,7 +53,7 @@ FAST_BALL_MS = 55.0
 
 # slowest RADIAL speed a real ball can read, per class: must sit ABOVE the
 # class's post-impact club (~0.7x ball) and the flying tee (~25 m/s), or
-# they steal the RANSAC track (the 2026-07-14 driver/SW live bug).
+# they steal the range track (the 2026-07-14 driver/SW live bug).
 # NOTE these floors assume adult full-swing speeds; a junior's driver ball
 # (~35 m/s radial) would need the class floors scaled or a max-range-reached
 # candidate rule in the tracker (next-session item).

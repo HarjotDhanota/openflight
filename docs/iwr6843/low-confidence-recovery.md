@@ -2,8 +2,11 @@
 
 The production runtime keeps LCMF-v2 as its first pass, then performs a
 bounded second pass when the selected TI range track differs from OPS ball
-speed by more than 15% or LCMF withholds an angle. Speed-consistent first-pass
-results are never revisited.
+speed by more than 15%, when LCMF withholds an angle, or when the ball tracker
+could not separate the first-pass track from a different walk (the track
+carries `track_ambiguity`: two walks whose support is within two standard
+errors of each other). Speed-consistent, unambiguous first-pass results are
+never revisited.
 
 ## Approach
 
@@ -15,7 +18,7 @@ radar/OPS observables:
 - multi-frame LCMF evidence
 - agreement between the independent `two8` and `four4_path_tdm` models
 
-Near-duplicate RANSAC lines are collapsed before at most eight candidates pass
+Near-duplicate range walks are collapsed before at most eight candidates pass
 through unchanged LCMF. A dual-model result outranks a single-model result. A
 single-model recovery remains available when no corroborated candidate
 survives, but its existing `single_channel` flag keeps UI confidence lower.
@@ -45,7 +48,9 @@ that result is not claimed here because it changed with the random seed.
 - A credible OPS-matched candidate is reported as `accepted_ops_guided`.
 - A one-model candidate is reported as `accepted_ops_guided_single_channel`.
 - If no candidate survives, an accepted baseline remains visible as
-  `accepted_track_speed_warning`; a rejected baseline remains rejected.
+  `accepted_track_speed_warning`, or `accepted_track_ambiguous` when its speed
+  matched OPS but its track had a competitor; a rejected baseline remains
+  rejected.
 - Any recovery exception preserves the baseline rather than losing the shot.
 
 ## Validation
