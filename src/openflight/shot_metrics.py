@@ -240,6 +240,21 @@ def _collision_metric(shot, name: str) -> Mapping[str, Any]:
     return _mapping(_mapping(_mapping(shot.get("collision_model")).get("metrics")).get(name))
 
 
+OPS_SPIN_UNVALIDATED = "OPS spin not validated against a reference"
+
+
+def _experimental_spin_note(shot) -> str:
+    """Why an OPS spin of experimental quality is not a measurement, rail included."""
+    confidence = _finite(shot.get("spin_confidence"))
+    parts = [f"confidence {confidence:.2f}" if confidence is not None else None]
+    parts.append(OPS_SPIN_UNVALIDATED)
+    if shot.get("spin_at_upper_rail"):
+        parts.append("at the search band's upper rail")
+    elif shot.get("spin_at_lower_rail"):
+        parts.append("at the search band's lower rail")
+    return "; ".join(part for part in parts if part)
+
+
 def _spin_rate(shot):
     source = shot.get("spin_source")
     status = source if source in LABELS and source != NOT_MEASURED else MEASURED
@@ -251,6 +266,8 @@ def _spin_rate(shot):
     )
     quality = shot.get("spin_quality")
     note = f"confidence {quality}" if status == MEASURED and quality else None
+    if status == MEASURED and quality == EXPERIMENTAL:
+        status, note = EXPERIMENTAL, _experimental_spin_note(shot)
     model_spin = _finite(shot.get("spin_rpm_collision"))
     if (
         status != MEASURED

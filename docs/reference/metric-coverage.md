@@ -23,7 +23,7 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
 | `estimated` | An OPS-only install's labelled stand-in, a weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
-| `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot | dotted outline in its own colour, "EXP", titled "not yet validated" |
+| `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot; an OPS spin of experimental quality (the ungated multitaper, not validated against a reference; its note gives the confidence and says when it sits on the search band's rail) | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.

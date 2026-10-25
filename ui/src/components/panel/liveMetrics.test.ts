@@ -415,6 +415,24 @@ describe('buildLiveMetrics', () => {
     }
   );
 
+  it('labels an experimental-quality OPS spin experimental, never measured', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ spin_rpm: 10986.33, spin_source: null, spin_quality: 'experimental', spin_confidence: 0.11 }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin')).toMatchObject({ status: 'experimental', confidence: 'experimental' });
+  });
+
+  it('keeps a model spin label over the radar quality', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ spin_source: 'estimated', spin_quality: 'experimental' }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin').status).toBe('estimated');
+  });
+
   it('labels a spin built on model geometry (D39) model_geometry, not calculated', () => {
     const modelled = buildLiveMetrics(makeShot({ spin_source: 'model_geometry' }), 'imperial', emptySwingStats);
     expect(byId(modelled, 'spin').status).toBe('model_geometry');
@@ -619,6 +637,20 @@ describe('buildLiveMetrics with the server labels (Shot.metrics)', () => {
     expect(tile.unit).toBeUndefined();
     expect(tile.status).toBeUndefined();
     expect(tile.confidence ?? null).toBeNull();
+  });
+
+  it('takes the experimental spin label from the server record', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        spin_rpm: 10986.33,
+        spin_source: null,
+        spin_quality: 'experimental',
+        metrics: { spin_rate: record({ value: 10986.33, unit: 'rpm', status: 'experimental' }) },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin').status).toBe('experimental');
   });
 
   it('shows why a metric is not measured, compactly', () => {

@@ -98,8 +98,10 @@ function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel |
   return isMeasured(value) ? status : undefined;
 }
 
+/** A model's spin keeps its label; an OPS spin of experimental quality is not a measurement. */
 function spinLabel(shot: Shot): MetricLabel {
-  return isValueLabel(shot.spin_source) ? shot.spin_source : 'measured';
+  if (isValueLabel(shot.spin_source) && shot.spin_source !== 'measured') return shot.spin_source;
+  return shot.spin_quality === 'experimental' ? 'experimental' : 'measured';
 }
 
 /** The horizontal tiles drop the shot's own (experimental) confidence for the server's value. */
