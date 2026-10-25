@@ -20,11 +20,11 @@ without hiding quality.
 
 !!! warning "The running estimator is LCMF-v2"
 
-    LCMF-v2 (`lcmf_v2_per_antenna`) places each IWR6843LEVM antenna (RX1–RX4,
-    TX1, TX3) from the enclosure's rig file (`--rig-geometry`) and fits exact
-    direct and floor-bounced path lengths for every TX/RX pair. Its gates, angle
-    grid and five component models are LCMF-v1's. The TrackMan results on this
-    page were measured with LCMF-v1; LCMF-v2 has no paired TrackMan session yet.
+    LCMF-v2 places each IWR6843 antenna from the enclosure's rig file
+    (`--rig-geometry`) and fits the direct and floor-bounced paths for every
+    TX/RX pair. Horizontal launch is the ball's direction of motion from the TX2
+    phase. The TrackMan results below were measured with LCMF-v1, which used the
+    same gates and five models; LCMF-v2 has not been graded against TrackMan yet.
 
 **Explain it like I’m five**
 
@@ -274,7 +274,7 @@ Driver needs an additional speed sanity check before any confidence badge. The w
 ### Club data and setup hardening
 
 - club**Keep club speed with OPS, but start collecting club-delivery evidence.** A split pre-impact/post-impact firmware mode may expose attack angle and club path research signals without pretending the TI board is the club-speed authority.
-- aim**Add TX2 for horizontal launch and shank classification.** Far-right shots should eventually be recognized as far-right shots, not forced through a purely vertical interpretation.
+- aim**Use TX2 horizontal launch for shank classification.** Far-right shots should eventually be recognized as far-right shots, not forced through a purely vertical interpretation.
 - inputs**Harden tee distance, mount tilt, radar height, ball height, mat height, and net distance.** The app should support measured settings, an explicit unresolved state, and radar sanity checks that warn when the actual session appears to drift.
 
 **DIY setup variables**
