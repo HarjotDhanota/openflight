@@ -612,7 +612,8 @@ class ImpactLiveExtension(kiosk_extensions.KioskExtension):
         if path is None:
             return
         server = _server()
-        handed = server.golfer_handedness().get("handed")
+        # the hand the shot was hit with, not one the golfer chose since
+        handed = server.shot_handedness(shot)
         self.dispatcher.submit(
             shot,
             {

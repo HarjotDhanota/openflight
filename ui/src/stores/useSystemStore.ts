@@ -4,6 +4,9 @@ import type { ReadyLight } from '../types/readyLight';
 import type { SimShotInfo, SimShotNotSent, SimStatus } from '../types/socket';
 
 export type Handed = 'RH' | 'LH';
+/** Who set the hand in force: a connected simulator wins over the kiosk's choice. */
+export type HandedSource = 'simulator' | 'profile' | 'setup' | 'default';
+export const HANDED_SOURCES: readonly HandedSource[] = ['simulator', 'profile', 'setup', 'default'];
 
 interface SystemState {
   connected: boolean;
@@ -17,6 +20,7 @@ interface SystemState {
   simShotNotSent: SimShotNotSent | null;
   serverClub: string | null;
   handed: Handed | null;
+  handedSource: HandedSource | null;
   powerStatus: PowerStatus | null;
   readyLight: ReadyLight | null;
   setConnected: (connected: boolean) => void;
@@ -27,7 +31,7 @@ interface SystemState {
   setLatestSimShot: (shot: SimShotInfo) => void;
   setSimShotNotSent: (notSent: SimShotNotSent | null) => void;
   setServerClub: (club: string | null) => void;
-  setHanded: (handed: Handed | null) => void;
+  setHanded: (handed: Handed | null, source?: HandedSource | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
   setReadyLight: (light: ReadyLight | null) => void;
 }
@@ -43,6 +47,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   simShotNotSent: null,
   serverClub: null,
   handed: null,
+  handedSource: null,
   powerStatus: null,
   readyLight: null,
   setConnected: (connected) => set({ connected }),
@@ -59,7 +64,7 @@ export const useSystemStore = create<SystemState>((set) => ({
     })),
   setSimShotNotSent: (simShotNotSent) => set({ simShotNotSent }),
   setServerClub: (serverClub) => set({ serverClub }),
-  setHanded: (handed) => set({ handed }),
+  setHanded: (handed, source = null) => set({ handed, handedSource: source }),
   setPowerStatus: (status) => set({ powerStatus: status }),
   setReadyLight: (readyLight) => set({ readyLight }),
 }));

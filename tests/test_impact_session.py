@@ -225,6 +225,15 @@ def test_handedness_defaults_to_right_and_reads_the_session_record():
     assert session.session_handedness(lefty) == ("left", "session_setup")
 
 
+def test_a_shots_own_hand_beats_the_session_record():
+    """The hand can change mid-session, so each shot's recorded hand comes first."""
+    lefty = {"config": {"golfer": {"handed": "LH", "source": "setup"}}}
+    assert session.shot_handedness({"handed": "RH"}, lefty) == ("right", "shot_record")
+    assert session.shot_handedness({"handed": "LH"}, {}) == ("left", "shot_record")
+    assert session.shot_handedness({}, lefty) == ("left", "session_setup")
+    assert session.shot_handedness({"handed": "left"}, {}) == ("right", "default_right_handed")
+
+
 def test_anchors_must_carry_their_schema(tmp_path):
     path = tmp_path / "anchors.json"
     path.write_text(json.dumps({"schema": "other", "clubs": {}}), encoding="utf-8")

@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { useSystemStore } from '../stores/useSystemStore';
+import { useSystemStore, type Handed } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraCaptureSettings } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
@@ -263,6 +263,10 @@ class SocketService {
   uploadCloud() {
     useSystemStore.getState().setCloudUploadStatus('running', 'Uploading...');
     this.socket?.emit('upload_cloud');
+  }
+
+  setHandedness(handed: Handed) {
+    this.socket?.emit('set_handedness', { handed });
   }
 
   setClub(club: string) {

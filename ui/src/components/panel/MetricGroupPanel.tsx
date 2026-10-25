@@ -13,7 +13,7 @@ import { isComingLater, shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
 import { ClubDeliveryViews } from './ClubDeliveryViews';
-import { shotHandedness } from './faceImpact';
+import { clubModel, shotHandedness } from './faceImpact';
 import { PanelHeader } from './PanelHeader';
 import './MetricGroupPanel.css';
 
@@ -155,8 +155,12 @@ function ComingLaterCell({ items }: { items: Array<{ spec: MetricSpec; record: S
 
 interface MetricGroupPanelProps {
   view: MetricPanelView;
+  /** The latest shot hit with the selected club (any shot in swing-speed mode), or null. */
   shot: Shot | null;
+  /** The selected club: drawn as its model, unmeasured, until a shot is hit with it. */
+  club?: string;
   profileName: string;
+  /** The selected club with the kiosk's hand, for the header while no shot is shown. */
   clubLabel: string;
   unitSystem: UnitSystem;
   headerAction?: ReactNode;
@@ -167,6 +171,7 @@ interface MetricGroupPanelProps {
 export function MetricGroupPanel({
   view,
   shot,
+  club,
   sessionShots = [],
   profileName,
   clubLabel,
@@ -175,8 +180,9 @@ export function MetricGroupPanel({
 }: MetricGroupPanelProps) {
   const { t } = useI18n();
   const handed = useSystemStore((state) => state.handed);
+  // a shown shot names its own club and the hand it was hit with
   const displayedClub =
-    view === 'club' && shot?.metrics && !isSwingSpeedShot(shot)
+    shot?.metrics && !isSwingSpeedShot(shot)
       ? clubWithHand(getClubName(shot.club), shotHandedness(shot, handed) === 'left' ? 'LH' : 'RH')
       : clubLabel;
   const header = (
@@ -188,6 +194,31 @@ export function MetricGroupPanel({
     />
   );
   const metrics = shot?.metrics;
+  if (!shot && club) {
+    const ask = t(view === 'club' ? 'metrics.hitClubDelivery' : 'metrics.hitClubFlight', {
+      club: getClubName(club),
+    });
+    if (view === 'club') {
+      return (
+        <div className="panel">
+          {header}
+          <div className="panel__body metric-groups" data-metric-panel={view} data-club-model={club}>
+            <p className="metric-groups__ask">{ask}</p>
+            <ClubDeliveryViews shot={clubModel(club)} sessionShots={sessionShots} />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="panel">
+        {header}
+        <div className="panel__body panel__body--empty">
+          <span className="panel__empty-title">{t('metrics.empty')}</span>
+          <span className="panel__empty-detail">{ask}</span>
+        </div>
+      </div>
+    );
+  }
   if (!shot || !metrics) {
     const swing = shot !== null && isSwingSpeedShot(shot);
     return (

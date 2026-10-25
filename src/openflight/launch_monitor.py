@@ -293,6 +293,10 @@ class Shot:
     mode: str = "rolling-buffer"
     profile_id: str = ""
     profile_name: str = ""
+    # The golfer's hand ("RH"/"LH") when the shot was detected, and who said it; every
+    # model of this shot reads it, so a change made mid-shot reaches only the next one.
+    handed: Optional[str] = None
+    handed_source: Optional[str] = None
     readings_data: Optional[list] = None
     camera_replay: Optional[dict] = None
     camera_fusion_context: Optional[dict] = None
@@ -507,6 +511,8 @@ class Shot:
             "club": self.club.value,
             "profile_id": self.profile_id,
             "profile_name": self.profile_name,
+            "handed": self.handed,
+            "handed_source": self.handed_source,
             "timestamp": self.timestamp.isoformat(),
             "impact_timestamp": self.impact_timestamp,
             "peak_magnitude": self.peak_magnitude,

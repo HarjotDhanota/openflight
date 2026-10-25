@@ -6,7 +6,7 @@ import { clubWithHand, ingestHandedness } from './handedness';
 describe('the golfer hand beside the club', () => {
   afterEach(() => {
     setActiveLocale('en');
-    useSystemStore.getState().setHanded(null);
+    useSystemStore.getState().setHanded(null, null);
   });
 
   it('names the hand after the club', () => {
@@ -32,5 +32,16 @@ describe('the golfer hand beside the club', () => {
     expect(useSystemStore.getState().handed).toBe('RH');
     ingestHandedness(null);
     expect(useSystemStore.getState().handed).toBe('RH');
+  });
+
+  it('keeps who said the hand, so the picker can show a simulator overriding it', () => {
+    ingestHandedness({ handed: 'LH', source: 'simulator' });
+    expect(useSystemStore.getState().handedSource).toBe('simulator');
+    ingestHandedness({ handed: 'RH', source: 'profile' });
+    expect(useSystemStore.getState().handedSource).toBe('profile');
+    ingestHandedness({ handed: 'RH', source: 'somewhere else' });
+    expect(useSystemStore.getState().handedSource).toBe(null);
+    ingestHandedness({ handed: 'RH' });
+    expect(useSystemStore.getState().handedSource).toBe(null);
   });
 });

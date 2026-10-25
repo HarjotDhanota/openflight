@@ -12,6 +12,11 @@ Open it from **Finish setup** on the Live screen, which shows while a step is st
 or from **Setup** in the bottom bar. A left-handed profile shows the camera view
 mirrored, so the picture matches what you see on the range.
 
+Right-handed is the default. To change it, tap **Change club** and then **Right-handed** or
+**Left-handed** at the top of the club picker. The change applies from the next shot, with
+no restart. Each profile keeps its own hand. While a connected simulator says which hand,
+its hand wins and the picker shows "Set by the simulator".
+
 Put the unit behind the ball, pointing down your target line, then work through four
 steps. **Back** and **Next** move between them.
 

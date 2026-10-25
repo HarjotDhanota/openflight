@@ -1,5 +1,4 @@
-import type { Shot } from '../../types/shot';
-import { FACE_SHAPES, type FaceCategory } from './faceImpact';
+import { FACE_SHAPES, type DeliveryShot, type FaceCategory } from './faceImpact';
 
 export type DeliveryView = 'face' | 'top' | 'side';
 export const VIEW_METRICS = {
@@ -91,7 +90,7 @@ export const CLUB_PROFILES: Record<FaceCategory, ClubProfile> = {
   },
 };
 
-export function deliveryValue(shot: Shot, metric: string): number | null {
+export function deliveryValue(shot: DeliveryShot, metric: string): number | null {
   const record = shot.metrics?.[metric];
   return record && record.status !== 'not_measured' && typeof record.value === 'number' && Number.isFinite(record.value)
     ? record.value
@@ -103,7 +102,7 @@ export function direction(degrees: number, length = 86): [number, number] {
   return [length * Math.cos(angle), -length * Math.sin(angle)];
 }
 
-export function faceDeliveryRotation(shot: Shot, category: FaceCategory): number {
+export function faceDeliveryRotation(shot: DeliveryShot, category: FaceCategory): number {
   const lie = deliveryValue(shot, 'dynamic_lie');
   if (lie === null) return 0;
   const loft = deliveryValue(shot, 'dynamic_loft') ?? CLUB_PROFILES[category].loft;

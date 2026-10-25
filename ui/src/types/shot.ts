@@ -52,6 +52,9 @@ export interface Shot {
   club: string;
   profile_id?: string;
   profile_name?: string;
+  /** The golfer's hand when the shot was detected; a later change never reaches it. */
+  handed?: 'RH' | 'LH' | null;
+  handed_source?: string | null;
   timestamp: string;
   impact_timestamp?: number | null;
   peak_magnitude: number | null;
@@ -216,6 +219,14 @@ function measuredValues(values: Array<number | null | undefined>): number[] {
 export function filterShotsByProfile(shots: Shot[], profileId: string): Shot[] {
   if (!profileId) return [];
   return shots.filter((shot) => shot.profile_id === profileId);
+}
+
+/** The latest of these shots hit with ``club``, or null when none was. */
+export function latestShotWithClub(shots: readonly Shot[], club: string): Shot | null {
+  for (let index = shots.length - 1; index >= 0; index -= 1) {
+    if (shots[index].club === club) return shots[index];
+  }
+  return null;
 }
 
 export function excludeShotsByProfile(shots: Shot[], profileId: string): Shot[] {

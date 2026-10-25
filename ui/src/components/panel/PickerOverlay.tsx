@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import { clubGroupLabel } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
+import type { Handed, HandedSource } from '../../stores/useSystemStore';
 import { PanelAction } from './PanelAction';
 import { initialPickerSection, pickerGridRows, type PickerSection } from './pickerSections';
 
@@ -12,6 +13,45 @@ interface PickerOverlayProps {
   onClose: () => void;
   /** Word-length labels (training implements) use a slightly smaller type size. */
   wide?: boolean;
+  /** The golfer's hand, one tap from the clubs; absent for training implements. */
+  hand?: {
+    handed: Handed | null;
+    source: HandedSource | null;
+    onChange: (handed: Handed) => void;
+  };
+}
+
+const HANDS: ReadonlyArray<[Handed, 'app.rightHanded' | 'app.leftHanded']> = [
+  ['RH', 'app.rightHanded'],
+  ['LH', 'app.leftHanded'],
+];
+
+/** Right or Left in one tap. A connected simulator's hand wins, so the choice locks while it does. */
+function HandChoice({ handed, source, onChange }: NonNullable<PickerOverlayProps['hand']>) {
+  const { t } = useI18n();
+  const simulator = source === 'simulator';
+  return (
+    <div className="picker-overlay__hand" role="group" aria-label={t('picker.hand')}>
+      {HANDS.map(([hand, label]) => {
+        // right-handed until the kiosk says otherwise
+        const active = (handed ?? 'RH') === hand;
+        return (
+          <PanelAction
+            key={hand}
+            variant={active ? 'primary' : 'secondary'}
+            aria-pressed={active}
+            disabled={simulator}
+            onClick={() => {
+              if (!active) onChange(hand);
+            }}
+          >
+            {t(label)}
+          </PanelAction>
+        );
+      })}
+      {simulator ? <span className="picker-overlay__hand-note">{t('picker.handSimulator')}</span> : null}
+    </div>
+  );
 }
 
 /**
@@ -19,7 +59,15 @@ interface PickerOverlayProps {
  * hairline-bordered option buttons grouped by tab. Four columns span the
  * overlay; row height is capped so irons stay on screen.
  */
-export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, wide = false }: PickerOverlayProps) {
+export function PickerOverlay({
+  title,
+  selectedId,
+  sections,
+  onSelect,
+  onClose,
+  wide = false,
+  hand,
+}: PickerOverlayProps) {
   const { t } = useI18n();
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
   const activeSection = sections.find((section) => section.name === sectionName) ?? sections[0];
@@ -35,6 +83,7 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
     >
       <div className="picker-overlay__header">
         <span className="picker-overlay__title">{title}</span>
+        {hand ? <HandChoice {...hand} /> : null}
         <button
           type="button"
           className="picker-overlay__close"

@@ -21,8 +21,8 @@ Per-shot inputs, each with its source:
   (marked face photos), else the category's; heel to toe, the category's distance
   from the toe (``face_centre_reference.json``) unless ``--face-centre-from-toe-mm``
   overrides it for research;
-- the golfer's hand from the session's ``--handed`` record (right-handed by
-  default), the lens's focal length from the session's lens record or the rig
+- the golfer's hand from the shot's own record, else the session's ``--handed``
+  record (right-handed by default), the lens's focal length from the session's lens record or the rig
   file's lens.
 """
 
@@ -239,6 +239,19 @@ def session_handedness(start: Mapping[str, Any]) -> tuple[str, str]:
     if handed == "RH":
         return "right", f"session_{golfer.get('source', 'setup')}"
     return "right", "default_right_handed"
+
+
+def shot_handedness(shot: Mapping[str, Any], start: Mapping[str, Any]) -> tuple[str, str]:
+    """(right|left, source): the hand the shot recorded, else the session's.
+
+    The kiosk's hand can change mid-session, so a shot's own record comes first.
+    """
+    handed = shot.get("handed")
+    if handed == "LH":
+        return "left", "shot_record"
+    if handed == "RH":
+        return "right", "shot_record"
+    return session_handedness(start)
 
 
 def session_rig(start: Mapping[str, Any]):
@@ -502,7 +515,7 @@ def prepare_clip(  # pylint: disable=too-many-locals
     run = run or RunRecord({}, {}, {}, {}, None)
     clip.shot_number = run.captures.get(clip.shot_id)
     shot = run.shots.get(clip.shot_number, {}) if clip.shot_number is not None else {}
-    handed, handed_source = session_handedness(run.start)
+    handed, handed_source = shot_handedness(shot, run.start)
     clip.handedness = options.handedness or handed
     clip.extra["handedness_source"] = "command_line" if options.handedness else handed_source
     clip.club = options.club or str(shot.get("club") or "unknown")

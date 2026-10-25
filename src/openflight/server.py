@@ -347,8 +347,12 @@ sim_connectors: List = []
 # *seconds* (see initial_shot_counter): epoch millis overflow GSPro's 32-bit
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
-# The golfer's hand from the setup (--handed); a connected simulator's wins.
+# The golfer's hand from the setup (--handed); the active profile's, set from the
+# club picker, beats it, and a connected simulator's beats both.
 golfer_handed: str | None = None
+HANDS = ("RH", "LH")
+# The key in a profile's settings that holds the hand the kiosk set for it.
+PROFILE_HANDED_SETTING = "handed"
 
 # Optional Bluetooth Low Energy publisher for the iOS app.
 ble_publisher = None
@@ -3802,7 +3806,10 @@ def apply_active_profile(payload=None):
     on the unchanged selection.
     """
     store = get_profile_store()
+    previous = golfer_handedness()
     applied = store.set_active(_payload_dict(payload).get("profile_id"))
+    if applied:
+        _publish_handedness(previous, "profile_switch")
     _emit_profiles()
     if not applied:
         return {"error": "Unknown profile"}, 404
@@ -3824,7 +3831,9 @@ def handle_set_active_profile(data=None):
 @socketio.on("add_profile")
 def handle_add_profile(data=None):
     """Add a profile and make it active."""
-    get_profile_store().add(_payload_dict(data).get("name"))
+    previous = golfer_handedness()
+    if get_profile_store().add(_payload_dict(data).get("name")) is not None:
+        _publish_handedness(previous, "profile_switch")
     _emit_profiles()
 
 
@@ -4239,6 +4248,8 @@ def _sim_on_status(target: str, event) -> None:
             "message": event.message,
         },
     )
+    # a simulator's hand wins only while it is connected
+    socketio.emit("handedness", golfer_handedness())
     sl = get_session_logger()
     if sl:
         sl.log_sim_status(
@@ -4253,12 +4264,72 @@ def _sim_on_status(target: str, event) -> None:
 
 
 def golfer_handedness() -> dict:
-    """The hand every model uses: a connected simulator's, else the setup's, else RH."""
+    """The hand for the next shot: a connected simulator's, else the active profile's,
+    else the setup's (``--handed``), else RH."""
     if sim_player_state.handed_reported and any(c.is_connected() for c in sim_connectors):
         return {"handed": sim_player_state.handed, "source": "simulator"}
-    if golfer_handed in ("RH", "LH"):
+    profile_handed = get_profile_store().get_active().settings.get(PROFILE_HANDED_SETTING)
+    if profile_handed in HANDS:
+        return {"handed": profile_handed, "source": "profile"}
+    if golfer_handed in HANDS:
         return {"handed": golfer_handed, "source": "setup"}
     return {"handed": "RH", "source": "default"}
+
+
+def shot_handedness(shot: Shot) -> str:
+    """The hand a shot was detected with; the golfer's now for a shot never stamped."""
+    handed = getattr(shot, "handed", None)
+    return handed if handed in HANDS else golfer_handedness()["handed"]
+
+
+def _publish_handedness(previous: dict, cause: str, requested: str | None = None) -> dict:
+    """Tell every screen the hand for the next shot; log it when it was asked for or moved.
+
+    The log record makes each shot's hand recoverable from the session alone: a shot
+    carries its own ``handed`` too, and this says when and why it changed between shots.
+    """
+    current = golfer_handedness()
+    if requested is not None or current != previous:
+        session_log = get_session_logger()
+        if session_log:
+            session_log.log_event(
+                "handedness",
+                {
+                    **current,
+                    "requested": requested,
+                    "cause": cause,
+                    "previous": previous,
+                    "profile_id": get_profile_store().get_active().id,
+                },
+            )
+    socketio.emit("handedness", current)
+    return current
+
+
+def apply_handedness(payload=None):
+    """Set the active profile's hand from the club picker; it applies from the next shot.
+
+    Kept with the profile, so it survives a restart. A connected simulator that has
+    said which hand still wins; the choice is kept for when it goes away.
+    """
+    handed = _payload_dict(payload).get("handed")
+    if handed not in HANDS:
+        # the unchanged hand goes out, so a stale screen heals
+        socketio.emit("handedness", golfer_handedness())
+        return {"error": "handed must be RH or LH"}, 400
+    previous = golfer_handedness()
+    store = get_profile_store()
+    store.set_setting(store.get_active().id, PROFILE_HANDED_SETTING, handed)
+    current = _publish_handedness(previous, "kiosk", requested=handed)
+    _emit_profiles()
+    logger.info("[SERVER] Golfer's hand set to %s (in force: %s)", handed, current["handed"])
+    return {"status": "applied", **current}, 200
+
+
+@socketio.on("set_handedness")
+def handle_set_handedness(data=None):
+    """Set the golfer's hand from the kiosk's club picker."""
+    apply_handedness(data)
 
 
 def _sim_on_inbound(target: str, event) -> None:
@@ -6760,6 +6831,8 @@ def _handle_shot_detected(shot: Shot) -> None:
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
+    hand = golfer_handedness()
+    shot.handed, shot.handed_source = hand["handed"], hand["source"]
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
     if not _has_slow_shot_enrichment(shot):

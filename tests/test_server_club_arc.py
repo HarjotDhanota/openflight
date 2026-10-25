@@ -84,6 +84,27 @@ def test_attach_takes_the_golfer_s_handedness(monkeypatch):
     assert shot.club_delivery["handedness"] == "LH"
 
 
+def test_a_shot_keeps_the_hand_it_was_detected_with_when_the_golfer_changes(monkeypatch):
+    """A hand set mid-shot reaches the next shot, never the one being processed."""
+    monkeypatch.setattr(server_module, "golfer_handed", "RH")
+    seen = []
+    real_evaluate = shot_models.collision_model.evaluate
+
+    def evaluate(**kwargs):
+        seen.append(kwargs["handedness"])
+        return real_evaluate(**kwargs)
+
+    monkeypatch.setattr(shot_models.collision_model, "evaluate", evaluate)
+    shot = _shot()
+    shot.handed = "LH"
+
+    shot_models._attach_club_arc(shot, None)
+    shot_models._attach_collision_model(shot)
+
+    assert shot.club_delivery["handedness"] == "LH"
+    assert seen == ["LH"]
+
+
 def test_the_fallback_club_delivery_attaches_a_not_measured_arc(monkeypatch):
     monkeypatch.setattr(server_module.sim_player_state, "handed", "RH")
     shot = _shot()

@@ -166,6 +166,8 @@ export const en = {
   'app.simulateShot': 'Simulate shot',
   'picker.groups': 'Groups',
   'picker.close': 'Close {title}',
+  'picker.hand': 'Hand',
+  'picker.handSimulator': 'Set by the simulator',
 
   'clubGroup.Irons': 'Irons',
   'clubGroup.Hybrids': 'Hybrids',
@@ -235,6 +237,8 @@ export const en = {
   'metrics.empty': 'No shot yet',
   'metrics.emptyDetail': 'Hit a ball to see every metric with its label.',
   'metrics.swingOnly': 'Swing-speed reps have no ball or club metrics.',
+  'metrics.hitClubDelivery': 'Hit a shot with your {club} to see its delivery',
+  'metrics.hitClubFlight': 'Hit a shot with your {club} to see its flight',
   'metrics.notMeasured': 'Not measured: {reason}',
   'metrics.range': 'range {low} to {high}',
   'metrics.ballRangeRadar': 'radar, this swing',

@@ -41,8 +41,9 @@ e1 = base line (downrange),  e2 = cos θ · (toward the golfer) + sin θ · up
 ```
 
 "Toward the golfer" is target-left for a right-handed golfer, which is the
-default. A left-handed golfer must be set explicitly (the simulator player's
-`handed` setting). The model has eight parameters, and every output is read
+default. A left-handed golfer must be set explicitly: in the club picker (kept per
+profile), or by a connected simulator's `handed` setting, which wins. Each shot keeps
+the hand it was detected with. The model has eight parameters, and every output is read
 from the arc at the contact time.
 
 Why a circle: high-speed measurements (2,000 fps) fit the head's path near

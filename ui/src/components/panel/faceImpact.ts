@@ -755,12 +755,24 @@ function axis(record: ShotMetric | undefined): [number | null, number | null, st
   return [record.value, sigma, null];
 }
 
-export function shotHandedness(shot: Shot, fallback: 'RH' | 'LH' | null = null): 'right' | 'left' {
-  const hand = shot.impact_location?.handedness;
-  return hand === 'right' || hand === 'left' ? hand : fallback === 'LH' ? 'left' : 'right';
+/** What the club drawings read from a shot. A club with no shot yet is drawn from
+ * `clubModel`: its model, every value unmeasured. */
+export type DeliveryShot = Pick<Shot, 'club' | 'timestamp' | 'metrics' | 'impact_location' | 'handed'>;
+
+/** The club's model with no shot behind it: nothing measured, so nothing drawn as read. */
+export function clubModel(club: string): DeliveryShot {
+  return { club, timestamp: '', metrics: null, impact_location: null, handed: null };
 }
 
-export function impactReading(shot: Shot): ImpactReading {
+/** The hand the shot was read or hit with, else ``fallback`` (the kiosk's now), else right. */
+export function shotHandedness(shot: DeliveryShot, fallback: 'RH' | 'LH' | null = null): 'right' | 'left' {
+  const hand = shot.impact_location?.handedness;
+  if (hand === 'right' || hand === 'left') return hand;
+  const handed = shot.handed ?? fallback;
+  return handed === 'LH' ? 'left' : 'right';
+}
+
+export function impactReading(shot: DeliveryShot): ImpactReading {
   const [offset, offsetSigma, offsetReason] = axis(shot.metrics?.impact_offset ?? undefined);
   const [height, heightSigma, heightReason] = axis(shot.metrics?.impact_height ?? undefined);
   return {

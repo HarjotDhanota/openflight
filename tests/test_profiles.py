@@ -304,6 +304,35 @@ class TestSettings:
 
         assert store.list()[-1].settings == {"altitude_m": 120}
 
+    def test_set_setting_stores_one_value_and_keeps_the_rest(self, store_path):
+        store = ProfileStore(store_path)
+        added = store.add("Range")
+        added.settings["altitude_m"] = 120
+        store.save()
+
+        assert store.set_setting(added.id, "handed", "LH")
+
+        reloaded = next(
+            profile for profile in ProfileStore(store_path).list() if profile.id == added.id
+        )
+        assert reloaded.settings == {"altitude_m": 120, "handed": "LH"}
+
+    def test_set_setting_changes_only_the_named_profile(self, store_path):
+        store = ProfileStore(store_path)
+        first = store.list()[0]
+        second = store.add("Second")
+
+        store.set_setting(second.id, "handed", "LH")
+
+        assert first.settings == {}
+        assert second.settings == {"handed": "LH"}
+
+    def test_set_setting_rejects_unknown_id(self, store_path):
+        store = ProfileStore(store_path)
+
+        assert not store.set_setting("ghost", "handed", "LH")
+        assert store.list()[0].settings == {}
+
 
 class TestSnapshot:
     """snapshot() is the socket payload."""

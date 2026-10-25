@@ -168,6 +168,8 @@ export const es: Messages = {
   'app.simulateShot': 'Simular golpe',
   'picker.groups': 'Grupos',
   'picker.close': 'Cerrar {title}',
+  'picker.hand': 'Mano',
+  'picker.handSimulator': 'Lo fija el simulador',
 
   'clubGroup.Irons': 'Hierros',
   'clubGroup.Hybrids': 'Híbridos',
@@ -237,6 +239,8 @@ export const es: Messages = {
   'metrics.empty': 'Aún no hay golpes',
   'metrics.emptyDetail': 'Golpea una bola para ver cada métrica con su etiqueta.',
   'metrics.swingOnly': 'Las repeticiones de velocidad no tienen métricas de bola ni de palo.',
+  'metrics.hitClubDelivery': 'Da un golpe con tu {club} para ver cómo llega el palo',
+  'metrics.hitClubFlight': 'Da un golpe con tu {club} para ver su vuelo',
   'metrics.notMeasured': 'No medido: {reason}',
   'metrics.range': 'rango {low} a {high}',
   'metrics.ballRangeRadar': 'radar, este swing',
