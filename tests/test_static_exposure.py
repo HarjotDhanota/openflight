@@ -318,7 +318,7 @@ def test_controls_the_camera_never_applies_end_the_loop():
 def test_the_indoor_patch_locks_on_the_ball_in_a_few_steps():
     """indoor-test-1's light-screen frame with a ball composited in, its
     levels scaled linearly with exposure x gain from the 300 us x 8 screen."""
-    from test_patch_ball_search import INDOOR_BALL_PX, indoor_scene  # noqa: PLC0415
+    from test_patch_ball_search_field import INDOOR_BALL_PX, indoor_scene  # noqa: PLC0415
 
     reference = np.median(indoor_scene(), axis=0)
     region = (661, 413, 817, 548)

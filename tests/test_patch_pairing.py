@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_patch_ball_search import INDOOR_BALL_PX, indoor_scene, outdoor_scene, v3
+from test_patch_ball_search_field import INDOOR_BALL_PX, indoor_scene, outdoor_scene, v3
 
 from openflight.camera.ground_patch import (
     BALL_CENTER_HEIGHT_M,
