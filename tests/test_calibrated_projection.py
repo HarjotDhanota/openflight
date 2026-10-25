@@ -31,7 +31,6 @@ from openflight.camera.geometry import unit_world_rays
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
 from openflight.camera.optical_calibration import validate_mode_profile
 from openflight.camera.triggered_buffer import CameraFrame
-from openflight.clubs import ClubType
 from openflight.iwr6843.lcmf import BallRangeEvidence
 from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.launch_monitor import Shot
@@ -41,6 +40,7 @@ from tests.camera_helpers import (
     camera_placement as _placement,
     mode_profile as _profile,
 )
+from tests.test_camera_fusion_processing import _context_kwargs
 
 ZERO = dict.fromkeys(BROWN, 0.0)
 
@@ -202,21 +202,7 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
     )
     assert restored.calibrated_mode_evidence["status"] == "unverified"
 
-    context = fusion_processing.build_context(
-        geometry=geometry,
-        lighting_eligible=True,
-        ball_range_evidence=None,
-        club_range_evidence=None,
-        ops_ball_speed_mph=100.0,
-        ops_club_speed_mph=75.0,
-        iwr_vertical_deg=18.0,
-        iwr_horizontal_deg=1.0,
-        iwr_horizontal_confidence=0.8,
-        club=ClubType.IRON_7,
-        capture_npz_sha256="capture-hash",
-        session_uuid="session-a",
-        shot_number=1,
-    )
+    context = fusion_processing.build_context(**{**_context_kwargs(), "geometry": geometry})
     archive = {
         "frames": np.zeros((4, 400, 640), np.uint8),
         "host_timestamp_ns": np.arange(4, dtype=np.int64),

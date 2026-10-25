@@ -7,8 +7,7 @@ from openflight.camera import ball_flight, club_delivery, fusion_processing as f
 from openflight.camera.ball_flight import CameraBallGeometry, estimate_camera_ball_flight
 from openflight.camera.club_delivery import CameraDeliveryGeometry, estimate_chained_delivery
 from openflight.camera.club_motion import ReferenceBall
-from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
-from openflight.clubs import ClubType
+from tests.test_camera_fusion_processing import _archive, _context_kwargs
 
 
 def _ball(x=50.0, y=70.0, diameter=14.0):
@@ -115,49 +114,8 @@ def test_the_club_stage_finds_no_ball_on_its_own_and_borrows_none(monkeypatch):
     assert result.status == "rejected_no_ball"
 
 
-def _geometry():
-    return EffectiveCameraGeometryInputs(
-        camera_height_m=0.095,
-        radar_height_m=0.051,
-        tee_slant_range_m=1.5,
-        ball_height_m=0.021,
-        camera_lateral_offset_m=0.0,
-        camera_forward_offset_m=0.03,
-        image_width_px=8,
-        image_height_px=6,
-        horizontal_pixel_sign=1.0,
-        roll_correction_deg=0.0,
-        ball_horizontal_output_offset_deg=0.0,
-        ball_diameter_m=0.0427,
-    )
-
-
 def _context():
-    return fp.build_context(
-        geometry=_geometry(),
-        lighting_eligible=True,
-        ball_range_evidence=None,
-        club_range_evidence=None,
-        ops_ball_speed_mph=100.0,
-        ops_club_speed_mph=75.0,
-        iwr_vertical_deg=18.0,
-        iwr_horizontal_deg=1.0,
-        iwr_horizontal_confidence=0.8,
-        club=ClubType.IRON_7,
-        capture_npz_sha256="capture-hash",
-        session_uuid="session-a",
-        shot_number=3,
-    )
-
-
-def _archive():
-    return {
-        "frames": np.zeros((20, 6, 8), np.uint8),
-        "host_timestamp_ns": np.arange(20, dtype=np.int64),
-        "trigger_host_timestamp_ns": np.asarray(10, dtype=np.int64),
-        "pre_trigger_count": np.asarray(10, dtype=np.int64),
-        "_capture_npz_sha256": "capture-hash",
-    }
+    return fp.build_context(**_context_kwargs())
 
 
 def test_neither_the_frozen_context_nor_a_result_carries_tracker_state():
