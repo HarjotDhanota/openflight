@@ -1,9 +1,4 @@
-"""Chained club delivery times frames by the sensor clock where the clip has it.
-
-Host arrival times stall by up to ~31 ms around impact; sensor timestamps are
-exposure times. Camera and radar meet only at the contact anchor, so no
-conversion to the host clock is needed.
-"""
+"""Chained club delivery times frames by the sensor clock: host arrival stalls ~31 ms at impact."""
 
 from __future__ import annotations
 
@@ -134,7 +129,7 @@ def test_a_clip_without_sensor_timestamps_still_times_by_arrival(monkeypatch):
 
 
 def test_the_field_clips_contact_and_trigger_offset_use_sensor_time(monkeypatch):
-    """Frame 18 arrives 31 ms late on the host clock."""
+    # frame 18 arrives 31 ms late on the host clock
     with np.load(FIXTURE) as archive:
         frames = archive["s1_frames"]
         sensor = archive["s1_sensor_timestamp_ns"].astype(np.int64)
@@ -174,11 +169,12 @@ def test_the_field_clips_contact_and_trigger_offset_use_sensor_time(monkeypatch)
     assert (host[18] - host[17]) / 1e6 > 35.0  # what the host clock would have said
 
 
-def test_fusion_replay_passes_the_clips_sensor_timestamps_to_club_delivery(monkeypatch):
-    from tests.test_camera_trigger_timing import (  # noqa: PLC0415
-        _fusion_archive,
-        _fusion_context,
-    )
+@pytest.mark.parametrize("path", ["replay", "live"])
+def test_replay_and_live_pass_the_clips_sensor_timestamps_to_club_delivery(
+    monkeypatch, tmp_path, path
+):
+    from tests.test_camera_fusion_processing import _context_kwargs  # noqa: PLC0415
+    from tests.test_camera_trigger_timing import _fusion_archive, _live_server  # noqa: PLC0415
 
     seen = {}
 
@@ -186,34 +182,20 @@ def test_fusion_replay_passes_the_clips_sensor_timestamps_to_club_delivery(monke
         seen["sensor"] = kwargs.get("sensor_timestamp_ns")
         return ChainedDelivery(status="rejected_test")
 
-    monkeypatch.setattr(
-        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate("rejected_test")
-    )
-    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
     sensor = np.arange(24, dtype=np.int64) * FRAME_NS
-
-    fp.process_camera_fusion(_fusion_context(), _fusion_archive(sensor_timestamp_ns=sensor))
-    np.testing.assert_array_equal(seen["sensor"], sensor)
-
-    fp.process_camera_fusion(_fusion_context(), _fusion_archive())
-    assert seen["sensor"] is None
-
-
-def test_the_live_path_passes_the_clips_sensor_timestamps_to_club_delivery(monkeypatch, tmp_path):
-    from tests.test_camera_trigger_timing import (  # noqa: PLC0415
-        _fusion_archive,
-        _live_server,
-    )
-
+    if path == "replay":
+        monkeypatch.setattr(
+            fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate("rejected_test")
+        )
+        monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+        context = fp.build_context(**_context_kwargs())
+        fp.process_camera_fusion(context, _fusion_archive(sensor_timestamp_ns=sensor))
+        np.testing.assert_array_equal(seen["sensor"], sensor)
+        fp.process_camera_fusion(context, _fusion_archive())
+        assert seen["sensor"] is None
+        return
     _live_server(monkeypatch, tmp_path)
-    seen = {}
-
-    def club_estimator(*_args, **kwargs):
-        seen["sensor"] = kwargs.get("sensor_timestamp_ns")
-        return ChainedDelivery(status="rejected_test")
-
     monkeypatch.setattr(club_delivery_module, "estimate_chained_delivery", club_estimator)
-    sensor = np.arange(24, dtype=np.int64) * FRAME_NS
     shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
 
     server._fuse_camera_club_delivery(
