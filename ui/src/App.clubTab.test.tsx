@@ -12,7 +12,6 @@ import { socketService } from './services/socketService';
 import { useProfileStore } from './stores/useProfileStore';
 import { useShotStore } from './stores/useShotStore';
 import { useSystemStore } from './stores/useSystemStore';
-import { makeShot, stubLayoutGlobals } from './test/liveTraceFixtures';
 import type { Shot, ShotMetric } from './types/shot';
 
 vi.mock('./hooks/useSocket', () => ({ useSocket: () => ({ shutdown: vi.fn() }) }));
@@ -47,6 +46,47 @@ vi.hoisted(() => {
   };
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
 });
+
+/** jsdom has no layout observers or font loading; the live grid's font fitting uses them. */
+function stubLayoutGlobals(): void {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    }
+  );
+  Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve() } });
+}
+
+function makeShot(overrides: Partial<Shot>): Shot {
+  return {
+    ball_speed_mph: 121.4,
+    club_speed_mph: 88,
+    smash_factor: 1.38,
+    estimated_carry_yards: 210,
+    carry_range: [205, 215],
+    club: 'driver',
+    timestamp: '2026-10-24T10:00:00Z',
+    peak_magnitude: 100,
+    launch_angle_vertical: 13.4,
+    launch_angle_horizontal: -1.2,
+    launch_angle_confidence: 0.8,
+    angle_source: 'radar',
+    club_angle_deg: 2.1,
+    club_path_deg: -0.6,
+    spin_axis_deg: 3.4,
+    spin_rpm: 2650,
+    spin_confidence: 0.9,
+    spin_quality: 'high',
+    spin_source: 'measured',
+    carry_spin_adjusted: 214,
+    profile_id: 'james',
+    profile_name: 'James',
+    ...overrides,
+  };
+}
 
 let container: HTMLDivElement;
 let root: Root;

@@ -61,7 +61,9 @@ def _drive_tester_shot(monkeypatch, readiness):
     monkeypatch.setattr(
         server,
         "get_profile_store",
-        lambda: SimpleNamespace(get_active=lambda: SimpleNamespace(id="p1", name="Tester")),
+        lambda: SimpleNamespace(
+            get_active=lambda: SimpleNamespace(id="p1", name="Tester", settings={})
+        ),
     )
     monkeypatch.setattr(server, "_assign_shot_number", lambda shot: None)
     monkeypatch.setattr(server, "_has_slow_shot_enrichment", lambda shot: False)
