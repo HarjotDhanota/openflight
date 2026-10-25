@@ -352,6 +352,8 @@ class Shot:
     experimental_camera_horizontal_confidence: Optional[float] = None
     experimental_camera_horizontal_status: Optional[str] = None
     experimental_camera_iwr_delta_deg: Optional[float] = None
+    # The camera's check of the IWR azimuth on that delta (camera.azimuth_check)
+    iwr_azimuth_check: Optional[dict] = None
     # Transient fitted IWR range trajectory consumed by live camera fusion.
     # Deliberately excluded from websocket/session serializers.
     iwr6843_club_range_evidence: object | None = field(
@@ -579,6 +581,7 @@ class Shot:
             "experimental_camera_horizontal_status": self.experimental_camera_horizontal_status,
             "experimental_camera_horizontal_frame": self.experimental_camera_horizontal_frame,
             "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
+            "iwr_azimuth_check": deepcopy(self.iwr_azimuth_check),
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "stage_timing": deepcopy(self.stage_timing),
             "camera_notes": list(self.camera_notes) if self.camera_notes else None,

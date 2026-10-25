@@ -240,6 +240,8 @@ def _launch_horizontal(shot):
         else None,
         AZIMUTH_UNCALIBRATED_NOTE if status == AZIMUTH_UNCALIBRATED else None,
         _experimental_launch_note(source),
+        # the camera's check of the IWR azimuth notes a disagreement; it never relabels
+        _mapping(shot.get("iwr_azimuth_check")).get("note"),
     ]
     return _record(
         "launch_horizontal",

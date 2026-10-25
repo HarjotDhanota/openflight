@@ -3603,7 +3603,15 @@ def _session_stats() -> dict:
     """The monitor's session stats with every non-finite value sent as null."""
     if not monitor:
         return {}
-    return _null_non_finite(monitor.get_session_stats(), "stats", [])
+    stats = dict(monitor.get_session_stats())
+    shots = monitor.get_shots() if hasattr(monitor, "get_shots") else []
+    checks = [getattr(shot, "iwr_azimuth_check", None) for shot in shots]
+    if any(checks):
+        from .camera.azimuth_check import session_summary  # noqa: PLC0415
+
+        # a diagnostic for a future azimuth calibration: nothing applies it
+        stats["iwr_azimuth_check"] = session_summary(checks)
+    return _null_non_finite(stats, "stats", [])
 
 
 def _session_state_payload(*, include_runtime_meta: bool = False) -> dict:
@@ -6498,6 +6506,20 @@ def _resolve_spin(shot: Shot) -> None:
     shot.input_sources = sources
 
 
+def _check_iwr_azimuth(shot: Shot) -> None:
+    """The camera's check of the IWR azimuth on a shot with both (camera.azimuth_check)."""
+    from .camera.azimuth_check import camera_sigma_deg, shot_check  # noqa: PLC0415
+
+    estimate = (shot.camera_fusion_processing or {}).get("ball_estimate")
+    shot.iwr_azimuth_check = shot_check(
+        shot.experimental_camera_iwr_delta_deg,
+        camera_sigma_deg=camera_sigma_deg(estimate),
+        iwr_sigma_deg=None,
+    )
+    if shot.iwr_azimuth_check and shot.iwr_azimuth_check["status"] == "disagrees":
+        logger.info("[SERVER] %s", shot.iwr_azimuth_check["note"])
+
+
 def _commit_carry(shot: Shot) -> str | None:
     """Commit the shot's carry, the flight model's on its own inputs, and name its source.
 
@@ -6538,6 +6560,7 @@ def _finalize_shot_detected(
     # and the shot still logs and publishes everything else, the OPS ball speed first of
     # all (25 Oct audit).
     _isolated_stage(shot, "launch_angles", _note_unmeasured_launch_angles, shot)
+    _isolated_stage(shot, "iwr_azimuth_check", _check_iwr_azimuth, shot)
 
     # OPS speed remains the canonical radial observation.
     if _isolated_stage(shot, "speed_contract", _attach_ball_speed_contract, shot) is _STAGE_FAILED:
