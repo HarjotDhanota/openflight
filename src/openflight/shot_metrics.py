@@ -16,6 +16,8 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
 from .source_labels import (
+    AZIMUTH_UNCALIBRATED,
+    AZIMUTH_UNCALIBRATED_NOTE,
     WEAK_HORIZONTAL_SOURCES,
     horizontal_launch_label,
     is_calculated_source,
@@ -208,8 +210,10 @@ def _launch_vertical(shot):
 
 
 def _launch_horizontal(shot):
-    """The horizontal launch: estimated on a weak source, withheld beyond a shank's reach."""
+    """The horizontal launch: estimated on a weak source or an uncalibrated azimuth, withheld
+    beyond a shank's reach."""
     source = shot.get("launch_angle_horizontal_source") or shot.get("angle_source")
+    status = shot.get("launch_angle_horizontal_status")
     value = shot.get("launch_angle_horizontal")
     reason = shot.get("launch_angle_horizontal_reason") or (
         "horizontal launch not measured on this shot"
@@ -221,14 +225,12 @@ def _launch_horizontal(shot):
         f"{WEAK_HORIZONTAL_SOURCES[source]} horizontal: too weak to stand as measured"
         if source in WEAK_HORIZONTAL_SOURCES
         else None,
-        "azimuth uncalibrated: the IWR start direction has its own zero"
-        if shot.get("launch_angle_horizontal_status") == "azimuth_uncalibrated"
-        else None,
+        AZIMUTH_UNCALIBRATED_NOTE if status == AZIMUTH_UNCALIBRATED else None,
     ]
     return _record(
         "launch_horizontal",
         value,
-        horizontal_launch_label(source),
+        horizontal_launch_label(source, status),
         source=source,
         reason=reason,
         frame=shot.get("launch_angle_horizontal_frame"),

@@ -529,7 +529,9 @@ sign of face to path.
 
 **A weak horizontal launch.** When the horizontal launch the model uses is a
 low-coherence IWR value (source `radar_low_coherence`), a low-consensus camera
-value (`camera_low_consensus`), or its confidence is below
+value (`camera_low_consensus`), an IWR value whose azimuth is uncalibrated (status
+`azimuth_uncalibrated`: no horizontal phase reference, so its start direction has its
+own zero), or its confidence is below
 `SPIN_AXIS_MIN_CONFIDENCE` (0.6) or not given, it enters as an `estimated` input
 with that reason. Every output built on it is then `estimated`, with the reason:
 face angle, dynamic loft (the inversion uses all four angles), face to path,

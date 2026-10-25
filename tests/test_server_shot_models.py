@@ -104,7 +104,9 @@ class TestFaceAngleFromTheCollisionModel:
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
     def test_an_uncalibrated_radar_start_direction_gives_a_labelled_face_angle(self, monkeypatch):
-        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source."""
+        """D15 (P8-7): computed, and labelled with the mixed zeros and the path source.
+
+        An uncalibrated start direction is an estimated input, so the face is estimated."""
         shot = self._run(monkeypatch, phase_reference=None)
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
@@ -113,7 +115,10 @@ class TestFaceAngleFromTheCollisionModel:
 
         weight = collision_model.weights_for_club(shot.club).horizontal
         assert shot.experimental_face_angle_deg == pytest.approx(-4.0 + 6.25 / weight, abs=0.05)
-        assert shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated"
+        assert (
+            shot.experimental_face_angle_status == "d_plane_estimate_azimuth_uncalibrated_estimated"
+        )
+        assert shot.collision_model["metrics"]["face_angle"]["status"] == "estimated"
         assert shot.experimental_face_angle_path_source == "camera_fused_chained"
         assert shot.experimental_face_angle_launch_source == "radar"
 

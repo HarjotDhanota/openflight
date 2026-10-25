@@ -29,10 +29,22 @@ WEAK_HORIZONTAL_SOURCES = {
     "camera_low_consensus": "low-consensus",
 }
 
+# Shot.launch_angle_horizontal_status of an IWR horizontal while the board has no
+# horizontal phase reference: its start direction has its own zero, so the value is
+# "estimated", like a weak source, until the azimuth is calibrated.
+AZIMUTH_UNCALIBRATED = "azimuth_uncalibrated"
+AZIMUTH_UNCALIBRATED_NOTE = "azimuth uncalibrated: the IWR start direction has its own zero"
 
-def horizontal_launch_label(source: Optional[str]) -> str:
-    """The label a Shot horizontal launch carries for its ``launch_angle_horizontal_source``."""
-    if source == LABEL_ESTIMATED or source in WEAK_HORIZONTAL_SOURCES:
+
+def horizontal_launch_label(source: Optional[str], status: Optional[str] = None) -> str:
+    """The label a Shot horizontal launch carries for its ``launch_angle_horizontal_source``
+    and ``launch_angle_horizontal_status``: "estimated" on a weak source or an
+    uncalibrated azimuth, else "measured"."""
+    if (
+        source == LABEL_ESTIMATED
+        or source in WEAK_HORIZONTAL_SOURCES
+        or status == AZIMUTH_UNCALIBRATED
+    ):
         return LABEL_ESTIMATED
     return LABEL_MEASURED
 

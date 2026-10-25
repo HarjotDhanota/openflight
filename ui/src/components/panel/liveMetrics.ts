@@ -149,13 +149,18 @@ function withFaceAngle(
   faceStatus?: string | null
 ): string | undefined {
   if (!isMeasured(faceDeg)) return subtext;
-  const basis = faceStatus === 'd_plane_estimate_azimuth_uncalibrated' ? 'D-plane, azimuth uncalibrated' : 'D-plane';
+  // the face's own label may follow ("_estimated", "_mixed_frames")
+  const uncalibrated = faceStatus?.startsWith('d_plane_estimate_azimuth_uncalibrated') ?? false;
+  const basis = uncalibrated ? 'D-plane, azimuth uncalibrated' : 'D-plane';
   const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
   return subtext ? `${subtext} · ${face}` : face;
 }
 
 /** Horizontal sources too weak to stand as measured (source_labels.WEAK_HORIZONTAL_SOURCES). */
 const WEAK_HORIZONTAL_SOURCES = new Set(['radar_low_coherence', 'camera_low_consensus']);
+
+/** An IWR horizontal without a phase reference (source_labels.AZIMUTH_UNCALIBRATED): estimated. */
+const AZIMUTH_UNCALIBRATED = 'azimuth_uncalibrated';
 
 /** Subtext naming a camera-derived horizontal launch source; radar and estimates get none. */
 const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
@@ -186,13 +191,14 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const horizontalEstimated =
     shot.launch_angle_horizontal_source !== undefined
       ? shot.launch_angle_horizontal_source === 'estimated' ||
-        WEAK_HORIZONTAL_SOURCES.has(shot.launch_angle_horizontal_source ?? '')
+        WEAK_HORIZONTAL_SOURCES.has(shot.launch_angle_horizontal_source ?? '') ||
+        shot.launch_angle_horizontal_status === AZIMUTH_UNCALIBRATED
       : angleEstimated;
   const horizontalSourceLabel = shot.launch_angle_horizontal_source
     ? HORIZONTAL_SOURCE_LABELS[shot.launch_angle_horizontal_source]
     : undefined;
   const horizontalSubtext =
-    shot.launch_angle_horizontal_status === 'azimuth_uncalibrated' ? 'azimuth uncalibrated' : horizontalSourceLabel;
+    shot.launch_angle_horizontal_status === AZIMUTH_UNCALIBRATED ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle = firstMeasured(
     shot.club_angle_deg,

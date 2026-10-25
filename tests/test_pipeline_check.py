@@ -433,6 +433,27 @@ def test_a_face_angle_on_a_low_consensus_start_direction_is_labelled():
     assert "camera_low_consensus" in row["evidence"]
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "d_plane_estimate_azimuth_uncalibrated",
+        # an uncalibrated start direction is an estimated input, so the face is estimated
+        "d_plane_estimate_azimuth_uncalibrated_estimated",
+        "d_plane_estimate_azimuth_uncalibrated_estimated_mixed_frames",
+    ],
+)
+def test_a_face_angle_on_an_uncalibrated_start_direction_is_labelled(status):
+    live = {
+        "face_angle_status": status,
+        "face_angle_deg": 1.5,
+        "face_angle_path_source": "camera_fused_ops",
+        "face_angle_launch_source": "radar",
+    }
+    row = check.face_angle_stage(live, _upstream())
+    assert row["status"] == check.LABELLED
+    assert "azimuth uncalibrated" in row["evidence"]
+
+
 class TestCameraVerticalOffset:
     """P8-5 hands the solved tilt to the kiosk as config["camera_tilt"]; the check
     looked only in the camera, scene and geometry blocks and called it unbuilt."""
