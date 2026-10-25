@@ -23,6 +23,7 @@ from openflight.camera.club_motion import (
     detect_impact_frame,
     detect_impact_reference_ball,
     detect_reference_ball,
+    measure_resting_ball,
 )
 from openflight.camera.geometry import (
     forward_distance_from_slant_range,
@@ -44,7 +45,9 @@ REFERENCE_FRAME_INTERVAL_S = 1.0 / 300.0
 REFERENCE_BALL_X_FRACTION = (0.1, 0.9)
 REFERENCE_BALL_Y_FRACTION = (0.4, 0.95)
 # With a setup ball the gate follows it; the fixed fractions apply only without one.
-SETUP_BALL_SEARCH_DIAMETERS = 3.0
+# The box is fixed and the ball may rest anywhere in it: Harjot-outdoor-test-1's resting
+# balls lay up to 3.1 of the setup ball's diameters (131 px) from where the setup saw it.
+SETUP_BALL_SEARCH_DIAMETERS = 4.0
 SETUP_BALL_SIZE_RATIO = (0.6, 1.6)
 
 
@@ -557,6 +560,17 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
             candidates[name] = detector(frames, **kwargs)
         except (RuntimeError, ValueError) as error:
             reasons[name] = f"{type(error).__name__}: {error}"
+    unlit = False
+    if setup_ball and candidates["scene"] is not None:
+        # the setup measured its ball as a lit sphere on its outline: so is this one, or
+        # it is not the ball (Harjot-outdoor-test-1 shots 5 and 8: a gap in the net)
+        measured = measure_resting_ball(
+            frames, candidates["scene"], float(setup_ball["diameter_px"])
+        )
+        if measured is None:
+            unlit = True
+        else:
+            candidates["scene"] = measured
 
     def plausible(candidate: ReferenceBall | None) -> bool:
         if candidate is None:
@@ -575,8 +589,11 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
 
     observations = dict(candidates)
     eligible = dict(candidates)
+    if unlit:
+        reasons["scene"] = "no lit ball where the scene detector found one"
+        eligible["scene"] = None
     for name, candidate in observations.items():
-        if candidate is not None and not plausible(candidate):
+        if candidate is not None and eligible[name] is not None and not plausible(candidate):
             reasons[name] = (
                 "candidate is not where or the size the setup ball was"
                 if setup_ball

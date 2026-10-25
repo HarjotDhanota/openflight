@@ -563,6 +563,39 @@ def _fit_lit_rim(
     return float(cx), float(cy), float(r)
 
 
+def measure_resting_ball(
+    frames: np.ndarray, ball: ReferenceBall, diameter_px: float
+) -> ReferenceBall | None:
+    """The lit sphere where ``ball`` was found, centred and sized on its outline; None when
+    no lit ball is there. ``diameter_px`` (the setup's ball) starts the fit's size.
+
+    The same measure as the setup's own ball search (``fit_lit_ball``), so the two sizes
+    compare: the scene detector's rim circle keeps only a dusk ball's lit cap.
+    """
+    stack = frames[: min(20, frames.shape[0])]
+    noise = max(
+        PICTURE_NOISE_FLOOR_DN,
+        MEDIAN_NOISE_FACTOR * float(np.median(np.std(stack, axis=0))) / math.sqrt(len(stack)),
+    )
+    fit = fit_lit_ball(
+        np.median(stack, axis=0),
+        ball.x,
+        ball.y,
+        diameter_px / 2.0,
+        noise_dn=noise,
+        size_starts=(1.0,),
+    )
+    if fit is None:
+        return None
+    return ReferenceBall(
+        x=fit.x,
+        y=fit.y,
+        diameter_px=fit.diameter_px,
+        area_px=int(round(math.pi * fit.radius_px**2)),
+        fit_quality=float(fit.quality),
+    )
+
+
 def detect_reference_ball(
     frames: np.ndarray,
     *,
