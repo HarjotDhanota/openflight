@@ -110,7 +110,7 @@ from . import collision_forward, metric_definitions
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .constants import BALL_DIAMETER_M, BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
-from .horizontal_frame import MIXED, combined_frame
+from .horizontal_frame import MIXED
 from .numeric import finite as _finite
 from .source_labels import (  # noqa: F401  (the predicates are re-exported)
     LABEL_CALCULATED,
@@ -200,6 +200,17 @@ PING_2018_ANCHORS = (
 # ("a club loft ... appropriate for their swing speed"); those two anchors sit at the
 # fork's nominal lofts for the same clubs (clubs.physics).
 PING_2018_WEDGE_LOFT_DEG = 58.0
+
+
+def combined_frame(*frames: Optional[str]) -> Optional[str]:
+    """The one frame a value built from these angles is in, or ``mixed``.
+
+    Unknown (None) frames are ignored; with none known the result is None.
+    """
+    known = {frame for frame in frames if frame is not None}
+    if not known:
+        return None
+    return known.pop() if len(known) == 1 else MIXED
 
 
 def _anchor_lofts() -> tuple[float, float, float]:

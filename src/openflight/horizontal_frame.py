@@ -38,14 +38,3 @@ def to_reported_deg(angle_from_boresight_deg, offset_deg: Optional[float]):
 def to_boresight_deg(reported_deg, offset_deg: Optional[float]):
     """The inverse of ``to_reported_deg``: a reported angle -> from the boresight."""
     return _wrap_deg(reported_deg - (offset_deg or 0.0))
-
-
-def combined_frame(*frames: Optional[str]) -> Optional[str]:
-    """The one frame a value built from these angles is in, or ``mixed``.
-
-    Unknown (None) frames are ignored; with none known the result is None.
-    """
-    known = {frame for frame in frames if frame is not None}
-    if not known:
-        return None
-    return known.pop() if len(known) == 1 else MIXED
