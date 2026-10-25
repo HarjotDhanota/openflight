@@ -252,6 +252,8 @@ class Shot:
     launch_angle_horizontal_status: Optional[str] = None
     # Zero of each horizontal metric: "unit_boresight", "target_line" or "mixed".
     launch_angle_horizontal_frame: Optional[str] = None
+    # Why a horizontal a sensor gave is not on the shot (beyond a shank's reach, say).
+    launch_angle_horizontal_reason: Optional[str] = None
     club_path_frame: Optional[str] = None
     experimental_club_path_frame: Optional[str] = None
     experimental_fused_club_path_frame: Optional[str] = None
@@ -520,6 +522,7 @@ class Shot:
             "launch_angle_horizontal_source": self.launch_angle_horizontal_source,
             "launch_angle_horizontal_status": self.launch_angle_horizontal_status,
             "launch_angle_horizontal_frame": self.launch_angle_horizontal_frame,
+            "launch_angle_horizontal_reason": self.launch_angle_horizontal_reason,
             "angle_source": self.angle_source,
             "club_angle_deg": self.club_angle_deg,
             "club_path_deg": self.club_path_deg,

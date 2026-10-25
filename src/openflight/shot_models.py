@@ -40,7 +40,7 @@ from openflight.launch_monitor import (
     Shot,
 )
 from openflight.numeric import finite as _finite
-from openflight.source_labels import MODEL_LABELS, is_measured_source
+from openflight.source_labels import MODEL_LABELS, WEAK_HORIZONTAL_SOURCES, is_measured_source
 
 logger = logging.getLogger("openflight.server")
 
@@ -131,7 +131,8 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
 def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
     """The horizontal launch as a collision input, "estimated" when it is weak (C2).
 
-    A low-coherence IWR horizontal, or one whose confidence is below the spin axis's
+    A weak source (a low-coherence IWR or low-consensus camera horizontal, the same ones
+    the kiosk labels "estimated"), or one whose confidence is below the spin axis's
     floor (``SPIN_AXIS_MIN_CONFIDENCE``), is a measured angle too weak to stand as one:
     every output built on it is labelled "estimated", with this reason.
     """
@@ -144,8 +145,9 @@ def _horizontal_launch_input(shot: Shot, source) -> collision_model.Input:
     if not measured.present:
         return measured
     confidence = shot.launch_angle_horizontal_confidence
-    if shot.launch_angle_horizontal_source == "radar_low_coherence":
-        reason = "horizontal launch is low-coherence (radar_low_coherence)"
+    weak = shot.launch_angle_horizontal_source
+    if weak in WEAK_HORIZONTAL_SOURCES:
+        reason = f"horizontal launch is {WEAK_HORIZONTAL_SOURCES[weak]} ({weak})"
     elif not _finite(confidence):
         reason = "horizontal launch confidence not given"
     elif confidence < server.SPIN_AXIS_MIN_CONFIDENCE:

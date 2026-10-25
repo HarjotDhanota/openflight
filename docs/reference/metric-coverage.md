@@ -22,11 +22,17 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `measured` | A sensor saw it | plain outline, "MEAS" |
 | `calculated` | A named model on measured or calculated inputs (D38) | accent outline, "CALC" |
 | `model_geometry` | Rests on an assumed swing arc (D39) | dashed accent outline, "MODEL" |
-| `estimated` | An OPS-only install's labelled stand-in, or a value built on a weak input (a low-coherence horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
+| `estimated` | An OPS-only install's labelled stand-in, a weak horizontal launch itself (a low-coherence IWR or low-consensus camera one, which the full ball speed refuses), or a value built on a weak input (that horizontal launch under spin, spin axis or face; the radial speed under a flight when the full speed is refused) | filled accent with the ≈ mark, "EST" |
 | `experimental` | Shown to testers before it is validated, and fed to no other metric: the camera's impact location, read live after the shot | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
 A simulated carry is `calculated` whether its spin was measured or calculated.
+
+A horizontal launch beyond ±45° (`horizontal_frame.MAX_PLAUSIBLE_LAUNCH_DEG`) is no
+struck ball's: a shank, the widest a ball leaves, goes out roughly 45° off line. The
+kiosk never puts one on the shot, so no flight, collision model, full speed or
+simulator reads it; the metric is `not_measured` with the reason
+(`Shot.launch_angle_horizontal_reason`), and a camera horizontal may still fill it.
 
 `ball_range` (13 Oct) is the range the shot's range-dependent metrics used: its own
 IWR launch point (`measured`, noted "not validated against a tape yet"), else the

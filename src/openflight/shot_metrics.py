@@ -13,8 +13,15 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
-from .source_labels import is_calculated_source, is_measured_source, is_model_geometry_source
+from .source_labels import (
+    WEAK_HORIZONTAL_SOURCES,
+    horizontal_launch_label,
+    is_calculated_source,
+    is_measured_source,
+    is_model_geometry_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,18 +208,31 @@ def _launch_vertical(shot):
 
 
 def _launch_horizontal(shot):
+    """The horizontal launch: estimated on a weak source, withheld beyond a shank's reach."""
     source = shot.get("launch_angle_horizontal_source") or shot.get("angle_source")
-    uncalibrated = shot.get("launch_angle_horizontal_status") == "azimuth_uncalibrated"
+    value = shot.get("launch_angle_horizontal")
+    reason = shot.get("launch_angle_horizontal_reason") or (
+        "horizontal launch not measured on this shot"
+    )
+    implausible = implausible_launch_reason(value)
+    if implausible is not None:
+        value, reason = None, f"{source or 'horizontal launch'} {implausible}"
+    notes = [
+        f"{WEAK_HORIZONTAL_SOURCES[source]} horizontal: too weak to stand as measured"
+        if source in WEAK_HORIZONTAL_SOURCES
+        else None,
+        "azimuth uncalibrated: the IWR start direction has its own zero"
+        if shot.get("launch_angle_horizontal_status") == "azimuth_uncalibrated"
+        else None,
+    ]
     return _record(
         "launch_horizontal",
-        shot.get("launch_angle_horizontal"),
-        _launch_status(source),
+        value,
+        horizontal_launch_label(source),
         source=source,
-        reason="horizontal launch not measured on this shot",
+        reason=reason,
         frame=shot.get("launch_angle_horizontal_frame"),
-        note="azimuth uncalibrated: the IWR start direction has its own zero"
-        if uncalibrated
-        else None,
+        note="; ".join(note for note in notes if note) or None,
     )
 
 

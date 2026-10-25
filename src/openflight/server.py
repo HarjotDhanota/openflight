@@ -48,6 +48,7 @@ from .clubs.physics import (
 from .constants import BALL_DIAMETER_MM, DEFAULT_NET_RANGE_M
 from .horizontal_frame import (
     frame_for,
+    implausible_launch_reason,
     to_reported_deg,
 )
 from .inclinometer.orientation_check import default_mount_path as _default_lis3dh_mount_path
@@ -4638,20 +4639,24 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             if fused_horizontal is not None:
                 shot.iwr6843_horizontal_deg = fused_horizontal
                 shot.iwr6843_horizontal_confidence = fused_confidence
-                shot.launch_angle_horizontal = fused_horizontal
-                shot.launch_angle_horizontal_confidence = fused_confidence
-                shot.launch_angle_horizontal_source = "radar"
-                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
-                shot.launch_angle_horizontal_frame = horizontal_frame
+                _put_launch_horizontal(
+                    shot,
+                    fused_horizontal,
+                    fused_confidence,
+                    "radar",
+                    status=_iwr_azimuth_status(),
+                    frame=horizontal_frame,
+                )
             elif horizontal_deg is not None:
                 # a low-coherence horizontal is shown but never handed to the camera
-                shot.launch_angle_horizontal = horizontal_deg
-                shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
-                    horizontal_confidence
+                _put_launch_horizontal(
+                    shot,
+                    horizontal_deg,
+                    horizontal_confidence_from(horizontal_confidence),
+                    "radar_low_coherence",
+                    status=_iwr_azimuth_status(),
+                    frame=horizontal_frame,
                 )
-                shot.launch_angle_horizontal_source = "radar_low_coherence"
-                shot.launch_angle_horizontal_status = _iwr_azimuth_status()
-                shot.launch_angle_horizontal_frame = horizontal_frame
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
                     horizontal_deg,
@@ -4978,11 +4983,42 @@ def _apply_camera_horizontal_decision(
             return
     if source == "radar":
         frame = shot.launch_angle_horizontal_frame
-    shot.launch_angle_horizontal = selected_deg
+    _put_launch_horizontal(
+        shot,
+        selected_deg,
+        confidence,
+        source,
+        status=_iwr_azimuth_status() if source == "radar" else None,
+        frame=frame or _horizontal_frame(),
+    )
+
+
+def _put_launch_horizontal(  # pylint: disable=too-many-arguments
+    shot: Shot,
+    value_deg: float,
+    confidence: float | None,
+    source: str | None,
+    *,
+    status: str | None,
+    frame: str | None,
+) -> None:
+    """Show a horizontal launch on the shot, or withhold one no struck ball leaves at.
+
+    A withheld value never reaches the shot, so no flight, collision model, full speed or
+    simulator reads it; a horizontal already shown is kept, else the reason is.
+    """
+    implausible = implausible_launch_reason(value_deg)
+    if implausible is not None:
+        logger.warning("[SERVER] Horizontal launch withheld: %s %s", source, implausible)
+        if shot.launch_angle_horizontal is None:
+            shot.launch_angle_horizontal_reason = f"{source} {implausible}"
+        return
+    shot.launch_angle_horizontal = value_deg
     shot.launch_angle_horizontal_confidence = confidence
     shot.launch_angle_horizontal_source = source
-    shot.launch_angle_horizontal_frame = frame or _horizontal_frame()
-    shot.launch_angle_horizontal_status = _iwr_azimuth_status() if source == "radar" else None
+    shot.launch_angle_horizontal_status = status
+    shot.launch_angle_horizontal_frame = frame
+    shot.launch_angle_horizontal_reason = None
 
 
 def _fuse_camera_ball_flight(

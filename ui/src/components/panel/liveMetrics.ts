@@ -105,6 +105,9 @@ function spinLabel(shot: Shot): MetricLabel {
 /** The horizontal tiles drop the shot's own (experimental) confidence for the server's value. */
 const SERVER_CLEARS_CONFIDENCE = new Set(['launch_h', 'spin_axis', 'club_path', 'club_aoa']);
 
+/** Tiles whose value the server may withhold (a horizontal beyond a shank's reach): no number then. */
+const SERVER_WITHHOLDS_VALUE = new Set(['launch_h']);
+
 function fromServer(metric: LiveMetric, record: ShotMetric, unitSystem: UnitSystem): LiveMetric {
   const id = TILE_METRIC[metric.id];
   const [value, unit] = formatMetricValue({ ...record, unit: METRIC_UNIT[id] }, unitSystem, id);
@@ -122,6 +125,17 @@ function withServerLabel(shot: Shot, metric: LiveMetric, unitSystem: UnitSystem)
   if (metric.value === NO_VALUE) {
     return { ...metric, status: undefined, reason: record.reason ?? undefined };
   }
+  if (!isMeasured(record.value) && SERVER_WITHHOLDS_VALUE.has(metric.id)) {
+    return {
+      ...metric,
+      value: NO_VALUE,
+      unit: undefined,
+      status: undefined,
+      confidence: null,
+      confidenceLabel: undefined,
+      reason: record.reason ?? undefined,
+    };
+  }
   // a candidate the server does not report (rejected or withheld) keeps its own pill
   return isMeasured(record.value) ? { ...metric, status: record.status } : { ...metric, status: undefined };
 }
@@ -137,6 +151,9 @@ function withFaceAngle(
   const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
   return subtext ? `${subtext} · ${face}` : face;
 }
+
+/** Horizontal sources too weak to stand as measured (source_labels.WEAK_HORIZONTAL_SOURCES). */
+const WEAK_HORIZONTAL_SOURCES = new Set(['radar_low_coherence', 'camera_low_consensus']);
 
 /** Subtext naming a camera-derived horizontal launch source; radar and estimates get none. */
 const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
@@ -166,7 +183,8 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   );
   const horizontalEstimated =
     shot.launch_angle_horizontal_source !== undefined
-      ? shot.launch_angle_horizontal_source === 'estimated'
+      ? shot.launch_angle_horizontal_source === 'estimated' ||
+        WEAK_HORIZONTAL_SOURCES.has(shot.launch_angle_horizontal_source ?? '')
       : angleEstimated;
   const horizontalSourceLabel = shot.launch_angle_horizontal_source
     ? HORIZONTAL_SOURCE_LABELS[shot.launch_angle_horizontal_source]

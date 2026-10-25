@@ -62,7 +62,12 @@ from .flight_sim import (
     CD_POLY,
     GRAVITY,
 )
-from .horizontal_frame import TARGET_LINE, UNIT_BORESIGHT, to_boresight_deg
+from .horizontal_frame import (
+    TARGET_LINE,
+    UNIT_BORESIGHT,
+    implausible_launch_reason,
+    to_boresight_deg,
+)
 from .metric_definitions import smash_factor
 from .numeric import finite as _finite, finite_float
 from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
@@ -311,6 +316,9 @@ def _horizontal_boresight(
         return None, "horizontal launch is not measured"
     if source not in MEASURED_HORIZONTAL_SOURCES:
         return None, f"horizontal launch source {source!r} is not a measured horizontal launch"
+    implausible = implausible_launch_reason(horizontal_deg)
+    if implausible is not None:
+        return None, f"horizontal launch {implausible}"
     if source == "radar" and status == "azimuth_uncalibrated":
         return None, (
             "the IWR horizontal launch has no horizontal phase reference (azimuth_uncalibrated)"
