@@ -1,36 +1,8 @@
-"""
-Physics-based golf ball flight simulator.
+"""Physics-based golf ball flight: RK4 over drag, Magnus lift and spin decay.
 
-Integrates the drag + Magnus ODE using RK4 to produce a deterministic
-trajectory from launch conditions. On an OPS-only install, when measured spin is
-low-confidence or missing, `resolve_launch` substitutes the club-typical spin
-estimate (clubs.physics.CLUB_TYPICAL_SPIN_RPM); a fusion unit never does (D17).
-
-Coordinate system (world frame):
-    x — downrange, along the horizontal-launch zero (the target line once D34's
-        target line is set; the unit's boresight otherwise)
-    y — lateral, +right
-    z — height, up
-
-W7 (E4) frames:
-    carry      — the horizontal straight-line distance from the launch point to
-                 the landing point at launch height, hypot(x, y): TrackMan's public
-                 definition (metric_definitions.curve cites it). Its downrange
-                 component is `downrange_yards`, its side `carry_side_yards`.
-    spin axis  — a tilt against the launch direction: 0 is pure backspin about the
-                 horizontal axis perpendicular to the horizontal launch direction,
-                 so the spin vector turns with the horizontal launch angle and a
-                 pure-backspin shot launched right flies the straight shot, rotated.
-
-Total (carry plus bounce and roll) uses the turf bounce-and-roll model
-(``bounce_roll.TURF_ROLL_V2``, its hops flown in the flight's own air and model)
-from the landing angle, speed and backspin on assumed fairway turf (BOUNCE_MODELS).
-
-Aerodynamic model: Cd, Cl and the spin-down moment C_M are functions of the spin
-parameter Sp = r*omega / v in the form of Ferguson, McNally & McPhee (2022) Eqs.
-(1)-(4). The active constants are flight-fit-v1 (``FLIGHT_FIT_V1``): that form
-refitted to TM4's normalized exports on carry, apex, landing angle and hang time,
-with its provenance in ``FLIGHT_FIT_V1.calibration``.
+World frame: x downrange along the horizontal-launch zero, y lateral (+right), z up.
+Carry is hypot(x, y) to the landing point at launch height; the spin axis is a tilt
+against the launch direction (0 = pure backspin). Total adds turf bounce and roll.
 """
 
 import math
@@ -53,44 +25,18 @@ from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
 
-# Aerodynamic model (E8a). The form is Ferguson, McNally & McPhee (2022), "Predicting
-# the Flight of a Golf Ball: Comparing a Physics-Based Aerodynamic Model to a Neural
-# Network", ISEA Engineering of Sport 14, doi:10.5703/1288284317493:
-#   Eq. (1)  Sp  = r * Omega / v            (the spin ratio)
+# Aerodynamic model: the form of Ferguson, McNally & McPhee (2022), ISEA Engineering of
+# Sport 14, doi:10.5703/1288284317493:
+#   Eq. (1)  Sp  = r * Omega / v
 #   Eq. (2)  Cd  = a + b*Sp + c*Sp^2        (CD_POLY = (a, b, c))
 #   Eq. (3)  Cl  = d + e*Sp + f*Sp^2        (CL_POLY = (d, e, f)), clamped at >= 0
 #   Eq. (4)  C_M = g*Sp                     (CM_PER_SP = g), g bounded 0.010-0.015
-#            "to reflect realistic spin decay [Smits & Smith 1994]"
-# Their constants, fitted to N=1040 shots (GCQuad launch conditions, FlightScope X3
-# carry/apex/offline, 2021 Pro V1, 190 m above sea level), are upstream ballistics.py's.
-# FLIGHT_FIT_V1 keeps the form and refits the seven constants to TM4's normalized
-# exports on carry, apex, landing angle and hang time jointly
-# (scripts/analysis/fit_flight_model.py; docs/how-it-works/ballistics.md). Ferguson's
-# constants were fitted to FlightScope carry, offline and apex, never landing angle or
-# hang time; flown with TM4's launch numbers they leave apex ~2 ft low and the
-# landing angle 2-4 deg shallow.
-#
-# Lift peaks and turns over (near Sp 0.52 in Ferguson's fit, 0.63 in the refit), as
-# in Bearman & Harvey (1976) and Lyu, Kensrud & Smith (2018). Beyond SP_FIT_MAX both
-# curves are held at their end value rather than extrapolating a parabola into a
-# region the fit never saw. No Reynolds-number term: one was tested in the refit
-# (Smits & Smith's sinusoid and a linear term) and did not improve held-out error.
-#
-# History (TrackMan measured launch conditions in, simulated flight out):
-#   Hill form (#229) -> Ferguson 2022 published constants:
-#     committed 24-shot capture:            carry RMSE 3.97 -> 2.90 yd
-#     independent 5-session 279-shot set:   carry RMSE 3.48 -> 1.98 yd,
-#                                           apex RMSE 4.41 -> 0.97 yd
-#   Ferguson 2022 -> flight-fit-v1: see FLIGHT_FIT_V1.calibration.metrics.
+# FLIGHT_FIT_V1 refits its constants to TM4 exports (scripts/analysis/fit_flight_model.py).
+# Beyond SP_FIT_MAX both curves are held at their end value, never extrapolated.
 SP_FIT_MAX = 0.75
 
-# Spin decay, Eq. (4): the abstract does not print the torque; it is taken as Smits &
-# Smith's convention, T = C_M (1/2) rho v^2 A d (d the diameter), with
-# I = (2/5) m r^2. With Ferguson's g = 0.01 that gives d(omega)/dt =
-# -lambda omega v / r with lambda = 2.0e-5 at 1.204 kg/m3: Penner 2001's Eq. (16),
-# "alpha = -(0.00002)(omega_b v_b / r)", from the same Smits & Smith data, to 0.2 %.
-# (The 4 %/s exponential this replaced was attributed to Kiratidis & Leinweber 2018,
-# a paper on FIFA footballs with no spin decay in it.)
+# Spin decay, Eq. (4), with Smits & Smith's torque T = C_M (1/2) rho v^2 A d and
+# I = (2/5) m r^2; g = 0.01 matches Penner 2001 Eq. (16) (lambda = 2.0e-5) to 0.2 %.
 SPIN_DECAY_G_BOUNDS = (0.010, 0.015)
 _BALL_INERTIA = 0.4 * BALL_MASS_KG * BALL_RADIUS_M**2
 
@@ -102,7 +48,7 @@ class CalibrationData:
     name: str
     path: str  # repo-relative for an in-repo file; where it was read from otherwise
     sha256: str
-    shots: int  # rows in the export
+    shots: int
     fit_shots: int  # rows inside the fit's domain (FlightCalibration.domain)
     in_repo: bool
     origin: str
@@ -110,7 +56,7 @@ class CalibrationData:
 
 @dataclass(frozen=True)
 class FlightCalibration:
-    """D38 provenance of a fitted aerodynamic model: what, from what, how well."""
+    """Provenance of a fitted aerodynamic model: what, from what, how well."""
 
     version: str
     source: str
@@ -127,11 +73,7 @@ class FlightCalibration:
 
 @dataclass(frozen=True)
 class AeroModel:
-    """Cd, Cl and the spin-down moment as functions of Sp (Ferguson 2022 Eqs. 1-4).
-
-    ``descent_drag``, ``descent_lift`` and ``descent_power`` scale Cd and Cl while
-    the ball descends (``descent_factors``); zero leaves the form as published.
-    """
+    """Cd, Cl and spin-down moment vs Sp; ``descent_*`` scale Cd/Cl while descending (0 = off)."""
 
     version: str
     label: str
@@ -236,22 +178,17 @@ FLIGHT_FIT_V1_CALIBRATION = FlightCalibration(
         ("pooled leave-one-out held-out apex RMSE ft", 0.78),
         ("pooled leave-one-out held-out landing_angle RMSE deg", 0.65),
         ("pooled leave-one-out held-out hang_time RMSE s", 0.06),
-        # fitted to the 6 May export alone, flown on the 12 Oct session's 36 shots
         ("6-May-fit on 12-Oct held-out carry RMSE yd", 0.73),
         ("6-May-fit on 12-Oct held-out apex RMSE ft", 0.62),
         ("6-May-fit on 12-Oct held-out landing_angle RMSE deg", 0.46),
         ("6-May-fit on 12-Oct held-out hang_time RMSE s", 0.05),
-        # fitted to the 12 Oct irons alone, flown on the 6 May 24 shots: the
-        # driver (Sp 0.05-0.08; 12 Oct goes no lower than 0.13) is extrapolated,
-        # +13 yd carry
+        # the driver is extrapolated here (12 Oct has no Sp below 0.13): +13 yd carry
         ("12-Oct-fit on 6-May held-out carry RMSE yd", 10.13),
         ("12-Oct-fit on 6-May held-out apex RMSE ft", 15.34),
         ("12-Oct-fit on 6-May held-out landing_angle RMSE deg", 4.55),
         ("12-Oct-fit on 6-May held-out hang_time RMSE s", 0.57),
-        # each of the 6 May export's 8 drives flown by a fit to the other 59 shots
         ("6-May drives leave-one-out held-out carry RMSE yd", 1.46),
         ("6-May drives leave-one-out held-out apex RMSE ft", 0.92),
-        # ferguson-2022 on the same 60 shots, for comparison
         ("ferguson-2022 carry RMSE yd", 1.73),
         ("ferguson-2022 apex RMSE ft", 2.09),
         ("ferguson-2022 landing_angle RMSE deg", 2.20),
@@ -274,8 +211,7 @@ FLIGHT_FIT_V1 = AeroModel(
 
 ACTIVE_AERO_MODEL = FLIGHT_FIT_V1
 
-# The active model's constants under their long-standing names (full_speed's drag
-# referral reads CD_POLY, so E3's drag stays E4's).
+# The active model's constants under their long-standing names (full_speed reads CD_POLY).
 CD_POLY = ACTIVE_AERO_MODEL.cd_poly
 CL_POLY = ACTIVE_AERO_MODEL.cl_poly
 CM_PER_SP = ACTIVE_AERO_MODEL.cm_per_sp
@@ -306,9 +242,7 @@ MAX_FLIGHT_SECONDS = 15.0
 # keeping payload size reasonable for UI/log consumers.
 SAMPLE_INTERVAL_S = 0.05
 
-# The one club-typical spin table lives in clubs.physics (CLUB_TYPICAL_SPIN_RPM,
-# labelled by CLUB_TYPICAL_SPIN_LABEL) and is re-exported here. It is the OPS-only
-# estimate path's spin; a fusion unit never uses it (D17).
+# The club-typical spin table is clubs.physics.CLUB_TYPICAL_SPIN_RPM (OPS-only path).
 
 
 FAIRWAY_NORMAL = "fairway_normal"
@@ -326,13 +260,10 @@ def bounce_and_roll_yards(
     model: Optional[RollModel] = None,
     fly_hop: Optional[HopFlight] = None,
 ) -> Optional[float]:
-    """Distance from landing to rest (yards) by the surface's model, or None.
+    """Distance from landing to rest (yards) by the surface's model (or ``model``), or None.
 
-    ``model`` overrides the surface's. None for a surface with
-    no model, a missing or non-finite input the model needs, or a landing angle
-    outside the model's data range (no extrapolation). The turf model needs the
-    landing speed and backspin. A turf model with airborne hops flies them with
-    ``fly_hop``, by default ``hop_flight()``: the active model in ISA sea-level air.
+    None without a model, without a needed finite input, or outside the model's landing
+    angles; turf hops fly with ``fly_hop`` (default ``hop_flight()``, ISA sea-level air).
     """
     model = BOUNCE_MODELS.get(surface) if model is None else model
     if model is None:
@@ -370,10 +301,8 @@ class TrajectoryPoint:
 class Trajectory:
     """A simulated flight from launch to the landing point at launch height.
 
-    carry_yards is the straight-line horizontal distance to the landing point
-    (W7); lateral_yards (alias carry_side_yards) is its signed side from the x
-    axis and downrange_yards its x component. landing_heading_deg is the
-    horizontal direction of travel at landing, positive right.
+    carry_yards is the horizontal straight-line distance; lateral_yards its signed side
+    from the x axis and landing_heading_deg the direction of travel, both positive right.
     """
 
     points: list[TrajectoryPoint]
@@ -399,10 +328,7 @@ class Trajectory:
     ) -> Optional[tuple[float, float]]:
         """(x, y) yards where the ball stops, or None where the model gives no value.
 
-        The landing point plus the surface's (or ``model``'s) bounce-and-roll
-        distance along the landing heading. Rolling on along the heading is an
-        assumption: the model gives a distance, not a direction, and no sideways
-        kick is modelled. Airborne hops fly in this flight's air and model.
+        It rolls on along the landing heading: an assumption, no sideways kick is modelled.
         """
         roll = bounce_and_roll_yards(
             self.landing_angle_deg,
@@ -441,13 +367,10 @@ MODEL_SPIN_SOURCES = ("calculated", "model_geometry", "estimated")
 
 
 def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
-    """(ball speed mph, label): the full ball speed when the shot has one, else the radial.
+    """(ball speed mph, label): the full 3-D ball speed when the shot has one, else the radial.
 
-    TrackMan's ball speed is the ball's full 3D speed; the OPS243 reads its
-    line-of-sight (radial) component. A full speed is read from
-    ``ball_speed_full_mph`` when present (E3), or from ``ball_speed_mph`` when the
-    shot's ``ball_speed_contract`` says it is full. The label records which was used.
-    None when the shot has no positive finite ball speed.
+    Full is ``ball_speed_full_mph``, or ``ball_speed_mph`` when ``ball_speed_contract``
+    says full. None without a positive finite ball speed.
     """
     full = getattr(shot, "ball_speed_full_mph", None)
     if _finite(full) and full > 0:
@@ -465,22 +388,12 @@ def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
 
 
 def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchConditions]:
-    """
-    Produce committed launch conditions from a shot.
+    """Committed launch conditions from a shot, or None without a vertical launch angle.
 
-    Returns None if the vertical launch angle is unavailable (no physics
-    simulation possible without it). Spin is the measurement when its
-    confidence >= SPIN_CONFIDENCE_HIGH, else a model's spin under its own label:
-    "calculated", or "model_geometry" when built on an assumed swing geometry (D39).
-
-    ``substitutes`` lets an OPS-only install, which has nothing to measure the
-    rest with, fill a club-typical spin and a straight (0) horizontal launch and
-    spin axis. A fusion unit passes False: without a measured spin, horizontal
-    launch and spin axis there is no carry (D17).
-
-    A non-finite input (NaN, inf) is a missing input and is handled exactly so;
-    without a finite ball speed there is nothing to simulate. The ball speed is the
-    full ball speed when the shot has one (ball_speed_for_flight), else the radial.
+    Spin is measured when its confidence >= SPIN_CONFIDENCE_HIGH, else a model's under its
+    own label. ``substitutes`` (OPS-only) fills club-typical spin and a straight horizontal
+    launch and spin axis; a fusion unit passes False and gets no carry without them.
+    Non-finite inputs count as missing.
     """
     ball_speed, _ = ball_speed_for_flight(shot)
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
@@ -516,12 +429,10 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
 
 
 def _cd(sp: float) -> float:
-    """The active model's drag coefficient."""
     return ACTIVE_AERO_MODEL.cd(sp)
 
 
 def _cl(sp: float) -> float:
-    """The active model's lift coefficient."""
     return ACTIVE_AERO_MODEL.cl(sp)
 
 
@@ -596,15 +507,11 @@ def _rk4_step(
 def launch_relative_spin_axis(
     spin_axis_deg: float, launch_angle_h_deg: float, launch_angle_v_deg: float = 0.0
 ) -> tuple:
-    """Unit spin vector for a spin axis tilted against the launch direction (W7).
+    """Unit spin vector for a spin axis tilted against the launch direction.
 
-    spin_axis_deg = 0 is pure backspin: the axis is horizontal, perpendicular to
-    the horizontal launch direction (cos h, sin h, 0) and pointing to its left, so
-    omega x v lifts. A positive tilt turns the axis about the launch direction so
-    its top leans toward the right of the launch line (fade/slice); a negative one
-    toward the left (draw/hook). The tilt is a rotation about the launch velocity
-    itself, so the spin vector stays perpendicular to it: a tilted axis adds no
-    rifle spin, whatever the vertical launch angle v.
+    0 is pure backspin: horizontal, perpendicular to the horizontal launch direction and
+    pointing to its left, so omega x v lifts. A positive tilt leans the top right (fade).
+    The tilt rotates about the launch velocity, so it adds no rifle spin.
     """
     axis_rad = math.radians(spin_axis_deg)
     h = math.radians(launch_angle_h_deg)
@@ -625,8 +532,6 @@ def simulate(
 ) -> Trajectory:
     """
     Integrate flight from launch to first ground contact (z = 0).
-
-    ``aero`` selects the aerodynamic model; the default is ``ACTIVE_AERO_MODEL``.
     """
     aero = ACTIVE_AERO_MODEL if aero is None else aero
     v0 = conditions.ball_speed_mph * MPH_TO_MPS
@@ -638,7 +543,7 @@ def simulate(
     vy = v0 * math.cos(la_v) * math.sin(la_h)
     vz = v0 * math.sin(la_v)
 
-    # Spin axis against the launch direction (W7): see launch_relative_spin_axis.
+    # Spin axis against the launch direction: see launch_relative_spin_axis.
     axis = launch_relative_spin_axis(
         conditions.spin_axis_deg, conditions.launch_angle_h, conditions.launch_angle_v
     )
@@ -719,10 +624,9 @@ def _trajectory(
     air_density: float = AIR_DENSITY_STD,
     aero: Optional[AeroModel] = None,
 ) -> Trajectory:
-    """The Trajectory ending at state ``final`` (metres), carry to the landing point (W7).
+    """The Trajectory ending at state ``final`` (metres).
 
-    ``backspin_share`` is the cosine of the spin axis tilt: the part of the spin
-    about the horizontal axis, which is what bounces and rolls.
+    ``backspin_share`` is cos(spin axis tilt): the share of the spin that bounces and rolls.
     """
     fx, fy, _, fvx, fvy, fvz = final[:6]
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
@@ -750,10 +654,8 @@ def hop_flight(
 ) -> HopFlight:
     """A bounce_roll.HopFlight that flies each hop through ``simulate``.
 
-    The hop leaves the turf along the landing heading carrying the spin out of the
-    bounce, ``om`` (rad/s about the horizontal axis, positive rolling forward):
-    backspin is a spin axis tilt of 0, topspin of 180 deg. Drag, Magnus lift and
-    the spin-down moment act as in flight.
+    ``om``: rad/s about the horizontal axis, positive rolling forward. Backspin flies as
+    a spin axis tilt of 0, topspin as 180 deg.
     """
 
     def fly(vx: float, vz: float, om: float) -> tuple[float, float, float, float]:

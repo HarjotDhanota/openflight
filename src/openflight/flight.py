@@ -1,38 +1,8 @@
-"""Flight outputs for one shot, labelled, as measured and normalized (Part E, E4).
+"""Flight outputs for one shot, labelled, as measured and normalized.
 
-The eight TrackMan 4 flight outputs: carry, carry side, total, total side, apex,
-landing angle, hang time and curve. ``ballistics.simulate`` already computed most
-of them; the server used to keep carry and throw the rest away.
-
-Every metric carries ``value``, ``unit``, ``status``, ``source``, ``range`` and
-``reason``:
-
-- ``status`` is the weakest label of the flight's inputs, in the order measured >
-  calculated > model_geometry > estimated > not_measured. A flight is a model's
-  output, so at best ``calculated`` (a fusion unit's flight on measured or
-  calculated inputs, D38); ``model_geometry`` when its spin or spin axis (or a club
-  input under them) rests on an assumed swing geometry (D39, E1's arc prior);
-  ``estimated`` on an OPS-only install (the club-typical spin and neutral angles
-  stand in); ``not_measured`` with the reason. Nothing is filled in on a fusion
-  unit: without spin or spin axis there is no flight (D17).
-- ``source`` names the model, the air, for total the bounce model and the surface
-  assumed, and the model-geometry inputs when there are any.
-- ``range`` is a +-1 sigma band from a linearised perturbation sweep of the
-  inputs' stated uncertainties (``RANGE_BASIS``).
-
-Two flights from the same launch (TrackMan's "raw" and "normalized"):
-
-- ``as_measured``: in the shot's own air. The density is ``Shot.air_density_kg_m3``
-  when supplied (the caller's density hook; this module never measures weather),
-  else the ISA sea-level 1.225 kg/m3, labelled "ISA default".
-- ``normalized``: TrackMan's reference, 77 F (25 C) and sea level (1013.25 hPa),
-  calm ("normalized to no wind conditions at 0 ft altitude, 77 F", a TM4
-  export; "Default values are 77°F and sea level", TrackMan's normalization page),
-  with a relative humidity TrackMan does not publish, set here as
-  ``NORMALIZED_REFERENCE_RH_PCT`` (50 %). The density is computed from the three.
-
-The launch values (ball speed, launch angles, spin, spin axis) are identical in
-both; only the air differs.
+Carry, carry side, total, total side, apex, landing angle, hang time and curve. Each takes
+the weakest label of its inputs (at best ``calculated``). ``as_measured`` flies in the
+shot's air (else ISA); ``normalized`` in TrackMan's 77 F, sea-level, calm reference air.
 """
 
 from __future__ import annotations
@@ -99,15 +69,12 @@ STATUS_ORDER = (
     "measured",
 )
 
-# The active aerodynamic model's own label (E8a: flight-fit-v1, Ferguson's form
-# refitted to TM4), plus the integrator.
+# The active aerodynamic model's own label, plus the integrator.
 FLIGHT_MODEL_LABEL = f"{ACTIVE_AERO_MODEL.label}, RK4 point mass"
 
-# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
-# calm. TrackMan publishes no humidity (its normalization page and help articles
-# give altitude and temperature only), so the relative humidity is a named
-# assumption: 50 %, as the August research took it (1.1769 kg/m3); dry air
-# (0 %) gives 1.1839 kg/m3 and saturated air (100 %) 1.1700.
+# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa), calm. TrackMan
+# publishes no humidity, so 50 % RH is a named assumption (1.1769 kg/m3; dry air gives
+# 1.1839, saturated 1.1700).
 NORMALIZED_TEMPERATURE_C = 25.0
 NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
 NORMALIZED_PRESSURE_PA = 101325.0
@@ -119,11 +86,9 @@ WATER_VAPOUR_GAS_CONSTANT = 461.495  # J/(kg K)
 def saturation_vapour_pressure_pa(temperature_c: float) -> float:
     """Saturation vapour pressure over water, Pa: Buck (1981).
 
-    A. L. Buck, "New equations for computing vapor pressure and enhancement
-    factor", J. Appl. Meteorol. 20, 1527-1532 (1981):
-    e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C. Buck's enhancement
-    factor for moist air (about 1.004 at sea level) is left out: it moves the
-    density by under 0.003 %.
+    A. L. Buck, J. Appl. Meteorol. 20, 1527-1532 (1981):
+    e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C; the enhancement factor
+    is left out (under 0.003 % of density).
     """
     return 611.21 * math.exp(17.502 * temperature_c / (240.97 + temperature_c))
 
@@ -163,11 +128,7 @@ DENSITY_HOOK = (
 
 @dataclass(frozen=True)
 class InputUncertainty:
-    """One-sigma input uncertainties for the range sweep.
-
-    The defaults are the D32 goals (ball speed, launch) and the Part E provisional
-    goals (calculated spin, spin axis): assumed, not measured per shot.
-    """
+    """One-sigma input uncertainties for the range sweep: assumed goals, not measured per shot."""
 
     ball_speed_mph: float = 1.0
     launch_vertical_deg: float = 0.5
@@ -321,11 +282,7 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
 
 
 def _model_geometry_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
-    """The flight's inputs built on model geometry (D39), named; empty when none are.
-
-    The spin and the spin axis as the flight used them, then the club inputs under
-    them (the collision model's model-geometry inputs, e.g. E1's arc prior).
-    """
+    """The flight's inputs built on model geometry, named; empty when none are."""
     if conditions is None:
         return []
     named = []
@@ -347,11 +304,7 @@ RADIAL_SPEED_REASON = (
 
 
 def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
-    """Why the flight's inputs make it an estimate, one reason each; empty when none do.
-
-    The OPS243's line-of-sight (radial) ball speed stands in for the full speed when
-    E3 refused it: a different, lower quantity (V-formulas C1).
-    """
+    """Why the flight's inputs make it an estimate, one reason each; empty when none do."""
     if conditions is None:
         return []
     reasons = []
@@ -360,7 +313,7 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
         full = getattr(shot, "ball_speed_full", None)
         why = (full or {}).get("reason") if isinstance(full, dict) else None
         reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
-    # a collision spin or axis built on an estimated input (C2), with that input's reason
+    # a collision spin or axis built on an estimated input, with that input's reason
     metrics = (getattr(shot, "collision_model", None) or {}).get("metrics") or {}
     estimated_spin = conditions.spin_source == STATUS_ESTIMATED
     estimated_axis = _finite(shot.spin_axis_deg) and is_estimated_source(
@@ -376,8 +329,7 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
 
 
 def _flight_status(substitutes: bool, model_geometry: list[str], estimated: list[str] = ()) -> str:
-    """The weakest input label: estimated (OPS-only, or an estimated input), model
-    geometry, else calculated."""
+    """The weakest input label: estimated (OPS-only or an input), model geometry, else calculated."""
     labels = [STATUS_ESTIMATED if substitutes or estimated else STATUS_CALCULATED]
     if model_geometry:
         labels.append(STATUS_MODEL_GEOMETRY)
@@ -526,7 +478,7 @@ def _block(
             "status": status,
             "source": _source(name, status, air, surface, surface_assumed, model_geometry),
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
-            # an estimate says why it is one (V-formulas C1, C2)
+            # an estimate says why it is one
             "reason": "; ".join(estimated) if status == STATUS_ESTIMATED and estimated else None,
         }
     block["metrics"] = metrics
@@ -543,12 +495,9 @@ def compute_flight(
 ) -> FlightResult:
     """Both flights for ``shot`` from its own inputs, every output labelled.
 
-    ``substitutes`` is True on an OPS-only install (club-typical spin and neutral
-    angles stand in, status "estimated") and False on a fusion unit (nothing is
-    filled in, D17). A fusion flight is "calculated", or "model_geometry" when any
-    input is model geometry (D39); the result's ``status`` names it. ``enabled``
-    False is ``--no-ballistics``. ``surface`` names a BOUNCE_MODELS entry; None
-    assumes fairway, normal firmness.
+    ``substitutes``: True on an OPS-only install (club-typical spin and neutral angles,
+    "estimated"), False on a fusion unit (nothing filled in). ``enabled`` False is
+    ``--no-ballistics``; ``surface`` names a BOUNCE_MODELS entry (None: fairway).
     """
     surface_assumed = surface is None
     surface = DEFAULT_SURFACE if surface is None else surface

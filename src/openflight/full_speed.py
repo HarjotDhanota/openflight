@@ -1,50 +1,8 @@
-"""Full ball speed by measured projection, full club speed and full smash (E3).
+"""Full ball speed by measured projection, full club speed and full smash.
 
-The OPS243 measures RADIAL speed: the share of the ball's velocity along the
-line from the OPS to the ball. This module turns one radial reading into the
-ball's full speed with the shot's own measured geometry, and nothing fitted:
-
-    full speed = radial speed / (LOS . dir)
-
-- ``dir`` is the ball's unit velocity from this shot's measured launch angles:
-  vertical from the IWR LCMF (or the camera), horizontal from the camera or the
-  IWR HLCMF, turned from the target-line frame into the unit's frame by the one
-  horizontal offset (``horizontal_frame``).
-- ``LOS`` is the unit vector from the OPS to the ball at the reading's own time.
-  The OPS sits where the rig file puts it (``ops_offset_mm``); the ball starts
-  where the IWR's tee range and the setup's side offset (D36) put it, and has
-  moved along ``dir`` by the time of the reading.
-- The reading is ONE FFT window of the OPS speed timeline: the first whole
-  window after the measured impact whose projection is well conditioned, so it
-  is as close to separation as the geometry allows. The value is referred back
-  to separation with the flight model's drag of a golf ball (the form of
-  Ferguson, McNally & McPhee 2022, refitted to TM4 as flight-fit-v1) and gravity
-  along the path; over a few milliseconds that adds about 0.03-0.04 mph per
-  millisecond.
-
-Refusals (status ``not_measured``, value None, with the reason):
-
-- the projection is below ``MIN_PROJECTION`` = cos 30 deg = 0.866 at every
-  candidate reading. The error grows as ``tan(angle) x angle error``: at 30 deg a
-  1 deg launch error (the D32 95th-percentile launch goal) already costs 1.0 %
-  of speed, about 1-1.6 mph at 100-160 mph, the D32 95th-percentile budget for
-  full ball speed; past 30 deg it grows quickly (40 deg: 1.5 %);
-- a launch angle is missing, estimated, low-coherence, in an unknown or mixed
-  frame, or an IWR horizontal with no phase reference;
-- a geometry source is missing: the rig file or its OPS offset, the tee range,
-  the radar or ball height, or the setup's tee side offset (no ball is assumed
-  dead ahead: that would be a filled-in value);
-- no OPS ball reading lies inside ``MAX_REFERRAL_MS`` after a measured impact.
-
-Every value carries a range: the root-sum-square of one-at-a-time changes for
-stated input tolerances (``TOLERANCES``), each named in ``uncertainty_mph``.
-
-The canonical radial ball speed is never changed (``docs/camera/speed-contract.md``),
-and the legacy peak-radial factor (``speed_correction.radial_speed_factor``) is
-not used here: it stays recorded only as a comparator.
-
-Frame: x forward along the unit's boresight, y target-right, z up, metres, with
-the origin on the hitting surface directly below the IWR's range origin.
+The OPS243 reads RADIAL speed: full = radial / (LOS . dir), dir the ball's unit velocity from
+the shot's launch angles, LOS the OPS-to-ball unit vector at the reading's time. Frame: x along
+the unit's boresight, y target-right, z up, metres, origin on the surface below the IWR.
 """
 
 from __future__ import annotations
@@ -79,15 +37,14 @@ BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
 CLUB_SOURCE = "measured projection: OPS radial + measured club direction + rig geometry"
 SMASH_SOURCE = "metric_definitions.smash_factor (D37): full ball speed / full club speed"
 
-# cos 30 deg: see the module docstring for why.
+# At 30 deg a 1 deg launch error already costs 1.0 % of speed (40 deg: 1.5 %).
 MIN_PROJECTION = math.cos(math.radians(30.0))
 # OPS defaults for a track that does not say: 128-sample windows at 30 ksps,
 # zero-padded to 4096, so the output grid is 0.1018 mph and half a bin 0.051.
 DEFAULT_WINDOW_MS = 128.0 / 30.0
 DEFAULT_RADIAL_RESOLUTION_MPH = 0.5 * (30000.0 / 4096.0) * (0.01243 / 2.0) / MPH_TO_MPS
 
-# Stated input tolerances for the range. None of the inputs is validated yet;
-# the launch and tee-range tolerances are the D32 95th-percentile goals.
+# Stated input tolerances for the range; none of the inputs is validated yet.
 TOLERANCES = {
     "vertical_launch_deg": 1.0,
     "horizontal_launch_deg": 1.0,
@@ -97,12 +54,8 @@ TOLERANCES = {
     "air_density_fraction": 0.10,
 }
 
-# Drag: Cd(Sp) = CD_POLY in the spin parameter Sp = r omega / v, the flight
-# simulator's own drag (E3's drag is E4's): since E8a the active model, flight-fit-v1,
-# the form of Ferguson, McNally & McPhee (2022, ISEA 14, doi:10.5703/1288284317493)
-# refitted to TM4. Spin is not needed: the band Sp 0.05 (a low-spin driver) to 0.50
-# (a wedge) gives Cd 0.186-0.424 (Ferguson's published constants: 0.175-0.388), the
-# centre is used and the band goes into the range.
+# Drag: the flight simulator's Cd(Sp) = CD_POLY. Spin is not needed: Sp 0.05 (low-spin
+# driver) to 0.50 (wedge) gives Cd 0.186-0.424; the centre is used, the band goes in the range.
 DRAG_SOURCE = (
     f"{ACTIVE_AERO_MODEL.version} (Ferguson, McNally & McPhee 2022 form, ISEA 14, "
     "doi:10.5703/1288284317493, refitted to TM4) Cd(Sp) over "
@@ -130,9 +83,6 @@ MEASURED_VERTICAL_SOURCES = frozenset({"radar", "camera"})
 MEASURED_HORIZONTAL_SOURCES = frozenset(
     {"radar", "camera_assisted_experimental", "camera_only_experimental", "camera_legacy_fallback"}
 )
-
-
-# ---------------------------------------------------------------- physics
 
 
 def drag_deceleration_mps2(
@@ -172,9 +122,7 @@ def _solve_ball(
 ) -> Optional[tuple[float, float, float]]:
     """(speed at separation, speed at the reading, projection), all m/s, or None.
 
-    The ball's position at the reading depends on its speed, so the solve
-    iterates; it converges in a few steps because the travelled distance
-    changes the projection only slowly.
+    Iterates: the ball's position at the reading depends on its speed.
     """
     radial = radial_mph * MPH_TO_MPS
     v0 = radial
@@ -190,9 +138,6 @@ def _solve_ball(
             break
         v0 = updated
     return v0, at_reading, projection
-
-
-# ---------------------------------------------------------------- inputs
 
 
 def _vector(value: Any) -> Optional[np.ndarray]:
@@ -212,12 +157,9 @@ def select_ball_reading(
 ) -> list[tuple[float, float]]:
     """Candidate ball readings in time order: (window start ms, radial mph).
 
-    A window qualifies when it starts at or after the impact (so no club return
-    shares it) and no later than ``MAX_REFERRAL_MS`` after it, and its speed is
-    on the ball's track: at least ``MIN_PROJECTION`` of the canonical radial
-    (less 1 mph), which a well-conditioned ball reading always is and the club
-    after impact never is, and no more than 3 mph above it (the processor's
-    ball-match tolerance). The fastest such peak per window is the ball.
+    A window qualifies from impact to ``MAX_REFERRAL_MS`` after it, with speed between
+    ``MIN_PROJECTION`` of the canonical radial (less 1 mph; the club never reaches it) and
+    3 mph above it (the processor's ball-match tolerance). The fastest peak is the ball.
     """
     impact = track.get("impact_ms") if impact_ms is None else impact_ms
     canonical = track.get("canonical_radial_mph")
@@ -323,9 +265,6 @@ def _horizontal_boresight(
     return None, f"horizontal launch frame {frame!r} is not one known frame"
 
 
-# ---------------------------------------------------------------- ball
-
-
 def evaluate_full_ball_speed(
     *,
     ops_track: Optional[dict],
@@ -346,9 +285,8 @@ def evaluate_full_ball_speed(
 ) -> dict:
     """Full ball speed at separation from one OPS reading, or not measured with the reason.
 
-    ``tee_range_m`` is the shot's own range (13 Oct): its IWR launch point, or the
-    camera prior labelled; ``tee_range_uncertainty_m`` widens the range's tolerance
-    when it is larger than the stated 5 cm, and ``tee_range_source`` is recorded.
+    ``tee_range_m`` is the shot's own range; ``tee_range_uncertainty_m`` widens its
+    tolerance when larger than the stated 5 cm.
     """
     inputs = {
         "vertical_deg": finite_float(vertical_deg),
@@ -586,9 +524,6 @@ def evaluate_full_ball_speed(
     }
 
 
-# ---------------------------------------------------------------- club
-
-
 def evaluate_full_club_speed(
     *,
     radial_mph: Any,
@@ -600,9 +535,7 @@ def evaluate_full_club_speed(
 ) -> dict:
     """Full club speed from ONE radial reading, the head's position and direction at its time.
 
-    The same projection and refusal threshold as the ball. Every input must be
-    at the reading's own time: the head moves on a curve, so an impact-time
-    direction does not describe a reading taken milliseconds earlier.
+    Every input must be at the reading's own time: the head moves on a curve.
     """
     base = {
         "status": NOT_MEASURED,
@@ -644,9 +577,6 @@ def evaluate_full_club_speed(
     }
 
 
-# ---------------------------------------------------------------- smash
-
-
 def _is_full(speed: Any) -> bool:
     return (
         isinstance(speed, dict)
@@ -656,11 +586,7 @@ def _is_full(speed: Any) -> bool:
 
 
 def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
-    """D37 smash factor from two full speeds; not measured otherwise (D21).
-
-    A full ball speed over a radial club speed is never computed: it would be a
-    ratio of two different kinds of speed.
-    """
+    """Smash factor from two full speeds; not measured otherwise (never full over radial)."""
     base = {"status": NOT_MEASURED, "value": None, "source": SMASH_SOURCE}
     if not _is_full(ball_full):
         return {**base, "reason": "the ball speed is not a full speed (D21)"}
