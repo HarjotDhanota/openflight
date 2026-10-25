@@ -713,6 +713,7 @@
   "tests/fixtures/iwr6843_w4a_contract_v1.json": "RESEARCH",
   "tests/fixtures/shot_v2.json": "PRODUCT",
   "tests/iwr6843_firmware_fake.py": "FUSION",
+  "tests/iwr6843_perf_fake.py": "RESEARCH",
   "tests/pi_trace_helpers.py": "RESEARCH",
   "tests/session_fixtures.py": "TESTER",
   "tests/setup_files.py": "FUSION",

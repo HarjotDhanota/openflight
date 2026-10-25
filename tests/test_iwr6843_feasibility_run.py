@@ -24,14 +24,8 @@ from openflight.iwr6843.driver import (
 )
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.perf_diagnostics import parse_perf_stats
-from tests.iwr6843_firmware_fake import (
-    BENCH_REPLY,
-    PERF_REPLY,
-    FakeClock,
-    FakePort,
-    FirmwareModel,
-    NoLock,
-)
+from tests.iwr6843_firmware_fake import FakeClock, FakePort, NoLock
+from tests.iwr6843_perf_fake import BENCH_REPLY, PERF_REPLY, PerfFirmwareModel
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "iwr6843" / "feasibility_run.py"
 SPEC = importlib.util.spec_from_file_location("iwr6843_feasibility_run", SCRIPT)
@@ -1041,7 +1035,7 @@ def test_ctrl_c_while_waiting_for_an_edge_keeps_the_attempt_row(tmp_path, placem
 # --- against the simulated firmware, through the real driver --------------------------------
 
 
-class PlanFirmware(FirmwareModel):
+class PlanFirmware(PerfFirmwareModel):
     """The firmware model, plus the W4a ``Capture plan:`` line after ``sensorStart``."""
 
     def receive(self, data: bytes) -> None:

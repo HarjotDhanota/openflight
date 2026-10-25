@@ -20,11 +20,22 @@ from tests.test_iwr6843_firmware_evidence import (
     SCRATCH_HARNESS_STANDINS,
     _build_c,
     _evidence_block,
-    _function_source,
-    _rearm_task,
     _run_c,
     _scan_source,
 )
+
+
+def _function_source(source: str, name: str, next_name: str) -> str:
+    start = source.rindex(name)
+    end = source.index(next_name, start)
+    return source[start:end]
+
+
+def _rearm_task(source: str) -> str:
+    return _function_source(
+        source, "static void l3_hwaRearmTask", "/* Fill the 20-byte fixed dump header"
+    )
+
 
 # --- Task 5: perfstats and l3bench ---------------------------------------------------------
 

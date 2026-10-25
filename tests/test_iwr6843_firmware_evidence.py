@@ -18,18 +18,6 @@ FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 FIRMWARE = FIRMWARE_DIR / "l3_dump.c"
 
 
-def _function_source(source: str, name: str, next_name: str) -> str:
-    start = source.rindex(name)
-    end = source.index(next_name, start)
-    return source[start:end]
-
-
-def _rearm_task(source: str) -> str:
-    return _function_source(
-        source, "static void l3_hwaRearmTask", "/* Fill the 20-byte fixed dump header"
-    )
-
-
 def _compiler() -> str:
     compiler = shutil.which("cc")
     if compiler is None:

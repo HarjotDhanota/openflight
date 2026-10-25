@@ -7,14 +7,26 @@ import math
 import pytest
 
 from openflight.inclinometer import guided_check as gc, orientation_check as oc
-from tests.test_lis3dh_orientation_check import (
-    ALL_MOUNTS,
-    LIFT_DEG,
-    board_reads,
-    enclosure_gravity,
-    enclosure_gravity_left_up,
-    reading,
-)
+from tests.test_lis3dh_orientation_check import ALL_MOUNTS, reading
+
+LIFT_DEG = 6.0  # about 2 cm under the front of a 20 cm deep unit
+
+
+def enclosure_gravity(front_up_deg: float = 0.0) -> tuple[float, float, float]:
+    """What a sensor in the enclosure's own axes reads, the front raised this much."""
+    angle = math.radians(front_up_deg)
+    return (0.0, math.sin(angle), math.cos(angle))
+
+
+def enclosure_gravity_left_up(left_up_deg: float) -> tuple[float, float, float]:
+    """The enclosure's own reading with its LEFT (target-left) side raised this much."""
+    angle = math.radians(left_up_deg)
+    return (-math.sin(angle), 0.0, math.cos(angle))
+
+
+def board_reads(true_mount: oc.Mount, enclosure: tuple[float, float, float]):
+    """The raw board reading for a board mounted ``true_mount`` in the enclosure."""
+    return true_mount.inverse_apply(*enclosure)
 
 
 class TestLevelVerdict:
