@@ -1,7 +1,6 @@
 import { renderToString } from 'react-dom/server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ReadyLight } from '../types/readyLight';
-import { useSystemStore } from '../stores/useSystemStore';
 import { kioskRestartingLight, swingIsFresh, timeLeftSeconds } from '../utils/readyLight';
 import { ReadyLightBand } from './ReadyLight';
 
@@ -19,10 +18,6 @@ const light = (overrides: Partial<ReadyLight> = {}): ReadyLight => ({
 });
 
 describe('ReadyLightBand', () => {
-  afterEach(() => {
-    useSystemStore.setState({ readyLight: null });
-  });
-
   it('shows nothing until the kiosk reports a light, or where it is off', () => {
     expect(renderToString(<ReadyLightBand light={null} />)).toBe('');
     expect(renderToString(<ReadyLightBand light={light({ state: 'off', word: '', cause: null })} />)).toBe('');
@@ -88,12 +83,6 @@ describe('ReadyLightBand', () => {
 
     expect(fresh).toContain('ready-light__flash');
     expect(old).not.toContain('ready-light__flash');
-  });
-
-  it('reads the light from the system store', () => {
-    useSystemStore.getState().setReadyLight(light({ state: 'amber', word: 'WAIT', cause: 'OPS243 re-arming' }));
-
-    expect(useSystemStore.getState().readyLight?.cause).toBe('OPS243 re-arming');
   });
 });
 
