@@ -9,20 +9,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from openflight import server, timing as timing_module
 from openflight.gate_timing import GateEvent
+from openflight.iwr6843 import monitor as iwr_monitor_module, runtime as runtime_module
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
 from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.launch_monitor import Shot
+from openflight.rolling_buffer import monitor as monitor_module, trigger as trigger_module
 from openflight.rolling_buffer.monitor import RollingBufferMonitor
 from openflight.rolling_buffer.trigger import HardwareTriggeredCapture, SoundTrigger
 from openflight.rolling_buffer.types import IQCapture, SpeedReading, SpeedTimeline
 from openflight.session_logger import SessionLogger
-from openflight.timing import (
-    SCHEMA_NAME,
-    SCHEMA_VERSION,
-    measured_stage,
-    new_stage_timing,
-)
+from openflight.timing import measured_stage, new_stage_timing
 
 
 def _queue_gate_event(capture_monitor: IWR6843CaptureMonitor, edge_wall_s: float) -> GateEvent:
@@ -47,20 +45,63 @@ class _FakeClock:
         self.monotonic_ns += duration_ns
 
 
-def test_contract_marks_unobservable_boundaries_unavailable():
-    timing = new_stage_timing()
+def _install_ops_clock(monkeypatch, clock: _FakeClock) -> None:
+    monkeypatch.setattr(timing_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
+    monkeypatch.setattr(trigger_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
+    monkeypatch.setattr(trigger_module.time, "time", lambda: clock.wall_time)
 
-    assert timing["schema"] == SCHEMA_NAME
-    assert timing["version"] == SCHEMA_VERSION
-    assert timing["clock"] == {
-        "domain": "host_monotonic",
-        "source": "time.monotonic_ns",
-        "unit": "ns",
-    }
-    assert timing["ops"]["physical_trigger_to_observation"]["duration_ns"] is None
-    assert timing["ops"]["acquisition_window"]["duration_ns"] is None
-    assert timing["browser"]["receive"]["duration_ns"] is None
-    assert timing["browser"]["paint"]["duration_ns"] is None
+
+class _Processor:
+    """Parses in 100 ms and processes in 200 ms of ``clock``."""
+
+    def __init__(self, clock: _FakeClock, capture: IQCapture, first_byte: float | None = 1234.5):
+        self.clock, self.capture, self.first_byte = clock, capture, first_byte
+
+    def parse_capture(self, _response, *, first_byte_timestamp):
+        assert first_byte_timestamp == self.first_byte
+        self.clock.advance_ns(100_000_000)
+        self.clock.wall_time += 0.1
+        return self.capture
+
+    def process_standard(self, _capture):
+        self.clock.advance_ns(200_000_000)
+        return SpeedTimeline([SpeedReading(100.0, 900.0, 68.0, "outbound")], 937.5)
+
+
+def _iq_capture() -> IQCapture:
+    return IQCapture(0.0, 0.068, [2048], [2048])
+
+
+def _iwr_capture(uart_transport_duration_ns: int) -> IWR6843Capture:
+    return IWR6843Capture(
+        sequence=1,
+        trigger_timestamp=1.0,
+        completed_timestamp=2.0,
+        dump_duration_s=7.55,
+        raw=b"capture",
+        path=None,
+        uart_transport_duration_ns=uart_transport_duration_ns,
+    )
+
+
+def _capture_monitor(tmp_path, radar) -> IWR6843CaptureMonitor:
+    return IWR6843CaptureMonitor(
+        config_path=tmp_path / "unused.cfg", output_dir=tmp_path, radar=radar
+    )
+
+
+def _iwr_runtime(capture_monitor) -> IWR6843Runtime:
+    return IWR6843Runtime(
+        capture_monitor=capture_monitor,
+        calibration=SimpleNamespace(tee_range_m=1.0),
+        net_range_m=4.0,
+    )
+
+
+def _serve_iwr_result(monkeypatch, result) -> None:
+    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(process_shot=lambda **_: result))
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server.socketio, "emit", lambda *_args, **_kwargs: None)
 
 
 def test_reversed_monotonic_boundaries_fail_closed():
@@ -73,14 +114,8 @@ def test_reversed_monotonic_boundaries_fail_closed():
 
 def test_sound_trigger_uses_monotonic_first_marker_and_response_boundaries(monkeypatch):
     """A discontinuous wall clock must not affect new OPS durations."""
-    from openflight import timing as timing_module
-    from openflight.rolling_buffer import trigger as trigger_module
-
     clock = _FakeClock()
-    monkeypatch.setattr(timing_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(trigger_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(trigger_module.time, "time", lambda: clock.wall_time)
-
+    _install_ops_clock(monkeypatch, clock)
     callback_calls = []
 
     class Radar:
@@ -102,32 +137,11 @@ def test_sound_trigger_uses_monotonic_first_marker_and_response_boundaries(monke
         def rearm_rolling_buffer(_segments):
             clock.advance_ns(50_000_000)
 
-    capture = IQCapture(
-        sample_time=0.0,
-        trigger_time=0.068,
-        i_samples=[2048],
-        q_samples=[2048],
-    )
-
-    class Processor:
-        @staticmethod
-        def parse_capture(_response, *, first_byte_timestamp):
-            assert first_byte_timestamp == 1234.5
-            clock.advance_ns(100_000_000)
-            return capture
-
-        @staticmethod
-        def process_standard(_capture):
-            clock.advance_ns(200_000_000)
-            return SpeedTimeline(
-                readings=[SpeedReading(100.0, 900.0, 68.0, "outbound")],
-                sample_rate_hz=937.5,
-            )
-
+    capture = _iq_capture()
     trigger = SoundTrigger()
     result = trigger.wait_for_trigger(
         Radar(),
-        Processor(),
+        _Processor(clock, capture),
         capture_started_callback=lambda: callback_calls.append(clock.monotonic_ns),
     )
 
@@ -142,53 +156,36 @@ def test_sound_trigger_uses_monotonic_first_marker_and_response_boundaries(monke
     assert ops["acquisition_window"]["status"] == "unavailable"
 
 
-def test_hardware_trigger_preserves_legacy_parse_rearm_value_and_splits_transport(monkeypatch):
-    from openflight import timing as timing_module
-    from openflight.rolling_buffer import trigger as trigger_module
+class _HardwareRadar:
+    _internal_trigger_firmware_version = "test"
 
-    clock = _FakeClock()
-    monkeypatch.setattr(timing_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(trigger_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(trigger_module.time, "time", lambda: clock.wall_time)
+    def __init__(self, clock: _FakeClock, first_byte: float | None):
+        self.clock = clock
+        self.last_hardware_trigger_first_byte_timestamp = first_byte
 
-    class Radar:
-        last_hardware_trigger_first_byte_timestamp = 1234.5
-        _internal_trigger_firmware_version = "test"
-
-        @staticmethod
-        def wait_for_hardware_trigger(*, timeout, cancel_event, on_first_byte):
-            del timeout, cancel_event
-            clock.advance_ns(10_000_000_000)
+    def wait_for_hardware_trigger(self, *, timeout, cancel_event, on_first_byte):
+        del timeout, cancel_event
+        self.clock.advance_ns(10_000_000_000)
+        if self.last_hardware_trigger_first_byte_timestamp is not None:
             on_first_byte()
-            clock.advance_ns(7_550_000_000)
-            return '{"sample_time": 0.0}'
+        self.clock.advance_ns(7_550_000_000)
+        return '{"sample_time": 0.0}'
 
-        @staticmethod
-        def rearm_internal_speed_trigger(_sample_rate):
-            clock.advance_ns(50_000_000)
-            clock.wall_time += 0.05
-            return True
+    def rearm_internal_speed_trigger(self, _sample_rate):
+        self.clock.advance_ns(50_000_000)
+        self.clock.wall_time += 0.05
+        return True
 
-    capture = IQCapture(0.0, 0.068, [2048], [2048])
 
-    class Processor:
-        @staticmethod
-        def parse_capture(_response, *, first_byte_timestamp):
-            assert first_byte_timestamp == 1234.5
-            clock.advance_ns(100_000_000)
-            clock.wall_time += 0.1
-            return capture
-
-        @staticmethod
-        def process_standard(_capture):
-            clock.advance_ns(200_000_000)
-            return SpeedTimeline(
-                [SpeedReading(100.0, 900.0, 68.0, "outbound")],
-                937.5,
-            )
+def test_hardware_trigger_preserves_legacy_parse_rearm_value_and_splits_transport(monkeypatch):
+    clock = _FakeClock()
+    _install_ops_clock(monkeypatch, clock)
+    capture = _iq_capture()
 
     trigger = HardwareTriggeredCapture()
-    assert trigger.wait_for_trigger(Radar(), Processor()) is capture
+    assert trigger.wait_for_trigger(_HardwareRadar(clock, 1234.5), _Processor(clock, capture)) is (
+        capture
+    )
 
     diagnostic = trigger.drain_diagnostics()[0]
     assert diagnostic["trigger_latency_ms"] == pytest.approx(150.0)
@@ -197,52 +194,24 @@ def test_hardware_trigger_preserves_legacy_parse_rearm_value_and_splits_transpor
 
 
 def test_missing_first_marker_is_unavailable_not_zero():
-    radar = type(
-        "Radar",
-        (),
-        {
-            "last_hardware_trigger_first_byte_timestamp": None,
-            "_internal_trigger_firmware_version": "test",
-            "wait_for_hardware_trigger": staticmethod(lambda **_kwargs: "response"),
-            "rearm_internal_speed_trigger": staticmethod(lambda _rate: True),
-        },
-    )()
-    capture = IQCapture(0.0, 0.068, [2048], [2048])
-    processor = type(
-        "Processor",
-        (),
-        {
-            "parse_capture": staticmethod(lambda *_args, **_kwargs: capture),
-            "process_standard": staticmethod(
-                lambda _capture: SpeedTimeline(
-                    [SpeedReading(100.0, 900.0, 68.0, "outbound")],
-                    937.5,
-                )
-            ),
-        },
-    )()
+    clock = _FakeClock()  # not installed: the trigger reads the real clocks
+    capture = _iq_capture()
 
     trigger = HardwareTriggeredCapture()
-    assert trigger.wait_for_trigger(radar, processor) is capture
+    radar = _HardwareRadar(clock, None)
+    assert trigger.wait_for_trigger(radar, _Processor(clock, capture, first_byte=None)) is capture
     ops = trigger.drain_diagnostics()[0]["ops_timing"]
     assert ops["trigger_observation_wait"]["status"] == "unavailable"
     assert ops["uart_transport"]["status"] == "unavailable"
 
 
 def test_monitor_preserves_mode_dependent_legacy_values_and_provenance():
-    class HardwareDiagnostics:
-        @staticmethod
-        def drain_diagnostics():
-            return [
-                {
-                    "accepted": True,
-                    "reason": "accepted",
-                    "trigger_latency_ms": 3.5,
-                }
-            ]
-
     monitor = RollingBufferMonitor(port=None, trigger_type="hardware")
-    monitor.trigger = HardwareDiagnostics()
+    monitor.trigger = SimpleNamespace(
+        drain_diagnostics=lambda: [
+            {"accepted": True, "reason": "accepted", "trigger_latency_ms": 3.5}
+        ]
+    )
     diagnostic = monitor._emit_diagnostics(30_000.0, ensure_accepted=True)
 
     assert diagnostic["trigger_latency_ms"] == 3.5
@@ -251,13 +220,8 @@ def test_monitor_preserves_mode_dependent_legacy_values_and_provenance():
     assert "parse and radar re-arm" in legacy["trigger_latency_ms"]["semantics"]
     assert "not physical trigger-edge" in legacy["trigger_latency_ms"]["ambiguity"]
 
-    class SpeedDiagnostics:
-        @staticmethod
-        def drain_diagnostics():
-            return []
-
     monitor.trigger_type = "speed"
-    monitor.trigger = SpeedDiagnostics()
+    monitor.trigger = SimpleNamespace(drain_diagnostics=lambda: [])
     fallback = new_stage_timing()["ops"]
     fallback["blocking_operation"] = measured_stage(
         1,
@@ -273,20 +237,17 @@ def test_monitor_preserves_mode_dependent_legacy_values_and_provenance():
     )
 
     assert diagnostic["latency_ms"] == 12.25
-    assert diagnostic["stage_timing"]["ops"]["blocking_operation"]["duration_ns"] == 12_250_000
-    assert diagnostic["stage_timing"]["ops"]["trigger_observation_wait"]["status"] == (
-        "unavailable"
-    )
-    assert diagnostic["stage_timing"]["ops"]["uart_transport"]["status"] == "unavailable"
+    ops = diagnostic["stage_timing"]["ops"]
+    assert ops["blocking_operation"]["duration_ns"] == 12_250_000
+    assert ops["trigger_observation_wait"]["status"] == "unavailable"
+    assert ops["uart_transport"]["status"] == "unavailable"
 
 
 def test_trigger_event_override_labels_whole_wait_legacy_value(monkeypatch):
-    from openflight.rolling_buffer import monitor as monitor_module
-
     monitor = RollingBufferMonitor(port=None, trigger_type="hardware")
-    monitor._diagnostic_callback = lambda event: observed.append(event)
-    monkeypatch.setattr(monitor_module, "get_session_logger", lambda: None)
     observed = []
+    monitor._diagnostic_callback = observed.append
+    monkeypatch.setattr(monitor_module, "get_session_logger", lambda: None)
     timing = new_stage_timing()
     timing["legacy_fields"]["latency_ms"] = {"semantics": "parse and re-arm"}
 
@@ -307,13 +268,16 @@ def test_session_records_keep_legacy_numbers_and_add_contract(tmp_path):
     logger.start_session(mode="rolling-buffer", trigger_type="sound")
     stage_timing = new_stage_timing()
 
+    def last_entry():
+        return json.loads(logger.session_path.read_text().splitlines()[-1])
+
     logger.log_trigger_event(
         trigger_type="sound",
         accepted=True,
         latency_ms=123.456,
         stage_timing=stage_timing,
     )
-    trigger_entry = json.loads(logger.session_path.read_text().splitlines()[-1])
+    trigger_entry = last_entry()
     assert trigger_entry["latency_ms"] == 123.456
     assert trigger_entry["stage_timing"]["version"] == 1
 
@@ -326,34 +290,24 @@ def test_session_records_keep_legacy_numbers_and_add_contract(tmp_path):
         trigger_latency_ms=9876.543,
         stage_timing=stage_timing,
     )
-    capture_entry = json.loads(logger.session_path.read_text().splitlines()[-1])
+    capture_entry = last_entry()
     assert capture_entry["trigger_latency_ms"] == 9876.543
     assert capture_entry["stage_timing"]["version"] == 1
 
 
 def test_iwr_capture_separates_uart_transport_from_dump_bookkeeping(monkeypatch, tmp_path):
-    from openflight.iwr6843 import monitor as monitor_module
-
     clock = _FakeClock()
 
-    class Radar:
-        port = "test"
+    def read_dump():
+        clock.advance_ns(7_550_000_000)
+        clock.wall_time -= 10.0
+        return b"dump"
 
-        @staticmethod
-        def read_dump():
-            clock.advance_ns(7_550_000_000)
-            clock.wall_time -= 10.0
-            return b"dump"
-
-    capture_monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=Radar(),
-    )
+    capture_monitor = _capture_monitor(tmp_path, SimpleNamespace(port="test", read_dump=read_dump))
     # Observed on the real clocks before they are faked, as the GPIO callback does.
     event = _queue_gate_event(capture_monitor, 123.0)
-    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    monkeypatch.setattr(monitor_module.time, "time", lambda: clock.wall_time)
+    monkeypatch.setattr(iwr_monitor_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
+    monkeypatch.setattr(iwr_monitor_module.time, "time", lambda: clock.wall_time)
 
     def validate(_raw):
         clock.advance_ns(200_000_000)
@@ -376,21 +330,15 @@ def test_iwr_capture_preserves_reversed_monotonic_transport_for_contract_rejecti
     monkeypatch,
     tmp_path,
 ):
-    from openflight.iwr6843 import monitor as monitor_module
-
     radar = SimpleNamespace(port="test", read_dump=lambda: b"dump")
-    capture_monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=radar,
-    )
+    capture_monitor = _capture_monitor(tmp_path, radar)
     # Observed on the real clocks; the scripted ticks below belong to the dump alone.
     event = _queue_gate_event(capture_monitor, 123.0)
 
     monotonic_ticks = iter((1_000, 900, 800, 700))
     wall_ticks = iter((10.0, 12.0))
-    monkeypatch.setattr(monitor_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
-    monkeypatch.setattr(monitor_module.time, "time", lambda: next(wall_ticks))
+    monkeypatch.setattr(iwr_monitor_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
+    monkeypatch.setattr(iwr_monitor_module.time, "time", lambda: next(wall_ticks))
     monkeypatch.setattr(capture_monitor, "_validate_dump", lambda _raw: {})
     capture_monitor._running = True
 
@@ -405,45 +353,23 @@ def test_iwr_capture_preserves_reversed_monotonic_transport_for_contract_rejecti
 
 
 def test_iwr_runtime_separates_capture_wait_and_estimator_analysis(monkeypatch):
-    from openflight.iwr6843 import runtime as runtime_module
-
     clock = _FakeClock()
     monkeypatch.setattr(runtime_module.time, "monotonic_ns", lambda: clock.monotonic_ns)
-    capture = IWR6843Capture(
-        sequence=1,
-        trigger_timestamp=1.0,
-        completed_timestamp=2.0,
-        dump_duration_s=7.55,
-        raw=b"capture",
-        path=None,
-        uart_transport_duration_ns=7_550_000_000,
-    )
+    capture = _iwr_capture(7_550_000_000)
 
-    class CaptureMonitor:
-        @staticmethod
-        def capture_for_shot(_timestamp, *, timeout_s):
-            assert timeout_s == 12.0
-            clock.advance_ns(7_600_000_000)
-            return capture
-
-    measurement = SimpleNamespace(accepted=False)
+    def capture_for_shot(_timestamp, *, timeout_s):
+        assert timeout_s == 12.0
+        clock.advance_ns(7_600_000_000)
+        return capture
 
     def process_raw(*_args, **_kwargs):
         clock.advance_ns(425_000_000)
-        return measurement, None
+        return SimpleNamespace(accepted=False), None
 
     monkeypatch.setattr(runtime_module, "process_raw_capture", process_raw)
-    runtime = IWR6843Runtime(
-        capture_monitor=CaptureMonitor(),
-        calibration=SimpleNamespace(tee_range_m=1.0),
-        net_range_m=4.0,
-    )
+    runtime = _iwr_runtime(SimpleNamespace(capture_for_shot=capture_for_shot))
 
-    result = runtime.process_shot(
-        impact_timestamp=1.0,
-        ball_speed_mph=100.0,
-        club="driver",
-    )
+    result = runtime.process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="driver")
 
     assert result.capture_wait_duration_ns == 7_600_000_000
     assert result.estimator_analysis_duration_ns == 425_000_000
@@ -452,46 +378,25 @@ def test_iwr_runtime_separates_capture_wait_and_estimator_analysis(monkeypatch):
 
 
 def test_iwr_runtime_reversed_stages_are_rejected_by_server_contract(monkeypatch):
-    from openflight import server
-    from openflight.iwr6843 import runtime as runtime_module
-
     monotonic_ticks = iter((1_000, 900, 800, 700, 600))
     monkeypatch.setattr(runtime_module.time, "monotonic_ns", lambda: next(monotonic_ticks))
-    capture = IWR6843Capture(
-        sequence=1,
-        trigger_timestamp=1.0,
-        completed_timestamp=2.0,
-        dump_duration_s=7.55,
-        raw=b"capture",
-        path=None,
-        uart_transport_duration_ns=-50,
-    )
-    capture_monitor = SimpleNamespace(capture_for_shot=lambda _timestamp, *, timeout_s: capture)
-    measurement = SimpleNamespace(accepted=False)
+    capture = _iwr_capture(-50)
     monkeypatch.setattr(
         runtime_module,
         "process_raw_capture",
-        lambda *_args, **_kwargs: (measurement, None),
+        lambda *_args, **_kwargs: (SimpleNamespace(accepted=False), None),
     )
-    runtime = IWR6843Runtime(
-        capture_monitor=capture_monitor,
-        calibration=SimpleNamespace(tee_range_m=1.0),
-        net_range_m=4.0,
+    runtime = _iwr_runtime(
+        SimpleNamespace(capture_for_shot=lambda _timestamp, *, timeout_s: capture)
     )
 
-    result = runtime.process_shot(
-        impact_timestamp=1.0,
-        ball_speed_mph=100.0,
-        club="driver",
-    )
+    result = runtime.process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="driver")
 
     assert result.capture_wait_duration_ns == -100
     assert result.estimator_analysis_duration_ns == -100
     assert result.aggregate_duration_ns == -400
 
-    monkeypatch.setattr(server, "iwr6843_runtime", SimpleNamespace(process_shot=lambda **_: result))
-    monkeypatch.setattr(server, "get_session_logger", lambda: None)
-    monkeypatch.setattr(server.socketio, "emit", lambda *_args, **_kwargs: None)
+    _serve_iwr_result(monkeypatch, result)
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
     server._process_iwr6843_angle(shot)
 
@@ -520,8 +425,6 @@ def test_shot_serializes_contract_but_not_transient_callback_clock():
 def test_server_maps_iwr_transport_and_analysis_without_using_legacy_dump_seconds(
     monkeypatch,
 ):
-    from openflight import server
-
     capture = SimpleNamespace(
         trigger_timestamp=1.0,
         path=None,
@@ -542,13 +445,7 @@ def test_server_maps_iwr_transport_and_analysis_without_using_legacy_dump_second
         estimator_analysis_duration_ns=425_000_000,
         aggregate_duration_ns=8_025_000_000,
     )
-    monkeypatch.setattr(
-        server,
-        "iwr6843_runtime",
-        SimpleNamespace(process_shot=lambda **_kwargs: result),
-    )
-    monkeypatch.setattr(server, "get_session_logger", lambda: None)
-    monkeypatch.setattr(server.socketio, "emit", lambda *_args, **_kwargs: None)
+    _serve_iwr_result(monkeypatch, result)
     shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
 
     legacy_aggregate_ms = server._process_iwr6843_angle(shot)
@@ -563,8 +460,6 @@ def test_server_maps_iwr_transport_and_analysis_without_using_legacy_dump_second
 
 
 def test_server_publication_is_callback_to_emit_invocation_not_browser_time(monkeypatch):
-    from openflight import server
-
     clock = _FakeClock()
     clock.monotonic_ns = 5_000_000_000
     clock.wall_time = -50_000.0
@@ -600,11 +495,7 @@ def test_server_publication_is_callback_to_emit_invocation_not_browser_time(monk
 
 def test_iwr_notify_trigger_queues_only_gate_events(tmp_path):
     """The capture loop's only producer queues a GateEvent per edge, never a bare timestamp."""
-    capture_monitor = IWR6843CaptureMonitor(
-        config_path=tmp_path / "unused.cfg",
-        output_dir=tmp_path,
-        radar=SimpleNamespace(port="test"),
-    )
+    capture_monitor = _capture_monitor(tmp_path, SimpleNamespace(port="test"))
     capture_monitor._running = True
     capture_monitor._armed = True
 

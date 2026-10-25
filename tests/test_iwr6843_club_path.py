@@ -810,21 +810,23 @@ def test_club_search_does_not_fit_the_ball():
 class TestRangeEvidenceStatus:
     """The club range track carries its own identity verdict to camera fusion."""
 
-    def test_accepted_track_evidence_is_accepted(self):
-        result = club.estimate_club_path(
-            _synth_club(4.0),
+    @staticmethod
+    def _estimate(offset=4.0, ops_club_speed_mph=OPS_CLUB_MPH):
+        return club.estimate_club_path(
+            _synth_club(offset),
             _cal(),
-            ops_club_speed_mph=OPS_CLUB_MPH,
+            ops_club_speed_mph=ops_club_speed_mph,
             impact_t_s=IMPACT_S,
             tdm_sign=1,
         )
+
+    def test_accepted_track_evidence_is_accepted(self):
+        result = self._estimate()
         assert result.status == "accepted"
         assert result.range_evidence.status == "accepted"
 
     def test_speed_mismatch_marks_the_track_rejected(self):
-        result = club.estimate_club_path(
-            _synth_club(0.0), _cal(), ops_club_speed_mph=20.0, impact_t_s=IMPACT_S, tdm_sign=1
-        )
+        result = self._estimate(0.0, ops_club_speed_mph=20.0)
         assert result.range_evidence is not None
         assert result.range_evidence.status == "rejected_club_speed_mismatch"
 
@@ -837,24 +839,11 @@ class TestRangeEvidenceStatus:
             return selection
 
         monkeypatch.setattr(club, "find_club", shifted_selection)
-        result = club.estimate_club_path(
-            _synth_club(4.0),
-            _cal(),
-            ops_club_speed_mph=OPS_CLUB_MPH,
-            impact_t_s=IMPACT_S,
-            tdm_sign=1,
-        )
-        assert result.range_evidence.status == "rejected_impact_contact_mismatch"
+        assert self._estimate().range_evidence.status == "rejected_impact_contact_mismatch"
 
     def test_a_rejected_azimuth_does_not_reject_the_range_track(self, monkeypatch):
         # Camera fusion uses only the IWR range; a phase failure says nothing about it.
         monkeypatch.setattr(club, "CLUB_MAX_PHASE_SPAN_RAD", 1e-9)
-        result = club.estimate_club_path(
-            _synth_club(4.0),
-            _cal(),
-            ops_club_speed_mph=OPS_CLUB_MPH,
-            impact_t_s=IMPACT_S,
-            tdm_sign=1,
-        )
+        result = self._estimate()
         assert result.status == "rejected_phase_span"
         assert result.range_evidence.status == "accepted"

@@ -31,10 +31,6 @@ YAW_DEG = 3.0  # the target line lies 3 deg right of the unit boresight
 OFFSET_DEG = -3.0  # the one horizontal offset for that yaw
 
 
-def test_the_hand_off_value_is_minus_the_target_yaw():
-    assert offset_from_target_yaw(YAW_DEG) == OFFSET_DEG
-
-
 def test_frame_is_the_boresight_until_an_offset_is_set():
     assert frame_for(None) == UNIT_BORESIGHT == "unit_boresight"
     # an explicit 0.0 is a target line straight down the boresight

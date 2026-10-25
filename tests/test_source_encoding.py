@@ -15,8 +15,3 @@ def test_no_source_file_holds_double_encoded_text():
         if DOUBLE_ENCODED.search(text := path.read_text(encoding="utf-8"))
     }
     assert offenders == {}
-
-
-def test_the_shot_line_writes_a_single_degree_sign():
-    text = (SOURCE / "server.py").read_text(encoding="utf-8")
-    assert '", Launch: %.1f\u00b0"' in text

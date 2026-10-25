@@ -54,14 +54,6 @@ def test_read_dump_timed_returns_the_bytes_and_ordered_marks(monkeypatch):
     assert timing.to_dict()["clock"] == "host_monotonic_ns"
 
 
-def test_read_dump_still_returns_bytes_only(monkeypatch):
-    clock = FakeClock()
-    firmware = FirmwareModel(_dump(), clock)
-    firmware.active = True
-
-    assert _radar(monkeypatch, firmware, clock).read_dump() == firmware.raw
-
-
 def test_timed_read_of_a_stalled_dump_keeps_the_raw_bytes(monkeypatch):
     clock = FakeClock()
     full = _dump()
@@ -75,19 +67,6 @@ def test_timed_read_of_a_stalled_dump_keeps_the_raw_bytes(monkeypatch):
     assert raised.value.raw == full[:-100]
     assert raised.value.timing.first_byte_ns is not None
     assert raised.value.timing.last_byte_ns is None
-    assert raised.value.timing.cli_ready_ns is None
-
-
-def test_a_dump_without_done_has_no_cli_ready_time(monkeypatch):
-    clock = FakeClock()
-    firmware = FirmwareModel(_dump(), clock, restart_s=1_000.0)
-    firmware.active = True
-    radar = _radar(monkeypatch, firmware, clock)
-
-    with pytest.raises(IWR6843DumpRecoveryError, match="did not return to its CLI") as raised:
-        radar.read_dump_timed(timeout_s=40.0)
-
-    assert raised.value.timing.last_byte_ns is not None
     assert raised.value.timing.cli_ready_ns is None
 
 

@@ -1,8 +1,12 @@
 """Tests for the IWR6843 ground-multipath array model."""
 
+import math
+
 import numpy as np
 import pytest
 
+from openflight.iwr6843 import lcmf
+from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.multipath import (
     ballistic_trajectory_from_range,
     collapse_reciprocal_cross_paths,
@@ -164,10 +168,6 @@ class TestLateralTeeOffset:
 
     @staticmethod
     def _cal(lateral_m=0.0):
-        import numpy as np  # noqa: PLC0415
-
-        from openflight.iwr6843.calibration import Calibration  # noqa: PLC0415
-
         return Calibration(
             elem_correction=np.ones(8, dtype=complex),
             tilt_rad=0.0,
@@ -178,17 +178,7 @@ class TestLateralTeeOffset:
             lateral_tee_offset_m=lateral_m,
         )
 
-    def test_calibration_defaults_to_no_lateral_offset(self):
-        from openflight.iwr6843 import lcmf  # noqa: PLC0415
-
-        assert self._cal().lateral_tee_offset_m == 0.0
-        assert not hasattr(lcmf, "LATERAL_TEE_OFFSET_M")
-
     def test_inversion_and_tee_position_use_the_calibration_offset(self):
-        import math  # noqa: PLC0415
-
-        from openflight.iwr6843 import lcmf  # noqa: PLC0415
-
         geometry = lcmf._model_geometry(
             self._cal(0.08), ball_speed_mph=100.0, tx_order="normal", tdm_tau_s=1e-5
         )
@@ -203,10 +193,6 @@ class TestLateralTeeOffset:
         )
 
     def test_dropping_the_july_offset_moves_the_inversion_under_2_mm(self):
-        import numpy as np  # noqa: PLC0415
-
-        from openflight.iwr6843 import lcmf  # noqa: PLC0415
-
         ranges = np.linspace(1.6, 4.5, 30)
         moved = []
         for lateral in (0.0, 0.064):

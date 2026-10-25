@@ -20,11 +20,9 @@ class TestSmashFactor:
     def test_no_ratio_without_a_positive_finite_club_speed(self, club):
         assert smash_factor(150.0, club) is None
 
-    def test_a_missing_ball_speed_is_no_ratio(self):
-        assert smash_factor(None, 100.0) is None
-
-    def test_a_negative_ball_speed_is_no_ratio(self):
-        assert smash_factor(-150.0, 100.0) is None
+    @pytest.mark.parametrize("ball", [None, -150.0])
+    def test_a_missing_or_negative_ball_speed_is_no_ratio(self, ball):
+        assert smash_factor(ball, 100.0) is None
 
     @pytest.mark.parametrize("ball", [math.nan, math.inf])
     def test_a_non_finite_ball_speed_stays_non_finite(self, ball):

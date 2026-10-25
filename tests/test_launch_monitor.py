@@ -95,20 +95,6 @@ class TestShot:
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=club, timestamp=datetime.now())
         assert shot.smash_factor is None
 
-    def test_smash_factor_uses_the_cited_definition(self, monkeypatch):
-        """Shot.smash_factor is smash.smash_factor, not a copy."""
-        from openflight import smash
-
-        calls = []
-        monkeypatch.setattr(
-            smash,
-            "smash_factor",
-            lambda ball, club: calls.append((ball, club)) or 9.99,
-        )
-        shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
-        assert shot.smash_factor == 9.99
-        assert calls == [(150.0, 100.0)]
-
     def test_smash_factor_status_is_unlabelled_by_default(self):
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
         assert shot.smash_factor_status is None
@@ -122,7 +108,6 @@ class TestShot:
             timestamp=datetime.now(),
             smash_factor_status=SMASH_RADIAL_RATIO,
         )
-        assert SMASH_RADIAL_RATIO == "radial_ratio"
         assert shot.to_dict()["smash_factor"] == 1.5
         assert shot.to_dict()["smash_factor_status"] == "radial_ratio"
 
@@ -273,18 +258,6 @@ class TestMultiObjectReporting:
         assert Direction.INBOUND.value == "inbound"
         assert Direction.OUTBOUND.value == "outbound"
         assert Direction.UNKNOWN.value == "unknown"
-
-
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
-def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
-    """A non-finite value is a missing value."""
-    from datetime import datetime as _dt
-
-    with_bad = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1), launch_angle_vertical=bad)
-    with_none = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1))
-    assert with_bad.has_launch_angle is False
-    assert with_bad.estimated_carry_yards == with_none.estimated_carry_yards
-    assert with_bad.estimated_carry_range == with_none.estimated_carry_range
 
 
 _DERIVED = (

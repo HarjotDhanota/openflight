@@ -134,7 +134,9 @@ class TestGpioUartFallback:
     """No USB radar: probe the GPIO-header UART, used only when it answers ``?V``."""
 
     @staticmethod
-    def _factory(answering_port, opened):
+    def _connect(radar, *, usb, uart, answering_port=None, opened=None, serial_factory=None):
+        """``radar.connect()`` over listed ports; returns its result and the two list mocks."""
+
         def factory(*_args, **kw):
             fake = FakeSerial(
                 kw["baudrate"],
@@ -144,19 +146,22 @@ class TestGpioUartFallback:
             opened.append(fake)
             return fake
 
-        return factory
+        with (
+            patch.object(OPS243Radar, "find_radar_ports", return_value=usb) as usb_ports,
+            patch.object(OPS243Radar, "find_gpio_uart_ports", return_value=uart) as uart_ports,
+            patch("openflight.ops243.serial.Serial", side_effect=serial_factory or factory),
+            patch.object(OPS243Radar, "_drain_serial"),
+        ):
+            return radar.connect(), usb_ports, uart_ports
 
     def test_usb_radar_is_used_without_probing_the_uart(self):
         radar = OPS243Radar()
         opened = []
-        with (
-            patch.object(OPS243Radar, "find_radar_ports", return_value=["/dev/ttyACM0"]),
-            patch.object(OPS243Radar, "find_gpio_uart_ports") as uart_ports,
-            patch("openflight.ops243.serial.Serial", side_effect=self._factory(None, opened)),
-            patch.object(OPS243Radar, "_drain_serial"),
-        ):
-            assert radar.connect()
+        connected, _usb, uart_ports = self._connect(
+            radar, usb=["/dev/ttyACM0"], uart=[], opened=opened
+        )
 
+        assert connected
         uart_ports.assert_not_called()
         assert radar.port == "/dev/ttyACM0"
         assert [fake.port for fake in opened] == ["/dev/ttyACM0"]
@@ -164,17 +169,11 @@ class TestGpioUartFallback:
     def test_no_usb_radar_falls_back_to_a_uart_that_answers(self):
         radar = OPS243Radar()
         opened = []
-        with (
-            patch.object(OPS243Radar, "find_radar_ports", return_value=[]),
-            patch.object(OPS243Radar, "find_gpio_uart_ports", return_value=["/dev/ttyAMA0"]),
-            patch(
-                "openflight.ops243.serial.Serial",
-                side_effect=self._factory("/dev/ttyAMA0", opened),
-            ),
-            patch.object(OPS243Radar, "_drain_serial"),
-        ):
-            assert radar.connect()
+        connected, _usb, _uart = self._connect(
+            radar, usb=[], uart=["/dev/ttyAMA0"], answering_port="/dev/ttyAMA0", opened=opened
+        )
 
+        assert connected
         assert radar.port == "/dev/ttyAMA0"
         assert radar.baud == 230400
         assert radar.serial is opened[-1] and radar.serial.is_open
@@ -183,34 +182,20 @@ class TestGpioUartFallback:
     def test_a_silent_uart_is_skipped_for_the_next_candidate(self):
         radar = OPS243Radar()
         opened = []
-        with (
-            patch.object(OPS243Radar, "find_radar_ports", return_value=[]),
-            patch.object(
-                OPS243Radar,
-                "find_gpio_uart_ports",
-                return_value=["/dev/ttyAMA0", "/dev/serial0"],
-            ),
-            patch(
-                "openflight.ops243.serial.Serial",
-                side_effect=self._factory("/dev/serial0", opened),
-            ),
-            patch.object(OPS243Radar, "_drain_serial"),
-        ):
-            assert radar.connect()
+        uart = ["/dev/ttyAMA0", "/dev/serial0"]
+        connected, _usb, _uart = self._connect(
+            radar, usb=[], uart=uart, answering_port="/dev/serial0", opened=opened
+        )
 
+        assert connected
         assert radar.port == "/dev/serial0"
         assert all(not fake.is_open for fake in opened if fake.port == "/dev/ttyAMA0")
 
     def test_no_radar_anywhere_fails_clearly_and_leaves_nothing_open(self):
         radar = OPS243Radar()
         opened = []
-        with (
-            patch.object(OPS243Radar, "find_radar_ports", return_value=[]),
-            patch.object(OPS243Radar, "find_gpio_uart_ports", return_value=["/dev/ttyAMA0"]),
-            patch("openflight.ops243.serial.Serial", side_effect=self._factory(None, opened)),
-        ):
-            with pytest.raises(ConnectionError) as exc:
-                radar.connect()
+        with pytest.raises(ConnectionError) as exc:
+            self._connect(radar, usb=[], uart=["/dev/ttyAMA0"], opened=opened)
 
         message = str(exc.value)
         assert "No OPS243 radar found on USB" in message
@@ -226,13 +211,8 @@ class TestGpioUartFallback:
         def refuse(*_args, **_kw):
             raise serial.SerialException("[Errno 13] Permission denied: '/dev/ttyAMA0'")
 
-        with (
-            patch.object(OPS243Radar, "find_radar_ports", return_value=[]),
-            patch.object(OPS243Radar, "find_gpio_uart_ports", return_value=["/dev/ttyAMA0"]),
-            patch("openflight.ops243.serial.Serial", side_effect=refuse),
-        ):
-            with pytest.raises(ConnectionError) as exc:
-                radar.connect()
+        with pytest.raises(ConnectionError) as exc:
+            self._connect(radar, usb=[], uart=["/dev/ttyAMA0"], serial_factory=refuse)
 
         assert "Permission denied" in str(exc.value)
         assert radar.port is None
@@ -240,93 +220,39 @@ class TestGpioUartFallback:
     @pytest.mark.parametrize("port", ["/dev/ttyACM3", "/dev/ttyAMA0"])
     def test_an_explicit_port_wins_over_detection(self, port):
         radar = OPS243Radar(port=port)
-        opened = []
-        with (
-            patch.object(OPS243Radar, "find_radar_ports") as usb_ports,
-            patch.object(OPS243Radar, "find_gpio_uart_ports") as uart_ports,
-            patch("openflight.ops243.serial.Serial", side_effect=self._factory(port, opened)),
-            patch.object(OPS243Radar, "_drain_serial"),
-        ):
-            assert radar.connect()
+        connected, usb_ports, uart_ports = self._connect(
+            radar, usb=[], uart=[], answering_port=port, opened=[]
+        )
 
+        assert connected
         usb_ports.assert_not_called()
         uart_ports.assert_not_called()
         assert radar.port == port
 
 
-class TestGpioUartCandidates:
-    """Which header UARTs are worth a ``?V`` probe."""
+@pytest.mark.parametrize(
+    ("candidates", "links", "cmdline", "found"),
+    [
+        (("ttyAMA0", "serial0", "missing"), {}, "", ["ttyAMA0", "serial0"]),  # existing, in order
+        (("ttyAMA0", "serial0"), {"serial0": "ttyAMA0"}, "", ["ttyAMA0"]),  # one device, once
+        (("serial0",), {"serial0": "ttyAMA10"}, "", []),  # the Pi 5 debug header
+        (("ttyAMA0",), {}, "console=ttyAMA0,115200 console=tty1 root=PARTUUID=1234", []),
+        (("ttyAMA0",), {"/dev/serial0": "ttyAMA0"}, "console=serial0,115200", []),  # alias
+    ],
+)
+def test_only_free_header_uarts_are_worth_a_probe(tmp_path, candidates, links, cmdline, found):
+    """Never a Pi 5 debug UART or a kernel console: writing ?V there is not a radar probe."""
+    for name in ("ttyAMA0", "serial0"):
+        (tmp_path / name).touch()
+    paths = {name: str(tmp_path / name) for name in ("ttyAMA0", "serial0", "ttyAMA10", "missing")}
+    real = {paths.get(link, link): paths[target] for link, target in links.items()}
 
-    def test_existing_header_uarts_are_listed_in_order(self, tmp_path):
-        ama0 = tmp_path / "ttyAMA0"
-        serial0 = tmp_path / "serial0"
-        ama0.touch()
-        serial0.touch()
-
-        found = OPS243Radar.find_gpio_uart_ports(
-            candidates=(str(ama0), str(serial0), str(tmp_path / "missing")),
-            kernel_cmdline="",
+    with patch("openflight.ops243.os.path.realpath", side_effect=lambda p: real.get(p, p)):
+        result = OPS243Radar.find_gpio_uart_ports(
+            candidates=tuple(paths[name] for name in candidates), kernel_cmdline=cmdline
         )
 
-        assert found == [str(ama0), str(serial0)]
-
-    def test_a_link_to_an_already_listed_device_is_not_probed_twice(self, tmp_path):
-        ama0 = tmp_path / "ttyAMA0"
-        serial0 = tmp_path / "serial0"
-        ama0.touch()
-        serial0.touch()
-        real = {str(serial0): str(ama0)}
-
-        with patch("openflight.ops243.os.path.realpath", side_effect=lambda p: real.get(p, p)):
-            found = OPS243Radar.find_gpio_uart_ports(
-                candidates=(str(ama0), str(serial0)), kernel_cmdline=""
-            )
-
-        assert found == [str(ama0)]
-
-    def test_the_pi5_debug_uart_is_never_probed(self, tmp_path):
-        """On a Pi 5 /dev/serial0 points at ttyAMA10, the separate debug header."""
-        serial0 = tmp_path / "serial0"
-        serial0.touch()
-        debug = str(tmp_path / "ttyAMA10")
-
-        with patch(
-            "openflight.ops243.os.path.realpath",
-            side_effect=lambda p: debug if p == str(serial0) else p,
-        ):
-            found = OPS243Radar.find_gpio_uart_ports(candidates=(str(serial0),), kernel_cmdline="")
-
-        assert found == []
-
-    def test_a_uart_owned_by_the_kernel_console_is_not_probed(self, tmp_path):
-        """Writing ?V into a login console is not a radar probe."""
-        ama0 = tmp_path / "ttyAMA0"
-        ama0.touch()
-
-        found = OPS243Radar.find_gpio_uart_ports(
-            candidates=(str(ama0),),
-            kernel_cmdline="console=ttyAMA0,115200 console=tty1 root=PARTUUID=1234",
-        )
-
-        assert found == []
-
-    def test_a_console_named_through_the_serial0_alias_is_matched(self, tmp_path):
-        """``console=serial0`` names the alias; the probe sees the device behind it."""
-        ama0 = tmp_path / "ttyAMA0"
-        ama0.touch()
-
-        with patch(
-            "openflight.ops243.os.path.realpath",
-            side_effect=lambda p: str(ama0) if p == "/dev/serial0" else p,
-        ):
-            found = OPS243Radar.find_gpio_uart_ports(
-                candidates=(str(ama0),), kernel_cmdline="console=serial0,115200"
-            )
-
-        assert found == []
-
-    def test_the_default_candidates_are_the_header_uarts(self):
-        assert OPS243Radar.GPIO_UART_PORTS == ("/dev/ttyAMA0", "/dev/serial0")
+    assert result == [paths[name] for name in found]
 
 
 class TestBaudNegotiation:
@@ -423,6 +349,7 @@ class TestBaudNegotiation:
                 assert radar.connect()
         assert len(opened) == 1, "negotiated baud on a USB port"
         assert radar.baud == OPS243Radar.DEFAULT_BAUD
+        assert radar.last_baud_negotiation is None
 
     def test_negotiate_baud_override_forces_it_off_for_uart(self):
         radar, opened, factory = _radar_with_fake_ports(answers_at=None, negotiate_baud=False)
@@ -646,51 +573,22 @@ class TestBaudPlumbing:
         assert "--ops-baud" in result.stdout
 
 
-class TestBaudNegotiationRecord:
-    """Connect records what the baud negotiation did."""
-
-    def _negotiate(self, answers_at, **kwargs):
-        radar, _opened, factory = _radar_with_fake_ports(answers_at=answers_at, **kwargs)
-        with patch("openflight.ops243.serial.Serial", side_effect=factory):
-            radar.negotiate_uart_baud()
-        return radar.last_baud_negotiation
-
-    def test_at_target_sends_no_switch(self):
-        assert self._negotiate(230400) == {
-            "found_baud": 230400,
-            "target_baud": 230400,
-            "switch_command": None,
-            "final_baud": 230400,
-        }
-
-    def test_a_switch_is_recorded_even_when_it_fails(self):
-        record = self._negotiate(19200)
-        assert record == {
-            "found_baud": 19200,
-            "target_baud": 230400,
-            "switch_command": "I5",
-            "final_baud": 19200,
-        }
-
-    def test_a_refused_target_sends_no_switch(self):
-        record = self._negotiate(19200, uart_baud=250000)
-        assert record["switch_command"] is None and record["final_baud"] == 19200
-
-    def test_no_reply_is_recorded_before_raising(self):
-        radar, _opened, factory = _radar_with_fake_ports(answers_at=None)
-        with patch("openflight.ops243.serial.Serial", side_effect=factory):
+@pytest.mark.parametrize(
+    ("answers_at", "kwargs", "record"),
+    [
+        (230400, {}, (230400, 230400, None, 230400)),  # at target: no switch
+        (19200, {}, (19200, 230400, "I5", 19200)),  # a switch is recorded even when it fails
+        (19200, {"uart_baud": 250000}, (19200, 250000, None, 19200)),  # refused: no switch
+        (None, {}, (None, 230400, None, None)),  # recorded before raising
+    ],
+)
+def test_negotiation_records_what_it_did(answers_at, kwargs, record):
+    radar, _opened, factory = _radar_with_fake_ports(answers_at=answers_at, **kwargs)
+    with patch("openflight.ops243.serial.Serial", side_effect=factory):
+        if answers_at is None:
             with pytest.raises(ConnectionError):
                 radar.negotiate_uart_baud()
-        assert radar.last_baud_negotiation == {
-            "found_baud": None,
-            "target_baud": 230400,
-            "switch_command": None,
-            "final_baud": None,
-        }
-
-    def test_usb_connect_records_no_negotiation(self):
-        radar, _opened, factory = _radar_with_fake_ports(answers_at=None, port="/dev/ttyACM0")
-        with patch("openflight.ops243.serial.Serial", side_effect=factory):
-            with patch.object(OPS243Radar, "_drain_serial"):
-                radar.connect()
-        assert radar.last_baud_negotiation is None
+        else:
+            radar.negotiate_uart_baud()
+    keys = ("found_baud", "target_baud", "switch_command", "final_baud")
+    assert radar.last_baud_negotiation == dict(zip(keys, record))

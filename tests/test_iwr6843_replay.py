@@ -1,11 +1,14 @@
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
 
+from openflight.iwr6843 import antennas, lcmf
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.replay import (
     ReplayInput,
+    build_replay_calibration,
     inputs_from_session,
     replay_capture,
     replay_summary,
@@ -160,8 +163,6 @@ def test_replay_summary_and_csv_output(tmp_path):
 
 def test_a_legacy_replay_reads_its_single_height_as_the_rx_row():
     """Sessions with one radar height and no rig replay it as the RX-row centre of a +90 deg board."""
-    from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
-    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
 
     cal = build_replay_calibration(
         "config/iwr6843_calibration_reference.json",
@@ -175,9 +176,6 @@ def test_a_legacy_replay_reads_its_single_height_as_the_rx_row():
 
 
 def test_a_rig_replay_places_the_antennas_off_its_phase_centre():
-    from openflight.iwr6843 import antennas  # noqa: PLC0415
-    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
-
     cal = build_replay_calibration(
         "config/iwr6843_calibration_reference.json",
         tee_range_m=1.5,
@@ -191,8 +189,6 @@ def test_a_rig_replay_places_the_antennas_off_its_phase_centre():
 
 
 def test_the_replay_record_names_the_estimator_and_the_antenna_basis(monkeypatch, tmp_path):
-    from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
-
     monkeypatch.setattr(
         "openflight.iwr6843.replay.process_dump",
         lambda *_args, **_kwargs: SimpleNamespace(track=None),
@@ -232,10 +228,6 @@ def test_the_replay_record_names_the_estimator_and_the_antenna_basis(monkeypatch
 
 
 def test_the_replay_calibration_takes_the_recorded_roll(tmp_path):
-    import math  # noqa: PLC0415
-
-    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
-
     def build(**extra):
         return build_replay_calibration(
             "config/iwr6843_calibration_reference.json",

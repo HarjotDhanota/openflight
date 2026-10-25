@@ -35,8 +35,10 @@ def _line_at(camera, forward_m, half_width_m=1.5):
     ]
 
 
-def _solve(camera, line):
-    return tl.net_range_from_floor_line(camera, line, ball_lfu=BALL, tilt_pad_deg=1.0, roll_deg=0.0)
+def _solve(camera, line, tilt_pad_deg=1.0):
+    return tl.net_range_from_floor_line(
+        camera, line, ball_lfu=BALL, tilt_pad_deg=tilt_pad_deg, roll_deg=0.0
+    )
 
 
 def test_floor_line_at_known_distance():
@@ -53,14 +55,7 @@ def test_uncertainty_grows_with_the_tilt_pad():
     camera = _camera(pitch_deg=-2.0)
     line = _line_at(camera, 5.0)
 
-    tight = tl.net_range_from_floor_line(
-        camera, line, ball_lfu=BALL, tilt_pad_deg=0.1, roll_deg=0.0
-    )
-    loose = tl.net_range_from_floor_line(
-        camera, line, ball_lfu=BALL, tilt_pad_deg=0.5, roll_deg=0.0
-    )
-
-    assert loose["uncertainty_m"] > tight["uncertainty_m"]
+    assert _solve(camera, line, 0.5)["uncertainty_m"] > _solve(camera, line, 0.1)["uncertainty_m"]
 
 
 def test_line_above_horizon_gives_default():

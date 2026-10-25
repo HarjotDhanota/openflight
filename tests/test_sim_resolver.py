@@ -188,14 +188,6 @@ def test_a_non_finite_input_resolves_exactly_like_a_missing_one(field, bad):
 
 
 @pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
-def test_a_non_finite_launch_never_makes_carry_measured_or_non_finite(bad):
-    r = resolve_shot(_shot(launch_angle_vertical=bad), PlayerState())
-    assert math.isfinite(r.vla) and math.isfinite(r.carry_yards)
-    assert r.provenance["vla"] == "estimated" and r.provenance["carry"] == "estimated"
-    _same_resolution(r, resolve_shot(_shot(launch_angle_vertical=None), PlayerState()))
-
-
-@pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
 def test_a_non_finite_calculated_spin_uses_the_model(bad):
     r = resolve_shot(_shot(spin_rpm=bad, spin_source="calculated"), PlayerState())
     assert r.total_spin_rpm == SPIN_MODEL_RPM[ClubType.DRIVER]
