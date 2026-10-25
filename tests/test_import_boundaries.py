@@ -165,9 +165,10 @@ def _ui_imported_files(path: str) -> set[str]:
 
 
 def test_shipped_ui_imports_never_merged_ui_only_in_the_known_mixed_files():
-    """The UI's trace and free-play imports are known; a new one fails here."""
+    """The UI's trace and free-play imports are known; a new one fails here, as does Part E."""
     files = _files()
     mixed = set(_manifest()["mixed"])
+    part_e = set(_manifest()["part_e"])
     crossings = []
     for path, bucket in sorted(files.items()):
         if bucket not in SHIPPED or not path.startswith("ui/") or not UI_SOURCE.search(path):
@@ -175,6 +176,8 @@ def test_shipped_ui_imports_never_merged_ui_only_in_the_known_mixed_files():
         for target in sorted(_ui_imported_files(path)):
             if files[target] in NEVER_MERGED and path not in mixed:
                 crossings.append(f"{path} imports {target} ({files[target]})")
+            if target in part_e and path not in part_e:
+                crossings.append(f"{path} imports {target} (Part E)")
     assert not crossings, "shipped UI imports never-merged UI:\n" + "\n".join(crossings)
 
 

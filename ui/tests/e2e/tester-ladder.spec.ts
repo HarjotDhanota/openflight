@@ -968,7 +968,7 @@ test('the hardware check records whether RESET was pressed', async ({ page }) =>
 });
 
 test('shows the kiosk shot beside the swing verdict, every metric with its label', async ({ page }) => {
-  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url), 'utf8')) as {
     metrics: Array<{ id: string; label: string; unit: string }>;
   };
   const cycle = ['measured', 'calculated', 'model_geometry', 'estimated', 'experimental', 'not_measured'];
@@ -1020,7 +1020,7 @@ test('says so when the kiosk does not answer for its shot', async ({ page }) => 
 const VERDICT_SHOT_DIR = process.env.UX_SWING_RANGE_DIR;
 
 function ballDistanceShot(status: 'measured' | 'estimated') {
-  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url), 'utf8')) as {
     metrics: Array<{ id: string; label: string; unit: string }>;
   };
   const metrics = Object.fromEntries(

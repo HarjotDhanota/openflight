@@ -153,8 +153,9 @@ def test_pipeline_check_reports_the_metric(payload, metric_id):
 
 @pytest.mark.parametrize("metric_id", EXPECTED_METRIC_IDS)
 def test_the_ui_catalog_lists_the_metric(metric_id):
-    catalog = json.loads((REPO / "ui" / "src" / "data" / "metricCatalog.json").read_text("utf-8"))
-    assert catalog == shot_metrics.catalog(), "regenerate ui/src/data/metricCatalog.json"
+    path = REPO / "ui" / "src" / "data" / "metricCatalog.shotModels.json"
+    catalog = json.loads(path.read_text("utf-8"))
+    assert catalog == shot_metrics.catalog(), f"regenerate {path.name}"
     assert metric_id in [entry["id"] for entry in catalog["metrics"]]
 
 

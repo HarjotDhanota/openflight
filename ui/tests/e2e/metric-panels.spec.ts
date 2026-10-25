@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { test, type Page } from '@playwright/test';
 import { expect, gotoApp, KIOSK_VIEWPORTS, resetSession, simulateShot, withControlSocket } from './helpers';
 
-const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+const withModels = new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url);
+const core = new URL('../../src/data/metricCatalog.json', import.meta.url);
+const catalog = JSON.parse(readFileSync(existsSync(withModels) ? withModels : core, 'utf8')) as {
   metrics: Array<{ id: string; group: string }>;
 };
 
@@ -76,14 +78,7 @@ for (const viewport of VIEWPORTS) {
         const expected = catalog.metrics.filter((spec) => groups.includes(spec.group)).map((spec) => spec.id);
         const cells = page.locator('.metric-cell');
         await expect(cells.first()).toBeVisible();
-        // every metric once: in its own cell, or named in its group's one Coming later row
-        const shown = await cells.evaluateAll((all) =>
-          all.flatMap((cell) =>
-            cell.getAttribute('data-metric') === 'coming-later'
-              ? (cell.getAttribute('data-metrics') ?? '').split(' ')
-              : [cell.getAttribute('data-metric')]
-          )
-        );
+        const shown = await cells.evaluateAll((all) => all.map((cell) => cell.getAttribute('data-metric')));
         expect([...shown].sort()).toEqual([...expected].sort());
         for (const cell of await cells.all()) {
           const status = await cell.getAttribute('data-status');

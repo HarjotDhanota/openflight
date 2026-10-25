@@ -8,8 +8,10 @@ so a metric dropped here is dropped everywhere; these tests pin the list.
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -62,6 +64,12 @@ def test_metric_records_accept_only_finite_real_scalars(value, expected):
 
 def test_the_catalog_is_the_owner_s_metric_list_in_order():
     assert shot_metrics.METRIC_IDS == EXPECTED_METRIC_IDS
+
+
+def test_the_ui_catalog_with_the_shot_models_matches_the_registry():
+    path = Path(__file__).resolve().parents[1] / "ui/src/data/metricCatalog.shotModels.json"
+
+    assert json.loads(path.read_text(encoding="utf-8")) == shot_metrics.catalog()
 
 
 def test_the_label_vocabulary_is_the_six_labels():

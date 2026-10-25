@@ -39,10 +39,10 @@ def test_catalog_cli_matches_the_installed_registry():
     assert json.loads(result.stdout) == sm.catalog()
 
 
-def test_ui_catalog_matches_the_installed_registry():
+def test_ui_catalog_matches_the_core_registry(core_only):
     path = Path(__file__).resolve().parents[1] / "ui/src/data/metricCatalog.json"
 
-    assert json.loads(path.read_text(encoding="utf-8")) == sm.catalog()
+    assert json.loads(path.read_text(encoding="utf-8")) == core_only.catalog()
 
 
 @pytest.fixture

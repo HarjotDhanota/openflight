@@ -65,24 +65,3 @@ test('the tab bar shows there are more tabs and a tap on the hint scrolls to the
   const last = tabs.last();
   await expect(last).toBeInViewport({ ratio: 0.95 });
 });
-
-test('the Club tab folds the metrics not built yet into one Coming later row; a tap lists why', async ({ page }) => {
-  await gotoApp(page);
-  await dismissPicker(page);
-  await page.getByRole('button', { name: 'Club', exact: true }).click();
-  const later = page.locator('[data-metric="coming-later"]');
-  await expect(later).toHaveCount(1);
-  await expect(later).toContainText('Coming later');
-  await expect(later).toContainText('Club speed (total)');
-  await expect(later).not.toContainText('Dynamic lie');
-  for (const id of ['impact_offset', 'impact_height', 'dynamic_lie']) {
-    await expect(page.locator(`[data-metric="${id}"]`)).toHaveAttribute('data-status', 'not_measured');
-  }
-  const list = later.locator('.metric-cell__later-list');
-  await expect(list).toBeHidden();
-  await later.tap();
-  await expect(list).toBeVisible();
-  await expect(list).toContainText('Club speed (total):');
-  const box = await later.boundingBox();
-  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
-});

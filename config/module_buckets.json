@@ -69,7 +69,9 @@
   "tests/test_v_formulas_consistency.py",
   "tests/test_v_formulas_fixes.py",
   "tests/test_v_formulas_known_answer.py",
-  "tests/tm_owner_export.py"
+  "tests/tm_owner_export.py",
+  "ui/src/data/metricCatalog.shotModels.json",
+  "ui/src/i18n/metricNames.shotModels.ts"
  ],
  "decisions": {
   "pi_trace": "The Pi trace is RESEARCH end to end: product code carries no trace calls. instrumentation.py holds the recorder hooks, trace_points.py wraps the kiosk's own paths (the OPS wait, re-arm and clock sync, the capture timer, the IWR debounce, the server's enrichment steps) once research_hooks is loaded, and research_hooks installs the recorder for --pi-trace. The product keeps two seams: IWR6843CaptureMonitor.on_debounced_edge and server._await_camera_prefetch, plus the kiosk_extensions on_shot_detected hook and Shot.extras.",
@@ -1154,6 +1156,7 @@
   "ui/src/components/panel/MenuSheet.test.tsx": "PRODUCT",
   "ui/src/components/panel/MenuSheet.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.ballRange.test.tsx": "PRODUCT",
+  "ui/src/components/panel/MetricGroupPanel.core.test.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.css": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.tap.test.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.test.tsx": "PRODUCT",
@@ -1215,6 +1218,7 @@
   "ui/src/data/clubs.test.ts": "PRODUCT",
   "ui/src/data/clubs.ts": "PRODUCT",
   "ui/src/data/metricCatalog.json": "PRODUCT",
+  "ui/src/data/metricCatalog.shotModels.json": "PRODUCT",
   "ui/src/data/metricCatalog.ts": "PRODUCT",
   "ui/src/data/trainingImplements.ts": "PRODUCT",
   "ui/src/extensions/freePlay.ts": "TESTER",
@@ -1237,6 +1241,7 @@
   "ui/src/i18n/fr.ts": "PRODUCT",
   "ui/src/i18n/i18n.test.ts": "PRODUCT",
   "ui/src/i18n/index.ts": "PRODUCT",
+  "ui/src/i18n/metricNames.shotModels.ts": "PRODUCT",
   "ui/src/i18n/pt.ts": "PRODUCT",
   "ui/src/i18n/useI18n.ts": "PRODUCT",
   "ui/src/index.css": "PRODUCT",

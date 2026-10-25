@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { METRIC_CATALOG } from '../../data/metricCatalog';
 import { METRIC_LABELS } from '../../types/shot';
 import type { MetricLabel, Shot, ShotMetric } from '../../types/shot';
-import { isComingLater } from '../../utils/plainReason';
 import { MetricGroupPanel } from './MetricGroupPanel';
 import { PANEL_GROUPS, formatMetricValue } from './metricFormat';
 
@@ -27,10 +26,10 @@ const LABEL_CYCLE: readonly MetricLabel[] = METRIC_LABELS;
 function everyMetricShot(): Shot {
   const metrics: Record<string, ShotMetric> = {};
   METRIC_CATALOG.forEach((spec, index) => {
-    const status = spec.pending ? 'not_measured' : LABEL_CYCLE[index % LABEL_CYCLE.length];
+    const status = LABEL_CYCLE[index % LABEL_CYCLE.length];
     metrics[spec.id] =
       status === 'not_measured'
-        ? record({ unit: spec.unit, reason: spec.pending ? `pending ${spec.pending}: not built yet` : 'no input' })
+        ? record({ unit: spec.unit, reason: 'no input' })
         : record({ unit: spec.unit, status, value: 1.5 + index, reason: null, source: 'test source' });
   });
   return {
@@ -92,12 +91,6 @@ describe('MetricGroupPanel', () => {
 
   it.each(METRIC_CATALOG.map((spec) => [spec.id, spec.group]))('shows %s with its label', (id, group) => {
     const html = render(PANEL_GROUPS.club.includes(group as never) ? 'club' : 'flight');
-    const spec = METRIC_CATALOG.find((item) => item.id === id)!;
-    if (isComingLater(spec, everyMetricShot().metrics![id])) {
-      const later = html.match(/data-metric="coming-later"[^>]*data-metrics="([^"]*)"/);
-      expect(later?.[1].split(' '), id).toContain(id);
-      return;
-    }
     const cell = html.match(new RegExp(`<div[^>]*data-metric="${id}"[^>]*data-status="([a-z_]+)"`));
     expect(cell, id).not.toBeNull();
     const status = cell![1];
@@ -121,16 +114,6 @@ describe('MetricGroupPanel', () => {
     const html = render('club', shot);
     expect(html).toContain('data-metric="dynamic_lie"');
     expect(html).toContain('no visible lower shaft');
-  });
-
-  it('folds the not-built metrics into one Coming later row, shown once per panel', () => {
-    const shot = everyMetricShot();
-    shot.metrics!.club_speed_full = record({ unit: 'mph', reason: 'full club speed is not available yet' });
-    const html = render('club', shot);
-    expect(html.match(/data-metric="coming-later"/g)).toHaveLength(1);
-    expect(html).toContain('Coming later');
-    expect(html).not.toMatch(/data-metric="club_speed_full"/);
-    expect(html).toMatch(/Dynamic lie/);
   });
 
   it('gives impact location its own cells, with the reason when it was not read', () => {

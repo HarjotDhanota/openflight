@@ -146,10 +146,14 @@ launch, spin and spin axis, and model geometry only with
 
 ## Regenerating the UI catalog
 
-`ui/src/data/metricCatalog.json` is generated from the server's list:
+`ui/src/data/metricCatalog.json` is the core list (no shot models);
+`ui/src/data/metricCatalog.shotModels.json` (Part E) is the full list, which the
+kiosk uses when present. Both are generated from the server's list:
 
 ```bash
-uv run python -m openflight.shot_metrics > ui/src/data/metricCatalog.json
+uv run python -m openflight.shot_metrics > ui/src/data/metricCatalog.shotModels.json
+uv run python -c "import json, openflight.shot_metrics as sm; sm._modules_loaded = True; print(json.dumps(sm.catalog(), indent=2))" > ui/src/data/metricCatalog.json
 ```
 
-`tests/test_metric_coverage.py` fails when the two differ.
+`tests/test_shot_metrics.py` and `tests/test_shot_metrics_registry.py` fail when
+either differs.

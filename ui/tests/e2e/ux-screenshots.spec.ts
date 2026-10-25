@@ -242,7 +242,7 @@ for (const size of SIZES) {
     });
 
     test('step 7: swing verdict, live numbers and kiosk progress', async ({ page }) => {
-      const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+      const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url), 'utf8')) as {
         metrics: Array<{ id: string; unit: string }>;
       };
       const metrics = Object.fromEntries(
