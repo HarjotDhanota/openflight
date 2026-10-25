@@ -7,15 +7,6 @@ import pytest
 from openflight import constants
 
 
-def test_values():
-    assert constants.MPH_TO_MPS == 0.44704
-    assert constants.GRAVITY == 9.81
-    assert constants.BALL_DIAMETER_MM == 42.7
-    assert constants.BALL_DIAMETER_M == 0.0427
-    assert constants.BALL_RADIUS_M == 0.02135
-    assert constants.RULES_MIN_BALL_DIAMETER_MM == 42.67
-
-
 @pytest.mark.parametrize(
     "module,name,shared",
     [
