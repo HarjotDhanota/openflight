@@ -26,11 +26,11 @@ full speed = radial speed / (LOS . dir)
     - horizontal from the camera, or the IWR's horizontal when its phase
       reference is calibrated.
     A target-line angle is turned into the unit's frame by the one horizontal
-    offset (D34, `horizontal_frame.py`).
+    offset (`horizontal_frame.py`).
 - **LOS** is the unit vector from the OPS to the ball at the reading's time:
     - the OPS is where the rig file puts it (`ops_offset_mm`);
     - the ball starts where the IWR tee range and the setup's tee side offset
-      (D36) put it;
+      put it;
     - by the reading's time it has moved along `dir`. The ball's position
       depends on its speed, so the solve iterates; it converges in a few steps.
 - **The reading** is one FFT window of the OPS speed timeline, on the OPS's own
@@ -61,8 +61,8 @@ The full speed is **not measured**, with the reason, when:
 
 - **the geometry is ill-conditioned.** LOS . dir is below **0.866 (cos 30°)** at
   every candidate reading. The speed error grows as tan(angle) × angle error. At
-  30°, a 1° launch error (the D32 95th-percentile launch goal) already costs
-  1.0 % of speed, about 1-1.6 mph at 100-160 mph: the D32 95th-percentile budget
+  30°, a 1° launch error (the 95th-percentile launch goal) already costs
+  1.0 % of speed, about 1-1.6 mph at 100-160 mph: the 95th-percentile budget
   for full ball speed. Past 30° it grows quickly (40°: 1.5 %). On the v3 rig at
   2.1 m this refuses launches steeper than about 43°;
 - **a launch angle is missing or not measured:**
@@ -84,8 +84,8 @@ changes for stated input tolerances, and each term is named in
 
 | Input | Tolerance |
 |---|---|
-| Vertical and horizontal launch | ±1° each (the D32 95th-percentile goal) |
-| IWR tee range | ±50 mm (D32) |
+| Vertical and horizontal launch | ±1° each (the 95th-percentile goal) |
+| IWR tee range | ±50 mm |
 | Tee side offset | ±50 mm |
 | OPS position | ±3 mm per axis |
 | Impact time | half the OPS transition gap; ±3 ms for a sound trigger |
@@ -121,9 +121,8 @@ OPS transition impact:
 - For the SW and LW, the reading near the tee is ill-conditioned. The method
   takes the first later window that clears 0.866.
 
-This proves the inversion, not the radar. The D32 goal is a median error of
-1 mph or less, and a 95th percentile of 2 mph or less. It is graded only against
-TrackMan shots in the pilot.
+This proves the inversion, not the radar. The goal is a median error of 1 mph or
+less, and a 95th percentile of 2 mph or less, graded against TrackMan shots.
 
 ## Club speed and smash
 
@@ -132,10 +131,10 @@ TrackMan shots in the pilot.
   today, for two reasons:
     - the OPS club speed is a percentile over 4-18 ms before impact, not one
       reading;
-    - the head moves on a curve, so its direction at that time needs E1's arc and
-      W6/W9's fixed head point.
-- **Smash** (`smash_factor_full`) is D37's `smash_factor` of a full ball speed
-  and a full club speed, labelled calculated. It is never full ÷ radial (D21), so
+    - the head moves on a curve, so its direction at that time needs the
+      [club arc](club-arc.md) and a fixed head point.
+- **Smash** (`smash_factor_full`) is the `smash_factor` of a full ball speed
+  and a full club speed, labelled calculated. It is never full ÷ radial, so
   today it is not measured. The shown `smash_factor` stays the radial ÷ radial
   ratio, labelled `radial_ratio` on fusion units.
 
@@ -143,9 +142,9 @@ TrackMan shots in the pilot.
 
 A simulator flies the ball's full speed. When `ball_speed_full` is calculated,
 `sim/resolver.py` sends it with provenance "calculated". Otherwise it sends the
-radial reading, with provenance "measured", as before (D31).
+radial reading, with provenance "measured".
 
-The flight model (E4) reads `Shot.ball_speed_full_mph`: the calculated full
+The flight model reads `Shot.ball_speed_full_mph`: the calculated full
 speed in mph, or None when it is not measured.
 
 ## Code

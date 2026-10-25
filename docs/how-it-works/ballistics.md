@@ -29,7 +29,7 @@ shot as `Shot.flight` and into the shot payload as `flight`.
 | `apex` | yd | Highest point above launch height |
 | `landing_angle` | deg | Descent angle below horizontal at landing |
 | `hang_time` | s | Time from launch to landing |
-| `curve` | yd | Side distance of the landing point from the launch-direction line (D37's `metric_definitions.curve`), positive right |
+| `curve` | yd | Side distance of the landing point from the launch-direction line (`metric_definitions.curve`), positive right |
 
 Every output has the same fields:
 
@@ -55,26 +55,26 @@ calculated > model_geometry > estimated > not_measured. A flight is a model's
 output, so it is at best `calculated`.
 
 - **`calculated`**: a fusion unit, with every input measured or calculated. The
-  model is published (D38), and the inputs come from this shot alone.
+  model is published, and the inputs come from this shot alone.
 - **`model_geometry`**: a fusion unit whose spin or spin axis rests on an assumed
-  swing geometry (D39): E2's spin or D-plane tilt built on E1's arc prior, which
-  on today's lens is every shot's club path and attack angle. The `source` ends
+  swing geometry: the collision model's spin or D-plane tilt built on the club
+  arc's prior, which on the stock lens is every shot's club path and attack angle. The `source` ends
   with the inputs that were, e.g. "model-geometry inputs: spin (Penner 2001; club
   inputs model geometry (D39)), spin axis, club path from the arc prior, attack
-  angle from the arc prior". Simulators do not get these values (D31).
+  angle from the arc prior". Simulators do not get these values.
 - **`estimated`**: an OPS-only install (its inputs include the club-typical spin
   and a neutral 0° for any missing horizontal launch or spin axis; the `inputs`
   block names each one it used), or a fusion flight with an estimated input. The
-  main one: when E3 refuses the full ball speed, the flight flies the OPS243's
+  main one: when the full ball speed is refused, the flight flies the OPS243's
   line-of-sight (radial) speed, a different and lower quantity. Every output, raw
   and normalized, is then `estimated` with the reason "ball speed is the OPS
-  line-of-sight speed (full speed refused: <E3's reason>), about 3-5% low", and
+  line-of-sight speed (full speed refused: <reason>), about 3-5% low", and
   `estimated_inputs` lists it. `Shot.carry_status` is then `estimated` too.
 - **`not_measured`**: nothing is filled in. A fusion shot without a measured,
   calculated or model-geometry spin, a spin axis, or both launch angles has no
   flight, and every
   output gives the reason ("spin not measured", "spin axis not measured", …).
-  Spin and spin axis may be calculated values (E2's collision model); they keep
+  Spin and spin axis may be calculated values (the collision model); they keep
   their labels in `inputs`. `--no-ballistics` gives "flight model disabled".
 
 `Shot.carry_status` is the flight's label on a fusion unit: `calculated`, or
@@ -141,25 +141,24 @@ at a 20 ms step, takes about 18 ms on a desktop, and runs once per shot.
 
 | Input | Assumed σ | Source |
 | --- | --- | --- |
-| Ball speed | 1 mph | D32 goal |
-| Vertical and horizontal launch | 0.5° each | D32 goal |
-| Spin | 10 % | Part E calculated-spin goal |
-| Spin axis | 3° | Part E spin-axis goal |
+| Ball speed | 1 mph | accuracy goal |
+| Vertical and horizontal launch | 0.5° each | accuracy goal |
+| Spin | 10 % | calculated-spin goal |
+| Spin axis | 3° | spin-axis goal |
 
 These are goals, not measured per-shot uncertainties. Air density is not varied.
 The same σ is applied to both flights.
 
-## Coordinate frames (W7)
+## Coordinate frames
 
 - **World frame:** x is downrange along the horizontal-launch zero, y is
-  lateral (positive right) and z is up. The x axis is the target line once D34's
-  aim point is set; otherwise it is the unit's boresight. The flight's `frame`
+  lateral (positive right) and z is up. The x axis is the target line once the
+  setup's aim is set; otherwise it is the unit's boresight. The flight's `frame`
   field carries `Shot.launch_angle_horizontal_frame`.
 - **Carry** is the straight-line horizontal distance to the landing point,
   `hypot(x, y)`. This is TrackMan's public definition: "the straight-line
   distance between where the golf ball was launched from and where it crosses
-  a point that has the same elevation". Carry used to be the x component alone,
-  which made a ball launched 10° right fly 5 yd "shorter".
+  a point that has the same elevation".
 - **Spin axis** is a tilt against the launch direction. At 0° (pure backspin)
   the spin vector is horizontal and perpendicular to the horizontal launch
   direction, so it turns with the horizontal launch angle h:
@@ -399,7 +398,7 @@ The refit is plausible here, with one caveat:
   Flights over ball speeds 50–190 mph at $S_p$ 0.05–0.45 are tested for
   plausible carry, apex, landing angle and hang time.
 
-**Provenance (D38).** `FLIGHT_FIT_V1.calibration` records:
+**Provenance.** `FLIGHT_FIT_V1.calibration` records:
 
 - the version and the source ("fitted to TM4 normalized exports: a TM4 normalized
   export, 6 May 2026 … and a second, public TM4 session …");
@@ -454,7 +453,7 @@ force coefficients on whether the flow around it accelerates (Odar & Hamilton,
 gravity along its path. Under 30° of descent it changes little; by 60° it takes
 most of both coefficients away, so a steep wedge lands steeper and faster.
 
-Its constants were fitted by the maintainer (flight-fit-v2) over 11,264
+Its constants were fitted (flight-fit-v2) over 11,264
 launches (ball speed 40–190 mph, launch 0–45°, spin 500–12,000 rpm, spin axis
 ±30°, launch direction ±10°) on carry, apex, apex distance, landing angle,
 landing speed, hang time, curve and landing spin. RMSE on the held-out 20 % and
@@ -540,7 +539,7 @@ landing backspin (the spin times the cosine of the spin axis tilt):
   which integrates in closed form. Heavy backspin on a steep landing can bring the
   ball back past where it landed.
 
-The twelve constants were fitted by the maintainer (turf-roll-v2) for fairway
+The twelve constants were fitted (turf-roll-v2) for fairway
 turf of normal firmness, with the hops flown by flight-fit-v1 in normalized air.
 The fit covered 4,096 landing states (landing speeds 18–100 mph, landing angles
 5–65°, backspin 0–11,000 rpm) plus the landings of 3,072 club-typical launches
@@ -596,8 +595,8 @@ clamped at 0: Eq. 1 is negative above 49.4°". At 37.6° it gives 18.94 yd.
 | Ball speed | Full ball speed when the shot has one (`ball_speed_full_mph`, or `ball_speed_contract` "full"); otherwise the OPS243 radial speed, labelled as such | Same |
 | Vertical launch | Measured, or no flight | Measured, or the labelled club-table estimate |
 | Horizontal launch | Measured, or no flight | Measured, or a substituted 0° |
-| Spin | Measured (confidence ≥ 0.7), calculated, or model geometry (D39), or no flight | Measured, calculated, model geometry, or the club-typical estimate |
-| Spin axis | Measured, calculated, or model geometry (D39), or no flight | Measured, or a substituted 0° |
+| Spin | Measured (confidence ≥ 0.7), calculated, or model geometry, or no flight | Measured, calculated, model geometry, or the club-typical estimate |
+| Spin axis | Measured, calculated, or model geometry, or no flight | Measured, or a substituted 0° |
 
 `inputs.ball_speed.label` records which ball speed was used. A spin axis with no
 `spin_axis_source` on the shot is labelled as the kiosk's proxy (horizontal
@@ -616,7 +615,7 @@ table, …)`. A fusion unit never uses them.
 
 The simulator connectors send a fusion shot's carry only when its
 `carry_status` is `measured` or `calculated`, i.e. flown on the shot's own
-measured or calculated inputs (D31). Its provenance is `calculated`: a simulated
+measured or calculated inputs. Its provenance is `calculated`: a simulated
 carry is the flight model's output, never `measured`, even when flown on a
 measured spin. A `model_geometry` carry is not sent (see
 `SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the collision-model page), nor an
@@ -700,4 +699,4 @@ disabled".
 - [Rolling buffer & spin detection](rolling-buffer.md): where measured spin
   comes from
 - [Constants](../reference/constants.md): the full constant set
-- `metric_definitions.py`: D37's public definitions, including `curve`
+- [Metric definitions](../reference/metric-definitions.md): the public definitions, including `curve`

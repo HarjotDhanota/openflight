@@ -4,7 +4,7 @@ icon: lucide/git-merge
 
 # Collision model (face, loft, spin)
 
-*Part E, item E2. Added 12 October 2026. Code: `src/openflight/collision_model.py`;
+*Code: `src/openflight/collision_model.py`;
 wiring: `server._attach_collision_model`.*
 
 OpenFlight's camera can't see the club face. These metrics are therefore
@@ -20,22 +20,17 @@ and two clean-room fits to a TrackMan 4 normalized export, 6 May 2026:
 A forward collision model supplies the spin, the wood and hybrid spin axis, and
 the face and loft when the spin is not measured. Its forms are published
 physics; its ball, friction and restitution are published values, its head
-properties are typical values (assumed), and its gains were fitted by the
-maintainer.
+properties are typical values (assumed), and its gains are fitted.
 
 Gyro is **not measured**. Every number below was read from the cited paper
 itself.
-
-Owner decisions: D33 (published PING weighting now, refit to TM4 after the
-pilot) and D38 (fitted physics, published sources first, labelled
-"calculated (model: source)").
 
 ## Labels and rules
 
 | Input label | Output status |
 | --- | --- |
 | all inputs `measured` or `calculated` | `calculated` |
-| any input `model_geometry` (D39, e.g. E1's arc path) | `model_geometry` |
+| any input `model_geometry` (e.g. the club arc's path) | `model_geometry` |
 | any input missing, non-finite, or a table estimate | `not_measured`, with the reason |
 
 - **Each shot uses its own inputs.** The model's constants are fixed; its
@@ -68,22 +63,20 @@ pilot) and D38 (fitted physics, published sources first, labelled
 | Attack angle | `displayed_attack_angle`: canonical `club_angle_deg`, then the camera-fused attack (unless rejected or withheld). The IWR attack angle is only ever a candidate, so it is never used | deg, + up |
 | Launch direction | `launch_angle_horizontal`, unless its source is `estimated` | deg, + right |
 | Vertical launch | `launch_angle_vertical`, unless its source is `estimated` | deg, + up |
-| Club speed | `club_speed_mph` (today the OPS243 radial reading, which runs 2–6 mph low until W6 and W9) | mph |
+| Club speed | `club_speed_mph` (today the OPS243 radial reading, which runs 2–6 mph low) | mph |
 | Ball speed (full) | `ball_speed_full_mph`, `calculated`. The radial speed never stands in for it | mph |
 | Spin rate | `spin_rpm` under its own label: an accepted measured spin (confidence ≥ `SPIN_CONFIDENCE_HIGH`), or a model's spin labelled as one | rpm |
 
-When the kiosk has no accepted measured path or attack, E1's selected arc value
+When the kiosk has no accepted measured path or attack, the [club arc](club-arc.md)'s selected value
 (`club_arc.selected_path_and_attack`) enters through `_collision_inputs` under
 its own label: `calculated` for the shot's own fit, `model_geometry` for the
-arc prior (D39, every shot on today's lens). Every output built on it inherits
+arc prior (every shot on the stock lens). Every output built on it inherits
 the label, and the kiosk's face status then ends in `_model_geometry`. A
 not-measured arc value is a missing input.
 
 ## The forward model
 
-*Added 20 October 2026; spin, off-centre loss, gear effect and the indices
-rebuilt on rigid-ball impulse physics the same day. Code:
-`src/openflight/collision_forward.py`.*
+*Code: `src/openflight/collision_forward.py`.*
 
 One forward model takes a club delivery (club speed V, attack angle, club path,
 face angle, dynamic loft) and an impact location to the ball's speed, launch
@@ -96,7 +89,7 @@ physics, per club category (driver and woods, irons and hybrids, wedges).
 | --- | --- |
 | Fixed, published | Ball m = 45.9 g, r = 21.35 mm (Penner 2001); κ = 0.4, I = κ m r² (uniform solid sphere); face friction μ = 0.40 (Henrikson et al. 2020, Sec. 2.2: urethane on a dry grooved face); restitution e = 0.86 − 0.0029 v_n for irons, hybrids and wedges (Penner 2001, Eq. (5)) and e = 0.830 − 0.0029 (v_n − 48.77 m/s) for drivers and woods (the USGA/R&A limit of 0.830 at its 48.77 m/s test speed, with Penner's slope), v_n the normal approach speed, held within 0.5–0.95 |
 | Assumed (typical heads) | Head mass, centre-of-mass depth d and moments of inertia, table below |
-| Fitted by the maintainer | The launch (K, s₁, s₂), centre speed S and centre axis (a, b), and the spin gain g and loss scales c_x, c_y: to a dense grid of deliveries (below). The gear gains g_x, g_y: to 38 clean export shots, each capped at 1.5 × its rigid-body value. The per-club index constants: to launch-monitor data (section 6) |
+| Fitted | The launch (K, s₁, s₂), centre speed S and centre axis (a, b), and the spin gain g and loss scales c_x, c_y: to a dense grid of deliveries (below). The gear gains g_x, g_y: to 38 clean export shots, each capped at 1.5 × its rigid-body value. The per-club index constants: to launch-monitor data (section 6) |
 
 The grid: club speed 50–130 mph, attack −8…+6°, path and face ±8°, dynamic
 loft 8–55°, impact offset ±25 mm (toe +) and height ±15 mm (up +); driver,
@@ -358,15 +351,15 @@ Why interpolate by loft:
 
 The straight lines between anchors are **our** choice. Neither paper tabulates
 the curve's shape. The x-axis is nominal loft rather than the shot's own spin
-loft because the anchors' spin lofts are not published. E8 refits both the
-weights and the curve to TM4 exports.
+loft because the anchors' spin lofts are not published. Neither is yet refitted
+to TrackMan 4 exports.
 
 **Status and source.** Used only for the face when the vertical launch or
 attack is missing; labelled `calculated` (or the weakest input's label).
 
 ## 2. Spin loft, face to path, D-plane tilt
 
-These come from the D37 definitions in `metric_definitions`:
+These come from the [metric definitions](../reference/metric-definitions.md):
 
 - `spin_loft_deg`: the 3D angle between the club direction and the face normal;
 - `face_to_path_deg`: face minus path;
@@ -398,8 +391,8 @@ calculated spin, and **its value is not changed**:
 - an iron or wedge (2-iron to lob wedge) with an attack angle of −2° or
   shallower;
 - a measured strike more than 8 mm above the face centre;
-- an iron or wedge shot whose camera club delivery gave no low point (E1's
-  arc). Without camera club data there is no low point to miss, and no note.
+- an iron or wedge shot whose camera club delivery gave no low point (the
+  club arc). Without camera club data there is no low point to miss, and no note.
 
 The note reads "low confidence: possible flier or heavy contact (…)" with the
 reasons, on `collision_model["metrics"]["spin_rate"]` and on the catalogue's
@@ -474,7 +467,7 @@ is within the reading tolerance of the printed curve.
   (*Rep. Prog. Phys.* **66**, 131), are about 10–40 % above the rolling value at a
   rigid barrier.
 
-The refit in E8 sets the size of this bias.
+A refit to TrackMan 4 exports would set the size of this bias.
 
 **Status and source (the shot's spin).** Labelled `calculated`, source the
 impulse model. The value is always recorded in `spin_rpm_collision`. When there is no accepted measured spin (confidence ≥
@@ -482,10 +475,10 @@ impulse model. The value is always recorded in `spin_rpm_collision`. When there 
 
 - `calculated`: `spin_source = "calculated"`, `spin_method = "impulse collision
   model; club inputs measured"` (or `calculated` when an input is);
-- `model_geometry` (an input is model geometry, D39): `spin_source =
+- `model_geometry` (an input is model geometry): `spin_source =
   "model_geometry"`, `spin_method = "impulse collision model; club inputs model
-  geometry (D39)"`. It feeds the flight model (D38) under that label; simulators do not
-  get it (D31).
+  geometry (D39)"`. It feeds the flight model under that label; simulators do not
+  get it.
 
 The spin it displaces is kept in `spin_rpm_measured` (its method in
 `spin_method_measured`), and is given back when a later run of the model has no
@@ -515,7 +508,7 @@ It is labelled `calculated` (or its inputs' weakest label), with
 source "fitted collision model: D-plane tilt, centre-face strike".
 
 **Impact location.** With a **measured** impact offset or height
-(`impact_offset_mm`, + toe; `impact_height_mm`, + up; E5 builds them), the
+(`impact_offset_mm`, + toe; `impact_height_mm`, + up), the
 forward model's gear back- and sidespin are added to the centre spin at the
 centre axis, for every club (an iron's is smaller, its centre of mass shallower): the source then ends "plus
 Cross & Nathan 2007 gear effect". `evaluate` takes the golfer's handedness
@@ -532,26 +525,27 @@ low-coherence IWR value (source `radar_low_coherence`), or its confidence is bel
 `SPIN_AXIS_MIN_CONFIDENCE` (0.6) or not given, it enters as an `estimated` input
 with that reason. Every output built on it is then `estimated`, with the reason:
 face angle, dynamic loft (the inversion uses all four angles), face to path,
-spin loft, D-plane tilt, the model's spin and the spin axis. The axis used to be
-withheld below 0.6; it is now shown, labelled `estimated`
+spin loft, D-plane tilt, the model's spin and the spin axis. The axis is shown,
+labelled `estimated`
 (`spin_axis_source = "estimated (D-plane tilt, ...; <reason>)"`), and the spin
 becomes the shot's under `spin_source = "estimated"` when no measured spin was
 accepted. Through the weakest-label rule the flight is then `estimated` too.
-Simulators get neither (D31). The label order is measured > calculated >
+Simulators get neither. The label order is measured > calculated >
 model_geometry > estimated > not_measured.
 
-**Club speed.** The model's club speed is the OPS243's club speed, which Tier 1 of
-the Part E plan treats as measured. It is a line-of-sight (radial) reading, not
-the head's full speed (E3 cannot project it yet), and the spin scales with it.
+**Club speed.** The model's club speed is the OPS243's club speed, treated as
+measured. It is a line-of-sight (radial) reading, not the head's full speed (the
+[full-speed projection](full-ball-speed.md) cannot project it yet), and the spin
+scales with it.
 
 **On the shot.** When calculated, it becomes `spin_axis_deg` with its frame and
 `spin_axis_source = "calculated (fitted collision model, centre-face strike, fitted launch-model inversion)"` (an
 iron: `"calculated (model: D-plane tilt x TM4 iron factor, …)"`; a rigid-body
 face says "rigid-body face" in place of the inversion), or `"calculated (fitted collision model + gear effect, Cross &
-Nathan 2007)"` with a measured impact location. The flight (E4) and the simulators treat any source starting
+Nathan 2007)"` with a measured impact location. The flight and the simulators treat any source starting
 with "calculated" as a calculated value.
 
-When an input is model geometry (D39), the axis still becomes `spin_axis_deg`,
+When an input is model geometry, the axis still becomes `spin_axis_deg`,
 with a source that starts with "model geometry" and names those inputs, e.g.
 `"model geometry (fitted collision model, centre-face strike, fitted
 launch-model inversion; club path from the arc prior)"`. The flight takes it under that label; simulators do not get it.
@@ -596,18 +590,18 @@ in the Club panel after spin loft:
 
 - **Spin index** = measured spin / expected spin × 100. Expected spin =
   `V · k · sin(spin loft)` (Penner 2001, Eq. (11): the rolling spin goes as
-  V sin θ). k is fitted by the maintainer to launch-monitor data per club where
+  V sin θ). k is fitted to launch-monitor data per club where
   an export has the club: driver 109.50, 7-iron 150.46, pitching wedge 165.13
   rpm per mph; other
   clubs take their category's k(L). It needs a **measured** spin: a calculated
   spin is not measured against itself, so on today's kiosk the spin index is
   `not_measured`, with that reason.
 - **Smash index** = ball speed (full) / expected ball speed × 100. Expected
-  ball speed = `V · (a · cos(spin loft) + c)`, fitted by the maintainer to
+  ball speed = `V · (a · cos(spin loft) + c)`, fitted to
   launch-monitor data per club: driver a = 1.5059, c = 0.0072; 7-iron 1.4956,
   0.0321; pitching wedge 1.4682, 0.0716. Other clubs take the published normal
   speed and rolling (or Coulomb-capped) tangential speed, Penner 2001 Eqs. (5),
-  (7), (8) with the heads above, times a category gain fitted by the maintainer
+  (7), (8) with the heads above, times a category gain fitted
   (driver and woods 0.997, irons and hybrids 1.022, wedges 1.022). It needs the
   full ball speed, the club speed and the spin loft; the model runs again once
   the full ball speed is known.
@@ -619,36 +613,22 @@ the indices follow the exported ones to 0.45 (spin) and 0.05 (smash) index
 points RMS. Each club's shots span only 3–6° of spin loft there, so a and c are
 fitted values for that club's usual deliveries, not a law over all spin lofts.
 
-## Simulators (D31)
+## Simulators
 
 Simulators get the calculated spin and spin axis under the provenance
 `"calculated"`, never `"measured"`. Back spin and side spin take the weaker of
 the two labels. A fusion shot with no measured or calculated spin or axis is
 still not sent.
 
-A spin, spin axis or carry built on model geometry (D39), and the arc's
+A spin, spin axis or carry built on model geometry, and the arc's
 model-geometry club path, are not sent. A fusion shot that has its spin or axis
 only as model geometry is refused with the reason "… not measured (model
-geometry only, not sent to simulators (D31): spin, spin axis)". Whether
-simulators get model-geometry values is an open decision: it is the
-one switch `sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`).
+geometry only, not sent to simulators (D31): spin, spin axis)". The switch
+`sim.resolver.SIMULATORS_ACCEPT_MODEL_GEOMETRY` (default `False`) changes that.
 Set to `True`, each of those values goes out labelled `"model_geometry"`, and
 back spin and side spin take the weaker label.
 
-## What this replaced
+## Kiosk fields
 
-- **The face estimate.** Was `face = (launch − 0.2 · path) / 0.8`, one fixed
-  weight for every club. It was replaced by the PING weights per category, then
-  (20 October 2026) by the fitted launch model's inversion, and by the
-  rigid-body relation when the spin is measured.
-- **The spin.** Penner 2001's rolling spin, replaced by the fitted forward
-  model, then (also 20 October 2026) by the impulse model: the earlier form had
-  a floor at small spin loft and a roll-off from about 47°, which a rigid ball
-  with the published face friction does not have; its smooth heel-biased loss
-  and saturating gear effect gave way to the effective mass and the linear gear
-  effect. The
-  `experimental_face_angle_*` fields mirror the new value so the kiosk tile
-  keeps working until the UI pass.
-- **The spin-axis proxy.** Was `spin axis = launch direction − path`. It is
-  replaced by the D-plane tilt, and for irons by the iron fit on it; drivers,
-  woods and hybrids then by the fitted model's centre axis.
+The `experimental_face_angle_*` fields mirror the face angle so the kiosk's face
+tile reads it.

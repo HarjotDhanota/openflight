@@ -82,7 +82,7 @@ which measured spin is trusted for physics.
 
 ## Ballistics
 
-`src/openflight/flight_sim.py` (Part E's flight model) — see
+`src/openflight/flight_sim.py` (the flight model) — see
 [ballistics & carry](../how-it-works/ballistics.md) for the model and its
 references.
 

@@ -5,13 +5,13 @@ icon: lucide/ruler
 # Metric definitions
 
 OpenFlight uses TrackMan's **public** definitions for smash factor, face to
-path, spin loft, D-plane tilt and curve (decision D37). Each formula below was
+path, spin loft, D-plane tilt and curve. Each formula below was
 derived from the quoted public wording and plain geometry. The code is
 `src/openflight/metric_definitions.py`; its tests, `tests/test_metric_definitions.py`,
 check hand-worked cases and properties.
 
 The kiosk shows all five. Spin loft, face to path and D-plane tilt use the
-collision model's calculated face and loft (`docs/how-it-works/collision-model.md`);
+[collision model](../how-it-works/collision-model.md)'s calculated face and loft;
 curve uses the flight model's landing point.
 
 ## Frame, units and signs
@@ -46,7 +46,7 @@ curve uses the flight model's landing point.
   ([support](https://support.trackmangolf.com/hc/en-us/articles/39726314021915-Parameters-Smash-Factor-Tee-to-Green)).
 - **Formula:** `smash = ball speed / club speed`, with both speeds in the same unit.
 - **Domain:** None without a positive, finite club speed, or with a negative ball speed.
-- **What the kiosk shows (D21):**
+- **What the kiosk shows:**
     - TrackMan divides the ball's full speed by the head's full speed.
     - A fusion unit divides the OPS243 radial ball speed by the OPS243 radial
       club speed, which is a different quantity.
@@ -154,8 +154,7 @@ curve uses the flight model's landing point.
 - **Domain:** None for a non-positive carry, |S| > C, or a launch direction
   that is not downrange (|t| ≥ 90°).
 
-## Not implemented
+## The D plane
 
-Nothing the D37 decision named was left out. The D plane itself has no
-TrackMan public definition (only its tilt has), so the plane comes from the
-physics literature cited above.
+The D plane itself has no TrackMan public definition (only its tilt has), so the
+plane comes from the physics literature cited above.
