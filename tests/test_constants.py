@@ -10,8 +10,6 @@ from openflight import constants
 @pytest.mark.parametrize(
     "module,name,shared",
     [
-        ("openflight.ops_speed_track", "MPH_TO_MPS", "MPH_TO_MPS"),
-        ("openflight.camera.impact_session", "MPH_TO_MPS", "MPH_TO_MPS"),
         ("openflight.camera.club_motion", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
         ("openflight.camera.impact_location", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),
         ("openflight.server", "BALL_DIAMETER_MM", "BALL_DIAMETER_MM"),

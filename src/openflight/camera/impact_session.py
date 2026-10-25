@@ -38,8 +38,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from openflight.ballistics import MPH_TO_MPS
 from openflight.camera import impact_location as il
-from openflight.constants import MPH_TO_MPS
 
 SCHEMA = "openflight.impact_location.v2"
 ANCHOR_SCHEMA = "openflight.face_centre_anchors.v1"

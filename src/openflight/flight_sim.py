@@ -37,22 +37,21 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .ballistics import (
+    AIR_DENSITY_STD,
+    BALL_AREA_M2,
+    BALL_MASS_KG,
+    BALL_RADIUS_M,
+    GRAVITY,
+    M_TO_YD,
+    MPH_TO_MPS,
+    MPS_TO_MPH,
+)
 from .bounce_roll import TURF_ROLL_V2, HopFlight, TurfRollModel
 from .clubs import ClubType
 from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
-from .constants import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
-
-MPS_TO_MPH = 1.0 / MPH_TO_MPS
-M_TO_YD = 1.09361
-
-# USGA maximum-conforming ball (45.93 g, 42.7 mm diameter).
-# Using the max — not an average — so carry estimates are upper-bounded by
-# the rules rather than by a guess at the specific ball in play.
-BALL_MASS_KG = 0.04593
-BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
-AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 
 # Aerodynamic model (E8a). The form is Ferguson, McNally & McPhee (2022), "Predicting
 # the Flight of a Golf Ball: Comparing a Physics-Based Aerodynamic Model to a Neural

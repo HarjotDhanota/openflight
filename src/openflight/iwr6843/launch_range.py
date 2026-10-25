@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from openflight.iwr6843 import tracking
+from openflight.iwr6843.club import CLUB_TRACK_SPEED_LIMIT_MS
 from openflight.iwr6843.shot import PreparedShotDump, near_mti_notch, track_broken
 
 SCHEMA = "openflight.iwr_launch_range.v1"
@@ -22,7 +23,6 @@ CAMERA_PRIOR_SOURCE = "camera_prior"
 # Radial ball speed as a fraction of the OPS243's; the floor keeps the slower club out.
 BALL_SPEED_FRACTION = (0.85, 1.10)
 CLUB_SPEED_FRACTION = (0.70, 1.20)
-CLUB_TRACK_SPEED_LIMIT_MS = (12.0, 60.0)
 # Club search window around the ball walk's start, which can come early.
 CLUB_WINDOW_BEFORE_S = 0.015
 CLUB_WINDOW_AFTER_S = 0.006

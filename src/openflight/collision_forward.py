@@ -66,9 +66,9 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from . import metric_definitions as md
+from .ballistics import BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
-from .constants import BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 from .numeric import finite
 
 DRIVER_WOOD = "driver_wood"

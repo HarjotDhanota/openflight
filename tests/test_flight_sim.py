@@ -500,6 +500,6 @@ class TestHopsFlyInTheTrajectorysAir:
 def test_the_shot_models_import_the_shared_constants(module, name, shared):
     import importlib
 
-    from openflight import constants
+    from openflight import ballistics
 
-    assert getattr(importlib.import_module(module), name) is getattr(constants, shared)
+    assert getattr(importlib.import_module(module), name) is getattr(ballistics, shared)

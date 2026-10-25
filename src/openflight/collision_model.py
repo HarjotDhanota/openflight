@@ -107,9 +107,10 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Optional
 
 from . import collision_forward, metric_definitions
+from .ballistics import BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
 from .clubs import ClubType
 from .clubs.physics import get_club_physics
-from .constants import BALL_DIAMETER_M, BALL_RADIUS_M, MPH_TO_MPS as MPH_TO_M_S
+from .constants import BALL_DIAMETER_M
 from .horizontal_frame import MIXED
 from .numeric import finite as _finite
 from .source_labels import (  # noqa: F401  (the predicates are re-exported)
@@ -187,7 +188,7 @@ SPIN_METHOD_MODEL = "impulse collision model"
 SPIN_METHOD_MODEL_GEOMETRY = f"{SPIN_METHOD_MODEL}; club inputs model geometry (D39)"
 SPIN_METHOD_ESTIMATED = f"{SPIN_METHOD_MODEL}; an input estimated"
 
-RAD_S_TO_RPM = 60.0 / (2.0 * math.pi)
+RAD_S_TO_RPM = collision_forward.RAD_S_TO_RPM
 
 # ---- Wood, Henrikson & Broadie 2018, Table 1 ----------------------------------------
 # (category, horizontal ratio toward face angle, vertical ratio toward dynamic loft)
@@ -222,7 +223,7 @@ def _anchor_lofts() -> tuple[float, float, float]:
 
 
 # ---- Penner 2001 constants (Sec. II A) -----------------------------------------------
-PENNER_BALL_MASS_KG = 0.0459
+PENNER_BALL_MASS_KG = collision_forward.BALL_MASS_KG
 PENNER_BALL_DIAMETER_M = BALL_DIAMETER_M
 PENNER_HEAD_MASS_KG = 0.200
 PENNER_INERTIA_FACTOR = 0.4  # I = (2/5) m r^2, uniform solid sphere

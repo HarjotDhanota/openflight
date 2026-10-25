@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .constants import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
+from .ballistics import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .numeric import finite as _finite
 
 M_TO_YD = 1.0 / 0.9144

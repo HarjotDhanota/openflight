@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .constants import MPH_TO_MPS
+from .ballistics import MPH_TO_MPS
 from .numeric import finite as _finite
 
 # Later readings are not used: the referral error grows with time after impact.
