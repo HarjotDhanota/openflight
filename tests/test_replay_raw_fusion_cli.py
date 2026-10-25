@@ -15,6 +15,7 @@ import pytest
 
 from openflight.accuracy_benchmark import build_accuracy_report
 from scripts.analysis import benchmark_accuracy as benchmark_cli, replay_raw_fusion as cli
+from tests.test_iwr6843_partial_dumps import partial_event
 
 
 def test_standalone_cli_help_does_not_require_repository_pythonpath():
@@ -733,3 +734,22 @@ def test_the_moving_anchor_names_why_the_camera_replay_did_not_run(tmp_path, mon
     anchor = result["stages"]["moving_camera_iwr_anchor"]
     assert "missing or misaligned" not in anchor["reason"]
     assert "lighting was not analysis eligible" in anchor["reason"]
+
+
+def test_raw_replay_labels_the_shot_incomplete_and_reads_nothing(tmp_path):
+    event = partial_event(tmp_path)
+
+    found, path, _resolution, raw, reason = cli._saved_iwr_raw([event], tmp_path)
+
+    assert found is event and path is None and raw is None
+    assert "incomplete" in reason
+    assert f"{event['partial_capture']['bytes']} of" in reason
+
+
+def test_raw_replay_refuses_a_partial_file_named_as_the_capture(tmp_path):
+    event = partial_event(tmp_path)
+    event.update(capture_error=None, capture_path=event["partial_capture"]["path"])
+
+    _event, _path, _resolution, raw, reason = cli._saved_iwr_raw([event], tmp_path)
+
+    assert raw is None and "incomplete" in reason

@@ -1,7 +1,9 @@
 """A saved partial dump is labelled incomplete everywhere and never replayed as a dump.
 
 The monitor keeps a failed transfer's bytes as ``*.partial.l3dump`` and records
-them as the event's ``partial_capture``, never as its ``capture_path``.
+them as the event's ``partial_capture``, never as its ``capture_path``. The
+analysis side (replay locator, pipeline check, raw replay) is checked in
+``test_partial_dump_analysis`` and ``test_replay_raw_fusion_cli``.
 """
 
 from __future__ import annotations
@@ -12,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight import pipeline_check
 from openflight.iwr6843.dump import (
     PARTIAL_DUMP_SUFFIX,
     declared_dump_nbytes,
@@ -20,8 +21,6 @@ from openflight.iwr6843.dump import (
     pack_dump,
 )
 from openflight.iwr6843.replay import input_from_dump, inputs_from_session
-from openflight.raw_radar_replay import locate_recorded_capture
-from scripts.analysis import replay_raw_fusion as cli
 
 RUN = "/data/openflight_sessions/run-01"
 
@@ -30,7 +29,7 @@ def _raw() -> bytes:
     return pack_dump(np.ones((2, 4, 4, 8), dtype=complex), n_tx=2, version=3)
 
 
-def _partial_event(session_dir: Path) -> dict:
+def partial_event(session_dir: Path) -> dict:
     raw = _raw()
     name = f"iwr6843_20261024_101500_000_007{PARTIAL_DUMP_SUFFIX}"
     (session_dir / "iwr6843").mkdir(parents=True, exist_ok=True)
@@ -61,33 +60,8 @@ def test_partial_names_and_header_sizes():
     assert declared_dump_nbytes(raw[:10]) is None
 
 
-def test_a_partial_dump_is_never_located_as_a_capture(tmp_path):
-    event = _partial_event(tmp_path)
-    with pytest.raises(ValueError, match="incomplete"):
-        locate_recorded_capture(event["partial_capture"]["path"], tmp_path)
-
-
-def test_raw_replay_labels_the_shot_incomplete_and_reads_nothing(tmp_path):
-    event = _partial_event(tmp_path)
-
-    found, path, _resolution, raw, reason = cli._saved_iwr_raw([event], tmp_path)
-
-    assert found is event and path is None and raw is None
-    assert "incomplete" in reason
-    assert f"{event['partial_capture']['bytes']} of" in reason
-
-
-def test_raw_replay_refuses_a_partial_file_named_as_the_capture(tmp_path):
-    event = _partial_event(tmp_path)
-    event.update(capture_error=None, capture_path=event["partial_capture"]["path"])
-
-    _event, _path, _resolution, raw, reason = cli._saved_iwr_raw([event], tmp_path)
-
-    assert raw is None and "incomplete" in reason
-
-
 def test_lcmf_replay_never_takes_a_partial_dump(tmp_path):
-    event = _partial_event(tmp_path)
+    event = partial_event(tmp_path)
     session = tmp_path / "session_20261024_101500_arm.jsonl"
     session.write_text(json.dumps(event) + "\n", encoding="utf-8")
 
@@ -95,14 +69,3 @@ def test_lcmf_replay_never_takes_a_partial_dump(tmp_path):
     partial_file = next((tmp_path / "iwr6843").glob(f"*{PARTIAL_DUMP_SUFFIX}"))
     with pytest.raises(ValueError, match="incomplete"):
         input_from_dump(partial_file, ball_speed_mph=120.0)
-
-
-def test_the_pipeline_check_names_the_kept_partial_dump(tmp_path):
-    event = _partial_event(tmp_path)
-
-    verdict = pipeline_check.iwr_capture({}, event)
-
-    assert verdict["status"] == pipeline_check.FAIL
-    assert "ended early" in verdict["evidence"]
-    assert f"{event['partial_capture']['bytes']} of" in verdict["evidence"]
-    assert "incomplete" in verdict["evidence"]

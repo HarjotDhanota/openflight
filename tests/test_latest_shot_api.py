@@ -8,15 +8,23 @@ the session, inside the kiosk process that also reads the IWR6843 dump (24 Oct:
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 
 from openflight import server as server_module, shot_metrics
-from tests.every_metric import fusion_shot
+from openflight.clubs import ClubType
+from openflight.launch_monitor import Shot
 
 
 def _shots(count: int):
     return [
-        fusion_shot(shot_number=number, ball_speed_mph=100.0 + number)
+        Shot(
+            ball_speed_mph=100.0 + number,
+            club_speed_mph=80.0,
+            timestamp=datetime(2026, 10, 24, 10, 0, number % 60),
+            club=ClubType.IRON_7,
+            shot_number=number,
+        )
         for number in range(1, count + 1)
     ]
 
