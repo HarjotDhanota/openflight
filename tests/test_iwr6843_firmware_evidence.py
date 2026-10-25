@@ -276,6 +276,10 @@ def test_c_struct_written_v8_and_v9_dumps_parse(tmp_path, version):
         "iq8_scanned": True,
     }
     assert meta["dump_trailer"] == {"payload_end_tick": 0x55555555}
+    assert meta["frame_time_offsets_us"] == (0, 3000)
+    unscanned = meta["frame_evidence"][0]  # its wire bytes say 0 and 90: neither was measured
+    assert (unscanned["iq8_overflow"], unscanned["iq8_max_abs"]) == (None, None)
+    assert cube[0, 0, 0, 0] == 1 - 1j
     assert cube[1, 2, 3, 1] == 48 - 48j
 
 
