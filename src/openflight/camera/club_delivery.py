@@ -30,6 +30,13 @@ from openflight.camera.geometry import (
     resting_ball_camera_model,
     unit_world_rays,
 )
+from openflight.camera.head_track import (
+    SOURCE as HEAD_TRACK_SOURCE,
+    HeadTrackCamera,
+    HeadTrackContext,
+    HeadTrackInputs,
+    estimate_head_track,
+)
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
@@ -224,6 +231,8 @@ class ChainedDelivery:
     clock: str | None = None
     horizontal_offset_deg: float | None = None
     ball_position: dict | None = None
+    # the camera head track's record when it ran as the last fallback (head_track.py)
+    head_track: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -1010,10 +1019,13 @@ def estimate_chained_delivery(
     reference_ball: ReferenceBall | None = None,
     reference_ball_selected: bool = False,
     sensor_timestamp_ns: np.ndarray | None = None,
+    head_track: HeadTrackContext | None = None,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
     Every time comes from one frame clock; the radar is reached only through the contact anchor.
+    With a ``head_track`` context, a rejection for no ball or no stable clubhead falls back
+    to the camera head track (``head_track.py``), experimental.
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1036,15 +1048,34 @@ def estimate_chained_delivery(
     if scene_p995 < SCENE_P995_MIN:
         notes.append(f"scene dim: p99.5 {scene_p995:.0f} DN, below {SCENE_P995_MIN:.0f}")
     ball = reference_ball
+
+    def fallback(rejected: ChainedDelivery, resting_ball) -> ChainedDelivery:
+        return _head_track_fallback(
+            rejected,
+            frames=frames,
+            timestamps_ns=timestamps_ns,
+            timestamp_source=timestamp_source,
+            ball=resting_ball,
+            geometry=geometry,
+            ops_club_speed_mph=ops_club_speed_mph,
+            context=head_track,
+        )
+
     if ball is None and reference_ball_selected:
-        return ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes))
+        return fallback(
+            ChainedDelivery(status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)),
+            None,
+        )
     scale = ball_pixels.pixel_scale(frames.shape[2])
     if ball is None:
         try:
             ball = detect_reference_ball(frames, pixel_scale=scale)
         except ValueError:
-            return ChainedDelivery(
-                status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
+            return fallback(
+                ChainedDelivery(
+                    status="rejected_no_ball", scene_p995=scene_p995, notes=tuple(notes)
+                ),
+                None,
             )
     camera_check = None
     if geometry.calibrated_model is None:
@@ -1180,14 +1211,9 @@ def estimate_chained_delivery(
         },
     }
     if not pair_estimates:
-        return ChainedDelivery(
-            status=(
-                "rejected_calibrated_requires_iwr_range"
-                if range_evidence is None and geometry.calibrated_model is not None
-                else "rejected_no_stable_clubhead"
-            ),
-            **common,
-        )
+        if range_evidence is None and geometry.calibrated_model is not None:
+            return ChainedDelivery(status="rejected_calibrated_requires_iwr_range", **common)
+        return fallback(ChainedDelivery(status="rejected_no_stable_clubhead", **common), ball)
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=pair_estimates.get((-1, 0)),
@@ -1221,6 +1247,114 @@ def estimate_chained_delivery(
     return _in_output_frame(
         ChainedDelivery(**{**vars(result), **common}), geometry.horizontal_offset_deg
     )
+
+
+def _head_track_fallback(
+    rejected: ChainedDelivery,
+    *,
+    frames: np.ndarray,
+    timestamps_ns: np.ndarray,
+    timestamp_source: str,
+    ball,
+    geometry: CameraDeliveryGeometry,
+    ops_club_speed_mph: float | None,
+    context: HeadTrackContext | None,
+) -> ChainedDelivery:
+    """The camera head track in place of ``rejected``, or ``rejected`` with its reason."""
+    if context is None:
+        return rejected
+    camera, ball_px, range_m = _head_track_camera(ball, geometry, context)
+    track = estimate_head_track(
+        HeadTrackInputs(
+            frames=frames,
+            timestamps_ns=timestamps_ns,
+            camera=camera,
+            ball_px=ball_px,
+            ball_range_m=range_m,
+            ops_club_speed_mph=ops_club_speed_mph,
+            contact_window_ns=(
+                context.contact_window_ns if timestamp_source == "sensor_timestamp_ns" else None
+            ),
+            exposure_us=context.exposure_us,
+            ball_range_sigma_m=context.ball_range_sigma_m,
+            handedness=context.handedness,
+            club=context.club,
+        )
+    )
+    record = track.to_dict()
+    if track.status != "ok":
+        reason = "; ".join(track.notes)
+        return replace(
+            rejected,
+            head_track=record,
+            notes=(*rejected.notes, f"camera head track: {track.status}: {reason}"),
+        )
+    path = track.club_path_deg if track.club_path_flag is None else None
+    attack = track.attack_angle_deg if track.attack_angle_flag is None else None
+    flags = tuple(flag for flag in (track.club_path_flag, track.attack_angle_flag) if flag)
+    delivery = replace(
+        rejected,
+        status=HEAD_TRACK_SOURCE,
+        club_path_deg=path,
+        attack_angle_deg=attack,
+        confidence_tier="experimental",
+        path_confidence_tier="experimental" if path is not None else "withheld",
+        attack_confidence_tier="experimental" if attack is not None else "withheld",
+        speed_mph=track.speed_mph,
+        impact_frame=track.last_rest_frame,
+        contact_t_s=track.contact_ns / 1e9,
+        clock=timestamp_source,
+        head_track=record,
+        notes=(
+            *rejected.notes,
+            f"{rejected.status}: camera head track used (experimental): path "
+            f"+-{track.club_path_sigma_deg:.1f} deg, attack +-{track.attack_angle_sigma_deg:.1f} deg",
+            *flags,
+            *track.notes,
+        ),
+    )
+    return _in_output_frame(delivery, geometry.horizontal_offset_deg)
+
+
+def _head_track_camera(ball, geometry: CameraDeliveryGeometry, context: HeadTrackContext):
+    """The head track's pinhole, the resting ball's pixel and its range from the camera.
+
+    The chained estimator's camera model: the unit's calibrated pitch and focal length, else
+    the resting ball's. Without a found ball the setup's ball position stands in, sized at
+    the lens's focal length (the setup's diameter is not this shot's).
+    """
+    range_m = math.sqrt(
+        (geometry.ball_lateral_offset_m - geometry.camera_lateral_offset_m) ** 2
+        + geometry.camera_ball_forward_m**2
+        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
+    )
+    if ball is None and context.setup_ball:
+        focal = geometry.setup_focal_px or context.lens_focal_px
+        if focal:
+            diameter = float(focal) * geometry.ball_diameter_m / range_m
+            ball = ReferenceBall(
+                x=float(context.setup_ball["x"]),
+                y=float(context.setup_ball["y"]),
+                diameter_px=diameter,
+                area_px=int(round(math.pi * diameter * diameter / 4.0)),
+            )
+    pitch_deg, focal_px = 0.0, float(context.lens_focal_px or geometry.image_width_px)
+    if ball is not None:
+        try:
+            focal_px, pitch_rad, _radar, _check = _camera_model(ball, geometry)
+            pitch_deg = math.degrees(pitch_rad)
+        except ValueError:
+            ball = None
+    camera = HeadTrackCamera(
+        focal_px=float(focal_px),
+        pitch_deg=pitch_deg,
+        image_width_px=geometry.image_width_px,
+        image_height_px=geometry.image_height_px,
+        roll_correction_deg=geometry.roll_correction_deg,
+        horizontal_pixel_sign=geometry.horizontal_pixel_sign,
+        yaw_sigma_deg=context.yaw_sigma_deg,
+    )
+    return camera, (None if ball is None else (float(ball.x), float(ball.y))), range_m
 
 
 # Measured AoA offsets (TrackMan July baseline minus radar candidate median,

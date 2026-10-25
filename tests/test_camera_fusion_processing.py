@@ -337,3 +337,61 @@ def test_the_setup_ball_rides_in_the_context_to_the_ball_gate(monkeypatch):
     fp.process_camera_fusion(context, _archive())
     assert context["setup_ball"] == ball
     assert seen["setup_ball"] == ball
+
+
+def test_the_head_track_context_rides_in_the_frozen_context(monkeypatch):
+    """Hand, gate latency, setup ball and lens reach the club stage's head-track fallback."""
+    monkeypatch.setattr(
+        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate(status="x")
+    )
+    seen = {}
+
+    def club_estimator(*_args, head_track, **_kwargs):
+        seen["context"] = head_track
+        return ChainedDelivery(status="rejected_no_stable_clubhead")
+
+    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    ball = {"x": 4.0, "y": 3.0, "diameter_px": 2.0}
+    context = fp.build_context(
+        **{
+            **_context_kwargs(),
+            "setup_ball": ball,
+            "lens_focal_px": 2000.0,
+            "handedness": "LH",
+            "gate_latency_ns": 800_000.0,
+        }
+    )
+    archive = {
+        **_archive(),
+        "sensor_timestamp_ns": np.arange(20, dtype=np.int64) * 8_333_333,
+        "trigger_boottime_ns": np.asarray(90_000_000, dtype=np.int64),
+        "exposure_us": np.full(20, 99, dtype=np.int32),
+    }
+    fp.process_camera_fusion(context, archive)
+
+    head_track = seen["context"]
+    assert head_track.handedness == "LH"
+    assert head_track.club == ClubType.IRON_7
+    assert head_track.setup_ball == ball
+    assert head_track.lens_focal_px == 2000.0
+    assert head_track.contact_window_ns == (
+        pytest.approx(90_000_000 - 800_000 - 4e6),
+        pytest.approx(90_000_000 - 800_000 - 0.5e6),
+    )
+
+
+def test_a_context_frozen_before_the_head_track_replays_right_handed(monkeypatch):
+    monkeypatch.setattr(
+        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate(status="x")
+    )
+    seen = {}
+
+    def club_estimator(*_args, head_track, **_kwargs):
+        seen["context"] = head_track
+        return ChainedDelivery(status="rejected_no_stable_clubhead")
+
+    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    fp.process_camera_fusion(_context(), _archive())
+
+    assert seen["context"].handedness == "RH"
+    assert seen["context"].contact_window_ns is None

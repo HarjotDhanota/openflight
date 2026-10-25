@@ -23,6 +23,7 @@ from openflight.camera.fusion_processing import (
     process_camera_fusion,
 )
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.camera.head_track import gate_latency_ns
 from openflight.clubs import ClubType
 from openflight.raw_radar_replay import locate_recorded_capture
 from openflight.shot_updates import apply_shot_updates
@@ -145,7 +146,11 @@ def replay_frozen_shot(
             raise ValueError("camera capture hash does not match the recorded context")
     else:
         # D15 (P8-7): only missing frames refuse; the rest is rebuilt, labelled
-        context, reconstruction = reconstruct_context(start, shot, capture_event, capture_hash)
+        metadata_path = capture_path.parent / "metadata.json"
+        metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
+        context, reconstruction = reconstruct_context(
+            start, shot, capture_event, capture_hash, gate_latency=gate_latency_ns(metadata)
+        )
     with np.load(io.BytesIO(capture_bytes), allow_pickle=False) as source:
         archive = {name: source[name] for name in source.files}
     archive["_capture_npz_sha256"] = capture_hash
@@ -203,7 +208,12 @@ def _reconstructed_geometry(config: dict[str, Any]) -> EffectiveCameraGeometryIn
 
 
 def reconstruct_context(
-    start: dict[str, Any], shot: dict[str, Any], capture_event: dict[str, Any], capture_hash: str
+    start: dict[str, Any],
+    shot: dict[str, Any],
+    capture_event: dict[str, Any],
+    capture_hash: str,
+    *,
+    gate_latency: float | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Rebuild a shot's camera fusion context from the clip, its metadata and the session.
 
@@ -251,6 +261,12 @@ def reconstruct_context(
             camera.get("lens") or _mapping(config.get("rig_geometry")).get("lens"),
             int(geometry.image_width_px),
         ),
+        handedness=shot.get("handed") or _mapping(config.get("golfer")).get("handed") or "RH",
+        gate_latency_ns=gate_latency,
+        # the kiosk's target line carries the setup aim's uncertainty (apply_setup_aim)
+        target_yaw_sigma_deg=_mapping(
+            _mapping(_mapping(config.get("setup")).get("record")).get("aim")
+        ).get("uncertainty_deg"),
     )
     return context, notes
 
