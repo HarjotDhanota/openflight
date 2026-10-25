@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from flask import Flask, Response, g, jsonify, request, send_file
+from flask import Flask, Response, g, has_request_context, jsonify, request, send_file
 
 from openflight import (
     session_bundle,
@@ -170,6 +170,11 @@ LIVE_FRAME_STALE_S = 2.5
 LIVE_THREAD_JOIN_TIMEOUT_S = 5.0
 GUIDED_RANGE_STABLE_COUNT = 3
 GUIDED_RANGE_STABLE_SPAN_S = 1.0
+# The ball range's streak survives this many missed looks in a row (no ball selected,
+# or the LIS3DH not still for a moment): field 24 Oct, any one of them started the
+# streak over. Save stays off on a missed look; a real move or another ball resets.
+GUIDED_RANGE_MISS_TOLERANCE = 2
+GUIDED_RANGE_WAITING_FOR_TILT = "waiting for a stable LIS3DH reading"
 # the picture's own reading of the ball's size, against the size the tape
 # predicts, beyond which the tape or the lens is suspect
 SIZE_CHECK_FRACTION = 0.25
@@ -315,6 +320,133 @@ def settle_reading(
         sleep(0.1)
         reading = read()
     return reading
+
+
+# The confirmation's baseline is the median of the still readings over this window,
+# a few of the service's 0.8 s windows: field 24 Oct, the one snapshot it kept was
+# taken while the unit was being set down and sat 0.46 deg off the still unit.
+CONFIRM_BASELINE_WINDOW_S = 2.5
+CONFIRM_BASELINE_INTERVAL_S = 0.2
+# the angles a baseline or a steady reading takes as medians
+MEDIAN_ANGLE_KEYS = ("pitch_deg", "calibrated_pitch_deg", "camera_pitch_deg", "roll_deg")
+
+
+def _median_angles(latest: Mapping, still: Sequence[Mapping]) -> dict:
+    """``latest`` with each angle every still reading carries replaced by their median."""
+    merged = dict(latest)
+    for key in MEDIAN_ANGLE_KEYS:
+        values = [item.get(key) for item in still]
+        if values and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+        ):
+            merged[key] = round(float(np.median(values)), 2)
+    return merged
+
+
+def median_reading(
+    read,
+    *,
+    window_s: float | None = None,
+    interval_s: float | None = None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> dict:
+    """The still LIS3DH readings over ``window_s``, as one reading with median angles.
+
+    The last still reading carries the medians; with none still in the window, the
+    last reading as it is (the confirmation then refuses it).
+    """
+    window = CONFIRM_BASELINE_WINDOW_S if window_s is None else float(window_s)
+    interval = CONFIRM_BASELINE_INTERVAL_S if interval_s is None else float(interval_s)
+    started = clock()
+    still: list[dict] = []
+    reading = read()
+    samples = 1
+    while True:
+        if reading.get("status") == "stable":
+            still.append(dict(reading))
+        if clock() - started >= window:
+            break
+        sleep(interval)
+        reading = read()
+        samples += 1
+    if not still:
+        return reading
+    return {
+        **_median_angles(still[-1], still),
+        "baseline_samples": samples,
+        "baseline_still_samples": len(still),
+        "baseline_window_s": round(clock() - started, 2),
+    }
+
+
+# A poll's reading that is momentarily not still stands on the last still one for
+# this long: a hand near the unit, or the service between windows, is not a move.
+READING_HOLD_S = 10.0
+# what a drawing (the box, the aim) is projected with: the recent still readings' median
+STEADY_WINDOW_S = 5.0
+HOLDABLE_STATUSES = frozenset({"moving", "stale", "no_stable_preimpact_reading"})
+
+
+class SteadyReading:
+    """The enclosure's reading as the page's polls and drawings take it (field 24 Oct).
+
+    A reading that is momentarily moving or stale is held over from the last still
+    one (``held_over`` says so, and the setup's move watch never counts it); a sensor
+    that is off or failing is never held. ``steady`` is the median of the still
+    readings of the last ``window_s``, so a drawing does not jitter with the noise.
+    """
+
+    def __init__(
+        self,
+        read: Callable[[], Mapping],
+        *,
+        hold_s: float = READING_HOLD_S,
+        window_s: float = STEADY_WINDOW_S,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._read = read
+        self.hold_s = float(hold_s)
+        self.window_s = float(window_s)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._still: deque[tuple[float, dict]] = deque()
+
+    def _observe(self) -> tuple[dict, float]:
+        current = dict(self._read())
+        now = self._clock()
+        with self._lock:
+            if current.get("status") == "stable":
+                self._still.append((now, current))
+            keep = max(self.hold_s, self.window_s)
+            while self._still and now - self._still[0][0] > keep:
+                self._still.popleft()
+        return current, now
+
+    def reading(self) -> dict:
+        """The reading now, or the last still one held over a moment's motion."""
+        current, now = self._observe()
+        if current.get("status") == "stable" or current.get("status") not in HOLDABLE_STATUSES:
+            return current
+        with self._lock:
+            if not self._still:
+                return current
+            last_at, last = self._still[-1]
+        if now - last_at > self.hold_s:
+            return current
+        return {**last, "held_over": current.get("status"), "held_s": round(now - last_at, 2)}
+
+    def steady(self) -> dict:
+        """The reading with the recent still readings' median angles, for a drawing."""
+        current = self.reading()
+        if current.get("status") != "stable":
+            return current
+        now = self._clock()
+        with self._lock:
+            recent = [item for at, item in self._still if now - at <= self.window_s]
+        if not recent:
+            return current
+        return {**_median_angles(current, recent), "steady_samples": len(recent)}
 
 
 class TeeRangeSetupAdmissionError(RuntimeError):
@@ -4913,6 +5045,7 @@ class GuidedRangeAnalyzer:
         self._stable_anchor: dict | None = None
         self._stable_count = 0
         self._stable_started_at: float | None = None
+        self._stable_misses = 0
         self._last_observation_id: int | None = None
         # whether the last pose check found the rig moved, so each change is logged once
         self._pose_moved = False
@@ -4920,7 +5053,7 @@ class GuidedRangeAnalyzer:
     def _orientation_problem(self) -> str | None:
         current = self._orientation_reader()
         if current.get("status") != "stable":
-            return "waiting for a stable LIS3DH reading"
+            return GUIDED_RANGE_WAITING_FOR_TILT
         deltas: dict[str, float] = {}
         for name in ("camera_pitch_deg", "roll_deg"):
             try:
@@ -5001,25 +5134,37 @@ class GuidedRangeAnalyzer:
             analysis["selected"] = None
         selected = analysis.get("selected")
         with self._lock:
-            if problem or not isinstance(selected, Mapping) or analysis["status"] != "selected":
+            looked = (
+                not problem and isinstance(selected, Mapping) and analysis["status"] == "selected"
+            )
+            # a missed look (no ball selected, or the LIS3DH not still a moment) keeps
+            # the streak for a few looks; a pose change or another ball does not
+            missed = not looked and problem in {None, GUIDED_RANGE_WAITING_FOR_TILT}
+            if missed and self._stable_anchor is not None:
+                self._stable_misses += 1
+            if not looked and (not missed or self._stable_misses > GUIDED_RANGE_MISS_TOLERANCE):
                 self._stable_anchor = None
                 self._stable_count = 0
                 self._stable_started_at = None
-            elif self._stable_anchor is None or not _same_guided_candidate(
-                self._stable_anchor, selected
+                self._stable_misses = 0
+            elif looked and (
+                self._stable_anchor is None
+                or not _same_guided_candidate(self._stable_anchor, selected)
             ):
                 self._stable_anchor = dict(selected)
                 self._stable_count = 1
                 self._stable_started_at = now
-            else:
+                self._stable_misses = 0
+            elif looked:
                 self._stable_count += 1
+                self._stable_misses = 0
             span = (
                 max(0.0, now - self._stable_started_at)
                 if self._stable_started_at is not None
                 else 0.0
             )
             eligible = bool(
-                not problem
+                looked
                 and self._stable_count >= GUIDED_RANGE_STABLE_COUNT
                 and span >= GUIDED_RANGE_STABLE_SPAN_S
             )
@@ -7762,6 +7907,9 @@ def create_app(
         live.sensor_limits_path = sensor_limits_path
         live.lens_id = lens_store.selected
     enclosure = tilt or EnclosureTilt(rig_geometry)
+    # the page's polls and drawings: a moment's motion held over, the box drawn from
+    # the recent still readings' median (field 24 Oct); actions read the enclosure
+    steady = SteadyReading(lambda: enclosure.reading())
     setup = setup_policy or SetupEligibility(
         rig_geometry,
         sessions_root,
@@ -8091,7 +8239,7 @@ def create_app(
             result["stage"] = "runtime"
             result["runtime"] = runtime
             return with_unit_checks(result)
-        return with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
+        return with_unit_checks(setup.evaluate(tester_id, steady.reading()))
 
     def setup_command_config(result: Mapping) -> dict:
         return {
@@ -8106,10 +8254,31 @@ def create_app(
     def blocked_setup(result: dict):
         return jsonify({"error": "tester setup is not eligible", "setup_eligibility": result}), 409
 
+    def settled_reading() -> dict:
+        """A still LIS3DH reading for a range action: the one its request took before
+        the range's lock, so the wait for it (up to 3 s) never holds the lock."""
+        if has_request_context():
+            taken = g.get("openflight_settled_reading")
+            if taken is not None:
+                return dict(taken)
+        return settle_reading(enclosure.reading)
+
+    def steady_baseline() -> dict:
+        """A frozen pose for a range step: the recent still readings' median, so one
+        noisy snapshot is not what every later reading is held to within 0.5 deg."""
+        reading = steady.steady()
+        if reading.get("status") == "stable" and not reading.get("held_over"):
+            return reading
+        return settled_reading()
+
+    def settle_before_lock() -> None:
+        """Take this request's still reading now, before it takes ``tee_range_lock``."""
+        g.openflight_settled_reading = settle_reading(enclosure.reading)
+
     def bound_range_setup(tester_id: str, state, action: str) -> tuple[dict, dict]:
         if state is None:
             raise RuntimeError("start automatic tee range before this step")
-        reading = settle_reading(enclosure.reading)
+        reading = settled_reading()
         eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
         if not eligibility["eligible"]:
             raise TeeRangeSetupAdmissionError(
@@ -8329,7 +8498,11 @@ def create_app(
         tester_id = str(payload.get("tester_id", ""))
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
-        reading = enclosure.reading()
+        # a confirmation's baseline, which a later move is measured from, is settled
+        # over a few of the service's windows: never one snapshot of the unit being
+        # set down (field 24 Oct)
+        confirming = request.method == "POST" and payload.get("action") == "confirm"
+        reading = median_reading(enclosure.reading) if confirming else steady.reading()
         try:
             if request.method == "POST":
                 if payload.get("action") != "confirm":
@@ -8387,8 +8560,12 @@ def create_app(
         return FlowStore(tester_root(sessions_root, tester_id))
 
     def patch_camera(arm_id: str = PLACEMENT_BOX_ARM) -> tuple[BallPlaneCamera, dict, float | None]:
-        """The camera model the box is drawn through (1280x800 by default), the tilt, the roll."""
-        reading = enclosure.reading()
+        """The camera model the box is drawn through (1280x800 by default), the tilt, the roll.
+
+        The tilt is the recent still readings' median, so the drawing does not move
+        with the LIS3DH's noise (field 24 Oct: about 4 px).
+        """
+        reading = steady.steady()
         model = camera_for(ARMS[arm_id], reading)
         return model, reading, _placement_roll_deg(rig_geometry, reading)
 
@@ -8573,8 +8750,14 @@ def create_app(
         )
         confirmed = confirmed_placement_box(root, eligibility)
         if confirmed is not None and confirmed.get("mode") == placement_box.MODE:
+            # drawn as it was confirmed, at its confirm-time tilt: never projected
+            # again from the live pitch, which moved it about 4 px (field 24 Oct)
+            frozen = box_mode_view(confirmed, arm_id)
             return {
                 **payload,
+                "box_outline_px": frozen["box_outline_px"],
+                "frame_size_px": frozen["frame_size_px"],
+                "box_arm_id": frozen["arm_id"],
                 "state": "confirmed",
                 "box": {key: confirmed.get(key) for key in BOX_DISPLAY_KEYS},
                 "confirmed_at_utc": confirmed.get("confirmed_at_utc"),
@@ -8815,10 +8998,13 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         arm_id = payload.get("arm_id")
         try:
+            if request.method == "GET":
+                # read-only: never queued behind a range action's lock (field 24 Oct:
+                # 5.6-5.8 s behind a Save, past the page's 5 s timeout)
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
+                return jsonify(placement_box_status(tester_id, eligibility, arm_id))
             with tee_range_lock:
-                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
-                if request.method == "GET":
-                    return jsonify(placement_box_status(tester_id, eligibility, arm_id))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
                 action = str(payload.get("action", ""))
                 if action not in {"show", "confirm", "set_net_line"}:
                     raise ValueError("unknown placement-box action")
@@ -9087,10 +9273,12 @@ def create_app(
         if not SAFE_SEGMENT.fullmatch(tester_id):
             return jsonify({"error": "unknown tester"}), 400
         try:
+            if request.method == "GET":
+                # read-only, as the box's: never queued behind a range action's lock
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
+                return jsonify(aim_point_status(tester_id, eligibility))
             with tee_range_lock:
-                eligibility = with_unit_checks(setup.evaluate(tester_id, enclosure.reading()))
-                if request.method == "GET":
-                    return jsonify(aim_point_status(tester_id, eligibility))
+                eligibility = with_unit_checks(setup.evaluate(tester_id, steady.reading()))
                 action = str(payload.get("action", ""))
                 if action not in {"show", "confirm", "skip"}:
                     raise ValueError("unknown aim-point action")
@@ -9748,7 +9936,7 @@ def create_app(
         store = range_store(tester_id)
         params = TesterParameters(tester_id, arm_id, "indoors")
         black_floor = read_arm_state(sessions_root, tester_id, arm_id).get("black_floor_dn")
-        tilt_snapshot = enclosure.reading()
+        tilt_snapshot = steady_baseline()
         model = camera_for(params.arm, tilt_snapshot)
         camera_input_identity = _guided_camera_input_identity(
             params.arm,
@@ -10396,6 +10584,8 @@ def create_app(
             return jsonify({"error": "unknown tester"}), 400
         request_id = str(payload.get("request_id", "")).strip()
         try:
+            if request.method == "POST":
+                settle_before_lock()
             if request.method == "POST" and payload.get("action") == "evaluate_camera_arm5":
                 # the Save's search runs outside tee_range_lock so page requests never
                 # queue behind it (13 Oct light audit section 5)
@@ -10445,7 +10635,7 @@ def create_app(
                     bound_range_setup(tester_id, state, f"idempotent_{action}")
                     return jsonify({"state": state.to_dict(), "idempotent": True})
                 if action in {"start", "start_over", "ball_moved"}:
-                    reading = enclosure.reading()
+                    reading = steady_baseline()
                     eligibility = require_setup(tester_id, reading, f"tee_range_{action}")
                     if not eligibility["eligible"]:
                         return blocked_setup(eligibility)
