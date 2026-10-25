@@ -9,6 +9,14 @@
   gap: var(--space-sm);
 }
 
+/* the line over the selected club's model while no shot was hit with it */
+.metric-groups__ask {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
 .metric-group__title {
   margin: 0 0 6px;
   font-size: 0.68rem;

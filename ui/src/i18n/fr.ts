@@ -168,6 +168,8 @@ export const fr: Messages = {
   'app.simulateShot': 'Simuler un coup',
   'picker.groups': 'Groupes',
   'picker.close': 'Fermer {title}',
+  'picker.hand': 'Main',
+  'picker.handSimulator': 'Défini par le simulateur',
 
   'clubGroup.Irons': 'Fers',
   'clubGroup.Hybrids': 'Hybrides',
@@ -237,6 +239,8 @@ export const fr: Messages = {
   'metrics.empty': 'Aucun coup',
   'metrics.emptyDetail': 'Frappez une balle pour voir chaque mesure avec son étiquette.',
   'metrics.swingOnly': "Les répétitions de vitesse n'ont pas de mesures de balle ni de club.",
+  'metrics.hitClubDelivery': 'Frappez un coup avec votre {club} pour voir la présentation du club',
+  'metrics.hitClubFlight': 'Frappez un coup avec votre {club} pour voir son vol',
   'metrics.notMeasured': 'Non mesuré : {reason}',
   'metrics.range': 'plage {low} à {high}',
   'metrics.ballRangeRadar': 'radar, ce swing',

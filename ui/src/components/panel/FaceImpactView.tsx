@@ -11,12 +11,13 @@ import {
   hoselParts,
   impactReading,
   shotHandedness,
+  type DeliveryShot,
 } from './faceImpact';
 import './FaceImpactView.css';
 import { faceDeliveryRotation } from './clubDelivery';
 
 interface FaceImpactViewProps {
-  shot: Shot;
+  shot: DeliveryShot;
   sessionShots: readonly Shot[];
   metricRow?: ReactNode;
 }

@@ -1347,6 +1347,21 @@
   color: var(--color-text);
 }
 
+/* the hand, beside the close button: one tap, never a restart */
+.picker-overlay__hand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: 12px;
+  min-width: 0;
+}
+
+.picker-overlay__hand-note {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 .picker-overlay__close {
   width: 44px;
   height: 44px;

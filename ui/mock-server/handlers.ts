@@ -15,6 +15,7 @@ export function registerHandlers(io: Server, session: MockSession): void {
 
     socket.emit('session_state', session.sessionStatePayload(true));
     socket.emit('profiles', session.snapshot());
+    socket.emit('handedness', session.handedness());
     socket.emit('trigger_status', session.triggerStatus());
     socket.emit('radar_config', session.radarConfig);
     socket.emit('camera_capture_settings', CAMERA_CAPTURE_SETTINGS);
@@ -76,16 +77,26 @@ export function registerHandlers(io: Server, session: MockSession): void {
     });
 
     const emitProfiles = () => io.emit('profiles', session.snapshot());
+    const emitHandedness = () => io.emit('handedness', session.handedness());
 
     socket.on('get_profiles', emitProfiles);
 
+    // the hand from the club picker; it reaches the next shot (each shot keeps its own)
+    socket.on('set_handedness', (data: { handed?: string }) => {
+      session.setHandedness(data?.handed);
+      emitHandedness();
+      emitProfiles();
+    });
+
     socket.on('set_active_profile', (data: { profile_id?: string }) => {
       session.setActiveProfile(data?.profile_id);
+      emitHandedness();
       emitProfiles();
     });
 
     socket.on('add_profile', (data: { name?: string }) => {
       session.addProfile(data?.name);
+      emitHandedness();
       emitProfiles();
     });
 

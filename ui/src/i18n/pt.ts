@@ -168,6 +168,8 @@ export const pt: Messages = {
   'app.simulateShot': 'Simular tacada',
   'picker.groups': 'Grupos',
   'picker.close': 'Fechar {title}',
+  'picker.hand': 'Mão',
+  'picker.handSimulator': 'Definido pelo simulador',
 
   'clubGroup.Irons': 'Ferros',
   'clubGroup.Hybrids': 'Híbridos',
@@ -237,6 +239,8 @@ export const pt: Messages = {
   'metrics.empty': 'Nenhuma tacada ainda',
   'metrics.emptyDetail': 'Bata uma bola para ver cada métrica com seu rótulo.',
   'metrics.swingOnly': 'Repetições de velocidade não têm métricas de bola nem de taco.',
+  'metrics.hitClubDelivery': 'Dê uma tacada com o seu {club} para ver a entrega do taco',
+  'metrics.hitClubFlight': 'Dê uma tacada com o seu {club} para ver o voo',
   'metrics.notMeasured': 'Não medido: {reason}',
   'metrics.range': 'faixa {low} a {high}',
   'metrics.ballRangeRadar': 'radar, este swing',

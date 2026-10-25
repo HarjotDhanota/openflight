@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
-import { useSystemStore } from './stores/useSystemStore';
+import { useSystemStore, type Handed } from './stores/useSystemStore';
 import { shotProcessingCoversResult, useShotStore } from './stores/useShotStore';
 import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
@@ -41,7 +41,7 @@ import {
   trainingImplementSections,
   type PanelView,
 } from './components/panel';
-import { filterShotsByProfile } from './types/shot';
+import { filterShotsByProfile, latestShotWithClub } from './types/shot';
 import type { Profile } from './types/profile';
 import { getClubName } from './data/clubs';
 import { clubWithHand } from './utils/handedness';
@@ -57,17 +57,19 @@ function AppContent() {
   const { t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub, handed } = useSystemStore(
-    useShallow((state) => ({
-      connected: state.connected,
-      mockMode: state.mockMode,
-      debugMode: state.debugMode,
-      latestSimShots: state.latestSimShots,
-      simShotNotSent: state.simShotNotSent,
-      serverClub: state.serverClub,
-      handed: state.handed,
-    }))
-  );
+  const { connected, mockMode, debugMode, latestSimShots, simShotNotSent, serverClub, handed, handedSource } =
+    useSystemStore(
+      useShallow((state) => ({
+        connected: state.connected,
+        mockMode: state.mockMode,
+        debugMode: state.debugMode,
+        latestSimShots: state.latestSimShots,
+        simShotNotSent: state.simShotNotSent,
+        serverClub: state.serverClub,
+        handed: state.handed,
+        handedSource: state.handedSource,
+      }))
+    );
   const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
     useShallow((state) => ({
       latestShot: state.latestShot,
@@ -231,6 +233,12 @@ function AppContent() {
     setPickerOpen(false);
   };
 
+  // shown at once; the kiosk answers with the hand in force (a simulator's wins)
+  const handleSetHanded = (hand: Handed) => {
+    useSystemStore.getState().setHanded(hand, 'profile');
+    socketService.setHandedness(hand);
+  };
+
   const handleShutdown = async () => {
     setShutdownState('pending');
     try {
@@ -247,6 +255,8 @@ function AppContent() {
 
   const profileShots = filterShotsByProfile(shots, activeProfileId);
   const profileLatestShot = profileShots[profileShots.length - 1] ?? null;
+  // the Club and Flight tabs show the selected club's latest shot, never another club's
+  const clubShot = isSwingSpeedMode ? profileLatestShot : latestShotWithClub(profileShots, selectedClub);
   const profileIsNewShot = Boolean(
     isNewShot && latestShot && profileLatestShot && latestShot.timestamp === profileLatestShot.timestamp
   );
@@ -370,7 +380,8 @@ function AppContent() {
         {(currentView === 'club' || currentView === 'flight') && (
           <MetricGroupPanel
             view={currentView}
-            shot={profileLatestShot}
+            shot={clubShot}
+            club={isSwingSpeedMode ? undefined : selectedClub}
             sessionShots={profileShots}
             profileName={activeProfileName}
             clubLabel={activeImplementLabel}
@@ -500,6 +511,7 @@ function AppContent() {
           onSelect={handlePickerSelect}
           onClose={() => setPickerOpen(false)}
           wide={isSwingSpeedMode}
+          hand={isSwingSpeedMode ? undefined : { handed, source: handedSource, onChange: handleSetHanded }}
         />
       ) : null}
 

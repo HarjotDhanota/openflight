@@ -174,6 +174,49 @@ describe('MetricGroupPanel', () => {
     expect(html).toContain(long);
   });
 
+  it('labels the shot with the hand it was hit with when there is no impact reading', () => {
+    const shot = everyMetricShot();
+    shot.handed = 'LH';
+    const html = render('club', shot);
+    expect(html.match(/class="panel-header__club">([^<]*)/)?.[1]).toBe('7 Iron · Left-handed');
+    expect(html).toContain('data-handed="left"');
+  });
+
+  it('draws the selected club, unmeasured, until a shot is hit with it', () => {
+    const html = renderToString(
+      <MetricGroupPanel
+        view="club"
+        shot={null}
+        club="driver"
+        profileName="Golfer"
+        clubLabel="Driver · Right-handed"
+        unitSystem="imperial"
+      />
+    );
+    expect(html.match(/class="panel-header__club">([^<]*)/)?.[1]).toBe('Driver · Right-handed');
+    expect(html).toContain('Hit a shot with your Driver to see its delivery');
+    expect(html).toContain('data-face="driver"');
+    expect(html).not.toContain('data-face="iron"');
+    expect(html).not.toContain('data-metric=');
+    expect(html).not.toMatch(/data-view-metric="[a-z_]+" data-status="(?!not_measured)/);
+  });
+
+  it('asks for a shot with the selected club on the Flight panel too', () => {
+    const html = renderToString(
+      <MetricGroupPanel
+        view="flight"
+        shot={null}
+        club="7-iron"
+        profileName="Golfer"
+        clubLabel="7 Iron · Right-handed"
+        unitSystem="imperial"
+      />
+    );
+    expect(html.match(/class="panel-header__club">([^<]*)/)?.[1]).toBe('7 Iron · Right-handed');
+    expect(html).toContain('Hit a shot with your 7 Iron to see its flight');
+    expect(html).not.toContain('data-metric=');
+  });
+
   it('shows the empty state before the first shot', () => {
     const html = render('flight', null);
     expect(html).toContain('No shot yet');

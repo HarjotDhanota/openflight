@@ -6,7 +6,7 @@ import type { Shot } from '../../types/shot';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
 import { FaceImpactView } from './FaceImpactView';
-import { FACE_SHAPES, faceCategory, shotHandedness } from './faceImpact';
+import { FACE_SHAPES, faceCategory, shotHandedness, type DeliveryShot } from './faceImpact';
 import {
   CLUB_PROFILES,
   VIEW_METRICS,
@@ -104,7 +104,7 @@ const BALL_DIMPLES = [...ballCentres.values()].flatMap(([sx, sy, sz, radius]) =>
   };
 });
 
-export function DeliveryNumbers({ shot, view }: { shot: Shot; view: DeliveryView }) {
+export function DeliveryNumbers({ shot, view }: { shot: DeliveryShot; view: DeliveryView }) {
   const { t } = useI18n();
   return (
     <dl className="club-view__numbers">
@@ -133,7 +133,7 @@ export function DeliveryNumbers({ shot, view }: { shot: Shot; view: DeliveryView
   );
 }
 
-export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side' }) {
+export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top' | 'side' }) {
   const id = useId();
   const { t } = useI18n();
   const category = faceCategory(shot.club);
@@ -549,7 +549,7 @@ export function ClubProjection({ shot, view }: { shot: Shot; view: 'top' | 'side
 }
 
 const VIEWS: DeliveryView[] = ['face', 'top', 'side'];
-export function ClubDeliveryViews({ shot, sessionShots }: { shot: Shot; sessionShots: readonly Shot[] }) {
+export function ClubDeliveryViews({ shot, sessionShots }: { shot: DeliveryShot; sessionShots: readonly Shot[] }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const drag = useDragScroll(scrollRef, 'x');

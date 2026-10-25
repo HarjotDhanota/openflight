@@ -31,12 +31,12 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
   };
 }
 
+export type MockHanded = 'RH' | 'LH';
+
 export class MockSession {
   shots: Shot[] = [];
   club = 'driver';
-  profiles: Profile[] = [
-    { id: 'mock-profile-1', name: 'Profile 1', created_at: '2026-01-01T00:00:00Z', settings: {} },
-  ];
+  profiles: Profile[] = [{ id: 'mock-profile-1', name: 'Profile 1', created_at: '2026-01-01T00:00:00Z', settings: {} }];
   activeProfileId = 'mock-profile-1';
   private nextProfileNumber = 2;
   trainingImplement = 'driver';
@@ -64,7 +64,9 @@ export class MockSession {
   }
 
   addProfile(rawName: unknown): void {
-    const name = String(rawName ?? '').trim().slice(0, 40);
+    const name = String(rawName ?? '')
+      .trim()
+      .slice(0, 40);
     if (!name || this.profiles.length >= 12) return;
     const profile: Profile = {
       id: `mock-profile-${this.nextProfileNumber++}`,
@@ -77,7 +79,9 @@ export class MockSession {
   }
 
   renameProfile(profileId: unknown, rawName: unknown): void {
-    const name = String(rawName ?? '').trim().slice(0, 40);
+    const name = String(rawName ?? '')
+      .trim()
+      .slice(0, 40);
     const profile = this.profiles.find((entry) => entry.id === profileId);
     if (!name || !profile) return;
     profile.name = name;
@@ -129,6 +133,19 @@ export class MockSession {
     };
   }
 
+  /** The hand for the next shot: the active profile's, else right-handed (no simulator here). */
+  handedness(): { handed: MockHanded; source: 'profile' | 'default' } {
+    const handed = this.activeProfile.settings.handed;
+    return handed === 'RH' || handed === 'LH' ? { handed, source: 'profile' } : { handed: 'RH', source: 'default' };
+  }
+
+  /** Keep the hand with the active profile, as the kiosk's set_handedness does. */
+  setHandedness(handed: unknown): boolean {
+    if (handed !== 'RH' && handed !== 'LH') return false;
+    this.activeProfile.settings = { ...this.activeProfile.settings, handed };
+    return true;
+  }
+
   setClub(club: string): string {
     this.club = club || 'driver';
     return this.club;
@@ -140,11 +157,16 @@ export class MockSession {
   }
 
   simulateShot(): { shot: Shot; stats: SessionStats } {
-    const shot = generateShot({
-      club: this.club,
-      profileId: this.activeProfile.id,
-      profileName: this.activeProfile.name,
-    });
+    const { handed, source } = this.handedness();
+    const shot = {
+      ...generateShot({
+        club: this.club,
+        profileId: this.activeProfile.id,
+        profileName: this.activeProfile.name,
+      }),
+      handed,
+      handed_source: source,
+    };
     this.shots.push(shot);
     this.triggersTotal += 1;
     this.triggersAccepted += 1;
