@@ -2615,8 +2615,7 @@ def static_files(path):
 @app.route("/api/shots/latest")
 def api_latest_shot():
     """The session's latest shot payload (every metric, labelled) and the metric catalog."""
-    shots = _session_shots()
-    return jsonify({"shot": shots[-1] if shots else None, "catalog": shot_metrics.catalog()})
+    return jsonify({"shot": _latest_session_shot(), "catalog": shot_metrics.catalog()})
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -3510,6 +3509,23 @@ def _session_shots() -> list[dict]:
     if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
         return [swing_speed_to_shot_dict(event) for event in monitor.get_events()]
     return [shot_to_dict(shot) for shot in monitor.get_shots()]
+
+
+def _latest_session_shot() -> dict | None:
+    """The last row of ``_session_shots()``, building only that row.
+
+    Pages poll it about once a second; building every row grew each poll with the
+    session, in the process that also reads the IWR6843 dump.
+    """
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor:
+        return None
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        events = monitor.get_events()
+        return swing_speed_to_shot_dict(events[-1]) if events else None
+    shots = monitor.get_shots()
+    return shot_to_dict(shots[-1]) if shots else None
 
 
 def _unregister_camera_replay(shot: Shot) -> None:
