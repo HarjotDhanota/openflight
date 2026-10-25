@@ -57,18 +57,12 @@ def _states(**overrides):
     return SensorStates(**values)
 
 
-def test_green_only_when_every_fitted_sensor_is_ready():
-    light = compute_state(_states(), NOW)
+@pytest.mark.parametrize("fitted", [True, False], ids=["all fitted", "OPS only"])
+def test_green_only_when_every_fitted_sensor_is_ready(fitted):
+    states = _states() if fitted else SensorStates(ops=_ops(), iwr=None, camera=None)
+    light = compute_state(states, NOW)
 
-    assert light["state"] == "green"
-    assert light["word"] == "SWING"
-    assert light["time_left_s"] is None
-
-
-def test_green_without_optional_sensors_fitted():
-    light = compute_state(SensorStates(ops=_ops(), iwr=None, camera=None), NOW)
-
-    assert light["state"] == "green"
+    assert (light["state"], light["word"], light["time_left_s"]) == ("green", "SWING", None)
 
 
 @pytest.mark.parametrize(
@@ -89,25 +83,19 @@ def test_ops_busy_phases_are_amber_with_a_rough_time_left(phase, cause):
     assert light["time_left_s"] is not None and light["time_left_s"] >= 0
 
 
-def test_iwr_dump_is_amber_with_its_typical_seven_seconds_left():
-    light = compute_state(_states(iwr=_iwr(dumping=True, dump_started_at=NOW - 2.0)), NOW)
+@pytest.mark.parametrize(
+    ("iwr", "time_left_s"),
+    [
+        (_iwr(dumping=True, dump_started_at=NOW - 2.0), IWR_TYPICAL_DUMP_S - 2.0),
+        (_iwr(queued=True), IWR_TYPICAL_DUMP_S),  # an edge queued for the IWR is already a dump
+        (_iwr(dumping=True, dump_started_at=NOW - 30.0), 0.0),  # an overrun is never negative
+    ],
+)
+def test_iwr_dump_is_amber_with_its_typical_time_left(iwr, time_left_s):
+    light = compute_state(_states(iwr=iwr), NOW)
 
-    assert light["state"] == "amber"
-    assert light["cause"] == "IWR6843 dumping"
-    assert light["time_left_s"] == pytest.approx(IWR_TYPICAL_DUMP_S - 2.0)
-
-
-def test_an_edge_queued_for_the_iwr_is_already_a_dump():
-    light = compute_state(_states(iwr=_iwr(queued=True)), NOW)
-
-    assert light["state"] == "amber"
-    assert light["time_left_s"] == pytest.approx(IWR_TYPICAL_DUMP_S)
-
-
-def test_an_overrunning_dump_shows_no_negative_time():
-    light = compute_state(_states(iwr=_iwr(dumping=True, dump_started_at=NOW - 30.0)), NOW)
-
-    assert light["time_left_s"] == 0.0
+    assert (light["state"], light["cause"]) == ("amber", "IWR6843 dumping")
+    assert light["time_left_s"] == pytest.approx(time_left_s)
 
 
 @pytest.mark.parametrize(
@@ -266,6 +254,7 @@ def test_the_shot_result_reaches_its_swing():
         ("no_radar_shot", "No radar shot"),
         ("not_a_shot", "Not a shot"),
         ("not_counted", "Not counted: setup not ready"),
+        ("paused", "Not counted: paused"),
     ],
 )
 def test_a_swing_without_a_shot_says_so(kind, text):
@@ -323,12 +312,6 @@ def test_a_wait_an_extension_names_is_amber_and_red_still_outranks_it():
     assert red["state"] == "red"
 
 
-def test_a_swing_during_a_pause_says_it_was_not_counted():
-    light = ReadyLight()
-    light.swing_result("paused", at=NOW)
-    assert light.update(_states(), now=NOW)["swing"]["result"]["text"] == "Not counted: paused"
-
-
 def _setup(camera_available=True, **sections):
     record = {
         "box": {"state": "confirmed"},
@@ -343,24 +326,6 @@ def _setup(camera_available=True, **sections):
 
 def _look(state, at=NOW - 1.0):
     return {"state": state, "observed_at": at}
-
-
-def test_ready_light_red_when_setup_incomplete():
-    setup = _setup(
-        aim={"state": "not_set", "reason": "not set"},
-        net_range={"state": "stale", "reason": "aim is not_set"},
-    )
-
-    light = compute_state(_states(setup=setup, ball_look=_look("in_box")), NOW)
-
-    # the net is set with the aim: an unset aim says it once
-    assert (light["state"], light["cause"]) == ("red", "setup incomplete: aim not set")
-
-
-def test_setup_incomplete_ignores_the_lens_height():
-    light = compute_state(_states(setup=_setup(), ball_look=_look("in_box")), NOW)
-
-    assert light["state"] == "green"
 
 
 @pytest.mark.parametrize("state", ["not_seen", "outside_box"])
@@ -382,49 +347,45 @@ def test_no_fresh_look_says_nothing_about_the_ball(look):
     assert light["state"] == "green"
 
 
-def test_no_box_set_says_only_setup_incomplete_not_ball_not_in_box():
-    setup = _setup(box={"state": "not_set", "reason": "not set"})
+_FAULT = {"camera_available": True, "setup_possible": False, "setup_fault": True}
 
+
+@pytest.mark.parametrize(
+    ("setup", "cause"),
+    [
+        (_setup(box={"state": "not_set", "reason": "not set"}), "box not set"),
+        (
+            {**_setup(), "unapplied": {"box": "the box is outside the 640x400 picture"}},
+            "box not applied (the box is outside the 640x400 picture)",
+        ),
+        (
+            {
+                **_setup(box={"state": "not_set"}),
+                "live": {**_FAULT, "setup_blocked_reason": "the tilt sensor did not start"},
+            },
+            "the tilt sensor did not start",
+        ),
+    ],
+    ids=["no box", "box not applied", "tilt sensor fault"],
+)
+def test_a_box_that_cannot_be_used_says_only_setup_incomplete_not_the_ball(setup, cause):
     light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
 
-    assert [cause["cause"] for cause in light["causes"]] == ["setup incomplete: box not set"]
+    assert [c["cause"] for c in light["causes"]] == [f"setup incomplete: {cause}"]
 
 
-def test_a_unit_without_a_camera_has_no_setup_causes():
-    setup = _setup(camera_available=False, box={"state": "not_set"}, aim={"state": "not_set"})
+@pytest.mark.parametrize("camera", [False, True], ids=["no camera", "no tilt sensor"])
+def test_a_unit_that_cannot_set_up_has_no_setup_causes(camera):
+    setup = _setup(camera_available=camera, box={"state": "not_set"}, aim={"state": "not_set"})
+    if camera:
+        setup["live"] = {**_FAULT, "setup_fault": False, "setup_blocked_reason": "no tilt sensor"}
 
-    light = compute_state(_states(camera=None, setup=setup, ball_look=_look("not_seen")), NOW)
+    light = compute_state(
+        _states(camera=_camera() if camera else None, setup=setup, ball_look=_look("not_seen")),
+        NOW,
+    )
 
     assert light["state"] == "green"
-
-
-def test_a_unit_that_cannot_set_up_has_no_setup_causes():
-    setup = _setup(box={"state": "not_set"})
-    setup["live"] = {
-        "camera_available": True,
-        "setup_possible": False,
-        "setup_blocked_reason": "the setup needs the tilt sensor",
-    }
-
-    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
-
-    assert light["state"] == "green"
-
-
-def test_a_tilt_sensor_that_did_not_start_keeps_setup_red():
-    setup = _setup(box={"state": "not_set"})
-    setup["live"] = {
-        "camera_available": True,
-        "setup_possible": False,
-        "setup_blocked_reason": "the tilt sensor did not start",
-        "setup_fault": True,
-    }
-
-    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
-
-    assert [cause["cause"] for cause in light["causes"]] == [
-        "setup incomplete: the tilt sensor did not start"
-    ]
 
 
 def test_a_section_the_run_does_not_need_is_not_incomplete():
@@ -481,14 +442,3 @@ def test_setup_incomplete_agrees_with_the_setup_screens_needs_setup(case):
     assert setup_reds == ([case["cause"]] if case["cause"] else [])
     # a fault holds the light red, though the screen has nothing to offer
     assert bool(setup_reds) == (case["needs"] or case.get("fault", False))
-
-
-def test_a_box_that_failed_to_apply_says_nothing_about_the_ball():
-    setup = _setup()
-    setup["unapplied"] = {"box": "the box is outside the 640x400 picture"}
-
-    light = compute_state(_states(setup=setup, ball_look=_look("not_seen")), NOW)
-
-    assert [cause["cause"] for cause in light["causes"]] == [
-        "setup incomplete: box not applied (the box is outside the 640x400 picture)"
-    ]

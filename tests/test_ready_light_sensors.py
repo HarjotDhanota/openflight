@@ -7,6 +7,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 
 from openflight.camera.capture_runtime import (
     CameraCaptureRuntime,
@@ -89,36 +90,30 @@ def test_ops_phase_walks_armed_dumping_draining_rearming_rearmed():
     assert radar.trigger_phase[0] == "rearmed"
 
 
-def test_ops_wait_is_armed_again_after_a_rearm():
+@pytest.mark.parametrize(
+    ("phase", "cancelled", "armed", "final"),
+    [
+        ("rearmed", False, True, None),
+        # a re-arm whose writes timed out left the board unconfirmed: amber, not green
+        ("rearming", False, False, None),
+        (None, True, None, "stopped"),
+    ],
+    ids=["rearmed", "unfinished rearm", "cancelled"],
+)
+def test_ops_wait_phase_after_a_rearm_or_cancel(phase, cancelled, armed, final):
     port = PhaseSerial(b"", idle_polls=10**6)
     radar = _radar(port)
-    radar.trigger_phase = ("rearmed", time.time())
-
-    assert radar.wait_for_hardware_trigger(timeout=0.1, dump_grace=0.1) == ""
-
-    assert "armed" in port.seen
-
-
-def test_ops_wait_after_an_unfinished_rearm_stays_rearming():
-    """A re-arm whose writes timed out left the board unconfirmed: amber, not green."""
-    port = PhaseSerial(b"", idle_polls=10**6)
-    radar = _radar(port)
-    radar.trigger_phase = ("rearming", time.time())
-
-    radar.wait_for_hardware_trigger(timeout=0.1, dump_grace=0.1)
-
-    assert "armed" not in port.seen
-
-
-def test_ops_cancelled_wait_is_stopped():
-    port = PhaseSerial(b"", idle_polls=10**6)
-    radar = _radar(port)
+    if phase:
+        radar.trigger_phase = (phase, time.time())
     cancel = threading.Event()
-    cancel.set()
+    if cancelled:
+        cancel.set()
 
-    radar.wait_for_hardware_trigger(timeout=5.0, cancel_event=cancel)
-
-    assert radar.trigger_phase[0] == "stopped"
+    assert radar.wait_for_hardware_trigger(timeout=0.1, dump_grace=0.1, cancel_event=cancel) == ""
+    if armed is not None:
+        assert ("armed" in port.seen) is armed
+    if final:
+        assert radar.trigger_phase[0] == final
 
 
 class _Serial:
