@@ -72,7 +72,6 @@ def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
 
 
 def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
-    """The frame of the club path ``displayed_club_path`` chose."""
     if path_source == "canonical":
         return shot.club_path_frame
     if path_source in ("camera_fused_chained", "camera_fused_ops"):
@@ -419,17 +418,13 @@ CLUB_SPEED_NOT_FULL_REASON = (
 
 
 def _attach_full_speeds(shot: Shot) -> None:
-    """Full ball speed by measured projection, full club speed and full smash.
-
-    The canonical radial ball speed is unchanged; each full speed is its own field.
-    """
+    """Full ball speed by measured projection, full club speed and full smash; radial unchanged."""
     from openflight.full_speed import (  # noqa: PLC0415
         evaluate_full_ball_speed,
         evaluate_full_club_speed,
         evaluate_full_smash,
     )
 
-    # this shot's own range and how sure it is
     calibration = server.shot_iwr_calibration(shot)
 
     def calibrated(name: str):
@@ -473,11 +468,7 @@ def _attach_full_speeds(shot: Shot) -> None:
 
 
 def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensions.CarryOutcome:
-    """Every flight output, as measured and normalized, and the as-measured carry.
-
-    As-measured flight uses the shot's air density, or ISA. A fusion unit builds carry only
-    from measured inputs; an OPS-only unit that cannot simulate takes the table estimate.
-    """
+    """Every flight output (as measured and normalized) and the as-measured carry."""
     flight = compute_flight(shot, substitutes=not fusion, enabled=enabled)
     shot.flight = flight.to_dict()
     conditions, trajectory = flight.conditions, flight.as_measured
@@ -518,8 +509,6 @@ def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensi
 
 
 class ShotModelsExtension(kiosk_extensions.KioskExtension):
-    """The club arc, collision model, full speeds and flight model."""
-
     name = "shot models"
 
     def on_club_delivery(self, shot, delivery) -> None:
