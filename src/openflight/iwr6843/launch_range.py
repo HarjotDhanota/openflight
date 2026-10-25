@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from openflight.iwr6843 import tracking
+from openflight.iwr6843.partial_dump import PARTIAL_LABEL
 from openflight.iwr6843.shot import PreparedShotDump, near_mti_notch, track_broken
 
 SCHEMA = "openflight.iwr_launch_range.v1"
@@ -99,6 +100,8 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
     club_track: dict | None = None
     scope: str | None = None
     track: tracking.BallTrack | None = field(default=None, repr=False, compare=False)
+    # the partial-dump record when the capture's transfer lost bytes (``partial_dump``)
+    partial: dict | None = None
 
     @property
     def measured(self) -> bool:
@@ -110,7 +113,9 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
 
     @property
     def label(self) -> str:
-        return "measured" if self.measured else "not_measured"
+        if not self.measured:
+            return "not_measured"
+        return PARTIAL_LABEL if self.partial is not None else "measured"
 
     def to_dict(self) -> dict:
         return {
@@ -132,6 +137,7 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
             "club_track": self.club_track,
             "scope": self.scope,
             "validated_against_tape": False,
+            "partial": self.partial,
         }
 
 
@@ -142,7 +148,7 @@ class ShotBallRange:
     range_m: float | None
     uncertainty_m: float | None
     source: str | None  # iwr_post_impact | camera_prior | None
-    label: str  # measured | estimated | not_measured
+    label: str  # measured | iwr_partial | estimated | not_measured
     reason: str | None = None
 
     def to_dict(self) -> dict:
@@ -164,7 +170,12 @@ def shot_ball_range(
             range_m=estimate.range_m,
             uncertainty_m=estimate.uncertainty_m,
             source=SOURCE,
-            label="measured",
+            label=estimate.label,
+            reason=(
+                f"from a partial IWR dump: {estimate.partial.get('missing')}"
+                if estimate.partial is not None
+                else None
+            ),
         )
     why = estimate.reason if estimate is not None and estimate.reason else "no IWR launch point"
     if prior is not None:

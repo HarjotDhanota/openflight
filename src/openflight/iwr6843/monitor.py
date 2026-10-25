@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -66,6 +66,8 @@ class IWR6843Capture:
     partial_path: Path | None = None
     partial_nbytes: int = 0
     partial_expected_nbytes: int | None = None
+    # those bytes, for the runtime's partial decoder (``partial_dump``) whether saved or not
+    partial_raw: bytes | None = field(default=None, repr=False)
 
     @property
     def valid(self) -> bool:
@@ -401,6 +403,7 @@ class IWR6843CaptureMonitor:
                 partial_path=partial_path,
                 partial_nbytes=len(partial),
                 partial_expected_nbytes=declared_dump_nbytes(partial) if partial else None,
+                partial_raw=partial or None,
             )
             with self._condition:
                 # duration first: the ready light reads these without the lock

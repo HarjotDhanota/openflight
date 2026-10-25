@@ -26,6 +26,11 @@ from openflight.iwr6843.lcmf import (
     prepare_lcmf_capture,
 )
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
+from openflight.iwr6843.partial_dump import (
+    PARTIAL_LABEL,
+    PartialDumpRecovery,
+    recover_partial_dump,
+)
 from openflight.iwr6843.recovery import (
     RecoveryCandidate,
     find_recovery_candidates,
@@ -222,6 +227,39 @@ class IWR6843ShotResult:
     aggregate_duration_ns: int | None = None
     launch_range: LaunchRangeEstimate | None = None
     ball_range: ShotBallRange | None = None
+    # set when the transfer lost bytes: what ``partial_dump`` recovered and what was missing
+    partial_recovery: dict | None = None
+
+
+def _capture_bytes(capture) -> tuple[bytes | None, PartialDumpRecovery | None]:
+    """The dump to measure: the whole capture's, else the frames a failed transfer kept."""
+    if capture is None:
+        return None, None
+    if capture.valid and capture.raw is not None:
+        return capture.raw, None
+    partial_raw = getattr(capture, "partial_raw", None)
+    if not partial_raw:
+        return None, None
+    recovery = recover_partial_dump(partial_raw)
+    if recovery.usable:
+        logger.info(
+            "[IWR6843] Partial capture #%s: %s", capture.sequence, recovery.missing_summary()
+        )
+        return recovery.raw, recovery
+    logger.info("[IWR6843] Partial capture #%s not decoded: %s", capture.sequence, recovery.reason)
+    return None, recovery
+
+
+def _from_partial(estimate: LaunchRangeEstimate, partial: dict | None) -> LaunchRangeEstimate:
+    """A launch range made from a partial dump carries its record (and so its label)."""
+    return replace(estimate, partial=partial) if partial is not None else estimate
+
+
+def _labelled_partial(result, partial: PartialDumpRecovery | None):
+    """An estimator result from a partial dump says so in its status."""
+    if partial is None or result is None or not getattr(result, "status", None):
+        return result
+    return replace(result, status=f"{result.status}_{PARTIAL_LABEL}")
 
 
 def process_raw_capture(  # pylint: disable=too-many-arguments,too-many-locals
@@ -417,6 +455,8 @@ class IWR6843Runtime:
             timeout_s=self.capture_timeout_s,
         )
         capture_returned_ns = time.monotonic_ns()
+        raw, partial = _capture_bytes(capture)
+        partial_record = partial.to_dict() if partial is not None else None
 
         launch_range: LaunchRangeEstimate | None = None
         ball_range: ShotBallRange | None = None
@@ -438,9 +478,10 @@ class IWR6843Runtime:
                 aggregate_duration_ns=time.monotonic_ns() - process_started_ns,
                 launch_range=launch_range,
                 ball_range=ball_range,
+                partial_recovery=partial_record,
             )
 
-        if capture is None or not capture.valid or capture.raw is None:
+        if raw is None:
             return result(measurement=None)
         shot_calibration = self.calibration
         if tilt_deg is not None:
@@ -453,7 +494,7 @@ class IWR6843Runtime:
         if hasattr(shot_calibration, "tee_range_m"):
             prior = range_prior or self.range_prior
             try:
-                prepared = prepare_lcmf_capture(capture.raw)
+                prepared = prepare_lcmf_capture(raw)
             except (ValueError, IndexError) as error:
                 launch_range = LaunchRangeEstimate(
                     status="not_measured",
@@ -461,12 +502,15 @@ class IWR6843Runtime:
                     prior=prior,
                 )
             else:
-                launch_range = self._launch_range(
-                    prepared,
-                    shot_calibration,
-                    ball_speed_mph=ball_speed_mph,
-                    club_speed_mph=club_speed_mph,
-                    prior=prior,
+                launch_range = _from_partial(
+                    self._launch_range(
+                        prepared,
+                        shot_calibration,
+                        ball_speed_mph=ball_speed_mph,
+                        club_speed_mph=club_speed_mph,
+                        prior=prior,
+                    ),
+                    partial_record,
                 )
             configured = shot_calibration.tee_range_m
             if configured is not None:
@@ -492,7 +536,7 @@ class IWR6843Runtime:
             )
         analysis_started_ns = time.monotonic_ns()
         measurement, club_path = process_raw_capture(
-            capture.raw,
+            raw,
             shot_calibration,
             ball_speed_mph=ball_speed_mph,
             club=club,
@@ -508,8 +552,8 @@ class IWR6843Runtime:
         )
         analysis_completed_ns = time.monotonic_ns()
         return result(
-            measurement=measurement,
-            club_path=club_path,
+            measurement=_labelled_partial(measurement, partial),
+            club_path=_labelled_partial(club_path, partial),
             estimator_analysis_duration_ns=analysis_completed_ns - analysis_started_ns,
         )
 
