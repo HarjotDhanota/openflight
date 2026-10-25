@@ -1,4 +1,4 @@
-import type { MetricLabel, Shot, ShotMetric, SpinQuality, SwingSpeedStats } from '../../types/shot';
+import type { MetricLabel, Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { carryLabel, getSwingSpeedMph, isSwingSpeedShot, reportedCarryYards } from '../../types/shot';
 import { METRIC_CATALOG, isValueLabel, shotMetric } from '../../data/metricCatalog';
 import { formatMetricValue } from './metricFormat';
@@ -13,7 +13,7 @@ import {
   isMeasured,
   unitIfMeasured,
 } from '../../utils/units';
-import { getHtmlLang, t } from '../../i18n';
+import { getHtmlLang, t, type MessageKey } from '../../i18n';
 
 export { NO_VALUE };
 
@@ -100,59 +100,46 @@ function labelIf(value: unknown, status: MetricLabel | undefined): MetricLabel |
 
 /** A model's spin keeps its label; an OPS spin of experimental quality is not a measurement. */
 function spinLabel(shot: Shot): MetricLabel {
+  if (shot.spin_source === 'ops_below_floor') return 'experimental';
   if (isValueLabel(shot.spin_source) && shot.spin_source !== 'measured') return shot.spin_source;
   return shot.spin_quality === 'experimental' ? 'experimental' : 'measured';
 }
 
-/** The horizontal tiles drop the shot's own (experimental) confidence for the server's value. */
-const SERVER_CLEARS_CONFIDENCE = new Set(['launch_h', 'spin_axis', 'club_path', 'club_aoa']);
-
-/** Tiles whose value the server may withhold (a horizontal beyond a shank's reach): no number then. */
-const SERVER_WITHHOLDS_VALUE = new Set(['launch_h']);
-
-function fromServer(metric: LiveMetric, record: ShotMetric, unitSystem: UnitSystem): LiveMetric {
-  const id = TILE_METRIC[metric.id];
-  const [value, unit] = formatMetricValue({ ...record, unit: METRIC_UNIT[id] }, unitSystem, id);
-  const shown = { ...metric, value, unit: unit || metric.unit, subtext: undefined, status: record.status };
-  return SERVER_CLEARS_CONFIDENCE.has(metric.id) ? { ...shown, confidence: null, confidenceLabel: undefined } : shown;
-}
-
-/** Put the server's label (and, for a value the tile lacks, its value and reason) on a tile. */
 function withServerLabel(shot: Shot, metric: LiveMetric, unitSystem: UnitSystem): LiveMetric {
-  const record = shotMetric(shot, TILE_METRIC[metric.id]);
+  const id = TILE_METRIC[metric.id];
+  const record = shotMetric(shot, id);
   if (!record) return metric;
-  if (metric.value === NO_VALUE && isMeasured(record.value)) {
-    return fromServer(metric, record, unitSystem);
-  }
-  if (metric.value === NO_VALUE) {
-    return { ...metric, status: undefined, reason: record.reason ?? undefined };
-  }
-  if (!isMeasured(record.value) && SERVER_WITHHOLDS_VALUE.has(metric.id)) {
-    return {
-      ...metric,
-      value: NO_VALUE,
-      unit: undefined,
-      status: undefined,
-      confidence: null,
-      confidenceLabel: undefined,
-      reason: record.reason ?? undefined,
-    };
-  }
-  // a candidate the server does not report (rejected or withheld) keeps its own pill
-  return isMeasured(record.value) ? { ...metric, status: record.status } : { ...metric, status: undefined };
+  const hasValue = isValueLabel(record.status) && isMeasured(record.value);
+  const [value, unit] = formatMetricValue(
+    { ...record, value: hasValue ? record.value : null, unit: METRIC_UNIT[id] },
+    unitSystem,
+    id
+  );
+  return {
+    ...metric,
+    value,
+    unit: unit || undefined,
+    status: hasValue ? record.status : undefined,
+    reason: hasValue ? undefined : (record.reason ?? undefined),
+    subtext: hasValue && metric.id === 'smash' ? smashSubtext(shot) : undefined,
+    confidence: 'confidence' in metric || metric.id === 'spin_axis' ? null : undefined,
+    confidenceLabel: undefined,
+  };
 }
 
 /** The D-plane face angle rides on the club-path tile it is derived from. */
 function withFaceAngle(
   subtext: string | undefined,
   faceDeg: number | null | undefined,
-  faceStatus?: string | null
+  faceStatus?: string | null,
+  faceLabel?: MetricLabel
 ): string | undefined {
   if (!isMeasured(faceDeg)) return subtext;
   // the face's own label may follow ("_estimated", "_mixed_frames")
   const uncalibrated = faceStatus?.startsWith('d_plane_estimate_azimuth_uncalibrated') ?? false;
   const basis = uncalibrated ? 'D-plane, azimuth uncalibrated' : 'D-plane';
-  const face = `face ${formatOptionalAngle(faceDeg, true)}° (${basis})`;
+  const label = faceLabel ? `${t(`label.${faceLabel}` as MessageKey).toLowerCase()}, ` : '';
+  const face = `face ${formatOptionalAngle(faceDeg, true)}° (${label}${basis})`;
   return subtext ? `${subtext} · ${face}` : face;
 }
 
@@ -193,7 +180,7 @@ type AttackSource = 'canonical' | 'fused' | 'iwr' | 'head_track' | 'iwr_candidat
 const ATTACK_STATUS: Record<string, MetricLabel | undefined> = {
   canonical: 'measured',
   head_track: 'experimental',
-  iwr_candidate: 'estimated',
+  iwr_candidate: 'experimental',
 };
 
 function attackRoute(
@@ -257,7 +244,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const cameraFused = fusedDeliveryAttempted && !fusedRejected && !headTrack;
   const fusedSubtext = headTrack ? 'camera head track' : 'camera fused';
   // Server shot_models.attack_angle_resolution(): canonical, camera fused, an accepted
-  // IWR attack, the camera head track, the IWR candidate (estimated); the arc's value
+  // IWR attack, the camera head track, the IWR candidate (experimental); the arc's value
   // arrives through the server's record. A rejected or withheld fused value is never shown.
   const attack = attackRoute(shot, { headTrack, fusedRejected });
   const attackAngle = attack.value;
@@ -273,17 +260,16 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const iwrPathAccepted = (shot.experimental_club_path_status ?? '').startsWith('accepted');
   const fusedPath = shot.experimental_fused_club_path_deg;
   const iwrPath = shot.experimental_club_path_deg;
+  const fusedPathShown = isMeasured(fusedPath) && shot.experimental_fused_club_path_confidence !== 'withheld';
   const clubPathSource = isMeasured(shot.club_path_deg)
     ? null
-    : cameraFused && isMeasured(fusedPath)
+    : cameraFused && fusedPathShown
       ? 'fused'
-      : !cameraFused && iwrPathAccepted && isMeasured(iwrPath)
+      : iwrPathAccepted && isMeasured(iwrPath)
         ? 'iwr'
-        : headTrack && isMeasured(fusedPath)
+        : headTrack && fusedPathShown
           ? 'fused'
-          : !fusedDeliveryAttempted && isMeasured(iwrPath)
-            ? 'iwr'
-            : null;
+          : null;
   const clubPath = firstMeasured(
     shot.club_path_deg,
     clubPathSource === 'fused' ? fusedPath : null,
@@ -353,7 +339,13 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatSpinRpm(shot.spin_rpm),
       unit: unitIfMeasured(shot.spin_rpm, 'rpm'),
       status: labelIf(shot.spin_rpm, spinLabel(shot)),
-      confidence: isMeasured(shot.spin_rpm) ? shot.spin_quality : null,
+      confidence: !isMeasured(shot.spin_rpm)
+        ? null
+        : spinLabel(shot) === 'measured'
+          ? shot.spin_quality
+          : spinLabel(shot) === 'experimental'
+            ? 'experimental'
+            : null,
     },
     {
       id: 'spin_axis',
@@ -367,21 +359,17 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.clubPath'),
       value: formatOptionalAngle(clubPath, true),
       unit: angleUnit(clubPath),
-      subtext: withFaceAngle(
-        isMeasured(shot.club_path_deg)
-          ? undefined
-          : clubPathSource === 'fused'
-            ? fusedSubtext
-            : clubPathSource === 'iwr'
-              ? experimentalStatus(shot.experimental_club_path_status)
-              : fusedDeliveryAttempted
-                ? experimentalStatus(shot.experimental_fused_status)
-                : clubPathIsExperimental
-                  ? experimentalStatus(shot.experimental_club_path_status)
-                  : undefined,
-        shot.experimental_face_angle_deg,
-        shot.experimental_face_angle_status
-      ),
+      subtext: isMeasured(shot.club_path_deg)
+        ? undefined
+        : clubPathSource === 'fused'
+          ? fusedSubtext
+          : clubPathSource === 'iwr'
+            ? experimentalStatus(shot.experimental_club_path_status)
+            : fusedDeliveryAttempted
+              ? experimentalStatus(shot.experimental_fused_status)
+              : clubPathIsExperimental
+                ? experimentalStatus(shot.experimental_club_path_status)
+                : undefined,
       confidence: !clubPathIsExperimental
         ? null
         : clubPathSource === 'iwr'
@@ -403,14 +391,27 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
           : (shot.experimental_fused_attack_angle_confidence ?? 'experimental')
         : null,
       confidenceLabel:
-        (attack.source === 'fused' || attack.source === 'head_track') &&
-        shot.experimental_fused_attack_angle_confidence
+        (attack.source === 'fused' || attack.source === 'head_track') && shot.experimental_fused_attack_angle_confidence
           ? 'experimental'
           : undefined,
       status: ATTACK_STATUS[attack.source ?? ''],
     },
   ];
-  return tiles.map((tile) => withServerLabel(shot, tile, unitSystem));
+  return tiles.map((tile) => {
+    const shown = withServerLabel(shot, tile, unitSystem);
+    if (tile.id !== 'club_path' || shown.value === NO_VALUE) return shown;
+    const face = shotMetric(shot, 'face_angle');
+    const faceValue = face ? (isValueLabel(face.status) ? face.value : null) : shot.experimental_face_angle_deg;
+    return {
+      ...shown,
+      subtext: withFaceAngle(
+        shown.subtext,
+        faceValue,
+        face ? undefined : shot.experimental_face_angle_status,
+        face?.status
+      ),
+    };
+  });
 }
 
 function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: UnitSystem): LiveMetric[] {

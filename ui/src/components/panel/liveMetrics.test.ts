@@ -117,10 +117,7 @@ describe('buildLiveMetrics', () => {
     expect(adjusted.status).toBe('estimated');
 
     // no simulated carry: no value, whatever the table says (owner decision 1)
-    const table = byId(
-      buildLiveMetrics(makeShot({ carry_spin_adjusted: null }), 'imperial', emptySwingStats),
-      'carry'
-    );
+    const table = byId(buildLiveMetrics(makeShot({ carry_spin_adjusted: null }), 'imperial', emptySwingStats), 'carry');
     expect(table.value).toBe(NO_VALUE);
     expect(table.subtext).toBeUndefined();
     expect(table.status).toBeUndefined();
@@ -377,7 +374,7 @@ describe('buildLiveMetrics', () => {
       expect(byId(metrics, 'launch_h').status).toBe('measured');
     });
 
-    it('labels an uncalibrated IWR club path (audit F8)', () => {
+    it('withholds an uncalibrated IWR club path (audit F8)', () => {
       const metrics = buildLiveMetrics(
         makeShot({
           club_path_deg: null,
@@ -389,7 +386,7 @@ describe('buildLiveMetrics', () => {
       );
 
       expect(byId(metrics, 'club_path')).toMatchObject({
-        value: '+1.5',
+        value: NO_VALUE,
         subtext: 'azimuth uncalibrated',
       });
     });
@@ -585,9 +582,9 @@ describe('face angle', () => {
       experimental_fused_attack_angle_confidence: 'experimental',
     };
 
-    it('shows the IWR candidate, labelled estimated, when nothing stronger gave one', () => {
+    it('shows the IWR candidate, labelled experimental, when nothing stronger gave one', () => {
       const tile = byId(buildLiveMetrics(makeShot(candidate), 'imperial', emptySwingStats), 'club_aoa');
-      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'experimental' });
     });
 
     it('puts the head track before the IWR candidate', () => {
@@ -624,7 +621,7 @@ describe('face angle', () => {
         ),
         'club_aoa'
       );
-      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'experimental' });
     });
 
     it('never shows an IWR candidate its gates flagged', () => {
@@ -880,5 +877,105 @@ describe('buildLiveMetrics with the server labels (Shot.metrics)', () => {
     expect(metric.ball_speed.slice(0, 2)).toEqual(['241.8', 'km/h']);
     expect(metric.carry.slice(0, 2)).toEqual(['211', 'm']);
     expect(metric.club_speed.slice(0, 2)).toEqual(['162.6', 'km/h']);
+  });
+
+  it.each([
+    ['ball_speed', 'ball_speed'],
+    ['carry', 'carry'],
+    ['club_speed', 'club_speed'],
+    ['smash', 'smash_factor'],
+    ['launch_v', 'launch_vertical'],
+    ['launch_h', 'launch_horizontal'],
+    ['spin', 'spin_rate'],
+    ['spin_axis', 'spin_axis'],
+    ['club_path', 'club_path'],
+    ['club_aoa', 'attack_angle'],
+  ])('withholds %s whenever its server record is unavailable', (tileId, metricId) => {
+    const metrics = buildLiveMetrics(
+      makeShot({ metrics: { [metricId]: record({ reason: 'withheld by producer' }) } }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, tileId)).toMatchObject({ value: NO_VALUE, reason: 'withheld by producer' });
+    expect(byId(metrics, tileId).unit).toBeUndefined();
+    expect(byId(metrics, tileId).status).toBeUndefined();
+    expect(byId(metrics, tileId).confidence ?? null).toBeNull();
+  });
+
+  it('replaces stale raw values and clears stale confidence with the server value', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        launch_angle_vertical: 40,
+        launch_angle_confidence: 0.99,
+        metrics: { launch_vertical: record({ value: 14.2, status: 'experimental' }) },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'launch_v')).toMatchObject({ value: '14.2', status: 'experimental', confidence: null });
+  });
+
+  it('labels the face subtext from its own record', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        experimental_face_angle_deg: 30,
+        metrics: {
+          club_path: record({ value: -2, status: 'measured' }),
+          face_angle: record({ value: 1.5, status: 'experimental' }),
+        },
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').subtext).toContain('face +1.5');
+    expect(byId(metrics, 'club_path').subtext).toContain('experimental');
+    expect(byId(metrics, 'club_path').subtext).not.toContain('30.0');
+  });
+
+  it('hides a face the server withholds even if the raw face is present', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ experimental_face_angle_deg: 30, metrics: { face_angle: record({ reason: 'mixed frames' }) } }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').subtext).toBeUndefined();
+  });
+
+  it('uses accepted IWR path after a withheld camera path in an older shot', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: null,
+        experimental_fused_status: 'ok',
+        experimental_fused_club_path_deg: 20,
+        experimental_fused_club_path_confidence: 'withheld',
+        experimental_club_path_deg: 2.5,
+        experimental_club_path_status: 'accepted_high',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').value).toBe('+2.5');
+  });
+
+  it('does not display an unaccepted IWR path in an older shot', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_path_deg: null,
+        experimental_club_path_deg: 20,
+        experimental_club_path_status: 'candidate_out_of_bounds',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'club_path').value).toBe(NO_VALUE);
+  });
+
+  it('labels the weak OPS spin fallback experimental without a server record', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ spin_source: 'ops_below_floor', spin_quality: 'high' }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(metrics, 'spin').status).toBe('experimental');
   });
 });

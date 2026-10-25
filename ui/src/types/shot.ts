@@ -98,7 +98,7 @@ export interface Shot {
   spin_rpm: number | null;
   spin_confidence: number | null;
   spin_quality: SpinQuality | null;
-  spin_source: Exclude<MetricLabel, 'experimental' | 'not_measured'> | null;
+  spin_source: Exclude<MetricLabel, 'experimental' | 'not_measured'> | 'ops_below_floor' | null;
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
