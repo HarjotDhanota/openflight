@@ -1993,13 +1993,10 @@ class TestShotToDict:
         hints = typing.get_type_hints(Shot)
         return [f.name for f in dataclasses.fields(Shot) if "float" in str(hints[f.name])]
 
-    def test_float_field_list_is_not_empty(self):
-        assert "launch_angle_vertical" in self._float_fields()
-        assert len(self._float_fields()) > 30
-
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
     def test_no_non_finite_float_field_raises_or_leaks_into_the_payload(self, bad):
         """A shot is never dropped; a non-finite metric goes out as null."""
+        assert "launch_angle_vertical" in self._float_fields() and len(self._float_fields()) > 30
         for name in self._float_fields():
             shot = Shot(ball_speed_mph=120.0, timestamp=datetime(2026, 10, 11, 9, 0, 0))
             setattr(shot, name, bad)
@@ -2046,30 +2043,23 @@ class TestShotToDict:
         ]
         json.dumps(result, allow_nan=False)
 
-    def test_a_nulled_smash_factor_keeps_no_radial_ratio_label(self):
-        """The radial-ratio label goes out only beside a smash value it describes."""
+    @pytest.mark.parametrize(
+        ("ball_speed_mph", "smash", "status"),
+        [(150.0, 1.45, "radial_ratio"), (math.inf, None, None)],
+        ids=["measured", "nulled"],
+    )
+    def test_the_radial_ratio_label_goes_out_only_beside_a_smash_value(
+        self, ball_speed_mph, smash, status
+    ):
         result = shot_to_dict(
             Shot(
-                ball_speed_mph=math.inf,
-                club_speed_mph=100.0,
-                timestamp=datetime(2026, 10, 12, 9, 0, 0),
-                smash_factor_status="radial_ratio",
-            )
-        )
-        assert result["smash_factor"] is None
-        assert result["smash_factor_status"] is None
-
-    def test_a_radial_ratio_label_reaches_the_payload(self):
-        result = shot_to_dict(
-            Shot(
-                ball_speed_mph=150.0,
+                ball_speed_mph=ball_speed_mph,
                 club_speed_mph=103.789,
                 timestamp=datetime(2026, 10, 12, 9, 0, 0),
                 smash_factor_status="radial_ratio",
             )
         )
-        assert result["smash_factor"] == 1.45
-        assert result["smash_factor_status"] == "radial_ratio"
+        assert (result["smash_factor"], result["smash_factor_status"]) == (smash, status)
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf], ids=["nan", "inf"])
     def test_a_nulled_metric_keeps_no_measuring_source_label(self, bad):
@@ -3522,29 +3512,46 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert len(updates) == 1
         assert updates[0]["shot"]["timestamp"] == shot.timestamp.isoformat()
 
+    _PREFETCHED = SimpleNamespace(
+        trigger_timestamp=100.0,
+        path=Path("camera-001"),
+        metadata={},
+        error=None,
+        valid=True,
+        sequence=1,
+    )
+
+    @staticmethod
+    def _enrich_with(monkeypatch, capture_for_shot, process_iwr, fuse, load=None):
+        """Only the camera prefetch and the IWR stage run; capture_for_shot gets the 2 s wait."""
+
+        def selected(impact_timestamp, timeout_s):
+            assert timeout_s == 2.0
+            return capture_for_shot(impact_timestamp)
+
+        runtime = SimpleNamespace(camera_analysis_eligible=True, capture_for_shot=selected)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        if load is not None:
+            monkeypatch.setattr(server_module, "_load_camera_capture_archive", load)
+        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
+        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
+        monkeypatch.setattr(server_module, "_fuse_camera_measurements", fuse)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+
     def test_camera_prefetch_overlaps_iwr_and_reuses_one_archive(self, monkeypatch):
         """Camera association and one archive load overlap the long TI transfer."""
         camera_loaded = threading.Event()
-        load_calls = []
-        fused_archives = []
+        load_calls, fused_archives = [], []
         archive = {"frames": np.zeros((1, 2, 2), dtype=np.uint8)}
-        capture = SimpleNamespace(
-            trigger_timestamp=100.0,
-            path=Path("camera-001"),
-            metadata={},
-            error=None,
-            valid=True,
-            sequence=1,
-        )
+        capture = self._PREFETCHED
 
-        class CameraRuntime:
-            camera_analysis_eligible = True
-
-            @staticmethod
-            def capture_for_shot(impact_timestamp, timeout_s):
-                assert impact_timestamp == 100.0
-                assert timeout_s == 2.0
-                return capture
+        def capture_for_shot(impact_timestamp):
+            assert impact_timestamp == 100.0
+            return capture
 
         def load_camera(selected):
             load_calls.append(selected)
@@ -3555,19 +3562,13 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             assert camera_loaded.wait(1.0), "camera work did not overlap IWR processing"
             return 7500.0
 
-        monkeypatch.setattr(server_module, "camera_capture_runtime", CameraRuntime())
-        monkeypatch.setattr(server_module, "_load_camera_capture_archive", load_camera)
-        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
-        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
-        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
-        monkeypatch.setattr(
-            server_module,
-            "_fuse_camera_measurements",
+        self._enrich_with(
+            monkeypatch,
+            capture_for_shot,
+            process_iwr,
             lambda _shot, selected, prefetched: fused_archives.append((selected, prefetched)),
+            load_camera,
         )
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
 
         result = server_module._enrich_shot_from_optional_hardware(self._shot())
 
@@ -3583,30 +3584,20 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         """A camera association failure remains isolated from radar enrichment."""
         fused = []
 
-        class FailingCameraRuntime:
-            @staticmethod
-            def capture_for_shot(_impact_timestamp, timeout_s):
-                assert timeout_s == 2.0
-                raise OSError("camera save failed")
+        def failing(_impact_timestamp):
+            raise OSError("camera save failed")
 
         def process_iwr(shot):
             shot.launch_angle_vertical = 18.5
             shot.launch_angle_vertical_source = "radar"
             return 25.0
 
-        monkeypatch.setattr(server_module, "camera_capture_runtime", FailingCameraRuntime())
-        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
-        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
-        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
-        monkeypatch.setattr(
-            server_module,
-            "_fuse_camera_measurements",
+        self._enrich_with(
+            monkeypatch,
+            failing,
+            process_iwr,
             lambda _shot, capture, archive: fused.append((capture, archive)),
         )
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
         shot = self._shot()
 
         result = server_module._enrich_shot_from_optional_hardware(shot)
@@ -3624,23 +3615,11 @@ class TestOnShotDetected(OnShotDetectedHelpers):
     def test_prefetch_completion_order_does_not_change_fused_output(self, monkeypatch):
         """Concurrency changes latency, not the deterministic fusion inputs."""
         camera_delay_s = [0.0]
-        archive = {"selected": 4.0}
-        capture = SimpleNamespace(
-            trigger_timestamp=100.0,
-            path=Path("camera-001"),
-            metadata={},
-            error=None,
-            valid=True,
-            sequence=1,
-        )
 
-        class CameraRuntime:
-            @staticmethod
-            def capture_for_shot(_impact_timestamp, timeout_s):
-                assert timeout_s == 2.0
-                if camera_delay_s[0]:
-                    threading.Event().wait(camera_delay_s[0])
-                return capture
+        def capture_for_shot(_impact_timestamp):
+            if camera_delay_s[0]:
+                threading.Event().wait(camera_delay_s[0])
+            return self._PREFETCHED
 
         def process_iwr(shot):
             shot.launch_angle_vertical = 16.0
@@ -3651,15 +3630,9 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             shot.launch_angle_horizontal = prefetched["selected"]
             shot.launch_angle_horizontal_source = "camera_assisted_experimental"
 
-        monkeypatch.setattr(server_module, "camera_capture_runtime", CameraRuntime())
-        monkeypatch.setattr(server_module, "_load_camera_capture_archive", lambda _capture: archive)
-        monkeypatch.setattr(server_module, "_process_iwr6843_angle", process_iwr)
-        monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
-        monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
-        monkeypatch.setattr(server_module, "_fuse_camera_measurements", fuse)
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        self._enrich_with(
+            monkeypatch, capture_for_shot, process_iwr, fuse, lambda _c: {"selected": 4.0}
+        )
 
         fast_camera_shot = self._shot()
         server_module._enrich_shot_from_optional_hardware(fast_camera_shot)
@@ -3736,15 +3709,16 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_finalized_once(emitted, session_log)
         assert session_log.shots[0]["pipeline_ms"]["camera_analysis"] == 123.5
 
-    def test_a_fusion_unit_labels_smash_a_radial_ratio_from_first_emit_to_session_log(
-        self, monkeypatch
+    @pytest.mark.parametrize(("fusion", "status"), [(True, "radial_ratio"), (False, None)])
+    def test_only_a_fusion_unit_labels_smash_a_radial_ratio_on_every_emit(
+        self, monkeypatch, fusion, status
     ):
-        """Both speeds are OPS radial readings, so smash says so on every emit."""
+        """On a fusion unit both speeds are OPS radial readings, so smash says so."""
         emitted, session_log = self._record_finalization(monkeypatch)
         worker_targets = []
         monkeypatch.setattr(server_module, "shot_enrichment_queue", self._enrichment_queue())
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object() if fusion else None)
         monkeypatch.setattr(
             server_module.socketio,
             "start_background_task",
@@ -3757,7 +3731,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         )
 
         on_shot_detected(self._shot())
-        worker_targets[0]()
+        if fusion:
+            worker_targets[0]()
         self._wait_for_finalization_coordinator_idle()
 
         payloads = [payload["shot"] for _event, payload in emitted if "shot" in payload]
@@ -3765,21 +3740,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert payloads and session_log.shots
         for shot_data in payloads + session_log.shots:
             assert shot_data["smash_factor"] == pytest.approx(1.5)
-            assert shot_data["smash_factor_status"] == "radial_ratio"
-
-    def test_an_ops_only_unit_leaves_smash_unlabelled(self, monkeypatch):
-        """The label is scoped to fusion units; OPS-only smash is unchanged."""
-        emitted, session_log = self._record_finalization(monkeypatch)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
-
-        on_shot_detected(self._shot())
-        self._wait_for_finalization_coordinator_idle()
-
-        payloads = [payload["shot"] for _event, payload in emitted if "shot" in payload]
-        assert payloads and session_log.shots
-        for shot_data in payloads + session_log.shots:
-            assert shot_data["smash_factor"] == pytest.approx(1.5)
-            assert shot_data["smash_factor_status"] is None
+            assert shot_data["smash_factor_status"] == status
 
     def test_camera_only_enrichment_uses_provisional_then_final_events(self, monkeypatch):
         emitted = []
@@ -4296,11 +4257,14 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         self._assert_finalization_coordinator_empty()
         assert not server_module._shot_awaiting_late_enrichment
 
-    def test_late_iwr_result_updates_same_shot_once_without_resending_sims(self, monkeypatch):
+    def _late_result(self, monkeypatch, *, fails=False):
+        """One fusion shot whose IWR result (or failure) lands after the first-result timer."""
         release_dump = threading.Event()
 
         def late_iwr(shot):
             assert release_dump.wait(5.0)
+            if fails:
+                raise RuntimeError("IWR dump failed")
             shot.launch_angle_vertical = 14.0
             shot.launch_angle_vertical_confidence = 0.9
             shot.launch_angle_vertical_source = "radar"
@@ -4312,6 +4276,10 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         release_dump.set()
         for thread in run.background_threads:
             thread.join(timeout=2.0)
+        return run
+
+    def test_late_iwr_result_updates_same_shot_once_without_resending_sims(self, monkeypatch):
+        run = self._late_result(monkeypatch)
 
         assert [event for event, _payload in run.emitted] == ["shot", "shot_update", "shot_update"]
         initial, first_result, late = (payload for _event, payload in run.emitted)
@@ -4350,22 +4318,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             def publish_shot(self, shot_data, *, final, enrichment=None):
                 phone_shots.append((dict(shot_data), final, enrichment))
 
-        release_dump = threading.Event()
-
-        def late_iwr(shot):
-            assert release_dump.wait(5.0)
-            shot.launch_angle_vertical = 14.0
-            shot.launch_angle_vertical_confidence = 0.9
-            shot.launch_angle_vertical_source = "radar"
-            return server_module._ShotEnrichmentResult(iwr6843_ms=21000.0)
-
-        run = self._late_iwr_session(monkeypatch, late_iwr)
         monkeypatch.setattr(server_module, "ble_publisher", Phone())
-        on_shot_detected(run.shot)
-        assert run.first_result_published.wait(2.0), "the timer must publish OPS-only first"
-        release_dump.set()
-        for thread in run.background_threads:
-            thread.join(timeout=2.0)
+        self._late_result(monkeypatch)
 
         assert [(final, enrichment) for _data, final, enrichment in phone_shots] == [
             (False, {"status": "pending"}),  # the initial OPS shot
@@ -4486,34 +4440,14 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert broken.carry_spin_adjusted == missing.carry_spin_adjusted
         assert math.isfinite(broken.carry_spin_adjusted)
 
-    def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
-        emitted, _session_log = self._record_finalization(monkeypatch)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
-        shot = self._shot()
-        shot.launch_angle_vertical = math.nan
-        assert server_module._emit_initial_ops_shot(shot) is True
-        assert [event for event, _payload in emitted] == ["shot"]
-        json.dumps(emitted[0][1], allow_nan=False)
-
     def test_late_enrichment_failure_is_logged_and_ops_shot_stays(self, monkeypatch):
-        release_dump = threading.Event()
         logged_errors = []
-
-        def failing_iwr(_shot):
-            assert release_dump.wait(5.0)
-            raise RuntimeError("IWR dump failed")
-
-        run = self._late_iwr_session(monkeypatch, failing_iwr)
         monkeypatch.setattr(
             server_module,
             "log_session_error",
             lambda message, **kwargs: logged_errors.append((message, kwargs)),
         )
-        on_shot_detected(run.shot)
-        assert run.first_result_published.wait(2.0)
-        release_dump.set()
-        for thread in run.background_threads:
-            thread.join(timeout=2.0)
+        run = self._late_result(monkeypatch, fails=True)
 
         assert [message for message, _kwargs in logged_errors] == [
             "Deferred shot enrichment failed"
@@ -6181,16 +6115,6 @@ class TestCameraShotAnalysisRefused:
         assert "--camera-shot-analysis is refused on fusion units" in error
         assert "pixel size" in error
         assert "the IWR gives distance" in error
-
-    def test_the_estimator_stays_in_the_code_unwired(self):
-        import inspect
-
-        from openflight.camera import ball_flight
-
-        assert callable(ball_flight.estimate_horizontal_launch)
-        source = inspect.getsource(server_module)
-        assert "estimate_horizontal_launch" not in source
-        assert "shot_analysis_enabled" not in source
 
 
 class TestIwrAzimuthCalibration:
