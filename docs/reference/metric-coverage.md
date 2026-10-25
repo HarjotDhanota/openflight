@@ -68,7 +68,7 @@ It feeds no other metric: no gear effect, spin, spin axis, face or flight
 | Code | Place | Where in the code | Test |
 |---|---|---|---|
 | S | `Shot.to_dict()["metrics"]` | `launch_monitor.py`, `shot_metrics.py` | `test_shot_metrics.py`, `test_metric_coverage.py` |
-| P | Kiosk payload: socket `shot` / `session_state` (via `shot_to_dict`) and `GET /api/shots/latest` | `server.py` | `test_metric_coverage.py` |
+| P | Kiosk payload: socket `shot` / `session_state` (via `shot_to_dict`) and `GET /api/shots/latest` | `server.py`, `tester_hooks.py` | `test_metric_coverage.py` |
 | K | Kiosk screen | Live tiles (`liveMetrics.ts`); Club and Flight tabs (`MetricGroupPanel.tsx`); the Club tab's face-impact view (`FaceImpactView.tsx`) | vitest `MetricGroupPanel.test.tsx`, `FaceImpactView.test.tsx`, `liveMetrics.test.ts`; Playwright `metric-panels.spec.ts`, `face-impact.spec.ts` |
 | T | Tester page, beside each swing's picture verdict | `ui/public/tester.html` (`#kiosk-shot`) | Playwright `tester-ladder.spec.ts` |
 | L | Session log `shot_detected` / `shot_updated` lines | `session_logger.py` (writes `Shot.to_dict()`) | `test_metric_coverage.py` |

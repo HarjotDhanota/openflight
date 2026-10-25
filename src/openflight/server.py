@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import kiosk_extensions, shot_metrics
+from . import kiosk_extensions
 from .ballistics import resolve_launch, simulate
 from .ble.protocol import (
     build_power_status_event,
@@ -2612,13 +2612,6 @@ def static_files(path):
     return send_from_directory(app.static_folder, path)
 
 
-@app.route("/api/shots/latest")
-def api_latest_shot():
-    """The session's latest shot payload (every metric, labelled) and the metric catalog."""
-    shots = _session_shots()
-    return jsonify({"shot": shots[-1] if shots else None, "catalog": shot_metrics.catalog()})
-
-
 @app.route("/api/shutdown", methods=["POST"])
 def api_shutdown():
     """Cleanly shut down the server via REST API."""
@@ -3711,12 +3704,6 @@ def _ready_light_trigger_outcome(event: dict) -> None:
         return
     reason = event.get("reason")
     ready_light.swing_result("no_radar_shot" if reason in _NO_RADAR_SHOT_REASONS else "not_a_shot")
-
-
-@app.get("/api/ready-light")
-def ready_light_status():
-    """The ready light for the tester page; the kiosk screen gets it on the socket."""
-    return jsonify(ready_light.update(_ready_light_states()))
 
 
 @socketio.on("connect")
