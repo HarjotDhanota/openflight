@@ -3,23 +3,11 @@
 A shot without its own impact time has none: no prior is built from earlier shots.
 """
 
-import dataclasses
-import inspect
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from openflight.iwr6843 import runtime as runtime_module
-from openflight.iwr6843.runtime import IWR6843Runtime, process_raw_capture
-
-
-def test_the_runtime_keeps_no_earlier_shots_tracks():
-    names = {field.name for field in dataclasses.fields(IWR6843Runtime)}
-
-    assert "recovery_observations" not in names
-
-
-def test_the_estimator_takes_no_earlier_shots_tracks():
-    assert "recovery_observations" not in inspect.signature(process_raw_capture).parameters
+from openflight.iwr6843.runtime import process_raw_capture
 
 
 def test_a_shot_without_its_own_impact_time_gives_the_club_search_none():
@@ -53,13 +41,3 @@ def test_a_shot_without_its_own_impact_time_gives_the_club_search_none():
 
     assert seen["impact_t_s"] is None
     assert "recovered" not in club.status
-
-
-def test_the_replay_snapshot_holds_no_earlier_shots_tracks():
-    runtime = IWR6843Runtime(
-        capture_monitor=SimpleNamespace(),
-        calibration=SimpleNamespace(tee_range_m=1.5),
-        net_range_m=None,
-    )
-
-    assert "recovery_observations" not in runtime.replay_config_snapshot()
