@@ -59,9 +59,9 @@ MAX_GATE_LATENCY_MS = 2.0
 
 FLAG_LIMIT_DEG = 15.0
 HOSEL_FOR_FACE_CENTRE_DEG = 1.5
-# The published near-impact radius comes from three scratch golfers; any golfer's
-# arc is held to this fraction of it.
-TURN_RATE_PRIOR_FRACTION = 0.25
+# The published radius comes from three scratch golfers. Two-chord shots on
+# Harjot-outdoor-test-1 turned at 0.5-1.65x its rate (sd about 0.35 of it).
+TURN_RATE_PRIOR_FRACTION = 0.35
 TURN_RATE_RATIO_RANGE = (0.5, 2.0)
 # Amateur planes spread wider than the published skilled golfers' standard deviation.
 PLANE_PRIOR_SIGMA_DEG = 5.0
@@ -116,6 +116,15 @@ class HeadTrackCamera:
     focal_sigma_fraction: float = 0.05
     pitch_sigma_deg: float = 1.0
     yaw_sigma_deg: float = 0.0
+    # None: the image centre
+    principal_point_px: Optional[tuple[float, float]] = None
+
+    @property
+    def centre_px(self) -> tuple[float, float]:
+        """The principal point the pixels are measured from."""
+        if self.principal_point_px is not None:
+            return self.principal_point_px
+        return self.image_width_px / 2.0, self.image_height_px / 2.0
 
 
 @dataclass(frozen=True)
@@ -547,8 +556,9 @@ class _Observation:
 
     def _normalized(self, x_px: float, y_px: float, scale: float) -> tuple[float, float]:
         camera = self.inputs.camera
-        horizontal = camera.horizontal_pixel_sign * (x_px - camera.image_width_px / 2.0)
-        vertical = -(y_px - camera.image_height_px / 2.0)
+        centre_x, centre_y = camera.centre_px
+        horizontal = camera.horizontal_pixel_sign * (x_px - centre_x)
+        vertical = -(y_px - centre_y)
         x, y = deroll_normalized_offsets(
             horizontal / camera.focal_px, vertical / camera.focal_px, camera.roll_correction_deg
         )
