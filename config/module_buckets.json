@@ -1415,6 +1415,12 @@
   "tests/fixtures/camera_fallback/outdoor-test-1-shot-28-launch.npz": "RESEARCH",
   "tests/test_camera_fallback_field.py": "RESEARCH",
   "tests/test_attack_angle_chain.py": "FUSION",
-  "tests/test_head_track_feeds_on.py": "FUSION"
+  "tests/test_head_track_feeds_on.py": "FUSION",
+  "src/openflight/phone_catch_up.py": "PRODUCT",
+  "src/openflight/shot_stream.py": "PRODUCT",
+  "tests/test_ble_catch_up.py": "PRODUCT",
+  "tests/test_phone_catch_up.py": "PRODUCT",
+  "tests/test_shot_stream.py": "PRODUCT",
+  "tests/test_shot_stream_catch_up.py": "PRODUCT"
  }
 }
