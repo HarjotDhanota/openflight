@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
-from openflight.iwr6843.dump import parse_header, payload_nbytes
+from openflight.iwr6843.dump import declared_dump_nbytes
 from openflight.iwr6843.range_evidence import (
     static_channel_profile,
     static_range_profile_v2 as static_range_profile,
@@ -163,15 +163,6 @@ def _input_manifest(inputs: StaticCaptureInputs) -> tuple[dict[str, dict[str, st
     return manifest, config_bytes
 
 
-def _declared_dump_nbytes(raw: bytes) -> int | None:
-    """Total size the dump's own header declares, or None without a readable header."""
-    try:
-        metadata = parse_header(raw)
-        return metadata["header_nbytes"] + payload_nbytes(metadata, raw)
-    except (KeyError, ValueError):
-        return None
-
-
 def _profile_payload(profile) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(profile), allow_nan=False))
 
@@ -298,7 +289,7 @@ def capture_static_range(  # pylint: disable=too-many-locals,too-many-statements
             if not isinstance(raw, bytes):
                 raise TypeError("IWR6843 read_dump must return bytes")
             stage = enter("persist_raw")
-            declared_nbytes = _declared_dump_nbytes(raw)
+            declared_nbytes = declared_dump_nbytes(raw)
             raw_complete = declared_nbytes == len(raw)
             if raw:
                 _atomic_write_bytes(raw_path, raw)

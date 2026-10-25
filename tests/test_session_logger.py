@@ -624,6 +624,51 @@ class TestLogIWR6843Capture:
         assert entry["measurement"]["track_span_s"] == 0.0334
         assert entry["temperature_report"] is None
 
+    def test_iwr6843_capture_records_a_partial_dump_apart_from_the_capture(self, tmp_path):
+        """A transfer that ended early keeps its bytes, never as the shot's dump."""
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        partial = {
+            "path": "/data/iwr6843/iwr6843_20261024_101500_000_007.partial.l3dump",
+            "bytes": 711_201,
+            "expected_bytes": 732_812,
+            "complete": False,
+        }
+
+        logger.log_iwr6843_capture(
+            shot_number=7,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.002,
+            capture_path=None,
+            capture_bytes=0,
+            dump_duration_s=11.3,
+            capture_error="IWR6843 dump ended early (711201 of 732812 bytes)",
+            ball_speed_mph=94.5,
+            partial_capture=partial,
+        )
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["capture_path"] is None and entry["capture_bytes"] == 0
+        assert entry["capture_complete"] is False
+        assert entry["partial_capture"] == partial
+
+    def test_iwr6843_capture_marks_a_complete_dump(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        logger.log_iwr6843_capture(
+            shot_number=1,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.002,
+            capture_path="/data/iwr6843/x.l3dump",
+            capture_bytes=732_812,
+            dump_duration_s=7.1,
+            capture_error=None,
+            ball_speed_mph=94.5,
+        )
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["capture_complete"] is True
+        assert entry["partial_capture"] is None
+
     def test_iwr6843_capture_club_path_defaults_to_none(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")

@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 from .clubs import ClubType
+from .iwr6843.dump import PARTIAL_DUMP_SUFFIX, is_partial_dump_path
 from .rolling_buffer.monitor import get_optimal_spin_for_ball_speed
 from .rolling_buffer.processor import RollingBufferProcessor
 from .rolling_buffer.types import IQCapture
@@ -39,17 +40,22 @@ def locate_recorded_capture(recorded: str, session_dir: Path) -> tuple[Path, str
     Sessions record absolute paths on the Pi. A copied or extracted session keeps
     the same layout below its session folder, so the longest trailing part of the
     recorded path that exists there is the capture. Nothing outside the folder is
-    ever read.
+    ever read. A partial IWR dump (``PARTIAL_DUMP_SUFFIX``) is never a capture.
     """
     if not isinstance(recorded, str) or not recorded:
         raise ValueError("capture event has no recorded path")
+    flavour = PureWindowsPath if "\\" in recorded else PurePosixPath
+    if is_partial_dump_path(recorded):
+        raise ValueError(
+            f"recorded capture {flavour(recorded).name!r} is an incomplete dump "
+            f"({PARTIAL_DUMP_SUFFIX}); it is never replayed"
+        )
     root = Path(session_dir).resolve(strict=True)
     direct = Path(recorded).expanduser()
     if not direct.is_absolute():
         direct = root / direct
     if direct.exists() and _inside(direct, root):
         return direct.resolve(strict=True), "recorded"
-    flavour = PureWindowsPath if "\\" in recorded else PurePosixPath
     parts = [part for part in flavour(recorded).parts if part not in (flavour(recorded).anchor, "")]
     for length in range(len(parts), 0, -1):
         candidate = root.joinpath(*parts[-length:])

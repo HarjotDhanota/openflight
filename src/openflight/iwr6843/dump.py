@@ -488,6 +488,24 @@ def payload_nbytes(meta: dict, raw: bytes | None = None) -> int:
     return metadata_nbytes + iq_nbytes + (meta.get("trailer_nbytes") or 0)
 
 
+# The bytes of a transfer that ended early: kept for diagnosis, never a dump to replay.
+PARTIAL_DUMP_SUFFIX = ".partial.l3dump"
+
+
+def is_partial_dump_path(path) -> bool:
+    """Whether ``path`` names a saved partial transfer (``PARTIAL_DUMP_SUFFIX``)."""
+    return str(path).lower().endswith(PARTIAL_DUMP_SUFFIX)
+
+
+def declared_dump_nbytes(raw: bytes) -> int | None:
+    """Total size the dump's own header declares, or None without a readable header."""
+    try:
+        metadata = parse_header(raw)
+        return metadata["header_nbytes"] + payload_nbytes(metadata, raw)
+    except (KeyError, ValueError, IndexError, struct.error):
+        return None
+
+
 def parse_dump(raw: bytes):
     """Dump bytes -> (meta dict, complex cube [n_frames, cpf, n_rx, n_samples])."""
     meta = parse_header(raw)

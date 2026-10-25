@@ -493,6 +493,14 @@ class TestProgressCountsAcceptedNotFiles:
         assert progress["accepted"] == 5
         assert progress["complete"] is True
 
+    def test_a_partial_radar_dump_is_not_counted_as_a_dump(self, tmp_path):
+        root = ts.tester_root(tmp_path, "20260922-name")
+        _write_session(root, "arm1", ["ok", "ok"], dumps=2)
+        paired = root / "arm1" / "paired" / "run-01" / "iwr6843"
+        (paired / "iwr6843_1_002.partial.l3dump").write_bytes(b"part")
+        progress = ts.arm_progress(tmp_path, params())
+        assert progress["radar_dumps"] == 2
+
     def test_missing_radar_dumps_is_a_named_problem(self, tmp_path):
         root = ts.tester_root(tmp_path, "20260922-name")
         _write_session(root, "arm1", ["ok", "ok"], dumps=0)

@@ -14,8 +14,14 @@ from typing import Callable
 
 from openflight.gate_timing import GateEvent, read_edge_tick, warm_edge_reading_cache
 from openflight.gpio_factory import ensure_lgpio_pin_factory
-from openflight.iwr6843.driver import IWR6843Radar
-from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
+from openflight.iwr6843.dump import (
+    HEADER,
+    PARTIAL_DUMP_SUFFIX,
+    declared_dump_nbytes,
+    parse_header,
+    payload_nbytes,
+)
 from openflight.iwr6843.serial_process import IWR6843SerialProcess
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
@@ -56,11 +62,31 @@ class IWR6843Capture:
     dump_duration_ns: int | None = None
     uart_transport_duration_ns: int | None = None
     gate_event: GateEvent | None = None
+    # the bytes of a transfer that failed (``IWR6843DumpRecoveryError``), never ``raw``
+    partial_path: Path | None = None
+    partial_nbytes: int = 0
+    partial_expected_nbytes: int | None = None
 
     @property
     def valid(self) -> bool:
         """Whether a complete dump was captured."""
         return self.raw is not None and self.error is None
+
+    @property
+    def partial_capture(self) -> dict | None:
+        """A failed transfer's bytes: where they were saved, and whether their header is met.
+
+        ``complete`` is the bytes against the size their own header declares; a
+        transfer whose CLI failed after a whole dump is complete but still failed.
+        """
+        if not self.partial_nbytes:
+            return None
+        return {
+            "path": str(self.partial_path) if self.partial_path is not None else None,
+            "bytes": self.partial_nbytes,
+            "expected_bytes": self.partial_expected_nbytes,
+            "complete": self.partial_expected_nbytes == self.partial_nbytes,
+        }
 
 
 class IWR6843CaptureMonitor:
@@ -283,9 +309,23 @@ class IWR6843CaptureMonitor:
             raise ValueError(f"short IWR6843 dump: {len(raw)} bytes, expected {expected}")
         return metadata
 
-    def _capture_path(self, sequence: int, trigger_timestamp: float) -> Path:
+    def _capture_path(
+        self, sequence: int, trigger_timestamp: float, suffix: str = ".l3dump"
+    ) -> Path:
         timestamp = datetime.fromtimestamp(trigger_timestamp).strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        return self.output_dir / f"iwr6843_{timestamp}_{sequence:03d}.l3dump"
+        return self.output_dir / f"iwr6843_{timestamp}_{sequence:03d}{suffix}"
+
+    def _save_partial(self, sequence: int, trigger_timestamp: float, raw: bytes) -> Path | None:
+        """Keep a failed transfer's bytes beside the dumps, named so no replay takes them."""
+        if not raw or not self.save_dumps:
+            return None
+        path = self._capture_path(sequence, trigger_timestamp, PARTIAL_DUMP_SUFFIX)
+        try:
+            path.write_bytes(raw)
+        except OSError:
+            logger.warning("[IWR6843] Could not save partial dump #%d", sequence, exc_info=True)
+            return None
+        return path
 
     def _capture_loop(self) -> None:
         while self._running:
@@ -304,6 +344,8 @@ class IWR6843CaptureMonitor:
             path = None
             error = None
             metadata = None
+            partial = b""
+            partial_path = None
             uart_started_ns = None
             uart_completed_ns = None
             try:
@@ -320,6 +362,18 @@ class IWR6843CaptureMonitor:
                 if self.save_dumps:
                     path = self._capture_path(sequence, edge_timestamp)
                     path.write_bytes(raw)
+            except IWR6843DumpRecoveryError as exc:
+                error = str(exc)
+                raw = None
+                partial = bytes(exc.raw or b"")
+                partial_path = self._save_partial(sequence, edge_timestamp, partial)
+                logger.warning(
+                    "[IWR6843] Capture #%d failed: %s (%d bytes kept%s)",
+                    sequence,
+                    exc,
+                    len(partial),
+                    f" in {partial_path.name}" if partial_path is not None else "",
+                )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 error = str(exc)
                 raw = None
@@ -344,6 +398,9 @@ class IWR6843CaptureMonitor:
                     else None
                 ),
                 gate_event=event,
+                partial_path=partial_path,
+                partial_nbytes=len(partial),
+                partial_expected_nbytes=declared_dump_nbytes(partial) if partial else None,
             )
             with self._condition:
                 # duration first: the ready light reads these without the lock

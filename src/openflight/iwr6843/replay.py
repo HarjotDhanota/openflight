@@ -15,6 +15,7 @@ from openflight.iwr6843.calibration_session import (
     clone_calibration,
     estimated_track_start_range_m,
 )
+from openflight.iwr6843.dump import PARTIAL_DUMP_SUFFIX, is_partial_dump_path
 from openflight.iwr6843.lcmf import LCMFResult, antenna_layout, estimate_lcmf_v1
 from openflight.iwr6843.shot import process_dump
 
@@ -156,8 +157,12 @@ def input_from_dump(
     ball_speed_mph: float,
     club: str | None = None,
 ) -> ReplayInput:
-    """Create a replay input for one standalone dump."""
+    """Create a replay input for one standalone dump; a partial dump is refused."""
     path = Path(dump_path).expanduser()
+    if is_partial_dump_path(path):
+        raise ValueError(
+            f"{path.name} is an incomplete dump ({PARTIAL_DUMP_SUFFIX}); it is never replayed"
+        )
     return ReplayInput(
         source=str(path),
         shot_number=None,
