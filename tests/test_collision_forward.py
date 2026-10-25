@@ -1,12 +1,7 @@
 """The forward collision model (club delivery to ball launch) and its inverse.
 
-Properties come from the published physics the model is built on: the launch lies
-in the D plane between the face normal and the club's direction (Jorgensen 1999;
-Penner 2001), the normal-impulse ball speed (Penner 2001, Eq. (7)), the spin of a
-rigid ball that leaves the face rolling or still sliding (Penner 2001, Sec. II;
-Cross 2002), the off-centre effective mass and the linear gear effect (Cross &
-Nathan 2007). The known answers at the end are the model's own outputs, to catch
-an unintended change to a constant.
+Checked against published physics: D-plane launch (Jorgensen 1999; Penner 2001), ball speed and
+spin (Penner 2001 Eq. (7), Sec. II; Cross 2002), off-centre mass and gear (Cross & Nathan 2007).
 """
 
 import math
@@ -32,9 +27,6 @@ def _forward(club=ClubType.IRON_7, speed=85.0, attack=-4.0, path=0.0, face=0.0, 
 
 def _angle(a, b):
     return math.degrees(math.acos(max(-1.0, min(1.0, sum(p * q for p, q in zip(a, b))))))
-
-
-# ---- categories --------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -64,9 +56,6 @@ def test_an_unknown_club_has_no_model():
     assert _forward(club=ClubType.UNKNOWN) is None
 
 
-# ---- launch geometry ---------------------------------------------------------------
-
-
 def test_a_square_delivery_launches_on_the_target_line_with_no_axis_tilt():
     impact = _forward(path=0.0, face=0.0)
 
@@ -92,9 +81,6 @@ def test_the_launch_falls_back_from_the_face_by_more_as_spin_loft_rises():
     high = _forward(loft=40.0)
 
     assert (40.0 - high.launch_vertical_deg) > (15.0 - low.launch_vertical_deg)
-
-
-# ---- ball speed --------------------------------------------------------------------
 
 
 def test_centre_ball_speed_scales_with_club_speed():
@@ -124,9 +110,6 @@ def test_an_off_centre_strike_loses_ball_speed_with_the_square_of_the_offset():
     assert loss(impact_offset_mm=20.0) == pytest.approx(4.0 * loss(impact_offset_mm=10.0))
     assert loss(impact_height_mm=10.0) == pytest.approx(loss(impact_height_mm=-10.0))
     assert loss(impact_height_mm=10.0) > 0.0 and loss(impact_offset_mm=10.0) > 0.0
-
-
-# ---- spin --------------------------------------------------------------------------
 
 
 def test_spin_rises_with_spin_loft_and_club_speed_in_the_normal_range():
@@ -192,9 +175,6 @@ def test_the_spin_depends_on_the_club_speeds_normal_and_tangential_parts_only():
     assert (
         cf.centre_spin_rpm(club=ClubType.UNKNOWN, club_speed_mph=80.0, spin_loft_deg=30.0) is None
     )
-
-
-# ---- spin axis and gear effect -----------------------------------------------------
 
 
 def test_an_open_face_to_path_tilts_the_axis_right_and_a_closed_one_left():
@@ -263,9 +243,6 @@ def test_without_an_impact_location_there_is_no_gear_effect():
     assert impact.gear_back_rpm == 0.0 and impact.gear_side_rpm == 0.0
 
 
-# ---- inverse: face and loft from the launch -----------------------------------------
-
-
 @pytest.mark.parametrize("club", [ClubType.DRIVER, ClubType.WOOD_3, ClubType.IRON_7, ClubType.PW])
 @pytest.mark.parametrize(
     ("path", "face", "attack", "loft"),
@@ -293,9 +270,6 @@ def test_the_inverse_refuses_what_it_cannot_solve():
     assert (
         cf.face_and_loft_from_launch(club=ClubType.IRON_7, attack_angle_deg=95.0, **common) is None
     )
-
-
-# ---- expected spin and ball speed (the indices) ------------------------------------
 
 
 def test_expected_spin_is_club_speed_times_sine_spin_loft():
@@ -353,7 +327,7 @@ def test_the_indices_are_undefined_for_an_unknown_club_or_no_speed():
     )
 
 
-# ---- known answers (the model's own outputs) --------------------------------------
+# the model's own outputs, pinned against an unintended change to a constant
 
 KNOWN = [
     # club, (speed, attack, path, face, loft, offset, height), (ball, vla, hla, spin, axis)

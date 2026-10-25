@@ -1,4 +1,4 @@
-"""E3 wiring: the server attaches full speeds; simulators take a calculated full speed."""
+"""The server attaches full speeds; simulators take a calculated full speed."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def test_the_payload_carries_the_full_speeds_and_keeps_the_radial(fusion_geometr
 
 
 def test_club_speed_is_not_full_and_smash_keeps_its_radial_ratio(fusion_geometry, monkeypatch):
-    """D21: no full / radial mix. The shown smash stays radial / radial, labelled."""
+    """No full / radial mix: the shown smash stays radial / radial, labelled."""
     monkeypatch.setattr(server_module, "_fusion_unit", lambda: True)
     shot = _shot()
     server_module._open_smash_factor_status(shot)
@@ -155,7 +155,6 @@ def test_a_radar_height_that_is_not_set_is_not_measured(fusion_geometry, monkeyp
 
 
 def test_the_flight_model_s_field_carries_the_calculated_full_speed(fusion_geometry):
-    """E4 reads Shot.ball_speed_full_mph; it is the calculated value or None."""
     shot = _shot()
     server_module._attach_ball_speed_contract(shot)
 

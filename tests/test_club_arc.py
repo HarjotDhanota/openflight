@@ -1,10 +1,7 @@
-"""E1: club path, attack angle, swing plane, swing direction and low point from an arc.
+"""Club path, attack angle, swing plane, swing direction and low point from an arc.
 
-The synthetic arcs here are built from plain geometry (a circle of radius R in a
-plane tilted ``plane`` from the horizon, its base line ``direction`` from the
-target line, the golfer on the hub side), sampled at frame times before impact
-with Gaussian noise. Truth for path and attack comes from a finite difference
-of the generator itself, not from the fit's formulas.
+Synthetic arcs are a circle in a plane tilted ``plane`` from the horizon, its base line
+``direction`` from the target line; truth is a finite difference of the generator, not the fit.
 """
 
 from __future__ import annotations
@@ -124,11 +121,6 @@ def _assert_recovers(arc, truth, *, angle_tol, plane_tol, direction_tol, low_poi
         assert getattr(arc, name) == pytest.approx(truth[name], abs=low_point_tol_mm), name
 
 
-# ---------------------------------------------------------------------------
-# Recovery from the shot's own points
-# ---------------------------------------------------------------------------
-
-
 def test_six_low_noise_points_recover_every_output_and_are_calculated():
     positions, truth = _synthetic_swing(
         plane_deg=52.0, radius_m=1.05, n_points=6, noise_m=0.0002, direction_deg=-2.0
@@ -192,11 +184,6 @@ def test_three_points_over_a_wide_arc_are_calculated_from_the_shot_alone():
     )
 
 
-# ---------------------------------------------------------------------------
-# The prior case
-# ---------------------------------------------------------------------------
-
-
 def test_model_geometry_carries_the_prior_bias_for_a_golfer_off_the_prior():
     """A 52 deg, 1.10 m golfer read through the 57 deg, 1.0 m 7-iron prior.
 
@@ -255,11 +242,6 @@ def test_unknown_club_without_a_conditioned_fit_is_not_measured():
     assert arc.club_path_deg is None
 
 
-# ---------------------------------------------------------------------------
-# Frame and sign
-# ---------------------------------------------------------------------------
-
-
 def test_right_handed_in_to_out_is_positive_path():
     """Hitting down on a square plane moves a right-hander's path in-to-out (+)."""
     positions, truth = _synthetic_swing(direction_deg=0.0, low_after_impact_s=0.003)
@@ -301,7 +283,7 @@ def test_horizontal_offset_moves_every_horizontal_output_into_the_target_line_fr
         horizontal_offset_deg=offset_deg,
     )
 
-    # an explicit 0.0 is a target line straight down the boresight (V-formulas C5)
+    # an explicit 0.0 is a target line straight down the boresight
     assert turned.frame == "target_line"
     assert boresight.frame == "unit_boresight"
     assert turned.club_path_deg == pytest.approx(boresight.club_path_deg + offset_deg, abs=0.05)
@@ -316,11 +298,6 @@ def test_horizontal_offset_moves_every_horizontal_output_into_the_target_line_fr
     assert math.hypot(turned.low_point_distance_mm, turned.low_point_side_mm) == pytest.approx(
         horizontal, abs=0.5
     )
-
-
-# ---------------------------------------------------------------------------
-# Not measured
-# ---------------------------------------------------------------------------
 
 
 def test_no_head_positions_is_not_measured_with_a_reason():
@@ -398,11 +375,6 @@ def test_ranges_bracket_the_values():
     for name, (low, high) in arc.ranges.items():
         value = getattr(arc, name)
         assert low <= value <= high, name
-
-
-# ---------------------------------------------------------------------------
-# Shot payload and the selection rule
-# ---------------------------------------------------------------------------
 
 
 def _delivery(positions, **overrides):
@@ -483,9 +455,6 @@ def test_payload_without_a_delivery_is_not_measured():
 def test_label_rank_orders_measured_over_calculated_over_model_geometry():
     rank = club_arc.LABEL_RANK
     assert rank["measured"] > rank[CALCULATED] > rank[MODEL_GEOMETRY] > rank[NOT_MEASURED]
-
-
-# ---- low point: the per-club offset --------------------------------------------
 
 
 @pytest.mark.parametrize(

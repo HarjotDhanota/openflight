@@ -1,9 +1,7 @@
-"""E3: full ball speed by measured projection, full club speed and full smash.
+"""Full ball speed by measured projection, full club speed and full smash.
 
-Synthetic geometry first: a known launch direction, OPS position and ball
-position give the radial reading the OPS would see, and the module must
-recover the full speed from it. Then refusals, sign and frame, missing inputs
-and the smash labels.
+Synthetic geometry gives the radial reading the OPS would see from a known launch, OPS and ball
+position; the module must recover the full speed from it.
 """
 
 from __future__ import annotations
@@ -109,9 +107,6 @@ def _evaluate(track, **overrides):
     )
     kwargs.update(overrides)
     return evaluate_full_ball_speed(**kwargs)
-
-
-# ---------------------------------------------------------------- recovery
 
 
 @pytest.mark.parametrize(
@@ -250,9 +245,6 @@ def test_a_sound_trigger_impact_without_a_mic_offset_is_refused():
     assert "mic" in result["reason"]
 
 
-# ---------------------------------------------------------------- the reading
-
-
 def test_the_reading_is_the_first_whole_window_after_impact():
     impact = 40.0
     track = _track(120.0, 16.0, 2.0, impact_ms=impact)
@@ -287,9 +279,6 @@ def test_select_ball_reading_takes_the_fastest_ball_peak_in_the_earliest_window(
     readings = select_ball_reading(track)
     assert readings[0] == (11.0, 112.0)
     assert readings[1] == (12.0, 113.0)
-
-
-# ---------------------------------------------------------------- refusals
 
 
 def test_refused_when_ill_conditioned_at_a_grazing_angle():
@@ -374,9 +363,6 @@ def test_not_measured_without_an_impact_time():
     assert "impact" in result["reason"]
 
 
-# ---------------------------------------------------------------- sign and frame
-
-
 def test_a_target_line_angle_is_turned_into_the_unit_frame_by_the_offset():
     """Reported = boresight + offset (horizontal_frame), so boresight = reported - offset."""
     track = _track(120.0, 16.0, 1.0)
@@ -420,9 +406,6 @@ def test_the_canonical_radial_is_never_changed_or_reused():
     assert result["canonical_speed_contract"] == "ops_radial_unchanged"
     assert result["method"] == full_speed.METHOD
     assert "legacy" not in result["method"]
-
-
-# ---------------------------------------------------------------- club
 
 
 def test_full_club_speed_recovers_a_synthetic_head():
@@ -473,9 +456,6 @@ def test_full_club_speed_refuses_a_grazing_direction():
     assert "ill-conditioned" in result["reason"]
 
 
-# ---------------------------------------------------------------- smash
-
-
 def _full(value):
     return {"status": CALCULATED, "value_mph": value}
 
@@ -510,11 +490,7 @@ def test_smash_is_not_measured_when_neither_is_full():
     assert result["value"] is None
 
 
-# ---------------------------------------------------------------- the OPS track
-
-
 def test_an_unbounded_range_is_none_never_infinite(monkeypatch):
-    """A tolerance that moves the geometry out of reach leaves the range unbounded."""
     monkeypatch.setitem(full_speed.TOLERANCES, "tee_range_m", 10.0)
 
     result = _evaluate(_track(120.0, 16.0, 2.0))

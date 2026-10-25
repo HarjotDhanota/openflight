@@ -1,9 +1,7 @@
 """The turf bounce-and-roll model: distance from the landing point to rest.
 
-A rigid ball bouncing on turf that dents under it (Penner 2002), with grip-slip
-friction during each impact (Cross 2002), hops until the bounce dies, then slides
-and rolls to rest. The constants were fitted by the maintainer;
-the known answers below are the model's own outputs, pinned against drift.
+A rigid ball bouncing on denting turf (Penner 2002) with grip-slip impact friction
+(Cross 2002); the known answers below are the model's own outputs, pinned against drift.
 """
 
 from __future__ import annotations
@@ -13,8 +11,6 @@ import math
 import pytest
 
 from openflight import bounce_roll
-
-# --- hops through the air ---
 
 
 def test_without_backspin_a_hop_through_air_lands_shorter_than_in_a_vacuum():
@@ -58,9 +54,6 @@ def test_the_hop_step_is_within_a_centimetre_of_the_flight_step():
         coarse = hop_flight()(14.0, 5.0, om)
         fine = hop_flight(dt=DT_SECONDS)(14.0, 5.0, om)
         assert coarse[0] == pytest.approx(fine[0], abs=0.01)
-
-
-# --- turf-roll-v2: the same bounce with hops through the air ---
 
 
 def test_v2_flies_its_hops():

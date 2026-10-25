@@ -1,8 +1,7 @@
-"""E1 wiring: the chained delivery hands its head positions to the arc fit.
+"""The chained delivery hands its head positions to the arc fit.
 
-A synthetic arc is projected through a level rear camera; the IWR club range is
-the head's own distance from the radar. The chained estimator's per-frame head
-positions must land on that arc, on the camera clock, with the contact time.
+A synthetic arc is projected through a level rear camera, the IWR club range being the head's
+distance from the radar; the per-frame head positions must land on it, on the camera clock.
 """
 
 from __future__ import annotations

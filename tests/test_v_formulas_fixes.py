@@ -1,4 +1,4 @@
-"""The V-formulas audit's fixes (C1-C5), each test first."""
+"""Label and physics rules for flight, spin axis, yaw zero and simulator provenance."""
 
 from __future__ import annotations
 
@@ -35,8 +35,6 @@ def _fusion_shot(**overrides):
     values.update(overrides)
     return Shot(**values)
 
-
-# ---- C1: a flight on the OPS line-of-sight speed is estimated -------------------------
 
 RADIAL_REASON = "ball speed is the OPS line-of-sight speed (full speed refused: {}), about 3-5% low"
 
@@ -123,8 +121,6 @@ def test_a_fusion_carry_on_the_radial_speed_is_estimated(fusion_finalize):
     assert shot.carry_spin_adjusted == pytest.approx(carry["value"])
 
 
-# ---- C2: a low-coherence or low-confidence horizontal launch makes an estimate ----------
-
 LOW_COHERENCE = "horizontal launch is low-coherence (radar_low_coherence)"
 LOW_CONFIDENCE = "horizontal launch confidence 0.50 below 0.6"
 _USES_LAUNCH_H = (
@@ -186,7 +182,7 @@ def test_outputs_built_on_a_weak_horizontal_launch_are_estimated(overrides, reas
     # the D-plane inversion takes the loft from the horizontal launch too
     assert metrics["dynamic_loft"]["status"] == "estimated"
     assert shot.collision_model["inputs"]["launch_horizontal"]["label"] == "estimated"
-    # the spin axis is no longer withheld: estimated, with the reason
+    # the spin axis is estimated, with the reason, not withheld
     assert shot.spin_axis_deg == pytest.approx(metrics["spin_axis"]["value"], abs=0.05)
     assert shot.spin_axis_source.startswith("estimated")
     assert reason in shot.spin_axis_source
@@ -245,13 +241,10 @@ def test_estimated_is_the_weakest_collision_input_label():
     assert metrics["dynamic_loft"].status == "estimated"
 
 
-# ---- C4: spin decays by Ferguson 2022's own moment model ------------------------------
-
-
 def test_the_spin_moment_coefficient_is_ferguson_s():
     # Ferguson, McNally & McPhee 2022, Eq. (4) C_M = g S, with g = 0.01 (the last of
-    # "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031, -1.1490, 0.01}"). E8a's refit
-    # (flight-fit-v1) kept g inside their 0.010-0.015 bounds and landed on 0.010.
+    # "{0.1304, 0.9287, -0.8259, 0.0504, 1.2031, -1.1490, 0.01}"); flight-fit-v1 kept g
+    # inside their 0.010-0.015 bounds at 0.010.
     assert ballistics.CM_PER_SP == 0.01
     assert not hasattr(ballistics, "SPIN_DECAY_RATE")
 
@@ -285,9 +278,6 @@ def test_the_flight_s_spin_follows_the_moment_model():
         / ballistics.M_TO_YD
     )
     assert math.log(3000.0 / points[-1].spin_rpm) == pytest.approx(k * path, rel=0.02)
-
-
-# ---- C5: an explicit zero yaw is the target line; only an unset one is the boresight ----
 
 
 @pytest.mark.parametrize("offset", [0.0, -0.0, 3.0, -3.0])
@@ -359,9 +349,6 @@ def test_the_camera_geometry_contract_carries_an_unset_offset_as_none():
     assert unset.ball_geometry().horizontal_offset_deg is None
     assert zero.ball_geometry().horizontal_offset_deg == 0.0
     assert unset.delivery_geometry().horizontal_offset_deg is None
-
-
-# ---- C6: simulators on a fusion unit never get an estimated value (D31) -----------------
 
 
 def _sim_shot(**overrides):
@@ -449,9 +436,6 @@ def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
     assert "estimated (horizontal launch is low-coherence (radar_low_coherence))" in message
 
 
-# ---- C7: the normalized reference is TrackMan's 77 F, sea level, with a named humidity ----
-
-
 def test_buck_1981_saturation_vapour_pressure():
     import math
 
@@ -471,7 +455,7 @@ def test_humid_air_density_from_temperature_pressure_and_humidity():
     assert humid_air_density_kg_m3(25.0, 101325.0, 0.0) == pytest.approx(
         101325.0 / (287.05 * 298.15)
     )
-    # 50 %: the August research's value
+    # 50 % RH
     assert humid_air_density_kg_m3(25.0, 101325.0, 50.0) == pytest.approx(1.1769, abs=5e-5)
     # moist air is lighter
     assert humid_air_density_kg_m3(25.0, 101325.0, 100.0) < humid_air_density_kg_m3(
@@ -507,9 +491,6 @@ def test_the_trackman_export_regression_flies_the_normalized_reference():
     import validate_ballistics  # noqa: PLC0415
 
     assert validate_ballistics.TM_FLAT_AIR_DENSITY == AIR_DENSITY_NORMALIZED
-
-
-# ---- C8: the simulator provenance never says "measured" for a kiosk-computed value ------
 
 
 @pytest.mark.parametrize(

@@ -191,7 +191,6 @@ class TestSimulate:
     "field", ["launch_angle_vertical", "launch_angle_horizontal", "spin_axis_deg", "spin_rpm"]
 )
 def test_a_non_finite_input_resolves_launch_exactly_like_a_missing_one(field, bad, substitutes):
-    """Task 3 fix round (I1): a non-finite value is a missing value; D17 unchanged."""
     measured = dict(
         ball_speed_mph=120.0,
         timestamp=datetime(2026, 10, 11),
@@ -220,7 +219,6 @@ def test_a_non_finite_input_resolves_launch_exactly_like_a_missing_one(field, ba
 @pytest.mark.parametrize("substitutes", [True, False], ids=["ops_only", "fusion"])
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
 def test_a_non_finite_ball_speed_resolves_no_launch(bad, substitutes):
-    """A-M2: a non-finite ball speed is a missing one, so there is nothing to simulate."""
     shot = Shot(
         ball_speed_mph=bad,
         timestamp=datetime(2026, 10, 12),
@@ -235,17 +233,10 @@ def test_a_non_finite_ball_speed_resolves_no_launch(bad, substitutes):
 
 
 class TestAeroCoefficientSafeguards:
-    """Guards on the Cd/Cl quadratics outside their fitted range.
+    """Guards on the Cd/Cl quadratics past their fitted range (Sp <= SP_FIT_MAX).
 
-    The coefficients are fitted over Sp <= SP_FIT_MAX. Extrapolated past it
-    both parabolas turn over and cross zero (Ferguson's published constants:
-    Cl above Sp ~1.09, Cd above ~1.25; flight-fit-v1: Cl above ~1.33, Cd above
-    ~1.66), which would mean lift pulling the ball down and drag *accelerating*
-    it. Sp is recomputed every integration step from r*omega/v, and v decays
-    faster than spin, so a normal lob wedge reaches Sp ~1.5 near apex - inside
-    the negative-lift region of both. Holding both curves at their end value is
-    the guard; these tests (on the active model, and test_flight_fit_v1 on every
-    model) are what make its removal fail.
+    Extrapolated, both parabolas cross zero (lift pulling down, drag accelerating), and a lob
+    wedge reaches Sp ~1.5 near apex; holding both curves at their end value is the guard.
     """
 
     def test_zero_spin_produces_no_lift(self):
@@ -275,17 +266,10 @@ class TestAeroCoefficientSafeguards:
             assert _cl(sp) == pytest.approx(_poly(CL_POLY, sp))
 
     def test_lob_wedge_reaches_clamped_region_in_flight(self):
-        """A real lob wedge drives Sp past the fitted range in flight.
+        """A real lob wedge (55 mph / 40 deg / 10000 rpm) drives Sp past the fitted range.
 
-        This is why the clamp is not hypothetical: 55 mph / 40 deg /
-        10000 rpm peaks near Sp 1.5, where the raw parabolas give
-        Cd = -0.35 and Cl = -0.73 (Ferguson's published constants) or
-        Cd = +0.15 and Cl = -0.24 (flight-fit-v1). The clamp is what holds
-        that at the Sp 0.75 endpoint instead.
-
-        Note this asserts reachability, not the clamp's presence: removing
-        the clamp *lowers* peak Sp (less drag keeps the ball faster), so it
-        cannot serve as a red control. The coefficient tests above do that.
+        This asserts reachability, not the clamp: removing the clamp lowers peak Sp, so it
+        cannot serve as a red control; the coefficient tests above do that.
         """
         cond = LaunchConditions(
             ball_speed_mph=55.0,
@@ -313,9 +297,6 @@ class TestAeroCoefficientSafeguards:
         )
 
 
-# --- W7 (E4): carry to the landing point; spin axis against the launch direction ---
-
-
 def _yawed(la_h, axis=0.0, spin=2700.0):
     return simulate(_driver(spin_rpm=spin, axis=axis, la_h=la_h))
 
@@ -323,11 +304,8 @@ def _yawed(la_h, axis=0.0, spin=2700.0):
 class TestW7Coordinates:
     """A launch rotated about the vertical must fly the same shot, rotated.
 
-    Carry is TrackMan's "straight-line distance between where the golf ball was
-    launched from and where it crosses a point that has the same elevation"
-    (metric_definitions.curve cites it), i.e. hypot(x, y), not the x component.
-    The spin axis is a tilt against the launch direction, so its vector turns
-    with the horizontal launch angle.
+    Carry is TrackMan's straight-line distance to the landing point, hypot(x, y), not x; the
+    spin axis tilts against the launch direction, so it turns with the horizontal launch.
     """
 
     def test_carry_is_the_straight_line_distance_to_the_landing_point(self):
@@ -397,9 +375,6 @@ class TestSpinAxisCarriesNoRifleSpin:
     def test_a_tilt_to_the_right_still_fades(self):
         assert simulate(_driver(axis=20.0, launch=25.0)).carry_side_yards > 0.0
         assert simulate(_driver(axis=-20.0, launch=25.0)).carry_side_yards < 0.0
-
-
-# --- E4: total distance on fairway turf ---
 
 
 class TestTurfRollIsTheFairwayModel:

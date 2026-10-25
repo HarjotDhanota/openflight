@@ -1,9 +1,7 @@
-"""Spin axis: the iron model on the D-plane tilt, and the fitted model for the rest.
+"""Spin axis: irons on the D-plane tilt, other clubs on the fitted collision model's centre axis.
 
-Irons: tan(spin axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), the
-clean-room fit to one TM4 session's irons (16 shots, 0.014 deg). Drivers and woods keep
-the fitted collision model's centre axis (hybrids too); a gear term enters only with a
-measured impact location.
+Irons: tan(axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), fitted to one TM4
+session's irons; a gear term enters only with a measured impact location.
 """
 
 from __future__ import annotations

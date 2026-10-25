@@ -1,9 +1,7 @@
-"""D37: TrackMan's public metric definitions, checked from first principles.
+"""TrackMan's public metric definitions, checked from first principles.
 
-Every expected value below is worked by hand from the public definition (see
-docs/reference/metric-definitions.md), not taken from any device output.
-Frame: x downrange, y target-right, z up; horizontal angles are positive right
-of the target line, vertical angles positive up.
+Expected values are worked by hand from the public definitions, never device output.
+Frame: x downrange, y target-right, z up; horizontal angles + right of target, vertical + up.
 """
 
 import math
@@ -15,9 +13,6 @@ from openflight import metric_definitions as md
 from tests.tm_owner_export import number, owner_shots
 
 NON_FINITE = [math.nan, math.inf, -math.inf]
-
-
-# --- face to path -----------------------------------------------------------
 
 
 class TestFaceToPath:
@@ -38,9 +33,6 @@ class TestFaceToPath:
     def test_non_finite_in_non_finite_out(self, bad):
         assert not math.isfinite(md.face_to_path_deg(bad, 1.0))
         assert not math.isfinite(md.face_to_path_deg(1.0, bad))
-
-
-# --- the two unit vectors ---------------------------------------------------
 
 
 class TestDirectionVectors:
@@ -75,9 +67,6 @@ class TestDirectionVectors:
     def test_none_in_none_out(self):
         assert md.club_direction(None, 0.0) is None
         assert md.face_normal(10.0, None) is None
-
-
-# --- spin loft --------------------------------------------------------------
 
 
 class TestSpinLoft:
@@ -181,9 +170,6 @@ class TestSpinLoft:
         assert md.spin_loft_deg(95.0, 0.0, 0.0, 0.0) is None
 
 
-# --- D-plane tilt -----------------------------------------------------------
-
-
 class TestDPlaneTilt:
     def test_zero_when_face_to_path_is_zero(self):
         # TrackMan: "if face-to-path is zero, D Plane Tilt will be zero"
@@ -236,9 +222,6 @@ class TestDPlaneTilt:
     def test_non_finite_in_non_finite_out(self, bad):
         result = md.d_plane_tilt_deg(12.0, bad, -2.0, 0.5)
         assert result is not None and math.isnan(result)
-
-
-# --- curve ------------------------------------------------------------------
 
 
 class TestBallDirection:

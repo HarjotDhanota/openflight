@@ -37,57 +37,26 @@ from validate_ballistics import (  # noqa: E402  (path set up above)
 
 TRACKMAN_CSV = _REPO_ROOT / "session_logs" / "OpenFlight-Test.Normalized.csv"
 
-# Per-club RMSE ceilings in yards. Ratcheted three times: after the aero
-# coefficients were re-fit against this capture (#229), when the Cd/Cl
-# functional form moved to the Ferguson quadratics (#230), and when E4's W7
-# frame fixes made carry the straight-line distance to the landing point and
-# turned the spin axis with the launch direction (no coefficient changed).
+# Per-club RMSE ceilings in yards. Ratcheted twice: after the aero
+# coefficients were re-fit against this capture (#229), and again when the
+# Cd/Cl functional form moved to the Ferguson quadratics (#230).
 #
-#                    pre-#229          #229 (Hill)       quadratic        + W7 frames
-#   club            rmse     bias      rmse    bias     rmse    bias     rmse    bias
-#   7-iron         11.64   +11.00      2.96   +1.52     1.33   +1.30     1.82   +1.76
-#   driver         38.60   -37.18      1.75   -0.45     2.38   -1.33     1.10   -0.35
-#   pitching wedge 13.56   +11.02      6.26   -2.96     4.48   +1.83     3.51   +3.26
-#   OVERALL        24.52    -5.05      3.97   -0.45     2.90   +0.58     2.29   +1.50
+#                    pre-#229          #229 (Hill)       quadratic
+#   club            rmse     bias      rmse    bias     rmse    bias
+#   7-iron         11.64   +11.00      2.96   +1.52     1.33   +1.30
+#   driver         38.60   -37.18      1.75   -0.45     2.38   -1.33
+#   pitching wedge 13.56   +11.02      6.26   -2.96     4.48   +1.83
+#   OVERALL        24.52    -5.05      3.97   -0.45     2.90   +0.58
 #
-# Driver moved up within its ceiling under the quadratic: the coefficients are
-# an external published fit, not tuned to this capture, and the ceiling was
-# left where it was rather than raised. Under W7 the 7-iron moved up within its
-# ceiling: the straight-line carry is longer than the old x component on
-# offline shots, which adds to the quadratic's existing +1.3 yd 7-iron bias.
+# Driver moved up within its ceiling: the quadratic coefficients are an
+# external published fit, not tuned to this capture, and the driver ceiling
+# was left where it was rather than raised.
 #
-# V-formulas C4 + C7 (both deliberate, not regressions, so the budgets were
-# RAISED, and say so): spin decay by Ferguson 2022's own C_M = 0.01 S, and the
-# model now flies the kiosk's own normalized reference (25 C, 1013.25 hPa, RH 50 %:
-# 1.1769 kg/m3) instead of a hand-typed dry 1.184 kg/m3, so the comparison is
-# normalized against normalized at the reference the kiosk reports. Thinner air
-# carries farther, which adds to the 7-iron's existing positive bias.
-#
-#                    + C4 (dry 1.184)    + C7 (RH 50 %)
-#   club            rmse     bias       rmse    bias
-#   7-iron           1.81   +1.75       2.25   +2.20
-#   driver           1.44   -0.60       1.54   -0.34
-#   pitching wedge   3.43   +3.18       3.73   +3.47
-#   OVERALL          2.31   +1.39       2.60   +1.72
-#
-# E8a (flight-fit-v1): Ferguson's form with its seven constants refitted to TM4's
-# normalized exports on carry, apex, landing angle and hang time jointly (this
-# capture plus a second, public 43-shot TM4 session; see
-# ballistics.FLIGHT_FIT_V1.calibration). Ratcheted DOWN. NOTE: this capture is
-# part of the fit, so these numbers are in-sample; the held-out numbers (pooled
-# 10-fold, leave-one-out, leave-one-source-out) are in the calibration record
-# and docs/how-it-works/ballistics.md.
-#
-#                    + C7 (Ferguson)     flight-fit-v1
-#   club            rmse     bias       rmse    bias
-#   7-iron           2.25   +2.20       0.39   -0.24
-#   driver           1.54   -0.34       1.19   -0.04
-#   pitching wedge   3.73   +3.47       1.64   -1.62
-#   OVERALL          2.60   +1.72       1.14   -0.57
+# flight-fit-v1 is fitted to this capture, so every ceiling here is in-sample; the
+# held-out numbers are in ballistics.FLIGHT_FIT_V1.calibration.
 #
 # Ceilings sit slightly above the measured values to absorb float/platform
-# drift. Lower them again if the model improves; never raise them without a
-# stated, deliberate change of reference (as above).
+# drift. Lower them again if the model improves; never raise them.
 RMSE_BUDGET_YARDS = {
     "driver": 1.25,
     "7-iron": 0.45,
@@ -96,9 +65,6 @@ RMSE_BUDGET_YARDS = {
 OVERALL_RMSE_BUDGET_YARDS = 1.2
 
 # Apex ceilings in FEET (TrackMan's "Max Height - Height" column is feet).
-# Until E8a nothing was fitted against apex, so the Hill -> quadratic improvement
-# below was out-of-sample. Since flight-fit-v1 apex is a fit target and this
-# capture is in the fit: the E8a row is in-sample.
 #
 #   club            Hill (#229)   quadratic
 #   7-iron            18.15         1.53
@@ -106,15 +72,8 @@ OVERALL_RMSE_BUDGET_YARDS = 1.2
 #   pitching wedge    18.00         2.81
 #   OVERALL           15.05         2.56
 #
-#   + C4 and C7 (RH 50 %): driver 4.08, 7-iron 1.74, PW 2.77, overall 2.99
-#   (driver and overall budgets RAISED for that stated change of reference).
-#   E8a flight-fit-v1 (apex now a fit target; in-sample here):
-#                    driver 0.73, 7-iron 1.05, PW 0.76, overall 0.87
-#
 # Seeded above measured to absorb float/platform drift, matching the carry
 # budgets above. Lower them when the model improves; never raise them.
-#   Spin axis turned about the launch direction (no rifle spin): driver 0.80,
-#   7-iron 1.05, PW 0.82; driver and PW budgets RAISED for that stated change.
 APEX_RMSE_BUDGET_FEET = {
     "driver": 0.85,
     "7-iron": 1.1,
@@ -122,14 +81,7 @@ APEX_RMSE_BUDGET_FEET = {
 }
 OVERALL_APEX_RMSE_BUDGET_FEET = 0.9
 
-# Landing angle ceilings in DEGREES ("Carry Flat - Land. Angle"), added with E8a.
-#
-#   club            Ferguson (C7)   flight-fit-v1
-#   7-iron              2.26           0.76
-#   driver              1.96           0.37
-#   pitching wedge      4.00           1.24
-#   OVERALL             2.80           0.84
-#   Spin axis turned about the launch direction: driver 0.41 (budget RAISED).
+# Landing angle ceilings in DEGREES ("Carry Flat - Land. Angle").
 LANDING_ANGLE_RMSE_BUDGET_DEG = {
     "driver": 0.45,
     "7-iron": 0.8,
@@ -137,16 +89,7 @@ LANDING_ANGLE_RMSE_BUDGET_DEG = {
 }
 OVERALL_LANDING_ANGLE_RMSE_BUDGET_DEG = 0.9
 
-# Hang time ceilings in SECONDS ("Carry Flat - Time"), added with E8a.
-#
-#   club            Ferguson (C7)   flight-fit-v1
-#   7-iron              0.04           0.10
-#   driver              0.23           0.08
-#   pitching wedge      0.22           0.04
-#   OVERALL             0.18           0.08
-#
-# The 7-iron's hang time got worse (+0.10 s bias, from -0.04): the joint fit traded
-# it for the other outputs. Its ceiling is set at the new value, not the old one.
+# Hang time ceilings in SECONDS ("Carry Flat - Time").
 HANG_TIME_RMSE_BUDGET_S = {
     "driver": 0.09,
     "7-iron": 0.11,
@@ -308,20 +251,8 @@ def test_per_club_shape_rmse_within_budget(validation_rows, output, club):
     )
 
 
-# Total ("Est. Total Flat - Length", yards): the normalized flight's carry plus the
-# active fairway bounce and roll, against the export's estimated total. Added with
-# turf-roll-v2, whose hops fly through the air (the roll is not fitted to this
-# capture: out of sample).
-#
-#   club            turf-roll-v1     turf-roll-v2
-#                   rmse   bias      rmse   bias
-#   7-iron          0.49  +0.28      0.54  +0.31
-#   driver          3.48  +1.94      2.08  +0.76
-#   pitching wedge  0.94  -0.83      1.23  -1.19
-#   OVERALL         2.09             1.41
-#
-# The wedge's total moved down with the shorter roll; flight-fit-v1 carries this
-# capture's wedges short, which turf-roll-v1's longer roll had partly hidden.
+# Total ("Est. Total Flat - Length", yards): normalized carry plus the active fairway
+# bounce and roll, against the export's estimated total. The roll is not fitted here.
 TOTAL_RMSE_BUDGET_YARDS = {
     "driver": 2.15,
     "7-iron": 0.6,
