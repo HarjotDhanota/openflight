@@ -29,6 +29,7 @@ from openflight.camera.fusion_processing import (
     process_camera_fusion,
 )
 from openflight.camera.geometry_contract import EffectiveCameraGeometryInputs
+from openflight.camera.head_track import gate_latency_ns
 from openflight.clubs import ClubType
 from openflight.iwr6843.launch_range import LaunchRangePrior
 from openflight.raw_radar_replay import locate_recorded_capture
@@ -156,8 +157,15 @@ def replay_frozen_shot(
             raise ValueError("camera capture hash does not match the recorded context")
     else:
         # D15 (P8-7): only missing frames refuse; the rest is rebuilt, labelled
+        metadata_path = capture_path.parent / "metadata.json"
+        metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
         context, reconstruction = reconstruct_context(
-            start, shot, capture_event, capture_hash, archive=archive
+            start,
+            shot,
+            capture_event,
+            capture_hash,
+            archive=archive,
+            gate_latency=gate_latency_ns(metadata),
         )
     replay = process_camera_fusion(context, archive)
     recorded = shot.get("camera_fusion_processing") if recorded_context else None
@@ -291,6 +299,7 @@ def reconstruct_context(
     capture_hash: str,
     *,
     archive: dict[str, Any] | None = None,
+    gate_latency: float | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Rebuild a shot's camera fusion context from the clip, its metadata and the session.
 
@@ -307,6 +316,9 @@ def reconstruct_context(
         "IWR range evidence is not in the session log; the replay's IWR stage supplies it",
     ]
     geometry, ball_range = _reconstructed_geometry(config, shot=shot, archive=archive)
+    aim_sigma = _mapping(_mapping(_mapping(config.get("setup")).get("record")).get("aim")).get(
+        "uncertainty_deg"
+    )
     if ball_range is not None:
         notes.append(
             f"the session recorded no tee range: the ball range came from {ball_range['source']} "
@@ -350,13 +362,20 @@ def reconstruct_context(
             ),
             ops_offset_mm=getattr(_rig(config), "ops_offset_mm", None),
             camera_origin_lfu=_camera_origin(camera),
-            target_line=_mapping(config.get("target_line")),
+            target_line={
+                **_mapping(config.get("target_line")),
+                "total_uncertainty_deg": aim_sigma,
+            },
             lis3dh_camera_pitch_deg=None,
         ),
+        handedness=shot.get("handed") or _mapping(config.get("golfer")).get("handed") or "RH",
+        gate_latency_ns=gate_latency,
+        # the kiosk's target line carries the setup aim's uncertainty (apply_setup_aim)
+        target_yaw_sigma_deg=aim_sigma,
     )
     notes.append(
-        "the camera fallback's aim uncertainty and LIS3DH pitch check are not in the session "
-        "start: the replay carries neither"
+        "the camera fallback's LIS3DH pitch check is not in the session start: the replay "
+        "carries none"
     )
     return context, notes
 

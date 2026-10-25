@@ -454,7 +454,7 @@ def pre_rung_check(
         "judged_on": (
             "hitting_zone"
             if light["ball"] is None
-            else ("setup_position" if light["ball"]["found_by"] == "setup_position" else "ball")
+            else ("ball" if light["ball"]["found_by"] == "detector" else light["ball"]["found_by"])
         ),
         "ball": light["ball"],
         "ok": not red,
@@ -542,12 +542,19 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         red.append(f"light: {light['message']}")
     elif light["message"]:
         amber.append(light["message"])
+    if light["zone_dark"] and light["cause"] != "zone_dark":
+        red.append(f"light: {light['zone_message']}")  # the club's background, behind the ball
     ball = None
     if expected_ball is None:
         red.append(f"ball: {NO_SETUP_BALL}")
-    elif lit is None:
-        amber.append("resting ball not found in the pre-impact frames")
-    elif lit["found_by"] == "detector":
+    elif lit is None and light["cause"] not in DARK_LIGHT_CAUSES:
+        # a dark rung is judged on its light, never on a ball too dark to see
+        amber.append(
+            "resting ball not found in the pre-impact frames"
+            if zone_box is None
+            else "resting ball not found in the box"
+        )
+    elif lit is not None and lit["found_by"] == "detector":
         ball = {"x": lit["x"], "y": lit["y"], "diameter_px": lit["diameter_px"]}
     if ball and previous_balls:
         x = float(np.median([b["x"] for b in previous_balls]))
@@ -567,6 +574,7 @@ def swing_verdict(  # pylint: disable=too-many-locals,too-many-arguments
         "zone_source": stats["zone_source"],
         "light_cause": light["cause"],
         "light_label": light_label(light["cause"]),
+        "zone_dark": light["zone_dark"],
         "ball": ball,
     }
 

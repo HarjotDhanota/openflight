@@ -161,12 +161,20 @@ const WEAK_HORIZONTAL_SOURCES = new Set(['radar_low_coherence', 'camera_low_cons
 
 /** An IWR horizontal without a phase reference (source_labels.AZIMUTH_UNCALIBRATED): estimated. */
 const AZIMUTH_UNCALIBRATED = 'azimuth_uncalibrated';
+// The club chain's last fallback: the camera's hosel track (server camera/head_track.py).
+const HEAD_TRACK_STATUS = 'camera_head_track';
+
+/** Subtext naming a camera-derived vertical launch source (the IWR measured none). */
+const VERTICAL_SOURCE_LABELS: Record<string, string> = {
+  camera_fallback: 'camera fallback',
+};
 
 /** Subtext naming a camera-derived horizontal launch source; radar and estimates get none. */
 const HORIZONTAL_SOURCE_LABELS: Record<string, string> = {
   camera_assisted_experimental: 'camera assisted',
   camera_only_experimental: 'camera only',
   camera_legacy_fallback: 'camera legacy',
+  camera_fallback: 'camera fallback',
   camera_low_consensus: 'camera, low consensus',
   radar_low_coherence: 'radar, low coherence',
 };
@@ -200,6 +208,11 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const horizontalSubtext =
     shot.launch_angle_horizontal_status === AZIMUTH_UNCALIBRATED ? 'azimuth uncalibrated' : horizontalSourceLabel;
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
+  const fusedStatus = shot.experimental_fused_status ?? '';
+  const headTrack = fusedStatus === HEAD_TRACK_STATUS;
+  const fusedRejected = fusedStatus.startsWith('rejected') || fusedStatus === 'error';
+  const cameraFused = fusedDeliveryAttempted && !fusedRejected && !headTrack;
+  const fusedSubtext = headTrack ? 'camera head track' : 'camera fused';
   const attackAngle = firstMeasured(
     shot.club_angle_deg,
     shot.experimental_fused_attack_angle_deg,
@@ -211,10 +224,26 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       shot.experimental_fused_status != null ||
       shot.experimental_attack_angle_deg != null ||
       shot.experimental_attack_angle_status != null);
+  // Server displayed_club_path(): camera fused, an accepted IWR path, the head track; an
+  // IWR candidate only when the camera never ran.
+  const iwrPathAccepted = (shot.experimental_club_path_status ?? '').startsWith('accepted');
+  const fusedPath = shot.experimental_fused_club_path_deg;
+  const iwrPath = shot.experimental_club_path_deg;
+  const clubPathSource = isMeasured(shot.club_path_deg)
+    ? null
+    : cameraFused && isMeasured(fusedPath)
+      ? 'fused'
+      : !cameraFused && iwrPathAccepted && isMeasured(iwrPath)
+        ? 'iwr'
+        : headTrack && isMeasured(fusedPath)
+          ? 'fused'
+          : !fusedDeliveryAttempted && isMeasured(iwrPath)
+            ? 'iwr'
+            : null;
   const clubPath = firstMeasured(
     shot.club_path_deg,
-    shot.experimental_fused_club_path_deg,
-    !fusedDeliveryAttempted ? shot.experimental_club_path_deg : null
+    clubPathSource === 'fused' ? fusedPath : null,
+    clubPathSource === 'iwr' ? iwrPath : null
   );
   const clubPathIsExperimental =
     !isMeasured(shot.club_path_deg) &&
@@ -258,6 +287,9 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.vLaunch'),
       value: formatOptionalAngle(shot.launch_angle_vertical),
       unit: angleUnit(shot.launch_angle_vertical),
+      subtext: shot.launch_angle_vertical_source
+        ? VERTICAL_SOURCE_LABELS[shot.launch_angle_vertical_source]
+        : undefined,
       status: labelIf(shot.launch_angle_vertical, angleEstimated ? 'estimated' : 'measured'),
       confidence: isMeasured(shot.launch_angle_vertical) ? angleConfidence : null,
     },
@@ -294,19 +326,26 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       subtext: withFaceAngle(
         isMeasured(shot.club_path_deg)
           ? undefined
-          : fusedDeliveryAttempted
-            ? shot.experimental_fused_club_path_deg != null
-              ? 'camera fused'
-              : experimentalStatus(shot.experimental_fused_status)
-            : clubPathIsExperimental
+          : clubPathSource === 'fused'
+            ? fusedSubtext
+            : clubPathSource === 'iwr'
               ? experimentalStatus(shot.experimental_club_path_status)
-              : undefined,
+              : fusedDeliveryAttempted
+                ? experimentalStatus(shot.experimental_fused_status)
+                : clubPathIsExperimental
+                  ? experimentalStatus(shot.experimental_club_path_status)
+                  : undefined,
         shot.experimental_face_angle_deg,
         shot.experimental_face_angle_status
       ),
-      confidence: clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null,
+      confidence: !clubPathIsExperimental
+        ? null
+        : clubPathSource === 'iwr'
+          ? 'experimental'
+          : (shot.experimental_fused_club_path_confidence ?? 'experimental'),
       status: isMeasured(shot.club_path_deg) ? 'measured' : undefined,
-      confidenceLabel: shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,
+      confidenceLabel:
+        clubPathSource !== 'iwr' && shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,
     },
     {
       id: 'club_aoa',
@@ -317,7 +356,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
         ? undefined
         : fusedDeliveryAttempted
           ? shot.experimental_fused_attack_angle_deg != null
-            ? 'camera fused'
+            ? fusedSubtext
             : experimentalStatus(shot.experimental_fused_status)
           : attackIsExperimental
             ? experimentalStatus(shot.experimental_attack_angle_status)

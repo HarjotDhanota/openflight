@@ -240,6 +240,17 @@ describe('buildLiveMetrics', () => {
     });
   });
 
+  it('names the camera fallback on the vertical launch tile', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ launch_angle_vertical_source: 'camera_fallback' }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(metrics, 'launch_v').subtext).toBe('camera fallback');
+    expect(byId(buildLiveMetrics(makeShot({}), 'imperial', emptySwingStats), 'launch_v').subtext).toBeUndefined();
+  });
+
   it('labels camera-assisted horizontal launch', () => {
     const metrics = buildLiveMetrics(
       makeShot({ launch_angle_horizontal_source: 'camera_assisted_experimental' }),
@@ -303,6 +314,7 @@ describe('buildLiveMetrics', () => {
       ['camera_assisted_experimental', 'camera assisted'],
       ['camera_only_experimental', 'camera only'],
       ['camera_legacy_fallback', 'camera legacy'],
+      ['camera_fallback', 'camera fallback'],
       ['camera_low_consensus', 'camera, low consensus'],
       ['radar_low_coherence', 'radar, low coherence'],
     ])('labels %s as experimental', (source, subtext) => {
@@ -506,6 +518,56 @@ describe('face angle', () => {
     );
     expect(byId(metrics, 'club_path').subtext).toBe('face +1.5° (D-plane)');
     expect(metrics).toHaveLength(LIVE_METRIC_COUNT);
+  });
+
+  it('shows an accepted IWR path when camera fusion rejected, not a candidate', () => {
+    const accepted = buildLiveMetrics(
+      makeShot({
+        club_path_deg: null,
+        experimental_club_path_deg: 2.5,
+        experimental_club_path_status: 'accepted',
+        experimental_fused_status: 'rejected_no_camera_capture',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(accepted, 'club_path')).toMatchObject({ value: '+2.5', subtext: 'accepted' });
+  });
+
+  it('shows the camera head track after an accepted IWR path, labelled experimental', () => {
+    const headTrack = {
+      club_angle_deg: null,
+      club_path_deg: null,
+      experimental_fused_status: 'camera_head_track',
+      experimental_fused_club_path_deg: -3.4,
+      experimental_fused_club_path_confidence: 'experimental',
+      experimental_fused_attack_angle_deg: -5.1,
+      experimental_fused_attack_angle_confidence: 'experimental',
+    };
+    const alone = buildLiveMetrics(makeShot(headTrack), 'imperial', emptySwingStats);
+
+    expect(byId(alone, 'club_path')).toMatchObject({
+      value: '-3.4',
+      subtext: 'camera head track',
+      confidenceLabel: 'experimental',
+    });
+    expect(byId(alone, 'club_aoa')).toMatchObject({
+      value: '-5.1',
+      subtext: 'camera head track',
+      confidenceLabel: 'experimental',
+    });
+
+    const withIwr = buildLiveMetrics(
+      makeShot({
+        ...headTrack,
+        experimental_club_path_deg: 2.5,
+        experimental_club_path_status: 'accepted',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+    expect(byId(withIwr, 'club_path')).toMatchObject({ value: '+2.5', subtext: 'accepted' });
   });
 
   it('rides on the camera path the server built it from, not an accepted IWR path', () => {

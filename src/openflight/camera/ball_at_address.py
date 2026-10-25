@@ -20,18 +20,27 @@ measures the distance.
 A ball outside the box, or none, is the shot's label (``outside_box``,
 ``not_seen``) and carries no range; nothing is filled in. A shot takes the last
 look before its trigger, and none older than ``MAX_LOOK_AGE_S``.
+
+The look's search (``locate``) is pure numpy/scipy work. The kiosk runs it in a worker
+process (``LookWorker``): on a kiosk thread it held the interpreter lock against the
+camera's frame callback, and the frames the sensor took meanwhile were lost
+(Harjot-outdoor-test-1, 24 Oct: 10 of 11 callback stalls began inside a look).
 """
 
 from __future__ import annotations
 
 import math
+import multiprocessing
+import pickle
 import threading
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
-from . import ground_patch
+from . import ground_patch, worker_lifetime
 
 SCHEMA = "openflight.ball_at_address.v1"
 SAME_SPOT_DIAMETERS = 0.5
@@ -48,6 +57,106 @@ def _outline(points) -> tuple[tuple[float, float], ...] | None:
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# A look's search: (image, box, outline, pixel scale) -> {"in_box": [x, y, d] | None,
+# "outside": [x, y, d] | None}
+Locate = Callable[[np.ndarray, Sequence[int], Any, Any], dict]
+LOOK_TIMEOUT_S = 10.0
+
+
+def _find_ball(image: np.ndarray, roi: Sequence[int], pixel_scale: float | None):
+    """The detector's resting ball inside ``roi`` (clipped to the frame), or None."""
+    from openflight.camera.club_motion import detect_reference_ball  # noqa: PLC0415
+
+    height, width = image.shape
+    x0, y0, x1, y1 = roi
+    roi = (max(0, x0), max(0, y0), min(width, x1), min(height, y1))
+    if roi[0] >= roi[2] or roi[1] >= roi[3]:
+        return None
+    stack = np.repeat(np.asarray(image, dtype=np.uint8)[None], 3, axis=0)
+    try:
+        return detect_reference_ball(stack, roi=roi, pixel_scale=pixel_scale)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _inside(x: float, y: float, box: Sequence[int], outline) -> bool:
+    if outline is not None:
+        return ground_patch.point_in_polygon(x, y, outline)
+    x0, y0, x1, y1 = box
+    return x0 <= x <= x1 and y0 <= y <= y1
+
+
+def locate(
+    image: np.ndarray,
+    box: Sequence[int],
+    outline_px,
+    pixel_scale: float | None,
+    *,
+    find: Callable | None = None,
+) -> dict:
+    """A look's search: the ball in the box, else one just outside it (a label).
+
+    Plain values in and out, so a worker process can run it (``LookWorker``).
+    """
+    find = find or _find_ball
+    x0, y0, x1, y1 = (int(value) for value in box)
+    found = find(image, (x0, y0, x1, y1), pixel_scale)
+    if found is not None and _inside(found.x, found.y, box, outline_px):
+        in_box = [float(found.x), float(found.y), float(found.diameter_px)]
+        return {"in_box": in_box, "outside": None}
+    width, height = x1 - x0, y1 - y0
+    wider = (x0 - width, y0 - height, x1 + width, y1 + height)
+    elsewhere = find(image, wider, pixel_scale)
+    if elsewhere is not None and not _inside(elsewhere.x, elsewhere.y, box, outline_px):
+        outside = [float(elsewhere.x), float(elsewhere.y), float(elsewhere.diameter_px)]
+        return {"in_box": None, "outside": outside}
+    return {"in_box": None, "outside": None}
+
+
+class LookUnavailable(RuntimeError):
+    """The look's worker could not answer: this look is skipped, the next starts a worker."""
+
+
+class LookWorker:
+    """Runs each look's search in one spawn worker process, off the kiosk's interpreter lock.
+
+    Started on the first look. A worker that dies or hangs is dropped and its look
+    skipped (``LookUnavailable``), never run on a kiosk thread instead.
+    """
+
+    def __init__(self, timeout_s: float = LOOK_TIMEOUT_S):
+        self.timeout_s = float(timeout_s)
+        self._pool: ProcessPoolExecutor | None = None
+        self._lock = threading.Lock()
+
+    def _worker(self) -> ProcessPoolExecutor:
+        with self._lock:
+            if self._pool is None:
+                # spawn, not fork: the kiosk has camera and web threads a fork would copy
+                self._pool = ProcessPoolExecutor(
+                    max_workers=1,
+                    mp_context=multiprocessing.get_context("spawn"),
+                    initializer=worker_lifetime.exit_with_parent,
+                )
+            return self._pool
+
+    def locate(self, image, box, outline_px, pixel_scale) -> dict:
+        """``locate`` in the worker process."""
+        try:
+            future = self._worker().submit(locate, image, box, outline_px, pixel_scale)
+            return future.result(timeout=self.timeout_s)
+        except (BrokenProcessPool, FutureTimeout, OSError, pickle.PicklingError) as exc:
+            self.close()
+            raise LookUnavailable(f"the look's worker failed: {type(exc).__name__}: {exc}") from exc
+
+    def close(self) -> None:
+        """Stop the worker; the next look starts another."""
+        with self._lock:
+            pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 class BallAtAddress:
@@ -111,18 +220,14 @@ class BallAtAddress:
         return float(self.setup_ball["diameter_px"]) / _TUNED_GEOMETRIC_MIDDLE_PX
 
     def _find(self, image: np.ndarray, roi: tuple[int, int, int, int]):
-        from openflight.camera.club_motion import detect_reference_ball  # noqa: PLC0415
+        return _find_ball(image, roi, self._pixel_scale())
 
-        height, width = image.shape
-        x0, y0, x1, y1 = roi
-        roi = (max(0, x0), max(0, y0), min(width, x1), min(height, y1))
-        if roi[0] >= roi[2] or roi[1] >= roi[3]:
-            return None
-        stack = np.repeat(np.asarray(image, dtype=np.uint8)[None], 3, axis=0)
-        try:
-            return detect_reference_ball(stack, roi=roi, pixel_scale=self._pixel_scale())
-        except (RuntimeError, ValueError):
-            return None
+    def _in_box(self, x: float, y: float) -> bool:
+        return _inside(x, y, self.box, self.outline_px)
+
+    def _locate_here(self, image, box, outline_px, _pixel_scale) -> dict:
+        """``locate`` in this process, through ``_find``."""
+        return locate(image, box, outline_px, None, find=lambda img, roi, _: self._find(img, roi))
 
     def _range(self, x: float, y: float, diameter: float) -> tuple[float | None, str | None]:
         if self.setup_range_m is None or not self.setup_ball:
@@ -136,34 +241,30 @@ class BallAtAddress:
             return None, None
         return self.setup_range_m * setup_d / diameter, f"camera_size_ratio_to_the_setup_{kind}"
 
-    def _in_box(self, x: float, y: float) -> bool:
-        if self.outline_px is not None:
-            return ground_patch.point_in_polygon(x, y, self.outline_px)
-        x0, y0, x1, y1 = self.box
-        return x0 <= x <= x1 and y0 <= y <= y1
+    def observe(self, image: np.ndarray, *, at: float, locate: Locate | None = None) -> dict:
+        """Look for the resting ball in this frame; keep and return what was found.
 
-    def observe(self, image: np.ndarray, *, at: float) -> dict:
-        """Look for the resting ball in this frame; keep and return what was found."""
+        ``locate`` runs the search (the kiosk's ``LookWorker.locate``); by default it runs
+        here. A ``LookUnavailable`` from it leaves no look.
+        """
         with self._lock:
             generation = self._generation
-        x0, y0, x1, y1 = self.box
-        found = self._find(image, self.box)
+        search = locate or self._locate_here
+        found = search(image, self.box, self.outline_px, self._pixel_scale())
         state, reason = "not_seen", "no ball in the box"
         center = diameter = range_m = source = None
-        if found is not None and self._in_box(found.x, found.y):
+        if found["in_box"] is not None:
+            x, y, size = (float(value) for value in found["in_box"])
             state, reason = "in_box", None
-            center = [round(float(found.x), 1), round(float(found.y), 1)]
-            diameter = round(float(found.diameter_px), 2)
-            range_m, source = self._range(float(found.x), float(found.y), float(found.diameter_px))
-        else:
-            width, height = x1 - x0, y1 - y0
-            wider = (x0 - width, y0 - height, x1 + width, y1 + height)
-            elsewhere = self._find(image, wider)
-            if elsewhere is not None and not self._in_box(elsewhere.x, elsewhere.y):
-                state = "outside_box"
-                reason = "the ball is outside the box: its shot is labelled, not blocked"
-                center = [round(float(elsewhere.x), 1), round(float(elsewhere.y), 1)]
-                diameter = round(float(elsewhere.diameter_px), 2)
+            center = [round(x, 1), round(y, 1)]
+            diameter = round(size, 2)
+            range_m, source = self._range(x, y, size)
+        elif found["outside"] is not None:
+            x, y, size = (float(value) for value in found["outside"])
+            state = "outside_box"
+            reason = "the ball is outside the box: its shot is labelled, not blocked"
+            center = [round(x, 1), round(y, 1)]
+            diameter = round(size, 2)
         look = {
             "schema": SCHEMA,
             "state": state,

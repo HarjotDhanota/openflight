@@ -125,18 +125,57 @@ def test_face_angle_uses_the_camera_path_the_kiosk_shows_over_an_iwr_path():
     assert shot.experimental_face_angle_path_source == "camera_fused_chained"
 
 
-def test_rejected_camera_fusion_hides_the_iwr_path_from_face_angle():
-    # The kiosk hides the IWR path once camera fusion ran, so face angle must too.
+@pytest.mark.parametrize("fused_status", ["rejected_no_impact", "rejected_no_camera_capture"])
+def test_a_rejected_camera_fusion_leaves_the_accepted_iwr_path(fused_status):
+    # Order: camera + IWR fused, accepted IWR, camera head track, the arc.
     shot = _measured_start(
-        experimental_fused_status="rejected_no_impact",
+        experimental_fused_status=fused_status,
         experimental_club_path_deg=6.0,
         experimental_club_path_status="accepted",
     )
 
     shot_models._attach_collision_model(shot)
 
+    assert shot_models.displayed_club_path(shot) == (6.0, "iwr")
+    assert shot.experimental_face_angle_path_source == "iwr"
+
+
+def _head_track(**fields):
+    return _measured_start(
+        experimental_fused_status="camera_head_track",
+        experimental_fused_club_path_deg=-4.0,
+        experimental_fused_attack_angle_deg=-3.0,
+        experimental_fused_club_path_confidence="experimental",
+        experimental_fused_attack_angle_confidence="experimental",
+        **fields,
+    )
+
+
+def test_the_head_track_is_shown_but_fed_to_no_other_metric():
+    shot = _head_track()
+
+    shot_models._attach_collision_model(shot)
+
+    assert shot_models.displayed_club_path(shot) == (-4.0, "camera_head_track")
+    assert shot_models.displayed_attack_angle(shot) == (-3.0, "camera_head_track")
     assert shot.experimental_face_angle_deg is None
-    assert shot.experimental_face_angle_status == "missing_accepted_club_path"
+    inputs = shot.collision_model["inputs"]
+    assert inputs["club_path"]["value"] is None
+    assert "experimental" in inputs["club_path"]["reason"]
+
+
+def test_an_accepted_iwr_path_outranks_the_head_track():
+    shot = _head_track(experimental_club_path_deg=6.0, experimental_club_path_status="accepted")
+
+    assert shot_models.displayed_club_path(shot) == (6.0, "iwr")
+
+
+def test_a_flagged_head_track_angle_is_not_shown():
+    shot = _head_track()
+    shot.experimental_fused_attack_angle_deg = None
+    shot.experimental_fused_attack_angle_confidence = "withheld"
+
+    assert shot_models.displayed_attack_angle(shot) == (None, None)
 
 
 def test_accepted_iwr_path_without_camera_fusion_is_used_and_named():

@@ -135,8 +135,20 @@ def _capture(tmp_path, frames, name="camera_1"):
     return folder
 
 
+def _with_a_lit_ball(frames, x=640.0, y=520.0, diameter=20.0):
+    """The resting ball as a lit sphere: in the box the ball must be one, as the setup's is."""
+    yy, xx = np.indices(frames.shape[1:], dtype=np.float32)
+    dx, dy = (xx - x) / (diameter / 2.0), (yy - y) / (diameter / 2.0)
+    inside = dx * dx + dy * dy <= 1.0
+    nz = np.sqrt(np.clip(1.0 - dx * dx - dy * dy, 0.0, None))
+    lit = 90.0 + 140.0 * np.clip(-0.4 * dx - 0.5 * dy + 0.77 * nz, 0.0, None)
+    frames = frames.copy()
+    frames[:, inside] = np.clip(lit[inside], 0, 255).astype(np.uint8)
+    return frames
+
+
 def test_a_swing_verdict_is_judged_on_the_box_and_says_so(tmp_path):
-    folder = _capture(tmp_path, _frames(count=12, patch_rows=(620, 720), ball_level=180))
+    folder = _capture(tmp_path, _with_a_lit_ball(_frames(count=12, patch_rows=(620, 720))))
     rung = sl.Rung("full-150", "arm5", 150, True)
 
     fixed = sl.swing_verdict(folder, rung, 8.0, BLACK, [], SETUP_BALL)

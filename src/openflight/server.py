@@ -319,6 +319,8 @@ _ball_at_address_thread: threading.Thread | None = None
 # (setup_range_m, range_prior) the monitor takes, kept for a box set after the range
 _ball_at_address_range: tuple = (None, None)
 BALL_AT_ADDRESS_EVERY_S = 1.0
+# the looks' search runs in a worker process, started by the look loop's first look
+_ball_look_worker = None
 # The per-unit setup record and the actions on it (setup_service.SetupService), from main()
 setup_service = None
 # the applied setup revision the session log last recorded
@@ -1562,8 +1564,14 @@ def resting_ball_look() -> dict | None:
     return monitor.latest() or {"state": "unknown", "reason": "no look at the box yet"}
 
 
-def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
-    """One look at the camera's latest frame, unless it is busy with a clip."""
+def ball_at_address_look(monitor, runtime, *, now: float, locate=None) -> dict | None:
+    """One look at the camera's latest frame, unless it is busy with a clip.
+
+    ``locate`` runs the search (the look loop's worker process); a worker that could not
+    answer skips this look.
+    """
+    from .camera.ball_at_address import LookUnavailable  # noqa: PLC0415
+
     if monitor is None or runtime is None:
         return None
     try:
@@ -1575,14 +1583,29 @@ def ball_at_address_look(monitor, runtime, *, now: float) -> dict | None:
     frames = runtime.recent_frames(1, timeout_s=0.5)
     if not frames:
         return None
-    return monitor.observe(frames[-1].image, at=now)
+    try:
+        return monitor.observe(frames[-1].image, at=now, locate=locate)
+    except LookUnavailable as exc:
+        logger.warning("[BALL_AT_ADDRESS] look skipped: %s", exc)
+        return None
 
 
 def _ball_at_address_loop() -> None:
+    global _ball_look_worker  # pylint: disable=global-statement
+    from .camera.ball_at_address import LookWorker  # noqa: PLC0415
+
+    # Off the kiosk's interpreter lock: on this thread the search starved the camera's
+    # frame callback and frames were lost (Harjot-outdoor-test-1, 24 Oct)
+    _ball_look_worker = _ball_look_worker or LookWorker()
     while True:
         time.sleep(BALL_AT_ADDRESS_EVERY_S)
         try:
-            ball_at_address_look(ball_at_address_monitor, camera_capture_runtime, now=time.time())
+            ball_at_address_look(
+                ball_at_address_monitor,
+                camera_capture_runtime,
+                now=time.time(),
+                locate=_ball_look_worker.locate,
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             logger.warning("[BALL_AT_ADDRESS] look failed", exc_info=True)
 
@@ -5015,7 +5038,9 @@ def _fuse_camera_club_delivery(
                     trigger_index = exposure_trigger_index(archive, len(archive["frames"]))
                     if trigger_index is None and "pre_trigger_count" in archive:
                         trigger_index = int(archive["pre_trigger_count"]) - 1
-                    calibration = shot_iwr_calibration(shot)
+                    # the shot's own range (the range chain's) with the scene's heights,
+                    # else at the camera when the scene has none
+                    calibration = shot_iwr_calibration(shot) or _camera_only_calibration(shot)
                     if calibration is None:
                         fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
@@ -5043,6 +5068,7 @@ def _fuse_camera_club_delivery(
                                     ),
                                     ops_club_speed_mph=shot.club_speed_mph,
                                     sensor_timestamp_ns=archive.get("sensor_timestamp_ns"),
+                                    head_track=_head_track_context(shot, camera_capture, archive),
                                 )
             else:
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")
@@ -5080,6 +5106,46 @@ def _fuse_camera_club_delivery(
             context={"stage": "club_delivery_fusion", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+
+
+def _camera_only_calibration(shot: Shot):
+    """Without an IWR, the shot's own ball range stands in for the tee range, at the camera."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    range_m = getattr(shot, "ball_range_m", None)
+    if range_m is None:
+        return None
+    return SimpleNamespace(
+        tee_range_m=float(range_m),
+        radar_height_m=camera_capture_config.get("mount_height_m"),
+        tee_ball_height_m=BALL_RADIUS_M,
+    )
+
+
+def _head_track_context(shot: Shot, camera_capture, archive):
+    """What the camera head-track fallback needs for this shot (camera/head_track.py)."""
+    from openflight.camera.fusion_processing import lens_record_focal_px  # noqa: PLC0415
+    from openflight.camera.head_track import gate_latency_ns, head_track_context  # noqa: PLC0415
+
+    return head_track_context(
+        archive,
+        gate_latency=gate_latency_ns(getattr(camera_capture, "metadata", None)),
+        handedness=shot_handedness(shot),
+        club=shot.club,
+        setup_ball=shot_reference_ball(shot.impact_timestamp),
+        lens_focal_px=lens_record_focal_px(
+            rig_geometry_config.get("lens"), int(np.shape(archive["frames"])[-1])
+        ),
+        yaw_sigma_deg=_target_line_sigma_deg(),
+        # the range chain's 1-sigma: the head's depth is the resting ball's range
+        ball_range_sigma_m=float(shot.ball_range_uncertainty_m or 0.05),
+    )
+
+
+def _target_line_sigma_deg() -> float:
+    """The set target line's total yaw uncertainty; 0 without one (the boresight frame)."""
+    value = (setup_handoff_config.get("target_line") or {}).get("total_uncertainty_deg")
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
 # How far each horizontal-launch source may be trusted as the displayed value;
@@ -5627,6 +5693,7 @@ def _fuse_camera_measurements(
             from openflight.camera.geometry_contract import (  # noqa: PLC0415
                 EffectiveCameraGeometryInputs,
             )
+            from openflight.camera.head_track import gate_latency_ns  # noqa: PLC0415
 
             calibration = shot_iwr_calibration(shot)
             if calibration is None:
@@ -5733,6 +5800,9 @@ def _fuse_camera_measurements(
                 ),
                 ball_range=(shot.input_sources or {}).get("ball_range"),
                 camera_fallback=_camera_fallback_inputs(shot, camera_archive),
+                handedness=shot_handedness(shot),
+                gate_latency_ns=gate_latency_ns(getattr(camera_capture, "metadata", None)),
+                target_yaw_sigma_deg=_target_line_sigma_deg(),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)

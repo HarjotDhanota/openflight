@@ -183,3 +183,31 @@ def test_camera_ops_fallback_has_no_head_positions(monkeypatch):
     payload = club_delivery_payload(asdict(result), club=ClubType.IRON_7, handedness="RH")
     assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
     assert "camera_ops_fallback" in payload["metrics"]["swing_plane_deg"]["reason"]
+
+
+def test_a_head_track_delivery_is_experimental_and_names_its_source():
+    delivery = {
+        "status": "camera_head_track",
+        "club_path_deg": 3.1,
+        "attack_angle_deg": None,
+        "path_confidence_tier": "experimental",
+        "attack_confidence_tier": "withheld",
+        "club_path_frame": "target_line",
+        "head_positions": [],
+        "horizontal_offset_deg": -2.2,
+        "head_track": {"attack_angle_flag": "attack angle -18.0 deg is beyond +-15 deg"},
+    }
+    payload = club_delivery_payload(delivery, club=ClubType.IRON_7, handedness="RH")
+
+    path = payload["metrics"]["club_path_deg"]
+    assert path["value"] == 3.1
+    assert path["status"] == "experimental"
+    assert path["source"] == "camera_head_track"
+    assert path["frame"] == "target_line"
+    attack = payload["metrics"]["attack_angle_deg"]
+    assert attack["value"] is None
+    assert attack["status"] == "not_measured"
+    assert "camera_head_track" in attack["reason"]
+    assert "beyond +-15 deg" in attack["reason"]
+    # the arc never fits it: no head positions
+    assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"

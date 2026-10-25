@@ -52,11 +52,13 @@ SMASH_SOURCE = "ball speed / club speed (D37)"
 TABLE_CARRY_SOURCE = "ball-speed carry table (OPS-only estimate)"
 COMMITTED_CARRY_SOURCE = "the kiosk's committed carry (no flight record on this shot)"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
+HEAD_TRACK_SOURCE_LABEL = "camera head track: hosel + OPS speed (experimental)"
 _PATH_SOURCES = {
     "canonical": "radar club track",
     "camera_fused_chained": "camera + IWR chained delivery",
     "camera_fused_ops": "camera + OPS chained delivery",
     "iwr": "IWR club track",
+    "camera_head_track": HEAD_TRACK_SOURCE_LABEL,
 }
 
 
@@ -416,7 +418,13 @@ def _path_or_attack(metric_id: str):
                 source,
             )
         if _finite(delivery.get("value")) is not None:
-            return _camera_club_label(_from_producer(metric_id, delivery), delivery.get("source"))
+            source = delivery.get("source")
+            return _camera_club_label(
+                _from_producer(
+                    metric_id, {**delivery, "source": _PATH_SOURCES.get(source, source)}
+                ),
+                source,
+            )
         legacy = shot.get(_LEGACY_DELIVERY[metric_id])
         if _finite(legacy) is not None:
             return _record(

@@ -2108,3 +2108,25 @@ def test_a_press_is_refused_while_the_ladder_changes_mode_or_is_stopped(tmp_path
     with pytest.raises(RuntimeError, match="stopped"):
         runner.jump("full-150")
     assert runner.state.current.rung_id == "full-300"
+
+
+def test_a_dark_rung_without_a_ball_is_judged_on_its_light_not_on_a_missed_ball(tmp_path):
+    # Harjot-outdoor-test-1, 30 us: red for the light, and amber for the ball as well
+    rung = sl.Rung("full-30", "arm5", 30, True)
+    folder = _capture(tmp_path, level=22.0, exposure=30, ball=False)
+
+    verdict = sl.swing_verdict(folder, rung, 8.0, 18.0, [], SETUP_BALL)
+
+    assert verdict["color"] == "red"
+    assert verdict["light_cause"] == "zone_dark"
+    assert not any("not found" in reason for reason in verdict["reasons"])
+
+
+def test_a_lit_rung_without_a_ball_says_it_was_not_found_in_the_box(tmp_path):
+    rung = sl.Rung("full-150", "arm5", 150, True)
+    folder = _capture(tmp_path, ball=False)
+
+    verdict = sl.swing_verdict(folder, rung, 8.0, 18.0, [], SETUP_BALL, (400, 400, 900, 640))
+
+    assert verdict["color"] == "amber"
+    assert "resting ball not found in the box" in verdict["reasons"]

@@ -580,7 +580,9 @@ def judge_swing(  # pylint: disable=too-many-arguments
             verdict.get("ball") is not None and verdict.get("light_cause") not in _BALL_LIGHT_CAUSES
         ),
         "club_usable": bool(
-            not frames_or_controls and verdict.get("light_cause") not in _ZONE_LIGHT_CAUSES
+            not frames_or_controls
+            and verdict.get("light_cause") not in _ZONE_LIGHT_CAUSES
+            and not verdict.get("zone_dark")
         ),
         "judged_against": {"rung_id": rung_id, "exposure_us": int(exposure_us), "gain": gain},
     }

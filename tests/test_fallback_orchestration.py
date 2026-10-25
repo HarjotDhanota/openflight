@@ -275,3 +275,24 @@ def test_a_stage_that_raises_is_its_own_reason_and_the_shot_still_logs(kiosk, sc
     assert "full-speed stage failed" in shot.ball_speed_full["reason"]
     # the rest still resolved
     assert shot.launch_angle_vertical_source == "camera_fallback"
+
+
+def test_the_camera_head_track_takes_the_range_chain_s_range_and_its_sigma(kiosk, scene):
+    from openflight.camera import fusion_processing  # noqa: PLC0415
+
+    seen = {}
+    real_delivery = fusion_processing.estimate_chained_delivery
+
+    def spy(*args, **kwargs):
+        seen["tee_range_m"] = kwargs["geometry"].tee_range_m
+        seen["sigma_m"] = kwargs["head_track"].ball_range_sigma_m
+        return real_delivery(*args, **kwargs)
+
+    kiosk.setattr(fusion_processing, "estimate_chained_delivery", spy)
+    shot = _shot(scene)
+
+    _run(scene, shot)
+
+    assert shot.ball_range_source == "camera_ball_size"
+    assert seen["tee_range_m"] == pytest.approx(shot.ball_range_m)
+    assert seen["sigma_m"] == pytest.approx(shot.ball_range_uncertainty_m)

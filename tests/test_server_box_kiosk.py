@@ -280,3 +280,26 @@ def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_st
     assert moved["diameter_px"] == pytest.approx(16.0, abs=2.0)
     assert moved["source"] == "ball_at_address"
     assert before == {**SETUP, "source": "setup_ball"}
+
+
+def test_a_look_whose_worker_failed_is_skipped_and_logged(kiosk_state, caplog):
+    monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
+
+    class Frame:
+        image = _scene([(641.0, 451.0, 20.0)])
+
+    class Runtime:
+        def status(self):
+            return {"collecting_tail": False, "saving": False, "pending_saves": 0}
+
+        def recent_frames(self, count, timeout_s=2.0):
+            return [Frame()]
+
+    def unavailable(*_args):
+        raise ball_at_address.LookUnavailable("the worker died")
+
+    with caplog.at_level("WARNING", logger=server.logger.name):
+        look = server.ball_at_address_look(monitor, Runtime(), now=3.0, locate=unavailable)
+
+    assert look is None and monitor.latest() is None
+    assert any("the worker died" in record.getMessage() for record in caplog.records)

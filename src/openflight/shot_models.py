@@ -29,6 +29,7 @@ from openflight import (  # noqa: F401  pylint: disable=unused-import
     model_metrics,
     server,
 )
+from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
 from openflight.horizontal_frame import MIXED
 from openflight.launch_monitor import (
@@ -67,12 +68,24 @@ def _attach_club_arc(shot: Shot, delivery) -> None:
     )
 
 
+def _fused_rejected(shot: Shot) -> bool:
+    status = shot.experimental_fused_status or ""
+    return status.startswith("rejected") or status == "error"
+
+
+def _fused_source(shot: Shot) -> str:
+    status = shot.experimental_fused_status
+    if status == HEAD_TRACK_SOURCE:
+        return HEAD_TRACK_SOURCE
+    return "camera_fused_ops" if status == "camera_ops_fallback" else "camera_fused_chained"
+
+
 def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     """Return the club path the kiosk shows, when it is accepted, and its source.
 
     The precedence mirrors the kiosk's club-path tile (ui liveMetrics.ts): the
-    canonical field, then the camera-fused path, and the IWR path only when
-    camera fusion did not run (the kiosk hides it otherwise). Candidate,
+    canonical field, the camera-fused path, an accepted IWR path, then the camera
+    head track (experimental). A rejected camera fusion hides nothing. Candidate,
     out-of-bounds, noisy, rejected and withheld paths return (None, None), so
     face angle is never built on a path the kiosk does not show as a
     measurement (audit F1). An IWR path without a horizontal phase reference
@@ -81,23 +94,16 @@ def displayed_club_path(shot: Shot) -> tuple[float | None, str | None]:
     """
     if shot.club_path_deg is not None:
         return shot.club_path_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
-    if shot.experimental_fused_club_path_deg is not None:
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_club_path_confidence == "withheld"
-        ):
-            return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_club_path_deg, source
-    if shot.experimental_fused_status is not None:
-        return None, None
+    fused = shot.experimental_fused_club_path_deg
+    withheld = shot.experimental_fused_club_path_confidence == "withheld"
+    head_track = shot.experimental_fused_status == HEAD_TRACK_SOURCE
+    if fused is not None and not head_track and not _fused_rejected(shot):
+        return (None, None) if withheld else (fused, _fused_source(shot))
     iwr_status = shot.experimental_club_path_status or ""
     if shot.experimental_club_path_deg is not None and iwr_status.startswith("accepted"):
         return shot.experimental_club_path_deg, "iwr"
+    if fused is not None and head_track and not withheld:
+        return fused, HEAD_TRACK_SOURCE
     return None, None
 
 
@@ -105,7 +111,7 @@ def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
     """The frame of the club path ``displayed_club_path`` chose (D36 item 2)."""
     if path_source == "canonical":
         return shot.club_path_frame
-    if path_source in ("camera_fused_chained", "camera_fused_ops"):
+    if path_source in ("camera_fused_chained", "camera_fused_ops", HEAD_TRACK_SOURCE):
         return shot.experimental_fused_club_path_frame
     if path_source == "iwr":
         return shot.experimental_club_path_frame
@@ -122,18 +128,10 @@ def displayed_attack_angle(shot: Shot) -> tuple[float | None, str | None]:
     """
     if _finite(shot.club_angle_deg):
         return shot.club_angle_deg, "canonical"
-    fused_status = shot.experimental_fused_status or ""
     if _finite(shot.experimental_fused_attack_angle_deg):
-        if (
-            fused_status.startswith("rejected")
-            or fused_status == "error"
-            or shot.experimental_fused_attack_angle_confidence == "withheld"
-        ):
+        if _fused_rejected(shot) or shot.experimental_fused_attack_angle_confidence == "withheld":
             return None, None
-        source = (
-            "camera_fused_ops" if fused_status == "camera_ops_fallback" else "camera_fused_chained"
-        )
-        return shot.experimental_fused_attack_angle_deg, source
+        return shot.experimental_fused_attack_angle_deg, _fused_source(shot)
     return None, None
 
 
@@ -225,6 +223,20 @@ def _club_arc_input(shot: Shot, name: str, missing: str) -> collision_model.Inpu
     )
 
 
+HEAD_TRACK_NOT_FED = "is the experimental camera head track, fed to no other metric"
+
+
+def _fed(value, source) -> tuple:
+    """A displayed path or attack as a collision input: the experimental head track is not."""
+    return (None, None) if source == HEAD_TRACK_SOURCE else (value, source)
+
+
+def _missing(shot: Shot, name: str, displayed) -> str:
+    if displayed(shot)[1] == HEAD_TRACK_SOURCE:
+        return f"{name} {HEAD_TRACK_NOT_FED}"
+    return f"no accepted {name}"
+
+
 def _collision_inputs(shot: Shot) -> dict:
     """The shot's own collision inputs, each labelled (E2).
 
@@ -232,8 +244,8 @@ def _collision_inputs(shot: Shot) -> dict:
     value enters under its own label ("calculated", or "model_geometry" for the arc
     prior, D39), which every output built on it then inherits.
     """
-    path, path_source = displayed_club_path(shot)
-    attack, attack_source = displayed_attack_angle(shot)
+    path, path_source = _fed(*displayed_club_path(shot))
+    attack, attack_source = _fed(*displayed_attack_angle(shot))
     launch_source = shot.launch_angle_horizontal_source
     if launch_source and shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED:
         launch_source = f"{launch_source} (azimuth uncalibrated)"
@@ -247,12 +259,16 @@ def _collision_inputs(shot: Shot) -> dict:
                 _club_path_frame_of(shot, path_source),
             )
             if path is not None
-            else _club_arc_input(shot, "club_path_deg", "no accepted club path")
+            else _club_arc_input(
+                shot, "club_path_deg", _missing(shot, "club path", displayed_club_path)
+            )
         ),
         "attack_angle": (
             collision_model.Input(attack, collision_model.LABEL_MEASURED, attack_source)
             if attack is not None
-            else _club_arc_input(shot, "attack_angle_deg", "no accepted attack angle")
+            else _club_arc_input(
+                shot, "attack_angle_deg", _missing(shot, "attack angle", displayed_attack_angle)
+            )
         ),
         "launch_horizontal": _horizontal_launch_input(
             shot,
