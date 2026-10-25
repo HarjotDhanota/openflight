@@ -906,6 +906,7 @@
   "tests/test_iwr6843_roll.py": "FUSION",
   "tests/test_iwr6843_runtime_ball_range.py": "FUSION",
   "tests/test_iwr6843_runtime_club.py": "FUSION",
+  "tests/test_iwr6843_runtime_partial.py": "FUSION",
   "tests/test_iwr6843_serial_lifecycle.py": "FUSION",
   "tests/test_iwr6843_serial_process.py": "FUSION",
   "tests/test_iwr6843_span_gate.py": "PRODUCT",

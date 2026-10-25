@@ -501,6 +501,28 @@ def test_a_dump_that_ended_early_is_saved_as_a_partial_file(tmp_path):
     }
 
 
+def test_a_failed_transfer_hands_its_bytes_to_the_runtime_with_or_without_saving(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    raw = _raw_dump()
+    kept = len(raw) - 100
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(b"", error=_partial_failure(raw, kept)),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+    monitor.stop()
+
+    assert not capture.valid and capture.raw is None
+    assert capture.partial_raw == raw[:kept]
+    assert "partial_raw" not in repr(capture)
+
+
 def test_partial_bytes_are_counted_but_not_written_without_saved_dumps(tmp_path):
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
@@ -545,6 +567,7 @@ def test_a_failure_with_no_bytes_records_no_partial_capture(tmp_path):
     monitor.stop()
 
     assert capture.partial_capture is None
+    assert capture.partial_raw is None
     assert list((tmp_path / "dumps").iterdir()) == []
 
 
