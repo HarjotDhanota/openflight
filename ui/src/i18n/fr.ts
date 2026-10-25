@@ -388,4 +388,22 @@ export const fr: Messages = {
   'setup.unavailable': 'Ce kiosque n’a pas de service de réglage.',
   'setup.camera.waiting': 'En attente de la caméra',
   'setup.camera.unavailable': 'Caméra indisponible',
+  'nav.conditions': 'Conditions',
+  'conditions.loading': 'Lecture des conditions…',
+  'conditions.standardAir': 'Air standard',
+  'conditions.isaTitle': 'Air standard supposé',
+  'conditions.isaDetail':
+    'Le vol réel utilise l’air ISA au niveau de la mer : {temperature}, {pressure}, sec ({density} kg/m³).',
+  'conditions.isaReason': 'Pourquoi : {reason}',
+  'conditions.playsLike': 'Équivaut à',
+  'conditions.thinner': 'Air moins dense que l’air standard : la balle va plus loin',
+  'conditions.denser': 'Air plus dense que l’air standard : la balle va moins loin',
+  'conditions.temperature': 'Température',
+  'conditions.pressure': 'Pression',
+  'conditions.humidity': 'Humidité',
+  'conditions.density': 'Densité de l’air',
+  'conditions.age': 'Lu il y a {seconds} s',
+  'conditions.flightNote':
+    'Le vol réel utilise cet air. Le vol normalisé utilise la référence TrackMan : {temperature}, {pressure}, sans vent.',
+  'conditions.windNote': 'Densité de l’air seulement : rien ici ne mesure le vent.',
 };

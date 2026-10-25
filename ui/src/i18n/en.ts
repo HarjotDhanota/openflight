@@ -386,6 +386,23 @@ export const en = {
   'setup.unavailable': 'This kiosk has no setup service.',
   'setup.camera.waiting': 'Waiting for the camera',
   'setup.camera.unavailable': 'Camera not available',
+  'nav.conditions': 'Conditions',
+  'conditions.loading': 'Reading conditions…',
+  'conditions.standardAir': 'Standard air',
+  'conditions.isaTitle': 'Standard air assumed',
+  'conditions.isaDetail': 'Raw flight uses ISA sea-level air: {temperature}, {pressure}, dry ({density} kg/m³).',
+  'conditions.isaReason': 'Why: {reason}',
+  'conditions.playsLike': 'Plays like',
+  'conditions.thinner': 'Thinner than standard air: the ball flies farther',
+  'conditions.denser': 'Denser than standard air: the ball flies shorter',
+  'conditions.temperature': 'Temperature',
+  'conditions.pressure': 'Pressure',
+  'conditions.humidity': 'Humidity',
+  'conditions.density': 'Air density',
+  'conditions.age': 'Read {seconds} s ago',
+  'conditions.flightNote':
+    'Raw flight uses this air. Normalized flight uses TrackMan’s reference: {temperature}, {pressure}, no wind.',
+  'conditions.windNote': 'Air density only: nothing here measures wind.',
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -850,6 +850,71 @@
   letter-spacing: -0.03em;
 }
 
+/* ------------------------------------------------------- conditions panel -- */
+
+.conditions-panel > .panel__body--empty {
+  flex: 1;
+  padding: 0 var(--space-xl);
+  text-align: center;
+}
+
+.conditions-panel__body {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* own the drag: the kiosk's global touch-action would swallow it */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.conditions-panel__plays-like {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-lg) var(--space-xl);
+}
+
+.conditions-panel__label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.conditions-panel__altitude {
+  font-size: clamp(2rem, 9vh, 3.2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.conditions-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  background: var(--color-border);
+  gap: 1px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.conditions-panel__grid .metric-card {
+  padding: var(--space-lg) var(--space-xl);
+  border-radius: 0;
+}
+
+.conditions-panel__note {
+  margin: 0;
+  padding: var(--space-sm) var(--space-xl) 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.conditions-panel__standard .conditions-panel__note {
+  padding: 0;
+}
+
 /* --------------------------------------------------------- profiles panel -- */
 
 .profiles-panel__grid {

@@ -49,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Added
+- **BME280 air-density sensor.** The raw (as-measured) flight flies in the air
+  the ball was hit in: a BME280 on I2C (0x76 or 0x77, found at startup) gives
+  temperature, station pressure and humidity, and the Buck humid-air density.
+  Without a sensor, or when its reading is over 60 s old or out of range, the raw
+  flight uses ISA sea-level air and every shot records why
+  (`air_density_source`: `bme280` or `isa_default`; `air_conditions`). The
+  normalized flight stays at TrackMan's reference. New Conditions tab;
+  `--no-air-sensor`, `--air-sensor-bus`; `scripts/hardware-test/read_bme280.py`.
+  A BMP280 is refused (no humidity sensor). See
+  [BME280 air-density sensor](build/air-sensor.md).
 - **IWR observed frame evidence (dump v8/v9).** The configurable firmware stamps each retained
   frame with its frame-start sequence number and R4F cycle-counter tick, stamps the dump
   request, freeze, RF stop, header and last byte, and (IQ8) counts values that would wrap

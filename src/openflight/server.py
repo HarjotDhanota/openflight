@@ -30,7 +30,10 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from . import kiosk_extensions, shot_metrics
-from .ballistics import resolve_launch, simulate
+from .air.bme280 import find_bme280
+from .air.conditions import AirConditions, isa_default
+from .air.service import AirSensorService
+from .ballistics import AIR_DENSITY_STD, resolve_launch, simulate
 from .ble.protocol import (
     FEATURES as PHONE_FEATURES,
     build_club_event,
@@ -313,6 +316,12 @@ _ready_light_thread: threading.Thread | None = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
+# Optional BME280: the as-measured flight's air density; ISA with the reason otherwise.
+air_sensor_service = None
+AIR_SENSOR_NOT_STARTED_REASON = "air sensor not started"
+AIR_SENSOR_DISABLED_REASON = "air sensor disabled (--no-air-sensor)"
+air_sensor_runtime_config: dict = {"enabled": False, "reason": AIR_SENSOR_NOT_STARTED_REASON}
+_air_last_logged: tuple | None = None
 rig_geometry = None
 # the lens on the unit (lens_profiles.ActiveLens), from init_camera_lens
 camera_lens = None
@@ -935,6 +944,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
+    if air_sensor_service:
+        _run_shutdown_step("air sensor stop", air_sensor_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
     if power_monitor:
@@ -2408,6 +2419,10 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["air_sensor"] = {
+        **air_sensor_runtime_config,
+        "conditions": current_air_conditions().to_dict(),
+    }
     config["golfer"] = golfer_handedness()
     config["target_line"] = target_line_in_force()
     config["rig_geometry"] = deepcopy(rig_geometry_config)
@@ -3155,6 +3170,69 @@ def init_inclinometer(
         return False
 
 
+def current_air_conditions() -> AirConditions:
+    """The air a shot taken now flies in: the BME280's, else ISA with the reason."""
+    if air_sensor_service is None:
+        return isa_default(air_sensor_runtime_config.get("reason") or AIR_SENSOR_NOT_STARTED_REASON)
+    return air_sensor_service.conditions()
+
+
+def _stamp_air_conditions(shot: Shot) -> None:
+    """Record the air the shot's as-measured flight uses, once: a late update keeps it."""
+    if shot.air_density_source is not None or shot.air_density_kg_m3 is not None:
+        return
+    conditions = current_air_conditions()
+    shot.air_density_kg_m3 = conditions.air_density_kg_m3
+    shot.air_density_source = conditions.source
+    shot.air_conditions = conditions.to_dict()
+
+
+def _on_air_conditions(conditions: AirConditions) -> None:
+    """Send each poll to the UI; log the air when its source or reason changes."""
+    global _air_last_logged  # pylint: disable=global-statement
+    payload = conditions.to_dict()
+    socketio.emit("air_conditions", payload)
+    key = (conditions.source, conditions.reason)
+    if key == _air_last_logged:
+        return
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_event("air_conditions", payload)
+        _air_last_logged = key
+
+
+def init_air_sensor(*, bus_number: int = 1) -> bool:
+    """Start polling the BME280; without one every flight uses ISA, saying why."""
+    global air_sensor_service  # pylint: disable=global-statement
+    global air_sensor_runtime_config  # pylint: disable=global-statement
+
+    config = {"sensor": "bme280", "i2c_bus": bus_number}
+    sensor = None
+    try:
+        sensor = find_bme280(bus_number=bus_number)
+        service = AirSensorService(sensor, on_update=_on_air_conditions)
+        service.start()
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        if sensor is not None:
+            try:
+                sensor.close()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.debug("Failed to close the BME280 after a start error", exc_info=True)
+        air_sensor_service = None
+        air_sensor_runtime_config = {**config, "enabled": False, "reason": str(error)}
+        logger.info("[AIR] No air sensor, flights use ISA air: %s", error)
+        return False
+    air_sensor_service = service
+    air_sensor_runtime_config = {
+        **config,
+        "enabled": True,
+        "i2c_address": f"0x{sensor.address:02x}",
+        "poll_interval_s": service.poll_interval_s,
+        "max_age_s": service.max_age_s,
+    }
+    return True
+
+
 def init_kld7(
     port=None,
     orientation="vertical",
@@ -3874,6 +3952,7 @@ def handle_connect():
     _emit_profiles()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    socketio.emit("air_conditions", current_air_conditions().to_dict())
     socketio.emit("club_changed", {"club": active_club.value})
     socketio.emit("handedness", golfer_handedness())
     if monitor:
@@ -3883,6 +3962,12 @@ def handle_connect():
         socketio.emit("ready_light", ready_light.update(_ready_light_states()))
     except Exception:  # pylint: disable=broad-exception-caught
         logger.warning("[READY] Ready light snapshot for a new client failed", exc_info=True)
+
+
+@socketio.on("get_air_conditions")
+def handle_get_air_conditions():
+    """Send the air the next shot would fly in."""
+    socketio.emit("air_conditions", current_air_conditions().to_dict())
 
 
 @socketio.on("disconnect")
@@ -6411,6 +6496,12 @@ def _open_smash_factor_status(shot: Shot) -> None:
     shot.smash_factor_status = SMASH_RADIAL_RATIO
 
 
+def _as_measured_density(shot: Shot) -> float:
+    """The shot's recorded density when finite, else ISA."""
+    density = shot.air_density_kg_m3
+    return float(density) if _finite(density) and density > 0 else AIR_DENSITY_STD
+
+
 def _ballistic_carry(shot: Shot) -> kiosk_extensions.CarryOutcome:
     """The simulator's carry on the shot's own launch, or none (no flight model loaded).
 
@@ -6419,7 +6510,7 @@ def _ballistic_carry(shot: Shot) -> kiosk_extensions.CarryOutcome:
     """
     conditions = resolve_launch(shot) if ballistics_enabled else None
     if conditions is not None and _finite(shot.ball_speed_mph):
-        trajectory = simulate(conditions)
+        trajectory = simulate(conditions, air_density=_as_measured_density(shot))
         if _finite(trajectory.carry_yards):
             shot.carry_spin_adjusted = trajectory.carry_yards
             shot.carry_status = CARRY_ESTIMATED
@@ -6613,6 +6704,7 @@ def _finalize_shot_detected(
                 "reason": f"the full-speed stage failed: {shot.stage_errors['speed_contract']}",
             }
 
+    _isolated_stage(shot, "air", _stamp_air_conditions, shot)
     _isolated_stage(shot, "spin", _resolve_spin, shot)
 
     carry_source = None
@@ -7786,6 +7878,13 @@ def start_monitor(
                 address=inclinometer_runtime_config.get("i2c_address", "0x18"),
                 sample_hz=inclinometer_runtime_config.get("sample_hz", 10.0),
             )
+        if not mock and air_sensor_service is not None:
+            session_logger.log_connection(
+                device="bme280",
+                port=f"i2c-{air_sensor_runtime_config['i2c_bus']}",
+                baud=0,
+                address=air_sensor_runtime_config["i2c_address"],
+            )
 
     if swing_speed_mode:
         monitor.start(
@@ -8663,6 +8762,12 @@ def build_parser():
         "--inclinometer-bus", type=int, default=1, help="LIS3DH I2C bus (default: 1)"
     )
     parser.add_argument(
+        "--no-air-sensor",
+        action="store_true",
+        help="Do not look for a BME280: every as-measured flight uses ISA air (1.225 kg/m3)",
+    )
+    parser.add_argument("--air-sensor-bus", type=int, default=1, help="BME280 I2C bus (default: 1)")
+    parser.add_argument(
         "--inclinometer-address",
         type=lambda value: int(value, 0),
         default=0x18,
@@ -9201,6 +9306,13 @@ def main():
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
         else:
             startup_status.ready("inclinometer", "Inclinometer connected")
+
+    if args.no_air_sensor:
+        air_sensor_runtime_config.update(reason=AIR_SENSOR_DISABLED_REASON)
+    elif init_air_sensor(bus_number=args.air_sensor_bus):
+        print(f"Air sensor: BME280 at {air_sensor_runtime_config['i2c_address']}")
+    else:
+        print(f"Air sensor: none, flights use ISA air ({air_sensor_runtime_config['reason']})")
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:

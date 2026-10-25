@@ -1,4 +1,5 @@
-export type PanelView = 'live' | 'club' | 'flight' | 'profiles' | 'stats' | 'shots' | 'camera' | 'setup' | 'debug';
+export type PanelView =
+  'live' | 'club' | 'flight' | 'profiles' | 'stats' | 'shots' | 'camera' | 'conditions' | 'setup' | 'debug';
 
 /**
  * Footer tabs, in order. Design doc 6a uses text-only tabs, so no icons here.
@@ -10,6 +11,7 @@ export const PANEL_VIEWS: ReadonlyArray<{ id: PanelView; label: string }> = [
   { id: 'stats', label: 'Stats' },
   { id: 'shots', label: 'Shots' },
   { id: 'camera', label: 'Camera' },
+  { id: 'conditions', label: 'Conditions' },
   { id: 'setup', label: 'Setup' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'debug', label: 'Debug' },

@@ -24,8 +24,9 @@ Every metric carries ``value``, ``unit``, ``status``, ``source``, ``range`` and
 Two flights from the same launch (TrackMan's "raw" and "normalized"):
 
 - ``as_measured``: in the shot's own air. The density is ``Shot.air_density_kg_m3``
-  when supplied (the owner's density hook; this module never measures weather),
-  else the ISA sea-level 1.225 kg/m3, labelled "ISA default".
+  when supplied, labelled by ``Shot.air_density_source`` (the BME280's reading,
+  openflight.air; this module never measures weather), else the ISA sea-level
+  1.225 kg/m3, labelled "ISA default".
 - ``normalized``: TrackMan's reference, 77 F (25 C) and sea level (1013.25 hPa),
   calm ("normalized to no wind conditions at 0 ft altitude, 77 F", the owner's
   export; "Default values are 77°F and sea level", TrackMan's normalization page),
@@ -44,6 +45,11 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from . import metric_definitions
+from .air.conditions import SOURCE_ISA_DEFAULT
+from .air.density import (  # pylint: disable=unused-import
+    humid_air_density_kg_m3,
+    saturation_vapour_pressure_pa as saturation_vapour_pressure_pa,
+)
 from .collision_model import (
     is_estimated_source,
     is_model_geometry_source,
@@ -113,33 +119,6 @@ NORMALIZED_TEMPERATURE_C = 25.0
 NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
 NORMALIZED_PRESSURE_PA = 101325.0
 NORMALIZED_REFERENCE_RH_PCT = 50.0
-DRY_AIR_GAS_CONSTANT = 287.05  # J/(kg K)
-WATER_VAPOUR_GAS_CONSTANT = 461.495  # J/(kg K)
-
-
-def saturation_vapour_pressure_pa(temperature_c: float) -> float:
-    """Saturation vapour pressure over water, Pa: Buck (1981).
-
-    A. L. Buck, "New equations for computing vapor pressure and enhancement
-    factor", J. Appl. Meteorol. 20, 1527-1532 (1981):
-    e_s = 6.1121 exp(17.502 T / (240.97 + T)) hPa, T in deg C. Buck's enhancement
-    factor for moist air (about 1.004 at sea level) is left out: it moves the
-    density by under 0.003 %.
-    """
-    return 611.21 * math.exp(17.502 * temperature_c / (240.97 + temperature_c))
-
-
-def humid_air_density_kg_m3(temperature_c: float, pressure_pa: float, rh_pct: float) -> float:
-    """Density of moist air: dry air and water vapour as ideal gases (Dalton's law).
-
-    rho = (p - e) / (R_d T) + e / (R_v T), with e = RH x e_s(T) (Buck 1981).
-    """
-    temperature_k = temperature_c + 273.15
-    vapour = rh_pct / 100.0 * saturation_vapour_pressure_pa(temperature_c)
-    return (pressure_pa - vapour) / (DRY_AIR_GAS_CONSTANT * temperature_k) + vapour / (
-        WATER_VAPOUR_GAS_CONSTANT * temperature_k
-    )
-
 
 AIR_DENSITY_NORMALIZED = humid_air_density_kg_m3(
     NORMALIZED_TEMPERATURE_C, NORMALIZED_PRESSURE_PA, NORMALIZED_REFERENCE_RH_PCT
@@ -157,8 +136,9 @@ AIR_SUPPLIED = "supplied"
 AIR_DENSITY_PLAUSIBLE_KG_M3 = (0.6, 1.6)
 
 DENSITY_HOOK = (
-    "Shot.air_density_kg_m3 (kg/m3), set per shot before finalization by the "
-    "owner's density source; when unset the as-measured flight uses ISA 1.225 kg/m3"
+    "Shot.air_density_kg_m3 (kg/m3) and Shot.air_density_source, set per shot before "
+    "finalization from the BME280 (openflight.air); when unset or isa_default the "
+    "as-measured flight uses ISA 1.225 kg/m3"
 )
 
 
@@ -207,19 +187,22 @@ class FlightResult:
 def _as_measured_air(shot: Shot) -> tuple[Optional[float], str, Optional[str]]:
     """(density, source, reason): the supplied density, or ISA when none was supplied.
 
-    An invalid supplied density is not replaced by ISA: that flight is not measured.
+    The source is the shot's ``air_density_source`` ("bme280"), else "supplied". An
+    invalid supplied density is not replaced by ISA: that flight is not measured.
     """
     supplied = getattr(shot, "air_density_kg_m3", None)
-    if supplied is None:
+    source = getattr(shot, "air_density_source", None)
+    if supplied is None or source == SOURCE_ISA_DEFAULT:
         return AIR_DENSITY_STD, AIR_ISA_DEFAULT, None
+    source = source or AIR_SUPPLIED
     low, high = AIR_DENSITY_PLAUSIBLE_KG_M3
     if not _finite(supplied) or not low <= supplied <= high:
         return (
             None,
-            AIR_SUPPLIED,
+            source,
             f"supplied air density invalid ({supplied!r} kg/m3; plausible {low}-{high})",
         )
-    return float(supplied), AIR_SUPPLIED, None
+    return float(supplied), source, None
 
 
 def _missing_reason(shot: Shot) -> str:

@@ -87,7 +87,7 @@ exports the same split).
 
 | Flight | Air density | Label |
 | --- | --- | --- |
-| `as_measured` | `Shot.air_density_kg_m3` when supplied; otherwise ISA sea level, 1.225 kg/m³ | `supplied` or `ISA default` |
+| `as_measured` | `Shot.air_density_kg_m3` from the BME280 when it has a fresh reading; otherwise ISA sea level, 1.225 kg/m³ | `bme280` (the shot's `air_density_source`), `supplied` or `ISA default` |
 | `normalized` | 25 °C (77 °F), 1013.25 hPa (sea level), RH 50 %, calm: 1.1769 kg/m³ | `normalized: …` |
 
 **The normalized reference is TrackMan's.** TrackMan's normalization page says
@@ -125,9 +125,12 @@ The carry the kiosk shows (`carry_spin_adjusted`) is the as-measured carry.
 
 !!! note "The density hook"
 
-    OpenFlight does not measure the weather here. A density source (such as a
-    BME280 sensor) sets `Shot.air_density_kg_m3`, in kg/m³, on each shot before
-    finalization. Unset, the as-measured flight uses ISA and says so. A supplied
+    This module does not measure the weather. The server sets
+    `Shot.air_density_kg_m3`, in kg/m³, and `Shot.air_density_source` on each shot
+    before finalization: the [BME280's](../build/air-sensor.md) humid-air density
+    (the same Buck formula as the normalized reference) as `bme280`, or ISA as
+    `isa_default` with the reason in `Shot.air_conditions`. Unset, the as-measured
+    flight uses ISA and says so. A supplied
     value that is not finite or lies outside 0.6–1.6 kg/m³ (a units or wiring
     error, not weather) is never replaced by ISA: that flight is not measured,
     with the reason, and the normalized flight is unaffected.

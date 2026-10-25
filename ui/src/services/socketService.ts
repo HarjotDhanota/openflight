@@ -3,6 +3,7 @@ import { useSystemStore, type Handed } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraCaptureSettings } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { useAirStore } from '../stores/useAirStore';
 import {
   type Shot,
   type SessionState,
@@ -10,7 +11,15 @@ import {
   type TriggerDiagnosticUpdate,
   type TriggerStatus,
 } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimShotNotSent, SimStatus } from '../types/socket';
+import type {
+  AirConditions,
+  DebugReading,
+  RadarConfig,
+  DebugShotLog,
+  SimShotInfo,
+  SimShotNotSent,
+  SimStatus,
+} from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import type { ReadyLight } from '../types/readyLight';
 import { kioskRestartingLight } from '../utils/readyLight';
@@ -110,6 +119,10 @@ class SocketService {
 
     this.socket.on('power_status', (data: PowerStatus) => {
       useSystemStore.getState().setPowerStatus(data);
+    });
+
+    this.socket.on('air_conditions', (data: AirConditions) => {
+      useAirStore.getState().setConditions(data);
     });
 
     this.socket.on('ready_light', (data: ReadyLight) => {

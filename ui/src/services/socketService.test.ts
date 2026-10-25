@@ -92,3 +92,29 @@ describe('socketService trace wiring', () => {
     expect(() => socketService.emit('trace_paint', {})).not.toThrow();
   });
 });
+
+describe('socketService air conditions', () => {
+  beforeEach(() => {
+    socketService.disconnect();
+    socketService.connect();
+  });
+
+  it('keeps the air the server sends for the Conditions panel', async () => {
+    const { useAirStore } = await import('../stores/useAirStore');
+    const conditions = {
+      air_density_kg_m3: 1.225,
+      source: 'isa_default',
+      temperature_c: null,
+      pressure_hpa: null,
+      humidity_pct: null,
+      measured_at: null,
+      age_s: null,
+      reason: 'no BME280 on I2C bus 1',
+      density_altitude_ft: null,
+    };
+
+    handlers.air_conditions(conditions);
+
+    expect(useAirStore.getState().conditions).toEqual(conditions);
+  });
+});

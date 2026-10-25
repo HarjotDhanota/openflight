@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   convertDistanceFromYards,
   convertSpeedFromMph,
+  formatAltitude,
   formatCarryRange,
   formatDistance,
+  formatPressure,
   formatSpeed,
+  formatTemperature,
   getDistanceUnit,
   getSpeedUnit,
   getUnitsLabel,
@@ -64,5 +67,24 @@ describe('isMeasured (the one missing-value rule)', () => {
     expect(
       [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '12', true].map(isMeasured)
     ).toEqual([false, false, false, false, false, false, false]);
+  });
+});
+
+describe('air formatters', () => {
+  it('formats temperature in the user units', () => {
+    expect(formatTemperature(15, 'imperial')).toBe('59.0 °F');
+    expect(formatTemperature(15, 'metric')).toBe('15.0 °C');
+    expect(formatTemperature(-10, 'imperial')).toBe('14.0 °F');
+  });
+
+  it('formats station pressure as inHg or hPa', () => {
+    expect(formatPressure(1013.25, 'imperial')).toBe('29.92 inHg');
+    expect(formatPressure(1013.25, 'metric')).toBe('1013 hPa');
+  });
+
+  it('formats density altitude as ft or m, signed below sea level', () => {
+    expect(formatAltitude(2685, 'imperial')).toBe('2,685 ft');
+    expect(formatAltitude(2685, 'metric')).toBe('818 m');
+    expect(formatAltitude(-1400, 'imperial')).toBe('-1,400 ft');
   });
 });

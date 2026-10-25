@@ -33,6 +33,7 @@ describe('App shell', () => {
       'stats',
       'shots',
       'camera',
+      'conditions',
       'setup',
       'profiles',
       'debug',

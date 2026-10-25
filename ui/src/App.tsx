@@ -24,6 +24,7 @@ import { SetupView } from './components/setup/SetupView';
 import { needsSetup } from './components/setup/setupWords';
 import {
   CameraPanel,
+  ConditionsPanel,
   LivePanel,
   MetricGroupPanel,
   ProfileNameDialog,
@@ -431,6 +432,7 @@ function AppContent() {
             handed={handed}
           />
         )}
+        {currentView === 'conditions' && <ConditionsPanel />}
         {currentView === 'setup' && (
           <SetupView
             setup={setup}
