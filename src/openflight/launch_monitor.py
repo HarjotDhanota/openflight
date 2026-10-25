@@ -211,7 +211,10 @@ class Shot:
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         carry_status: What the reported carry is (CARRY_* above); None until finalized
-        air_density_kg_m3: The shot's air density (kg/m^3), or None for ISA air
+        air_density_kg_m3: The as-measured flight's air density (kg/m^3), or None for ISA air
+        air_density_source: Where that density came from: "bme280" or "isa_default"
+        air_conditions: The air record (openflight.air): temperature, station pressure,
+            humidity and reading age, or the reason ISA air was used
         flight: Every flight output with status, source, range and reason
             (openflight.flight); None until finalized
         smash_factor_status: What smash_factor is (SMASH_RADIAL_RATIO above), or None
@@ -290,6 +293,8 @@ class Shot:
     carry_spin_adjusted: Optional[float] = None
     carry_status: Optional[str] = None
     air_density_kg_m3: Optional[float] = None
+    air_density_source: Optional[str] = None
+    air_conditions: Optional[dict] = None
     flight: Optional[dict] = None
     smash_factor_status: Optional[str] = None
     mode: str = "rolling-buffer"
@@ -623,6 +628,8 @@ class Shot:
             "carry_spin_adjusted": self.carry_spin_adjusted,
             "carry_status": self.carry_status,
             "air_density_kg_m3": self.air_density_kg_m3,
+            "air_density_source": self.air_density_source,
+            "air_conditions": deepcopy(self.air_conditions),
             "flight": deepcopy(self.flight),
             "target_line": deepcopy(self.target_line),
             "setup_revision": self.setup_revision,
