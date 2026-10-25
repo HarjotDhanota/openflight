@@ -114,7 +114,7 @@ field of view, provenance, and the exposure rungs each ladder mode allows. A len
 nominal focal length is the rig file's scaled by `focal_mm / 2.8`; a checkerboard
 calibration for its `lens_id` replaces it. The unit's choice and each lens's own
 modes, default mode and ladder are kept in `~/.config/openflight/camera-lens.json`.
-See [the fixed box](../camera/tester-fixed-box.md#the-lens).
+The kiosk's lens is chosen with [`--camera-lens-id`](cli.md#high-speed-camera-capture).
 
 ## `config/swing_exposure.json`
 
@@ -128,11 +128,11 @@ See [automatic exposure](../camera/README.md#automatic-exposure).
 
 ## `config/placement_box.json`
 
-The tester's fixed placement box: the placement window (`placement_window_m`,
+The fixed box the [setup screen](../how-it-works/setting-up.md) draws: the placement window (`placement_window_m`,
 1.8–2.9 m forward of the lens), its half width, the tilt margins it is drawn with
 (uncalibrated 3°, calibrated 1°), the distance windows' pads, the net margin and
 the size window's reach past the window. A malformed file is refused, never
-defaulted. See [the fixed box](../camera/tester-fixed-box.md).
+defaulted.
 
 ## `config/alloy.alloy`
 

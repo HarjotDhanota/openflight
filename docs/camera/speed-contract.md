@@ -14,6 +14,4 @@ value. The diagnostic view shows it separately, with why it is unavailable.
 
 Reference scoring must distinguish radial speed from total ball speed and keep
 model-derived candidates identifiable. Never compare two differently defined
-speeds as an accuracy error merely because both use mph. See the
-[master plan](../development/fusion-master-plan.md) for the geometry, timing and
-reference gates required before promotion.
+speeds as an accuracy error merely because both use mph.

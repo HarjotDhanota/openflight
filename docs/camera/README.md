@@ -9,24 +9,8 @@ Camera capture is experimental. Camera-assisted horizontal launch, club path,
 and attack angle must remain quality-gated until they are validated against a
 launch-monitor source of truth.
 
-Related pages: the [fusion master plan](../development/fusion-master-plan.md)
-(calibration, replay, validation and promotion gates);
-[optical calibration](optical-calibration.md) (checkerboard candidates);
-the [opt-in live calibrated path](live-calibrated-fusion.md) (unqualified);
-[projection comparison](calibrated-projection.md);
-[recorded-track comparison](recorded-track-comparison.md);
-the [tester fusion diagnostic view](live-fusion-diagnostics.md);
-[tester setup requirements](tester-setup-gate.md);
-[the fixed box](tester-fixed-box.md) (placement box, lens choice, aim point);
-the [first Pi session procedure](pi-commissioning.md);
-the [speed contract](speed-contract.md) (OPS radial speed and the experimental
-total-speed correction); the [timing evidence bench](timing-validation.md);
-[camera-fusion replay](fusion-replay.md); the
-[accuracy benchmark](accuracy-benchmark.md);
-[raw radar and camera replay](raw-fusion-replay.md); the
-[commissioning report](commissioning-report.md); and
-[community contribution packages](community-contributions.md) (consent-bound,
-checksum-verified archives of a tester export).
+The [speed contract](speed-contract.md) covers the OPS radial speed and the
+experimental total-speed correction.
 
 ## Supported Hardware
 

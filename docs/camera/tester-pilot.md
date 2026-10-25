@@ -3,6 +3,25 @@
 **Testers: follow the [tester guide](../tester-guide/README.md)**, the step-by-step setup and
 free play with pictures. This page is the maintainer's technical reference behind it.
 
+Related fork pages: the [fusion master plan](../development/fusion-master-plan.md)
+(calibration, replay, validation and promotion gates);
+[optical calibration](optical-calibration.md) (checkerboard candidates);
+the [opt-in live calibrated path](live-calibrated-fusion.md) (unqualified);
+[projection comparison](calibrated-projection.md);
+[recorded-track comparison](recorded-track-comparison.md);
+the [tester fusion diagnostic view](live-fusion-diagnostics.md);
+[tester setup requirements](tester-setup-gate.md);
+[the fixed box](tester-fixed-box.md) (placement box, lens choice, aim point);
+the [first Pi session procedure](pi-commissioning.md);
+the [static setup range capture](../iwr6843/static-range-capture.md);
+the [timing evidence bench](timing-validation.md);
+[camera-fusion replay](fusion-replay.md); the
+[accuracy benchmark](accuracy-benchmark.md);
+[raw radar and camera replay](raw-fusion-replay.md); the
+[commissioning report](commissioning-report.md); and
+[community contribution packages](community-contributions.md) (consent-bound,
+checksum-verified archives of a tester export).
+
 ## Free play for outside testers
 
 **The test is only for units with all four sensors**: the OPS243 speed radar, the IWR6843
