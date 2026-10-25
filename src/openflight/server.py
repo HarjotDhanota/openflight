@@ -5091,7 +5091,9 @@ def _fuse_camera_club_delivery(
         shot.experimental_fused_club_path_confidence = fused.path_confidence_tier
         shot.experimental_camera_trace_deg = None
         shot.experimental_aoa_offset_source = "none_chained_3d"
-        kiosk_extensions.call_all("on_club_delivery", shot, fused)
+        _isolated_stage(
+            shot, "on_club_delivery", kiosk_extensions.call_all, "on_club_delivery", shot, fused
+        )
         logger.info(
             "[SERVER] Camera/IWR chained club delivery: AoA %s path %s "
             "(status=%s, features=%d, speed_ratio=%s, velocity_mad=%s mph, "
@@ -5372,7 +5374,14 @@ def _withhold_camera_metrics(shot: Shot, status: str, reason: str) -> None:
     shot.experimental_fused_status = status
     shot.experimental_fused_attack_angle_confidence = "withheld"
     shot.experimental_fused_club_path_confidence = "withheld"
-    kiosk_extensions.call_all("on_club_delivery", shot, {"status": status})
+    _isolated_stage(
+        shot,
+        "on_club_delivery",
+        kiosk_extensions.call_all,
+        "on_club_delivery",
+        shot,
+        {"status": status},
+    )
     shot.camera_fusion_context = {
         "schema": "openflight.camera.fusion_context",
         "version": CAMERA_FUSION_CONTEXT_VERSION,
@@ -5901,7 +5910,9 @@ def _fuse_camera_measurements(
             shot.experimental_fused_club_path_confidence = fused["path_confidence_tier"]
             shot.experimental_camera_trace_deg = None
             shot.experimental_aoa_offset_source = "none_chained_3d"
-            kiosk_extensions.call_all("on_club_delivery", shot, fused)
+            _isolated_stage(
+                shot, "on_club_delivery", kiosk_extensions.call_all, "on_club_delivery", shot, fused
+            )
             _apply_camera_fallback_launch(shot, fallback_result)
             return
         except Exception as error:  # pylint: disable=broad-exception-caught
@@ -5925,7 +5936,7 @@ def _fuse_camera_measurements(
 
                 camera_notes.append(NO_TEE_RANGE)
                 shot.camera_notes = camera_notes
-            logger.warning("[SERVER] Shared camera fusion failed: %s", error, exc_info=True)
+            _record_stage_error(shot, "camera_fusion_shared", error)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
     _calibrate_camera_tilt_from_swing(shot, camera_archive)
@@ -5976,6 +5987,71 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
         )
 
 
+def _log_camera_capture_match(shot: Shot, camera_capture) -> None:
+    """Log the camera clip matched to this shot, or why none was."""
+    session_log = get_session_logger()
+    if not session_log:
+        return
+    shot_number = _shot_number_for_log(shot, session_log)
+    if camera_capture is not None:
+        _isolated_stage(
+            shot,
+            "on_camera_capture",
+            kiosk_extensions.call_all,
+            "on_camera_capture",
+            shot,
+            camera_capture,
+        )
+        session_log.log_camera_capture(
+            shot_number=shot_number,
+            shot_timestamp=shot.impact_timestamp,
+            trigger_timestamp=camera_capture.trigger_timestamp,
+            capture_path=str(camera_capture.path) if camera_capture.path else None,
+            metadata=camera_capture.metadata,
+            capture_error=(
+                f"camera_save_failed: {camera_capture.error}" if camera_capture.error else None
+            ),
+        )
+        if camera_capture.valid:
+            logger.info(
+                "[SERVER] Camera capture #%d matched -> %s",
+                camera_capture.sequence,
+                camera_capture.path,
+            )
+        else:
+            logger.warning(
+                "[SERVER] Camera capture #%d failed: %s",
+                camera_capture.sequence,
+                camera_capture.error,
+            )
+        return
+    rejection = camera_capture_runtime.trigger_rejection_for_shot(shot.impact_timestamp)
+    session_log.log_camera_capture(
+        shot_number=shot_number,
+        shot_timestamp=shot.impact_timestamp,
+        trigger_timestamp=rejection["trigger_timestamp"] if rejection else None,
+        capture_path=None,
+        metadata={"trigger_rejection": rejection} if rejection else None,
+        capture_error=(
+            f"camera_trigger_rejected:{rejection['reason']}"
+            if rejection
+            else "no_matching_camera_capture"
+        ),
+    )
+    logger.warning("[SERVER] No camera capture matched this shot")
+
+
+def _close_camera_chains(shot: Shot, camera_archive, reason: str) -> None:
+    """After a failed camera stage: the range chain (if it never ran) and the launch chain.
+
+    The radar's range and launch still resolve, and the camera fallback is refused with
+    the stage's own reason, so nothing downstream reads a half-finished camera stage.
+    """
+    if "ball_range" not in (shot.input_sources or {}):
+        _resolve_shot_ball_range(shot, camera_archive)
+    _apply_camera_fallback_launch(shot, {"status": "not_run", "reason": reason})
+
+
 def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     """Mutate a shot with available radar/camera measurements and timings."""
     if shot.mode == "mock" and _mock_enrichment_enabled():
@@ -5989,8 +6065,10 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         camera_future = camera_executor.submit(_prefetch_camera_capture, shot)
     # The orientation before any estimator uses it; its wait for the reading after
     # impact overlaps the camera fetch and the IWR's dump.
-    _snapshot_inclinometer_for_shot(shot)
-    iwr6843_ms = _process_iwr6843_angle(shot)
+    _isolated_stage(shot, "inclinometer", _snapshot_inclinometer_for_shot, shot)
+    iwr6843_ms = _isolated_stage(shot, "iwr6843", _process_iwr6843_angle, shot)
+    if iwr6843_ms is _STAGE_FAILED:
+        iwr6843_ms = None
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
@@ -6179,6 +6257,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         # reads club_path_deg regardless of whether it came from K-LD7 or
         # IWR6843 -- so this is not necessarily a K-LD7-specific failure.
         logger.warning("[SERVER] Angle/spin-axis post-processing error: %s", e, exc_info=True)
+        _note_stage_error(shot, "kld7", e)
         log_session_error(
             "Angle/spin-axis post-processing failed",
             component="server",
@@ -6216,56 +6295,28 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             if camera_executor is not None:
                 camera_executor.shutdown(wait=True, cancel_futures=False)
 
-        session_log = get_session_logger()
-        if session_log:
-            shot_number = _shot_number_for_log(shot, session_log)
-            if camera_capture is not None:
-                kiosk_extensions.call_all("on_camera_capture", shot, camera_capture)
-                session_log.log_camera_capture(
-                    shot_number=shot_number,
-                    shot_timestamp=shot.impact_timestamp,
-                    trigger_timestamp=camera_capture.trigger_timestamp,
-                    capture_path=str(camera_capture.path) if camera_capture.path else None,
-                    metadata=camera_capture.metadata,
-                    capture_error=(
-                        f"camera_save_failed: {camera_capture.error}"
-                        if camera_capture.error
-                        else None
-                    ),
-                )
-                if camera_capture.valid:
-                    logger.info(
-                        "[SERVER] Camera capture #%d matched -> %s",
-                        camera_capture.sequence,
-                        camera_capture.path,
-                    )
-                else:
-                    logger.warning(
-                        "[SERVER] Camera capture #%d failed: %s",
-                        camera_capture.sequence,
-                        camera_capture.error,
-                    )
-            else:
-                rejection = camera_capture_runtime.trigger_rejection_for_shot(shot.impact_timestamp)
-                session_log.log_camera_capture(
-                    shot_number=shot_number,
-                    shot_timestamp=shot.impact_timestamp,
-                    trigger_timestamp=rejection["trigger_timestamp"] if rejection else None,
-                    capture_path=None,
-                    metadata={"trigger_rejection": rejection} if rejection else None,
-                    capture_error=(
-                        f"camera_trigger_rejected:{rejection['reason']}"
-                        if rejection
-                        else "no_matching_camera_capture"
-                    ),
-                )
-                logger.warning("[SERVER] No camera capture matched this shot")
+        _isolated_stage(shot, "camera_capture_log", _log_camera_capture_match, shot, camera_capture)
 
     camera_analysis_started = time.monotonic()
     _attach_camera_replay(shot, camera_capture)
 
     if shot.mode != "mock":
-        _fuse_camera_measurements(shot, camera_capture, camera_archive)
+        if (
+            _isolated_stage(
+                shot,
+                "camera_fusion",
+                _fuse_camera_measurements,
+                shot,
+                camera_capture,
+                camera_archive,
+            )
+            is _STAGE_FAILED
+        ):
+            _close_camera_chains(
+                shot,
+                camera_archive,
+                f"the camera stage failed ({shot.stage_errors['camera_fusion']})",
+            )
         camera_analysis_ms = (time.monotonic() - camera_analysis_started) * 1000.0
     _isolated_stage(shot, "after_enrichment", kiosk_extensions.call_all, "after_enrichment", shot)
 
@@ -6361,22 +6412,37 @@ def _ballistic_carry(shot: Shot) -> kiosk_extensions.CarryOutcome:
 _STAGE_FAILED = object()
 
 
+def _note_stage_error(shot: Shot, name: str, error: Exception) -> str:
+    """Name one stage's error on the shot (``Shot.stage_errors``)."""
+    message = f"{type(error).__name__}: {error}"
+    shot.stage_errors = {**(shot.stage_errors or {}), name: message}
+    return message
+
+
+def _record_stage_error(shot: Shot, name: str, error: Exception) -> str:
+    """Name one stage's error on the shot and in the session log."""
+    message = _note_stage_error(shot, name, error)
+    logger.warning(
+        "[SERVER] Shot stage %s failed: %s",
+        name,
+        message,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    log_session_error(
+        f"Shot stage {name} failed",
+        component="server",
+        context={"stage": name, "ball_speed_mph": shot.ball_speed_mph},
+        exc=error,
+    )
+    return message
+
+
 def _isolated_stage(shot: Shot, name: str, stage, *args, **kwargs):
     """Run one shot stage; an error is the stage's own reason, never the shot's end."""
     try:
         return stage(*args, **kwargs)
     except Exception as error:  # pylint: disable=broad-exception-caught
-        message = f"{type(error).__name__}: {error}"
-        errors = dict(shot.stage_errors or {})
-        errors[name] = message
-        shot.stage_errors = errors
-        logger.warning("[SERVER] Shot stage %s failed: %s", name, message, exc_info=True)
-        log_session_error(
-            f"Shot stage {name} failed",
-            component="server",
-            context={"stage": name, "ball_speed_mph": shot.ball_speed_mph},
-            exc=error,
-        )
+        _record_stage_error(shot, name, error)
         return _STAGE_FAILED
 
 
@@ -6526,7 +6592,11 @@ def _finalize_shot_detected(
             "%.0f" % (shot.spin_peak_freq_hz * 60) if shot.spin_peak_freq_hz is not None else "N/A",
         )
 
-    kiosk_extensions.call_all(
+    # before the session-log write: a failing diagnostic must not lose the log entry
+    _isolated_stage(
+        shot,
+        "fusion_diagnostic",
+        kiosk_extensions.call_all,
         "on_fusion_diagnostic",
         diagnostic_logger,
         diagnostic_session_uuid,
@@ -6737,6 +6807,24 @@ def _finish_shot_detected(
             component="server",
             context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
+        )
+        # every stage is isolated; this guard closes the chains for whatever was missed
+        message = _note_stage_error(enriched_shot, "enrichment", error)
+        if enriched_shot.mode != "mock":
+            _isolated_stage(
+                enriched_shot,
+                "camera_chains",
+                _close_camera_chains,
+                enriched_shot,
+                None,
+                f"the enrichment failed ({message})",
+            )
+        _isolated_stage(
+            enriched_shot,
+            "after_enrichment",
+            kiosk_extensions.call_all,
+            "after_enrichment",
+            enriched_shot,
         )
         enrichment = replace(
             enrichment,

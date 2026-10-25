@@ -183,10 +183,33 @@ def load_installed() -> list[str]:
     return loaded
 
 
+def _skipped(extension: KioskExtension, hook: str, error: Exception) -> None:
+    logger.error(
+        "[EXTENSIONS] %s.%s failed: %s: %s",
+        getattr(extension, "name", type(extension).__name__),
+        hook,
+        type(error).__name__,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
 def call_all(hook: str, *args: Any, **kwargs: Any) -> None:
-    """Call one hook on every extension, in order."""
+    """Call one hook on every extension, in order.
+
+    One extension raising never stops the others; the first error is raised once
+    every extension has run, so the caller's stage still records it (and a
+    ``check_camera_capture`` refusal still refuses).
+    """
+    errors: list[Exception] = []
     for extension in registered():
-        getattr(extension, hook)(*args, **kwargs)
+        try:
+            getattr(extension, hook)(*args, **kwargs)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            _skipped(extension, hook, error)
+            errors.append(error)
+    if errors:
+        raise errors[0]
 
 
 def any_true(hook: str, *args: Any, **kwargs: Any) -> bool:
@@ -195,11 +218,23 @@ def any_true(hook: str, *args: Any, **kwargs: Any) -> bool:
 
 
 def first(hook: str, *args: Any, **kwargs: Any) -> Any:
-    """The first answer that is not None, or None."""
+    """The first answer that is not None, or None.
+
+    A raising extension is skipped for a later one's answer; with no answer at all
+    its error is raised, so a failure never passes for "no extension answers".
+    """
+    errors: list[Exception] = []
     for extension in registered():
-        answer = getattr(extension, hook)(*args, **kwargs)
+        try:
+            answer = getattr(extension, hook)(*args, **kwargs)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            _skipped(extension, hook, error)
+            errors.append(error)
+            continue
         if answer is not None:
             return answer
+    if errors:
+        raise errors[0]
     return None
 
 

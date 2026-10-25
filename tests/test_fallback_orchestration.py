@@ -298,3 +298,36 @@ def test_the_camera_head_track_takes_the_range_chain_s_range_and_its_sigma(kiosk
     assert shot.ball_range_source == "camera_ball_size"
     assert seen["tee_range_m"] == pytest.approx(shot.ball_range_m)
     assert seen["sigma_m"] == pytest.approx(shot.ball_range_uncertainty_m)
+
+
+def test_a_raising_fusion_diagnostic_still_logs_the_shot(kiosk, scene):
+    logged = []
+    kiosk.setattr(
+        server_module,
+        "get_session_logger",
+        lambda: SimpleNamespace(log_shot=lambda shot, pipeline_ms: logged.append(shot.to_dict())),
+    )
+
+    class Diagnostics(kiosk_extensions.KioskExtension):
+        def on_fusion_diagnostic(self, *_args, **_kwargs):
+            raise RuntimeError("diagnostic exploded")
+
+    kiosk.setattr(kiosk_extensions, "_extensions", [shot_models.extension, Diagnostics()])
+    shot = _shot(scene)
+
+    _run(scene, shot)
+
+    assert logged, "the shot was not logged"
+    assert "diagnostic exploded" in shot.stage_errors["fusion_diagnostic"]
+    assert logged[0]["stage_errors"]["fusion_diagnostic"] == shot.stage_errors["fusion_diagnostic"]
+
+
+def test_a_shot_without_a_range_records_the_shared_fusion_s_refusal_as_a_stage_error(kiosk, scene):
+    kiosk.setattr(server_module, "_resolve_shot_ball_range", lambda shot, archive: None)
+    shot = _shot(scene)
+
+    _run(scene, shot)
+
+    assert "missing effective camera geometry" in shot.stage_errors["camera_fusion_shared"]
+    # the shot itself still resolves what needs no camera geometry
+    assert shot.to_dict()["metrics"]["ball_speed"]["status"] == "measured"
