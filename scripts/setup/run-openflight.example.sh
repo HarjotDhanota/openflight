@@ -32,9 +32,6 @@ openflight_args=(
     --startup-splash
     --ballistics
 
-    # Optional measurement modes:
-    # --calculated-spin  # Replaces measured OPS spin with a kinematic estimate.
-
     # TI IWR6843 example. The radar's placement comes from the rig file
     # (--rig-geometry), and the ball box, aim and ranges from the unit's setup
     # record (~/.config/openflight/setup.json, or --setup-file).

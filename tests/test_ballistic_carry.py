@@ -17,19 +17,8 @@ def plain_kiosk(monkeypatch):
     """No extension registered, ballistics on, nothing logged or emitted."""
     monkeypatch.setattr(kiosk_extensions, "_extensions", [])
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
-
-
-@pytest.fixture
-def fusion(monkeypatch):
-    monkeypatch.setattr(server_module, "_fusion_unit", lambda: True)
-
-
-@pytest.fixture
-def ops_only(monkeypatch):
-    monkeypatch.setattr(server_module, "_fusion_unit", lambda: False)
 
 
 def _shot(**overrides) -> Shot:
@@ -53,14 +42,7 @@ def _finalize(shot: Shot) -> Shot:
     return shot
 
 
-def test_an_ops_only_unit_flies_the_simulator(ops_only):
-    shot = _finalize(_shot(spin_confidence=0.2))
-
-    assert shot.carry_spin_adjusted == pytest.approx(simulate(resolve_launch(shot)).carry_yards)
-    assert shot.carry_status == CARRY_ESTIMATED
-
-
-def test_a_fusion_unit_flies_only_measured_inputs(fusion):
+def test_the_plain_simulator_flies_only_measured_inputs():
     shot = _finalize(_shot())
 
     assert shot.carry_spin_adjusted == pytest.approx(simulate(resolve_launch(shot)).carry_yards)
@@ -76,21 +58,15 @@ def test_a_fusion_unit_flies_only_measured_inputs(fusion):
         {"launch_angle_vertical": None},
     ],
 )
-def test_a_fusion_unit_without_a_measured_input_has_no_carry(fusion, missing):
+def test_without_a_measured_input_there_is_no_carry_on_any_install(missing):
+    """No OPS-only table or club-typical spin stands in (owner decision 1)."""
     shot = _finalize(_shot(**missing))
 
     assert shot.carry_spin_adjusted is None
     assert shot.carry_status == CARRY_NOT_MEASURED
 
 
-def test_an_ops_only_unit_without_a_launch_angle_takes_the_table(ops_only):
-    shot = _finalize(_shot(launch_angle_vertical=None))
-
-    assert shot.carry_spin_adjusted is not None and shot.carry_spin_adjusted > 0
-    assert shot.carry_status == CARRY_ESTIMATED
-
-
-def test_disabled_ballistics_leave_the_fusion_unit_without_carry(fusion, monkeypatch):
+def test_disabled_ballistics_leave_no_carry(monkeypatch):
     monkeypatch.setattr(server_module, "ballistics_enabled", False)
 
     shot = _finalize(_shot())

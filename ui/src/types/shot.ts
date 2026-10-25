@@ -1,4 +1,4 @@
-import { firstMeasured, isMeasured } from '../utils/units';
+import { isMeasured } from '../utils/units';
 export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental' | 'withheld';
 
 export interface CameraReplay {
@@ -46,7 +46,7 @@ export interface Shot {
   smash_factor: number | null;
   /** `radial_ratio`: OPS radial ball over club speed, not full speeds. Null: unlabelled. */
   smash_factor_status?: string | null;
-  /** The ball-speed table; null on a fusion unit, which never shows it. */
+  /** The upstream schema's ball-speed table: null on every install, never shown (decision 1). */
   estimated_carry_yards: number | null;
   carry_range: [number, number] | null;
   club: string;
@@ -290,12 +290,13 @@ export function computeSwingSpeedStats(shots: Shot[], filter: SwingSpeedStatsFil
   };
 }
 
-/** The carry the kiosk shows, or null; mirrors the server's `Shot.reported_carry_yards`. */
+/**
+ * The carry the kiosk shows, or null; mirrors the server's `Shot.reported_carry_yards`.
+ * The flight model's carry only: the ball-speed table never stands in (owner decision 1).
+ */
 export function reportedCarryYards(shot: Shot): number | null {
   if (shot.carry_status === 'not_measured') return null;
-  if (isMeasured(shot.carry_spin_adjusted)) return shot.carry_spin_adjusted;
-  const tableAllowed = shot.carry_status == null || shot.carry_status === 'estimated';
-  return tableAllowed ? firstMeasured(shot.estimated_carry_yards) : null;
+  return isMeasured(shot.carry_spin_adjusted) ? shot.carry_spin_adjusted : null;
 }
 
 /** The reported carry's label, or null; an older log's `measured` carry reads `calculated`. */

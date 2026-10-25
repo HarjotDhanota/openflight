@@ -75,7 +75,7 @@ Not every number the system produces is used for physics.
 | Club path | Reported, experimental |
 | Spin rate | **Experimental** — recorded, not used for carry by default |
 
-Carry uses trusted measurements and fills anything missing with documented
-fallbacks rather than guessing silently. When spin is absent, the simulator uses
-a kinematic estimate derived from ball speed and launch angle; `--calculated-spin`
-makes that substitution explicit even when a measured value exists.
+Carry uses only the shot's own inputs: a measured or model value under its
+label, never a filled-in one. When there is no accepted OPS spin and no
+collision-model spin, there is no spin and no carry, and the reason says why; no
+formula spin stands in (25 Oct 2026).

@@ -1,15 +1,15 @@
 """Translate a Shot into a protocol-neutral ResolvedShot with provenance.
 
-This is the single place the measured-vs-estimated fallback table lives, so
-every simulator connector inherits identical fallback behavior. Codecs only
+This is the single place that decides what a simulator is sent, so every
+connector inherits the same rule: only the shot's own values, each under its
+label, and nothing filled in on any install (D31; owner decision 1, 25 Oct 2026).
+A shot missing a required field is not sent, with the reason. Codecs only
 serialize the ResolvedShot into their own wire format.
 """
 
 import math
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from openflight.clubs import ClubType
-from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM, get_club_physics
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
@@ -33,13 +33,8 @@ from openflight.source_labels import (
     launch_label,
 )
 
-# OPS-only fallback spin (labelled estimated, as in the kiosk's ballistics); never on fusion.
-SPIN_MODEL_RPM: Mapping[ClubType, float] = CLUB_TYPICAL_SPIN_RPM
-
-_DEFAULT_SPIN_RPM = CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
-
-# Off: a fusion unit's model-geometry or estimated values are never sent and a shot
-# needing one is refused. On: each is sent under its label. OPS-only is unaffected.
+# Off: model-geometry or estimated values are never sent and a shot needing one is
+# refused. On: each is sent under its label.
 SIMULATORS_ACCEPT_MODEL_GEOMETRY = False
 SIMULATORS_ACCEPT_ESTIMATED = False
 
@@ -151,9 +146,7 @@ def _unmeasured_required_fields(shot: Shot) -> List[str]:
     return missing
 
 
-def _resolve_carry(
-    shot: Shot, provenance: Dict[str, str], *, substitutes: bool = True
-) -> Optional[float]:
+def _resolve_carry(shot: Shot, provenance: Dict[str, str]) -> Optional[float]:
     """The carry to send, optional in OpenConnect; tags its provenance when there is one.
 
     None is not sent: simulators fly the ball from speed, launch and spin themselves.
@@ -161,7 +154,7 @@ def _resolve_carry(
     carry = shot.reported_carry_yards
     if carry is None:
         return None
-    if shot.carry_status == CARRY_ESTIMATED and not substitutes:
+    if shot.carry_status == CARRY_ESTIMATED:
         if not SIMULATORS_ACCEPT_ESTIMATED:
             return None
         provenance["carry"] = ESTIMATED
@@ -169,28 +162,26 @@ def _resolve_carry(
         if not SIMULATORS_ACCEPT_MODEL_GEOMETRY:
             return None
         provenance["carry"] = MODEL_GEOMETRY
-    elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED) and not substitutes:
+    elif shot.carry_status in (CARRY_MEASURED, CARRY_CALCULATED):
         # a simulated carry is a flight model's output: at most "calculated"
         provenance["carry"] = "calculated"
     else:
-        # an OPS-only carry flies a club-typical spin, so it is always an estimate
-        provenance["carry"] = "estimated"
+        # an unlabelled carry is not sent: its inputs are unknown
+        return None
     return float(carry)
 
 
 def _resolve_club_fields(
-    shot: Shot, provenance: Dict[str, str], *, substitutes: bool
+    shot: Shot, provenance: Dict[str, str]
 ) -> Tuple[Optional[float], Optional[float]]:
     """Club speed and path, both optional in OpenConnect; tags their provenance.
 
-    A missing path is 0, labelled estimated, only with ``substitutes``.
+    A missing one is left out, never sent as 0.
     """
     club_speed: Optional[float] = None
     if _finite(shot.club_speed_mph) and shot.club_speed_mph > 0:
         club_speed = float(shot.club_speed_mph)
         provenance["club_speed"] = "measured"
-    elif substitutes:
-        provenance["club_speed"] = "estimated"
 
     club_path: Optional[float] = None
     arc_path = _model_geometry_club_path(shot) if SIMULATORS_ACCEPT_MODEL_GEOMETRY else None
@@ -200,9 +191,6 @@ def _resolve_club_fields(
     elif arc_path is not None:
         club_path = arc_path
         provenance["club_path"] = MODEL_GEOMETRY
-    elif substitutes:
-        club_path = 0.0
-        provenance["club_path"] = "estimated"
     return club_speed, club_path
 
 
@@ -223,30 +211,26 @@ def _reject_non_finite(resolved: ResolvedShot) -> None:
             raise IncompleteShotError(f"{name} is not finite")
 
 
-def resolve_shot(
-    shot: Shot, player_state: PlayerState, *, substitutes: bool = True
-) -> ResolvedShot:
-    """Fill every simulator field from a Shot, applying the fallback table.
+def resolve_shot(shot: Shot, player_state: PlayerState) -> ResolvedShot:
+    """Every simulator field from the shot's own values, each under its label.
 
-    Raises IncompleteShotError when ball speed is missing — the one field that
-    has no honest model. Allocates exactly one shot number per physical shot
-    (so all connectors share a number for the same shot), and only for a shot
-    that is sent.
-
-    A non-finite input is treated as None. ``substitutes`` (OPS-only) fills missing
-    fields from club tables or 0, labelled estimated; without it a missing required
-    field raises UnmeasuredShotError and missing optional ones are left out.
+    Raises IncompleteShotError when ball speed is missing, and UnmeasuredShotError
+    when a required field (vertical and horizontal launch, spin, spin axis) is
+    missing or is not sent under its label; optional fields that are missing are
+    left out. Nothing is filled in, on any install (owner decision 1, 25 Oct 2026).
+    Allocates exactly one shot number per physical shot (so all connectors share a
+    number for the same shot), and only for a shot that is sent. A non-finite input
+    is treated as None.
     """
     if not _finite(shot.ball_speed_mph) or shot.ball_speed_mph <= 0:
         raise IncompleteShotError("ball_speed_mph is required")
-    if not substitutes:
-        missing = _unmeasured_required_fields(shot)
-        if missing:
-            raise UnmeasuredShotError(
-                missing,
-                model_geometry=_withheld_model_geometry(shot),
-                estimated=_withheld_estimated(shot),
-            )
+    missing = _unmeasured_required_fields(shot)
+    if missing:
+        raise UnmeasuredShotError(
+            missing,
+            model_geometry=_withheld_model_geometry(shot),
+            estimated=_withheld_estimated(shot),
+        )
 
     # a simulator flies the full speed: the calculated one replaces the OPS radial reading
     full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
@@ -257,35 +241,17 @@ def resolve_shot(
         ball_speed = float(shot.ball_speed_mph)
         provenance = {"ball_speed": "measured"}
 
-    if _finite(shot.launch_angle_vertical):
-        vla = float(shot.launch_angle_vertical)
-        provenance["vla"] = launch_label(shot.launch_angle_vertical_source)
-    else:
-        vla = get_club_physics(shot.club).optimal_launch_deg
-        provenance["vla"] = "estimated"
-
-    if _finite(shot.launch_angle_horizontal):
-        hla = float(shot.launch_angle_horizontal)
-        provenance["hla"] = horizontal_launch_label(
-            shot.launch_angle_horizontal_source, shot.launch_angle_horizontal_status
-        )
-    else:
-        hla = 0.0
-        provenance["hla"] = "estimated"
-
-    measured_spin = _measured_total_spin(shot)
-    if measured_spin is not None:
-        total_spin, spin_prov = measured_spin
-    else:
-        total_spin, spin_prov = SPIN_MODEL_RPM.get(shot.club, _DEFAULT_SPIN_RPM), "estimated"
+    # every required field is present and sendable (checked above)
+    vla = float(shot.launch_angle_vertical)
+    provenance["vla"] = launch_label(shot.launch_angle_vertical_source)
+    hla = float(shot.launch_angle_horizontal)
+    provenance["hla"] = horizontal_launch_label(
+        shot.launch_angle_horizontal_source, shot.launch_angle_horizontal_status
+    )
+    total_spin, spin_prov = _measured_total_spin(shot)
     provenance["total_spin"] = spin_prov
-
+    spin_axis = float(shot.spin_axis_deg)
     axis_prov = _spin_axis_provenance(shot)
-    if axis_prov is not None:
-        spin_axis = float(shot.spin_axis_deg)
-    else:
-        spin_axis = 0.0
-        axis_prov = "estimated"
     provenance["spin_axis"] = axis_prov
 
     axis_rad = math.radians(spin_axis)
@@ -295,9 +261,9 @@ def resolve_shot(
     provenance["back_spin"] = derived_prov
     provenance["side_spin"] = derived_prov
 
-    carry = _resolve_carry(shot, provenance, substitutes=substitutes)
+    carry = _resolve_carry(shot, provenance)
 
-    club_speed, club_path = _resolve_club_fields(shot, provenance, substitutes=substitutes)
+    club_speed, club_path = _resolve_club_fields(shot, provenance)
 
     resolved = ResolvedShot(
         shot_number=0,

@@ -8,14 +8,14 @@ point loads it at kiosk start-up) and, through the ``KioskExtension`` hooks:
 - attaches the arc's club delivery to each camera club delivery (E1);
 - runs the collision model on the measured inputs once enrichment is done: face
   angle, dynamic loft, spin loft, face to path, D-plane tilt, spin and spin axis
-  (E2), and hands its spin to --calculated-spin;
+  (E2); its spin becomes the shot's when no OPS spin is accepted;
 - adds the full ball speed, full club speed and full smash beside the radial
   speeds (E3);
 - simulates the flight and commits the carry (E4).
 
 A kiosk without this module still measures and publishes every radar and camera
-value; it reports none of these models' outputs, an OPS-only unit takes the
-table carry, and a fusion unit has no carry (D17).
+value; it reports none of these models' outputs, and its carry is the plain
+simulator's on measured inputs only, else not measured (D17; owner decision 1).
 """
 
 from __future__ import annotations
@@ -357,7 +357,7 @@ def _accepted_measured_spin(shot: Shot) -> bool:
 
 
 def _collision_spin_status(shot: Shot) -> str | None:
-    """The label of this shot's collision spin, "calculated" or "model_geometry", or None.
+    """The label of this shot's collision spin (calculated, model_geometry, estimated), or None.
 
     Either becomes the shot's spin, under its own label, when there is no accepted
     measured spin. A spin built on model geometry (D39) feeds the flight model (D38)
@@ -368,12 +368,6 @@ def _collision_spin_status(shot: Shot) -> str | None:
     if shot.spin_rpm_collision is None or status not in MODEL_LABELS:
         return None
     return status
-
-
-def _collision_spin_feeds(shot: Shot) -> bool:
-    """Whether this shot's collision spin is calculated (the --calculated-spin formula
-    yields to it; a model-geometry spin yields to that formula's calculated value)."""
-    return _collision_spin_status(shot) == "calculated"
 
 
 _SPIN_INPUTS = (
@@ -600,17 +594,18 @@ def _attach_full_speeds(shot: Shot) -> None:
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 
 
-def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensions.CarryOutcome:
+def _simulate_carry(shot: Shot, *, enabled: bool) -> kiosk_extensions.CarryOutcome:
     """E4: every flight output, as measured and normalized, and the as-measured carry.
 
     The as-measured flight uses the shot's supplied air density, or ISA; every
-    output is labelled. A fusion unit builds carry only from measured inputs
-    (D17); an OPS-only unit that cannot simulate takes the table estimate.
+    output is labelled. Carry is built only from the shot's own inputs, on every
+    install; without them it is not measured, with the reason (D17; owner decision 1,
+    25 Oct 2026).
     """
-    flight = compute_flight(shot, substitutes=not fusion, enabled=enabled)
+    flight = compute_flight(shot, enabled=enabled)
     shot.flight = flight.to_dict()
     conditions, trajectory = flight.conditions, flight.as_measured
-    if trajectory is None and fusion:
+    if trajectory is None:
         # nothing already on the shot stands in for the simulator
         shot.carry_spin_adjusted = None
         shot.carry_status = CARRY_NOT_MEASURED
@@ -618,32 +613,23 @@ def _simulate_carry(shot: Shot, *, fusion: bool, enabled: bool) -> kiosk_extensi
             "[SERVER] Carry not measured: %s",
             shot.flight["as_measured"]["metrics"]["carry"]["reason"],
         )
-        return kiosk_extensions.CarryOutcome(source=None, table_reason=None)
-    if trajectory is not None:
-        shot.carry_spin_adjusted = trajectory.carry_yards
-        if not fusion:
-            shot.carry_status = CARRY_ESTIMATED
-        elif flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
-            shot.carry_status = CARRY_MODEL_GEOMETRY
-        elif flight.status == CARRY_ESTIMATED:
-            # an estimated input (the OPS line-of-sight ball speed): the flight's label
-            shot.carry_status = CARRY_ESTIMATED
-        else:
-            # the flight's own label: a simulated carry is calculated (D38)
-            shot.carry_status = CARRY_CALCULATED
-        logger.info(
-            "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
-            shot.carry_spin_adjusted,
-            conditions.spin_rpm,
-            conditions.spin_source,
-        )
-        return kiosk_extensions.CarryOutcome(source="ballistic", table_reason=None)
-    reason = (
-        "ballistics disabled"
-        if not enabled
-        else ("no launch angle" if conditions is None else "supplied air density invalid")
+        return kiosk_extensions.CarryOutcome(source=None)
+    shot.carry_spin_adjusted = trajectory.carry_yards
+    if flight.status == FLIGHT_STATUS_MODEL_GEOMETRY:
+        shot.carry_status = CARRY_MODEL_GEOMETRY
+    elif flight.status == CARRY_ESTIMATED:
+        # an estimated input (the OPS line-of-sight ball speed): the flight's label
+        shot.carry_status = CARRY_ESTIMATED
+    else:
+        # the flight's own label: a simulated carry is calculated (D38)
+        shot.carry_status = CARRY_CALCULATED
+    logger.info(
+        "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
+        shot.carry_spin_adjusted,
+        conditions.spin_rpm,
+        conditions.spin_source,
     )
-    return kiosk_extensions.CarryOutcome(source=None, table_reason=reason)
+    return kiosk_extensions.CarryOutcome(source="ballistic")
 
 
 class ShotModelsExtension(kiosk_extensions.KioskExtension):
@@ -657,19 +643,14 @@ class ShotModelsExtension(kiosk_extensions.KioskExtension):
     def after_enrichment(self, shot) -> None:
         _attach_collision_model(shot)
 
-    def model_spin(self, shot):
-        if not _collision_spin_feeds(shot):
-            return None
-        return shot.spin_rpm_collision, _collision_spin_method(shot)
-
     def after_speed_contract(self, shot) -> None:
         _attach_full_speeds(shot)
         # the rigid-body face and the smash index need the full ball speed, known only now
         if shot.collision_model is not None and _finite(shot.ball_speed_full_mph):
             _attach_collision_model(shot)
 
-    def simulate_carry(self, shot, *, fusion: bool, enabled: bool):
-        return _simulate_carry(shot, fusion=fusion, enabled=enabled)
+    def simulate_carry(self, shot, *, enabled: bool):
+        return _simulate_carry(shot, enabled=enabled)
 
 
 extension = kiosk_extensions.register(ShotModelsExtension())

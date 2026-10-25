@@ -185,21 +185,34 @@ def test_a_model_geometry_spin_and_carry_keep_their_label():
     assert metrics["carry"]["status"] == "model_geometry"
 
 
-def test_an_ops_only_table_carry_is_estimated():
+def test_an_older_logs_table_carry_is_not_a_carry():
+    """An older OPS-only log's table estimate is not read back as a carry (decision 1)."""
+    record = Shot(
+        ball_speed_mph=140.0,
+        club_speed_mph=95.0,
+        timestamp=datetime(2026, 10, 12),
+        carry_status=CARRY_ESTIMATED,
+    ).to_dict()
+    record.pop("metrics")
+    record["estimated_carry_yards"] = 180.0  # what such a log carried
+    metrics = shot_metrics.from_record(record)
+    assert metrics["carry"]["status"] == "not_measured"
+    assert metrics["carry"]["value"] is None
+    assert metrics["carry_side"]["status"] == "not_measured"
+    assert metrics["carry_side"]["reason"]
+
+
+def test_an_estimated_simulated_carry_keeps_its_label():
     shot = Shot(
         ball_speed_mph=140.0,
         club_speed_mph=95.0,
         timestamp=datetime(2026, 10, 12),
         carry_status=CARRY_ESTIMATED,
-        launch_angle_vertical=12.0,
-        launch_angle_vertical_source="estimated",
+        carry_spin_adjusted=181.0,
     )
     metrics = shot.to_dict()["metrics"]
     assert metrics["carry"]["status"] == "estimated"
-    assert metrics["carry"]["value"] == pytest.approx(shot.reported_carry_yards)
-    assert metrics["launch_vertical"]["status"] == "estimated"
-    assert metrics["carry_side"]["status"] == "not_measured"
-    assert metrics["carry_side"]["reason"]
+    assert metrics["carry"]["value"] == pytest.approx(181.0)
 
 
 def test_a_fusion_shot_without_a_carry_says_why():

@@ -73,7 +73,7 @@ function shotShape(spinAxisDeg: number | null | undefined): string | undefined {
   return t('shape.straight');
 }
 
-/** A fusion unit's smash is radial ball over radial club speed, so it is labelled. */
+/** The smash is radial ball over radial club speed on every install, so it is labelled. */
 export function smashSubtext(shot: Shot): string | undefined {
   return isMeasured(shot.smash_factor) && shot.smash_factor_status === 'radial_ratio' ? 'radial ratio' : undefined;
 }

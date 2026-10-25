@@ -87,19 +87,16 @@ targets — is written once and reused.
 
 ### The resolver and provenance
 
-`resolve_shot()` turns a `Shot` into a `ResolvedShot` with every
-simulator-relevant field populated, applying a fallback when a measurement is
-missing (e.g. no measured spin → a per-club model value). Each field is tagged
-`measured` or `estimated`. This logic lives in exactly one place, so every
-connector is honest about what came from hardware versus a model, and the UI
-renders identical badges for any simulator.
+`resolve_shot()` turns a `Shot` into a `ResolvedShot` from the shot's own
+values. Each field is tagged with its label (`measured`, `calculated`, ...).
+This logic lives in exactly one place, so every connector is honest about what
+came from hardware versus a model, and the UI renders identical badges for any
+simulator. Nothing is filled in, on any install (owner decision 1, 25 Oct 2026):
+an OPS-only unit used to send club-table launch angles, a 0° horizontal and
+axis and a typical spin; it now sends no shot, because it measures no launch.
 
-On an OPS-only unit a shot is **only dropped** when ball speed is missing —
-every other field has a model fallback.
-
-A fusion unit (IWR6843 or camera) sends only what it measured (or calculated,
-labelled estimated). If it did not measure a field the OpenConnect protocol
-requires — `Speed`, `VLA`, `HLA`, `TotalSpin`, `SpinAxis` — the shot is **not
+Every unit sends only what it measured or calculated. If it did not measure a
+field the OpenConnect protocol requires — `Speed`, `VLA`, `HLA`, `TotalSpin`, `SpinAxis` — the shot is **not
 sent**: the live screen says why ("Not sent to simulator: spin not measured")
 and the session log records a `sim_send` entry with `"sent": false` and the
 reason. Optional fields it did not measure (`CarryDistance`, `ClubData.Path`,

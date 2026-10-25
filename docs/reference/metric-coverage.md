@@ -26,6 +26,18 @@ Every metric has the same keys: `value`, `unit`, `status`, `source`, `range`,
 | `experimental` | Shown before it is validated. Fed to no other metric: the camera's impact location, read live after the shot; the camera head track's club path and attack angle; an OPS spin of experimental quality (the ungated multitaper; its note gives the confidence and the search band's rail). Fed on, so every model output built on one is experimental too (`shot_metrics.with_input_labels`; `docs/camera/camera-fallback.md`): a camera launch with no validated geometry (the camera fallback's, `camera_fallback`, and the older camera horizontals), a range from the resting ball's own size (`camera_ball_size`) and a camera club delivery on the chained estimator | dotted outline in its own colour, "EXP", titled "not yet validated" |
 | `not_measured` | No value; `reason` says why (D17) | no badge: the reason is shown |
 
+Nothing is filled in, on any install (owner decision 1, 25 Oct 2026). OPS-only
+installs used to fill a club-table vertical launch, a 0° horizontal launch and spin
+axis, a club-typical spin and a ball-speed table carry, labelled `estimated`, so
+carry side and curve came out as 0.0. Those are gone: on an OPS-only unit the launch
+angles, spin axis, carry and every flight metric are `not_measured` with the reason,
+and simulators get no shot. What the OPS measures stays: ball and club speed
+(radial, `measured`), the radial smash (`calculated`), its spin under its own label,
+and any model route on the shot's own inputs. No formula spin stands in either
+(25 Oct 2026): the spin is an accepted OPS reading (`measured`), the collision
+model's (its label), or the OPS reading below the confidence floor (`experimental`,
+feeding nothing); else `not_measured` with the reason "no trustworthy spin: ...".
+
 A simulated carry is `calculated` whether its spin was measured or calculated.
 
 A horizontal launch beyond ±45° (`horizontal_frame.MAX_PLAUSIBLE_LAUNCH_DEG`) is no
@@ -115,7 +127,7 @@ what the kiosk reported, under the kiosk's labels.
 ✓ means present with its label. "Live" and "Club" / "Flight" name the kiosk
 screens. "key" on the tester page is the one-line summary under the swing
 verdict; every metric is in its "All metrics" table. For simulators, "sent"
-follows D31: a fusion shot goes only with measured or calculated speed,
+follows D31: a shot (on any install) goes only with measured or calculated speed,
 launch, spin and spin axis, and model geometry only with
 `SIMULATORS_ACCEPT_MODEL_GEOMETRY`; "n/a" means OpenConnect has no field for it.
 

@@ -204,7 +204,7 @@ def test_fast_path_publishes_one_final_shot_without_enrichment(phones, monkeypat
     ble, _emitted = phones
     for name in ("kld7_vertical", "kld7_horizontal", "camera_capture_runtime", "iwr6843_runtime"):
         monkeypatch.setattr(server_module, name, None)
-    for name in ("ball_speed_correction_enabled", "calculated_spin_enabled", "ballistics_enabled"):
+    for name in ("ball_speed_correction_enabled", "ballistics_enabled"):
         monkeypatch.setattr(server_module, name, False)
     monkeypatch.setattr(server_module, "sim_connectors", [])
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)

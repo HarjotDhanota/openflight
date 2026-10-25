@@ -96,7 +96,7 @@ simulated battery. See
 | `--sim` | Enable simulator connectors from `config/sim.json` |
 | `--battery <provider>` | Show battery and external-power status |
 | `--debug` | Verbose FFT/CFAR output |
-| `--no-ballistics` | Use the legacy carry table instead of the RK4 simulator |
+| `--no-ballistics` | Disable the RK4 simulator: carry is not measured |
 | `--dry-run` | Print the command the script would run, then exit |
 
 `--dry-run` is the quickest way to see exactly what `start-kiosk.sh` will

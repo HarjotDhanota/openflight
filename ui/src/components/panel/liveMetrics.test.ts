@@ -109,20 +109,21 @@ describe('buildLiveMetrics', () => {
     expect(byId(metric, 'carry')).toMatchObject({ value: '196', unit: 'm' });
   });
 
-  it('prefers the spin-adjusted carry and labels a table carry estimated', () => {
+  it('shows the spin-adjusted carry and never the ball-speed table', () => {
     const adjusted = byId(buildLiveMetrics(makeShot(), 'imperial', emptySwingStats), 'carry');
     expect(adjusted.value).toBe('214');
     expect(adjusted.subtext).toBe('Spin-adjusted');
     // an unlabelled committed carry (a replay, an older log) is an estimate
     expect(adjusted.status).toBe('estimated');
 
-    const estimated = byId(
+    // no simulated carry: no value, whatever the table says (owner decision 1)
+    const table = byId(
       buildLiveMetrics(makeShot({ carry_spin_adjusted: null }), 'imperial', emptySwingStats),
       'carry'
     );
-    expect(estimated.value).toBe('210');
-    expect(estimated.subtext).toBeUndefined();
-    expect(estimated.status).toBe('estimated');
+    expect(table.value).toBe(NO_VALUE);
+    expect(table.subtext).toBeUndefined();
+    expect(table.status).toBeUndefined();
   });
 
   it('shows a fusion carry that is not measured as no value, never the table', () => {

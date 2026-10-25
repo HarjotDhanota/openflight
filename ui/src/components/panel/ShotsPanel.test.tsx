@@ -100,7 +100,8 @@ describe('ShotsPanel', () => {
   });
 
   it('renders each metric column for a ball-strike shot', () => {
-    const html = render([makeShot()]);
+    // the simulated carry; the ball-speed table is never shown (owner decision 1)
+    const html = render([makeShot({ carry_spin_adjusted: 210, carry_status: 'calculated' })]);
 
     expect(html).toContain('>92.0<');
     expect(html).toContain('>68.0<');

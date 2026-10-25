@@ -491,12 +491,11 @@ The spin it displaces is kept in `spin_rpm_measured` (its method in
 `spin_method_measured`), and is given back when a later run of the model has no
 spin. A model's value is never labelled measured.
 
-**The `--calculated-spin` flag.** Its formula, `170 · v · sin(LA)^1.2` in
-`spin_estimate.py`, is empirical, not a published collision model. When the
-flag is on, its value is recorded in `spin_rpm_calculated_empirical`. If
-the collision model's spin is calculated for the shot, that is the one used;
-over a model-geometry model spin, the formula's calculated value is used
-(`spin_method` names it).
+**No formula spin.** The empirical `170 · v · sin(LA)^1.2` (`spin_estimate.py`)
+and its TrackMan refit are not used (owner decision, 25 Oct 2026: about 30 % and
+26 % median error against TrackMan). The `--calculated-spin` flag that applied the
+formula is ignored, with a warning; `spin_rpm_calculated_empirical` appears only in
+older logs. The collision model's spin is the only model spin.
 
 ## 4. Spin axis
 

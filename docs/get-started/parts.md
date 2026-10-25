@@ -289,7 +289,7 @@ the running total tells you what it costs to stop there.
 | Accessories | Active cooler, female/male jumpers, microSD, micro-USB radar cable | $25 |
 | Power | [Route 1](power.md#route-1-the-official-27-w-usb-c-supply), the official 27 W supply, whose cable is captive | $14 |
 | Enclosure | ~750 g PETG, plus heat-set inserts and screws | $52 |
-| **Base build** | a working unit: ball speed, club speed, smash factor, spin, estimated carry | **~$534** |
+| **Base build** | a working unit: ball speed, club speed, smash factor, spin (no carry or launch angle without an angle radar) | **~$534** |
 
 The enclosure is in here rather than under Optional because you need one
 whichever radars you fit. Nothing measures repeatably until the boards are
@@ -391,8 +391,10 @@ the ~$76 J-Link EDU Mini listed under
 flashes the 1.3.2 firmware.
 
 OpenFlight works without any angle radar: you get ball speed, club speed, smash
-factor, spin rate, and estimated carry. The angle radar adds measured launch
-angle (vertical and horizontal) and is what club path is derived from.
+factor and spin rate. Carry, launch angle and spin axis are shown as not
+measured: nothing is filled in from tables. The angle radar adds measured launch
+angle (vertical and horizontal), from which carry is flown, and is what club path
+is derived from.
 
 If you are building new, buy the **IWR6843**, not the K-LD7s. It costs about the
 same as the two K-LD7s plus their FTDI adapters ($150 vs $140) and replaces both

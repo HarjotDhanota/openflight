@@ -52,7 +52,7 @@ def _radial_shot(**overrides):
 
 
 def test_a_flight_on_the_radial_speed_is_estimated_with_the_reason():
-    result = compute_flight(_radial_shot(), substitutes=False)
+    result = compute_flight(_radial_shot())
     payload = result.to_dict()
 
     assert result.status == "estimated"
@@ -67,14 +67,14 @@ def test_a_flight_on_the_radial_speed_is_estimated_with_the_reason():
 
 def test_a_radial_flight_with_no_full_speed_record_names_that():
     shot = _fusion_shot(ball_speed_full_mph=None)
-    payload = compute_flight(shot, substitutes=False).to_dict()
+    payload = compute_flight(shot).to_dict()
     carry = payload["normalized"]["metrics"]["carry"]
     assert carry["status"] == "estimated"
     assert carry["reason"] == RADIAL_REASON.format("no full ball speed on the shot")
 
 
 def test_a_flight_on_the_full_speed_stays_calculated():
-    result = compute_flight(_fusion_shot(), substitutes=False)
+    result = compute_flight(_fusion_shot())
     carry = result.to_dict()["as_measured"]["metrics"]["carry"]
     assert result.status == "calculated"
     assert carry["status"] == "calculated" and carry["reason"] is None
@@ -82,7 +82,7 @@ def test_a_flight_on_the_full_speed_stays_calculated():
 
 def test_a_full_speed_contract_is_not_a_radial_flight():
     shot = _fusion_shot(ball_speed_full_mph=None, ball_speed_contract="full")
-    assert compute_flight(shot, substitutes=False).status == "calculated"
+    assert compute_flight(shot).status == "calculated"
 
 
 def test_estimated_is_weaker_than_model_geometry_in_the_flight():
@@ -91,7 +91,7 @@ def test_estimated_is_weaker_than_model_geometry_in_the_flight():
         spin_source="model_geometry",
         spin_method=cm.SPIN_METHOD_MODEL_GEOMETRY,
     )
-    assert compute_flight(shot, substitutes=False).status == "estimated"
+    assert compute_flight(shot).status == "estimated"
 
 
 @pytest.fixture
@@ -102,7 +102,6 @@ def fusion_finalize(monkeypatch):
 
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
     return server_module
@@ -213,7 +212,7 @@ def test_a_flight_on_an_estimated_spin_and_axis_is_estimated():
     shot = _collision_shot(launch_angle_horizontal_confidence=0.5)
     _attach_collision(shot)
 
-    result = compute_flight(shot, substitutes=False)
+    result = compute_flight(shot)
     carry = result.to_dict()["normalized"]["metrics"]["carry"]
 
     assert result.status == "estimated"
@@ -389,11 +388,11 @@ def test_a_fusion_unit_does_not_send_an_estimated_carry():
     from openflight.sim.resolver import resolve_shot
     from openflight.sim.types import PlayerState
 
-    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=False)
+    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState())
     assert resolved.carry_yards is None
     assert "carry" not in resolved.provenance
     # a calculated carry still goes
-    sent = resolve_shot(_sim_shot(), PlayerState(), substitutes=False)
+    sent = resolve_shot(_sim_shot(), PlayerState())
     assert sent.carry_yards == pytest.approx(250.0)
 
 
@@ -402,20 +401,19 @@ def test_the_estimated_switch_sends_it_labelled(monkeypatch):
     from openflight.sim.types import PlayerState
 
     monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
-    resolved = resolver.resolve_shot(
-        _sim_shot(carry_status="estimated"), PlayerState(), substitutes=False
-    )
+    resolved = resolver.resolve_shot(_sim_shot(carry_status="estimated"), PlayerState())
     assert resolved.carry_yards == pytest.approx(250.0)
     assert resolved.provenance["carry"] == "estimated"
 
 
-def test_an_ops_only_estimated_carry_is_still_sent_labelled():
+def test_an_estimated_carry_is_withheld_on_every_install():
+    """No OPS-only exception: an estimated carry goes only behind the switch (decision 1)."""
     from openflight.sim.resolver import resolve_shot
     from openflight.sim.types import PlayerState
 
-    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=True)
-    assert resolved.carry_yards == pytest.approx(250.0)
-    assert resolved.provenance["carry"] == "estimated"
+    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState())
+    assert resolved.carry_yards is None
+    assert "carry" not in resolved.provenance
 
 
 def test_a_fusion_shot_with_only_an_estimated_spin_axis_is_refused_naming_it():
@@ -429,7 +427,7 @@ def test_a_fusion_shot_with_only_an_estimated_spin_axis_is_refused_naming_it():
     assert shot.spin_axis_source.startswith("estimated")
 
     with pytest.raises(UnmeasuredShotError) as refused:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
     assert refused.value.missing == ["spin axis"]
     assert "estimated (horizontal launch confidence 0.50 below 0.6)" in str(refused.value)
 
@@ -443,7 +441,7 @@ def test_a_fusion_shot_with_only_an_estimated_spin_is_refused_naming_it():
     assert shot.spin_source == "estimated"
 
     with pytest.raises(UnmeasuredShotError) as refused:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
     message = str(refused.value)
     assert "spin" in refused.value.missing
     assert "estimated (horizontal launch is low-coherence (radar_low_coherence))" in message
@@ -489,7 +487,7 @@ def test_the_normalized_reference_is_named_and_computed_not_typed():
 
 
 def test_every_normalized_output_names_its_reference():
-    payload = compute_flight(_fusion_shot(), substitutes=False).to_dict()
+    payload = compute_flight(_fusion_shot()).to_dict()
     for name, metric in payload["normalized"]["metrics"].items():
         if metric["value"] is None:
             continue
@@ -520,7 +518,7 @@ def test_a_fusion_carry_is_at_most_calculated(carry_status, expected):
     from openflight.sim.types import PlayerState
 
     # flown on a measured spin, but a simulated carry is a model's output
-    resolved = resolve_shot(_sim_shot(carry_status=carry_status), PlayerState(), substitutes=False)
+    resolved = resolve_shot(_sim_shot(carry_status=carry_status), PlayerState())
     assert resolved.provenance["carry"] == expected
 
 
@@ -529,50 +527,32 @@ def test_a_model_geometry_fusion_carry_keeps_its_label(monkeypatch):
     from openflight.sim.types import PlayerState
 
     monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_MODEL_GEOMETRY", True)
-    resolved = resolver.resolve_shot(
-        _sim_shot(carry_status="model_geometry"), PlayerState(), substitutes=False
-    )
+    resolved = resolver.resolve_shot(_sim_shot(carry_status="model_geometry"), PlayerState())
     assert resolved.provenance["carry"] == "model_geometry"
 
 
-def test_an_ops_only_carry_stays_estimated():
+def test_measured_launch_angles_go_out_measured():
     from openflight.sim.resolver import resolve_shot
     from openflight.sim.types import PlayerState
 
-    resolved = resolve_shot(_sim_shot(carry_status="estimated"), PlayerState(), substitutes=True)
-    assert resolved.provenance["carry"] == "estimated"
-
-
-def test_table_filled_launch_angles_are_estimated():
-    from openflight.sim.resolver import resolve_shot
-    from openflight.sim.types import PlayerState
-
-    shot = _sim_shot(
-        launch_angle_vertical_source="estimated",
-        launch_angle_horizontal=0.0,
-        launch_angle_horizontal_source="estimated",
-        carry_status="estimated",
-    )
-    resolved = resolve_shot(shot, PlayerState(), substitutes=True)
-    assert resolved.vla == 12.0 and resolved.hla == 0.0  # the wire values are unchanged
-    assert resolved.provenance["vla"] == "estimated"
-    assert resolved.provenance["hla"] == "estimated"
-    measured = resolve_shot(_sim_shot(), PlayerState(), substitutes=True)
+    measured = resolve_shot(_sim_shot(), PlayerState())
     assert measured.provenance["vla"] == "measured"
     assert measured.provenance["hla"] == "measured"
 
 
-def test_the_ops_only_server_path_fills_launch_and_labels_it_estimated(monkeypatch):
+def test_the_ops_only_server_path_fills_no_launch_and_sends_nothing(monkeypatch):
     import openflight.server as server_module
     from openflight.sim.resolver import resolve_shot
-    from openflight.sim.types import PlayerState
+    from openflight.sim.types import PlayerState, UnmeasuredShotError
 
-    monkeypatch.setattr(server_module, "_fusion_unit", lambda: False)
+    monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+    monkeypatch.setattr(server_module, "camera_capture_runtime", None)
     shot = Shot(ball_speed_mph=140.0, timestamp=datetime(2026, 10, 13), club=ClubType.IRON_7)
-    server_module._ensure_user_facing_launch_angles(shot)  # pylint: disable=protected-access
-    resolved = resolve_shot(shot, PlayerState(), substitutes=True)
-    assert resolved.provenance["vla"] == "estimated"
-    assert resolved.provenance["hla"] == "estimated"
+    server_module._note_unmeasured_launch_angles(shot)  # pylint: disable=protected-access
+    assert shot.launch_angle_vertical is None and shot.launch_angle_horizontal is None
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(shot, PlayerState())
+    assert raised.value.missing == ["vertical launch", "horizontal launch", "spin", "spin axis"]
 
 
 def test_a_spin_axis_is_never_measured():
@@ -580,6 +560,6 @@ def test_a_spin_axis_is_never_measured():
     from openflight.sim.types import PlayerState
 
     # no sensor measures the spin axis: an unlabelled one is the kiosk's computation
-    resolved = resolve_shot(_sim_shot(spin_axis_source=None), PlayerState(), substitutes=True)
+    resolved = resolve_shot(_sim_shot(spin_axis_source=None), PlayerState())
     assert resolved.provenance["spin_axis"] == "calculated"
     assert resolved.provenance["back_spin"] == "calculated"

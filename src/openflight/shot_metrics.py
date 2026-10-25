@@ -49,7 +49,6 @@ OPS_RADIAL_SOURCE = "OPS243 radial (line of sight)"
 MOCK_SOURCE = "mock shot (simulated)"
 SMASH_RADIAL_SOURCE = "radial ratio: OPS radial ball speed / OPS radial club speed (D21)"
 SMASH_SOURCE = "ball speed / club speed (D37)"
-TABLE_CARRY_SOURCE = "ball-speed carry table (OPS-only estimate)"
 COMMITTED_CARRY_SOURCE = "the kiosk's committed carry (no flight record on this shot)"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
 HEAD_TRACK_SOURCE_LABEL = "camera head track: hosel + OPS speed (experimental)"
@@ -273,14 +272,18 @@ def _spin_rate(shot):
     source = shot.get("spin_source")
     status = source if source in LABELS and source != NOT_MEASURED else MEASURED
     collision = _collision_metric(shot, "spin_rate")
+    # the spin chain's own record names every route (server._resolve_spin)
+    chain = _mapping(_mapping(shot.get("input_sources")).get("spin"))
     reason = (
-        shot.get("spin_rejection_reason")
+        chain.get("reason")
+        or shot.get("spin_rejection_reason")
         or (f"collision model: {collision['reason']}" if collision.get("reason") else None)
         or "spin not measured on this shot"
     )
     quality = shot.get("spin_quality")
     note = f"confidence {quality}" if status == MEASURED and quality else None
-    if status == MEASURED and quality == EXPERIMENTAL:
+    if status == MEASURED and (quality == EXPERIMENTAL or chain.get("route") == "ops_below_floor"):
+        # an OPS reading below the confidence floor is not a measurement: it feeds nothing
         status, note = EXPERIMENTAL, _experimental_spin_note(shot)
     model_spin = _finite(shot.get("spin_rpm_collision"))
     if (
@@ -351,10 +354,8 @@ def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]
         # a simulated carry is calculated, never measured; unlabelled ones are estimates
         label = {None: ESTIMATED, MEASURED: CALCULATED}.get(status, status)
         return committed, label, COMMITTED_CARRY_SOURCE
-    if status in (None, ESTIMATED):
-        table = _finite(shot.get("estimated_carry_yards"))
-        if table is not None:
-            return table, ESTIMATED, TABLE_CARRY_SOURCE
+    # an older log's ball-speed table carry is not a carry: nothing is filled in
+    # (owner decision 1, 25 Oct 2026)
     return None, None, None
 
 

@@ -84,17 +84,12 @@ openflight_args=(
     # --debug  # Uncomment to enable debug logging.
     --startup-splash
     --ballistics
-    # --calculated-spin  # Replaces measured OPS spin with a kinematic estimate.
     --iwr6843
     --iwr6843-port /dev/serial/by-id/REPLACE_WITH_TI_SERIAL_ID
     --iwr6843-ball-height-m 0.021
     --battery geekworm
 )
 ```
-
-`--calculated-spin` is intentionally commented out because it replaces OPS
-spin with an opt-in kinematic estimate whenever a measured launch angle is
-available. Enable it only when that behavior is desired.
 
 The geometry above is an example, not a default. Follow the
 [IWR6843 mounting guide](../iwr6843/mounting.md#measure-the-geometry) and enter the

@@ -63,7 +63,7 @@ def test_the_core_catalogue_is_the_metrics_every_unit_measures(core_only):
     assert [entry["id"] for entry in sm.catalog()["metrics"]] == list(CORE_IDS)
 
 
-def test_a_plain_shot_has_every_core_metric_and_a_table_carry(core_only):
+def test_a_plain_shot_has_every_core_metric_and_no_table_carry(core_only):
     shot = Shot(
         ball_speed_mph=140.0,
         club_speed_mph=95.0,
@@ -74,8 +74,9 @@ def test_a_plain_shot_has_every_core_metric_and_a_table_carry(core_only):
 
     assert tuple(records) == CORE_IDS
     assert records["ball_speed"]["status"] == sm.MEASURED
-    assert records["carry"]["status"] == sm.ESTIMATED
-    assert records["carry"]["source"] == sm.TABLE_CARRY_SOURCE
+    # the ball-speed table no longer stands in for a carry (owner decision 1)
+    assert records["carry"]["status"] == sm.NOT_MEASURED
+    assert records["carry"]["value"] is None
 
 
 def test_registered_metrics_go_after_their_anchor_in_order(core_only):

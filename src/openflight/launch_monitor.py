@@ -21,18 +21,18 @@ from .ops243 import SpeedReading
 # Measured spin is trusted for physics simulation only above this level.
 SPIN_CONFIDENCE_HIGH = 0.7
 
-# Floor below which a measured spin is diagnostic only: it is still reported,
-# but the carry table substitutes the club-optimal spin for the ball speed.
+# Floor below which a measured spin is diagnostic only (rolling_buffer.types).
 SPIN_CONFIDENCE_RELIABLE = 0.6
 
-# Shot.carry_status values; a fusion unit (IWR or camera) never falls back to the speed table.
+# Shot.carry_status values. No install falls back to a speed table or a filled-in input
+# (D17; owner decision 1, 25 Oct 2026): a carry is the flight model's on the shot's own
+# inputs, under their weakest label, or not measured.
 CARRY_MEASURED = "measured"  # older logs: simulator on a measured spin
-CARRY_CALCULATED = "calculated"  # fusion: simulator on measured or calculated inputs
-CARRY_MODEL_GEOMETRY = "model_geometry"  # fusion: spin or spin axis rests on model geometry
-CARRY_ESTIMATED = "estimated"  # OPS-only: labelled estimate (substitutes or the spin table)
-CARRY_NOT_MEASURED = "not_measured"  # fusion: no carry; nothing is filled in
-# None is a shot that never reached finalization (mock, replays, older logs).
-_TABLE_CARRY_STATUSES = (None, CARRY_ESTIMATED)
+CARRY_CALCULATED = "calculated"  # simulator on measured or calculated inputs
+CARRY_MODEL_GEOMETRY = "model_geometry"  # spin or spin axis rests on model geometry
+CARRY_ESTIMATED = "estimated"  # simulator on an estimated input (older logs: OPS-only table)
+CARRY_NOT_MEASURED = "not_measured"  # no carry; nothing is filled in
+# None is a shot that never reached finalization (replays, older logs): no carry either.
 
 # Shot.smash_factor_status: OPS radial ball over OPS radial club speed, not full speeds.
 SMASH_RADIAL_RATIO = "radial_ratio"
@@ -264,8 +264,8 @@ class Shot:
     spin_axis_frame: Optional[str] = None
     spin_rpm: Optional[float] = None
     spin_confidence: Optional[float] = None
-    # Raw radar-measured spin, kept when --calculated-spin rewrites
-    # spin_rpm with the kinematic estimate (for offline scoring)
+    # Raw radar-measured spin, kept when the collision model's spin replaces
+    # spin_rpm (for offline scoring)
     spin_rpm_measured: Optional[float] = None
     # "measured", "calculated", "model_geometry" (assumed swing geometry), or None
     spin_source: Optional[str] = None
@@ -336,6 +336,7 @@ class Shot:
     d_plane_tilt_deg: Optional[float] = None
     # spin_rpm takes the collision spin only without an accepted measured spin.
     spin_rpm_collision: Optional[float] = None
+    # older logs only: the removed --calculated-spin formula's value
     spin_rpm_calculated_empirical: Optional[float] = None
     spin_axis_source: Optional[str] = None
     collision_model: Optional[dict] = None
@@ -425,7 +426,11 @@ class Shot:
 
     @property
     def estimated_carry_yards(self) -> float:
-        """Estimated carry distance based on ball speed, club type, and launch angle."""
+        """The ball-speed carry table, a diagnostic only: never a reported carry.
+
+        No install shows, sends or averages it (owner decision 1, 25 Oct 2026); the
+        rolling buffer monitor logs it beside a trigger, named as the table.
+        """
         base = estimate_carry_distance(self.ball_speed_mph, self.club)
         if self.has_launch_angle:
             return adjust_carry_for_launch_angle(
@@ -438,36 +443,15 @@ class Shot:
         return base
 
     @property
-    def table_carry_allowed(self) -> bool:
-        """Whether the ball-speed table may stand in for a missing carry (never on fusion)."""
-        return self.carry_status in _TABLE_CARRY_STATUSES
-
-    @property
     def reported_carry_yards(self) -> Optional[float]:
-        """The carry the kiosk shows, averages and sends to simulators, or None."""
+        """The carry the kiosk shows, averages and sends to simulators, or None.
+
+        The flight model's carry on the shot's own inputs; nothing stands in for a
+        missing one (owner decision 1, 25 Oct 2026).
+        """
         if self.carry_status == CARRY_NOT_MEASURED:
             return None
-        if _finite(self.carry_spin_adjusted):
-            return self.carry_spin_adjusted
-        if not self.table_carry_allowed:
-            return None
-        table = self.estimated_carry_yards
-        return table if _finite(table) else None
-
-    @property
-    def estimated_carry_range(self) -> tuple:
-        """
-        Return (min, max) carry distance estimate to show uncertainty.
-
-        Returns:
-            Tuple of (low_estimate, high_estimate) in yards
-        """
-        base = self.estimated_carry_yards
-        # ±10% uncertainty without launch angle/spin data
-        # Reduce to ±5% if we have launch angle data
-        if self.has_launch_angle:
-            return (base * 0.95, base * 1.05)
-        return (base * 0.90, base * 1.10)
+        return self.carry_spin_adjusted if _finite(self.carry_spin_adjusted) else None
 
     @property
     def has_launch_angle(self) -> bool:
@@ -514,10 +498,10 @@ class Shot:
             "smash_factor_status": (
                 self.smash_factor_status if self.smash_factor is not None else None
             ),
-            "estimated_carry_yards": (
-                self.estimated_carry_yards if self.table_carry_allowed else None
-            ),
-            "carry_range": (list(self.estimated_carry_range) if self.table_carry_allowed else None),
+            # the upstream schema's table-carry fields (BLE, UI): null on every install,
+            # nothing fills a carry in (owner decision 1, 25 Oct 2026)
+            "estimated_carry_yards": None,
+            "carry_range": None,
             "club": self.club.value,
             "profile_id": self.profile_id,
             "profile_name": self.profile_name,

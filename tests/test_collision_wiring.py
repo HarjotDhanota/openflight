@@ -225,27 +225,25 @@ def test_a_rerun_with_fewer_inputs_clears_its_own_earlier_values():
     assert shot.spin_rpm is None and shot.spin_source is None
 
 
-def test_the_empirical_formula_is_recorded_but_the_published_model_is_preferred():
+def test_the_published_model_is_the_spin_and_no_formula_runs_beside_it():
     shot = _delivered_shot()
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
-    published = shot.spin_rpm_collision
 
-    server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
+    server_module._resolve_spin(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_rpm == pytest.approx(published)
-    assert shot.spin_rpm_calculated_empirical is not None
-    assert shot.spin_rpm_calculated_empirical != pytest.approx(published)
-    assert shot.spin_source == "calculated"
+    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_collision)
+    assert shot.spin_rpm_calculated_empirical is None
+    assert shot.input_sources["spin"]["route"] == "collision"
 
 
-def test_the_empirical_formula_still_runs_alone_without_the_published_model():
+def test_without_the_published_model_no_formula_stands_in():
     shot = _delivered_shot(experimental_fused_club_path_deg=None, experimental_fused_status=None)
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
+    server_module._resolve_spin(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_calculated_empirical)
-    assert shot.spin_source == "calculated"
+    assert shot.spin_rpm_calculated_empirical is None
+    assert shot.input_sources["spin"]["route"] != "kinematic"
 
 
 # ---- simulators get the calculated labels (D31) -------------------------------------
@@ -255,7 +253,7 @@ def test_simulators_receive_calculated_spin_and_axis_under_the_calculated_label(
     shot = _delivered_shot()
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    resolved = resolve_shot(shot, PlayerState())
 
     assert resolved.total_spin_rpm == pytest.approx(shot.spin_rpm_collision)
     assert resolved.spin_axis_deg == pytest.approx(shot.spin_axis_deg)
@@ -270,7 +268,7 @@ def test_a_fusion_shot_without_collision_inputs_is_still_not_sent():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     with pytest.raises(UnmeasuredShotError) as raised:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
 
     assert raised.value.missing == ["spin", "spin axis"]
 

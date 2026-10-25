@@ -2,9 +2,9 @@
 Physics-based golf ball flight simulator.
 
 Integrates the drag + Magnus ODE using RK4 to produce a deterministic
-trajectory from launch conditions. On an OPS-only install, when measured spin is
-low-confidence or missing, `resolve_launch` substitutes the club-typical spin
-estimate (clubs.physics.CLUB_TYPICAL_SPIN_RPM); a fusion unit never does (D17).
+trajectory from launch conditions. `resolve_launch` flies only the shot's own
+inputs: without a spin (measured, or a model's under its label), a horizontal launch
+and a spin axis there is no flight, on any install (D17; owner decision 1, 25 Oct 2026).
 
 Coordinate system (world frame):
     x — downrange, along the horizontal-launch zero (the target line once D34's
@@ -38,8 +38,6 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from .bounce_roll import TURF_ROLL_V2, HopFlight, TurfRollModel
-from .clubs import ClubType
-from .clubs.physics import CLUB_TYPICAL_SPIN_RPM
 from .constants import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
@@ -307,11 +305,6 @@ MAX_FLIGHT_SECONDS = 15.0
 # keeping payload size reasonable for UI/log consumers.
 SAMPLE_INTERVAL_S = 0.05
 
-# The one club-typical spin table lives in clubs.physics (CLUB_TYPICAL_SPIN_RPM,
-# labelled by CLUB_TYPICAL_SPIN_LABEL) and is re-exported here. It is the OPS-only
-# estimate path's spin; a fusion unit never uses it (D17).
-
-
 FAIRWAY_NORMAL = "fairway_normal"
 DEFAULT_SURFACE = FAIRWAY_NORMAL
 RollModel = TurfRollModel
@@ -354,7 +347,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
+    spin_source: Literal["measured", "calculated", "model_geometry", "estimated"]
 
 
 @dataclass
@@ -465,19 +458,16 @@ def ball_speed_for_flight(shot: Shot) -> tuple[Optional[float], str]:
     )
 
 
-def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchConditions]:
+def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
     """
-    Produce committed launch conditions from a shot.
+    Produce committed launch conditions from a shot, or None.
 
-    Returns None if the vertical launch angle is unavailable (no physics
-    simulation possible without it). Spin is the measurement when its
-    confidence >= SPIN_CONFIDENCE_HIGH, else a model's spin under its own label:
-    "calculated", or "model_geometry" when built on an assumed swing geometry (D39).
-
-    ``substitutes`` lets an OPS-only install, which has nothing to measure the
-    rest with, fill a club-typical spin and a straight (0) horizontal launch and
-    spin axis. A fusion unit passes False: without a measured spin, horizontal
-    launch and spin axis there is no carry (D17).
+    Every input is the shot's own: the vertical and horizontal launch, the spin
+    axis, and a spin that is the measurement when its confidence >=
+    SPIN_CONFIDENCE_HIGH, else a model's spin under its own label ("calculated",
+    "model_geometry" when built on an assumed swing geometry (D39), "estimated").
+    Without any one of them there is no flight; nothing is filled in on any install
+    (D17; owner decision 1, 25 Oct 2026).
 
     A non-finite input (NaN, inf) is a missing input and is handled exactly so;
     without a finite ball speed there is nothing to simulate. The ball speed is the
@@ -487,7 +477,7 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
-    source: Literal["measured", "calculated", "model_geometry", "estimated", "club_typical"]
+    source: Literal["measured", "calculated", "model_geometry", "estimated"]
     if (
         _finite(shot.spin_rpm)
         and _finite(shot.spin_confidence)
@@ -496,22 +486,17 @@ def resolve_launch(shot: Shot, *, substitutes: bool = True) -> Optional[LaunchCo
         spin_rpm, source = float(shot.spin_rpm), "measured"
     elif shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm:
         spin_rpm, source = float(shot.spin_rpm), shot.spin_source
-    elif substitutes:
-        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN])
-        source = "club_typical"
     else:
         return None
-    horizontal = shot.launch_angle_horizontal if _finite(shot.launch_angle_horizontal) else None
-    spin_axis = shot.spin_axis_deg if _finite(shot.spin_axis_deg) else None
-    if not substitutes and (horizontal is None or spin_axis is None):
+    if not _finite(shot.launch_angle_horizontal) or not _finite(shot.spin_axis_deg):
         return None
 
     return LaunchConditions(
         ball_speed_mph=ball_speed,
         launch_angle_v=shot.launch_angle_vertical,
-        launch_angle_h=horizontal or 0.0,
+        launch_angle_h=shot.launch_angle_horizontal,
         spin_rpm=spin_rpm,
-        spin_axis_deg=spin_axis or 0.0,
+        spin_axis_deg=shot.spin_axis_deg,
         spin_source=source,
     )
 

@@ -62,10 +62,9 @@ output, so it is at best `calculated`.
   with the inputs that were, e.g. "model-geometry inputs: spin (Penner 2001; club
   inputs model geometry (D39)), spin axis, club path from the arc prior, attack
   angle from the arc prior". Simulators do not get these values (D31).
-- **`estimated`**: an OPS-only install (its inputs include the club-typical spin
-  and a neutral 0° for any missing horizontal launch or spin axis; the `inputs`
-  block names each one it used), or a fusion flight with an estimated input. The
-  main one: when E3 refuses the full ball speed, the flight flies the OPS243's
+- **`estimated`**: a flight with an estimated input. Nothing is filled in on any
+  install (owner decision 1, 25 Oct 2026): the club-typical spin and the neutral
+  0° launch and spin axis an OPS-only install used to fly are gone. The main one: when E3 refuses the full ball speed, the flight flies the OPS243's
   line-of-sight (radial) speed, a different and lower quantity. Every output, raw
   and normalized, is then `estimated` with the reason "ball speed is the OPS
   line-of-sight speed (full speed refused: <E3's reason>), about 3-5% low", and
@@ -591,13 +590,16 @@ clamped at 0: Eq. 1 is negative above 49.4°". At 37.6° it gives 18.94 yd.
 
 ## Inputs
 
-| Input | Fusion unit | OPS-only install |
-| --- | --- | --- |
-| Ball speed | Full ball speed when the shot has one (`ball_speed_full_mph`, or `ball_speed_contract` "full"); otherwise the OPS243 radial speed, labelled as such | Same |
-| Vertical launch | Measured, or no flight | Measured, or the labelled club-table estimate |
-| Horizontal launch | Measured, or no flight | Measured, or a substituted 0° |
-| Spin | Measured (confidence ≥ 0.7), calculated, or model geometry (D39), or no flight | Measured, calculated, model geometry, or the club-typical estimate |
-| Spin axis | Measured, calculated, or model geometry (D39), or no flight | Measured, or a substituted 0° |
+The same on every install (owner decision 1, 25 Oct 2026: OPS-only installs no
+longer fill anything in):
+
+| Input | Used |
+| --- | --- |
+| Ball speed | Full ball speed when the shot has one (`ball_speed_full_mph`, or `ball_speed_contract` "full"); otherwise the OPS243 radial speed, labelled as such |
+| Vertical launch | Measured (or a labelled camera or model route), or no flight |
+| Horizontal launch | Measured (or a labelled camera route), or no flight |
+| Spin | Measured (confidence ≥ 0.7), or a model's under its label (calculated, model geometry (D39), estimated), or no flight |
+| Spin axis | Measured, calculated, model geometry (D39) or estimated, or no flight |
 
 `inputs.ball_speed.label` records which ball speed was used. A spin axis with no
 `spin_axis_source` on the shot is labelled as the kiosk's proxy (horizontal
@@ -605,26 +607,25 @@ launch minus club path).
 
 ### The club-typical spin table
 
-There is one table, `clubs.physics.CLUB_TYPICAL_SPIN_RPM`, used by both the
-kiosk's ballistics and the simulator connectors. Its values were first described
-as "TrackMan PGA Tour averages". They match no published TrackMan table (7-iron:
-6,500 rpm here, against 7,124 rpm on TrackMan's 2023 PGA Tour spin-rate page).
-They are therefore labelled `club-typical estimate (source: OpenFlight club
-table, …)`. A fusion unit never uses them.
+There is one table, `clubs.physics.CLUB_TYPICAL_SPIN_RPM`. Its values were first
+described as "TrackMan PGA Tour averages". They match no published TrackMan table
+(7-iron: 6,500 rpm here, against 7,124 rpm on TrackMan's 2023 PGA Tour spin-rate
+page), so they are labelled `club-typical estimate (source: OpenFlight club
+table, …)`. Neither the flight nor the simulator connectors use it any more
+(owner decision 1, 25 Oct 2026); only research scripts read it.
 
 ## Simulators
 
-The simulator connectors send a fusion shot's carry only when its
-`carry_status` is `measured` or `calculated`, i.e. flown on the shot's own
-measured or calculated inputs (D31). Its provenance is `calculated`: a simulated
-carry is the flight model's output, never `measured`, even when flown on a
-measured spin. A `model_geometry` carry is not sent (see
-`SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the collision-model page), nor an
-`estimated` one (`SIMULATORS_ACCEPT_ESTIMATED`). A fusion shot missing a required
-input, or having it only as model geometry or an estimate, is not sent. An
-OPS-only shot's carry goes out labelled `estimated`, whatever its launch angle,
-and so do its club-table launch angles. A spin axis is never `measured` (no
-sensor measures one). These labels are the provenance badges only; the wire
+The simulator connectors send a shot's carry only when its `carry_status` is
+`measured` or `calculated`, i.e. flown on the shot's own measured or calculated
+inputs (D31). Its provenance is `calculated`: a simulated carry is the flight
+model's output, never `measured`, even when flown on a measured spin. A
+`model_geometry` carry is not sent (see `SIMULATORS_ACCEPT_MODEL_GEOMETRY` in the
+collision-model page), nor an `estimated` one (`SIMULATORS_ACCEPT_ESTIMATED`). A
+shot missing a required input, or having it only as model geometry or an
+estimate, is not sent, on every install: an OPS-only shot is no longer sent with
+club-table launch angles and a typical spin (owner decision 1, 25 Oct 2026). A
+spin axis is never `measured` (no sensor measures one). These labels are the provenance badges only; the wire
 format is unchanged. Simulators get the as-measured carry; they fly the ball
 themselves from speed, launch and spin.
 
@@ -678,12 +679,11 @@ solver instability fail loudly instead of looping.
 
 - **The flight:** it calls `compute_flight` once.
 - **Carry:** it stores the as-measured carry in `carry_spin_adjusted`.
-- **Fusion unit without a flight:** carry is `not_measured`, and the log names
-  the reason.
-- **OPS-only install without a flight** (ballistics disabled, no launch angle,
-  or an invalid supplied density): carry falls back to the labelled ball-speed
-  spin table.
-- **Mock shots** have no flight.
+- **Without a flight** (ballistics disabled, a missing launch angle, spin or spin
+  axis, or an invalid supplied density): carry is `not_measured` on every
+  install, and the log names the reason. The ball-speed spin table no longer
+  stands in on an OPS-only install (owner decision 1, 25 Oct 2026).
+- **Mock shots** have no flight, so no carry.
 
 ## Disabling it
 
@@ -691,9 +691,8 @@ solver instability fail loudly instead of looping.
 scripts/start-kiosk.sh --no-ballistics
 ```
 
-This uses the legacy carry-table estimator for every OPS-only shot. On a fusion
-unit, carry is not measured, and every flight output says "flight model
-disabled".
+Carry is then not measured on every install, and every flight output says
+"flight model disabled".
 
 ## Related
 

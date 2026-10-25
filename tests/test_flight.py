@@ -1,8 +1,8 @@
 """E4: every flight output, labelled, as measured and normalized (Part E, Tier 6).
 
 Carry, carry side, total, total side, apex, landing angle, hang time and curve,
-each with a status, a source, a range and a reason. Nothing is filled in on a
-fusion unit: without spin or spin axis there is no flight. The as-measured
+each with a status, a source, a range and a reason. Nothing is filled in on any
+install: without spin, horizontal launch or spin axis there is no flight. The as-measured
 flight uses the shot's own air density when one is supplied (the owner's hook)
 and ISA otherwise, saying which; the normalized flight is TrackMan's
 "no wind, 0 ft altitude, 77 F". Launch values are the same in both.
@@ -23,7 +23,6 @@ from openflight.flight import (
 )
 from openflight.flight_sim import (
     AIR_DENSITY_STD,
-    CLUB_TYPICAL_SPIN_RPM,
     LaunchConditions,
     resolve_launch,
     simulate,
@@ -66,7 +65,7 @@ def _shot(**overrides) -> Shot:
 
 
 def _fusion(shot):
-    return compute_flight(shot, substitutes=False).to_dict()
+    return compute_flight(shot).to_dict()
 
 
 def test_flight_metrics_are_the_eight_tm4_outputs():
@@ -98,7 +97,7 @@ def test_every_flight_output_is_present_with_its_label(block):
 def test_the_as_measured_flight_is_the_simulated_trajectory_at_isa():
     shot = _shot()
     metrics = _fusion(shot)["as_measured"]["metrics"]
-    traj = simulate(resolve_launch(shot, substitutes=False), air_density=AIR_DENSITY_STD)
+    traj = simulate(resolve_launch(shot), air_density=AIR_DENSITY_STD)
     assert metrics["carry"]["value"] == pytest.approx(traj.carry_yards)
     assert metrics["carry_side"]["value"] == pytest.approx(traj.carry_side_yards)
     assert metrics["apex"]["value"] == pytest.approx(traj.apex_yards)
@@ -121,7 +120,7 @@ def test_curve_is_the_d37_definition_of_the_same_flight():
 def test_curve_is_trackmans_definition_on_the_straight_line_carry():
     shot = _shot(spin_axis_deg=-6.0, launch_angle_horizontal=3.0)
     metrics = _fusion(shot)["as_measured"]["metrics"]
-    traj = simulate(resolve_launch(shot, substitutes=False), air_density=AIR_DENSITY_STD)
+    traj = simulate(resolve_launch(shot), air_density=AIR_DENSITY_STD)
     side, launch = traj.carry_side_yards, math.radians(3.0)
     downrange = math.sqrt(traj.carry_yards**2 - side**2)
     assert downrange == pytest.approx(traj.downrange_yards)
@@ -151,9 +150,9 @@ def test_a_fusion_shot_missing_an_input_has_no_flight_and_says_why(overrides, re
             assert reason in metric["reason"], (block, name)
 
 
-def test_a_fusion_unit_never_uses_the_club_typical_spin():
+def test_no_install_flies_the_club_typical_spin():
     shot = _shot(spin_rpm=1500.0, spin_confidence=0.3)
-    result = compute_flight(shot, substitutes=False)
+    result = compute_flight(shot)
     assert result.conditions is None and result.as_measured is None
 
 
@@ -171,7 +170,8 @@ def test_an_unlabelled_spin_axis_is_named_as_the_kiosk_proxy():
     assert "proxy" in flight["inputs"]["spin_axis"]["label"]
 
 
-def test_an_ops_only_flight_is_an_estimate_naming_its_substitutes():
+def test_an_ops_only_shot_has_no_flight_and_substitutes_nothing():
+    """The OPS-only stand-ins are gone (owner decision 1): no typical spin, no 0 deg."""
     shot = _shot(
         spin_rpm=None,
         spin_confidence=None,
@@ -179,18 +179,21 @@ def test_an_ops_only_flight_is_an_estimate_naming_its_substitutes():
         spin_axis_deg=None,
         launch_angle_horizontal=None,
     )
-    flight = compute_flight(shot, substitutes=True).to_dict()
+    flight = compute_flight(shot).to_dict()
+    for block in ("as_measured", "normalized"):
+        assert flight[block]["launch"] is None
+        for name, metric in flight[block]["metrics"].items():
+            assert metric["value"] is None and metric["status"] == "not_measured", name
     carry = flight["as_measured"]["metrics"]["carry"]
-    assert carry["status"] == "estimated"
-    assert carry["source"].startswith("estimated (model: ")
-    assert flight["inputs"]["spin"]["value"] == CLUB_TYPICAL_SPIN_RPM[ClubType.DRIVER]
-    assert "club-typical estimate (source: " in flight["inputs"]["spin"]["label"]
-    assert "substituted" in flight["inputs"]["spin_axis"]["label"]
-    assert "substituted" in flight["inputs"]["launch_horizontal"]["label"]
+    for reason in ("horizontal launch", "spin not measured", "spin axis"):
+        assert reason in carry["reason"]
+    assert flight["inputs"]["spin"]["value"] is None
+    assert flight["inputs"]["spin_axis"]["value"] is None
+    assert flight["inputs"]["launch_horizontal"]["value"] is None
 
 
 def test_the_flight_model_disabled_says_so():
-    flight = compute_flight(_shot(), substitutes=False, enabled=False).to_dict()
+    flight = compute_flight(_shot(), enabled=False).to_dict()
     carry = flight["as_measured"]["metrics"]["carry"]
     assert carry["status"] == "not_measured" and "flight model disabled" in carry["reason"]
 
@@ -296,9 +299,12 @@ def test_a_landing_outside_the_bounce_data_gives_a_total_not_measured():
 # --- one club-typical spin table ---------------------------------------------------
 
 
-def test_there_is_one_club_typical_spin_table():
-    assert resolver.SPIN_MODEL_RPM is club_physics.CLUB_TYPICAL_SPIN_RPM
-    assert CLUB_TYPICAL_SPIN_RPM is club_physics.CLUB_TYPICAL_SPIN_RPM
+def test_there_is_one_club_typical_spin_table_and_no_production_consumer():
+    from openflight import flight_sim
+
+    # nothing fills a spin in any more (owner decision 1): no module re-exports the table
+    assert not hasattr(resolver, "SPIN_MODEL_RPM")
+    assert not hasattr(flight_sim, "CLUB_TYPICAL_SPIN_RPM")
     for club, physics in club_physics.CLUB_PHYSICS.items():
         assert club_physics.CLUB_TYPICAL_SPIN_RPM[club] == physics.typical_spin_rpm
 
@@ -307,16 +313,21 @@ def test_the_club_typical_spin_table_is_labelled_an_estimate_with_its_source():
     assert club_physics.CLUB_TYPICAL_SPIN_LABEL.startswith("club-typical estimate (source: ")
 
 
-def test_the_simulator_and_the_kiosk_estimate_the_same_spin():
+def test_neither_the_simulator_nor_the_kiosk_fills_in_a_spin():
+    from openflight.sim.types import UnmeasuredShotError
+
     shot = Shot(
         ball_speed_mph=140.0,
         timestamp=datetime(2026, 10, 12),
         club=ClubType.IRON_7,
         launch_angle_vertical=18.0,
+        launch_angle_horizontal=1.0,
+        spin_axis_deg=2.0,
     )
-    simulated = resolve_shot(shot, PlayerState())
-    kiosk = resolve_launch(shot, substitutes=True)
-    assert simulated.total_spin_rpm == kiosk.spin_rpm == CLUB_TYPICAL_SPIN_RPM[ClubType.IRON_7]
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(shot, PlayerState())
+    assert raised.value.missing == ["spin"]
+    assert resolve_launch(shot) is None
 
 
 # --- server and payload -------------------------------------------------------------
@@ -326,7 +337,6 @@ def test_the_simulator_and_the_kiosk_estimate_the_same_spin():
 def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 

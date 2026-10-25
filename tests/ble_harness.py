@@ -368,7 +368,6 @@ def server_loopback(monkeypatch, tmp_path):
     monkeypatch.setattr(server_module, "kld7_horizontal", None)
     monkeypatch.setattr(server_module, "camera_capture_runtime", None)
     monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "ballistics_enabled", False)
     monkeypatch.setattr(server_module, "debug_mode", False)
     monkeypatch.setattr(server_module, "sim_connectors", [])

@@ -113,7 +113,8 @@ references.
 | `RANGE_DT_SECONDS` | 0.02 |
 
 `CLUB_TYPICAL_SPIN_RPM` (`src/openflight/clubs/physics.py`) is the one
-club-typical spin table, for OPS-only estimates only.
+club-typical spin table. No shot uses it (owner decision 1, 25 Oct 2026: nothing is
+filled in); only research scripts read it.
 
 ## Thresholds
 

@@ -247,7 +247,7 @@ def test_the_simulator_switch_for_model_geometry_defaults_off():
 
 def test_a_fusion_shot_with_model_geometry_spin_and_axis_is_not_sent_and_says_why():
     with pytest.raises(UnmeasuredShotError) as raised:
-        resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=False)
+        resolve_shot(_model_geometry_shot(), PlayerState())
 
     assert raised.value.missing == ["spin", "spin axis"]
     assert "model geometry" in str(raised.value)
@@ -258,27 +258,24 @@ def test_a_model_geometry_axis_alone_still_refuses_the_fusion_shot():
     shot = _model_geometry_shot(spin_rpm=6800.0, spin_confidence=0.9, spin_source="measured")
 
     with pytest.raises(UnmeasuredShotError) as raised:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
 
     assert raised.value.missing == ["spin axis"]
     assert "model geometry" in str(raised.value)
 
 
-def test_an_ops_only_resolve_never_sends_model_geometry_values():
-    resolved = resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=True)
+def test_no_install_swaps_model_geometry_values_for_estimates():
+    """The OPS-only typical spin and 0 deg axis are gone (owner decision 1): refused."""
+    with pytest.raises(UnmeasuredShotError) as raised:
+        resolve_shot(_model_geometry_shot(), PlayerState())
 
-    assert resolved.provenance["total_spin"] == "estimated"
-    assert resolved.total_spin_rpm != 6400.0
-    assert resolved.provenance["spin_axis"] == "estimated" and resolved.spin_axis_deg == 0.0
-    assert resolved.carry_yards is None and "carry" not in resolved.provenance
-    assert resolved.club_path_deg == 0.0 and resolved.provenance["club_path"] == "estimated"
-    assert "model_geometry" not in resolved.provenance.values()
+    assert raised.value.missing == ["spin", "spin axis"]
 
 
 def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypatch):
     monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_MODEL_GEOMETRY", True)
 
-    resolved = resolve_shot(_model_geometry_shot(), PlayerState(), substitutes=False)
+    resolved = resolve_shot(_model_geometry_shot(), PlayerState())
 
     assert resolved.total_spin_rpm == 6400.0
     assert resolved.spin_axis_deg == 3.0
@@ -404,19 +401,6 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
     assert shot.spin_method == "ops_fft"
 
 
-def test_the_empirical_formula_over_a_model_geometry_spin_keeps_the_measured_one():
-    shot = _arc_shot(**_low_confidence_spin())
-    _attach(shot)
-
-    assert server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
-
-    assert shot.spin_source == "calculated"
-    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_calculated_empirical)
-    assert "empirical" in shot.spin_method
-    assert shot.spin_rpm_measured == 900.0
-    assert shot.spin_method_measured == "ops_fft"
-
-
 def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
     """No filled-in values: no club speed, no spin; the axis needs no club speed."""
     shot = _arc_shot(club_speed_mph=None)
@@ -444,14 +428,14 @@ def _arc_flight_shot(**overrides):
     return shot
 
 
-def _flight(shot, *, substitutes=False):
-    return compute_flight(shot, substitutes=substitutes)
+def _flight(shot):
+    return compute_flight(shot)
 
 
 def test_resolve_launch_takes_a_model_geometry_spin_under_its_label():
     shot = _arc_flight_shot()
 
-    conditions = resolve_launch(shot, substitutes=False)
+    conditions = resolve_launch(shot)
 
     assert conditions is not None
     assert conditions.spin_source == "model_geometry"
@@ -518,14 +502,6 @@ def test_measured_and_calculated_inputs_still_fly_as_calculated():
             assert "model-geometry" not in metric["source"], (block, name)
 
 
-def test_an_ops_only_flight_stays_estimated_over_model_geometry():
-    result = _flight(_arc_flight_shot(), substitutes=True)
-
-    carry = result.to_dict()["as_measured"]["metrics"]["carry"]
-    assert result.status == "estimated"
-    assert carry["status"] == "estimated"
-
-
 @pytest.mark.parametrize(
     "overrides, reason",
     [
@@ -561,7 +537,6 @@ def test_a_weak_horizontal_launch_makes_the_model_geometry_flight_an_estimate():
 def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 
@@ -616,7 +591,7 @@ def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
 
     assert shot.flight["as_measured"]["metrics"]["carry"]["status"] == "calculated"
     assert shot.carry_status == "calculated"
-    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    resolved = resolve_shot(shot, PlayerState())
     # a simulated carry is the flight model's: at most calculated (V-formulas C8)
     assert resolved.provenance["carry"] == "calculated"
     assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
@@ -631,6 +606,6 @@ def test_a_model_geometry_carry_is_shown_but_never_sent_to_simulators():
     assert shot.carry_status == "model_geometry"
     assert shot.reported_carry_yards is not None
     with pytest.raises(UnmeasuredShotError) as raised:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
     assert raised.value.missing == ["spin axis"]
     assert "model geometry" in str(raised.value)

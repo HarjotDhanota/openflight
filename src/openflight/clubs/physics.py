@@ -17,8 +17,8 @@ class ClubPhysics:
     optimal_launch_deg and average_ball_speed_mph are the original TrackMan
     baseline launch angle and amateur ball speed. launch_deg_per_mph adjusts
     launch relative to that speed: slower shots launch higher, faster shots lower.
-    typical_spin_rpm is the OPS-only estimate path's spin when measured spin is
-    missing or weak; a fusion unit never uses it.
+    typical_spin_rpm is a club-typical spin for research scripts; no shot uses it
+    (nothing is filled in, owner decision 1, 25 Oct 2026).
     optimal_smash is the optimal ball_speed / club_speed ratio for launch estimation.
     optimal_spin_multiplier scales the speed-dependent driver spin baseline for
     each club; irons and wedges need more spin. UNKNOWN keeps the baseline (1.0).
@@ -144,8 +144,9 @@ CLUB_SIMULATION_PROFILES: Mapping[ClubType, ClubSimulationProfile] = MappingProx
 )
 
 
-# The one club-typical spin table, for the OPS-only estimate path. The values are rounded
-# and do not match TrackMan's published figures, so they are labelled an estimate.
+# The one club-typical spin table. No shot uses it any more (owner decision 1, 25 Oct
+# 2026); research scripts do. The values are rounded and do not match TrackMan's
+# published figures, so they are labelled an estimate.
 CLUB_TYPICAL_SPIN_RPM: Mapping[ClubType, float] = MappingProxyType(
     {club: physics.typical_spin_rpm for club, physics in CLUB_PHYSICS.items()}
 )

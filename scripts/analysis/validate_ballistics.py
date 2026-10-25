@@ -10,9 +10,9 @@ Two independent comparisons are produced:
 2. **OF-inputs** — feed OpenFlight's measured values for the same shots
    into the model and compare to TrackMan's carry. This is the
    end-to-end check the user actually sees on screen (sensor + model
-   error combined). Spin handling matches production
-   :func:`openflight.flight_sim.resolve_launch`: measured spin if
-   confidence >= SPIN_CONFIDENCE_HIGH, otherwise club-typical fallback.
+   error combined). Spin handling is this research check's own: measured
+   spin if present, otherwise the club-typical table (production no longer
+   fills one in, decision 1 of 25 Oct 2026; this comparison still needs a spin).
    OpenFlight has no spin-axis measurement, so spin_axis = 0 is assumed.
 
 TrackMan's "Flat" carry is normalized to no-wind, 0 ft altitude, 77 °F.
@@ -61,10 +61,10 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from openflight.clubs import ClubType  # noqa: E402
+from openflight.clubs.physics import CLUB_TYPICAL_SPIN_RPM  # noqa: E402
 from openflight.flight import AIR_DENSITY_NORMALIZED  # noqa: E402
 from openflight.flight_sim import (  # noqa: E402
     ACTIVE_AERO_MODEL,
-    CLUB_TYPICAL_SPIN_RPM,
     AeroModel,
     LaunchConditions,
     simulate,
@@ -540,10 +540,9 @@ def _resolve_of_spin(
     row: ComparisonRow,
     club: ClubType,
 ) -> Tuple[float, str]:
-    """Mirror production resolve_launch(): use OF spin only when confident,
-    else club-typical fallback. The comparison CSV doesn't carry spin
-    confidence, so we treat any present OF spin as measured (this is the
-    same fallback the production server would log)."""
+    """OF spin when present, else the club-typical table (this research check's
+    stand-in; production fills nothing in). The comparison CSV doesn't carry spin
+    confidence, so any present OF spin is treated as measured."""
     if row.spin_of is not None and row.spin_of > 0:
         return row.spin_of, "measured"
     typical = CLUB_TYPICAL_SPIN_RPM.get(club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN])

@@ -176,7 +176,7 @@ def fusion_shot(**overrides) -> Shot:
         reason=shot_models.CLUB_SPEED_NOT_FULL_REASON,
     )
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
-    flight = compute_flight(shot, substitutes=False)
+    flight = compute_flight(shot)
     shot.flight = flight.to_dict()
     if flight.as_measured is not None:
         shot.carry_spin_adjusted = flight.as_measured.carry_yards

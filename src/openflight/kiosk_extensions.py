@@ -21,11 +21,11 @@ ENTRY_POINT_GROUP = "openflight.kiosk_extensions"
 class CarryOutcome(NamedTuple):
     """What a flight model did with a shot's carry.
 
-    Both None means the model decided there is no carry (a fusion unit).
+    ``source`` None means there is no carry: nothing stands in for it on any install
+    (owner decision 1, 25 Oct 2026).
     """
 
     source: Optional[str]
-    table_reason: Optional[str]
 
 
 class KioskExtension:  # pylint: disable=unused-argument
@@ -110,17 +110,13 @@ class KioskExtension:  # pylint: disable=unused-argument
     def after_enrichment(self, shot) -> None:
         """The shot's radar and camera enrichment is done (face, loft, spin axis go here)."""
 
-    def model_spin(self, shot) -> Optional[tuple[float, str]]:
-        """A model's spin (rpm, method) that --calculated-spin uses instead of its formula."""
-        return None
-
     def after_speed_contract(self, shot) -> None:
         """The radial speeds are fixed; a model may add the full speeds."""
 
-    def simulate_carry(self, shot, *, fusion: bool, enabled: bool) -> Optional["CarryOutcome"]:
+    def simulate_carry(self, shot, *, enabled: bool) -> Optional["CarryOutcome"]:
         """Simulate the flight and commit the carry, or None without a flight model.
 
-        ``fusion``: a unit with an IWR6843 or camera (no table carry).
+        ``enabled`` False is ``--no-ballistics``.
         """
         return None
 
