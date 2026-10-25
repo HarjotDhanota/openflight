@@ -103,27 +103,163 @@ def test_a_reconfirmation_without_a_real_change_keeps_the_identity(tmp_path):
     )
 
 
+class Clock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def watched(tmp_path, clock):
+    return SetupEligibility(
+        RIG,
+        tmp_path,
+        inclinometer_bus=1,
+        inclinometer_address=0x18,
+        inclinometer_zero_offset_deg=0.0,
+        clock=clock,
+    )
+
+
+def operator_check(result):
+    return next(item for item in result["checks"] if item["id"] == "operator_confirmation")
+
+
 @pytest.mark.parametrize("name", ["pitch_deg", "roll_deg"])
-def test_a_unit_moved_more_than_half_a_degree_needs_confirming_again(tmp_path, name):
-    gate = policy(tmp_path)
+def test_a_move_that_persists_needs_confirming_again(tmp_path, name):
+    clock = Clock()
+    gate = watched(tmp_path, clock)
     config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
     first = gate.confirm(TESTER, config_hash, True, STABLE)
-    moved = {**STABLE, name: 0.8}
+    moved = {**STABLE, name: 1.5}
 
-    result = policy(tmp_path).evaluate(TESTER, moved)
+    # a move is only a move once it has lasted: three still readings over 3 s
+    for _ in range(3):
+        result = gate.evaluate(TESTER, moved)
+        assert result["eligible"], "a move is not latched before it persists"
+        assert operator_check(result)["status"] == "warn"
+        assert "keep it still" in operator_check(result)["reason"]
+        clock.now += 1.0
+    result = gate.evaluate(TESTER, moved)
 
     assert not result["eligible"]
-    operator = next(item for item in result["checks"] if item["id"] == "operator_confirmation")
-    assert "moved" in operator["reason"]
+    assert "moved" in operator_check(result)["reason"]
+    assert result["operator_confirmation"]["confirmation_id"] is None
+    # latched: a reading back where it was does not bring the confirmation back
+    assert not gate.evaluate(TESTER, STABLE)["eligible"]
     # a reading the kiosk holds (no angles) does not count as a move
     assert policy(tmp_path).evaluate(TESTER, {"status": "stable"})["operator_confirmation"][
         "confirmed"
     ]
     second = gate.confirm(TESTER, config_hash, True, moved)
+    assert second["eligible"]
     assert (
         second["operator_confirmation"]["confirmation_id"]
         != first["operator_confirmation"]["confirmation_id"]
     )
+    moves = [entry for entry in _records(tmp_path) if entry["outcome"] == "unit_moved"]
+    assert len(moves) == 1
+    assert moves[0]["confirmation_id"] == first["operator_confirmation"]["confirmation_id"]
+
+
+def test_the_field_noise_never_revokes_a_confirmation(tmp_path):
+    """Field 24 Oct (outdoor test 1): still readings of roll -1.73 to -1.91 deg.
+
+    At 0.5 deg against one reading of the unit being set down (-2.25) about one
+    reading in ten crossed, and the box and aim steps reset each time.
+    """
+    clock = Clock()
+    gate = watched(tmp_path, clock)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    baseline = {**STABLE, "pitch_deg": -0.11, "roll_deg": -2.25}
+    confirmation_id = gate.confirm(TESTER, config_hash, True, baseline)["operator_confirmation"][
+        "confirmation_id"
+    ]
+    rolls = [-1.79, -1.73, -1.87, -1.91, -1.75, -1.81, -1.73, -1.79, -1.85, -1.73] * 6
+    for roll in rolls:
+        result = gate.evaluate(TESTER, {**STABLE, "pitch_deg": 0.22, "roll_deg": roll})
+        assert result["eligible"]
+        assert operator_check(result)["status"] == "pass"
+        assert result["operator_confirmation"]["confirmation_id"] == confirmation_id
+        clock.now += 0.5
+
+
+def test_a_reading_back_inside_the_release_band_clears_a_pending_move(tmp_path):
+    clock = Clock()
+    gate = watched(tmp_path, clock)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    gate.confirm(TESTER, config_hash, True, STABLE)
+    moved = {**STABLE, "roll_deg": 1.2}
+    for _ in range(2):
+        gate.evaluate(TESTER, moved)
+        clock.now += 1.0
+    # inside the tolerance but outside the release band: the streak is held, not reset
+    assert operator_check(gate.evaluate(TESTER, {**STABLE, "roll_deg": 0.9}))["status"] == "warn"
+    clock.now += 1.0
+    # back inside the release band: the streak starts over
+    assert operator_check(gate.evaluate(TESTER, {**STABLE, "roll_deg": 0.2}))["status"] == "pass"
+    for _ in range(3):
+        assert gate.evaluate(TESTER, moved)["eligible"]
+        clock.now += 1.0
+    assert not gate.evaluate(TESTER, moved)["eligible"]
+
+
+@pytest.mark.parametrize("status", ["moving", "stale", "no_stable_preimpact_reading"])
+def test_a_moving_or_stale_reading_waits_and_never_revokes(tmp_path, status):
+    clock = Clock()
+    gate = watched(tmp_path, clock)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    gate.confirm(TESTER, config_hash, True, STABLE)
+    moved = {**STABLE, "roll_deg": 1.5}
+    gate.evaluate(TESTER, moved)
+    for _ in range(10):
+        clock.now += 1.0
+        result = gate.evaluate(TESTER, {"status": status})
+        assert result["operator_confirmation"]["confirmed"]
+    # the moving readings did not count: one still reading is not three
+    assert gate.evaluate(TESTER, moved)["operator_confirmation"]["confirmed"]
+    # a reading the page's poll held over from the last still one is not counted either
+    held = {**STABLE, "roll_deg": 1.5, "held_over": "moving"}
+    for _ in range(5):
+        clock.now += 1.0
+        assert gate.evaluate(TESTER, held)["operator_confirmation"]["confirmed"]
+
+
+def test_a_held_over_reading_warns_instead_of_blocking(tmp_path):
+    gate = policy(tmp_path)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    gate.confirm(TESTER, config_hash, True, STABLE)
+    result = gate.evaluate(TESTER, {**STABLE, "held_over": "moving", "held_s": 1.2})
+    lis = next(item for item in result["checks"] if item["id"] == "lis3dh")
+    assert result["eligible"]
+    assert lis["status"] == "warn"
+    assert "keep the unit still" in lis["reason"]
+
+
+def test_eligibility_changes_are_logged_with_the_reading(tmp_path, caplog):
+    clock = Clock()
+    gate = watched(tmp_path, clock)
+    config_hash = gate.evaluate(TESTER, STABLE)["config_hash"]
+    gate.confirm(TESTER, config_hash, True, STABLE)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="openflight.camera.setup_eligibility"):
+        for _ in range(3):
+            gate.evaluate(TESTER, STABLE)
+        gate.evaluate(TESTER, {"status": "moving"})
+        gate.evaluate(TESTER, STABLE)
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "[SETUP] eligibility" in record.getMessage()
+    ]
+    assert len(lines) == 2
+    assert "eligible -> blocked" in lines[0]
+    assert "moving" in lines[0]
+    assert "blocked -> eligible" in lines[1]
+    assert "roll +0.00" in lines[1]
 
 
 def test_an_unreadable_confirmation_file_is_no_confirmation(tmp_path):
