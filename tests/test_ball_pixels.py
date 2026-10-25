@@ -26,7 +26,6 @@ def test_pixel_scale_follows_the_mode_not_the_crop():
 
 
 def test_mode_focal_follows_binning_from_the_rig_file():
-    """Focal follows the sensor's binning, not the output width."""
     rig = RigGeometry.from_json(V3)
     assert (rig.image_width, rig.image_height) == (320, 200)
     assert ball_pixels.mode_focal_px(1280, rig) == pytest.approx(933.3334)
@@ -57,23 +56,20 @@ def _scene(width, height, diameter, *, level=235, count=24, gone_after=None):
     return frames.astype(np.uint8), (x, y)
 
 
-def test_the_scene_detector_finds_a_1280_ball_at_address():
-    frames, (x, y) = _scene(1280, 800, 36.0)
+@pytest.mark.parametrize(
+    ("width", "height", "diameter", "low", "high"),
+    [(1280, 800, 36.0, 30.0, 42.0), (640, 400, 18.0, 14.0, 22.0)],
+)
+def test_the_scene_detector_finds_a_ball_at_address_in_either_mode(
+    width, height, diameter, low, high
+):
+    frames, (x, y) = _scene(width, height, diameter)
 
     ball = detect_reference_ball(frames)
 
     assert ball.x == pytest.approx(x, abs=2.0)
     assert ball.y == pytest.approx(y, abs=2.0)
-    assert 30.0 <= ball.diameter_px <= 42.0
-
-
-def test_the_scene_detector_still_finds_a_640_ball():
-    frames, (x, y) = _scene(640, 400, 18.0)
-
-    ball = detect_reference_ball(frames)
-
-    assert ball.x == pytest.approx(x, abs=2.0)
-    assert 14.0 <= ball.diameter_px <= 22.0
+    assert low <= ball.diameter_px <= high
 
 
 def test_the_impact_detector_finds_a_1280_ball_that_departs():
@@ -109,7 +105,6 @@ def test_ball_flight_selects_a_1280_reference_ball():
     [((24, 200, 320), 1.0), ((24, 400, 640), 1.0), ((24, 800, 1280), 2.0)],
 )
 def test_club_windows_scale_with_focal_length_not_image_size(shape, scale):
-    """320x200 is a crop with 640x400's focal, so its windows are not halved."""
     from openflight.camera.club_delivery import _image_scale  # noqa: PLC0415
 
     assert _image_scale(shape) == pytest.approx(scale)
