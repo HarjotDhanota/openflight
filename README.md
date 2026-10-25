@@ -57,9 +57,11 @@ a tilt sensor ($15), and a global-shutter camera ($30). Everything together is
 roughly **$819**. Full staged breakdown in the
 [parts list](docs/get-started/parts.md#cost-summary).
 
-Without an angle radar you still get ball speed, club speed, smash factor,
-experimental spin, and estimated carry. The angle radar adds measured launch
-angle and experimental club path.
+Without an angle radar you still get ball speed, club speed and smash factor,
+all along the radar's line of sight, and experimental spin. Carry, launch angle
+and spin axis need the angle radar: an OPS-only unit shows them as not measured
+rather than filling in table values. The angle radar adds measured launch angle,
+the flight model's carry and experimental club path.
 
 > **⚠️ The K-LD7 angle radars are deprecated.** The supported angle radar is now the **TI IWR6843**. Don't buy K-LD7s for a new build; their software support remains for existing builds only. See the [full parts list](docs/get-started/parts.md) for details and links.
 
@@ -253,7 +255,8 @@ print("Swing when ready...")
 shot = monitor.wait_for_shot(timeout=60)
 if shot:
     print(f"Ball Speed: {shot.ball_speed_mph:.1f} mph")
-    print(f"Est. Carry: {shot.estimated_carry_yards:.0f} yards")
+    # None when the shot lacks a launch angle, spin or spin axis: nothing is filled in
+    print(f"Carry: {shot.reported_carry_yards} yards")
 
 monitor.stop()
 monitor.disconnect()

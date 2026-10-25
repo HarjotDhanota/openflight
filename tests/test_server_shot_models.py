@@ -84,6 +84,9 @@ class TestFaceAngleFromTheCollisionModel:
 
     def test_without_a_reference_face_angle_uses_camera_paths_only(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)
+        # no attack: the face from the horizontal ratio alone (the IWR attack candidate
+        # is an estimated attack route since decision 3: test_attack_angle_chain)
+        shot.experimental_attack_angle_deg = None
         # The camera horizontal (camera bearing on accepted IWR depth) outranks
         # the radar one and carries no azimuth mark.
         server_module._apply_camera_horizontal_decision(
@@ -108,6 +111,7 @@ class TestFaceAngleFromTheCollisionModel:
 
         An uncalibrated start direction is an estimated input, so the face is estimated."""
         shot = self._run(monkeypatch, phase_reference=None)
+        shot.experimental_attack_angle_deg = None  # the horizontal ratio alone, as above
         shot.experimental_fused_club_path_deg = -4.0
         shot.experimental_fused_status = "chained_high"
 
@@ -143,7 +147,7 @@ class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
 
     def _patch_environment(self, monkeypatch):
-        # an OPS-only install: no IWR or camera, so its labelled estimates stand (D17)
+        # an OPS-only install: no IWR or camera; nothing is filled in (owner decision 1)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)
@@ -176,7 +180,11 @@ class TestCarryComputation:
             timestamp=datetime.now(),
             club=ClubType.DRIVER,
             launch_angle_vertical=11.0,
+            launch_angle_vertical_source="radar",
             launch_angle_confidence=0.8,
+            launch_angle_horizontal=0.5,
+            launch_angle_horizontal_source="radar",
+            spin_axis_deg=1.0,
             spin_rpm=2700,
             spin_confidence=0.85,
             angle_source="radar",
@@ -190,8 +198,8 @@ class TestCarryComputation:
         assert shot.carry_spin_adjusted is not None
         assert 250 < shot.carry_spin_adjusted < 300
 
-    def test_carry_falls_back_to_table_when_resolve_returns_none(self, monkeypatch):
-        """When resolve_launch returns None, the table path should compute carry."""
+    def test_no_carry_when_resolve_returns_none(self, monkeypatch):
+        """When resolve_launch returns None there is no carry: no table (decision 1)."""
         self._patch_environment(monkeypatch)
 
         monkeypatch.setattr(flight_module, "resolve_launch", lambda shot, **_kwargs: None)
@@ -215,13 +223,13 @@ class TestCarryComputation:
         on_shot_detected(shot)
         _wait_for_shot_finalization_idle()
 
-        assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted > 0
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_status == "not_measured"
 
     def test_carry_skips_ballistic_when_ballistics_disabled(self, monkeypatch):
         """When ballistics_enabled is False, the simulator must not run even
-        if a valid launch angle is present — carry falls through to the
-        table estimator. Operators can request this with `--no-ballistics`."""
+        if a valid launch angle is present, and nothing stands in for the carry.
+        Operators can request this with `--no-ballistics`."""
         self._patch_environment(monkeypatch)
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
 
@@ -249,8 +257,8 @@ class TestCarryComputation:
         on_shot_detected(shot)
         _wait_for_shot_finalization_idle()
 
-        assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted > 0
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_status == "not_measured"
 
 
 def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):

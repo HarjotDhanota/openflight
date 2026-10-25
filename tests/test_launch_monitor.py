@@ -160,14 +160,14 @@ class TestShot:
         )
         assert driver_shot.estimated_carry_yards == iron_shot.estimated_carry_yards
 
-    def test_carry_range(self):
-        """Carry range should be ±10% of estimate."""
+    def test_the_table_carry_is_never_the_reported_carry(self):
+        """The table is a diagnostic only: nothing fills a carry in (owner decision 1)."""
         shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
-        low, high = shot.estimated_carry_range
-        estimate = shot.estimated_carry_yards
 
-        assert low == pytest.approx(estimate * 0.90, rel=0.01)
-        assert high == pytest.approx(estimate * 1.10, rel=0.01)
+        assert shot.estimated_carry_yards > 0
+        assert shot.reported_carry_yards is None
+        assert shot.to_dict()["estimated_carry_yards"] is None
+        assert shot.to_dict()["carry_range"] is None
 
     def test_carry_adjusts_for_launch_angle(self):
         """Shot with launch angle should adjust carry distance."""
@@ -184,18 +184,6 @@ class TestShot:
         shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         base = estimate_carry_distance(150.0, ClubType.DRIVER)
         assert shot.estimated_carry_yards == base
-
-    def test_carry_range_tighter_with_angle(self):
-        """Shot with launch angle should have tighter carry range."""
-        shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
-        shot_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
-            launch_angle_vertical=11.0,
-            launch_angle_confidence=0.5,
-        )
-        no_angle_spread = shot_no_angle.estimated_carry_range[1] - shot_no_angle.estimated_carry_range[0]
-        angle_spread = shot_angle.estimated_carry_range[1] - shot_angle.estimated_carry_range[0]
-        assert angle_spread < no_angle_spread
 
 
 class TestAdjustCarryForLaunchAngle:
@@ -284,13 +272,12 @@ def test_a_non_finite_launch_angle_is_no_launch_angle_for_carry(bad):
     with_none = Shot(ball_speed_mph=140.0, timestamp=_dt(2026, 1, 1))
     assert with_bad.has_launch_angle is False
     assert with_bad.estimated_carry_yards == with_none.estimated_carry_yards
-    assert with_bad.estimated_carry_range == with_none.estimated_carry_range
 
 
 _DERIVED = (
     "smash_factor",
     "estimated_carry_yards",
-    "estimated_carry_range",
+    "reported_carry_yards",
     "has_launch_angle",
     "has_spin",
     "spin_quality",
@@ -376,9 +363,8 @@ def test_summarize_shots_skips_a_non_finite_value_in_every_averaged_field(field,
         assert summary["avg_ball_speed"] == 150.0
         assert summary["max_ball_speed"] == 160.0
         assert summary["min_ball_speed"] == 140.0
-        assert summary["avg_carry_est"] == pytest.approx(
-            (good_a.estimated_carry_yards + good_b.estimated_carry_yards) / 2
-        )
+        # no shot here has a simulated carry, and no table stands in (decision 1)
+        assert summary["avg_carry_est"] is None
     if field == "club":
         assert summary["avg_club_speed"] == 105.0
         assert summary["avg_smash_factor"] == pytest.approx(

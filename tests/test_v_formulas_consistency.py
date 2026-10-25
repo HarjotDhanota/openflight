@@ -156,15 +156,13 @@ def _fusion_shot(**overrides):
 
 
 def test_raw_and_normalized_differ_only_in_the_air():
-    payload = compute_flight(
-        _fusion_shot(air_density_kg_m3=AIR_DENSITY_NORMALIZED), substitutes=False
-    ).to_dict()
+    payload = compute_flight(_fusion_shot(air_density_kg_m3=AIR_DENSITY_NORMALIZED)).to_dict()
     raw, norm = payload["as_measured"], payload["normalized"]
     assert raw["launch"] == norm["launch"]
     for name, metric in raw["metrics"].items():
         assert metric["value"] == pytest.approx(norm["metrics"][name]["value"]), name
         assert metric["status"] == norm["metrics"][name]["status"]
-    thin = compute_flight(_fusion_shot(air_density_kg_m3=1.0), substitutes=False).to_dict()
+    thin = compute_flight(_fusion_shot(air_density_kg_m3=1.0)).to_dict()
     assert thin["as_measured"]["launch"] == thin["normalized"]["launch"]
     assert (
         thin["as_measured"]["metrics"]["carry"]["value"]
@@ -234,9 +232,9 @@ def test_a_flight_on_model_geometry_spin_is_never_calculated():
         spin_source="model_geometry",
         spin_method=cm.SPIN_METHOD_MODEL_GEOMETRY,
     )
-    result = compute_flight(shot, substitutes=False)
+    result = compute_flight(shot)
     assert result.status == "model_geometry"
     shot = _fusion_shot(spin_axis_source="model geometry (D-plane tilt, ...)")
-    assert compute_flight(shot, substitutes=False).status == "model_geometry"
+    assert compute_flight(shot).status == "model_geometry"
     shot = replace(_fusion_shot())
-    assert compute_flight(shot, substitutes=False).status == "calculated"
+    assert compute_flight(shot).status == "calculated"

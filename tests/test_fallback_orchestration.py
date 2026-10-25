@@ -76,7 +76,6 @@ def kiosk(monkeypatch, scene):
     monkeypatch.setattr(server_module, "camera_tilt_calibration_path", None)
     monkeypatch.setattr(server_module, "horizontal_offset_deg", None)
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
     monkeypatch.setattr(server_module, "_forward_shot_to_simulators", lambda shot: None)
@@ -170,8 +169,9 @@ def test_every_downstream_metric_the_fallback_reaches_resolves_labelled_by_it(ki
     assert full["value"] is not None
     assert full["status"] == "experimental"
     assert shot.input_sources["tee_side_offset"]["source"] == "camera_resting_ball"
-    # the OPS spin is below the floor and there is no club: the kinematic spin (D38)
-    assert shot.input_sources["spin"]["route"] == "kinematic"
+    # the OPS spin is below the floor and there is no club: no formula spin stands in
+    # (25 Oct 2026), the OPS's own reading stays, experimental, feeding nothing
+    assert shot.input_sources["spin"]["route"] == "ops_below_floor"
     assert metrics["spin_rate"]["value"] is not None
     assert metrics["spin_rate"]["status"] == "experimental"
     # radial OPS speeds are sensor readings: untouched
@@ -230,10 +230,10 @@ def test_without_a_camera_clip_the_radar_and_ops_still_resolve_everything_they_c
 
     assert metrics["launch_vertical"]["status"] == "measured"
     assert shot.camera_fallback_launch["reason"] == "no camera clip for this shot"
-    # the kinematic spin on the radar's launch and the OPS radial speed
-    assert shot.input_sources["spin"]["route"] == "kinematic"
+    # no formula spin on the radar's launch (25 Oct 2026): the OPS's own weak reading
+    assert shot.input_sources["spin"]["route"] == "ops_below_floor"
     assert metrics["spin_rate"]["value"] is not None
-    assert metrics["spin_rate"]["status"] == "estimated"
+    assert metrics["spin_rate"]["status"] == "experimental"
     assert metrics["ball_range"]["status"] == "not_measured"
     assert "no camera frames" in metrics["ball_range"]["reason"]
 

@@ -1,4 +1,4 @@
-"""Tests for sim.resolver — the shared fallback table + provenance."""
+"""Tests for sim.resolver: what a simulator is sent, with provenance; nothing filled in."""
 
 import math
 from datetime import datetime
@@ -7,8 +7,8 @@ import pytest
 
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
-from openflight.sim.resolver import SPIN_MODEL_RPM, resolve_shot
-from openflight.sim.types import IncompleteShotError, PlayerState
+from openflight.sim.resolver import resolve_shot
+from openflight.sim.types import IncompleteShotError, PlayerState, UnmeasuredShotError
 
 
 def _shot(**kw) -> Shot:
@@ -53,67 +53,44 @@ def test_full_measured_shot():
         assert r.provenance[f] == "calculated", f
 
 
-def test_missing_vla_falls_back_to_optimal_launch():
-    shot = _shot(spin_rpm=2500.0, spin_confidence=0.9, club=ClubType.IRON_7)
-    r = resolve_shot(shot, PlayerState())
-    assert r.vla == 20.5  # _OPTIMAL_LAUNCH[IRON_7]
-    assert r.provenance["vla"] == "estimated"
+_MEASURED = dict(
+    launch_angle_vertical=12.0,
+    launch_angle_horizontal=1.5,
+    spin_rpm=2500.0,
+    spin_confidence=0.9,
+    spin_axis_deg=-3.0,
+)
 
 
-def test_missing_hla_falls_back_to_zero():
-    r = resolve_shot(_shot(spin_rpm=2500.0, spin_confidence=0.9), PlayerState())
-    assert r.hla == 0.0
-    assert r.provenance["hla"] == "estimated"
+@pytest.mark.parametrize(
+    "missing, named",
+    [
+        ({"launch_angle_vertical": None}, "vertical launch"),
+        ({"launch_angle_horizontal": None}, "horizontal launch"),
+        ({"spin_confidence": 0.4}, "spin"),
+        ({"spin_rpm": None, "spin_confidence": None}, "spin"),
+        ({"spin_axis_deg": None}, "spin axis"),
+    ],
+)
+def test_a_missing_required_field_is_never_filled_in(missing, named):
+    """No club-table launch, 0 deg angle or typical spin on any install (decision 1)."""
+    state = PlayerState()
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(_shot(**{**_MEASURED, **missing}), state)
+    assert refused.value.missing == [named]
+    assert state.shot_counter == 0
 
 
-def test_low_spin_confidence_uses_model():
-    shot = _shot(spin_rpm=2500.0, spin_confidence=0.4, club=ClubType.DRIVER)
-    r = resolve_shot(shot, PlayerState())
-    assert r.total_spin_rpm == SPIN_MODEL_RPM[ClubType.DRIVER]
-    assert r.provenance["total_spin"] == "estimated"
+def test_missing_club_speed_and_path_are_left_out():
+    r = resolve_shot(_shot(**_MEASURED), PlayerState())
+    assert r.club_speed_mph is None and r.club_path_deg is None
+    assert "club_speed" not in r.provenance and "club_path" not in r.provenance
 
 
-def test_missing_spin_uses_model():
-    r = resolve_shot(_shot(club=ClubType.IRON_7), PlayerState())
-    assert r.total_spin_rpm == SPIN_MODEL_RPM[ClubType.IRON_7]
-    assert r.provenance["total_spin"] == "estimated"
-
-
-def test_missing_spin_axis_falls_back_to_zero():
-    shot = _shot(spin_rpm=2500.0, spin_confidence=0.9)  # no spin_axis_deg
-    r = resolve_shot(shot, PlayerState())
-    assert r.spin_axis_deg == 0.0
-    assert r.provenance["spin_axis"] == "estimated"
-    assert r.back_spin_rpm == 2500.0
-    assert r.side_spin_rpm == 0.0
-
-
-def test_derived_spin_provenance_estimated_when_either_input_estimated():
-    shot = _shot(spin_rpm=2500.0, spin_confidence=0.9)  # axis missing
-    r = resolve_shot(shot, PlayerState())
-    assert r.provenance["back_spin"] == "estimated"
-    assert r.provenance["side_spin"] == "estimated"
-
-
-def test_missing_club_speed_is_none():
-    r = resolve_shot(_shot(spin_rpm=2500.0, spin_confidence=0.9), PlayerState())
-    assert r.club_speed_mph is None
-    assert r.provenance["club_speed"] == "estimated"
-
-
-def test_missing_club_path_falls_back_to_zero():
-    shot = _shot(spin_rpm=2500.0, spin_confidence=0.9, club_speed_mph=100.0)
-    r = resolve_shot(shot, PlayerState())
-    assert r.club_path_deg == 0.0
-    assert r.provenance["club_path"] == "estimated"
-
-
-def test_an_ops_only_carry_is_always_estimated():
-    """An OPS-only carry flies a club-typical spin, so it is an estimate even with a measured launch."""
-    with_launch = resolve_shot(_shot(launch_angle_vertical=12.0), PlayerState())
-    assert with_launch.provenance["carry"] == "estimated"
-    estimated = resolve_shot(_shot(), PlayerState())
-    assert estimated.provenance["carry"] == "estimated"
+def test_an_unlabelled_carry_is_not_sent():
+    """A carry with no label has unknown inputs; nothing is sent in its place."""
+    r = resolve_shot(_shot(**_MEASURED, carry_spin_adjusted=244.0), PlayerState())
+    assert r.carry_yards is None and "carry" not in r.provenance
 
 
 def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
@@ -127,7 +104,7 @@ def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
         carry_spin_adjusted=244.0,
         carry_status="measured",
     )
-    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    resolved = resolve_shot(shot, PlayerState())
     assert resolved.carry_yards == pytest.approx(244.0)
     assert resolved.provenance["carry"] == "calculated"
 
@@ -140,20 +117,18 @@ def test_missing_ball_speed_raises():
 def test_shot_number_uses_player_state():
     ps = PlayerState()
     ps.next_shot_number()  # consume one
-    r = resolve_shot(_shot(spin_rpm=2500.0, spin_confidence=0.9), ps)
+    r = resolve_shot(_shot(**_MEASURED), ps)
     assert r.shot_number == 2
 
 
-def test_carry_prefers_committed_spin_adjusted_carry():
-    shot = _shot(launch_angle_vertical=12.0, carry_spin_adjusted=244.0)
+def test_carry_is_the_committed_simulated_carry():
+    shot = _shot(**_MEASURED, carry_spin_adjusted=244.0, carry_status="calculated")
     assert resolve_shot(shot, PlayerState()).carry_yards == pytest.approx(244.0)
 
 
-def test_carry_falls_back_to_table_when_nothing_committed():
-    shot = _shot(launch_angle_vertical=12.0)
-    assert resolve_shot(shot, PlayerState()).carry_yards == pytest.approx(
-        shot.estimated_carry_yards
-    )
+def test_carry_is_never_the_ball_speed_table():
+    shot = _shot(**_MEASURED)
+    assert resolve_shot(shot, PlayerState()).carry_yards is None
 
 
 _NON_FINITE = [math.nan, math.inf, -math.inf]
@@ -187,25 +162,36 @@ def test_a_non_finite_input_resolves_exactly_like_a_missing_one(field, bad):
         spin_axis_deg=-3.0,
         club_path_deg=0.5,
     )
-    with_bad = resolve_shot(_shot(**{**measured, field: bad}), PlayerState())
-    with_none = resolve_shot(_shot(**{**measured, field: None}), PlayerState())
+
+    def resolved(value):
+        try:
+            return resolve_shot(_shot(**{**measured, field: value}), PlayerState())
+        except UnmeasuredShotError as refused:
+            return refused.missing
+
+    with_bad, with_none = resolved(bad), resolved(None)
+    if isinstance(with_none, list):
+        assert with_bad == with_none
+        return
     _same_resolution(with_bad, with_none)
     assert all(v is None or math.isfinite(v) for v in with_bad.as_values().values())
 
 
 @pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
-def test_a_non_finite_launch_never_makes_carry_measured_or_non_finite(bad):
-    r = resolve_shot(_shot(launch_angle_vertical=bad), PlayerState())
-    assert math.isfinite(r.vla) and math.isfinite(r.carry_yards)
-    assert r.provenance["vla"] == "estimated" and r.provenance["carry"] == "estimated"
-    _same_resolution(r, resolve_shot(_shot(launch_angle_vertical=None), PlayerState()))
+def test_a_non_finite_launch_is_refused_like_a_missing_one(bad):
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(_shot(**{**_MEASURED, "launch_angle_vertical": bad}), PlayerState())
+    assert refused.value.missing == ["vertical launch"]
 
 
 @pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
-def test_a_non_finite_calculated_spin_uses_the_model(bad):
-    r = resolve_shot(_shot(spin_rpm=bad, spin_source="calculated"), PlayerState())
-    assert r.total_spin_rpm == SPIN_MODEL_RPM[ClubType.DRIVER]
-    assert r.provenance["total_spin"] == "estimated"
+def test_a_non_finite_calculated_spin_is_refused(bad):
+    shot = _shot(
+        **{**_MEASURED, "spin_rpm": bad, "spin_confidence": None}, spin_source="calculated"
+    )
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState())
+    assert refused.value.missing == ["spin"]
 
 
 @pytest.mark.parametrize("bad", _NON_FINITE, ids=["nan", "inf", "-inf"])
@@ -218,17 +204,16 @@ def test_no_resolved_value_can_leave_non_finite(monkeypatch):
     """Last line: whatever produced it, a non-finite resolved value is never sent."""
     from openflight.sim import resolver
 
-    class Physics:
-        optimal_launch_deg = math.nan
-
-    monkeypatch.setattr(resolver, "get_club_physics", lambda _club: Physics())
-    with pytest.raises(IncompleteShotError, match="vla"):
-        resolve_shot(_shot(), PlayerState())
+    monkeypatch.setattr(resolver, "_measured_total_spin", lambda _shot: (math.nan, "measured"))
+    with pytest.raises(IncompleteShotError, match="total_spin"):
+        resolve_shot(_shot(**_MEASURED), PlayerState())
 
 
 def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
     r = resolve_shot(
         _shot(
+            launch_angle_vertical=12.0,
+            launch_angle_horizontal=1.5,
             spin_rpm=2700.0,
             spin_source="calculated",
             spin_axis_deg=4.0,
@@ -241,17 +226,31 @@ def test_a_calculated_spin_and_axis_go_out_labelled_calculated():
         assert r.provenance[field] == "calculated", field
 
 
-def test_a_spin_component_is_as_good_as_its_weaker_source():
-    measured_spin = dict(spin_rpm=2500.0, spin_confidence=0.9)
+def test_a_spin_component_is_as_good_as_its_weaker_source(monkeypatch):
+    from openflight.sim import resolver
+
+    angles = dict(launch_angle_vertical=12.0, launch_angle_horizontal=1.5)
     calculated_axis = resolve_shot(
         _shot(
-            **measured_spin,
+            **angles,
+            spin_rpm=2500.0,
+            spin_confidence=0.9,
             spin_axis_deg=2.0,
             spin_axis_source="calculated (D-plane tilt, Wood et al. 2018 weights)",
         ),
         PlayerState(),
     )
-    estimated_axis = resolve_shot(_shot(spin_rpm=2700.0, spin_source="calculated"), PlayerState())
+    monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
+    estimated_axis = resolve_shot(
+        _shot(
+            **angles,
+            spin_rpm=2700.0,
+            spin_source="calculated",
+            spin_axis_deg=2.0,
+            spin_axis_source="estimated (D-plane tilt; horizontal launch is low-coherence)",
+        ),
+        PlayerState(),
+    )
 
     assert calculated_axis.provenance["spin_axis"] == "calculated"
     assert calculated_axis.provenance["side_spin"] == "calculated"
@@ -259,36 +258,13 @@ def test_a_spin_component_is_as_good_as_its_weaker_source():
     assert estimated_axis.provenance["side_spin"] == "estimated"
 
 
-def test_server_estimated_launch_angles_are_tagged_estimated():
-    # server._ensure_user_facing_launch_angles fills missing angles before the
-    # sim fan-out and marks them with source "estimated".
-    shot = _shot(
-        launch_angle_vertical=11.0,
-        launch_angle_vertical_source="estimated",
-        launch_angle_horizontal=0.0,
-        launch_angle_horizontal_source="estimated",
-    )
-    r = resolve_shot(shot, PlayerState())
-    assert r.vla == 11.0
-    assert r.hla == 0.0
-    assert r.provenance["vla"] == "estimated"
-    assert r.provenance["hla"] == "estimated"
-    assert r.provenance["carry"] == "estimated"
-
-
-def test_measured_vla_with_estimated_hla_keeps_each_angle_s_own_label():
-    # A vertical angle radar alone gives a measured VLA, and the server fills in
-    # the neutral 0.0 HLA. An OPS-only carry stays "estimated" whatever the launch angle.
-    shot = _shot(
-        launch_angle_vertical=12.0,
-        launch_angle_vertical_source="radar",
-        launch_angle_horizontal=0.0,
-        launch_angle_horizontal_source="estimated",
-    )
+def test_a_weak_horizontal_keeps_its_own_estimated_label():
+    # a low-coherence IWR horizontal is a weak measured angle, not a filled-in one
+    shot = _shot(**_MEASURED, launch_angle_vertical_source="radar")
+    shot.launch_angle_horizontal_source = "radar_low_coherence"
     r = resolve_shot(shot, PlayerState())
     assert r.provenance["vla"] == "measured"
     assert r.provenance["hla"] == "estimated"
-    assert r.provenance["carry"] == "estimated"
 
 
 @pytest.mark.parametrize(
@@ -310,5 +286,5 @@ def test_a_fusion_shot_on_the_camera_fallback_launch_is_shown_but_never_flown(fi
         **{field: "camera_fallback"},
     )
     with pytest.raises(UnmeasuredShotError) as refused:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
     assert words in str(refused.value)

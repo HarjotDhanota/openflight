@@ -49,8 +49,11 @@ class _FakeConnector:
 
 
 def _shot():
+    # every field OpenConnect requires, measured: nothing is filled in (decision 1)
     return Shot(ball_speed_mph=140.0, timestamp=datetime(2026, 6, 13, 12, 0, 0),
-                club=ClubType.DRIVER, launch_angle_vertical=12.0)
+                club=ClubType.DRIVER, launch_angle_vertical=12.0,
+                launch_angle_horizontal=1.0, spin_rpm=2600.0, spin_confidence=0.9,
+                spin_axis_deg=1.0)
 
 
 def test_forward_fans_out_to_connected_only(server):
@@ -237,22 +240,10 @@ def _strict_json(data):
     return json.loads(json.dumps(data, allow_nan=False), parse_constant=reject)
 
 
-def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypatch):
-    """Codec bytes, log_sim_send and the sim_shot emit are all strict JSON."""
+def test_a_non_finite_shot_reaches_no_simulator_and_says_why(server, monkeypatch):
+    """A NaN angle is a missing one: the shot is not sent, nothing is filled in, and the
+    drop event and the sim-send log are strict JSON."""
     import math  # pylint: disable=import-outside-toplevel
-
-    from openflight.gspro.codec import GSProCodec  # pylint: disable=import-outside-toplevel
-
-    wire = []
-
-    class CodecConnector(_FakeConnector):
-        def __init__(self):
-            super().__init__("gspro")
-            self.codec = GSProCodec()
-
-        def send_shot(self, resolved):
-            super().send_shot(resolved)
-            wire.append(self.codec.build_shot(resolved))
 
     logged = []
 
@@ -261,8 +252,12 @@ def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypat
         def log_sim_send(**entry):
             logged.append(entry)
 
+        @staticmethod
+        def log_sim_not_sent(**entry):
+            logged.append(entry)
+
     monkeypatch.setattr(server, "get_session_logger", lambda: SessionLog())
-    connector = CodecConnector()
+    connector = _FakeConnector("gspro")
     server.sim_connectors = [connector]
     shot = Shot(
         ball_speed_mph=140.0,
@@ -274,13 +269,12 @@ def test_a_non_finite_shot_reaches_no_simulator_payload_as_nan(server, monkeypat
     )
     server._forward_shot_to_simulators(shot)
 
-    ball = _strict_json(wire[0])["BallData"]
-    assert all(math.isfinite(ball[key]) for key in ("VLA", "HLA", "CarryDistance", "SpinAxis"))
-    assert _strict_json(logged[0])["provenance"]["vla"] == "estimated"
-    sim_shot = [a_[1] for a_, k in server._emitted if a_[0] == "sim_shot"][0]
-    payload = _strict_json(sim_shot)
-    assert payload["provenance"]["vla"] == payload["provenance"]["carry"] == "estimated"
-    assert payload["provenance"]["hla"] == payload["provenance"]["spin_axis"] == "estimated"
+    assert connector.sent == []
+    assert _strict_json(logged[0])["missing"] == [
+        "vertical launch", "horizontal launch", "spin", "spin axis"
+    ]
+    dropped = [a_[1] for a_, k in server._emitted if a_[0] == "sim_shot_dropped"][0]
+    assert _strict_json(dropped)["missing"] == logged[0]["missing"]
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
@@ -290,13 +284,9 @@ def test_a_non_finite_launch_confidence_still_sends_the_measured_shot(server, ba
     server.sim_connectors = [connector]
 
     def shot(confidence):
-        return Shot(
-            ball_speed_mph=140.0,
-            timestamp=datetime(2026, 6, 13, 12, 0, 0),
-            club=ClubType.DRIVER,
-            launch_angle_vertical=12.0,
-            launch_angle_confidence=confidence,
-        )
+        measured = _shot()
+        measured.launch_angle_confidence = confidence
+        return measured
 
     server._forward_shot_to_simulators(shot(bad))
     server._forward_shot_to_simulators(shot(None))

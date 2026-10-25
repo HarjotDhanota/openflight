@@ -161,7 +161,8 @@ def test_a_missing_input_leaves_spin_and_axis_not_measured(overrides):
     assert shot.collision_model["metrics"]["spin_axis"]["reason"]
 
 
-def test_an_iwr_attack_candidate_is_not_an_input():
+def test_an_iwr_attack_candidate_is_an_estimated_input():
+    """Owner decision 3: the candidate is a route, estimated, with its reason."""
     shot = _delivered_shot(
         experimental_fused_attack_angle_deg=None,
         experimental_fused_status=None,
@@ -175,8 +176,11 @@ def test_an_iwr_attack_candidate_is_not_an_input():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     assert shot.face_angle_deg is not None  # the accepted IWR path is used
-    assert shot.dynamic_loft_deg is None
-    assert "attack angle" in shot.collision_model["metrics"]["dynamic_loft"]["reason"]
+    attack = shot.collision_model["inputs"]["attack_angle"]
+    assert attack["value"] == -4.0 and attack["label"] == "estimated"
+    assert attack["source"] == shot_models.IWR_CANDIDATE_SOURCE
+    assert shot.dynamic_loft_deg is not None
+    assert shot.collision_model["metrics"]["dynamic_loft"]["status"] == "estimated"
 
 
 def test_a_canonical_attack_angle_is_used_first():
@@ -225,27 +229,25 @@ def test_a_rerun_with_fewer_inputs_clears_its_own_earlier_values():
     assert shot.spin_rpm is None and shot.spin_source is None
 
 
-def test_the_empirical_formula_is_recorded_but_the_published_model_is_preferred():
+def test_the_published_model_is_the_spin_and_no_formula_runs_beside_it():
     shot = _delivered_shot()
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
-    published = shot.spin_rpm_collision
 
-    server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
+    server_module._resolve_spin(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_rpm == pytest.approx(published)
-    assert shot.spin_rpm_calculated_empirical is not None
-    assert shot.spin_rpm_calculated_empirical != pytest.approx(published)
-    assert shot.spin_source == "calculated"
+    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_collision)
+    assert shot.spin_rpm_calculated_empirical is None
+    assert shot.input_sources["spin"]["route"] == "collision"
 
 
-def test_the_empirical_formula_still_runs_alone_without_the_published_model():
+def test_without_the_published_model_no_formula_stands_in():
     shot = _delivered_shot(experimental_fused_club_path_deg=None, experimental_fused_status=None)
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert server_module._apply_calculated_spin(shot)  # pylint: disable=protected-access
+    server_module._resolve_spin(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_rpm == pytest.approx(shot.spin_rpm_calculated_empirical)
-    assert shot.spin_source == "calculated"
+    assert shot.spin_rpm_calculated_empirical is None
+    assert shot.input_sources["spin"]["route"] != "kinematic"
 
 
 # ---- simulators get the calculated labels (D31) -------------------------------------
@@ -255,7 +257,7 @@ def test_simulators_receive_calculated_spin_and_axis_under_the_calculated_label(
     shot = _delivered_shot()
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    resolved = resolve_shot(shot, PlayerState(), substitutes=False)
+    resolved = resolve_shot(shot, PlayerState())
 
     assert resolved.total_spin_rpm == pytest.approx(shot.spin_rpm_collision)
     assert resolved.spin_axis_deg == pytest.approx(shot.spin_axis_deg)
@@ -270,7 +272,7 @@ def test_a_fusion_shot_without_collision_inputs_is_still_not_sent():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     with pytest.raises(UnmeasuredShotError) as raised:
-        resolve_shot(shot, PlayerState(), substitutes=False)
+        resolve_shot(shot, PlayerState())
 
     assert raised.value.missing == ["spin", "spin axis"]
 

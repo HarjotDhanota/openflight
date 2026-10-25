@@ -126,7 +126,6 @@ def configure_kiosk(start: dict, *, ignore_iwr: bool, aim_uncertainty_deg: float
     server.camera_optical_calibration = None
     server.camera_tilt_calibration_path = None
     server.ball_at_address_monitor = None
-    server.calculated_spin_enabled = False
     server.ballistics_enabled = True
     server.get_session_logger = lambda: None
     server._forward_shot_to_simulators = lambda shot: None  # pylint: disable=protected-access

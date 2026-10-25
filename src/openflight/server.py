@@ -57,7 +57,6 @@ from .launch_monitor import (
     CARRY_NOT_MEASURED,
     SMASH_RADIAL_RATIO,
     SPIN_CONFIDENCE_HIGH,
-    SPIN_CONFIDENCE_RELIABLE,
     Shot,
     summarize_shots,
 )
@@ -72,7 +71,7 @@ from .ops243 import (
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
 from .ready_light import ReadyLight, SensorStates
-from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
+from .rolling_buffer.monitor import get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .setup_record import SECTIONS as SETUP_SECTIONS, StartContext
 from .sim import (
@@ -88,7 +87,6 @@ from .sim import (
 )
 from .source_labels import MODEL_LABELS
 from .speed_correction import evaluate_experimental_total_speed
-from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
@@ -1265,52 +1263,15 @@ def _select_horizontal_radar_launch(kld7_angle, horizontal_limit: float) -> tupl
     return True, details
 
 
-def _fusion_unit() -> bool:
-    """Whether this kiosk measures angles (IWR or camera), so it fills nothing in."""
-    return iwr6843_runtime is not None or camera_capture_runtime is not None
+def _note_unmeasured_launch_angles(shot: Shot) -> None:
+    """Log a launch angle no route measured; nothing is filled in on any install.
 
-
-def _estimate_launch_from_finite_inputs(shot: Shot) -> tuple[float, float]:
-    """The OPS-only launch estimate; a non-finite club speed or spin is a missing one."""
-    return estimate_launch_angle(
-        shot.club,
-        shot.ball_speed_mph,
-        club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
-        spin_rpm=shot.spin_rpm if _finite(shot.spin_rpm) else None,
-    )
-
-
-def _ensure_user_facing_launch_angles(shot: Shot) -> None:
-    """An OPS-only install's labelled launch estimates; a fusion unit fills nothing in."""
-    if _fusion_unit():
-        if not _finite(shot.launch_angle_vertical) or not _finite(shot.launch_angle_horizontal):
-            logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
-        return
-    estimated: tuple[float, float] | None = None
-
-    if not _finite(shot.launch_angle_vertical):
-        estimated = _estimate_launch_from_finite_inputs(shot)
-        shot.launch_angle_vertical = estimated[0]
-        shot.launch_angle_confidence = estimated[1]
-        shot.launch_angle_vertical_confidence = estimated[1]
-        shot.launch_angle_vertical_source = "estimated"
-        shot.angle_source = "estimated"
-        logger.info(
-            "[SERVER] Angle source: estimated (%.1f°, conf=%.0f%%)",
-            estimated[0],
-            estimated[1] * 100,
-        )
-
-    if not _finite(shot.launch_angle_horizontal):
-        shot.launch_angle_horizontal = 0.0
-        if shot.launch_angle_horizontal_confidence is None:
-            if estimated is None:
-                estimated = _estimate_launch_from_finite_inputs(shot)
-            shot.launch_angle_horizontal_confidence = estimated[1]
-        shot.launch_angle_horizontal_source = "estimated"
-        if shot.angle_source is None:
-            shot.angle_source = "estimated"
-        logger.info("[SERVER] Horizontal angle source: neutral estimate (0.0°)")
+    OPS-only installs used to fill a club-table vertical and a 0 deg horizontal
+    (owner decision 1, 25 Oct 2026, removed them): the metric is not measured, with
+    its reason, and so is everything built on it.
+    """
+    if not _finite(shot.launch_angle_vertical) or not _finite(shot.launch_angle_horizontal):
+        logger.info("[SERVER] Launch angle not measured on this shot; nothing filled in")
 
 
 # K-LD7 produces ~34 RADC frames/sec at 3 Mbaud. With buffer_seconds=6
@@ -2496,9 +2457,6 @@ def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, st
         )
     forward_m, lateral_m, above_m = geometry
     return forward_m * FEET_PER_M, above_m * FEET_PER_M, lateral_m * FEET_PER_M, "ops_rig_offsets"
-
-
-calculated_spin_enabled = False
 
 
 def _null_non_finite(value, path: str, not_measured: list[dict]):
@@ -4224,8 +4182,8 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
     if not targets:
         return
     try:
-        # a fusion unit sends only what it measured
-        resolved = resolve_shot(shot, sim_player_state, substitutes=not _fusion_unit())
+        # every install sends only what the shot measured (owner decision 1)
+        resolved = resolve_shot(shot, sim_player_state)
     except IncompleteShotError as e:
         _report_shot_not_sent(shot, targets, e)
         return
@@ -4433,53 +4391,8 @@ def _sim_on_inbound(target: str, event) -> None:
             logger.info("[sim] ← %s ack: shot %s ok", target, event.shot_number)
 
 
-# Shot.spin_method for the --calculated-spin formula's value
-EMPIRICAL_SPIN_METHOD = "empirical 170 v sin(LA)^1.2 (--calculated-spin; not a published model)"
 # spin_source values a model wrote; anything else is the radar's (or None)
 _MODEL_SPIN_SOURCES = MODEL_LABELS
-
-
-def _apply_calculated_spin(shot: Shot) -> bool:
-    """Replace radar-measured spin with the kinematic estimate.
-
-    The 24 GHz OPS return carries no usable spin line (see
-    spin_estimate.py), so when the vertical launch angle was actually
-    measured (radar/camera, not the club-table estimate), spin_rpm is
-    rewritten with 170*v*sin(LA)^1.2. The displaced measured value is
-    kept in spin_rpm_measured for offline scoring. Returns True when
-    the shot was rewritten.
-
-    The empirical value is always kept in spin_rpm_calculated_empirical; a shot
-    model's spin, when there is one, is the spin used.
-    """
-    if shot.launch_angle_vertical is None:
-        return False
-    if shot.launch_angle_vertical_source not in ("radar", "camera"):
-        return False
-    spin_calc = calculated_spin_rpm(shot.ball_speed_mph, shot.launch_angle_vertical)
-    if spin_calc is None:
-        return False
-    shot.spin_rpm_calculated_empirical = spin_calc
-    method = EMPIRICAL_SPIN_METHOD
-    model_spin = kiosk_extensions.first("model_spin", shot)
-    if model_spin is not None:
-        spin_calc, method = model_spin
-    if shot.spin_source not in _MODEL_SPIN_SOURCES:
-        shot.spin_rpm_measured = shot.spin_rpm
-        shot.spin_method_measured = shot.spin_method
-    shot.spin_rpm = spin_calc
-    shot.spin_method = method
-    shot.spin_confidence = None
-    shot.spin_source = "calculated"
-    shot.spin_rejection_reason = None
-    logger.info(
-        "[SERVER] Calculated spin: %.0f rpm (v=%.1f mph, LA=%.1f deg, measured was %s)",
-        spin_calc,
-        shot.ball_speed_mph,
-        shot.launch_angle_vertical,
-        "%.0f rpm" % shot.spin_rpm_measured if shot.spin_rpm_measured else "none",
-    )
-    return True
 
 
 # Confidence floor/ceiling for measured angles. A measured angle always beats
@@ -6275,55 +6188,43 @@ def _shot_speed_correction_geometry(shot: Shot):
 
 
 def _carry_log_text(shot: Shot, source: str | None) -> str:
-    """The carry the UI shows (``Shot.reported_carry_yards``), named, beside the table estimate."""
+    """The carry the UI shows (``Shot.reported_carry_yards``), named."""
     carry = shot.reported_carry_yards
     if carry is None:
         return "carry not measured"
-    if not shot.table_carry_allowed:
-        return f"carry shown={carry:.0f} yds ({source or shot.carry_status})"
-    table = shot.estimated_carry_yards
-    if not _finite(shot.carry_spin_adjusted):
-        return f"carry shown={table:.0f} yds (table estimate)"
-    return (
-        f"carry shown={carry:.0f} yds ({source or 'spin-adjusted'}), table estimate={table:.0f} yds"
-    )
+    return f"carry shown={carry:.0f} yds ({source or shot.carry_status})"
 
 
 def _open_carry_status(shot: Shot) -> None:
-    """Name the carry before the first emit: a fusion unit's is not measured until simulated."""
-    shot.carry_status = CARRY_NOT_MEASURED if _fusion_unit() else CARRY_ESTIMATED
+    """Name the carry before the first emit: not measured until the flight model runs."""
+    shot.carry_status = CARRY_NOT_MEASURED
 
 
 def _open_smash_factor_status(shot: Shot) -> None:
-    """Label a fusion unit's smash a radial (line-of-sight) ratio before the first emit."""
-    shot.smash_factor_status = SMASH_RADIAL_RATIO if _fusion_unit() else None
+    """Label the smash a radial (line-of-sight) ratio before the first emit: OPS radial
+    ball speed over OPS radial club speed, on every install."""
+    shot.smash_factor_status = SMASH_RADIAL_RATIO
 
 
-def _ballistic_carry(shot: Shot, *, fusion: bool) -> kiosk_extensions.CarryOutcome:
-    """The simulator's carry on the shot's launch, or why there is none.
+def _ballistic_carry(shot: Shot) -> kiosk_extensions.CarryOutcome:
+    """The simulator's carry on the shot's own launch, or none (no flight model loaded).
 
-    A fusion unit simulates only a measured spin, horizontal launch and spin axis;
-    an OPS-only unit lets resolve_launch fill the club-typical spin.
+    It flies only a measured spin, vertical and horizontal launch and spin axis;
+    nothing is filled in (owner decision 1, 25 Oct 2026).
     """
-    inputs = [shot.ball_speed_mph, shot.launch_angle_vertical]
-    if fusion:
-        inputs += [shot.spin_rpm, shot.launch_angle_horizontal, shot.spin_axis_deg]
-    measured_spin = _finite(shot.spin_confidence) and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
-    usable = ballistics_enabled and all(_finite(v) for v in inputs)
-    if usable and (measured_spin or not fusion):
-        trajectory = simulate(resolve_launch(shot))
+    conditions = resolve_launch(shot) if ballistics_enabled else None
+    if conditions is not None and _finite(shot.ball_speed_mph):
+        trajectory = simulate(conditions)
         if _finite(trajectory.carry_yards):
             shot.carry_spin_adjusted = trajectory.carry_yards
             shot.carry_status = CARRY_ESTIMATED
             logger.info("[SERVER] Ballistic carry: %.0f yds", shot.carry_spin_adjusted)
-            return kiosk_extensions.CarryOutcome(source="ballistic", table_reason=None)
+            return kiosk_extensions.CarryOutcome(source="ballistic")
     reason = "ballistics disabled" if not ballistics_enabled else "launch not measured"
-    if fusion:
-        shot.carry_spin_adjusted = None
-        shot.carry_status = CARRY_NOT_MEASURED
-        logger.info("[SERVER] Carry not measured: %s", reason)
-        return kiosk_extensions.CarryOutcome(source=None, table_reason=None)
-    return kiosk_extensions.CarryOutcome(source=None, table_reason=reason)
+    shot.carry_spin_adjusted = None
+    shot.carry_status = CARRY_NOT_MEASURED
+    logger.info("[SERVER] Carry not measured: %s", reason)
+    return kiosk_extensions.CarryOutcome(source=None)
 
 
 _STAGE_FAILED = object()
@@ -6348,20 +6249,23 @@ def _isolated_stage(shot: Shot, name: str, stage, *args, **kwargs):
         return _STAGE_FAILED
 
 
-# Kinematic spin (spin_estimate): fitted to the 2026-06-08 TrackMan session, 10.5 %
-# median error on TrackMan's own inputs. D38: fitted physics, labelled.
-KINEMATIC_SPIN_METHOD = (
-    "kinematic 170 v sin(LA)^1.2 (spin_estimate, fitted to TrackMan 2026-06-08; "
-    "used when no OPS spin is accepted and the collision model has none)"
-)
+NO_TRUSTWORTHY_SPIN = "no trustworthy spin"
 
 
-def _apply_fallback_spin(shot: Shot) -> bool:
-    """The spin's last route: with no accepted OPS spin and no collision spin, the
-    kinematic spin from the ball speed and the vertical launch (D38), labelled by its
-    inputs: calculated on the full ball speed, estimated on the radial one; the launch's
-    own label (a camera fallback's: experimental) reaches it in ``shot_metrics``."""
+def _resolve_spin(shot: Shot) -> None:
+    """Record how the shot's spin was chosen (``Shot.input_sources["spin"]``).
+
+    Routes, best first: an accepted OPS spin (measured); the collision model's spin
+    under its own label (experimental when it rests on the camera head track or an
+    experimental launch, decision 5); the OPS reading below the confidence floor
+    (experimental, feeding nothing). Nothing else: no formula spin stands in (owner
+    decision, 25 Oct 2026: the kinematic and refitted formulas missed TrackMan by
+    26-30 % median), so a shot with none of these has no spin, with every route's
+    reason. The collision spin is already on the shot (``shot_models``); this only
+    records the choice.
+    """
     from .source_chain import Candidate, Route, resolve  # noqa: PLC0415
+    from .source_labels import LABEL_EXPERIMENTAL, experimental_collision_inputs  # noqa: PLC0415
 
     accepted = (
         shot.spin_source not in _MODEL_SPIN_SOURCES
@@ -6375,116 +6279,61 @@ def _apply_fallback_spin(shot: Shot) -> bool:
         if accepted:
             return Candidate(float(shot.spin_rpm), "measured", shot.spin_method or "ops")
         if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
-            return f"OPS spin confidence {shot.spin_confidence:.2f} below {SPIN_CONFIDENCE_HIGH}"
-        return shot.spin_rejection_reason or "no OPS spin"
+            return (
+                f"the OPS reading's confidence {shot.spin_confidence:.2f} is below the "
+                f"floor {SPIN_CONFIDENCE_HIGH}"
+            )
+        return shot.spin_rejection_reason or "no OPS spin reading"
 
     def collision():
         if shot.spin_source in _MODEL_SPIN_SOURCES and _finite(shot.spin_rpm):
-            return Candidate(float(shot.spin_rpm), shot.spin_source, shot.spin_method or "model")
+            experimental = experimental_collision_inputs(shot.collision_model)
+            label = LABEL_EXPERIMENTAL if experimental else shot.spin_source
+            note = f"rests on experimental {', '.join(experimental)}" if experimental else None
+            return Candidate(
+                float(shot.spin_rpm), label, shot.spin_method or "collision model", note=note
+            )
+        if shot.collision_model is None:
+            return "the shot has no club delivery for the collision model"
         reason = (((shot.collision_model or {}).get("metrics") or {}).get("spin_rate") or {}).get(
             "reason"
         )
         return f"collision model: {reason or 'no spin'}"
-
-    def kinematic():
-        source = shot.launch_angle_vertical_source
-        if source not in ("radar", "camera", "camera_fallback") or not _finite(
-            shot.launch_angle_vertical
-        ):
-            return "no vertical launch from a sensor"
-        full = shot.ball_speed_full_mph if _finite(shot.ball_speed_full_mph) else None
-        speed = full if full is not None else shot.ball_speed_mph
-        spin = calculated_spin_rpm(speed, shot.launch_angle_vertical)
-        if spin is None:
-            return "outside the kinematic model's launch range"
-        full_status = (shot.ball_speed_full or {}).get("status")
-        label = "calculated" if full is not None and full_status == "calculated" else "estimated"
-        return Candidate(float(spin), label, KINEMATIC_SPIN_METHOD)
 
     def ops_below_floor():
         # the OPS's own reading below the floor stays on the shot under its own label
         # (experimental quality, D17): it feeds no model
         if _finite(shot.spin_rpm) and shot.spin_source not in _MODEL_SPIN_SOURCES:
             return Candidate(float(shot.spin_rpm), "experimental", shot.spin_method or "ops")
-        return "no OPS spin"
+        return "no OPS spin reading"
 
     resolution = resolve(
         "spin",
         [
             Route("ops", ops),
             Route("collision", collision),
-            Route("kinematic", kinematic),
             Route("ops_below_floor", ops_below_floor),
         ],
     )
+    record = resolution.to_dict()
+    if not resolution.present:
+        record["reason"] = f"{NO_TRUSTWORTHY_SPIN}: {resolution.reason}"
     sources = dict(shot.input_sources or {})
-    sources["spin"] = resolution.to_dict()
+    sources["spin"] = record
     shot.input_sources = sources
-    if resolution.route != "kinematic":
-        return False
-    if shot.spin_source not in _MODEL_SPIN_SOURCES:
-        shot.spin_rpm_measured = shot.spin_rpm
-        shot.spin_method_measured = shot.spin_method
-    shot.spin_rpm = round(float(resolution.value), 0)
-    shot.spin_method = (
-        KINEMATIC_SPIN_METHOD
-        if resolution.label == "calculated"
-        else f"{KINEMATIC_SPIN_METHOD}; on the OPS radial ball speed (no full speed)"
-    )
-    shot.spin_source = resolution.label
-    shot.spin_confidence = None
-    logger.info(
-        "[SERVER] Kinematic spin: %.0f rpm (%s, launch %s)",
-        shot.spin_rpm,
-        resolution.label,
-        shot.launch_angle_vertical_source,
-    )
-    return True
 
 
 def _commit_carry(shot: Shot) -> str | None:
-    """Commit the shot's carry: the flight model's, else (OPS-only) the table's; its source.
+    """Commit the shot's carry, the flight model's on its own inputs, and name its source.
 
-    Prefer the physics simulator (drag + Magnus, RK4) when ballistics is enabled and a
-    vertical launch angle is available; fall back to the table estimator otherwise
-    (either ballistics disabled or angle missing: resolve_launch returns None), on an
-    OPS-only unit only.
+    The shot models' flight (E4) when loaded, else the plain simulator. Without the
+    inputs there is no carry, on every install: the ball-speed table no longer stands
+    in (owner decision 1, 25 Oct 2026).
     """
-    carry_source = None
-    fusion = _fusion_unit()
-    if shot.mode != "mock":
-        outcome = kiosk_extensions.first(
-            "simulate_carry", shot, fusion=fusion, enabled=ballistics_enabled
-        ) or _ballistic_carry(shot, fusion=fusion)
-        carry_source = outcome.source
-        if outcome.table_reason is not None:
-            has_reliable_spin = (
-                shot.spin_rpm
-                and shot.spin_rpm > 0
-                and shot.spin_confidence is not None
-                and shot.spin_confidence >= SPIN_CONFIDENCE_RELIABLE
-            )
-            spin_for_carry = (
-                shot.spin_rpm
-                if has_reliable_spin
-                else get_optimal_spin_for_ball_speed(shot.ball_speed_mph, shot.club)
-            )
-            shot.carry_spin_adjusted = estimate_carry_with_spin(
-                shot.ball_speed_mph,
-                spin_for_carry,
-                shot.club,
-                club_speed_mph=shot.club_speed_mph if _finite(shot.club_speed_mph) else None,
-            )
-            shot.carry_status = CARRY_ESTIMATED
-            carry_source = "table with spin"
-            logger.info(
-                "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
-                outcome.table_reason,
-                shot.carry_spin_adjusted,
-                spin_for_carry,
-                "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
-            )
-    return carry_source
+    outcome = kiosk_extensions.first(
+        "simulate_carry", shot, enabled=ballistics_enabled
+    ) or _ballistic_carry(shot)
+    return outcome.source
 
 
 def _finalize_shot_detected(
@@ -6509,11 +6358,11 @@ def _finalize_shot_detected(
     kld7_ms = enrichment.kld7_ms
     camera_capture_ms = enrichment.camera_capture_ms
 
-    # Always emit user-facing launch angles. Radar/camera measurements win;
-    # rejected or missing axes fall back to conservative estimates.
-    # Each stage fails alone: its error becomes its own reason and the shot still logs
-    # and publishes everything else, the OPS ball speed first of all (25 Oct audit).
-    _isolated_stage(shot, "launch_angles", _ensure_user_facing_launch_angles, shot)
+    # A launch angle no route measured stays not measured, on every install (owner
+    # decision 1, 25 Oct 2026). Each stage fails alone: its error becomes its own reason
+    # and the shot still logs and publishes everything else, the OPS ball speed first of
+    # all (25 Oct audit).
+    _isolated_stage(shot, "launch_angles", _note_unmeasured_launch_angles, shot)
 
     # OPS speed remains the canonical radial observation.
     if _isolated_stage(shot, "speed_contract", _attach_ball_speed_contract, shot) is _STAGE_FAILED:
@@ -6525,13 +6374,10 @@ def _finalize_shot_detected(
                 "reason": f"the full-speed stage failed: {shot.stage_errors['speed_contract']}",
             }
 
-    if calculated_spin_enabled:
-        _isolated_stage(shot, "calculated_spin", _apply_calculated_spin, shot)
-    else:
-        _isolated_stage(shot, "spin_fallback", _apply_fallback_spin, shot)
+    _isolated_stage(shot, "spin", _resolve_spin, shot)
 
     carry_source = None
-    if shot.mode != "mock":
+    if shot.mode != "mock":  # a mock shot is not flown (E4): its carry stays not measured
         carry_source = _isolated_stage(shot, "carry", _commit_carry, shot)
         if carry_source is _STAGE_FAILED:
             carry_source = None
@@ -8142,7 +7988,7 @@ def _add_ballistics_arguments(parser):
         "--no-ballistics",
         action="store_false",
         dest="ballistics",
-        help="Disable the physics simulator and use the legacy carry table for all shots.",
+        help="Disable the physics simulator: carry and the flight metrics are not measured.",
     )
     parser.set_defaults(ballistics=True)
 
@@ -8610,17 +8456,9 @@ def build_parser():
             "standard mount (default: 1.5)"
         ),
     )
-    parser.add_argument(
-        "--calculated-spin",
-        action="store_true",
-        help=(
-            "Replace radar-measured spin with the kinematic estimate "
-            "(170*v*sin(LA)^1.2) when the launch angle was measured. The 24 GHz "
-            "OPS return carries no usable spin line (see "
-            "src/openflight/spin_estimate.py); the measured value is kept in "
-            "spin_rpm_measured for offline scoring"
-        ),
-    )
+    # Removed (25 Oct 2026): no formula spin stands in for a measured one. Still parsed,
+    # so a run script that passes it starts; it changes nothing and says so.
+    parser.add_argument("--calculated-spin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--kld7-mount-tilt",
         type=float,
@@ -8850,8 +8688,11 @@ def main():
     ball_speed_correction_ball_above_radar_ft = -args.kld7_radar_height_inches / 12.0
     global _VERTICAL_RADAR_GATE_BYPASS
     _VERTICAL_RADAR_GATE_BYPASS = args.kld7_vertical_raw
-    global calculated_spin_enabled
-    calculated_spin_enabled = args.calculated_spin
+    if args.calculated_spin:
+        logger.warning(
+            "[SERVER] --calculated-spin was removed (25 Oct 2026): no formula spin is used; "
+            "the flag is ignored"
+        )
     ballistics_enabled = args.ballistics
     battery_provider = args.battery
     profile_store = ProfileStore(args.profiles_path)

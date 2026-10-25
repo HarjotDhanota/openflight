@@ -2,9 +2,9 @@
 Physics-based golf ball flight simulator.
 
 Integrates the drag + Magnus ODE using RK4 to produce a deterministic
-trajectory from launch conditions. When measured spin is low-confidence
-or missing, `resolve_launch` substitutes a club-typical spin value so the
-output remains committable (no probabilistic range).
+trajectory from launch conditions. `resolve_launch` flies only a measured
+spin, horizontal launch and spin axis: nothing is filled in (D17; owner
+decision 1, 25 Oct 2026). The kiosk uses it only without the shot models' flight.
 
 Coordinate system (world frame):
     x — downrange, target direction
@@ -22,9 +22,8 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from .clubs import ClubType
-from .clubs.physics import CLUB_PHYSICS
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
+from .numeric import finite as _finite
 
 MPH_TO_MPS = 0.44704
 MPS_TO_MPH = 1.0 / MPH_TO_MPS
@@ -77,13 +76,6 @@ MAX_FLIGHT_SECONDS = 15.0
 # keeping payload size reasonable for UI/log consumers.
 SAMPLE_INTERVAL_S = 0.05
 
-# Club-typical spin (RPM) from TrackMan PGA Tour averages.
-# Used as fallback when measured spin is missing or low-confidence.
-CLUB_TYPICAL_SPIN_RPM: dict[ClubType, float] = {
-    club: physics.typical_spin_rpm for club, physics in CLUB_PHYSICS.items()
-}
-
-
 @dataclass
 class LaunchConditions:
     """Deterministic launch parameters for the physics model or simulator export."""
@@ -93,7 +85,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "club_typical"]
+    spin_source: Literal["measured"]
 
 
 @dataclass
@@ -131,35 +123,26 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
     """
     Produce committed launch conditions from a shot.
 
-    Returns None if the vertical launch angle is unavailable (no physics
-    simulation possible without it). Spin is taken from the measurement only
-    when confidence >= SPIN_CONFIDENCE_HIGH; otherwise a club-typical value
-    is substituted and `spin_source` is set to "club_typical".
+    Returns None unless the shot has a vertical and a horizontal launch, a spin
+    axis, and a spin measured with confidence >= SPIN_CONFIDENCE_HIGH. Nothing is
+    filled in (D17; owner decision 1, 25 Oct 2026).
     """
-    if shot.launch_angle_vertical is None:
-        return None
-
-    use_measured = (
-        shot.spin_rpm is not None
-        and shot.spin_confidence is not None
+    measured_spin = (
+        _finite(shot.spin_rpm)
+        and _finite(shot.spin_confidence)
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     )
-    if use_measured:
-        spin_rpm = float(shot.spin_rpm)
-        source: Literal["measured", "club_typical"] = "measured"
-    else:
-        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(
-            shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
-        )
-        source = "club_typical"
+    inputs = (shot.launch_angle_vertical, shot.launch_angle_horizontal, shot.spin_axis_deg)
+    if not measured_spin or not all(_finite(value) for value in inputs):
+        return None
 
     return LaunchConditions(
         ball_speed_mph=shot.ball_speed_mph,
         launch_angle_v=shot.launch_angle_vertical,
-        launch_angle_h=shot.launch_angle_horizontal or 0.0,
-        spin_rpm=spin_rpm,
-        spin_axis_deg=shot.spin_axis_deg or 0.0,
-        spin_source=source,
+        launch_angle_h=shot.launch_angle_horizontal,
+        spin_rpm=float(shot.spin_rpm),
+        spin_axis_deg=shot.spin_axis_deg,
+        spin_source="measured",
     )
 
 

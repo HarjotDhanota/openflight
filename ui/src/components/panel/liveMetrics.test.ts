@@ -109,20 +109,21 @@ describe('buildLiveMetrics', () => {
     expect(byId(metric, 'carry')).toMatchObject({ value: '196', unit: 'm' });
   });
 
-  it('prefers the spin-adjusted carry and labels a table carry estimated', () => {
+  it('shows the spin-adjusted carry and never the ball-speed table', () => {
     const adjusted = byId(buildLiveMetrics(makeShot(), 'imperial', emptySwingStats), 'carry');
     expect(adjusted.value).toBe('214');
     expect(adjusted.subtext).toBe('Spin-adjusted');
     // an unlabelled committed carry (a replay, an older log) is an estimate
     expect(adjusted.status).toBe('estimated');
 
-    const estimated = byId(
+    // no simulated carry: no value, whatever the table says (owner decision 1)
+    const table = byId(
       buildLiveMetrics(makeShot({ carry_spin_adjusted: null }), 'imperial', emptySwingStats),
       'carry'
     );
-    expect(estimated.value).toBe('210');
-    expect(estimated.subtext).toBeUndefined();
-    expect(estimated.status).toBe('estimated');
+    expect(table.value).toBe(NO_VALUE);
+    expect(table.subtext).toBeUndefined();
+    expect(table.status).toBeUndefined();
   });
 
   it('shows a fusion carry that is not measured as no value, never the table', () => {
@@ -568,6 +569,76 @@ describe('face angle', () => {
       emptySwingStats
     );
     expect(byId(withIwr, 'club_path')).toMatchObject({ value: '+2.5', subtext: 'accepted' });
+  });
+
+  // Server shot_models.attack_angle_resolution(): canonical, camera fused, accepted IWR,
+  // camera head track, the IWR candidate (estimated), then the arc (owner decision 3).
+  describe('attack tile chain', () => {
+    const candidate = {
+      club_angle_deg: null,
+      experimental_attack_angle_deg: -6.5,
+      experimental_attack_angle_status: 'candidate_available',
+    };
+    const headTrack = {
+      experimental_fused_status: 'camera_head_track',
+      experimental_fused_attack_angle_deg: -4.2,
+      experimental_fused_attack_angle_confidence: 'experimental',
+    };
+
+    it('shows the IWR candidate, labelled estimated, when nothing stronger gave one', () => {
+      const tile = byId(buildLiveMetrics(makeShot(candidate), 'imperial', emptySwingStats), 'club_aoa');
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+    });
+
+    it('puts the head track before the IWR candidate', () => {
+      const tile = byId(
+        buildLiveMetrics(makeShot({ ...candidate, ...headTrack }), 'imperial', emptySwingStats),
+        'club_aoa'
+      );
+      expect(tile).toMatchObject({ value: '-4.2', subtext: 'camera head track' });
+    });
+
+    it('puts an accepted IWR attack before the head track', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({ ...headTrack, ...candidate, experimental_attack_angle_status: 'accepted' }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile.value).toBe('-6.5');
+      expect(tile.subtext).toBe('accepted');
+    });
+
+    it('shows the IWR candidate after a rejected camera fusion, which it never shows', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({
+            ...candidate,
+            experimental_fused_status: 'rejected_no_impact',
+            experimental_fused_attack_angle_deg: -1.0,
+          }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile).toMatchObject({ value: '-6.5', subtext: 'IWR candidate', status: 'estimated' });
+    });
+
+    it('never shows an IWR candidate its gates flagged', () => {
+      const tile = byId(
+        buildLiveMetrics(
+          makeShot({ ...candidate, experimental_attack_angle_status: 'candidate_noisy_fit' }),
+          'imperial',
+          emptySwingStats
+        ),
+        'club_aoa'
+      );
+      expect(tile.value).toBe(NO_VALUE);
+      expect(tile.subtext).toBe('candidate noisy fit');
+    });
   });
 
   it('rides on the camera path the server built it from, not an accepted IWR path', () => {

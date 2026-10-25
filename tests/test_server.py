@@ -1127,7 +1127,7 @@ class TestIWR6843ShotIntegration:
             angle_source="radar",
         )
 
-        server_module._ensure_user_facing_launch_angles(shot)
+        server_module._note_unmeasured_launch_angles(shot)
 
         assert shot.launch_angle_vertical == pytest.approx(17.42)
         assert shot.launch_angle_vertical_source == "radar"
@@ -1142,7 +1142,7 @@ class TestIWR6843ShotIntegration:
     def test_a_non_finite_launch_angle_is_handled_exactly_like_a_missing_one(
         self, monkeypatch, fusion, bad
     ):
-        """OPS-only fills its labelled estimate; a fusion unit fills nothing in."""
+        """No install fills anything in (owner decision 1): a NaN is a missing angle."""
         monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace() if fusion else None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
 
@@ -1155,7 +1155,7 @@ class TestIWR6843ShotIntegration:
                 launch_angle_vertical=vertical,
                 launch_angle_horizontal=horizontal,
             )
-            server_module._ensure_user_facing_launch_angles(shot)
+            server_module._note_unmeasured_launch_angles(shot)
             return shot
 
         with_bad, with_none = ensured(bad, bad), ensured(None, None)
@@ -1166,42 +1166,9 @@ class TestIWR6843ShotIntegration:
             "launch_angle_horizontal_confidence",
             "angle_source",
         ):
-            assert getattr(with_bad, name) == getattr(with_none, name), name
-        if fusion:
-            assert with_none.launch_angle_vertical is None
-            assert with_none.launch_angle_vertical_source is None
-        else:
-            assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
-            assert with_bad.launch_angle_horizontal == with_none.launch_angle_horizontal == 0.0
-            assert with_bad.launch_angle_vertical_source == "estimated"
-
-    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
-    @pytest.mark.parametrize("field", ["club_speed_mph", "spin_rpm"])
-    def test_ops_only_launch_estimate_ignores_a_non_finite_input_like_none(
-        self, monkeypatch, field, bad
-    ):
-        """estimate_launch_angle only checks > 0, so +inf must not drive the estimate."""
-        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
-        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
-
-        def ensured(value):
-            shot = Shot(
-                ball_speed_mph=100.0,
-                club_speed_mph=80.0,
-                spin_rpm=6500.0,
-                timestamp=datetime(2026, 10, 11, 9, 0, 0),
-                club=ClubType.IRON_7,
-            )
-            setattr(shot, field, value)
-            server_module._ensure_user_facing_launch_angles(shot)
-            return shot
-
-        with_bad, with_none = ensured(bad), ensured(None)
-        assert with_bad.launch_angle_vertical == with_none.launch_angle_vertical
-        assert with_bad.launch_angle_confidence == with_none.launch_angle_confidence
-        assert with_bad.launch_angle_horizontal_confidence == (
-            with_none.launch_angle_horizontal_confidence
-        )
+            assert getattr(with_bad, name) == getattr(with_none, name) is None, name
+        assert with_none.launch_angle_vertical is None
+        assert with_none.launch_angle_horizontal is None
 
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
         emitted = []
@@ -1504,9 +1471,9 @@ class TestShotToDict:
         assert result["club"] == "driver"
         assert result["profile_name"] == ""
         assert result["timestamp"] == "2024-01-15T10:30:00"
-        assert "estimated_carry_yards" in result
-        assert "carry_range" in result
-        assert len(result["carry_range"]) == 2
+        # the upstream schema keeps the table-carry keys, null on every install (decision 1)
+        assert result["estimated_carry_yards"] is None
+        assert result["carry_range"] is None
 
     def test_null_club_speed(self):
         """Shot without club speed should have null in dict."""
@@ -2216,7 +2183,7 @@ class TestShotToDict:
         assert result["carry_range"] == no_launch["carry_range"]
 
     def test_a_derived_non_finite_metric_is_nulled_and_named(self):
-        """Smash factor and carry derive from an infinite ball speed; each is named."""
+        """Smash factor derives from an infinite ball speed; it is named (no table carry)."""
         result = shot_to_dict(
             Shot(
                 ball_speed_mph=math.inf,
@@ -2226,13 +2193,10 @@ class TestShotToDict:
         )
         assert result["smash_factor"] is None
         assert result["estimated_carry_yards"] is None
-        assert result["carry_range"] == [None, None]
+        assert result["carry_range"] is None
         assert result["metrics_not_measured"] == [
             {"id": "ball_speed_mph", "reason": "non_finite_value:inf"},
             {"id": "smash_factor", "reason": "non_finite_value:inf"},
-            {"id": "estimated_carry_yards", "reason": "non_finite_value:inf"},
-            {"id": "carry_range[0]", "reason": "non_finite_value:inf"},
-            {"id": "carry_range[1]", "reason": "non_finite_value:inf"},
         ]
         json.dumps(result, allow_nan=False)
 
@@ -3519,7 +3483,6 @@ class OnShotDetectedHelpers:
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
-        monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "sim_connectors", [])
@@ -3957,8 +3920,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             assert shot_data["smash_factor"] == pytest.approx(1.5)
             assert shot_data["smash_factor_status"] == "radial_ratio"
 
-    def test_an_ops_only_unit_leaves_smash_unlabelled(self, monkeypatch):
-        """The label is scoped to fusion units; OPS-only smash is unchanged."""
+    def test_an_ops_only_unit_labels_smash_a_radial_ratio_too(self, monkeypatch):
+        """No per-install split (owner decision 1): the OPS-only smash is radial as well."""
         emitted, session_log = self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
 
@@ -3969,7 +3932,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert payloads and session_log.shots
         for shot_data in payloads + session_log.shots:
             assert shot_data["smash_factor"] == pytest.approx(1.5)
-            assert shot_data["smash_factor_status"] is None
+            assert shot_data["smash_factor_status"] == "radial_ratio"
 
     def test_camera_only_enrichment_uses_provisional_then_final_events(self, monkeypatch):
         emitted = []
@@ -4582,13 +4545,13 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         payload = emitted[0][1]
         json.dumps(payload, allow_nan=False)
         assert payload["shot"]["ball_speed_mph"] == 150.0
-        reference = self._shot()
-        server_module._ensure_user_facing_launch_angles(reference)
-        assert payload["shot"]["launch_angle_vertical_source"] == "estimated"
-        assert payload["shot"]["launch_angle_vertical"] == reference.launch_angle_vertical
+        # a NaN launch is a missing one: not measured, nothing filled in (decision 1)
+        assert payload["shot"]["launch_angle_vertical"] is None
+        assert payload["shot"]["launch_angle_vertical_source"] is None
         assert payload["shot"]["spin_rpm"] is None
         assert payload["shot"]["metrics_not_measured"] == [
-            {"id": "spin_rpm", "reason": "non_finite_value:inf"}
+            {"id": "launch_angle_vertical", "reason": "non_finite_value:nan"},
+            {"id": "spin_rpm", "reason": "non_finite_value:inf"},
         ]
         assert len(session_log.shots) == 1
 
@@ -4648,18 +4611,10 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert server_module._session_state_payload()["stats"]["avg_ball_speed"] is None
 
     @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
-    def test_table_carry_gets_no_club_speed_when_it_is_non_finite(self, monkeypatch, bad):
-        """A non-finite club speed reaches the table carry as None (missing)."""
+    def test_a_non_finite_club_speed_gives_the_same_carry_as_a_missing_one(self, monkeypatch, bad):
+        """No table carry on any install: a NaN club speed changes nothing (decision 1)."""
         self._record_finalization(monkeypatch)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
-        calls = []
-        real = server_module.estimate_carry_with_spin
-
-        def spy(*args, **kwargs):
-            calls.append(kwargs.get("club_speed_mph", "absent"))
-            return real(*args, **kwargs)
-
-        monkeypatch.setattr(server_module, "estimate_carry_with_spin", spy)
         broken = self._shot()
         broken.club_speed_mph = bad
         on_shot_detected(broken)
@@ -4668,13 +4623,9 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         missing.club_speed_mph = None
         on_shot_detected(missing)
         _wait_for_shot_finalization_idle()
-        measured = self._shot()
-        on_shot_detected(measured)
-        _wait_for_shot_finalization_idle()
 
-        assert calls == [None, None, 100.0]
-        assert broken.carry_spin_adjusted == missing.carry_spin_adjusted
-        assert math.isfinite(broken.carry_spin_adjusted)
+        assert broken.carry_spin_adjusted is None and missing.carry_spin_adjusted is None
+        assert broken.carry_status == missing.carry_status == "not_measured"
 
     def test_initial_ops_emit_of_a_non_finite_shot_still_happens(self, monkeypatch):
         emitted, _session_log = self._record_finalization(monkeypatch)
@@ -4767,8 +4718,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         assert ("club", 1234.5) in calls
         assert emitted
 
-    def test_implausible_kld7_angle_falls_back_to_estimate(self, monkeypatch):
-        """Radar angles that conflict with club+speed should not override the estimate."""
+    def test_implausible_kld7_angle_is_not_measured(self, monkeypatch):
+        """A radar angle that conflicts with club+speed is refused; nothing stands in."""
 
         class StubTracker:
             orientation = "vertical"
@@ -4799,9 +4750,9 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.angle_source == "estimated"
-        assert shot.launch_angle_vertical == pytest.approx(20.5)
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
+        assert shot.angle_source is None
+        assert shot.launch_angle_vertical is None
+        assert shot.launch_angle_horizontal is None
 
     def test_low_valid_vertical_kld7_angle_beats_high_estimate(self, monkeypatch):
         """A low measured iron launch should not be replaced by a high fallback estimate."""
@@ -5116,7 +5067,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
             == "marginal_accept:estimator_delta_too_large"
         )
 
-    def test_vertical_estimate_preserves_radar_horizontal(self, monkeypatch):
+    def test_a_refused_vertical_keeps_the_radar_horizontal(self, monkeypatch):
         """Vertical fallback should not erase a horizontal radar measurement."""
 
         class StubHorizontalTracker:
@@ -5152,13 +5103,12 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.angle_source == "estimated"
-        assert shot.launch_angle_vertical == pytest.approx(20.5)
+        assert shot.launch_angle_vertical is None
+        assert shot.launch_angle_vertical_source is None
         assert shot.launch_angle_horizontal == pytest.approx(1.5)
-        assert shot.launch_angle_vertical_source == "estimated"
         assert shot.launch_angle_horizontal_source == "radar"
 
-    def test_low_confidence_horizontal_radar_falls_back_to_neutral(self, monkeypatch):
+    def test_low_confidence_horizontal_radar_is_not_measured(self, monkeypatch):
         """Very low-confidence horizontal K-LD7 angles should not overwrite neutral fallback."""
 
         class StubHorizontalTracker:
@@ -5194,9 +5144,8 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
-        assert shot.launch_angle_horizontal_source == "estimated"
-        assert shot.angle_source == "estimated"
+        assert shot.launch_angle_horizontal is None
+        assert shot.launch_angle_horizontal_source is None
 
     def test_low_confidence_horizontal_radar_soft_accepts_near_target_line(self, monkeypatch):
         """Marginal horizontal candidates can win when they stay near centerline."""
@@ -5297,12 +5246,11 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
-        assert shot.launch_angle_horizontal_source == "estimated"
-        assert shot.angle_source == "estimated"
+        assert shot.launch_angle_horizontal is None
+        assert shot.launch_angle_horizontal_source is None
         assert logged_buffers[0]["ball_angle"]["selection_reason"] == "outside_soft_lane"
 
-    def test_weak_near_limit_horizontal_radar_falls_back_to_neutral(self, monkeypatch):
+    def test_weak_near_limit_horizontal_radar_is_not_measured(self, monkeypatch):
         """Near-wall horizontal readings need stronger evidence than centerline readings."""
 
         class StubHorizontalTracker:
@@ -5349,12 +5297,12 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
-        assert shot.launch_angle_horizontal_source == "estimated"
+        assert shot.launch_angle_horizontal is None
+        assert shot.launch_angle_horizontal_source is None
         assert logged_buffers[0]["ball_angle"]["selection_reason"] == "weak_near_limit"
 
-    def test_vertical_radar_gets_neutral_horizontal_fallback(self, monkeypatch):
-        """A good vertical radar angle should still emit a horizontal value."""
+    def test_vertical_radar_gets_no_filled_in_horizontal(self, monkeypatch):
+        """A good vertical radar angle stands alone: no 0 deg horizontal (decision 1)."""
 
         class StubVerticalTracker:
             orientation = "vertical"
@@ -5392,12 +5340,12 @@ class TestOnShotDetected(OnShotDetectedHelpers):
 
         assert shot.angle_source == "radar"
         assert shot.launch_angle_vertical == pytest.approx(18.7)
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
+        assert shot.launch_angle_horizontal is None
         assert shot.launch_angle_vertical_source == "radar"
-        assert shot.launch_angle_horizontal_source == "estimated"
+        assert shot.launch_angle_horizontal_source is None
 
-    def test_mock_shot_missing_angles_gets_fallback_values(self, monkeypatch):
-        """Even malformed/manual mock shots should emit user-facing angles."""
+    def test_mock_shot_missing_angles_gets_no_filled_in_values(self, monkeypatch):
+        """A malformed/manual mock shot's missing angles stay missing (decision 1)."""
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -5413,9 +5361,9 @@ class TestOnShotDetected(OnShotDetectedHelpers):
         on_shot_detected(shot)
         self._wait_for_finalization_coordinator_idle()
 
-        assert shot.angle_source == "estimated"
-        assert shot.launch_angle_vertical == pytest.approx(20.5)
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
+        assert shot.angle_source is None
+        assert shot.launch_angle_vertical is None
+        assert shot.launch_angle_horizontal is None
 
     def test_ble_publish_survives_websocket_failure(self, monkeypatch):
         """A broken web client must not suppress the independent BLE transport."""
@@ -5524,7 +5472,7 @@ class TestOnShotDetected(OnShotDetectedHelpers):
 
         assert shot.angle_source == "radar"
         assert shot.launch_angle_vertical == pytest.approx(18.7)
-        assert shot.launch_angle_horizontal == pytest.approx(0.0)
+        assert shot.launch_angle_horizontal is None
 
 
 class TestBallisticsConfiguration:
@@ -5729,8 +5677,8 @@ def test_kld7_device_symlinks_supply_stable_defaults(tmp_path):
     assert args.kld7_horizontal_port == str(tmp_path / "kld7_horizontal")
 
 
-class TestApplyCalculatedSpin:
-    """Tests for the --calculated-spin shot rewrite."""
+class TestNoFormulaSpin:
+    """No formula spin stands in for the OPS reading (owner decision, 25 Oct 2026)."""
 
     def _shot(self, la=18.0, la_source="radar", ball_speed=115.0, spin=6800.0):
         return Shot(
@@ -5744,36 +5692,24 @@ class TestApplyCalculatedSpin:
             spin_rejection_reason="SNR too low",
         )
 
-    def test_rewrites_spin_when_launch_angle_measured(self):
+    def test_a_weak_ops_spin_stays_the_ops_reading_labelled_experimental(self):
         shot = self._shot()
-        assert server_module._apply_calculated_spin(shot) is True
-        # 170 * 115 * sin(18deg)^1.2 ~= 4800 rpm
-        assert 4500 < shot.spin_rpm < 5100
-        assert shot.spin_rpm_measured == 6800.0
-        assert shot.spin_source == "calculated"
-        assert shot.spin_confidence is None
-        assert shot.spin_rejection_reason is None
-
-    def test_untouched_when_launch_angle_estimated(self):
-        shot = self._shot(la_source="estimated")
-        assert server_module._apply_calculated_spin(shot) is False
+        server_module._resolve_spin(shot)
         assert shot.spin_rpm == 6800.0
         assert shot.spin_source is None
+        spin = shot.input_sources["spin"]
+        assert spin["route"] == "ops_below_floor" and spin["label"] == "experimental"
+        assert [entry["route"] for entry in spin["tried"]] == ["ops", "collision"]
 
-    def test_untouched_when_no_launch_angle(self):
-        shot = self._shot(la=None)
-        assert server_module._apply_calculated_spin(shot) is False
-        assert shot.spin_rpm == 6800.0
+    def test_the_formula_rewrite_and_its_switch_are_gone(self):
+        assert not hasattr(server_module, "_apply_calculated_spin")
+        assert not hasattr(server_module, "calculated_spin_enabled")
+        assert not hasattr(server_module, "calculated_spin_rpm")
 
-    def test_untouched_when_launch_angle_outside_model_range(self):
-        shot = self._shot(la=1.0)
-        assert server_module._apply_calculated_spin(shot) is False
-        assert shot.spin_rpm == 6800.0
-
-    def test_camera_launch_angle_accepted(self):
-        shot = self._shot(la_source="camera")
-        assert server_module._apply_calculated_spin(shot) is True
-        assert shot.spin_source == "calculated"
+    def test_the_old_flag_still_parses_and_changes_nothing(self):
+        parser = server_module.build_parser()
+        assert parser.parse_args(["--calculated-spin"]).calculated_spin is True
+        assert "--calculated-spin" not in parser.format_help()
 
 
 class TestVerticalGateBypass:
@@ -6303,33 +6239,33 @@ class TestIwrAzimuthCalibration:
 
 
 class TestShotCarryLogText:
-    """The shot line names the carry the UI shows and the table estimate beside it."""
+    """The shot line names the carry the UI shows; no table estimate stands beside it."""
 
-    def test_the_shown_ballistic_carry_is_named_beside_the_table_estimate(self):
+    def test_the_shown_ballistic_carry_is_named(self):
         shot = Shot(ball_speed_mph=75.8, club_speed_mph=50.6, timestamp=datetime.now())
         shot.launch_angle_vertical = 27.8
         shot.launch_angle_confidence = 0.5
         shot.carry_spin_adjusted = 88.0
+        shot.carry_status = "calculated"
 
         text = server_module._carry_log_text(shot, "ballistic")
 
-        assert text == (
-            f"carry shown=88 yds (ballistic), table estimate={shot.estimated_carry_yards:.0f} yds"
-        )
+        assert text == "carry shown=88 yds (ballistic)"
 
-    def test_without_a_spin_adjusted_carry_the_table_estimate_is_the_one_shown(self):
+    def test_without_a_simulated_carry_no_carry_is_shown(self):
         shot = Shot(ball_speed_mph=75.8, club_speed_mph=50.6, timestamp=datetime.now())
 
         text = server_module._carry_log_text(shot, None)
 
-        assert text == f"carry shown={shot.estimated_carry_yards:.0f} yds (table estimate)"
+        assert text == "carry not measured"
 
 
 class TestBallisticCarryPrecedence:
     """Finalization is the single writer of carry_spin_adjusted.
 
-    The simulator owns carry whenever it can run; the spin table owns it
-    otherwise. Anything already on the shot is replaced either way.
+    The simulator owns carry whenever the shot's own inputs let it run; otherwise there
+    is no carry (owner decision 1, 25 Oct 2026). Anything already on the shot is
+    replaced either way.
     """
 
     @pytest.fixture(autouse=True)
@@ -6341,7 +6277,6 @@ class TestBallisticCarryPrecedence:
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
-        monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "sim_connectors", [])
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -6363,80 +6298,45 @@ class TestBallisticCarryPrecedence:
             spin_rpm=5164.0,
             spin_confidence=0.9,
             launch_angle_vertical=launch_angle,
+            launch_angle_vertical_source="radar" if launch_angle is not None else None,
             launch_angle_confidence=0.9 if launch_angle is not None else None,
+            launch_angle_horizontal=1.0 if launch_angle is not None else None,
+            launch_angle_horizontal_source="radar" if launch_angle is not None else None,
+            spin_axis_deg=2.0 if launch_angle is not None else None,
             carry_spin_adjusted=prefilled_carry,
             mode="rolling-buffer",
         )
 
-    def test_table_fallback_replaces_prefilled_carry_when_ballistics_disabled(self, monkeypatch):
+    def test_no_carry_replaces_a_prefilled_one_when_ballistics_disabled(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", False)
         shot = self._shot(launch_angle=19.1, prefilled_carry=999.0)
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
-        expected = server_module.estimate_carry_with_spin(
-            104.2, 5164.0, ClubType.IRON_7, club_speed_mph=83.7
-        )
-        assert shot.carry_spin_adjusted == pytest.approx(expected)
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_status == "not_measured"
 
-    def test_table_fallback_replaces_prefilled_carry_without_launch_angle(self, monkeypatch):
+    def test_no_carry_replaces_a_prefilled_one_without_a_launch_angle(self, monkeypatch):
         monkeypatch.setattr(server_module, "ballistics_enabled", True)
-        monkeypatch.setattr(server_module, "_ensure_user_facing_launch_angles", lambda _shot: None)
         shot = self._shot(launch_angle=None, prefilled_carry=999.0)
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
-        assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted != pytest.approx(999.0)
-        assert 0 < shot.carry_spin_adjusted < 200
+        assert shot.carry_spin_adjusted is None
+        assert shot.carry_status == "not_measured"
 
-    @pytest.mark.parametrize(
-        ("confidence", "uses_measured_spin"),
-        [
-            (server_module.SPIN_CONFIDENCE_RELIABLE, True),
-            (server_module.SPIN_CONFIDENCE_RELIABLE - 0.01, False),
-        ],
-    )
-    def test_table_fallback_spin_gate_matches_monitor_reliability(
-        self, monkeypatch, confidence, uses_measured_spin
-    ):
-        """The fallback trusts measured spin on the same floor SpinResult.is_reliable uses."""
-        from openflight.rolling_buffer.types import SpinResult
-
-        assert (
-            SpinResult(spin_rpm=5164, confidence=confidence, snr=10.0, quality="medium").is_reliable
-            is uses_measured_spin
-        )
-
-        monkeypatch.setattr(server_module, "ballistics_enabled", False)
-        shot = self._shot(launch_angle=19.1, prefilled_carry=None)
-        shot.spin_confidence = confidence
-
-        server_module._finalize_shot_detected(shot, emit_event="shot")
-
-        measured = server_module.estimate_carry_with_spin(
-            104.2, 5164.0, ClubType.IRON_7, club_speed_mph=83.7
-        )
-        optimal = server_module.estimate_carry_with_spin(
-            104.2,
-            server_module.get_optimal_spin_for_ball_speed(104.2, ClubType.IRON_7),
-            ClubType.IRON_7,
-            club_speed_mph=83.7,
-        )
-        assert measured != pytest.approx(optimal)
-        expected = measured if uses_measured_spin else optimal
-        assert shot.carry_spin_adjusted == pytest.approx(expected)
-
-    def test_table_fallback_fills_empty_carry(self, monkeypatch):
-        monkeypatch.setattr(server_module, "ballistics_enabled", False)
-        shot = self._shot(launch_angle=19.1, prefilled_carry=None)
+    def test_the_simulator_replaces_a_prefilled_carry(self, monkeypatch):
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+        shot = self._shot(launch_angle=19.1, prefilled_carry=999.0)
 
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
         assert shot.carry_spin_adjusted is not None
-        assert shot.carry_spin_adjusted > 0
+        assert 135.0 < shot.carry_spin_adjusted < 200
 
-    def test_simulator_carry_reaches_sim_connectors(self, monkeypatch):
+    def test_simulator_carry_reaches_sim_connectors_under_its_label(self, monkeypatch):
+        from openflight.sim import resolver
+
         monkeypatch.setattr(server_module, "ballistics_enabled", True)
         forwarded = []
         monkeypatch.setattr(server_module, "_forward_shot_to_simulators", forwarded.append)
@@ -6445,8 +6345,15 @@ class TestBallisticCarryPrecedence:
         server_module._finalize_shot_detected(shot, emit_event="shot")
 
         assert forwarded == [shot]
+        # flown on the OPS radial ball speed (no full speed here): an estimated carry,
+        # sent only behind the switch, under its label
+        assert shot.carry_status == "estimated"
+        withheld = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
+        assert withheld.carry_yards is None
+        monkeypatch.setattr(resolver, "SIMULATORS_ACCEPT_ESTIMATED", True)
         resolved = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
         assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
+        assert resolved.provenance["carry"] == "estimated"
         assert resolved.carry_yards > 135.0
 
 

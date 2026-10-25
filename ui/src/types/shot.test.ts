@@ -58,7 +58,7 @@ describe('excludeShotsByProfile', () => {
   });
 });
 
-// A fusion unit's unmeasured carry never falls back to `estimated_carry_yards`.
+// No install's unmeasured carry falls back to `estimated_carry_yards` (owner decision 1).
 describe('reportedCarryYards', () => {
   const carryShot = (overrides: Partial<Shot>): Shot =>
     ({ ball_speed_mph: 150, estimated_carry_yards: 257, carry_spin_adjusted: null, ...overrides }) as Shot;
@@ -74,11 +74,11 @@ describe('reportedCarryYards', () => {
     expect(reportedCarryYards(carryShot({ carry_status: 'measured' }))).toBeNull();
   });
 
-  it('keeps the labelled estimate for OPS-only and older shots', () => {
+  it('keeps an estimated simulated carry but never shows the ball-speed table', () => {
     expect(reportedCarryYards(carryShot({ carry_status: 'estimated', carry_spin_adjusted: 229 }))).toBe(229);
-    expect(reportedCarryYards(carryShot({ carry_status: 'estimated' }))).toBe(257);
-    expect(reportedCarryYards(carryShot({}))).toBe(257);
-    expect(reportedCarryYards(carryShot({ carry_status: null }))).toBe(257);
+    expect(reportedCarryYards(carryShot({ carry_status: 'estimated' }))).toBeNull();
+    expect(reportedCarryYards(carryShot({}))).toBeNull();
+    expect(reportedCarryYards(carryShot({ carry_status: null }))).toBeNull();
   });
 });
 
@@ -92,9 +92,10 @@ describe('carryLabel', () => {
     expect(carryLabel(carryShot({ carry_status: 'measured', carry_spin_adjusted: 244 }))).toBe('calculated');
   });
 
-  it('labels a table carry estimated and a missing carry not at all', () => {
-    expect(carryLabel(carryShot({ carry_status: 'estimated' }))).toBe('estimated');
-    expect(carryLabel(carryShot({}))).toBe('estimated');
+  it('labels an estimated simulated carry estimated, and a table or missing carry not at all', () => {
+    expect(carryLabel(carryShot({ carry_status: 'estimated', carry_spin_adjusted: 229 }))).toBe('estimated');
+    expect(carryLabel(carryShot({ carry_status: 'estimated' }))).toBeNull();
+    expect(carryLabel(carryShot({}))).toBeNull();
     expect(carryLabel(carryShot({ carry_status: 'not_measured' }))).toBeNull();
   });
 
@@ -151,10 +152,10 @@ describe('reportedCarryYards with a non-finite carry', () => {
     }
   });
 
-  it('an OPS-only shot with a non-finite committed carry keeps its labelled table estimate', () => {
+  it('an OPS-only shot with a non-finite committed carry has no carry, not the table', () => {
     const shot = carryShot({ carry_status: 'estimated', carry_spin_adjusted: Number.NaN });
-    expect(reportedCarryYards(shot)).toBe(257);
-    expect(carryLabel(shot)).toBe('estimated');
+    expect(reportedCarryYards(shot)).toBeNull();
+    expect(carryLabel(shot)).toBeNull();
   });
 
   it('a non-finite table carry is not reported either', () => {
@@ -174,7 +175,8 @@ describe('a shot whose core metrics the server nulled', () => {
   const shot = (ball: number | null, carry: number | null, extra: Partial<Shot> = {}): Shot =>
     ({
       ball_speed_mph: ball,
-      estimated_carry_yards: carry,
+      carry_spin_adjusted: carry,
+      carry_status: carry === null ? 'not_measured' : 'calculated',
       club_speed_mph: null,
       smash_factor: null,
       ...extra,

@@ -63,7 +63,7 @@ moves and pass them on the command line.
 | `--kld7-port` / `--kld7-horizontal-port` | Override serial port autodetection |
 | `--kld7-horizontal-offset` | Boresight offset for the horizontal radar |
 | `--kld7-vertical-raw` | Emit the raw vertical estimator output with **all display gating bypassed** (plausibility, lane, and confidence guards). For debugging/validation only. |
-| `--calculated-spin` | Off by default. Replaces radar spin with the kinematic estimate (`170·v·sin(LA)^1.2`). Opt-in; see the spin notes. |
+| `--calculated-spin` | Removed (25 Oct 2026): ignored with a warning. No formula spin is used. |
 
 ## Horizontal / aim
 

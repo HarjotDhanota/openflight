@@ -213,7 +213,6 @@ def kiosk(monkeypatch):
     monkeypatch.setitem(server_module.setup_handoff_config, "scene", scene)
     monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
     monkeypatch.setattr(server_module, "ballistics_enabled", True)
-    monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 

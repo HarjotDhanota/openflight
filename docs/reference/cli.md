@@ -115,8 +115,8 @@ Carry model and spin handling.
 | Flag | Type / default | Description |
 | --- | --- | --- |
 | `--ballistics` | flag | Use the physics-based carry simulator (drag + Magnus, RK4). This is the default; shots without a vertical launch angle fall back to the legacy table estimator. |
-| `--no-ballistics` | flag | Disable the physics simulator and use the legacy carry table for all shots. |
-| `--calculated-spin` | flag | Replace radar-measured spin with the kinematic estimate (170*v*sin(LA)^1.2) when the launch angle was measured. The 24 GHz OPS return carries no usable spin line (see src/openflight/spin_estimate.py); the measured value is kept in spin_rpm_measured for offline scoring |
+| `--no-ballistics` | flag | Disable the physics simulator: carry and the flight metrics are not measured. |
+| `--calculated-spin` | flag | Removed (25 Oct 2026): still parsed so old run scripts start, but ignored with a warning. No formula spin is used. |
 
 ## Swing speed
 

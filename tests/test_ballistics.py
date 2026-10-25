@@ -9,7 +9,6 @@ from openflight.ballistics import (
     BALL_RADIUS_M,
     CD_POLY,
     CL_POLY,
-    CLUB_TYPICAL_SPIN_RPM,
     MPH_TO_MPS,
     SP_FIT_MAX,
     SPIN_DECAY_RATE,
@@ -36,47 +35,38 @@ def _shot(**kwargs) -> Shot:
 
 
 class TestResolveLaunch:
+    """Only the shot's own inputs fly; nothing is filled in (owner decision 1)."""
+
+    @staticmethod
+    def _measured(**kwargs) -> Shot:
+        values = dict(
+            launch_angle_horizontal=1.0, spin_axis_deg=2.0, spin_rpm=2500, spin_confidence=0.85
+        )
+        values.update(kwargs)
+        return _shot(**values)
+
     def test_returns_none_without_vertical_launch_angle(self):
-        shot = _shot(launch_angle_vertical=None)
-        assert resolve_launch(shot) is None
+        assert resolve_launch(self._measured(launch_angle_vertical=None)) is None
 
     def test_uses_measured_spin_when_high_confidence(self):
-        shot = _shot(spin_rpm=2500, spin_confidence=0.85)
-        cond = resolve_launch(shot)
+        cond = resolve_launch(self._measured())
         assert cond is not None
         assert cond.spin_rpm == 2500
         assert cond.spin_source == "measured"
+        assert cond.launch_angle_h == 1.0 and cond.spin_axis_deg == 2.0
 
-    def test_uses_club_typical_when_low_confidence(self):
-        shot = _shot(spin_rpm=1500, spin_confidence=0.3, club=ClubType.DRIVER)
-        cond = resolve_launch(shot)
-        assert cond is not None
-        assert cond.spin_rpm == CLUB_TYPICAL_SPIN_RPM[ClubType.DRIVER]
-        assert cond.spin_source == "club_typical"
+    @pytest.mark.parametrize("confidence", [0.3, 0.5, None])
+    def test_no_flight_without_a_confident_spin(self, confidence):
+        assert resolve_launch(self._measured(spin_confidence=confidence)) is None
 
-    def test_uses_club_typical_when_spin_missing(self):
-        shot = _shot(spin_rpm=None, club=ClubType.IRON_7)
-        cond = resolve_launch(shot)
-        assert cond is not None
-        assert cond.spin_rpm == CLUB_TYPICAL_SPIN_RPM[ClubType.IRON_7]
-        assert cond.spin_source == "club_typical"
+    def test_no_flight_without_a_spin(self):
+        assert resolve_launch(self._measured(spin_rpm=None, spin_confidence=None)) is None
 
-    def test_medium_confidence_still_falls_back(self):
-        # Medium confidence (~0.5) is below the high threshold — use typical.
-        shot = _shot(spin_rpm=3000, spin_confidence=0.5)
-        cond = resolve_launch(shot)
-        assert cond is not None
-        assert cond.spin_source == "club_typical"
+    def test_no_flight_without_a_horizontal_angle(self):
+        assert resolve_launch(self._measured(launch_angle_horizontal=None)) is None
 
-    def test_defaults_horizontal_angle_to_zero(self):
-        shot = _shot(launch_angle_horizontal=None)
-        cond = resolve_launch(shot)
-        assert cond.launch_angle_h == 0.0
-
-    def test_defaults_spin_axis_to_zero(self):
-        shot = _shot(spin_axis_deg=None)
-        cond = resolve_launch(shot)
-        assert cond.spin_axis_deg == 0.0
+    def test_no_flight_without_a_spin_axis(self):
+        assert resolve_launch(self._measured(spin_axis_deg=None)) is None
 
 
 def _driver(spin_rpm=2700, launch=11.0, ball_speed=165.0, axis=0.0, la_h=0.0):

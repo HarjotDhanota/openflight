@@ -47,9 +47,9 @@ class IncompleteShotError(Exception):
 
 
 class UnmeasuredShotError(IncompleteShotError):
-    """A fusion unit did not measure a field the simulator protocol requires.
+    """The shot did not measure a field the simulator protocol requires.
 
-    Nothing is filled in on a fusion unit, so the shot is not sent. ``missing`` is in
+    Nothing is filled in on any install, so the shot is not sent. ``missing`` is in
     protocol order; ``model_geometry`` and ``estimated`` name fields the shot has only
     in those forms, which simulators are not sent.
     """

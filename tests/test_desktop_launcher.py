@@ -45,8 +45,8 @@ def test_example_launcher_is_valid_and_uses_safe_defaults():
     launcher = EXAMPLE_LAUNCHER.read_text(encoding="utf-8")
     assert "flock -n" in launcher
     assert "--startup-splash" in launcher
-    assert "    --calculated-spin" not in launcher
-    assert "# --calculated-spin" in launcher
+    # no formula spin (25 Oct 2026): the flag is gone from the example
+    assert "--calculated-spin" not in launcher
     assert "--ballistics" in launcher
     assert "# --debug" in launcher
     assert 'scripts/start-kiosk.sh "${openflight_args[@]}"' in launcher

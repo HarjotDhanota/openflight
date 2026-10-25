@@ -1,8 +1,9 @@
 """The label a value carries, and how a Shot's source text names it.
 
 Labels: measured (a sensor saw it), calculated (a named model), model_geometry (assumed swing
-geometry), estimated (a weak input or an OPS-only stand-in), experimental (unvalidated camera
-reading; never feeds another metric). A model's source text starts with its label's word."""
+geometry), estimated (a weak input; nothing is filled in), experimental (unvalidated camera
+reading; what it feeds is experimental too). A model's source text starts with its label's
+word."""
 
 from __future__ import annotations
 
@@ -47,6 +48,27 @@ EXPERIMENTAL_LAUNCH_SOURCES = {
     "camera_legacy_fallback": "camera horizontal after the calibrated model was refused",
 }
 EXPERIMENTAL_LAUNCH_NOTE = "experimental: the camera's geometry is not validated against TrackMan"
+
+# The camera head track's club path and attack angle (camera/head_track.SOURCE): they
+# feed the collision model as "estimated" with their reason (owner decision 5, 25 Oct
+# 2026), and every output built on them is experimental.
+CAMERA_HEAD_TRACK_SOURCE = "camera_head_track"
+# Collision-model input sources whose outputs are experimental, whatever label the
+# model gave them: never sent to a simulator.
+EXPERIMENTAL_INPUT_SOURCES = frozenset({CAMERA_HEAD_TRACK_SOURCE, *EXPERIMENTAL_LAUNCH_SOURCES})
+
+
+def experimental_collision_inputs(collision_record) -> list:
+    """The present collision-model inputs (``CollisionResult.to_dict()``) that came from an
+    experimental source, by name; empty when none did or the model did not run."""
+    inputs = (collision_record or {}).get("inputs") or {}
+    return [
+        name
+        for name, record in inputs.items()
+        if isinstance(record, dict)
+        and record.get("value") is not None
+        and record.get("source") in EXPERIMENTAL_INPUT_SOURCES
+    ]
 
 
 def launch_label(source: Optional[str], status: Optional[str] = None) -> str:

@@ -19,6 +19,7 @@ from .source_chain import weakest_label
 from .source_labels import (
     AZIMUTH_UNCALIBRATED,
     AZIMUTH_UNCALIBRATED_NOTE,
+    CAMERA_HEAD_TRACK_SOURCE,
     EXPERIMENTAL_LAUNCH_NOTE,
     EXPERIMENTAL_LAUNCH_SOURCES,
     MODEL_LABELS,
@@ -49,7 +50,6 @@ OPS_RADIAL_SOURCE = "OPS243 radial (line of sight)"
 MOCK_SOURCE = "mock shot (simulated)"
 SMASH_RADIAL_SOURCE = "radial ratio: OPS radial ball speed / OPS radial club speed (D21)"
 SMASH_SOURCE = "ball speed / club speed (D37)"
-TABLE_CARRY_SOURCE = "ball-speed carry table (OPS-only estimate)"
 COMMITTED_CARRY_SOURCE = "the kiosk's committed carry (no flight record on this shot)"
 NO_CLUB_DELIVERY = "no camera club delivery on this shot"
 HEAD_TRACK_SOURCE_LABEL = "camera head track: hosel + OPS speed (experimental)"
@@ -58,7 +58,9 @@ _PATH_SOURCES = {
     "camera_fused_chained": "camera + IWR chained delivery",
     "camera_fused_ops": "camera + OPS chained delivery",
     "iwr": "IWR club track",
-    "camera_head_track": HEAD_TRACK_SOURCE_LABEL,
+    # the IWR attack that passed its fit gates but no acceptance gate (decision 3)
+    "iwr_candidate": "IWR attack-angle candidate (estimated)",
+    CAMERA_HEAD_TRACK_SOURCE: HEAD_TRACK_SOURCE_LABEL,
 }
 
 
@@ -273,14 +275,18 @@ def _spin_rate(shot):
     source = shot.get("spin_source")
     status = source if source in LABELS and source != NOT_MEASURED else MEASURED
     collision = _collision_metric(shot, "spin_rate")
+    # the spin chain's own record names every route (server._resolve_spin)
+    chain = _mapping(_mapping(shot.get("input_sources")).get("spin"))
     reason = (
-        shot.get("spin_rejection_reason")
+        chain.get("reason")
+        or shot.get("spin_rejection_reason")
         or (f"collision model: {collision['reason']}" if collision.get("reason") else None)
         or "spin not measured on this shot"
     )
     quality = shot.get("spin_quality")
     note = f"confidence {quality}" if status == MEASURED and quality else None
-    if status == MEASURED and quality == EXPERIMENTAL:
+    if status == MEASURED and (quality == EXPERIMENTAL or chain.get("route") == "ops_below_floor"):
+        # an OPS reading below the confidence floor is not a measurement: it feeds nothing
         status, note = EXPERIMENTAL, _experimental_spin_note(shot)
     model_spin = _finite(shot.get("spin_rpm_collision"))
     if (
@@ -351,10 +357,8 @@ def _reported_carry(shot) -> tuple[Optional[float], Optional[str], Optional[str]
         # a simulated carry is calculated, never measured; unlabelled ones are estimates
         label = {None: ESTIMATED, MEASURED: CALCULATED}.get(status, status)
         return committed, label, COMMITTED_CARRY_SOURCE
-    if status in (None, ESTIMATED):
-        table = _finite(shot.get("estimated_carry_yards"))
-        if table is not None:
-            return table, ESTIMATED, TABLE_CARRY_SOURCE
+    # an older log's ball-speed table carry is not a carry: nothing is filled in
+    # (owner decision 1, 25 Oct 2026)
     return None, None, None
 
 
@@ -387,12 +391,26 @@ CAMERA_CLUB_NOTE = (
 )
 
 
+HEAD_TRACK_CLUB_NOTE = (
+    "camera head track (experimental): hosel + OPS speed, not validated against TrackMan; "
+    "it feeds the collision model, so every output built on it is experimental"
+)
+
+
 def _camera_club_label(record: dict, source: Optional[str]) -> dict:
-    """A camera club value labelled measured is experimental: its geometry is inferred."""
-    if record.get("status") == MEASURED and str(source or "").startswith("camera"):
+    """A camera club value labelled measured is experimental: its geometry is inferred.
+
+    The head track's value enters the collision model "estimated" (it has no
+    experimental label); its own record is experimental, and with_input_labels lifts
+    every output built on it to experimental (owner decision 5, 25 Oct 2026).
+    """
+    status = record.get("status")
+    head_track = source == CAMERA_HEAD_TRACK_SOURCE and status in (MEASURED, ESTIMATED)
+    if head_track or (status == MEASURED and str(source or "").startswith("camera")):
+        why = HEAD_TRACK_CLUB_NOTE if head_track else CAMERA_CLUB_NOTE
         note = record.get("note")
         record["status"] = EXPERIMENTAL
-        record["note"] = f"{note}; {CAMERA_CLUB_NOTE}" if note else CAMERA_CLUB_NOTE
+        record["note"] = f"{note}; {why}" if note else why
     return record
 
 
@@ -414,6 +432,10 @@ def _path_or_attack(metric_id: str):
                     source=_PATH_SOURCES.get(source, source),
                     range_=delivery.get("range") if same_as_arc else None,
                     frame=used.get("frame") if metric_id == "club_path" else None,
+                    # an estimated input says why (the IWR candidate's reason, say)
+                    note=used.get("reason")
+                    if used.get("label") == ESTIMATED and source != CAMERA_HEAD_TRACK_SOURCE
+                    else None,
                 ),
                 source,
             )
@@ -586,7 +608,33 @@ def with_input_labels(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dic
                 spec = _specs.get(name)
                 title = spec.label.lower() if spec else name
                 changed |= _lower(entry, status, f"rests on the {status} {title}")
+    _name_experimental_club_inputs(metrics)
     return metrics
+
+
+_CLUB_INPUTS = ("club_path", "attack_angle")
+
+
+def _name_experimental_club_inputs(metrics: dict[str, dict[str, Any]]) -> None:
+    """An output already experimental for another reason (a camera launch, the ball's own
+    size) still names the experimental club path or attack it is built on: the camera
+    head track feeds the collision model (owner decision 5, 25 Oct 2026)."""
+    for metric_id, inputs in UPSTREAM.items():
+        entry = metrics.get(metric_id)
+        if not entry or entry.get("status") != EXPERIMENTAL or entry.get("value") is None:
+            continue
+        for name in inputs:
+            upstream = metrics.get(name) or {}
+            if (
+                name not in _CLUB_INPUTS
+                or upstream.get("status") != EXPERIMENTAL
+                or upstream.get("value") is None
+            ):
+                continue
+            why = f"rests on the experimental {_specs[name].label.lower()}"
+            note = entry.get("note") or ""
+            if why not in note:
+                entry["note"] = f"{note}; {why}" if note else why
 
 
 Builder = Callable[[Mapping[str, Any]], dict]

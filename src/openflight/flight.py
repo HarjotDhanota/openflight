@@ -12,9 +12,10 @@ Every metric carries ``value``, ``unit``, ``status``, ``source``, ``range`` and
   output, so at best ``calculated`` (a fusion unit's flight on measured or
   calculated inputs, D38); ``model_geometry`` when its spin or spin axis (or a club
   input under them) rests on an assumed swing geometry (D39, E1's arc prior);
-  ``estimated`` on an OPS-only install (the club-typical spin and neutral angles
-  stand in); ``not_measured`` with the reason. Nothing is filled in on a fusion
-  unit: without spin or spin axis there is no flight (D17).
+  ``estimated`` when an input is a weak one (the radial ball speed, an estimated spin
+  or axis); ``not_measured`` with the reason. Nothing is filled in on any install:
+  without spin, horizontal launch or spin axis there is no flight (D17; owner
+  decision 1, 25 Oct 2026).
 - ``source`` names the model, the air, for total the bounce model and the surface
   assumed, and the model-geometry inputs when there are any.
 - ``range`` is a +-1 sigma band from a linearised perturbation sweep of the
@@ -43,7 +44,6 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from . import metric_definitions
-from .clubs.physics import CLUB_TYPICAL_SPIN_LABEL
 from .collision_model import (
     is_estimated_source,
     is_model_geometry_source,
@@ -222,7 +222,7 @@ def _as_measured_air(shot: Shot) -> tuple[Optional[float], str, Optional[str]]:
     return float(supplied), AIR_SUPPLIED, None
 
 
-def _missing_reason(shot: Shot, *, substitutes: bool) -> str:
+def _missing_reason(shot: Shot) -> str:
     """Why resolve_launch gave no launch conditions, in the shot's own terms."""
     reasons = []
     speed, _ = ball_speed_for_flight(shot)
@@ -230,33 +230,28 @@ def _missing_reason(shot: Shot, *, substitutes: bool) -> str:
         reasons.append("ball speed not measured")
     if not _finite(shot.launch_angle_vertical):
         reasons.append("vertical launch not measured")
-    if not substitutes:
-        if not _finite(shot.launch_angle_horizontal):
-            reasons.append("horizontal launch not measured")
-        measured = (
-            _finite(shot.spin_rpm)
-            and _finite(shot.spin_confidence)
-            and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
-        )
-        model = shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm
-        if not (measured or model):
-            if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
-                reasons.append(
-                    f"spin not measured (spin confidence {shot.spin_confidence:.2f} "
-                    f"below {SPIN_CONFIDENCE_HIGH})"
-                )
-            else:
-                reasons.append("spin not measured")
-        if not _finite(shot.spin_axis_deg):
-            reasons.append("spin axis not measured")
+    if not _finite(shot.launch_angle_horizontal):
+        reasons.append("horizontal launch not measured")
+    measured = (
+        _finite(shot.spin_rpm)
+        and _finite(shot.spin_confidence)
+        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
+    )
+    model = shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm
+    if not (measured or model):
+        if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
+            reasons.append(
+                f"spin not measured (spin confidence {shot.spin_confidence:.2f} "
+                f"below {SPIN_CONFIDENCE_HIGH})"
+            )
+        else:
+            reasons.append("spin not measured")
+    if not _finite(shot.spin_axis_deg):
+        reasons.append("spin axis not measured")
     return "; ".join(reasons) or "flight inputs incomplete"
 
 
-def _angle_label(source: Optional[str], substituted: bool) -> str:
-    if substituted:
-        return "substituted 0 deg (OPS-only estimate; not measured)"
-    if source == "estimated":
-        return "estimated (OPS-only club table or neutral estimate)"
+def _angle_label(source: Optional[str]) -> str:
     return f"measured ({source})" if source else "measured (source unlabelled on the shot)"
 
 
@@ -293,28 +288,21 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
         spin_label = f"calculated ({shot.spin_method or 'model unnamed on the shot'})"
     elif conditions.spin_source == STATUS_MODEL_GEOMETRY:
         spin_label = f"model geometry ({shot.spin_method or 'model unnamed on the shot'})"
-    elif conditions.spin_source == STATUS_ESTIMATED:
+    else:
         spin_label = f"estimated ({shot.spin_method or 'model unnamed on the shot'})"
-    else:
-        spin_label = CLUB_TYPICAL_SPIN_LABEL
 
-    if not _finite(shot.spin_axis_deg):
-        axis_label = "substituted 0 deg (OPS-only estimate; not measured)"
-    else:
-        axis_label = getattr(shot, "spin_axis_source", None) or (
-            "unlabelled on the shot (the kiosk's proxy: horizontal launch minus club path)"
-        )
+    axis_label = getattr(shot, "spin_axis_source", None) or (
+        "unlabelled on the shot (the kiosk's proxy: horizontal launch minus club path)"
+    )
     return {
         "ball_speed": {"value": conditions.ball_speed_mph, "label": speed_label},
         "launch_vertical": {
             "value": conditions.launch_angle_v,
-            "label": _angle_label(shot.launch_angle_vertical_source, False),
+            "label": _angle_label(shot.launch_angle_vertical_source),
         },
         "launch_horizontal": {
             "value": conditions.launch_angle_h,
-            "label": _angle_label(
-                shot.launch_angle_horizontal_source, not _finite(shot.launch_angle_horizontal)
-            ),
+            "label": _angle_label(shot.launch_angle_horizontal_source),
         },
         "spin": {"value": conditions.spin_rpm, "label": spin_label},
         "spin_axis": {"value": conditions.spin_axis_deg, "label": axis_label},
@@ -387,10 +375,10 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
     return reasons
 
 
-def _flight_status(substitutes: bool, model_geometry: list[str], estimated: list[str] = ()) -> str:
-    """The weakest input label: estimated (OPS-only, or an estimated input), model
-    geometry, else calculated."""
-    labels = [STATUS_ESTIMATED if substitutes or estimated else STATUS_CALCULATED]
+def _flight_status(model_geometry: list[str], estimated: list[str] = ()) -> str:
+    """The weakest input label: estimated (an estimated input), model geometry, else
+    calculated."""
+    labels = [STATUS_ESTIMATED if estimated else STATUS_CALCULATED]
     if model_geometry:
         labels.append(STATUS_MODEL_GEOMETRY)
     return min(labels, key=STATUS_ORDER.index)
@@ -548,31 +536,29 @@ def _block(
 def compute_flight(
     shot: Shot,
     *,
-    substitutes: bool,
     enabled: bool = True,
     surface: Optional[str] = None,
     uncertainty: InputUncertainty = DEFAULT_INPUT_UNCERTAINTY,
 ) -> FlightResult:
     """Both flights for ``shot`` from its own inputs, every output labelled.
 
-    ``substitutes`` is True on an OPS-only install (club-typical spin and neutral
-    angles stand in, status "estimated") and False on a fusion unit (nothing is
-    filled in, D17). A fusion flight is "calculated", or "model_geometry" when any
-    input is model geometry (D39); the result's ``status`` names it. ``enabled``
-    False is ``--no-ballistics``. ``surface`` names a BOUNCE_MODELS entry; None
-    assumes fairway, normal firmness.
+    Nothing is filled in on any install (D17; owner decision 1, 25 Oct 2026). A
+    flight is "calculated", "model_geometry" when any input is model geometry (D39),
+    or "estimated" on an estimated input; the result's ``status`` names it.
+    ``enabled`` False is ``--no-ballistics``. ``surface`` names a BOUNCE_MODELS
+    entry; None assumes fairway, normal firmness.
     """
     surface_assumed = surface is None
     surface = DEFAULT_SURFACE if surface is None else surface
-    conditions = resolve_launch(shot, substitutes=substitutes) if enabled else None
+    conditions = resolve_launch(shot) if enabled else None
     model_geometry = tuple(_model_geometry_inputs(shot, conditions))
     estimated = tuple(_estimated_inputs(shot, conditions))
-    status = _flight_status(substitutes, list(model_geometry), list(estimated))
+    status = _flight_status(list(model_geometry), list(estimated))
 
     if not enabled:
         reason = "flight model disabled (--no-ballistics)"
     elif conditions is None:
-        reason = _missing_reason(shot, substitutes=substitutes)
+        reason = _missing_reason(shot)
     else:
         reason = None
 

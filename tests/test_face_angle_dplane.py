@@ -151,17 +151,20 @@ def _head_track(**fields):
     )
 
 
-def test_the_head_track_is_shown_but_fed_to_no_other_metric():
+def test_the_head_track_feeds_the_face_angle_estimated_with_its_reason():
+    """Owner decision 5: fed on, its outputs labelled experimental in shot_metrics."""
     shot = _head_track()
 
     shot_models._attach_collision_model(shot)
 
     assert shot_models.displayed_club_path(shot) == (-4.0, "camera_head_track")
     assert shot_models.displayed_attack_angle(shot) == (-3.0, "camera_head_track")
-    assert shot.experimental_face_angle_deg is None
+    assert shot.experimental_face_angle_deg is not None
+    assert shot.experimental_face_angle_path_source == "camera_head_track"
     inputs = shot.collision_model["inputs"]
-    assert inputs["club_path"]["value"] is None
-    assert "experimental" in inputs["club_path"]["reason"]
+    assert inputs["club_path"]["value"] == -4.0
+    assert inputs["club_path"]["label"] == "estimated"
+    assert inputs["club_path"]["reason"] == "camera head track (experimental)"
 
 
 def test_an_accepted_iwr_path_outranks_the_head_track():

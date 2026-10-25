@@ -10,7 +10,7 @@ import pytest
 
 from openflight import kiosk_extensions, server
 from openflight.clubs import ClubType
-from openflight.launch_monitor import CARRY_ESTIMATED, CARRY_NOT_MEASURED, Shot
+from openflight.launch_monitor import CARRY_NOT_MEASURED, Shot
 
 
 @pytest.fixture
@@ -19,7 +19,6 @@ def plain_kiosk(monkeypatch):
     monkeypatch.setattr(server, "iwr6843_runtime", None)
     monkeypatch.setattr(server, "camera_capture_runtime", None)
     monkeypatch.setattr(server, "ballistics_enabled", True)
-    monkeypatch.setattr(server, "calculated_spin_enabled", False)
     monkeypatch.setattr(server, "get_session_logger", lambda: None)
     monkeypatch.setattr(server.socketio, "emit", lambda *args, **kwargs: None)
     return monkeypatch
@@ -43,18 +42,10 @@ def _finalize(shot):
     server._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
 
 
-def test_an_ops_only_unit_takes_the_table_carry_without_a_flight_model(plain_kiosk):
-    shot = _shot()
-
-    _finalize(shot)
-
-    assert shot.flight is None
-    assert shot.carry_status == CARRY_ESTIMATED
-    assert shot.carry_spin_adjusted is not None and shot.carry_spin_adjusted > 0
-
-
-def test_a_fusion_unit_has_no_carry_without_a_flight_model(plain_kiosk):
-    plain_kiosk.setattr(server, "iwr6843_runtime", SimpleNamespace())
+@pytest.mark.parametrize("fusion", [False, True], ids=["ops-only", "fusion"])
+def test_no_unit_has_a_table_carry_without_a_flight_model(plain_kiosk, fusion):
+    """Every install alike: no ball-speed table stands in (owner decision 1)."""
+    plain_kiosk.setattr(server, "iwr6843_runtime", SimpleNamespace() if fusion else None)
     shot = _shot()
 
     _finalize(shot)
@@ -74,10 +65,11 @@ def test_no_model_output_is_attached(plain_kiosk):
     assert shot.ball_speed_contract == "radial"
 
 
-def test_calculated_spin_uses_its_own_formula_without_a_collision_model(plain_kiosk):
-    shot = _shot(spin_rpm_collision=5000.0)
+def test_no_formula_spin_without_a_collision_model(plain_kiosk):
+    """No collision model and a weak OPS reading: no trustworthy spin, no formula."""
+    shot = _shot(spin_rpm=5000.0, spin_confidence=0.3)
 
-    assert server._apply_calculated_spin(shot) is True  # pylint: disable=protected-access
+    _finalize(shot)
 
-    assert shot.spin_rpm == shot.spin_rpm_calculated_empirical != 5000.0
-    assert shot.spin_method == server.EMPIRICAL_SPIN_METHOD
+    assert shot.spin_rpm == 5000.0 and shot.spin_source is None
+    assert shot.input_sources["spin"]["route"] == "ops_below_floor"

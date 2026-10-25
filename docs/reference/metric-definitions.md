@@ -48,12 +48,11 @@ curve uses the flight model's landing point.
 - **Domain:** None without a positive, finite club speed, or with a negative ball speed.
 - **What the kiosk shows (D21):**
     - TrackMan divides the ball's full speed by the head's full speed.
-    - A fusion unit divides the OPS243 radial ball speed by the OPS243 radial
+    - OpenFlight divides the OPS243 radial ball speed by the OPS243 radial
       club speed, which is a different quantity.
-    - So a fusion unit's shot carries `smash_factor_status: "radial_ratio"`,
-      and the kiosk shows "radial ratio" under the value. The value is still
-      shown, not hidden.
-    - An OPS-only unit's smash is unlabelled, as before.
+    - So every shot carries `smash_factor_status: "radial_ratio"`, on an
+      OPS-only unit too (25 Oct 2026), and the kiosk shows "radial ratio" under
+      the value. The value is still shown, not hidden.
 
 ## Face to path
 
