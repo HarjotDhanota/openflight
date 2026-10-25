@@ -82,8 +82,9 @@ class RollingBufferProcessor:
     # ball energy. Track the fastest pre-impact Doppler branch, then summarize
     # its plateau before that mixed region instead of selecting the strongest
     # reflector (which is frequently the shaft or an earlier swing return).
+    # The plateau is anchored on the ball's FIRST appearance: its strongest
+    # window can come tens of ms later, after impact.
     CLUB_BRANCH_HISTORY_MS = 30.0
-    CLUB_BALL_ONSET_SEARCH_MS = 10.0
     CLUB_BALL_MATCH_MIN_MPH = 4.0
     CLUB_BALL_MATCH_FRACTION = 0.06
     CLUB_PLATEAU_LOOKBACK_MS = 18.0
@@ -94,6 +95,24 @@ class RollingBufferProcessor:
     CLUB_TERMINAL_END_MS = 1.0
     CLUB_MAX_PLAUSIBLE_SPEED_MPH = 150.0
     CLUB_SMOOTH_MERGE_TYPES = frozenset({ClubType.SW, ClubType.LW})
+    # Head dropout: near contact the head's return can fade below the peak
+    # picker, and the window's fastest reading becomes a slower, weak return.
+    # The head's line-of-sight speed only rises before impact, so a reading
+    # this far below the ridge AND this weak ends the plateau. Both conditions
+    # are needed: a strongly seen dip is still the head.
+    CLUB_RIDGE_DROPOUT_MPH = 3.0
+    CLUB_RIDGE_DROPOUT_MAGNITUDE_RATIO = 0.5
+    # Ball-line onset from the spectrum rather than the reported peaks: a ball
+    # can sit well clear of the noise yet stay under MAGNITUDE_THRESHOLD (or
+    # out of the top peaks) until long after impact. The ball-speed band must
+    # reach this multiple of the window's median outbound level for this many
+    # consecutive windows. The window is 256 samples so its Hann main lobe
+    # (+/-3.25 mph, half the 128-sample one) keeps a strong club return more
+    # than ~6 mph below the ball out of the band. A closer club spills its
+    # skirt into the band's lower edge; a band peaking there is not the ball.
+    BALL_LINE_WINDOW_SIZE = 256
+    BALL_LINE_ONSET_SNR = 12.0
+    BALL_LINE_ONSET_WINDOWS = 12
 
     # Spin detection via amplitude envelope demodulation.
     # The ball seam modulates the radar return at 1x spin rate.
@@ -1525,91 +1544,211 @@ class RollingBufferProcessor:
         merge rather than a distinct transition. For that case, use the terminal
         upper branch instead of imposing an iron/driver smash-factor bracket.
 
+        Every other club is read only before the ball's first appearance, the
+        earliest of: two consecutive windows with a ball-speed reading, the
+        ball line rising out of the noise in the spectrum, and the strongest
+        ball window. The plateau ends a guard before it, the head's dropout
+        just before contact is cut from it, and the magnitude fallback only
+        takes windows that end by it.
+
         Args:
-            timeline: Speed timeline
+            timeline: Speed timeline. When it carries its capture, the ball
+                line's onset is also measured from the spectrum.
             ball_speed_mph: Detected ball speed
-            ball_timestamp_ms: When ball was detected
+            ball_timestamp_ms: When ball was detected (its strongest window)
             max_window_ms: Maximum time before ball to search
             club_type: Selected club, used for smooth wedge transitions
 
         Returns:
             Tuple of (club_speed_mph, club_timestamp_ms) or (None, None)
         """
+        if club_type in self.CLUB_SMOOTH_MERGE_TYPES:
+            terminal_pick = self._smooth_merge_terminal_pick(
+                timeline, ball_timestamp_ms, max_window_ms
+            )
+            if terminal_pick is not None:
+                return terminal_pick.speed_mph, terminal_pick.timestamp_ms
+
+        upper_branch = self._upper_branch(timeline.readings)
+        ball_evidence_ms = [
+            onset_ms
+            for onset_ms in (
+                self._ball_pair_onset_ms(timeline.readings, ball_speed_mph),
+                (
+                    self._ball_line_onset_ms(timeline.capture, ball_speed_mph)
+                    if timeline.capture is not None
+                    else None
+                ),
+            )
+            if onset_ms is not None
+        ]
+        # The strongest ball window is ball evidence too, just possibly late.
+        first_ball_ms = min([*ball_evidence_ms, ball_timestamp_ms])
+        if ball_evidence_ms:
+            onset_timestamp_ms = first_ball_ms
+        else:
+            # One overlapping FFT step before the mixed club/ball guard.
+            onset_timestamp_ms = ball_timestamp_ms - 3.2
+
         legacy_speed, legacy_timestamp = self._find_club_speed_by_magnitude(
             timeline,
             ball_speed_mph,
             ball_timestamp_ms,
             max_window_ms,
+            latest_timestamp_ms=first_ball_ms,
         )
 
-        history_ms = min(max_window_ms, self.CLUB_BRANCH_HISTORY_MS)
+        plateau_start_ms = onset_timestamp_ms - self.CLUB_PLATEAU_LOOKBACK_MS
+        plateau_end_ms = onset_timestamp_ms - self.CLUB_PLATEAU_GUARD_MS
+        plateau = self._until_head_dropout(
+            [
+                reading
+                for reading in upper_branch
+                if plateau_start_ms <= reading.timestamp_ms <= plateau_end_ms
+            ]
+        )
+        if len(plateau) < 3:
+            return legacy_speed, legacy_timestamp
+        plateau_pick = self._quantile_reading(plateau, self.CLUB_PLATEAU_QUANTILE)
+
+        if plateau_pick.speed_mph > ball_speed_mph * self.CLUB_BALL_CONTAMINATION_RATIO:
+            return legacy_speed, legacy_timestamp
+
+        return plateau_pick.speed_mph, plateau_pick.timestamp_ms
+
+    def _upper_branch(
+        self,
+        readings: list[SpeedReading],
+        start_ms: float = -np.inf,
+        end_ms: float = np.inf,
+    ) -> list[SpeedReading]:
+        """Fastest plausible outbound reading per window, in time order."""
         upper_by_timestamp: dict[float, SpeedReading] = {}
-        for reading in timeline.readings:
-            relative_ms = reading.timestamp_ms - ball_timestamp_ms
+        for reading in readings:
             if not reading.is_outbound:
                 continue
-            if not -history_ms <= relative_ms <= self.CLUB_TERMINAL_END_MS:
+            if not start_ms <= reading.timestamp_ms <= end_ms:
                 continue
             if not 0 < reading.speed_mph <= self.CLUB_MAX_PLAUSIBLE_SPEED_MPH:
                 continue
             current = upper_by_timestamp.get(reading.timestamp_ms)
             if current is None or reading.speed_mph > current.speed_mph:
                 upper_by_timestamp[reading.timestamp_ms] = reading
+        return sorted(upper_by_timestamp.values(), key=lambda reading: reading.timestamp_ms)
 
-        upper_branch = sorted(
-            upper_by_timestamp.values(),
-            key=lambda reading: reading.timestamp_ms,
+    def _smooth_merge_terminal_pick(
+        self,
+        timeline: SpeedTimeline,
+        ball_timestamp_ms: float,
+        max_window_ms: float,
+    ) -> Optional[SpeedReading]:
+        """Median of the upper branch where a wedge's club trace merges into the ball."""
+        history_ms = min(max_window_ms, self.CLUB_BRANCH_HISTORY_MS)
+        upper_branch = self._upper_branch(
+            timeline.readings,
+            ball_timestamp_ms - history_ms,
+            ball_timestamp_ms + self.CLUB_TERMINAL_END_MS,
         )
         if len(upper_branch) < 3:
-            return legacy_speed, legacy_timestamp
+            return None
+        terminal = [
+            reading
+            for reading in upper_branch
+            if self.CLUB_TERMINAL_START_MS
+            <= reading.timestamp_ms - ball_timestamp_ms
+            <= self.CLUB_TERMINAL_END_MS
+        ]
+        return self._quantile_reading(terminal, 0.50)
 
-        if club_type in self.CLUB_SMOOTH_MERGE_TYPES:
-            terminal = [
-                reading
-                for reading in upper_branch
-                if self.CLUB_TERMINAL_START_MS
-                <= reading.timestamp_ms - ball_timestamp_ms
-                <= self.CLUB_TERMINAL_END_MS
-            ]
-            terminal_pick = self._quantile_reading(terminal, 0.50)
-            if terminal_pick is not None:
-                return terminal_pick.speed_mph, terminal_pick.timestamp_ms
+    def _ball_pair_onset_ms(
+        self, readings: list[SpeedReading], ball_speed_mph: float
+    ) -> Optional[float]:
+        """First of two consecutive windows that each hold a ball-speed reading.
 
+        Any reading in the window counts, not only the fastest: a noise peak
+        above the ball must not hide the ball's first windows.
+        """
         ball_tolerance_mph = max(
             self.CLUB_BALL_MATCH_MIN_MPH,
             ball_speed_mph * self.CLUB_BALL_MATCH_FRACTION,
         )
-        onset_timestamp_ms: Optional[float] = None
-        for first, second in zip(upper_branch, upper_branch[1:]):
-            first_relative_ms = first.timestamp_ms - ball_timestamp_ms
-            if first_relative_ms < -self.CLUB_BALL_ONSET_SEARCH_MS:
+        ball_in_window: dict[float, bool] = {}
+        for reading in readings:
+            if not reading.is_outbound:
                 continue
+            if not 0 < reading.speed_mph <= self.CLUB_MAX_PLAUSIBLE_SPEED_MPH:
+                continue
+            ball_in_window[reading.timestamp_ms] = ball_in_window.get(
+                reading.timestamp_ms, False
+            ) or (abs(reading.speed_mph - ball_speed_mph) <= ball_tolerance_mph)
+        windows = sorted(ball_in_window.items())
+        for (timestamp_ms, first_has_ball), (_, second_has_ball) in zip(windows, windows[1:]):
+            if first_has_ball and second_has_ball:
+                return timestamp_ms
+        return None
+
+    def _ball_line_onset_ms(self, capture: IQCapture, ball_speed_mph: float) -> Optional[float]:
+        """When the ball line is first established above the noise, in ms.
+
+        Independent of MAGNITUDE_THRESHOLD and the per-window peak cap, which
+        can hide a clear but weak ball line until long after impact. A window
+        counts when the ball-speed band (BALL_SPEED_MATCH_TOLERANCE_MPH) peaks
+        at BALL_LINE_ONSET_SNR times the window's median outbound magnitude;
+        the first of BALL_LINE_ONSET_WINDOWS consecutive such windows is the
+        onset, reported at its centre. That is within half a window of the
+        ball's first sample: a strong ball crosses the threshold while only the
+        window's tail holds it (centre before the first sample), a ball barely
+        over the threshold needs most of the window (centre after it).
+        """
+        window_size = self.BALL_LINE_WINDOW_SIZE
+        i_data = np.asarray(capture.i_samples, dtype=float)
+        q_data = np.asarray(capture.q_samples, dtype=float)
+        starts = np.arange(0, len(i_data) - window_size + 1, self.STEP_SIZE_OVERLAP)
+        if len(starts) < self.BALL_LINE_ONSET_WINDOWS:
+            return None
+        offsets = starts[:, None] + np.arange(window_size)
+        blocks = i_data[offsets] + 1j * q_data[offsets]
+        blocks = (blocks - blocks.mean(axis=1, keepdims=True)) * np.hanning(window_size)
+        half = self.FFT_SIZE // 2
+        magnitude = np.abs(np.fft.fft(blocks, self.FFT_SIZE, axis=1)[:, :half])
+
+        mph_per_bin = self.SAMPLE_RATE / self.FFT_SIZE * self.WAVELENGTH_M / 2 * self.MPS_TO_MPH
+        bin_speeds = np.arange(half) * mph_per_bin
+        band = np.abs(bin_speeds - ball_speed_mph) <= self.BALL_SPEED_MATCH_TOLERANCE_MPH
+        band[: self.DC_MASK_BINS] = False
+        if band.sum() < 2:
+            return None
+        band_magnitude = magnitude[:, band]
+        noise = np.median(magnitude[:, self.DC_MASK_BINS :], axis=1)
+        # A window of constant samples (an unfilled buffer start) has no noise
+        # floor to measure against and is no evidence of anything. A band whose
+        # maximum sits on its lower edge is the skirt of a slower return, the
+        # club closing on the ball's speed, not a ball line.
+        present = (
+            (noise > 0)
+            & (band_magnitude.max(axis=1) >= self.BALL_LINE_ONSET_SNR * noise)
+            & (band_magnitude.argmax(axis=1) > 0)
+        )
+        run = self.BALL_LINE_ONSET_WINDOWS
+        for index in range(len(present) - run + 1):
+            if present[index : index + run].all():
+                return float((starts[index] + window_size / 2) / self.SAMPLE_RATE * 1000.0)
+        return None
+
+    def _until_head_dropout(self, plateau: list[SpeedReading]) -> list[SpeedReading]:
+        """Cut the plateau where the head's return drops out before contact."""
+        if not plateau:
+            return plateau
+        peak_magnitude = max(reading.magnitude for reading in plateau)
+        ridge_mph = plateau[0].speed_mph
+        for index, reading in enumerate(plateau):
             if (
-                abs(first.speed_mph - ball_speed_mph) <= ball_tolerance_mph
-                and abs(second.speed_mph - ball_speed_mph) <= ball_tolerance_mph
+                reading.speed_mph < ridge_mph - self.CLUB_RIDGE_DROPOUT_MPH
+                and reading.magnitude < peak_magnitude * self.CLUB_RIDGE_DROPOUT_MAGNITUDE_RATIO
             ):
-                onset_timestamp_ms = first.timestamp_ms
-                break
-
-        if onset_timestamp_ms is None:
-            # One overlapping FFT step before the mixed club/ball guard.
-            onset_timestamp_ms = ball_timestamp_ms - 3.2
-
-        plateau_start_ms = onset_timestamp_ms - self.CLUB_PLATEAU_LOOKBACK_MS
-        plateau_end_ms = onset_timestamp_ms - self.CLUB_PLATEAU_GUARD_MS
-        plateau = [
-            reading
-            for reading in upper_branch
-            if plateau_start_ms <= reading.timestamp_ms <= plateau_end_ms
-        ]
-        plateau_pick = self._quantile_reading(plateau, self.CLUB_PLATEAU_QUANTILE)
-        if plateau_pick is None:
-            return legacy_speed, legacy_timestamp
-
-        if plateau_pick.speed_mph > ball_speed_mph * self.CLUB_BALL_CONTAMINATION_RATIO:
-            return legacy_speed, legacy_timestamp
-
-        return plateau_pick.speed_mph, plateau_pick.timestamp_ms
+                return plateau[:index]
+            ridge_mph = max(ridge_mph, reading.speed_mph)
+        return plateau
 
     @staticmethod
     def _quantile_reading(readings: list[SpeedReading], quantile: float) -> Optional[SpeedReading]:
@@ -1625,20 +1764,31 @@ class RollingBufferProcessor:
             ),
         )
 
-    @staticmethod
     def _find_club_speed_by_magnitude(
+        self,
         timeline: SpeedTimeline,
         ball_speed_mph: float,
         ball_timestamp_ms: float,
         max_window_ms: float,
+        latest_timestamp_ms: Optional[float] = None,
     ) -> Tuple[Optional[float], Optional[float]]:
-        """Provide a conservative fallback when no usable branch exists."""
+        """Provide a conservative fallback when no usable branch exists.
+
+        A candidate window must end by the ball's first appearance
+        (``latest_timestamp_ms``, else the ball window), so neither the ball's
+        own window nor a strong post-impact club return is reported as club
+        speed.
+        """
         min_club = ball_speed_mph * 0.67
         max_club = ball_speed_mph * 0.85
+        latest_ms = (
+            ball_timestamp_ms
+            if latest_timestamp_ms is None
+            else min(ball_timestamp_ms, latest_timestamp_ms)
+        )
+        window_ms = self.WINDOW_SIZE / self.SAMPLE_RATE * 1000.0
 
-        # Get readings at or before ball timestamp (covers software trigger
-        # latency where club and ball appear in the same FFT block)
-        pre_ball = [r for r in timeline.readings if r.timestamp_ms <= ball_timestamp_ms]
+        pre_ball = [r for r in timeline.readings if r.timestamp_ms + window_ms <= latest_ms]
 
         # Filter to valid club candidates, excluding the ball reading itself
         candidates = [
