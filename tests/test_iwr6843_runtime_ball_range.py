@@ -36,6 +36,8 @@ class FakeMonitor:
 
 
 PRIOR = lr.LaunchRangePrior(range_m=2.11, uncertainty_m=0.42, source="camera_size_coarse")
+MISSING = lr.LaunchRangeEstimate(status="not_measured", reason="no ball track after impact")
+SHOT = {"impact_timestamp": 1.0, "ball_speed_mph": 100.0, "club": "7i", "club_speed_mph": 74.0}
 
 
 def _runtime(*, tee_range_m=None, prior=PRIOR):
@@ -82,9 +84,7 @@ def test_a_measured_launch_point_is_the_range_every_estimator_uses(seen):
     with patch(
         "openflight.iwr6843.runtime.estimate_launch_range", return_value=_measured()
     ) as estimate:
-        result = _runtime().process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
-        )
+        result = _runtime().process_shot(**SHOT)
 
     assert estimate.call_args.kwargs["prior"] == PRIOR
     assert estimate.call_args.kwargs["ball_speed_mph"] == 100.0
@@ -96,11 +96,8 @@ def test_a_measured_launch_point_is_the_range_every_estimator_uses(seen):
 
 
 def test_without_a_launch_point_the_camera_prior_stands_in_labelled(seen):
-    missing = lr.LaunchRangeEstimate(status="not_measured", reason="no ball track after impact")
-    with patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=missing):
-        result = _runtime().process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
-        )
+    with patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING):
+        result = _runtime().process_shot(**SHOT)
 
     assert seen["calibration"].tee_range_m == 2.11
     assert seen["calibration"].tee_range_uncertainty_m == 0.42
@@ -110,35 +107,25 @@ def test_without_a_launch_point_the_camera_prior_stands_in_labelled(seen):
 
 def test_a_shot_s_own_resting_ball_look_is_its_prior(seen):
     own = lr.LaunchRangePrior(range_m=1.95, uncertainty_m=0.39, source="camera_ball_at_address")
-    missing = lr.LaunchRangeEstimate(status="not_measured", reason="no ball track after impact")
     with patch(
-        "openflight.iwr6843.runtime.estimate_launch_range", return_value=missing
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING
     ) as estimate:
-        result = _runtime().process_shot(
-            impact_timestamp=1.0,
-            ball_speed_mph=100.0,
-            club="7i",
-            club_speed_mph=74.0,
-            range_prior=own,
-        )
+        result = _runtime().process_shot(**SHOT, range_prior=own)
 
     assert estimate.call_args.kwargs["prior"] == own
     assert result.ball_range.range_m == 1.95
 
 
 def test_without_either_the_range_dependent_estimators_are_withheld():
-    missing = lr.LaunchRangeEstimate(status="not_measured", reason="no ball track after impact")
     with (
         patch(
             "openflight.iwr6843.runtime.prepare_lcmf_capture",
             return_value=SimpleNamespace(vertical="vertical"),
         ),
-        patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=missing),
+        patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING),
         patch("openflight.iwr6843.runtime.process_raw_capture") as process,
     ):
-        result = _runtime(prior=None).process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
-        )
+        result = _runtime(prior=None).process_shot(**SHOT)
 
     process.assert_not_called()
     assert result.measurement is None
@@ -152,9 +139,7 @@ def test_a_failing_estimator_never_loses_the_shot(seen):
     with patch(
         "openflight.iwr6843.runtime.estimate_launch_range", side_effect=ValueError("bad dump")
     ):
-        result = _runtime().process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
-        )
+        result = _runtime().process_shot(**SHOT)
 
     assert result.launch_range.status == "not_measured"
     assert "bad dump" in result.launch_range.reason
@@ -163,9 +148,7 @@ def test_a_failing_estimator_never_loses_the_shot(seen):
 
 def test_a_configured_range_is_kept_and_the_launch_point_is_still_recorded(seen):
     with patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=_measured()):
-        result = _runtime(tee_range_m=1.372, prior=None).process_shot(
-            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
-        )
+        result = _runtime(tee_range_m=1.372, prior=None).process_shot(**SHOT)
 
     # a bench run given --iwr6843-tee-m keeps it; the launch point is recorded beside it
     assert seen["calibration"].tee_range_m == 1.372
