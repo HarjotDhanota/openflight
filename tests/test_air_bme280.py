@@ -248,6 +248,29 @@ class TestIdentity:
 
 
 class TestForcedMode:
+    def test_a_clear_status_before_conversion_starts_does_not_read_old_data(self, monkeypatch):
+        elapsed = [0.0]
+        monkeypatch.setattr(
+            "openflight.air.bme280.time.sleep",
+            lambda delay: elapsed.__setitem__(0, elapsed[0] + delay),
+        )
+
+        class DelayedBus(FakeBus):
+            def read_i2c_block_data(self, address, register, length):
+                if register == DATA_REG and elapsed[0] < 0.0162:
+                    return data_block(adc_t=480000)
+                return super().read_i2c_block_data(address, register, length)
+
+        sample = _sensor(DelayedBus()).read()
+        assert sample.temperature_c == pytest.approx(DATASHEET_T_C, abs=0.005)
+
+    @pytest.mark.parametrize("channel", ["adc_t", "adc_p", "adc_h"])
+    def test_a_skipped_channel_sentinel_is_not_a_measurement(self, channel):
+        bus = FakeBus()
+        bus.data = data_block(**{channel: 0x8000 if channel == "adc_h" else 0x80000})
+        with pytest.raises(OSError, match="skipped"):
+            _sensor(bus).read()
+
     def test_ctrl_hum_is_written_before_ctrl_meas(self):
         """Datasheet 5.4.3: ctrl_hum takes effect only on the next ctrl_meas write."""
         bus = FakeBus()

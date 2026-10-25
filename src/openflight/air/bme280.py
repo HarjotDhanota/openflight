@@ -34,6 +34,8 @@ OVERSAMPLE_X1 = 0b001
 OVERSAMPLE_X4 = 0b011
 MODE_FORCED = 0b01
 STATUS_MEASURING = 0b1000
+# Datasheet 9.1: T x1, P x4, H x1 needs at most 16.2 ms, rounded up before polling.
+FORCED_CONVERSION_S = 0.017
 # x1 temperature and humidity, x4 pressure: the conversion takes under 20 ms.
 MAX_CONVERSION_POLLS = 50
 CONVERSION_POLL_S = 0.002
@@ -173,6 +175,7 @@ class BME280:
             CTRL_MEAS_REG,
             (OVERSAMPLE_X1 << 5) | (OVERSAMPLE_X4 << 2) | MODE_FORCED,
         )
+        time.sleep(FORCED_CONVERSION_S)
         for _ in range(MAX_CONVERSION_POLLS):
             if not self.bus.read_byte_data(self.address, STATUS_REG) & STATUS_MEASURING:
                 break
@@ -185,6 +188,8 @@ class BME280:
         raw_pressure = (data[0] << 12) | (data[1] << 4) | (data[2] >> 4)
         raw_temperature = (data[3] << 12) | (data[4] << 4) | (data[5] >> 4)
         raw_humidity = (data[6] << 8) | data[7]
+        if raw_temperature == 0x80000 or raw_pressure == 0x80000 or raw_humidity == 0x8000:
+            raise OSError("BME280 reported a skipped temperature, pressure or humidity channel")
         temperature_c, t_fine = self._temperature(raw_temperature)
         return AirSample(
             timestamp=time.time() if timestamp is None else timestamp,

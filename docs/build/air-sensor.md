@@ -48,6 +48,13 @@ next to the Pi reads the enclosure, not the range. OpenFlight reads it in forced
 mode every 5 s and lets it sleep in between, which keeps the sensor's own
 self-heating off the reading.
 
+Each forced read waits 17 ms before checking completion. This is the rounded-up
+16.2 ms maximum derived for temperature ×1, pressure ×4 and humidity ×1 from
+[Bosch's datasheet, section 9.1](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf).
+It then polls the status bit and refuses a conversion that never finishes, a
+short register read, or the documented skipped-channel sentinel values. These
+checks are covered with an injected bus; physical sensor validation is pending.
+
 ## Enable And Verify
 
 I2C is the same setup as the inclinometer's
