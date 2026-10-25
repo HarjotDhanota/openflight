@@ -593,8 +593,14 @@ class SessionLogger:
         launch_range: Optional[Dict[str, Any]] = None,
         ball_range: Optional[Dict[str, Any]] = None,
         gate_event: Optional[Dict[str, Any]] = None,
+        partial_capture: Optional[Dict[str, Any]] = None,
     ):
-        """Log the TI raw-dump reference and complete LCMF evidence, with the shot's IWR ranges."""
+        """Log the TI raw-dump reference and complete LCMF evidence, with the shot's IWR ranges.
+
+        ``capture_path`` only ever names a complete dump. A transfer that failed
+        keeps its bytes in ``partial_capture`` (a ``.partial.l3dump`` path, its
+        bytes, the size its header declares, ``complete``), never in the capture.
+        """
         if not self.enabled:
             return
         self._write_entry(
@@ -610,6 +616,8 @@ class SessionLogger:
                 ),
                 "capture_path": capture_path,
                 "capture_bytes": capture_bytes,
+                "capture_complete": capture_error is None and capture_bytes > 0,
+                "partial_capture": partial_capture,
                 "dump_duration_s": dump_duration_s,
                 "capture_error": capture_error,
                 "ball_speed_source": "ops243",

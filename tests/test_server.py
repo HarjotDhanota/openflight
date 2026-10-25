@@ -764,6 +764,47 @@ class TestIWR6843ShotIntegration:
             )
         ]
 
+    def test_a_partial_iwr_dump_is_logged_as_the_partial_capture(self, monkeypatch):
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=None,
+            dump_duration_s=11.3,
+            error="IWR6843 dump ended early (900 of 1000 bytes)",
+            valid=False,
+            sequence=4,
+            gate_event=None,
+            partial_capture={
+                "path": "/data/iwr6843/x.partial.l3dump",
+                "bytes": 900,
+                "expected_bytes": 1000,
+                "complete": False,
+            },
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(capture=capture, measurement=None),
+        )
+        logged = []
+        session = SimpleNamespace(
+            stats={"shots_detected": 2},
+            log_iwr6843_capture=lambda **kwargs: logged.append(kwargs),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *_args, **_kwargs: None)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert logged[0]["capture_path"] is None and logged[0]["capture_bytes"] == 0
+        assert logged[0]["partial_capture"] == capture.partial_capture
+
     def test_iwr6843_horizontal_confidence_derived_from_coherence(self, monkeypatch):
         measurement = SimpleNamespace(
             accepted=True,

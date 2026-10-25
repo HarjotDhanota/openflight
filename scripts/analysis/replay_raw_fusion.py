@@ -247,6 +247,19 @@ def _saved_iwr_raw(events, session_dir: Path):
     if len(matches) != 1:
         return {}, None, None, None, f"expected exactly one iwr6843_capture, found {len(matches)}"
     event = matches[0]
+    partial = event.get("partial_capture")
+    if isinstance(partial, dict) and partial.get("bytes"):
+        # the bytes of a transfer that failed: kept for diagnosis, never replayed
+        return (
+            event,
+            None,
+            None,
+            None,
+            (
+                f"IWR capture is incomplete: {partial['bytes']} of "
+                f"{partial.get('expected_bytes') or 'unknown'} bytes kept as a partial dump"
+            ),
+        )
     if event.get("capture_error"):
         return event, None, None, None, "IWR capture event records a capture error"
     try:

@@ -105,6 +105,7 @@ from openflight.camera.triggered_buffer import unpack_r8_frame
 from openflight.clubs.types import ClubType
 from openflight.constants import BALL_DIAMETER_MM, DEFAULT_NET_RANGE_M
 from openflight.inclinometer import guided_check, orientation_check
+from openflight.iwr6843.dump import is_partial_dump_path
 from openflight.iwr6843.range_evidence import (
     StaticChannelProfile,
     StaticRangeProfile,
@@ -7474,7 +7475,12 @@ def arm_progress(sessions_root: Path, params: TesterParameters) -> dict:
     camera = [
         f for run in runs for f in (run / params.arm_id / "camera").glob("camera_*/frames.npz")
     ]
-    dumps = [f for run in runs for f in (run / "iwr6843").glob("*.l3dump")]
+    dumps = [
+        f
+        for run in runs
+        for f in (run / "iwr6843").glob("*.l3dump")
+        if not is_partial_dump_path(f)  # a failed transfer's bytes, not a dump
+    ]
     statuses = Counter()
     shots: list[dict] = []
     all_shots: list[dict] = []

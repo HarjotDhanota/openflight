@@ -882,12 +882,19 @@ def iwr_capture(report_stage: Mapping[str, Any], iwr_event: Mapping[str, Any]) -
             evidence="no iwr6843_capture event for the shot",
         )
     if iwr_event.get("capture_error"):
+        partial = mapping(iwr_event.get("partial_capture"))
+        kept = (
+            f"; {partial['bytes']} of {partial.get('expected_bytes') or 'unknown'} bytes "
+            "kept as an incomplete partial dump"
+            if partial.get("bytes")
+            else ""
+        )
         return stage(
             "iwr_capture",
             FAIL,
             cause="DATA",
             gate="iwr_capture",
-            evidence=str(iwr_event["capture_error"]),
+            evidence=f"{iwr_event['capture_error']}{kept}",
         )
     error = str(report_stage.get("error") or "")
     if "dump is unreadable" in error or "dump is empty" in error:
