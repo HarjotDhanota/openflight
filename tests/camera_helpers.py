@@ -1,5 +1,7 @@
 """Shared camera fixtures: the v3 nominal camera and a calibration candidate with its placement."""
 
+import numpy as np
+
 from openflight.camera.optical_calibration import validate_mode_profile
 from openflight.camera.reference_ball_range import BallPlaneCamera
 
@@ -32,6 +34,23 @@ def v3_camera(
         angular_uncertainty_deg=angular_uncertainty_deg,
         focal_relative_uncertainty=0.08,
     )
+
+
+def lit_spheres(height, width, spheres, *, seed=4, count=7):
+    """Frames of diffusely lit spheres ``(cx, cy, radius, diffuse)`` over a noisy floor."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.indices((height, width), dtype=float)
+    image = 55.0 + rng.normal(0.0, 1.0, (height, width))
+    light = np.asarray([-0.35, -0.62, 0.70])
+    light /= np.linalg.norm(light)
+    for cx, cy, radius, diffuse in spheres:
+        dx, dy = (xx - cx) / radius, (yy - cy) / radius
+        inside = dx * dx + dy * dy <= 1.0
+        nz = np.sqrt(np.clip(1.0 - dx * dx - dy * dy, 0.0, None))
+        shading = np.clip(dx * light[0] + dy * light[1] + nz * light[2], 0.0, None)
+        image[inside] = 42.0 + diffuse * shading[inside]
+    noise = np.random.default_rng(seed).normal(0.0, 0.8, (count, height, width))
+    return np.clip(np.round(image[None] + noise), 0, 255).astype(np.uint8)
 
 
 def mode_profile(*, width=640, height=400, mirror=False, rotate=False):

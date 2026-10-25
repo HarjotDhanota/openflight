@@ -1,5 +1,4 @@
-"""The camera looks for the ball only inside the patch; scenes are composites
-(scripts/analysis/patch_fixtures.py)."""
+"""The camera looks for the ball only inside the patch (scenes: scripts/analysis/patch_fixtures.py)."""
 
 import math
 from pathlib import Path
@@ -15,33 +14,14 @@ from openflight.camera.ground_patch import (
     project_patch,
     tilt_pads_deg,
 )
-from openflight.camera.reference_ball_range import (
-    BallPlaneCamera,
-    estimate_patch_ball,
-    project_to_pixel,
-)
+from openflight.camera.reference_ball_range import estimate_patch_ball, project_to_pixel
+from tests.camera_helpers import V3_FOCAL_1280, lit_spheres as _lit_spheres, v3_camera as v3
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ground_patch"
-V3_FOCAL_1280 = 933.3334
 # the ball at (744, 518), inside the dragged box
 INDOOR_BALL_PX = (744.0, 518.0)
 # a ball 1.25 m from the radar is about 1.252 m from the lens: 31.8 px at 933 px
 INDOOR_BALL_DIAMETER_PX = V3_FOCAL_1280 * 0.0427 / 1.252
-
-
-def v3(pitch_deg=0.0, width=1280, height=800):
-    return BallPlaneCamera.nominal(
-        focal_px=V3_FOCAL_1280 * width / 1280,
-        image_width_px=width,
-        image_height_px=height,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=0.0,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0588),
-        angular_uncertainty_deg=1.0,
-        focal_relative_uncertainty=0.08,
-    )
 
 
 def search_for(camera, patch, *, calibrated=False, roll_deg=-2.62):
@@ -100,40 +80,31 @@ def outdoor_scene():
     return _frames(image), tuple(float(value) for value in data["ball_px"])
 
 
-def test_the_indoor_ball_is_found_in_a_patch_placed_over_it_by_eye():
-    """The patch finds a ball that a floor-row term would refuse."""
-    camera = v3(pitch_deg=1.72)  # the LIS3DH's reading, not the camera's true tilt
-    frames = indoor_scene()
-    patch = patch_from_centre_pixel(camera, (INDOOR_BALL_PX[0], INDOOR_BALL_PX[1] + 10.0))
+@pytest.mark.parametrize("placed_by", ["eye", "distance"])
+def test_the_indoor_ball_is_found_in_a_patch_placed_by_eye_or_by_distance(placed_by):
+    # the LIS3DH's reading, not the camera's true tilt: by distance the ball sits in the pad
+    camera = v3(pitch_deg=1.72)
+    if placed_by == "eye":
+        patch = patch_from_centre_pixel(camera, (INDOOR_BALL_PX[0], INDOOR_BALL_PX[1] + 10.0))
+    else:
+        patch = patch_at(camera, 1.25, 0.1)
 
     result = estimate_patch_ball(
-        frames, camera, search=search_for(camera, patch), ball_center_height_m=BALL_CENTER_HEIGHT_M
+        indoor_scene(),
+        camera,
+        search=search_for(camera, patch),
+        ball_center_height_m=BALL_CENTER_HEIGHT_M,
     )
 
     assert result.status == "selected", [c.rejection_reason for c in result.candidates]
     ball = result.selected
     assert ball.x_px == pytest.approx(INDOOR_BALL_PX[0], abs=2.0)
-    assert ball.y_px == pytest.approx(INDOOR_BALL_PX[1], abs=2.0)
-    assert ball.diameter_px == pytest.approx(INDOOR_BALL_DIAMETER_PX, rel=0.12)
-    assert ball.size_radar_range_m == pytest.approx(1.25, abs=0.15)
-    assert ball.rejection_reason is None
-    assert ball.floor_height_residual_m is not None
-    assert abs(ball.floor_height_residual_m) > 0.03
-
-
-def test_the_indoor_ball_is_found_when_the_patch_was_placed_by_its_distance():
-    """With the patch 1.25 m out, unmodelled tilt puts the ball below the drawn
-    patch but inside the pad."""
-    camera = v3(pitch_deg=1.72)
-    frames = indoor_scene()
-    search = search_for(camera, patch_at(camera, 1.25, 0.1))
-
-    result = estimate_patch_ball(
-        frames, camera, search=search, ball_center_height_m=BALL_CENTER_HEIGHT_M
-    )
-
-    assert result.status == "selected"
-    assert result.selected.x_px == pytest.approx(INDOOR_BALL_PX[0], abs=2.0)
+    if placed_by == "eye":  # a ball a floor-row term would refuse
+        assert ball.y_px == pytest.approx(INDOOR_BALL_PX[1], abs=2.0)
+        assert ball.diameter_px == pytest.approx(INDOOR_BALL_DIAMETER_PX, rel=0.12)
+        assert ball.size_radar_range_m == pytest.approx(1.25, abs=0.15)
+        assert ball.rejection_reason is None
+        assert abs(ball.floor_height_residual_m) > 0.03
 
 
 def test_the_outdoors_test_7_ball_is_found_in_its_patch():
@@ -149,23 +120,6 @@ def test_the_outdoors_test_7_ball_is_found_in_its_patch():
     assert result.selected.x_px == pytest.approx(x, abs=1.5)
     assert result.selected.y_px == pytest.approx(y, abs=1.5)
     assert result.selected.diameter_px == pytest.approx(diameter, rel=0.08)
-
-
-def _lit_spheres(height, width, spheres, *, seed=4):
-    rng = np.random.default_rng(seed)
-    yy, xx = np.indices((height, width), dtype=float)
-    image = 55.0 + rng.normal(0.0, 1.0, (height, width))
-    light = np.asarray([-0.35, -0.62, 0.70])
-    light /= np.linalg.norm(light)
-    for cx, cy, radius, diffuse in spheres:
-        dx, dy = xx - cx, yy - cy
-        inside = dx * dx + dy * dy <= radius * radius
-        nz = np.sqrt(np.clip(radius * radius - dx * dx - dy * dy, 0.0, None)) / radius
-        shading = np.clip(
-            dx / radius * light[0] + dy / radius * light[1] + nz * light[2], 0.0, None
-        )
-        image[inside] = 42.0 + diffuse * shading[inside]
-    return _frames(image, seed=seed)
 
 
 def _ball(camera, lateral, forward):
@@ -243,8 +197,7 @@ def test_the_search_never_leaves_the_patch():
 
 
 def test_a_ball_whose_centre_is_just_inside_the_outline_s_edge_is_found_whole():
-    """A ball centred 2 rows inside the box's bottom edge: the search region must
-    hold the whole ball."""
+    # centred 2 rows inside the box's bottom edge: the search region must hold all of it
     camera = v3()
     diameter = 34.0
     ball_px = (531.0, 531.0)
