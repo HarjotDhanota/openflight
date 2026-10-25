@@ -280,3 +280,18 @@ def test_acoustic_window_walks_back_from_the_gate_edge():
     lo, hi = acoustic_contact_window(trigger_ns=100_000_000, gate_latency_ns=None)
     assert hi == pytest.approx(99_500_000)
     assert lo < 95_200_000
+
+
+def test_two_chords_turning_far_off_the_arc_flag_both_angles():
+    """A misplaced hosel bends one chord: the arc then turns at an impossible rate."""
+    swing = Swing()
+    inputs = _inputs(swing)
+    frames = inputs.frames.copy()
+    # shift the middle frame's club 40 px up the image: one bad point
+    frames[17] = np.roll(frames[17], -40, axis=0)
+    track = estimate_head_track(replace(inputs, frames=frames))
+
+    assert track.status == "ok"
+    assert not 0.5 <= track.turn_rate_ratio <= 2.0
+    assert track.club_path_flag is not None and "turn" in track.club_path_flag
+    assert track.attack_angle_flag is not None and "turn" in track.attack_angle_flag

@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import cv2
 import numpy as np
@@ -65,13 +65,21 @@ TURN_RATE_PRIOR_FRACTION = 0.25
 TURN_RATE_RATIO_RANGE = (0.5, 2.0)
 # Amateur planes spread wider than the published skilled golfers' standard deviation.
 PLANE_PRIOR_SIGMA_DEG = 5.0
-HOSEL_PIXEL_SIGMA = 1.5
+# Rendered field tracks: the point lands a few px off the heel's sole along the shaft.
+HOSEL_PIXEL_SIGMA = 3.0
 
 MOVING_SIGMAS = 5.0
 MOVING_FLOOR_DN = 12.0
+# The walk to the heel's sole reads a looser mask: at 22-45 us the heel is dim.
+WALK_SIGMAS = 3.0
+WALK_FLOOR_DN = 8.0
 MIN_STEEPNESS_DEG = 35.0
 SHAFT_MIN_LENGTH_M = 0.10
 SHAFT_BAND_M = 0.012
+# The ferrule is a dark band above the hosel; the walk down the shaft crosses it to
+# reach the heel's sole, the one end of the axis every exposure shows.
+FERRULE_GAP_M = 0.035
+LOWER_SHAFT_FRACTION = 0.4
 ROI_HALF_WIDTH_M = 0.45
 ROI_BELOW_M = 0.12
 HOSEL_NEAR_BALL_M = 0.35
@@ -197,6 +205,52 @@ def acoustic_contact_window(
     )
 
 
+@dataclass(frozen=True)
+class HeadTrackContext:
+    """What the head track needs beyond the chained delivery's inputs, for one shot.
+
+    ``contact_window_ns`` is on the clip's sensor clock (``head_track_context``).
+    """
+
+    contact_window_ns: Optional[tuple[float, float]]
+    exposure_us: Optional[np.ndarray] = None
+    handedness: str = "RH"
+    club: Any = ClubType.UNKNOWN
+    setup_ball: Optional[Mapping[str, Any]] = None
+    lens_focal_px: Optional[float] = None
+    ball_range_sigma_m: float = 0.05
+    yaw_sigma_deg: float = 0.0
+
+
+def gate_latency_ns(metadata: Any) -> Optional[float]:
+    """The capture's recorded GPIO edge to camera callback delay, or None."""
+    clocks = metadata.get("trigger_clocks") if isinstance(metadata, Mapping) else None
+    bounds = clocks.get("gate_to_camera_callback_ns") if isinstance(clocks, Mapping) else None
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        return None
+    try:
+        low, high = (float(value) for value in bounds)
+    except (TypeError, ValueError):
+        return None
+    return (low + high) / 2.0 if math.isfinite(low) and math.isfinite(high) else None
+
+
+def head_track_context(
+    archive: Mapping[str, Any], *, gate_latency: Optional[float] = None, **fields
+) -> HeadTrackContext:
+    """One clip's context: the acoustic contact window on its sensor (boottime) clock."""
+    window = None
+    if archive.get("sensor_timestamp_ns") is not None and "trigger_boottime_ns" in archive:
+        trigger = float(np.asarray(archive["trigger_boottime_ns"]))
+        window = acoustic_contact_window(trigger, gate_latency)
+    exposure = archive.get("exposure_us")
+    return HeadTrackContext(
+        contact_window_ns=window,
+        exposure_us=None if exposure is None else np.asarray(exposure),
+        **fields,
+    )
+
+
 def _rejected(status: str, note: str, **extra) -> HeadTrack:
     return HeadTrack(status=status, notes=(note,), **extra)
 
@@ -262,12 +316,13 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
         return _rejected(rejection.status, str(rejection), last_rest_frame=last_rest, track=track)
     path_sigma = math.sqrt(sum(part["club_path_deg"] ** 2 for part in parts.values()))
     attack_sigma = math.sqrt(sum(part["attack_angle_deg"] ** 2 for part in parts.values()))
-    notes = []
+    turn_flag = None
     if nominal.turn_rate_ratio is not None and not (
         TURN_RATE_RATIO_RANGE[0] <= nominal.turn_rate_ratio <= TURN_RATE_RATIO_RANGE[1]
     ):
-        notes.append(
-            f"the two chords turn at {nominal.turn_rate_ratio:.2f}x the published arc's rate"
+        turn_flag = (
+            f"the two chords turn at {nominal.turn_rate_ratio:.2f}x the published arc's rate "
+            "(a misplaced hosel or contact time): flagged, not shown"
         )
     return HeadTrack(
         status="ok",
@@ -275,8 +330,8 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
         attack_angle_deg=round(nominal.attack_deg, 2),
         club_path_sigma_deg=round(path_sigma, 2),
         attack_angle_sigma_deg=round(attack_sigma, 2),
-        club_path_flag=_flag("club path", nominal.path_deg),
-        attack_angle_flag=_flag("attack angle", nominal.attack_deg),
+        club_path_flag=turn_flag or _flag("club path", nominal.path_deg),
+        attack_angle_flag=turn_flag or _flag("attack angle", nominal.attack_deg),
         turning=nominal.turning,
         turn_rate_ratio=(
             round(nominal.turn_rate_ratio, 3) if nominal.turn_rate_ratio is not None else None
@@ -291,7 +346,6 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
             name: {key: round(value, 3) for key, value in part.items()}
             for name, part in parts.items()
         },
-        notes=tuple(notes),
     )
 
 
@@ -327,6 +381,7 @@ def _track_hosel(
     else:
         noise = 0.0
     threshold = max(MOVING_SIGMAS * noise, MOVING_FLOOR_DN)
+    walk_threshold = max(WALK_SIGMAS * noise, WALK_FLOOR_DN)
     on_left = _golfer_on_image_left(inputs)
     points = {}
     for index in (last_rest - 2, last_rest - 1, last_rest):
@@ -335,8 +390,10 @@ def _track_hosel(
         moving = np.abs(frames[index, :y1, x0:x1].astype(np.float32) - background[:y1, x0:x1])
         end = _shaft_end(
             moving > threshold,
+            moving > walk_threshold,
             min_length_px=SHAFT_MIN_LENGTH_M * scale,
             band_px=max(3.0, SHAFT_BAND_M * scale),
+            gap_px=max(3.0, FERRULE_GAP_M * scale),
             golfer_on_left=on_left,
         )
         if end is not None:
@@ -349,7 +406,13 @@ def _track_hosel(
 
 
 def _shaft_end(
-    mask: np.ndarray, *, min_length_px: float, band_px: float, golfer_on_left: bool
+    mask: np.ndarray,
+    walk_mask: np.ndarray,
+    *,
+    min_length_px: float,
+    band_px: float,
+    gap_px: float,
+    golfer_on_left: bool,
 ) -> Optional[tuple[float, float]]:
     """The lower end of the longest steep line leaning toward the golfer, on its refit axis."""
     binary = mask.astype(np.uint8) * 255
@@ -376,56 +439,75 @@ def _shaft_end(
     normal = np.array([-unit[1], unit[0]])
     ys, xs = np.nonzero(mask)
     origin = np.array(upper, dtype=float)
-    # Hough lines hug one edge of a thick shaft: re-centre the band on the shaft's
-    # own pixels, away from the head beside the hosel, until the axis settles
+    # Hough lines hug one edge of a thick shaft: re-centre the band on the shaft's own
+    # pixels until the axis settles. Only the shaft's lower part sets it (a flexed shaft
+    # and the lens bend the far end) and not the head beside the hosel.
     for _ in range(3):
         offsets = np.column_stack([xs - origin[0], ys - origin[1]])
         along = offsets @ unit
         across = offsets @ normal
-        near = (np.abs(across) <= band_px) & (along >= 0.0) & (along <= length - 3.0 * band_px)
+        near = (
+            (np.abs(across) <= band_px)
+            & (along >= (1.0 - LOWER_SHAFT_FRACTION) * length)
+            & (along <= length - 3.0 * band_px)
+        )
         if int(near.sum()) < 10:
             return float(lower[0]), float(lower[1])
         slope, intercept = np.polyfit(along[near], across[near], 1)
         origin = origin + normal * intercept
         unit = (unit + normal * slope) / math.hypot(1.0, slope)
         normal = np.array([-unit[1], unit[0]])
-    end_along = _axis_end(
-        mask, origin, unit, start=0.5 * length, gap_px=max(3.0, 0.09 * min_length_px)
-    )
-    end = origin + unit * end_along
-    return float(end[0]), float(end[1])
+    return _axis_end(walk_mask, origin, unit, start=0.5 * length, gap_px=gap_px)
 
 
 def _axis_end(
     mask: np.ndarray, origin: np.ndarray, axis: np.ndarray, *, start: float, gap_px: float
-) -> float:
-    """Where the club leaves the axis, to a fraction of a pixel: the last point at which
-    half the axis's 2 px band is moving, before a gap longer than ``gap_px``."""
-    step = 0.25
-    along = np.arange(start, start + 4.0 * mask.shape[0], step)
+) -> Optional[tuple[float, float]]:
+    """Where the club leaves the shaft, walking down it from ``start`` along ``axis``.
+
+    The walk follows the shaft's centre (a flexed shaft and the lens bend it off the
+    line) and ends at the last step at which half its 5 px core is moving, before a gap
+    longer than ``gap_px``. None when the shaft resumes beyond that gap (a background as
+    bright as the shaft hides a piece of it): the end found would not be the club's.
+    """
+    height, width = mask.shape
     normal = np.array([-axis[1], axis[0]])
-    across = np.arange(-2.0, 2.01, 0.5)
-    xs = origin[0] + along[:, None] * axis[0] + across[None, :] * normal[0]
-    ys = origin[1] + along[:, None] * axis[1] + across[None, :] * normal[1]
-    sampled = cv2.remap(
-        mask.astype(np.float32),
-        xs.astype(np.float32),
-        ys.astype(np.float32),
-        cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0.0,
-    )
-    occupied = sampled.mean(axis=1)
-    end = 0
-    for index in range(1, len(occupied)):
-        if occupied[index] >= 0.5:
-            end = index
-        elif (index - end) * step > gap_px:
+    offsets = np.arange(-6.0, 6.01, 1.0)
+    core = np.abs(offsets) <= 2.0
+    centre, end, gap = 0.0, None, 0
+    ended, run, scanned = False, 0, 0
+    along = float(start)
+    while along < start + 2.0 * (height + width):
+        points = origin + axis * along + np.outer(offsets + centre, normal)
+        columns = np.round(points[:, 0]).astype(int)
+        rows = np.round(points[:, 1]).astype(int)
+        inside = (columns >= 0) & (columns < width) & (rows >= 0) & (rows < height)
+        if not inside.any():
             break
-    if end + 1 < len(occupied) and occupied[end] > occupied[end + 1]:
-        fraction = (occupied[end] - 0.5) / (occupied[end] - occupied[end + 1])
-        return float(along[end] + fraction * step)
-    return float(along[end])
+        values = np.zeros(len(offsets))
+        values[inside] = mask[rows[inside], columns[inside]]
+        moving = values[core].mean() >= 0.5
+        if not ended:
+            if moving:
+                # re-centre on the shaft, never on the head beside the hosel
+                if values[0] == 0 and values[-1] == 0:
+                    centre += 0.3 * float(np.sum(values * offsets) / values.sum())
+                end, gap = (along, centre), 0
+            elif end is not None:
+                gap += 1
+                ended = gap > gap_px
+        else:
+            scanned += 1
+            run = run + 1 if moving else 0
+            if run >= 0.5 * gap_px:
+                return None
+            if scanned > 3.0 * gap_px:
+                break
+        along += 1.0
+    if end is None:
+        return None
+    position = origin + axis * end[0] + normal * end[1]
+    return float(position[0]), float(position[1])
 
 
 # --------------------------------------------------------------------------- geometry
