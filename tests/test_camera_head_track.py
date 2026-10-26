@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pytest
 
+from openflight.camera import head_track as ht
 from openflight.camera.head_track import (
     FLAG_LIMIT_DEG,
     HOSEL_PIXEL_SIGMA,
@@ -159,6 +160,69 @@ def _inputs(
         club=ClubType.IRON_7,
     )
     return replace(inputs, **changes)
+
+
+@pytest.mark.parametrize("handed", ["RH", "LH"])
+def test_retains_more_than_three_visible_precontact_hosel_observations(handed):
+    swing = Swing(speed_mps=15.0, handed=handed)
+    inputs = _inputs(swing)
+    track = estimate_head_track(inputs)
+
+    assert track.status == "ok", track.notes
+    assert len(track.track) >= 4
+    truth_path, truth_attack, _speed = _truth(swing)
+    assert track.club_path_deg == pytest.approx(truth_path, abs=1.0)
+    assert track.attack_angle_deg == pytest.approx(truth_attack, abs=1.5)
+    for point in track.track:
+        expected = _project(swing, _hosel(swing, point["t_ns"]))
+        assert math.dist((point["x_px"], point["y_px"]), expected) < 2 * HOSEL_PIXEL_SIGMA
+
+
+def test_a_shaft_cut_off_by_the_image_edge_has_no_observed_hosel():
+    mask = np.zeros((200, 100), dtype=bool)
+    mask[20:, 46:55] = True
+    assert (
+        ht._axis_end(mask, np.array([50.0, 20.0]), np.array([0.0, 1.0]), start=20, gap_px=10)
+        is None
+    )
+
+
+def test_frame_whose_exposure_overlaps_earliest_contact_is_excluded():
+    inputs = _inputs(Swing(), contact_window_ns=(18 * FRAME_NS + 75_000, 18 * FRAME_NS + 100_000))
+    track = estimate_head_track(inputs)
+    assert all(point["frame"] < 18 for point in track.track)
+
+
+def test_turn_fit_uses_earlier_chords_to_reduce_terminal_pixel_noise():
+    inputs = _inputs(Swing(speed_mps=15.0))
+    observation = ht._Observation(points={}, pairs=[], mid_ns=np.array([]), inputs=inputs)
+    axis = np.array([1.0, 0.0, 0.0])
+    at_contact = np.array([0.0, 0.0, 1.0])
+    times = np.array([-50, -40, -30, -20, -10]) * 1e6
+    chords = [
+        {
+            "direction": ht._rotate(
+                at_contact, axis, 15 * t / 1e9 + (math.radians(1) if i == 4 else 0)
+            ),
+            "t_ns": t,
+        }
+        for i, t in enumerate(times)
+    ]
+    direction, turning, _ratio, _turn = observation._direction_at_contact(
+        chords, 0, 15, ht._Perturbation()
+    )
+    assert abs(ht._angles(direction)[1]) < 1
+    assert turning == "multi_chord_fit"
+
+
+def test_wider_search_does_not_join_a_disconnected_earlier_motion(monkeypatch):
+    inputs = _inputs(Swing())
+    detections = iter(
+        [None] * 12 + [(450, 300), (460, 320)] + [None] * 3 + [(470, 400), (480, 440)]
+    )
+    monkeypatch.setattr(ht, "_shaft_end", lambda *_args, **_kwargs: next(detections))
+    points = ht._track_hosel(inputs.frames, 18, inputs, FOCAL / inputs.ball_range_m)
+    assert set(points) == {17, 18}
 
 
 @pytest.mark.parametrize(

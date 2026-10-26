@@ -7,8 +7,8 @@ experimental by its callers.
 Tracking. In each pre-contact frame the shaft is the longest steep straight line in the
 moving pixels (|frame - background| above five noise sigmas), leaning toward the golfer.
 Its lower end is where the shaft axis leaves the club at the heel: one rigid point on the
-club, sharp from 22 to 298 us, used as the hosel. Only frames whose mid-exposure is
-before the earliest contact are used; at 120 fps that is two or three frames.
+club, sharp from 22 to 298 us, used as the hosel. Every fully pre-contact frame is
+searched; the last connected approach retains all visible, uncropped hosel points.
 
 Geometry. The OPS radial club speed is the head's speed along its line of sight to the
 ball at contact; the head's speed ``S`` is taken as constant over the last frames. The
@@ -21,7 +21,8 @@ the tangent at the chord's mid-time.
 Contact. The head turns fast through impact (about 1.8 deg/ms of attack angle at 75 mph
 on a 1 m arc), so the last chord's direction is turned on to contact about the arc's
 axis: axis and rate measured from two chords, or, with one chord, the published arc
-prior's plane tilt and radius per club class (``WOOD_ARC`` / ``IRON_ARC``). Contact time
+prior's plane tilt and radius per club class (``WOOD_ARC`` / ``IRON_ARC``). Three or
+more chords fit one plane and angular rate using every chord. Contact time
 comes from the sound trigger, which fires 0.5-4 ms after contact (``club_delivery``,
 ``ball_flight``). The ball-departure helpers date contact a frame early on this camera:
 the head passes between the lens and the ball before it moves it.
@@ -76,6 +77,7 @@ TURN_RATE_RATIO_RANGE = (0.5, 2.0)
 PLANE_PRIOR_SIGMA_DEG = 5.0
 # Rendered field tracks: the point lands a few px off the heel's sole along the shaft.
 HOSEL_PIXEL_SIGMA = 3.0
+HOSEL_EDGE_MARGIN_PX = 4.0
 
 MOVING_SIGMAS = 5.0
 MOVING_FLOOR_DN = 12.0
@@ -306,7 +308,8 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
     )
     mid_ns = stamps + exposure_ns / 2.0
     window_lo, window_hi = (float(value) for value in inputs.contact_window_ns)
-    last_rest = int(np.searchsorted(mid_ns, window_lo)) - 1
+    complete = np.flatnonzero(stamps + exposure_ns <= window_lo)
+    last_rest = int(complete[-1]) if complete.size else -1
     if last_rest < BACKGROUND_FRAMES[0] // 2:
         return _rejected(
             "rejected_no_contact_time", "contact falls before the clip has a background"
@@ -359,7 +362,7 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
         TURN_RATE_RATIO_RANGE[0] <= nominal.turn_rate_ratio <= TURN_RATE_RATIO_RANGE[1]
     ):
         turn_flag = (
-            f"the two chords turn at {nominal.turn_rate_ratio:.2f}x the published arc's rate "
+            f"the tracked chords turn at {nominal.turn_rate_ratio:.2f}x the published arc's rate "
             "(a misplaced hosel or contact time): flagged, not shown"
         )
     return HeadTrack(
@@ -408,7 +411,7 @@ def _golfer_on_image_left(inputs: HeadTrackInputs) -> bool:
 def _track_hosel(
     frames: np.ndarray, last_rest: int, inputs: HeadTrackInputs, scale: float
 ) -> dict[int, tuple[float, float]]:
-    """The shaft's lower end in each of the last three pre-contact frames that show it."""
+    """All observed hosels in the last connected, fully pre-contact approach."""
     start, stop = last_rest - BACKGROUND_FRAMES[0], last_rest - BACKGROUND_FRAMES[1]
     stack = frames[max(0, start) : max(1, stop)].astype(np.float32)
     background = np.median(stack, axis=0)
@@ -425,8 +428,10 @@ def _track_hosel(
     walk_threshold = max(WALK_SIGMAS * noise, WALK_FLOOR_DN)
     on_left = _golfer_on_image_left(inputs)
     points = {}
-    for index in (last_rest - 2, last_rest - 1, last_rest):
-        if index < 0:
+    exposure = inputs.exposure_us
+    for index in range(last_rest + 1):
+        exposure_ns = float(exposure[index]) * 1e3 if exposure is not None else 0.0
+        if inputs.timestamps_ns[index] + exposure_ns > inputs.contact_window_ns[0]:
             continue
         moving = np.abs(frames[index, :y1, x0:x1].astype(np.float32) - background[:y1, x0:x1])
         end = _shaft_end(
@@ -437,13 +442,22 @@ def _track_hosel(
             gap_px=max(3.0, FERRULE_GAP_M * scale),
             golfer_on_left=on_left,
         )
-        if end is not None:
+        if (
+            end is not None
+            and min(end[0], end[1], x1 - x0 - 1 - end[0], y1 - 1 - end[1]) >= HOSEL_EDGE_MARGIN_PX
+        ):
             points[index] = (end[0] + x0, end[1])
-    if last_rest in points:
-        hosel_x, hosel_y = points[last_rest]
-        if math.hypot(hosel_x - ball_x, hosel_y - ball_y) > HOSEL_NEAR_BALL_M * scale:
-            del points[last_rest]
-    return points
+    while points:
+        last = max(points)
+        if math.dist(points[last], (ball_x, ball_y)) <= HOSEL_NEAR_BALL_M * scale:
+            break
+        del points[last]
+    if not points or max(points) < last_rest - 1:
+        return {}
+    last = first = max(points)
+    while first - 1 in points:
+        first -= 1
+    return {index: points[index] for index in range(first, last + 1)}
 
 
 def _shaft_end(
@@ -548,6 +562,11 @@ def _axis_end(
     if end is None:
         return None
     position = origin + axis * end[0] + normal * end[1]
+    if (
+        min(position[0], position[1], width - 1 - position[0], height - 1 - position[1])
+        < HOSEL_EDGE_MARGIN_PX
+    ):
+        return None
     return float(position[0]), float(position[1])
 
 
@@ -723,7 +742,11 @@ class _Observation:
         prior = _arc_prior(self.inputs.club)
         prior_omega = speed / prior.radius_m
         last = chords[-1]
-        if len(chords) >= 2:
+        if len(chords) >= 3:
+            direction, axis, omega = _fit_chord_turn(chords)
+            last = {**last, "direction": direction}
+            turning, ratio = "multi_chord_fit", omega / prior_omega
+        elif len(chords) == 2:
             first = chords[-2]
             axis = np.cross(first["direction"], last["direction"])
             sine = float(np.linalg.norm(axis))
@@ -803,6 +826,27 @@ class _Observation:
         x, y = points[index]
         points[index] = (x + shift, y) if axis == 0 else (x, y + shift)
         return replace(self, points=points)
+
+
+def _fit_chord_turn(chords) -> tuple[np.ndarray, np.ndarray, float]:
+    """Fit a great-circle tangent rotation using every observed chord and its time."""
+    directions = np.asarray([chord["direction"] for chord in chords], dtype=float)
+    _u, _s, vectors = np.linalg.svd(directions, full_matrices=False)
+    axis = vectors[-1]
+    winding = np.cross(directions[:-1], directions[1:]).sum(axis=0)
+    if float(axis @ winding) < 0:
+        axis = -axis
+    in_plane = directions - (directions @ axis)[:, None] * axis
+    in_plane /= np.linalg.norm(in_plane, axis=1)[:, None]
+    reference = in_plane[-1]
+    across = np.cross(axis, reference)
+    angles = np.unwrap(np.arctan2(in_plane @ across, in_plane @ reference))
+    times = np.asarray([chord["t_ns"] for chord in chords], dtype=float)
+    times = (times - times[-1]) / 1e9
+    omega, phase = np.linalg.lstsq(
+        np.column_stack((times, np.ones(len(times)))), angles, rcond=None
+    )[0]
+    return _rotate(reference, axis, float(phase)), axis, float(omega)
 
 
 _STATE_STEPS = 32
