@@ -104,8 +104,11 @@ static void Hwi_restore(uintptr_t key)
 
 
 def _evidence_block(source: str) -> str:
-    start = source.index("/* W4A-EVIDENCE-BEGIN */")
-    end = source.index("/* W4A-EVIDENCE-END */", start)
+    start = source.index(
+        "#if defined(L3_CAPTURE_EVIDENCE) || defined(L3_USB_CLOCK_PROBE)\n/* W4A-EVIDENCE-BEGIN */"
+    )
+    last = "/* W4A-EVIDENCE-END */\n#endif"
+    end = source.index(last, start) + len(last)
     return source[start:end]
 
 
