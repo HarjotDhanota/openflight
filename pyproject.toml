@@ -53,6 +53,9 @@ ui = [
 camera = [
     "opencv-python-headless>=4.8.0",
 ]
+timing = [
+    "gpiod>=2.2,<3; sys_platform == 'linux'",
+]
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",
