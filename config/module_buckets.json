@@ -379,6 +379,7 @@
   "scripts/analysis/illustrate_centroid_vs_peak.py": "PRODUCT",
   "scripts/analysis/impact_live_benchmark.py": "RESEARCH",
   "scripts/analysis/impact_location.py": "RESEARCH",
+  "scripts/analysis/iwr_transfer_study.py": "RESEARCH",
   "scripts/analysis/kld7_radc_lib.py": "PRODUCT",
   "scripts/analysis/kld7_timing_shift_visualizer.html": "PRODUCT",
   "scripts/analysis/ops_impact_finder.py": "PRODUCT",
