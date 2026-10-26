@@ -298,7 +298,14 @@ def shot_launch_label(shot: Any, axis: str) -> tuple[str, Optional[str]]:
     label = launch_label(source, status, camera_tier=tier, intrinsics=intrinsics)
     notes = [launch_label_note(source, status, camera_tier=tier, intrinsics=intrinsics)]
     if str(source or "").startswith("radar"):
-        if _field(shot, "iwr6843_launch_status") == TRACK_AMBIGUOUS_STATUS:
+        # a partial dump's estimate carries the suffix on its status (iwr6843.runtime)
+        launch_status = str(_field(shot, "iwr6843_launch_status") or "")
+        partial_suffix = f"_{LABEL_IWR_PARTIAL}"
+        if launch_status.endswith(partial_suffix):
+            label = _weaker(label, IWR_PARTIAL_RECORD_LABEL)
+            notes.append(IWR_PARTIAL_NOTE)
+            launch_status = launch_status.removesuffix(partial_suffix)
+        if launch_status == TRACK_AMBIGUOUS_STATUS:
             label = _weaker(label, LABEL_ESTIMATED)
             notes.append(TRACK_AMBIGUOUS_NOTE)
         range_label, range_note = _iwr_range_label(shot)

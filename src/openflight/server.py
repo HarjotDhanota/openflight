@@ -4859,7 +4859,9 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 state="error",
                 reason="no capture matched the OPS impact timestamp",
             )
-        elif not capture.valid:
+        elif not capture.valid and measurement is None:
+            # a failed transfer whose recovered frames gave a measurement goes on below,
+            # labelled iwr_partial by its status
             logger.warning(
                 "[SERVER] IWR6843 capture #%d failed: %s; preserving OPS shot",
                 capture.sequence,

@@ -208,6 +208,26 @@ def test_an_ambiguous_iwr_track_makes_its_launch_angles_estimated():
 
 
 @pytest.mark.parametrize(
+    ("status", "notes"),
+    [
+        ("accepted_iwr_partial", [labels.IWR_PARTIAL_NOTE]),
+        (
+            "accepted_track_ambiguous_iwr_partial",
+            [labels.IWR_PARTIAL_NOTE, "accepted_track_ambiguous"],
+        ),
+    ],
+)
+def test_a_launch_from_a_partial_dump_is_estimated_on_any_range(status, notes):
+    # the range here is the camera prior's, so only the launch status names the partial dump
+    shot = _shot(iwr6843_launch_status=status, ball_range_source="camera_prior")
+
+    for axis in ("vertical", "horizontal"):
+        label, note = labels.shot_launch_label(shot, axis)
+        assert label == "estimated"
+        assert all(part in note for part in notes)
+
+
+@pytest.mark.parametrize(
     ("range_label", "launch"),
     [("estimated", "estimated"), ("iwr_partial", "estimated"), ("measured", "measured")],
 )
