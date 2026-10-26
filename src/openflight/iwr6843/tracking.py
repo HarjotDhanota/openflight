@@ -22,6 +22,8 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from openflight.iwr6843.sparse_capture import mapped_loop_power, scoped_mti
+
 LOOP_PRI_S = 90e-6  # TX1-to-next-TX1 loop period for the 2TX config
 RANGE_SPAN_M = 6.0  # every cfg keeps a 6 m span: bin = 6.0/n_samples
 BALL_GATES_M = ((2.25, 3.75), (3.75, 5.5))
@@ -230,10 +232,10 @@ def mti_filter(
             count = geometry.frame_bin_count(frame)
             stop = start + count
             out[frame, ..., :count] = rfft[frame, ..., :count] - means[:, None, :, start:stop]
-        return out
+        return scoped_mti(cube, out, scope)
     if scope == "window":
-        return rfft - rfft.mean(axis=(0, 2), keepdims=True)
-    return rfft - rfft.mean(axis=2, keepdims=True)
+        return scoped_mti(cube, rfft - rfft.mean(axis=(0, 2), keepdims=True), scope)
+    return scoped_mti(cube, rfft - rfft.mean(axis=2, keepdims=True), scope)
 
 
 def loop_power(mti: np.ndarray) -> np.ndarray:
@@ -241,7 +243,8 @@ def loop_power(mti: np.ndarray) -> np.ndarray:
     n_frames = mti.shape[0]
     n_loops = mti.shape[2]
     power = (np.abs(mti) ** 2).sum(axis=(1, 3))
-    return power.reshape(n_frames * n_loops, mti.shape[-1])
+    # a partly sent capture takes its unsent cells' power from the overview map
+    return mapped_loop_power(mti, power.reshape(n_frames * n_loops, mti.shape[-1]))
 
 
 def _detections(

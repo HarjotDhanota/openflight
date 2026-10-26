@@ -48,6 +48,7 @@ from openflight.iwr6843.shot import (
     is_range_snapshot,
     project_tx_pair,
 )
+from openflight.iwr6843.sparse_capture import noise_override
 
 logger = logging.getLogger(__name__)
 
@@ -528,6 +529,7 @@ def estimate_attack_angle_candidate(
         tx_order="normal",
         tdm_sign=tdm_sign,
         tdm_tau_s=doa.TX2_VERTICAL_TDM_TAU_S,
+        noise_power=noise_override(mti),
     )
     points = [point for point in points if lo_s <= point.t_s < hi_s]
     fit = trajectory.fit_tee(points, cal, min_points=4)

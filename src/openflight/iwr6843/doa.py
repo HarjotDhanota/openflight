@@ -188,19 +188,24 @@ def snapshot_series(
     tx_order: str = "normal",
     tdm_sign: int | None = None,
     tdm_tau_s: float = TDM_TAU_S,
+    noise_power: float | None = None,
 ) -> list[tuple[float, float, np.ndarray, float]]:
     """Calibrated snapshots along the fitted track.
 
     Returns [(t_mid_s, range_m_bias_corrected, 8-el snapshot, snr), ...].
     ``coherent_loops=K`` motion-compensates and sums K consecutive loops
-    (~10*log10(K) dB gain); K=1 is the raw per-loop series.
+    (~10*log10(K) dB gain); K=1 is the raw per-loop series. ``noise_power`` is
+    the median MTI power per element; None takes it from ``mti`` itself (a partly
+    sent capture passes the radar's own median: its fills are not noise).
     """
     tx_order = validate_tx_order(tx_order)
     if tdm_sign is None:
         tdm_sign = measure_tdm_sign(mti, track, geo)
     if tdm_sign not in (-1, +1):
         raise ValueError("tdm_sign must be -1 or +1")
-    noise = max(float(np.median(np.abs(mti) ** 2)), 1e-12)
+    if noise_power is None:
+        noise_power = float(np.median(np.abs(mti) ** 2))
+    noise = max(float(noise_power), 1e-12)
     k = max(1, int(coherent_loops))
     out: list[tuple[float, float, np.ndarray, float]] = []
     for frame in range(geo.n_frames):
@@ -251,12 +256,16 @@ def angle_points(
     tdm_sign: int | None = None,
     tdm_tau_s: float = TDM_TAU_S,
     agreement_max_rad: float = np.radians(8.0),
+    noise_power: float | None = None,
 ) -> list[AnglePoint]:
     """Per-point elevation estimates along the fitted ball track.
 
     MUSIC (higher-peak rule) per snapshot, gated on SNR and MUSIC/Bartlett
-    agreement (a multipath-corruption tell).
+    agreement (a multipath-corruption tell). ``noise_power`` as in
+    :func:`snapshot_series`.
     """
+    if noise_power is None:
+        noise_power = float(np.median(np.abs(mti) ** 2))
     series = snapshot_series(
         mti,
         track,
@@ -267,8 +276,9 @@ def angle_points(
         tx_order=tx_order,
         tdm_sign=tdm_sign,
         tdm_tau_s=tdm_tau_s,
+        noise_power=noise_power,
     )
-    noise = float(np.median(np.abs(mti) ** 2))
+    noise = float(noise_power)
     k = max(1, int(coherent_loops))
     points: list[AnglePoint] = []
     for t_mid, rng_m, snap, snr in series:

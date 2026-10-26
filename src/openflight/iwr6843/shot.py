@@ -18,6 +18,7 @@ from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.doa import TX2_VERTICAL_TDM_TAU_S  # noqa: F401 - re-exported
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
 from openflight.iwr6843.music import LAM
+from openflight.iwr6843.sparse_capture import noise_override
 from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.iwr6843.trajectory import TrajectoryFit
 
@@ -276,7 +277,11 @@ class PreparedShotDump:
         """Return the invariant median noise power for one MTI scope."""
         if scope not in self._noise_by_scope:
             mti = self.mti(scope)
-            if self.geometry.range_bin_counts is None:
+            # a partly sent capture's median comes from the overview, not the fills
+            override = noise_override(mti)
+            if override is not None:
+                noise = override
+            elif self.geometry.range_bin_counts is None:
                 noise = np.median(np.abs(mti) ** 2)
             else:
                 valid_power = np.concatenate(
@@ -438,6 +443,7 @@ def process_dump(
         tx_order=tx_order,
         tdm_sign=result.tdm_sign_used,
         tdm_tau_s=tdm_tau_s,
+        noise_power=noise_override(mti),
     )
     result.n_angle_points = len(points)
     for fit in (trajectory.fit_free(points, cal), trajectory.fit_tee(points, cal)):
@@ -453,6 +459,7 @@ def process_dump(
             tx_order=tx_order,
             tdm_sign=result.tdm_sign_used,
             tdm_tau_s=tdm_tau_s,
+            noise_power=noise_override(mti),
         )
         snaps = [(t, r, s) for t, r, s, _snr in series]
         # policy from PER-SHOT observables (see POLICY_* above)

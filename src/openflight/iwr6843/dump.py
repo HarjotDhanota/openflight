@@ -35,6 +35,7 @@ import struct
 import numpy as np
 
 from openflight.iwr6843.music import est_music_fbss, steer
+from openflight.iwr6843.sparse_capture import carry, sparse_parse
 
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
@@ -549,7 +550,7 @@ def parse_dump(raw: bytes):
             raise ValueError(f"short payload: {body.size} i16 < {2 * n} needed")
         iq = body.astype(np.float64)
         cube = (iq[1::2] + 1j * iq[0::2]).reshape(nf, cpf, nrx, ns)  # ImRe: Q,I pairs
-    return meta, cube
+    return meta, sparse_parse(raw, cube)
 
 
 def _repack_kwargs(meta: dict) -> dict:
@@ -645,7 +646,7 @@ def project_tx_pair(raw: bytes, tx_indices: tuple[int, int] = (0, 1)) -> bytes:
         n_rx,
         n_samples,
     )
-    return pack_dump(projected, n_tx=len(tx_indices), **_repack_kwargs(meta))
+    return carry(raw, pack_dump(projected, n_tx=len(tx_indices), **_repack_kwargs(meta)))
 
 
 def range_fft(cube: np.ndarray, n_fft: int | None = None) -> np.ndarray:
