@@ -248,11 +248,13 @@ test('the Tester button focuses the tester page that opened the scoreboard', asy
 
 test.describe('a kiosk the tester page showed in its own window', () => {
   const tester = 'http://127.0.0.1:8765/';
-  async function mockRun(page: import('@playwright/test').Page) {
-    let phase = 'recording';
+  async function mockRun(page: import('@playwright/test').Page, start = 'recording') {
+    let phase = start;
     await page.route('**/api/free-play', async (route) => {
-      if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'stop') phase = 'packaging';
-      await route.fulfill({ json: { enabled: true, phase, tester_url: tester } });
+      const action = route.request().method() === 'POST' ? route.request().postDataJSON().action : null;
+      if (action === 'stop') phase = 'packaging';
+      if (action === 'close') return route.fulfill({ json: { closing: true } });
+      await route.fulfill({ json: { enabled: true, phase, tester_url: tester, bundle: { name: 'session.zip' } } });
     });
     await page.route(`${tester}**`, (route) => route.fulfill({ contentType: 'text/html', body: 'tester page' }));
   }
@@ -269,6 +271,13 @@ test.describe('a kiosk the tester page showed in its own window', () => {
     await mockRun(page);
     await gotoApp(page, '/?from=tester');
     await page.getByRole('button', { name: 'Stop & package', exact: true }).click();
+    await expect(page).toHaveURL(tester);
+  });
+
+  test('Done there goes back to the tester page too: the kiosk it closes is gone', async ({ page }) => {
+    await mockRun(page, 'ready');
+    await gotoApp(page, '/?from=tester');
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(tester);
   });
 

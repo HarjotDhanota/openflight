@@ -184,11 +184,10 @@ export function FreePlayControls() {
     setBusy(true);
     try {
       const body = await postFreePlay('/api/free-play', { action }, 'Could not finish the session');
-      if (action === 'stop') {
-        setFreePlay(() => body);
-        // the tester page lent this window: it shows the packaging and step 8 from here
-        returnToTesterPage(body.tester_url ?? state?.tester_url);
-      }
+      if (action === 'stop') setFreePlay(() => body);
+      // the tester page lent this window: it shows the packaging and step 8 from here, and
+      // after Done the kiosk this window shows is gone
+      returnToTesterPage(body.tester_url ?? state?.tester_url);
     } catch (error) {
       setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : null));
     } finally {
