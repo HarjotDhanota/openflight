@@ -86,15 +86,22 @@ def test_the_switch_reports_unavailable_with_a_reason(monkeypatch, emitted):
     assert status["enabled"] is True
 
 
+def _from(address: str):
+    """A request context from ``address``, as a Socket.IO event handler runs in."""
+    return server_module.app.test_request_context(environ_base={"REMOTE_ADDR": address})
+
+
 def test_the_switch_changes_the_next_shots_mode_without_a_restart(monkeypatch, emitted):
     runtime = _runtime(True, "full")
     monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
     monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"transfer": "full"})
-    server_module.handle_set_iwr6843_transfer({"mode": "two_round"})
+    with _from("127.0.0.1"):
+        server_module.handle_set_iwr6843_transfer({"mode": "two_round"})
     assert runtime.transfer_mode.effective() == "two_round"
     assert emitted[-1] == ("iwr6843_transfer", server_module.iwr6843_transfer_status())
     assert server_module.iwr6843_runtime_config["transfer"] == "two_round"
-    server_module.handle_set_iwr6843_transfer({"mode": "half"})
+    with _from("::1"):
+        server_module.handle_set_iwr6843_transfer({"mode": "half"})
     assert emitted[-1][0] == "iwr6843_transfer_error"
     assert runtime.transfer_mode.effective() == "two_round"
 
@@ -176,3 +183,52 @@ def test_a_two_round_shot_is_saved_and_logged_with_its_mode(monkeypatch, tmp_pat
     assert logged[0]["capture_bytes"] == len(result.sparse_capture)
     assert logged[0]["transfer_mode"] == result.transfer_mode
     assert logged[0]["transfer"] == result.transfer
+
+
+def test_the_socket_switch_refuses_another_machine(monkeypatch, emitted):
+    runtime = _runtime(True, "full")
+    monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+    monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"transfer": "full"})
+    with _from("192.0.2.7"):
+        server_module.handle_set_iwr6843_transfer({"mode": "two_round"})
+    assert emitted[-1] == (
+        "iwr6843_transfer_error",
+        {"error": "the IWR transfer is set from the kiosk itself"},
+    )
+    assert runtime.transfer == "full" and runtime.transfer_mode.effective() == "full"
+    assert server_module.iwr6843_runtime_config["transfer"] == "full"
+
+
+def test_a_local_socket_client_sets_the_mode(monkeypatch):
+    runtime = _runtime(True, "full")
+    monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+    monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"transfer": "full"})
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    # Flask's test client gives the connection the kiosk's own address, 127.0.0.1
+    client = server_module.socketio.test_client(
+        server_module.app, flask_test_client=server_module.app.test_client()
+    )
+    try:
+        client.get_received()
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        client.emit("set_iwr6843_transfer", {"mode": "two_round"})
+        names = [message["name"] for message in client.get_received()]
+    finally:
+        client.disconnect()
+    assert "iwr6843_transfer" in names and "iwr6843_transfer_error" not in names
+    assert runtime.transfer_mode.effective() == "two_round"
+
+
+def test_a_socket_client_without_an_address_is_refused(monkeypatch):
+    runtime = _runtime(True, "full")
+    monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+    monkeypatch.setattr(server_module, "iwr6843_runtime_config", {"transfer": "full"})
+    client = server_module.socketio.test_client(server_module.app)  # no REMOTE_ADDR at all
+    try:
+        client.get_received()
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        client.emit("set_iwr6843_transfer", {"mode": "two_round"})
+        names = [message["name"] for message in client.get_received()]
+    finally:
+        client.disconnect()
+    assert names == ["iwr6843_transfer_error"] and runtime.transfer == "full"

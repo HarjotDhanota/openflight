@@ -2762,13 +2762,22 @@ def set_iwr6843_transfer(mode) -> dict:
     return status
 
 
+IWR_TRANSFER_LOCAL_ONLY = "the IWR transfer is set from the kiosk itself"
+
+
+def _from_this_machine() -> bool:
+    """Whether the current HTTP or Socket.IO request comes from this machine (loopback)."""
+    address = request.remote_addr or ""
+    return address in ("127.0.0.1", "::1") or address.startswith("127.")
+
+
 @app.route("/api/iwr6843/transfer", methods=["GET", "POST"])
 def api_iwr6843_transfer():
     """Read the IWR transfer setting, or change it from this machine (the tester page)."""
     if request.method == "GET":
         return iwr6843_transfer_status()
-    if request.remote_addr not in ("127.0.0.1", "::1"):
-        return {"error": "the IWR transfer is set from the kiosk itself"}, 403
+    if not _from_this_machine():
+        return {"error": IWR_TRANSFER_LOCAL_ONLY}, 403
     try:
         status = set_iwr6843_transfer((request.get_json(silent=True) or {}).get("mode"))
     except ValueError as error:
@@ -2785,7 +2794,10 @@ def handle_get_iwr6843_transfer():
 
 @socketio.on("set_iwr6843_transfer")
 def handle_set_iwr6843_transfer(data):
-    """Switch between Fast (two-round) and Full transfer, for the next shot on."""
+    """Switch between Fast (two-round) and Full transfer, for the next shot on (kiosk only)."""
+    if not _from_this_machine():
+        socketio.emit("iwr6843_transfer_error", {"error": IWR_TRANSFER_LOCAL_ONLY})
+        return
     try:
         status = set_iwr6843_transfer((data or {}).get("mode") if isinstance(data, dict) else None)
     except ValueError as error:
