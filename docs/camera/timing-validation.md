@@ -43,6 +43,16 @@ stalls. The larger pools retained frames in the tested modes while callbacks
 still arrived late. This uses more buffer memory and is a bounded-stall
 mitigation, not a callback-latency guarantee or an acquisition-clock correction.
 
+The address-ball and tester ball-search pools lower their own Linux threads to
+nice 10 when starting. Already lower-priority threads keep their settings. This
+includes native threads created before the pool initializer: Linux nice is
+[per-thread](https://man7.org/linux/man-pages/man2/getpriority.2.html).
+The capture/parent process keeps its priority and CPU affinity. Unsupported
+platforms keep their existing scheduling; Linux permission/enumeration failures
+are logged and analysis continues. Under CPU contention, analysis can take
+longer. This is best-effort scheduling, not a real-time or frame-retention
+guarantee. Independent physical timing validation is still required.
+
 ## Offline mapping candidate
 
 The M1 timing bench fits camera sensor-to-host timestamp correlation on declared

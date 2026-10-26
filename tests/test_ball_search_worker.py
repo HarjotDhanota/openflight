@@ -1,5 +1,6 @@
 """The ball search gives the same answer in a worker process as in the tester process."""
 
+import os
 import subprocess
 import sys
 import threading
@@ -10,6 +11,30 @@ import pytest
 
 from openflight.camera import tester_server as ts
 from tests import test_patch_ball_search_field as patch_tests
+from tests.worker_probe import thread_priorities
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux per-thread nice priorities")
+@pytest.mark.parametrize("pool_kind", ["address", "tester"])
+def test_analysis_workers_yield_to_capture_without_changing_parent(pool_kind):
+    from openflight.camera.ball_at_address import LookWorker
+
+    parent_priority = os.getpriority(os.PRIO_PROCESS, 0)
+    if pool_kind == "address":
+        worker = LookWorker()
+        pool = worker._worker()
+    else:
+        ts.configure_ball_search_workers(1)
+        pool = ts._BALL_SEARCH_POOL
+    try:
+        priorities = pool.submit(thread_priorities).result(timeout=60)
+        assert priorities and min(priorities) >= max(10, parent_priority)
+        assert os.getpriority(os.PRIO_PROCESS, 0) == parent_priority
+    finally:
+        if pool_kind == "address":
+            worker.close()
+        else:
+            ts.configure_ball_search_workers(0)
 
 
 def test_the_worker_process_finds_the_same_ball():
