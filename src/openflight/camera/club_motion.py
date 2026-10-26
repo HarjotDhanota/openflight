@@ -563,11 +563,21 @@ def _fit_lit_rim(
     return float(cx), float(cy), float(r)
 
 
+def background_median(frames: np.ndarray) -> np.ndarray:
+    """The still scene: the per-pixel median of the first 20 frames, as the detectors take it."""
+    return np.median(frames[: min(20, frames.shape[0])], axis=0)
+
+
 def measure_resting_ball(
-    frames: np.ndarray, ball: ReferenceBall, diameter_px: float
+    frames: np.ndarray,
+    ball: ReferenceBall,
+    diameter_px: float,
+    *,
+    background: np.ndarray | None = None,
 ) -> ReferenceBall | None:
     """The lit sphere where ``ball`` was found, centred and sized on its outline; None when
     no lit ball is there. ``diameter_px`` (the setup's ball) starts the fit's size.
+    ``background`` is ``background_median(frames)`` when the caller has it already.
 
     The same measure as the setup's own ball search (``fit_lit_ball``), so the two sizes
     compare: the scene detector's rim circle keeps only a dusk ball's lit cap.
@@ -578,7 +588,7 @@ def measure_resting_ball(
         MEDIAN_NOISE_FACTOR * float(np.median(np.std(stack, axis=0))) / math.sqrt(len(stack)),
     )
     fit = fit_lit_ball(
-        np.median(stack, axis=0),
+        background if background is not None else np.median(stack, axis=0),
         ball.x,
         ball.y,
         diameter_px / 2.0,
@@ -604,18 +614,21 @@ def detect_reference_ball(
     expected_diameter_px: float | None = None,
     expected_row_px: tuple[float, float] | None = None,
     pixel_scale: float | None = None,
+    background: np.ndarray | None = None,
 ) -> ReferenceBall:
     """Find the stationary ball in bright- or dark-on-ground lighting.
 
     ``pixel_scale`` is relative to 640x400 (2 at 1280x800), by default from the frame width.
     ``expected_diameter_px`` (from the measured range) fits the lit sphere of that size, and
     ``expected_row_px`` (row, band) is where it must rest; with the size known, a frame
-    with no such ball raises.
+    with no such ball raises. ``background`` is ``background_median(frames)`` when the
+    caller has it already.
     """
     if frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must have shape (n, height, width) with n >= 3")
 
-    background = np.median(frames[: min(20, frames.shape[0])], axis=0)
+    if background is None:
+        background = background_median(frames)
     height, width = background.shape
     x0, y0, x1, y1 = roi or (0, 0, width, height)
     if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):

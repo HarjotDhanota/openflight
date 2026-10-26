@@ -804,6 +804,7 @@
   "tests/test_camera_mode_capture.py": "FUSION",
   "tests/test_camera_optical_quality.py": "FUSION",
   "tests/test_camera_replay.py": "PRODUCT",
+  "tests/test_camera_resting_ball_reuse.py": "FUSION",
   "tests/test_camera_roll.py": "FUSION",
   "tests/test_camera_setup_ball_gate.py": "FUSION",
   "tests/test_camera_swing_exposure_runtime.py": "FUSION",

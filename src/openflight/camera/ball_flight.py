@@ -20,6 +20,7 @@ from openflight.camera.club_delivery import camera_contact_time, frame_clock
 from openflight.camera.club_motion import (
     BALL_DIAMETER_MM,
     ReferenceBall,
+    background_median,
     detect_impact_frame,
     detect_impact_reference_ball,
     detect_reference_ball,
@@ -529,6 +530,21 @@ def _resolve_by_size(
 
 
 # pylint: disable-next=too-many-branches
+def _measured_here(
+    resting_ball: tuple[float, float, float] | None, candidate: ReferenceBall
+) -> ReferenceBall | None:
+    """The range chain's resting-ball fit, when it sits on ``candidate``: within half a
+    diameter of it. Its fit already found a lit ball there, so it is not fitted again."""
+    if resting_ball is None:
+        return None
+    x, y, diameter = (float(value) for value in resting_ball)
+    if not (diameter > 0 and math.hypot(x - candidate.x, y - candidate.y) <= 0.5 * diameter):
+        return None
+    return ReferenceBall(
+        x=x, y=y, diameter_px=diameter, area_px=int(round(math.pi * (diameter / 2.0) ** 2))
+    )
+
+
 def _select_reference_ball(  # pylint: disable=too-many-locals
     frames,
     trigger_frame: int,
@@ -536,10 +552,12 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
     *,
     setup_ball: dict | None = None,
     lens_focal_px: float | None = None,
+    resting_ball: tuple[float, float, float] | None = None,
 ):
     """Choose between scene and impact evidence, keeping both; detectors that
     disagree withhold the ball, unless they sit on one ball and only one of them
-    measured it at its expected size."""
+    measured it at its expected size. ``resting_ball`` (x, y, diameter px): this clip's
+    resting ball as the range chain already measured it (the same lit-sphere fit)."""
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
@@ -548,8 +566,14 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
     )
     gate = reference_ball_gate(setup_ball, geometry.image_width_px, geometry.image_height_px)
     region = tuple(int(round(value)) for value in gate["region_px"]) if setup_ball else None
+    # the scene detector and the resting-ball fit both read the still scene: take it once
+    background = background_median(frames)
     for name, detector, kwargs in (
-        ("scene", detect_reference_ball, {"pixel_scale": scale, "roi": region}),
+        (
+            "scene",
+            detect_reference_ball,
+            {"pixel_scale": scale, "roi": region, "background": background},
+        ),
         (
             "impact",
             detect_impact_reference_ball,
@@ -564,8 +588,8 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
     if setup_ball and candidates["scene"] is not None:
         # the setup measured its ball as a lit sphere on its outline: so is this one, or
         # it is not the ball (Harjot-outdoor-test-1 shots 5 and 8: a gap in the net)
-        measured = measure_resting_ball(
-            frames, candidates["scene"], float(setup_ball["diameter_px"])
+        measured = _measured_here(resting_ball, candidates["scene"]) or measure_resting_ball(
+            frames, candidates["scene"], float(setup_ball["diameter_px"]), background=background
         )
         if measured is None:
             unlit = True
@@ -1089,11 +1113,13 @@ def estimate_camera_ball_flight(
     trigger_frame_index: int | None = None,
     setup_ball: dict | None = None,
     lens_focal_px: float | None = None,
+    resting_ball: tuple[float, float, float] | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
     ``trigger_frame_index``: last frame exposed by the trigger, else nearest ``trigger_ns``.
     ``lens_focal_px`` (the lens's focal length) sizes the resting ball from its distance.
+    ``resting_ball`` (x, y, diameter px): the range chain's fit of this clip's resting ball.
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1109,7 +1135,12 @@ def estimate_camera_ball_flight(
         else int(np.argmin(np.abs(timestamps_ns.astype(np.int64) - trigger_ns)))
     )
     anchor, reference_diagnostics = _select_reference_ball(
-        frames, trigger_frame, geometry, setup_ball=setup_ball, lens_focal_px=lens_focal_px
+        frames,
+        trigger_frame,
+        geometry,
+        setup_ball=setup_ball,
+        lens_focal_px=lens_focal_px,
+        resting_ball=resting_ball,
     )
     if anchor is None:
         return CameraBallEstimate(

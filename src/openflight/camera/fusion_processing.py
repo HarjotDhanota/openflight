@@ -208,6 +208,19 @@ def build_context(
     return payload
 
 
+def _measured_resting_ball(context: Mapping[str, Any]) -> tuple[float, float, float] | None:
+    """(x, y, diameter px) of the resting ball when the range chain measured it from its
+    size on this clip (``resting_ball_range``), else None."""
+    details = (context.get("ball_range") or {}).get("details") or {}
+    if details.get("status") != "measured_from_size":
+        return None
+    try:
+        x, y = (float(value) for value in details["rest_px"])
+        return x, y, float(details["diameter_px"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]) -> dict:
     """Run both stages from frozen context and a loader-verified archive hash."""
     context = dict(context)
@@ -252,6 +265,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             trigger_frame_index=exposure_trigger_index(archive, len(frames)),
             setup_ball=context.get("setup_ball"),
             lens_focal_px=context.get("lens_focal_px"),
+            resting_ball=_measured_resting_ball(context),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")
