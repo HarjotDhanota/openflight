@@ -85,16 +85,17 @@ def test_header_helpers_are_inline_so_builds_that_skip_them_do_not_warn(tmp_path
 
 
 def test_perfstats_and_l3bench_are_registered_in_production_builds():
-    source = FIRMWARE.read_text(encoding="utf-8")
-    table = source[source.rindex("cliCfg.tableEntry[0].cmd") : source.index("CLI_open(&cliCfg);")]
+    """Slot order and dispatch are host-checked in tests/test_iwr6843_firmware_cli_table.py."""
+    table = (FIRMWARE_DIR / "l3_cli_table.h").read_text(encoding="utf-8")
 
-    assert 'cliCfg.tableEntry[11].cmd           = "perfstats";' in table
-    assert "cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_perfStats;" in table
-    assert 'cliCfg.tableEntry[12].cmd           = "l3bench";' in table
-    assert "cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_bench;" in table
-    entry = table.index("cliCfg.tableEntry[11].cmd")
+    entry = table.index('L3_CLI_ADD(cfg, next, "perfstats",')
+    assert table.index("l3_cli_perfStats);", entry) < table.index('"l3bench"', entry)
+    assert (
+        'L3_CLI_ADD(cfg, next, "l3bench", "Time one pass over the stopped ring", l3_cli_bench);'
+        in table
+    )
     assert table.rindex("#ifdef L3_CAPTURE_EVIDENCE", 0, entry) > table.rindex("#endif", 0, entry)
-    assert table.index("cliCfg.tableEntry[10].cmd") < entry
+    assert table.index('"iq8Scale"') < entry
 
 
 def test_l3bench_refuses_a_running_capture_before_timing():

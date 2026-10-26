@@ -3852,6 +3852,8 @@ static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
     return l3_stopCaptureForShutdown();
 }
 
+#include "l3_cli_table.h"
+
 /* System init task: UART, mmWave control, EDMA + ADCBUF + frame-start ISR, CLI. */
 static void l3_initTask(UArg arg0, UArg arg1)
 {
@@ -4021,59 +4023,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.enableMMWaveExtension = 1U;
     cliCfg.taskPriority          = L3_CLI_TASK_PRIORITY;
     cliCfg.usePolledMode         = true;
-    cliCfg.tableEntry[0].cmd           = "sensorStart";
-    cliCfg.tableEntry[0].helpString    = "Configure + start capture (no args)";
-    cliCfg.tableEntry[0].cmdHandlerFxn = l3_cli_sensorStart;
-    cliCfg.tableEntry[1].cmd           = "sensorStop";
-    cliCfg.tableEntry[1].helpString    = "Stop the front-end";
-    cliCfg.tableEntry[1].cmdHandlerFxn = l3_cli_sensorStop;
-    cliCfg.tableEntry[2].cmd           = "l3dump";
-    cliCfg.tableEntry[2].helpString    = "Freeze and stream one L3 snapshot dump";
-    cliCfg.tableEntry[2].cmdHandlerFxn = l3_cli_dump;
-    cliCfg.tableEntry[3].cmd           = "stats";
-    cliCfg.tableEntry[3].helpString    = "Report capture counters";
-    cliCfg.tableEntry[3].cmdHandlerFxn = l3_cli_stats;
-#ifdef ENABLE_HWA_SMOKE
-    cliCfg.tableEntry[4].cmd           = "hwastats";
-    cliCfg.tableEntry[4].helpString    = "Report HWA smoke-test status";
-    cliCfg.tableEntry[4].cmdHandlerFxn = l3_cli_hwaStats;
-    cliCfg.tableEntry[5].cmd           = "hwatest";
-    cliCfg.tableEntry[5].helpString    = "Run HWA FFT self-test";
-    cliCfg.tableEntry[5].cmdHandlerFxn = l3_cli_hwaTest;
-    cliCfg.tableEntry[6].cmd           = "hwareal";
-    cliCfg.tableEntry[6].helpString    = "Run HWA FFT on current ADCBUF chirp";
-    cliCfg.tableEntry[6].cmdHandlerFxn = l3_cli_hwaReal;
-#endif
-#ifdef CONFIGURABLE_CAPTURE
-    cliCfg.tableEntry[7].cmd           = "captureCfg";
-    cliCfg.tableEntry[7].helpString    =
-        "captureCfg preStart preBins postStart postBins lateStart postFrames [postStride]";
-    cliCfg.tableEntry[7].cmdHandlerFxn = l3_cli_captureCfg;
-    cliCfg.tableEntry[8].cmd           = "phaseCaptureCfg";
-    cliCfg.tableEntry[8].helpString    =
-        "phaseCaptureCfg preStart preBins preFrames impactStart impactBins "
-        "impactFrames postStart postBins lateStart ballFrames ballStride";
-    cliCfg.tableEntry[8].cmdHandlerFxn = l3_cli_phaseCaptureCfg;
-#ifdef L3_RING_IQ8
-    cliCfg.tableEntry[9].cmd           = "captureFormat";
-    cliCfg.tableEntry[9].helpString    = "captureFormat iq16|iq8";
-    cliCfg.tableEntry[9].cmdHandlerFxn = l3_cli_captureFormat;
-#ifdef L3_IQ8_EDMA_PACK
-    cliCfg.tableEntry[10].cmd           = "iq8Scale";
-    cliCfg.tableEntry[10].helpString    = "iq8Scale 16|32|64|128|256";
-    cliCfg.tableEntry[10].cmdHandlerFxn = l3_cli_iq8Scale;
-#endif
-#endif
-#endif
-#ifdef L3_CAPTURE_EVIDENCE
-    cliCfg.tableEntry[11].cmd           = "perfstats";
-    cliCfg.tableEntry[11].helpString    =
-        "Report worst-case elapsed times (ticks, including pre-emption), margin, heap and stacks";
-    cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_perfStats;
-    cliCfg.tableEntry[12].cmd           = "l3bench";
-    cliCfg.tableEntry[12].helpString    = "Time one pass over the stopped ring";
-    cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_bench;
-#endif
+    (void)l3_cliRegister(&cliCfg);
     CLI_open(&cliCfg);
 #ifdef L3_CAPTURE_EVIDENCE
     l3_sampleHeap();
