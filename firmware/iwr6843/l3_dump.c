@@ -2601,6 +2601,30 @@ static void l3_fill_header(l3_dump_header_t *h, uint16_t n_frames,
     h->frame_period_us  = gFramePeriodUs;
 }
 
+#ifdef L3_DUMP_WIRE_TRACE
+#if !defined(L3_DUMP_STAGE_TRACE) || !defined(L3_CAPTURE_EVIDENCE)
+#error "wire trace requires clock-only stage tracing and capture evidence"
+#endif
+#include "dump_wire_trace.h"
+static l3_wire_trace_t gDumpWire;
+static int32_t l3_dumpWireWrite(UART_Handle handle, uint8_t *data, uint32_t size)
+{
+    int32_t result;
+    l3_wire_begin_write(&gDumpWire, data, size);
+    result = UART_writePolling(handle, data, size);
+    l3_wire_end_write(&gDumpWire, size, result);
+    return result;
+}
+#define UART_writePolling l3_dumpWireWrite
+#define L3_WIRE_BEGIN() l3_wire_reset(&gDumpWire)
+#define L3_WIRE_END() CLI_write("\nL3WIRE calls=%u requested=%u returned=%u errors=%u mismatches=%u first_call=%u first_result=%d crc32=%08x\n", \
+    gDumpWire.calls, gDumpWire.requested, gDumpWire.returned, gDumpWire.errors, \
+    gDumpWire.mismatches, gDumpWire.first_call, gDumpWire.first_result, l3_wire_crc32(&gDumpWire))
+#else
+#define L3_WIRE_BEGIN() ((void)0)
+#define L3_WIRE_END() ((void)0)
+#endif
+
 #ifdef CONFIGURABLE_CAPTURE
 static void l3_writeFrameDescriptor(uint32_t slot, uint8_t firstFrame)
 {
@@ -2918,6 +2942,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         headerTick = l3_ticks();
 #endif
         L3_DUMP_STAGE("header_enter", 0);
+        L3_WIRE_BEGIN();
         UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));
         if (tempStatus == 0) {
             UART_writePolling(gDataUart, (uint8_t *)&tempReport, sizeof(tempReport));
@@ -3046,6 +3071,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     }
 #endif
 
+    L3_WIRE_END();
 #ifdef HWA_CHAINED_SNAPSHOT_RING
     gRingFrame = 0U;
     gHwaFreezeRequestFrame = 0U;
@@ -3101,6 +3127,10 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 #endif
     return 0;
 }
+
+#ifdef L3_DUMP_WIRE_TRACE
+#undef UART_writePolling
+#endif
 
 /* CLI "stats": report capture counters (diagnostic). */
 static int32_t l3_cli_stats(int32_t argc, char *argv[])
