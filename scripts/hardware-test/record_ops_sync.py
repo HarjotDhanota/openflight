@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
 import platform
+import re
 import sys
 import time
 import uuid
@@ -130,15 +132,98 @@ def _captures(path):
             raise ValueError("raw capture must stay within the manifest directory")
         raw = source.read_bytes()
         parsed = processor.parse_capture(raw.decode("utf-8"))
+        unique = all(
+            raw.count(key) == 1 for key in (b'"sample_time"', b'"trigger_time"', b'"I"', b'"Q"')
+        )
         validated.append(
             {
                 **row,
                 "raw_sha256": hashlib.sha256(raw).hexdigest(),
-                "dump_complete": parsed is not None,
+                "dump_complete": parsed is not None and unique,
                 "sample_count": len(parsed.i_samples) if parsed is not None else 0,
             }
         )
     return validated, hashlib.sha256(encoded).hexdigest()
+
+
+def export_captures(session_path, output_dir):
+    """Extract original byte evidence and conservative windows from a live session."""
+    encoded = session_path.read_bytes()
+    rows, originals, ids = [], [], set()
+    for line in encoded.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        evidence = json.loads(line)
+        if not isinstance(evidence, dict):
+            raise ValueError("session entries must be JSON objects")
+        if evidence.get("type") != "ops_capture_evidence":
+            continue
+        if evidence.get("schema") != "openflight.ops-capture-evidence.v1":
+            raise ValueError("unsupported capture evidence schema")
+        identity = evidence.get("capture_id")
+        if not isinstance(identity, str) or re.fullmatch(r"[a-f0-9]{32}", identity) is None:
+            raise ValueError("capture identity must be a lowercase UUID hex string")
+        if identity in ids:
+            raise ValueError("duplicate capture identity")
+        ids.add(identity)
+        raw = base64.b64decode(evidence["raw_capture_base64"], validate=True)
+        if hashlib.sha256(raw).hexdigest() != evidence.get("raw_sha256"):
+            raise ValueError("original capture hash mismatch")
+        issues = list(evidence.get("evidence_issues", []))
+        if evidence.get("error") or evidence.get("outcome") != "capture":
+            issues.append("capture_did_not_complete_normally")
+        if evidence.get("arm_command_error"):
+            issues.append("arm_command_incomplete")
+        bounds = [
+            evidence.get(key)
+            for key in (
+                "armed_mono_ns",
+                "arm_command_completed_mono_ns",
+                "wait_started_mono_ns",
+                "dump_start_mono_ns",
+                "response_completed_mono_ns",
+            )
+        ]
+        if not all(type(value) is int and value >= 0 for value in bounds) or bounds != sorted(
+            bounds
+        ):
+            issues.append("invalid_command_or_read_bounds")
+        if (
+            evidence.get("clock_domain") != "host_monotonic"
+            or evidence.get("arm_observation") != "host_command_bounds_not_device_acknowledgement"
+            or not evidence.get("boot_id")
+            or type(evidence.get("raw_bytes_received")) is not int
+            or evidence["raw_bytes_received"] != len(raw)
+        ):
+            issues.append("invalid_evidence_context")
+        filename = f"{identity}.raw"
+        rows.append(
+            {
+                "capture_id": identity,
+                "boot_id": evidence.get("boot_id"),
+                "armed_mono_ns": bounds[0],
+                "dump_start_mono_ns": bounds[3],
+                "raw_capture": filename,
+                "evidence_issues": issues,
+                "arm_observation": evidence.get("arm_observation"),
+            }
+        )
+        originals.append((filename, raw))
+    if not rows:
+        raise ValueError("session contains no OPS capture evidence")
+    manifest = {
+        "schema": "openflight.ops-sync-captures.v1",
+        "captures": rows,
+        "source_session_sha256": hashlib.sha256(encoded).hexdigest(),
+        "physical_timing_qualified": False,
+    }
+    output_dir.mkdir(parents=True, exist_ok=False)
+    for filename, raw in originals:
+        with (output_dir / filename).open("xb") as stream:
+            stream.write(raw)
+    with (output_dir / "captures.json").open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
+    return manifest
 
 
 def audit(path, captures_path=None):
@@ -170,8 +255,17 @@ def main(argv=None):
     analyzer.add_argument("recording", type=Path)
     analyzer.add_argument("--captures", type=Path)
     analyzer.add_argument("--output", required=True, type=Path)
+    exporter = commands.add_parser(
+        "export", help="extract retained live evidence for offline audit"
+    )
+    exporter.add_argument("session", type=Path)
+    exporter.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "export":
+            result = export_captures(args.session, args.output_dir)
+            print(json.dumps(result, indent=2, allow_nan=False))
+            return int(any(row["evidence_issues"] for row in result["captures"]))
         if args.command == "record":
             with args.output.open("x", encoding="utf-8") as stream:
 

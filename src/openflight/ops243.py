@@ -47,6 +47,7 @@ from typing import Callable, List, Optional
 import serial
 import serial.tools.list_ports
 
+from .ops_capture_evidence import OpsCaptureEvidence
 from .serial_latency import log_usb_serial_latency_timer
 
 # Configure logging for raw radar data
@@ -297,6 +298,9 @@ class OPS243Radar:
         self._internal_trigger_firmware_version = None
         self._hardware_trigger_recovery_required = False
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
+        self.capture_evidence_callback: Optional[Callable[[dict], None]] = None
+        self.last_hardware_capture_evidence: Optional[dict] = None
+        self._hardware_arm_context: Optional[dict] = None
         self.last_baud_negotiation: Optional[dict] = None
         # (phase, host epoch it began); one tuple so lock-free readers never mix two phases
         self.trigger_phase: Optional[tuple[str, float]] = None
@@ -1664,6 +1668,40 @@ class OPS243Radar:
         on_first_byte: Optional[Callable[[], None]] = None,
         gate_edge_time: Optional[Callable[[], Optional[float]]] = None,
     ) -> str:
+        """Read one dump and preserve evidence before parsing or re-arming."""
+        evidence = OpsCaptureEvidence(getattr(self, "_hardware_arm_context", None))
+        self.last_hardware_capture_evidence = None
+        error = None
+        try:
+            return self._read_hardware_trigger(
+                timeout, dump_grace, cancel_event, on_first_byte, gate_edge_time, evidence=evidence
+            )
+        except BaseException as exc:
+            error = type(exc).__name__
+            raise
+        finally:
+            row = evidence.finish(
+                "error" if error else getattr(self, "last_hardware_trigger_outcome", "unknown"),
+                error,
+            )
+            self.last_hardware_capture_evidence = row
+            callback = getattr(self, "capture_evidence_callback", None)
+            if callback is not None:
+                try:
+                    callback(row)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning("[OPS] Capture evidence logging failed", exc_info=True)
+
+    def _read_hardware_trigger(
+        self,
+        timeout: float = 30.0,
+        dump_grace: Optional[float] = None,
+        cancel_event: Optional[threading.Event] = None,
+        on_first_byte: Optional[Callable[[], None]] = None,
+        gate_edge_time: Optional[Callable[[], Optional[float]]] = None,
+        *,
+        evidence: OpsCaptureEvidence,
+    ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
 
@@ -1733,6 +1771,7 @@ class OPS243Radar:
                 chunk = self.serial.read(waiting)
                 first_byte_timestamp = None
                 if not capture_started:
+                    evidence.prefix_read(chunk)
                     idle_bytes.extend(chunk)
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
@@ -1750,6 +1789,7 @@ class OPS243Radar:
                         continue
                     capture_start = min(marker_offsets)
                     marker_offset = discarded_bytes + capture_start
+                    evidence.marker(marker_offset)
                     discarded_bytes += capture_start
                     chunk = bytes(idle_bytes[capture_start:])
                     idle_bytes.clear()
@@ -1771,6 +1811,7 @@ class OPS243Radar:
                         }
                     first_byte_timestamp = time.time()
 
+                evidence.dump_chunk(chunk)
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
                 bytes_received += len(chunk)
                 if first_byte_timestamp is not None:
@@ -1890,6 +1931,7 @@ class OPS243Radar:
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
         self._set_trigger_phase("rearming")
+        self._hardware_arm_context = None
 
         # Drain the serial buffer until no new bytes arrive for 200ms.
         # A full I/Q dump is ~41KB at 57600 baud (~7s). If the previous
@@ -1935,6 +1977,12 @@ class OPS243Radar:
         pre_trigger_segments = max(0, min(32, pre_trigger_segments))
 
         def write_rearm_commands():
+            self._hardware_arm_context = {
+                "command_started_mono_ns": time.monotonic_ns(),
+                "command_completed_mono_ns": None,
+                "pre_trigger_segments": pre_trigger_segments,
+                "error": "arm_commands_incomplete",
+            }
             # Restart sampling
             self.serial.write(b"PA")
             self.serial.flush()
@@ -1965,6 +2013,7 @@ class OPS243Radar:
             return
 
         # No flush: an edge after the first PA may already have started a dump.
+        self._hardware_arm_context.update(command_completed_mono_ns=time.monotonic_ns(), error=None)
         self._set_trigger_phase("rearmed")
         logger.info("[OPS] Rolling buffer re-armed (S#%d)", pre_trigger_segments)
 
@@ -2111,8 +2160,15 @@ class OPS243Radar:
         # Restore the requested trigger only after every other setting. ST and
         # SM require explicit carriage returns on this firmware path.
         self.serial.write(f"SM{trigger_magnitude}\r".encode("ascii"))
+        self._hardware_arm_context = {
+            "command_started_mono_ns": time.monotonic_ns(),
+            "command_completed_mono_ns": None,
+            "pre_trigger_segments": pre_trigger_segments,
+            "error": "arm_commands_incomplete",
+        }
         self.serial.write(f"ST{signed_threshold}\r".encode("ascii"))
         self.serial.flush()
+        self._hardware_arm_context.update(command_completed_mono_ns=time.monotonic_ns(), error=None)
         time.sleep(0.1)
 
     def rearm_internal_speed_trigger(self, sample_rate_ksps: int = 30) -> bool:
@@ -2136,13 +2192,23 @@ class OPS243Radar:
         if self._internal_speed_trigger_config is None:
             raise RuntimeError("Internal speed trigger has not been configured")
         self._set_trigger_phase("rearming")
+        self._hardware_arm_context = None
 
         try:
             # The board is idle until PA, so clearing the dump tail here is safe.
             self._drain_rearm_serial()
             self.serial.reset_input_buffer()
+            self._hardware_arm_context = {
+                "command_started_mono_ns": time.monotonic_ns(),
+                "command_completed_mono_ns": None,
+                "pre_trigger_segments": self._internal_speed_trigger_config[1],
+                "error": "arm_commands_incomplete",
+            }
             self.serial.write(b"PA")
             self.serial.flush()
+            self._hardware_arm_context.update(
+                command_completed_mono_ns=time.monotonic_ns(), error=None
+            )
         except serial.SerialTimeoutException as error:
             self._hardware_trigger_recovery_required = True
             logger.warning(

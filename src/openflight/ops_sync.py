@@ -78,6 +78,8 @@ def _stream(records):  # pylint: disable=too-many-branches,too-many-boolean-expr
 
 
 def _associate(capture, start, end, edges):  # pylint: disable=too-many-return-statements,too-many-branches
+    if capture.get("evidence_issues"):
+        return None, "capture_evidence_invalid"
     if capture.get("boot_id") != start.get("boot_id"):
         return None, "boot_mismatch"
     if (

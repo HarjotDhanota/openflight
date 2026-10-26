@@ -254,6 +254,11 @@ class SessionLogger:
             entry.update(summary)
         self._write_entry("ops_clock_sync", entry)
 
+    def log_ops_capture_evidence(self, evidence: Dict[str, Any]):
+        """Retain original dump evidence before shot acceptance and radar re-arm."""
+        if self.enabled:
+            self._write_entry("ops_capture_evidence", evidence)
+
     def _setup_raw_logging(self):
         """Configure Python logging for raw radar data."""
         # Remove existing handlers
@@ -851,6 +856,7 @@ class SessionLogger:
         post_trigger_duration_ms: Optional[float] = None,
         processor_config: Optional[Dict] = None,
         stage_timing: Optional[Dict] = None,
+        capture_id: Optional[str] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -879,6 +885,7 @@ class SessionLogger:
             impact_min_transition_delta_mph: Minimum speed jump for transition
             trigger_latency_ms: Whole trigger-strategy wall duration (ms), including idle wait
             stage_timing: Versioned monotonic duration/provenance contract
+            capture_id: Join to the original ops_capture_evidence entry, when available
             smash_factor: Ball speed / club speed ratio
             spin_rpm: Detected spin rate in RPM
             spin_confidence: Confidence of spin detection (0-1)
@@ -921,6 +928,7 @@ class SessionLogger:
             "rolling_buffer_capture",
             {
                 "shot_number": shot_number,
+                "capture_id": capture_id,
                 "sample_time": sample_time,
                 "trigger_time": trigger_time,
                 "trigger_offset_ms": trigger_offset_ms,
