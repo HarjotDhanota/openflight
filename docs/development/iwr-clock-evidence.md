@@ -281,6 +281,32 @@ output or collection setup failure. Failure closes UART without follow-up
 commands against an unknown CLI. Restore normal boot through the supervised
 board procedure. No diagnostic outcome qualifies physical synchronization.
 
+## Pre-header dump diagnostic
+
+`record_dump_trace` in the RESEARCH module `iwr6843.dump_trace` sends one
+`l3dump` on an exclusively owned, already configured connection. It retains the
+entire byte stream and cumulative read marks through a declared window (default
+15 seconds; maximum 30 seconds), including silence beyond the product reader's
+four-second stall policy. It does not flush input, retry or send recovery
+commands. It restores serial timeout settings, saves partial bytes on I/O error
+and marks late bytes ineligible for completion. The caller must persist the
+returned raw bytes and JSON record even when the status is unavailable.
+
+The opt-in firmware flag `L3_DUMP_STAGE_TRACE` emits `L3STAGE` lines before the
+binary header: dump entry, HWA freeze, RF stop, stop margin, temperature query
+and header entry. It requires the HWA ring and USB clock probe and rejects
+two-round builds. Markers come from CLI context, never an ISR. Their counters
+are separate reads, not an atomic state snapshot. Text writes alter scheduling
+and UART traffic; this build is for fault localization, not calibration.
+
+The recorder reports complete only for a valid binary dump followed by exactly
+`Done` and the full prompt within the window. It retains the original prefix
+and suffix separately from payload offsets; it does not mistake ASCII stages
+for frame evidence. Headerless, incomplete, rejected and late transfers remain
+unavailable. A finished diagnostic alone never qualifies physical RF timing or
+sub-millisecond clock alignment. Use the supervised RAM/restore procedure and
+verify the reviewed source ID before starting the one-capture experiment.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.
