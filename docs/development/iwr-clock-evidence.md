@@ -281,6 +281,29 @@ output or collection setup failure. Failure closes UART without follow-up
 commands against an unknown CLI. Restore normal boot through the supervised
 board procedure. No diagnostic outcome qualifies physical synchronization.
 
+## RF startup diagnostic
+
+The separate `trace_sensor_start` entrypoint explicitly sends `sensorStart`
+once on an already reviewed and configured connection. Its collection window
+defaults to 20 seconds and is capped at 30 seconds. It retains exact bytes and
+all read marks through a complete terminal response and prompt, or the bounded
+deadline. Echo-only, rejected, malformed and late responses are not completion.
+Read/write settings stay fixed during collection. No input flush, retry or
+follow-up recovery command occurs. The ADC-only entrypoint still forbids RF start.
+
+`send_config_with_start_trace` temporarily intercepts only the exact start
+command on one exclusively owned radar instance. Other commands, profile
+ordering and post-start active-state checks remain with the existing driver.
+The original method is restored even after errors. A duplicate/unexpected
+start is rejected before sending it. The caller persists the trace even on
+failure. Use this only in the supervised research runner after source-ID and
+profile-hash verification; it is not installed into the product capture path.
+
+The record includes the original caller's response window for comparison.
+A response beyond that window is an observation, not a production timeout fix.
+A complete CLI reply alone does not establish active RF; retain the subsequent
+health check. Neither result qualifies RF acquisition timing or synchronization.
+
 ## Pre-header dump diagnostic
 
 `record_dump_trace` in the RESEARCH module `iwr6843.dump_trace` sends one

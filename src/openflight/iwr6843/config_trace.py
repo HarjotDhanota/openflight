@@ -1,4 +1,4 @@
-"""Research-only, bounded ADC configuration traces; no RF-start or flash path."""
+"""Research-only CLI traces; RF start requires the explicit startup entrypoint."""
 
 from __future__ import annotations
 
@@ -30,6 +30,47 @@ def trace_command(port, command, *, timeout_ns=10_000_000_000, now=time.monotoni
         raise ValueError("command is outside the configuration diagnostic allowlist")
     if not 1 <= _uint(timeout_ns, 63) <= 15_000_000_000:
         raise ValueError("diagnostic window must be positive and at most 15 seconds")
+    return _trace_exchange(port, command, timeout_ns=timeout_ns, now=now)
+
+
+def trace_sensor_start(port, *, timeout_ns=20_000_000_000, now=time.monotonic_ns):
+    """Start RF once on a reviewed/configured connection and retain its whole reply."""
+    if not 1 <= _uint(timeout_ns, 63) <= 30_000_000_000:
+        raise ValueError("startup diagnostic window must be positive and at most 30 seconds")
+    return _trace_exchange(port, "sensorStart", timeout_ns=timeout_ns, now=now)
+
+
+def send_config_with_start_trace(
+    radar, profile, emit, *, responses, timeout_ns=20_000_000_000, now=time.monotonic_ns
+):
+    """Trace one start on this owned instance; preserve the driver's other setup steps."""
+    original = radar.cmd
+    starts = 0
+
+    def command(text, window):
+        nonlocal starts
+        if not text.startswith("sensorStart"):
+            return original(text, window)
+        if text != "sensorStart" or starts:
+            raise ValueError("unexpected or repeated sensorStart")
+        starts += 1
+        result = trace_sensor_start(radar.ser, timeout_ns=timeout_ns, now=now)
+        result["caller_window_s"] = window
+        emit(result)
+        if result["status"] != "complete":
+            raise ValueError(f"sensorStart response {result['status']}")
+        return base64.b64decode(result["received_b64"]).decode("ascii")
+
+    radar.cmd = command
+    try:
+        radar.send_config(profile, responses=responses)
+        if starts != 1:
+            raise ValueError("profile did not issue sensorStart")
+    finally:
+        radar.cmd = original
+
+
+def _trace_exchange(port, command, *, timeout_ns, now):
     original_read, original_write = port.timeout, port.write_timeout
     data = bytearray()
     result = {
