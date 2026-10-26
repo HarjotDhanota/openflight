@@ -35,6 +35,12 @@ from typing import Any, BinaryIO, Callable
 
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
 from openflight.iwr6843.driver import BAUD, DumpTransferTiming, IWR6843DumpRecoveryError
+from openflight.iwr6843.serial_two_round import (
+    PROTOCOL_TIMEOUT_S,
+    SerialTwoRoundLink,
+    WorkerTwoRound,
+)
+from openflight.iwr6843.two_round import TwoRoundError, TwoRoundRemoteError
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +92,18 @@ def _error_reply(error: BaseException) -> tuple[dict, bytes]:
     if isinstance(error, IWR6843DumpRecoveryError):
         reply["timing"] = error.timing.to_dict() if error.timing is not None else None
         return reply, bytes(error.raw or b"")
+    if isinstance(error, TwoRoundError):
+        reply["timing"] = getattr(error, "timing", None)
+        return reply, getattr(error, "raw", b"")
     return reply, b""
 
 
 def _remote_error(reply: dict, payload: bytes) -> Exception:
     kind, message = reply.get("error_type"), str(reply.get("error"))
+    if kind in ("TwoRoundError", "TwoRoundRemoteError"):
+        error = (TwoRoundRemoteError if kind == "TwoRoundRemoteError" else TwoRoundError)(message)
+        error.raw, error.timing = payload, reply.get("timing")
+        return error
     if kind == "IWR6843DumpRecoveryError":
         timing = reply.get("timing")
         return IWR6843DumpRecoveryError(
@@ -171,6 +184,7 @@ def serve(requests: BinaryIO, replies: BinaryIO) -> int:
     _write_frame(replies, {"ok": True, "port": radar.port, "pid": os.getpid(), "events": events})
     reported = len(events)
     closing = False
+    two_round = WorkerTwoRound(radar)
     try:
         while True:
             frame = _read_frame(requests)
@@ -182,14 +196,30 @@ def serve(requests: BinaryIO, replies: BinaryIO) -> int:
                 break
             operation = _OPERATIONS.get(request.get("op"))
             try:
-                if operation is None:
+                if (
+                    str(request.get("op")).startswith("two_round_")
+                    and request["op"] != "two_round_support"
+                ):
+                    reply, payload = two_round.exchange(request)
+                elif two_round.held:
+                    raise RuntimeError(
+                        "a two-round capture is held; release it before other commands"
+                    )
+                elif operation is None:
                     raise ValueError(f"unknown IWR6843 serial request {request.get('op')!r}")
-                reply, payload = operation(radar, request)
+                else:
+                    reply, payload = operation(radar, request)
             except Exception as error:  # pylint: disable=broad-exception-caught
                 reply, payload = _error_reply(error)
-            _write_frame(replies, {**reply, "events": events[reported:]}, payload)
+            _write_frame(
+                replies, {**reply, "held": two_round.held, "events": events[reported:]}, payload
+            )
             reported = len(events)
     finally:
+        try:
+            two_round.close()
+        except Exception:
+            logger.warning("[IWR6843] Held capture could not be released on close", exc_info=True)
         try:
             radar.close()
             reply = {"ok": True}
@@ -252,6 +282,7 @@ class IWR6843SerialProcess:
         self._reply_margin_s = float(reply_margin_s)
         self._close_timeout_s = float(close_timeout_s)
         self._lock = threading.Lock()
+        self._held = False
         self._end_lock = threading.Lock()
         self._replies: queue.Queue[tuple[dict, bytes] | None] = queue.Queue()
         self._gone = threading.Event()
@@ -335,6 +366,7 @@ class IWR6843SerialProcess:
                 f"during {operation}"
             )
         reply, payload = frame
+        self._held = bool(reply.get("held", False))
         if self._events is not None:
             self._events.extend(reply.get("events") or ())
         if check and not reply.get("ok"):
@@ -370,8 +402,17 @@ class IWR6843SerialProcess:
 
     @property
     def busy(self) -> bool:
-        """Whether a request is in flight."""
-        return self._lock.locked()
+        """Whether a request or a frozen two-round capture owns the session."""
+        return self._lock.locked() or self._held
+
+    def begin_two_round(self) -> SerialTwoRoundLink:
+        """Freeze/read the overview in the child; keep the ring held for analysis."""
+
+        def call(request):
+            return self._call(request, 2 * PROTOCOL_TIMEOUT_S + self._reply_margin_s)
+
+        reply, raw = call({"op": "two_round_begin"})
+        return SerialTwoRoundLink(call, reply, raw)
 
     def send_config(self, cfg_path: str, *, responses: list[tuple[str, str]] | None = None) -> None:
         """``IWR6843Radar.send_config`` in the serial process."""

@@ -762,6 +762,7 @@ class TwoRoundTransfer:
     fallback: str | None = None
     released: bool = False
     error: str | None = None
+    uart_exchanges: list[dict] = field(default_factory=list)
     # the payloads as received, in order: ("overview" | "request" | "cells", bytes)
     payloads: list[tuple[str, bytes]] = field(default_factory=list, repr=False)
 
@@ -790,6 +791,7 @@ class TwoRoundTransfer:
             "fallback": self.fallback,
             "released": self.released,
             "error": self.error,
+            "uart_exchanges": list(self.uart_exchanges),
         }
 
 
@@ -953,6 +955,8 @@ def _release(client: TwoRoundClient, transfer: TwoRoundTransfer) -> None:
         )
         if transfer.error is None:
             transfer.error = f"release failed: {error}"
+    finally:
+        transfer.uart_exchanges = list(getattr(client, "exchanges", ()))
 
 
 __all__ = [
