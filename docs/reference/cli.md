@@ -217,6 +217,7 @@ The kiosk shell (Electron) reads these from the environment:
 | `OPENFLIGHT_ALLOWED_ORIGINS` | Space- or comma-separated origins the window may navigate to besides the page it opened; every other origin is refused. `start-kiosk.sh` sets the kiosk's own, plus the tester page's on a kiosk the tester started (`--tester-setup-required`, port from `--tester-control-port`, default 8765) |
 | `OPENFLIGHT_KIOSK_WINDOWED` | `1`: a normal window instead of fullscreen |
 | `OPENFLIGHT_KIOSK_WINDOW_SIZE` | The windowed page's size, e.g. `800x480` (default `1024x600`); fullscreen takes the screen's size |
+| `OPENFLIGHT_KIOSK_ZOOM` | Zoom for every page the window shows, 0.5–3 (default 1), for a screen with more pixels than the 1024×600 the pages are laid out for |
 
 `scripts/start-tester.sh --on-screen` (or `OPENFLIGHT_TESTER_ON_SCREEN=1`) opens the
 tester page in the same shell on the unit's own screen; see

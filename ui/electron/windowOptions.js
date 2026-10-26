@@ -1,15 +1,23 @@
 // The kiosk shell's window. Fullscreen and chromeless on the unit's own screen,
 // at whatever size that screen is; with OPENFLIGHT_KIOSK_WINDOWED=1 a normal
 // window instead, so a launcher can show the kiosk during a tester run without
-// it covering the tester page (13 Oct decision 2a). The window is 1024×600
-// unless OPENFLIGHT_KIOSK_WINDOW_SIZE says otherwise (e.g. 800x480), to try a
-// smaller screen's layout on a desktop. Kept apart from main.js so it can be
+// it covering the tester page (13 Oct decision 2a). The window's page is
+// 1024×600 unless OPENFLIGHT_KIOSK_WINDOW_SIZE says otherwise (e.g. 800x480),
+// to try a smaller screen's layout on a desktop. OPENFLIGHT_KIOSK_ZOOM (e.g.
+// 1.25) zooms every page the window shows, for a screen with more pixels than
+// the 1024×600 the pages are laid out for. Kept apart from main.js so it can be
 // unit-tested without the `electron` module.
 export const DEFAULT_WINDOW_SIZE = { width: 1024, height: 600 };
+const ZOOM_RANGE = { min: 0.5, max: 3 };
 
 function windowSize(env) {
   const match = /^(\d{3,5})[x×](\d{3,5})$/i.exec(String(env.OPENFLIGHT_KIOSK_WINDOW_SIZE || '').trim());
   return match ? { width: Number(match[1]), height: Number(match[2]) } : DEFAULT_WINDOW_SIZE;
+}
+
+function zoomFactor(env) {
+  const zoom = Number(String(env.OPENFLIGHT_KIOSK_ZOOM || '').trim());
+  return Number.isFinite(zoom) && zoom >= ZOOM_RANGE.min && zoom <= ZOOM_RANGE.max ? zoom : 1;
 }
 
 export function kioskWindowOptions(env) {
@@ -20,6 +28,7 @@ export function kioskWindowOptions(env) {
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
+      zoomFactor: zoomFactor(env),
     },
   };
   return windowed

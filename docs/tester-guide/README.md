@@ -42,7 +42,7 @@ With `--on-screen`, the tester page and the scoreboard share the unit's screen a
 - **Start free play** switches to the scoreboard by itself when the kiosk is ready, about 20 seconds later. The line under the top bar says so while you wait.
 - **Stop & package** on the scoreboard brings the tester page back, where you wait for the package and tap **Done**.
 
-Everything is touch: tap buttons, and drag the page (or a list) up and down with your finger to scroll. The pages fit the unit's 1024×600 and 800×480 screens.
+Everything is touch: tap buttons, and drag the page (or a list) up and down with your finger to scroll. The pages fit the unit's 1024×600 and 800×480 screens. If everything looks too small on your screen, start with `OPENFLIGHT_KIOSK_ZOOM=1.25` in front of `bash scripts/start-tester.sh` (bigger numbers zoom more).
 
 ## Set up (once per spot)
 

@@ -40,4 +40,17 @@ describe('kioskWindowOptions', () => {
     expect(options).not.toHaveProperty('width');
     expect(options).not.toHaveProperty('height');
   });
+
+  it('zooms every page by OPENFLIGHT_KIOSK_ZOOM, for a screen with more pixels than 1024×600', () => {
+    expect(kioskWindowOptions({ OPENFLIGHT_KIOSK_ZOOM: '1.25' }).webPreferences).toMatchObject({ zoomFactor: 1.25 });
+    expect(
+      kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '1', OPENFLIGHT_KIOSK_ZOOM: '0.8' }).webPreferences
+    ).toMatchObject({ zoomFactor: 0.8 });
+  });
+
+  it('keeps 100% for a zoom it cannot read or that would make the page unusable', () => {
+    for (const zoom of ['', 'big', '0', '-1', '0.2', '5']) {
+      expect(kioskWindowOptions({ OPENFLIGHT_KIOSK_ZOOM: zoom }).webPreferences).toMatchObject({ zoomFactor: 1 });
+    }
+  });
 });

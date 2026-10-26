@@ -300,10 +300,13 @@ starts allows its window the tester's origin too, so its **Tester** button works
 in the kiosk's own window; a plain kiosk's window stays on the kiosk.
 
 **The screen size.** Fullscreen, the shell takes whatever size the screen is; the
-pages are laid out for 1024×600 and 800×480 (and the kiosk for 800×400). To try a
-size on a desktop, run the shell windowed:
-`OPENFLIGHT_KIOSK_WINDOWED=1 OPENFLIGHT_KIOSK_WINDOW_SIZE=800x480` (the page gets
-exactly that size).
+pages are laid out for 1024×600 and 800×480 (and the kiosk for 800×400). On a
+screen with more pixels than that, where everything looks small, zoom every page:
+`OPENFLIGHT_KIOSK_ZOOM=1.25 bash scripts/start-tester.sh --on-screen ...` (0.5–3;
+a 1280×800 screen at 1.25 lays out like 1024×640). The kiosk the tester starts
+inherits it, as `start-kiosk.sh` does. To try a size on a desktop, run the shell
+windowed: `OPENFLIGHT_KIOSK_WINDOWED=1 OPENFLIGHT_KIOSK_WINDOW_SIZE=800x480` (the
+page gets exactly that size).
 
 The tester also writes a rotating service log to
 `~/openflight_sessions/tester_pilot/tester-server.log`. It remains available
