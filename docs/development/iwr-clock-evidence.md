@@ -307,6 +307,25 @@ unavailable. A finished diagnostic alone never qualifies physical RF timing or
 sub-millisecond clock alignment. Use the supervised RAM/restore procedure and
 verify the reviewed source ID before starting the one-capture experiment.
 
+With `L3_DUMP_WIRE_TRACE`, the clock-only diagnostic also counts every binary
+UART call from header through dump trailer and computes a source CRC32 before
+each write. After the binary it emits a separate `L3WIRE` line with requested
+bytes, returned bytes, errors, mismatches, first failing call/result and CRC32.
+No retry or repair occurs. Stage text and the diagnostic line are outside the
+checksum. This flag defaults off; the production binary format is unchanged.
+
+Use `require_wire_trace=True` with that reviewed image. The recorder requires
+matching declared/observed/requested/returned lengths, no write errors or
+mismatches, a matching CRC32 and the complete prompt within the deadline. Missing
+or malformed reports, short data and equal-length corruption stay unavailable.
+`inspect_dump_trace` can inspect saved bytes offline under the same rules.
+CRC32 is a transport diagnostic, not an authentication mechanism or proof that
+the underlying IQ acquisition is correct. The checksum pass adds pauses between
+writes and can alter the behavior under investigation. A passing instrumented
+run cannot establish that the uninstrumented short transfer is fixed or qualify
+physical clock timing. Callers must save accepted `.l3dump` files only when the
+overall status is complete, retaining every other stream as raw evidence.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.
