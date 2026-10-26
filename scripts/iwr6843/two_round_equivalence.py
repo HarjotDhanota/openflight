@@ -179,6 +179,11 @@ class _Capture:
 class _Monitor:
     def __init__(self, capture):
         self.capture = capture
+        supported = capture.two_round_link is not None
+        self.two_round_support = {
+            "supported": supported,
+            "reason": None if supported else "the simulated capture has no two-round link",
+        }
 
     def capture_for_shot(self, _impact, timeout_s=0.0):  # noqa: ARG002
         """The one capture."""
