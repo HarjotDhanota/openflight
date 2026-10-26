@@ -169,3 +169,43 @@ test.describe('a touchscreen that reports a finger as a mouse', () => {
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
   });
 });
+
+test('step 8 on the unit screen says where the package already is, with no Download', async ({ page }) => {
+  const bundle = { name: 'demo-session-bundle.zip', size_bytes: 1_234_567_890, sha256: 'a'.repeat(64) };
+  const world: World = {
+    freePlay: { ...RECORDING, phase: 'closed', bundle },
+    kiosk: { state: 'stopped', progress_message: null, url: 'http://localhost:8080/' },
+  };
+  await useTester(page);
+  await mockOnScreenWorld(page, world);
+  await page.unroute('**/api/tester/status**');
+  await page.route('**/api/tester/status**', (route) =>
+    fulfillJson(route, {
+      free_play: world.freePlay,
+      kiosk: world.kiosk,
+      analysis: {
+        state: 'complete',
+        reason: null,
+        job: { state: 'complete' },
+        review_ready: true,
+        bundles: [bundle],
+        latest_bundle: bundle,
+        send_folder: '~/OpenFlight-to-send',
+        send_copy: {
+          name: bundle.name,
+          folder: '~/OpenFlight-to-send',
+          size_bytes: bundle.size_bytes,
+          method: 'link',
+          error: null,
+        },
+      },
+    })
+  );
+  await page.goto('/tester.html?screen=unit');
+  await expect(page.locator('#bundle-size')).toHaveText(`${bundle.name} · 1.23 GB`);
+  // a download here would only copy it to the same unit, through a save dialog a finger can't use
+  await expect(page.locator('#bundle-link')).toBeHidden();
+  await expect(page.locator('#send-folder')).toHaveText(
+    'Saved on this unit in ~/OpenFlight-to-send/. To send it, open this page on a phone or laptop and tap Download there, or copy it to a USB stick.'
+  );
+});

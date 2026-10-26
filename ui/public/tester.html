@@ -2316,6 +2316,22 @@
         // Storage can be unavailable in locked-down kiosk browser profiles.
       }
       const currentTester = () => el('tester-id').value.trim();
+      // (25 Oct) `start-tester.sh --on-screen` opens this page on the unit's own screen with
+      // ?screen=unit, kept for this tab. This page and the kiosk then share that one window:
+      // Kiosk view goes there, the kiosk's Tester button comes back, and free play started
+      // here opens no kiosk window of its own: this window switches to it once it answers.
+      const UNIT_SCREEN_STORAGE_KEY = 'openflight-tester-unit-screen';
+      const KIOSK_SWITCH_STORAGE_KEY = 'openflight-tester-kiosk-switch';
+      const onUnitScreen = (() => {
+        const marked = new URLSearchParams(location.search).get('screen') === 'unit';
+        try {
+          if (marked) sessionStorage.setItem(UNIT_SCREEN_STORAGE_KEY, '1');
+          return marked || sessionStorage.getItem(UNIT_SCREEN_STORAGE_KEY) === '1';
+        } catch {
+          // Storage can be unavailable in locked-down kiosk browser profiles.
+          return marked;
+        }
+      })();
 
       function payload() {
         return {
@@ -2986,11 +3002,16 @@
           const folder = copy?.folder || analysis.send_folder;
           const line = el('send-folder');
           line.className = copy?.error ? 'problem' : 'note';
+          // on the unit's own screen a download only copies it to the same unit, through a
+          // save dialog a finger can't use: say where it already is, and how to send it
+          el('bundle-link').hidden = onUnitScreen && !copy?.error;
           line.textContent = copy?.error
             ? `The copy in ${folder}/ could not be made (${copy.error}). Use Download above.`
-            : folder
-              ? `Also saved on the unit in ${folder}/`
-              : '';
+            : folder && onUnitScreen
+              ? `Saved on this unit in ${folder}/. To send it, open this page on a phone or laptop and tap Download there, or copy it to a USB stick.`
+              : folder
+                ? `Also saved on the unit in ${folder}/`
+                : '';
           line.hidden = !line.textContent;
         }
       }
@@ -6282,22 +6303,6 @@
           return null;
         }
       }
-      // (25 Oct) `start-tester.sh --on-screen` opens this page on the unit's own screen with
-      // ?screen=unit, kept for this tab. This page and the kiosk then share that one window:
-      // Kiosk view goes there, the kiosk's Tester button comes back, and free play started
-      // here opens no kiosk window of its own: this window switches to it once it answers.
-      const UNIT_SCREEN_STORAGE_KEY = 'openflight-tester-unit-screen';
-      const KIOSK_SWITCH_STORAGE_KEY = 'openflight-tester-kiosk-switch';
-      const onUnitScreen = (() => {
-        const marked = new URLSearchParams(location.search).get('screen') === 'unit';
-        try {
-          if (marked) sessionStorage.setItem(UNIT_SCREEN_STORAGE_KEY, '1');
-          return marked || sessionStorage.getItem(UNIT_SCREEN_STORAGE_KEY) === '1';
-        } catch {
-          // Storage can be unavailable in locked-down kiosk browser profiles.
-          return marked;
-        }
-      })();
       // The unit's touchscreen may report a finger as a mouse, which never scrolls a page:
       // there, dragging the page scrolls it (as the kiosk's lists do, ui/AGENTS.md). Nothing
       // moves before 16 px, so a tap still taps; after a drag the click it ends in is
