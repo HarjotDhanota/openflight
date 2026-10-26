@@ -109,3 +109,30 @@ for (const viewport of VIEWPORTS) {
     });
   });
 }
+
+// ui/AGENTS.md: a Pi touchscreen may report a finger as a mouse, which native overflow
+// scrolling ignores, so the Club and Flight lists scroll by a drag on their content.
+for (const tab of ['Club', 'Flight'] as const) {
+  test(`the ${tab} panel scrolls by dragging at 800×480, and a drag never taps a cell`, async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 480 });
+    await withControlSocket(async (socket) => {
+      await resetSession(socket);
+      await simulateShot(socket);
+    });
+    await gotoApp(page);
+    await dismissPicker(page);
+    await page.locator('.panel-footer__tabs').getByRole('button', { name: tab, exact: true }).click();
+    const body = page.locator('.metric-groups');
+    await expect(body).toBeVisible();
+    const box = (await body.boundingBox())!;
+    expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height * 0.75;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step += 1) await page.mouse.move(x, y - step * 20);
+    await page.mouse.up();
+    await expect.poll(() => body.evaluate((node) => node.scrollTop)).toBeGreaterThan(100);
+    await expect(page.locator('.metric-cell[aria-expanded="true"]')).toHaveCount(0);
+  });
+}

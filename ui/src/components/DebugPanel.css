@@ -45,7 +45,7 @@
   letter-spacing: 0.02em;
   cursor: pointer;
   transition: all var(--transition-fast);
-  min-height: 32px;
+  min-height: var(--panel-control-height, 40px);
   touch-action: manipulation;
 }
 
@@ -557,7 +557,7 @@
   .debug-tabs__tab {
     padding: var(--space-xs) var(--space-sm);
     font-size: 0.6875rem;
-    min-height: 28px;
+    min-height: var(--panel-control-height, 40px);
   }
 
   .debug-tabs {

@@ -1,10 +1,11 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { METRIC_CATALOG, type MetricSpec } from '../../data/metricCatalog';
 import { getClubName } from '../../data/clubs';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { clubWithHand } from '../../utils/handedness';
 import type { MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
@@ -180,6 +181,9 @@ export function MetricGroupPanel({
 }: MetricGroupPanelProps) {
   const { t } = useI18n();
   const handed = useSystemStore((state) => state.handed);
+  // the groups scroll by a drag on them, as a finger reported as a mouse needs (ui/AGENTS.md)
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useDragScroll(bodyRef);
   // a shown shot names its own club and the hand it was hit with
   const displayedClub =
     shot?.metrics && !isSwingSpeedShot(shot)
@@ -202,7 +206,13 @@ export function MetricGroupPanel({
       return (
         <div className="panel">
           {header}
-          <div className="panel__body metric-groups" data-metric-panel={view} data-club-model={club}>
+          <div
+            ref={bodyRef}
+            {...dragScroll}
+            className="panel__body metric-groups"
+            data-metric-panel={view}
+            data-club-model={club}
+          >
             <p className="metric-groups__ask">{ask}</p>
             <ClubDeliveryViews shot={clubModel(club)} sessionShots={sessionShots} />
           </div>
@@ -238,7 +248,7 @@ export function MetricGroupPanel({
   return (
     <div className="panel">
       {header}
-      <div className="panel__body metric-groups" data-metric-panel={view}>
+      <div ref={bodyRef} {...dragScroll} className="panel__body metric-groups" data-metric-panel={view}>
         {view === 'club' ? <ClubDeliveryViews shot={shot} sessionShots={sessionShots} /> : null}
         {PANEL_GROUPS[view].map((group) => (
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>

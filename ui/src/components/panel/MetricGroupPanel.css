@@ -113,10 +113,16 @@
   color: var(--color-text-faint);
 }
 
+/* the groups own the drag (useDragScroll): the kiosk's global touch-action would swallow it */
+.metric-groups,
+.metric-groups button {
+  touch-action: none;
+}
+
 .metric-cell--tappable {
   min-height: 44px;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
 }
 
 .metric-cell--tappable .metric-cell__reason {

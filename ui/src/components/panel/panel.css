@@ -18,8 +18,9 @@
   color: var(--color-text);
   /* Containing block for the menu sheet and picker overlay. */
   position: relative;
-  /* Header chips (Shots / Camera) set the chrome height for every screen. */
-  --panel-control-height: 32px;
+  /* Header chips and actions (Shots / Camera, Change club) set the chrome height for every
+     screen: 40 px, a fingertip on a 7" touchscreen at 800×480 or 1024×600 */
+  --panel-control-height: 40px;
 }
 
 .panel-app__main {
