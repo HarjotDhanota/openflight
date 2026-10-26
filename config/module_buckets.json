@@ -221,6 +221,7 @@
   "docs/camera/tester-setup-gate.md": "TESTER",
   "docs/camera/timing-validation.md": "RESEARCH",
   "docs/changelog.md": "DOCS-USER",
+  "docs/development/iwr-temperature-isolation.md": "RESEARCH",
   "docs/development/2026-09-26-next-agent-handoff.md": "RESEARCH",
   "docs/development/2026-09-26-static-range-camera-exposure-implementation-plan.md": "RESEARCH",
   "docs/development/2026-09-28-impact-location-plan.md": "RESEARCH",

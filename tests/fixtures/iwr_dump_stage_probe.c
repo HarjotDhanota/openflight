@@ -56,15 +56,29 @@ static void l3_fill_header(l3_dump_header_t *h, uint16_t frames, uint16_t trigge
     assert(frames == 16 && trigger == 0); h->version = 6;
 }
 static int l3_readTemperatureReport(l3_temperature_report_t *report) {
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+    (void)report; abort();
+#else
     (void)report; event("temp_call"); return scenario == 3 ? -1 : 0;
+#endif
 }
 static int UART_writePolling(void *uart, uint8_t *data, uint32_t bytes) {
     (void)uart;
     if (!header_written) {
         assert(bytes == sizeof(l3_dump_header_t));
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+        assert(((l3_dump_header_t *)data)->version == 9);
+#else
         assert(((l3_dump_header_t *)data)->version == (scenario == 3 ? 9 : 8));
+#endif
         header_written = 1; event("header_call");
-    } else { assert(bytes == sizeof(l3_temperature_report_t)); }
+    } else {
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+        abort();
+#else
+        assert(bytes == sizeof(l3_temperature_report_t));
+#endif
+    }
     return (int)bytes;
 }
 #include "dump_stage.inc"
@@ -81,7 +95,13 @@ int main(int argc, char **argv) {
     if (scenario == 4) expected = "dump_enter ";
     else if (scenario == 1) expected = "dump_enter freeze_enter freeze_call freeze_error ";
     else if (scenario == 2) expected = "dump_enter freeze_enter freeze_call freeze_done stop_enter stop_call stop_error ";
-    else expected = "dump_enter freeze_enter freeze_call freeze_done stop_enter stop_call stop_done sleep_call stop_margin_done stop_complete temp_enter temp_call temp_done header_enter header_call ";
+    else {
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+        expected = "dump_enter freeze_enter freeze_call freeze_done stop_enter stop_call stop_done sleep_call stop_margin_done stop_complete temp_enter temp_skipped temp_done header_enter header_call ";
+#else
+        expected = "dump_enter freeze_enter freeze_call freeze_done stop_enter stop_call stop_done sleep_call stop_margin_done stop_complete temp_enter temp_call temp_done header_enter header_call ";
+#endif
+    }
 #else
     if (scenario == 4) expected = "";
     else if (scenario == 1) expected = "freeze_call ";

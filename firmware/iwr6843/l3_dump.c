@@ -478,6 +478,11 @@ static uint32_t l3_ticks(void)
 }
 
 #endif
+#if defined(L3_DUMP_SKIP_TEMPERATURE)
+#if !defined(L3_DUMP_STAGE_TRACE) || !defined(L3_CAPTURE_EVIDENCE)
+#error "temperature isolation requires stage tracing and capture evidence"
+#endif
+#endif
 #ifdef L3_DUMP_STAGE_TRACE
 #if !defined(HWA_CHAINED_SNAPSHOT_RING) || !defined(L3_USB_CLOCK_PROBE)
 #error "dump stage trace requires HWA ring and clock probe"
@@ -2755,6 +2760,7 @@ static void l3_writeCompressedIq8Frame(uint32_t slot, uint16_t scale)
 }
 #endif
 
+#ifndef L3_DUMP_SKIP_TEMPERATURE
 static int32_t l3_readTemperatureReport(l3_temperature_report_t *report)
 {
     rlRfTempData_t tempData;
@@ -2779,6 +2785,7 @@ static int32_t l3_readTemperatureReport(l3_temperature_report_t *report)
     report->tmpDig1Sens = tempData.tmpDig1Sens;
     return 0;
 }
+#endif
 
 #ifndef HWA_CHAINED_SNAPSHOT_RING
 /* EDMA ring-wrap completion (fires once per RING_CHIRPS; liveness only). */
@@ -2927,7 +2934,12 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 
         memset((void *)&tempReport, 0, sizeof(tempReport));
         L3_DUMP_STAGE("temp_enter", 0);
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+        tempStatus = -1;
+        L3_DUMP_STAGE("temp_skipped", tempStatus);
+#else
         tempStatus = l3_readTemperatureReport(&tempReport);
+#endif
         L3_DUMP_STAGE("temp_done", tempStatus);
         if (tempStatus == 0) {
 #ifdef CONFIGURABLE_CAPTURE
