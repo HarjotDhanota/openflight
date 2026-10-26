@@ -3912,6 +3912,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
      * BINARY write mode is ESSENTIAL for the dump path (TEXT inserts \r
      * before 0x0A bytes); read mode stays TEXT for CLI line handling. */
     uartParams.writeDataMode  = UART_DATA_BINARY;
+#ifdef L3_UART_NO_ECHO
+    uartParams.readEcho       = UART_ECHO_OFF;
+#endif
     uartParams.baudRate       = 1041667;
     uartParams.isPinMuxDone    = 1;
     gCliUart = UART_open(0, &uartParams);
