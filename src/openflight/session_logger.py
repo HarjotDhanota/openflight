@@ -594,6 +594,8 @@ class SessionLogger:
         ball_range: Optional[Dict[str, Any]] = None,
         gate_event: Optional[Dict[str, Any]] = None,
         partial_capture: Optional[Dict[str, Any]] = None,
+        transfer_mode: Optional[Dict[str, Any]] = None,
+        transfer: Optional[Dict[str, Any]] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence, with the shot's IWR ranges.
 
@@ -630,6 +632,9 @@ class SessionLogger:
                 "ball_range": ball_range,
                 "gate_event": gate_event,
                 "runtime_config_sha256": runtime_config_sha256,
+                # the transfer mode asked for and used, and a two-round shot's rounds
+                "transfer_mode": transfer_mode,
+                "transfer": transfer,
             },
         )
 

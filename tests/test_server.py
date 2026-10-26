@@ -622,7 +622,7 @@ class TestIWR6843ShotIntegration:
     def test_cli_iwr6843_transfer_defaults_to_the_full_dump(self):
         parser = server_module.build_parser()
 
-        assert parser.parse_args([]).iwr6843_transfer == "full"
+        assert parser.parse_args([]).iwr6843_transfer is None
         assert (
             parser.parse_args(["--iwr6843-transfer", "two_round"]).iwr6843_transfer == "two_round"
         )

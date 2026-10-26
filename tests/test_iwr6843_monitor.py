@@ -666,3 +666,18 @@ def test_a_failed_or_missing_support_check_is_unsupported_with_a_reason(tmp_path
     legacy = _started(tmp_path, FakeRadar(_raw_dump()))
     assert legacy.two_round_support["supported"] is False
     assert legacy.two_round_support["reason"]
+
+
+def test_a_two_round_capture_is_saved_beside_the_dumps_only_when_dumps_are(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart", encoding="utf-8")
+    kept = IWR6843CaptureMonitor(
+        config_path=config, output_dir=tmp_path / "dumps", radar=FakeRadar(b""), save_dumps=True
+    )
+    path = kept.save_sparse_capture(3, 1_790_000_000.25, b"OFL3SPARSE")
+    assert path.parent == tmp_path / "dumps" and path.name.endswith("_003.l3sparse")
+    assert path.read_bytes() == b"OFL3SPARSE"
+    dropped = IWR6843CaptureMonitor(
+        config_path=config, output_dir=tmp_path / "none", radar=FakeRadar(b"")
+    )
+    assert dropped.save_sparse_capture(3, 1_790_000_000.25, b"OFL3SPARSE") is None

@@ -340,6 +340,17 @@ class IWR6843CaptureMonitor:
         timestamp = datetime.fromtimestamp(trigger_timestamp).strftime("%Y%m%d_%H%M%S_%f")[:-3]
         return self.output_dir / f"iwr6843_{timestamp}_{sequence:03d}{suffix}"
 
+    def save_sparse_capture(
+        self, sequence: int, trigger_timestamp: float, data: bytes
+    ) -> Path | None:
+        """Keep a two-round shot's payloads (``.l3sparse``) where its dump would have gone."""
+        if not data or not self.save_dumps:
+            return None
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self._capture_path(sequence, trigger_timestamp, suffix=".l3sparse")
+        path.write_bytes(data)
+        return path
+
     def _save_partial(self, sequence: int, trigger_timestamp: float, raw: bytes) -> Path | None:
         """Keep a failed transfer's bytes beside the dumps, named so no replay takes them."""
         if not raw or not self.save_dumps:

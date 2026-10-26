@@ -2435,6 +2435,7 @@ def _session_start_config() -> dict:
     config["net_range"] = deepcopy(setup_handoff_config.get("net_range"))
     config["camera_tilt"] = deepcopy(setup_handoff_config.get("camera_tilt"))
     config["setup"] = setup_in_force()
+    config["iwr6843_transfer"] = iwr6843_transfer_status()
     kiosk_extensions.call_all("session_start_config", config)
     from .camera.geometry_contract import EffectiveCameraGeometryInputs, unavailable_snapshot
 
@@ -2707,6 +2708,90 @@ def static_files(path):
 def api_latest_shot():
     """The session's latest shot payload (every metric, labelled) and the metric catalog."""
     return jsonify({"shot": _latest_session_shot(), "catalog": shot_metrics.catalog()})
+
+
+def initial_iwr6843_transfer(args) -> tuple[str, str]:
+    """The starting IWR transfer and the session kind that chose it.
+
+    The flag wins. Otherwise tester and research sessions keep complete raw data
+    (``full``); kiosk play asks for two-round, used once the radar supports it.
+    """
+    if getattr(args, "tester_setup_required", False) or getattr(args, "tester_free_play", False):
+        kind = "tester"
+    elif getattr(args, "study_mode", False):
+        kind = "research"
+    else:
+        kind = "kiosk"
+    explicit = getattr(args, "iwr6843_transfer", None)
+    if explicit:
+        return explicit, kind
+    return ("two_round" if kind == "kiosk" else "full"), kind
+
+
+def iwr6843_transfer_status() -> dict:
+    """The IWR transfer the menu shows: requested, in effect, and why not when unavailable."""
+    if iwr6843_runtime is None or not hasattr(iwr6843_runtime, "transfer_mode"):
+        from .iwr6843.transfer_mode import NO_RADAR_REASON  # noqa: PLC0415
+
+        return {
+            "enabled": False,
+            "requested": "full",
+            "effective": "full",
+            "available": False,
+            "reason": NO_RADAR_REASON,
+            "last_fallback": None,
+        }
+    return {"enabled": True, **iwr6843_runtime.transfer_mode.status().to_dict()}
+
+
+def set_iwr6843_transfer(mode) -> dict:
+    """Ask for a transfer mode; the next shot uses it. ValueError when it cannot be set."""
+    if iwr6843_runtime is None or not hasattr(iwr6843_runtime, "set_transfer"):
+        raise ValueError("no IWR radar is connected")
+    iwr6843_runtime.set_transfer(str(mode))
+    iwr6843_runtime_config["transfer"] = iwr6843_runtime.transfer
+    status = iwr6843_transfer_status()
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_event("iwr6843_transfer_changed", status)
+    logger.info(
+        "[SERVER] IWR transfer: %s requested, %s in effect",
+        status["requested"],
+        status["effective"],
+    )
+    return status
+
+
+@app.route("/api/iwr6843/transfer", methods=["GET", "POST"])
+def api_iwr6843_transfer():
+    """Read the IWR transfer setting, or change it from this machine (the tester page)."""
+    if request.method == "GET":
+        return iwr6843_transfer_status()
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        return {"error": "the IWR transfer is set from the kiosk itself"}, 403
+    try:
+        status = set_iwr6843_transfer((request.get_json(silent=True) or {}).get("mode"))
+    except ValueError as error:
+        return {"error": str(error)}, 400
+    socketio.emit("iwr6843_transfer", status)
+    return status
+
+
+@socketio.on("get_iwr6843_transfer")
+def handle_get_iwr6843_transfer():
+    """Send the IWR transfer setting to the requesting UI."""
+    socketio.emit("iwr6843_transfer", iwr6843_transfer_status())
+
+
+@socketio.on("set_iwr6843_transfer")
+def handle_set_iwr6843_transfer(data):
+    """Switch between Fast (two-round) and Full transfer, for the next shot on."""
+    try:
+        status = set_iwr6843_transfer((data or {}).get("mode") if isinstance(data, dict) else None)
+    except ValueError as error:
+        socketio.emit("iwr6843_transfer_error", {"error": str(error)})
+        return
+    socketio.emit("iwr6843_transfer", status)
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -3048,6 +3133,7 @@ def init_iwr6843(
             "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
             "capture_timeout_s": capture_timeout_s,
             "transfer": iwr6843_runtime.transfer,
+            "transfer_status": iwr6843_runtime.transfer_mode.status().to_dict(),
             "freeze_delay_ms": 0.0,
             "raw_dump_saved": save_dumps,
             "output_dir": str(Path(output_dir).expanduser()),
@@ -4767,6 +4853,22 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
         shot.ball_range_reason = "the IWR runtime did not range this shot"
 
 
+def _save_sparse_capture(capture, data: bytes | None) -> Path | None:
+    """A two-round shot's payloads (``.l3sparse``) beside the session's dumps, when kept."""
+    monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+    if not data or monitor is None or not hasattr(monitor, "save_sparse_capture"):
+        return None
+    try:
+        return monitor.save_sparse_capture(
+            getattr(capture, "sequence", 0) or 0,
+            getattr(capture, "trigger_timestamp", None) or time.time(),
+            data,
+        )
+    except OSError as error:
+        logger.warning("[SERVER] Could not save the two-round capture: %s", error)
+        return None
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -4812,6 +4914,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         capture = shot_result.capture
         measurement = shot_result.measurement
         club_path = getattr(shot_result, "club_path", None)
+        sparse_path = _save_sparse_capture(capture, getattr(shot_result, "sparse_capture", None))
         _attach_ball_range(shot, shot_result)
         if measurement is not None:
             shot.iwr6843_ball_range_evidence = getattr(measurement, "range_evidence", None)
@@ -4821,8 +4924,20 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 shot_number=_shot_number_for_log(shot, session_log),
                 shot_timestamp=shot.impact_timestamp,
                 trigger_timestamp=(capture.trigger_timestamp if capture is not None else None),
-                capture_path=(str(capture.path) if capture and capture.path else None),
-                capture_bytes=(len(capture.raw) if capture and capture.raw else 0),
+                capture_path=(
+                    str(sparse_path)
+                    if sparse_path is not None
+                    else str(capture.path)
+                    if capture and capture.path
+                    else None
+                ),
+                capture_bytes=(
+                    len(shot_result.sparse_capture)
+                    if sparse_path is not None
+                    else len(capture.raw)
+                    if capture and capture.raw
+                    else 0
+                ),
                 dump_duration_s=(capture.dump_duration_s if capture is not None else None),
                 capture_error=(
                     capture.error
@@ -4850,6 +4965,8 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     else None
                 ),
                 launch_range=shot.iwr_launch_range,
+                transfer_mode=getattr(shot_result, "transfer_mode", None),
+                transfer=getattr(shot_result, "transfer", None),
                 ball_range={
                     "ball_range_m": shot.ball_range_m,
                     "ball_range_source": shot.ball_range_source,
@@ -8868,11 +8985,13 @@ def build_parser():
     parser.add_argument(
         "--iwr6843-transfer",
         choices=("full", "two_round"),
-        default="full",
+        default=None,
         help=(
-            "How each shot's TI data reaches the host (default: full). two_round "
-            "fetches an overview and then only the cells the estimators read; it "
-            "needs the stage-2 firmware and falls back to the full dump without it"
+            "The starting IWR transfer, changeable between shots from the menu: "
+            "two_round (Fast) fetches an overview and then only the cells the "
+            "estimators read; full sends the whole dump. Default: two_round for "
+            "kiosk play, full for tester and research sessions. Two-round needs the "
+            "stage-2 firmware; without it every shot is a full dump"
         ),
     )
     parser.add_argument(
@@ -9311,8 +9430,9 @@ def main():
             # the rig's camera axis, else downrange, until the setup's side offset applies
             lateral_tee_offset_m=_rig_tee_lateral_offset_m(),
             board_rotation_deg=enclosure.iwr_board_rotation_deg,
-            transfer=args.iwr6843_transfer,
+            transfer=initial_iwr6843_transfer(args)[0],
         ):
+            iwr6843_runtime_config["session_kind"] = initial_iwr6843_transfer(args)[1]
             print(
                 "IWR6843 enabled (LCMF launch angle, "
                 f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"

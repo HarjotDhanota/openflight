@@ -19,7 +19,7 @@ from openflight.iwr6843.replay import (
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Replay a session JSONL or single .l3dump through IWR6843 LCMF."
+        description="Replay a session JSONL or single .l3dump/.l3sparse through IWR6843 LCMF."
     )
     parser.add_argument("--input", required=True, type=Path, help="Session JSONL or .l3dump file")
     parser.add_argument("--ball-speed-mph", type=float, help="Required for a single .l3dump")
@@ -87,9 +87,9 @@ def _resolve_tx_order(config_path: str, requested: str) -> str:
 
 
 def _inputs(args) -> list:
-    if args.input.suffix.lower() == ".l3dump":
+    if args.input.suffix.lower() in (".l3dump", ".l3sparse"):
         if args.ball_speed_mph is None:
-            raise ValueError("--ball-speed-mph is required when --input is a single .l3dump")
+            raise ValueError("--ball-speed-mph is required when --input is a single capture")
         return [
             input_from_dump(
                 args.input,

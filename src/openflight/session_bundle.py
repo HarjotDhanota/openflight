@@ -33,7 +33,7 @@ FREE_SPACE_MARGIN_BYTES = 256 * 1024 * 1024
 SNAPSHOT_WAIT_S = 30.0
 WRITER_WAIT_S = 5.0
 LOCK_POLL_S = 0.05
-_STORED_SUFFIXES = frozenset({".npz", ".pgm", ".l3dump", ".png", ".zip"})
+_STORED_SUFFIXES = frozenset({".npz", ".pgm", ".l3dump", ".l3sparse", ".png", ".zip"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _BUNDLE_NAME = re.compile(
     r"^(?P<tester>[A-Za-z0-9][A-Za-z0-9._-]{0,79})-session-bundle-\d{8}T\d{6}Z(-\d+)?\.zip$"

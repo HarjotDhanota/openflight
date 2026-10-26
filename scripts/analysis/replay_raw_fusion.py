@@ -264,12 +264,19 @@ def _saved_iwr_raw(events, session_dir: Path):
         return event, None, None, None, "IWR capture event records a capture error"
     try:
         path, resolution = locate_recorded_capture(event.get("capture_path"), session_dir)
-        raw = path.read_bytes()
+        raw = _load_capture(path)
     except (FileNotFoundError, OSError, TypeError, ValueError) as error:
         return event, None, None, None, f"saved IWR dump is unreadable: {error}"
     if not raw:
         return event, path, resolution, None, "saved IWR dump is empty"
     return event, path, resolution, raw, None
+
+
+def _load_capture(path):
+    """A saved IWR capture: a ``.l3dump`` as is, a ``.l3sparse`` rebuilt to its sparse dump."""
+    from openflight.iwr6843.two_round_file import load_iwr_capture  # noqa: PLC0415
+
+    return load_iwr_capture(path)
 
 
 def replay(args, *, frozen_session=None) -> dict:

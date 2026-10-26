@@ -1068,6 +1068,7 @@
   "tests/test_server_head_track.py": "FUSION",
   "tests/test_server_free_play_ladder.py": "TESTER",
   "tests/test_server_iwr_partial_launch.py": "FUSION",
+  "tests/test_server_iwr6843_transfer.py": "FUSION",
   "tests/test_server_ready_light.py": "TESTER",
   "tests/test_server_shot_models.py": "FUSION",
   "tests/test_server_swing_exposure.py": "FUSION",

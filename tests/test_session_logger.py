@@ -652,6 +652,24 @@ class TestLogIWR6843Capture:
         assert entry["capture_complete"] is False
         assert entry["partial_capture"] == partial
 
+    def test_iwr6843_capture_records_the_transfer_mode_it_used(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+        mode = {"requested": "two_round", "used": "full", "fallback_reason": "no firmware support"}
+        logger.log_iwr6843_capture(
+            shot_number=1,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.002,
+            capture_path="/data/iwr6843/x.l3dump",
+            capture_bytes=732_812,
+            dump_duration_s=7.1,
+            capture_error=None,
+            ball_speed_mph=94.5,
+            transfer_mode=mode,
+        )
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["transfer_mode"] == mode and entry["transfer"] is None
+
     def test_iwr6843_capture_marks_a_complete_dump(self, tmp_path):
         logger = SessionLogger(log_dir=tmp_path, enabled=True)
         logger.start_session(mode="rolling-buffer", trigger_type="sound")

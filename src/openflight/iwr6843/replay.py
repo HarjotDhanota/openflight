@@ -18,6 +18,7 @@ from openflight.iwr6843.calibration_session import (
 from openflight.iwr6843.dump import PARTIAL_DUMP_SUFFIX, is_partial_dump_path
 from openflight.iwr6843.lcmf import LCMFResult, antenna_layout, estimate_lcmf_v1
 from openflight.iwr6843.shot import process_dump
+from openflight.iwr6843.two_round_file import load_iwr_capture
 
 
 @dataclass(frozen=True)
@@ -190,7 +191,7 @@ def replay_capture(
     grid_step_deg: float = 0.5,
     estimator=estimate_lcmf_v1,
 ) -> ReplayRecord:
-    """Run the LCMF estimator on one saved dump."""
+    """Run the LCMF estimator on one saved capture (a ``.l3dump`` or ``.l3sparse``)."""
     if not replay_input.capture_path.is_file():
         return ReplayRecord(
             source=replay_input.source,
@@ -202,7 +203,7 @@ def replay_capture(
             error=f"capture not found: {replay_input.capture_path}",
         )
     try:
-        raw = replay_input.capture_path.read_bytes()
+        raw = load_iwr_capture(replay_input.capture_path)
         measurement: LCMFResult = estimator(
             raw,
             calibration,

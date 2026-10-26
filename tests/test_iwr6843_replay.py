@@ -6,6 +6,7 @@ import pytest
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.replay import (
     ReplayInput,
+    input_from_dump,
     inputs_from_session,
     replay_capture,
     replay_summary,
@@ -249,3 +250,57 @@ def test_the_replay_calibration_takes_the_recorded_roll(tmp_path):
 
     assert build().roll_rad == 0.0
     assert math.degrees(build(roll_deg=-2.0).roll_rad) == pytest.approx(-2.0)
+
+
+def test_replay_loads_a_saved_two_round_capture(monkeypatch, tmp_path):
+    from openflight.iwr6843.dump import parse_dump
+    from openflight.iwr6843.sparse_capture import SparseDump
+    from openflight.iwr6843.two_round import TwoRoundClient, run_two_round
+    from openflight.iwr6843.two_round_file import pack_sparse_capture
+    from openflight.iwr6843.two_round_sim import SimulatedIWR6843TwoRound, SimulatedSerial
+    from tests.iwr6843_partial_scene import pack, scene
+
+    raw = pack(scene(6, seed=2))
+    radar = SimulatedIWR6843TwoRound()
+    radar.freeze(raw)
+    _result, transfer = run_two_round(
+        TwoRoundClient(SimulatedSerial(radar), timeout_s=0.05),
+        lambda dump: parse_dump(dump)[1][2, 0, 0, 7],
+    )
+    path = tmp_path / "iwr6843_20261026_101500_000_001.l3sparse"
+    path.write_bytes(pack_sparse_capture(transfer))
+    seen = []
+
+    def fake_estimator(capture, _calibration, **_kwargs):
+        seen.append(capture)
+        _meta, cube = parse_dump(capture)
+        assert cube[2, 0, 0, 7] == parse_dump(raw)[1][2, 0, 0, 7]
+        return SimpleNamespace(
+            accepted=False,
+            status="rejected_no_track",
+            angle_deg=None,
+            raw_angle_deg=None,
+            component_std_deg=None,
+            n_snapshots=0,
+            n_frames=0,
+            track_speed_mph=None,
+            track_rms_bins=None,
+            track_inliers=0,
+        )
+
+    monkeypatch.setattr(
+        "openflight.iwr6843.replay.process_dump",
+        lambda *_args, **_kwargs: SimpleNamespace(track=None),
+    )
+    cal = Calibration.identity()
+    cal.tee_range_m = 1.5
+    record = replay_capture(
+        input_from_dump(path, ball_speed_mph=100.0),
+        cal,
+        net_range_m=4.6,
+        tx_order="normal",
+        estimator=fake_estimator,
+    )
+
+    assert record.status == "rejected_no_track", record.error
+    assert isinstance(seen[0], SparseDump)
