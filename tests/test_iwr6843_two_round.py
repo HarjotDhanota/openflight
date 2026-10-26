@@ -36,6 +36,7 @@ from openflight.iwr6843.two_round import (
     parse_overview,
     run_two_round,
 )
+from openflight.iwr6843.two_round_file import pack_sparse_capture, read_sparse_capture
 from openflight.iwr6843.two_round_sim import SimulatedIWR6843TwoRound, SimulatedSerial
 from tests.iwr6843_partial_scene import BINS, LOOPS, N_RX, pack, scene
 from tests.test_iwr6843_dump_evidence import _evidence
@@ -431,3 +432,79 @@ def test_a_damaged_overview_is_asked_for_again(raw):
     assert result == cube[3, 0, 0, 9]
     assert transfer.released and transfer.error is None
     assert radar.commands.count("overview") == 2
+
+
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("frame_count", [6, 24])
+def test_fragmented_requests_fit_the_ti_cli_and_keep_exact_samples(raw, complete, frame_count):
+    class LimitedSerial(SimulatedSerial):
+        def write(self, data):
+            assert len(data) <= 255, f"TI CLI line exceeds its 255-byte read: {len(data)}"
+            return super().write(data)
+
+    if frame_count != N_FRAMES:
+        raw = pack(scene(frame_count, seed=5))
+    radar = SimulatedIWR6843TwoRound()
+    radar.freeze(raw)
+    client = TwoRoundClient(LimitedSerial(radar), timeout_s=0.05)
+    _meta, cube = parse_dump(raw)
+
+    def analyse(dump):
+        _m, sparse = parse_dump(dump)
+        return np.array(
+            [
+                [sparse[frame, 0, 0, local] for local in range(0, BINS, 2)]
+                for frame in range(frame_count)
+            ]
+        )
+
+    result, transfer = run_two_round(client, analyse, max_cell_rounds=0 if complete else 2)
+    np.testing.assert_array_equal(result, cube[:, 0, 0, ::2])
+    assert transfer.complete_request is complete
+    requests = [data for kind, data in transfer.payloads if kind == "request"]
+    decoded = [
+        decode_request(data, range_bin_counts=_counts(raw), n_samples=BINS) for data in requests
+    ]
+    assert [request.sequence for request in decoded] == list(range(1, len(decoded) + 1))
+    assert all(len(request.command()) <= 255 for request in decoded)
+    if not complete:
+        assert len(decoded) > 1
+    assert transfer.released and not radar.frozen
+    _header, replay = read_sparse_capture(pack_sparse_capture(transfer))
+    np.testing.assert_array_equal(analyse(replay.sparse_dump()), result)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, OSError])
+def test_analysis_failure_preserves_received_cells_and_releases_the_ring(raw, error_type):
+    radar = SimulatedIWR6843TwoRound()
+    radar.freeze(raw)
+    client = TwoRoundClient(SimulatedSerial(radar), timeout_s=0.05)
+    calls = 0
+
+    def analyse(dump):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise error_type("analysis failed")
+        return parse_dump(dump)[1][0, 0, 0, 0]
+
+    with pytest.raises(TwoRoundTransferError) as caught:
+        run_two_round(client, analyse)
+    assert isinstance(caught.value.__cause__, error_type)
+    assert any(kind == "cells" for kind, _ in caught.value.transfer.payloads)
+    assert caught.value.transfer.released and not radar.frozen
+
+
+def test_lost_release_link_is_reported_without_discarding_the_capture(raw):
+    class LostRelease(TwoRoundClient):
+        def release(self, session_id):
+            raise OSError("link disconnected")
+
+    radar = SimulatedIWR6843TwoRound()
+    radar.freeze(raw)
+    client = LostRelease(SimulatedSerial(radar), timeout_s=0.05)
+    result, transfer = run_two_round(client, lambda dump: parse_dump(dump)[1][0, 0, 0, 0])
+    assert result == parse_dump(raw)[1][0, 0, 0, 0]
+    assert not transfer.released and radar.frozen
+    assert "release failed: link disconnected" in transfer.error
+    assert any(kind == "cells" for kind, _ in transfer.payloads)

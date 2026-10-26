@@ -95,6 +95,7 @@ SUMMED_TX = (0, 2)  # TX1 and TX3: the vertical pair the trackers use
 IQ16_FORMATS = (SAMPLE_RANGE_FFT_IQ16_VARIABLE, SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED)
 MAX_CELL_ROUNDS = 4  # cells rounds before the host asks for every remaining cell
 READ_ATTEMPTS = 2  # a damaged or late reply is asked for once more (the ring is frozen)
+CLI_MAX_LINE_BYTES = 255  # SDK CLI_task: cmdString[256], UART_read(sizeof - 1)
 
 
 class TwoRoundError(ValueError):
@@ -726,6 +727,8 @@ class TwoRoundClient:
 
     def cells(self, request: CellRequest, meta: dict) -> tuple[np.ndarray, bytes]:
         """One round of cells."""
+        if len(request.command()) > CLI_MAX_LINE_BYTES:
+            raise TwoRoundError("cell request exceeds the radar CLI line limit; split its runs")
         data = self._binary(request.command(), CELLS_MAGIC, CELLS_HEADER)
         return parse_cells(data, request, meta), data
 
@@ -797,13 +800,42 @@ class TwoRoundTransferError(RuntimeError):
         self.capture = capture
 
 
+def _request_masks(request: CellRequest, counts):
+    if len(request.command()) <= CLI_MAX_LINE_BYTES:
+        yield request.mask
+        return
+    empty = np.zeros_like(request.mask)
+    base = encode_request(empty, session_id=request.session_id, sequence=1, range_bin_counts=counts)
+    run_limit = (CLI_MAX_LINE_BYTES - len(base.command())) // 4
+    if run_limit < 1:
+        raise TwoRoundError("capture has too many frames for the radar CLI line limit")
+    chunk, runs = empty.copy(), 0
+    for frame, row in enumerate(request.mask):
+        for first, length in _runs(row):
+            if runs == run_limit:
+                yield chunk
+                chunk, runs = empty.copy(), 0
+            chunk[frame, first : first + length] = True
+            runs += 1
+    if runs:
+        yield chunk
+
+
 def _fetch(client, request: CellRequest, overview: Overview, capture, transfer) -> None:
-    cells, data = _attempt(lambda: client.cells(request, overview.meta))
-    transfer.request_bytes.append(len(request.command()))
-    transfer.cells_bytes.append(len(data))
-    transfer.cells_per_round.append(request.n_cells)
-    transfer.payloads += [("request", request.data), ("cells", data)]
-    capture.add(request, cells)
+    counts = overview.meta["range_bin_counts"]
+    for mask in _request_masks(request, counts):
+        part = encode_request(
+            mask,
+            session_id=request.session_id,
+            sequence=transfer.cell_rounds + 1,
+            range_bin_counts=counts,
+        )
+        cells, data = _attempt(lambda: client.cells(part, overview.meta))
+        transfer.request_bytes.append(len(part.command()))
+        transfer.cells_bytes.append(len(data))
+        transfer.cells_per_round.append(part.n_cells)
+        transfer.payloads += [("request", part.data), ("cells", data)]
+        capture.add(part, cells)
 
 
 def run_two_round(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
@@ -833,6 +865,7 @@ def run_two_round(  # pylint: disable=too-many-locals,too-many-branches,too-many
         capture = TwoRoundCapture(overview)
         counts = overview.meta["range_bin_counts"]
         dry_run = True
+        analysis_rounds = 0
         while True:
             dump = capture.sparse_dump()
             started = time.perf_counter()
@@ -849,7 +882,7 @@ def run_two_round(  # pylint: disable=too-many-locals,too-many-branches,too-many
                 if error is not None:
                     raise error
                 break
-            if transfer.cell_rounds >= max_cell_rounds:
+            if analysis_rounds >= max_cell_rounds:
                 missing = capture.unsent()
                 transfer.complete_request = True
             request = encode_request(
@@ -879,8 +912,9 @@ def run_two_round(  # pylint: disable=too-many-locals,too-many-branches,too-many
                     range_bin_counts=counts,
                 )
                 _fetch(client, complete, overview, capture, transfer)
+            analysis_rounds += 1
             dry_run = False
-    except TwoRoundError as error:
+    except Exception as error:  # pylint: disable=broad-exception-caught
         transfer.error = f"{type(error).__name__}: {error}"
         logger.warning("[IWR6843] two-round transfer failed: %s", transfer.error)
         if transfer.session_id is not None:
@@ -908,7 +942,7 @@ def _release(client: TwoRoundClient, transfer: TwoRoundTransfer) -> None:
     try:
         client.release(transfer.session_id)
         transfer.released = True
-    except TwoRoundError as error:
+    except (TwoRoundError, OSError) as error:
         # the radar's hold timeout rearms it; say so rather than assume
         logger.warning(
             "[IWR6843] release of session %#010x failed (%s); the radar's hold timeout rearms it",
