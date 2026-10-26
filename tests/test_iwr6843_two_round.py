@@ -344,7 +344,7 @@ def test_client_reads_through_an_echo_and_refuses_damaged_replies(raw):
     client = TwoRoundClient(serial, timeout_s=0.05)
     overview, data = client.overview()
     assert data.startswith(OVERVIEW_MAGIC) and overview.session_id == session
-    radar.corrupt_next = True
+    radar.corrupt_next = 1
     with pytest.raises(TwoRoundError, match="CRC"):
         client.overview()
     radar.truncate_next = 1000
@@ -404,7 +404,7 @@ def test_a_failed_round_keeps_what_arrived_and_releases_explicitly(raw):
     client = TwoRoundClient(SimulatedSerial(radar), timeout_s=0.05)
 
     def analyse(dump):
-        radar.corrupt_next = True
+        radar.corrupt_next = 2  # the request and its one retry
         _m, sparse = parse_dump(dump)
         return sparse[0, 0, 0, 0]
 
@@ -414,3 +414,20 @@ def test_a_failed_round_keeps_what_arrived_and_releases_explicitly(raw):
     assert caught.value.transfer.overview_bytes > 0
     assert "CRC" in caught.value.transfer.error
     assert caught.value.transfer.released and not radar.frozen
+
+
+def test_a_damaged_overview_is_asked_for_again(raw):
+    radar = SimulatedIWR6843TwoRound()
+    radar.freeze(raw)
+    radar.corrupt_next = 1
+    client = TwoRoundClient(SimulatedSerial(radar), timeout_s=0.05)
+    _meta, cube = parse_dump(raw)
+
+    def analyse(dump):
+        _m, sparse = parse_dump(dump)
+        return sparse[3, 0, 0, 9]
+
+    result, transfer = run_two_round(client, analyse)
+    assert result == cube[3, 0, 0, 9]
+    assert transfer.released and transfer.error is None
+    assert radar.commands.count("overview") == 2

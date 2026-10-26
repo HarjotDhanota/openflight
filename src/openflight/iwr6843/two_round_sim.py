@@ -73,7 +73,7 @@ class SimulatedIWR6843TwoRound:
         self.ignored_triggers = 0
         self.commands: list[str] = []
         # test hooks: damage the next binary payload
-        self.corrupt_next = False
+        self.corrupt_next = 0  # payloads to damage
         self.truncate_next: int | None = None
 
     @property
@@ -106,7 +106,7 @@ class SimulatedIWR6843TwoRound:
 
     def _payload(self, data: bytes) -> bytes:
         if self.corrupt_next:
-            self.corrupt_next = False
+            self.corrupt_next -= 1
             data = data[:-9] + bytes([data[-9] ^ 0x5A]) + data[-8:]
         if self.truncate_next is not None:
             data = data[: self.truncate_next]

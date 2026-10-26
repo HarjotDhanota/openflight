@@ -94,6 +94,7 @@ N_LOOP_TX = 3  # the protocol carries 3-TX TDM captures (TX1, TX2, TX3 per loop)
 SUMMED_TX = (0, 2)  # TX1 and TX3: the vertical pair the trackers use
 IQ16_FORMATS = (SAMPLE_RANGE_FFT_IQ16_VARIABLE, SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED)
 MAX_CELL_ROUNDS = 4  # cells rounds before the host asks for every remaining cell
+READ_ATTEMPTS = 2  # a damaged or late reply is asked for once more (the ring is frozen)
 
 
 class TwoRoundError(ValueError):
@@ -809,7 +810,7 @@ def run_two_round(  # pylint: disable=too-many-locals
     transfer = TwoRoundTransfer()
     capture: TwoRoundCapture | None = None
     try:
-        overview, data = client.overview()
+        overview, data = _attempt(client.overview)
         transfer.session_id = overview.session_id
         transfer.overview_bytes = len(data)
         capture = TwoRoundCapture(overview)
@@ -840,7 +841,7 @@ def run_two_round(  # pylint: disable=too-many-locals
                 sequence=transfer.cell_rounds + 1,
                 range_bin_counts=counts,
             )
-            cells, data = client.cells(request, overview.meta)
+            cells, data = _attempt(lambda: client.cells(request, overview.meta))
             transfer.request_bytes.append(len(request.command()))
             transfer.cells_bytes.append(len(data))
             transfer.cells_per_round.append(request.n_cells)
@@ -854,6 +855,20 @@ def run_two_round(  # pylint: disable=too-many-locals
         raise TwoRoundTransferError(transfer.error, transfer, capture) from error
     _release(client, transfer)
     return result, transfer
+
+
+def _attempt(read):
+    """One read, asked again once when the reply was damaged (not when the radar refused)."""
+    for attempt in range(READ_ATTEMPTS):
+        try:
+            return read()
+        except TwoRoundRemoteError:
+            raise
+        except TwoRoundError as error:
+            if attempt + 1 == READ_ATTEMPTS:
+                raise
+            logger.info("[IWR6843] two-round reply damaged (%s); asking again", error)
+    raise AssertionError("unreachable")
 
 
 def _release(client: TwoRoundClient, transfer: TwoRoundTransfer) -> None:

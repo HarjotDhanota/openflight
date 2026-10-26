@@ -35,6 +35,7 @@ from openflight.iwr6843.recovery import (
     RecoveryCandidate,
     find_recovery_candidates,
 )
+from openflight.iwr6843.two_round import TwoRoundTransferError, run_two_round
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,16 @@ OPS_GUIDED_MIN_LAUNCH_DEG = 2.0
 # when the OPS-guided pass found no replacement.
 TRACK_AMBIGUOUS_STATUS = "accepted_track_ambiguous"
 HORIZONTAL_CONFIDENCE_CEILING = 0.95
+
+# How the shot's IWR data reaches the host: the whole dump, or the two-round transfer
+# (``two_round``: an overview, then only the cells the estimators read). The two-round
+# path runs only when the capture offers a link to its frozen session as
+# ``TWO_ROUND_LINK_ATTR``; no live capture does until the stage-2 firmware exists.
+TRANSFER_FULL = "full"
+TRANSFER_TWO_ROUND = "two_round"
+TRANSFERS = (TRANSFER_FULL, TRANSFER_TWO_ROUND)
+TWO_ROUND_LINK_ATTR = "two_round_link"
+TWO_ROUND_FAILED = "iwr_two_round_transfer_failed"
 
 
 def horizontal_confidence_from(coherence: float | None) -> float:
@@ -239,6 +250,20 @@ class IWR6843ShotResult:
     ball_range: ShotBallRange | None = None
     # set when the transfer lost bytes: what ``partial_dump`` recovered and what was missing
     partial_recovery: dict | None = None
+    # set for a two-round transfer: its session, rounds and bytes (``TwoRoundTransfer``)
+    transfer: dict | None = None
+
+
+@dataclass(frozen=True)
+class _Analysis:
+    """The estimators' answer on one capture's bytes."""
+
+    measurement: LCMFResult | None
+    club_path: ClubPathResult | None = None
+    withheld_reason: str | None = None
+    estimator_analysis_duration_ns: int | None = None
+    launch_range: LaunchRangeEstimate | None = None
+    ball_range: ShotBallRange | None = None
 
 
 def _capture_bytes(capture) -> tuple[bytes | None, PartialDumpRecovery | None]:
@@ -368,6 +393,12 @@ class IWR6843Runtime:
     radar_config_provenance: dict | None = None
     # The camera's coarse resting-ball range: a prior only, labelled where used.
     range_prior: LaunchRangePrior | None = None
+    # TRANSFER_FULL (default) or TRANSFER_TWO_ROUND
+    transfer: str = TRANSFER_FULL
+
+    def __post_init__(self):
+        if self.transfer not in TRANSFERS:
+            raise ValueError(f"IWR transfer must be one of {TRANSFERS}, not {self.transfer!r}")
 
     def replay_config_snapshot(
         self,
@@ -465,34 +496,77 @@ class IWR6843Runtime:
             timeout_s=self.capture_timeout_s,
         )
         capture_returned_ns = time.monotonic_ns()
-        raw, partial = _capture_bytes(capture)
+        link = (
+            getattr(capture, TWO_ROUND_LINK_ATTR, None)
+            if self.transfer == TRANSFER_TWO_ROUND
+            else None
+        )
+        raw, partial = (None, None) if link is not None else _capture_bytes(capture)
         partial_record = partial.to_dict() if partial is not None else None
 
-        launch_range: LaunchRangeEstimate | None = None
-        ball_range: ShotBallRange | None = None
-
         def result(
+            analysis: _Analysis | None = None,
             *,
-            measurement: LCMFResult | None,
-            club_path: ClubPathResult | None = None,
             withheld_reason: str | None = None,
-            estimator_analysis_duration_ns: int | None = None,
+            transfer: dict | None = None,
         ) -> IWR6843ShotResult:
+            if analysis is None:
+                analysis = _Analysis(measurement=None, withheld_reason=withheld_reason)
             return IWR6843ShotResult(
                 capture=capture,
-                measurement=measurement,
-                club_path=club_path,
-                withheld_reason=withheld_reason,
+                measurement=analysis.measurement,
+                club_path=analysis.club_path,
+                withheld_reason=analysis.withheld_reason,
                 capture_wait_duration_ns=capture_returned_ns - process_started_ns,
-                estimator_analysis_duration_ns=estimator_analysis_duration_ns,
+                estimator_analysis_duration_ns=analysis.estimator_analysis_duration_ns,
                 aggregate_duration_ns=time.monotonic_ns() - process_started_ns,
-                launch_range=launch_range,
-                ball_range=ball_range,
+                launch_range=analysis.launch_range,
+                ball_range=analysis.ball_range,
                 partial_recovery=partial_record,
+                transfer=transfer,
             )
 
+        def analyse(dump: bytes, recovered: PartialDumpRecovery | None = None) -> _Analysis:
+            return self._analyse(
+                dump,
+                recovered,
+                partial_record if recovered is not None else None,
+                ball_speed_mph=ball_speed_mph,
+                club=club,
+                club_speed_mph=club_speed_mph,
+                tilt_deg=tilt_deg,
+                tee_range_m=tee_range_m,
+                range_prior=range_prior,
+                roll_deg=roll_deg,
+            )
+
+        if link is not None:
+            try:
+                analysis, transfer = run_two_round(link, analyse)
+            except TwoRoundTransferError as error:
+                return result(withheld_reason=TWO_ROUND_FAILED, transfer=error.transfer.to_dict())
+            return result(analysis, transfer=transfer.to_dict())
         if raw is None:
-            return result(measurement=None)
+            return result()
+        return result(analyse(raw, partial))
+
+    def _analyse(  # pylint: disable=too-many-arguments,too-many-locals
+        self,
+        raw: bytes,
+        partial: PartialDumpRecovery | None,
+        partial_record: dict | None,
+        *,
+        ball_speed_mph: float,
+        club: str | None,
+        club_speed_mph: float | None,
+        tilt_deg: float | None,
+        tee_range_m: float | None,
+        range_prior: LaunchRangePrior | None,
+        roll_deg: float | None,
+    ) -> _Analysis:
+        """Range the launch point, settle the tee, and run every estimator on ``raw``."""
+        launch_range: LaunchRangeEstimate | None = None
+        ball_range: ShotBallRange | None = None
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
@@ -540,9 +614,11 @@ class IWR6843Runtime:
                         tee_range_uncertainty_m=float(ball_range.uncertainty_m or 0.0),
                     )
         if getattr(shot_calibration, "tee_range_m", 1.0) is None:
-            return result(
+            return _Analysis(
                 measurement=None,
                 withheld_reason="tee_range_unresolved",
+                launch_range=launch_range,
+                ball_range=ball_range,
             )
         analysis_started_ns = time.monotonic_ns()
         measurement, club_path = process_raw_capture(
@@ -561,10 +637,12 @@ class IWR6843Runtime:
             prepared=prepared,
         )
         analysis_completed_ns = time.monotonic_ns()
-        return result(
+        return _Analysis(
             measurement=_labelled_partial(measurement, partial),
             club_path=_labelled_partial(club_path, partial),
             estimator_analysis_duration_ns=analysis_completed_ns - analysis_started_ns,
+            launch_range=launch_range,
+            ball_range=ball_range,
         )
 
     def _launch_range(
@@ -600,6 +678,9 @@ class IWR6843Runtime:
 
 
 __all__ = [
+    "TRANSFER_FULL",
+    "TRANSFER_TWO_ROUND",
+    "TRANSFERS",
     "IWR6843Runtime",
     "IWR6843ShotResult",
     "ops_guided_measurement",
