@@ -1452,6 +1452,8 @@
   "tests/test_ble_catch_up.py": "PRODUCT",
   "tests/test_phone_catch_up.py": "PRODUCT",
   "tests/test_shot_stream.py": "PRODUCT",
-  "tests/test_shot_stream_catch_up.py": "PRODUCT"
+  "tests/test_shot_stream_catch_up.py": "PRODUCT",
+  "scripts/analysis/audit_fusion_observations.py": "RESEARCH",
+  "tests/test_fusion_observation_audit.py": "RESEARCH"
  }
 }
