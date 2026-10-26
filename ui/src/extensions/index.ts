@@ -27,6 +27,8 @@ export interface UiExtension {
   onShotMessage?(event: 'shot' | 'shot_update', message: unknown): void;
   /** Whether the live view is on screen. */
   onLiveViewShown?(shown: boolean): void;
+  /** False when the club was already chosen before this page loaded: no club picker then. */
+  clubPickerOnLoad?(): boolean;
 }
 
 const modules = import.meta.glob<{ default: UiExtension }>(['./*.{ts,tsx}', '!./index.ts', '!./*.test.{ts,tsx}'], {

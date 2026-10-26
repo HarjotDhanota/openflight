@@ -11,7 +11,9 @@ adds the tester's routes and flags:
   shot's trigger evidence must pass, and the setup problems on the ready light;
 - ``--tester-free-play`` (with ``--free-play-ladder``): run-bound free play, its
   exposure ladder and the Stop & package proxy (``/api/free-play``), and its pauses
-  for a face photo or a new aim (``/api/free-play/pause``, ``photo``, ``target-line``).
+  for a face photo or a new aim (``/api/free-play/pause``, ``photo``, ``target-line``);
+- ``--tester-control-port``: the tester page a tester-started kiosk's Tester button goes
+  back to, while that page answers (``/api/tester-page``, ``tester_link``).
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from typing import Mapping
 
 from flask import Response, jsonify, request
 
-from openflight import free_play, instrumentation, kiosk_extensions, server
+from openflight import free_play, instrumentation, kiosk_extensions, server, tester_link
 from openflight.free_play import register_kiosk_routes
 from openflight.launch_monitor import Shot
 
@@ -820,6 +822,8 @@ def _configure(args, parser) -> None:
     study_mode_enabled = bool(args.study_mode)
     tester_setup_required = bool(args.tester_setup_required)
     tester_config_hash = args.tester_config_hash
+    # a kiosk the tester started links back to its page (the kiosk's Tester button)
+    tester_page.configure(args.tester_control_port if args.tester_setup_required else None)
     free_play_config.clear()
     if args.tester_free_play:
         free_play_config.update(
@@ -1236,6 +1240,10 @@ def _free_play_extra() -> dict:
 
 
 extension = kiosk_extensions.register(TesterKioskExtension())
+
+# the tester page this kiosk's Tester button goes back to (set by _configure)
+tester_page = tester_link.TesterLink(None)
+tester_link.register(server.app, tester_page)
 
 # late-bound, so a test can replace either function on this module
 register_kiosk_routes(

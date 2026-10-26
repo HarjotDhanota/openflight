@@ -64,7 +64,10 @@ for (const viewport of KIOSK_VIEWPORTS) {
       // an active action while recording, never the grey of a disabled one (19 Oct)
       await expect(stop).toBeEnabled();
       const fill = (selector: string) =>
-        page.locator(selector).first().evaluate((node) => getComputedStyle(node).backgroundColor);
+        page
+          .locator(selector)
+          .first()
+          .evaluate((node) => getComputedStyle(node).backgroundColor);
       const stopFill = await stop.evaluate((node) => getComputedStyle(node).backgroundColor);
       expect(stopFill).not.toBe(await fill('.free-play'));
       expect(stopFill).toBe(
@@ -163,12 +166,15 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect(page.locator('#free-play-stop')).toBeDisabled();
     });
 
-    test('Setup and Face photo in the Live header bring the tester page back', async ({ page }) => {
+    test('the Tester button and Face photo bring the tester page back', async ({ page }) => {
       const tester = 'http://127.0.0.1:8765/';
       let paused: object | null = null;
       const pauses: object[] = [];
       await page.route('**/api/free-play', (route) =>
         route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: tester, paused } })
+      );
+      await page.route('**/api/tester-page', (route) =>
+        route.fulfill({ json: { available: true, url: tester, reason: null, final: false } })
       );
       await page.route('**/api/free-play/pause', async (route) => {
         pauses.push(route.request().postDataJSON());
@@ -180,13 +186,19 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await page.getByRole('button', { name: 'Close Select club' }).tap();
 
       const header = page.locator('.panel-header');
-      const setup = header.getByRole('button', { name: 'Setup', exact: true });
+      const back = page.locator('.session-status').getByRole('button', { name: 'Back to the tester page' });
       const photo = header.getByRole('button', { name: 'Photograph the face' });
-      await expect(setup).toBeVisible();
+      await expect(back).toHaveText('Tester');
       await expect(photo).toHaveText('Face photo');
-      // both fit the header beside Change club, clear of the club and hand
+      // one way back, never a second Setup in the header
+      await expect(header.getByRole('button', { name: 'Setup', exact: true })).toHaveCount(0);
+      // the Tester button sits in the band, finger-sized, inside the screen
+      const backBox = (await back.boundingBox())!;
+      expect(backBox.height).toBeGreaterThanOrEqual(44);
+      expect(backBox.x + backBox.width).toBeLessThanOrEqual(viewport.width);
+      // the face photo fits the header beside Change club, clear of the club and hand
       const club = (await page.locator('.panel-header__club').boundingBox())!;
-      for (const button of [setup, photo, header.getByRole('button', { name: 'Change club' })]) {
+      for (const button of [photo, header.getByRole('button', { name: 'Change club' })]) {
         const box = (await button.boundingBox())!;
         expect(box.x).toBeGreaterThanOrEqual(club.x + club.width);
         expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
@@ -195,7 +207,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
         path: test.info().outputPath(`free-play-header-${viewport.width}x${viewport.height}.png`),
       });
 
-      await setup.tap();
+      await back.tap();
       await expect(page).toHaveURL(tester);
       await gotoApp(page);
       await page.getByRole('button', { name: 'Close Select club' }).tap();
@@ -206,7 +218,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
   });
 }
 
-test('Setup focuses the tester page that opened the scoreboard', async ({ page }) => {
+test('the Tester button focuses the tester page that opened the scoreboard', async ({ page }) => {
   await page.route('**/api/free-play', (route) =>
     route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: 'http://127.0.0.1:8765/' } })
   );
@@ -224,8 +236,48 @@ test('Setup focuses the tester page that opened the scoreboard', async ({ page }
   await scoreboard.route('**/api/free-play', (route) =>
     route.fulfill({ json: { enabled: true, phase: 'recording', tester_url: 'http://127.0.0.1:8765/' } })
   );
+  await scoreboard.route('**/api/tester-page', (route) =>
+    route.fulfill({ json: { available: true, url: 'http://127.0.0.1:8765/', reason: null, final: false } })
+  );
+  await scoreboard.reload();
   await scoreboard.getByRole('button', { name: 'Close Select club' }).click();
-  await scoreboard.locator('.panel-header').getByRole('button', { name: 'Setup', exact: true }).click();
+  await scoreboard.getByRole('button', { name: 'Back to the tester page' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { focused: number }).focused)).toBe(1);
   expect(new URL(scoreboard.url()).pathname).toBe('/');
+});
+
+test.describe('a kiosk the tester page showed in its own window', () => {
+  const tester = 'http://127.0.0.1:8765/';
+  async function mockRun(page: import('@playwright/test').Page) {
+    let phase = 'recording';
+    await page.route('**/api/free-play', async (route) => {
+      if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'stop') phase = 'packaging';
+      await route.fulfill({ json: { enabled: true, phase, tester_url: tester } });
+    });
+    await page.route(`${tester}**`, (route) => route.fulfill({ contentType: 'text/html', body: 'tester page' }));
+  }
+
+  test('opens without the club picker: the tester page chose the club', async ({ page }) => {
+    await mockRun(page);
+    await gotoApp(page, '/?from=tester');
+    await expect(page.locator('.panel-header')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Select club' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Close Select club' })).toHaveCount(0);
+  });
+
+  test('goes back to the tester page when free play stops', async ({ page }) => {
+    await mockRun(page);
+    await gotoApp(page, '/?from=tester');
+    await page.getByRole('button', { name: 'Stop & package', exact: true }).click();
+    await expect(page).toHaveURL(tester);
+  });
+
+  test('a kiosk in its own window (the page on a phone) stays on the scoreboard', async ({ page }) => {
+    await mockRun(page);
+    await gotoApp(page);
+    await page.getByRole('button', { name: 'Close Select club' }).click();
+    await page.getByRole('button', { name: 'Stop & package', exact: true }).click();
+    await expect(page.getByText('Stopping and packaging…')).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe('/');
+  });
 });

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { PANEL_VIEWS } from './components/panel';
 import { useSystemStore } from './stores/useSystemStore';
+import { uiExtensions, type UiExtension } from './extensions';
 
 describe('App shell', () => {
   beforeEach(() => {
@@ -57,6 +58,19 @@ describe('App shell', () => {
     expect(html).toMatch(/picker-overlay__option--selected[^>]*aria-pressed="true"[^>]*>DR</);
     // ...and it is dismissible, so skipping keeps the default.
     expect(html).toContain('aria-label="Close Select club"');
+  });
+
+  it('skips the club picker when an extension says the club is already chosen', () => {
+    // the tester page chose the club before it showed this kiosk (extensions/testerLink.ts)
+    const extension: UiExtension = { clubPickerOnLoad: () => false };
+    (uiExtensions as UiExtension[]).push(extension);
+    try {
+      const html = renderToString(<App />);
+      expect(html).not.toContain('aria-label="Select club"');
+      expect(html).toContain('Change club');
+    } finally {
+      (uiExtensions as UiExtension[]).splice(uiExtensions.indexOf(extension), 1);
+    }
   });
 
   it('offers the club change action in the Live header', () => {

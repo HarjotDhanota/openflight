@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { PanelAction } from './panel/PanelAction';
-import { openTesterPage } from '../utils/testerPage';
+import { openTesterPage, returnToTesterPage } from '../utils/testerPage';
 import './FreePlayControls.css';
 
 // free play's exposure ladder, as the kiosk reports it (free_play_ladder.progress_from_state)
@@ -79,37 +79,30 @@ export function FreePlayStatus({
   );
 }
 
-/** Setup and the face photo, in the Live header beside Change club. */
+/**
+ * The face photo, in the Live header beside Change club. The way back to the tester
+ * page (setup, a new aim) is the Tester button beside the ready light (TesterButton.tsx).
+ */
 export function FreePlayActionsView({
   state,
   busy = false,
-  onSetup,
   onPhoto,
   onResume,
 }: {
   state: FreePlayState | null;
   busy?: boolean;
-  onSetup: () => void;
   onPhoto: () => void;
   onResume: () => void;
 }) {
-  if (!state?.enabled) return null;
-  const recording = state.phase === 'recording';
-  return (
-    <>
-      <PanelAction variant="secondary" onClick={onSetup}>
-        Setup
-      </PanelAction>
-      {recording && state.paused ? (
-        <PanelAction variant="secondary" disabled={busy} onClick={onResume}>
-          Resume
-        </PanelAction>
-      ) : recording ? (
-        <PanelAction variant="secondary" disabled={busy} aria-label="Photograph the face" onClick={onPhoto}>
-          Face photo
-        </PanelAction>
-      ) : null}
-    </>
+  if (!state?.enabled || state.phase !== 'recording') return null;
+  return state.paused ? (
+    <PanelAction variant="secondary" disabled={busy} onClick={onResume}>
+      Resume
+    </PanelAction>
+  ) : (
+    <PanelAction variant="secondary" disabled={busy} aria-label="Photograph the face" onClick={onPhoto}>
+      Face photo
+    </PanelAction>
   );
 }
 
@@ -149,7 +142,6 @@ export function FreePlayActions() {
     <FreePlayActionsView
       state={state}
       busy={busy}
-      onSetup={() => openTesterPage(state?.tester_url)}
       onPhoto={() => void pause('pause')}
       onResume={() => void pause('resume')}
     />
@@ -192,7 +184,11 @@ export function FreePlayControls() {
     setBusy(true);
     try {
       const body = await postFreePlay('/api/free-play', { action }, 'Could not finish the session');
-      if (action === 'stop') setFreePlay(() => body);
+      if (action === 'stop') {
+        setFreePlay(() => body);
+        // the tester page lent this window: it shows the packaging and step 8 from here
+        returnToTesterPage(body.tester_url ?? state?.tester_url);
+      }
     } catch (error) {
       setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : null));
     } finally {

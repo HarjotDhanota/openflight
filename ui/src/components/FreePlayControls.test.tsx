@@ -23,7 +23,11 @@ describe('Free-play status', () => {
   it('says where to send the finished package, and offers Done', () => {
     const html = renderToString(
       <FreePlayStatus
-        state={{ enabled: true, phase: 'ready', bundle: { name: 'session.zip', path: '/home/someone/captures/session.zip' } }}
+        state={{
+          enabled: true,
+          phase: 'ready',
+          bundle: { name: 'session.zip', path: '/home/someone/captures/session.zip' },
+        }}
         onAction={noop}
       />
     );
@@ -77,7 +81,11 @@ describe('Free play exposure study line', () => {
   it('says automatic exposure once the ladder is done', () => {
     const html = renderToString(
       <FreePlayStatus
-        state={{ enabled: true, phase: 'recording', exposure_study: { phase: 'automatic', text: 'Automatic exposure' } }}
+        state={{
+          enabled: true,
+          phase: 'recording',
+          exposure_study: { phase: 'automatic', text: 'Automatic exposure' },
+        }}
         onAction={noop}
       />
     );
@@ -86,7 +94,11 @@ describe('Free play exposure study line', () => {
   it('drops the line once acquisition stops', () => {
     const html = renderToString(
       <FreePlayStatus
-        state={{ enabled: true, phase: 'packaging', exposure_study: { phase: 'ladder', text: 'Exposure study: 150 µs' } }}
+        state={{
+          enabled: true,
+          phase: 'packaging',
+          exposure_study: { phase: 'ladder', text: 'Exposure study: 150 µs' },
+        }}
         onAction={noop}
       />
     );
@@ -100,28 +112,26 @@ describe('Free play exposure study line', () => {
   });
 });
 
-describe('Setup and the face photo on the scoreboard', () => {
+describe('The face photo on the scoreboard', () => {
   const recording = { enabled: true, phase: 'recording', tester_url: 'http://pi.local:8765/' };
   const view = (state: Parameters<typeof FreePlayActionsView>[0]['state']) =>
-    renderToString(<FreePlayActionsView state={state} onSetup={noop} onPhoto={noop} onResume={noop} />);
+    renderToString(<FreePlayActionsView state={state} onPhoto={noop} onResume={noop} />);
 
-  it('offers Setup and the face photo while free play records', () => {
+  it('offers the face photo while free play records; the Tester button goes back to setup', () => {
     const html = view(recording);
-    expect(html).toContain('>Setup</button>');
     expect(html).toContain('>Face photo</button>');
     expect(html).toContain('aria-label="Photograph the face"');
     expect(html).not.toContain('Resume');
+    // one way back to the tester page, on every tab: the Tester button (TesterButton.tsx)
+    expect(html).not.toContain('>Setup</button>');
   });
   it('offers Resume instead while free play is paused', () => {
     const html = view({ ...recording, paused: { cause: 'photo' } });
     expect(html).toContain('>Resume</button>');
     expect(html).not.toContain('Face photo');
-    expect(html).toContain('>Setup</button>');
   });
-  it('keeps Setup once recording stops, and shows nothing outside free play', () => {
-    const html = view({ ...recording, phase: 'ready' });
-    expect(html).toContain('>Setup</button>');
-    expect(html).not.toContain('Face photo');
+  it('shows nothing once recording stops, or outside free play', () => {
+    expect(view({ ...recording, phase: 'ready' })).toBe('');
     expect(view({ enabled: false })).toBe('');
   });
 });

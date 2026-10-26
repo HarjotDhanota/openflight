@@ -131,8 +131,11 @@ function AppContent() {
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
   // Open on every app load so the user confirms their club before the first
   // shot; dismissing keeps the default. The /display route returns early below,
-  // so this never appears in the passive TV view.
-  const [pickerOpen, setPickerOpen] = useState(true);
+  // so this never appears in the passive TV view. An extension may say the club was
+  // already chosen before this page loaded.
+  const [pickerOpen, setPickerOpen] = useState(() =>
+    uiExtensions.every((extension) => extension.clubPickerOnLoad?.() ?? true)
+  );
   const [profileDialog, setProfileDialog] = useState<{ mode: 'add' | 'rename'; target: Profile | null } | null>(null);
   const [profileDialogName, setProfileDialogName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);

@@ -1,0 +1,22 @@
+/* The way back to the tester page: beside the ready light, inside the band's
+   height, on every tab. A finger-sized button that never makes the band taller. */
+.tester-link {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 0 0.5rem;
+  background: var(--color-surface);
+}
+
+.tester-link button {
+  min-height: 2.75rem;
+  min-width: 4.5rem;
+  padding: 0.35rem 0.75rem;
+  border: 2px solid var(--color-text);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+  touch-action: manipulation;
+}
