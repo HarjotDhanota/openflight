@@ -967,6 +967,8 @@
   "tests/test_iwr6843_serial_process.py": "FUSION",
   "tests/test_iwr6843_serial_two_round.py": "FUSION",
   "tests/test_iwr6843_uart_echo.py": "FUSION",
+  "tests/test_iwr6843_dump_stage_trace.py": "RESEARCH",
+  "tests/fixtures/iwr_dump_stage_probe.c": "RESEARCH",
   "tests/test_iwr6843_monitor_two_round.py": "FUSION",
   "tests/test_iwr6843_span_gate.py": "PRODUCT",
   "tests/test_iwr6843_sparse_capture.py": "FUSION",

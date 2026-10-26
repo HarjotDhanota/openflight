@@ -478,6 +478,23 @@ static uint32_t l3_ticks(void)
 }
 
 #endif
+#ifdef L3_DUMP_STAGE_TRACE
+#if !defined(HWA_CHAINED_SNAPSHOT_RING) || !defined(L3_USB_CLOCK_PROBE)
+#error "dump stage trace requires HWA ring and clock probe"
+#endif
+#ifdef L3_TWO_ROUND
+#error "dump stage trace is a clock-only diagnostic"
+#endif
+static void l3_dumpStage(const char *stage, int32_t status)
+{
+    CLI_write("\nL3STAGE %s tick=%u frame=%u ring=%u hwa=%u out=%u rearms=%u missed=%u status=%d\n",
+              stage, l3_ticks(), gNumFrame, gRingFrame, gHwaFrameDone,
+              gHwaOutputDone, gHwaRearms, gHwaMissedFrameStarts, status);
+}
+#define L3_DUMP_STAGE(stage, status) l3_dumpStage(stage, status)
+#else
+#define L3_DUMP_STAGE(stage, status) ((void)0)
+#endif
 #ifdef L3_CAPTURE_EVIDENCE
 static uint32_t gFrameSeq[L3_MAX_CAPTURE_FRAMES];
 static uint32_t gFrameStartTick[L3_MAX_CAPTURE_FRAMES];
@@ -2237,11 +2254,15 @@ static int32_t l3_finishCaptureStop(void)
 {
     int32_t errCode;
 
+    L3_DUMP_STAGE("stop_enter", 0);
     if (MMWave_stop(gMMWaveHandle, &errCode) < 0) {
+        L3_DUMP_STAGE("stop_error", errCode);
         CLI_write("Error: MMWave_stop failed (%d)\n", errCode);
         return -1;
     }
+    L3_DUMP_STAGE("stop_done", 0);
     Task_sleep(10);
+    L3_DUMP_STAGE("stop_margin_done", 0);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
     (void)HWA_enable(gHwaHandle, 0U);
     (void)EDMA_disableChannel(gEdmaHandle, L3_HWA_OUT_PING_CHANNEL,
@@ -2254,6 +2275,7 @@ static int32_t l3_finishCaptureStop(void)
     (void)EDMA_disableChannel(gEdmaHandle, L3_EDMA_CHANNEL, EDMA3_CHANNEL_TYPE_DMA);
 #endif
     gCaptureActive = 0U;
+    L3_DUMP_STAGE("stop_complete", 0);
     return 0;
 }
 
@@ -2264,10 +2286,13 @@ static int32_t l3_stopCaptureAtBoundary(void)
         return 0;
     }
 #ifdef HWA_CHAINED_SNAPSHOT_RING
+    L3_DUMP_STAGE("freeze_enter", 0);
     if (l3_freezeHwaAfterPostFrames() != 0) {
+        L3_DUMP_STAGE("freeze_error", -1);
         CLI_write("Error: HWA post-trigger frame freeze timed out\n");
         return -1;
     }
+    L3_DUMP_STAGE("freeze_done", 0);
 #ifdef L3_CAPTURE_EVIDENCE
     gFreezeTick = l3_ticks();
 #endif
@@ -2835,6 +2860,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 #endif
     (void)argc; (void)argv;
 
+    L3_DUMP_STAGE("dump_enter", 0);
     if (!gCaptureActive) {
         return -1;
     }
@@ -2876,7 +2902,9 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         int32_t tempStatus;
 
         memset((void *)&tempReport, 0, sizeof(tempReport));
+        L3_DUMP_STAGE("temp_enter", 0);
         tempStatus = l3_readTemperatureReport(&tempReport);
+        L3_DUMP_STAGE("temp_done", tempStatus);
         if (tempStatus == 0) {
 #ifdef CONFIGURABLE_CAPTURE
             h.version = L3_DUMP_VERSION_CAPTURE_TEMPERATURE;
@@ -2889,6 +2917,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
                                       : L3_DUMP_VERSION_EVIDENCE;
         headerTick = l3_ticks();
 #endif
+        L3_DUMP_STAGE("header_enter", 0);
         UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));
         if (tempStatus == 0) {
             UART_writePolling(gDataUart, (uint8_t *)&tempReport, sizeof(tempReport));
