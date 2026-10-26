@@ -147,6 +147,10 @@ export const en = {
   'menu.disable': 'Disable',
   'menu.enable': 'Enable',
   'menu.shutdown': 'Shut down',
+  'menu.radarData': 'Radar data',
+  'menu.radarFast': 'Fast',
+  'menu.radarFull': 'Full (complete data)',
+  'menu.radarUnavailable': 'Unavailable: {reason}',
 
   'app.changeImplement': 'Change implement',
   'app.changeClub': 'Change club',

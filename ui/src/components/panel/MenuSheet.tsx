@@ -1,11 +1,14 @@
+import { useRef } from 'react';
 import { LOCALES, type LocaleId } from '../../i18n';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import { useI18n } from '../../i18n/useI18n';
-import { useSystemStore } from '../../stores/useSystemStore';
+import { useSystemStore, type Iwr6843Transfer } from '../../stores/useSystemStore';
 import { useThemeStore } from '../../stores/useThemeStore';
 import { useLocaleStore } from '../../stores/useLocaleStore';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
+import { socketService } from '../../services/socketService';
 
 interface MenuSheetProps {
   onClose: () => void;
@@ -22,6 +25,10 @@ interface MenuSheetProps {
  */
 export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
+  const radarTransfer = useSystemStore((state) => state.iwr6843Transfer);
+  const radarTransferError = useSystemStore((state) => state.iwr6843TransferError);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useDragScroll(scrollRef);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
@@ -30,7 +37,14 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   return (
     <>
       <button type="button" className="panel-scrim" onClick={onClose} aria-label={t('menu.close')} />
-      <div className="menu-sheet" role="dialog" aria-modal="true" aria-label={t('menu.title')}>
+      <div
+        ref={scrollRef}
+        {...dragScroll}
+        className="menu-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('menu.title')}
+      >
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.units')}</span>
           <SegmentedControl
@@ -73,6 +87,12 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
           </select>
         </section>
 
+        <RadarDataControl
+          status={radarTransfer}
+          error={radarTransferError}
+          onChange={(mode) => socketService.setIwr6843Transfer(mode)}
+        />
+
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.system')}</span>
           {Object.keys(simStatuses).length > 0 ? (
@@ -88,5 +108,40 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
         </button>
       </div>
     </>
+  );
+}
+
+export function RadarDataControl({
+  status,
+  error = null,
+  onChange,
+}: {
+  status: Iwr6843Transfer | null;
+  error?: string | null;
+  onChange: (mode: Iwr6843Transfer['requested']) => void;
+}) {
+  const { t } = useI18n();
+  if (!status?.enabled) return null;
+  return (
+    <section className="menu-sheet__section">
+      <span className="menu-sheet__section-title">{t('menu.radarData')}</span>
+      <SegmentedControl
+        ariaLabel={t('menu.radarData')}
+        value={status.requested}
+        options={[
+          { id: 'two_round', label: t('menu.radarFast') },
+          { id: 'full', label: t('menu.radarFull') },
+        ]}
+        onChange={onChange}
+      />
+      {error ? (
+        <span role="alert" className="menu-sheet__status-label">
+          {error}
+        </span>
+      ) : null}
+      {!status.available && status.reason ? (
+        <span className="menu-sheet__status-label">{t('menu.radarUnavailable', { reason: status.reason })}</span>
+      ) : null}
+    </section>
   );
 }

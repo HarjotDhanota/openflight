@@ -149,6 +149,10 @@ export const pt: Messages = {
   'menu.disable': 'Desativar',
   'menu.enable': 'Ativar',
   'menu.shutdown': 'Desligar',
+  'menu.radarData': 'Dados do radar',
+  'menu.radarFast': 'Rápido',
+  'menu.radarFull': 'Completo (todos os dados)',
+  'menu.radarUnavailable': 'Indisponível: {reason}',
 
   'app.changeImplement': 'Trocar implemento',
   'app.changeClub': 'Trocar taco',

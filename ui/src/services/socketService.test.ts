@@ -118,3 +118,38 @@ describe('socketService air conditions', () => {
     expect(useAirStore.getState().conditions).toEqual(conditions);
   });
 });
+
+describe('socketService radar transfer', () => {
+  beforeEach(() => {
+    emitted.length = 0;
+    socketService.disconnect();
+    socketService.connect();
+  });
+
+  it('requests status on reconnect and sends a mode change', () => {
+    handlers.connect(undefined);
+    expect(emitted).toContainEqual(['get_iwr6843_transfer', undefined]);
+    socketService.setIwr6843Transfer('two_round');
+    expect(emitted).toContainEqual(['set_iwr6843_transfer', { mode: 'two_round' }]);
+  });
+
+  it('keeps an unsuccessful change visible and clears it on status or disconnect', async () => {
+    const { useSystemStore } = await import('../stores/useSystemStore');
+    const status = {
+      enabled: true,
+      requested: 'full',
+      effective: 'full',
+      available: true,
+      reason: null,
+      last_fallback: null,
+    };
+    handlers.iwr6843_transfer(status);
+    handlers.iwr6843_transfer_error({ error: 'Changes are only accepted on the kiosk' });
+    expect(useSystemStore.getState().iwr6843TransferError).toContain('only accepted');
+    expect(useSystemStore.getState().iwr6843Transfer).toEqual(status);
+    handlers.iwr6843_transfer(status);
+    expect(useSystemStore.getState().iwr6843TransferError).toBeNull();
+    handlers.disconnect(undefined);
+    expect(useSystemStore.getState().iwr6843Transfer).toBeNull();
+  });
+});

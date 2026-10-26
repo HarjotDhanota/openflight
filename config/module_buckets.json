@@ -1427,6 +1427,7 @@
   "ui/tests/e2e/metric-panels.spec.ts": "PRODUCT",
   "ui/tests/e2e/pi-screen.spec.ts": "TESTER",
   "ui/tests/e2e/ready-light-tiles.spec.ts": "PRODUCT",
+  "ui/tests/e2e/radar-transfer.spec.ts": "PRODUCT",
   "ui/tests/e2e/session-review.spec.ts": "TESTER",
   "ui/tests/e2e/setup.spec.ts": "PRODUCT",
   "ui/tests/e2e/startup-splash.spec.ts": "PRODUCT",

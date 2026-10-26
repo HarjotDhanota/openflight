@@ -149,6 +149,10 @@ export const es: Messages = {
   'menu.disable': 'Desactivar',
   'menu.enable': 'Activar',
   'menu.shutdown': 'Apagar',
+  'menu.radarData': 'Datos del radar',
+  'menu.radarFast': 'Rápido',
+  'menu.radarFull': 'Completo (todos los datos)',
+  'menu.radarUnavailable': 'No disponible: {reason}',
 
   'app.changeImplement': 'Cambiar implemento',
   'app.changeClub': 'Cambiar palo',

@@ -1664,6 +1664,14 @@
           </div>
           <span class="problem" id="handed-error" role="alert" hidden></span>
         </div>
+        <div class="field-row">
+          <span class="field-row__label" id="radar-data-label">Radar data</span>
+          <div class="seg" role="group" aria-labelledby="radar-data-label" id="radar-data-choice">
+            <button type="button" data-radar-data="two_round" aria-pressed="false">Fast</button>
+            <button type="button" data-radar-data="full" aria-pressed="true">Full (complete data)</button>
+          </div>
+          <span class="note" id="radar-data-status" role="status"></span>
+        </div>
         <div class="lens" id="lens" data-ready="false">
           <h3>Lens on the unit</h3>
           <div class="lens-list" id="lens-list" role="group" aria-label="Lens"></div>
@@ -6857,6 +6865,7 @@
           refreshTeeRange();
           refreshLens();
           refreshHanded();
+          refreshRadarData();
           refresh();
         }, 300);
       }
@@ -6877,6 +6886,49 @@
       // the tester's hand, kept per tester; right-handed unless they tap left
       let handed = 'RH';
       let handedPending = false;
+      // Radar data: Full (the complete dump) unless the tester chose Fast; a running kiosk
+      // switches at its next shot, and says when its radar cannot do Fast.
+      let radarData = { mode: 'full', kiosk: null, kiosk_note: null };
+      let radarDataPending = false;
+      function renderRadarData() {
+        for (const button of el('radar-data-choice').querySelectorAll('button')) {
+          button.setAttribute('aria-pressed', String(button.dataset.radarData === radarData.mode));
+          button.disabled = radarDataPending || !currentTester();
+        }
+        const kiosk = radarData.kiosk;
+        el('radar-data-status').textContent = kiosk
+          ? kiosk.available
+            ? `Kiosk: ${kiosk.effective === 'two_round' ? 'Fast' : 'Full'}`
+            : `Kiosk: Full. Fast unavailable: ${kiosk.reason}`
+          : radarData.kiosk_note || '';
+      }
+      async function refreshRadarData() {
+        const testerId = currentTester();
+        radarData = { mode: 'full', kiosk: null, kiosk_note: null };
+        renderRadarData();
+        if (!testerId) return;
+        try {
+          const body = await request('/api/tester/radar-data?' + new URLSearchParams({ tester_id: testerId }));
+          if (testerId === currentTester()) radarData = body;
+        } catch {
+          radarData = { mode: 'full', kiosk: null, kiosk_note: null };
+        }
+        renderRadarData();
+      }
+      el('radar-data-choice').addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-radar-data]');
+        if (!button || button.disabled) return;
+        radarDataPending = true;
+        renderRadarData();
+        try {
+          radarData = await post('/api/tester/radar-data', { tester_id: currentTester(), mode: button.dataset.radarData });
+        } catch (error) {
+          radarData = { ...radarData, kiosk_note: `Not saved: ${error.message}` };
+        } finally {
+          radarDataPending = false;
+          renderRadarData();
+        }
+      });
       function renderHanded() {
         for (const button of el('handed-choice').querySelectorAll('button')) {
           button.setAttribute('aria-pressed', String(button.dataset.handed === handed));
@@ -7485,6 +7537,7 @@
       renderSteps();
       refreshLens();
       refreshHanded();
+      refreshRadarData();
       refresh();
       refreshSetupEligibility();
       refreshPlacement();

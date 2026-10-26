@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 import zlib
 from collections import Counter, deque
@@ -2782,6 +2783,7 @@ def action_commands(
     handed: str = "RH",
     tester_control_port: int | None = None,
     kiosk_window: str = "own",
+    iwr_transfer: str = "full",
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
 
@@ -2971,6 +2973,8 @@ def action_commands(
             commands[0].extend(["--iwr6843-port", iwr_static_port])
         # the same board calibration the setup's static ranges used (wiring audit C10)
         commands[0].extend(["--iwr6843-cal", str(iwr_calibration)])
+        # the complete dump unless the tester chose Fast; the page can switch it live
+        commands[0].extend(["--iwr6843-transfer", iwr_transfer])
         commands[0].extend(
             [
                 "--tester-setup-required",
@@ -4252,6 +4256,48 @@ def save_handedness(root: Path, handed: object) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     atomic_write(root / HANDEDNESS_FILE, (json.dumps({"handed": handed}) + "\n").encode("utf-8"))
     return read_handedness(root)
+
+
+RADAR_DATA_FILE = "radar_data.json"
+# How the IWR's data reaches the kiosk: the complete dump unless the tester chose Fast
+RADAR_DATA_MODES = ("full", "two_round")
+
+
+def read_radar_data(root: Path) -> dict:
+    """The tester's IWR transfer: the full dump unless they chose Fast (two-round)."""
+    try:
+        mode = json.loads((root / RADAR_DATA_FILE).read_text(encoding="utf-8"))["mode"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"mode": "full", "source": "default"}
+    if mode not in RADAR_DATA_MODES:
+        return {"mode": "full", "source": "default"}
+    return {"mode": mode, "source": "tester"}
+
+
+def save_radar_data(root: Path, mode: object) -> dict:
+    """Keep the tester's IWR transfer for every kiosk this page starts."""
+    if mode not in RADAR_DATA_MODES:
+        raise ValueError("radar data must be full or two_round")
+    root.mkdir(parents=True, exist_ok=True)
+    atomic_write(root / RADAR_DATA_FILE, (json.dumps({"mode": mode}) + "\n").encode("utf-8"))
+    return read_radar_data(root)
+
+
+def kiosk_iwr_transfer(mode: str | None = None, *, timeout_s: float = 1.0) -> dict:
+    """The running kiosk's IWR transfer (``/api/iwr6843/transfer``), set first when ``mode``.
+
+    The kiosk takes the change only from this machine; the next shot uses it.
+    """
+    url = f"http://127.0.0.1:{KIOSK_WEB_PORT}/api/iwr6843/transfer"
+    data = None if mode is None else json.dumps({"mode": mode}).encode("utf-8")
+    request_ = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="GET" if data is None else "POST",
+    )
+    with urllib.request.urlopen(request_, timeout=timeout_s) as response:
+        return json.loads(response.read())
 
 
 def first_club(payload: Mapping | None) -> str:
@@ -11235,6 +11281,7 @@ def create_app(
                 handed=read_handedness(tester_root(sessions_root, params.tester_id))["handed"],
                 tester_control_port=tester_control_port,
                 kiosk_window=kiosk_window,
+                iwr_transfer=read_radar_data(tester_root(sessions_root, params.tester_id))["mode"],
             )
             run_id = None
             if action == "free_play":
@@ -11770,6 +11817,7 @@ def create_app(
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
                 tester_control_port=tester_control_port,
+                iwr_transfer=read_radar_data(tester_root(sessions_root, tester_id))["mode"],
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(
@@ -12182,6 +12230,30 @@ def create_app(
         except (OSError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"tester_id": tester_id, **hand})
+
+    @app.route("/api/tester/radar-data", methods=["GET", "POST"])
+    def radar_data_route():
+        """Fast (two-round) or Full IWR transfer: kept for the next kiosk, sent to a running one."""
+        payload = request.get_json(silent=True) if request.method == "POST" else request.args
+        payload = payload if isinstance(payload, Mapping) else {}
+        tester_id = str(payload.get("tester_id", "")).strip()
+        if not SAFE_SEGMENT.fullmatch(tester_id):
+            return jsonify({"error": "unknown tester"}), 400
+        root = tester_root(sessions_root, tester_id)
+        try:
+            chosen = (
+                save_radar_data(root, payload.get("mode"))
+                if request.method == "POST"
+                else read_radar_data(root)
+            )
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        kiosk, note = None, None
+        try:
+            kiosk = kiosk_iwr_transfer(chosen["mode"] if request.method == "POST" else None)
+        except (OSError, ValueError):
+            note = "The kiosk is not running or could not be reached. Saved for its next start."
+        return jsonify({"tester_id": tester_id, **chosen, "kiosk": kiosk, "kiosk_note": note})
 
     @app.post("/api/tester/comparator")
     def comparator_upload():

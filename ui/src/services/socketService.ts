@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { useSystemStore, type Handed } from '../stores/useSystemStore';
+import { useSystemStore, type Handed, type Iwr6843Transfer } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraCaptureSettings } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
@@ -74,6 +74,7 @@ class SocketService {
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
+      this.socket?.emit('get_iwr6843_transfer');
       this.socket?.emit('get_profiles');
       uiExtensions.forEach((extension) => extension.onConnect?.(socket));
       this.connectListeners.forEach((listener) => listener());
@@ -83,6 +84,7 @@ class SocketService {
       console.log('Disconnected from server');
       const systemStore = useSystemStore.getState();
       systemStore.setConnected(false);
+      systemStore.setIwr6843Transfer(null);
       // The kiosk is restarting or gone: never leave a green light up.
       systemStore.setReadyLight(kioskRestartingLight(systemStore.readyLight));
       useShotStore.getState().finishShotProcessing();
@@ -192,6 +194,14 @@ class SocketService {
 
     this.socket.on('camera_capture_settings', (data: CameraCaptureSettings) => {
       useCameraStore.getState().setCaptureSettings(data);
+    });
+
+    this.socket.on('iwr6843_transfer', (data: Iwr6843Transfer) => {
+      useSystemStore.getState().setIwr6843Transfer(data);
+    });
+
+    this.socket.on('iwr6843_transfer_error', (data: { error: string }) => {
+      useSystemStore.getState().setIwr6843TransferError(data.error);
     });
 
     this.socket.on('camera_capture_settings_error', (data: { error: string }) => {
@@ -304,6 +314,11 @@ class SocketService {
 
   setRadarConfig(config: Partial<RadarConfig>) {
     this.socket?.emit('set_radar_config', config);
+  }
+
+  /** Fast (two-round) or Full IWR transfer, from the next shot on. */
+  setIwr6843Transfer(mode: Iwr6843Transfer['requested']) {
+    this.socket?.emit('set_iwr6843_transfer', { mode });
   }
 
   setCameraCaptureSettings(settings: Partial<CameraCaptureSettings>) {

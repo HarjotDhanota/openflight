@@ -1272,6 +1272,11 @@
   gap: 8px;
 }
 
+.menu-sheet,
+.menu-sheet button {
+  touch-action: none;
+}
+
 .menu-sheet__section-title {
   font-weight: 700;
   font-size: 0.59rem;

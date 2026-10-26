@@ -4215,3 +4215,63 @@ def test_a_stored_pre_s11_candidate_still_matches_a_new_one():
     new = {**base, "size_radar_range_m": 1.51}
     assert ts._same_guided_candidate(old, new) is True
     assert ts._same_guided_candidate(old, {**new, "size_radar_range_m": 1.9}) is False
+
+
+class TestRadarData:
+    """Fast (two-round) or Full IWR transfer, chosen on the tester page; Full by default."""
+
+    @pytest.mark.parametrize("action", ["swings", "ladder"])
+    def test_every_kiosk_starts_with_the_full_dump_by_default(self, tmp_path, action):
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        commands, _ = ts.action_commands(action, p, tmp_path, RIG, tester_setup=TESTER_SETUP)
+        flag = commands[0].index("--iwr6843-transfer")
+        assert commands[0][flag + 1] == "full"
+
+    def test_a_tester_who_chose_fast_starts_the_kiosk_with_it(self, tmp_path):
+        p = params(arm_id="arm4", tee_mm=1524)
+        screened(tmp_path, p)
+        commands, _ = ts.action_commands(
+            "swings", p, tmp_path, RIG, tester_setup=TESTER_SETUP, iwr_transfer="two_round"
+        )
+        flag = commands[0].index("--iwr6843-transfer")
+        assert commands[0][flag + 1] == "two_round"
+
+    def test_the_choice_is_saved_and_reaches_a_running_kiosk(self, tmp_path, monkeypatch):
+        sent = []
+
+        def kiosk(mode=None):
+            sent.append(mode)
+            return {
+                "requested": mode or "full",
+                "effective": "full",
+                "available": False,
+                "reason": "the radar firmware has no fast-transfer commands",
+            }
+
+        monkeypatch.setattr(ts, "kiosk_iwr_transfer", kiosk)
+        client = eligible_app(sessions_root=tmp_path).test_client()
+        tester = "20260922-name"
+
+        first = client.get("/api/tester/radar-data", query_string={"tester_id": tester}).get_json()
+        assert first["mode"] == "full" and first["source"] == "default"
+        chosen = client.post(
+            "/api/tester/radar-data", json={"tester_id": tester, "mode": "two_round"}
+        ).get_json()
+        assert chosen["mode"] == "two_round" and chosen["kiosk"]["requested"] == "two_round"
+        assert "fast-transfer" in chosen["kiosk"]["reason"]
+        assert sent == [None, "two_round"]
+        assert ts.read_radar_data(ts.tester_root(tmp_path, tester))["mode"] == "two_round"
+        bad = client.post("/api/tester/radar-data", json={"tester_id": tester, "mode": "x"})
+        assert bad.status_code == 400
+
+    def test_no_running_kiosk_is_said_plainly(self, tmp_path, monkeypatch):
+        def unreachable(mode=None):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(ts, "kiosk_iwr_transfer", unreachable)
+        client = eligible_app(sessions_root=tmp_path).test_client()
+        body = client.get(
+            "/api/tester/radar-data", query_string={"tester_id": "20260922-name"}
+        ).get_json()
+        assert body["kiosk"] is None and "not running" in body["kiosk_note"]
