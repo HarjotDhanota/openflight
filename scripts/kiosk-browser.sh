@@ -23,7 +23,7 @@ launch_kiosk_browser() {
 
     log "Launching kiosk shell (Electron)..."
     if [ -x "$electron_bin" ]; then
-        _launch_kiosk_process env DISPLAY=:0 OPENFLIGHT_URL="$url" OPENFLIGHT_ALLOWED_ORIGINS="$origins" "$electron_bin" "$PROJECT_DIR/ui"
+        _launch_kiosk_process env -u ELECTRON_RUN_AS_NODE DISPLAY=:0 OPENFLIGHT_URL="$url" OPENFLIGHT_ALLOWED_ORIGINS="$origins" "$electron_bin" "$PROJECT_DIR/ui"
     elif command -v chromium-browser &> /dev/null; then
         warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium-browser"
         _launch_kiosk_process env DISPLAY=:0 chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"

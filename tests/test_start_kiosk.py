@@ -961,3 +961,11 @@ def test_the_shell_is_handed_its_allowed_origins():
 
     assert 'OPENFLIGHT_ALLOWED_ORIGINS="$origins"' in launcher
     assert 'launch_kiosk_browser "$1" "$KIOSK_BROWSER_ORIGINS"' in script
+
+
+def test_the_shell_never_runs_as_plain_node():
+    """An editor's or agent's terminal exports ELECTRON_RUN_AS_NODE=1; Electron then runs
+    main.js as Node, where `import { BrowserWindow } from 'electron'` fails."""
+    launcher = _launcher_function()
+
+    assert "env -u ELECTRON_RUN_AS_NODE DISPLAY=:0 OPENFLIGHT_URL=" in launcher

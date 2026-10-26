@@ -23,6 +23,6 @@ export function kioskWindowOptions(env) {
     },
   };
   return windowed
-    ? { ...common, kiosk: false, fullscreen: false, ...windowSize(env) }
+    ? { ...common, kiosk: false, fullscreen: false, useContentSize: true, ...windowSize(env) }
     : { ...common, kiosk: true, fullscreen: true };
 }

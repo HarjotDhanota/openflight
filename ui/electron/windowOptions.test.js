@@ -18,7 +18,8 @@ describe('kioskWindowOptions', () => {
 
   it("sizes the window from OPENFLIGHT_KIOSK_WINDOW_SIZE, to try another screen's size", () => {
     const options = kioskWindowOptions({ OPENFLIGHT_KIOSK_WINDOWED: '1', OPENFLIGHT_KIOSK_WINDOW_SIZE: '800x480' });
-    expect(options).toMatchObject({ width: 800, height: 480 });
+    // the page gets the screen's size, not the window with its frame
+    expect(options).toMatchObject({ width: 800, height: 480, useContentSize: true });
   });
 
   it('reads the multiplication sign too', () => {
