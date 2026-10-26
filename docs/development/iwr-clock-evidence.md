@@ -186,6 +186,62 @@ or minus half that width. Counter continuity/rate, source timestamp placement,
 wire ceilings, capture/runtime linkage and the RF/ADC offset require separate
 qualification before this calculation can support physical fusion timing.
 
+## Capture/runtime sidecars
+
+The separate RESEARCH-only `capture_clock` recorder brackets one original full
+dump with a compact probe on each side and verbose identity checks around the
+whole session. It uses one already exclusively owned radar handle. The capture
+callback receives that handle and must return only after CLI recovery; it must
+not reopen UART or start another serial owner. No probe runs during acquisition
+or a held transfer. The collector saves exact payload bytes before attempting
+the post-probe, retaining partial bytes and failure records when available.
+
+`scripts/hardware-test/iwr_capture_clock.py record` operates on a separately
+configured, already running RF profile and requires the reviewed build hash. It
+does not configure/start RF or install firmware. It creates a new directory,
+records one capture and, on successful collection, stops the sensor and verifies
+idle with the existing driver. Failed collection closes the port without
+attempting further UART commands against an unknown CLI state. Failure may
+leave RF running; inspect retained evidence and recover through the reviewed
+board procedure. It never retries, resets or flashes the board automatically.
+
+The JSONL start record identifies the host boot, serial connection and capture.
+The capture record binds the original payload length and SHA-256 to the observed
+host acquisition bracket. The auditor checks all compact byte/read evidence and
+matching pre/post identities, payload length/hash, continuous associated frame
+evidence, capture/probe rate agreement and lifecycle ordering. Every retained
+frame must follow the pre-probe's frame sequence and counter, and precede the
+post-probe. Buffered frames from before the pre-probe are rejected, rather than
+silently omitted. A settle interval is an operator-selected collection policy;
+its default does not guarantee that every profile has overwritten its ring.
+
+The full host span between probes must fit inside the supplied proximity bound
+and be shorter than the fastest assumed counter half-wrap. This independently
+bounds proximity instead of inferring wrap count from raw counter values. Long
+waits or slow full dumps can make the entire association unavailable; no distant
+post-probe is dropped to manufacture a result. Both probes participate in every
+frame start/done counter interval. Optional UART credits require the explicit
+contract described above. Full dump versions without observed evidence and
+sparse/two-round captures are currently unsupported by this sidecar auditor.
+
+Offline example, with ASSUMED counter/proximity inputs:
+
+```bash
+uv run --no-sync python scripts/hardware-test/iwr_capture_clock.py audit capture-dir \
+  --output capture-audit.json --rate-min-hz 199980000 \
+  --rate-max-hz 200020000 --max-distance-ns 10000000000
+```
+
+Exit 0 means a conditional counter association, 1 unavailable evidence, and 2
+collection/input/output error. Output files/directories must be new. Offline
+audit never opens a device and hashes its input JSONL. Pre/post identity agreement
+is a conditional software association, not an embedded capture runtime token or
+cryptographic provenance. It relies on the reviewed collector, runtime identity
+behavior and uninterrupted counter operation. Start means ISR entry and done
+means processing/copy completion; neither is a calibrated ADC boundary.
+`physical_timing_qualified` and `wire_timing_qualified` stay false, and
+`rf_acquisition_interval_ns` stays null. No shot metric consumes this result.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.
