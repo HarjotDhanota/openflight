@@ -129,3 +129,43 @@ test('the package is ready: Done on the page closes the kiosk', async ({ page })
   await expect.poll(() => closes).toEqual([{ tester_id: DEFAULT_TESTER, run_id: 'run-1' }]);
   await expect(done).toBeHidden();
 });
+
+test.describe('a touchscreen that reports a finger as a mouse', () => {
+  test.use({ hasTouch: false });
+
+  async function mouseDrag(page: Page, from: { x: number; y: number }, dy: number) {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step += 1) await page.mouse.move(from.x, from.y + (dy * step) / 8);
+    await page.mouse.up();
+  }
+
+  test('drags the page on the unit screen, and a drag never taps what it started on', async ({ page }) => {
+    const world: World = { freePlay: { enabled: false }, kiosk: null };
+    await useTester(page);
+    await mockOnScreenWorld(page, world);
+    await page.goto('/tester.html?screen=unit');
+    await expect(page.locator('#step-1')).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const indoors = page.getByRole('button', { name: 'Outdoors', exact: true });
+    const box = (await indoors.boundingBox())!;
+    const before = await page.evaluate(() => window.scrollY);
+    await mouseDrag(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, -200);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before + 150);
+    await expect(indoors).toHaveAttribute('aria-pressed', 'false');
+    // a tap still taps
+    await indoors.click();
+    await expect(indoors).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('a desktop browser keeps its own mouse: no drag scrolling off the unit screen', async ({ page }) => {
+    const world: World = { freePlay: { enabled: false }, kiosk: null };
+    await useTester(page);
+    await mockOnScreenWorld(page, world);
+    await page.goto('/tester.html');
+    await expect(page.locator('#step-1')).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await mouseDrag(page, { x: 400, y: 400 }, -200);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  });
+});

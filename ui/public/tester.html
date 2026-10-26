@@ -769,6 +769,11 @@
         background: var(--bg);
         border-bottom: 1px solid var(--line);
       }
+      /* the unit's own screen: a finger dragging the page never selects its text */
+      html.unit-screen body {
+        user-select: none;
+        -webkit-user-select: none;
+      }
       .stepbar button {
         min-height: 44px;
         padding: 6px 12px;
@@ -6293,6 +6298,64 @@
           return marked;
         }
       })();
+      // The unit's touchscreen may report a finger as a mouse, which never scrolls a page:
+      // there, dragging the page scrolls it (as the kiosk's lists do, ui/AGENTS.md). Nothing
+      // moves before 16 px, so a tap still taps; after a drag the click it ends in is
+      // swallowed. A control that drags by itself (touch-action: none: the net line, the aim)
+      // keeps its drag. A desktop browser's mouse is left alone.
+      const DRAG_SCROLL_THRESHOLD_PX = 16;
+      function ownsItsDrag(node) {
+        for (let at = node; at && at !== document.body; at = at.parentElement) {
+          if (at.matches('input, select, textarea') || getComputedStyle(at).touchAction === 'none') return true;
+        }
+        return false;
+      }
+      function installDragScroll() {
+        let drag = null;
+        let swallowClick = false;
+        document.documentElement.classList.add('unit-screen');
+        window.addEventListener(
+          'pointerdown',
+          (event) => {
+            if (event.pointerType !== 'mouse' || event.button !== 0 || ownsItsDrag(event.target)) return;
+            drag = { id: event.pointerId, y: event.clientY, top: window.scrollY, moving: false };
+          },
+          true
+        );
+        window.addEventListener(
+          'pointermove',
+          (event) => {
+            if (!drag || event.pointerId !== drag.id) return;
+            const dy = event.clientY - drag.y;
+            if (!drag.moving && Math.abs(dy) < DRAG_SCROLL_THRESHOLD_PX) return;
+            drag.moving = true;
+            event.preventDefault();
+            window.scrollTo(0, drag.top - dy);
+          },
+          true
+        );
+        const end = (event) => {
+          if (!drag || event.pointerId !== drag.id) return;
+          if (drag.moving) {
+            swallowClick = true;
+            setTimeout(() => (swallowClick = false), 0);
+          }
+          drag = null;
+        };
+        window.addEventListener('pointerup', end, true);
+        window.addEventListener('pointercancel', end, true);
+        window.addEventListener(
+          'click',
+          (event) => {
+            if (!swallowClick) return;
+            swallowClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+          },
+          true
+        );
+      }
+      if (onUnitScreen) installDragScroll();
       // the kiosk in this window: ?from=tester tells it the way back (and that the club is chosen)
       function kioskHereUrl() {
         const href = kioskViewUrl();
