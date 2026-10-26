@@ -157,3 +157,33 @@ Hardware qualification still requires firmware/host compatibility and rollback,
 counter continuity/drift/reset checks, UART-load/RF-frame integrity checks, explicit
 RF frame/chirp/ADC timing, camera optical timing and independent physical evidence.
 No software-only result removes those requirements.
+
+## Temporary RAM experiment
+
+The research-only `scripts/hardware-test/load_iwr_clock_ram.py` implements the
+ROM UART RAM-download path in [SWRA627, section 3.3](https://www.ti.com/lit/an/swra627/swra627.pdf).
+It uses SRAM storage 4 and WRITE FILE TO RAM opcode 0x26. The SDK meta-image must
+have its flash-only CRC32 footer removed; its internal CRC64 remains for the
+ROM. `ram_image_from_flash` verifies the footer before removing it. The command
+requires the reviewed RAM payload SHA-256 and validates its device/header length
+before opening UART. It has no flash-write, erase or flash-fallback option.
+
+On the confirmed PROC116A board, the CP2105 DTR/RTS pins are unconnected
+([schematic, sheet 10](https://www.ti.com/lit/zip/swrr178)). USB therefore cannot
+operate SOP or RESET. The operator prepares SOP2/S1.1 ON, SOP1/S1.2 OFF and
+SOP0/S1.3 ON, preserving the functional UART-routing switches. The command opens
+the exclusively locked Enhanced UART, then waits for the operator to press
+RESET before starting the ROM handshake. It does not pulse DTR/RTS to attempt a
+remote boot-mode change.
+
+```bash
+uv run python scripts/hardware-test/load_iwr_clock_ram.py temporary-clock.ram.bin \
+  --port /dev/ttyUSB0 --sha256 REVIEWED_RAM_PAYLOAD_SHA256
+```
+
+Acknowledged transfer is not verified application startup. Check the expected
+verbose `clockProbe` build/runtime before collecting timing evidence. To return
+to saved firmware, restore functional SOP2/S1.1 OFF and press RESET. The RAM path
+is intended to preserve flash, but its operation on this board is still pending
+hardware validation. The saved release artifact is not a readback of the
+currently installed application.
