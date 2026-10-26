@@ -204,10 +204,15 @@ serves the new line.
 
 ## The kiosk window (2a, 3a)
 
-The tester starts every kiosk with `start-kiosk.sh --no-browser`
-(`OPENFLIGHT_NO_BROWSER=1` does the same), so the fullscreen kiosk window never
-covers the tester page; the page's "Kiosk view" button opens the kiosk UI at
-`kiosk.url`. The 1280×800 ↔ 640×400 switch keeps its restart; `kiosk.state` is
+The tester starts the ladder's and the swings' kiosks with
+`start-kiosk.sh --no-browser` (`OPENFLIGHT_NO_BROWSER=1` does the same), so the
+fullscreen kiosk window never covers the tester page; the page's "Kiosk view"
+button opens the kiosk UI at `kiosk.url`. Free play opens the kiosk's fullscreen
+window on the unit, unless the page itself is on the unit's screen
+(`start-tester.sh --on-screen`): it then asks for `kiosk_window: "shared"`, the
+kiosk starts with `--no-browser`, and the page's window switches to it. Every
+kiosk the tester starts gets `--tester-control-port`, for its **Tester** button
+(`GET /api/tester-page`). The 1280×800 ↔ 640×400 switch keeps its restart; `kiosk.state` is
 `switching_mode` with a progress message meanwhile.
 
 ## Endpoints

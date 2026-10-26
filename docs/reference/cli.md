@@ -208,7 +208,19 @@ Handled by `scripts/start-kiosk.sh` itself rather than passed through.
 | `--port`, `--web-port` | Set the kiosk web port |
 | `--radar-port`, `--ops-port` | Forward the OPS serial port as the server's `--port` |
 | `--buffer-split` | Buffer split preset (`balanced`, `post-heavy`, `pre-heavy`) or raw segment count |
-| `--no-browser` | Start the server without opening the kiosk window (the tester always does, so its page stays on screen); `OPENFLIGHT_NO_BROWSER=1` does the same |
+| `--no-browser` | Start the server without opening the kiosk window (the tester's ladder and swings always do, so its page stays on screen, and so does free play started from the tester page on the unit's own screen); `OPENFLIGHT_NO_BROWSER=1` does the same |
+
+The kiosk shell (Electron) reads these from the environment:
+
+| Variable | Description |
+| --- | --- |
+| `OPENFLIGHT_ALLOWED_ORIGINS` | Space- or comma-separated origins the window may navigate to besides the page it opened; every other origin is refused. `start-kiosk.sh` sets the kiosk's own, plus the tester page's on a kiosk the tester started (`--tester-setup-required`, port from `--tester-control-port`, default 8765) |
+| `OPENFLIGHT_KIOSK_WINDOWED` | `1`: a normal window instead of fullscreen |
+| `OPENFLIGHT_KIOSK_WINDOW_SIZE` | The windowed page's size, e.g. `800x480` (default `1024x600`); fullscreen takes the screen's size |
+
+`scripts/start-tester.sh --on-screen` (or `OPENFLIGHT_TESTER_ON_SCREEN=1`) opens the
+tester page in the same shell on the unit's own screen; see
+[the tester pilot](../camera/tester-pilot.md#on-the-units-own-screen-on-screen).
 
 ## Related
 

@@ -40,12 +40,12 @@ prompt or annotation step. Face photos aren't required, but they help (below).
 Testers collect and send data; the maintainer handles any reference marking and
 accuracy grading.
 
-### During free play: Setup, face photos and the aim
+### During free play: Tester, face photos and the aim
 
-- **Setup** in the scoreboard's Live header brings the tester page back: the
-  window that opened the scoreboard, or (on the unit's own screen, where the
-  scoreboard covers everything) the tester page in the same window. **Kiosk view**
-  goes back to the scoreboard.
+- **Tester**, at the top right of every scoreboard tab, brings the tester page
+  back: the window that opened the scoreboard, or (on the unit's own screen, where
+  the scoreboard covers everything) the tester page in the same window. **Kiosk
+  view** goes back to the scoreboard.
 - **Face photo** (scoreboard) or **Photograph the face** (step 7) pauses free
   play: the light shows amber **WAIT · taking a face photo**, swings are not
   counted ("Not counted: paused"), and the camera holds the ladder's still-photo
@@ -255,6 +255,55 @@ bash scripts/start-tester.sh
 On the Pi itself, open `http://127.0.0.1:8765`. From another computer, use
 `http://<pi-hostname-or-address>:8765`; `127.0.0.1` on that computer points
 back to that computer, not to the Pi.
+
+### On the unit's own screen (`--on-screen`)
+
+`bash scripts/start-tester.sh --on-screen` (or `OPENFLIGHT_TESTER_ON_SCREEN=1`) runs
+the tester page on the unit's touchscreen, in the kiosk's own Electron shell,
+fullscreen and chromeless. The script starts the tester server, waits for it to
+answer, then opens `http://localhost:8765/?screen=unit`; Ctrl+C (or the server
+stopping) closes the shell too. Other options pass through to the server as before
+(`--port`, `--iwr-static-port`, ...). `--host` must be `127.0.0.1` (the default:
+only the unit's screen can open the page) or `0.0.0.0` (a phone can as well);
+anything else is refused, since the shell opens the page through loopback.
+`--dry-run` prints the server command and what the shell would open.
+
+The page and the kiosk then take turns in that one window, one tap each way, with
+no restart of the kiosk, free play or the camera:
+
+- **Kiosk view** navigates the window to the kiosk UI (`?from=tester`). Without
+  `--on-screen` it still opens the kiosk in a new window or tab, as before.
+- **Tester**, at the top right of every kiosk tab, navigates back to the tester
+  page. The kiosk shows it only while the tester that started it answers
+  (`GET /api/tester-page` on the kiosk asks the tester's `GET /api/tester/ping`;
+  a phone is offered it only when the tester listens with `--host 0.0.0.0`). It
+  replaces free play's old **Setup** button.
+- **Start free play** from the page on the unit's screen starts the kiosk with
+  `--no-browser` (`kiosk_window: "shared"`), so no second window opens; the page
+  says "The scoreboard opens on this screen when it is ready" and switches the
+  window once the kiosk answers, also after a reload. Started from a phone, free
+  play still opens the kiosk's own fullscreen window on the unit, as before.
+- **Stop & package** on a kiosk shown this way returns the window to the tester
+  page, which shows the packaging and, once the package is ready, a **Done**
+  button (it closes the kiosk, as **Done** on the kiosk does).
+
+The tester page keeps its state across the switches: the tester ID and the unit
+screen mark live in the tab's session storage, and every step is read back from
+the server, so the page reopens at the step it was on. On the unit's screen a
+finger dragging the page scrolls it, even on a display that reports the finger as
+a mouse; a tap still taps.
+
+The shell only ever navigates between the tester page's origin and the kiosk's
+(`http://localhost:8765` and `http://localhost:8080`): every other origin, and
+`file:` URLs, are refused, and pop-up windows are denied. A kiosk the tester
+starts allows its window the tester's origin too, so its **Tester** button works
+in the kiosk's own window; a plain kiosk's window stays on the kiosk.
+
+**The screen size.** Fullscreen, the shell takes whatever size the screen is; the
+pages are laid out for 1024×600 and 800×480 (and the kiosk for 800×400). To try a
+size on a desktop, run the shell windowed:
+`OPENFLIGHT_KIOSK_WINDOWED=1 OPENFLIGHT_KIOSK_WINDOW_SIZE=800x480` (the page gets
+exactly that size).
 
 The tester also writes a rotating service log to
 `~/openflight_sessions/tester_pilot/tester-server.log`. It remains available
@@ -488,8 +537,9 @@ are recorded with the capture in the session bundle.
 
 **The kiosk's own screen.** While the tester runs, the kiosk does not take over
 the screen. **Kiosk view** in the bar at the top opens the kiosk's page in a
-normal window or tab; nothing the ladder waits on (the verdict, the photo or skip,
-switching exposure, Stop) needs it. Its Live tab says what left and right are
+normal window or tab (on the unit's own screen, with `--on-screen`, the same
+window, and **Tester** comes back); nothing the ladder waits on (the verdict, the
+photo or skip, switching exposure, Stop) needs it. Its Live tab says what left and right are
 measured from: "Target line set +2.1° ±0.8°", or "Target line not set: left/right
 is from the unit's aim".
 
@@ -994,7 +1044,9 @@ every earlier frame and failure record for review.
 | `The ball box moved, so confirm the aim point again` | The target line starts at the ball, which moved | Check the yellow line is still on the target and press **Confirm the aim point** |
 | Ladder verdict red: `ball: the setup has no ball position for this camera mode` | The setup's camera never found the ball, so a swing's pictures cannot be checked against it | Press **Stop**, run the setup again until the camera finds the ball, then press **Start the exposure ladder** |
 | **Kiosk view** is greyed out | The kiosk is not running, or is between camera modes | Start the ladder; during a mode switch wait for the progress line under the top bar to finish (about 20 s). Nothing the ladder waits on needs the kiosk's window |
-| A fullscreen kiosk window covers the tester page | The kiosk was started by an older start script | Close that window; use **Kiosk view**, which opens the kiosk in a normal window or tab |
+| The scoreboard fills the unit's screen and the tester page is behind it | Free play was started from a phone (its kiosk opens fullscreen on the unit), or the tester page is not on the unit's screen | Tap **Tester** at the top right of the scoreboard: the same window shows the tester page, and **Kiosk view** goes back. To run the tester page on the unit's screen from the start, use `start-tester.sh --on-screen` |
+| No **Tester** button on the scoreboard | The tester server is not answering (its terminal stopped), the kiosk was not started by the tester, or the page is on a phone while the tester listens on loopback only | Check the tester's terminal; on a phone, start the tester with `--host 0.0.0.0` |
+| On the unit's screen, **Start free play** stays on the tester page | The kiosk takes about 20 s to start; the line under the bar says the scoreboard opens when it is ready | Wait for it; if the line has gone, tap **Kiosk view** |
 | The target is too small to see on the aim picture | The step's picture is smaller than the camera's own pixels | Press **Full screen with magnifier**, choose 3× or 4×, drag the circle near the target, then use the arrow buttons to put it on the target one camera pixel at a time |
 | `No ball in the box yet: put one in the yellow box` | The camera sees no ball in the box | Put the ball inside the yellow box on the hitting surface. If the box is not where you hit from, move the unit (1.8–2.9 m behind the ball, pointing down the target line); the box itself never moves |
 | `The ball is outside the box: move it into the yellow box` | The camera found a ball, but not inside the box | Move the ball into the box, or move the unit so the box sits over your hitting spot; **Confirm the ball in the box** opens when the green check appears |

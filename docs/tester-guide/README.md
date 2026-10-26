@@ -22,11 +22,27 @@ bash scripts/start-tester.sh --host 0.0.0.0 --iwr-static-port /dev/serial/by-id/
 ```
 
 - **OPS243 on USB rather than the GPIO pins?** Add `--radar-port /dev/ttyACM0`, or whichever port it shows.
+- **Using the unit's own touchscreen instead of a phone?** Add `--on-screen`. The tester page then opens full screen on the unit by itself, once the tester is ready:
+
+  ```
+  bash scripts/start-tester.sh --on-screen --host 0.0.0.0 --iwr-static-port /dev/serial/by-id/<your ...if00-port0 entry>
+  ```
 
 Leave the terminal open; **Ctrl+C** in it stops everything. Then open the tester page:
 
-- **On the Pi's own screen:** `http://localhost:8765/`
+- **On the Pi's own screen:** start with `--on-screen` (above) and it's already there.
 - **From a phone or laptop:** `http://<pi address>:8765/`. Find the address with `hostname -I` on the Pi, and note the colon before `8765`.
+
+### On the unit's own screen: one window for both
+
+With `--on-screen`, the tester page and the scoreboard share the unit's screen and take turns in it. Each switch is one tap, and nothing restarts: the kiosk, free play and the camera keep running, and the tester page comes back where it was.
+
+- **Kiosk view** (top right of the tester page) shows the scoreboard.
+- **Tester** (top right of the scoreboard, on every tab) brings the tester page back.
+- **Start free play** switches to the scoreboard by itself when the kiosk is ready, about 20 seconds later. The line under the top bar says so while you wait.
+- **Stop & package** on the scoreboard brings the tester page back, where you wait for the package and tap **Done**.
+
+Everything is touch: tap buttons, and drag the page (or a list) up and down with your finger to scroll. The pages fit the unit's 1024×600 and 800×480 screens.
 
 ## Set up (once per spot)
 
@@ -64,7 +80,7 @@ Work down the page. Each step opens when the one before it is done, and the bar 
 
 ## Play
 
-**7. Free play.** Tap the resolution you were asked to use (**1280×800** or **640×400**), tap the club you'll hit first, then tap **Start free play**. The scoreboard opens full screen.
+**7. Free play.** Tap the resolution you were asked to use (**1280×800** or **640×400**), tap the club you'll hit first, then tap **Start free play**. The scoreboard opens full screen on the unit. If the tester page is on the unit's own screen, that same screen switches to the scoreboard by itself once the kiosk is ready, about 20 seconds later.
 
 <img src="images/7-resolution.png" width="480" alt="Step 7: 1280×800 and the 7-iron tapped, above Start free play">
 
@@ -74,20 +90,20 @@ Hit balls as normal and watch your numbers. The light at the top tells you when 
 - **Amber, WAIT:** the unit is saving the last shot or changing the camera setting. Hit when it turns green.
 - **Red, NOT READY:** something needs fixing, and it says what; for example, no ball in the box.
 
-<img src="images/kiosk-swing.png" width="960" alt="The scoreboard: green SWING, the exposure study line, Stop & package, the Setup, Face photo and Change club buttons, and a 7-iron shot's numbers">
+<img src="images/kiosk-swing.png" width="960" alt="The scoreboard: green SWING, the exposure study line, Stop & package, the Tester button, the Face photo and Change club buttons, and a 7-iron shot's numbers">
 
 <img src="images/kiosk-wait.png" width="480" alt="Amber WAIT: camera saving a clip"> <img src="images/kiosk-not-ready.png" width="480" alt="Red NOT READY: no ball in the box">
 
 - The unit runs an exposure study by itself: five swings at each camera setting. The top right shows its progress, for example **Exposure study: 150 µs · swing 3 of 5 · setting 3 of 6**, and then **Automatic exposure** once it's done. There's nothing for you to do.
 - **Switching clubs?** Tap **CHANGE CLUB** on the scoreboard before the first swing with the new club. The numbers depend on it.
 - **Face photos** aren't required, but they help a lot. Before a swing you want to photograph, spray the club face with foot-powder spray (or stick on impact tape) so the strike leaves a mark. After the swing, tap **Face photo** on the scoreboard (or **Photograph the face** in step 7). The scoreboard waits; hold the club face about 0.5 m from the lens inside the dashed box, leaning the shaft back so the face looks straight at the lens, and tap **Photograph face** (or **Skip**). If the scoreboard still says WAIT, tap **Resume**. Wipe the face before spraying it again. You don't mark anything: we do that from the photo. Recommended: put a 1/4-inch white (or black) round dot sticker on the toe of each club you photograph, clear of where you hit; it makes the photo exact even at an angle.
-- **To change your aim**, or get back to the setup page: tap **Setup** on the scoreboard. In step 4, tap **Move the aim point** and confirm it; the next shot is measured from the new line. Tap **Kiosk view** to return to the scoreboard.
+- **To change your aim**, or get back to the tester page: tap **Tester** at the top right of the scoreboard. In step 4, tap **Move the aim point** and confirm it; the next shot is measured from the new line. Tap **Kiosk view** to return to the scoreboard.
 - Labels like **EST** mark numbers we trust less. Keep hitting.
 - Re-tee anywhere in the box. If you move the unit, stop, package and set up again.
 
 ## Finish and send us the data
 
-**8. Send the package.** Tap **Stop & package** on the scoreboard whenever you're done; a part-finished study is fine. Wait for **Package ready**, then tap **Done**. Then, on the tester page, step 8:
+**8. Send the package.** Tap **Stop & package** on the scoreboard (or in step 7) whenever you're done; a part-finished study is fine. Wait for **Package ready**, then tap **Done**, on the scoreboard or in step 7. On the unit's own screen, the tester page comes back by itself after **Stop & package**. Then, on the tester page, step 8:
 
 1. Tap **Download** to save the zip on your phone or laptop. It can be about 1 GB.
 2. In your Google Drive (drive.google.com), make a new folder and upload the zip into it. **Hit beside a TrackMan or another launch monitor?** Put its export (CSV) in the same folder.
@@ -104,6 +120,9 @@ The zip is also saved on the unit in `~/OpenFlight-to-send/`.
 |---|---|
 | The tester page won't load | Check the address: a colon before `8765`, and the Pi's current address from `hostname -I`. Make sure the terminal is still running. |
 | The script stops, mentioning OpenFlight's service | Run the `sudo systemctl stop openflight.service` line it prints, then start again. |
+| The scoreboard fills the unit's screen and you want the tester page | Tap **Tester** at the top right of the scoreboard. No **Tester** button means the tester page isn't answering: check the terminal is still running. |
+| On the unit's screen, **Start free play** seems to do nothing | The scoreboard takes about 20 seconds to start; the line under the top bar says so, and the screen switches by itself when it's ready. If the line is gone and you're still on the tester page, tap **Kiosk view**. |
+| `--on-screen needs --host 127.0.0.1 or 0.0.0.0` | Use `--host 0.0.0.0` (a phone can also open the page) or leave `--host` out (only the unit's screen can). |
 | **Check the unit** names a missing sensor | Do what its row says (for the camera: check the ribbon cable at both ends), then tap **Check the unit** again. For the ranging radar: press RESET on its board, tick the RESET box and check again; still failing, unplug its USB cable for 5 seconds and plug it back in. |
 | The tilt check fails or reads the wrong way | Wrong way: put the unit down and tap the marked fix. **No lift seen** or **The lift was not clear**: lift the middle of the front edge about 2 cm and tap **Try again**. **No left-side lift seen**: lift the middle of the left side. **The left side read the wrong way**: if you did lift the left side, tell us (the front is still checked). **The unit did not sit the same way twice**: set it down flat on the same spot each time and tap **Try again**. Reads the unit on its side: stand it on its feet; if it already is, tell us. |
 | No green check in step 3 | Move the ball inside the yellow box and put more light on it. |
