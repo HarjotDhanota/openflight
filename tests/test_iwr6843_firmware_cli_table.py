@@ -264,8 +264,8 @@ MATRIX = {
     "minimal": (),
     "clock_probe": PRODUCTION + CLOCK_PROBE,
     "clock_compact": PRODUCTION + CLOCK_COMPACT,
-    "clock_compact_evidence_off": EVIDENCE_OFF + CLOCK_COMPACT,
-    "clock_probe_minimal": CLOCK_PROBE,
+    "clock_compact_no_hwa_smoke": tuple(f for f in PRODUCTION if f != "ENABLE_HWA_SMOKE")
+    + CLOCK_COMPACT,
     "two_round": PRODUCTION + TWO_ROUND,
     "combined": PRODUCTION + CLOCK_COMPACT + TWO_ROUND,
 }
@@ -295,11 +295,19 @@ def test_the_clock_commands_take_their_contract_slots_when_everything_is_on(tmp_
     assert rows[len(PRODUCTION_ORDER) + 2][1] == "help"
 
 
-def test_clock_commands_still_register_when_evidence_is_off(tmp_path):
-    """The old fixed slots 13/14 sat past a NULL here, so CLI_open never saw them."""
-    rows = _registered(tmp_path, EVIDENCE_OFF + CLOCK_COMPACT)
+def test_clock_commands_still_register_after_a_disabled_feature(tmp_path):
+    """The old fixed slots 13/14 sat past NULLs at 4-6 here, so CLI_open never saw them."""
+    rows = _registered(tmp_path, MATRIX["clock_compact_no_hwa_smoke"])
 
-    assert [row[1] for row in rows[11:]] == ["clockProbe", "cp", "help"]
+    assert [row[1] for row in rows[10:]] == ["clockProbe", "cp", "help"]
+
+
+def test_the_clock_probe_without_capture_evidence_is_refused(tmp_path):
+    """Its handlers read l3_ticks, which only the evidence block defines."""
+    refused = _compile(tmp_path, EVIDENCE_OFF + CLOCK_COMPACT)
+
+    assert refused.returncode != 0
+    assert "L3_USB_CLOCK_PROBE requires L3_CAPTURE_EVIDENCE" in refused.stderr
 
 
 def test_two_round_adds_no_command_yet(tmp_path):

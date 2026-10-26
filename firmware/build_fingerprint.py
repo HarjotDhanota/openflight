@@ -30,9 +30,9 @@ SOURCE_SUFFIXES = {".c", ".h", ".cfg", ".cmd"}
 
 # Always on wherever the header is included (clock_probe.h includes it).
 BASE_FLAG = "L3_USB_CLOCK_PROBE"
-# Flags that change the clock build. L3_CAPTURE_EVIDENCE is derived in
-# l3_dump.c from CONFIGURABLE_CAPTURE + HYBRID_CADENCE_CAPTURE.
-VARIANT_FLAGS = ("L3_USB_CLOCK_COMPACT", "L3_TWO_ROUND", "L3_CAPTURE_EVIDENCE")
+# Flags that change a clock build. L3_CAPTURE_EVIDENCE is not one: the clock
+# probe refuses to build without it (l3_feature_checks.h).
+VARIANT_FLAGS = ("L3_USB_CLOCK_COMPACT", "L3_TWO_ROUND")
 
 
 def sources() -> list[Path]:

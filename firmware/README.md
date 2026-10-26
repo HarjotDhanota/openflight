@@ -33,8 +33,9 @@ production build. Pass them to `build-native` or `docker-build`:
 | `TWO_ROUND_DEFS` | `L3_TWO_ROUND` | Nothing yet: the stage-2 two-round transfer scaffold (`iwr6843/two_round_format.h`) |
 
 `L3_USB_CLOCK_COMPACT` without `L3_USB_CLOCK_PROBE` is refused at compile
-time (`iwr6843/l3_feature_checks.h`), as is `L3_TWO_ROUND` without the
-capture evidence of the configurable hybrid-cadence build. Commands are registered contiguously by
+time (`iwr6843/l3_feature_checks.h`), as are `L3_USB_CLOCK_PROBE` and
+`L3_TWO_ROUND` without the capture evidence of the configurable
+hybrid-cadence build. Commands are registered contiguously by
 `iwr6843/l3_cli_table.h`, so a disabled flag never hides a later command.
 
 `clockProbe` reports a build id from `iwr6843/clock_probe_build_id.h`: one
