@@ -4,6 +4,7 @@ import json
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from openflight import gate_timing
@@ -31,6 +32,7 @@ def test_event_keeps_a_bracket_and_cannot_be_changed():
     assert event.kernel_mono_interval_ns == (800_000, 800_100)
     assert event.to_dict()["physical_edge_uncertainty_ns"] is None
     assert event.to_dict()["status"] == "observed_kernel_tick"
+    assert event.to_dict()["source"] == "sound_gate"
     with pytest.raises(FrozenInstanceError):
         event.event_id = "replacement"
 
@@ -72,6 +74,7 @@ def test_camera_records_shared_event_beside_its_later_callback(tmp_path, monkeyp
     assert runtime.notify_gate_event(event)
     clocks = runtime._trigger_clocks.get_nowait()
     assert clocks["host_monotonic_ns"] == 30_000_000
+    assert clocks["trigger_source"] == "sound_gate"
     assert clocks["gate_event"] == event.to_dict()
     assert clocks["gate_to_camera_callback_ns"] == [29_199_900, 29_200_000]
     capture = TriggeredCapture(
@@ -80,6 +83,10 @@ def test_camera_records_shared_event_beside_its_later_callback(tmp_path, monkeyp
     saved = runtime._save_capture(1, 10.0, capture, trigger_clocks=clocks)
     written = json.loads((saved.path / "metadata.json").read_text(encoding="utf-8"))
     assert written["trigger_clocks"]["gate_event"] == event.to_dict()
+    assert written["trigger_clocks"]["trigger_source"] == "sound_gate"
+    with np.load(saved.path / "frames.npz", allow_pickle=False) as archive:
+        assert archive["trigger_source"].shape == ()
+        assert archive["trigger_source"].item() == "sound_gate"
     assert written["trigger_clocks"]["gate_to_camera_callback_ns"] == [29_199_900, 29_200_000]
 
 

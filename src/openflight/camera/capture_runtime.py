@@ -986,6 +986,7 @@ class CameraCaptureRuntime:
         trigger_boottime_ns = _boottime_ns()
         clock_read_end_ns = time.monotonic_ns()
         clocks = {
+            "trigger_source": "sound_gate",
             "host_monotonic_ns": trigger_host_ns,
             "boottime_ns": trigger_boottime_ns,
             "boottime_minus_monotonic_bounds_ns": (
@@ -1616,6 +1617,8 @@ class CameraCaptureRuntime:
             exposure_split["gate_boottime_interval_ns"] = np.asarray(
                 clocks["gate_boottime_interval_ns"], dtype=np.int64
             )
+        if "trigger_source" in clocks:
+            exposure_split["trigger_source"] = np.str_(clocks["trigger_source"])
         if capture.tail_after_sensor_ns is not None:
             exposure_split["tail_after_sensor_ns"] = np.int64(capture.tail_after_sensor_ns)
 
@@ -1677,6 +1680,7 @@ class CameraCaptureRuntime:
                     **{
                         key: clocks[key]
                         for key in (
+                            "trigger_source",
                             "gate_event",
                             "gate_to_camera_callback_ns",
                             "boottime_minus_monotonic_bounds_ns",

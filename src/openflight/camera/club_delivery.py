@@ -1280,7 +1280,10 @@ def _head_track_fallback(
             )
             ball_ruf = ray * range_m / np.linalg.norm(ray)
         timing = sound_contact_record(
-            context.gate_interval_ns, ball_camera_ruf_m=ball_ruf, inputs=context.sound_timing
+            context.gate_interval_ns,
+            ball_camera_ruf_m=ball_ruf,
+            inputs=context.sound_timing,
+            trigger_source=context.trigger_source,
         )
         window = timing["contact_interval_ns"]
     track = estimate_head_track(
@@ -1299,6 +1302,8 @@ def _head_track_fallback(
         )
     )
     record = track.to_dict()
+    if context.trigger_source is not None:
+        record["trigger_source"] = context.trigger_source
     if timing is not None:
         record["contact_timing"] = timing
         record["notes"].append(timing["reason"])

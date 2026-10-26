@@ -144,6 +144,7 @@ class GateEvent:
         interval = self.kernel_mono_interval_ns
         return {
             **fields,
+            "source": "sound_gate",
             "kernel_mono_interval_ns": list(interval) if interval is not None else None,
             "status": "observed_kernel_tick" if interval is not None else "unobserved",
             "physical_edge_uncertainty_ns": None,
