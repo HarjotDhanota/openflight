@@ -22,10 +22,11 @@ Contact. The head turns fast through impact (about 1.8 deg/ms of attack angle at
 on a 1 m arc), so the last chord's direction is turned on to contact about the arc's
 axis: axis and rate measured from two chords, or, with one chord, the published arc
 prior's plane tilt and radius per club class (``WOOD_ARC`` / ``IRON_ARC``). Three or
-more chords fit one plane and angular rate using every chord. Contact time
-comes from the sound trigger, which fires 0.5-4 ms after contact (``club_delivery``,
-``ball_flight``). The ball-departure helpers date contact a frame early on this camera:
-the head passes between the lens and the ball before it moves it.
+more chords fit one plane and angular rate using every chord. New sound contexts
+require separate acoustic travel and detector-delay evidence. Legacy contexts retain
+their unqualified 0.5-4 ms total-delay assumption. The ball-departure helpers date
+contact a frame early on this camera: the head passes between the lens and the ball
+before it moves it.
 
 Positions. Each tracked frame's hosel is also a 3-D point from the camera's optical
 centre: its normalized image offsets times the depth walked back for that frame, turned
@@ -61,7 +62,7 @@ from openflight.clubs import ClubType
 SOURCE = "camera_head_track"
 MPH_PER_MPS = 2.23694
 
-# The sound trigger fires this long after contact (club_delivery, ball_flight).
+# Legacy replay assumption, not a measured total delay or detector calibration.
 TRIGGER_AFTER_CONTACT_MS = (0.5, 4.0)
 # GPIO edge to camera callback, seen 0.7-1.6 ms on the tester Pi; beyond this the
 # recorded latency is not the gate's.
@@ -249,6 +250,9 @@ class HeadTrackContext:
     lens_focal_px: Optional[float] = None
     ball_range_sigma_m: float = 0.05
     yaw_sigma_deg: float = 0.0
+    sound_timing: Optional[Mapping[str, Any]] = None
+    gate_interval_ns: Optional[tuple[float, float]] = None
+    legacy_sound_model: bool = False
 
 
 def gate_latency_ns(metadata: Any) -> Optional[float]:
@@ -265,15 +269,20 @@ def gate_latency_ns(metadata: Any) -> Optional[float]:
 
 
 def head_track_context(
-    archive: Mapping[str, Any], *, gate_latency: Optional[float] = None, **fields
+    archive: Mapping[str, Any],
+    *,
+    gate_latency: Optional[float] = None,
+    sound_timing: Optional[Mapping[str, Any]] = None,
+    **fields,
 ) -> HeadTrackContext:
     """One clip's context: the acoustic contact window on its sensor (boottime) clock."""
-    window = None
+    window, gate = None, None
     if archive.get("sensor_timestamp_ns") is not None:
         if "gate_boottime_interval_ns" in archive:
             try:
                 bounds = np.asarray(archive["gate_boottime_interval_ns"], dtype=float)
                 if bounds.shape == (2,) and np.all(np.isfinite(bounds)) and bounds[0] <= bounds[1]:
+                    gate = tuple(float(value) for value in bounds)
                     window = (
                         acoustic_contact_window(bounds[0], 0)[0],
                         acoustic_contact_window(bounds[1], 0)[1],
@@ -285,8 +294,11 @@ def head_track_context(
             window = acoustic_contact_window(trigger, gate_latency)
     exposure = archive.get("exposure_us")
     return HeadTrackContext(
-        contact_window_ns=window,
+        contact_window_ns=window if sound_timing is None else None,
         exposure_us=None if exposure is None else np.asarray(exposure),
+        sound_timing=sound_timing,
+        gate_interval_ns=gate,
+        legacy_sound_model=sound_timing is None,
         **fields,
     )
 

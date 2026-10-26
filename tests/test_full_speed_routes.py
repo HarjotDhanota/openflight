@@ -221,6 +221,7 @@ def test_full_club_speed_recovers_the_head_speed_from_one_reading(before_contact
     assert result["value_mph"] >= result["reading"]["radial_mph"]
     assert result["reading"]["time_before_contact_ms"] == pytest.approx(before_contact_ms)
     assert result["direction_source"] == "camera_head_track"
+    assert result["reading"]["contact_timing"]["status"] == "ops_transition"
     assert "experimental" in result["note"]
 
 
@@ -265,6 +266,44 @@ def test_a_sound_trigger_impact_is_walked_back_by_the_sound_s_flight():
     assert result["status"] == EXPERIMENTAL
     assert result["reading"]["impact_walk_back_ms"] == pytest.approx(walk_back_ms)
     assert result["reading"]["time_before_contact_ms"] == pytest.approx(8.0)
+
+
+def test_shared_contact_delay_includes_detector_once_for_the_ops_reading():
+    swing = Swing()
+    head = _head_record(swing)
+    head["contact_timing"] = {
+        "status": "model_interval",
+        "gate_to_contact_delay_ns": [6_000_000, 8_000_000],
+        "physical_timing_qualified": False,
+    }
+    track = _club_track(swing, 8.0, impact_source="sound_trigger")
+    track["impact_ms"] += 7.0
+
+    result = _club(swing, head_track=head, ops_track=track)
+
+    assert result["status"] == EXPERIMENTAL, result["reason"]
+    assert result["reading"]["impact_walk_back_ms"] == pytest.approx(7.0)
+    assert result["reading"]["time_before_contact_ms"] == pytest.approx(8.0)
+
+
+@pytest.mark.parametrize(
+    "timing",
+    [
+        False,
+        {},
+        {"status": "unavailable"},
+        {"status": "model_interval", "gate_to_contact_delay_ns": [8, 6]},
+        {"status": "model_interval", "gate_to_contact_delay_ns": [float("nan"), 8]},
+    ],
+)
+def test_bad_new_contact_evidence_cannot_use_legacy_sound_walkback(timing):
+    head = _head_record(Swing())
+    head["contact_timing"] = timing
+    result = _club(
+        head_track=head, ops_track=_club_track(Swing(), 8, impact_source="sound_trigger")
+    )
+    assert result["status"] == NOT_MEASURED
+    assert "shared acoustic contact" in result["reason"]
 
 
 @pytest.mark.parametrize(

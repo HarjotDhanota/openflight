@@ -53,6 +53,34 @@ def _context():
     return fp.build_context(**_context_kwargs())
 
 
+def test_sound_inputs_are_frozen_and_reach_replay_without_inventing_contact(monkeypatch):
+    from openflight.acoustic_timing import sound_timing_inputs
+
+    seen = {}
+
+    def club_estimator(*_args, head_track, **_kwargs):
+        seen["head"] = head_track
+        return ChainedDelivery(status="rejected_no_stable_clubhead")
+
+    monkeypatch.setattr(
+        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate(status="x")
+    )
+    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+    inputs = sound_timing_inputs(None)
+    context = fp.build_context(**_context_kwargs(), sound_timing=inputs)
+    inputs["nominal_sound_speed_m_s_assumed"] = 999
+    archive = {
+        **_archive(),
+        "sensor_timestamp_ns": np.arange(20),
+        "gate_boottime_interval_ns": np.array([100_000_000, 101_000_000]),
+    }
+    fp.process_camera_fusion(context, archive)
+    assert seen["head"].sound_timing["nominal_sound_speed_m_s_assumed"] == 343
+    assert seen["head"].contact_window_ns is None
+    assert seen["head"].gate_interval_ns == (100_000_000, 101_000_000)
+    assert seen["head"].legacy_sound_model is False
+
+
 def _archive():
     return {
         "frames": np.zeros((20, 6, 8), np.uint8),

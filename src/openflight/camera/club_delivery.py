@@ -21,6 +21,7 @@ from typing import Any
 
 import numpy as np
 
+from openflight.acoustic_timing import sound_contact_record
 from openflight.camera import ball_pixels
 from openflight.camera.club_motion import ReferenceBall, detect_reference_ball
 from openflight.camera.geometry import (
@@ -1264,6 +1265,24 @@ def _head_track_fallback(
     if context is None:
         return rejected
     camera, ball_px, range_m = _head_track_camera(ball, geometry, context)
+    window = context.contact_window_ns
+    timing = None
+    if context.sound_timing is not None:
+        ball_ruf = None
+        if ball_px is not None:
+            cx, cy = camera.centre_px
+            ray = np.array(
+                [
+                    camera.horizontal_pixel_sign * (ball_px[0] - cx),
+                    -(ball_px[1] - cy),
+                    camera.focal_px,
+                ]
+            )
+            ball_ruf = ray * range_m / np.linalg.norm(ray)
+        timing = sound_contact_record(
+            context.gate_interval_ns, ball_camera_ruf_m=ball_ruf, inputs=context.sound_timing
+        )
+        window = timing["contact_interval_ns"]
     track = estimate_head_track(
         HeadTrackInputs(
             frames=frames,
@@ -1272,9 +1291,7 @@ def _head_track_fallback(
             ball_px=ball_px,
             ball_range_m=range_m,
             ops_club_speed_mph=ops_club_speed_mph,
-            contact_window_ns=(
-                context.contact_window_ns if timestamp_source == "sensor_timestamp_ns" else None
-            ),
+            contact_window_ns=(window if timestamp_source == "sensor_timestamp_ns" else None),
             exposure_us=context.exposure_us,
             ball_range_sigma_m=context.ball_range_sigma_m,
             handedness=context.handedness,
@@ -1282,8 +1299,16 @@ def _head_track_fallback(
         )
     )
     record = track.to_dict()
+    if timing is not None:
+        record["contact_timing"] = timing
+        record["notes"].append(timing["reason"])
+    elif context.legacy_sound_model:
+        record["contact_timing"] = {
+            "status": "legacy_unqualified",
+            "physical_timing_qualified": False,
+        }
     if track.status != "ok":
-        reason = "; ".join(track.notes)
+        reason = "; ".join(record["notes"])
         return replace(
             rejected,
             head_track=record,
