@@ -753,8 +753,12 @@ class TwoRoundTransfer:
     cells_per_round: list[int] = field(default_factory=list)
     analysis_s: list[float] = field(default_factory=list)
     complete_request: bool = False
+    # set when a round failed and every remaining cell was fetched instead
+    fallback: str | None = None
     released: bool = False
     error: str | None = None
+    # the payloads as received, in order: ("overview" | "request" | "cells", bytes)
+    payloads: list[tuple[str, bytes]] = field(default_factory=list, repr=False)
 
     @property
     def cell_rounds(self) -> int:
@@ -778,6 +782,7 @@ class TwoRoundTransfer:
             "link_bytes": self.link_bytes,
             "analysis_s": list(self.analysis_s),
             "complete_request": self.complete_request,
+            "fallback": self.fallback,
             "released": self.released,
             "error": self.error,
         }
@@ -792,7 +797,16 @@ class TwoRoundTransferError(RuntimeError):
         self.capture = capture
 
 
-def run_two_round(  # pylint: disable=too-many-locals
+def _fetch(client, request: CellRequest, overview: Overview, capture, transfer) -> None:
+    cells, data = _attempt(lambda: client.cells(request, overview.meta))
+    transfer.request_bytes.append(len(request.command()))
+    transfer.cells_bytes.append(len(data))
+    transfer.cells_per_round.append(request.n_cells)
+    transfer.payloads += [("request", request.data), ("cells", data)]
+    capture.add(request, cells)
+
+
+def run_two_round(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     client: TwoRoundClient,
     analyse: Callable[[SparseDump], object],
     *,
@@ -803,9 +817,11 @@ def run_two_round(  # pylint: disable=too-many-locals
     ``analyse`` is the whole kiosk path on a dump. It runs first on the overview alone
     (a dry run: whatever it reads becomes the first request), then once per cells round
     until every cell it reads has been sent. After ``max_cell_rounds`` the host asks for
-    every remaining cell, so the answer can never rest on a fill. The session is
-    released (acknowledged) at the end; a failed request keeps what arrived in the error
-    and is released explicitly and logged, never silently.
+    every remaining cell, so the answer can never rest on a fill. When a round fails, the
+    host asks once for every remaining cell of the still-frozen capture (the full data,
+    the most it can still recover). The session is released (acknowledged) at the end;
+    a transfer that cannot be completed keeps what arrived in the error and is released
+    explicitly and logged, never silently.
     """
     transfer = TwoRoundTransfer()
     capture: TwoRoundCapture | None = None
@@ -813,6 +829,7 @@ def run_two_round(  # pylint: disable=too-many-locals
         overview, data = _attempt(client.overview)
         transfer.session_id = overview.session_id
         transfer.overview_bytes = len(data)
+        transfer.payloads.append(("overview", data))
         capture = TwoRoundCapture(overview)
         counts = overview.meta["range_bin_counts"]
         dry_run = True
@@ -841,11 +858,27 @@ def run_two_round(  # pylint: disable=too-many-locals
                 sequence=transfer.cell_rounds + 1,
                 range_bin_counts=counts,
             )
-            cells, data = _attempt(lambda: client.cells(request, overview.meta))
-            transfer.request_bytes.append(len(request.command()))
-            transfer.cells_bytes.append(len(data))
-            transfer.cells_per_round.append(request.n_cells)
-            capture.add(request, cells)
+            try:
+                _fetch(client, request, overview, capture, transfer)
+            except TwoRoundRemoteError:
+                raise
+            except TwoRoundError as round_error:
+                if transfer.complete_request:
+                    raise
+                logger.warning(
+                    "[IWR6843] two-round request %d failed (%s); fetching every remaining cell",
+                    request.sequence,
+                    round_error,
+                )
+                transfer.complete_request = True
+                transfer.fallback = "complete_capture_after_failed_round"
+                complete = encode_request(
+                    capture.unsent(),
+                    session_id=overview.session_id,
+                    sequence=transfer.cell_rounds + 1,
+                    range_bin_counts=counts,
+                )
+                _fetch(client, complete, overview, capture, transfer)
             dry_run = False
     except TwoRoundError as error:
         transfer.error = f"{type(error).__name__}: {error}"

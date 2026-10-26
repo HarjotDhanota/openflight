@@ -27,6 +27,7 @@ import serial
 
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError, IWR6843DeviceLock
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
+from openflight.iwr6843.transfer_mode import help_lists_two_round, unsupported_reason
 
 BAUD = 1_041_667
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
@@ -35,6 +36,7 @@ _CP2105_USB_ID = ("10c4", "ea70")
 _CP2105_INTERFACE_NAMES = {0: "CP2105 Enhanced if00", 1: "CP2105 Standard if01"}
 _CP2105_STANDARD_INTERFACE = 1
 _PROBE_WINDOW_S = 1.5
+_CLI_PROMPT = b"l3dump:/>"
 _BY_ID_GLOB = "/dev/serial/by-id/*"
 _RESET_ACTION = "press RESET on the IWR6843 board once with its switches in functional mode"
 
@@ -281,6 +283,29 @@ class IWR6843Radar:
             if b"Done" in resp or b"Error" in resp:
                 break
         return resp.decode(errors="replace")
+
+    def two_round_support(self, window: float = 1.5) -> dict[str, Any]:
+        """Whether the firmware's CLI ``help`` lists the two-round commands.
+
+        Read until the prompt that follows the listing (``help`` answers with no
+        ``Done`` on every build), so it never waits the whole window on a live CLI.
+        """
+        self.ser.reset_input_buffer()
+        self.ser.write(b"help\n")
+        resp = b""
+        deadline = time.time() + window
+        while time.time() < deadline:
+            resp += self.ser.read(max(1, self.ser.in_waiting))
+            if b"sensorStart" in resp and resp.rstrip().endswith(_CLI_PROMPT):
+                break
+        supported, missing = help_lists_two_round(resp)
+        if supported:
+            reason = None
+        elif b"sensorStart" not in resp:
+            reason = f"the radar did not answer help ({_describe_probe_reply(resp)})"
+        else:
+            reason = unsupported_reason(missing)
+        return {"supported": supported, "reason": reason, "missing": list(missing)}
 
     def drain_stale_output(
         self,

@@ -404,7 +404,7 @@ def test_a_failed_round_keeps_what_arrived_and_releases_explicitly(raw):
     client = TwoRoundClient(SimulatedSerial(radar), timeout_s=0.05)
 
     def analyse(dump):
-        radar.corrupt_next = 2  # the request and its one retry
+        radar.corrupt_next = 4  # the request, its retry, the complete request and its retry
         _m, sparse = parse_dump(dump)
         return sparse[0, 0, 0, 0]
 

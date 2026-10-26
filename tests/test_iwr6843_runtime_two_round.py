@@ -21,6 +21,7 @@ from openflight.iwr6843.runtime import (
     IWR6843Runtime,
 )
 from openflight.iwr6843.two_round import TwoRoundClient
+from openflight.iwr6843.two_round_file import load_iwr_capture, read_sparse_capture
 from openflight.iwr6843.two_round_sim import SimulatedIWR6843TwoRound, SimulatedSerial
 from tests.iwr6843_partial_scene import TEMPERATURE, pack, scene
 from tests.test_iwr6843_pipeline import RADAR_HEIGHT_M, synth_shot
@@ -87,8 +88,13 @@ class _Capture:
 
 
 class _Monitor:
-    def __init__(self, capture):
+    def __init__(self, capture, supported: bool = True):
         self.capture = capture
+        # what the radar's startup check found (``IWR6843CaptureMonitor.two_round_support``)
+        self.two_round_support = {
+            "supported": supported,
+            "reason": None if supported else "the radar firmware has no fast-transfer commands",
+        }
 
     def capture_for_shot(self, _impact, timeout_s=0.0):  # noqa: ARG002
         return self.capture
@@ -97,9 +103,11 @@ class _Monitor:
         return None
 
 
-def _runtime(capture, transfer: str, tee_range_m: float | None) -> IWR6843Runtime:
+def _runtime(
+    capture, transfer: str, tee_range_m: float | None, *, supported: bool = True
+) -> IWR6843Runtime:
     return IWR6843Runtime(
-        capture_monitor=_Monitor(capture),
+        capture_monitor=_Monitor(capture, supported),
         calibration=_calibration(tee_range_m),
         net_range_m=4.0,
         transfer=transfer,
@@ -194,3 +202,116 @@ def test_a_failed_transfer_is_reported_not_measured(ball_dump):
     # no trusted session id: the host cannot release, the radar's hold timeout rearms it
     assert result.transfer["session_id"] is None and not result.transfer["released"]
     assert radar.frozen
+
+
+def _two_round_capture(dump: bytes, **radar):
+    simulated = SimulatedIWR6843TwoRound(**radar)
+    simulated.freeze(dump)
+    return simulated, _Capture(
+        None, two_round_link=TwoRoundClient(SimulatedSerial(simulated), timeout_s=0.05)
+    )
+
+
+def test_every_shot_says_which_mode_it_used(ball_dump):
+    full = _shot(_runtime(_Capture(ball_dump), TRANSFER_FULL, None))
+    assert full.transfer_mode == {"requested": "full", "used": "full", "fallback_reason": None}
+    assert full.sparse_capture is None
+    _radar, capture = _two_round_capture(ball_dump)
+    two = _shot(_runtime(capture, TRANSFER_TWO_ROUND, None))
+    assert two.transfer_mode == {
+        "requested": "two_round",
+        "used": "two_round",
+        "fallback_reason": None,
+    }
+
+
+def test_unsupported_firmware_measures_the_full_dump_and_says_why(ball_dump):
+    _radar, capture = _two_round_capture(ball_dump)
+    capture.raw = ball_dump
+    runtime = _runtime(capture, TRANSFER_TWO_ROUND, None, supported=False)
+    status = runtime.transfer_mode.status()
+    assert (status.requested, status.effective, status.available) == ("two_round", "full", False)
+    result = _shot(runtime)
+    assert result.transfer is None and result.transfer_mode["used"] == "full"
+    assert "fast-transfer commands" in result.transfer_mode["fallback_reason"]
+    assert runtime.transfer_mode.status().last_fallback == result.transfer_mode["fallback_reason"]
+    assert _numbers(result) == _numbers(_shot(_runtime(_Capture(ball_dump), TRANSFER_FULL, None)))
+
+
+def test_unchecked_radar_never_claims_two_round(ball_dump):
+    class Bare:
+        def capture_for_shot(self, _impact, timeout_s=0.0):  # noqa: ARG002
+            return _Capture(ball_dump)
+
+    runtime = IWR6843Runtime(
+        capture_monitor=Bare(),
+        calibration=_calibration(None),
+        net_range_m=4.0,
+        transfer="two_round",
+    )
+    result = _shot(runtime)
+    assert result.transfer_mode["used"] == "full"
+    assert "not been checked" in result.transfer_mode["fallback_reason"]
+
+
+def test_the_mode_changes_between_shots_not_during_one(ball_dump):
+    radar, capture = _two_round_capture(ball_dump)
+    capture.raw = ball_dump
+    monitor = _Monitor(capture)
+    runtime = IWR6843Runtime(
+        capture_monitor=monitor, calibration=_calibration(None), net_range_m=4.0, transfer="full"
+    )
+    first = _shot(runtime)
+    assert first.transfer_mode["used"] == "full" and radar.frozen
+
+    original = monitor.capture_for_shot
+
+    def switch_while_capturing(impact, timeout_s=0.0):
+        runtime.set_transfer("full")  # asked for mid-shot: the next shot's
+        return original(impact, timeout_s=timeout_s)
+
+    runtime.set_transfer("two_round")
+    assert runtime.transfer == "two_round"
+    monitor.capture_for_shot = switch_while_capturing
+    second = _shot(runtime)
+    assert second.transfer_mode["used"] == "two_round" and not radar.frozen
+    monitor.capture_for_shot = original
+    assert runtime.transfer_mode.status().effective == "full"
+    with pytest.raises(ValueError, match="transfer"):
+        runtime.set_transfer("fast")
+
+
+def test_a_failed_round_falls_back_to_every_remaining_cell(ball_dump):
+    radar, capture = _two_round_capture(ball_dump)
+    calls = {"n": 0}
+    original = radar.command
+
+    def damage_first_cells(line):
+        if line.startswith(b"cells") and calls["n"] < 2:
+            calls["n"] += 1
+            radar.corrupt_next = 1
+        return original(line)
+
+    radar.command = damage_first_cells
+    result = _shot(_runtime(capture, TRANSFER_TWO_ROUND, None))
+    assert result.transfer["fallback"] == "complete_capture_after_failed_round"
+    assert result.transfer_mode["used"] == "two_round"
+    assert result.transfer_mode["fallback_reason"] == "complete_capture_after_failed_round"
+    full = _shot(_runtime(_Capture(ball_dump), TRANSFER_FULL, None))
+    _assert_same(_numbers(full), _numbers(result))
+
+
+def test_a_saved_two_round_capture_replays_to_the_live_numbers(ball_dump, tmp_path):
+    _radar, capture = _two_round_capture(ball_dump)
+    live = _shot(_runtime(capture, TRANSFER_TWO_ROUND, None))
+    path = tmp_path / "iwr6843_shot_001.l3sparse"
+    path.write_bytes(live.sparse_capture)
+    header, rebuilt = read_sparse_capture(path.read_bytes())
+    assert header["transfer"]["session_id"] == live.transfer["session_id"]
+    assert header["transfer"]["cells_per_round"] == live.transfer["cells_per_round"]
+    assert int(rebuilt.sent.sum()) == sum(live.transfer["cells_per_round"])
+    replayed = _shot(_runtime(_Capture(load_iwr_capture(path)), TRANSFER_FULL, None))
+    assert _numbers(replayed) == _numbers(live)
+    dump_path = tmp_path / "iwr6843_shot_002.l3dump"
+    dump_path.write_bytes(ball_dump)
+    assert load_iwr_capture(dump_path) == ball_dump

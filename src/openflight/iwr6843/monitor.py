@@ -23,6 +23,7 @@ from openflight.iwr6843.dump import (
     payload_nbytes,
 )
 from openflight.iwr6843.serial_process import IWR6843SerialProcess
+from openflight.iwr6843.transfer_mode import NOT_CHECKED_REASON
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,8 @@ class IWR6843CaptureMonitor:
         self._trigger_observers = list(trigger_observers or [])
         self._gate_event_observers = list(gate_event_observers or [])
         self._previous_callback_mono_ns: int | None = None
+        # the startup check's answer: can this radar do the two-round transfer?
+        self.two_round_support: dict = {"supported": False, "reason": NOT_CHECKED_REASON}
 
     @property
     def port(self) -> str:
@@ -153,6 +156,7 @@ class IWR6843CaptureMonitor:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False
         try:
+            self.two_round_support = self._check_two_round_support()
             self.radar.send_config(str(self.config_path))
             configured = True
 
@@ -195,6 +199,25 @@ class IWR6843CaptureMonitor:
             self.config_path.name,
             ", armed" if self._armed else ", waiting for OPS",
         )
+
+    def _check_two_round_support(self) -> dict:
+        """Ask the CLI (``help``) whether it lists the two-round commands; never raise."""
+        check = getattr(self.radar, "two_round_support", None)
+        if check is None:
+            return {
+                "supported": False,
+                "reason": "this radar driver cannot check for fast transfer",
+            }
+        try:
+            support = dict(check())
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] Fast-transfer check failed: %s", error)
+            return {"supported": False, "reason": f"the fast-transfer check failed: {error}"}
+        logger.info(
+            "[IWR6843] Fast (two-round) transfer %s",
+            "supported" if support.get("supported") else f"unavailable: {support.get('reason')}",
+        )
+        return support
 
     def arm(self) -> None:
         """Accept GPIO edges after the OPS trigger path is fully initialized."""

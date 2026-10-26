@@ -55,8 +55,17 @@ BENCH_REPLY = b"bench samples=183168 cycles=4200000 sum_hi=1 sum_lo=5\r\n"
 class FirmwareModel:
     """One board; its state survives host serial close/reopen."""
 
-    def __init__(self, raw: bytes, clock: FakeClock, *, restart_s: float = 0.0, trailer=b"Done"):
+    def __init__(
+        self,
+        raw: bytes,
+        clock: FakeClock,
+        *,
+        restart_s: float = 0.0,
+        trailer=b"Done",
+        extra_help: bytes = b"",
+    ):
         self.raw = raw
+        self.extra_help = extra_help  # more help lines, e.g. the stage-2 commands
         self.clock = clock
         self.restart_s = restart_s
         self.trailer = trailer
@@ -115,6 +124,7 @@ class FirmwareModel:
                 self.pending += BENCH_REPLY
             elif line == "help":
                 self.pending += b"sensorStart   Configure + start capture (no args)\r\n"
+                self.pending += self.extra_help
             self.pending += b"Done\r\nl3dump:/>"
 
 

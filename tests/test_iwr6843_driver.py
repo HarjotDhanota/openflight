@@ -615,3 +615,44 @@ def test_a_command_returns_without_waiting_for_a_full_read_buffer():
 
     assert "Done" in reply
     assert all(size <= max(1, available) for size, available in radar.ser.requests)
+
+
+STAGE2_HELP = (
+    b"overview   Two-round overview\r\ncells   Two-round cells\r\nrelease   Release the ring\r\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("extra_help", "supported"),
+    [(b"", False), (STAGE2_HELP, True), (b"overview   only\r\n", False)],
+)
+def test_two_round_support_comes_from_the_cli_help_listing(monkeypatch, extra_help, supported):
+    clock = FakeClock()
+    firmware = FirmwareModel(b"", clock, extra_help=extra_help)
+    radar = _simulated_radar(monkeypatch, firmware, clock)
+
+    support = radar.two_round_support()
+    radar.close()
+
+    assert firmware.commands == ["help"]
+    assert support["supported"] is supported
+    if supported:
+        assert support["reason"] is None
+    else:
+        assert "fast-transfer commands" in support["reason"]
+        assert "release" in support["reason"]
+
+
+def test_two_round_support_says_when_the_cli_is_silent(monkeypatch):
+    from openflight.iwr6843 import driver
+
+    clock = FakeClock()
+    monkeypatch.setattr(driver, "time", clock.module())
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
+    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: SilentPort(clock))
+    radar = IWR6843Radar(port="/dev/ttyUSB1")
+
+    support = radar.two_round_support()
+
+    assert support["supported"] is False
+    assert "did not answer" in support["reason"]

@@ -125,6 +125,8 @@ def test_the_session_runs_in_another_process_and_returns_the_dump_and_marks(rada
         assert None not in marks and marks == sorted(marks)
         assert radar.read_dump(timeout_s=10.0, stall_tolerance_s=1.0) == raw
         assert "active=1" in radar.stats()
+        support = radar.two_round_support()
+        assert support["supported"] is False and "fast-transfer" in support["reason"]
     finally:
         radar.close()
     assert not radar.is_open

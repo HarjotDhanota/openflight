@@ -35,7 +35,16 @@ from openflight.iwr6843.recovery import (
     RecoveryCandidate,
     find_recovery_candidates,
 )
+from openflight.iwr6843.transfer_mode import (
+    NOT_CHECKED_REASON,
+    TRANSFER_FULL,
+    TRANSFER_TWO_ROUND,
+    TRANSFERS,
+    TransferMode,
+    validate_transfer,
+)
 from openflight.iwr6843.two_round import TwoRoundTransferError, run_two_round
+from openflight.iwr6843.two_round_file import pack_sparse_capture
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +65,15 @@ OPS_GUIDED_MIN_LAUNCH_DEG = 2.0
 TRACK_AMBIGUOUS_STATUS = "accepted_track_ambiguous"
 HORIZONTAL_CONFIDENCE_CEILING = 0.95
 
-# How the shot's IWR data reaches the host: the whole dump, or the two-round transfer
-# (``two_round``: an overview, then only the cells the estimators read). The two-round
-# path runs only when the capture offers a link to its frozen session as
-# ``TWO_ROUND_LINK_ATTR``; no live capture does until the stage-2 firmware exists.
-TRANSFER_FULL = "full"
-TRANSFER_TWO_ROUND = "two_round"
-TRANSFERS = (TRANSFER_FULL, TRANSFER_TWO_ROUND)
+# How the shot's IWR data reaches the host (``transfer_mode``): the whole dump, or the
+# two-round transfer (an overview, then only the cells the estimators read). Two-round
+# runs only when the radar reported support and the capture offers a link to its frozen
+# session as ``TWO_ROUND_LINK_ATTR``; no live capture does until the stage-2 reader exists.
 TWO_ROUND_LINK_ATTR = "two_round_link"
+# what the monitor reports from the radar's startup check: {"supported": bool, "reason": str}
+TWO_ROUND_SUPPORT_ATTR = "two_round_support"
 TWO_ROUND_FAILED = "iwr_two_round_transfer_failed"
+FULL_DUMP_ARRIVED_REASON = "this capture arrived as a full dump (no two-round link on the capture)"
 
 
 def horizontal_confidence_from(coherence: float | None) -> float:
@@ -252,6 +261,10 @@ class IWR6843ShotResult:
     partial_recovery: dict | None = None
     # set for a two-round transfer: its session, rounds and bytes (``TwoRoundTransfer``)
     transfer: dict | None = None
+    # every shot: the mode asked for, the mode used, and why they differ
+    transfer_mode: dict | None = None
+    # a two-round shot's payloads as a ``.l3sparse`` file, for the session folder
+    sparse_capture: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -393,12 +406,26 @@ class IWR6843Runtime:
     radar_config_provenance: dict | None = None
     # The camera's coarse resting-ball range: a prior only, labelled where used.
     range_prior: LaunchRangePrior | None = None
-    # TRANSFER_FULL (default) or TRANSFER_TWO_ROUND
+    # the requested transfer at startup, TRANSFER_FULL (default) or TRANSFER_TWO_ROUND;
+    # ``set_transfer`` changes it between shots
     transfer: str = TRANSFER_FULL
 
     def __post_init__(self):
-        if self.transfer not in TRANSFERS:
-            raise ValueError(f"IWR transfer must be one of {TRANSFERS}, not {self.transfer!r}")
+        self.transfer_mode = TransferMode(validate_transfer(self.transfer))
+        self.refresh_transfer_support()
+
+    def set_transfer(self, mode: str):
+        """Ask for a transfer mode; a shot already begun keeps the mode it began with."""
+        status = self.transfer_mode.request(mode)
+        self.transfer = status.requested
+        return status
+
+    def refresh_transfer_support(self):
+        """Take the radar's two-round support from its monitor's startup check."""
+        support = getattr(self.capture_monitor, TWO_ROUND_SUPPORT_ATTR, None)
+        if isinstance(support, dict) and "supported" in support:
+            self.transfer_mode.set_support(bool(support["supported"]), support.get("reason"))
+        return self.transfer_mode.status()
 
     def replay_config_snapshot(
         self,
@@ -491,6 +518,8 @@ class IWR6843Runtime:
         ``roll_deg`` (the unit's verified roll) turns the board about its boresight.
         """
         process_started_ns = time.monotonic_ns()
+        # the mode in effect as the shot begins; a change from now on is the next shot's
+        status = self.transfer_mode.status()
         capture = self.capture_monitor.capture_for_shot(
             impact_timestamp,
             timeout_s=self.capture_timeout_s,
@@ -498,17 +527,35 @@ class IWR6843Runtime:
         capture_returned_ns = time.monotonic_ns()
         link = (
             getattr(capture, TWO_ROUND_LINK_ATTR, None)
-            if self.transfer == TRANSFER_TWO_ROUND
+            if status.effective == TRANSFER_TWO_ROUND
             else None
         )
         raw, partial = (None, None) if link is not None else _capture_bytes(capture)
         partial_record = partial.to_dict() if partial is not None else None
+
+        def mode_record(used: str, reason: str | None) -> dict:
+            if status.requested == TRANSFER_TWO_ROUND:
+                self.transfer_mode.note_fallback(reason)
+            return {"requested": status.requested, "used": used, "fallback_reason": reason}
+
+        used_mode: dict | None = None
+        if link is None:
+            fallback = None
+            if status.requested == TRANSFER_TWO_ROUND:
+                fallback = (
+                    status.reason or NOT_CHECKED_REASON
+                    if status.effective != TRANSFER_TWO_ROUND
+                    else FULL_DUMP_ARRIVED_REASON
+                )
+            used_mode = mode_record(TRANSFER_FULL if raw is not None else "none", fallback)
 
         def result(
             analysis: _Analysis | None = None,
             *,
             withheld_reason: str | None = None,
             transfer: dict | None = None,
+            transfer_mode: dict | None = None,
+            sparse_capture: bytes | None = None,
         ) -> IWR6843ShotResult:
             if analysis is None:
                 analysis = _Analysis(measurement=None, withheld_reason=withheld_reason)
@@ -524,6 +571,8 @@ class IWR6843Runtime:
                 ball_range=analysis.ball_range,
                 partial_recovery=partial_record,
                 transfer=transfer,
+                transfer_mode=transfer_mode if transfer_mode is not None else used_mode,
+                sparse_capture=sparse_capture,
             )
 
         def analyse(dump: bytes, recovered: PartialDumpRecovery | None = None) -> _Analysis:
@@ -544,8 +593,26 @@ class IWR6843Runtime:
             try:
                 analysis, transfer = run_two_round(link, analyse)
             except TwoRoundTransferError as error:
-                return result(withheld_reason=TWO_ROUND_FAILED, transfer=error.transfer.to_dict())
-            return result(analysis, transfer=transfer.to_dict())
+                reason = (
+                    f"the two-round transfer failed ({error.transfer.error}); the ring was "
+                    + ("released" if error.transfer.released else "left to the radar's timeout")
+                    + ", so the full dump is no longer available"
+                )
+                logger.error("[IWR6843] Shot not measured: %s", reason)
+                return result(
+                    withheld_reason=TWO_ROUND_FAILED,
+                    transfer=error.transfer.to_dict(),
+                    transfer_mode=mode_record("none", reason),
+                    sparse_capture=pack_sparse_capture(error.transfer)
+                    if error.transfer.payloads
+                    else None,
+                )
+            return result(
+                analysis,
+                transfer=transfer.to_dict(),
+                transfer_mode=mode_record(TRANSFER_TWO_ROUND, transfer.fallback),
+                sparse_capture=pack_sparse_capture(transfer),
+            )
         if raw is None:
             return result()
         return result(analyse(raw, partial))

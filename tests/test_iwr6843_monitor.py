@@ -620,3 +620,49 @@ def test_the_monitor_reads_dumps_through_its_own_serial_process(tmp_path, monkey
     assert capture.path.read_bytes() == capture.raw
     assert capture.uart_transport_duration_ns > 0
     assert not monitor.ready_snapshot()["serial_open"]
+
+
+class SupportRadar(FakeRadar):
+    """A radar double whose startup ``help`` check answers (or fails)."""
+
+    def __init__(self, raw: bytes, support):
+        super().__init__(raw)
+        self.support = support
+        self.order = []
+
+    def two_round_support(self):
+        self.order.append("help")
+        if isinstance(self.support, Exception):
+            raise self.support
+        return self.support
+
+    def send_config(self, path: str):
+        self.order.append("config")
+        super().send_config(path)
+
+
+def _started(tmp_path, radar):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    monitor = IWR6843CaptureMonitor(
+        config_path=config, output_dir=tmp_path / "dumps", radar=radar, button_factory=FakeButton
+    )
+    monitor.start()
+    monitor.stop()
+    return monitor
+
+
+def test_startup_checks_two_round_support_before_the_config(tmp_path):
+    radar = SupportRadar(_raw_dump(), {"supported": True, "reason": None, "missing": []})
+    monitor = _started(tmp_path, radar)
+    assert radar.order == ["help", "config"]
+    assert monitor.two_round_support == {"supported": True, "reason": None, "missing": []}
+
+
+def test_a_failed_or_missing_support_check_is_unsupported_with_a_reason(tmp_path):
+    failed = _started(tmp_path, SupportRadar(_raw_dump(), OSError("port vanished")))
+    assert failed.two_round_support["supported"] is False
+    assert "port vanished" in failed.two_round_support["reason"]
+    legacy = _started(tmp_path, FakeRadar(_raw_dump()))
+    assert legacy.two_round_support["supported"] is False
+    assert legacy.two_round_support["reason"]

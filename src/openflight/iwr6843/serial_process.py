@@ -143,11 +143,16 @@ def _stats(radar, _request: dict) -> tuple[dict, bytes]:
     return {"ok": True, "reply": radar.stats()}, b""
 
 
+def _two_round_support(radar, _request: dict) -> tuple[dict, bytes]:
+    return {"ok": True, "support": radar.two_round_support()}, b""
+
+
 _OPERATIONS: dict[str, Callable[[Any, dict], tuple[dict, bytes]]] = {
     "send_config": _send_config,
     "read_dump_timed": _read_dump,
     "stop_sensor": _stop_sensor,
     "stats": _stats,
+    "two_round_support": _two_round_support,
 }
 
 
@@ -403,6 +408,13 @@ class IWR6843SerialProcess:
         """Firmware health line, from the serial process."""
         reply, _payload = self._call({"op": "stats"}, STATS_TIMEOUT_S + self._reply_margin_s)
         return str(reply["reply"])
+
+    def two_round_support(self) -> dict:
+        """``IWR6843Radar.two_round_support`` (the CLI ``help`` check) in the serial process."""
+        reply, _payload = self._call(
+            {"op": "two_round_support"}, STATS_TIMEOUT_S + self._reply_margin_s
+        )
+        return dict(reply["support"])
 
     def stop_sensor(self) -> None:
         """``IWR6843Radar.stop_sensor`` in the serial process."""
