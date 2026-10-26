@@ -70,6 +70,36 @@ def send_config_with_start_trace(
         radar.cmd = original
 
 
+def stop_sensor_with_trace(radar, emit, *, timeout_ns=10_000_000_000, now=time.monotonic_ns):
+    """Retain one stop and idle/fault response; never recover or retry a failed command."""
+    if not 1 <= _uint(timeout_ns, 63) <= 15_000_000_000:
+        raise ValueError("cleanup diagnostic window must be positive and at most 15 seconds")
+    original, replies = radar.cmd, []
+
+    def command(text, window):
+        expected = ("sensorStop", "stats")
+        if len(replies) >= 2 or text != expected[len(replies)]:
+            raise ValueError("unexpected or repeated cleanup command")
+        result = trace_command(radar.ser, text, timeout_ns=timeout_ns, now=now)
+        result["caller_window_s"] = window
+        replies.append(result)
+        emit(result)
+        if result["status"] != "complete":
+            raise ValueError(f"{text} response {result['status']}")
+        return base64.b64decode(result["received_b64"]).decode("ascii")
+
+    radar.cmd = command
+    try:
+        radar.stop_sensor()
+        if len(replies) != 2:
+            raise ValueError("cleanup did not complete stop and stats")
+        health = base64.b64decode(replies[-1]["received_b64"])
+        if not re.search(rb"\bactive=0\b", health) or not re.search(rb"\brf_faults=0\b", health):
+            raise ValueError("idle/no-fault status unavailable")
+    finally:
+        radar.cmd = original
+
+
 def _trace_exchange(port, command, *, timeout_ns, now):
     original_read, original_write = port.timeout, port.write_timeout
     data = bytearray()

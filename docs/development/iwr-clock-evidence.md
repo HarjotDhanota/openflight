@@ -304,6 +304,15 @@ A response beyond that window is an observation, not a production timeout fix.
 A complete CLI reply alone does not establish active RF; retain the subsequent
 health check. Neither result qualifies RF acquisition timing or synchronization.
 
+`stop_sensor_with_trace` traces the existing stop/idle check on one owned
+instance. It permits one `sensorStop` followed by one `stats`, with a default
+10-second window per command and a 15-second cap. Every reply/read mark and
+original caller window is emitted before validation. Missing or rejected stop
+completion prevents stats; unavailable/active/faulted stats prevents an idle
+claim. The method is restored after failure. There is no retry or recovery
+command. A passing stop alone does not establish idle RF: both complete replies
+and explicit `active=0 rf_faults=0` are required. Product stop windows are unchanged.
+
 ## Pre-header dump diagnostic
 
 `record_dump_trace` in the RESEARCH module `iwr6843.dump_trace` sends one

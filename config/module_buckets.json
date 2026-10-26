@@ -940,6 +940,7 @@
   "tests/test_iwr6843_clock_evidence.py": "RESEARCH",
   "tests/test_iwr6843_config_trace.py": "RESEARCH",
   "tests/test_iwr6843_start_trace.py": "RESEARCH",
+  "tests/test_iwr6843_stop_trace.py": "RESEARCH",
   "tests/test_iwr6843_dump_trace.py": "RESEARCH",
   "tests/test_iwr6843_compact_clock.py": "RESEARCH",
     "tests/test_iwr6843_uart_clock_bounds.py": "RESEARCH",
