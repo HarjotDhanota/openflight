@@ -189,11 +189,16 @@ class ProbeObservation:
     after_ns: int
     host_boot: str
     connection: str
+    cli_after_ns: int | None = None
 
     def validate(self):
         """Require a whole causal bracket, not a callback or write-return estimate."""
         _uint(self.before_ns, 63)
         _uint(self.after_ns, 63)
+        if self.cli_after_ns is not None:
+            _uint(self.cli_after_ns, 63)
+            if self.cli_after_ns < self.after_ns:
+                raise ValueError("CLI completion precedes counter bracket")
         for value in (
             self.reply.seq,
             self.reply.rx_tick,
@@ -282,7 +287,7 @@ def map_tick(observations, target_tick, *, target_epoch, rate_hz_bounds, max_dis
         if observation.reply.request in seen:
             raise ValueError("reused request nonce")
         if previous is not None:
-            if observation.before_ns < previous.after_ns:
+            if observation.before_ns < (previous.cli_after_ns or previous.after_ns):
                 raise ValueError("overlapping or reordered host exchanges")
             if observation.reply.seq != previous.reply.seq + 1:
                 raise ValueError("probe sequence gap or duplicate")

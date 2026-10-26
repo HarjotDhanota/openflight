@@ -92,6 +92,57 @@ unavailable; 2 input/output/collection error. Audits hash the original recording
 `physical_timing_qualified` is always false; `rf_acquisition_interval_ns` is null.
 Even a width below 1 ms is not a claim of RF/camera/contact synchronization.
 
+## Compact packet mode
+
+`record --compact` requires the separate compact scratch firmware. It first runs
+a verbose identity probe, then sends `cp nonce_hi_hex8 nonce_lo_hex8 seq_hex8`
+with a fresh nonce for each exchange, and finishes with another verbose identity
+probe. Both context replies must agree on build, runtime token and configured
+rate. The first and last context checks are outside each compact timing bracket.
+They do not prove a target RF frame's runtime/capture association.
+
+The fixed packet is 44 bytes: ASCII magic `OFC2`, then ten little-endian uint32
+words: request high/low, runtime high/low, sequence, handler-entry tick,
+pre-response tick, configured tick rate, frame-sequence snapshot and CRC32.
+CRC32 uses IEEE polynomial 0xEDB88320 over the preceding 40 bytes, initialized and
+finalized with XOR 0xFFFFFFFF. CRC detects corruption; it is not authentication.
+Width/version are defined by the magic. This does not reuse an IWR dump version.
+
+The command is 30 bytes and the packet is 44 bytes (DESIGN sizes). Under ASSUMED
+8N1 framing and SOURCE-CONFIGURED 1,041,667 baud, their wire time is DERIVED
+0.710400 ms, excluding echo/processing/USB/host delays. This replaces the verbose
+example's DERIVED approximately 3.13 ms serialization minimum; neither number is
+measured latency, an upper bound or proof of sub-millisecond synchronization.
+
+The reader timestamps the read completing the packet before waiting for `Done`
+and the complete known CLI prompt. It saves exact received bytes, cumulative read
+sizes and their separate MONOTONIC marks. The counter envelope uses the packet
+completion upper bound; whole-command completion remains a separate diagnostic.
+If USB coalesces packet and trailer, both marks are late and equal. No estimated
+USB delay or midpoint is subtracted to make the interval narrower.
+
+The recorder uses the existing driver's serial handle while holding exclusive
+ownership. Partial writes, CRC/identity errors, unknown prefixes, duplicated
+packets, oversized/truncated data, missing readiness and changed runtime stop
+collection. Bytes and available read marks are retained on transport failure.
+Auditing refuses incomplete runs and verifies the packet timestamp against the
+read that first contained the complete packet. It waits for CLI readiness before
+the next command; it does not discard input to hide a mismatched response.
+
+Compact recordings use `openflight.iwr-clock-compact.v1`; the same `audit` command
+accepts them. Its `host_round_trip_ns` describes whole-command completion, while
+`counter_bracket_width_ns` describes the bracket used for the counter envelope.
+Packet proximity, oscillator continuity/rate and physical RF timing remain
+conditional exactly as for verbose probes. No clock correction is installed.
+
+USB/bridge buffering can still dominate. The CP2105 datasheet identifies a
+full-speed USB device; it does not establish a latency bound for this Pi stack.
+[CP2105 datasheet](https://www.silabs.com/documents/public/data-sheets/CP2105.pdf).
+Do not apply another bridge's timeout command to it: AN571 specifies its receiver
+max-timeout setting for CP2102N only, rather than CP2105.
+[AN571, section 5.18](https://www.silabs.com/documents/public/application-notes/AN571.pdf).
+No USB bridge, UART baud, kernel or saved device setting is changed here.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.

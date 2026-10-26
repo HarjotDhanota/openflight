@@ -21,6 +21,11 @@ from openflight.iwr6843.clock_evidence import (  # noqa: E402
     probe_envelope,
     recording_observations,
 )
+from openflight.iwr6843.compact_clock import (  # noqa: E402
+    SCHEMA as COMPACT_SCHEMA,
+    compact_recording_observations,
+    record_compact_probes,
+)
 from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
 from openflight.ops_capture_evidence import boot_identity  # noqa: E402
 
@@ -125,7 +130,10 @@ def audit(records, *, rate_hz_bounds, max_distance_ns, target=None):
         "probe_envelopes": [],
     }
     try:
-        observations = recording_observations(records)
+        if records and isinstance(records[0], dict) and records[0].get("schema") == COMPACT_SCHEMA:
+            observations = compact_recording_observations(records)
+        else:
+            observations = recording_observations(records)
         for obs in observations:
             epoch = (obs.reply.build, obs.reply.boot)
             low, high = probe_envelope(
@@ -139,7 +147,8 @@ def audit(records, *, rate_hz_bounds, max_distance_ns, target=None):
                 {
                     "seq": obs.reply.seq,
                     "tx_tick": obs.reply.tx_tick,
-                    "host_round_trip_ns": obs.after_ns - obs.before_ns,
+                    "host_round_trip_ns": (obs.cli_after_ns or obs.after_ns) - obs.before_ns,
+                    "counter_bracket_width_ns": obs.after_ns - obs.before_ns,
                     "conditional_mono_interval_ns": [low, high],
                     "interval_width_ns": high - low,
                 }
@@ -168,6 +177,9 @@ def main(argv=None):
     record.add_argument("--count", type=int, default=32)
     record.add_argument("--interval-s", type=float, default=0.1)
     record.add_argument("--output", required=True, type=Path)
+    record.add_argument(
+        "--compact", action="store_true", help="requires the compact scratch firmware"
+    )
     check = commands.add_parser("audit")
     check.add_argument("input", type=Path)
     check.add_argument("--output", required=True, type=Path)
@@ -187,7 +199,8 @@ def main(argv=None):
                     handle.flush()
 
                 with IWR6843Radar(port=args.port) as radar:
-                    record_probes(radar, emit, count=args.count, interval_s=args.interval_s)
+                    recorder = record_compact_probes if args.compact else record_probes
+                    recorder(radar, emit, count=args.count, interval_s=args.interval_s)
                 return 0
             data = args.input.read_bytes()
             records = [json.loads(line) for line in data.decode("utf-8").splitlines()]
