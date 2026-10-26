@@ -21,7 +21,8 @@ It does not request GPIO, send radar commands or change saved kiosk settings.
 
 The tool saves timestamps only in `frames.jsonl`, bracketed MONOTONIC/BOOTTIME
 reads in `clock-pairs.jsonl`, and a `report.json` with source hashes, requested and
-resolved mode, boot identity, observed cadence/gaps and delivery-lag intervals.
+resolved mode, observed buffer count, boot identity, observed cadence/gaps and
+delivery-lag intervals.
 No images are retained. It rejects missing/malformed clocks, changed boot IDs,
 nonconstant observed clock offsets and duplicate/reordered frames for conversion.
 Clock observations enclose the saved frame callback times. A successful exit
@@ -35,6 +36,12 @@ delivery lag is `[host-s+low, host-s+high]`. It is reported, never fitted away.
 The envelope assumes no suspend between observations. The sensor clock domain
 is declared according to libcamera, while exposure/readout semantics still need
 an independent optical event. Small clock-read widths cannot qualify that offset.
+
+The camera requests 16 capture buffers through 120 fps and 32 above it. Live Pi
+preflight tests exhausted the old 8-buffer pool during same-process JSON/GIL
+stalls. The larger pools retained frames in the tested modes while callbacks
+still arrived late. This uses more buffer memory and is a bounded-stall
+mitigation, not a callback-latency guarantee or an acquisition-clock correction.
 
 ## Offline mapping candidate
 

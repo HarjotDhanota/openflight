@@ -156,6 +156,7 @@ def record(args):
                 frames = log.take()
                 pairs.append(clock_pair())
             resolved = runtime._resolved_config  # pylint: disable=protected-access
+            buffer_count = runtime._camera.camera_configuration().get("buffer_count")  # pylint: disable=protected-access
         finally:
             runtime.stop()
     rows = [
@@ -179,6 +180,7 @@ def record(args):
             "load": args.load,
         },
         resolved_camera_config=resolved,
+        buffer_count_observed=buffer_count,
         kernel=platform.release(),
         frames_sha256=_save_rows(args.output_dir / "frames.jsonl", rows),
         clock_pairs_sha256=_save_rows(args.output_dir / "clock-pairs.jsonl", pairs),

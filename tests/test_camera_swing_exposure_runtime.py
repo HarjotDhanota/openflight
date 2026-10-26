@@ -563,6 +563,33 @@ class _StartCamera(FakeCamera):
         pass
 
 
+@pytest.mark.parametrize(
+    "width,height,fps,buffers", [(1280, 800, 120.0, 16), (640, 400, 288.0, 32)]
+)
+def test_start_reserves_buffers_for_observed_host_stalls(
+    tmp_path, monkeypatch, width, height, fps, buffers
+):
+    import sys
+    from types import SimpleNamespace
+
+    camera = _StartCamera()
+    monkeypatch.setitem(sys.modules, "picamera2", SimpleNamespace(Picamera2=lambda: camera))
+    monkeypatch.setattr(capture_runtime, "ensure_picamera2_import_path", lambda: None)
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(width=width, height=height, fps=fps, auto_exposure=False),
+        use_gpio_trigger=False,
+    )
+    monkeypatch.setattr(runtime, "_wait_for_prebuffer", lambda: None)
+    runtime.start()
+    try:
+        assert camera.configured["buffer_count"] == buffers
+        assert camera.configured["raw"] == {"size": (width, height), "format": "R8"}
+        assert camera.configured["controls"]["FrameDurationLimits"] == (round(1e6 / fps),) * 2
+    finally:
+        runtime.stop()
+
+
 def test_automatic_startup_applies_the_seed_before_the_first_frame(tmp_path, monkeypatch):
     import sys
     import types

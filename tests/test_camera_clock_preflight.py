@@ -136,6 +136,7 @@ def test_recording_saves_only_timestamps_and_releases_camera(tmp_path, monkeypat
             assert kwargs["settings"].auto_exposure is False
             self._ring = SimpleNamespace(add_frame=lambda _frame: None)
             self._resolved_config = {"raw": {"size": [1280, 800], "format": "R8"}}
+            self._camera = SimpleNamespace(camera_configuration=lambda: {"buffer_count": 16})
             self.stopped = False
             instances.append(self)
 
@@ -184,4 +185,5 @@ def test_recording_saves_only_timestamps_and_releases_camera(tmp_path, monkeypat
     report = json.loads((output / "report.json").read_text())
     assert report["frame_count_measured"] >= 2
     assert report["physical_timing_qualified"] is False
+    assert report["buffer_count_observed"] == 16
     assert report["callback_delivery_lag_ns_derived"]["p50_lower"] == 1_000_000
