@@ -2919,6 +2919,7 @@ def init_iwr6843(
     save_dumps: bool = False,
     lateral_tee_offset_m: float = 0.0,
     board_rotation_deg: float | None = None,
+    transfer: str = "full",
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the LCMF launch estimator.
 
@@ -2995,6 +2996,7 @@ def init_iwr6843(
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
             range_prior=range_prior,
+            transfer=transfer,
             calibration_provenance={
                 "schema_version": 1,
                 "source_path": str(calibration_source),
@@ -3045,6 +3047,7 @@ def init_iwr6843(
             "azimuth_offset_deg": azimuth_offset_deg,
             "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
             "capture_timeout_s": capture_timeout_s,
+            "transfer": iwr6843_runtime.transfer,
             "freeze_delay_ms": 0.0,
             "raw_dump_saved": save_dumps,
             "output_dir": str(Path(output_dir).expanduser()),
@@ -8863,6 +8866,16 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--iwr6843-transfer",
+        choices=("full", "two_round"),
+        default="full",
+        help=(
+            "How each shot's TI data reaches the host (default: full). two_round "
+            "fetches an overview and then only the cells the estimators read; it "
+            "needs the stage-2 firmware and falls back to the full dump without it"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-output-dir",
         default=None,
         help=(
@@ -9298,6 +9311,7 @@ def main():
             # the rig's camera axis, else downrange, until the setup's side offset applies
             lateral_tee_offset_m=_rig_tee_lateral_offset_m(),
             board_rotation_deg=enclosure.iwr_board_rotation_deg,
+            transfer=args.iwr6843_transfer,
         ):
             print(
                 "IWR6843 enabled (LCMF launch angle, "
