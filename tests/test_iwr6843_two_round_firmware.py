@@ -21,15 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SESSION = 0x1234ABCD
 
 
-@pytest.fixture(scope="module")
-def probe(tmp_path_factory):
-    folder = tmp_path_factory.mktemp("two-round-c")
+def build_native_probe(folder, name, flags=()):
     compiler = shutil.which("cc")
     image = os.environ.get("OPENFLIGHT_FIRMWARE_DOCKER_IMAGE")
     docker = []
     include, source, executable = (
         ROOT / "firmware/iwr6843",
-        ROOT / "tests/fixtures/iwr_two_round_probe.c",
+        ROOT / "tests/fixtures" / name,
         folder / "probe",
     )
     if compiler is None:
@@ -48,10 +46,10 @@ def probe(tmp_path_factory):
         compiler, include, source, executable = (
             "gcc",
             "/repo/firmware/iwr6843",
-            "/repo/tests/fixtures/iwr_two_round_probe.c",
+            f"/repo/tests/fixtures/{name}",
             "/case/probe",
         )
-    subprocess.run(
+    compiled = subprocess.run(
         [
             *docker,
             compiler,
@@ -61,19 +59,29 @@ def probe(tmp_path_factory):
             "-Wextra",
             "-Werror",
             "-Wno-unused-function",
+            *flags,
             "-fsanitize=undefined",
             "-fno-sanitize-recover=all",
             "-I",
             str(include),
+            "-I",
+            "/case" if docker else str(folder),
             str(source),
             "-lm",
             "-o",
             str(executable),
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
+    assert compiled.returncode == 0, compiled.stderr
+    return docker, executable
+
+
+@pytest.fixture(scope="module")
+def probe(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("two-round-c")
+    docker, executable = build_native_probe(folder, "iwr_two_round_probe.c")
 
     def run(raw, request=None, *, fail_after=-1, fields=None):
         meta, _ = parse_dump(raw)

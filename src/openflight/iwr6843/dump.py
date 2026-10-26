@@ -550,7 +550,7 @@ def parse_dump(raw: bytes):
             raise ValueError(f"short payload: {body.size} i16 < {2 * n} needed")
         iq = body.astype(np.float64)
         cube = (iq[1::2] + 1j * iq[0::2]).reshape(nf, cpf, nrx, ns)  # ImRe: Q,I pairs
-    return meta, sparse_parse(raw, cube)
+    return meta, sparse_parse(raw, cube, meta)
 
 
 def _repack_kwargs(meta: dict) -> dict:

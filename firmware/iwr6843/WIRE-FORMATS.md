@@ -33,3 +33,11 @@ whole-window map is allocated. Compute cost on the radar remains unmeasured.
 The core itself does not start RF, own a frozen session or implement recovery;
 those responsibilities belong to the CLI integration. A registry entry is not
 an advertisement that the command is installed or hardware-qualified.
+
+Overview flag bit 0 records timeout recovery of a previous session. Bit 1
+identifies live metadata snapshots: the prefix `header_tick` and suffix
+`payload_end_tick` then mark metadata assembly and readiness, respectively.
+No complete raw dump crossed the UART. Updated host parsing preserves the
+raw evidence and its source through sparse-file replay and TX projection,
+and withholds the legacy UART transfer durations. Request, freeze, stop and
+per-frame timestamps retain their acquisition meanings.

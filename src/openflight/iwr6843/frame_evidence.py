@@ -233,6 +233,12 @@ def frame_timing_report(meta: dict) -> dict:
     unobserved = [f for f in findings if f["kind"] in _UNOBSERVED_KINDS]
     status = UNOBSERVED if unobserved else DISCONTINUOUS if findings else CONTINUOUS
     origin = frames[0]["start_tick"] if frames[0]["associated"] else None
+    relation = _request_relation(capture, frames, meta.get("dump_trailer"), us)
+    if meta.get("transfer_timing_source") == "snapshot_metadata":
+        relation["metadata_snapshot_to_ready_us"] = relation["header_to_payload_end_us"]
+        relation["stop_to_metadata_snapshot_us"] = relation["stop_to_header_us"]
+        relation["header_to_payload_end_us"] = None
+        relation["stop_to_header_us"] = None
     return {
         **base,
         "status": status,
@@ -249,7 +255,7 @@ def frame_timing_report(meta: dict) -> dict:
             [us(_signed(f["done_tick"], f["start_tick"])) for f in frames if f["associated"]]
         ),
         "hwa_missed_total": capture["hwa_missed_total"],
-        "request": _request_relation(capture, frames, meta.get("dump_trailer"), us),
+        "request": relation,
     }
 
 

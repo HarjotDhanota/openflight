@@ -68,6 +68,7 @@ CLI_ERROR = b"Error"
 
 # overview flags
 FLAG_PREVIOUS_SESSION_TIMED_OUT = 0x0001  # the last session was rearmed by the hold timeout
+FLAG_METADATA_SNAPSHOT = 0x0002  # prefix header/trailer ticks describe metadata preparation
 # power map coding: code = round(LOG16_CODES_PER_DECADE * log10(max(power, 1))), 1/500 dB
 POWER_CODE_LOG16 = 1
 LOG16_CODES_PER_DECADE = 5000
@@ -643,6 +644,7 @@ class TwoRoundCapture:
             sent=self.sent.copy(),
             power_maps=ov.power_maps,
             noise_power=ov.noise_power,
+            metadata_snapshot=bool(ov.flags & FLAG_METADATA_SNAPSHOT),
         )
         # pylint: disable-next=too-many-function-args
         return SparseDump(ov.prefix + payload + ov.suffix, evidence)

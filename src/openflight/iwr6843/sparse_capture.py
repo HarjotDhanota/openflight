@@ -39,6 +39,7 @@ class SparseEvidence:
     power_maps: dict[str, np.ndarray]
     # scope -> median MTI power per element
     noise_power: dict[str, float]
+    metadata_snapshot: bool = False
     reads: set[tuple[int, int]] = field(default_factory=set)
 
     @property
@@ -148,9 +149,13 @@ def carry(source: bytes, data: bytes) -> bytes:
     return source.derived(data) if isinstance(source, SparseDump) else data
 
 
-def sparse_parse(raw: bytes, cube: np.ndarray) -> np.ndarray:
+def sparse_parse(raw: bytes, cube: np.ndarray, meta: dict | None = None) -> np.ndarray:
     """``parse_dump``'s cube, sparse when the dump is (unchanged for plain bytes)."""
-    return raw.evidence.attach(cube) if isinstance(raw, SparseDump) else cube
+    if not isinstance(raw, SparseDump):
+        return cube
+    if meta is not None and raw.evidence.metadata_snapshot:
+        meta["transfer_timing_source"] = "snapshot_metadata"
+    return raw.evidence.attach(cube)
 
 
 def scoped_mti(cube: np.ndarray, mti: np.ndarray, scope: str) -> np.ndarray:

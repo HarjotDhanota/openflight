@@ -91,6 +91,16 @@ def test_tick_delta_is_modular():
     assert tick_delta(10, 4) == 6
 
 
+def test_live_snapshot_metadata_is_not_reported_as_uart_transfer_time():
+    meta = _meta()
+    meta["transfer_timing_source"] = "snapshot_metadata"
+    report = frame_timing_report(meta)["request"]
+    assert report["header_to_payload_end_us"] is None
+    assert report["stop_to_header_us"] is None
+    assert report["metadata_snapshot_to_ready_us"] == 30000.0
+    assert report["stop_to_metadata_snapshot_us"] == 2000.0
+
+
 def test_a_dump_without_evidence_is_unobserved_never_rebuilt_from_planned_deltas():
     meta = _meta()
     meta.update(version=7, capture_evidence=None, frame_evidence=None, dump_trailer=None)

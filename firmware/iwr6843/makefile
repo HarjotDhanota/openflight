@@ -24,7 +24,7 @@ include $(MMWAVE_SDK_INSTALL_PATH)/ti/common/mmwave_sdk.mak
 # Variant builds override capture geometry (make clean first — same objects):
 #   make L3_VARIANT_DEFS="--define=LOOPS=16 --define=RING_FRAMES=12"     # B
 #   make L3_VARIANT_DEFS="--define=N_SAMPLES=64 --define=RING_FRAMES=12" # C
-R4F_CFLAGS += $(L3_VARIANT_DEFS)
+R4F_CFLAGS += $(L3_VARIANT_DEFS) $(CLOCK_PROBE_DEFS) $(TWO_ROUND_DEFS)
 
 APPNAME = l3_dump
 

@@ -51,6 +51,10 @@
 #include "dump_format.h"
 #include "l3_evidence.h"
 
+#if defined(L3_USB_CLOCK_COMPACT) && !defined(L3_USB_CLOCK_PROBE)
+#error "compact clock requires L3_USB_CLOCK_PROBE"
+#endif
+
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
 #endif
@@ -452,7 +456,7 @@ static Task_Handle gInitTask;
 static Task_Handle gCtrlTask;
 static Task_Handle gRearmTask;
 
-#ifdef L3_CAPTURE_EVIDENCE
+#if defined(L3_CAPTURE_EVIDENCE) || defined(L3_USB_CLOCK_PROBE)
 /* W4A-EVIDENCE-BEGIN */
 /* Observed evidence (W4a). The R4F's PMU cycle counter runs at the CPU clock (gCpuClock,
  * 200 MHz) and wraps every 21.47 s; one capture's intervals are far shorter, so 32-bit
@@ -473,6 +477,8 @@ static uint32_t l3_ticks(void)
     return __MRC(15U, 0U, 9U, 13U, 0U);        /* PMCCNTR */
 }
 
+#endif
+#ifdef L3_CAPTURE_EVIDENCE
 static uint32_t gFrameSeq[L3_MAX_CAPTURE_FRAMES];
 static uint32_t gFrameStartTick[L3_MAX_CAPTURE_FRAMES];
 static uint32_t gFrameDoneTick[L3_MAX_CAPTURE_FRAMES];
@@ -3853,6 +3859,10 @@ static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
 }
 
 /* System init task: UART, mmWave control, EDMA + ADCBUF + frame-start ISR, CLI. */
+#if defined(L3_USB_CLOCK_PROBE) || defined(L3_TWO_ROUND)
+#include "extended_cli.h"
+#endif
+
 static void l3_initTask(UArg arg0, UArg arg1)
 {
     MMWave_InitCfg        initCfg;
@@ -3869,7 +3879,15 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
     (void)arg0; (void)arg1;
 
-#ifdef L3_CAPTURE_EVIDENCE
+#if defined(L3_USB_CLOCK_PROBE) || defined(L3_TWO_ROUND)
+#ifndef L3_CAPTURE_EVIDENCE
+    (void)gInitTask; (void)gCtrlTask; (void)gRearmTask;
+#endif
+#if defined(CONFIGURABLE_CAPTURE) && !defined(HYBRID_CADENCE_CAPTURE)
+    (void)gFrameDeltaUs;
+#endif
+#endif
+#if defined(L3_CAPTURE_EVIDENCE) || defined(L3_USB_CLOCK_PROBE)
     l3_cycleCounterInit();
 #endif
     UART_init();
@@ -4021,6 +4039,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.enableMMWaveExtension = 1U;
     cliCfg.taskPriority          = L3_CLI_TASK_PRIORITY;
     cliCfg.usePolledMode         = true;
+#if defined(L3_USB_CLOCK_PROBE) || defined(L3_TWO_ROUND)
+    if (l3_registerExtendedCli(&cliCfg) != 0) return;
+#else
     cliCfg.tableEntry[0].cmd           = "sensorStart";
     cliCfg.tableEntry[0].helpString    = "Configure + start capture (no args)";
     cliCfg.tableEntry[0].cmdHandlerFxn = l3_cli_sensorStart;
@@ -4073,6 +4094,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[12].cmd           = "l3bench";
     cliCfg.tableEntry[12].helpString    = "Time one pass over the stopped ring";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_bench;
+#endif
 #endif
     CLI_open(&cliCfg);
 #ifdef L3_CAPTURE_EVIDENCE

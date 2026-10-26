@@ -120,6 +120,15 @@ def test_overview_carries_the_capture_evidence_and_trailer(evidence_raw):
         assert rebuilt_meta[key] == meta[key]
 
 
+def test_live_snapshot_metadata_source_survives_tx_projection(evidence_raw):
+    overview = parse_overview(build_overview(evidence_raw, session_id=SESSION, flags=2))
+    capture = TwoRoundCapture(overview)
+    capture.add(*_all_cells(evidence_raw, overview))
+    for raw in (capture.sparse_dump(), project_tx_pair(capture.sparse_dump(), (0, 2))):
+        meta, _ = parse_dump(raw)
+        assert meta["transfer_timing_source"] == "snapshot_metadata"
+
+
 def test_overview_corruption_and_truncation_are_detected(raw):
     data = build_overview(raw, session_id=SESSION)
     flipped = bytearray(data)
