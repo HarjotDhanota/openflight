@@ -242,6 +242,45 @@ means processing/copy completion; neither is a calibrated ADC boundary.
 `physical_timing_qualified` and `wire_timing_qualified` stay false, and
 `rf_acquisition_interval_ns` stays null. No shot metric consumes this result.
 
+## ADC configuration diagnostic
+
+`scripts/hardware-test/iwr_config_trace.py` is a RESEARCH-only diagnostic for a
+configuration response that did not complete. It runs verbose identity checks
+around a fixed command list: `sensorStop`, `flushCfg`, `dfeDataOutputMode 1`,
+`channelCfg 15 7 0`, `adcCfg 2 1`, then `stats`. Its allowlist excludes RF start,
+profile/chirp/frame configuration, capture, loading and flashing. It requires
+one exclusive Enhanced UART and the reviewed source build fingerprint.
+
+The diagnostic retains original received bytes, all read marks (including empty
+reads), write return and separate terminal/prompt marks. It does not flush input
+or retry a command. Completion requires exactly one standalone `Done` or SDK
+error line followed immediately by the complete known prompt. An echo, embedded
+substring or `Done` without the prompt does not establish readiness. Unknown
+suffixes and duplicate terminals remain invalid. I/O failure, rejection, byte
+limit or timeout stops the sequence before any further UART command.
+
+The default 10-second wait and maximum 15-second wait are DESIGN diagnostic
+policies, not measured device latency or a production timeout fix. Serial
+read/write calls use finite timeouts; the recorded final read can exceed the
+requested deadline by one bounded synchronous call. Such bytes are retained
+but not accepted as completion within the declared window. Original serial
+timeout settings are restored. Read timestamps are host upper bounds, not
+UART-pin timestamps or clock-offset measurements.
+
+Use the same diagnostic on separately reviewed combined and clock-only RAM
+images, keeping their exact source IDs and failed traces separate. Example
+(placeholders require the supervised image/port procedure):
+
+```text
+uv run --no-sync python scripts/hardware-test/iwr_config_trace.py --port ENHANCED_UART --build REVIEWED_SOURCE_SHA256 --output NEW_TRACE.jsonl --timeout-s 10
+```
+
+Exit 0 reports complete command replies, matching pre/post identity and observed
+idle/no-fault stats; 1 means diagnostic evidence unavailable; 2 means input,
+output or collection setup failure. Failure closes UART without follow-up
+commands against an unknown CLI. Restore normal boot through the supervised
+board procedure. No diagnostic outcome qualifies physical synchronization.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.
