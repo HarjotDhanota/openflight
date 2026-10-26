@@ -307,6 +307,13 @@ unavailable. A finished diagnostic alone never qualifies physical RF timing or
 sub-millisecond clock alignment. Use the supervised RAM/restore procedure and
 verify the reviewed source ID before starting the one-capture experiment.
 
+Read/write timeout settings are established before the request and held fixed
+through collection. Do not assign `port.timeout` per read: pySerial's setter
+reconfigures an open port, including its custom baud rate on Linux. A final
+bounded read may return up to 0.25 seconds after the deadline; those late bytes
+remain recorded but ineligible. Settings are restored after collection. This
+removes a diagnostic disturbance, not a validated explanation for lost bytes.
+
 With `L3_DUMP_WIRE_TRACE`, the clock-only diagnostic also counts every binary
 UART call from header through dump trailer and computes a source CRC32 before
 each write. After the binary it emits a separate `L3WIRE` line with requested

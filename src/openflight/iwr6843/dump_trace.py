@@ -129,10 +129,6 @@ def record_dump_trace(
         if not isinstance(written, int) or written != 7:
             raise ValueError("partial dump command write")
         while now() < deadline and len(data) < MAX_BYTES:
-            remaining_s = (deadline - now()) / 10**9
-            if remaining_s <= 0:
-                break
-            port.timeout = min(0.25, remaining_s)
             chunk = port.read(min(max(1, port.in_waiting), MAX_BYTES - len(data)))
             received = now()
             data.extend(chunk)

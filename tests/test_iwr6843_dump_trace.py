@@ -196,3 +196,36 @@ def test_optional_wire_report_is_still_checked_if_present():
     raw = binary + wire_report(binary, crc32=0) + b"Done\nl3dump:/>"
     _, result = trace(Port([(1, raw)]))
     assert result["status"] == "unavailable" and result["wire_trace_status"] == "crc_mismatch"
+
+
+def test_serial_settings_are_not_reconfigured_while_dump_bytes_are_arriving():
+    class SettingsPort(Port):
+        def __init__(self, chunks):
+            self.events = []
+            super().__init__(chunks)
+
+        @property
+        def timeout(self):
+            return self._timeout
+
+        @timeout.setter
+        def timeout(self, value):
+            self.events.append("reconfigure")
+            self._timeout = value
+
+        def write(self, data):
+            self.events.append("write")
+            return super().write(data)
+
+        def read(self, count):
+            self.events.append("read")
+            return super().read(count)
+
+    binary = payload()
+    port = SettingsPort([(1, binary), (1, wire_report(binary) + b"Done\nl3dump:/>")])
+    _, result = trace(port, require_wire_trace=True)
+    assert result["status"] == "complete"
+    begin = port.events.index("write")
+    end = len(port.events) - 1 - port.events[::-1].index("read")
+    assert "reconfigure" not in port.events[begin : end + 1]
+    assert port.timeout == 0.3 and port.write_timeout is None
