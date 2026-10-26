@@ -96,7 +96,7 @@ class SparseDump(bytes):
 
     def derived(self, data: bytes) -> SparseDump:
         """Another view of the same capture (a TX projection) with the same evidence."""
-        return SparseDump(data, self.evidence)
+        return SparseDump(data, self.evidence)  # pylint: disable=too-many-function-args
 
 
 def _is_index(value) -> bool:
