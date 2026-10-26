@@ -54,7 +54,7 @@ test('stays usable when websocket upgrade fails and socket.io falls back to poll
   await page.getByLabel('Close status').click();
   await expect(statusMenu).toBeHidden();
 
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await page.getByLabel('Server connected').click();
   await expect(page.getByRole('dialog', { name: 'System status' })).toBeVisible();
 });
@@ -72,7 +72,7 @@ test('supports club selection choose and dismiss flows against mock backend', as
     await simulateShot(socket);
   });
 
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
   await expect(page.getByText('7-iron')).toBeVisible();
 
@@ -168,7 +168,7 @@ test('switches between primary navigation views', async ({ page }) => {
 
   await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
   await expect(page.locator('.panel-footer__count')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Shots' })).toContainText('2');
+  await expect(page.getByRole('button', { name: /^Shots/ })).toContainText('2');
 
   await page.getByRole('button', { name: 'Profiles' }).click();
   await expect(page.getByRole('region', { name: 'Profiles' })).toBeVisible();
@@ -185,7 +185,7 @@ test('switches between primary navigation views', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(2);
   await expect(page.getByText('7-iron')).toBeVisible();
   await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
@@ -265,7 +265,7 @@ test('does not allow deleting a profile that still has shots', async ({ page }) 
 
   await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Alex' })).toBeVisible();
   await page.locator('.profiles-panel__card').filter({ hasText: 'Alex' }).click();
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
   await expect(page.locator('.shots-panel__profile-name')).toHaveText('Alex');
 });
@@ -311,7 +311,7 @@ test('confirms before clearing and only removes that profile, then returns to Li
 
   await page.getByRole('button', { name: 'Profiles' }).click();
   await page.locator('.profiles-panel__card').filter({ hasText: 'Profile 1' }).click();
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
 });
 
@@ -370,7 +370,7 @@ test('clear-session confirmation is a centered overlay at 800×480', async ({ pa
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('.panel-header__title')).toHaveText('Stats');
 
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
 });
 
@@ -460,7 +460,7 @@ test('renaming a profile keeps its shots', async ({ page }) => {
   await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Rnage' })).toHaveCount(0);
 
   await renamedCard.click();
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
   await expect(page.locator('.shots-panel__profile-name')).toHaveText('Range');
 });
@@ -476,7 +476,7 @@ test('scrolls the shots list by dragging on a row', async ({ page }) => {
 
   await gotoApp(page);
   await dismissPicker(page);
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
 
   const list = page.getByRole('region', { name: 'Recorded shots' });
   await expect(list.locator('.shots-panel__row')).toHaveCount(16);
@@ -533,7 +533,7 @@ test('expands a shot row to reveal its validation fields', async ({ page }) => {
 
   await gotoApp(page);
   await dismissPicker(page);
-  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByRole('button', { name: /^Shots/ }).click();
 
   // 7b's row has no room for the fields inline, so they live behind a tap.
   await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
@@ -555,7 +555,7 @@ test.describe('shots list on a touchscreen', () => {
 
     await gotoApp(page);
     await dismissPicker(page);
-    await page.getByRole('button', { name: 'Shots' }).click();
+    await page.getByRole('button', { name: /^Shots/ }).click();
 
     await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
     await page.locator('.shots-panel__row-main').first().tap();
@@ -662,9 +662,8 @@ test('unit toggle in the menu sheet updates displayed units', async ({ page }) =
   await dismissPicker(page);
 
   await expect(page.locator('.metric-card--selected .metric-card__unit')).toHaveText('mph');
-  await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText(
-    'yds'
-  );
+  // Mock shots carry no flight model, so Carry stays blank; the speed unit is what the toggle can show.
+  await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveCount(0);
 
   const imperialSpeed = await page.locator('.metric-card--selected .metric-card__value').textContent();
 
@@ -673,7 +672,6 @@ test('unit toggle in the menu sheet updates displayed units', async ({ page }) =
   await page.getByRole('button', { name: 'Close menu' }).click();
 
   await expect(page.locator('.metric-card--selected .metric-card__unit')).toHaveText('km/h');
-  await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText('m');
   await expect(page.locator('.metric-card--selected .metric-card__value')).not.toHaveText(imperialSpeed ?? '');
 });
 
