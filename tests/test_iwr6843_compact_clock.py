@@ -164,6 +164,24 @@ def test_packet_read_is_timestamped_before_later_cli_text():
     assert radar.ser.commands == [b"cp 00000000 00000002 00000001\n"]
 
 
+@pytest.mark.parametrize("echo", [False, True])
+def test_complete_recording_accepts_optional_uart_command_echo(echo):
+    def transform(chunks):
+        if echo:
+            return chunks
+        delay, data = chunks[0]
+        command, newline, packet_bytes = data.partition(b"\n")
+        assert newline and command.startswith(b"cp ")
+        return [(delay, packet_bytes), *chunks[1:]]
+
+    rows, _radar = collect(SyntheticRadar(transform=transform), count=4)
+    observations = compact_recording_observations(rows)
+    assert len(observations) == 4
+    assert all(
+        row["packet_offset"] == (30 if echo else 0) for row in rows if row["type"] == "compact"
+    )
+
+
 def test_fragmented_magic_packet_and_prompt_are_read_without_losing_boundary():
     radar = SyntheticRadar(fragmented=True)
     result = exchange(radar)
