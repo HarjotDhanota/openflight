@@ -1,52 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
-import { DEFAULT_TESTER, lensState, mockConfirmedPlacementBox, PATCH_PROJECTION, useTester } from './testerHelpers';
-
-async function fulfillJson(route: Route, payload: object, status = 200) {
-  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) });
-}
-
-const RECORDING = { enabled: true, tester_id: DEFAULT_TESTER, run_id: 'run-1', phase: 'recording' };
-
-async function mockSetupDone(page: Page, world: { freePlay: object; aim?: object }) {
-  await mockConfirmedPlacementBox(page);
-  await page.route('**/api/tester/lens?**', (route) => fulfillJson(route, lensState()));
-  await page.route('**/api/tester/tee-range?**', (route) =>
-    fulfillJson(route, {
-      state: {
-        epoch_id: 'fixture-range',
-        phase: 'raw_only',
-        reason: 'qualification_artifact_missing',
-        evidence: {},
-        solution: { status: 'unresolved', selected_range_m: null },
-      },
-    })
-  );
-  await page.route('**/api/tester/setup-eligibility?**', (route) =>
-    fulfillJson(route, {
-      schema_version: 1,
-      tester_id: new URL(route.request().url()).searchParams.get('tester_id'),
-      config_hash: 'measured-v3-hash',
-      eligible: true,
-      stage: 'tester_admission',
-      checks: [],
-      blockers: [],
-      operator_confirmation: {
-        confirmed: true,
-        confirmed_at: '2026-09-24T00:00:00Z',
-        config_hash: 'measured-v3-hash',
-        authority: 'operator_physical_setup',
-      },
-      runtime_requirements: ['ops', 'camera', 'iwr6843', 'lis3dh'],
-    })
-  );
-  await page.route('**/api/tester/aim-point**', (route) =>
-    fulfillJson(route, world.aim ?? { tester_id: DEFAULT_TESTER, state: 'skipped', runs: {} })
-  );
-  await page.route('**/api/camera/preview.jpg**', (route) => route.fulfill({ status: 204 }));
-  await page.route('**/api/tester/attempts?**', (route) => fulfillJson(route, { schema_version: 1, scopes: [] }));
-  await page.route('**/api/tester/ladder?**', (route) => fulfillJson(route, { ladder: { rungs: {} }, stopped: true }));
-  await page.route('**/api/tester/status**', (route) => fulfillJson(route, { free_play: world.freePlay }));
-}
+import { expect, test, type Page } from '@playwright/test';
+import { DEFAULT_TESTER, fulfillJson, mockSetupDone, PATCH_PROJECTION, RECORDING, useTester } from './testerHelpers';
 
 test.describe('the tester page around free play', () => {
   test.use({ viewport: { width: 1024, height: 600 }, hasTouch: true });

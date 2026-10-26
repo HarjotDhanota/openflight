@@ -1948,6 +1948,7 @@
         </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
+        <button type="button" class="primary" id="free-play-done" hidden>Done</button>
         <p class="note" id="free-play-status" role="status"></p>
         <p class="note" id="free-play-note">
           Record every shot. The exposure study runs by itself: five swings at each setting, then automatic exposure.
@@ -5868,10 +5869,13 @@
         el('ladder-controls').hidden = active;
         el('free-play-stop').hidden = !['recording', 'stopping', 'packaging', 'error'].includes(phase);
         el('free-play-stop').disabled = freePlayPending || ['stopping', 'packaging'].includes(phase);
+        // the package is made: Done closes the kiosk, here or on the kiosk (25 Oct)
+        el('free-play-done').hidden = phase !== 'ready';
+        el('free-play-done').disabled = freePlayPending;
         renderFreePlayStudy(state);
         renderFreePlayPhoto();
         el('free-play-status').textContent = ['ready', 'closed'].includes(phase)
-          ? `Package ready: ${state.bundle?.name}. Send it from step 8 below.${phase === 'ready' ? ' Then tap Done on the kiosk.' : ''}`
+          ? `Package ready: ${state.bundle?.name}. Send it from step 8 below.${phase === 'ready' ? ' Then tap Done.' : ''}`
           : phase === 'recording' && state.paused
             ? `Free play is paused: ${state.paused.cause === 'aim' ? 'moving the aim' : 'taking a face photo'}. Shots are not counted.`
           : phase === 'recording' ? `Free play is recording.${state.geometry_unverified ? ' Geometry unverified.' : ''}`
@@ -5943,7 +5947,9 @@
               : 'Photo saved (before the first shot).'
         );
         // opened from the scoreboard on the unit's own screen: go back to it
-        if (location.hash === '#free-play-photo' && !window.opener && kioskViewUrl()) location.assign(kioskViewUrl());
+        if (location.hash === '#free-play-photo' && !window.opener && kioskViewUrl()) {
+          location.assign(onUnitScreen ? kioskHereUrl() : kioskViewUrl());
+        }
       }
       el('free-play-photo-take').addEventListener('click', () => finishFreePlayPhoto('capture'));
       el('free-play-photo-skip').addEventListener('click', () => finishFreePlayPhoto('skip'));
@@ -5960,6 +5966,17 @@
         } catch (error) {
           el('free-play-status').textContent = error.message;
         } finally { freePlayPending = false; renderLadderControls(); refresh(); }
+      });
+      el('free-play-done').addEventListener('click', async () => {
+        const state = freePlayState;
+        if (!state?.run_id || freePlayPending) return;
+        freePlayPending = true;
+        renderFreePlay(state);
+        try {
+          await post('/api/tester/free-play/close', { tester_id: state.tester_id, run_id: state.run_id });
+        } catch (error) {
+          el('free-play-status').textContent = error.message;
+        } finally { freePlayPending = false; refresh(); }
       });
 
       // P7-13 (D12): a button per setting switches to it now, ticked or not, and can
@@ -6260,6 +6277,63 @@
           return null;
         }
       }
+      // (25 Oct) `start-tester.sh --on-screen` opens this page on the unit's own screen with
+      // ?screen=unit, kept for this tab. This page and the kiosk then share that one window:
+      // Kiosk view goes there, the kiosk's Tester button comes back, and free play started
+      // here opens no kiosk window of its own: this window switches to it once it answers.
+      const UNIT_SCREEN_STORAGE_KEY = 'openflight-tester-unit-screen';
+      const KIOSK_SWITCH_STORAGE_KEY = 'openflight-tester-kiosk-switch';
+      const onUnitScreen = (() => {
+        const marked = new URLSearchParams(location.search).get('screen') === 'unit';
+        try {
+          if (marked) sessionStorage.setItem(UNIT_SCREEN_STORAGE_KEY, '1');
+          return marked || sessionStorage.getItem(UNIT_SCREEN_STORAGE_KEY) === '1';
+        } catch {
+          // Storage can be unavailable in locked-down kiosk browser profiles.
+          return marked;
+        }
+      })();
+      // the kiosk in this window: ?from=tester tells it the way back (and that the club is chosen)
+      function kioskHereUrl() {
+        const href = kioskViewUrl();
+        if (!href) return null;
+        const url = new URL(href);
+        url.searchParams.set('from', 'tester');
+        return url.href;
+      }
+      function showKioskHere() {
+        const url = kioskHereUrl();
+        if (url) location.assign(url);
+        return Boolean(url);
+      }
+      // the free-play run whose kiosk this window shows once it answers (kept over a reload)
+      function pendingKioskSwitch() {
+        try {
+          return sessionStorage.getItem(KIOSK_SWITCH_STORAGE_KEY);
+        } catch {
+          return null;
+        }
+      }
+      function setPendingKioskSwitch(runId) {
+        try {
+          if (runId) sessionStorage.setItem(KIOSK_SWITCH_STORAGE_KEY, runId);
+          else sessionStorage.removeItem(KIOSK_SWITCH_STORAGE_KEY);
+        } catch {
+          // Storage can be unavailable in locked-down kiosk browser profiles.
+        }
+      }
+      // once, when the run this page started is recording and its kiosk answers
+      function maybeSwitchToKiosk() {
+        const pending = pendingKioskSwitch();
+        if (!pending || !freePlayState?.enabled) return;
+        if (freePlayState.run_id !== pending || freePlayState.phase !== 'recording') {
+          setPendingKioskSwitch(null);
+          return;
+        }
+        if (kioskStatus?.state !== 'running') return;
+        setPendingKioskSwitch(null);
+        showKioskHere();
+      }
       // 2a/3a: the kiosk never takes over the screen; its view opens in a normal window or
       // tab, and a mode switch says how far along it is while this page stays put
       function renderKioskStatus(kiosk) {
@@ -6274,13 +6348,21 @@
         progress.dataset.state = kiosk?.state || '';
         if (moving) {
           progress.textContent =
-            kiosk.progress_message ||
-            (kiosk.state === 'switching_mode'
-              ? 'Switching the camera mode (about 20 s). This page stays here.'
-              : 'Starting the kiosk (about 20 s). This page stays here.');
+            kiosk.state === 'starting' && pendingKioskSwitch()
+              ? 'Starting the kiosk (about 20 s). The scoreboard opens on this screen when it is ready.'
+              : kiosk.progress_message ||
+                (kiosk.state === 'switching_mode'
+                  ? 'Switching the camera mode (about 20 s). This page stays here.'
+                  : 'Starting the kiosk (about 20 s). This page stays here.');
         }
+        maybeSwitchToKiosk();
       }
       el('kiosk-view').addEventListener('click', () => {
+        // on the unit's own screen the kiosk shows in this window: one tap, no second window
+        if (onUnitScreen) {
+          showKioskHere();
+          return;
+        }
         const url = kioskViewUrl();
         if (url && !window.open(url, 'openflight-kiosk')) location.assign(url);
       });
@@ -6497,10 +6579,14 @@
             action: 'free_play',
             resolution: freePlayResolution,
             club: firstClub,
+            // on the unit's own screen the kiosk shows in this window, never a second one
+            kiosk_window: onUnitScreen ? 'shared' : 'own',
           });
           renderFreePlay(result.free_play);
           if (!result.free_play?.run_id) throw new Error('Free play did not return its session identity.');
+          if (onUnitScreen) setPendingKioskSwitch(result.free_play.run_id);
         } catch (error) {
+          setPendingKioskSwitch(null);
           el('free-play-status').textContent = error.message;
         } finally { freePlayPending = false; renderLadderControls(); }
       });

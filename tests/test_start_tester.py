@@ -228,7 +228,7 @@ def test_on_screen_opens_the_tester_page_in_the_kiosk_shell():
 
     assert "--on-screen" not in command
     assert command == [*SERVER, "--iwr-static-port", "/dev/ttyUSB0"]
-    assert "tester shell: http://localhost:8765/" in stderr
+    assert "tester shell: http://localhost:8765/?screen=unit" in stderr
     # the one window may switch to the kiosk and back, and go nowhere else
     assert "tester shell origins: http://localhost:8765 http://localhost:8080" in stderr
 
@@ -238,7 +238,7 @@ def test_on_screen_follows_the_tester_port(port_args):
     command, stderr = _tester_dry_run("--on-screen", *port_args)
 
     assert command == [*SERVER, *port_args]
-    assert "tester shell: http://localhost:9000/" in stderr
+    assert "tester shell: http://localhost:9000/?screen=unit" in stderr
     assert "tester shell origins: http://localhost:9000 http://localhost:8080" in stderr
 
 
@@ -246,7 +246,7 @@ def test_on_screen_follows_the_tester_port(port_args):
 def test_the_environment_can_put_the_tester_page_on_screen(value):
     _command, stderr = _tester_dry_run(env={"OPENFLIGHT_TESTER_ON_SCREEN": value})
 
-    assert "tester shell: http://localhost:8765/" in stderr
+    assert "tester shell: http://localhost:8765/?screen=unit" in stderr
 
 
 def test_on_screen_refuses_a_host_the_unit_cannot_reach_itself():

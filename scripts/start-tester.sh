@@ -48,7 +48,8 @@ done
 
 SERVER_CMD=(uv run --extra camera python -m openflight.camera.tester_server "${SERVER_ARGS[@]}")
 # The shell reaches the page through loopback, so the server must listen there.
-TESTER_URL="http://localhost:$TESTER_PORT/"
+# ?screen=unit tells the page it is on the unit's own screen (it remembers it for this tab)
+TESTER_URL="http://localhost:$TESTER_PORT/?screen=unit"
 TESTER_ORIGINS="http://localhost:$TESTER_PORT http://localhost:$KIOSK_WEB_PORT"
 if [ "$ON_SCREEN" = true ]; then
     case "$TESTER_HOST" in
