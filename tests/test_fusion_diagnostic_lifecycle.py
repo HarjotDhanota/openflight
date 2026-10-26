@@ -187,6 +187,7 @@ def test_duplicate_result_for_enriched_shot_does_not_create_another_terminal(mon
             "kld7_ms": None,
             "camera_match_ms": None,
             "camera_archive_load_ms": None,
+            "camera_resting_ball_ms": None,
             "camera_wait_ms": None,
             "camera_analysis_ms": None,
         },

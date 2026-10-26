@@ -14,8 +14,8 @@ the same values live and replayed.
 from __future__ import annotations
 
 import math
-from dataclasses import replace
-from typing import Any, Callable, Mapping, Optional
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Mapping, MutableMapping, Optional
 
 import numpy as np
 
@@ -210,14 +210,15 @@ def size_range_route(  # pylint: disable=too-many-arguments
         if not finite(ball_height_m):
             return "no ball height for the resting ball"
         frames = np.asarray(archive["frames"])
-        found = resting_ball_seed(frames, seed, first_post_index(archive, len(frames)))
-        if found is None:
+        measure = resting_ball_measure(archive, seed)
+        if measure.found is None:
             return "no resting ball: neither the shot's look, the setup nor a search found it"
         return resting_ball_range.resting_ball_range(
             frames,
             first_post_index=first_post_index(archive, len(frames)),
             frame_interval_s=frame_interval_s(archive),
-            seed=found,
+            seed=measure.found,
+            size=measure.size,
             lens_focal_px=lens_focal_px,
             calibrated_focal_px=calibrated_focal_px,
             camera_origin_lfu=np.asarray(camera_origin_lfu, dtype=float),
@@ -267,6 +268,60 @@ def resting_ball_seed(
     if not smallest <= found.diameter_px <= largest:
         return None
     return float(found.x), float(found.y), float(found.diameter_px)
+
+
+# The resting ball measured on a clip, kept on the shot's in-memory archive under this key
+# (``keep_resting_ball_measure``): the kiosk takes it while the IWR's dump is still
+# arriving, and the range chain and the camera fallback read it instead of measuring again.
+RESTING_BALL_KEY = "_resting_ball_measure"
+
+
+@dataclass(frozen=True)
+class RestingBallMeasure:
+    """This clip's resting ball: where it was looked for (``seed``, the caller's x, y,
+    diameter or None), where it was found and its measured size (None when not found)."""
+
+    seed: Optional[tuple[float, float, float]]
+    found: Optional[tuple[float, float, float]]
+    size: Optional[resting_ball_range.RestingBallSize]
+
+
+def _seed_key(seed: Optional[Mapping[str, Any]]) -> Optional[tuple[float, float, float]]:
+    if seed and all(finite(seed.get(key)) for key in ("x", "y", "diameter_px")):
+        return float(seed["x"]), float(seed["y"]), float(seed["diameter_px"])
+    return None
+
+
+def resting_ball_measure(
+    archive: Mapping[str, Any], seed: Optional[Mapping[str, Any]]
+) -> RestingBallMeasure:
+    """The resting ball on this clip from ``seed`` (``resting_ball_seed``, then
+    ``measure_resting_ball_size``): the one kept on the archive for the same seed, else
+    measured now."""
+    key = _seed_key(seed)
+    kept = archive.get(RESTING_BALL_KEY)
+    if isinstance(kept, RestingBallMeasure) and kept.seed == key:
+        return kept
+    frames = np.asarray(archive["frames"])
+    first = first_post_index(archive, len(frames))
+    found = resting_ball_seed(frames, seed, first)
+    size = (
+        None
+        if found is None
+        else resting_ball_range.measure_resting_ball_size(
+            frames, first_post_index=first, seed=found, frame_interval_s=frame_interval_s(archive)
+        )
+    )
+    return RestingBallMeasure(seed=key, found=found, size=size)
+
+
+def keep_resting_ball_measure(
+    archive: MutableMapping[str, Any], seed: Optional[Mapping[str, Any]]
+) -> RestingBallMeasure:
+    """Measure this clip's resting ball now and keep it on the archive for the shot."""
+    measure = resting_ball_measure(archive, seed)
+    archive[RESTING_BALL_KEY] = measure
+    return measure
 
 
 def first_post_index(archive: Mapping[str, Any], frame_count: int) -> int:
@@ -387,15 +442,10 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
     if details.get("status") == "measured_from_size":
         rest_px, rest_d = tuple(details["rest_px"]), float(details["diameter_px"])
     else:
-        seed = resting_ball_seed(frames, context.get("setup_ball"), first_post)
-        if seed is None:
+        measure = resting_ball_measure(archive, context.get("setup_ball"))
+        if measure.found is None:
             return {"status": "withheld_no_resting_ball", "reason": "no resting ball found"}
-        size = resting_ball_range.measure_resting_ball_size(
-            frames,
-            first_post_index=first_post,
-            seed=seed,
-            frame_interval_s=frame_interval_s(archive),
-        )
+        size = measure.size
         if size is None:
             return {
                 "status": "withheld_no_resting_ball",
@@ -595,8 +645,11 @@ __all__ = [
     "ball_range_resolution",
     "fallback_inputs",
     "first_post_index",
+    "keep_resting_ball_measure",
     "mode_focal",
     "launch_resolutions",
+    "resting_ball_measure",
+    "RestingBallMeasure",
     "run_ball_fallback",
     "size_range_route",
 ]

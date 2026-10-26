@@ -434,6 +434,7 @@ class _ShotEnrichmentResult:
     kld7_ms: float | None = None
     camera_capture_ms: float | None = None
     camera_archive_load_ms: float | None = None
+    camera_resting_ball_ms: float | None = None
     camera_wait_ms: float | None = None
     camera_analysis_ms: float | None = None
     enrichment_ms: float | None = None
@@ -450,6 +451,8 @@ class _CameraPrefetchResult:
     archive: dict[str, object] | None
     match_ms: float
     archive_load_ms: float | None
+    # measuring the resting ball while the IWR's dump arrives (None: not measured)
+    resting_ball_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -512,6 +515,7 @@ def _enrichment_timing_payload(enrichment: _ShotEnrichmentResult) -> dict[str, o
         "kld7_ms": enrichment.kld7_ms,
         "camera_match_ms": enrichment.camera_capture_ms,
         "camera_archive_load_ms": enrichment.camera_archive_load_ms,
+        "camera_resting_ball_ms": enrichment.camera_resting_ball_ms,
         "camera_wait_ms": enrichment.camera_wait_ms,
         "camera_analysis_ms": enrichment.camera_analysis_ms,
     }
@@ -5106,7 +5110,26 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
         archive=camera_archive,
         match_ms=(match_finished - match_started) * 1000.0,
         archive_load_ms=(archive_finished - archive_started) * 1000.0,
+        resting_ball_ms=_measure_resting_ball_early(shot, camera_archive),
     )
+
+
+def _measure_resting_ball_early(shot: Shot, camera_archive) -> float | None:
+    """Measure the clip's resting ball now, while the IWR's dump is still arriving: it needs
+    the frames only. The range chain and the camera fallback read it off the archive
+    (``fallback_chain.RESTING_BALL_KEY``) instead of measuring it after the IWR. A failure
+    here only means they measure it themselves."""
+    if camera_archive is None or "frames" not in camera_archive:
+        return None
+    started = time.monotonic()
+    try:
+        from .camera.fallback_chain import keep_resting_ball_measure  # noqa: PLC0415
+
+        keep_resting_ball_measure(camera_archive, shot_reference_ball(shot.impact_timestamp))
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Early resting-ball measure failed: %s", error, exc_info=True)
+        return None
+    return (time.monotonic() - started) * 1000.0
 
 
 def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
@@ -6182,6 +6205,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
+    camera_resting_ball_ms = None
     camera_wait_ms = None
     camera_analysis_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
@@ -6389,6 +6413,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             camera_archive = prefetched.archive
             camera_capture_ms = prefetched.match_ms
             camera_archive_load_ms = prefetched.archive_load_ms
+            camera_resting_ball_ms = prefetched.resting_ball_ms
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning("[SERVER] Camera capture matching error: %s", error, exc_info=True)
             log_session_error(
@@ -6435,6 +6460,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         kld7_ms=kld7_ms,
         camera_capture_ms=camera_capture_ms,
         camera_archive_load_ms=camera_archive_load_ms,
+        camera_resting_ball_ms=camera_resting_ball_ms,
         camera_wait_ms=camera_wait_ms,
         camera_analysis_ms=camera_analysis_ms,
         enrichment_ms=(time.monotonic() - enrichment_started) * 1000.0,
@@ -6777,6 +6803,11 @@ def _finalize_shot_detected(
             "camera_archive_load": (
                 round(enrichment.camera_archive_load_ms, 1)
                 if enrichment.camera_archive_load_ms is not None
+                else None
+            ),
+            "camera_resting_ball": (
+                round(enrichment.camera_resting_ball_ms, 1)
+                if enrichment.camera_resting_ball_ms is not None
                 else None
             ),
             "camera_wait": (

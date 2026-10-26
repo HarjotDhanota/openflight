@@ -47,6 +47,8 @@ SEED_REACH_DIAMETERS = 4.0
 SEED_SIZE_RATIO = (0.6, 1.6)
 # A window whose size is this far from the median is not the ball's (a club edge, glare).
 WINDOW_OUTLIER_FRACTION = 0.15
+# ``resting_ball_range``'s default: measure the resting ball's size on the clip there.
+MEASURE_HERE = object()
 
 
 @dataclass(frozen=True)
@@ -189,8 +191,12 @@ def resting_ball_range(  # pylint: disable=too-many-arguments,too-many-locals
     image_height_px: int,
     roll_correction_deg: float,
     horizontal_pixel_sign: float = 1.0,
+    size: Any = MEASURE_HERE,
 ) -> dict[str, Any]:
-    """The ball's range from its own size, as one plain record (status, label, source...)."""
+    """The ball's range from its own size, as one plain record (status, label, source...).
+
+    ``size`` is this clip's ``measure_resting_ball_size`` when the caller took it already
+    (None when it found no lit ball); by default it is measured here."""
     record: dict[str, Any] = {"label": LABEL, "source": SOURCE}
     focal = focal_for(lens_focal_px=lens_focal_px, calibrated_focal_px=calibrated_focal_px)
     if focal is None:
@@ -200,9 +206,10 @@ def resting_ball_range(  # pylint: disable=too-many-arguments,too-many-locals
             "reason": "no calibrated or listed focal length for this lens and mode",
         }
     focal_px, focal_source, focal_rel_sd = focal
-    size = measure_resting_ball_size(
-        frames, first_post_index=first_post_index, seed=seed, frame_interval_s=frame_interval_s
-    )
+    if size is MEASURE_HERE:
+        size = measure_resting_ball_size(
+            frames, first_post_index=first_post_index, seed=seed, frame_interval_s=frame_interval_s
+        )
     if size is None:
         return {
             **record,
