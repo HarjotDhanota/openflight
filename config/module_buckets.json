@@ -101,7 +101,7 @@
   "src/openflight/camera/capture_runtime.py": "diagnostic_capture study hook; 'tester_setup' metadata key",
   "src/openflight/ready_light.py": "'not_counted' result text is the tester gate's",
   "scripts/pi-python-env.sh": "refuse_while_kiosk_service_runs is the tester's",
-  "scripts/start-kiosk.sh": "--no-browser exists for the tester",
+  "scripts/start-kiosk.sh": "--no-browser exists for the tester, and the tester page's origin is allowed only for a kiosk the tester started",
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {

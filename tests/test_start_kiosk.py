@@ -925,3 +925,39 @@ def test_every_browser_launch_goes_through_the_no_browser_guard():
 
     assert script.count("launch_kiosk_browser ") == script.count("maybe_launch_kiosk_browser ") + 1
     assert 'if [ "$NO_BROWSER" = true ]; then' in body
+
+
+def _browser_origins(stderr: str) -> list[str]:
+    line = next(line for line in stderr.splitlines() if line.startswith("kiosk browser origins:"))
+    return line.split(":", 1)[1].split()
+
+
+def test_a_plain_kiosk_window_may_show_only_the_kiosk():
+    _command, stderr = _dry_run_browser()
+
+    assert _browser_origins(stderr) == ["http://localhost:8080"]
+
+
+def test_a_kiosk_the_tester_started_may_also_show_the_tester_page():
+    """Its Tester button navigates the same window back to the tester page."""
+    _command, stderr = _dry_run_browser(
+        "--tester-setup-required", "--tester-config-hash", "h", "--tester-control-port", "9000"
+    )
+
+    assert _browser_origins(stderr) == ["http://localhost:8080", "http://localhost:9000"]
+
+
+def test_the_tester_page_origin_defaults_to_the_tester_port():
+    _command, stderr = _dry_run_browser(
+        "--port", "8090", "--tester-setup-required", "--tester-config-hash", "h"
+    )
+
+    assert _browser_origins(stderr) == ["http://localhost:8090", "http://localhost:8765"]
+
+
+def test_the_shell_is_handed_its_allowed_origins():
+    launcher = _launcher_function()
+    script = _script()
+
+    assert 'OPENFLIGHT_ALLOWED_ORIGINS="$origins"' in launcher
+    assert 'launch_kiosk_browser "$1" "$KIOSK_BROWSER_ORIGINS"' in script

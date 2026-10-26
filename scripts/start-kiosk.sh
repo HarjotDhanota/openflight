@@ -166,12 +166,35 @@ fi
 
 SERVER_CMD=(openflight-server --web-port "$WEB_PORT" "${SERVER_ARGS[@]}")
 
+# The value after a server option, or empty (the last one wins, as in argparse).
+server_arg_value() {
+    local wanted="$1"
+    local value=""
+    local index
+    for index in "${!SERVER_ARGS[@]}"; do
+        case "${SERVER_ARGS[$index]}" in
+            "$wanted") value="${SERVER_ARGS[$((index + 1))]:-}" ;;
+            "$wanted="*) value="${SERVER_ARGS[$index]#"$wanted="}" ;;
+        esac
+    done
+    printf '%s' "$value"
+}
+
+# Where the kiosk window may navigate: the kiosk UI and, on a kiosk the tester
+# started (--tester-setup-required), the tester page its Tester button goes back
+# to (default port 8765, as tester_hooks.py). Electron refuses every other origin.
+KIOSK_BROWSER_ORIGINS="http://$HOST:$WEB_PORT"
+if has_server_arg --tester-setup-required; then
+    TESTER_CONTROL_PORT="$(server_arg_value --tester-control-port)"
+    KIOSK_BROWSER_ORIGINS+=" http://$HOST:${TESTER_CONTROL_PORT:-8765}"
+fi
+
 maybe_launch_kiosk_browser() {
     if [ "$NO_BROWSER" = true ]; then
         log "No kiosk browser (--no-browser): the kiosk UI is at $1"
         return 0
     fi
-    launch_kiosk_browser "$1"
+    launch_kiosk_browser "$1" "$KIOSK_BROWSER_ORIGINS"
 }
 
 if [ "$DRY_RUN" = true ]; then
@@ -182,6 +205,7 @@ if [ "$DRY_RUN" = true ]; then
     else
         printf 'kiosk browser: on\n' >&2
     fi
+    printf 'kiosk browser origins: %s\n' "$KIOSK_BROWSER_ORIGINS" >&2
     exit 0
 fi
 

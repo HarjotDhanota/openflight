@@ -198,3 +198,89 @@ def test_a_kiosk_start_on_a_system_python_venv_never_rebuilds_or_strips_it():
 def test_helper_has_valid_shell_syntax_and_unix_newlines():
     assert b"\r\n" not in HELPER.read_bytes()
     subprocess.run(["bash", "-n", shlex.quote(_bash_path(HELPER))], check=True)
+
+
+def _tester_dry_run(*args: str, env: dict | None = None) -> tuple[list[str], str]:
+    """The tester server command and what the dry run says about the unit's screen."""
+    assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in (env or {}).items())
+    command = " ".join(
+        [assignments, "bash scripts/start-tester.sh", *map(shlex.quote, args), "--dry-run"]
+    ).strip()
+    result = subprocess.run(
+        ["bash", "-c", command], cwd=REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    return shlex.split(result.stdout), result.stderr
+
+
+SERVER = ["uv", "run", "--extra", "camera", "python", "-m", "openflight.camera.tester_server"]
+
+
+def test_by_default_the_tester_page_is_opened_elsewhere():
+    command, stderr = _tester_dry_run("--host", "0.0.0.0")
+
+    assert command == [*SERVER, "--host", "0.0.0.0"]
+    assert "tester shell: off" in stderr
+
+
+def test_on_screen_opens_the_tester_page_in_the_kiosk_shell():
+    command, stderr = _tester_dry_run("--on-screen", "--iwr-static-port", "/dev/ttyUSB0")
+
+    assert "--on-screen" not in command
+    assert command == [*SERVER, "--iwr-static-port", "/dev/ttyUSB0"]
+    assert "tester shell: http://localhost:8765/" in stderr
+    # the one window may switch to the kiosk and back, and go nowhere else
+    assert "tester shell origins: http://localhost:8765 http://localhost:8080" in stderr
+
+
+@pytest.mark.parametrize("port_args", [("--port", "9000"), ("--port=9000",)])
+def test_on_screen_follows_the_tester_port(port_args):
+    command, stderr = _tester_dry_run("--on-screen", *port_args)
+
+    assert command == [*SERVER, *port_args]
+    assert "tester shell: http://localhost:9000/" in stderr
+    assert "tester shell origins: http://localhost:9000 http://localhost:8080" in stderr
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes"])
+def test_the_environment_can_put_the_tester_page_on_screen(value):
+    _command, stderr = _tester_dry_run(env={"OPENFLIGHT_TESTER_ON_SCREEN": value})
+
+    assert "tester shell: http://localhost:8765/" in stderr
+
+
+def test_on_screen_refuses_a_host_the_unit_cannot_reach_itself():
+    result = subprocess.run(
+        ["bash", "scripts/start-tester.sh", "--on-screen", "--host", "192.0.2.10", "--dry-run"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--on-screen needs --host 127.0.0.1 or 0.0.0.0" in result.stderr
+
+
+def test_on_screen_launches_the_shell_only_once_the_tester_answers():
+    text = TESTER.read_text(encoding="utf-8")
+    on_screen = text[text.index("run_on_screen() {") :]
+
+    assert 'source "$SCRIPT_DIR/kiosk-browser.sh"' in text
+    assert on_screen.index("tester_answers") < on_screen.index("launch_kiosk_browser")
+    assert 'launch_kiosk_browser "$TESTER_URL" "$TESTER_ORIGINS"' in on_screen
+    # the shell and the server stop together
+    cleanup = text[text.index("stop_on_screen() {") : text.index("run_on_screen() {")]
+    assert "stop_kiosk_browser" in cleanup
+    assert 'kill -TERM "$SERVER_PID"' in cleanup
+
+
+def test_the_dry_run_touches_nothing():
+    text = TESTER.read_text(encoding="utf-8")
+
+    assert text.index('if [ "$DRY_RUN" = true ]') < text.index("refuse_while_kiosk_service_runs ||")
+
+
+def test_start_tester_has_valid_shell_syntax_and_unix_newlines():
+    assert b"\r\n" not in TESTER.read_bytes()
+    subprocess.run(["bash", "-n", _bash_path(TESTER)], check=True)

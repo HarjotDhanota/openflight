@@ -13,13 +13,17 @@
 # Expects from the caller: PROJECT_DIR, log(), warn().
 # Sets: BROWSER_PID, BROWSER_PGID, BROWSER_LAUNCHED.
 
+# launch_kiosk_browser URL [ORIGINS]: ORIGINS (space-separated) are the other
+# origins the Electron shell's window may navigate to besides URL's own, e.g.
+# the kiosk UI and the tester page (ui/electron/navigationPolicy.js).
 launch_kiosk_browser() {
     local url="$1"
+    local origins="${2:-}"
     local electron_bin="$PROJECT_DIR/ui/node_modules/.bin/electron"
 
     log "Launching kiosk shell (Electron)..."
     if [ -x "$electron_bin" ]; then
-        _launch_kiosk_process env DISPLAY=:0 OPENFLIGHT_URL="$url" "$electron_bin" "$PROJECT_DIR/ui"
+        _launch_kiosk_process env DISPLAY=:0 OPENFLIGHT_URL="$url" OPENFLIGHT_ALLOWED_ORIGINS="$origins" "$electron_bin" "$PROJECT_DIR/ui"
     elif command -v chromium-browser &> /dev/null; then
         warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium-browser"
         _launch_kiosk_process env DISPLAY=:0 chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"
