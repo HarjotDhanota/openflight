@@ -128,6 +128,14 @@ class SerialTwoRoundLink:
         self.released = False
         self.finished = threading.Event()
         self.claimed = threading.Event()
+        self.abandoned = threading.Event()
+        self._operation_lock = threading.Lock()
+        self.failed_payloads: list[bytes] = []
+
+    @property
+    def cached_overview(self):
+        """Original bytes, also available when an unmatched capture is discarded."""
+        return self._overview, self._raw
 
     def overview(self, *, session_id=None):
         self._check_active()
@@ -144,8 +152,12 @@ class SerialTwoRoundLink:
         try:
             reply, data = self._call({"op": op, "lease": self._lease, **fields})
         except Exception as error:
+            raw = getattr(error, "raw", b"")
+            if raw:
+                self.failed_payloads.append(raw)
             timing = getattr(error, "timing", None)
             if timing is not None:
+                timing = {**timing, "error": str(error), "partial_protocol_bytes": len(raw)}
                 self.exchanges.append(timing)
             if isinstance(error, TwoRoundError):
                 raise
@@ -154,12 +166,16 @@ class SerialTwoRoundLink:
         return data
 
     def cells(self, request, meta):
-        data = self._exchange("two_round_cells", request_hex=request.data.hex())
-        return parse_cells(data, request, meta), data
+        with self._operation_lock:
+            data = self._exchange("two_round_cells", request_hex=request.data.hex())
+            return parse_cells(data, request, meta), data
 
     def release(self, session_id):
-        try:
-            self._exchange("two_round_release", session_id=session_id)
-            self.released = True
-        finally:
-            self.finished.set()
+        with self._operation_lock:
+            if self.released and session_id == self.session_id:
+                return
+            try:
+                self._exchange("two_round_release", session_id=session_id)
+                self.released = True
+            finally:
+                self.finished.set()

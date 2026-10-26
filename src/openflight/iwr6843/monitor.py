@@ -23,12 +23,21 @@ from openflight.iwr6843.dump import (
     payload_nbytes,
 )
 from openflight.iwr6843.serial_process import IWR6843SerialProcess
-from openflight.iwr6843.transfer_mode import NOT_CHECKED_REASON
+from openflight.iwr6843.serial_two_round import SerialTwoRoundLink
+from openflight.iwr6843.transfer_mode import (
+    NOT_CHECKED_REASON,
+    TRANSFER_TWO_ROUND,
+    TransferMode,
+    TransferStatus,
+)
+from openflight.iwr6843.two_round import TwoRoundTransfer
+from openflight.iwr6843.two_round_file import pack_sparse_capture
 from openflight.ready_light import IWR_TYPICAL_DUMP_S
 
 logger = logging.getLogger(__name__)
 
 _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
+_UNCLAIMED_TWO_ROUND_S = 12.0
 
 
 def tx_order_from_config(config_path: str | Path) -> str:
@@ -69,11 +78,14 @@ class IWR6843Capture:
     partial_expected_nbytes: int | None = None
     # those bytes, for the runtime's partial decoder (``partial_dump``) whether saved or not
     partial_raw: bytes | None = field(default=None, repr=False)
+    two_round_link: SerialTwoRoundLink | None = field(default=None, repr=False)
+    transfer_status: TransferStatus | None = None
+    two_round_failure: dict | None = None
 
     @property
     def valid(self) -> bool:
-        """Whether a complete dump was captured."""
-        return self.raw is not None and self.error is None
+        """Whether data is available as a complete dump or a held protocol session."""
+        return (self.raw is not None or self.two_round_link is not None) and self.error is None
 
     @property
     def partial_capture(self) -> dict | None:
@@ -131,7 +143,7 @@ class IWR6843CaptureMonitor:
         self._sequence = 0
         self._last_edge_timestamp = 0.0
         self._last_observed_edge_timestamp = 0.0
-        self._events: queue.Queue[GateEvent | None] = queue.Queue(maxsize=1)
+        self._events: queue.Queue[tuple[GateEvent, TransferStatus] | None] = queue.Queue(maxsize=1)
         self._captures: deque[IWR6843Capture] = deque()
         self._condition = threading.Condition()
         self._worker: threading.Thread | None = None
@@ -140,6 +152,12 @@ class IWR6843CaptureMonitor:
         self._previous_callback_mono_ns: int | None = None
         # the startup check's answer: can this radar do the two-round transfer?
         self.two_round_support: dict = {"supported": False, "reason": NOT_CHECKED_REASON}
+        self._transfer_mode = TransferMode()
+
+    def set_transfer_mode(self, mode: TransferMode) -> None:
+        """Share the runtime's setting; each accepted edge freezes its own status."""
+        with self._condition:
+            self._transfer_mode = mode
 
     @property
     def port(self) -> str:
@@ -297,10 +315,15 @@ class IWR6843CaptureMonitor:
             else:
                 self._last_observed_edge_timestamp = edge_timestamp
                 # the IWR skips edges during its ~7 s dump; observers still hear them
-                queued = self._events.empty() and not self._capture_active
+                queued = (
+                    self._events.empty()
+                    and not self._capture_active
+                    and getattr(self.radar, "is_open", True)
+                )
                 if queued:
                     self._last_edge_timestamp = edge_timestamp
-                    self._events.put_nowait(event)
+                    self._capture_active = True
+                    self._events.put_nowait((event, self._transfer_mode.status()))
                     self._condition.notify_all()
                 else:
                     logger.info(
@@ -365,14 +388,18 @@ class IWR6843CaptureMonitor:
 
     def _capture_loop(self) -> None:
         while self._running:
-            event = self._events.get()
-            if event is None or not self._running:
+            queued = self._events.get()
+            if queued is None or not self._running:
                 break
+            event, status = queued
             edge_timestamp = event.observation.observer_wall_s
             with self._condition:
                 self._capture_active = True
                 self._sequence += 1
                 sequence = self._sequence
+            if status.effective == TRANSFER_TWO_ROUND:
+                self._capture_two_round(event, status, sequence)
+                continue
             start = time.time()
             self._capture_started_at = start
             dump_started_ns = time.monotonic_ns()
@@ -438,6 +465,7 @@ class IWR6843CaptureMonitor:
                 partial_nbytes=len(partial),
                 partial_expected_nbytes=declared_dump_nbytes(partial) if partial else None,
                 partial_raw=partial or None,
+                transfer_status=status,
             )
             with self._condition:
                 # duration first: the ready light reads these without the lock
@@ -454,6 +482,120 @@ class IWR6843CaptureMonitor:
                 capture.dump_duration_s,
             )
 
+    def _capture_two_round(self, event, status, sequence) -> None:
+        start = time.time()
+        self._capture_started_at = start
+        started_ns = time.monotonic_ns()
+        edge = event.observation.observer_wall_s
+        link = None
+        failure = None
+        error = None
+        try:
+            link = self.radar.begin_two_round()
+            overview, _raw = link.overview()
+            metadata = overview.meta
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error = str(exc)
+            partial = getattr(exc, "raw", b"")
+            partial_path = None
+            if partial and self.save_dumps:
+                partial_path = self._capture_path(sequence, edge, ".l3protocol-partial")
+                try:
+                    partial_path.write_bytes(partial)
+                except OSError:
+                    logger.warning("[IWR6843] Could not save failed overview", exc_info=True)
+                    partial_path = None
+            failure = {
+                "error": error,
+                "partial_protocol_bytes": len(partial),
+                "partial_protocol_file": partial_path.name if partial_path else None,
+                "uart_exchanges": [exc.timing] if getattr(exc, "timing", None) else [],
+            }
+            metadata = {}
+            self.radar.close()
+            logger.warning(
+                "[IWR6843] Overview #%d failed; serial session closed: %s", sequence, error
+            )
+        completed = time.time()
+        duration_ns = time.monotonic_ns() - started_ns
+        capture = IWR6843Capture(
+            sequence=sequence,
+            trigger_timestamp=edge,
+            completed_timestamp=completed,
+            dump_duration_s=completed - start,
+            raw=None,
+            path=None,
+            error=error,
+            temperature_report=metadata.get("temperature_report"),
+            dump_duration_ns=duration_ns,
+            uart_transport_duration_ns=(
+                link.exchanges[0]["completed_ns"] - link.exchanges[0]["started_ns"]
+                if link
+                else None
+            ),
+            gate_event=event,
+            two_round_link=link,
+            transfer_status=status,
+            two_round_failure=failure,
+        )
+        with self._condition:
+            self._captures.append(capture)
+            self._condition.notify_all()
+        try:
+            if link is not None:
+                self._wait_for_two_round(capture, link)
+        finally:
+            with self._condition:
+                self._last_dump_duration_s = time.time() - start
+                self._capture_active = False
+                self._capture_started_at = None
+                self._condition.notify_all()
+
+    def _wait_for_two_round(self, capture, link) -> None:
+        deadline = time.monotonic() + _UNCLAIMED_TWO_ROUND_S
+        while not link.finished.wait(0.05):
+            with self._condition:
+                abandoned = link.abandoned.is_set()
+                unclaimed = not link.claimed.is_set() and time.monotonic() >= deadline
+                if self._running and not abandoned and not unclaimed:
+                    continue
+                if capture in self._captures:
+                    self._captures.remove(capture)
+            reason = "monitor stopped" if not self._running else "unmatched capture"
+            logger.warning("[IWR6843] Releasing session %#x: %s", link.session_id, reason)
+            try:
+                link.release(link.session_id)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[IWR6843] Discarded session release failed", exc_info=True)
+            overview, raw = link.cached_overview
+            transfer = TwoRoundTransfer(
+                session_id=overview.session_id,
+                overview_bytes=len(raw),
+                released=link.released,
+                error=reason,
+                payloads=[("overview", raw)],
+                uart_exchanges=list(link.exchanges),
+            )
+            try:
+                self.save_sparse_capture(
+                    capture.sequence, capture.trigger_timestamp, pack_sparse_capture(transfer)
+                )
+            except OSError:
+                logger.warning("[IWR6843] Could not save discarded overview", exc_info=True)
+            break
+        if not link.released:
+            logger.error("[IWR6843] Rearm was not acknowledged; closing serial session")
+            self.radar.close()
+        if self.save_dumps:
+            for index, raw in enumerate(link.failed_payloads, 1):
+                path = self._capture_path(
+                    capture.sequence, capture.trigger_timestamp, f".{index:03d}.l3protocol-partial"
+                )
+                try:
+                    path.write_bytes(raw)
+                except OSError:
+                    logger.warning("[IWR6843] Could not save failed protocol reply", exc_info=True)
+
     def capture_for_shot(
         self,
         impact_timestamp: float | None,
@@ -465,12 +607,17 @@ class IWR6843CaptureMonitor:
         with self._condition:
             while True:
                 if impact_timestamp is None and self._captures:
-                    return self._captures.popleft()
+                    selected = self._captures.popleft()
+                    if selected.two_round_link is not None:
+                        selected.two_round_link.claimed.set()
+                    return selected
 
                 if impact_timestamp is not None:
                     cutoff = impact_timestamp - self.match_tolerance_s
                     while self._captures and self._captures[0].trigger_timestamp < cutoff:
                         stale = self._captures.popleft()
+                        if stale.two_round_link is not None:
+                            stale.two_round_link.abandoned.set()
                         logger.warning(
                             "[IWR6843] Discarding unmatched capture #%d (edge %.3f, shot %.3f)",
                             stale.sequence,
@@ -489,6 +636,8 @@ class IWR6843CaptureMonitor:
                             key=lambda capture: abs(capture.trigger_timestamp - impact_timestamp),
                         )
                         self._captures.remove(selected)
+                        if selected.two_round_link is not None:
+                            selected.two_round_link.claimed.set()
                         return selected
 
                     matching_capture_active = abs(

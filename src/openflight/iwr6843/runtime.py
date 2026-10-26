@@ -68,7 +68,7 @@ HORIZONTAL_CONFIDENCE_CEILING = 0.95
 # How the shot's IWR data reaches the host (``transfer_mode``): the whole dump, or the
 # two-round transfer (an overview, then only the cells the estimators read). Two-round
 # runs only when the radar reported support and the capture offers a link to its frozen
-# session as ``TWO_ROUND_LINK_ATTR``; no live capture does until the stage-2 reader exists.
+# session as ``TWO_ROUND_LINK_ATTR``.
 TWO_ROUND_LINK_ATTR = "two_round_link"
 # what the monitor reports from the radar's startup check: {"supported": bool, "reason": str}
 TWO_ROUND_SUPPORT_ATTR = "two_round_support"
@@ -413,6 +413,9 @@ class IWR6843Runtime:
     def __post_init__(self):
         self.transfer_mode = TransferMode(validate_transfer(self.transfer))
         self.refresh_transfer_support()
+        setter = getattr(self.capture_monitor, "set_transfer_mode", None)
+        if setter is not None:
+            setter(self.transfer_mode)
 
     def set_transfer(self, mode: str):
         """Ask for a transfer mode; a shot already begun keeps the mode it began with."""
@@ -525,6 +528,7 @@ class IWR6843Runtime:
             timeout_s=self.capture_timeout_s,
         )
         capture_returned_ns = time.monotonic_ns()
+        status = getattr(capture, "transfer_status", None) or status
         link = (
             getattr(capture, TWO_ROUND_LINK_ATTR, None)
             if status.effective == TRANSFER_TWO_ROUND
@@ -614,6 +618,13 @@ class IWR6843Runtime:
                 sparse_capture=pack_sparse_capture(transfer),
             )
         if raw is None:
+            failure = getattr(capture, "two_round_failure", None)
+            if failure is not None:
+                return result(
+                    withheld_reason=TWO_ROUND_FAILED,
+                    transfer=failure,
+                    transfer_mode=mode_record("none", failure["error"]),
+                )
             return result()
         return result(analyse(raw, partial))
 

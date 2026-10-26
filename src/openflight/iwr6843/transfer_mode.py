@@ -1,7 +1,7 @@
 """Which IWR transfer each shot uses: the requested mode, and whether the radar can do it.
 
-``full`` sends the whole 733 kB dump (about 7 s); ``two_round`` sends an overview and
-then only the cells the estimators read (about 1 s, same numbers). The mode is a
+``full`` sends the whole dump; ``two_round`` sends an overview and then only the
+cells the estimators read. Live performance needs hardware qualification. The mode is a
 session setting the operator can change between shots; a shot uses the mode that was
 in effect when it began. Two-round runs only when the radar has said it supports it
 (its CLI ``help`` lists ``overview``, ``cells`` and ``release``); until then, or when
@@ -96,20 +96,18 @@ class TransferMode:
 
     def effective(self) -> str:
         """The mode a shot beginning now uses."""
-        with self._lock:
-            return (
-                TRANSFER_TWO_ROUND
-                if self._requested == TRANSFER_TWO_ROUND and self._available
-                else TRANSFER_FULL
-            )
+        return self.status().effective
 
     def status(self) -> TransferStatus:
         """Requested, effective, availability and the reason when unavailable."""
-        effective = self.effective()
         with self._lock:
             return TransferStatus(
                 requested=self._requested,
-                effective=effective,
+                effective=(
+                    TRANSFER_TWO_ROUND
+                    if self._requested == TRANSFER_TWO_ROUND and self._available
+                    else TRANSFER_FULL
+                ),
                 available=bool(self._available),
                 reason=self._reason,
                 last_fallback=self._last_fallback,

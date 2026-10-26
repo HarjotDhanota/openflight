@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from openflight.iwr6843.transfer_mode import (
@@ -41,3 +43,41 @@ def test_the_last_fallback_is_kept_for_the_ui():
     assert mode.status().last_fallback == "the ring was released"
     mode.note_fallback(None)
     assert mode.status().last_fallback is None
+
+
+def test_edge_snapshot_is_consistent_when_ui_changes_setting_between_lock_releases():
+    mode = TransferMode("two_round")
+    mode.set_support(True)
+    released = threading.Event()
+    changed = threading.Event()
+    reader = threading.get_ident()
+
+    class InterleavedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.paused = False
+
+        def __enter__(self):
+            self.lock.acquire()
+
+        def __exit__(self, *_args):
+            self.lock.release()
+            if threading.get_ident() == reader and not self.paused:
+                self.paused = True
+                released.set()
+                assert changed.wait(2)
+
+    mode._lock = InterleavedLock()
+
+    def change():
+        assert released.wait(2)
+        mode.request("full")
+        changed.set()
+
+    writer = threading.Thread(target=change)
+    writer.start()
+    try:
+        snapshot = mode.status()
+    finally:
+        writer.join(timeout=3)
+    assert snapshot.requested == snapshot.effective
