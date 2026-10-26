@@ -143,6 +143,49 @@ max-timeout setting for CP2102N only, rather than CP2105.
 [AN571, section 5.18](https://www.silabs.com/documents/public/application-notes/AN571.pdf).
 No USB bridge, UART baud, kernel or saved device setting is changed here.
 
+## Conditional UART serialization bounds
+
+`uart_clock_bounds.map_compact_uart_tick` is a separate research calculation;
+the existing audit and live capture behavior do not change. Decode saved compact
+records with `compact_recording_observations` first. Supply an explicit
+`UARTAssumptions` with the reviewed build fingerprint, framing, per-direction
+maximum baud rates and a reference explaining those assumptions. A matching hash
+identifies reviewed source; it does not establish physical timing by itself.
+
+For this firmware contract, the handler reads `r` after the complete command
+arrives and reads `t` before sending any packet byte. Under assumed 8N1 framing,
+each preceding complete character occupies ten bit periods. Omit the last
+character entirely in each direction to avoid relying on the receiver's stop-bit
+sampling point. For the DESIGN command/packet lengths of 30/44 bytes:
+
+```text
+request_min = 290 bit periods / request_max_baud
+reply_min   = 430 bit periods / reply_max_baud
+time(r) >= h0 + request_min
+time(t) <= h1 - reply_min
+```
+
+Baud ceilings must be expressed in bits per host-MONOTONIC second, accounting
+for UART oscillator/divider error and host timebase error. Requested baud is not
+a measured ceiling. USB queuing, echo, CRC computation and CLI trailer duration
+receive no credit; unequal or arbitrarily stalled transport remains allowed.
+
+The earlier counter envelopes can therefore be shifted inward by those two
+minimum durations. Common shifts commute with intersection, so every supplied
+probe remains included. Integer serialization credits round downward. Expand
+each end by one counter cycle at the slowest assumed rate to cover counter-read
+phase quantization. Reject an exchange if its bracket cannot contain these wire
+minima plus the minimum handler duration, or if the final intersection is empty.
+Original bytes and host timestamps are unchanged.
+
+The result retains the unadjusted interval and its assumptions alongside the
+narrowed interval. `physical_timing_qualified` and `wire_timing_qualified` remain
+false, and `rf_acquisition_interval_ns` remains null. A conditional width below
+1 ms is neither a measured clock error nor a justified accuracy claim of plus
+or minus half that width. Counter continuity/rate, source timestamp placement,
+wire ceilings, capture/runtime linkage and the RF/ADC offset require separate
+qualification before this calculation can support physical fusion timing.
+
 ## GPIO sidecar parsing
 
 The research module also parses the previous optional GPIO1 `clockGate` sidecar.
