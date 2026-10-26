@@ -1113,6 +1113,7 @@
   "tests/test_tester_kiosk_agreement.py": "TESTER",
   "tests/test_tester_light.py": "TESTER",
   "tests/test_tester_light_fixes.py": "TESTER",
+  "tests/test_tester_on_screen.py": "TESTER",
   "tests/test_tester_placement_checks.py": "TESTER",
   "tests/test_tester_ready_light.py": "TESTER",
   "tests/test_tester_restart.py": "TESTER",

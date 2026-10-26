@@ -2754,6 +2754,14 @@ def write_setup_admission(
     os.replace(temporary, run_dir / "setup_admission.json")
 
 
+# the kiosk's web port (start-kiosk.sh's default), for the tester page's "Kiosk view"
+KIOSK_WEB_PORT = 8080
+# where free play's kiosk shows (action_commands' kiosk_window)
+KIOSK_WINDOWS = ("own", "shared")
+# a server bound to one of these is out of a phone's reach
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
 def action_commands(
     action: str,
     params: TesterParameters,
@@ -2772,8 +2780,17 @@ def action_commands(
     free_play_plan: Mapping | None = None,
     club: str = CLUB,
     handed: str = "RH",
+    tester_control_port: int | None = None,
+    kiosk_window: str = "own",
 ) -> tuple[list[list[str]], Path]:
     """Build an allowlisted command sequence and its log path.
+
+    ``tester_control_port`` is this tester server's port: every kiosk it starts is
+    told it, so the kiosk's Tester button finds the page again. ``kiosk_window`` is
+    where free play's kiosk shows: ``"own"``, its own fullscreen window on the unit's
+    screen (the page is on a phone), or ``"shared"``, the tester page's window on the
+    unit's screen, which switches to it (``start-tester.sh --on-screen``), so the
+    kiosk opens no window of its own.
 
     ``free_play_plan`` (``free_play_ladder.build_plan``) is free play's exposure
     ladder at the tapped resolution: the kiosk starts at its startup controls,
@@ -2788,6 +2805,8 @@ def action_commands(
     """
     if action not in ACTION_LABELS:
         raise ValueError("unknown tester action")
+    if kiosk_window not in KIOSK_WINDOWS:
+        raise ValueError(f"kiosk_window must be one of {', '.join(KIOSK_WINDOWS)}")
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     root = arm_directory(sessions_root, params)
@@ -2929,8 +2948,11 @@ def action_commands(
             )
         commands[0].extend(["--handed", handed])
         # the tester page stays on screen: no fullscreen kiosk window (2a); the page's
-        # "Kiosk view" button opens the kiosk UI in a normal window or tab
+        # "Kiosk view" button opens the kiosk UI in a normal window or tab. Free play
+        # opens the kiosk on the unit's screen, unless the page itself is there.
         if action == "free_play":
+            if kiosk_window == "shared":
+                commands[0].insert(2, "--no-browser")
             commands[0].append("--tester-free-play")
             if light_index_dn_per_us_gain is not None:
                 commands[0].extend(["--camera-light-index", str(light_index_dn_per_us_gain)])
@@ -2941,6 +2963,9 @@ def action_commands(
                 )
         else:
             commands[0].insert(2, "--no-browser")
+        if tester_control_port is not None:
+            # the kiosk's Tester button goes back to this page (tester_link.py)
+            commands[0].extend(["--tester-control-port", str(tester_control_port)])
         if iwr_static_port:
             # The kiosk must own the same interface the hardware check verified.
             commands[0].extend(["--iwr6843-port", iwr_static_port])
@@ -7861,10 +7886,6 @@ def study_overview(
     return {"tester_id": tester_id, "club": CLUB, "arms": arms}
 
 
-# the kiosk's web port (start-kiosk.sh's default), for the tester page's "Kiosk view"
-KIOSK_WEB_PORT = 8080
-
-
 def create_app(
     *,
     sessions_root: Path = DEFAULT_SESSIONS_ROOT,
@@ -7887,6 +7908,7 @@ def create_app(
     require_iwr_preflight: bool = False,
     allow_unverified_geometry: bool = False,
     tester_control_port: int = 8765,
+    bind_host: str = "127.0.0.1",
     package_manager: TesterJobManager | None = None,
     static_radar=None,
     camera_tilt_path: Path | None = None,
@@ -7918,6 +7940,9 @@ def create_app(
 
     ``send_dir`` is the visible folder (``~/OpenFlight-to-send``) each finished
     bundle is also put in, for the tester to send from.
+
+    ``bind_host`` is the address the server listens on; ``/api/tester/ping`` says
+    from it whether a phone could open the page (the kiosk's Tester button).
     """
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
@@ -11032,6 +11057,11 @@ def create_app(
             range_m=choice.radar_slant_range_m if choice is not None else None,
         )
 
+    @app.get("/api/tester/ping")
+    def ping():
+        """The kiosk asks this before it offers its Tester button (tester_link.py)."""
+        return jsonify({"tester": True, "lan": bind_host not in LOOPBACK_HOSTS})
+
     @app.route("/api/tester/status", methods=["GET", "POST"])
     def status():
         try:
@@ -11122,6 +11152,14 @@ def create_app(
                 lens_settings = lens_store.settings(lens_id)
                 params = replace(params, arm_id=free_play_resolution(payload, lens_settings))
             club = first_club(payload) if action == "free_play" else CLUB
+            # the page on the unit's own screen shows free play's kiosk in its window
+            kiosk_window = (
+                str((payload or {}).get("kiosk_window") or "own")
+                if action == "free_play"
+                else "own"
+            )
+            if kiosk_window not in KIOSK_WINDOWS:
+                raise ValueError(f"kiosk_window must be one of {', '.join(KIOSK_WINDOWS)}")
             operator_reset = (payload or {}).get("operator_reset")
             if operator_reset is not None and not isinstance(operator_reset, bool):
                 raise ValueError("operator_reset must be true, false or absent")
@@ -11195,6 +11233,8 @@ def create_app(
                 free_play_plan=plan,
                 club=club,
                 handed=read_handedness(tester_root(sessions_root, params.tester_id))["handed"],
+                tester_control_port=tester_control_port,
+                kiosk_window=kiosk_window,
             )
             run_id = None
             if action == "free_play":
@@ -11205,8 +11245,6 @@ def create_app(
                         params.tester_id,
                         "--tester-run-id",
                         run_id,
-                        "--tester-control-port",
-                        str(tester_control_port),
                     ]
                 )
                 if any(
@@ -11274,6 +11312,7 @@ def create_app(
                         run_dir,
                         "--tester-geometry-unverified" in commands[0],
                         resolution=plan["resolution"],
+                        kiosk_window=kiosk_window,
                     )
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
@@ -11730,6 +11769,7 @@ def create_app(
                 iwr_static_port,
                 handed_to_swings=handed,
                 iwr_calibration=iwr_calibration,
+                tester_control_port=tester_control_port,
             )
             run = Path(commands[0][commands[0].index("--log-dir") + 1])
             with session_bundle.snapshot_lock(
@@ -12319,6 +12359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             send_dir=args.send_dir,
             allow_unverified_geometry=True,
             tester_control_port=args.port,
+            bind_host=args.host,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()

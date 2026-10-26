@@ -36,11 +36,18 @@ class FreePlayController:
         temporary.replace(path)
 
     def begin(  # pylint: disable=too-many-arguments
-        self, tester_id, run_id, run_dir, geometry_unverified=False, resolution=None
+        self,
+        tester_id,
+        run_id,
+        run_dir,
+        geometry_unverified=False,
+        resolution=None,
+        kiosk_window="own",
     ):
         """Record the new capture identity before its child process starts.
 
-        ``resolution`` is the mode the tester tapped (``free_play_ladder.resolution``).
+        ``resolution`` is the mode the tester tapped (``free_play_ladder.resolution``);
+        ``kiosk_window`` where its kiosk shows (``tester_server.action_commands``).
         """
         with self.lock:
             if self.run and self.run["phase"] in {"recording", "stopping", "packaging"}:
@@ -54,6 +61,7 @@ class FreePlayController:
                 "bundle": None,
                 "geometry_unverified": geometry_unverified,
                 "resolution": resolution,
+                "kiosk_window": kiosk_window,
                 "error": None,
                 "paused": None,
             }
