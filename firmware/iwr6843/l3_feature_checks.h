@@ -12,4 +12,11 @@
 #error "L3_USB_CLOCK_COMPACT requires L3_USB_CLOCK_PROBE: cp shares clockProbe's boot token and helpers"
 #endif
 
+/* The two-round transfer serves a frozen capture and must keep its per-frame
+ * sequence/timing/overflow evidence, which only the configurable
+ * hybrid-cadence build records (L3_CAPTURE_EVIDENCE, dump v8/v9). */
+#if defined(L3_TWO_ROUND) && !defined(L3_CAPTURE_EVIDENCE)
+#error "L3_TWO_ROUND requires L3_CAPTURE_EVIDENCE (CONFIGURABLE_CAPTURE + HYBRID_CADENCE_CAPTURE)"
+#endif
+
 #endif

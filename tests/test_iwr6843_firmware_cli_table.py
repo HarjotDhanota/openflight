@@ -61,6 +61,8 @@ CLOCK_HANDLERS = {"clockProbe": "l3_cli_clockProbe", "cp": "l3_cli_cp"}
 ALL_HANDLERS = {**HANDLERS, **CLOCK_HANDLERS}
 CLOCK_PROBE = ("L3_USB_CLOCK_PROBE",)
 CLOCK_COMPACT = ("L3_USB_CLOCK_PROBE", "L3_USB_CLOCK_COMPACT")
+# Stage-2 scaffold only: overview, cells and release are not registered until F2.
+TWO_ROUND = ("L3_TWO_ROUND",)
 
 PRODUCTION_ORDER = [
     "sensorStart",
@@ -148,6 +150,9 @@ static int32_t UART_writePolling(UART_Handle handle, const void *buffer, size_t 
     return (int32_t)size;
 }}
 #include "clock_probe.h"
+#endif
+#ifdef L3_TWO_ROUND
+#include "two_round_format.h"
 #endif
 
 #include "l3_cli_table.h"
@@ -261,6 +266,8 @@ MATRIX = {
     "clock_compact": PRODUCTION + CLOCK_COMPACT,
     "clock_compact_evidence_off": EVIDENCE_OFF + CLOCK_COMPACT,
     "clock_probe_minimal": CLOCK_PROBE,
+    "two_round": PRODUCTION + TWO_ROUND,
+    "combined": PRODUCTION + CLOCK_COMPACT + TWO_ROUND,
 }
 
 
@@ -293,6 +300,19 @@ def test_clock_commands_still_register_when_evidence_is_off(tmp_path):
     rows = _registered(tmp_path, EVIDENCE_OFF + CLOCK_COMPACT)
 
     assert [row[1] for row in rows[11:]] == ["clockProbe", "cp", "help"]
+
+
+def test_two_round_adds_no_command_yet(tmp_path):
+    with_it = _registered(tmp_path, PRODUCTION + CLOCK_COMPACT + TWO_ROUND)
+
+    assert [row[1] for row in with_it] == [*PRODUCTION_ORDER, "clockProbe", "cp", "help"]
+
+
+def test_two_round_without_capture_evidence_is_refused(tmp_path):
+    refused = _compile(tmp_path, EVIDENCE_OFF + TWO_ROUND)
+
+    assert refused.returncode != 0
+    assert "L3_TWO_ROUND requires L3_CAPTURE_EVIDENCE" in refused.stderr
 
 
 def test_compact_without_the_probe_is_refused(tmp_path):

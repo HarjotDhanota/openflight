@@ -48,9 +48,13 @@
 #else
 #define L3_CLI_CLOCK_COUNT 0U
 #endif
+/* Stage-2 two-round transfer: overview, cells and release are appended after
+ * the clock commands in phase F2 (slots 15-17 with everything on). None yet. */
+#define L3_CLI_TWO_ROUND_COUNT 0U
 
 #define L3_CLI_COUNT (L3_CLI_CORE_COUNT + L3_CLI_HWA_COUNT + L3_CLI_CAPTURE_COUNT + \
-                      L3_CLI_IQ8_COUNT + L3_CLI_EVIDENCE_COUNT + L3_CLI_CLOCK_COUNT)
+                      L3_CLI_IQ8_COUNT + L3_CLI_EVIDENCE_COUNT + L3_CLI_CLOCK_COUNT + \
+                      L3_CLI_TWO_ROUND_COUNT)
 
 /* CLI_open appends its built-in "help" after the last entry, so at most
  * CLI_MAX_CMD - 1 of the table's slots are ours. The SDK is not edited. */

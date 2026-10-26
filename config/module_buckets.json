@@ -929,6 +929,7 @@
   "tests/test_iwr6843_firmware_evidence.py": "FUSION",
   "tests/test_iwr6843_firmware_perf.py": "RESEARCH",
   "tests/test_iwr6843_firmware_rearm.py": "FUSION",
+  "tests/test_iwr6843_firmware_wire_formats.py": "FUSION",
   "tests/test_iwr6843_frame_evidence.py": "RESEARCH",
   "tests/test_iwr6843_frame_evidence_c.py": "RESEARCH",
   "tests/test_iwr6843_horizontal_phase_reference.py": "PRODUCT",

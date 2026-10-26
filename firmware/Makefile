@@ -16,6 +16,11 @@ RELEASE_DIR ?= releases
 # unless OVERWRITE_RELEASE=1 is given as well.
 RELEASE_NAME ?= l3_dump_local_build.bin
 OVERWRITE_RELEASE ?= 0
+# Experimental features, all off by default (README.md, "Experimental build flags"):
+#   CLOCK_PROBE_DEFS="--define=L3_USB_CLOCK_PROBE=1 [--define=L3_USB_CLOCK_COMPACT=1]"
+#   TWO_ROUND_DEFS="--define=L3_TWO_ROUND=1"
+CLOCK_PROBE_DEFS ?=
+TWO_ROUND_DEFS ?=
 
 SDK_INSTALLER := $(INSTALLER_DIR)/mmwave_sdk_03_06_02_00-LTS-Linux-x86-Install.bin
 R4F_INSTALLER := $(INSTALLER_DIR)/ti_cgt_tms470_20.2.7.LTS_linux-x64_installer.bin
@@ -160,7 +165,7 @@ check-release-target:
 
 build-native: check-release-target check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
-	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1 $(CLOCK_PROBE_DEFS)"
+	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1 $(CLOCK_PROBE_DEFS) $(TWO_ROUND_DEFS)"
 	mkdir -p "$(RELEASE_DIR)"
 	cp "$(FIRMWARE_DIR)/l3_dump.bin" "$(RELEASE_DIR)/$(RELEASE_NAME)"
 	sha256sum "$(RELEASE_DIR)/$(RELEASE_NAME)"
@@ -235,7 +240,8 @@ docker-build: check-release-target
 	docker run --rm --platform linux/amd64 \
 		-v "$(REPO_ROOT):/work" -w /work \
 		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)" \
-		OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)"
+		OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)" \
+		CLOCK_PROBE_DEFS="$(CLOCK_PROBE_DEFS)" TWO_ROUND_DEFS="$(TWO_ROUND_DEFS)"
 
 
 docker-shell:

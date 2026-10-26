@@ -50,6 +50,9 @@
 
 #include "dump_format.h"
 #include "l3_evidence.h"
+#ifdef L3_TWO_ROUND
+#include "two_round_format.h"
+#endif
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
