@@ -110,7 +110,7 @@ Hit balls as normal and watch your numbers. The light at the top tells you when 
 3. Share the folder as "Anyone with the link".
 4. Send the link to whoever asked you to test, with a sentence about your setup: indoor or outdoor, the light, **whether your enclosure is the v3 one with the experimental radar and camera mounts (and if not, which one)**, and anything odd that happened.
 
-The zip is also saved on the unit in `~/OpenFlight-to-send/`.
+The zip is also saved on the unit in `~/OpenFlight-to-send/`. On the unit's own screen step 8 has no **Download** (it would only copy the zip to the same unit): open the tester page on a phone or laptop to download it (start the unit with `--host 0.0.0.0`), or copy it off with a USB stick.
 
 <img src="images/kiosk-package-ready.png" width="480" alt="The scoreboard: Package ready and Done"> <img src="images/8-download.png" width="480" alt="Step 8: the Download button, the copy on the unit, and how to send it">
 
