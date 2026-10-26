@@ -1,5 +1,43 @@
 # Offline camera timing evidence
 
+## Camera-only clock preflight
+
+This check can run before an OPS firmware upgrade, without either radar or a
+sound-trigger connection. Stop camera capture applications first; the tool uses
+the kiosk's camera path and will not stop another camera owner.
+
+```bash
+UV_PYTHON=/usr/bin/python3 uv run --no-sync python scripts/hardware-test/camera_clock_preflight.py \
+  --width 1280 --height 800 --fps 120 --seconds 10 --load idle \
+  --output-dir camera-clock-idle
+```
+
+Use a system-Python environment with Picamera2 and compatible camera dependencies.
+`--load gil` and `--load cpu` reuse the existing camera starvation test's loads;
+run them separately and retain every report. Existing output directories are
+refused. The diagnostic fixes requested exposure/gain and disables automatic
+exposure; those temporary controls are not an optical-quality qualification.
+It does not request GPIO, send radar commands or change saved kiosk settings.
+
+The tool saves timestamps only in `frames.jsonl`, bracketed MONOTONIC/BOOTTIME
+reads in `clock-pairs.jsonl`, and a `report.json` with source hashes, requested and
+resolved mode, boot identity, observed cadence/gaps and delivery-lag intervals.
+No images are retained. It rejects missing/malformed clocks, changed boot IDs,
+nonconstant observed clock offsets and duplicate/reordered frames for conversion.
+Clock observations enclose the saved frame callback times. A successful exit
+means the observations are usable and no cadence gaps were seen in that run;
+it is not a sub-millisecond accuracy pass. Exit 1 retains diagnostic failures or
+gaps; exit 2 means invalid input, device access or I/O failure.
+
+The conversion is the clock-read envelope: for BOOTTIME minus MONOTONIC in
+`[low, high]`, a sensor timestamp `s` maps to MONOTONIC `[s-high, s-low]`. Callback
+delivery lag is `[host-s+low, host-s+high]`. It is reported, never fitted away.
+The envelope assumes no suspend between observations. The sensor clock domain
+is declared according to libcamera, while exposure/readout semantics still need
+an independent optical event. Small clock-read widths cannot qualify that offset.
+
+## Offline mapping candidate
+
 The M1 timing bench fits camera sensor-to-host timestamp correlation on declared
 fit captures and evaluates separate validation captures without refitting.
 It preserves input hashes, cadence/gap diagnostics, residuals and unsuccessful
