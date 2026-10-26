@@ -1452,6 +1452,10 @@
   "tests/test_ble_catch_up.py": "PRODUCT",
   "tests/test_phone_catch_up.py": "PRODUCT",
   "tests/test_shot_stream.py": "PRODUCT",
-  "tests/test_shot_stream_catch_up.py": "PRODUCT"
+  "tests/test_shot_stream_catch_up.py": "PRODUCT",
+  "scripts/analysis/spin_fusion_study.py": "RESEARCH",
+  "tests/test_spin_fusion_study.py": "RESEARCH",
+  "scripts/analysis/spin_signal_windows.py": "RESEARCH",
+  "scripts/analysis/spin_study_report.py": "RESEARCH"
  }
 }
