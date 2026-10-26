@@ -67,6 +67,9 @@
 #define L3_IQ8_SCAN 1
 #endif
 
+/* Rejects feature-flag combinations that cannot work (after the derived flags above). */
+#include "l3_feature_checks.h"
+
 /* --- task priorities (mirror the mmw demo): ctrl > CLI. -------------------- */
 #define L3_INIT_TASK_PRIORITY  2
 #define L3_CLI_TASK_PRIORITY   3
@@ -472,6 +475,10 @@ static uint32_t l3_ticks(void)
 {
     return __MRC(15U, 0U, 9U, 13U, 0U);        /* PMCCNTR */
 }
+
+#ifdef L3_USB_CLOCK_PROBE
+#include "clock_probe.h"
+#endif
 
 static uint32_t gFrameSeq[L3_MAX_CAPTURE_FRAMES];
 static uint32_t gFrameStartTick[L3_MAX_CAPTURE_FRAMES];

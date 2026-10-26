@@ -924,6 +924,7 @@
   "tests/test_iwr6843_dump_evidence.py": "FUSION",
   "tests/test_iwr6843_dump_starvation_check.py": "RESEARCH",
   "tests/test_iwr6843_feasibility_run.py": "RESEARCH",
+  "tests/test_iwr6843_firmware_build_fingerprint.py": "FUSION",
   "tests/test_iwr6843_firmware_cli_table.py": "FUSION",
   "tests/test_iwr6843_firmware_evidence.py": "FUSION",
   "tests/test_iwr6843_firmware_perf.py": "RESEARCH",

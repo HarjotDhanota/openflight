@@ -4,6 +4,8 @@ The table is compiled on the host against a stub of the SDK's CLI_Cfg, for each
 feature-flag set, then run through a copy of CLI_open's count-and-append-help
 walk and its by-name dispatch. Each stub handler reports its own name, so a
 pass proves the registered names, their order and which handler a name reaches.
+The clock handlers are the real ones (clock_probe.h) over stub SDK calls: their
+dispatch is seen by the reply they start to write.
 Builds only this fork's headers, never TI's SDK. Skips without a C compiler: it
 uses $CC, then cc/gcc/clang on PATH, then ``python -m ziglang cc`` if installed.
 """
@@ -24,6 +26,7 @@ import pytest
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 FIRMWARE = FIRMWARE_DIR / "l3_dump.c"
 TABLE = FIRMWARE_DIR / "l3_cli_table.h"
+CLOCK_HEADERS = ("clock_probe.h", "clock_compact_handler.h")
 
 # The flags the production build passes (firmware/Makefile build-native) that
 # the table reads; N_TX, SNAPSHOT_DUMP and HWA_CHAINED_SNAPSHOT_RING do not
@@ -53,6 +56,11 @@ HANDLERS = {
     "perfstats": "l3_cli_perfStats",
     "l3bench": "l3_cli_bench",
 }
+# Compiled for real from clock_probe.h / clock_compact_handler.h, not stubbed.
+CLOCK_HANDLERS = {"clockProbe": "l3_cli_clockProbe", "cp": "l3_cli_cp"}
+ALL_HANDLERS = {**HANDLERS, **CLOCK_HANDLERS}
+CLOCK_PROBE = ("L3_USB_CLOCK_PROBE",)
+CLOCK_COMPACT = ("L3_USB_CLOCK_PROBE", "L3_USB_CLOCK_COMPACT")
 
 PRODUCTION_ORDER = [
     "sensorStart",
@@ -69,6 +77,8 @@ PRODUCTION_ORDER = [
     "perfstats",
     "l3bench",
 ]
+# The coordination contract's all-enabled positions (CODEX-COORDINATION.md, 26 Oct 2026).
+CONTRACT_SLOTS = {13: "clockProbe", 14: "cp"}
 
 
 def _compiler() -> list[str]:
@@ -106,6 +116,7 @@ def _harness() -> str:
 #include <stdio.h>
 #include <string.h>
 {_evidence_derivation()}
+#include "l3_feature_checks.h"
 /* Stand-ins for the SDK's ti/utils/cli/cli.h; not the SDK. */
 #ifndef CLI_MAX_CMD
 #define CLI_MAX_CMD 32
@@ -118,6 +129,27 @@ static const char *gRan;
 static int32_t CLI_help(int32_t argc, char *argv[]) {{ (void)argc; (void)argv; gRan = "CLI_help"; return 0; }}
 {stubs}
 
+#ifdef L3_USB_CLOCK_PROBE
+/* Stand-ins for what clock_probe.h uses from l3_dump.c and the SDK. A reply
+ * that starts the right way marks which real handler ran. */
+typedef void *UART_Handle;
+static UART_Handle gCliUart;
+static volatile uint32_t gNumFrame = 7U;
+static uint32_t gCpuClock = 200U * 1000000U;
+static uint32_t l3_ticks(void) {{ static uint32_t tick = 100U; return tick++; }}
+static void CLI_write(const char *format, ...)
+{{
+    if (strncmp(format, "OFCLKPROBE1 ", 12) == 0) gRan = "l3_cli_clockProbe";
+}}
+static int32_t UART_writePolling(UART_Handle handle, const void *buffer, size_t size)
+{{
+    (void)handle;
+    if (size == 44U && memcmp(buffer, "OFC2", 4U) == 0) gRan = "l3_cli_cp";
+    return (int32_t)size;
+}}
+#include "clock_probe.h"
+#endif
+
 #include "l3_cli_table.h"
 
 int main(void)
@@ -125,6 +157,10 @@ int main(void)
     static CLI_Cfg cfg;
     uint32_t used = l3_cliRegister(&cfg);
     uint32_t count = 0U, index, probe;
+    char nonceHi[] = "0000abcd", nonceLo[] = "00001234", seq[] = "00000001";
+#ifdef L3_USB_CLOCK_PROBE
+    (void)gCliUart;  /* only cp writes to it */
+#endif
     printf("used %u expected %u\\n", (unsigned)used, (unsigned)L3_CLI_COUNT);
     /* CLI_open (src/cli.c): count to the first NULL, then append "help". */
     for (index = 0U; index < CLI_MAX_CMD; index++) {{
@@ -143,8 +179,10 @@ int main(void)
         for (probe = 0U; probe < count; probe++) {{
             if (strcmp(cfg.tableEntry[probe].cmd, cfg.tableEntry[index].cmd) == 0) break;
         }}
+        char *argv[4];
+        argv[0] = cfg.tableEntry[index].cmd; argv[1] = nonceHi; argv[2] = nonceLo; argv[3] = seq;
         gRan = "none";
-        cfg.tableEntry[probe].cmdHandlerFxn(0, NULL);
+        cfg.tableEntry[probe].cmdHandlerFxn(4, argv);
         printf("cmd %u %s %s\\n", (unsigned)index, cfg.tableEntry[index].cmd, gRan);
     }}
     return 0;
@@ -206,6 +244,10 @@ def _expected(flags) -> list[str]:
                 names.append("iq8Scale")
         if "HYBRID_CADENCE_CAPTURE" in on:
             names += ["perfstats", "l3bench"]
+    if "L3_USB_CLOCK_PROBE" in on:
+        names.append("clockProbe")
+        if "L3_USB_CLOCK_COMPACT" in on:
+            names.append("cp")
     return names
 
 
@@ -215,6 +257,10 @@ MATRIX = {
     "no_hwa_smoke": tuple(flag for flag in PRODUCTION if flag != "ENABLE_HWA_SMOKE"),
     "iq16_only": ("ENABLE_HWA_SMOKE", "CONFIGURABLE_CAPTURE", "HYBRID_CADENCE_CAPTURE"),
     "minimal": (),
+    "clock_probe": PRODUCTION + CLOCK_PROBE,
+    "clock_compact": PRODUCTION + CLOCK_COMPACT,
+    "clock_compact_evidence_off": EVIDENCE_OFF + CLOCK_COMPACT,
+    "clock_probe_minimal": CLOCK_PROBE,
 }
 
 
@@ -226,13 +272,34 @@ def test_every_enabled_command_registers_contiguously_and_dispatches_to_its_hand
 
     assert [row[1] for row in rows] == [*expected, "help"]
     assert [row[0] for row in rows] == list(range(len(expected) + 1))
-    assert [row[2] for row in rows] == [HANDLERS[n] for n in expected] + ["CLI_help"]
+    assert [row[2] for row in rows] == [ALL_HANDLERS[n] for n in expected] + ["CLI_help"]
 
 
 def test_the_production_build_keeps_its_slot_order(tmp_path):
     rows = _registered(tmp_path, PRODUCTION)
 
     assert [row[1] for row in rows] == [*PRODUCTION_ORDER, "help"]
+
+
+def test_the_clock_commands_take_their_contract_slots_when_everything_is_on(tmp_path):
+    rows = _registered(tmp_path, PRODUCTION + CLOCK_COMPACT)
+
+    assert {index: rows[index][1] for index in CONTRACT_SLOTS} == CONTRACT_SLOTS
+    assert rows[len(PRODUCTION_ORDER) + 2][1] == "help"
+
+
+def test_clock_commands_still_register_when_evidence_is_off(tmp_path):
+    """The old fixed slots 13/14 sat past a NULL here, so CLI_open never saw them."""
+    rows = _registered(tmp_path, EVIDENCE_OFF + CLOCK_COMPACT)
+
+    assert [row[1] for row in rows[11:]] == ["clockProbe", "cp", "help"]
+
+
+def test_compact_without_the_probe_is_refused(tmp_path):
+    refused = _compile(tmp_path, PRODUCTION + ("L3_USB_CLOCK_COMPACT",))
+
+    assert refused.returncode != 0
+    assert "L3_USB_CLOCK_COMPACT requires L3_USB_CLOCK_PROBE" in refused.stderr
 
 
 def test_a_disabled_feature_leaves_no_gap(tmp_path):
@@ -255,7 +322,7 @@ def test_the_table_refuses_to_build_without_a_slot_for_help(tmp_path):
 
 
 def test_l3_dump_registers_through_the_shared_table_only():
-    source = FIRMWARE.read_text(encoding="utf-8")
+    source = FIRMWARE.read_text(encoding="utf-8").replace("\r\n", "\n")
 
     assert "tableEntry[" not in source
     include = source.index('#include "l3_cli_table.h"')
@@ -265,6 +332,17 @@ def test_l3_dump_registers_through_the_shared_table_only():
         definition = re.search(rf"^(?:static )?int32_t {handler}\(int32_t argc", source, re.M)
         assert definition, handler
         assert definition.start() < include, f"{handler} is defined after the table include"
+    clock = source.index('#ifdef L3_USB_CLOCK_PROBE\n#include "clock_probe.h"\n#endif')
+    assert source.index("static uint32_t l3_ticks(void)") < clock < include
+    checks = source.index('#include "l3_feature_checks.h"')
+    assert source.index("#define L3_CAPTURE_EVIDENCE 1") < checks
+
+
+@pytest.mark.parametrize("header", CLOCK_HEADERS)
+def test_the_clock_handlers_live_in_their_own_headers(header):
+    text = (FIRMWARE_DIR / header).read_text(encoding="utf-8")
+
+    assert "GPIO" not in text  # the USB-only experiment, not the earlier GPIO gate
 
 
 def test_registration_is_inline_so_the_all_off_image_is_unchanged():

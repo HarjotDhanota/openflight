@@ -160,7 +160,7 @@ check-release-target:
 
 build-native: check-release-target check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
-	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
+	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1 $(CLOCK_PROBE_DEFS)"
 	mkdir -p "$(RELEASE_DIR)"
 	cp "$(FIRMWARE_DIR)/l3_dump.bin" "$(RELEASE_DIR)/$(RELEASE_NAME)"
 	sha256sum "$(RELEASE_DIR)/$(RELEASE_NAME)"

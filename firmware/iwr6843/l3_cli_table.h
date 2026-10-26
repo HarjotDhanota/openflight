@@ -39,9 +39,18 @@
 #else
 #define L3_CLI_EVIDENCE_COUNT 0U
 #endif
+/* USB clock experiment: clockProbe, and cp only on top of it
+ * (l3_feature_checks.h refuses cp alone). */
+#if defined(L3_USB_CLOCK_PROBE) && defined(L3_USB_CLOCK_COMPACT)
+#define L3_CLI_CLOCK_COUNT 2U
+#elif defined(L3_USB_CLOCK_PROBE)
+#define L3_CLI_CLOCK_COUNT 1U
+#else
+#define L3_CLI_CLOCK_COUNT 0U
+#endif
 
 #define L3_CLI_COUNT (L3_CLI_CORE_COUNT + L3_CLI_HWA_COUNT + L3_CLI_CAPTURE_COUNT + \
-                      L3_CLI_IQ8_COUNT + L3_CLI_EVIDENCE_COUNT)
+                      L3_CLI_IQ8_COUNT + L3_CLI_EVIDENCE_COUNT + L3_CLI_CLOCK_COUNT)
 
 /* CLI_open appends its built-in "help" after the last entry, so at most
  * CLI_MAX_CMD - 1 of the table's slots are ours. The SDK is not edited. */
@@ -98,6 +107,16 @@ static inline uint32_t l3_cliRegister(CLI_Cfg *cfg)
                "Report worst-case elapsed times (ticks, including pre-emption), margin, heap and stacks",
                l3_cli_perfStats);
     L3_CLI_ADD(cfg, next, "l3bench", "Time one pass over the stopped ring", l3_cli_bench);
+#endif
+#ifdef L3_USB_CLOCK_PROBE
+    L3_CLI_ADD(cfg, next, "clockProbe",
+               "clockProbe fresh_nonce_hi fresh_nonce_lo seq_hex8 (USB clock diagnostic)",
+               l3_cli_clockProbe);
+#ifdef L3_USB_CLOCK_COMPACT
+    L3_CLI_ADD(cfg, next, "cp",
+               "cp nonce_hi_hex8 nonce_lo_hex8 seq_hex8 (compact USB counter packet)",
+               l3_cli_cp);
+#endif
 #endif
     return next;
 }
