@@ -65,6 +65,54 @@ def test_ring_freezes_latest_pre_frames_and_post_tail():
     assert capture.trigger_host_timestamp_ns == 19_000_000
 
 
+def test_delayed_pre_gate_frames_do_not_spend_the_sensor_timestamp_tail():
+    ring = TriggeredFrameBuffer(pre_trigger_frames=2, post_trigger_frames=2)
+    for index in [0, 1]:
+        ring.add_frame(make_frame(index))
+    assert ring.trigger(19_000_000, sensor_timestamp_ns=19_000_000)
+    for index in [2, 3, 4, 5]:
+        ring.add_frame(make_frame(index))
+    assert ring.pop_capture() is None
+    ring.add_frame(make_frame(6))
+    capture = ring.pop_capture()
+    assert [int(frame.image[0, 0]) for frame in capture.frames] == list(range(7))
+    assert capture.pre_trigger_count == 2
+    assert capture.post_trigger_count == 5
+    assert capture.tail_after_sensor_ns == 19_000_000
+
+
+def test_a_duplicate_or_out_of_order_sensor_frame_cannot_complete_the_tail():
+    ring = TriggeredFrameBuffer(pre_trigger_frames=1, post_trigger_frames=2)
+    ring.add_frame(make_frame(0))
+    assert ring.trigger(1, sensor_timestamp_ns=4_000_000)
+    for index in [1, 2, 2, 1]:
+        ring.add_frame(make_frame(index))
+    assert ring.pop_capture() is None
+    ring.add_frame(make_frame(3))
+    capture = ring.pop_capture()
+    assert [frame.sensor_timestamp_ns for frame in capture.frames] == [
+        0,
+        4_000_000,
+        8_000_000,
+        12_000_000,
+    ]
+
+
+def test_a_late_callback_counts_post_gate_frames_already_in_the_ring():
+    ring = TriggeredFrameBuffer(pre_trigger_frames=3, post_trigger_frames=2)
+    for index in range(3):
+        ring.add_frame(make_frame(index))
+    assert ring.trigger(20_000_000, sensor_timestamp_ns=0)
+    capture = ring.pop_capture()
+    assert capture is not None
+    assert len(capture.frames) == 3
+    assert capture.post_trigger_count == 0
+    assert (
+        sum(frame.sensor_timestamp_ns > capture.tail_after_sensor_ns for frame in capture.frames)
+        == 2
+    )
+
+
 def test_ring_exposes_latest_frame_during_capture():
     ring = TriggeredFrameBuffer(pre_trigger_frames=2, post_trigger_frames=2)
     ring.add_frame(make_frame(1))

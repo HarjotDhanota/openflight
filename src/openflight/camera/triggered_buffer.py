@@ -32,10 +32,11 @@ class TriggeredCapture:
     frames: tuple[CameraFrame, ...]
     pre_trigger_count: int
     trigger_host_timestamp_ns: int
+    tail_after_sensor_ns: int | None = None
 
     @property
     def post_trigger_count(self) -> int:
-        """Number of frames captured after the trigger."""
+        """Number of frames delivered after the trigger callback."""
         return len(self.frames) - self.pre_trigger_count
 
 
@@ -76,6 +77,8 @@ class TriggeredFrameBuffer:
         self._post: list[CameraFrame] = []
         self._frozen_pre: tuple[CameraFrame, ...] = ()
         self._trigger_ns = 0
+        self._tail_after_sensor_ns: int | None = None
+        self._post_sensor_count = 0
         self._ready: Optional[TriggeredCapture] = None
         self._capturing = False
         self._condition = threading.Condition()
@@ -120,23 +123,35 @@ class TriggeredFrameBuffer:
                 self._pre.append(frame)
                 return
 
+            if self._tail_after_sensor_ns is not None:
+                previous = self._post[-1] if self._post else self._frozen_pre[-1]
+                if frame.sensor_timestamp_ns <= previous.sensor_timestamp_ns:
+                    return
+                self._post_sensor_count += frame.sensor_timestamp_ns > self._tail_after_sensor_ns
             self._post.append(frame)
-            if len(self._post) < self.post_trigger_frames:
-                return
-
-            frames = self._frozen_pre + tuple(self._post)
-            self._ready = TriggeredCapture(
-                frames=frames,
-                pre_trigger_count=len(self._frozen_pre),
-                trigger_host_timestamp_ns=self._trigger_ns,
+            count = (
+                len(self._post) if self._tail_after_sensor_ns is None else self._post_sensor_count
             )
-            self._capturing = False
-            self._pre.clear()
-            self._post = []
-            self._frozen_pre = ()
-            self._condition.notify_all()
+            if count < self.post_trigger_frames:
+                return
+            self._finish_capture()
 
-    def trigger(self, host_timestamp_ns: Optional[int] = None) -> bool:
+    def _finish_capture(self) -> None:
+        self._ready = TriggeredCapture(
+            frames=self._frozen_pre + tuple(self._post),
+            pre_trigger_count=len(self._frozen_pre),
+            trigger_host_timestamp_ns=self._trigger_ns,
+            tail_after_sensor_ns=self._tail_after_sensor_ns,
+        )
+        self._capturing = False
+        self._pre.clear()
+        self._post = []
+        self._frozen_pre = ()
+        self._condition.notify_all()
+
+    def trigger(
+        self, host_timestamp_ns: Optional[int] = None, *, sensor_timestamp_ns: int | None = None
+    ) -> bool:
         """Freeze the current pre-trigger ring and begin collecting the tail."""
         with self._condition:
             if (
@@ -149,7 +164,15 @@ class TriggeredFrameBuffer:
             self._pre.clear()
             self._post = []
             self._trigger_ns = host_timestamp_ns or time.monotonic_ns()
+            self._tail_after_sensor_ns = sensor_timestamp_ns
+            self._post_sensor_count = (
+                sum(frame.sensor_timestamp_ns > sensor_timestamp_ns for frame in self._frozen_pre)
+                if sensor_timestamp_ns is not None
+                else 0
+            )
             self._capturing = True
+            if self._post_sensor_count >= self.post_trigger_frames:
+                self._finish_capture()
             return True
 
     def busy_reason(self) -> Optional[str]:

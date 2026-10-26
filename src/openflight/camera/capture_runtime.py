@@ -983,6 +983,30 @@ class CameraCaptureRuntime:
         # Timed first: gathering evidence under the frame lock delayed the stamp 14-31 ms.
         trigger_host_ns = time.monotonic_ns()
         trigger_boottime_ns = _boottime_ns()
+        clock_read_end_ns = time.monotonic_ns()
+        clocks = {
+            "host_monotonic_ns": trigger_host_ns,
+            "boottime_ns": trigger_boottime_ns,
+            "boottime_minus_monotonic_bounds_ns": (
+                [trigger_boottime_ns - clock_read_end_ns, trigger_boottime_ns - trigger_host_ns]
+                if trigger_boottime_ns is not None
+                else None
+            ),
+        }
+        gate_sensor_interval = None
+        if gate_event is not None:
+            interval = gate_event.kernel_mono_interval_ns
+            clocks["gate_event"] = gate_event.to_dict()
+            clocks["gate_to_camera_callback_ns"] = (
+                [trigger_host_ns - interval[1], trigger_host_ns - interval[0]]
+                if interval is not None
+                else None
+            )
+            if interval is not None and trigger_boottime_ns is not None:
+                low, high = clocks["boottime_minus_monotonic_bounds_ns"]
+                gate_sensor_interval = [interval[0] + low, interval[1] + high]
+            clocks["gate_boottime_interval_ns"] = gate_sensor_interval
+        tail_sensor_ns = gate_sensor_interval[1] if gate_sensor_interval is not None else None
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
         if not self._running:
             return self._reject_trigger(trigger_epoch, "camera_stopped", "capture is not running")
@@ -995,7 +1019,11 @@ class CameraCaptureRuntime:
         with self._trigger_order_lock:
             # Frame delivery needs this lock: hold it only for the freeze and a controls snapshot.
             with self._trigger_exposure_lock:
-                accepted = self._ring.trigger(trigger_host_ns)
+                accepted = (
+                    self._ring.trigger(trigger_host_ns, sensor_timestamp_ns=tail_sensor_ns)
+                    if tail_sensor_ns is not None
+                    else self._ring.trigger(trigger_host_ns)
+                )
                 exposure = self._auto_exposure_snapshot(history=False) if accepted else None
             if not accepted:
                 busy = getattr(self._ring, "busy_reason", lambda: None)()
@@ -1007,15 +1035,6 @@ class CameraCaptureRuntime:
             self._trigger_epochs.put(trigger_epoch)
             self._trigger_auto_exposure.put(auto_exposure)
             self._trigger_evidence.put(evidence)
-            clocks = {"host_monotonic_ns": trigger_host_ns, "boottime_ns": trigger_boottime_ns}
-            if gate_event is not None:
-                interval = gate_event.kernel_mono_interval_ns
-                clocks["gate_event"] = gate_event.to_dict()
-                clocks["gate_to_camera_callback_ns"] = (
-                    [trigger_host_ns - interval[1], trigger_host_ns - interval[0]]
-                    if interval is not None
-                    else None
-                )
             self._trigger_clocks.put(clocks)
             return True
 
@@ -1592,6 +1611,12 @@ class CameraCaptureRuntime:
             if by_exposure is not None
             else {}
         )
+        if clocks.get("gate_boottime_interval_ns") is not None:
+            exposure_split["gate_boottime_interval_ns"] = np.asarray(
+                clocks["gate_boottime_interval_ns"], dtype=np.int64
+            )
+        if capture.tail_after_sensor_ns is not None:
+            exposure_split["tail_after_sensor_ns"] = np.int64(capture.tail_after_sensor_ns)
 
         # These clips are consumed immediately by the live estimators. ZIP
         # compression delayed shot display by roughly a second on the Pi, so
@@ -1631,6 +1656,12 @@ class CameraCaptureRuntime:
                 "capture_path": str(shot_dir),
                 "pre_trigger_frames": capture.pre_trigger_count,
                 "post_trigger_frames": capture.post_trigger_count,
+                "tail_after_sensor_ns": capture.tail_after_sensor_ns,
+                "post_tail_frames_by_sensor_timestamp": (
+                    int(np.count_nonzero(sensor_ns > capture.tail_after_sensor_ns))
+                    if capture.tail_after_sensor_ns is not None
+                    else None
+                ),
                 "pre_trigger_frames_by_exposure": by_exposure,
                 "trigger_host_timestamp_ns": capture.trigger_host_timestamp_ns,
                 "trigger_clocks": {
@@ -1644,7 +1675,12 @@ class CameraCaptureRuntime:
                     "exposure_split": EXPOSURE_SPLIT_DEFINITION,
                     **{
                         key: clocks[key]
-                        for key in ("gate_event", "gate_to_camera_callback_ns")
+                        for key in (
+                            "gate_event",
+                            "gate_to_camera_callback_ns",
+                            "boottime_minus_monotonic_bounds_ns",
+                            "gate_boottime_interval_ns",
+                        )
                         if key in clocks
                     },
                 },

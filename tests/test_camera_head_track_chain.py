@@ -33,6 +33,26 @@ from tests.test_camera_head_track import (
 YAW_OFFSET_DEG = -2.2
 
 
+def test_contact_window_uses_whole_sensor_clock_gate_interval_not_callback_midpoint():
+    archive = {
+        "sensor_timestamp_ns": np.arange(4),
+        "trigger_boottime_ns": np.int64(130_000_000),
+        "gate_boottime_interval_ns": np.array([100_000_000, 101_000_000]),
+    }
+    context = head_track_context(archive, gate_latency=30_000_000)
+    assert context.contact_window_ns == (96_000_000, 100_500_000)
+
+
+@pytest.mark.parametrize("interval", [[101, 100], [float("nan"), 100], [100]])
+def test_invalid_recorded_gate_interval_cannot_fall_back_to_a_callback_guess(interval):
+    archive = {
+        "sensor_timestamp_ns": np.arange(4),
+        "trigger_boottime_ns": np.int64(130_000_000),
+        "gate_boottime_interval_ns": np.array(interval),
+    }
+    assert head_track_context(archive).contact_window_ns is None
+
+
 def _geometry(**changes) -> CameraDeliveryGeometry:
     camera_ball = float(np.linalg.norm(BALL_LUF - np.array([0.0, CAMERA_HEIGHT_M, 0.0])))
     values = {

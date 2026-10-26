@@ -26,10 +26,13 @@ Camera `metadata.json` carries the evidence in `trigger_clocks.gate_event` and
 The camera-only GPIO path uses the same reader. Legacy float trigger observers
 still receive the original wall timestamp, including the OPS recovery listener.
 
-The existing camera ring freeze, NPZ trigger timestamps and exposure split retain
-their callback-based definitions. The IWR serial command, OPS clock sync and
-re-arm order, coarse shot matching and metric calculations are unchanged. This
-change does not yet map IWR cycle counters or OPS samples to the Pi clock.
+The original change retained callback-based camera ring counts, NPZ trigger
+timestamps and exposure split. The 25 October follow-up adds a bracketed camera
+clock conversion and counts the tail against the mapped gate when available;
+see [the timestamp and tail contract](../camera/timing-validation.md#shared-gate-and-capture-duration).
+The legacy callback fields remain. IWR serial commands, OPS clock sync and
+re-arm order and coarse shot matching are unchanged. Neither change maps IWR
+cycle counters or OPS samples to the Pi clock for live metric calculations.
 
 On the Pi, collect several captures with tracing enabled and disabled. Check that
 paired camera/IWR records have the same event ID and raw readings, inspect the
@@ -40,7 +43,7 @@ IWR external-edge latch before enabling a calibrated fusion mapping or claiming
 the proposed 1 ms alignment target. There is no hardware accuracy measurement
 from this software change.
 
-Software validation on Windows: 1,100 tests passed across the capture, camera,
+Original shared-event validation on Windows: 1,100 tests passed across the capture, camera,
 trace, server, logging, OPS trigger and provenance paths; four skipped because
 Linux CLOCK_BOOTTIME or historical capture fixtures were unavailable. Ruff passed
 on changed Python files; backend pylint passed its 9.0 threshold (9.77/10).

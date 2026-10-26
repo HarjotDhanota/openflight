@@ -269,9 +269,20 @@ def head_track_context(
 ) -> HeadTrackContext:
     """One clip's context: the acoustic contact window on its sensor (boottime) clock."""
     window = None
-    if archive.get("sensor_timestamp_ns") is not None and "trigger_boottime_ns" in archive:
-        trigger = float(np.asarray(archive["trigger_boottime_ns"]))
-        window = acoustic_contact_window(trigger, gate_latency)
+    if archive.get("sensor_timestamp_ns") is not None:
+        if "gate_boottime_interval_ns" in archive:
+            try:
+                bounds = np.asarray(archive["gate_boottime_interval_ns"], dtype=float)
+                if bounds.shape == (2,) and np.all(np.isfinite(bounds)) and bounds[0] <= bounds[1]:
+                    window = (
+                        acoustic_contact_window(bounds[0], 0)[0],
+                        acoustic_contact_window(bounds[1], 0)[1],
+                    )
+            except (TypeError, ValueError):
+                pass
+        elif "trigger_boottime_ns" in archive:
+            trigger = float(np.asarray(archive["trigger_boottime_ns"]))
+            window = acoustic_contact_window(trigger, gate_latency)
     exposure = archive.get("exposure_us")
     return HeadTrackContext(
         contact_window_ns=window,
