@@ -21,6 +21,7 @@ int32_t gRestartError, gStartError;
 jmp_buf gSleepReturn;
 uint8_t gBytes[100000];
 uint32_t gUsed;
+uint32_t gTemperatureRequests;
 uintptr_t Hwi_disable(void) { return 0U; }
 void Hwi_restore(uintptr_t key) { (void)key; }
 uint32_t Clock_getTicks(void) { return gNow; }
@@ -65,7 +66,11 @@ int32_t l3_startFrontEnd(void) { return gStartError; }
 int32_t l3_stopCaptureAtBoundary(void) {
     gCaptureActive = 0U; gFreezeTick = ++gTicks; gStopTick = ++gTicks; return 0;
 }
-int32_t l3_readTemperatureReport(l3_temperature_report_t *report) { (void)report; return -1; }
+#ifndef L3_DUMP_SKIP_TEMPERATURE
+int32_t l3_readTemperatureReport(l3_temperature_report_t *report) {
+    (void)report; gTemperatureRequests++; return -1;
+}
+#endif
 void l3_fill_header(l3_dump_header_t *h, uint16_t frames, uint16_t trigger) {
     memset(h, 0, sizeof(*h)); memcpy(h->magic, "ILD1", 4U);
     h->version = 6U; h->n_frames = frames; h->chirps_per_frame = 6U;
@@ -123,6 +128,11 @@ int main(void)
         char hex[9]; uint32_t restarts;
         gUsed = 0U;
         assert(command(&cfg, "overview", NULL) == 0 && gTwoHeld && !gTwoBusy);
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+        assert(gTemperatureRequests == 0U);
+#else
+        assert(gTemperatureRequests == 1U);
+#endif
         session = gTwoState.session;
 #ifdef L3_CAPTURE_EVIDENCE
         assert(gTwoFlags & L3_TWO_METADATA_SNAPSHOT_FLAG);

@@ -121,7 +121,11 @@ static int32_t l3_two_snapshot(void)
     memset(&capture, 0, sizeof(capture));
     l3_fill_header(&header, (uint16_t)(pre + post), 0U);
     memset(&temperature, 0, sizeof(temperature));
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+    tempStatus = -1;
+#else
     tempStatus = l3_readTemperatureReport(&temperature);
+#endif
     if (!tempStatus) header.version = L3_DUMP_VERSION_CAPTURE_TEMPERATURE;
 #ifdef L3_CAPTURE_EVIDENCE
     header.version = tempStatus ? L3_DUMP_VERSION_EVIDENCE : L3_DUMP_VERSION_EVIDENCE_TEMPERATURE;

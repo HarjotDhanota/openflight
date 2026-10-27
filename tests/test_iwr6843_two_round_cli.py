@@ -20,7 +20,10 @@ from tests.test_iwr6843_two_round_firmware import build_native_probe
         (True, True, False, False),
     ],
 )
-def test_registration_and_frozen_session_lifecycle(tmp_path, stage, clock, evidence, iq8):
+@pytest.mark.parametrize("skip_temperature", [False, True])
+def test_registration_and_frozen_session_lifecycle(
+    tmp_path, stage, clock, evidence, iq8, skip_temperature
+):
     clock_stub = tmp_path / "ti/sysbios/knl/Clock.h"
     clock_stub.parent.mkdir(parents=True)
     clock_stub.write_text("/* The harness supplies the scheduler stand-ins. */\n", encoding="utf-8")
@@ -41,6 +44,8 @@ def test_registration_and_frozen_session_lifecycle(tmp_path, stage, clock, evide
         flags += ["-DL3_CAPTURE_EVIDENCE=1"]
     if iq8:
         flags += ["-DL3_RING_IQ8=1", "-DL3_IQ8_EDMA_PACK=1"]
+    if skip_temperature:
+        flags += ["-DL3_DUMP_SKIP_TEMPERATURE=1"]
     docker, exe = build_native_probe(tmp_path, "iwr_two_round_cli_probe.c", flags)
     result = subprocess.run([*docker, str(exe)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
