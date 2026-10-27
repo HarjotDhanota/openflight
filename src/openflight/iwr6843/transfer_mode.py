@@ -25,7 +25,10 @@ NO_RADAR_REASON = "no IWR radar is connected"
 def help_lists_two_round(reply: str | bytes) -> tuple[bool, tuple[str, ...]]:
     """Whether a CLI ``help`` reply lists every two-round command; and the missing ones."""
     text = reply.decode("ascii", "replace") if isinstance(reply, bytes) else str(reply)
-    words = {line.strip().split(" ")[0] for line in text.replace("\r", "\n").split("\n")}
+    words = {
+        line.strip().split(" ")[0].removesuffix(":")
+        for line in text.replace("\r", "\n").split("\n")
+    }
     missing = tuple(name for name in TWO_ROUND_COMMANDS if name not in words)
     return not missing, missing
 

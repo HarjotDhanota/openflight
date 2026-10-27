@@ -21,6 +21,21 @@ def test_help_listing_names_every_two_round_command():
     assert help_lists_two_round(b"") == (False, ("overview", "cells", "release"))
 
 
+def test_help_listing_accepts_sdk_colon_delimited_command_names():
+    reply = (
+        "help\r\nCommand: Help Description\r\n"
+        "overview: Freeze or repeat the held overview\r\n"
+        "cells: Read held IQ16 cells\r\n"
+        "release: Release a held session\r\nDone\r\nl3dump:/>"
+    )
+    assert help_lists_two_round(reply.encode()) == (True, ())
+    assert help_lists_two_round(reply.replace("cells:", "other:")) == (False, ("cells",))
+    assert help_lists_two_round("note: overview cells release") == (
+        False,
+        ("overview", "cells", "release"),
+    )
+
+
 def test_two_round_is_effective_only_once_the_radar_supports_it():
     mode = TransferMode("two_round")
     status = mode.status()

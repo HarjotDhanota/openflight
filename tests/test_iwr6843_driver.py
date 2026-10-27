@@ -624,7 +624,12 @@ STAGE2_HELP = (
 
 @pytest.mark.parametrize(
     ("extra_help", "supported"),
-    [(b"", False), (STAGE2_HELP, True), (b"overview   only\r\n", False)],
+    [
+        (b"", False),
+        (STAGE2_HELP, True),
+        (STAGE2_HELP.replace(b"   ", b": "), True),
+        (b"overview   only\r\n", False),
+    ],
 )
 def test_two_round_support_comes_from_the_cli_help_listing(monkeypatch, extra_help, supported):
     clock = FakeClock()
