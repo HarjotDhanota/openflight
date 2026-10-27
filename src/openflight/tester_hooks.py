@@ -1199,6 +1199,45 @@ def free_play_resume_route():
     return _answer(lambda _body: resume_free_play() or {})
 
 
+@server.app.post("/api/free-play/next-exposure")
+def free_play_next_exposure_route():
+    """Advance the exposure ladder between shots, retaining partial rung counts."""
+
+    def act(body):
+        expected = body.get("rung_id")
+        if not isinstance(expected, str) or not expected:
+            raise ValueError("rung_id is required")
+
+        def advance():
+            with _pause_lock:
+                if free_play_config.get("phase") != "recording" or free_play_pause:
+                    raise RuntimeError("resume recording before changing exposure")
+                runtime = server.camera_capture_runtime
+                if runtime is None or free_play_study is None:
+                    raise RuntimeError("the exposure ladder is unavailable")
+                ops_phase = tuple(
+                    getattr(getattr(server.monitor, "radar", None), "trigger_phase", None) or ()
+                )
+                if ops_phase and ops_phase[0] != "armed":
+                    raise RuntimeError("wait for OPS243 to finish processing the shot")
+                camera = runtime.ready_snapshot()
+                if not camera.get("running") or any(
+                    camera.get(key)
+                    for key in ("collecting_tail", "awaiting_handoff", "saving", "pending_saves")
+                ):
+                    raise RuntimeError("wait for the camera capture to finish")
+                progress = free_play_study.next_exposure(expected)
+                _log_event(
+                    "free_play_next_exposure",
+                    {"rung_id": expected, "after_shot": _latest_shot_number()},
+                )
+                return {"exposure_study": progress}
+
+        return server._when_idle(advance, timeout_s=0)
+
+    return _answer(act)
+
+
 @server.app.post("/api/free-play/photo")
 def free_play_photo_route():
     """Photograph the face (``capture``) or go on without it (``skip``), then resume."""

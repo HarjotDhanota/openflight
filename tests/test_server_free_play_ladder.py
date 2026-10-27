@@ -182,6 +182,87 @@ def test_the_ready_light_hears_the_ladder(kiosk, monkeypatch):
     assert states.camera["exposure_study"] == {"phase": "ladder", "changing": False}
 
 
+@pytest.fixture
+def manual_kiosk(kiosk, monkeypatch):
+    monkeypatch.setattr(tester_hooks, "free_play_pause", {})
+    monkeypatch.setattr(server, "shot_processing_pending", lambda: False)
+    monkeypatch.setattr(server, "monitor", None)
+    kiosk.runtime.ready_snapshot = lambda: {"running": True}
+    return server.app.test_client(), kiosk
+
+
+def test_manual_exposure_route_changes_once_and_refuses_a_duplicate(manual_kiosk):
+    client, kiosk = manual_kiosk
+    tester_hooks._count_free_play_shot(_shot(1))
+    response = client.post("/api/free-play/next-exposure", json={"rung_id": "full-300"})
+    assert response.status_code == 200
+    assert response.json["exposure_study"]["rung"]["rung_id"] == "full-150"
+    assert response.json["exposure_study"]["rungs"][0]["swings"] == 1
+    assert (
+        client.post("/api/free-play/next-exposure", json={"rung_id": "full-300"}).status_code == 409
+    )
+    assert kiosk.runtime.applied == [(150, 4.0)]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "paused",
+        "stopping",
+        "processing",
+        "collecting_tail",
+        "awaiting_handoff",
+        "saving",
+        "pending_saves",
+        "unavailable",
+    ],
+)
+def test_manual_exposure_route_refuses_busy_or_unavailable_capture(
+    manual_kiosk, monkeypatch, reason
+):
+    client, kiosk = manual_kiosk
+    if reason == "paused":
+        tester_hooks.free_play_pause["cause"] = "photo"
+    elif reason == "stopping":
+        tester_hooks.free_play_config["phase"] = "stopping"
+    elif reason == "processing":
+        monkeypatch.setattr(server, "shot_processing_pending", lambda: True)
+    elif reason == "unavailable":
+        monkeypatch.setattr(server, "camera_capture_runtime", None)
+    else:
+        kiosk.runtime.ready_snapshot = lambda: {"running": True, reason: True}
+    assert (
+        client.post("/api/free-play/next-exposure", json={"rung_id": "full-300"}).status_code == 409
+    )
+    assert kiosk.study.progress()["rung"]["rung_id"] == "full-300"
+    assert kiosk.runtime.applied == []
+
+
+@pytest.mark.parametrize(
+    "payload, code",
+    [({}, 400), ({"rung_id": 300}, 400), ({"rung_id": "full-300", "run_id": "old"}, 409)],
+)
+def test_manual_exposure_route_validates_requests(manual_kiosk, payload, code):
+    client, kiosk = manual_kiosk
+    assert client.post("/api/free-play/next-exposure", json=payload).status_code == code
+    assert kiosk.runtime.applied == []
+
+
+@pytest.mark.parametrize("phase", ["dumping", "draining", "rearming", "rearmed"])
+def test_manual_exposure_waits_for_ops_before_its_shot_callback(manual_kiosk, monkeypatch, phase):
+    client, kiosk = manual_kiosk
+    radar = SimpleNamespace(trigger_phase=(phase, 0))
+    monkeypatch.setattr(server, "monitor", SimpleNamespace(radar=radar))
+    assert (
+        client.post("/api/free-play/next-exposure", json={"rung_id": "full-300"}).status_code == 409
+    )
+    assert kiosk.runtime.applied == []
+    radar.trigger_phase = ("armed", 1)
+    assert (
+        client.post("/api/free-play/next-exposure", json={"rung_id": "full-300"}).status_code == 200
+    )
+
+
 def test_stop_and_package_records_a_partial_ladder(kiosk, monkeypatch):
     for number in range(1, 4):
         tester_hooks._count_free_play_shot(_shot(number))

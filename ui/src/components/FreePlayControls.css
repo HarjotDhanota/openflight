@@ -4,6 +4,10 @@
   min-width: 0;
 }
 
+.panel-header__actions:has(.free-play__next) .panel-action {
+  min-height: 44px;
+}
+
 .session-status > .ready-light {
   flex: 1;
   min-width: 0;

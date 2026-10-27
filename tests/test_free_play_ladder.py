@@ -235,6 +235,79 @@ def test_false_triggers_never_count(tmp_path):
     assert camera.applied == []
 
 
+def test_manual_next_retains_shots_and_late_verdicts_and_marks_study_partial(tmp_path):
+    running, camera = study(tmp_path, plan(ladder_us=(300, 150)))
+    first = running.on_shot(1)
+    running.next_exposure("full-300")
+    running.record_verdict(1, {"status": "judged", "color": "green"})
+    second = running.on_shot(2)
+    for number in range(3, 7):
+        running.on_shot(number)
+
+    assert first["exposure_us"] == 300
+    assert (second["exposure_us"], second["swing_of_rung"]) == (150, 1)
+    saved = json.loads((tmp_path / fpl.STATE_NAME).read_text())
+    assert saved["ladder_status"] == "partial"
+    assert saved["rungs"][0]["status"] == "incomplete"
+    assert saved["rungs"][0]["finish_reason"] == "manual_next"
+    assert len(saved["rungs"][0]["swings"]) == 1
+    assert saved["rungs"][0]["counts"]["green"] == 1
+    assert saved["rungs"][1]["status"] == "done"
+    assert camera.applied == [(150, 4.0)]
+    assert camera.automatic == 1
+    running.finish()
+    assert running.progress()["ladder_status"] == "partial"
+
+
+def test_manual_next_without_shots_finishes_with_automatic_not_a_complete_ladder(tmp_path):
+    running, camera = study(tmp_path, plan(ladder_us=(300,)))
+    progress = running.next_exposure("full-300")
+    assert progress["phase"] == "automatic"
+    assert progress["ladder_status"] == "partial"
+    assert progress["rungs"][0]["swings"] == 0
+    assert camera.automatic == 1
+    with pytest.raises(RuntimeError, match="not running"):
+        running.next_exposure("full-300")
+
+
+def test_manual_next_refuses_stale_rung_stopped_study_and_changes_in_progress(tmp_path):
+    pending = []
+    camera = Camera()
+    running = fpl.FreePlayExposureStudy(
+        plan(ladder_us=(300, 150, 75)),
+        tmp_path / fpl.STATE_NAME,
+        apply_controls=camera.apply,
+        begin_automatic=camera.begin_automatic,
+        run_async=pending.append,
+        settle_s=0,
+    )
+    with pytest.raises(RuntimeError, match="already changed"):
+        running.next_exposure("full-150")
+    running.next_exposure("full-300")
+    assert running.progress()["changing"] is True
+    with pytest.raises(RuntimeError, match="wait"):
+        running.next_exposure("full-150")
+    pending.pop()()
+    with pytest.raises(RuntimeError, match="already changed"):
+        running.next_exposure("full-300")
+    assert running.progress()["rung"]["rung_id"] == "full-150"
+    running.finish()
+    with pytest.raises(RuntimeError, match="not running"):
+        running.next_exposure("full-150")
+
+
+def test_manual_next_preserves_sensor_limit_skips(tmp_path):
+    running, camera = study(
+        tmp_path, plan(ladder_us=(300, 5, 150), light_index=1.0), live_sensor_min_us=8
+    )
+    progress = running.next_exposure("full-300")
+    assert progress["rung"]["rung_id"] == "full-150"
+    assert camera.applied[0][0] == 150
+    skipped = next(rung for rung in progress["rungs"] if rung["exposure_us"] == 5)
+    assert skipped["status"] == "skipped"
+    assert "shortest exposure" in skipped["skip_reason"]
+
+
 def test_after_the_last_rung_free_play_switches_to_the_automatic_exposure(tmp_path):
     running, camera = study(tmp_path)
 

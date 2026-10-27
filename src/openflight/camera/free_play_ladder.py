@@ -13,6 +13,7 @@ for fusion while the tester simply plays:
   trigger's clip never reaches it), five per rung, then the next rung's controls
   are applied live on the running camera: no window, no restart;
 - every shot carries the ladder's picture-only verdict, recorded silently;
+- Next exposure can leave a rung early; its actual count is kept as incomplete;
 - after the last rung the automatic swing exposure takes over, seeded from the
   light index.
 
@@ -402,13 +403,32 @@ class FreePlayExposureStudy:  # pylint: disable=too-many-instance-attributes
     def _advance(self) -> None:
         following = self._next_pending()
         if following is None:
-            self._data["ladder_status"] = "complete"
+            self._data["ladder_status"] = (
+                "partial"
+                if any(rung["status"] == "incomplete" for rung in self._data["rungs"])
+                else "complete"
+            )
             self._start_automatic_now()
             return
         following.update(status="active", started_at=_now())
         self._schedule_apply(following)
 
     # --- the kiosk's calls -------------------------------------------------------------
+
+    def next_exposure(self, expected_rung_id: str) -> dict:
+        """Leave this rung early without claiming its shot quota was completed."""
+        with self._lock:
+            rung = self._active()
+            if self._data["stopped_at"] or self._data["phase"] != "ladder" or rung is None:
+                raise RuntimeError("the exposure ladder is not running")
+            if self._data["changing"]:
+                raise RuntimeError("wait for the exposure change to finish")
+            if rung["rung_id"] != expected_rung_id:
+                raise RuntimeError("the exposure has already changed; refresh and try again")
+            rung.update(status="incomplete", finished_at=_now(), finish_reason="manual_next")
+            self._advance()
+            self._save()
+            return self.progress()
 
     def on_shot(self, shot_number: int | None) -> dict:
         """Count one real (OPS) shot and return its per-shot record (``SHOT_SCHEMA``)."""

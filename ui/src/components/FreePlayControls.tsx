@@ -9,10 +9,13 @@ interface ExposureStudy {
   phase: string;
   text: string;
   changing?: boolean;
+  rung?: { rung_id: string } | null;
 }
 
 interface FreePlayState {
   enabled: boolean;
+  tester_id?: string;
+  run_id?: string;
   phase?: string;
   geometry_unverified?: boolean;
   bundle?: { name: string; path?: string } | null;
@@ -61,7 +64,6 @@ export function FreePlayStatus({
                 : 'Free play needs attention'}
         </strong>
         {state.geometry_unverified && !finished ? <span>Geometry unverified</span> : null}
-        {/* the exposure study runs itself: a progress line, never a prompt */}
         {state.exposure_study?.text && !finished ? (
           <span className="free-play__study">{state.exposure_study.text}</span>
         ) : null}
@@ -88,11 +90,13 @@ export function FreePlayActionsView({
   busy = false,
   onPhoto,
   onResume,
+  onNextExposure,
 }: {
   state: FreePlayState | null;
   busy?: boolean;
   onPhoto: () => void;
   onResume: () => void;
+  onNextExposure?: () => void;
 }) {
   if (!state?.enabled || state.phase !== 'recording') return null;
   return state.paused ? (
@@ -100,9 +104,26 @@ export function FreePlayActionsView({
       Resume
     </PanelAction>
   ) : (
-    <PanelAction variant="secondary" disabled={busy} aria-label="Photograph the face" onClick={onPhoto}>
-      Face photo
-    </PanelAction>
+    <>
+      {state.exposure_study?.phase === 'ladder' && state.exposure_study.rung && onNextExposure ? (
+        <PanelAction
+          className="free-play__next"
+          variant="secondary"
+          disabled={busy || state.exposure_study.changing}
+          onClick={onNextExposure}
+        >
+          Next exposure
+        </PanelAction>
+      ) : null}
+      <PanelAction
+        variant="secondary"
+        disabled={busy || state.exposure_study?.changing}
+        aria-label="Photograph the face"
+        onClick={onPhoto}
+      >
+        Face photo
+      </PanelAction>
+    </>
   );
 }
 
@@ -121,6 +142,25 @@ async function postFreePlay(path: string, body: object, failure: string): Promis
 export function FreePlayActions() {
   const state = useFreePlayStore((store) => store.state);
   const [busy, setBusy] = useState(false);
+  async function nextExposure() {
+    const rungId = state?.exposure_study?.rung?.rung_id;
+    if (busy || !rungId) return;
+    setBusy(true);
+    try {
+      const answer = await postFreePlay(
+        '/api/free-play/next-exposure',
+        { rung_id: rungId, tester_id: state?.tester_id, run_id: state?.run_id },
+        'Could not change exposure'
+      );
+      setFreePlay((previous) =>
+        previous ? { ...previous, exposure_study: answer.exposure_study, error: null } : previous
+      );
+    } catch (error) {
+      setFreePlay((previous) => (previous ? { ...previous, error: String(error) } : previous));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function pause(action: 'pause' | 'resume') {
     if (busy) return;
     setBusy(true);
@@ -144,6 +184,7 @@ export function FreePlayActions() {
       busy={busy}
       onPhoto={() => void pause('pause')}
       onResume={() => void pause('resume')}
+      onNextExposure={() => void nextExposure()}
     />
   );
 }

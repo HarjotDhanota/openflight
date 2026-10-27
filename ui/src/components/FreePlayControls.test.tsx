@@ -115,7 +115,17 @@ describe('Free play exposure study line', () => {
 describe('The face photo on the scoreboard', () => {
   const recording = { enabled: true, phase: 'recording', tester_url: 'http://pi.local:8765/' };
   const view = (state: Parameters<typeof FreePlayActionsView>[0]['state']) =>
-    renderToString(<FreePlayActionsView state={state} onPhoto={noop} onResume={noop} />);
+    renderToString(<FreePlayActionsView state={state} onPhoto={noop} onResume={noop} onNextExposure={noop} />);
+
+  it('offers manual advancement only on an active, unpaused ladder', () => {
+    const ladder = { phase: 'ladder', text: '300 us', rung: { rung_id: 'full-300' } };
+    expect(view({ ...recording, exposure_study: ladder })).toContain('Next exposure');
+    expect(view({ ...recording, exposure_study: { ...ladder, phase: 'automatic' } })).not.toContain('Next exposure');
+    expect(view({ ...recording, exposure_study: ladder, paused: { cause: 'photo' } })).not.toContain('Next exposure');
+    const changing = view({ ...recording, exposure_study: { ...ladder, changing: true } });
+    expect(changing).toMatch(/disabled=""[^>]*>Next exposure/);
+    expect(changing).toMatch(/disabled=""[^>]*>Face photo/);
+  });
 
   it('offers the face photo while free play records; the Tester button goes back to setup', () => {
     const html = view(recording);
