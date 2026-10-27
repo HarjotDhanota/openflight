@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- OPS243 auto-detection probes GPIO-header UARTs when no USB radar is found, excluding the debug UART and kernel console.
 - **Simulator output tags estimated launch angles as estimated.** When the
   server fills in a launch angle before the sim fan-out, the resolver tagged
   it, and the carry built on it, as measured. It now reads the angle's source,
