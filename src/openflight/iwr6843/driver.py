@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import re
 import time
 from typing import Callable
 
@@ -715,17 +716,28 @@ class IWR6843Radar:
         return self.cmd("triggerLog shot", 3.0)
 
     def shot_result(self):
-        """The firmware's result packet for the last shot, parsed, or None when
-        the machine has not reached RESULT since the last rearm.
+        """Wait up to three seconds for this capture's onboard result.
 
-        Reads ``triggerLog result``; the packet lines are always printed (the
-        last shot's, or all invalid), so ``ready=0`` on the first line is what
-        says there is no result yet.
+        Only an explicit, complete ``ready=0`` reply is retried. Its packet
+        may belong to the previous shot and is never consumed. The caller
+        retains the capture until this returns, including on timeout.
         """
-        reply = self.cmd("triggerLog result", 3.0)
-        if " ready=1" not in reply:
-            return None
-        return parse_result_reply(reply)
+        deadline = time.monotonic() + 3.0
+        while (remaining := deadline - time.monotonic()) > 0:
+            reply = self.cmd("triggerLog result", remaining)
+            ready = re.search(r"^result\b[^\r\n]*\bready=([01])(?:\s|$)", reply, re.MULTILINE)
+            complete = "\nDone\n" in reply.replace("\r\n", "\n") and reply.rstrip().endswith(
+                CLI_PROMPT.decode("ascii")
+            )
+            if ready is None or not complete or "Error" in reply:
+                return None
+            if ready[1] == "1":
+                return parse_result_reply(reply)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.01, remaining))
+        logger.warning("[IWR6843] Onboard result not ready within 3.0 s; no result consumed")
+        return None
 
     def perf(self) -> str:
         """``triggerLog perf``: per-stage microseconds and the adaptive window state."""
