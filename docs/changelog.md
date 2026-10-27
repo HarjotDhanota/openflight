@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- The boot service accepts `OPENFLIGHT_OPS_PORT` to select the radar port; explicit port arguments take precedence.
 - **Simulator output tags estimated launch angles as estimated.** When the
   server fills in a launch angle before the sim fan-out, the resolver tagged
   it, and the carry built on it, as measured. It now reads the angle's source,
