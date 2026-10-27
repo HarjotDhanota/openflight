@@ -42,6 +42,22 @@ Labels (D39)
   impact, or no prior for an unknown club when the points alone do not fix the
   arc. Nothing is filled in.
 
+A model-geometry fit also reports, per output, the prior's share of its variance
+(``prior_share``): in the linearized fit the output's variance splits into a part
+from the positions and a part from the two prior rows, and the share is the second
+over the sum (1: the prior alone sets it; 0: the positions alone do). It also
+reports how far each output moves per degree of the prior's plane and per 0.1 m of
+its radius (``prior_sensitivity``): with two or three points the share of an output
+can be small while it still moves with the assumed plane (a bias the range omits).
+
+Positions carry their own label (25 Oct 2026). The camera head track's hosel points
+(``camera/head_track.py``) are experimental: their depths are walked back from the
+OPS club speed, and two or three of them cannot tilt the plane. On them every output
+is experimental, except one whose ``prior_share`` is at least ``PRIOR_SET_SHARE``:
+that one is the published prior's value and is labelled model geometry, with the
+share in its note. The head track's own path and attack stay the shot's (the arc
+reads the same points); the arc fills one only when the track withheld it.
+
 The arc is never "measured": a measured tangent needs 4-6 frames from the new
 lenses (Part E, Tier 2, "method later").
 
@@ -130,7 +146,19 @@ CALCULATED = "calculated"
 MODEL_GEOMETRY = "model_geometry"
 NOT_MEASURED = "not_measured"
 EXPERIMENTAL = "experimental"
-LABEL_RANK = {MEASURED: 3, CALCULATED: 2, MODEL_GEOMETRY: 1, NOT_MEASURED: 0}
+ESTIMATED = "estimated"
+# the owner's order (D17, 25 Oct): measured > calculated > model geometry > estimated >
+# experimental > not measured
+LABEL_RANK = {
+    MEASURED: 5,
+    CALCULATED: 4,
+    MODEL_GEOMETRY: 3,
+    ESTIMATED: 2,
+    EXPERIMENTAL: 1,
+    NOT_MEASURED: 0,
+}
+# An output whose variance is at least this share the prior's is the prior's value.
+PRIOR_SET_SHARE = 0.9
 
 RIGHT_HANDED = "RH"
 LEFT_HANDED = "LH"
@@ -242,6 +270,11 @@ class ClubArc:
     conditioning: dict = field(default_factory=dict)
     # the low point from the resting ball (lateral/up/forward given), when known
     low_point_from_ball_mm: Optional[dict] = None
+    # model geometry only: each output's share of its variance from the prior, 0-1
+    prior_share: dict = field(default_factory=dict)
+    # model geometry only: each output's move per degree of the prior's plane and per
+    # 0.1 m of its radius
+    prior_sensitivity: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """A JSON-ready copy."""
@@ -423,6 +456,39 @@ def _sigmas(params, impact_t_s, side, covariance) -> dict:
     return {name: float(value) for name, value in sigmas.items()}
 
 
+def _prior_influence(params, impact_t_s, side, jacobian, covariance) -> tuple[dict, dict]:
+    """How much the prior sets each output: its variance share and its sensitivity.
+
+    With C = (J^T J)^-1 over the data rows J_d and the prior rows J_p, an output with
+    gradient g has variance g^T C g = |J_d C g|^2 + |J_p C g|^2; the share is the second
+    term over the sum. The sensitivity is how far the output moves when the prior's
+    plane moves by one degree, or its radius by 0.1 m (Gauss-Newton: a prior row
+    (p_k - mu_k) / sigma_k moved by mu_k moves the fit by C e_k / sigma_k^2): the share
+    can be small while the output still leans on the assumed plane.
+    """
+    if covariance is None:
+        return {}, {}
+    plane_row, radius_row = jacobian[-2], jacobian[-1]
+    gradients = _numeric_jacobian(lambda p: _outputs(p, impact_t_s, side), params)
+    radius = np.zeros(params.size)
+    radius[2] = 1.0
+    shares, sensitivity = {}, {}
+    for name, gradient in (*zip(_OUTPUTS, gradients), ("radius_m", radius)):
+        spread = covariance @ gradient
+        total = float(gradient @ spread)
+        if total <= 0.0:
+            continue
+        prior_part = float((plane_row @ spread) ** 2 + (radius_row @ spread) ** 2)
+        shares[name] = round(min(max(prior_part / total, 0.0), 1.0), 4)
+        sensitivity[name] = {
+            "per_plane_deg": round(
+                float(plane_row @ spread) * float(plane_row[0]) * math.pi / 180.0, 4
+            ),
+            "per_radius_0_1_m": round(float(radius_row @ spread) * float(radius_row[2]) * 0.1, 4),
+        }
+    return shares, sensitivity
+
+
 def normalize_handedness(handedness: Optional[str]) -> str:
     """Right-handed is the default; left-handed only when said explicitly."""
     return LEFT_HANDED if str(handedness or "").strip().upper() == LEFT_HANDED else RIGHT_HANDED
@@ -570,7 +636,8 @@ def fit_club_arc(
     params, residuals = _fit(xyz, times, side, start, prior, floor)
     error = (_positions_at(params, times, side) - xyz).ravel()
     rms_mm = float(np.sqrt(np.mean(error**2))) * 1000.0
-    covariance = _covariance(_numeric_jacobian(residuals, params))
+    jacobian = _numeric_jacobian(residuals, params)
+    covariance = _covariance(jacobian)
     return _result(
         params,
         impact_t_s,
@@ -591,6 +658,7 @@ def fit_club_arc(
         },
         ball=ball_position,
         offset_deg=horizontal_offset_deg,
+        prior_influence=_prior_influence(params, impact_t_s, side, jacobian, covariance),
     )
 
 
@@ -610,6 +678,7 @@ def _result(
     conditioning,
     ball,
     offset_deg,
+    prior_influence=None,
 ) -> ClubArc:
     values = _outputs(params, impact_t_s, side)
     ranges = {}
@@ -645,6 +714,8 @@ def _result(
         prior=prior,
         conditioning=conditioning,
         low_point_from_ball_mm=from_ball,
+        prior_share=dict((prior_influence or ({}, {}))[0]),
+        prior_sensitivity=dict((prior_influence or ({}, {}))[1]),
         **rounded,
     )
 
@@ -655,10 +726,11 @@ def _result(
 
 SELECTION_RULE = (
     "club path and attack angle: the arc's value when its label ranks at least as high as "
-    "the chained camera/IWR value's (measured > calculated > model geometry > not measured), "
-    "otherwise the chained value; a chained value counts as measured when it exists and is "
-    "not withheld, rejected or an error. The camera head track's value is experimental and "
-    "fills only a metric the arc did not measure. Both are recorded under cross_check."
+    "the chained camera/IWR value's (measured > calculated > model geometry > estimated > "
+    "experimental > not measured), otherwise the chained value; a chained value counts as "
+    "measured when it exists and is not withheld, rejected or an error. The camera head "
+    "track's value is experimental and is kept unless the arc's label ranks above "
+    "experimental. Both are recorded under cross_check."
 )
 CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
@@ -666,6 +738,11 @@ ARC_FIT_SOURCE = "club_arc:shot_fit"
 NO_CAMERA_DELIVERY = "no camera club delivery"
 LOW_POINT_OFFSETS_MM = {ClubType.IRON_7: 2.3, ClubType.DRIVER: -28.3, ClubType.PW: 5.5}
 NOTE_NO_LOW_POINT_OFFSET = "arc geometry only: no per-club offset fitted for this club"
+HEAD_TRACK_POSITIONS = "the camera head track's hosel positions"
+HEAD_TRACK_POSITIONS_NOTE = (
+    f"rests on {HEAD_TRACK_POSITIONS} (experimental): their depths are walked back from "
+    "the OPS club speed"
+)
 ARC_PRIOR_SOURCE = "club_arc:published_prior"
 _HORIZONTAL = {"club_path_deg", "swing_direction_deg", "low_point_distance_mm", "low_point_side_mm"}
 
@@ -713,6 +790,53 @@ def _arc_metric(arc: ClubArc, name: str) -> dict:
     }
 
 
+def _note(entry: dict, text: str) -> dict:
+    note = entry.get("note")
+    return {**entry, "note": f"{note}; {text}" if note else text}
+
+
+def _positions_label(data: Optional[Mapping]) -> tuple[Optional[str], float]:
+    """The label the delivery's positions carry, and their per-point noise (metres).
+
+    The head track's points are experimental, with their own pixel sigma; other camera
+    positions keep the arc's own label (None) at the noise floor.
+    """
+    if not data or data.get("status") != HEAD_TRACK_SOURCE:
+        return None, POSITION_NOISE_FLOOR_M
+    sigma = (data.get("head_track") or {}).get("position_sigma_m")
+    try:
+        noise = max(POSITION_NOISE_FLOOR_M, float(sigma))
+    except (TypeError, ValueError):
+        noise = POSITION_NOISE_FLOOR_M
+    return EXPERIMENTAL, noise
+
+
+def _inherit_positions_label(entry: dict, name: str, arc: ClubArc, label: str) -> dict:
+    """An arc output on the head track's positions: their label, or the prior's where it
+    sets the value (``PRIOR_SET_SHARE``)."""
+    if entry["value"] is None:
+        return entry
+    share = arc.prior_share.get(name)
+    if arc.status == MODEL_GEOMETRY and share is not None and share >= PRIOR_SET_SHARE:
+        return _note(
+            {**entry, "status": MODEL_GEOMETRY},
+            f"the published prior sets it: {share:.0%} of its variance is the prior's, "
+            f"{HEAD_TRACK_POSITIONS} barely move it",
+        )
+    if LABEL_RANK[label] < LABEL_RANK[entry["status"]]:
+        entry = {**entry, "status": label}
+    entry = _note(entry, HEAD_TRACK_POSITIONS_NOTE)
+    per_plane = (arc.prior_sensitivity.get(name) or {}).get("per_plane_deg")
+    if arc.status == MODEL_GEOMETRY and per_plane is not None:
+        unit = "mm" if name.endswith("_mm") else "deg"
+        entry = _note(
+            entry,
+            f"and on the published prior's swing plane: it moves {per_plane:+.2f} {unit} "
+            "per degree of the assumed plane",
+        )
+    return entry
+
+
 def _with_low_point_offset(entry: dict, club: Any) -> dict:
     """The low point distance with the club's fitted offset, the arc's geometry kept."""
     entry = {**entry, "geometry_value": entry["value"], "offset_mm": None}
@@ -720,15 +844,17 @@ def _with_low_point_offset(entry: dict, club: Any) -> dict:
         return entry
     offset = LOW_POINT_OFFSETS_MM.get(club)
     if offset is None:
-        return {**entry, "note": NOTE_NO_LOW_POINT_OFFSET}
+        return _note(entry, NOTE_NO_LOW_POINT_OFFSET)
     shifted = entry["range"]
-    return {
-        **entry,
-        "value": round(entry["value"] + offset, 2),
-        "range": [round(bound + offset, 2) for bound in shifted] if shifted else None,
-        "offset_mm": offset,
-        "note": f"arc geometry {offset:+.1f} mm per-club offset (fitted by the maintainer)",
-    }
+    return _note(
+        {
+            **entry,
+            "value": round(entry["value"] + offset, 2),
+            "range": [round(bound + offset, 2) for bound in shifted] if shifted else None,
+            "offset_mm": offset,
+        },
+        f"arc geometry {offset:+.1f} mm per-club offset (fitted by the maintainer)",
+    )
 
 
 def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]) -> dict:
@@ -740,6 +866,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
     """
     handed = normalize_handedness(handedness)
     data = _as_mapping(delivery)
+    positions_label, noise_m = _positions_label(data)
     # None: no target line set (boresight frame); 0.0 is a target line (frame_for)
     recorded = (data or {}).get("horizontal_offset_deg")
     offset = float(recorded) if recorded is not None else None
@@ -761,9 +888,15 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
                 club=club,
                 handedness=handed,
                 horizontal_offset_deg=offset,
+                position_noise_m=noise_m,
                 ball_position=HeadPosition(t_s=0.0, **dict(ball)) if ball else None,
             )
     metrics = {name: _arc_metric(arc, name) for name in _OUTPUTS}
+    if positions_label is not None:
+        metrics = {
+            name: _inherit_positions_label(entry, name, arc, positions_label)
+            for name, entry in metrics.items()
+        }
     metrics["low_point_distance_mm"] = _with_low_point_offset(
         metrics["low_point_distance_mm"], club
     )
@@ -782,7 +915,9 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
         measured = _chained_value(chained, name, tier_name)
         arc_rank = LABEL_RANK[metrics[name]["status"]]
         outranks = (
-            arc_rank == LABEL_RANK[NOT_MEASURED] if head_track else arc_rank < LABEL_RANK[MEASURED]
+            arc_rank <= LABEL_RANK[EXPERIMENTAL]
+            if head_track
+            else arc_rank < LABEL_RANK[MEASURED]
         )
         if measured is not None and outranks:
             metrics[name] = {
@@ -833,7 +968,32 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
             },
         },
         "arc": arc.to_dict(),
+        "head_track": _head_track_state(chained),
     }
+
+
+# What E3's full club speed reads from the head track (full_speed, head_track.head_state_at).
+_HEAD_TRACK_STATE_KEYS = (
+    "status",
+    "turn",
+    "positions",
+    "position_sigma_m",
+    "contact_ns",
+    "contact_sigma_ms",
+    "club_path_sigma_deg",
+    "attack_angle_sigma_deg",
+    "club_path_flag",
+    "attack_angle_flag",
+    "speed_mph",
+)
+
+
+def _head_track_state(delivery: Mapping) -> Optional[dict]:
+    """The camera head track's state on the camera clock (camera-centred), or None."""
+    record = delivery.get("head_track")
+    if not isinstance(record, Mapping):
+        return None
+    return {key: record.get(key) for key in _HEAD_TRACK_STATE_KEYS}
 
 
 def selected_path_and_attack(payload: Optional[Mapping]) -> dict:

@@ -17,10 +17,12 @@ import pytest
 
 from openflight.camera.head_track import (
     FLAG_LIMIT_DEG,
+    HOSEL_PIXEL_SIGMA,
     HeadTrackCamera,
     HeadTrackInputs,
     acoustic_contact_window,
     estimate_head_track,
+    head_state_at,
 )
 from openflight.clubs import ClubType
 
@@ -295,3 +297,74 @@ def test_two_chords_turning_far_off_the_arc_flag_both_angles():
     assert not 0.5 <= track.turn_rate_ratio <= 2.0
     assert track.club_path_flag is not None and "turn" in track.club_path_flag
     assert track.attack_angle_flag is not None and "turn" in track.attack_angle_flag
+
+
+# --------------------------------------------------------------------------- positions
+
+
+def _camera_relative(point: np.ndarray) -> np.ndarray:
+    """A world (lateral, up, forward) point relative to the camera's optical centre."""
+    return point - np.array([0.0, CAMERA_HEIGHT_M, 0.0])
+
+
+def test_the_track_emits_one_3d_hosel_position_per_tracked_frame():
+    """x and y times the depth the track walked back from contact, on the frame clock."""
+    swing = Swing()
+    track = estimate_head_track(_inputs(swing))
+
+    assert len(track.positions) == len(track.track)
+    assert [p["frame"] for p in track.positions] == [p["frame"] for p in track.track]
+    for position in track.positions:
+        truth = _camera_relative(_hosel(swing, position["t_ns"]))
+        found = np.array([position["lateral_m"], position["up_m"], position["forward_m"]])
+        # the depth at contact is the ball's: the hosel sits 25 mm short of it
+        assert np.linalg.norm(found - truth) < 0.05
+    # the shape between frames is what an arc reads: chords to about a centimetre
+    for first, second in zip(track.positions, track.positions[1:]):
+        found = np.array(
+            [second[key] - first[key] for key in ("lateral_m", "up_m", "forward_m")]
+        )
+        truth = _hosel(swing, second["t_ns"]) - _hosel(swing, first["t_ns"])
+        assert np.linalg.norm(found - truth) < 0.012
+    # one hosel pixel's sigma at the head's depth
+    depth = max(p["forward_m"] for p in track.positions)
+    assert track.position_sigma_m == pytest.approx(HOSEL_PIXEL_SIGMA * depth / FOCAL, rel=0.05)
+
+
+def test_a_rejected_track_has_no_positions():
+    track = estimate_head_track(_inputs(Swing(), ball_range_m=None))
+
+    assert track.positions == ()
+    assert track.to_dict()["positions"] == []
+
+
+@pytest.mark.parametrize("before_contact_ms", [0.0, 6.0, 12.0])
+def test_the_head_state_follows_the_arc_to_any_time_near_contact(before_contact_ms):
+    """Direction and position at a time on the frame clock, from the track's own turn."""
+    swing = Swing()
+    track = estimate_head_track(_inputs(swing))
+    t_ns = CONTACT_NS - before_contact_ms * 1e6
+
+    state = head_state_at(track.to_dict(), t_ns)
+
+    assert state is not None
+    position, direction = state
+    dt = 1e3
+    velocity = (_hosel(swing, t_ns + dt) - _hosel(swing, t_ns - dt)) / (2 * dt / 1e9)
+    truth_direction = velocity / np.linalg.norm(velocity)
+    angle = math.degrees(math.acos(min(1.0, float(direction @ truth_direction))))
+    assert angle < 1.5
+    assert np.linalg.norm(position - _camera_relative(_hosel(swing, t_ns))) < 0.05
+
+
+def test_the_head_state_is_none_without_a_turn_model():
+    assert head_state_at({"status": "rejected_no_shaft"}, CONTACT_NS) is None
+    assert head_state_at({}, CONTACT_NS) is None
+
+
+def test_the_turn_records_the_resting_ball_from_the_optical_centre():
+    track = estimate_head_track(_inputs(Swing(pitch_deg=4.0)))
+
+    ball = np.asarray(track.turn["ball_m"])
+    assert np.linalg.norm(ball - _camera_relative(BALL_LUF)) < 0.005
+    assert track.turn["contact_ns"] == pytest.approx(CONTACT_NS)

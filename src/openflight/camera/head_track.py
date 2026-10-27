@@ -26,6 +26,15 @@ comes from the sound trigger, which fires 0.5-4 ms after contact (``club_deliver
 ``ball_flight``). The ball-departure helpers date contact a frame early on this camera:
 the head passes between the lens and the ball before it moves it.
 
+Positions. Each tracked frame's hosel is also a 3-D point from the camera's optical
+centre: its normalized image offsets times the depth walked back for that frame, turned
+by the pitch into (lateral, up, forward). They feed the E1 arc (``club_arc``) labelled
+experimental like the angles; their depths rest on the same OPS speed and contact depth,
+so the arc's swing plane and radius from two or three of them are the published prior's
+(``club_arc`` says so per output). ``head_state_at`` reads the head's position and
+direction at any time near contact from the same turn the angles use (E3's full club
+speed reads the OPS club reading's time).
+
 Uncertainty. Each input is moved by its standard deviation and the angles re-solved:
 contact time, ball range, focal length, pitch (attack), target-line yaw (path), the arc
 prior's rate and plane (one chord), the hosel's pixels, plus a fixed 1.5 deg for the
@@ -170,6 +179,12 @@ class HeadTrack:
     chords: tuple[dict, ...] = ()
     uncertainty_parts: dict = field(default_factory=dict)
     notes: tuple[str, ...] = ()
+    # one (lateral, up, forward) point per tracked frame from the camera's optical centre
+    positions: tuple[dict, ...] = ()
+    # one hosel pixel's sigma at the deepest position, metres
+    position_sigma_m: Optional[float] = None
+    # the turn the angles use: a direction at a time, the axis and rate it turns at
+    turn: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """A JSON-ready record of the track, its chords and its uncertainty."""
@@ -193,6 +208,9 @@ class HeadTrack:
             "chords": [dict(chord) for chord in self.chords],
             "uncertainty_parts": self.uncertainty_parts,
             "notes": list(self.notes),
+            "positions": [dict(point) for point in self.positions],
+            "position_sigma_m": self.position_sigma_m,
+            "turn": dict(self.turn) if self.turn is not None else None,
         }
 
 
@@ -325,6 +343,17 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
         return _rejected(rejection.status, str(rejection), last_rest_frame=last_rest, track=track)
     path_sigma = math.sqrt(sum(part["club_path_deg"] ** 2 for part in parts.values()))
     attack_sigma = math.sqrt(sum(part["attack_angle_deg"] ** 2 for part in parts.values()))
+    positions = tuple(
+        {
+            "frame": int(index),
+            "t_ns": float(mid_ns[index]),
+            "lateral_m": round(float(point[0]), 5),
+            "up_m": round(float(point[1]), 5),
+            "forward_m": round(float(point[2]), 5),
+        }
+        for index, point in sorted(nominal.positions.items())
+    )
+    deepest = max(float(point[2]) for point in nominal.positions.values())
     turn_flag = None
     if nominal.turn_rate_ratio is not None and not (
         TURN_RATE_RATIO_RANGE[0] <= nominal.turn_rate_ratio <= TURN_RATE_RATIO_RANGE[1]
@@ -355,6 +384,9 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
             name: {key: round(value, 3) for key, value in part.items()}
             for name, part in parts.items()
         },
+        positions=positions,
+        position_sigma_m=round(HOSEL_PIXEL_SIGMA * deepest / inputs.camera.focal_px, 5),
+        turn=nominal.turn,
     )
 
 
@@ -536,6 +568,9 @@ class _Solution:
     turning: str
     turn_rate_ratio: Optional[float]
     chords: tuple[dict, ...]
+    # tracked frame -> (lateral, up, forward) from the optical centre, metres
+    positions: dict = field(default_factory=dict)
+    turn: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -575,16 +610,20 @@ class _Observation:
         speed = ops_mps
         contact_forward = None
         for _ in range(3):
-            chords = self._chords(
+            chords, depths = self._chords(
                 change.scale, depth_contact, contact_ns, speed, pitch, contact_forward
             )
-            direction, turning, ratio = self._direction_at_contact(
+            direction, turning, ratio, turn = self._direction_at_contact(
                 chords, contact_ns, speed, change
             )
             contact_forward = speed * float(_world_to_camera(direction, pitch)[2])
             # the OPS sees the head's speed along its line of sight to the ball
             speed = ops_mps / max(float(_world_to_camera(direction, pitch) @ sight), 0.5)
         path, attack = _angles(direction)
+        positions = {}
+        for index, depth in depths.items():
+            x, y = self._normalized(*self.points[index], change.scale)
+            positions[index] = _camera_to_world(np.array([x * depth, y * depth, depth]), pitch)
         return _Solution(
             path_deg=path,
             attack_deg=attack,
@@ -592,21 +631,36 @@ class _Observation:
             turning=turning,
             turn_rate_ratio=ratio,
             chords=tuple(chord["record"] for chord in chords),
+            positions=positions,
+            turn={
+                **turn,
+                "speed_mps": speed,
+                "contact_ns": contact_ns,
+                # the resting ball, (lateral, up, forward) from the optical centre
+                "ball_m": [
+                    float(value)
+                    for value in _camera_to_world(
+                        sight * float(inputs.ball_range_m) * change.range_scale, pitch
+                    )
+                ],
+            },
         )
 
     def _chords(
         self, scale, depth_contact, contact_ns, speed, pitch, contact_forward
-    ) -> list[dict]:
-        """The chords, their depths walked back from contact at each chord's own forward speed."""
+    ) -> tuple[list[dict], dict]:
+        """The chords and each frame's depth, walked back from contact at each chord's own
+        forward speed."""
         forwards = {pair: speed for pair in self.pairs}
-        chords = []
+        chords: list[dict] = []
+        depths: dict = {}
         for _ in range(4):
             depths = self._depths(depth_contact, contact_ns, forwards, contact_forward)
             chords = [
                 self._chord(pair, scale, depths, contact_ns, speed, pitch) for pair in self.pairs
             ]
             forwards = {pair: chord["forward"] for pair, chord in zip(self.pairs, chords)}
-        return chords
+        return chords, depths
 
     def _depths(self, depth_contact, contact_ns, forwards, contact_forward) -> dict:
         """Each tracked frame's depth: the last from contact, earlier ones chord by chord."""
@@ -686,7 +740,13 @@ class _Observation:
             omega = prior_omega * change.prior_rate_scale
             turning, ratio = "arc_prior", None
         angle = omega * (contact_ns - last["t_ns"]) / 1e9
-        return _rotate(last["direction"], axis, angle), turning, ratio
+        turn = {
+            "t_ns": float(last["t_ns"]),
+            "direction": [float(value) for value in last["direction"]],
+            "axis": [float(value) for value in axis],
+            "omega_rad_s": float(omega),
+        }
+        return _rotate(last["direction"], axis, angle), turning, ratio, turn
 
     def uncertainty(self, nominal: _Solution, contact_ns: float, contact_sigma_ns: float) -> dict:
         """Each input moved by its sigma; half the spread of the re-solved angles."""
@@ -743,6 +803,42 @@ class _Observation:
         x, y = points[index]
         points[index] = (x + shift, y) if axis == 0 else (x, y + shift)
         return replace(self, points=points)
+
+
+# The head's path between a tracked frame and the asked time is summed in this many steps.
+_STATE_STEPS = 32
+
+
+def head_state_at(
+    record: Mapping[str, Any], t_ns: float
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """The head's (position, unit direction) at ``t_ns`` on the frame clock, or None.
+
+    ``record`` is ``HeadTrack.to_dict()``. Both are (lateral, up, forward) from the camera's
+    optical centre: the direction is the track's own turn (its last chord's direction
+    turned about its axis at its rate), the position the nearest tracked hosel moved along
+    that turning direction at the track's speed. Valid near contact, where the track's
+    constant-speed arc holds.
+    """
+    turn = record.get("turn") if isinstance(record, Mapping) else None
+    positions = record.get("positions") if isinstance(record, Mapping) else None
+    if not isinstance(turn, Mapping) or not positions:
+        return None
+    axis = np.asarray(turn["axis"], dtype=float)
+    start = np.asarray(turn["direction"], dtype=float)
+    omega = float(turn["omega_rad_s"])
+    speed = float(turn["speed_mps"])
+
+    def direction(at_ns: float) -> np.ndarray:
+        return _rotate(start, axis, omega * (at_ns - float(turn["t_ns"])) / 1e9)
+
+    anchor = min(positions, key=lambda point: abs(float(point["t_ns"]) - float(t_ns)))
+    point = np.array([anchor["lateral_m"], anchor["up_m"], anchor["forward_m"]], dtype=float)
+    times = np.linspace(float(anchor["t_ns"]), float(t_ns), _STATE_STEPS + 1)
+    step_s = (times[1] - times[0]) / 1e9
+    for middle in 0.5 * (times[:-1] + times[1:]):
+        point = point + speed * step_s * direction(float(middle))
+    return point, direction(float(t_ns))
 
 
 def _arc_prior(club: Any) -> ArcPrior:

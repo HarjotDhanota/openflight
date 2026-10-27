@@ -9,6 +9,7 @@ of the generator itself, not from the fit's formulas.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -17,6 +18,7 @@ import pytest
 from openflight import club_arc
 from openflight.club_arc import (
     CALCULATED,
+    EXPERIMENTAL,
     MODEL_GEOMETRY,
     NOT_MEASURED,
     HeadPosition,
@@ -531,3 +533,139 @@ def test_a_missing_low_point_gets_no_offset():
     entry = payload["metrics"]["low_point_distance_mm"]
     assert entry["value"] is None
     assert entry["status"] == NOT_MEASURED
+
+
+# ---- how much of each output the prior sets ----------------------------------------
+
+# The head track's frames at 120 fps: two or three hosel points, the last one a few ms
+# before contact, each to about a centimetre (one hosel pixel at the head's depth).
+HEAD_TRACK_TIMES = (-0.0226, -0.0143, -0.0060)
+HEAD_TRACK_SIGMA_M = 0.012
+
+
+def test_a_model_geometry_fit_reports_the_prior_s_share_of_each_output():
+    positions, _truth = _synthetic_swing(n_points=2, noise_m=0.0, plane_deg=57.0)
+
+    arc = fit_club_arc(positions, impact_t_s=0.0, club=ClubType.IRON_7)
+
+    assert arc.status == MODEL_GEOMETRY
+    assert set(arc.prior_share) >= {*club_arc._OUTPUTS, "radius_m"}
+    assert all(0.0 <= share <= 1.0 for share in arc.prior_share.values())
+    # two points cannot tilt the plane: it is the prior's
+    assert arc.prior_share["swing_plane_deg"] > 0.95
+    assert arc.prior_share["radius_m"] > 0.95
+
+
+def test_a_calculated_fit_has_no_prior_share():
+    positions, _truth = _synthetic_swing(n_points=6, noise_m=0.0002, plane_deg=52.0)
+
+    arc = fit_club_arc(positions, impact_t_s=0.0, club=ClubType.IRON_7, position_noise_m=0.0002)
+
+    assert arc.status == CALCULATED
+    assert arc.prior_share == {}
+
+
+def _head_track_delivery(positions, **overrides):
+    delivery = _delivery(
+        positions,
+        status="camera_head_track",
+        club_path_deg=2.0,
+        attack_angle_deg=-4.0,
+        path_confidence_tier="experimental",
+        attack_confidence_tier="experimental",
+        head_track={"label": "experimental", "position_sigma_m": HEAD_TRACK_SIGMA_M},
+    )
+    delivery.update(overrides)
+    return delivery
+
+
+def test_head_track_positions_make_every_arc_output_experimental_or_the_prior_s():
+    """Labels inherit the positions': experimental, or model geometry where the prior sets it."""
+    positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
+
+    payload = club_delivery_payload(
+        _head_track_delivery(positions), club=ClubType.IRON_7, handedness="RH"
+    )
+
+    arc = payload["arc"]
+    assert arc["status"] == MODEL_GEOMETRY
+    assert arc["conditioning"]["position_noise_floor_m"] == pytest.approx(HEAD_TRACK_SIGMA_M)
+    metrics = payload["metrics"]
+    plane = metrics["swing_plane_deg"]
+    assert plane["status"] == MODEL_GEOMETRY
+    assert "prior" in plane["note"] and "%" in plane["note"]
+    for name in ("swing_direction_deg", "low_point_distance_mm", "low_point_height_mm"):
+        entry = metrics[name]
+        assert entry["value"] is not None, name
+        share = arc["prior_share"][name]
+        expected = MODEL_GEOMETRY if share >= club_arc.PRIOR_SET_SHARE else EXPERIMENTAL
+        assert entry["status"] == expected, (name, share)
+        assert "head track" in entry["note"], name
+    # the head track's own path and attack stay: the arc reads the same points
+    assert metrics["club_path_deg"]["value"] == pytest.approx(2.0)
+    assert metrics["club_path_deg"]["status"] == EXPERIMENTAL
+    assert metrics["club_path_deg"]["source"] == "camera_head_track"
+    assert metrics["attack_angle_deg"]["value"] == pytest.approx(-4.0)
+
+
+def test_head_track_positions_fill_a_withheld_angle_only_experimental():
+    positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
+
+    payload = club_delivery_payload(
+        _head_track_delivery(positions, attack_angle_deg=None, attack_confidence_tier="withheld"),
+        club=ClubType.IRON_7,
+        handedness="RH",
+    )
+
+    attack = payload["metrics"]["attack_angle_deg"]
+    assert attack["value"] == payload["cross_check"]["arc"]["attack_angle_deg"]
+    assert attack["status"] in (EXPERIMENTAL, MODEL_GEOMETRY)
+
+
+def test_label_rank_follows_the_owner_order():
+    rank = club_arc.LABEL_RANK
+    assert (
+        rank["measured"]
+        > rank[CALCULATED]
+        > rank[MODEL_GEOMETRY]
+        > rank["estimated"]
+        > rank[EXPERIMENTAL]
+        > rank[NOT_MEASURED]
+    )
+
+
+def test_the_prior_sensitivity_predicts_a_refit_on_a_moved_prior(monkeypatch):
+    """The linearized move per degree of the assumed plane matches refitting with it moved."""
+    positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
+    arc = fit_club_arc(
+        positions, impact_t_s=0.0, club=ClubType.IRON_7, position_noise_m=HEAD_TRACK_SIGMA_M
+    )
+    prior = prior_for_club(ClubType.IRON_7)
+    moved = dataclasses.replace(prior, plane_deg=prior.plane_deg + 1.0)
+    monkeypatch.setattr(club_arc, "prior_for_club", lambda _club: moved)
+    refit = fit_club_arc(
+        positions, impact_t_s=0.0, club=ClubType.IRON_7, position_noise_m=HEAD_TRACK_SIGMA_M
+    )
+
+    for name in ("swing_plane_deg", "swing_direction_deg", "low_point_distance_mm"):
+        predicted = arc.prior_sensitivity[name]["per_plane_deg"]
+        actual = getattr(refit, name) - getattr(arc, name)
+        assert actual == pytest.approx(predicted, abs=0.05 + 0.15 * abs(predicted)), name
+
+
+def test_the_payload_keeps_the_head_track_state_for_the_full_club_speed():
+    positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
+    turn = {"t_ns": 1.0, "direction": [0.0, 0.0, 1.0], "axis": [1.0, 0.0, 0.0]}
+    delivery = _head_track_delivery(
+        positions,
+        head_track={"status": "ok", "turn": turn, "position_sigma_m": 0.01, "track": [1, 2]},
+    )
+
+    state = club_delivery_payload(delivery, club=ClubType.IRON_7, handedness="RH")["head_track"]
+
+    assert state["status"] == "ok"
+    assert state["turn"] == turn
+    assert "track" not in state  # the pixels stay with the camera record
+    assert club_delivery_payload(_delivery(positions), club=ClubType.IRON_7, handedness="RH")[
+        "head_track"
+    ] is None

@@ -32,17 +32,17 @@ def test_measured_passes_and_a_labelled_value_is_labelled(records):
     assert _row(rows, "carry")["status"] == check.LABELLED
 
 
-@pytest.mark.parametrize("metric_id", PENDING_METRIC_IDS + ("club_speed_full", "gyro"))
+@pytest.mark.parametrize("metric_id", PENDING_METRIC_IDS + ("gyro",))
 def test_unbuilt_metrics_are_pending(records, metric_id):
     row = _row(check.kiosk_metric_stages(records, upstream={}), metric_id)
     assert (row["status"], row["cause"]) == (check.FAIL, "PENDING")
 
 
-def test_full_smash_is_pending_on_the_club_speed_and_data_on_the_ball_speed(records):
-    assert _row(check.kiosk_metric_stages(records, {}), "smash_factor_full")["cause"] == "PENDING"
-    record = dict(records["smash_factor_full"], reason="the ball speed is not a full speed (D21)")
-    row = check.kiosk_metric_stage("smash_factor_full", record, {})
-    assert row["cause"] == "DATA"
+@pytest.mark.parametrize("metric_id", ["club_speed_full", "smash_factor_full"])
+def test_full_club_speed_and_smash_are_built_so_a_missing_one_is_data(records, metric_id):
+    """Built on the camera head track (25 Oct 2026): no head track on the shot is data."""
+    row = _row(check.kiosk_metric_stages(records, {}), metric_id)
+    assert (row["status"], row["cause"]) == (check.FAIL, "DATA")
 
 
 def test_a_metric_whose_stages_all_failed_is_blocked_upstream(records):

@@ -77,15 +77,18 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     ops_speed_track,
 )
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
+from .source_chain import weakest_label
 from .source_labels import (
     EXPERIMENTAL_LAUNCH_SOURCES,
     LABEL_ESTIMATED,
     LABEL_EXPERIMENTAL,
+    LABEL_MODEL_GEOMETRY,
     launch_label,
 )
 
 CALCULATED = "calculated"
 ESTIMATED = "estimated"
+EXPERIMENTAL = LABEL_EXPERIMENTAL
 NOT_MEASURED = "not_measured"
 METHOD = "measured_projection_v1"
 BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
@@ -627,6 +630,209 @@ def evaluate_full_ball_speed(
     }
 
 
+# ---------------------------------------------------------------- ball: OPS total projection
+
+TOTAL_ROUTE = "ops_total_projection"
+TOTAL_SOURCE = (
+    "OPS total-speed projection: the canonical OPS radial over its peak line-of-sight share "
+    "(speed_correction.radial_speed_factor) + vertical launch + rig geometry"
+)
+TOTAL_WINDOW_MS = 70.0
+# The model's scatter against TrackMan: the 12 Oct 2026 TrackMan pairs (another rig, the
+# unit 1.83 m behind the ball, 12 clean wedge and iron shots) fed TrackMan's own launch:
+# median -0.4 to +0.1 mph, sd 0.5 mph. Not yet checked on this rig.
+TOTAL_MODEL_SCATTER_MPH = 0.5
+TOTAL_VALIDATION = (
+    "12 Oct 2026 TrackMan pairs at 1.83 m (12 shots, TrackMan's launch fed in): sd 0.5 mph; "
+    "not yet checked on this rig or on a measured launch"
+)
+TOTAL_ASSUMPTIONS = (
+    "the ball flies along the unit's boresight: the horizontal launch is not an input "
+    "(a few degrees change the share by well under 1 %)",
+    "the OPS reading is the peak radial speed within its first 70 ms (mode extraction)",
+    "the drag over that window is the historical 0.027 mph per ms",
+)
+_FEET_PER_M = 1.0 / 0.3048
+ASSUMED_SIDE_OFFSET_NOTE = (
+    "the ball's side offset is assumed dead ahead of the IWR origin (the setup measured none)"
+)
+
+
+def _total_value(radial_mph: float, vertical_deg: float, geometry: dict) -> float:
+    """The full speed for one set of inputs: radial over the model's peak share."""
+    from .speed_correction import radial_speed_factor  # noqa: PLC0415
+
+    forward, lateral, above = (
+        float(value) for value in geometry["ball_rest_m"] - geometry["ops_m"]
+    )
+    if forward <= 0.0:
+        return math.nan
+    factor = radial_speed_factor(
+        vertical_deg,
+        radial_mph,
+        forward * _FEET_PER_M,
+        above * _FEET_PER_M,
+        TOTAL_WINDOW_MS,
+        ball_lateral_ft=lateral * _FEET_PER_M,
+    )
+    return radial_mph / factor
+
+
+def evaluate_total_speed_projection(
+    *,
+    ball_radial_mph: Any,
+    vertical_deg: Any,
+    vertical_source: Any,
+    rig: Any,
+    tee_range_m: Any,
+    radar_height_m: Any,
+    ball_height_m: Any,
+    tee_side_offset_m: Any,
+    tee_range_uncertainty_m: Any = None,
+    tee_range_source: Any = None,
+    tee_side_offset_source: Any = None,
+) -> dict:
+    """Full ball speed from the canonical OPS radial and the peak line-of-sight share.
+
+    The second full-ball-speed route (``shot_models``), used when the launch-based
+    projection refuses (an estimated, weak or missing horizontal launch, no measured side
+    offset, no OPS reading in the referral window, an ill-conditioned line of sight). It
+    needs no horizontal launch and no OPS timeline: ``radial_speed_factor`` predicts the
+    peak share of the ball's speed the OPS sees over its first 70 ms from the vertical
+    launch and where the ball sits from the OPS (``_ball_geometry``), and the canonical
+    radial is divided by it. Labels follow the launch-based route: calculated on a
+    measured vertical launch, the shot's own range and the setup's side offset; estimated,
+    naming each, on a camera launch, a stand-in range or an assumed or camera side offset
+    (``shot_metrics`` labels a value on an experimental input experimental).
+    """
+    side_offset = finite_float(tee_side_offset_m)
+    side_assumed = side_offset is None
+    inputs = {
+        "ball_radial_mph": finite_float(ball_radial_mph),
+        "vertical_deg": finite_float(vertical_deg),
+        "vertical_source": vertical_source,
+        "tee_range_m": finite_float(tee_range_m),
+        "tee_range_uncertainty_m": finite_float(tee_range_uncertainty_m),
+        "tee_range_source": tee_range_source,
+        "tee_side_offset_m": 0.0 if side_assumed else side_offset,
+        "tee_side_offset_source": "assumed" if side_assumed else tee_side_offset_source,
+        "radar_height_m": finite_float(radar_height_m),
+        "ball_height_m": finite_float(ball_height_m),
+    }
+
+    def refused(reason: str) -> dict:
+        return _not_measured(
+            reason, inputs=inputs, source=TOTAL_SOURCE, method=TOTAL_ROUTE, route=TOTAL_ROUTE
+        )
+
+    radial = inputs["ball_radial_mph"]
+    if radial is None or radial <= 0.0:
+        return refused("no OPS radial ball speed")
+    if not _finite(vertical_deg) or abs(float(vertical_deg)) >= 90.0:
+        return refused("vertical launch is not measured")
+    if vertical_source not in VERTICAL_SOURCES:
+        return refused(
+            f"vertical launch source {vertical_source!r} is not a measured vertical launch"
+        )
+    vertical = float(vertical_deg)
+    side = inputs["tee_side_offset_m"]
+    geometry, reason = _ball_geometry(rig, tee_range_m, radar_height_m, ball_height_m, side)
+    if reason:
+        return refused(reason)
+    value = _total_value(radial, vertical, geometry)
+    if not math.isfinite(value):
+        return refused("the ball is not downrange of the OPS")
+
+    tol = dict(TOLERANCES)
+    if _finite(tee_range_uncertainty_m):
+        tol["tee_range_m"] = max(tol["tee_range_m"], float(tee_range_uncertainty_m))
+
+    def solve(*, vertical_=vertical, tee_range=float(tee_range_m), side_=side, ops_shift=None):
+        geo, _ = _ball_geometry(
+            rig, tee_range, radar_height_m, ball_height_m, side_, ops_shift or (0.0, 0.0, 0.0)
+        )
+        return _total_value(radial, vertical_, geo) if geo is not None else math.nan
+
+    def spread(*values: float) -> float:
+        finite = [abs(v - value) for v in values if math.isfinite(v)]
+        return max(finite) if finite and len(finite) == len(values) else math.inf
+
+    def ops_axis(axis: int, sign: float) -> tuple:
+        return tuple(sign * tol["ops_position_mm"] * (axis == k) for k in range(3))
+
+    budget = {
+        "vertical_launch": spread(
+            solve(vertical_=vertical + tol["vertical_launch_deg"]),
+            solve(vertical_=vertical - tol["vertical_launch_deg"]),
+        ),
+        "tee_range": spread(
+            solve(tee_range=float(tee_range_m) + tol["tee_range_m"]),
+            solve(tee_range=float(tee_range_m) - tol["tee_range_m"]),
+        ),
+        "tee_side_offset": spread(
+            solve(side_=side + tol["tee_side_offset_m"]),
+            solve(side_=side - tol["tee_side_offset_m"]),
+        ),
+        "ops_position": math.sqrt(
+            sum(
+                spread(solve(ops_shift=ops_axis(axis, 1.0)), solve(ops_shift=ops_axis(axis, -1.0)))
+                ** 2
+                for axis in range(3)
+            )
+        ),
+        "radial_resolution": DEFAULT_RADIAL_RESOLUTION_MPH * value / radial,
+        "model_scatter": TOTAL_MODEL_SCATTER_MPH,
+    }
+    half_width = math.sqrt(sum(term**2 for term in budget.values()))
+    bounded = math.isfinite(half_width)
+    weak = []
+    if vertical_source in EXPERIMENTAL_LAUNCH_SOURCES:
+        weak.append(
+            f"vertical launch from {EXPERIMENTAL_LAUNCH_SOURCES[vertical_source]} "
+            f"({LABEL_EXPERIMENTAL})"
+        )
+    if tee_range_source in WEAK_RANGE_SOURCES:
+        weak.append(WEAK_RANGE_SOURCES[tee_range_source])
+    if side_assumed:
+        weak.append(ASSUMED_SIDE_OFFSET_NOTE)
+    elif tee_side_offset_source == CAMERA_SIDE_OFFSET_SOURCE:
+        weak.append("the side offset is the resting ball's camera bearing (experimental)")
+    return {
+        "status": ESTIMATED if weak else CALCULATED,
+        "weak_inputs": weak,
+        "note": "; ".join(weak) or None,
+        "value_mph": value,
+        "range_mph": [value - half_width, value + half_width] if bounded else None,
+        "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances, "
+        "plus the model's scatter against TrackMan"
+        if bounded
+        else "unbounded: an input moved by its tolerance leaves the geometry",
+        "uncertainty_mph": {
+            name: term if math.isfinite(term) else None for name, term in budget.items()
+        },
+        "tolerances": tol,
+        "radial_mph": radial,
+        "radial_share": radial / value,
+        "window_ms": TOTAL_WINDOW_MS,
+        "tee_range_source": tee_range_source,
+        "source": TOTAL_SOURCE,
+        "method": TOTAL_ROUTE,
+        "route": TOTAL_ROUTE,
+        "reason": None,
+        "referred_to": "launch",
+        "validation": TOTAL_VALIDATION,
+        "assumptions": list(TOTAL_ASSUMPTIONS),
+        "inputs": inputs,
+        "geometry_m": {
+            "frame": "x forward along the unit boresight, y target-right, z up; origin on the "
+            "hitting surface below the IWR range origin",
+            "ops": geometry["ops_m"].tolist(),
+            "ball_at_rest": geometry["ball_rest_m"].tolist(),
+        },
+        "canonical_speed_contract": "ops_radial_unchanged",
+    }
+
+
 # ---------------------------------------------------------------- club
 
 
@@ -685,13 +891,274 @@ def evaluate_full_club_speed(
     }
 
 
+# ---------------------------------------------------------------- club: the head track
+
+CLUB_HEAD_TRACK_SOURCE = (
+    "OPS club reading (one FFT window) + the camera head track's direction and position at "
+    "its time + rig geometry"
+)
+CLUB_HEAD_TRACK_NOTE = (
+    "rests on the camera head track's direction (experimental): hosel + OPS speed, not "
+    "validated against TrackMan"
+)
+# The head track's constant-speed arc holds over its own frames, the last ~25 ms.
+MAX_CLUB_READING_BEFORE_CONTACT_MS = 30.0
+CLUB_UNMODELLED = (
+    "the OPS sees the club's fastest scatterer (the toe, the leading edge), the head track "
+    "follows the hosel: the toe moves a few per cent faster on the arc",
+    "the speed at the reading, not at contact: the head still gains a little before impact",
+    "the unit's tilt applied to the rig offsets (millimetres)",
+)
+
+
+def _camera_relative(offset_mm) -> Optional[np.ndarray]:
+    """A rig offset (camera right, down, forward, mm) as (lateral, up, forward) metres."""
+    vector = _vector(offset_mm)
+    if vector is None:
+        return None
+    right, down, forward = vector / 1000.0
+    return np.array([right, -down, forward])
+
+
+def _turned(direction: np.ndarray, *, path_deg: float = 0.0, attack_deg: float = 0.0):
+    """A (lateral, up, forward) unit direction with its path and attack angle moved."""
+    lateral, up, forward = (float(v) for v in direction)
+    path = math.atan2(lateral, forward) + math.radians(path_deg)
+    attack = math.atan2(up, math.hypot(lateral, forward)) + math.radians(attack_deg)
+    return np.array(
+        [math.cos(attack) * math.sin(path), math.sin(attack), math.cos(attack) * math.cos(path)]
+    )
+
+
+def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig: Any) -> dict:
+    """Full club speed from the one OPS club reading and the head track's direction then.
+
+    Geometry, all in the head track's frame ((lateral, up, forward) metres from the
+    camera's optical centre, level, along the unit's boresight):
+
+    - the reading is the club pick's FFT window (``ops_speed_track`` ``club_reading``);
+      its centre's time before contact is its distance from the OPS impact time (walked
+      back by the sound's flight to the mic for a sound trigger), and that same time
+      before the head track's contact (the acoustic window's centre) puts it on the
+      camera's clock: both clocks are anchored on contact;
+    - the head's position and direction then are the head track's own turning arc
+      (``head_track.head_state_at``);
+    - the OPS sits at the rig's offset from the lens; ``LOS`` is the unit vector from it
+      to the head, and full speed = radial / (LOS . dir) with the same cos 30 deg refusal
+      as the ball (``evaluate_full_club_speed``).
+
+    The value is experimental: the head track's direction is. The range is the root-sum-
+    square of one-at-a-time changes: the radial bin, the reading's time (the OPS impact
+    and the camera contact uncertainties), the FFT window (the projection over the window
+    against its centre), the head track's path and attack sigmas, the head's depth (the
+    stated tee-range tolerance) and the OPS position.
+    """
+    from .camera.head_track import head_state_at  # noqa: PLC0415
+
+    base = {
+        "status": NOT_MEASURED,
+        "value_mph": None,
+        "range_mph": None,
+        "source": CLUB_HEAD_TRACK_SOURCE,
+        "method": METHOD,
+        "direction_source": None,
+        "min_projection": MIN_PROJECTION,
+    }
+
+    def refused(reason: str, **extra) -> dict:
+        return {**base, "reason": reason, **extra}
+
+    record = head_track if isinstance(head_track, dict) else {}
+    if record.get("status") != "ok" or not isinstance(record.get("turn"), dict):
+        why = record.get("status") or "not run"
+        return refused(f"no camera head track direction ({why})")
+    flags = [record.get(name) for name in ("club_path_flag", "attack_angle_flag")]
+    if any(flags):
+        return refused(f"the camera head track flagged its direction: {next(f for f in flags if f)}")
+    if not isinstance(ops_track, dict):
+        return refused("no OPS speed track for this shot")
+    reading = ops_track.get("club_reading")
+    if not isinstance(reading, dict) or not (
+        _finite(reading.get("window_start_ms")) and _finite(reading.get("radial_mph"))
+    ):
+        return refused("no one OPS club reading with its window time (the club pick kept none)")
+    radial = float(reading["radial_mph"])
+    if radial <= 0.0:
+        return refused("no one OPS club reading with its window time (not positive)")
+    if rig is None:
+        return refused("no rig file: the OPS position is not measured")
+    ops = _camera_relative(getattr(rig, "ops_offset_mm", None))
+    if ops is None:
+        return refused("the rig file has no OPS offset: the OPS position is not measured")
+    impact_ms = ops_track.get("impact_ms")
+    if not _finite(impact_ms):
+        return refused("no measured impact time on the OPS clock")
+    impact_source = ops_track.get("impact_source")
+    walk_back_ms = 0.0
+    if impact_source == "sound_trigger":
+        mic = _camera_relative(getattr(rig, "mic_offset_mm", None))
+        ball = _vector(record["turn"].get("ball_m"))
+        if mic is None or ball is None:
+            return refused("a sound-trigger impact needs the rig's mic offset and the ball")
+        walk_back_ms = 1000.0 * float(np.linalg.norm(ball - mic)) / SPEED_OF_SOUND_M_S
+    elif impact_source != "ops_transition":
+        return refused(f"impact source {impact_source!r} is not a measured impact")
+    window_ms = float(ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
+    centre_ms = float(reading["window_start_ms"]) + 0.5 * window_ms
+    before_ms = float(impact_ms) - walk_back_ms - centre_ms
+    if before_ms < 0.0:
+        return refused(f"the club reading's centre is {-before_ms:.1f} ms after contact")
+    if before_ms > MAX_CLUB_READING_BEFORE_CONTACT_MS:
+        return refused(
+            f"the club reading is {before_ms:.1f} ms before contact, more than "
+            f"{MAX_CLUB_READING_BEFORE_CONTACT_MS:g} ms: beyond the head track's arc"
+        )
+    contact_ns = float(record["turn"]["contact_ns"])
+
+    def projection_at(
+        before: float, *, path=0.0, attack=0.0, depth=0.0, ops_shift=(0.0, 0.0, 0.0)
+    ) -> float:
+        state = head_state_at(record, contact_ns - before * 1e6)
+        if state is None:
+            return math.nan
+        position, direction = state
+        direction = _turned(direction, path_deg=path, attack_deg=attack)
+        position = position + np.array([0.0, 0.0, depth])
+        return _projection(ops + np.asarray(ops_shift) / 1000.0, position, direction)
+
+    state = head_state_at(record, contact_ns - before_ms * 1e6)
+    position, direction = state
+    core = evaluate_full_club_speed(
+        radial_mph=radial,
+        head_position_m=position + 0.0,
+        direction=direction,
+        ops_position_m=ops,
+        direction_source="camera_head_track",
+    )
+    reading_record = {
+        "window_start_ms": float(reading["window_start_ms"]),
+        "window_centre_ms": centre_ms,
+        "window_ms": window_ms,
+        "radial_mph": radial,
+        "time_before_contact_ms": before_ms,
+        "impact_ms": float(impact_ms),
+        "impact_source": impact_source,
+        "impact_walk_back_ms": walk_back_ms,
+        "clock": ops_track.get("clock", "ops_capture"),
+        "camera_contact_ns": contact_ns,
+    }
+    if core["status"] != CALCULATED:
+        return refused(core["reason"], projection=core.get("projection"), reading=reading_record)
+    projection = float(core["projection"])
+    value = radial / projection
+
+    def value_for(proj: float) -> float:
+        return radial / proj if math.isfinite(proj) and proj > 0.0 else math.nan
+
+    def spread(*values: float) -> float:
+        finite = [abs(v - value) for v in values if math.isfinite(v)]
+        return max(finite) if finite and len(finite) == len(values) else math.inf
+
+    time_sigma_ms = math.hypot(
+        float(ops_track.get("impact_uncertainty_ms") or 0.0),
+        float(record.get("contact_sigma_ms") or 0.0),
+    )
+    path_sigma = float(record.get("club_path_sigma_deg") or 0.0)
+    attack_sigma = float(record.get("attack_angle_sigma_deg") or 0.0)
+    depth_m = TOLERANCES["tee_range_m"]
+    ops_mm = TOLERANCES["ops_position_mm"]
+    resolution = float(ops_track.get("radial_resolution_mph") or DEFAULT_RADIAL_RESOLUTION_MPH)
+    window_mean = float(
+        np.mean(
+            [
+                projection_at(before_ms + offset)
+                for offset in np.linspace(-0.5 * window_ms, 0.5 * window_ms, 9)
+            ]
+        )
+    )
+
+    def ops_axis(axis: int, sign: float) -> tuple:
+        return tuple(sign * ops_mm * (axis == k) for k in range(3))
+
+    budget = {
+        "radial_resolution": resolution / projection,
+        "reading_time": spread(
+            value_for(projection_at(max(before_ms - time_sigma_ms, 0.0))),
+            value_for(projection_at(before_ms + time_sigma_ms)),
+        ),
+        "fft_window": abs(projection / window_mean - 1.0) * value,
+        "club_path": spread(
+            value_for(projection_at(before_ms, path=path_sigma)),
+            value_for(projection_at(before_ms, path=-path_sigma)),
+        ),
+        "attack_angle": spread(
+            value_for(projection_at(before_ms, attack=attack_sigma)),
+            value_for(projection_at(before_ms, attack=-attack_sigma)),
+        ),
+        "head_depth": spread(
+            value_for(projection_at(before_ms, depth=depth_m)),
+            value_for(projection_at(before_ms, depth=-depth_m)),
+        ),
+        "ops_position": math.sqrt(
+            sum(
+                spread(
+                    value_for(projection_at(before_ms, ops_shift=ops_axis(axis, 1.0))),
+                    value_for(projection_at(before_ms, ops_shift=ops_axis(axis, -1.0))),
+                )
+                ** 2
+                for axis in range(3)
+            )
+        ),
+    }
+    half_width = math.sqrt(sum(term**2 for term in budget.values()))
+    bounded = math.isfinite(half_width)
+    return {
+        **base,
+        "status": EXPERIMENTAL,
+        "value_mph": value,
+        "range_mph": [value - half_width, value + half_width] if bounded else None,
+        "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances"
+        if bounded
+        else "unbounded: an input moved by its tolerance leaves the geometry",
+        "uncertainty_mph": {
+            name: term if math.isfinite(term) else None for name, term in budget.items()
+        },
+        "tolerances": {
+            "reading_time_ms": time_sigma_ms,
+            "club_path_deg": path_sigma,
+            "attack_angle_deg": attack_sigma,
+            "head_depth_m": depth_m,
+            "ops_position_mm": ops_mm,
+            "radial_resolution_mph": resolution,
+        },
+        "direction_source": "camera_head_track",
+        "note": CLUB_HEAD_TRACK_NOTE,
+        "reason": None,
+        "projection": projection,
+        "referred_to": "the reading's time",
+        "reading": reading_record,
+        "geometry_m": {
+            "frame": "(lateral + target-right, up, forward along the unit boresight) from the "
+            "camera's optical centre, level",
+            "ops": ops.tolist(),
+            "head_at_reading": [float(v) for v in position],
+            "direction_at_reading": [float(v) for v in direction],
+        },
+        "unmodelled": list(CLUB_UNMODELLED),
+    }
+
+
 # ---------------------------------------------------------------- smash
+
+
+# A full speed under any value label (it carries its label into the smash).
+_FULL_SPEED_LABELS = (CALCULATED, LABEL_MODEL_GEOMETRY, ESTIMATED, EXPERIMENTAL)
 
 
 def _is_full(speed: Any) -> bool:
     return (
         isinstance(speed, dict)
-        and speed.get("status") == CALCULATED
+        and speed.get("status") in _FULL_SPEED_LABELS
         and _finite(speed.get("value_mph"))
     )
 
@@ -700,7 +1167,8 @@ def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
     """D37 smash factor from two full speeds; not measured otherwise (D21).
 
     A full ball speed over a radial club speed is never computed: it would be a
-    ratio of two different kinds of speed.
+    ratio of two different kinds of speed. The ratio takes the weaker speed's label
+    (measured > calculated > model geometry > estimated > experimental).
     """
     base = {"status": NOT_MEASURED, "value": None, "source": SMASH_SOURCE}
     if not _is_full(ball_full):
@@ -713,4 +1181,16 @@ def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
     value = smash_factor(ball_full["value_mph"], club_full["value_mph"])
     if value is None or not math.isfinite(value):
         return {**base, "reason": "no ratio is defined for these speeds"}
-    return {**base, "status": CALCULATED, "value": value, "reason": None}
+    label = weakest_label(ball_full["status"], club_full["status"])
+    weak = [
+        f"{name} full speed is {speed['status']}"
+        for name, speed in (("the ball", ball_full), ("the club", club_full))
+        if speed["status"] != CALCULATED
+    ]
+    return {
+        **base,
+        "status": label,
+        "value": value,
+        "reason": None,
+        "note": "; ".join(weak) or None,
+    }

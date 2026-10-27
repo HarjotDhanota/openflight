@@ -1262,9 +1262,6 @@ _KIOSK_GATE = {
 }
 # Not measured because a named dependency is not built yet, not for want of data.
 _KIOSK_PENDING = {
-    # shot_models.CLUB_SPEED_NOT_FULL_REASON: the OPS club speed is not one reading (W6, W9, E1)
-    "club_speed_full": ("W6, W9", "OPS club speed"),
-    "smash_factor_full": ("W6, W9", "club speed is not a full speed"),
     # collision_model.GYRO_REASON: the planar model has no gyro (E2, low priority)
     "gyro": ("E2", "planar"),
 }
