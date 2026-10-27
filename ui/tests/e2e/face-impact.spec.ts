@@ -112,28 +112,6 @@ async function keep(page: Page, name: string) {
   }
 }
 
-async function keepFigure(page: Page, name: string) {
-  if (!OUT) return;
-  const figure = page.locator('.face-impact__figure');
-  await figure.screenshot({ path: join(OUT, `${name}.png`) });
-  const original = await figure.getAttribute('style');
-  await figure.evaluate((element) => {
-    const { width, height } = element.getBoundingClientRect();
-    element.setAttribute(
-      'style',
-      `position: fixed; top: 0; left: 0; z-index: 9999; width: ${width * 4}px; height: ${height * 4}px; background: var(--color-surface)`
-    );
-  });
-  try {
-    await figure.screenshot({ path: join(OUT, `${name}-4x.png`) });
-  } finally {
-    await figure.evaluate(
-      (element, style) => (style === null ? element.removeAttribute('style') : element.setAttribute('style', style)),
-      original
-    );
-  }
-}
-
 for (const viewport of [...KIOSK_VIEWPORTS, { width: 390, height: 844 }]) {
   test.describe(`face impact at ${viewport.width}×${viewport.height}`, () => {
     test.use({ hasTouch: true, viewport });
@@ -272,7 +250,6 @@ for (const viewport of [
         expect(await overflowing(page)).toEqual([]);
         expect(await artefacts(page)).toEqual([]);
         await keep(page, `face-impact-${category}-${size}`);
-        await keepFigure(page, `face-impact-${category}-figure-${size}`);
       });
     }
 
@@ -292,7 +269,6 @@ for (const viewport of [
         expect(await overflowing(page)).toEqual([]);
         expect(await artefacts(page)).toEqual([]);
         await keep(page, `face-impact-${category}-left-${size}`);
-        await keepFigure(page, `face-impact-${category}-left-figure-${size}`);
       });
     }
   });

@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import type { MessageKey } from '../../i18n';
+import { metricName } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import type { Shot } from '../../types/shot';
@@ -114,7 +114,7 @@ export function DeliveryNumbers({ shot, view }: { shot: DeliveryShot; view: Deli
         const [text, unit] = value !== null && record ? formatMetricValue(record, 'metric', metric) : ['—', ''];
         return (
           <div key={metric} data-view-metric={metric} data-status={value === null ? 'not_measured' : record?.status}>
-            <dt>{t(`metricName.${metric}` as MessageKey)}</dt>
+            <dt>{metricName(metric)}</dt>
             <dd>
               <span>{text}</span>
               <small>{unit}</small>
@@ -610,10 +610,10 @@ export function ClubDeliveryViews({ shot, sessionShots }: { shot: DeliveryShot; 
                 <DeliveryNumbers shot={shot} view={view} />
                 <p className="club-view__legend">
                   <span className="club-view__key--face">
-                    {t(view === 'top' ? 'metricName.face_angle' : 'metricName.dynamic_loft')}
+                    {metricName(view === 'top' ? 'face_angle' : 'dynamic_loft')}
                   </span>
                   <span className="club-view__key--path">
-                    {t(view === 'top' ? 'metricName.club_path' : 'metricName.attack_angle')}
+                    {metricName(view === 'top' ? 'club_path' : 'attack_angle')}
                   </span>
                 </p>
               </>

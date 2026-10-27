@@ -9,8 +9,7 @@ until power, ports, firmware, config, and geometry are verified.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `no IWR6843 CLI found` | Wrong USB interface, board still in flash mode, missing functional RESET, stale serial owner, or unstable power | Read the `Probes:` list in the message: `no reply to help` means the port opened but the firmware stayed silent (reset/flash mode/power); `bytes without the CLI help` means something else is streaming (often an abandoned dump — wait, then retry); `could not open` names the OS error (permissions, group membership of the running service, a vanished device). Auto-detection never opens the CP2105 Standard interface (`if01`). Set functional switches, press RESET, verify Enhanced/UARTA interface `00`, stop serial processes, then give the tester its stable `/dev/serial/by-id/...-if00-port0` path with `--iwr-static-port` |
-| Static capture reports `stage=post_dump_cli_health` | Raw bytes arrived but the firmware never returned a healthy CLI after `l3dump` | Keep the preserved raw file, press RESET, rerun the tester hardware check on Enhanced/UARTA `if00`, then start a new capture; do not repeatedly send Retry while the CLI check fails |
+| `no IWR6843 CLI found` | Wrong USB interface, board still in flash mode, missing functional RESET, stale serial owner, or unstable power | Read the `Probes:` list: `no reply to help` means the firmware stayed silent (reset, flash mode or power); `bytes without the CLI help` means something else is streaming (often an abandoned dump: wait, then retry); `could not open` names the OS error. Set functional switches, press RESET, verify Enhanced/UARTA interface `00`, stop serial processes, then retry with explicit `--iwr6843-port` |
 | `GPIO busy` | Another kiosk, calibration, or shot-test process owns BCM17 | Stop the old process; use `pgrep -af` and `sudo fuser -v /dev/gpiochip*` to locate it |
 | `captureFormat` or `phaseCaptureCfg` rejected | Older firmware is flashed | Flash the configurable release, reset in functional mode, and retry either supported profile |
 | Bootloader probe returns no response | Wrong CP2105 port or RESET occurred before the script opened UART | Use Enhanced/UARTA, rerun the probe, type `READY`, then RESET only when prompted |
@@ -26,30 +25,6 @@ until power, ports, firmware, config, and geometry are verified.
 | Either radar disconnects when both run | Insufficient USB power or unstable cabling | Use OPS GPIO power or a hub with its own external supply; verify the hub supply is connected and sized for both radars |
 | Angles are consistently shifted | Tilt, antenna orientation, radar height, ball height, or tee distance is wrong | Re-measure all geometry from the antenna center and common floor reference |
 | Dump file is missing from the session | OpenFlight was not launched with `--debug` | Re-run in debug mode when raw capture retention is required |
-
-## CLI answers only after RESET (open hardware limitation)
-
-The Enhanced `if00` CLI can stay silent to `help` until RESET is pressed. The
-host releases the port and its lock after every check and capture, including
-failures. The cause is unknown; OpenFlight does not unbind USB, power-cycle,
-pulse DTR/RTS or retry to hide it.
-
-Every `check_cli.py` run prints one `IWR6843 CLI evidence: {...}` JSON line
-before its result: requested and resolved port, by-id aliases, USB interface,
-each lock/open/`help`/close step with reply size and timing, and the error.
-Pass `--operator-reset pressed` or `--operator-reset not-pressed` when running
-it by hand. On the tester page, tick "I pressed RESET on the IWR6843 board since
-the last check" before **Check the hardware**; unticked records `not-pressed`.
-
-To characterize it, run one session on the Pi and keep every evidence line.
-"Check" means `uv run python scripts/iwr6843/check_cli.py --port
-/dev/serial/by-id/...-if00-port0 --operator-reset not-pressed` unless stated:
-
-1. Cold boot the Pi with the board powered; check.
-2. Restart the tester app; run **Check the hardware**, then check.
-3. After a failed check or static capture, do not press RESET; check again.
-4. Press RESET once; check with `--operator-reset pressed`.
-5. Restart the tester app; check again.
 
 If the firmware itself must be rebuilt rather than flashed from the checked-in
 binary, continue with the [firmware developer guide](../development/firmware.md).

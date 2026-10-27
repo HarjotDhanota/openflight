@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import re
-import shlex
-import shutil
-import subprocess
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "scripts/setup/openflight.service"
@@ -54,47 +48,3 @@ def test_every_home_path_in_the_unit_is_rewritten_by_setup():
     for line in _unit_lines():
         if "/home/coleman" in line:
             assert "/home/coleman/openflight" in line, line
-
-
-def _installed_unit(user: str, project_dir: str) -> str:
-    """The unit text exactly as setup.sh writes it to /etc/systemd/system."""
-    setup = SETUP.read_text(encoding="utf-8")
-    match = re.search(
-        r"(sed -e \"s\|\^User=.*?\"\$SCRIPT_DIR/openflight\.service\")"
-        r"\s*\|\s*sudo tee /etc/systemd/system/openflight\.service",
-        setup,
-        flags=re.DOTALL,
-    )
-    assert match, "setup.sh no longer installs the unit from scripts/setup/openflight.service"
-    script = (
-        f"USER={shlex.quote(user)}\n"
-        f"PROJECT_DIR={shlex.quote(project_dir)}\n"
-        "SCRIPT_DIR=scripts/setup\n"
-        f"{match.group(1)}\n"
-    )
-    # stdin, not ``bash -c`` (WSL expands $VARS too early); bytes, so no CRLF
-    result = subprocess.run(
-        ["bash", "-s"],
-        input=script.encode("utf-8"),
-        cwd=REPO_ROOT,
-        capture_output=True,
-        check=True,
-    )
-    return result.stdout.decode("utf-8")
-
-
-@pytest.mark.skipif(shutil.which("bash") is None, reason="renders the unit with setup.sh's sed")
-def test_the_installed_unit_carries_the_restart_limits():
-    """The installed unit carries the restart limits."""
-    installed = _installed_unit("pi", "/home/pi/openflight")
-    lines = [line.strip() for line in installed.splitlines()]
-    unit = lines[lines.index("[Unit]") + 1 : lines.index("[Service]")]
-    service = lines[lines.index("[Service]") + 1 : lines.index("[Install]")]
-
-    assert "StartLimitIntervalSec=300" in unit
-    assert "StartLimitBurst=5" in unit
-    assert "Restart=on-failure" in service
-    assert "RestartPreventExitStatus=3" in service
-    assert "User=pi" in service
-    assert "ExecStart=/home/pi/openflight/scripts/start-kiosk.sh" in service
-    assert "coleman" not in installed

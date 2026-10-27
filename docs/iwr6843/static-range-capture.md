@@ -98,3 +98,27 @@ setups and synthetic cases only, none with a recorded tape measurement, so they
 are not an accuracy result. The selector's identity is bound into the
 qualification artifact, so changing any threshold invalidates an existing
 qualification until the hardware study repeats.
+
+## CLI answers only after RESET (open hardware limitation)
+
+The Enhanced `if00` CLI can stay silent to `help` until RESET is pressed. The
+host releases the port and its lock after every check and capture, including
+failures. The cause is unknown; OpenFlight does not unbind USB, power-cycle,
+pulse DTR/RTS or retry to hide it.
+
+Every `check_cli.py` run prints one `IWR6843 CLI evidence: {...}` JSON line
+before its result: requested and resolved port, by-id aliases, USB interface,
+each lock/open/`help`/close step with reply size and timing, and the error.
+Pass `--operator-reset pressed` or `--operator-reset not-pressed` when running
+it by hand. On the tester page, tick "I pressed RESET on the IWR6843 board since
+the last check" before **Check the hardware**; unticked records `not-pressed`.
+
+To characterize it, run one session on the Pi and keep every evidence line.
+"Check" means `uv run python scripts/iwr6843/check_cli.py --port
+/dev/serial/by-id/...-if00-port0 --operator-reset not-pressed` unless stated:
+
+1. Cold boot the Pi with the board powered; check.
+2. Restart the tester app; run **Check the hardware**, then check.
+3. After a failed check or static capture, do not press RESET; check again.
+4. Press RESET once; check with `--operator-reset pressed`.
+5. Restart the tester app; check again.

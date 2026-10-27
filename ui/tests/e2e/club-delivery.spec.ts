@@ -1,9 +1,6 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { test, type Page } from '@playwright/test';
 import { expect, gotoApp, resetSession, setClub, simulateShot, withControlSocket } from './helpers';
 
-const OUT = process.env.UX_SHOTS_DIR;
 const CLUBS = ['driver', '3-wood', '5-hybrid', '7-iron', 'sw'];
 const VIEWS = ['face', 'top', 'side'];
 async function open(page: Page, club = '7-iron', hand = 'right') {
@@ -156,41 +153,6 @@ async function auditFace(page: Page) {
   });
 }
 
-async function sheet(page: Page, name: string) {
-  if (!OUT) return;
-  await page.evaluate(() => {
-    const holder = document.createElement('div');
-    holder.id = 'club-review-sheet';
-    holder.style.cssText =
-      'position:absolute;top:0;left:0;z-index:9999;display:flex;width:max-content;background:var(--color-surface)';
-    for (const card of document.querySelectorAll('.club-view')) {
-      const original = card.querySelector('.face-impact__figure, .club-view__figure')!;
-      const { width, height } = original.getBoundingClientRect();
-      const viewBox = original.querySelector('svg')!.viewBox.baseVal;
-      const scale = Math.min(width / viewBox.width, height / viewBox.height) * 4;
-      const zoomWidth = viewBox.width * scale,
-        zoomHeight = viewBox.height * scale;
-      const clone = card.cloneNode(true) as HTMLElement;
-      clone.style.cssText = `flex:none;width:${zoomWidth}px;padding:0;border:0`;
-      for (const item of clone.querySelectorAll(
-        '.face-impact__readout, .club-view__title, .club-view__numbers, .club-view__legend'
-      ))
-        item.remove();
-      const figure = clone.querySelector('.face-impact__figure, .club-view__figure') as HTMLElement;
-      figure.style.cssText = `width:${zoomWidth}px;height:${zoomHeight}px`;
-      const face = clone.querySelector('.face-impact') as HTMLElement | null;
-      if (face) face.style.cssText = 'display:block;padding:0;outline:none';
-      holder.append(clone);
-    }
-    document.body.append(holder);
-  });
-  try {
-    await page.locator('#club-review-sheet').screenshot({ path: join(OUT, `${name}-4x.png`) });
-  } finally {
-    await page.locator('#club-review-sheet').evaluate((node) => node.remove());
-  }
-}
-
 for (const viewport of [
   { width: 1024, height: 600 },
   { width: 800, height: 480 },
@@ -206,7 +168,6 @@ for (const viewport of [
             hand === 'left' ? 'Left-handed' : 'Right-handed'
           );
           await page.evaluate(() => document.fonts.ready);
-          if (OUT) mkdirSync(OUT, { recursive: true });
           for (const [index, view] of VIEWS.entries()) {
             if (viewport.width === 800) await page.locator('.club-views__nav button').nth(index).tap();
             const card = page.locator(`[data-club-view="${view}"]`);
@@ -263,9 +224,7 @@ for (const viewport of [
               expect(result.path).toBeCloseTo(result.displayedPath, 5);
               if (view === 'top') expect(result.face).toBeCloseTo(-3.17, 5);
             }
-            if (OUT) await page.screenshot({ path: join(OUT, `${club}-${hand}-${view}-${size}.png`) });
           }
-          await sheet(page, `${club}-${hand}-${size}`);
         });
       }
     for (const hand of ['right', 'left']) {
@@ -315,11 +274,6 @@ for (const viewport of [
             1
           );
           expect(face.outside).toEqual([]);
-          if (OUT) {
-            const name = `audit-iron-${hand}-lie-${lie}-${size}`;
-            await page.screenshot({ path: join(OUT, `${name}.png`) });
-            await sheet(page, name);
-          }
         }
       });
     }

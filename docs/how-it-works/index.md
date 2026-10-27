@@ -41,7 +41,7 @@ each stage.
 
     Face angle, dynamic loft, spin loft, a calculated spin and axis, and the
     spin and smash indices from published physics (Penner 2001, Cross & Nathan
-    2007) with constants fitted by the maintainer, labelled calculated.
+    2007) with fitted constants, labelled calculated.
 
 - :material-map-marker-radius-outline: **[Radar positioning](positioning.md)**
 

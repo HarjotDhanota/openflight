@@ -259,7 +259,7 @@ test("the kiosk's numbers: signed left/right against their frame, values unbroke
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 480 });
-  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+  const catalog = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url), 'utf8')) as {
     metrics: Array<{ id: string; label: string; unit: string; pending: string | null }>;
   };
   const measured = (value: number, unit: string, extra: object = {}) => ({

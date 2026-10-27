@@ -21,25 +21,8 @@ from openflight.camera.ground_patch import (
     projection_parameters,
     tilt_pads_deg,
 )
-from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
-
-V3_FOCAL_1280 = 933.3334
-
-
-def _v3(width=1280, height=800, *, pitch_deg=0.0):
-    """The v3 enclosure: lens 95 mm up, the IWR phase centre below and just behind it."""
-    return BallPlaneCamera.nominal(
-        focal_px=V3_FOCAL_1280 * width / 1280,
-        image_width_px=width,
-        image_height_px=height,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=0.0,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0588),
-        angular_uncertainty_deg=1.0,
-        focal_relative_uncertainty=0.08,
-    )
+from openflight.camera.reference_ball_range import project_to_pixel
+from tests.camera_helpers import V3_FOCAL_1280, v3_camera as _v3
 
 
 def _projection(camera, patch, *, calibrated=False, roll_deg=0.0):
@@ -155,7 +138,6 @@ def test_the_outline_tightens_once_the_tilt_is_calibrated():
 
 @pytest.mark.parametrize("placed_by", ["eye", "distance"])
 def test_before_calibration_a_3_deg_tilt_error_still_puts_the_ball_in_the_patch(placed_by):
-    """A camera looking 3-4 deg further down than modelled still finds the ball."""
     modelled = _v3(pitch_deg=1.72)
     truth = _v3(pitch_deg=1.72 - 3.8)
     ball = (0.02, 1.25, BALL_CENTER_HEIGHT_M)
@@ -209,7 +191,6 @@ def test_once_the_camera_applies_the_roll_only_its_residual_pads_the_rows():
     applied = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, zeroed))
     unverified = replace(camera, roll=camera_roll.roll_record(-2.9, 0.0, None))
 
-    # the unit's own zero repeatability, not a fixed figure
     assert _projection(applied, patch, roll_deg=0.0).roll_pad_deg == pytest.approx(0.25)
     assert _projection(unverified, patch, roll_deg=-2.9).roll_pad_deg == pytest.approx(2.9)
     assert _projection(camera, patch, roll_deg=None).roll_pad_deg == pytest.approx(3.0)

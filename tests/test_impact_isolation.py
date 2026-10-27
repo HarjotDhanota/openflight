@@ -1,8 +1,7 @@
 """The camera's experimental impact location feeds nothing but its own two records.
 
-It is shown to testers before it is validated, so no model may use it: no gear
-effect in the collision model, and no change to spin, spin axis, face, flight or
-any other metric of the shot.
+It is not validated, so no model may use it: no gear effect, and no change to spin, spin axis,
+face, flight or any other metric of the shot.
 """
 
 from __future__ import annotations

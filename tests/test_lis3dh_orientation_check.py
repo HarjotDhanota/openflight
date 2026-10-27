@@ -14,25 +14,6 @@ from openflight.inclinometer import (
     orientation_check as oc,
 )
 
-LIFT_DEG = 6.0  # about 2 cm under the front of a 20 cm deep unit
-
-
-def enclosure_gravity(front_up_deg: float = 0.0) -> tuple[float, float, float]:
-    """What a sensor in the enclosure's own axes reads, the front raised this much."""
-    angle = math.radians(front_up_deg)
-    return (0.0, math.sin(angle), math.cos(angle))
-
-
-def enclosure_gravity_left_up(left_up_deg: float) -> tuple[float, float, float]:
-    """The enclosure's own reading with its LEFT (target-left) side raised this much."""
-    angle = math.radians(left_up_deg)
-    return (-math.sin(angle), 0.0, math.cos(angle))
-
-
-def board_reads(true_mount: oc.Mount, enclosure: tuple[float, float, float]):
-    """The raw board reading for a board mounted ``true_mount`` in the enclosure."""
-    return true_mount.inverse_apply(*enclosure)
-
 
 def reading(x, y, z, status="stable"):
     return {"status": status, "x_g": x, "y_g": y, "z_g": z}
@@ -44,14 +25,17 @@ ALL_MOUNTS = [
 
 
 class TestMount:
-    def test_the_identity_mount_reads_the_board_as_it_is(self):
-        assert oc.Mount().apply(0.1, 0.2, 0.97) == pytest.approx((0.1, 0.2, 0.97))
-
-    def test_a_turned_round_board_reads_x_and_y_reversed(self):
-        assert oc.Mount(180.0).apply(0.1, 0.2, 0.97) == pytest.approx((-0.1, -0.2, 0.97))
-
-    def test_upside_down_turns_gravity_back_up(self):
-        assert oc.Mount(0.0, True).apply(0.1, 0.2, -0.97) == pytest.approx((-0.1, 0.2, 0.97))
+    @pytest.mark.parametrize(
+        ("mount", "raw", "reads"),
+        [
+            (oc.Mount(), (0.1, 0.2, 0.97), (0.1, 0.2, 0.97)),
+            (oc.Mount(180.0), (0.1, 0.2, 0.97), (-0.1, -0.2, 0.97)),  # turned round
+            (oc.Mount(0.0, True), (0.1, 0.2, -0.97), (-0.1, 0.2, 0.97)),  # upside down
+            (oc.Mount(90.0), (0.1, 0.0, 0.99), (0.0, 0.1, 0.99)),  # board X to enclosure Y
+        ],
+    )
+    def test_a_mount_reads_the_board_in_the_enclosures_axes(self, mount, raw, reads):
+        assert mount.apply(*raw) == pytest.approx(reads, abs=1e-12)
 
     @pytest.mark.parametrize("mount", ALL_MOUNTS, ids=str)
     def test_inverse_apply_undoes_apply(self, mount):

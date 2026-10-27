@@ -43,10 +43,7 @@ def roll_record(
     """How a camera model takes this roll, for the model and the shot's record.
 
     ``calibration`` is the unit's ``roll_calibration`` (``verified``, ``zero_deg``,
-    ``residual_deg``). With both the direction and the zero, and a reading, the camera
-    roll is reading - zero - expected (``roll_correction_deg`` for the nominal rays) and
-    the residual is the zero's own repeatability; otherwise it is recorded, labelled,
-    and padded by the camera's consumers.
+    ``residual_deg``); applied roll = reading - zero - expected.
     """
     calibration = calibration if isinstance(calibration, Mapping) else {}
     measured = _finite(measured_roll_deg)

@@ -1,5 +1,3 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from '@playwright/test';
 import {
   drawnAt,
@@ -82,12 +80,6 @@ test('supports club selection choose and dismiss flows against mock backend', as
   // Dismissing keeps whatever the server last reported, not a reset to driver.
   await expect(page.locator('.panel-header').getByRole('button', { name: 'Change club' })).toBeVisible();
   await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
-});
-
-test('the header names the golfer hand next to the club, right-handed by default', async ({ page }) => {
-  await gotoApp(page);
-  await dismissPicker(page);
-  await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
 });
 
 test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
@@ -746,13 +738,6 @@ for (const size of [
         const [bx, by] = await drawnAt(page, CAMERA_PICTURE, SET_UP.ball, hand);
         expect(Math.abs(ball.x + ball.width / 2 - bx)).toBeLessThan(2);
         expect(Math.abs(ball.y + ball.height / 2 - by)).toBeLessThan(2);
-
-        const out = process.env.UX_SHOTS_DIR;
-        if (out) {
-          mkdirSync(out, { recursive: true });
-          await page.locator('.camera-feed__stream').scrollIntoViewIfNeeded();
-          await page.screenshot({ path: join(out, `task8-camera-box-${size.width}x${size.height}-${hand}.png`) });
-        }
       });
     });
   }

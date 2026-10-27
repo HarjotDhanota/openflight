@@ -1,4 +1,4 @@
-"""Club delivery from a circular arc: path, attack, swing plane, swing direction, low point (E1).
+"""Club delivery from a circular arc fitted near impact (docs/how-it-works/club-arc.md).
 
 Part E, Tier 2 (MASTER-PLAN D38, D39). Near impact the club head's path is
 fitted as a **circular arc in a plane**, from the shot's own head positions:
@@ -140,13 +140,15 @@ from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
 from openflight.horizontal_frame import frame_for
+from openflight.shot_metrics import (
+    CALCULATED,
+    ESTIMATED,
+    EXPERIMENTAL,
+    MEASURED,
+    MODEL_GEOMETRY,
+    NOT_MEASURED,
+)
 
-MEASURED = "measured"
-CALCULATED = "calculated"
-MODEL_GEOMETRY = "model_geometry"
-NOT_MEASURED = "not_measured"
-EXPERIMENTAL = "experimental"
-ESTIMATED = "estimated"
 LABEL_RANK = {
     MEASURED: 5,
     CALCULATED: 4,
@@ -169,22 +171,21 @@ KRASNA_2019 = (
     "Krasna, Coh, Prebil & Mackala 2019, Facta Universitatis PE&S 17(3):437-452, "
     "doi:10.22190/FUPES191205039K, Table 3 (fitted near-impact circle radius)"
 )
-# (club, mean, SD) anchors; the SD is the published between-golfer spread
+# (club, mean, SD) deg from KWON_2012; the SD is the between-golfer spread
 PLANE_ANCHORS_DEG = (
     (ClubType.DRIVER, 47.2, 2.3),
     (ClubType.IRON_5, 55.8, 1.5),
     (ClubType.PW, 59.1, 1.9),
 )
-# Krasna 2019 Table 3 rC, mean and SD over each club's trials (computed here)
+# (club, mean, SD) m from KRASNA_2019's rC, over each club's trials
 RADIUS_ANCHORS_M = (
     (ClubType.DRIVER, 1.077, 0.044),
     (ClubType.IRON_6, 1.002, 0.014),
     (ClubType.PW, 0.993, 0.039),
 )
 
-# The 3D head-position noise floor the conditioning test assumes: about one pixel
-# across the head at 2 m with the stock lens in 640x400 (~4 mm), rounded up. An
-# engineering assumption, replaced by the measured scatter once the pilot has it.
+# Assumed 3-D head-position noise floor: ~1 px across the head at 2 m with the stock lens
+# in 640x400 (~4 mm), rounded up.
 POSITION_NOISE_FLOOR_M = 0.005
 # "calculated" needs every 1-sigma, data-only uncertainty within these, the fit's
 # RMS residual within RESIDUAL_MAX_NOISE noise floors, at least 3 positions, and
@@ -218,6 +219,9 @@ _OUTPUTS = (
 )
 _N_PARAMS = 8
 _SINGULAR_RATIO_MIN = 1e-10
+# The arc: P(t) = L + R sin(phi) e1 + R (1 - cos(phi)) e2, phi = omega (t - t_L); e1 the
+# plane's horizontal base line (bearing psi from the target line, downrange), and
+# e2 = cos(theta) h + sin(theta) z with h horizontal toward the golfer (target-left for RH).
 # Parameter bounds: theta, psi, R, L (3), omega, t_L
 _LOWER = np.array(
     [math.radians(5.0), math.radians(-80.0), 0.3, -np.inf, -np.inf, -np.inf, 1.0, -np.inf]
@@ -275,7 +279,6 @@ class ClubArc:
     prior_sensitivity: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        """A JSON-ready copy."""
         data = asdict(self)
         data["ranges"] = {name: list(bounds) for name, bounds in self.ranges.items()}
         return data
@@ -338,7 +341,10 @@ def _positions_at(params: np.ndarray, times: np.ndarray, side: float) -> np.ndar
 
 
 def _outputs(params: np.ndarray, impact_t_s: float, side: float) -> np.ndarray:
-    """The seven outputs at impact, in the fit's (reported) frame."""
+    """The seven outputs at impact, in the fit's (reported) frame.
+
+    The low point is L - P(t_impact): forward (+ after the ball), up, and side (+ right).
+    """
     theta, psi = params[0], params[1]
     omega, t_low = params[6], params[7]
     e1, e2 = _basis(theta, psi, side)
@@ -504,9 +510,9 @@ def fit_club_arc(
 ) -> ClubArc:
     """Fit the shot's head positions with a circular arc and read it at impact.
 
-    ``impact_t_s`` is on the positions' clock. ``ball_position`` (its ``t_s``
-    ignored) adds the low point's offset from the resting ball. See the module
-    docstring for the model, the labels and the sources.
+    ``impact_t_s`` is on the positions' clock; ``ball_position`` (``t_s`` ignored) adds the
+    low point's offset from the resting ball. Calculated when the shot's own points fix the
+    arc (CONDITIONING); otherwise model geometry, with the per-club prior on R and theta.
     """
     handed = normalize_handedness(handedness)
     frame = frame_for(horizontal_offset_deg)
@@ -718,10 +724,6 @@ def _result(
     )
 
 
-# ---------------------------------------------------------------------------
-# The shot's club-delivery payload
-# ---------------------------------------------------------------------------
-
 SELECTION_RULE = (
     "club path and attack angle: the arc's value when its label ranks at least as high as "
     "the chained camera/IWR value's (measured > calculated > model geometry > estimated > "
@@ -734,6 +736,7 @@ CHAINED_IWR_SOURCE = "camera_iwr_chained"
 CHAINED_OPS_SOURCE = "camera_ops_chained"
 ARC_FIT_SOURCE = "club_arc:shot_fit"
 NO_CAMERA_DELIVERY = "no camera club delivery"
+# Added to the arc's low-point distance per club; fitted to a TM4 normalized export.
 LOW_POINT_OFFSETS_MM = {ClubType.IRON_7: 2.3, ClubType.DRIVER: -28.3, ClubType.PW: 5.5}
 NOTE_NO_LOW_POINT_OFFSET = "arc geometry only: no per-club offset fitted for this club"
 HEAD_TRACK_POSITIONS = "the camera head track's hosel positions"
@@ -856,11 +859,10 @@ def _with_low_point_offset(entry: dict, club: Any) -> dict:
 
 
 def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]) -> dict:
-    """The shot's club delivery: every E1 metric with status, source, frame, range, reason.
+    """The shot's club delivery: every arc metric with status, source, frame, range, reason.
 
-    ``delivery`` is the camera's ``ChainedDelivery`` (or its dict, as the fusion
-    processing persists it), carrying ``head_positions``, ``contact_t_s`` and
-    ``horizontal_offset_deg``; None when the camera stage did not run.
+    ``delivery`` is the camera's ``ChainedDelivery`` or its persisted dict (``head_positions``,
+    ``contact_t_s``, ``horizontal_offset_deg``); None when the camera stage did not run.
     """
     handed = normalize_handedness(handedness)
     data = _as_mapping(delivery)
@@ -992,7 +994,7 @@ def _head_track_state(delivery: Mapping) -> Optional[dict]:
 
 
 def selected_path_and_attack(payload: Optional[Mapping]) -> dict:
-    """The selected club path and attack angle entries (for E2's collision model)."""
+    """The selected club path and attack angle entries (for the collision model)."""
     metrics = (payload or {}).get("metrics") or {}
     return {
         "club_path_deg": metrics.get("club_path_deg"),

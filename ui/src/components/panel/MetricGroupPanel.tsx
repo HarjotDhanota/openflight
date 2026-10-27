@@ -3,14 +3,14 @@ import { METRIC_CATALOG, type MetricSpec } from '../../data/metricCatalog';
 import { getClubName } from '../../data/clubs';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { clubWithHand } from '../../utils/handedness';
-import type { MessageKey } from '../../i18n';
+import { metricName, type MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { isMeasured } from '../../utils/units';
-import { isComingLater, shortReason } from '../../utils/plainReason';
+import { shortReason } from '../../utils/plainReason';
 import { GROUP_TITLE, PANEL_GROUPS, formatMetricValue, type MetricPanelView } from './metricFormat';
 import { LabelBadge } from '../ui/LabelBadge';
 import { ClubDeliveryViews } from './ClubDeliveryViews';
@@ -100,7 +100,7 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
       title={record.source ?? undefined}
       {...props}
     >
-      <span className="metric-cell__label">{t(`metricName.${spec.id}` as MessageKey)}</span>
+      <span className="metric-cell__label">{metricName(spec.id)}</span>
       <div className="metric-cell__value-row">
         <span className="metric-cell__value">{value}</span>
         {unit ? <span className="metric-cell__unit">{unit}</span> : null}
@@ -124,32 +124,6 @@ function MetricCell({ spec, record, unitSystem }: { spec: MetricSpec; record: Sh
       ) : (
         <span className="metric-cell__reason">{reason}</span>
       )}
-    </div>
-  );
-}
-
-/** The metrics not built yet, in one row while they have no value; a tap lists why. */
-function ComingLaterCell({ items }: { items: Array<{ spec: MetricSpec; record: ShotMetric | undefined }> }) {
-  const { t } = useI18n();
-  const { open, props } = useTapToggle(true);
-  const name = (spec: MetricSpec) => t(`metricName.${spec.id}` as MessageKey);
-  return (
-    <div
-      className={`metric-cell metric-cell--not_measured metric-cell--coming-later metric-cell--tappable${open ? ' metric-cell--open' : ''}`}
-      data-metric="coming-later"
-      data-status="not_measured"
-      data-metrics={items.map(({ spec }) => spec.id).join(' ')}
-      {...props}
-    >
-      <span className="metric-cell__label">{t('metrics.comingLater')}</span>
-      <span className="metric-cell__reason">{items.map(({ spec }) => name(spec)).join(', ')}</span>
-      <ul className="metric-cell__later-list" hidden={!open}>
-        {items.map(({ spec, record }) => (
-          <li key={spec.id}>
-            {name(spec)}: {record?.reason || t('label.not_measured')}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -241,10 +215,6 @@ export function MetricGroupPanel({
       </div>
     );
   }
-  const later = METRIC_CATALOG.filter((spec) => isComingLater(spec, metrics[spec.id])).map((spec) => ({
-    spec,
-    record: metrics[spec.id],
-  }));
   return (
     <div className="panel">
       {header}
@@ -254,22 +224,17 @@ export function MetricGroupPanel({
           <section key={group} className="metric-group" aria-label={t(GROUP_TITLE[group])}>
             <h3 className="metric-group__title">{t(GROUP_TITLE[group])}</h3>
             <div className="metric-group__grid">
-              {METRIC_CATALOG.filter((spec) => spec.group === group && !isComingLater(spec, metrics[spec.id])).map(
-                (spec) => {
-                  const record = metrics[spec.id];
-                  return (
-                    <MetricCell
-                      key={spec.id}
-                      spec={spec}
-                      record={record ?? missingRecord(spec)}
-                      unitSystem={unitSystem}
-                    />
-                  );
-                }
-              )}
-              {later.filter(({ spec }) => spec.group === group).length ? (
-                <ComingLaterCell items={later.filter(({ spec }) => spec.group === group)} />
-              ) : null}
+              {METRIC_CATALOG.filter((spec) => spec.group === group).map((spec) => {
+                const record = metrics[spec.id];
+                return (
+                  <MetricCell
+                    key={spec.id}
+                    spec={spec}
+                    record={record ?? missingRecord(spec)}
+                    unitSystem={unitSystem}
+                  />
+                );
+              })}
             </div>
           </section>
         ))}

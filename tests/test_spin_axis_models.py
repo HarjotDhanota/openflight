@@ -1,9 +1,7 @@
-"""Spin axis: the iron model on the D-plane tilt, and the fitted model for the rest.
+"""Spin axis: irons on the D-plane tilt, other clubs on the fitted collision model's centre axis.
 
-Irons: tan(spin axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), the
-clean-room fit to the owner's TM4 irons (16 shots, 0.014 deg). Drivers and woods keep
-the fitted collision model's centre axis (hybrids too); a gear term enters only with a
-measured impact location.
+Irons: tan(axis) = tan(D-plane tilt) x (0.81385 + 0.00342 x dynamic loft), fitted to one TM4
+session's irons; a gear term enters only with a measured impact location.
 """
 
 from __future__ import annotations
@@ -162,7 +160,7 @@ def test_the_shot_source_names_the_iron_model():
 
 
 def test_the_owner_export_iron_axes_are_reproduced():
-    """The study fitted the owner's iron shots (15 with a loft) to 0.014 deg RMS."""
+    """The study fitted one session's iron shots (15 with a loft) to 0.014 deg RMS."""
     errors = []
     for shot in owner_shots():
         if shot["Club"] == "Driver":

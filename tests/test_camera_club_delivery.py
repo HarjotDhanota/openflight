@@ -312,7 +312,6 @@ class TestChainedImpactDelivery:
         assert result.attack_confidence_tier == "medium"
 
     def test_ops_speed_mismatch_labels_both_angles(self):
-        """An implausible speed ratio is a label on the values, not a refusal."""
         tracks, times, ranges, ball, geometry = _project_impact_tracks(
             path_deg=3.0,
             aoa_deg=-4.0,
@@ -918,14 +917,9 @@ class TestVelocityAngleProjection:
         assert path_deg == pytest.approx(math.degrees(math.atan2(5.0, 20.0)))
 
 
-def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
-    """A rejected club track downgrades delivery to the camera+OPS fallback."""
-    from types import SimpleNamespace  # noqa: PLC0415
-
-    from openflight.iwr6843.club import ClubRangeEvidence  # noqa: PLC0415
-
+def _camera_ops_only(monkeypatch, *, range_evidence=None, **geometry):
+    """A chained delivery whose only path estimate is the camera+OPS pair (3.0, -5.0)."""
     ball = ReferenceBall(10.0, 10.0, 12.0, 120)
-    estimate = ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12)
     monkeypatch.setattr(
         club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
     )
@@ -940,8 +934,30 @@ def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
     monkeypatch.setattr(
         club_delivery_module,
         "camera_ops_delivery_from_feature_pair",
-        lambda *_args, **_kwargs: estimate,
+        lambda *_args, **_kwargs: ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12),
     )
+    return estimate_chained_delivery(
+        np.full((60, 20, 20), 150, dtype=np.uint8),
+        np.arange(60, dtype=np.int64) * 2_000_000,
+        trigger_index=40,
+        range_evidence=range_evidence,
+        geometry=CameraDeliveryGeometry(
+            camera_height_m=0.2032,
+            radar_height_m=0.1524,
+            tee_range_m=1.524,
+            ball_height_m=0.04,
+            image_width_px=20,
+            image_height_px=20,
+            **geometry,
+        ),
+        ops_club_speed_mph=80.0,
+    )
+
+
+def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from openflight.iwr6843.club import ClubRangeEvidence  # noqa: PLC0415
 
     def iwr_pair(*_args, **_kwargs):
         raise AssertionError("a rejected IWR club track must not supply camera depth")
@@ -954,32 +970,14 @@ def test_rejected_iwr_club_track_is_not_used_as_camera_depth(monkeypatch):
         status="rejected_club_speed_mismatch",
     )
 
-    result = estimate_chained_delivery(
-        np.full((60, 20, 20), 150, dtype=np.uint8),
-        np.arange(60, dtype=np.int64) * 2_000_000,
-        trigger_index=40,
-        range_evidence=rejected,
-        geometry=CameraDeliveryGeometry(
-            camera_height_m=0.2032,
-            radar_height_m=0.1524,
-            tee_range_m=1.524,
-            ball_height_m=0.04,
-            image_width_px=20,
-            image_height_px=20,
-        ),
-        ops_club_speed_mph=80.0,
-    )
+    result = _camera_ops_only(monkeypatch, range_evidence=rejected)
 
     assert result.status == "camera_ops_fallback"
     assert result.range_evidence_status == "rejected_club_speed_mismatch"
 
 
 def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: float = 67.0):
-    """One club motion seen by a level camera centred above the radar.
-
-    The teed ball sits ``ball_offset_px`` right of the image centre, the unit not
-    yawed. Returns a two-frame feature pair (1 ms apart) plus the radar ranges.
-    """
+    """A level, unyawed camera above the radar; the ball ``ball_offset_px`` right of centre."""
     camera_height_m, radar_height_m, ball_height_m = 0.095, 0.051, 0.02135
     focal_px, width, height = 933.33, 640, 400
     tee_range_m = 1.30
@@ -1025,18 +1023,11 @@ def _off_centre_ball_scene(*, path_deg: float, aoa_deg: float, ball_offset_px: f
         points = [contact + offset + velocity * time_s for time_s in times]
         tracks.append([project(point) for point in points])
         ranges.append([float(np.linalg.norm(point - radar)) for point in points])
-    return (
-        np.asarray(tracks),
-        times,
-        np.median(np.asarray(ranges), axis=0),
-        ball,
-        geometry,
-    )
+    return np.asarray(tracks), times, np.median(np.asarray(ranges), axis=0), ball, geometry
 
 
 @pytest.mark.parametrize(("path_deg", "offset_px"), [(3.0, 67.0), (-4.0, -67.0), (0.0, 67.0)])
 def test_both_club_path_branches_share_the_unit_boresight_zero(path_deg, offset_px):
-    """With the ball 67 px off centre, the chained and camera-OPS paths agree."""
     tracks, times, ranges, ball, geometry = _off_centre_ball_scene(
         path_deg=path_deg, aoa_deg=-4.0, ball_offset_px=offset_px
     )
@@ -1078,41 +1069,7 @@ def test_every_camera_club_path_names_its_frame():
     ],
 )
 def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, frame):
-    """The horizontal offset is added to club path as to launch."""
-    ball = ReferenceBall(10.0, 10.0, 12.0, 120)
-    monkeypatch.setattr(
-        club_delivery_module, "detect_reference_ball", lambda _frames, **_kwargs: ball
-    )
-    monkeypatch.setattr(
-        club_delivery_module, "_detect_impact_index", lambda _frames, _ball, trigger_index: 40
-    )
-    monkeypatch.setattr(
-        club_delivery_module,
-        "_clubhead_pair_tracks",
-        lambda *_args, **_kwargs: (np.zeros((12, 2, 2)), 5.0),
-    )
-    monkeypatch.setattr(
-        club_delivery_module,
-        "camera_ops_delivery_from_feature_pair",
-        lambda *_args, **_kwargs: ApproachPairEstimate(3.0, -5.0, 1.0, 1.0, 12),
-    )
-
-    result = estimate_chained_delivery(
-        np.full((60, 20, 20), 150, dtype=np.uint8),
-        np.arange(60, dtype=np.int64) * 2_000_000,
-        trigger_index=40,
-        range_evidence=None,
-        geometry=CameraDeliveryGeometry(
-            camera_height_m=0.2032,
-            radar_height_m=0.1524,
-            tee_range_m=1.524,
-            ball_height_m=0.04,
-            image_width_px=20,
-            image_height_px=20,
-            horizontal_offset_deg=offset_deg,
-        ),
-        ops_club_speed_mph=80.0,
-    )
+    result = _camera_ops_only(monkeypatch, horizontal_offset_deg=offset_deg)
 
     assert result.club_path_deg == pytest.approx(3.0 + (offset_deg or 0.0))
     assert result.attack_angle_deg == pytest.approx(-5.0)
@@ -1120,7 +1077,6 @@ def test_horizontal_offset_turns_club_path_like_launch(monkeypatch, offset_deg, 
 
 
 def test_camera_contact_is_midway_between_the_last_resting_and_first_departed_frames():
-    """One reusable contact time, from the ball, on whichever clock is given."""
     from openflight.camera.club_delivery import camera_contact_time, frame_clock  # noqa: PLC0415
 
     frames = np.zeros((60, 9, 9), dtype=np.uint8)

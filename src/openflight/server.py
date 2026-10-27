@@ -29,7 +29,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from . import kiosk_extensions, shot_metrics
+from . import kiosk_extensions
 from .air.bme280 import find_bme280
 from .air.conditions import AirConditions, isa_default
 from .air.service import AirSensorService
@@ -185,7 +185,6 @@ _target_line_since: str | None = None
 
 
 def _horizontal_frame() -> str:
-    """The frame every reported horizontal angle is in this session."""
     return frame_for(horizontal_offset_deg)
 
 
@@ -219,11 +218,7 @@ def _finite_number(value, name: str) -> float:
 
 
 def apply_target_line(line, *, timeout_s: float = 20.0) -> dict:
-    """Move every horizontal angle to a new target line between two shots.
-
-    ``line`` is the aim step's hand-off (``set`` or ``skipped``). New shots wait
-    while every consumer takes the offset, so each shot is wholly in one frame.
-    """
+    """Move every horizontal angle to target line ``line`` (set or skipped) between shots."""
     status = line.get("status") if isinstance(line, dict) else None
     if status == "set":
         yaw = _finite_number(line.get("yaw_deg"), "yaw_deg")
@@ -323,7 +318,6 @@ AIR_SENSOR_DISABLED_REASON = "air sensor disabled (--no-air-sensor)"
 air_sensor_runtime_config: dict = {"enabled": False, "reason": AIR_SENSOR_NOT_STARTED_REASON}
 _air_last_logged: tuple | None = None
 rig_geometry = None
-# the lens on the unit (lens_profiles.ActiveLens), from init_camera_lens
 camera_lens = None
 rig_geometry_config: dict = {"enabled": False}
 setup_handoff_config: dict = {"tee_range": None, "scene": None, "net_range": None}
@@ -336,14 +330,11 @@ BALL_AT_ADDRESS_EVERY_S = 1.0
 _ball_look_worker = None
 # The per-unit setup record and the actions on it (setup_service.SetupService), from main()
 setup_service = None
-# the applied setup revision the session log last recorded
 _setup_logged_revision: int | None = None
-# the setup searches the latest few frames, as the tester's live view does
 SETUP_FRAMES = 5
 MIN_SETUP_FRAMES = 3
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
-# The floor-bounce model needs the radar above the hitting surface; a solved lens
-# height that puts it lower than this is refused.
+# A solved lens height that puts the radar lower than this is refused (floor-bounce model).
 MIN_RADAR_CLEARANCE_M = 0.010
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
@@ -398,10 +389,8 @@ _SHOT_ENRICHMENT_DEADLINE_S = 20.0
 # Active hardware work, the two queued jobs, and one overflow result. If more
 # shots arrive, the oldest is published OPS-only and updated later.
 _SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
-# Shots that arrive while the enrichment queue is full wait here (a few KB each;
-# their IWR dump and clip are already recorded). Enrichment takes ~7-8 s per
-# shot, so this fills only at far above swing pace; past it, enrichment is
-# abandoned loudly (enrichment_abandoned).
+# Shots waiting while the enrichment queue is full (a few KB each). At ~7-8 s per
+# enrichment this fills only far above swing pace; past it, enrichment is abandoned.
 _DEFERRED_ENRICHMENT_CAPACITY = 8
 _SHOT_AWAITING_LATE_CAPACITY = 1 + _SHOT_ENRICHMENT_QUEUE_CAPACITY + _DEFERRED_ENRICHMENT_CAPACITY
 shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
@@ -445,8 +434,6 @@ class _ShotEnrichmentResult:
 
 @dataclass(frozen=True)
 class _CameraPrefetchResult:
-    """One matched camera capture and its single in-memory archive."""
-
     capture: Any | None
     archive: dict[str, object] | None
     match_ms: float
@@ -497,7 +484,6 @@ class _LateShotUpdate:
     late_by_ms: float
 
     def as_log_dict(self) -> dict[str, object]:
-        """The update record written beside the shot in the session log."""
         return {
             "reason": "late_enrichment",
             "first_result_reason": self.first_result_reason,
@@ -507,7 +493,6 @@ class _LateShotUpdate:
 
 
 def _enrichment_timing_payload(enrichment: _ShotEnrichmentResult) -> dict[str, object]:
-    """Return explicit monotonic stage durations for lifecycle evidence."""
     return {
         "clock_domain": enrichment.clock_domain,
         "enrichment_ms": enrichment.enrichment_ms,
@@ -533,7 +518,6 @@ def _log_shot_enrichment_lifecycle(
     enrichment: _ShotEnrichmentResult | None = None,
     late_by_ms: float | None = None,
 ) -> None:
-    """Persist whether deadline work continued and how its late result was applied."""
     if diagnostic_logger is None or session_uuid is None:
         return
     log_lifecycle = getattr(diagnostic_logger, "log_shot_enrichment", None)
@@ -589,7 +573,6 @@ def _emit_shot_payload(
 
 
 def _non_finite_float(value) -> bool:
-    """A float that is NaN or infinite."""
     return isinstance(value, float) and not _finite(value)
 
 
@@ -857,7 +840,6 @@ def _ops_only_reason(pending: _PendingShotFinalization | None, *, deadline_expir
 
 
 def _copy_shot_fields(target: Shot, source: Shot) -> None:
-    """Make the retained shot object carry every field of its enriched copy."""
     for shot_field in fields(Shot):
         setattr(target, shot_field.name, getattr(source, shot_field.name))
 
@@ -866,11 +848,7 @@ def _await_late_enrichment_locked(
     registered: _RegisteredShotFinalization,
     first_result_reason: str,
 ) -> list[_AwaitingLateEnrichment]:
-    """Keep an OPS-only shot for its late result; caller holds the condition lock.
-
-    Returns the oldest entries dropped to stay within _SHOT_AWAITING_LATE_CAPACITY,
-    which happens only if an enrichment worker died without reporting back.
-    """
+    """Keep an OPS-only shot for its late result (caller holds the lock); the entries dropped."""
     _shot_awaiting_late_enrichment[registered.shot.shot_number] = _AwaitingLateEnrichment(
         registered=registered,
         first_result_reason=first_result_reason,
@@ -884,7 +862,6 @@ def _await_late_enrichment_locked(
 
 
 def _log_abandoned_late_enrichment(entry: _AwaitingLateEnrichment) -> None:
-    """Say plainly that a shot stopped waiting for an enrichment that never reported."""
     logger.warning(
         "[SERVER] Shot #%d stays OPS-only: its enrichment never reported back and "
         "%d newer OPS-only shots are waiting for theirs",
@@ -1626,11 +1603,7 @@ def start_ball_at_address(box, setup_ball, setup_range_m, range_prior=None, outl
 
 
 def apply_setup_box(box: dict | None) -> None:
-    """Put the setup's box into effect: the resting-ball monitor, the capture's zone and ball.
-
-    A box that is not a rectangle is cleared and the reason raised, so the setup shows it
-    as needing confirming again.
-    """
+    """Put the setup's box into effect; a box that is not a rectangle is cleared and raises."""
     if box is None:
         _when_idle(lambda: _set_box(None, None))
         return
@@ -1643,8 +1616,7 @@ def apply_setup_box(box: dict | None) -> None:
 
 
 def _box_in_this_picture(box: dict) -> tuple[tuple[int, ...], dict, list | None]:
-    """The box, its ball and its confirmed outline, in the capture's pixels. An older box
-    without an outline is tested as its rectangle (None)."""
+    """The box, its ball and outline in the capture's pixels (outline None on an older box)."""
     zone = tuple(int(round(float(value))) for value in box["box_px"])
     if len(zone) != 4 or not (0 <= zone[0] < zone[2] and 0 <= zone[1] < zone[3]):
         raise ValueError(f"the box {zone} is not a rectangle: confirm the box again")
@@ -1708,10 +1680,7 @@ def _set_iwr_calibration(**changes) -> None:
 
 
 def apply_setup_ball_range(rng: dict | None) -> None:
-    """Put the setup's ball range into effect: the IWR's prior, the monitor's, the side offset.
-
-    The range is a prior: each shot is still ranged from its own IWR capture.
-    """
+    """Put the setup's ball range into effect as a prior; each shot is still ranged itself."""
     from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
 
     prior = side = None
@@ -1754,7 +1723,6 @@ def _set_ball_range(prior, side: float | None, provenance: dict | None = None) -
         "status": "prior" if prior is not None else "pending",
         "source": prior.source if prior is not None else "pending",
         "candidate_id": provenance.get("candidate_id"),
-        # how its maker qualified the range (the tester's tee-range source), for review
         "qualification": provenance.get("qualification"),
         **(
             {
@@ -1787,8 +1755,7 @@ def apply_setup_net_range(net: dict | None) -> None:
     handoff = {
         "net_range_m": value,
         "source": source,
-        # the floor-line tap gives a horizontal distance from the unit, not the radar's
-        # apparent range; the gate's margin covers the difference
+        # a floor-line tap is a horizontal distance, not slant range; the gate margin covers it
         "range_space": (
             "horizontal_from_the_unit" if source == "camera_floor_line" else "apparent"
         ),
@@ -1825,7 +1792,7 @@ def api_target_line():
 
 @app.route("/api/ball-at-address")
 def api_ball_at_address():
-    """The resting ball's last look in the fixed box, for the tester's ready light."""
+    """The resting ball's last look in the fixed box."""
     monitor = ball_at_address_monitor
     latest = monitor.latest() if monitor is not None else None
     if latest is None:
@@ -1874,8 +1841,7 @@ def setup_start_context() -> StartContext:
 
 
 def _setup_camera_tilt() -> dict | None:
-    """The unit's camera tilt, only when it came from the unit's calibration file; the
-    setup then measures with it and the calibrated box margin, as the tester's setup does."""
+    """The unit's camera tilt, only when it came from the unit's calibration file."""
     from .camera import camera_tilt  # noqa: PLC0415
 
     source = (setup_handoff_config.get("camera_tilt") or {}).get("source")
@@ -1886,7 +1852,6 @@ def _setup_camera_tilt() -> dict | None:
         and stored is not None
         and math.isclose(float(stored["offset_deg"]), tilt["offset_deg"], abs_tol=1e-4)
     ):
-        # the file's uncertainty and date, as the tester's setup reads them
         return {**stored, "offset_deg": tilt["offset_deg"]}
     return tilt
 
@@ -1906,10 +1871,7 @@ def _setup_lis3dh() -> tuple[float | None, float | None, str]:
 
 
 def setup_block():
-    """Why this kiosk, as started, can never set up (a ``setup_service.Blocked``), or None:
-    what setup_camera_view always refuses without (a camera, the rig file, and the tilt
-    sensor unless the camera is calibrated). A tilt sensor asked for that did not start is
-    a fault."""
+    """Why setup can never run here (no camera, rig file or needed tilt sensor), or None."""
     from .setup_service import Blocked  # noqa: PLC0415
 
     if camera_capture_runtime is None:
@@ -1940,14 +1902,10 @@ def _roll_calibration() -> dict | None:
 
 
 def setup_camera_view():
-    """The live capture's camera as the setup measures with it, and the LIS3DH roll it does
-    not apply (a ``setup_service.CameraView``; 0 on a unit that verified and zeroed its
-    roll); None without a camera.
+    """The live camera as the setup measures with it, and the LIS3DH roll it leaves unapplied.
 
-    Built as the tester's setup camera is: with calibrated fusion loaded, the calibrated
-    optical model at the LIS3DH's pose; otherwise the rig's lens and radar, this mode's
-    focal length, the LIS3DH's pitch composed with the unit's calibrated camera tilt. A
-    camera it cannot model raises ValueError with the reason.
+    Returns a ``setup_service.CameraView``, or None without a camera; raises ValueError
+    for a camera it cannot model.
     """
     from .camera import camera_roll, camera_tilt  # noqa: PLC0415
     from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
@@ -1999,8 +1957,7 @@ def setup_camera_view():
         camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
     )
     camera = BallPlaneCamera.nominal(
-        # the lens's own focal length for this mode, as the tester's setup takes it: a
-        # checkerboard lens is measured per mode, not scaled from the rig file's mode
+        # a checkerboard lens is measured per mode, not scaled from the rig file's mode
         focal_px=(
             float(camera_lens.focal_px(width))
             if camera_lens is not None
@@ -2022,7 +1979,7 @@ def setup_camera_view():
 
 
 def _calibrated_setup_camera(width: int, height: int, pitch, measured_roll, roll: dict):
-    """The calibrated optical model at the LIS3DH's pose, as the swings and the tester use it."""
+    """The calibrated optical model at the LIS3DH's pose."""
     from .camera import camera_roll  # noqa: PLC0415
     from .camera.calibrated_projection import build_calibrated_camera_model  # noqa: PLC0415
     from .camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
@@ -2263,7 +2220,7 @@ def apply_setup_scene(scene: dict | None) -> None:
     if scene is not None and scene.get("source") != "rig_nominal":
         solved = _finite_number(scene.get("lens_height_m"), "lens_height_m")
     if solved is None and nominal is None:
-        return  # no rig file, so no heights to put into effect
+        return
     if solved is not None and nominal is None:
         raise ValueError("a solved lens height needs the rig file's heights to move the radar")
     if solved is not None:
@@ -2313,10 +2270,7 @@ def _set_scene(scene: dict | None, solved: float | None, radar: float | None, en
 
 
 def init_setup_handoff(args, enclosure) -> None:
-    """Record what this session starts with, and where each value came from.
-
-    The setup record's sections replace these as they are applied (``apply_saved_setup``).
-    """
+    """Record what this session starts with and where each value came from."""
     global setup_handoff_config  # pylint: disable=global-statement
     nominal = getattr(enclosure, "camera_mount_height_m", None)
     ball_height = float(args.iwr6843_ball_height_m)
@@ -2376,11 +2330,7 @@ def _rig_value(enclosure, name: str) -> float:
 
 
 def _swing_camera_pose(shot: Shot) -> dict:
-    """This swing's camera pose: its own LIS3DH pitch plus ``--camera-vertical-offset-deg``.
-
-    Without either, or a stable reading, the pose says why and the estimators infer
-    pitch and focal length from the resting ball, labelled.
-    """
+    """This swing's camera pose: its LIS3DH pitch plus ``--camera-vertical-offset-deg``."""
     from .camera import camera_tilt  # noqa: PLC0415
 
     return camera_tilt.swing_camera_pose(
@@ -2500,10 +2450,7 @@ def _ops_speed_correction_geometry(calibration) -> tuple[float, float, float, st
 
 
 def _null_non_finite(value, path: str, not_measured: list[dict]):
-    """``value`` with every non-finite float replaced by None, each one named in ``not_measured``.
-
-    Strict JSON has no NaN/Infinity; a raw one would make the browser drop the packet.
-    """
+    """``value`` with non-finite floats as None, each named in ``not_measured`` (strict JSON)."""
     if _non_finite_float(value):
         not_measured.append({"id": path, "reason": f"non_finite_value:{value!r}"})
         return None
@@ -2538,10 +2485,7 @@ _SOURCE_LABELS_OF_METRIC = {
 
 
 def shot_to_dict(shot: Shot) -> dict:
-    """Return the UI shot schema with display-oriented rounding.
-
-    A non-finite metric is sent as null and listed in ``metrics_not_measured``.
-    """
+    """Return the UI shot schema with display-oriented rounding."""
     raw = shot.to_dict()
     for log_only_field in ("mode", "readings", "readings_count"):
         raw.pop(log_only_field)
@@ -2701,12 +2645,6 @@ def api_club_selection():
 def static_files(path):
     """Serve static files."""
     return send_from_directory(app.static_folder, path)
-
-
-@app.route("/api/shots/latest")
-def api_latest_shot():
-    """The session's latest shot payload (every metric, labelled) and the metric catalog."""
-    return jsonify({"shot": _latest_session_shot(), "catalog": shot_metrics.catalog()})
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -2922,9 +2860,8 @@ def init_iwr6843(
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the LCMF launch estimator.
 
-    ``tilt_deg`` and ``radar_height_m`` come from the rig file (or the setup's solved
-    height), never the board calibration. With ``board_rotation_deg`` LCMF places
-    each antenna off the phase centre ``radar_height_m`` names.
+    ``tilt_deg`` and ``radar_height_m`` come from the rig file or the setup, never the
+    board calibration; ``radar_height_m`` is the phase centre's.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     for name, value in (("tilt_deg", tilt_deg), ("radar_height_m", radar_height_m)):
@@ -3116,7 +3053,7 @@ def init_inclinometer(
             "i2c_bus": bus_number,
             "i2c_address": f"0x{address:02x}",
             "sample_hz": service.sample_hz,
-            # the kiosk takes no typed zero offset; the tester's setup gate reads this
+            # the kiosk takes no typed zero offset
             "zero_offset_deg": 0.0,
             "mount_yaw_deg": mount_yaw,
             "mount_upside_down": mount.upside_down,
@@ -3891,7 +3828,6 @@ def _ready_light_states() -> SensorStates | None:
 
 
 def _publish_ready_light() -> dict:
-    """Compute the light and send it to the kiosk screen when it changed."""
     global _ready_light_published  # pylint: disable=global-statement
     payload = ready_light.update(_ready_light_states())
     swing = payload["swing"] or {}
@@ -3940,12 +3876,6 @@ def _ready_light_trigger_outcome(event: dict) -> None:
         return
     reason = event.get("reason")
     ready_light.swing_result("no_radar_shot" if reason in _NO_RADAR_SHOT_REASONS else "not_a_shot")
-
-
-@app.get("/api/ready-light")
-def ready_light_status():
-    """The ready light for the tester page; the kiosk screen gets it on the socket."""
-    return jsonify(ready_light.update(_ready_light_states()))
 
 
 @socketio.on("connect")
@@ -4347,7 +4277,6 @@ def on_shot_processing(state: str) -> None:
 
 
 def _report_shot_not_sent(shot: Shot, targets: List[str], error: IncompleteShotError) -> None:
-    """Tell the screen and the sim-send log why a shot was not sent to the simulators."""
     reason = str(error)
     missing = list(getattr(error, "missing", []))
     shot_timestamp = shot.timestamp.isoformat()
@@ -4658,10 +4587,8 @@ def horizontal_confidence_from(coherence: float | None) -> float:
 def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     """Attach the enclosure orientation this shot is corrected with and the sensors it corrects.
 
-    The service's rule chooses it (``rule``): an older or swing-shaken reading waits up
-    to a second for the reading after impact, and a unit that moved gets none.
-    ``applied_to`` names the camera whenever a reading was selected and the camera
-    runs, the IWR when it runs.
+    An older or swing-shaken reading waits up to a second for the reading after impact;
+    a unit that moved gets none.
     """
     if inclinometer_service is None or shot.mode == "mock":
         return
@@ -5133,7 +5060,7 @@ def _measure_resting_ball_early(shot: Shot, camera_archive) -> float | None:
 
 
 def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
-    """Wait for this shot's camera match and archive load (one place an extension can time it)."""
+    """Wait for this shot's camera match and archive load."""
     return camera_future.result()
 
 
@@ -6706,9 +6633,8 @@ def _finalize_shot_detected(
 ) -> None:
     """Apply required fallbacks, persist once, and publish the final shot.
 
-    With ``late_update`` this is a late enrichment of a shot already published:
-    the log records ``shot_updated`` and simulators are not sent it again.
-    ``awaits_late_result`` sends phones an OPS-only first result as provisional.
+    ``late_update`` logs ``shot_updated`` and skips simulators; ``awaits_late_result``
+    sends phones the OPS-only first result as provisional.
     """
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
@@ -7423,10 +7349,7 @@ def _has_slow_shot_enrichment(shot: Shot) -> bool:
 
 
 def _drain_shot_enrichment_queue() -> None:
-    """Finish deferred shots in detection order, one hardware consumer at a time.
-
-    Order matters: matching a newer impact discards older unmatched captures as stale.
-    """
+    """Finish deferred shots in detection order, one hardware consumer at a time."""
     global shot_enrichment_task  # pylint: disable=global-statement
 
     while True:
@@ -7471,8 +7394,7 @@ def _defer_shot_enrichment(
 ) -> bool:
     """Queue optional hardware work without blocking the OPS capture callback.
 
-    Returns True when queued, False when it waits in the deferred backlog.
-    Raises ``queue.Full`` only when the backlog is at its hard bound too.
+    True when queued, False when deferred; ``queue.Full`` only past the backlog's bound.
     """
     global shot_enrichment_task  # pylint: disable=global-statement
 
@@ -7952,7 +7874,6 @@ def start_monitor(
 
 
 def _gate_edge_listener():
-    """The running sound trigger's BCM17 edge hook, when there is one."""
     return getattr(getattr(monitor, "trigger", None), "notify_gate_edge", None)
 
 
@@ -7968,7 +7889,6 @@ def _attach_gate_edge_listener() -> None:
 
 
 def _detach_gate_edge_listener() -> None:
-    """Stop feeding BCM17 edges to a sound trigger that is being stopped."""
     listener = _gate_edge_listener()
     iwr_monitor = getattr(iwr6843_runtime, "capture_monitor", None)
     if listener is not None and iwr_monitor is not None:
@@ -8441,8 +8361,7 @@ def _add_battery_arguments(parser):
 
 
 def _add_camera_unit_arguments(parser):
-    """The unit's lens and camera tilt. The setup itself (box, aim, ranges, scene) comes
-    only from --setup-file."""
+    """The unit's lens and camera tilt; the setup itself comes only from --setup-file."""
     parser.add_argument(
         "--camera-lens-id",
         default=None,

@@ -96,6 +96,12 @@ class Association:
     unusable_seqs: tuple = ()  # candidates with no usable kernel time (age-less or invalid)
 
 
+def _association_mono_ns(edge: EdgeObservation) -> int:
+    """Time used only to associate an edge with a dump (coarse)."""
+    interval = edge.kernel_mono_interval_ns()
+    return (interval[0] + interval[1]) // 2 if interval else edge.mono_after_ns
+
+
 def associate_edge_detail(
     edges: Sequence[EdgeObservation],
     first_byte_mono_ns: int,
@@ -125,7 +131,7 @@ def associate_edge_detail(
                 unusable.append(edge)
             continue
         widen = edge.mono_after_ns - edge.mono_before_ns
-        lag = first_byte_mono_ns - edge.association_mono_ns()
+        lag = first_byte_mono_ns - _association_mono_ns(edge)
         if (
             post_trigger_ns - segment_ns - widen
             <= lag

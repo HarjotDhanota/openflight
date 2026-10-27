@@ -1,4 +1,4 @@
-import catalogJson from './metricCatalog.json';
+import coreCatalog from './metricCatalog.json';
 import { METRIC_LABELS } from '../types/shot';
 import type { MetricLabel, Shot, ShotMetric } from '../types/shot';
 
@@ -14,11 +14,14 @@ export interface MetricSpec {
   label: string;
   group: MetricGroup;
   unit: string;
-  /** Set while the metric is not built yet. */
-  pending: string | null;
 }
 
-export const METRIC_CATALOG: readonly MetricSpec[] = catalogJson.metrics as MetricSpec[];
+/** A model module's full catalogue (`metricCatalog.*.json`) replaces the core one when present. */
+const extended = Object.values(
+  import.meta.glob<typeof coreCatalog>('./metricCatalog.*.json', { eager: true, import: 'default' })
+);
+
+export const METRIC_CATALOG: readonly MetricSpec[] = (extended[0] ?? coreCatalog).metrics as MetricSpec[];
 
 /** The shot's record for one metric, or null for a shot from before `metrics` existed. */
 export function shotMetric(shot: Shot | null | undefined, id: string): ShotMetric | null {

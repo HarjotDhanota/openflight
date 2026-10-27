@@ -1,13 +1,8 @@
 """Face angle and dynamic loft from the ball and the club's direction (rigid-body relation).
 
-The face normal n lies in the plane of the ball's launch direction b and the club's
-direction v, on the far side of b from v, at an angle theta from b with
-
-    ball speed x sin(theta) = c x spin,   c = I / (m r)
-
-the tangential-impulse identity m v_t r = I omega for a rigid ball (Cross & Nathan
-2007, Am. J. Phys. 75, 658; Penner 2001, Am. J. Phys. 69, 563). The known answers
-below are built forward from a chosen face, so the inverse is checked, not restated.
+The face normal lies in the plane of launch direction b and club direction v, beyond b from v, at
+theta from b with ball speed x sin(theta) = c x spin, c = I / (m r) (Cross & Nathan 2007; Penner
+2001). The known answers are built forward from a chosen face, so the inverse is checked.
 """
 
 from __future__ import annotations
@@ -177,9 +172,6 @@ def test_a_spin_built_from_face_and_loft_is_refused_as_circular(source):
         assert "circular" in metric.reason
 
 
-# ---- inside the collision model ------------------------------------------------------
-
-
 def _evaluate(spin=None, ball_speed=None, *, club=ClubType.DRIVER, **delivery):
     values = {"path": 2.0, "attack": 3.0, "launch_h": 1.0, "launch_v": 13.0}
     values.update(delivery)
@@ -291,9 +283,6 @@ def test_an_unknown_club_still_gets_a_rigid_body_face():
     assert result.metrics["dynamic_loft"].value == pytest.approx(25.0, abs=1e-9)
 
 
-# ---- the owner's TM4 export ------------------------------------------------------------
-
-
 def _owner_measured_spin_shots():
     shots = []
     for shot in owner_shots():
@@ -315,8 +304,7 @@ def _owner_measured_spin_shots():
 
 
 def test_the_owner_export_face_and_loft_are_reproduced():
-    """The clean-room study reproduced TM4's face to 0.024 deg RMS (max 0.062) and loft
-    to 0.004 deg RMS (max 0.016) on the measured-spin shots."""
+    """TM4's face (0.024 deg RMS) and loft (0.004 deg RMS) on the measured-spin shots."""
     face_errors, loft_errors = [], []
     shots = _owner_measured_spin_shots()
     for shot in shots:

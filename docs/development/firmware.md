@@ -328,11 +328,7 @@ meta-image, and copies the production image into `firmware/releases/`:
 firmware/releases/$(RELEASE_NAME)
 ```
 
-`RELEASE_NAME` names the file (default `l3_dump_local_build.bin`, never a release
-name); pass a dated name such as `RELEASE_NAME=l3_dump_evidence_20261009.bin` for a
-release. Both targets refuse to overwrite an existing file in `firmware/releases/`,
-including the checked-in rollback image
-`l3_dump_configurable_capture_20260818.bin`, unless `OVERWRITE_RELEASE=1` is given.
+`RELEASE_NAME` and `OVERWRITE_RELEASE` work as in the Docker build above.
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
 `firmware/iwr6843/` and are ignored by Git. Current production images and

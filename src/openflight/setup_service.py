@@ -40,7 +40,6 @@ WIDE_HALF_WIDTH_M = 1.2
 # the fixed box drawn again this close (the tilt sensor's noise) is the box already confirmed
 SAME_OUTLINE_PX = 0.5
 TOO_UNCERTAIN = "too uncertain to measure"
-# each section's actions, as the kiosk's API takes them
 ACTIONS = {
     "box": ("show", "confirm", "clear"),
     "aim": ("show", "confirm", "skip", "clear"),
@@ -99,10 +98,8 @@ def box_section(  # pylint: disable=too-many-arguments
 ) -> dict:
     """A confirmed box, stamped with the lens, rig and tilt it was confirmed under.
 
-    ``outline_px`` is the polygon the user confirmed (the search outline); ``box_px`` bounds
-    it and the ground, and is only the detector's window. A record without an outline is
-    read as its ``box_px`` rectangle. The id is the box's geometry and inputs, never its
-    ball: a ball anywhere in the box keeps the aim and range set against it.
+    ``outline_px`` is the confirmed polygon; ``box_px`` bounds it and is only the detector's
+    window. The id excludes the ball: a ball anywhere in the box keeps the aim and range.
     """
     section = {
         "state": "confirmed",
@@ -209,11 +206,7 @@ def ball_range_section(  # pylint: disable=too-many-arguments
     qualification: str | None = None,
     candidate_id: str | None = None,
 ) -> dict:
-    """The resting ball's range from the radar's origin: a prior for each shot's own.
-
-    ``qualification`` says how the range was qualified where its maker knows (the tester's
-    tee-range source), and ``candidate_id`` which candidate it was.
-    """
+    """The resting ball's range from the radar's origin: a prior for each shot's own."""
     return {
         "state": "set",
         "range_m": float(range_m),
@@ -268,7 +261,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         # runs one change's applies together, so no shot lands between two sections
         self._between_shots = between_shots
         self._camera_available = camera_available
-        # why this kiosk, as started, can never set up (no tilt sensor ...), or None
         self._setup_blocked = setup_blocked
         self._config = box_config or placement_box.load_config()
         self._action_lock = threading.Lock()
@@ -331,8 +323,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             if not present:
                 self._applied_revision = self.revision  # nothing to put into effect
             return failed
-
-    # actions
 
     def box(self, action: Literal["show", "confirm", "clear"]) -> dict:
         """Look at the placement box, confirm the ball in it, or clear the setup."""
@@ -451,8 +441,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
     def _cleared(self, *names: str) -> dict:
         return {name: {"state": "not_set", "reason": "cleared"} for name in names}
 
-    # camera access
-
     def _view(self) -> tuple[Any, float | None]:
         try:
             view = self._camera_provider()
@@ -484,8 +472,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             "selected": dataclasses.asdict(result.selected) if result.selected else None,
             "result": result,
         }
-
-    # box
 
     def _box_look(self, _record: dict, _payload: dict) -> dict:
         self._classify_box()
@@ -551,8 +537,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
     def _box_clear(self, _record: dict, _payload: dict) -> dict:
         return self._cleared(*SECTIONS)
 
-    # aim
-
     def _need_box(self, evaluated: dict) -> dict:
         box = evaluated["box"]
         if not _usable(box):
@@ -617,8 +601,6 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         the box gives the same aim."""
         box = placement_box.fixed_box(camera, self._config)
         return box.centre_lateral_m, box.centre_forward_m
-
-    # ball range
 
     def _range_measure(self, record: dict, _payload: dict) -> dict:
         box = self._need_box(record)

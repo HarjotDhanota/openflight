@@ -40,7 +40,6 @@ from openflight.gpio_factory import ensure_lgpio_pin_factory
 
 logger = logging.getLogger(__name__)
 
-# settings are replaced whole from the exposure loop and from the kiosk's setup
 _settings_lock = threading.Lock()
 
 
@@ -168,40 +167,6 @@ def parse_scaler_crop(value: str | None) -> tuple[int, int, int, int] | None:
     return x, y, width, height
 
 
-def parse_setup_ball(value: str | None) -> dict[str, float] | None:
-    """Parse ``x,y,diameter`` in pixels, where the setup saw the resting ball."""
-    if value is None:
-        return None
-    parts = [part.strip() for part in value.split(",")]
-    if len(parts) != 3:
-        raise ValueError("setup ball must be x,y,diameter in pixels")
-    try:
-        x, y, diameter = (float(part) for part in parts)
-    except ValueError as exc:
-        raise ValueError("setup ball values must be numbers") from exc
-    if not all(math.isfinite(item) for item in (x, y, diameter)):
-        raise ValueError("setup ball values must be finite")
-    if x < 0 or y < 0 or diameter <= 0:
-        raise ValueError("setup ball must lie in the frame with a positive diameter")
-    return {"x": x, "y": y, "diameter_px": diameter}
-
-
-def parse_hitting_zone(value: str | None) -> tuple[int, int, int, int] | None:
-    """Parse ``x0,y0,x1,y1`` in pixels: the tester's placement box in this mode."""
-    if value is None:
-        return None
-    parts = [part.strip() for part in value.split(",")]
-    if len(parts) != 4:
-        raise ValueError("hitting zone must be x0,y0,x1,y1 in pixels")
-    try:
-        x0, y0, x1, y1 = (int(part) for part in parts)
-    except ValueError as exc:
-        raise ValueError("hitting zone values must be whole pixels") from exc
-    if min(x0, y0) < 0 or x1 <= x0 or y1 <= y0:
-        raise ValueError("hitting zone must lie in the frame with x1 > x0 and y1 > y0")
-    return x0, y0, x1, y1
-
-
 def _nearest_trigger_index(timestamps: list[float], impact: float, tolerance: float) -> int | None:
     candidates = [
         (abs(timestamp - impact), index)
@@ -284,7 +249,6 @@ def resolved_camera_config(camera) -> dict | None:
 
 
 def _json_safe(value):
-    """Convert common libcamera value objects to JSON-compatible values."""
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, numbers.Integral):
@@ -516,7 +480,7 @@ class CameraCaptureRuntime:
         if self.settings.scaler_crop is not None:
             self._camera.set_controls({"ScalerCrop": self.settings.scaler_crop})
         self._resolved_config = resolved_camera_config(self._camera)
-        # this mode's limits, read after configure (they are per mode), never assumed
+        # per-mode limits, read after configure, never assumed
         self.configure_swing_exposure(read_sensor_limits(self._camera))
         self._startup_capture_mode = self._capture_mode_startup_snapshot()
         self._camera.post_callback = self._on_frame
@@ -676,7 +640,6 @@ class CameraCaptureRuntime:
 
     @staticmethod
     def _auto_exposure_payload(snapshot: Mapping) -> dict:
-        """The status dict from one snapshot, measuring its frame in manual mode."""
         payload = dict(snapshot["payload"])
         settings = snapshot["settings"]
         if not settings.auto_exposure:
@@ -792,7 +755,6 @@ class CameraCaptureRuntime:
         return payload
 
     def _driver_offset_readback(self) -> dict:
-        """Read the OV9281 driver offset once for this camera startup."""
         try:
             raw_value = self._vertical_offset_path.read_text(encoding="ascii").strip()
         except OSError:
@@ -938,7 +900,6 @@ class CameraCaptureRuntime:
         }
 
     def _reject_trigger(self, trigger_epoch: float, reason: str, detail: str | None) -> bool:
-        """Remember why a trigger edge produced no capture, and report it."""
         rejection = {
             "trigger_timestamp": trigger_epoch,
             "reason": reason,
@@ -1259,7 +1220,6 @@ class CameraCaptureRuntime:
     def _resting_ball(
         self, frames: tuple[CameraFrame, ...], look: Mapping | None
     ) -> tuple[sx.BallReading | None, str | None]:
-        """The resting ball's reading in these frames, or why there is none."""
         images = [frame.image for frame in frames]
         last = frames[-1]
         common = {
@@ -1360,7 +1320,6 @@ class CameraCaptureRuntime:
     def _record_swing_decision(
         self, decision: sx.SwingExposureDecision, *, checked_at: float
     ) -> None:
-        """Keep and log every decision with its inputs."""
         payload = decision.to_dict()
         with self._auto_exposure_lock:
             previous = self._auto_exposure_decision

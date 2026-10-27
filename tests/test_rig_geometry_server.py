@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,26 @@ def _restore_module_globals():
     saved = (server.rig_geometry, dict(server.rig_geometry_config))
     yield
     server.rig_geometry, server.rig_geometry_config = saved[0], saved[1]
+
+
+def _fake_iwr_hardware(monkeypatch, tmp_path):
+    """A capture monitor that opens nothing, and a radar config file; returns its path."""
+
+    class FakeCaptureMonitor:
+        def __init__(self, **kwargs):
+            self.port = "/dev/ttyUSB0"
+
+        def start(self, *, armed=True):
+            return None
+
+        def stop(self):
+            return None
+
+    monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+    monkeypatch.setattr("openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal")
+    config_path = tmp_path / "snapshot.cfg"
+    config_path.write_text("profileCfg 0\n", encoding="utf-8")
+    return config_path
 
 
 class TestTheGeometryReplacesTheFlags:
@@ -61,34 +82,6 @@ class TestTheExpectedOrientation:
         assert expected["roll_deg"] == pytest.approx(0.0)
 
 
-class TestTheTiltArithmetic:
-    """effective = configured + (measured - expected); the raw sum doubles on a leaning housing."""
-
-    @staticmethod
-    def _effective(configured_deg: float, measured_deg: float, expected_deg: float) -> float:
-        return configured_deg + (measured_deg - expected_deg)
-
-    def test_a_level_enclosure_on_a_level_floor_keeps_its_mount_angle(self):
-        assert self._effective(10.0, 0.0, 0.0) == pytest.approx(10.0)
-
-    def test_a_level_enclosure_on_a_sloping_floor_is_corrected(self):
-        assert self._effective(10.0, -2.0, 0.0) == pytest.approx(8.0)
-
-    def test_a_leaning_housing_is_not_double_counted(self):
-        # housing leans 10 deg and the LIS3DH, parallel to it, reads +10
-        assert self._effective(10.0, 10.0, 10.0) == pytest.approx(10.0)
-        naive = 10.0 + 10.0
-        assert naive == pytest.approx(20.0), "the defect this test exists to prevent"
-
-    def test_a_leaning_housing_on_a_sloping_floor_is_still_corrected(self):
-        assert self._effective(10.0, 12.5, 10.0) == pytest.approx(12.5)
-
-    def test_an_unknown_expectation_falls_back_to_the_raw_reading(self):
-        server.init_rig_geometry(None)
-        expected = server._expected_inclinometer_orientation().get("pitch_deg") or 0.0
-        assert self._effective(10.0, 1.5, expected) == pytest.approx(11.5)
-
-
 class TestTheFileTravelsWithItsProvenance:
     def test_session_preserves_loaded_geometry_after_source_file_changes(self, tmp_path):
         path = tmp_path / "rig.json"
@@ -112,13 +105,6 @@ class TestTheFileTravelsWithItsProvenance:
 
         second = server._session_start_config()["rig_geometry"]
         assert second["snapshot"]["parameters"]["focal_px"] == server.rig_geometry.focal_px
-
-    def test_the_v3_file_names_the_frame_and_what_it_is_not(self):
-        text = json.loads(open(V3, encoding="utf-8").read())["provenance"]
-        assert "camera image axes" in text
-        assert "4-RX" in text
-        assert "20260825" in text, "must say which session it does NOT describe"
-        assert "PENDING checkerboard" in text, "focal_px is nominal until calibrated"
 
     def test_a_rig_without_heights_names_the_gap_instead_of_guessing(self):
         rig = dataclasses.replace(RigGeometry.from_json(V3), lens_height_above_floor_mm=None)
@@ -168,9 +154,12 @@ class TestTheSwingServerNeedsTheRigFile:
             return received
         raise AssertionError("the server should have reached the IWR start")
 
-    def test_the_iwr_is_refused_without_a_rig_file(self, monkeypatch, tmp_path, capsys):
+    @pytest.mark.parametrize("sensor", ["--iwr6843", "--camera-capture"])
+    def test_the_iwr_and_camera_are_refused_without_a_rig_file(
+        self, monkeypatch, tmp_path, capsys, sensor
+    ):
         with pytest.raises(SystemExit):
-            self._main(monkeypatch, tmp_path, ["--iwr6843"])
+            self._main(monkeypatch, tmp_path, [sensor])
         assert "--rig-geometry" in capsys.readouterr().err
 
     def test_a_rig_file_that_cannot_place_the_radar_is_refused(self, monkeypatch, tmp_path, capsys):
@@ -180,13 +169,12 @@ class TestTheSwingServerNeedsTheRigFile:
             self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", str(path)])
         assert "iwr_offset_mm" in capsys.readouterr().err
 
-    def test_the_radar_height_and_tilt_come_from_the_rig_file(self, monkeypatch, tmp_path):
+    def test_the_radar_height_tilt_and_board_rotation_come_from_the_rig_file(
+        self, monkeypatch, tmp_path
+    ):
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
         assert received["radar_height_m"] == pytest.approx(0.05225, abs=1e-5)
         assert received["tilt_deg"] == pytest.approx(10.0)
-
-    def test_the_board_rotation_comes_from_the_rig_file(self, monkeypatch, tmp_path):
-        received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
         assert received["board_rotation_deg"] == 90.0
 
     def test_the_setup_record_s_solved_lens_height_moves_the_antennas_with_it(
@@ -197,31 +185,16 @@ class TestTheSwingServerNeedsTheRigFile:
         class Started(Exception):
             pass
 
-        class FakeCaptureMonitor:
-            def __init__(self, **kwargs):
-                self.port = "/dev/ttyUSB0"
-
-            def start(self, *, armed=True):
-                return None
-
-            def stop(self):
-                return None
-
         def started(*_args, **_kwargs):
             raise Started
 
-        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
-        monkeypatch.setattr(
-            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
-        )
+        config_path = _fake_iwr_hardware(monkeypatch, tmp_path)
         for name in ("iwr6843_runtime", "iwr6843_runtime_config", "setup_handoff_config"):
             monkeypatch.setattr(server, name, getattr(server, name))
         monkeypatch.setattr(server, "start_monitor", started)
         monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
         monkeypatch.setattr(server, "init_session_logger", lambda **kwargs: None)
         monkeypatch.setattr(server, "profile_store", None)
-        config_path = tmp_path / "snapshot.cfg"
-        config_path.write_text("profileCfg 0\n", encoding="utf-8")
         setup_file = tmp_path / "setup.json"
         write_setup(setup_file, scene_lens_height_m=0.195, scene_uncertainty_m=0.01)
         monkeypatch.setattr(
@@ -252,11 +225,6 @@ class TestTheSwingServerNeedsTheRigFile:
         assert scene["lens_height_used_source"] == "radar_solved_height"
         assert scene["lens_height_solved_uncertainty_m"] == pytest.approx(0.01)
 
-    def test_the_camera_has_no_default_height(self, monkeypatch, tmp_path, capsys):
-        with pytest.raises(SystemExit):
-            self._main(monkeypatch, tmp_path, ["--camera-capture"])
-        assert "--rig-geometry" in capsys.readouterr().err
-
 
 class TestTheBoardCalibrationCarriesNoInstallation:
     """The corner-reflector calibration JSON's mount is not the rig."""
@@ -269,65 +237,10 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         with pytest.raises(ValueError, match="rig"):
             _ = calibration.radar_height_m
 
-    def test_the_server_installs_the_rigs_height_and_tilt(self, monkeypatch, tmp_path):
-        import math  # noqa: PLC0415
-
-        class FakeCaptureMonitor:
-            def __init__(self, **kwargs):
-                self.port = "/dev/ttyUSB0"
-
-            def start(self, *, armed=True):
-                return None
-
-            def stop(self):
-                return None
-
-        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
-        monkeypatch.setattr(
-            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
-        )
-        monkeypatch.setattr(server, "iwr6843_runtime", None)
-        config_path = tmp_path / "snapshot.cfg"
-        config_path.write_text("profileCfg 0\n", encoding="utf-8")
-        setup = RigGeometry.from_json(V3).enclosure_setup()
-
-        assert server.init_iwr6843(
-            port="/dev/ttyUSB0",
-            config_path=str(config_path),
-            calibration_path="config/iwr6843_calibration_reference.json",
-            output_dir=tmp_path,
-            trigger_pin=17,
-            tee_range_m=1.3,
-            net_range_m=4.6,
-            tx_order="auto",
-            capture_timeout_s=12.0,
-            tilt_deg=setup.iwr_tilt_deg,
-            radar_height_m=setup.radar_height_m,
-        )
-        calibration = server.iwr6843_runtime.calibration
-        assert calibration.radar_height_m == pytest.approx(0.05225, abs=1e-5)
-        assert math.degrees(calibration.tilt_rad) == pytest.approx(10.0)
-        server.iwr6843_runtime = None
-
     @staticmethod
     def _init_v3(monkeypatch, tmp_path, **overrides):
-        class FakeCaptureMonitor:
-            def __init__(self, **kwargs):
-                self.port = "/dev/ttyUSB0"
-
-            def start(self, *, armed=True):
-                return None
-
-            def stop(self):
-                return None
-
-        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
-        monkeypatch.setattr(
-            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
-        )
+        config_path = _fake_iwr_hardware(monkeypatch, tmp_path)
         monkeypatch.setattr(server, "iwr6843_runtime", None)
-        config_path = tmp_path / "snapshot.cfg"
-        config_path.write_text("profileCfg 0\n", encoding="utf-8")
         setup = RigGeometry.from_json(V3).enclosure_setup()
         kwargs = {
             "port": "/dev/ttyUSB0",
@@ -349,10 +262,13 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         server.iwr6843_runtime = None
         return runtime
 
-    def test_the_server_installs_the_rigs_antenna_layout(self, monkeypatch, tmp_path):
+    def test_the_server_installs_the_rigs_height_tilt_and_antenna_layout(
+        self, monkeypatch, tmp_path
+    ):
         from openflight.iwr6843 import antennas, lcmf  # noqa: PLC0415
 
         runtime = self._init_v3(monkeypatch, tmp_path)
+        assert math.degrees(runtime.calibration.tilt_rad) == pytest.approx(10.0)
         layout = runtime.calibration.antennas
         assert layout.basis == antennas.RIG_BASIS
         assert layout.board_rotation_deg == 90.0

@@ -6,30 +6,22 @@ from openflight import source_labels as labels
 
 
 @pytest.mark.parametrize(
-    ("source", "calculated", "model_geometry", "estimated"),
+    ("source", "labels_read"),
     [
-        ("calculated (D-plane tilt)", True, False, False),
-        ("model geometry (D-plane tilt; club path from the arc prior)", False, True, False),
-        ("estimated (D-plane tilt; launch direction weak)", False, False, True),
-        ("radar", False, False, False),
-        ("", False, False, False),
-        (None, False, False, False),
+        ("measured (camera)", {"measured"}),
+        ("calculated (D-plane tilt)", {"calculated"}),
+        ("model geometry (D-plane tilt; club path from the arc prior)", {"model_geometry"}),
+        ("estimated (D-plane tilt; launch direction weak)", {"estimated"}),
+        ("radar", set()),
+        ("", set()),
+        (None, set()),
     ],
 )
-def test_the_predicates_read_the_label_from_the_source_text(
-    source, calculated, model_geometry, estimated
-):
-    assert labels.is_calculated_source(source) is calculated
-    assert labels.is_model_geometry_source(source) is model_geometry
-    assert labels.is_estimated_source(source) is estimated
-
-
-@pytest.mark.parametrize(
-    ("source", "measured"),
-    [("measured (camera)", True), ("calculated (D-plane tilt)", False), ("", False), (None, False)],
-)
-def test_a_measured_source_is_read_back(source, measured):
-    assert labels.is_measured_source(source) is measured
+def test_the_predicates_read_the_label_from_the_source_text(source, labels_read):
+    assert labels.is_measured_source(source) is ("measured" in labels_read)
+    assert labels.is_calculated_source(source) is ("calculated" in labels_read)
+    assert labels.is_model_geometry_source(source) is ("model_geometry" in labels_read)
+    assert labels.is_estimated_source(source) is ("estimated" in labels_read)
 
 
 def test_the_label_words_are_the_shared_vocabulary():

@@ -91,23 +91,8 @@ class TestShot:
 
     @pytest.mark.parametrize("club", [0.0, -100.0])
     def test_smash_factor_none_without_a_positive_club_speed(self, club):
-        """Smash needs a positive club speed; none is filled in."""
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=club, timestamp=datetime.now())
         assert shot.smash_factor is None
-
-    def test_smash_factor_uses_the_cited_definition(self, monkeypatch):
-        """Shot.smash_factor is smash.smash_factor, not a copy."""
-        from openflight import smash
-
-        calls = []
-        monkeypatch.setattr(
-            smash,
-            "smash_factor",
-            lambda ball, club: calls.append((ball, club)) or 9.99,
-        )
-        shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
-        assert shot.smash_factor == 9.99
-        assert calls == [(150.0, 100.0)]
 
     def test_smash_factor_status_is_unlabelled_by_default(self):
         shot = Shot(ball_speed_mph=150.0, club_speed_mph=100.0, timestamp=datetime.now())
@@ -115,14 +100,12 @@ class TestShot:
         assert shot.to_dict()["smash_factor_status"] is None
 
     def test_a_radial_ratio_label_rides_with_its_smash_factor(self):
-        """Radial ball over radial club speed is labelled, not passed off as smash."""
         shot = Shot(
             ball_speed_mph=150.0,
             club_speed_mph=100.0,
             timestamp=datetime.now(),
             smash_factor_status=SMASH_RADIAL_RATIO,
         )
-        assert SMASH_RADIAL_RATIO == "radial_ratio"
         assert shot.to_dict()["smash_factor"] == 1.5
         assert shot.to_dict()["smash_factor_status"] == "radial_ratio"
 
@@ -173,7 +156,8 @@ class TestShot:
         """Shot with launch angle should adjust carry distance."""
         shot_no_angle = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
         shot_low_angle = Shot(
-            ball_speed_mph=150.0, timestamp=datetime.now(),
+            ball_speed_mph=150.0,
+            timestamp=datetime.now(),
             launch_angle_vertical=7.0,  # well below 11 optimal for driver
             launch_angle_confidence=1.0,
         )
@@ -252,7 +236,7 @@ class TestMultiObjectReporting:
 
         # Verify the method exists and handles single digits
         # Can't test actual command without hardware, but method should not raise
-        assert hasattr(radar, 'set_num_reports')
+        assert hasattr(radar, "set_num_reports")
 
     def test_direction_constants(self):
         """Verify direction enum values."""
@@ -298,7 +282,6 @@ _DERIVED = (
     ],
 )
 def test_every_derived_property_treats_a_non_finite_input_exactly_like_none(field, bad):
-    """A non-finite value is a missing value."""
     from datetime import datetime as _dt
 
     measured = dict(

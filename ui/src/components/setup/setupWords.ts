@@ -26,10 +26,9 @@ export function canSetUp(setup: SetupSnapshot): boolean {
 const STEP_SECTIONS = ['box', 'aim', 'ball_range', 'net_range'] as const;
 
 /**
- * Whether to offer the Setup screen: a step on it is unset, stale or saved but not put into
- * effect, and the unit has the camera and tilt sensor every step needs. The lens height (`scene`) has no
- * step here; without one the kiosk runs on the enclosure's value. The kiosk's ready light
- * holds red on the same sections (setupNeedsCases.json keeps the two in step).
+ * Whether to offer the Setup screen: a step is unset, stale or saved but not in effect, and the
+ * unit has the camera and tilt sensor every step needs. The ready light holds red on the same
+ * sections (setupNeedsCases.json keeps the two in step).
  */
 export function needsSetup(setup: SetupSnapshot | null): boolean {
   if (!setup || !canSetUp(setup)) return false;

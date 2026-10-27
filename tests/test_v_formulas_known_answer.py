@@ -1,23 +1,8 @@
-"""Known-answer shots through the kiosk's own shot assembly (V-formulas audit).
+"""Known-answer shots through the kiosk's own shot assembly.
 
-A known club delivery (club, club speed, path, attack, face, loft, handedness) is
-turned into a known ball launch:
-
-- launch direction, vertical launch, spin and a driver's spin axis from the fitted
-  forward collision model (``collision_forward``, tested on its own); the kiosk
-  must invert that launch back to the delivery;
-- a 7-iron's spin axis from the clean-room iron fit on the D-plane tilt;
-- ball speed from Penner 2001's normal and parallel launch speeds (Am. J. Phys.
-  69, 563, Eqs. (5), (7), (8)), written out here;
-- the head's last positions on a circular arc in a plane (E1's model) with the
-  given path and attack at impact, and the OPS's radial readings of that ball
-  from the rig's own OPS position.
-
-The shot then goes through the server's functions: ``_attach_club_arc``,
-``_attach_collision_model`` and ``_finalize_shot_detected`` (full speeds and both
-flights). Every output must come back with the delivery's value and the right
-label, for a right- and an explicit left-handed golfer, and with a target yaw of
-0 and +-3 deg through the one horizontal offset (D34/D36).
+A known club delivery becomes a known launch (forward collision model, iron axis fit, Penner
+2001 ball speed), arc positions and OPS readings; through the server's own functions every output
+must come back with the delivery's value and label, RH and LH, at target yaw 0 and +-3 deg.
 """
 
 from __future__ import annotations
@@ -42,8 +27,6 @@ from openflight.rig_geometry import RigGeometry
 
 REPO = Path(__file__).resolve().parents[1]
 MPH = 0.44704
-
-# ---- independent forward model ------------------------------------------------------
 
 # Penner 2001 Sec. II A: ball 45.9 g, 4.27 cm; head 200 g; I = 2/5 m r^2
 PENNER_M, PENNER_D, PENNER_HEAD = 0.0459, 0.0427, 0.200
@@ -119,9 +102,6 @@ def truth_launch(club, speed, path, attack, face, loft):
     }
 
 
-# ---- the head's arc and the ball's OPS readings ------------------------------------
-
-
 def _rotate(xyz, degrees):
     """Turn (forward, lateral, up) points about the vertical by ``degrees`` (+ toward right)."""
     a = math.radians(degrees)
@@ -193,8 +173,6 @@ def ops_track(full_mph, launch_v, launch_h_boresight, ops_m, ball, impact_ms=40.
         "outbound": readings,
     }
 
-
-# ---- the kiosk -----------------------------------------------------------------------
 
 TEE_RANGE, BALL_H, SIDE = 2.10, 0.02135, 0.03
 
@@ -322,7 +300,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     )
     frame = "target_line" if yaw else "unit_boresight"
 
-    # -- club delivery (E1): path, attack, swing plane and direction, low point
+    # club delivery: path, attack, swing plane and direction, low point
     arc = shot.club_delivery["metrics"]
     arc_label = arc["swing_plane_deg"]["status"]
     assert arc_label in ("calculated", "model_geometry")
@@ -345,7 +323,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     assert arc["low_point_side_mm"]["value"] == pytest.approx(side, abs=0.5)
     assert distance > 0 if truth["attack"] < 0 else distance < 0  # TrackMan: down = after
 
-    # -- face and collision (E2), labelled by their weakest input
+    # face and collision, labelled by their weakest input
     collision_label = "calculated" if club_label in ("measured", "calculated") else "model_geometry"
     metrics = shot.collision_model["metrics"]
     for metric in ("face_angle", "dynamic_loft", "spin_loft", "face_to_path", "d_plane_tilt"):
@@ -367,7 +345,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     assert metrics["spin_axis"]["status"] == collision_label
     assert metrics["gyro"]["status"] == "not_measured"
 
-    # -- speeds (E3): full ball speed calculated; smash stays the labelled radial ratio
+    # speeds: full ball speed calculated; smash stays the labelled radial ratio
     full = shot.ball_speed_full
     assert full["status"] == "calculated", full.get("reason")
     assert full["value_mph"] == pytest.approx(truth["ball_speed"], abs=0.15)
@@ -376,7 +354,7 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     assert shot.smash_factor_full["status"] == "not_measured"
     assert shot.smash_factor_status == SMASH_RADIAL_RATIO
 
-    # -- flight (E4): both airs, every output, the flight's label is the weakest input's
+    # flight: both airs, every output, the flight's label is the weakest input's
     flight_label = collision_label
     expected = {}
     for block, density in (
@@ -425,7 +403,6 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
 
 @pytest.mark.parametrize("handed", ["RH", "LH"])
 def test_the_target_yaw_moves_no_target_line_output(kiosk, handed):
-    """The same delivery, relative to the target line, at yaw -3, 0 and +3."""
     results = [
         run_shot(kiosk, delivery=DELIVERIES["rh_7iron_draw"], handed=handed, yaw=yaw)[0]
         for yaw in (-3.0, 0.0, 3.0)

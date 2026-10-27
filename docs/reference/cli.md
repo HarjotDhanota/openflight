@@ -171,7 +171,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | `--camera-capture-exposure-us` | int; default `1000` | Startup exposure. Automatic exposure moves it inside the blur ceiling (294 µs), then re-checks the resting ball before every swing ([automatic exposure](../camera/README.md#automatic-exposure)) |
 | `--camera-capture-gain` | float; default `4.0` | Startup analogue gain; automatic exposure keeps it within the sensor's cap |
 | `--camera-light-index` | float; unset | The setup's measured light: the 1280×800 resting ball's DN above black per µs × gain. It seeds the automatic swing exposure before the first resting-ball look; 640×400 doubles it (measured). Unset, the light remembered from the last ball-judged setting, else the startup controls |
-| `--camera-armed-profile` | path | Qualified armed exposure profile. Production capture refuses exposure or gain above its ceiling; `--study-mode` captures stay diagnostic and their out-of-ceiling metrics are withheld. There is no default ceiling. |
+| `--camera-armed-profile` | path | Qualified armed exposure profile. Capture refuses exposure or gain above its ceiling. There is no default ceiling. |
 | `--camera-lens-id` | `stock-2.8mm`, `6mm` or `8mm`; unset | The lens on the unit ([lenses](configuration.md#configlensesjson)). Its focal length (nominal, or from a checkerboard calibration kept for it) replaces the rig file's for every camera metric; recorded in session_start and every clip's metadata. Unset, the rig file's own (stock) lens, recorded as such |
 | `--camera-capture-stream` | `raw` or `main-y`; default `raw` | Camera stream to persist |
 | `--camera-capture-scaler-crop` | `X,Y,W,H` | Optional Picamera2 scaler crop |

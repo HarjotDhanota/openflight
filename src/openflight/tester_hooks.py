@@ -30,7 +30,14 @@ from typing import Mapping
 
 from flask import Response, jsonify, request
 
-from openflight import free_play, instrumentation, kiosk_extensions, server, tester_link
+from openflight import (
+    free_play,
+    instrumentation,
+    kiosk_extensions,
+    server,
+    shot_metrics,
+    tester_link,
+)
 from openflight.free_play import register_kiosk_routes
 from openflight.launch_monitor import Shot
 
@@ -436,6 +443,18 @@ def _ready_light_setup_problems() -> list[str]:
     ):
         problems.append("camera exposure is automatic")
     return problems
+
+
+@server.app.get("/api/shots/latest")
+def api_latest_shot():
+    """The session's latest shot payload (every metric, labelled) and the metric catalog."""
+    return jsonify({"shot": server._latest_session_shot(), "catalog": shot_metrics.catalog()})
+
+
+@server.app.get("/api/ready-light")
+def ready_light_status():
+    """The ready light for the tester page; the kiosk screen gets it on the socket."""
+    return jsonify(server.ready_light.update(server._ready_light_states()))
 
 
 @server.app.post("/api/ready-light/hold")

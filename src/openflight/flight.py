@@ -1,4 +1,4 @@
-"""Flight outputs for one shot, labelled, as measured and normalized (Part E, E4).
+"""Flight outputs for one shot, labelled, as measured and normalized.
 
 The eight TrackMan 4 flight outputs: carry, carry side, total, total side, apex,
 landing angle, hang time and curve. ``ballistics.simulate`` already computed most
@@ -44,7 +44,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from . import metric_definitions
+from . import metric_definitions, shot_metrics
 from .air.conditions import SOURCE_ISA_DEFAULT
 from .air.density import (  # pylint: disable=unused-import
     humid_air_density_kg_m3,
@@ -93,10 +93,10 @@ _UNITS = {
 }
 _TOTAL_METRICS = ("total", "total_side")
 
-STATUS_CALCULATED = "calculated"
-STATUS_MODEL_GEOMETRY = "model_geometry"
-STATUS_ESTIMATED = "estimated"
-STATUS_NOT_MEASURED = "not_measured"
+STATUS_CALCULATED = shot_metrics.CALCULATED
+STATUS_MODEL_GEOMETRY = shot_metrics.MODEL_GEOMETRY
+STATUS_ESTIMATED = shot_metrics.ESTIMATED
+STATUS_NOT_MEASURED = shot_metrics.NOT_MEASURED
 # weakest first: a flight output takes the weakest label among its inputs
 STATUS_ORDER = (
     STATUS_NOT_MEASURED,
@@ -106,15 +106,12 @@ STATUS_ORDER = (
     "measured",
 )
 
-# The active aerodynamic model's own label (E8a: flight-fit-v1, Ferguson's form
-# refitted to TM4), plus the integrator.
+# The active aerodynamic model's own label, plus the integrator.
 FLIGHT_MODEL_LABEL = f"{ACTIVE_AERO_MODEL.label}, RK4 point mass"
 
-# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa, 29.92 inHg),
-# calm. TrackMan publishes no humidity (its normalization page and help articles
-# give altitude and temperature only), so the relative humidity is a named
-# assumption: 50 %, as the owner's August research took it (1.1769 kg/m3); dry air
-# (0 %) gives 1.1839 kg/m3 and saturated air (100 %) 1.1700.
+# Normalized air: TrackMan's 77 F (25 C) at sea level (1013.25 hPa), calm. TrackMan
+# publishes no humidity, so 50 % RH is a named assumption (1.1769 kg/m3; dry air gives
+# 1.1839, saturated 1.1700).
 NORMALIZED_TEMPERATURE_C = 25.0
 NORMALIZED_TEMPERATURE_K = NORMALIZED_TEMPERATURE_C + 273.15
 NORMALIZED_PRESSURE_PA = 101325.0
@@ -144,11 +141,7 @@ DENSITY_HOOK = (
 
 @dataclass(frozen=True)
 class InputUncertainty:
-    """One-sigma input uncertainties for the range sweep.
-
-    The defaults are the D32 goals (ball speed, launch) and the Part E provisional
-    goals (calculated spin, spin axis): assumed, not measured per shot.
-    """
+    """One-sigma input uncertainties for the range sweep: assumed goals, not measured per shot."""
 
     ball_speed_mph: float = 1.0
     launch_vertical_deg: float = 0.5
@@ -291,11 +284,7 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
 
 
 def _model_geometry_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
-    """The flight's inputs built on model geometry (D39), named; empty when none are.
-
-    The spin and the spin axis as the flight used them, then the club inputs under
-    them (the collision model's model-geometry inputs, e.g. E1's arc prior).
-    """
+    """The flight's inputs built on model geometry, named; empty when none are."""
     if conditions is None:
         return []
     named = []
@@ -317,11 +306,7 @@ RADIAL_SPEED_REASON = (
 
 
 def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> list[str]:
-    """Why the flight's inputs make it an estimate, one reason each; empty when none do.
-
-    The OPS243's line-of-sight (radial) ball speed stands in for the full speed when
-    E3 refused it: a different, lower quantity (V-formulas C1).
-    """
+    """Why the flight's inputs make it an estimate, one reason each; empty when none do."""
     if conditions is None:
         return []
     reasons = []
@@ -510,7 +495,7 @@ def _block(
             "status": status,
             "source": _source(name, status, air, surface, surface_assumed, model_geometry),
             "range": [float(value) - sigma, float(value) + sigma] if sigma is not None else None,
-            # an estimate says why it is one (V-formulas C1, C2)
+            # an estimate says why it is one
             "reason": "; ".join(estimated) if status == STATUS_ESTIMATED and estimated else None,
         }
     block["metrics"] = metrics

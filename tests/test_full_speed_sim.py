@@ -1,4 +1,4 @@
-"""E3 and D31: a simulator flies the calculated full ball speed when there is one."""
+"""A simulator flies the calculated full ball speed when there is one."""
 
 from __future__ import annotations
 

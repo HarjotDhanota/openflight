@@ -24,7 +24,12 @@ from .source_labels import (
     EXPERIMENTAL_LAUNCH_SOURCES,
     IWR_COMPETING_NOTE,
     IWR_PARTIAL_NOTE,
+    LABEL_CALCULATED as CALCULATED,
+    LABEL_ESTIMATED as ESTIMATED,
+    LABEL_EXPERIMENTAL as EXPERIMENTAL,
     LABEL_IWR_PARTIAL,
+    LABEL_MEASURED as MEASURED,
+    LABEL_MODEL_GEOMETRY as MODEL_GEOMETRY,
     MODEL_LABELS,
     SPIN_AXIS_UNRECORDED_NOTE,
     is_calculated_source,
@@ -39,11 +44,6 @@ logger = logging.getLogger(__name__)
 SCHEMA = "openflight.shot_metrics"
 VERSION = 1
 
-MEASURED = "measured"
-CALCULATED = "calculated"
-MODEL_GEOMETRY = "model_geometry"
-ESTIMATED = "estimated"
-EXPERIMENTAL = "experimental"
 NOT_MEASURED = "not_measured"
 LABELS = (MEASURED, CALCULATED, MODEL_GEOMETRY, ESTIMATED, EXPERIMENTAL, NOT_MEASURED)
 

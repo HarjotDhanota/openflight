@@ -1,4 +1,4 @@
-"""E3 wiring: the server attaches full speeds; simulators take a calculated full speed."""
+"""The server attaches full speeds; simulators take a calculated full speed."""
 
 from __future__ import annotations
 
@@ -161,7 +161,6 @@ def test_a_radar_height_that_is_not_set_is_not_measured(fusion_geometry, monkeyp
 
 
 def test_the_flight_model_s_field_carries_the_calculated_full_speed(fusion_geometry):
-    """E4 reads Shot.ball_speed_full_mph; it is the calculated value or None."""
     shot = _shot()
     server_module._attach_ball_speed_contract(shot)
 

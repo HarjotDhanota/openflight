@@ -1,55 +1,15 @@
-"""The target line: a camera aim point dragged on the live view at every setup (D34).
+"""The target line: the yaw from the ball (patch centre) to an aim point dragged on the view.
 
-TrackMan 4's "Target Image" is the model: the ball sits in a square on the
-picture, the operator marks the target, and optionally the line where the floor
-meets the screen. Here the ball is the confirmed ground patch's centre (P8-1),
-and the tester drags an **aim point** onto the target on the far net, screen or
-flag in the live 1280x800 view. The line from the ball towards it is the target
-line; its yaw is the zero every horizontal angle is measured from.
+**Sign:** yaw is the ground-plane azimuth of the target line from the camera boresight,
+positive when the line lies RIGHT of the boresight seen from behind the unit. The kiosk
+adds ``kiosk_offset_deg = -yaw_deg`` to every horizontal angle, so a ball launched down
+the target line reads 0. Camera and IWR share a boresight in azimuth by design (the rig
+file has no yaw term), so one yaw applies to both.
 
-**Yaw.** The azimuth, in the ground plane, of the line from the ball (the patch
-centre, on the ground) to the aim point, relative to the camera's boresight. It
-is computed through the same camera model and tilt the patch is drawn with (the
-rig file, the LIS3DH pitch and the unit's camera tilt, P8-5), so the pitch is
-applied. **Sign:** positive when the target line lies to the RIGHT of the unit's
-boresight, as seen from behind the unit (the shared contract with D36).
-
-**Far or near.** An aim point on a far flag is a direction: the line from the
-ball runs parallel to the aim pixel's ray (``direction``). An aim point on a net
-or screen a few metres away is not quite one: a ball aside of the lens sees the
-target at a different azimuth from the lens (parallax). When the tester also
-marks the floor line (where the floor meets the screen), the aim point is put on
-that screen, dropped to the floor, and the line runs from the ball to that floor
-point (``floor_point``). Without a floor line the aim is taken as a direction,
-the method is recorded, and the parallax the direction leaves at the net's range
-is added to the uncertainty at the hand-off.
-
-**Roll.** The camera applies the LIS3DH roll only on a unit whose tilt check
-verified it (``camera_roll``). A camera rolled by r turns the picture about its
-centre, so an aim point d rows from the centre moves about d * sin(r) columns: at
-the horizon row nothing, 1.4 m up a screen 4.5 m out (about 270 rows above the
-centre) about 0.9 deg for a 3 deg roll. The roll the camera does not apply is
-carried in the uncertainty (``roll_deg``) with the patch's roll pad (the reading,
-at least 1 deg, or 3 deg without one); an applied roll carries only its residual.
-An aim point low on the screen, near where it meets the floor, keeps it small.
-
-**Lens.** The nominal model is a distortion-free pinhole; the stock 2.8 mm lens
-has a barrel of about 16 % at the 1280 frame's edge (field frames, 30 Sept). It
-is not corrected (no calibration measures it), only carried in the uncertainty
-(``lens_distortion_deg``): small near the middle of the picture, so the unit
-should be turned to face the target roughly.
-
-**Camera to IWR.** The rig file has no yaw term between the camera and the IWR:
-they share a boresight in azimuth by design (the IWR is pitched 10 deg up, which
-does not turn it sideways; ``iwr_offset_mm`` puts it straight below the lens).
-So one yaw applies to both, and both sensors get the same offset. A measured
-camera-to-IWR yaw, when the rig file has one, enters ``iwr_yaw_deg`` here.
-
-**Kiosk offset.** The kiosk *adds* one horizontal offset to every measured angle,
-the boresight's azimuth from the target line (positive when the boresight points
-right of the target line). That is minus the target line's yaw, so the setup
-record's aim gives ``kiosk_offset_deg = -yaw_deg``: a ball launched straight down
-the target line then reads 0.
+A far aim point is a direction (``direction``); with a floor line marked the aim is
+dropped to the floor (``floor_point``), removing parallax. Unapplied roll (an aim point
+d rows off centre moves ~d*sin(r) columns), the stock lens's ~16 % edge barrel and the
+direction's parallax are carried as uncertainty, not corrected.
 """
 
 from __future__ import annotations
@@ -70,31 +30,23 @@ KIOSK_OFFSET_CONVENTION = (
     "kiosk_offset_deg = -yaw_deg: the camera and the IWR take the boresight's azimuth from "
     "the target line, added to measured horizontal angles"
 )
-# The rig file carries no camera-to-IWR yaw: a shared boresight by design, not measured.
 CAMERA_TO_IWR_YAW_DEG = 0.0
 CAMERA_TO_IWR_BASIS = "rig_file_has_no_yaw_term_shared_boresight_by_design_not_measured"
-# How well a mouse puts the aim on the target, in 1280x800 pixels: the floor.
+# mouse aim floor, in 1280x800 pixels
 AIM_PIXEL_UNCERTAINTY_PX = 2.0
-# A finger on the preview: this many screen pixels, times the preview's frame pixels
-# per screen pixel (``display_scale``, the page sends it). Without it a finger on
-# the Pi's own preview is assumed: 20-40 frame px (13 Oct audit), this much.
+# touch uncertainty in screen px, times ``display_scale`` (frame px per screen px);
+# without a scale the Pi's own preview is assumed (20-40 frame px)
 TOUCH_UNCERTAINTY_SCREEN_PX = 12.5
 DEFAULT_TOUCH_UNCERTAINTY_FRAME_PX = 30.0
 FLOOR_LINE_PIXEL_UNCERTAINTY_PX = 2.0
-# A re-confirmed aim point (or floor line end) that moved less than this has not moved.
 AIM_MOVE_TOLERANCE_PX = 4.0
-# The stock lens's barrel, as a one-term radial model at 1280 px wide (Outdoors-test-5,
-# 30 Sept: about 16 % at the horizontal edge). Carried as uncertainty only.
+# stock lens barrel, one-term radial model at 1280 px wide (~16 % at the edge);
+# uncertainty only
 STOCK_LENS_BARREL_K1_PER_PX2_AT_1280 = 4.0e-7
-# Beyond this the aim point sits far out in the picture, where the lens is least known.
 LARGE_YAW_WARNING_DEG = 15.0
-# A floor line shorter than this on the ground cannot give the screen's direction.
 MIN_FLOOR_LINE_M = 0.05
-# The target must lie at least this far beyond the ball along the boresight.
 MIN_TARGET_BEYOND_BALL_M = 0.05
-# The target distances a direction's parallax is shown for: a net, a screen, a flag.
 PARALLAX_REFERENCE_DISTANCES_M = (3.0, 5.0, 10.0, 100.0)
-# The alignment stick (Part B) agrees when within this many combined uncertainties.
 STICK_AGREEMENT_SIGMA = 2.0
 
 
@@ -199,18 +151,13 @@ def solve_yaw(  # pylint: disable=too-many-return-statements
 
 
 class _RemappedRays:  # pylint: disable=too-few-public-methods
-    """A camera whose pixels are moved before its own ray model sees them.
-
-    How a wrong pitch, an unapplied roll, a wrong focal length or the lens's
-    barrel moves a pixel, applied to any model (nominal or calibrated).
-    """
+    """A camera whose pixels are remapped (pitch, roll, focal, barrel) before its ray model."""
 
     def __init__(self, model, remap: Callable[[np.ndarray], np.ndarray]):
         self._model = model
         self._remap = remap
 
     def rays(self, pixels_px: Any) -> np.ndarray:
-        """The model's rays for the moved pixels."""
         pixels = np.asarray(pixels_px, dtype=float)
         return self._model.rays(self._remap(pixels.reshape(-1, 2)).reshape(pixels.shape))
 
@@ -238,7 +185,6 @@ class _PitchedRays:  # pylint: disable=too-few-public-methods
         )
 
     def rays(self, pixels_px: Any) -> np.ndarray:
-        """The model's rays, turned."""
         rays = np.asarray(self._model.rays(pixels_px), dtype=float)
         return rays @ self._turn.T
 
@@ -302,8 +248,7 @@ def _uncertainty(  # pylint: disable=too-many-arguments,too-many-locals
     unbounded: set[str] = set()
 
     def spread(name: str, solutions: list[TargetLineSolution]) -> float:
-        """The part's spread; a perturbation that changes the method leaves it unbounded:
-        a fallback is a different estimate, never a tighter one."""
+        """The part's spread; a perturbation that changes the method leaves it unbounded."""
         if any(item.method != solved.method for item in solutions):
             unbounded.add(name)
         return _spread(solved.yaw_deg, [item.yaw_deg for item in solutions])
@@ -407,11 +352,7 @@ def net_range_from_floor_line(
     tilt_pad_deg: float,
     roll_deg: float | None,
 ) -> dict[str, Any]:
-    """The net's distance from the unit, from the floor line the tester taps.
-
-    The floor point under the line's midpoint, as a horizontal distance from the rig's
-    origin. A line at or above the horizon, or not beyond the ball, measures nothing.
-    """
+    """The net's horizontal distance from the rig origin, at the floor line's midpoint."""
     first, second = (np.asarray(end, dtype=float) for end in floor_line_px)
     midpoint = (first + second) / 2.0
     point = _ground_point(camera, midpoint)
@@ -427,7 +368,7 @@ def net_range_from_floor_line(
     value = float(math.hypot(point[0], point[1]))
     roll_pad = ground_patch.roll_pad_deg(camera, roll_deg)
     touch = np.asarray([0.0, FLOOR_LINE_PIXEL_UNCERTAINTY_PX])
-    # Tilt, roll and the touch are separate errors; they add in quadrature, as in the yaw's.
+    # tilt, roll and touch are independent: they add in quadrature
     cases = (
         [(_pitched(camera, sign * float(tilt_pad_deg)), midpoint) for sign in (1.0, -1.0)],
         [(_rolled(camera, sign * roll_pad), midpoint) for sign in (1.0, -1.0)],
@@ -437,7 +378,6 @@ def net_range_from_floor_line(
     for case in cases:
         moved = [distance(model, pixel) for model, pixel in case]
         if any(item is None for item in moved):
-            # a ray the pad lifts to the horizon has no floor point: the distance is unbounded
             return _net_default("too close to the horizon to measure")
         parts.append(_spread(value, moved))
     return {
@@ -479,12 +419,10 @@ def target_line_record(  # pylint: disable=too-many-arguments
 ) -> dict[str, Any]:
     """The target line as it is stored, shown and handed on.
 
-    ``ball_lfu`` is the box's ball on the floor (rig frame); ``tilt_pad_deg`` the
-    camera tilt's uncertainty; ``roll_deg`` the LIS3DH roll the camera does not
-    apply (against the rig's expected placement; 0 once applied). ``display_scale``
-    (frame px per screen px) sizes the touch's own uncertainty; ``target_distance_m`` is how far
-    the target is taken to be beyond the ball, for the direction's parallax, which
-    ``total_uncertainty_deg`` (the one +- the page shows) includes.
+    ``ball_lfu`` is the ball on the floor (rig frame); ``tilt_pad_deg`` the camera tilt's
+    uncertainty; ``roll_deg`` the LIS3DH roll the camera does not apply (0 once applied);
+    ``display_scale`` is frame px per screen px; ``target_distance_m`` is the target's
+    distance beyond the ball, for the direction's parallax.
     """
     aim = _pixel(aim_px, camera, "aim_px")
     floor = parse_floor_line(floor_line_px, camera)
@@ -571,7 +509,6 @@ def target_line_record(  # pylint: disable=too-many-arguments
             else None
         ),
         "ball_offset_from_aim_ray_m": round(offset_m, 4),
-        # what a direction can be off by if the target is really this far from the ball
         "parallax_deg_at_m": {
             f"{distance:g}": round(math.degrees(math.atan2(abs(offset_m), distance)), 3)
             for distance in PARALLAX_REFERENCE_DISTANCES_M
@@ -587,8 +524,7 @@ def target_line_record(  # pylint: disable=too-many-arguments
             "camera_to_iwr_basis": CAMERA_TO_IWR_BASIS,
         },
         "uncertainty": uncertainty,
-        # the one +- the page shows: every part, the touch and the parallax at the
-        # target's distance; None when a part has no bound (13 Oct)
+        # None when any part has no bound
         "total_uncertainty_deg": shown,
         "parallax_deg": round(parallax, 4) if parallax is not None else None,
         "parallax_distance_m": target_distance_m,
@@ -615,11 +551,7 @@ def _point_moved(before: Any, after: Any) -> bool:
 
 
 def target_line_moved(previous: Mapping | None, current: Mapping | None) -> bool:
-    """Whether a target line is somewhere else: its aim, its floor line or its ball.
-
-    Pixels compare within ``AIM_MOVE_TOLERANCE_PX``; the ball (the patch centre)
-    within the patch's own tolerance.
-    """
+    """Whether a target line's aim, floor line or ball has moved beyond tolerance."""
     if not isinstance(previous, Mapping) or not isinstance(current, Mapping):
         return True
     if _point_moved(previous.get("aim_px"), current.get("aim_px")):
@@ -655,12 +587,7 @@ def handoff(
     target_distance_m: float | None,
     distance_basis: str | None,
 ) -> dict[str, Any]:
-    """The record of the target line a run is handed: its yaw for the camera and the IWR.
-
-    ``target_distance_m`` is how far the target is taken to be for a direction's
-    parallax: the net's range from the empty static capture, or the swing
-    server's default (``distance_basis`` says which).
-    """
+    """The record of the target line a run is handed: its yaw for the camera and the IWR."""
     if not isinstance(record, Mapping):
         return {
             "schema": SCHEMA,
@@ -729,7 +656,7 @@ SKIPPED_REASON = (
 
 
 def skipped_record() -> dict[str, Any]:
-    """The aim step skipped (13 Oct): swings measure from the unit's boresight, labelled."""
+    """The aim step skipped: swings measure from the unit's boresight, labelled."""
     from datetime import datetime, timezone  # noqa: PLC0415
 
     return {
@@ -749,12 +676,7 @@ def compare_with_alignment_stick(
     stick_uncertainty_deg: float,
     source: str = "alignment_stick",
 ) -> dict[str, Any]:
-    """The aim point's yaw against an independent alignment-stick yaw (Part B's check).
-
-    The stick's yaw takes the same sign convention. Nothing is replaced: the
-    comparison is recorded, and a disagreement beyond ``STICK_AGREEMENT_SIGMA``
-    combined uncertainties says the aim point, the stick or the unit moved.
-    """
+    """Compare the aim point's yaw with an alignment-stick yaw (same sign); nothing is replaced."""
     aim_yaw = float(record["yaw_deg"])
     aim_uncertainty = float((record.get("uncertainty") or {}).get("total_deg") or 0.0)
     # an unbounded aim never agrees by its own width

@@ -1,4 +1,5 @@
 """Tests for src/openflight/gspro/messages.py."""
+
 import json
 
 import pytest
@@ -16,10 +17,20 @@ from openflight.gspro.messages import (
 
 def test_serialize_minimum_shot():
     payload = ShotPayload(
-        DeviceID="OpenFlight", Units="Yards", ShotNumber=1, APIversion="1",
-        BallData=BallData(Speed=147.5, HLA=2.3, VLA=14.3, TotalSpin=2500.0,
-                          SpinAxis=-3.0, BackSpin=2496.6, SideSpin=-130.8,
-                          CarryDistance=240.0),
+        DeviceID="OpenFlight",
+        Units="Yards",
+        ShotNumber=1,
+        APIversion="1",
+        BallData=BallData(
+            Speed=147.5,
+            HLA=2.3,
+            VLA=14.3,
+            TotalSpin=2500.0,
+            SpinAxis=-3.0,
+            BackSpin=2496.6,
+            SideSpin=-130.8,
+            CarryDistance=240.0,
+        ),
         ClubData=ClubData(Speed=110.0, Path=1.0),
         ShotDataOptions=ShotDataOptions(),
     )
@@ -34,13 +45,24 @@ def test_serialize_minimum_shot():
 
 def test_serialize_includes_all_required_keys():
     payload = ShotPayload(
-        DeviceID="X", Units="Yards", ShotNumber=1, APIversion="1",
-        BallData=BallData(), ClubData=ClubData(),
+        DeviceID="X",
+        Units="Yards",
+        ShotNumber=1,
+        APIversion="1",
+        BallData=BallData(),
+        ClubData=ClubData(),
         ShotDataOptions=ShotDataOptions(),
     )
     obj = json.loads(serialize_payload(payload))
-    for key in ("DeviceID", "Units", "ShotNumber", "APIversion",
-                "BallData", "ClubData", "ShotDataOptions"):
+    for key in (
+        "DeviceID",
+        "Units",
+        "ShotNumber",
+        "APIversion",
+        "BallData",
+        "ClubData",
+        "ShotDataOptions",
+    ):
         assert key in obj
     for key in ("Speed", "SpinAxis", "TotalSpin", "BackSpin", "SideSpin", "HLA", "VLA"):
         assert key in obj["BallData"]
@@ -58,38 +80,26 @@ def test_serialize_includes_all_required_keys():
         assert key in obj["ClubData"]
 
 
-def test_carry_distance_is_optional_and_sent_only_when_known():
-    """An unknown carry is left off the wire rather than sent as 0 (optional in OpenConnect V1)."""
+@pytest.mark.parametrize(
+    ("section", "data", "key", "value"),
+    [("BallData", BallData, "CarryDistance", 243.8), ("ClubData", ClubData, "Path", -1.5)],
+)
+def test_an_optional_value_is_sent_only_when_known(section, data, key, value):
+    """An unknown value is left off the wire rather than sent as 0 (optional in OpenConnect V1)."""
 
-    def ball_data(**kw):
+    def sent(**kw):
         payload = ShotPayload(
             DeviceID="X",
             Units="Yards",
             ShotNumber=1,
             APIversion="1",
-            BallData=BallData(Speed=150.0, **kw),
+            **{section: data(Speed=1.0, **kw)},
         )
-        return json.loads(serialize_payload(payload))["BallData"]
+        return json.loads(serialize_payload(payload))[section]
 
-    assert "CarryDistance" not in ball_data()
-    assert ball_data(CarryDistance=243.8)["CarryDistance"] == 243.8
-    assert ball_data(CarryDistance=0.0)["CarryDistance"] == 0.0
-
-
-def test_club_path_is_optional_and_sent_only_when_known():
-    def club_data(**kw):
-        payload = ShotPayload(
-            DeviceID="X",
-            Units="Yards",
-            ShotNumber=1,
-            APIversion="1",
-            ClubData=ClubData(Speed=110.0, **kw),
-        )
-        return json.loads(serialize_payload(payload))["ClubData"]
-
-    assert "Path" not in club_data()
-    assert club_data(Path=-1.5)["Path"] == -1.5
-    assert club_data(Path=0.0)["Path"] == 0.0
+    assert key not in sent()
+    assert sent(**{key: value})[key] == value
+    assert sent(**{key: 0.0})[key] == 0.0
 
 
 def test_build_heartbeat():

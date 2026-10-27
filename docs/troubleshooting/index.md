@@ -57,7 +57,7 @@ means different things depending on which subsystem produced it.
 | `WHO_AM_I expected 0x33` | [Inclinometer § WHO_AM_I](../build/inclinometer.md#who_am_i-expected-0x33) |
 | Permission denied on `/dev/i2c-1` | [Inclinometer § Permission denied](../build/inclinometer.md#permission-denied-on-devi2c-1) |
 | Pitch sign is backward | [Inclinometer § Pitch sign is backward](../build/inclinometer.md#pitch-sign-is-backward) |
-| Shots report `moving` or `stale` | [Inclinometer § Noisy pitch](../build/inclinometer.md#pitch-is-noisy-or-shots-report-moving) |
+| Shots report `moved`, `unconfirmed` or `stale` | [Inclinometer § Noisy pitch](../build/inclinometer.md#pitch-is-noisy-or-shots-report-moved-or-unconfirmed) |
 | Pi reboots or shows a black screen | [Inclinometer § Pi reboots](../build/inclinometer.md#pi-reboots-shows-a-black-screen-or-runs-the-fan-at-full-speed) |
 
 ## Battery and power

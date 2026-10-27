@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from openflight import server as server_module
 from openflight.clubs import ClubType
 from openflight.iwr6843 import launch_range as lr
@@ -133,25 +135,20 @@ def test_a_shot_without_an_iwr_capture_says_why_its_range_is_missing(monkeypatch
     assert "no IWR capture" in shot.ball_range_reason
 
 
-def test_the_camera_and_full_speed_use_the_shot_s_own_range(monkeypatch):
+@pytest.mark.parametrize("ranged", [True, False])
+def test_the_camera_and_full_speed_use_the_shot_s_own_range(monkeypatch, ranged):
     calibration = Calibration.identity()
     calibration.tee_range_m = None
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
     shot = _shot()
-    shot.ball_range_m = 2.08
-    shot.ball_range_uncertainty_m = 0.03
-    shot.ball_range_source = "iwr_post_impact"
+    if ranged:
+        shot.ball_range_m = 2.08
+        shot.ball_range_uncertainty_m = 0.03
+        shot.ball_range_source = "iwr_post_impact"
 
     shot_calibration = server_module.shot_iwr_calibration(shot)
 
-    assert shot_calibration.tee_range_m == 2.08
-    assert shot_calibration.tee_range_uncertainty_m == 0.03
+    assert shot_calibration.tee_range_m == (2.08 if ranged else None)
+    if ranged:
+        assert shot_calibration.tee_range_uncertainty_m == 0.03
     assert calibration.tee_range_m is None  # the session's calibration is never changed
-
-
-def test_a_shot_without_a_range_has_no_range_for_the_camera(monkeypatch):
-    calibration = Calibration.identity()
-    calibration.tee_range_m = None
-    monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace(calibration=calibration))
-
-    assert server_module.shot_iwr_calibration(_shot()).tee_range_m is None

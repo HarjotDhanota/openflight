@@ -163,7 +163,6 @@ def unregister(extension: KioskExtension) -> None:
 
 
 def registered() -> tuple[KioskExtension, ...]:
-    """The registered extensions, in registration order."""
     with _lock:
         return tuple(_extensions)
 
@@ -213,7 +212,6 @@ def call_all(hook: str, *args: Any, **kwargs: Any) -> None:
 
 
 def any_true(hook: str, *args: Any, **kwargs: Any) -> bool:
-    """True when any extension answers True."""
     return any(getattr(extension, hook)(*args, **kwargs) for extension in registered())
 
 

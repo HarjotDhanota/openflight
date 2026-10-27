@@ -18,13 +18,6 @@
       "pending": null
     },
     {
-      "id": "ball_speed_full",
-      "label": "Ball speed (full)",
-      "group": "ball",
-      "unit": "mph",
-      "pending": null
-    },
-    {
       "id": "launch_vertical",
       "label": "Vertical launch",
       "group": "ball",
@@ -53,22 +46,8 @@
       "pending": null
     },
     {
-      "id": "gyro",
-      "label": "Gyro",
-      "group": "ball",
-      "unit": "deg",
-      "pending": null
-    },
-    {
       "id": "smash_factor",
       "label": "Smash (radial)",
-      "group": "ball",
-      "unit": "",
-      "pending": null
-    },
-    {
-      "id": "smash_factor_full",
-      "label": "Smash (full)",
       "group": "ball",
       "unit": "",
       "pending": null
@@ -88,64 +67,8 @@
       "pending": null
     },
     {
-      "id": "carry_side",
-      "label": "Carry side",
-      "group": "flight",
-      "unit": "yd",
-      "pending": null
-    },
-    {
-      "id": "total",
-      "label": "Total",
-      "group": "flight",
-      "unit": "yd",
-      "pending": null
-    },
-    {
-      "id": "total_side",
-      "label": "Total side",
-      "group": "flight",
-      "unit": "yd",
-      "pending": null
-    },
-    {
-      "id": "apex",
-      "label": "Apex",
-      "group": "flight",
-      "unit": "yd",
-      "pending": null
-    },
-    {
-      "id": "landing_angle",
-      "label": "Landing angle",
-      "group": "flight",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "hang_time",
-      "label": "Hang time",
-      "group": "flight",
-      "unit": "s",
-      "pending": null
-    },
-    {
-      "id": "curve",
-      "label": "Curve",
-      "group": "flight",
-      "unit": "yd",
-      "pending": null
-    },
-    {
       "id": "club_speed",
       "label": "Club speed (radial)",
-      "group": "club",
-      "unit": "mph",
-      "pending": null
-    },
-    {
-      "id": "club_speed_full",
-      "label": "Club speed (full)",
       "group": "club",
       "unit": "mph",
       "pending": null
@@ -160,111 +83,6 @@
     {
       "id": "attack_angle",
       "label": "Attack angle",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "face_angle",
-      "label": "Face angle",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "face_to_path",
-      "label": "Face to path",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "dynamic_loft",
-      "label": "Dynamic loft",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "spin_loft",
-      "label": "Spin loft",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "spin_index",
-      "label": "Spin index",
-      "group": "club",
-      "unit": "%",
-      "pending": null
-    },
-    {
-      "id": "smash_index",
-      "label": "Smash index",
-      "group": "club",
-      "unit": "%",
-      "pending": null
-    },
-    {
-      "id": "d_plane_tilt",
-      "label": "D-plane tilt",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "swing_plane",
-      "label": "Swing plane",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "swing_direction",
-      "label": "Swing direction",
-      "group": "club",
-      "unit": "deg",
-      "pending": null
-    },
-    {
-      "id": "low_point_distance",
-      "label": "Low point distance",
-      "group": "club",
-      "unit": "mm",
-      "pending": null
-    },
-    {
-      "id": "low_point_height",
-      "label": "Low point height",
-      "group": "club",
-      "unit": "mm",
-      "pending": null
-    },
-    {
-      "id": "low_point_side",
-      "label": "Low point side",
-      "group": "club",
-      "unit": "mm",
-      "pending": null
-    },
-    {
-      "id": "impact_offset",
-      "label": "Impact offset",
-      "group": "club",
-      "unit": "mm",
-      "pending": null
-    },
-    {
-      "id": "impact_height",
-      "label": "Impact height",
-      "group": "club",
-      "unit": "mm",
-      "pending": null
-    },
-    {
-      "id": "dynamic_lie",
-      "label": "Dynamic lie",
       "group": "club",
       "unit": "deg",
       "pending": null

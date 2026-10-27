@@ -10,11 +10,11 @@ import numpy as np
 
 from openflight.camera.geometry import intersect_radar_range_sphere
 from openflight.camera.reference_ball_range import GOLF_BALL_DIAMETER_M, BallPlaneCamera
+from openflight.iwr6843.tracking import MPH_PER_MS
 
 # OpenCV's extension members are not visible to Pylint.
 # pylint: disable=no-member
 
-MPH_PER_MS = 2.23694
 MIN_PATH_POINTS = 5
 MAX_CLOCK_UNCERTAINTY_S = 0.005
 AMBIGUITY_SCORE_MARGIN = 0.75

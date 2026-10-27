@@ -53,36 +53,33 @@ def _result(gain, mean, clipped, dark=0.0):
     return {"gain": gain, "mean": mean, "clipped_pct": clipped, "dark_pct": dark}
 
 
-def test_a_dark_scene_is_not_told_to_reduce_its_brightness():
-    """At dusk the best gain is still too dark and every brighter gain clips."""
-    results = [
-        _result(4, 48.6, 0.97),
-        _result(1, 23.9, 0.0),
-        _result(6, 60.6, 8.55),
-        _result(15.9, 94.3, 14.14),
-    ]
-
+@pytest.mark.parametrize(
+    ("results", "says", "never"),
+    [
+        # dusk: the best gain is still too dark and every brighter gain clips
+        (
+            [_result(4, 48.6, 0.97), _result(1, 23.9, 0.0), _result(6, 60.6, 8.55)]
+            + [_result(15.9, 94.3, 14.14)],
+            ("too dark", "48.6", "brighter settings clip"),
+            "reduce scene brightness",
+        ),
+        # too dark with headroom: add light or sweep higher
+        (
+            [_result(16, 50.0, 0.0), _result(8, 30.0, 0.0)],
+            ("too dark", "add light"),
+            "reduce scene brightness",
+        ),
+        (
+            [_result(1, 190.0, 6.0), _result(2, 230.0, 20.0)],
+            ("too bright", "6.00% clipped", "reduce scene brightness"),
+            None,
+        ),
+    ],
+)
+def test_the_miss_reason_tells_a_dark_scene_to_add_light_and_a_bright_one_to_dim(
+    results, says, never
+):
     reason = _module().miss_reason(results[0], results, _sweep_args())
 
-    assert "reduce scene brightness" not in reason
-    assert "too dark" in reason and "48.6" in reason
-    assert "brighter settings clip" in reason
-
-
-def test_a_dark_scene_with_headroom_is_told_to_add_light_or_sweep_higher():
-    results = [_result(16, 50.0, 0.0), _result(8, 30.0, 0.0)]
-
-    reason = _module().miss_reason(results[0], results, _sweep_args())
-
-    assert "too dark" in reason
-    assert "add light" in reason
-    assert "reduce scene brightness" not in reason
-
-
-def test_a_bright_scene_is_still_told_to_reduce_its_brightness():
-    results = [_result(1, 190.0, 6.0), _result(2, 230.0, 20.0)]
-
-    reason = _module().miss_reason(results[0], results, _sweep_args())
-
-    assert "too bright" in reason and "6.00% clipped" in reason
-    assert "reduce scene brightness" in reason
+    assert all(phrase in reason for phrase in says), reason
+    assert never is None or never not in reason

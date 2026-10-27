@@ -158,9 +158,8 @@ describe('faceImpact', () => {
     expect(blade).toBeLessThanOrEqual(87);
   });
 
-  /* The face's height at the centre (bottom edge to top line) is the population mean
-   * (docs/camera/impact-location.md): woods' visible face height, irons' at C. So is a wood face's
-   * width; a blade's face is its head inset by the band, so its width follows the head. */
+  /* Face height at the centre (bottom edge to top line) and a wood face's width are population
+   * means (docs/camera/impact-location.md); a blade's face width follows its head. */
   it.each([
     ['driver', 110, 50.4],
     ['fairway', 90, 30],
@@ -596,6 +595,9 @@ describe('FaceImpactView', () => {
       expect(clip).toMatch(/^url\(#.+\)$/);
       expect(html).toContain(`id="${clip!.slice(5, -1)}"`);
       expect(html).toContain('Illustrative face and contact mark');
+      // the label is the rounded mm; the dot sits at the unrounded value
+      expect(html).toContain('Toe 9 mm');
+      expect(attr(html, 'face-impact__dot', 'cx')).toBe(hand === 'left' ? '8.64' : '-8.64');
     }
   );
 
@@ -621,6 +623,10 @@ describe('FaceImpactView', () => {
     expect(attr(html, 'face-impact__dot', 'cy')).toBe('-3');
     expect(attr(html, 'face-impact__ellipse', 'rx')).toBe('4');
     expect(attr(html, 'face-impact__ellipse', 'ry')).toBe('5');
+    // always millimetres, with centre lines and no grid
+    expect(html).not.toContain('grid');
+    expect(html).not.toContain(' in ');
+    expect(html.match(/face-impact__centre-line"/g)).toHaveLength(2);
   });
 
   it('draws the club as a filled silhouette: head, face, hosel, ferrule, shaft and score lines', () => {
@@ -656,22 +662,6 @@ describe('FaceImpactView', () => {
     expect(attr(html, 'face-impact__dot', 'cx')).toBe('8');
   });
 
-  it('draws each club category with its own face', () => {
-    expect(render(shot({ club: 'driver' }))).toContain('data-face="driver"');
-    expect(render(shot({ club: '3-wood' }))).toContain('data-face="fairway"');
-    expect(render(shot({ club: '4-hybrid' }))).toContain('data-face="hybrid"');
-    expect(render(shot({ club: 'sw' }))).toContain('data-face="wedge"');
-  });
-
-  it('always reads in millimetres, with centre lines and no grid', () => {
-    const html = render(shot());
-    expect(html).toContain('Toe 8 mm');
-    expect(html).toContain('Illustrative face');
-    expect(html).not.toContain('grid');
-    expect(html).not.toContain(' in ');
-    expect(html.match(/face-impact__centre-line"/g)).toHaveLength(2);
-  });
-
   it.each(
     (Object.keys(FACE_SHAPES) as FaceCategory[]).flatMap((category) =>
       (['right', 'left'] as const).flatMap((hand) => [
@@ -701,15 +691,8 @@ describe('FaceImpactView', () => {
     expect(Math.abs(-dy - height)).toBeLessThanOrEqual(0.1);
     expect(Number(attr(html, 'face-impact__ellipse', 'rx'))).toBeCloseTo(4, 5);
     expect(Number(attr(html, 'face-impact__ellipse', 'ry'))).toBeCloseTo(5, 5);
-    const toe = html.indexOf('>Toe<') > -1;
-    expect(toe).toBe(true);
-  });
-
-  it('labels the rounded mm but places the dot at the unrounded value', () => {
-    const html = render(shot({}, { impact_offset: reading(8.64, 4), impact_height: reading(-0.46, 5) }));
-    expect(html).toContain('Toe 9 mm');
-    expect(attr(html, 'face-impact__dot', 'cx')).toBe('-8.64');
-    expect(attr(html, 'face-impact__dot', 'cy')).toBe('0.46');
+    expect(html.indexOf('>Toe<')).toBeGreaterThan(-1);
+    expect(html).toContain(`data-face="${category}"`);
   });
 
   it('says why when the shot was not read, and draws no dot', () => {

@@ -1,4 +1,4 @@
-"""The owner's own TM4 normalized export, read in place for the regression checks."""
+"""The in-repo TM4 normalized export, read in place for the regression checks."""
 
 from __future__ import annotations
 

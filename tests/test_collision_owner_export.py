@@ -1,11 +1,7 @@
-"""The collision model against the owner's own export session.
+"""The collision model against the in-repo TM4 export session (24 shots: driver, 7i, PW).
 
-The export (``session_logs/OpenFlight-Test.Normalized.csv``, 24 shots: driver,
-7-iron, pitching wedge) records each shot's club delivery, impact location, ball
-launch, spin and indices. The gear gains (with a second session's export) and
-the per-club expected ball speed were fitted to it; the launch, spin and loss
-constants were not. The budgets are the model's
-own numbers on it with a little room, each against the model it replaced.
+The gear gains (with a second session's export) and the per-club expected ball speed were
+fitted to it; the launch, spin and loss constants were not. Budgets are the model's own numbers.
 """
 
 from __future__ import annotations

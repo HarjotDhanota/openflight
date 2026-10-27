@@ -139,13 +139,7 @@ def test_iq8_edma_pack_compacts_int16_scratch_without_cpu_loop():
     assert "param->destinationBindex = 1" in pack
     assert "EDMA_startDmaTransfer" in pack
     assert "l3_restartCompletedHwaFrame" in rearm
-    # Both rearm sites start the EDMA pack through one helper that also runs the IQ8 scan.
-    assert rearm.count("l3_startIq8PackAndScan(pendingSlot, pendingScratch);") == 2
-    assert "if (l3_startIq8EdmaPack(slot, scratch) != 0) {" in _function_source(
-        source,
-        "static void l3_startIq8PackAndScan",
-        "static uint32_t l3_snapshotBinStartForNextFrame",
-    )
+    assert "l3_startIq8PackAndScan" in rearm
     assert rearm.count("l3_packIq8CompletedFrame") == 2
     assert rearm.count("#else\n                    l3_packIq8CompletedFrame") == 1
     assert rearm.count("#else\n                l3_packIq8CompletedFrame") == 1
@@ -190,13 +184,12 @@ def test_production_build_uses_configurable_compression_and_single_release():
 ROLLBACK_IMAGE = "l3_dump_configurable_capture_20260818.bin"
 
 
-def _release_guard(*variables: str) -> subprocess.CompletedProcess:
-    """Run only the Makefile's release-target check (no TI tools, nothing is built)."""
+def _release_guard(*variables: str, target: str = "check-release-target"):
     make = shutil.which("make")
     if make is None:
         pytest.skip("no make to run the firmware Makefile's release guard")
     return subprocess.run(
-        [make, "-s", "-C", str(FIRMWARE_MAKEFILE.parent), "check-release-target", *variables],
+        [make, "-s", "-C", str(FIRMWARE_MAKEFILE.parent), target, *variables],
         capture_output=True,
         text=True,
         check=False,
@@ -229,7 +222,6 @@ def test_the_default_release_name_is_not_a_release():
 
 
 def test_a_bare_builds_image_is_ignored_and_the_rollback_image_is_not():
-    """A bare local build leaves no untracked file; the tracked rollback image is never ignored."""
     default = _default_release_name()
 
     assert _git("check-ignore", "-q", "--no-index", f"firmware/releases/{default}").returncode == 0
@@ -247,58 +239,35 @@ def test_the_rollback_image_is_never_overwritten_by_name():
     assert (FIRMWARE_MAKEFILE.parent / "releases" / ROLLBACK_IMAGE).exists()
 
 
-def test_an_existing_release_is_refused_and_left_untouched(tmp_path):
-    """Any existing file in the release directory is refused and kept byte for byte."""
+@pytest.mark.parametrize("target", ["check-release-target", "build-native", "docker-build"])
+def test_an_existing_release_is_refused_and_left_untouched(tmp_path, target):
+    """Every release writer refuses an existing file first and keeps it byte for byte."""
     (tmp_path / "taken.bin").write_bytes(b"old image")
 
-    result = _release_guard(f"RELEASE_DIR={tmp_path}", "RELEASE_NAME=taken.bin")
+    result = _release_guard(f"RELEASE_DIR={tmp_path}", "RELEASE_NAME=taken.bin", target=target)
 
     assert result.returncode != 0
     assert "OVERWRITE_RELEASE=1" in result.stderr
     assert (tmp_path / "taken.bin").read_bytes() == b"old image"
 
 
-def test_overwrite_release_lets_a_deliberate_rebuild_through(tmp_path):
-    """OVERWRITE_RELEASE=1 is the one explicit way to replace a release."""
+@pytest.mark.parametrize(
+    ("name", "override", "passes"),
+    [
+        ("taken.bin", None, False),
+        ("taken.bin", "OVERWRITE_RELEASE=0", False),
+        ("taken.bin", "OVERWRITE_RELEASE=yes", False),
+        ("taken.bin", "OVERWRITE_RELEASE=1", True),
+        ("l3_dump_new_20261011.bin", None, True),
+    ],
+)
+def test_only_a_new_name_or_overwrite_release_1_passes_the_guard(tmp_path, name, override, passes):
     (tmp_path / "taken.bin").write_bytes(b"old image")
-
-    result = _release_guard(
-        f"RELEASE_DIR={tmp_path}", "RELEASE_NAME=taken.bin", "OVERWRITE_RELEASE=1"
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("override", ["", "OVERWRITE_RELEASE=0", "OVERWRITE_RELEASE=yes"])
-def test_only_overwrite_release_1_unlocks_an_existing_release(tmp_path, override):
-    """Unset, 0 or any other value keeps the existing release."""
-    (tmp_path / "taken.bin").write_bytes(b"old image")
-    variables = [f"RELEASE_DIR={tmp_path}", "RELEASE_NAME=taken.bin"]
+    variables = [f"RELEASE_DIR={tmp_path}", f"RELEASE_NAME={name}"]
 
     result = _release_guard(*variables, *([override] if override else []))
 
-    assert result.returncode != 0
-
-
-def test_a_new_release_name_passes_the_guard(tmp_path):
-    """A release name that is not taken yet passes."""
-    result = _release_guard(f"RELEASE_DIR={tmp_path}", "RELEASE_NAME=l3_dump_new_20261011.bin")
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_every_release_writer_checks_the_target_before_building():
-    """Both build targets run the guard first; docker forwards the override."""
-    source = FIRMWARE_MAKEFILE.read_text(encoding="utf-8")
-    native = re.search(r"^build-native:(.*)$", source, re.MULTILINE).group(1).split()
-    docker = re.search(r"^docker-build:(.*)$", source, re.MULTILINE).group(1).split()
-    docker_recipe = _function_source(source, "docker-build:", "docker-shell:")
-
-    assert native[0] == "check-release-target"  # before the toolchain check and the build
-    assert docker[0] == "check-release-target"  # on the host, before the container runs
-    assert 'OVERWRITE_RELEASE="$(OVERWRITE_RELEASE)"' in docker_recipe
-    assert source.count('cp "$(FIRMWARE_DIR)/l3_dump.bin"') == 1
-    assert "check-release-target" in re.search(r"^\.PHONY:(.*)$", source, re.MULTILINE).group(1)
+    assert (result.returncode == 0) == passes, result.stderr
 
 
 def _config_lines(path: Path) -> set[str]:

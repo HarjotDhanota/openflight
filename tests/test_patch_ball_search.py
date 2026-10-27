@@ -13,28 +13,8 @@ from openflight.camera.ground_patch import (
     project_patch,
     tilt_pads_deg,
 )
-from openflight.camera.reference_ball_range import (
-    BallPlaneCamera,
-    estimate_patch_ball,
-    project_to_pixel,
-)
-
-V3_FOCAL_1280 = 933.3334
-
-
-def v3(pitch_deg=0.0, width=1280, height=800):
-    return BallPlaneCamera.nominal(
-        focal_px=V3_FOCAL_1280 * width / 1280,
-        image_width_px=width,
-        image_height_px=height,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=0.0,
-        mirror_horizontal=False,
-        camera_origin_lfu=(0.0, 0.0, 0.095),
-        radar_origin_lfu=(0.0, -0.0014, 0.0588),
-        angular_uncertainty_deg=1.0,
-        focal_relative_uncertainty=0.08,
-    )
+from openflight.camera.reference_ball_range import estimate_patch_ball, project_to_pixel
+from tests.camera_helpers import V3_FOCAL_1280, lit_spheres as _lit_spheres, v3_camera as v3
 
 
 def search_for(camera, patch, *, calibrated=False, roll_deg=-2.62):
@@ -49,23 +29,6 @@ def _frames(image, count=7, seed=3):
     rng = np.random.default_rng(seed)
     noise = rng.normal(0.0, 0.8, (count, *image.shape))
     return np.clip(np.round(image[None] + noise), 0, 255).astype(np.uint8)
-
-
-def _lit_spheres(height, width, spheres, *, seed=4):
-    rng = np.random.default_rng(seed)
-    yy, xx = np.indices((height, width), dtype=float)
-    image = 55.0 + rng.normal(0.0, 1.0, (height, width))
-    light = np.asarray([-0.35, -0.62, 0.70])
-    light /= np.linalg.norm(light)
-    for cx, cy, radius, diffuse in spheres:
-        dx, dy = xx - cx, yy - cy
-        inside = dx * dx + dy * dy <= radius * radius
-        nz = np.sqrt(np.clip(radius * radius - dx * dx - dy * dy, 0.0, None)) / radius
-        shading = np.clip(
-            dx / radius * light[0] + dy / radius * light[1] + nz * light[2], 0.0, None
-        )
-        image[inside] = 42.0 + diffuse * shading[inside]
-    return _frames(image, seed=seed)
 
 
 def _ball(camera, lateral, forward):

@@ -66,15 +66,12 @@ surface). The setup screen writes it through the kiosk's `/api/setup/*` actions,
 the kiosk applies each change between two shots, without a restart;
 [`--setup-file`](cli.md#unit-setup) names another file.
 
-Each section keeps its `source` and its uncertainty, and the inputs it was confirmed
-against: the lens, the rig file and the camera tilt for the box, the box for the
-aim, ball range and scene. The box's id is its geometry and those inputs, never the
-ball's spot in it, so a ball anywhere in the box keeps the aim and ball range. Its pixels
-are the capture's; the setup converts none between capture sizes. At start, a section
-whose inputs no longer match is marked stale with the reason and is not applied. A section never set leaves the
-kiosk's own start values: no box, the unit-boresight frame, each shot ranged from
-its own capture without a prior, the 4.6 m net labelled `default_not_measured`, and
-the rig file's lens height. A missing or unreadable file starts with nothing set.
+Each section keeps its `source`, its uncertainty and the inputs it was confirmed
+against; one whose inputs no longer match is marked stale and not applied (see
+[what makes a step go stale](../how-it-works/setting-up.md#what-makes-a-step-go-stale)).
+A section never set leaves the kiosk's defaults: no box, the unit-boresight frame, no
+ball-range prior, the 4.6 m net labelled `default_not_measured`, and the rig file's
+lens height. A missing or unreadable file starts with nothing set.
 
 ## IWR6843 radar configs
 
@@ -114,7 +111,7 @@ field of view, provenance, and the exposure rungs each ladder mode allows. A len
 nominal focal length is the rig file's scaled by `focal_mm / 2.8`; a checkerboard
 calibration for its `lens_id` replaces it. The unit's choice and each lens's own
 modes, default mode and ladder are kept in `~/.config/openflight/camera-lens.json`.
-See [the fixed box](../camera/tester-fixed-box.md#the-lens).
+The kiosk's lens is chosen with [`--camera-lens-id`](cli.md#high-speed-camera-capture).
 
 ## `config/swing_exposure.json`
 
@@ -128,11 +125,11 @@ See [automatic exposure](../camera/README.md#automatic-exposure).
 
 ## `config/placement_box.json`
 
-The tester's fixed placement box: the placement window (`placement_window_m`,
+The fixed box the [setup screen](../how-it-works/setting-up.md) draws: the placement window (`placement_window_m`,
 1.8–2.9 m forward of the lens), its half width, the tilt margins it is drawn with
 (uncalibrated 3°, calibrated 1°), the distance windows' pads, the net margin and
 the size window's reach past the window. A malformed file is refused, never
-defaulted. See [the fixed box](../camera/tester-fixed-box.md).
+defaulted.
 
 ## `config/alloy.alloy`
 

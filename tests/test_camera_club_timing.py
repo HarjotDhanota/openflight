@@ -132,46 +132,36 @@ def test_a_clip_without_sensor_timestamps_still_times_by_arrival(monkeypatch):
     assert seen[0][0] == pytest.approx(tuple(stalled[[38, 41]] / 1e9))
 
 
-def test_fusion_replay_passes_the_clips_sensor_timestamps_to_club_delivery(monkeypatch):
-    from tests.test_camera_trigger_timing import (  # noqa: PLC0415
-        _fusion_archive,
-        _fusion_context,
-    )
-
-    seen = {}
-
-    def club_estimator(*_args, **kwargs):
-        seen["sensor"] = kwargs.get("sensor_timestamp_ns")
-        return ChainedDelivery(status="rejected_test")
-
-    monkeypatch.setattr(
-        fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate("rejected_test")
-    )
-    monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
-    sensor = np.arange(24, dtype=np.int64) * FRAME_NS
-
-    fp.process_camera_fusion(_fusion_context(), _fusion_archive(sensor_timestamp_ns=sensor))
-    np.testing.assert_array_equal(seen["sensor"], sensor)
-
-    fp.process_camera_fusion(_fusion_context(), _fusion_archive())
-    assert seen["sensor"] is None
-
-
-def test_the_live_path_passes_the_clips_sensor_timestamps_to_club_delivery(monkeypatch, tmp_path):
+@pytest.mark.parametrize("path", ["replay", "live"])
+def test_fusion_replay_passes_the_clips_sensor_timestamps_to_club_delivery(
+    monkeypatch, tmp_path, path
+):
+    from tests.test_camera_fusion_processing import _context_kwargs  # noqa: PLC0415
     from tests.test_camera_trigger_timing import (  # noqa: PLC0415
         _fusion_archive,
         _live_server,
     )
 
-    _live_server(monkeypatch, tmp_path)
     seen = {}
 
     def club_estimator(*_args, **kwargs):
         seen["sensor"] = kwargs.get("sensor_timestamp_ns")
         return ChainedDelivery(status="rejected_test")
 
-    monkeypatch.setattr(club_delivery_module, "estimate_chained_delivery", club_estimator)
     sensor = np.arange(24, dtype=np.int64) * FRAME_NS
+    if path == "replay":
+        monkeypatch.setattr(
+            fp, "estimate_camera_ball_flight", lambda *_a, **_k: CameraBallEstimate("rejected_test")
+        )
+        monkeypatch.setattr(fp, "estimate_chained_delivery", club_estimator)
+        context = fp.build_context(**_context_kwargs())
+        fp.process_camera_fusion(context, _fusion_archive(sensor_timestamp_ns=sensor))
+        np.testing.assert_array_equal(seen["sensor"], sensor)
+        fp.process_camera_fusion(context, _fusion_archive())
+        assert seen["sensor"] is None
+        return
+    _live_server(monkeypatch, tmp_path)
+    monkeypatch.setattr(club_delivery_module, "estimate_chained_delivery", club_estimator)
     shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
 
     server._fuse_camera_club_delivery(

@@ -540,11 +540,18 @@ def replay(args, *, frozen_session=None) -> dict:
             if isinstance(ball_speed, bool) or not isinstance(ball_speed, (int, float)):
                 raise ValueError("IWR capture event has no OPS ball speed")
             club_speed = ops_result.get("club_speed_mph") if isinstance(ops_result, dict) else None
-            if isinstance(per_shot_inputs, dict) and (
-                per_shot_inputs.get("ball_speed_mph") != ball_speed
-                or per_shot_inputs.get("club") != club
-                or per_shot_inputs.get("club_speed_mph") != club_speed
-            ):
+            replayed_inputs = {
+                "ball_speed_mph": ball_speed,
+                "club": club,
+                "club_speed_mph": club_speed,
+            }
+            changed_inputs = (
+                [key for key, value in replayed_inputs.items() if per_shot_inputs.get(key) != value]
+                if isinstance(per_shot_inputs, dict)
+                else []
+            )
+            recompute_inputs = bool(getattr(args, "recompute_iwr_inputs", False))
+            if changed_inputs and not recompute_inputs:
                 raise ValueError(
                     "replayed OPS/club inputs differ from recorded IWR per-shot inputs"
                 )
@@ -564,6 +571,13 @@ def replay(args, *, frozen_session=None) -> dict:
                 "runtime_config_sha256": canonical_runtime_hash,
                 "runtime_config_source": runtime_config_source,
             }
+            if recompute_inputs:
+                capture_evidence["input_binding"] = {
+                    "mode": "recomputed_ops_inputs",
+                    "recorded": per_shot_inputs,
+                    "replayed": replayed_inputs,
+                    "changed": changed_inputs,
+                }
             if tee_range_m is None:
                 report["stages"]["iwr6843"] = {
                     "status": "withheld",
@@ -780,6 +794,11 @@ def parser():
     result.add_argument("--camera-capture", type=Path)
     result.add_argument("--projection-manifest", type=Path)
     result.add_argument("--iwr", action="store_true")
+    result.add_argument(
+        "--recompute-iwr-inputs",
+        action="store_true",
+        help="Use this shot's recomputed OPS inputs for IWR; retain the recorded inputs and differences",
+    )
     result.add_argument("--iwr-calibration", type=Path)
     result.add_argument("--iwr-config", type=Path)
     result.add_argument("--iwr-runtime-config", type=Path)

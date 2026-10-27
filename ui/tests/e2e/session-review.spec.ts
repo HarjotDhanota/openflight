@@ -192,7 +192,7 @@ const review = {
 };
 
 // Every kiosk metric (openflight.shot_metrics), cycling through the five labels.
-const CATALOG = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.json', import.meta.url), 'utf8')) as {
+const CATALOG = JSON.parse(readFileSync(new URL('../../src/data/metricCatalog.shotModels.json', import.meta.url), 'utf8')) as {
   labels: string[];
   metrics: Array<{ id: string; label: string; group: string; unit: string }>;
 };

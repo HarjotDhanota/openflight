@@ -13,7 +13,6 @@ import numpy as np
 
 from .optical_calibration import (
     ARTIFACT_VERSION,
-    _finite_positive,
     _mapping,
     _nonempty_string,
     _positive_int,
@@ -24,6 +23,15 @@ from .optical_calibration import (
 
 MIN_FIT_VIEWS = 10
 MIN_VALIDATION_VIEWS = 3
+
+
+def _finite_positive(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+        raise ValueError(f"{name} must be a positive finite number")
+    result = float(value)
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return result
 
 
 def _validate_board(board: Mapping[str, Any]) -> dict[str, Any]:

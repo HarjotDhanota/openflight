@@ -99,23 +99,12 @@ For the Adafruit board:
 
 The validated installation aligns **Y with the radar tilt direction**. Positive
 Y must increase when the enclosure tilts backward. Roll is `atan2(X, hypot(Y, Z))`,
-positive when the target-right side is up. It is applied only on a unit whose
-tilt check (the tester page, step 2 B) passed both roll steps:
-
-1. **Direction.** The tester lifts the unit's left side about 2 cm; the roll must
-   read negative (`roll_verified: true`).
-2. **Zero, by reversal.** The tester turns the unit 180° on the same spot and taps,
-   then turns it back and taps. The floor's tilt changes sign with the turn and the
-   board's own roll (its seat and the sensor's zero-g offset) does not, so the mean
-   of the two facings is the board's roll on a level floor. No level surface and no
-   typed value are needed. `roll_zero_deg` (beyond the rig's expected mount roll) and
-   its repeatability go in `~/.config/openflight/lis3dh-mount.json`; a reversal that
-   does not repeat within 1° is tried again.
-
-The roll applied is then the reading − `roll_zero_deg` − the expected mount roll, and
-the setup's pads keep the zero's measured repeatability (at least 0.1°). Otherwise the
-roll is recorded, padded, and labelled "roll not verified on this unit" or "roll not
-zeroed on this unit".
+positive when the target-right side is up. It is applied only when
+`~/.config/openflight/lis3dh-mount.json` records the unit's roll as verified and
+zeroed (`roll_verified`, `roll_zero_deg`): the roll applied is the reading −
+`roll_zero_deg` − the rig's expected mount roll. Otherwise the roll is recorded,
+padded, and labelled "roll not verified on this unit" or "roll not zeroed on this
+unit".
 
 Before fixing the board permanently, run the readout script and gently tilt the
 enclosure backward. Confirm that the reported pitch becomes more positive.
@@ -241,11 +230,9 @@ For each shot, OpenFlight:
 1. Takes the newest stable LIS3DH snapshot before the swing. Within two seconds
    of impact and steady through it, it is used at once (`rule: recent_stable`).
 2. Otherwise, up to 60 seconds old, or shaken by the swing, it is used once the
-   first quiet snapshot taken wholly after impact (scatter ≤ 0.15°) agrees with it
-   in pitch and roll (`rule: confirmed_after_impact`): within 0.3°, or three
-   standard errors of the two medians if larger, so a still unit never reads as
-   moved. The shot waits at most a second for it, alongside the camera fetch and the
-   IWR dump; an OPS-only kiosk never waits.
+   first quiet snapshot after impact agrees with it in pitch and roll
+   (`rule: confirmed_after_impact`). The shot waits at most a second for it; an
+   OPS-only kiosk never waits.
 3. Gives no correction when the unit moved (`status: moved`, "the unit moved"),
    when nothing confirms it (`unconfirmed`), or past 60 seconds (`stale`).
 4. Corrects the camera pose and the IWR tilt by the pitch's departure from the

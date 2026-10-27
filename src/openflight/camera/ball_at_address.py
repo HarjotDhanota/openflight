@@ -1,4 +1,4 @@
-"""Per-shot re-location of the resting ball inside the fixed box (13 Oct 2026).
+"""Per-shot re-location of the resting ball inside the setup's box, and its range.
 
 The setup measures the ball once; a tester then tees the next ball wherever it
 lands in the box. Before each swing the kiosk looks at its own latest camera
@@ -174,14 +174,14 @@ class BallAtAddress:
         outline_px: Sequence[Sequence[float]] | None = None,
     ):
         self.box = tuple(int(value) for value in box_px)
-        # the polygon the user confirmed; None (an older box) is the box_px rectangle
+        # None (an older box) is the box_px rectangle
         self.outline_px = _outline(outline_px)
         self.setup_ball = dict(setup_ball) if setup_ball else None
         self.setup_range_m = float(setup_range_m) if setup_range_m else None
         self.setup_range_uncertainty_m = (
             float(setup_range_uncertainty_m) if setup_range_uncertainty_m else None
         )
-        # what the setup's range is: "radar_range" before 13 Oct, "camera_prior" since
+        # "radar_range" or "camera_prior"
         self.setup_range_kind = str(setup_range_kind)
         self.lens = dict(lens) if lens else None
         self._lock = threading.Lock()
@@ -273,7 +273,6 @@ class BallAtAddress:
             "diameter_px": diameter,
             "range_m": round(range_m, 4) if range_m is not None else None,
             "range_source": source,
-            # the setup prior's relative uncertainty, carried to this look's range
             "range_uncertainty_m": (
                 round(self.setup_range_uncertainty_m * range_m / self.setup_range_m, 4)
                 if range_m is not None and self.setup_range_uncertainty_m and self.setup_range_m

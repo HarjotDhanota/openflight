@@ -1,23 +1,10 @@
-"""The ground patch: a 2 ft x 2 ft square of ground where the ball will be (P8-1, D14).
+"""The ground patch: a 2 ft x 2 ft square of ground where the ball will be.
 
-The tester places the patch on the live 1280x800 view; everything the setup does
-takes its window from where it is put. The patch is stored as ground coordinates
-in the rig frame and projected through the camera model (the rig file, the LIS3DH
-and the unit's camera tilt, P8-5) into the picture, where it is drawn in true
-perspective. At the lens's 95 mm it is wide and shallow on screen.
-
-The rig frame is the camera models' lateral, forward, up frame with its origin on
-the hitting surface directly below the lens: lateral is positive to the right in
-the camera's view, forward runs along the camera's heading, up is height above the
-surface the ball rests on. The radar's phase centre sits at ``radar_origin_lfu``
-in the same frame (a little below and behind the lens).
-
-Until the camera tilt is calibrated (P8-5), the image rows of anything the
-camera sees are uncertain by a few degrees: at 95 mm, 1 deg moves a ball 1.25 m
-out by about 0.25 m. So the outline the camera searches is padded vertically by
-that uncertainty (never sideways), and every distance window derived from the
-patch is taken over that padded outline, so the ball is inside it whether the
-tester placed the patch by eye over the ball or by its displayed distance.
+Stored in the rig frame (lateral +right in the camera's view, forward along its heading,
+up from the surface the ball rests on; origin on that surface below the lens) and
+projected into the picture. Until the camera tilt is calibrated, rows are uncertain by
+a few degrees (at 95 mm, 1 deg moves a ball 1.25 m out by ~0.25 m), so the search
+outline and every distance window are padded vertically, never sideways.
 """
 
 from __future__ import annotations
@@ -33,41 +20,28 @@ from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 
 BALL_CENTER_HEIGHT_M = GOLF_BALL_DIAMETER_M / 2.0
 PATCH_SCHEMA = "openflight.tester_ground_patch.v1"
-# 2 ft x 2 ft (D14)
+# 2 ft x 2 ft
 PATCH_SIZE_M = 0.61
-# The patch centre's distance from the radar, along the ground. The sensors support
-# at least 0.8-2.5 m; the camera sees a ball 3 m out at about 13 px, which it can
-# still fit, and the setup capture is widened for a far patch (P8-3).
+# patch centre's ground distance from the radar (a ball 3 m out is ~13 px)
 PATCH_CENTRE_DISTANCE_M = (0.8, 3.0)
 PATCH_DEFAULT_DISTANCE_M = 1.25
-# The camera's vertical (pitch plus principal-point row) is uncertain by about 3 deg
-# until P8-5 calibrates it: indoor-test-1 put the floor 2-4 deg below where
-# the level, nominal-centre model puts it. The pad covers that with a margin.
+# Uncalibrated vertical (pitch plus principal-point row) is off by up to ~3-4 deg.
 UNCALIBRATED_TILT_PAD_DEG = 4.0
-# Once calibrated, what is left: the LIS3DH's settling, a mat under the ball but
-# not the unit, and the calibration's own uncertainty.
+# calibrated: LIS3DH settling, a mat under the ball only, the calibration itself
 CALIBRATED_TILT_PAD_DEG = 1.0
-# The distance windows (the radar's range window, the camera's size window) are
-# taken over the ball-centre outline padded by this much: the whole search pad
-# before calibration, and the calibration's own few tenths of a degree after it.
-# At 95 mm every degree is a quarter of a metre at 1.25 m, so a calibrated window
-# padded by the search's full degree would reach past 2.8 m.
+# Distance windows use the ball-centre outline padded by this much; at 95 mm each
+# degree is ~0.25 m at 1.25 m, so a calibrated window must not take the search pad.
 UNCALIBRATED_WINDOW_PAD_DEG = UNCALIBRATED_TILT_PAD_DEG
 CALIBRATED_WINDOW_PAD_DEG = 0.5
-# A camera that does not apply the LIS3DH roll (a unit that has not verified it,
-# camera_roll) pads the rows at the outline's ends for the reading; without one, this
-# much. A camera that applies it pads only the unit's zero repeatability.
+# Roll pad when the LIS3DH roll is not applied (the reading, at least MIN, or UNKNOWN
+# without one); an applied roll pads only the zero repeatability.
 UNKNOWN_ROLL_PAD_DEG = 3.0
 MIN_ROLL_PAD_DEG = 1.0
-# A ball's apparent size may differ from the nominal focal length's prediction by
-# this fraction (focal length 8 %, the lit-ball fit about 20 %).
+# apparent-size tolerance vs the nominal focal prediction (focal 8 %, fit ~20 %)
 SIZE_TOLERANCE = 0.25
-# Radar slant-range window margin beyond the patch's near and far edges.
 RADAR_WINDOW_MARGIN_M = 0.10
-# A ray in the padded outline that never reaches the surface (at or above the
-# horizon) is taken to reach this far; no sensor looks further for a ball at address.
+# reach of a padded-outline ray at or above the horizon
 FAR_CAP_M = 4.0
-# A re-confirmed patch whose centre moved less than this has not moved.
 PATCH_MOVE_TOLERANCE_M = 0.02
 _EDGE_SAMPLES = 16
 
@@ -100,9 +74,8 @@ def ground_patch_policy() -> dict[str, Any]:
 class GroundPatch:
     """A rectangle of ground, centred ``(lateral, forward)`` in the rig frame.
 
-    ``size_m`` is its width across; ``depth_m`` its extent along the boresight, the
-    width again when not given (the dragged square, P8-1). The fixed placement box
-    (placement_box) is 0.6 m across and 1.1 m deep.
+    ``size_m`` is its width across; ``depth_m`` its extent along the boresight (the width
+    again when not given).
     """
 
     centre_lateral_m: float
@@ -169,11 +142,11 @@ def _origins(camera) -> tuple[np.ndarray, np.ndarray]:
 def patch_distance(
     camera, patch: GroundPatch, ball_center_height_m: float = BALL_CENTER_HEIGHT_M
 ) -> dict[str, float]:
-    """What the tester is shown: how far the patch centre is from the radar, and how far aside.
+    """How far the patch centre is from the radar, and how far aside.
 
-    ``distance_m`` is the radar's slant range to a ball centre resting at the patch
-    centre (what a tape from the radar to the ball measures); ``ground_distance_m``
-    is along the surface; ``side_offset_m`` is from the radar's axis, + right.
+    ``distance_m`` is the radar's slant range to a ball centre resting at the patch centre;
+    ``ground_distance_m`` is along the surface; ``side_offset_m`` is from the radar's axis,
+    + right.
     """
     _camera, radar = _origins(camera)
     ball = np.asarray([patch.centre_lateral_m, patch.centre_forward_m, ball_center_height_m])
@@ -223,11 +196,7 @@ def clamp_patch(camera, patch: GroundPatch) -> GroundPatch:
 def patch_from_centre_pixel(
     camera, pixel_xy: Sequence[float], size_m: float = PATCH_SIZE_M
 ) -> GroundPatch:
-    """The patch whose centre is the ground point under ``pixel_xy``, kept in range.
-
-    A pixel at or above the horizon has no ground under it; the patch then goes
-    to the farthest supported distance along that pixel's heading.
-    """
+    """The patch centred on the ground under ``pixel_xy`` (at or above the horizon: farthest)."""
     origin, _radar = _origins(camera)
     ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
     if ray.shape != (3,) or not np.all(np.isfinite(ray)):
@@ -250,12 +219,10 @@ def _pixels(camera, points: np.ndarray) -> np.ndarray:
 
 
 def roll_pad_deg(camera: Any, roll_deg: float | None) -> float:
-    """The roll the rows are padded for, as the target line (D34) carries it too.
+    """The roll the rows are padded for (also carried by the target line).
 
-    The applied roll's residual (the unit's zero repeatability) when the camera
-    applies the LIS3DH roll;
-    otherwise ``roll_deg`` (the roll it does not apply), at least ``MIN_ROLL_PAD_DEG``,
-    or ``UNKNOWN_ROLL_PAD_DEG`` without one.
+    The zero repeatability when the camera applies the LIS3DH roll; otherwise ``roll_deg``,
+    at least ``MIN_ROLL_PAD_DEG``, or ``UNKNOWN_ROLL_PAD_DEG`` without one.
     """
     if camera_roll.is_applied(camera):
         residual = camera_roll.residual_deg(camera)
@@ -281,7 +248,6 @@ def point_in_polygon(x: float, y: float, polygon: Sequence[Sequence[float]]) -> 
 
 
 def points_in_polygon(xs: Any, ys: Any, polygon: Sequence[Sequence[float]]) -> np.ndarray:
-    """Vectorised ``point_in_polygon``."""
     xs = np.asarray(xs, dtype=float)
     ys = np.asarray(ys, dtype=float)
     inside = np.zeros(xs.shape, dtype=bool)
@@ -406,15 +372,10 @@ def project_patch(  # pylint: disable=too-many-locals
 ) -> PatchProjection:
     """Project the patch, pad its ball-centre outline's rows, and derive its windows.
 
-    ``outline_px`` is the patch on the ground, for drawing; ``ball_outline_px`` is
-    where the centres of balls resting on it appear; ``search_outline_px`` is that
-    outline with its far edge raised and its near edge lowered by the camera tilt's
-    uncertainty (``tilt_pad_deg``) and the roll pad (``roll_pad_deg``), its columns
-    exact.
-    ``box_px`` bounds both outlines and is the hitting zone the light and the
-    ladder judge (it replaces the P7-4 box); ``search_box_px`` bounds the search.
-    The distance windows come from the ball-centre outline padded by
-    ``window_pad_deg`` (and the roll), sampled along its edges.
+    ``outline_px`` is the patch on the ground; ``ball_outline_px`` where centres of balls
+    resting on it appear; ``search_outline_px`` that outline with rows padded by
+    ``tilt_pad_deg`` and ``roll_pad_deg``, columns exact. ``box_px`` bounds both outlines
+    (the hitting zone the light and ladder judge). Distance windows use ``window_pad_deg``.
     """
     width, height = int(camera.image_width_px), int(camera.image_height_px)
     ground = _pixels(camera, patch.corners(0.0))
@@ -467,12 +428,7 @@ def scale_outline(points: Sequence[Sequence[float]], factor: float) -> list[list
 
 @dataclass(frozen=True)
 class PatchSearch:
-    """What the camera's ball search takes from the patch, in one mode's pixels (P8-2).
-
-    A ball counts only with its fitted centre inside ``outline_px`` and a diameter
-    inside ``diameter_px``; candidates rank by how far aside of the patch centre
-    they lie, in half-sizes of the patch.
-    """
+    """What the camera's ball search takes from the patch, in one mode's pixels."""
 
     outline_px: tuple[tuple[float, float], ...]
     diameter_px: tuple[float, float]
@@ -561,12 +517,7 @@ class PatchSearch:
 
 
 def projection_parameters(camera) -> dict[str, Any]:
-    """What the page needs to draw and drag the patch itself, in true perspective.
-
-    The nominal pinhole model the setup uses: focal length, image centre, pitch and
-    roll correction, and the lens and radar origins. A calibrated model is drawn
-    with its pinhole part only (``approximate``); the server's outline is exact.
-    """
+    """The pinhole model the page draws and drags the patch with (calibrated: ``approximate``)."""
     model = camera.ray_model
     pitch_rad = getattr(model, "pitch_rad", None)
     return {

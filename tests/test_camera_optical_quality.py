@@ -48,54 +48,49 @@ def test_matching_capture_controls_are_usable():
     assert quality["brightness"] == {"mean": 88.5, "p99": 201.0}
 
 
-def test_a_capture_taken_during_a_still_photo_is_withheld():
-    quality = capture_optical_quality(
-        _metadata(purpose="still_photo", exposure_us=8000, gain=2.0),
-        _archive(exposure_us=8000, gain=2.0),
-    )
-
-    assert quality["status"] == "withheld"
-    assert quality["reason"] == "still_photo_controls_active"
+PROFILE = {"sha256": "a" * 64, "qualified": True, "exposure_ceiling_us": 400, "gain_ceiling": 12.0}
 
 
-def test_frames_not_captured_at_the_requested_controls_are_withheld():
+def _mismatched():
     archive = _archive()
     archive["exposure_us"][:2] = 8000
+    return archive
 
-    quality = capture_optical_quality(_metadata(), archive)
+
+@pytest.mark.parametrize(
+    ("metadata", "archive", "reason"),
+    [
+        (
+            _metadata(purpose="still_photo", exposure_us=8000, gain=2.0),
+            _archive(exposure_us=8000, gain=2.0),
+            "still_photo_controls_active",
+        ),
+        (_metadata(), _mismatched(), "applied_controls_mismatch"),
+        (_metadata(eligible=False), _archive(), "lighting_not_eligible"),
+        (_metadata(), {}, "applied_controls_unknown"),
+        (
+            _metadata(profile=PROFILE, exposure_us=1250),
+            _archive(exposure_us=1250),
+            "outside_armed_profile",
+        ),
+    ],
+)
+def test_a_capture_the_metrics_cannot_trust_is_withheld_with_its_reason(metadata, archive, reason):
+    quality = capture_optical_quality(metadata, archive)
 
     assert quality["status"] == "withheld"
-    assert quality["reason"] == "applied_controls_mismatch"
-    assert quality["applied"]["mismatched_frames"] == 2
-
-
-def test_a_capture_the_lighting_check_rejected_is_withheld():
-    quality = capture_optical_quality(_metadata(eligible=False), _archive())
-
-    assert quality["status"] == "withheld"
-    assert quality["reason"] == "lighting_not_eligible"
-
-
-def test_missing_per_frame_controls_withhold_the_capture():
-    quality = capture_optical_quality(_metadata(), {})
-
-    assert quality["controls_match"] is None
-    assert quality["status"] == "withheld"
-    assert quality["reason"] == "applied_controls_unknown"
-    assert quality["applied"] is None
+    assert quality["reason"] == reason
+    if reason == "applied_controls_mismatch":
+        assert quality["applied"]["mismatched_frames"] == 2
+    if reason == "applied_controls_unknown":
+        assert quality["controls_match"] is None
+        assert quality["applied"] is None
 
 
 def test_the_armed_profile_identity_is_carried_through():
-    profile = {
-        "sha256": "a" * 64,
-        "qualified": True,
-        "exposure_ceiling_us": 400,
-        "gain_ceiling": 12.0,
-    }
-
-    quality = capture_optical_quality(_metadata(profile=profile), _archive())
-
-    assert quality["armed_profile"] == profile
+    assert capture_optical_quality(_metadata(profile=PROFILE), _archive())["armed_profile"] == (
+        PROFILE
+    )
 
 
 @pytest.mark.parametrize(
@@ -147,22 +142,6 @@ def test_a_qualified_armed_profile_loads_with_its_identity(tmp_path):
 def test_an_unqualified_or_malformed_armed_profile_is_refused(tmp_path, overrides, message):
     with pytest.raises(ValueError, match=message):
         load_armed_exposure_profile(_profile_file(tmp_path, **overrides))
-
-
-def test_a_capture_outside_the_armed_profile_is_withheld():
-    profile = {
-        "sha256": "a" * 64,
-        "qualified": True,
-        "exposure_ceiling_us": 400,
-        "gain_ceiling": 12.0,
-    }
-
-    quality = capture_optical_quality(
-        _metadata(profile=profile, exposure_us=1250), _archive(exposure_us=1250)
-    )
-
-    assert quality["status"] == "withheld"
-    assert quality["reason"] == "outside_armed_profile"
 
 
 def test_no_armed_profile_imposes_no_ceiling():

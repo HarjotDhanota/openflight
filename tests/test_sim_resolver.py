@@ -97,7 +97,6 @@ def test_an_unlabelled_carry_is_not_sent():
 
 
 def test_a_fusion_carry_from_measured_inputs_is_sent_as_calculated():
-    """A simulated carry is the flight model's output: at most calculated."""
     shot = _shot(
         launch_angle_vertical=12.0,
         launch_angle_horizontal=1.5,
@@ -207,7 +206,9 @@ def test_no_resolved_value_can_leave_non_finite(monkeypatch):
     """Last line: whatever produced it, a non-finite resolved value is never sent."""
     from openflight.sim import resolver
 
-    monkeypatch.setattr(resolver, "_measured_total_spin", lambda _shot, _metrics: (math.nan, "measured"))
+    monkeypatch.setattr(
+        resolver, "_measured_total_spin", lambda _shot, _metrics: (math.nan, "measured")
+    )
     with pytest.raises(IncompleteShotError, match="total_spin"):
         resolve_shot(_shot(**_MEASURED), PlayerState())
 

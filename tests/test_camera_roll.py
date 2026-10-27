@@ -14,7 +14,7 @@ import pytest
 from openflight.camera import camera_roll
 from openflight.camera.calibrated_projection import build_calibrated_camera_model
 from openflight.camera.geometry import unit_world_rays
-from openflight.camera.optical_calibration import validate_mode_profile
+from tests.camera_helpers import BROWN, calibration_artifact, camera_placement, mode_profile
 
 FOCAL_PX = 466.6667
 WIDTH, HEIGHT = 640, 400
@@ -87,74 +87,20 @@ def test_the_nominal_rays_see_a_level_line_level(roll_deg):
 
 
 def _artifact():
-    profile = validate_mode_profile(
-        {
-            "version": 1,
-            "camera_id": "camera-1",
-            "lens_id": "lens-1",
-            "focus_id": "fixed-1",
-            "sensor_output": {
-                "width": 1280,
-                "height": 800,
-                "bit_depth": 10,
-                "raw_format": "SBGGR10_CSI2P",
-                "mode_id": "mode-1",
-            },
-            "saved_image": {
-                "width": WIDTH,
-                "height": HEIGHT,
-                "stream": "raw",
-                "rotate_180": False,
-                "mirror": False,
-            },
-            "crop_readout_mapping": {
-                "native_sensor_crop": "unknown",
-                "scaler_crop": "unknown",
-                "driver_vertical_offset_px": "unknown",
-                "sensor_output_mapping": "unknown",
-                "saved_image_mapping": "unknown",
-            },
-        }
+    return calibration_artifact(
+        mode_profile(width=WIDTH, height=HEIGHT),
+        matrix=[[FOCAL_PX, 0.0, WIDTH / 2.0], [0.0, FOCAL_PX, HEIGHT / 2.0], [0.0, 0.0, 1.0]],
+        coefficients=dict.fromkeys(BROWN, 0.0),
     )
-    return {
-        "version": 1,
-        "status": "candidate",
-        "mode_profile": profile,
-        "mode_profile_sha256": profile["sha256"],
-        "camera_matrix": [
-            [FOCAL_PX, 0.0, WIDTH / 2.0],
-            [0.0, FOCAL_PX, HEIGHT / 2.0],
-            [0.0, 0.0, 1.0],
-        ],
-        "distortion_model": "opencv_brown_5",
-        "distortion_convention": {
-            "coefficient_order": ["k1", "k2", "p1", "p2", "k3"],
-            "coordinates": "OpenCV normalized camera coordinates",
-        },
-        "distortion_coefficients": dict.fromkeys(("k1", "k2", "p1", "p2", "k3"), 0.0),
-    }
 
 
 def _placement():
-    return {
-        "schema": "openflight.camera.placement",
-        "version": 1,
-        "world_frame": "target_lfu",
-        "rig_geometry_sha256": "rig-hash",
-        # optical right/down/forward to enclosure right/forward/up
-        "optical_to_enclosure_lfu": [[1, 0, 0], [0, 0, 1], [0, -1, 0]],
-        "enclosure_to_target_lfu": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-        "camera_origin_lfu": [0.0, 0.0, 0.0],
-        "radar_origin_lfu": [0.0, -0.03, -0.044],
-        "enclosure_pivot_lfu": [0.0, 0.0, 0.0],
-        "reference_pose_deg": {"pitch": 0.0, "roll": 0.0},
-        "origin_provenance": {
-            "camera_origin_lfu": "test",
-            "radar_origin_lfu": "test",
-            "enclosure_pivot_lfu": "test",
-        },
-        "rig_offset_consistency_tolerance_m": 0.002,
-    }
+    return camera_placement(
+        enclosure_to_target_lfu=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        camera_origin_lfu=[0.0, 0.0, 0.0],
+        radar_origin_lfu=[0.0, -0.03, -0.044],
+        reference_pose_deg={"pitch": 0.0, "roll": 0.0},
+    )
 
 
 @pytest.mark.parametrize("roll_deg", [ROLL_DEG, -ROLL_DEG])

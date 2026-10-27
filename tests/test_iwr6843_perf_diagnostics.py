@@ -11,13 +11,14 @@ from openflight.iwr6843.perf_diagnostics import (
     parse_perf_stats,
     perf_stats,
 )
-from tests.iwr6843_firmware_fake import PERF_REPLY, FakeClock, FirmwareModel
+from tests.iwr6843_firmware_fake import FakeClock
+from tests.iwr6843_perf_fake import PERF_REPLY, PerfFirmwareModel
 from tests.test_iwr6843_driver_timing import _radar
 
 
 def test_perf_stats_reads_the_four_lines(monkeypatch):
     clock = FakeClock()
-    radar = _radar(monkeypatch, FirmwareModel(b"", clock), clock)
+    radar = _radar(monkeypatch, PerfFirmwareModel(b"", clock), clock)
 
     perf = perf_stats(radar)
 
@@ -51,7 +52,7 @@ def test_parse_perf_stats_refuses_a_garbled_field():
 
 def test_bench_kernel_needs_a_stopped_sensor(monkeypatch):
     clock = FakeClock()
-    firmware = FirmwareModel(b"", clock)
+    firmware = PerfFirmwareModel(b"", clock)
     firmware.active = True
     radar = _radar(monkeypatch, firmware, clock)
 
@@ -61,7 +62,7 @@ def test_bench_kernel_needs_a_stopped_sensor(monkeypatch):
 
 def test_bench_kernel_reads_cycles_and_the_exact_sum(monkeypatch):
     clock = FakeClock()
-    radar = _radar(monkeypatch, FirmwareModel(b"", clock), clock)
+    radar = _radar(monkeypatch, PerfFirmwareModel(b"", clock), clock)
 
     bench = bench_kernel(radar)
 
@@ -249,7 +250,7 @@ def test_a_scan_marker_beside_scan_fields_is_refused():
 def test_perf_stats_and_bench_kernel_use_the_public_reply_windows(monkeypatch):
     """One source for the windows the run script also sends its raw commands with."""
     clock = FakeClock()
-    radar = _radar(monkeypatch, FirmwareModel(b"", clock), clock)
+    radar = _radar(monkeypatch, PerfFirmwareModel(b"", clock), clock)
     windows = {}
     replies = {"perfstats": "perfstats\r\n" + PERF_REPLY.decode() + "Done\r\n"}
     replies["l3bench"] = "l3bench\r\nbench samples=10 cycles=20 sum_hi=0 sum_lo=1\r\nDone\r\n"

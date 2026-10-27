@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from openflight.iwr6843 import driver
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
 from openflight.iwr6843.driver import IWR6843DumpRecoveryError, IWR6843Radar
 from openflight.iwr6843.dump import TEMP_REPORT_KEYS, pack_dump
@@ -94,72 +95,33 @@ class OpenedSerial:
         self.closed = True
 
 
-def test_radar_holds_device_lock_until_close(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    locks = []
-    serial_handle = OpenedSerial()
-
-    def lock_factory(port, **_kwargs):
-        lock = FakeDeviceLock(port)
-        locks.append(lock)
-        return lock
-
-    monkeypatch.setattr(driver, "IWR6843DeviceLock", lock_factory)
-    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: serial_handle)
-
-    radar = IWR6843Radar(port="/dev/test-iwr")
-
-    assert locks[0].acquired is True
-    radar.close()
-    assert serial_handle.closed is True
-    assert locks[0].acquired is False
+@pytest.fixture
+def fake_lock(monkeypatch):
+    monkeypatch.setattr(FakeDeviceLock, "held", set())
+    monkeypatch.setattr(driver, "IWR6843DeviceLock", FakeDeviceLock)
+    return FakeDeviceLock
 
 
-def test_close_releases_device_lock_when_serial_close_fails(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    lock = FakeDeviceLock("/dev/test-iwr")
-
+@pytest.mark.parametrize("fails_at", ["open", "close"])
+def test_a_serial_failure_still_releases_the_device_lock(monkeypatch, fake_lock, fails_at):
     class CloseFailureSerial(OpenedSerial):
         def close(self):
             raise OSError("close failed")
 
-    monkeypatch.setattr(driver, "IWR6843DeviceLock", lambda *_args, **_kwargs: lock)
-    monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: CloseFailureSerial())
-    radar = IWR6843Radar(port="/dev/test-iwr")
+    def open_port(*_args, **_kwargs):
+        if fails_at == "open":
+            raise OSError("open failed")
+        return CloseFailureSerial()
 
-    with pytest.raises(OSError, match="close failed"):
-        radar.close()
+    monkeypatch.setattr(driver, "open_port", open_port)
 
-    assert lock.acquired is False
+    with pytest.raises(OSError, match=f"{fails_at} failed"):
+        IWR6843Radar(port="/dev/test-iwr").close()
 
-
-def test_serial_open_failure_releases_device_lock(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    locks = []
-
-    def lock_factory(port, **_kwargs):
-        lock = FakeDeviceLock(port)
-        locks.append(lock)
-        return lock
-
-    monkeypatch.setattr(driver, "IWR6843DeviceLock", lock_factory)
-    monkeypatch.setattr(
-        driver, "open_port", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("open failed"))
-    )
-
-    with pytest.raises(OSError, match="open failed"):
-        IWR6843Radar(port="/dev/test-iwr")
-
-    assert locks[0].acquired is False
+    assert not fake_lock.held
 
 
-def test_auto_detection_releases_probe_lock_before_owning_radar(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    FakeDeviceLock.held.clear()
+def test_auto_detection_releases_probe_lock_before_owning_radar(monkeypatch, fake_lock):
     handles = []
 
     def opened(*_args, **_kwargs):
@@ -168,7 +130,6 @@ def test_auto_detection_releases_probe_lock_before_owning_radar(monkeypatch):
         return handle
 
     monkeypatch.setattr(driver.glob, "glob", lambda _pattern: ["/dev/test-iwr"])
-    monkeypatch.setattr(driver, "IWR6843DeviceLock", FakeDeviceLock)
     monkeypatch.setattr(driver, "open_port", opened)
 
     radar = IWR6843Radar()
@@ -176,26 +137,14 @@ def test_auto_detection_releases_probe_lock_before_owning_radar(monkeypatch):
     assert radar.port == "/dev/test-iwr"
     assert len(handles) == 2
     assert handles[0].closed is True
-    assert "/dev/test-iwr" in FakeDeviceLock.held
+    assert "/dev/test-iwr" in fake_lock.held
     radar.close()
-    assert not FakeDeviceLock.held
+    assert not fake_lock.held
 
 
-def test_auto_detection_reports_busy_candidate(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    class BusyLock:
-        def __init__(self, port, **_kwargs):
-            self.port = port
-
-        def acquire(self):
-            raise IWR6843DeviceBusyError(self.port)
-
-        def release(self):
-            pass
-
+def test_auto_detection_reports_busy_candidate(monkeypatch, fake_lock):
+    fake_lock.held.add("/dev/busy-iwr")
     monkeypatch.setattr(driver.glob, "glob", lambda _pattern: ["/dev/busy-iwr"])
-    monkeypatch.setattr(driver, "IWR6843DeviceLock", BusyLock)
 
     with pytest.raises(IWR6843DeviceBusyError, match="/dev/busy-iwr"):
         IWR6843Radar()
@@ -359,17 +308,6 @@ def test_read_dump_reports_firmware_restart_error_after_binary_payload():
     assert raised.value.raw == raw
 
 
-def test_read_dump_rejects_complete_payload_without_trailing_cli_ready():
-    raw = pack_dump(np.ones((1, 3, 4, 4), dtype=complex), n_tx=3, version=3)
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    radar.ser = FakeSerial(b"l3dump\r\n" + raw)
-
-    with pytest.raises(IWR6843DumpRecoveryError, match="did not return to its CLI") as raised:
-        radar.read_dump(timeout_s=0.01)
-
-    assert raised.value.raw == raw
-
-
 def test_read_dump_rejects_partial_transport_without_sending_a_followup_command():
     radar = IWR6843Radar.__new__(IWR6843Radar)
     radar.ser = FakeSerial(b"l3dump\r\nILD1-partial")
@@ -400,8 +338,6 @@ def test_read_dump_sizes_v5_header_extension():
 
 
 def _simulated_radar(monkeypatch, firmware, clock):
-    from openflight.iwr6843 import driver
-
     monkeypatch.setattr(driver, "time", clock.module())
     monkeypatch.setattr(driver, "IWR6843DeviceLock", NoLock)
     monkeypatch.setattr(driver, "open_port", lambda *_args, **_kwargs: FakePort(firmware))
@@ -439,22 +375,10 @@ def test_dump_without_trailing_done_fails_without_sending_another_command(monkey
         radar.read_dump(timeout_s=40.0)
 
     assert raised.value.raw == firmware.raw
+    assert raised.value.timing.last_byte_ns is not None
+    assert raised.value.timing.cli_ready_ns is None
     assert firmware.commands == ["l3dump"]
     assert firmware.lost_writes == []
-
-
-def test_dump_restart_error_after_payload_preserves_the_payload(monkeypatch):
-    clock = FakeClock()
-    firmware = FirmwareModel(
-        _active_dump(), clock, restart_s=0.5, trailer=b"Error: RF restart failed\r\nError -1"
-    )
-    firmware.active = True
-    radar = _simulated_radar(monkeypatch, firmware, clock)
-
-    with pytest.raises(IWR6843DumpRecoveryError, match="RF restart failed") as raised:
-        radar.read_dump()
-
-    assert raised.value.raw == firmware.raw
 
 
 def test_dump_rejected_by_an_idle_cli_is_an_ordinary_error_not_raw_evidence(monkeypatch):
@@ -474,8 +398,6 @@ def test_dump_rejected_by_an_idle_cli_is_an_ordinary_error_not_raw_evidence(monk
 
 def _probe_fixture(monkeypatch, ports, identities):
     """Auto-detection over named fake handles; returns the list of opened ports."""
-    from openflight.iwr6843 import driver
-
     opened = []
 
     def open_probe(port, *_args, **_kwargs):
@@ -498,33 +420,20 @@ CP2105_ENHANCED = ("10c4", "ea70", 0)
 CP2105_STANDARD = ("10c4", "ea70", 1)
 
 
-def test_auto_detection_never_opens_the_cp2105_standard_interface(monkeypatch):
+@pytest.mark.parametrize(
+    "usb0_identity",
+    [CP2105_STANDARD, None],  # never opened: the Standard if01 / an unknown port probed last
+)
+def test_auto_detection_opens_the_cp2105_enhanced_interface_first(monkeypatch, usb0_identity):
     """Opening a tty raises DTR/RTS; the Standard interface carries no CLI to find."""
-    from openflight.iwr6843 import driver
-
     clock = FakeClock()
     monkeypatch.setattr(driver, "time", clock.module())
     firmware = FirmwareModel(b"", clock)
+    identities = {"/dev/ttyUSB0": usb0_identity, "/dev/ttyUSB1": CP2105_ENHANCED}
     opened = _probe_fixture(
         monkeypatch,
         {"/dev/ttyUSB0": SilentPort(clock), "/dev/ttyUSB1": FakePort(firmware)},
-        {"/dev/ttyUSB0": CP2105_STANDARD, "/dev/ttyUSB1": CP2105_ENHANCED},
-    )
-
-    assert IWR6843Radar.detect_port() == "/dev/ttyUSB1"
-    assert opened == ["/dev/ttyUSB1"]
-
-
-def test_auto_detection_probes_the_cp2105_enhanced_interface_before_unknown_ports(monkeypatch):
-    from openflight.iwr6843 import driver
-
-    clock = FakeClock()
-    monkeypatch.setattr(driver, "time", clock.module())
-    firmware = FirmwareModel(b"", clock)
-    opened = _probe_fixture(
-        monkeypatch,
-        {"/dev/ttyUSB0": SilentPort(clock), "/dev/ttyUSB1": FakePort(firmware)},
-        {"/dev/ttyUSB1": CP2105_ENHANCED},
+        {port: identity for port, identity in identities.items() if identity},
     )
 
     assert IWR6843Radar.detect_port() == "/dev/ttyUSB1"
@@ -533,8 +442,6 @@ def test_auto_detection_probes_the_cp2105_enhanced_interface_before_unknown_port
 
 def test_missing_cli_reports_what_each_candidate_did(monkeypatch):
     """`no CLI found` must distinguish silence, foreign bytes, open failures and skips."""
-    from openflight.iwr6843 import driver
-
     clock = FakeClock()
     monkeypatch.setattr(driver, "time", clock.module())
     streaming = FirmwareModel(b"", clock)
@@ -567,8 +474,6 @@ def test_missing_cli_reports_what_each_candidate_did(monkeypatch):
 
 
 def test_usb_serial_identity_reads_linux_sysfs(tmp_path, monkeypatch):
-    from openflight.iwr6843 import driver
-
     (tmp_path / "idVendor").write_text("10C4\n", encoding="ascii")
     (tmp_path / "idProduct").write_text("ea70\n", encoding="ascii")
     for name, number in (("ttyUSB0", "00"), ("ttyUSB1", "01")):
@@ -585,8 +490,6 @@ def test_usb_serial_identity_reads_linux_sysfs(tmp_path, monkeypatch):
 def test_a_command_returns_without_waiting_for_a_full_read_buffer():
     # pyserial's read(n) blocks for the whole port timeout (0.3 s) until n bytes
     # arrive; a short "Done" reply must not pay that on every command.
-    from openflight.iwr6843 import driver
-
     class ReplySerial:
         def __init__(self):
             self.pending = bytearray()

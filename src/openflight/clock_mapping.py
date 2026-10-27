@@ -63,8 +63,3 @@ class EdgeObservation:  # pylint: disable=too-many-instance-attributes
         if not self.readings_valid() or not _finite(self.edge_age_ns) or self.edge_age_ns < 0:
             return None
         return self.mono_before_ns - self.edge_age_ns, self.mono_after_ns - self.edge_age_ns
-
-    def association_mono_ns(self) -> int:
-        """Time used only to associate an edge with a dump (coarse)."""
-        interval = self.kernel_mono_interval_ns()
-        return (interval[0] + interval[1]) // 2 if interval else self.mono_after_ns

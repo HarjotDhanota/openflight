@@ -66,6 +66,24 @@ export function t(key: MessageKey, vars?: Record<string, string | number>): stri
   });
 }
 
+/** Metric names an optional model module brings (`metricNames.*.ts`), by locale and metric id. */
+const extraMetricNames = Object.values(
+  import.meta.glob<Record<LocaleId, Record<string, string>>>('./metricNames.*.ts', {
+    eager: true,
+    import: 'metricNames',
+  })
+);
+
+export function metricName(id: string): string {
+  const key = `metricName.${id}` as MessageKey;
+  if (key in catalogs.en) return t(key);
+  for (const names of extraMetricNames) {
+    const name = names[activeLocale]?.[id] ?? names.en?.[id];
+    if (name) return name;
+  }
+  return id;
+}
+
 export function clubGroupLabel(name: string): string {
   const key = `clubGroup.${name}` as MessageKey;
   return key in catalogs.en ? t(key) : name;

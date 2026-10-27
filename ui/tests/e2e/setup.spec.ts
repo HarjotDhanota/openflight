@@ -1,11 +1,8 @@
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { test, type Page, type Route } from '@playwright/test';
-import { expect, gotoApp } from './helpers';
+import { drawnAt, expect, gotoApp, setHanded } from './helpers';
 
 // The kiosk Setup screen against a mocked setup API: the mock backend has no camera, so it
 // can never find a ball. Saved pixels are camera pixels whichever way the view is drawn.
-const OUT = process.env.UX_SHOTS_DIR;
 const SIZES = [
   { width: 1024, height: 600 },
   { width: 800, height: 480 },
@@ -162,24 +159,12 @@ async function open(page: Page, hand: Hand): Promise<MockSetup> {
   const mock = await mockSetupApi(page);
   await gotoApp(page);
   await page.getByRole('button', { name: 'Close Select club' }).click();
-  // the kiosk's own hand arrives on connect; set the golfer's after it
-  await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
-  await page.evaluate(async (handed) => {
-    const { useSystemStore } = await import('/src/stores/useSystemStore.ts');
-    useSystemStore.getState().setHanded(handed);
-  }, hand);
+  await setHanded(page, hand);
   return mock;
 }
 
 /** Where a camera pixel is drawn: the picture fits the view, mirrored for a left-hander. */
-async function screenPoint(page: Page, px: Px, hand: Hand): Promise<Px> {
-  const box = (await page.locator('.setup-view__stage').boundingBox())!;
-  const scale = Math.min(box.width / IMAGE[0], box.height / IMAGE[1]);
-  const left = (box.width - IMAGE[0] * scale) / 2;
-  const top = (box.height - IMAGE[1] * scale) / 2;
-  const x = hand === 'LH' ? IMAGE[0] - px[0] : px[0];
-  return [box.x + left + x * scale, box.y + top + px[1] * scale];
-}
+const screenPoint = (page: Page, px: Px, hand: Hand) => drawnAt(page, '.setup-view__stage', px, hand);
 
 async function tap(page: Page, px: Px, hand: Hand) {
   const [x, y] = await screenPoint(page, px, hand);
@@ -220,65 +205,56 @@ async function expectRowsApart(page: Page) {
   }
 }
 
-async function shot(page: Page, name: string) {
-  if (!OUT) return;
-  mkdirSync(OUT, { recursive: true });
-  await page.screenshot({ path: join(OUT, `${name}.png`) });
+/** Opens Setup, confirms the found ball and moves on to the aim step. */
+async function toAimStep(page: Page) {
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
+  await expect(page.locator('.setup-view__look')).toContainText('Ball found in the box', { timeout: 6000 });
+  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
 }
 
-test.describe('a kiosk without a camera', () => {
+test.describe('a kiosk that cannot set up', () => {
   test.use({ viewport: { width: 800, height: 480 }, hasTouch: true });
 
-  test('offers no setup, and the Setup tab says it needs the camera', async ({ page }) => {
-    const mock = await open(page, 'RH');
-    mock.snapshot = { ...mock.snapshot, live: { camera_available: false } };
-    // the first read may have happened before the change: the kiosk comes back
-    await page.reload();
-    await page.getByRole('button', { name: 'Close Select club' }).click();
-    await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
-    await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
-    await expect(page.locator('.nav__setup-dot')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Setup', exact: true }).click();
-    await expect(page.locator('.setup-view')).toHaveText(/Setup needs the camera, and this kiosk has none\./);
-    await expect(page.locator('.setup-view__steps')).toHaveCount(0);
-    await page.waitForTimeout(2500);
-    expect(mock.posts).toEqual([]);
-  });
-
-  test('offers no setup without the tilt sensor, and says what is missing', async ({ page }) => {
-    const mock = await open(page, 'RH');
-    mock.snapshot = {
-      ...mock.snapshot,
-      live: {
+  for (const [missing, live, words] of [
+    ['camera', { camera_available: false }, /Setup needs the camera, and this kiosk has none\./],
+    [
+      'tilt sensor',
+      {
         camera_available: true,
         setup_possible: false,
         setup_blocked_reason: 'the setup needs the tilt sensor (LIS3DH, --inclinometer)',
       },
-    };
-    await page.reload();
-    await page.getByRole('button', { name: 'Close Select club' }).click();
-    await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
-    await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
-    await expect(page.locator('.nav__setup-dot')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Setup', exact: true }).click();
-    await expect(page.locator('.setup-view')).toHaveText(/needs the tilt sensor/);
-    await expect(page.locator('.setup-view__steps')).toHaveCount(0);
-    await page.waitForTimeout(2500);
-    expect(mock.posts).toEqual([]);
-  });
+      /needs the tilt sensor/,
+    ],
+  ] as const) {
+    test(`offers no setup without the ${missing}, and the Setup tab says what is missing`, async ({ page }) => {
+      const mock = await open(page, 'RH');
+      mock.snapshot = { ...mock.snapshot, live };
+      // the first read may have happened before the change: the kiosk comes back
+      await page.reload();
+      await page.getByRole('button', { name: 'Close Select club' }).click();
+      await expect(page.locator('.panel-header__club')).toContainText('Right-handed');
+      await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
+      await expect(page.locator('.nav__setup-dot')).toHaveCount(0);
+      await page.getByRole('button', { name: 'Setup', exact: true }).click();
+      await expect(page.locator('.setup-view')).toHaveText(words);
+      await expect(page.locator('.setup-view__steps')).toHaveCount(0);
+      await page.waitForTimeout(2500);
+      expect(mock.posts).toEqual([]);
+    });
+  }
 });
 
 for (const size of SIZES) {
   for (const hand of HANDS) {
     test.describe(`${size.width}x${size.height} ${hand}`, () => {
       test.use({ viewport: size, hasTouch: true });
-      const tag = `${size.width}x${size.height}-${hand}`;
 
       test('walks the four steps; the saved aim is in camera pixels', async ({ page }) => {
         const mock = await open(page, hand);
         mock.ball = 'no_ball';
         await expect(page.locator('.nav__setup-dot')).toHaveCount(1);
-        await shot(page, `${tag}-0-offer`);
         await page.getByRole('button', { name: 'Finish setup' }).click();
         await expect(page.locator('.setup-view')).toBeVisible();
 
@@ -287,17 +263,14 @@ for (const size of SIZES) {
         await expect(page.locator('.setup-view__look')).toHaveText('No ball seen. Put a ball in the box.');
         await expect(page.getByRole('button', { name: 'Confirm', exact: true })).toBeDisabled();
         await expect(page.locator('.setup-view__saved')).toHaveText('Not confirmed');
-        await shot(page, `${tag}-1-box-not-seen`);
         mock.ball = 'outside_box';
         await expect(page.locator('.setup-view__look')).toHaveText('The ball is outside the box. Move it in.', {
           timeout: 6000,
         });
-        await shot(page, `${tag}-1-box-outside`);
         mock.ball = 'found';
         await expect(page.locator('.setup-view__look')).toHaveText('Ball found in the box', { timeout: 6000 });
         await expect(page.locator('.setup-view__box-outline')).toBeVisible();
         await expectDrawnAt(page, '.setup-view__ball', BALL, hand);
-        await shot(page, `${tag}-1-box`);
         await page.getByRole('button', { name: 'Confirm', exact: true }).click();
         await expect(page.locator('.setup-view__saved')).toContainText('Confirmed');
         await page.getByRole('button', { name: 'Next', exact: true }).click();
@@ -313,7 +286,6 @@ for (const size of SIZES) {
         expectNear(aimPost.body.aim_px, AIM, 4);
         expect(aimPost.body.floor_line_px ?? null).toBeNull();
         await expect(page.locator('.setup-view__aim-line--saved')).toBeVisible();
-        await shot(page, `${tag}-2-aim`);
         await page.getByRole('button', { name: 'Next', exact: true }).click();
 
         // 3. ball range, measured on arrival
@@ -322,7 +294,6 @@ for (const size of SIZES) {
           '2.31 m ± 0.12, from the camera; the radar refines it each shot'
         );
         expect(mock.posts.some((post) => post.section === 'range' && post.body.action === 'measure')).toBe(true);
-        await shot(page, `${tag}-3-range`);
         await page.getByRole('button', { name: 'Next', exact: true }).click();
 
         // 4. ready check
@@ -332,7 +303,6 @@ for (const size of SIZES) {
         await expect(page.locator('[data-section="ball_range"]')).toContainText('from the camera');
         await expect(page.locator('[data-section="net_range"]')).toContainText('4.6 m (not measured)');
         await expectRowsApart(page);
-        await shot(page, `${tag}-4-ready`);
         await page.getByRole('button', { name: 'Done', exact: true }).click();
         await expect(page.locator('.setup-view')).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Finish setup' })).toHaveCount(0);
@@ -341,17 +311,13 @@ for (const size of SIZES) {
 
       test('a floor line is saved in camera pixels and gives a measured net', async ({ page }) => {
         const mock = await open(page, hand);
-        await page.getByRole('button', { name: 'Setup', exact: true }).click();
-        await expect(page.locator('.setup-view__look')).toContainText('Ball found in the box', { timeout: 6000 });
-        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-        await page.getByRole('button', { name: 'Next', exact: true }).click();
+        await toAimStep(page);
 
         await tap(page, AIM, hand);
         await page.getByRole('button', { name: 'Floor line', exact: true }).click();
         await tap(page, FLOOR[0], hand);
         await tap(page, FLOOR[1], hand);
         await expect(page.locator('.setup-view__floor-line')).toBeVisible();
-        await shot(page, `${tag}-2-aim-floor-line`);
         await page.getByRole('button', { name: 'Confirm', exact: true }).click();
         await expect(page.locator('.setup-view__saved')).toContainText('3.92 m ± 0.20, from the floor line');
         const post = mock.posts.find((item) => item.section === 'aim' && item.body.action === 'confirm')!;
@@ -363,10 +329,7 @@ for (const size of SIZES) {
 
       test('a skipped aim shows the net as the default, not measured', async ({ page }) => {
         await open(page, hand);
-        await page.getByRole('button', { name: 'Setup', exact: true }).click();
-        await expect(page.locator('.setup-view__look')).toContainText('Ball found in the box', { timeout: 6000 });
-        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-        await page.getByRole('button', { name: 'Next', exact: true }).click();
+        await toAimStep(page);
         await page.getByRole('button', { name: 'Skip', exact: true }).click();
         await expect(page.locator('.setup-view__saved')).toContainText('Skipped');
         await page.getByRole('button', { name: 'Ready check' }).click();
@@ -378,10 +341,7 @@ for (const size of SIZES) {
       test('a rejected floor line says why and is drawn as not used', async ({ page }) => {
         const mock = await open(page, hand);
         mock.floorRejected = 'above the horizon';
-        await page.getByRole('button', { name: 'Setup', exact: true }).click();
-        await expect(page.locator('.setup-view__look')).toContainText('Ball found in the box', { timeout: 6000 });
-        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-        await page.getByRole('button', { name: 'Next', exact: true }).click();
+        await toAimStep(page);
         await tap(page, AIM, hand);
         await page.getByRole('button', { name: 'Floor line', exact: true }).click();
         await tap(page, FLOOR[0], hand);

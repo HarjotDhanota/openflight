@@ -527,7 +527,9 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
     assert result["stages"]["moving_camera_iwr_anchor"]["status"] == ("withheld_prerequisites")
 
 
-def _replay_recorded_iwr(tmp_path, monkeypatch, per_shot_tilt):
+def _replay_recorded_iwr(
+    tmp_path, monkeypatch, per_shot_tilt, *, replay_club_speed=77.0, recompute_iwr_inputs=False
+):
     """Replay one recorded IWR shot; returns the replay calibration's inputs and the result."""
     session = _session(tmp_path)
     raw = tmp_path / "iwr.bin"
@@ -586,7 +588,7 @@ def _replay_recorded_iwr(tmp_path, monkeypatch, per_shot_tilt):
         lambda *_args, **_kwargs: {
             "status": "ok",
             "canonical_capture_payload_sha256": "c" * 64,
-            "result": {"ball_speed_mph": 101.0, "club_speed_mph": 77.0},
+            "result": {"ball_speed_mph": 101.0, "club_speed_mph": replay_club_speed},
             "overlapping_readings": [],
         },
     )
@@ -601,8 +603,47 @@ def _replay_recorded_iwr(tmp_path, monkeypatch, per_shot_tilt):
     monkeypatch.setattr(
         cli, "replay_iwr_capture_bytes", lambda *_args, **_kwargs: (measurement, None)
     )
-    result = cli.replay(_args(tmp_path, session, iwr=True))
+    result = cli.replay(
+        _args(tmp_path, session, iwr=True, recompute_iwr_inputs=recompute_iwr_inputs)
+    )
     return seen, result, radar_bytes
+
+
+@pytest.mark.parametrize("recompute", [False, True])
+def test_changed_ops_replay_inputs_need_an_explicit_mode_and_keep_the_recorded_binding(
+    tmp_path, monkeypatch, recompute
+):
+    _seen, result, _radar = _replay_recorded_iwr(
+        tmp_path,
+        monkeypatch,
+        {"effective_tilt_deg": 8.0},
+        replay_club_speed=79.0,
+        recompute_iwr_inputs=recompute,
+    )
+    stage = result["stages"]["iwr6843"]
+    if not recompute:
+        assert stage["status"] == "error"
+        assert "differ from recorded" in stage["error"]
+        return
+    assert stage["status"] == "rejected"
+    assert stage["input_binding"]["mode"] == "recomputed_ops_inputs"
+    assert stage["input_binding"]["recorded"]["club_speed_mph"] == 77.0
+    assert stage["input_binding"]["replayed"]["club_speed_mph"] == 79.0
+    assert stage["input_binding"]["changed"] == ["club_speed_mph"]
+    assert stage["runtime_config_source"] == "recorded_per_shot_snapshot"
+
+
+def test_recomputed_inputs_never_bypass_the_recorded_runtime_hash(tmp_path, monkeypatch):
+    _replay_recorded_iwr(tmp_path, monkeypatch, {"effective_tilt_deg": 8.0})
+    session = tmp_path / "session.jsonl"
+    events = [json.loads(line) for line in session.read_text(encoding="utf-8").splitlines()]
+    events[-1]["runtime_config"]["per_shot_inputs"]["club_speed_mph"] = 90.0
+    session.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+    result = cli.replay(_args(tmp_path, session, iwr=True, recompute_iwr_inputs=True))
+
+    assert result["stages"]["iwr6843"]["status"] == "error"
+    assert "runtime config hash mismatch" in result["stages"]["iwr6843"]["error"]
 
 
 def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, monkeypatch):

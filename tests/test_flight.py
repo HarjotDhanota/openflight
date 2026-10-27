@@ -1,4 +1,4 @@
-"""E4: every flight output, labelled, as measured and normalized (Part E, Tier 6).
+"""Every flight output, labelled, as measured and normalized.
 
 Carry, carry side, total, total side, apex, landing angle, hang time and curve,
 each with a status, a source, a range and a reason. Nothing is filled in on any
@@ -57,7 +57,7 @@ def _shot(**overrides) -> Shot:
         spin_confidence=0.9,
         spin_source="measured",
         spin_axis_deg=2.0,
-        # a full ball speed: a flight on the line-of-sight speed is estimated (C1)
+        # a full ball speed: a flight on the line-of-sight speed is estimated
         ball_speed_contract="full",
     )
     values.update(overrides)
@@ -86,7 +86,7 @@ def test_every_flight_output_is_present_with_its_label(block):
         low, high = metric["range"]
         assert low <= metric["value"] <= high, name
     assert "Ferguson" in metrics["carry"]["source"]
-    assert "flight-fit-v1" in metrics["carry"]["source"]  # E8a: the source names the fit
+    assert "flight-fit-v1" in metrics["carry"]["source"]
     assert "turf-roll-v2" in metrics["total"]["source"]
     assert "Penner" in metrics["total"]["source"]
     assert "surface assumed: fairway, normal firmness" in metrics["total"]["source"]
@@ -198,9 +198,6 @@ def test_the_flight_model_disabled_says_so():
     assert carry["status"] == "not_measured" and "flight model disabled" in carry["reason"]
 
 
-# --- raw vs normalized -------------------------------------------------------------
-
-
 def test_raw_and_normalized_share_their_launch_and_differ_only_in_the_air():
     flight = _fusion(_shot())
     raw, norm = flight["as_measured"], flight["normalized"]
@@ -214,7 +211,7 @@ def test_raw_and_normalized_share_their_launch_and_differ_only_in_the_air():
 
 
 def test_the_normalized_density_is_sea_level_25c_at_the_reference_humidity():
-    # 50 % RH (V-formulas C7); dry air would be 101325 / (287.05 x 298.15) = 1.1839
+    # 50 % RH; dry air would be 101325 / (287.05 x 298.15) = 1.1839
     assert AIR_DENSITY_NORMALIZED == pytest.approx(1.1769, abs=5e-5)
 
 
@@ -236,9 +233,6 @@ def test_an_invalid_supplied_density_is_not_replaced_by_isa(bad):
     assert flight["normalized"]["metrics"]["carry"]["status"] == "calculated"
 
 
-# --- inputs ------------------------------------------------------------------------
-
-
 def test_the_full_ball_speed_is_preferred_and_recorded():
     shot = _shot()
     shot.ball_speed_full_mph = 155.0
@@ -247,7 +241,7 @@ def test_the_full_ball_speed_is_preferred_and_recorded():
     assert flight["inputs"]["ball_speed"]["label"].startswith("full")
     straight = _fusion(_shot(ball_speed_contract="radial"))
     assert straight["inputs"]["ball_speed"]["label"].startswith("radial")
-    # the line-of-sight speed stands in for the full speed: an estimate (V-formulas C1)
+    # the line-of-sight speed stands in for the full speed: an estimate
     assert straight["as_measured"]["metrics"]["carry"]["status"] == "estimated"
     assert (
         flight["as_measured"]["metrics"]["carry"]["value"]
@@ -265,9 +259,6 @@ def test_each_shot_flies_on_its_own_inputs():
     a = _fusion(_shot(spin_rpm=2200.0))["as_measured"]["metrics"]["carry"]["value"]
     b = _fusion(_shot(spin_rpm=3200.0))["as_measured"]["metrics"]["carry"]["value"]
     assert a != b
-
-
-# --- ranges ------------------------------------------------------------------------
 
 
 def test_the_range_propagates_the_stated_input_uncertainties():
@@ -331,9 +322,6 @@ def test_neither_the_simulator_nor_the_kiosk_fills_in_a_spin():
     assert resolve_launch(shot) is None
 
 
-# --- server and payload -------------------------------------------------------------
-
-
 @pytest.fixture
 def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "iwr6843_runtime", SimpleNamespace())
@@ -341,9 +329,8 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 
-    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
-    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
-    # the other inputs' labels
+    # the full speed stands in as the ball speed: a flight on the OPS line-of-sight speed is
+    # "estimated", and these tests are about the other inputs' labels
     def full_speed(shot):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
         shot.ball_speed_full_mph = shot.ball_speed_mph

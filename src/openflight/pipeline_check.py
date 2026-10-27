@@ -1343,3 +1343,37 @@ def kiosk_metric_stages(records: Mapping[str, Any], upstream: Mapping[str, dict]
     """One row per metric in the catalog (openflight.shot_metrics.METRICS), in order."""
     records = mapping(records)
     return [kiosk_metric_stage(spec.id, records.get(spec.id), upstream) for spec in METRICS]
+
+
+def parse_setup_ball(value: str | None) -> dict[str, float] | None:
+    """Parse ``x,y,diameter`` in pixels, where the setup saw the resting ball."""
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        raise ValueError("setup ball must be x,y,diameter in pixels")
+    try:
+        x, y, diameter = (float(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError("setup ball values must be numbers") from exc
+    if not all(math.isfinite(item) for item in (x, y, diameter)):
+        raise ValueError("setup ball values must be finite")
+    if x < 0 or y < 0 or diameter <= 0:
+        raise ValueError("setup ball must lie in the frame with a positive diameter")
+    return {"x": x, "y": y, "diameter_px": diameter}
+
+
+def parse_hitting_zone(value: str | None) -> tuple[int, int, int, int] | None:
+    """Parse ``x0,y0,x1,y1`` in pixels: the tester's placement box in this mode."""
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 4:
+        raise ValueError("hitting zone must be x0,y0,x1,y1 in pixels")
+    try:
+        x0, y0, x1, y1 = (int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError("hitting zone values must be whole pixels") from exc
+    if min(x0, y0) < 0 or x1 <= x0 or y1 <= y0:
+        raise ValueError("hitting zone must lie in the frame with x1 > x0 and y1 > y0")
+    return x0, y0, x1, y1

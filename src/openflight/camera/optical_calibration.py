@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import string
 from collections.abc import Mapping
 from typing import Any
@@ -33,15 +32,6 @@ def _positive_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
-
-
-def _finite_positive(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
-        raise ValueError(f"{name} must be a positive finite number")
-    result = float(value)
-    if not math.isfinite(result) or result <= 0:
-        raise ValueError(f"{name} must be a positive finite number")
-    return result
 
 
 def _nonempty_string(value: Any, name: str) -> str:

@@ -21,15 +21,3 @@ export function shortReason(reason: string | null | undefined): string {
   words.pop();
   return words.join(' ');
 }
-
-/** Metrics not built yet, folded into one “Coming later” row while they have no value. */
-export const COMING_LATER_METRICS: ReadonlySet<string> = new Set(['club_speed_full', 'gyro']);
-
-export function isComingLater(
-  spec: { id: string; pending: string | null },
-  record: { status: string; value: number | null } | null | undefined
-): boolean {
-  const notBuilt = COMING_LATER_METRICS.has(spec.id) || Boolean(spec.pending);
-  if (!notBuilt) return false;
-  return !record || record.status === 'not_measured' || typeof record.value !== 'number';
-}

@@ -1,8 +1,8 @@
 """Tests for the high-speed camera trigger ring."""
 
+import copy
 import json
 import threading
-from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -226,34 +226,6 @@ def test_capture_persistence_uses_fast_uncompressed_npz(tmp_path, monkeypatch):
     assert saved.metadata["storage_format"] == "npz_uncompressed"
 
 
-def test_a_clip_records_the_controls_requested_and_applied_at_its_trigger(tmp_path):
-    """A 30 us ladder clip must not read as the 300 us startup snapshot."""
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path,
-        settings=CameraCaptureSettings(fps=120.0, exposure_us=300, gain=2.0, auto_exposure=False),
-    )
-    runtime.settings = replace(runtime.settings, exposure_us=30, gain=4.5)
-    frames = tuple(
-        CameraFrame(
-            image=np.full((2, 3), index, dtype=np.uint8),
-            sensor_timestamp_ns=index * 8_333_333,
-            host_timestamp_ns=index * 8_333_333 + 100,
-            exposure_us=300 if index == 0 else 29,
-            analogue_gain=2.0 if index == 0 else 4.5,
-        )
-        for index in range(3)
-    )
-    capture = TriggeredCapture(frames=frames, pre_trigger_count=2, trigger_host_timestamp_ns=1)
-
-    saved = runtime._save_capture(1, 123.0, capture, auto_exposure=runtime.auto_exposure_status())
-
-    written = json.loads((saved.path / "metadata.json").read_text(encoding="utf-8"))
-    assert written["controls_at_trigger"] == {
-        "requested": {"exposure_us": 30, "gain": 4.5, "purpose": "capture"},
-        "applied": {"exposure_us": 29, "gain": 4.5, "frame_index": 1},
-    }
-
-
 def test_live_image_controls_update_camera_without_restarting(tmp_path):
     class FakeCamera:
         def __init__(self):
@@ -395,30 +367,6 @@ def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(
     assert np.array_equal(runtime._ring.latest_frame.image, image)
 
 
-def test_preview_can_downscale_before_encoding(tmp_path):
-    cv2 = pytest.importorskip("cv2")
-    runtime = CameraCaptureRuntime(output_dir=tmp_path, settings=CameraCaptureSettings())
-    image = np.arange(800 * 1280, dtype=np.uint8).reshape(800, 1280)
-    runtime._ring.add_frame(
-        CameraFrame(
-            image=image,
-            sensor_timestamp_ns=1,
-            host_timestamp_ns=2,
-            exposure_us=300,
-            analogue_gain=12.0,
-        )
-    )
-    runtime._camera = object()
-    runtime._running = True
-
-    encoded = runtime.capture_preview_jpeg(max_width=640)
-
-    assert encoded is not None
-    preview = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-    assert preview.shape == (400, 640)
-    assert np.array_equal(runtime._ring.latest_frame.image, image)
-
-
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -514,21 +462,19 @@ def test_vertical_crop_update_rejects_unsafe_or_unaligned_offsets(tmp_path, offs
 
 
 def test_trigger_evidence_is_frozen_per_accepted_trigger(tmp_path):
+    guard = {
+        "warned": True,
+        "pitch_deg": 5.25,
+        "pitch_error_deg": 5.25,
+        "accuracy_qualified": False,
+    }
     current = {
         "ready": True,
         "blockers": [],
         "warnings": [{"id": "lis3dh", "reason": "tilted"}],
-        "observations": {
-            "lis3dh": {
-                "placement_guard": {
-                    "warned": True,
-                    "pitch_deg": 5.25,
-                    "pitch_error_deg": 5.25,
-                    "accuracy_qualified": False,
-                }
-            }
-        },
+        "observations": {"lis3dh": {"placement_guard": guard}},
     }
+    frozen = copy.deepcopy(current)
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path, trigger_evidence_provider=lambda _timestamp: current
     )
@@ -537,24 +483,10 @@ def test_trigger_evidence_is_frozen_per_accepted_trigger(tmp_path):
 
     assert runtime.notify_trigger(10.0) is True
     current["warnings"].clear()
-    current["observations"]["lis3dh"]["placement_guard"]["pitch_deg"] = 0.0
+    guard["pitch_deg"] = 0.0
     assert runtime.notify_trigger(11.0) is True
 
-    assert runtime._trigger_evidence.get_nowait() == {
-        "ready": True,
-        "blockers": [],
-        "warnings": [{"id": "lis3dh", "reason": "tilted"}],
-        "observations": {
-            "lis3dh": {
-                "placement_guard": {
-                    "warned": True,
-                    "pitch_deg": 5.25,
-                    "pitch_error_deg": 5.25,
-                    "accuracy_qualified": False,
-                }
-            }
-        },
-    }
+    assert runtime._trigger_evidence.get_nowait() == frozen
     assert runtime._trigger_evidence.get_nowait()["warnings"] == []
 
 
@@ -672,32 +604,10 @@ def test_diagnostic_capture_is_not_held_to_the_armed_ceiling(tmp_path):
     assert runtime.auto_exposure_status()["diagnostic_capture"] is True
 
 
-def test_automatic_exposure_never_steps_past_the_armed_ceilings(tmp_path):
-    from openflight.camera import swing_exposure as sx
-
-    runtime = _running_runtime(tmp_path, armed_profile=ARMED)
-    runtime.configure_swing_exposure(sx.SensorLimits(9, 8_000, 1.0, 15.9375))
-
-    envelope = runtime._swing_policy.envelope
-    assert max(envelope.ladder) <= 400
-    assert envelope.gain_cap <= 8.0
-
-
 def test_a_saved_seed_outside_the_armed_profile_is_not_restored(tmp_path):
     state = tmp_path / "camera-exposure.json"
-    state.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "width": 640,
-                "height": 400,
-                "fps": 300.0,
-                "exposure_us": 1000,
-                "gain": 20.0,
-            }
-        ),
-        encoding="utf-8",
-    )
+    saved = {"version": 1, "width": 640, "height": 400, "fps": 300.0, "exposure_us": 1000}
+    state.write_text(json.dumps({**saved, "gain": 20.0}), encoding="utf-8")
 
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,

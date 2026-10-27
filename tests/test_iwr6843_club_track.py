@@ -145,7 +145,6 @@ def test_time_window_excludes_a_later_mover():
 
 
 def test_accepted_range_evidence_passes_only_accepted_tracks():
-    """Camera depth takes only tracks their radar estimator accepted."""
     from types import SimpleNamespace  # noqa: PLC0415
 
     from openflight.iwr6843.tracking import accepted_range_evidence  # noqa: PLC0415
@@ -162,9 +161,8 @@ def test_accepted_range_evidence_passes_only_accepted_tracks():
     assert accepted_range_evidence(legacy) is legacy
 
 
-def test_one_ms_to_mph_constant():
-    """The track's mph uses the shared 2.23694, not a rounded 2.237."""
-    from openflight.iwr6843 import club, lcmf, tracking  # noqa: PLC0415
+def test_the_track_s_mph_uses_the_unrounded_conversion():
+    from openflight.iwr6843 import tracking  # noqa: PLC0415
 
     track = tracking.BallTrack(
         speed_ms=40.0,
@@ -177,7 +175,4 @@ def test_one_ms_to_mph_constant():
         low_confidence=False,
     )
 
-    assert tracking.MPH_PER_MS == 2.23694
     assert track.speed_mph == 40.0 * 2.23694
-    assert lcmf.MPH_PER_MS is tracking.MPH_PER_MS
-    assert club.MPH_PER_MS is tracking.MPH_PER_MS

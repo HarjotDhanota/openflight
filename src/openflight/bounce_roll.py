@@ -1,21 +1,8 @@
 """Bounce and roll on fairway turf: the distance from the landing point to rest.
 
-The ball lands on turf that dents under it. Penner (2002), "The run of a golf
-ball", Can. J. Phys. 80, 931-940 (doi:10.1139/p02-035), models the dent as a
-local tilt of the impact plane toward the incoming ball; here the tilt grows with
-the landing speed and peaks at a fitted landing angle. Each impact is a rigid
-sphere bouncing with grip-slip friction (Cross 2002, "Grip-slip behavior of a
-bouncing ball", Am. J. Phys. 70, 1093-1102, doi:10.1119/1.1507792): it slides
-with friction mu unless friction can bring the contact point to rest, in which
-case it leaves rolling. The normal restitution falls with the normal impact
-speed, and the turf caps the speed the ball keeps along the surface. Once a hop
-is under 1 cm the ball slides on the ground until it rolls, then rolls out
-against a constant rolling resistance plus a speed-squared turf drag
-(deceleration g c0 + k v^2), which integrates in closed form.
-
-turf-roll-v2 flies the hops between bounces through the flight model
-(``flight_sim.hop_flight``: drag, Magnus lift and spin decay, carrying the spin out
-of each bounce). Its constants were fitted by the maintainer; see its ``calibration``.
+Dented-turf impacts (Penner 2002, Can. J. Phys. 80, 931) with grip-slip friction (Cross 2002,
+Am. J. Phys. 70, 1093), then a closed-form roll-out at deceleration g c0 + k v^2. turf-roll-v2
+flies the hops through the flight model; its constants are fitted (see ``calibration``).
 """
 
 from __future__ import annotations
@@ -24,7 +11,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .constants import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
+from .ballistics import BALL_RADIUS_M, GRAVITY, MPH_TO_MPS
 from .numeric import finite as _finite
 
 M_TO_YD = 1.0 / 0.9144
@@ -89,10 +76,8 @@ class TurfRollModel:
     ) -> Optional[float]:
         """Signed distance (yd) from landing to rest along the landing heading, or None.
 
-        None for a non-finite input or a landing angle outside the fitted range.
-        Negative when backspin pulls the ball back past its landing point. A model
-        with ``aerodynamic_hops`` flies each hop with ``fly_hop`` (the flight
-        model's, ``flight_sim.hop_flight``); otherwise the hops are vacuum arcs.
+        None for a non-finite input or a landing angle outside the fitted range; negative
+        when backspin pulls the ball back. Aerodynamic hops fly with ``fly_hop``.
         """
         if self.aerodynamic_hops and fly_hop is None:
             raise ValueError(f"{self.version} flies its hops through the air: pass a hop flight")

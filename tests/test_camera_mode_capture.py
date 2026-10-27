@@ -49,12 +49,16 @@ def raw_request(value, *, crop=None, duration=None):
     return FakeRequest({"raw": raw}, metadata)
 
 
-def test_callbacks_freeze_per_frame_metadata_and_settings_before_save(tmp_path):
-    runtime = CameraCaptureRuntime(
+def _runtime(tmp_path, **settings):
+    return CameraCaptureRuntime(
         output_dir=tmp_path,
-        settings=CameraCaptureSettings(width=3, height=2, fps=1000, pre_ms=1, post_ms=1),
+        settings=CameraCaptureSettings(width=3, height=2, **settings),
         vertical_offset_path=tmp_path / "missing",
     )
+
+
+def test_callbacks_freeze_per_frame_metadata_and_settings_before_save(tmp_path):
+    runtime = _runtime(tmp_path, fps=1000, pre_ms=1, post_ms=1)
     snapshot(runtime)
     runtime._on_frame(raw_request(1, crop=(1, 2, 3, 4), duration=1000))
     assert runtime._ring.trigger(50)
@@ -74,11 +78,7 @@ def test_callbacks_freeze_per_frame_metadata_and_settings_before_save(tmp_path):
 
 
 def test_malformed_optional_request_metadata_does_not_drop_frame(tmp_path):
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path,
-        settings=CameraCaptureSettings(width=3, height=2),
-        vertical_offset_path=tmp_path / "missing",
-    )
+    runtime = _runtime(tmp_path)
     snapshot(runtime)
 
     runtime._on_frame(raw_request(1, crop=(1, 2, -3, 4), duration=float("inf")))
@@ -91,28 +91,15 @@ def test_malformed_optional_request_metadata_does_not_drop_frame(tmp_path):
 
 def test_rectangle_resolved_control_is_json_safe_and_saveable(tmp_path):
     rectangle = type("Rectangle", (), {"x": 1, "y": 2, "width": 3, "height": 4})()
-    camera = type(
-        "Camera",
-        (),
-        {
-            "camera_configuration": lambda _self: {
-                "controls": {"ScalerCrop": rectangle},
-            }
-        },
-    )()
+    configuration = {"controls": {"ScalerCrop": rectangle}}
+    camera = type("Camera", (), {"camera_configuration": lambda _self: configuration})()
     runtime = CameraCaptureRuntime(output_dir=tmp_path)
     runtime.settings = replace(runtime.settings, width=999)
     runtime._resolved_config = resolved_camera_config(camera)
     runtime._camera = type("Properties", (), {"camera_properties": {}})()
     runtime._startup_capture_mode = runtime._capture_mode_startup_snapshot()
-    frame = CameraFrame(
-        np.zeros((2, 3), dtype=np.uint8),
-        1,
-        1,
-        1,
-        1.0,
-        capture_mode=runtime._startup_capture_mode,
-    )
+    mode = runtime._startup_capture_mode
+    frame = CameraFrame(np.zeros((2, 3), dtype=np.uint8), 1, 1, 1, 1.0, capture_mode=mode)
 
     saved = runtime._save_capture(1, 1.0, TriggeredCapture((frame,), 1, 1))
 
@@ -120,38 +107,24 @@ def test_rectangle_resolved_control_is_json_safe_and_saveable(tmp_path):
 
 
 def test_driver_readback_is_nullable_and_never_defaults_to_zero(tmp_path):
-    missing = CameraCaptureRuntime(output_dir=tmp_path, vertical_offset_path=tmp_path / "missing")
-    assert missing._driver_offset_readback() == {
-        "value_px": None,
-        "scope": "startup",
-        "status": "unavailable",
-    }
-
     malformed_path = tmp_path / "strip_y_offset"
     malformed_path.write_text("unknown\n", encoding="ascii")
-    malformed = CameraCaptureRuntime(output_dir=tmp_path, vertical_offset_path=malformed_path)
-    assert malformed._driver_offset_readback() == {
-        "value_px": None,
-        "scope": "startup",
-        "status": "malformed",
-    }
+    for path, status in ((tmp_path / "missing", "unavailable"), (malformed_path, "malformed")):
+        runtime = CameraCaptureRuntime(output_dir=tmp_path, vertical_offset_path=path)
+        assert runtime._driver_offset_readback() == {
+            "value_px": None,
+            "scope": "startup",
+            "status": status,
+        }
 
 
 def test_callback_records_main_stream_and_applied_orientation(tmp_path):
-    runtime = CameraCaptureRuntime(
-        output_dir=tmp_path,
-        settings=CameraCaptureSettings(width=3, height=2),
-        vertical_offset_path=tmp_path / "missing",
-    )
+    runtime = _runtime(tmp_path)
     snapshot(runtime, stream="main-y", rotate_180=True, mirror_horizontal=True)
     main = np.array([[1, 2, 3], [4, 5, 6], [0, 0, 0]], dtype=np.uint8)
 
-    runtime._on_frame(
-        FakeRequest(
-            {"main": main},
-            {"SensorTimestamp": 1, "ExposureTime": 100, "AnalogueGain": 2.0},
-        )
-    )
+    metadata = {"SensorTimestamp": 1, "ExposureTime": 100, "AnalogueGain": 2.0}
+    runtime._on_frame(FakeRequest({"main": main}, metadata))
     frame = runtime._ring.latest_frame
 
     assert frame.capture_mode["settings"]["stream"] == "main-y"
@@ -205,17 +178,7 @@ def test_start_snapshots_after_controls_and_refreshes_on_restart(tmp_path, monke
             events.append((self.value, "read_config"))
             return {"controls": {"ScalerCrop": (self.value, 0, 10, 10)}}
 
-        @staticmethod
-        def start():
-            return None
-
-        @staticmethod
-        def stop():
-            return None
-
-        @staticmethod
-        def close():
-            return None
+        start = stop = close = staticmethod(lambda: None)
 
     monkeypatch.setitem(sys.modules, "picamera2", SimpleNamespace(Picamera2=FakeCamera))
     runtime = CameraCaptureRuntime(

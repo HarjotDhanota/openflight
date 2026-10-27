@@ -105,37 +105,28 @@ def test_reference_model_rejects_bad_ball_and_behind_camera_placement():
         reference_ball_camera_model(**arguments)
 
 
-@pytest.mark.parametrize("radar_range", [float("nan"), 0.0, -1.0])
-def test_range_intersection_rejects_invalid_range(radar_range):
-    with pytest.raises(ValueError, match="range"):
+FORWARD, BACK = (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("ray", "radar_range", "camera", "match"),
+    [
+        (FORWARD, float("nan"), (0.0, 0.0, 0.0), "range"),
+        (FORWARD, 0.0, (0.0, 0.0, 0.0), "range"),
+        (FORWARD, -1.0, (0.0, 0.0, 0.0), "range"),
+        (FORWARD, 0.5, (1.0, 0.0, 0.0), "does not intersect"),
+        (BACK, 1.0, (0.0, 2.0, 0.0), "inside"),
+        (FORWARD, 1.0, (0.0, 2.0, 0.0), "behind"),
+    ],
+)
+def test_range_intersection_rejects_invalid_ranges_and_impossible_roots(
+    ray, radar_range, camera, match
+):
+    with pytest.raises(ValueError, match=match):
         intersect_radar_range_sphere(
-            np.array([0.0, 1.0, 0.0]),
+            np.array(ray),
             radar_range,
-            camera_origin_lfu=np.zeros(3),
-            radar_origin_lfu=np.zeros(3),
-        )
-
-
-def test_range_intersection_rejects_impossible_and_behind_camera_roots():
-    with pytest.raises(ValueError, match="does not intersect"):
-        intersect_radar_range_sphere(
-            np.array([0.0, 1.0, 0.0]),
-            0.5,
-            camera_origin_lfu=np.array([1.0, 0.0, 0.0]),
-            radar_origin_lfu=np.zeros(3),
-        )
-    with pytest.raises(ValueError, match="inside"):
-        intersect_radar_range_sphere(
-            np.array([0.0, -1.0, 0.0]),
-            1.0,
-            camera_origin_lfu=np.array([0.0, 2.0, 0.0]),
-            radar_origin_lfu=np.zeros(3),
-        )
-    with pytest.raises(ValueError, match="behind"):
-        intersect_radar_range_sphere(
-            np.array([0.0, 1.0, 0.0]),
-            1.0,
-            camera_origin_lfu=np.array([0.0, 2.0, 0.0]),
+            camera_origin_lfu=np.array(camera),
             radar_origin_lfu=np.zeros(3),
         )
 
@@ -156,16 +147,7 @@ def test_ball_and_club_adapters_use_identical_rays_and_world_points():
     )
     ball_geometry = ball_flight.CameraBallGeometry(**common)
     club_geometry = club_delivery.CameraDeliveryGeometry(**common)
-    candidate = ball_flight.BallCandidate(
-        x=301.0,
-        y=178.0,
-        area=100,
-        width=12,
-        height=12,
-        fill=0.8,
-        circularity=0.9,
-        mean_intensity=220.0,
-    )
+    candidate = ball_flight.BallCandidate(301.0, 178.0, 100, 12, 12, 0.8, 0.9, 220.0)
     model = ball_flight._camera_model(ball, ball_geometry)
     ball_ray = ball_flight._camera_ray(candidate, model=model, geometry=ball_geometry)
     shared_ray = unit_world_rays(

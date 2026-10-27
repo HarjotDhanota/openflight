@@ -1,15 +1,15 @@
 """Every golf metric on the Shot, each with its label, source, range, reason and frame.
 
-``openflight.shot_metrics`` turns one shot record (``Shot.to_dict()`` or a logged
-``shot_detected`` entry) into one record per metric. Every place the owner looks
-(kiosk, tester page, session log, review, pipeline check) reads these records,
-so a metric dropped here is dropped everywhere; these tests pin the list.
+``openflight.shot_metrics`` turns one shot record into one record per metric; every place a
+golfer looks reads these records, so a metric dropped here is dropped everywhere.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -64,6 +64,12 @@ def test_the_catalog_is_the_owner_s_metric_list_in_order():
     assert shot_metrics.METRIC_IDS == EXPECTED_METRIC_IDS
 
 
+def test_the_ui_catalog_with_the_shot_models_matches_the_registry():
+    path = Path(__file__).resolve().parents[1] / "ui/src/data/metricCatalog.shotModels.json"
+
+    assert json.loads(path.read_text(encoding="utf-8")) == shot_metrics.catalog()
+
+
 def test_the_label_vocabulary_is_the_six_labels():
     assert shot_metrics.LABELS == LABELS
 
@@ -105,12 +111,12 @@ def test_the_fusion_shot_labels_follow_their_producers():
     assert status["attack_angle"] == "measured"
     assert status["face_angle"] == "calculated"
     assert status["dynamic_loft"] == "calculated"
-    # the arc's own label (calculated, or model geometry on the published prior, D39)
+    # the arc's own label (calculated, or model geometry on the published prior)
     shot_arc = fusion_shot().club_delivery["metrics"]["swing_plane_deg"]["status"]
     assert status["swing_plane"] == shot_arc
     assert status["smash_factor"] == "calculated"
     assert "radial" in metrics["smash_factor"]["source"]
-    # a simulated carry on a measured spin is calculated, never estimated (D38)
+    # a simulated carry on a measured spin is calculated, never estimated
     assert status["carry"] == "calculated"
     assert metrics["carry"]["range"] is not None
     assert metrics["carry"]["normalized"]["value"] is not None
@@ -263,7 +269,7 @@ def test_the_catalog_is_exported_for_the_ui():
 
 
 def test_estimated_labels_from_every_producer_pass_through():
-    """agent/v-formulas: spin, spin axis, face and flight outputs can be "estimated"."""
+    """Spin, spin axis, face and flight outputs can be "estimated"."""
     shot = fusion_shot()
     shot.spin_source = "estimated"
     shot.spin_axis_source = "estimated (D-plane tilt; horizontal launch confidence 0.4)"

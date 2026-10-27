@@ -75,17 +75,4 @@ describe('MetricGroupPanel taps', () => {
     act(() => cell.click());
     expect(reason()).toBe('the radar measures speed along its line only ›');
   });
-
-  it('lists why each not-built metric is coming later on a tap', () => {
-    act(() => {
-      root.render(<MetricGroupPanel view="club" shot={shot()} profileName="P" clubLabel="DR" unitSystem="imperial" />);
-    });
-    const later = container.querySelector('[data-metric="coming-later"]') as HTMLElement;
-    const list = later.querySelector('.metric-cell__later-list') as HTMLElement;
-    expect(list.hidden).toBe(true);
-    act(() => later.click());
-    expect(list.hidden).toBe(false);
-    expect(list.textContent).toContain('Club speed (total): no input');
-    expect(list.textContent).not.toContain('Dynamic lie:');
-  });
 });

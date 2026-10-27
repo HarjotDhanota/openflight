@@ -21,39 +21,23 @@ from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 _DIAMETER_HYPOTHESES = 12
 _AMBIGUITY_SCORE_MARGIN = 0.75
 _FULL_RADAR_RANGE_M = (0.5, 4.0)
-# The lens height is solved from the resting ball, not assumed: feet sink into
-# carpet and a unit may stand on a box. These bound what is physically plausible.
-# Heights are measured from the surface the ball rests on (ground, mat or tee top),
-# so the ball's centre is one radius up by definition and the setup can be on grass,
-# a mat, a tee or a box. The lens sits between just above that support (a high tee)
-# and a metre above it (a unit on a table).
+# Lens height bounds, solved per setup and measured from the surface the ball rests
+# on (ground, mat or tee top), so the ball centre is one radius up by definition.
 _CAMERA_HEIGHT_RANGE_M = (0.0, 1.0)
-# How far the solved height may stray from the rig's nominal lens height before a
-# candidate ranks below one that sits where the rig says it should.
 _CAMERA_HEIGHT_PRIOR_SIGMA_M = 0.06
 _SEED_SIZE_TOLERANCE = 0.25
-# The lit-ball fit cannot tell a resting ball's size to better than about a fifth
-# (fits held 12 % apart score alike on real frames); size range says no more.
+# The lit-ball fit cannot resolve a resting ball's size better than about a fifth.
 _MIN_DIAMETER_RELATIVE_UNCERTAINTY = 0.20
-# A lone plausible candidate is still refused when it scores this badly: far off
-# the boresight or far from the rig's lens height.
 _MAX_SELECTION_SCORE = 2.5
-# The ball sits at address in front of the unit, near its boresight.
 _LATERAL_SIGMA_M = 0.15
-# The hitting area: where a ball at address can legitimately be, in the world
-# (commercial behind-the-ball units use a zone 0.6-1.2 m deep, +-0.15-0.3 m wide).
-# Distance and sideways offset are from the radar; heights are the ball centre
-# relative to the lens, allowing a ball 10 mm into grass up to a 90 mm tee, with
-# the lens 0-1 m above the hitting surface.
+# Hitting area: distance and sideways offset are from the radar; heights are the
+# ball centre relative to the lens (10 mm into grass up to a 90 mm tee).
 _HITTING_RANGE_M = (1.0, 2.5)
 _HITTING_LATERAL_M = 0.30
-# First-pass seeds get extra sideways slack so a near miss is still fitted and
-# refused with a named reason instead of silently disappearing.
+# Extra seed slack so a near miss is fitted and refused with a named reason.
 _SEED_LATERAL_M = 0.45
 _BALL_ABOVE_SURFACE_M = (-0.010, 0.090)
 _LENS_ABOVE_SURFACE_M = (0.0, 1.0)
-# A search region the caller names in pixels (the old whole-frame estimator's
-# ``placement_box_px``); the setup itself now searches the ground patch (P8-1, P8-2).
 PLACEMENT_BOX_REJECTION = "outside the placement box"
 
 
@@ -66,14 +50,6 @@ def _patch_policy() -> dict[str, Any]:
 def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
-        # version 3: the range fields are named for the ball's size they come from
-        # (wiring audit S11); they were "floor_*" though nothing uses the floor
-        # version 4: every setup search looks only inside the tester's placement box
-        # (P7-4); a box the tester placed is as independent of the live pick as the
-        # full frame was, so Save stays an independent confirmation
-        # version 5 (P8-2): the setup searches only the ground patch's outline, at the
-        # sizes its distances allow; the floor row is a diagnostic, never a refusal;
-        # candidates rank by the lit-sphere fit's quality
         "name": "camera_reference_ball_size_range",
         "version": 5,
         "detector": "reference_ball_candidates_v2_merged_seeds",
@@ -90,7 +66,6 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "lateral_sigma_m": _LATERAL_SIGMA_M,
         "hitting_range_m": list(_HITTING_RANGE_M),
         "hitting_lateral_m": _HITTING_LATERAL_M,
-        # the area's ray tests measure along the lens ray, not the radar's slant (S7)
         "hitting_area_ray_distance": "lens",
         "seed_lateral_m": _SEED_LATERAL_M,
         "ball_above_surface_m": list(_BALL_ABOVE_SURFACE_M),
@@ -168,7 +143,7 @@ class BallPlaneCamera:
     accuracy_qualified: bool
     angular_uncertainty_deg: float
     focal_relative_uncertainty: float
-    # P8-5: the unit's camera tilt this model's pitch was composed with, labelled
+    # the unit's camera tilt this model's pitch was composed with, labelled
     vertical_offset: Mapping[str, Any] | None = None
     # the LIS3DH roll this model was built with (``camera_roll.roll_record``)
     roll: Mapping[str, Any] | None = None
@@ -214,8 +189,8 @@ class BallPlaneCamera:
         """Build a visibly uncalibrated model from declared pinhole assumptions.
 
         ``pitch_deg`` is the camera's whole pitch; ``vertical_offset`` records how it
-        was composed (the LIS3DH's and the unit's camera tilt, P8-5), ``roll`` how the
-        LIS3DH roll was taken.
+        was composed (LIS3DH plus the unit's camera tilt), ``roll`` how the LIS3DH roll
+        was taken.
         """
         focal_px = _positive(focal_px, "focal size")
         if not isinstance(mirror_horizontal, bool):
@@ -303,8 +278,7 @@ class BallPlaneIntersection:
     accuracy_qualified: bool
 
 
-# Evidence stored before wiring audit S11 carries the old names; readers of stored
-# candidates accept either (``stored_candidate_value``).
+# Older stored candidates carry these field names.
 LEGACY_CANDIDATE_FIELDS = {
     "size_radar_range_m": "floor_radar_range_m",
     "size_point_lfu_m": "floor_point_lfu_m",
@@ -312,7 +286,7 @@ LEGACY_CANDIDATE_FIELDS = {
 
 
 def stored_candidate_value(candidate: Mapping[str, Any], name: str) -> Any:
-    """A field of a stored candidate, under its current name or its pre-S11 one."""
+    """A field of a stored candidate, under its current or legacy name."""
     if name in candidate:
         return candidate[name]
     legacy = LEGACY_CANDIDATE_FIELDS.get(name)
@@ -343,11 +317,10 @@ class ReferenceBallRangeCandidate:
     rejection_reason: str | None
     camera_height_m: float | None = None
     camera_height_uncertainty_m: float | None = None
-    # P8-2: how far the lens height the ball's floor row implies is from the rig's.
-    # A diagnostic only: before the camera tilt is calibrated the row cannot say it.
+    # diagnostic only: lens height implied by the floor row minus the rig's
     floor_height_residual_m: float | None = None
     lateral_from_patch_m: float | None = None
-    # the lit-sphere fit's own quality (diffuse brightness over misfit), for ranking
+    # diffuse brightness over misfit, for ranking
     fit_quality: float | None = None
 
 
@@ -445,12 +418,8 @@ def _candidate(  # pylint: disable=too-many-locals
     ball_center_height_m: float,
     plausible_range: tuple[float, float],
 ) -> ReferenceBallRangeCandidate:
-    """Range from the ball's apparent size; the camera height it implies must be plausible.
-
-    The ball rests on the floor, so the camera sits ``range x sin(depression)``
-    above the ball's centre. That height is solved here rather than taken from
-    the rig, and a candidate whose implied height is impossible is rejected.
-    """
+    """Range from apparent size; the implied lens height (``range x sin(depression)``
+    above the ball centre) must be plausible."""
     try:
         local_focal = _local_focal_size(camera, ball.x, ball.y)
         angular_diameter = ball.diameter_px / local_focal
@@ -530,10 +499,8 @@ def solve_camera_height_from_radar(
 ) -> tuple[float, float]:
     """Camera height above the floor from the radar's range to the resting ball.
 
-    The ball lies on its pixel ray at the one distance whose range from the radar
-    (a fixed offset inside the enclosure) is the measured range. Unlike apparent
-    size it does not depend on the fitted diameter, which the pixels leave loose;
-    both are limited mostly by the camera's tilt uncertainty.
+    The ball lies on its pixel ray where its range from the radar (offset inside the
+    enclosure) equals the measured range; independent of the fitted diameter.
     """
     ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
@@ -559,11 +526,7 @@ def _ball_height_below_lens_bounds(ball_center_height_m: float) -> tuple[float, 
 def _hitting_area_upper_distance(
     rays: np.ndarray, camera: BallPlaneCamera, ball_center_height_m: float, lateral_m: float
 ) -> np.ndarray:
-    """Farthest camera distance along each ray that stays inside the hitting area.
-
-    Each limit is linear in distance, so a ray is usable out to the smallest of
-    them. The camera's angular uncertainty is added as slack that grows with distance.
-    """
+    """Farthest camera distance along each ray that stays inside the hitting area."""
     rays = np.asarray(rays, dtype=float).reshape(-1, 3)
     slack = math.sin(math.radians(camera.angular_uncertainty_deg))
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
@@ -591,9 +554,8 @@ def _hitting_area_reason(  # pylint: disable=too-many-arguments
 ) -> str | None:
     """Why a candidate at this distance cannot be the ball at address, if it cannot.
 
-    The area's range limits are radar slant ranges (``distance``); the ray tests
-    are distances along the lens ray (``lens_distance``), so the window found in
-    radar range is moved onto the ray by their difference (wiring audit S7).
+    Range limits are radar slant ranges (``distance``); ray tests are distances along
+    the lens ray (``lens_distance``), so the window is shifted by their difference.
     """
     offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
     near = max(_HITTING_RANGE_M[0], distance - 2.0 * distance_sigma)
@@ -635,11 +597,7 @@ def _score_reason(candidate: ReferenceBallRangeCandidate, camera: BallPlaneCamer
 
 
 def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
-    """Drop seeds whose ray never passes through the hitting area.
-
-    The disk filter's seed size is not the ball's size, so the seed's distance is
-    not used; a seed survives if any distance in the hitting area fits its ray.
-    """
+    """Drop seeds whose ray never passes through the hitting area (seed size is ignored)."""
     nearest = _HITTING_RANGE_M[0] - 0.1
 
     def allowed(xs: np.ndarray, ys: np.ndarray, _diameter: float) -> np.ndarray:
@@ -651,12 +609,7 @@ def _seed_filter(camera: BallPlaneCamera, ball_center_height_m: float):
 
 
 def project_to_pixel(camera: BallPlaneCamera, point_lfu: Any) -> tuple[float, float]:
-    """The pixel whose ray passes through a world point, by inverting the ray model.
-
-    The models only map pixels to rays; a few Gauss-Newton steps on that map find
-    the pixel for a point in front of the camera, for nominal and calibrated
-    models alike.
-    """
+    """The pixel whose ray passes through a world point (Gauss-Newton on the ray model)."""
     target = np.asarray(point_lfu, dtype=float) - np.asarray(camera.camera_origin_lfu)
     norm = float(np.linalg.norm(target))
     if target.shape != (3,) or not math.isfinite(norm) or norm <= 0.0:
@@ -730,9 +683,7 @@ def estimate_reference_ball_range(  # pylint: disable=too-many-locals
 ) -> ReferenceBallRangeResult:
     """Rank stationary sphere candidates without requiring a tape distance.
 
-    ``placement_box_px`` (the tester's box, in this mode's pixels) limits the search
-    to balls whose fitted centre lies inside it; a ball found there must still pass
-    every hitting-area check.
+    ``placement_box_px`` (this mode's pixels) limits the search to fitted centres inside it.
     """
     if frames.ndim != 3 or frames.shape[1:] != (
         camera.image_height_px,
@@ -843,15 +794,11 @@ def estimate_reference_ball_range(  # pylint: disable=too-many-locals
     )
 
 
-# P8-2: the camera searches only the patch. What a ball there must satisfy is the
-# patch's outline and the sizes its distances allow; the floor row is recorded,
-# never used to refuse a ball, since the camera's vertical is uncertain by a few
-# degrees until the unit's tilt is calibrated (P8-5).
+# The floor row is recorded, never used to refuse a ball: the camera's vertical is
+# uncertain by a few degrees until the unit's tilt is calibrated.
 PATCH_REJECTION = "outside the patch"
 PATCH_SEED_MARGIN_PX = 4.0
-# Inside the patch the most ball-like fit is the ball; a second fit this close to
-# it in quality leaves the view ambiguous (Outdoors-test-7: the ball 20.8, a lit
-# tuft of turf 12.4 beside it).
+# A second fit this close in quality to the best leaves the view ambiguous.
 PATCH_AMBIGUITY_QUALITY_RATIO = 0.75
 
 
@@ -932,15 +879,13 @@ def _patch_candidate(  # pylint: disable=too-many-locals
     )
 
 
-# With the unit's camera tilt calibrated, a seed is fitted only when its disk size is
-# within this factor of the size a ball at its row has (13 Oct light audit section 5:
-# a 172 px seed at row 427 was fitted though no ball at that row is that size). The
-# disk pass steps its sizes about 23 % apart, so this keeps every real ball.
+# Once the tilt is calibrated, a seed is fitted only within this factor of the size
+# a ball at its row has; the disk pass steps sizes ~23 % apart, so no real ball is lost.
 SEED_ROW_SIZE_FACTOR = 1.6
 
 
 def tilt_is_calibrated(camera: BallPlaneCamera) -> bool:
-    """Whether this model's pitch carries the unit's calibrated camera tilt (P8-5)."""
+    """Whether this model's pitch carries the unit's calibrated camera tilt."""
     offset = camera.vertical_offset
     return isinstance(offset, Mapping) and offset.get("status") == "calibrated"
 
@@ -997,11 +942,9 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
 ) -> ReferenceBallRangeResult:
     """Find the resting ball inside the patch (``search``, a ``PatchSearch``).
 
-    There is no search outside the patch. ``roi`` and ``expected_diameter_range_px``
-    only narrow it further (a live look following the ball it found).
-    ``confirm_anchor`` (the stable live ball's x_px, y_px, diameter_px) makes it the
-    setup Save's confirm search: the whole patch's disk pass, then the ball at its
-    held size and only its close rivals fitted (13 Oct light audit section 5).
+    ``roi`` and ``expected_diameter_range_px`` only narrow the search. ``confirm_anchor``
+    (x_px, y_px, diameter_px of the stable live ball) fits it at its held size and only
+    its close rivals.
     """
     if frames.ndim != 3 or frames.shape[1:] != (
         camera.image_height_px,
@@ -1009,9 +952,7 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     ):
         raise ValueError("camera frames do not match the declared saved-image mode")
     width, height = camera.image_width_px, camera.image_height_px
-    # the region holds the whole of the largest ball whose centre lies in the outline:
-    # a centre near the edge needs its disk, not only the seed grid's margin
-    # (indoor-test-2: the ball's centre 2 rows inside the fixed box's edge)
+    # a centre near the outline's edge needs its whole disk inside the region
     bounds = search.bounds_px(
         width, height, PATCH_SEED_MARGIN_PX + float(search.diameter_px[1]) / 2.0
     )

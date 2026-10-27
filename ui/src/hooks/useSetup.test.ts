@@ -58,6 +58,13 @@ async function flush() {
   });
 }
 
+/** Renders the hook against a kiosk whose setup is at revision 3. */
+async function mount() {
+  fetchMock.mockResolvedValueOnce({ ok: true, json: async () => snapshot(3) });
+  act(() => root.render(createElement(Probe)));
+  await flush();
+}
+
 describe('useSetup', () => {
   beforeEach(() => {
     listeners.clear();
@@ -78,9 +85,7 @@ describe('useSetup', () => {
   });
 
   it('reads the setup again when the kiosk comes back', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(1, 'stale') });
     act(() => connectListeners.forEach((listener) => listener()));
     await flush();
@@ -111,26 +116,20 @@ describe('useSetup', () => {
   });
 
   it('keeps the same setup when an event repeats it, so nothing re-renders', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     const before = latest?.setup;
     act(() => listeners.forEach((listener) => listener(snapshot(3))));
     expect(latest?.setup).toBe(before);
   });
 
   it('reads the setup at start', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/setup$/);
     expect(latest?.setup?.revision).toBe(3);
   });
 
   it('an incoming setup_changed replaces the state', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     const next = snapshot(4, 'confirmed');
     act(() => listeners.forEach((listener) => listener(next)));
     expect(latest?.setup).toEqual(next);
@@ -138,17 +137,13 @@ describe('useSetup', () => {
   });
 
   it('ignores a setup_changed that is not a snapshot', async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     act(() => listeners.forEach((listener) => listener({ revision: 'x' })));
     expect(latest?.setup?.revision).toBe(3);
   });
 
   it('posts an action and takes the setup it answers with, refused or not', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
 
     fetchMock.mockResolvedValueOnce({
       ok: false,
@@ -177,9 +172,7 @@ describe('useSetup', () => {
   });
 
   it('says an action failed when the kiosk cannot be reached', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => snapshot(3) });
-    act(() => root.render(createElement(Probe)));
-    await flush();
+    await mount();
     fetchMock.mockRejectedValueOnce(new TypeError('network down'));
     let result: { ok: boolean; reason: string | null } | undefined;
     await act(async () => {

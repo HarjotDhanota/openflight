@@ -1,9 +1,7 @@
-"""D-plane face angle from start direction and club path (E2 collision model).
+"""D-plane face angle from start direction and club path (collision model).
 
-The face angle comes from inverting the published PING launch ratio (Wood,
-Henrikson & Broadie 2018): a 7-iron ball starts 69 % of the way from the club path
-to the face, so face = path + (launch - path) / 0.69. It replaced the fixed 0.8
-weight.
+Inverts the published PING launch ratio (Wood, Henrikson & Broadie 2018): a 7-iron ball starts
+69 % of the way from the path to the face, so face = path + (launch - path) / 0.69.
 """
 
 from datetime import datetime
@@ -75,8 +73,8 @@ def _measured_start(**fields):
     "iwr_status", ["candidate_out_of_bounds", "candidate_noisy_fit", "rejected_phase_span"]
 )
 def test_iwr_path_that_is_not_accepted_gives_no_face_angle(iwr_status):
-    # F1: the kiosk shows an IWR candidate with its status, but face angle is
-    # built only on an accepted path.
+    # the kiosk shows an IWR candidate with its status, but face angle is built only on an
+    # accepted path
     shot = _measured_start(
         experimental_club_path_deg=35.2, experimental_club_path_status=iwr_status
     )
@@ -205,10 +203,7 @@ def test_displayed_club_path_withholds_a_withheld_camera_path():
 
 
 def test_a_frame_rotation_moves_face_with_launch_and_path():
-    """F9: turning launch and path by the same offset turns face angle with them.
-
-    Face-to-path, the quantity the offset must not change, stays the same.
-    """
+    """Turning launch and path by one offset turns face angle with them; face-to-path stays."""
     faces = []
     for offset in (0.0, 2.0):
         shot = _measured_start(

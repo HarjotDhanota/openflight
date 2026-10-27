@@ -5,9 +5,8 @@ export type FaceCategory = 'driver' | 'fairway' | 'hybrid' | 'iron' | 'wedge';
 
 type Point = readonly [number, number];
 
-/** USGA/R&A Equipment Rules, Part 2 (Rules for Clubs), the limits a face-on drawing can show:
- * 2c shaft attachment, 4b(i) wood head dimensions, 5c(i) grooves, 5d decorative markings and
- * interpretation 5.b(1) impact area (usga.org/equipment-standards/equipment-rules-2019). */
+/** USGA/R&A Equipment Rules, Part 2: the limits a face-on drawing can show
+ * (usga.org/equipment-standards/equipment-rules-2019). */
 export const USGA = {
   /** 5c(i): groove width W at most 0.035 in. */
   grooveMaxWidthMm: 0.9,
@@ -57,10 +56,9 @@ export interface Groove {
 /** chrome and satin steel blades, black-headed woods. */
 export type Finish = 'chrome' | 'satin' | 'black';
 
-/** Our own drawings, toe left and hosel right as seen along the face normal from the target
- * (right-handed), svg mm (+x heel, +y down) around the face centre. Each outline was fitted to a
- * reference photo rectified to that view and scaled to one category dimension; the hosel rises
- * at atan(tan lie * cos loft) from the model's published specs (docs/camera/impact-location.md). */
+/** Our own drawings: toe left, hosel right, seen along the face normal from the target
+ * (right-handed); svg mm (+x heel, +y down) about the face centre. The hosel rises at
+ * atan(tan lie * cos loft). */
 export interface FaceShape {
   finish: Finish;
   head: string;
@@ -202,11 +200,9 @@ function slopes(p: readonly Point[], start: Point | null, end: Point | null, per
   return solve(a, b);
 }
 
-/** The cubic Béziers of a fair closed outline through `nodes`: C2 cubic splines (chord-length
- * parameter, so curvature is continuous) between designed breaks. A node in `corners` is a sharp
- * corner; one in `tangents` a smooth join along that unit direction; a pair in `lines` a straight
- * segment, whose ends join the curves either side smoothly unless they are corners. With no breaks
- * the outline is one periodic spline. Each spline piece is the cubic Bézier it exactly is. */
+/** The cubic Béziers of a fair closed outline through `nodes`: chord-length C2 splines between
+ * breaks (`corners` sharp, `tangents` smooth along a unit direction, `lines` straight pairs);
+ * with no breaks, one periodic spline. */
 function segments(
   nodes: readonly Point[],
   corners: readonly number[] = [],
@@ -301,14 +297,10 @@ function chordMiddle(face: Point[], at: number, vertical: boolean): number {
   return (hits[0] + hits[hits.length - 1]) / 2;
 }
 
-/** The face centre, per club type (R&A/USGA TPX3004 centre template: equal heel-toe and
- * sole-crown distances to the face edges).
- * Woods and hybrids: on the drawn face outline, from the centre of its box, alternately move to
- * the middle of the heel-toe chord (parallel to the score lines) and of the sole-crown chord
- * until the point moves less than 0.01 mm.
- * Irons and wedges: heel-toe at the middle of the longest score line (the milled area's edges
- * sit within 0.6 mm of its ends on both sides, so they agree to 0.1 mm); up the face midway
- * between the leading edge and the top line on the line through that point. */
+/** The face centre per club type (R&A/USGA TPX3004: equal heel-toe and sole-crown distances to
+ * the face edges). Woods and hybrids: alternate between the middles of the heel-toe and
+ * sole-crown chords until it moves < 0.01 mm. Irons and wedges: heel-toe at the middle of the
+ * longest score line, up the face midway between the leading edge and the top line. */
 export function faceCentre(category: FaceCategory, shape: Pick<FaceShape, 'face' | 'grooves'>): Point {
   const face = flatten(shape.face);
   if (category === 'iron' || category === 'wedge') {
@@ -361,10 +353,9 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
   };
 }
 
-/** The head and the club's silhouette. `nodes` run from the heel side of the neck round the
- * sole, toe and top line back to the neck, where they meet the tube's foot running along its
- * edges (a fixed tangent there, so no step). The head closes up to 1.5 mm inside the tube, which
- * covers the overlap so no seam shows; the silhouette carries on up the tube to the ferrule. */
+/** The head and the club's silhouette: `nodes` run from the neck's heel side round the sole, toe
+ * and top line back to the tube's foot (fixed tangent, no step). The head closes 1.5 mm inside the
+ * tube so no seam shows; the silhouette carries on up the tube to the ferrule. */
 function headAndSilhouette(
   nodes: readonly Point[],
   hosel: Hosel,
@@ -514,11 +505,8 @@ function framed(moved: FaceShape): FaceShape {
   };
 }
 
-/* The population-average club of each category, drawn along the face normal (svg mm, y down)
- * from the research aggregates in docs/camera/impact-location.md: each outline is a few fair
- * curves (C2 splines between designed breaks). The head rims the face with a band of one width all
- * the way round (the population's leading-edge band), then blends into the hosel at the heel; the
- * face centre, band and score lines land on the population values. */
+/* The population-average club of each category along the face normal (svg mm, y down), from
+ * docs/camera/impact-location.md: a band of one width rims the face and blends into the hosel. */
 
 const DRIVER: Drawing = {
   finish: 'black',

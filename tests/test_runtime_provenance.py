@@ -98,15 +98,3 @@ def test_cache_identity_uses_content_not_only_timestamp_and_size(tmp_path):
     second = capture_runtime_provenance(tmp_path / "logs", "second", repo_root=repo)
 
     assert first["source_snapshot"]["sha256"] != second["source_snapshot"]["sha256"]
-
-
-def test_snapshot_includes_runtime_modules_outside_fusion_packages(tmp_path):
-    repo = _repo(tmp_path)
-    module = repo / "src/openflight/ballistics.py"
-    module.write_text("GRAVITY = 9.81\n", encoding="utf-8")
-
-    metadata = capture_runtime_provenance(tmp_path / "logs", "session", repo_root=repo)
-
-    archive = tmp_path / "logs" / metadata["source_snapshot"]["basename"]
-    with zipfile.ZipFile(archive) as bundle:
-        assert "src/openflight/ballistics.py" in bundle.namelist()

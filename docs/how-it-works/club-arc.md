@@ -5,11 +5,9 @@ icon: lucide/circle-dashed
 # Club delivery arc
 
 How the kiosk gets **club path, attack angle, swing plane, swing direction and
-low point** from one shot. It is Part E item E1, under the owner's decisions D38
-(published sources first, refitted to TrackMan 4 later) and D39 (assumed swing
-geometry is allowed, labelled "model geometry", until the new 6 mm and 8 mm
-lenses give enough frames to measure the arc). The code is
-`src/openflight/club_arc.py`.
+low point** from one shot. It uses published sources first, and assumed swing
+geometry, labelled "model geometry", until the 6 mm and 8 mm lenses give enough
+frames to measure the arc. The code is `src/openflight/club_arc.py`.
 
 ## The inputs: this shot's own head positions
 
@@ -22,7 +20,7 @@ also records:
 
 - the contact time on the same clock (midway between the last frame with the
   ball at rest and the next);
-- the horizontal offset (D36);
+- the horizontal offset;
 - the resting ball's position.
 
 Only positions **before contact** go into the fit, because TrackMan measures club
@@ -89,7 +87,7 @@ from mid-downswing to mid-follow-through is planar to 0.3 cm RMS (Kwon et al.
 The position noise floor is 5 mm, about one pixel across the head at 2 m with
 the stock lens at 640×400. It is an engineering assumption, to be replaced by
 the measured scatter. The arc is never labelled "measured". A measured tangent
-needs 4 to 6 frames from the new lenses (Part E, Tier 2, "method later").
+needs 4 to 6 frames from the new lenses.
 
 ## The published priors
 
@@ -124,7 +122,7 @@ a published value. An unknown club has no prior.
 
 ## The outputs and their definitions
 
-Each output follows TrackMan's public definition (D37). TrackMan measures at the
+Each output follows TrackMan's public definition. TrackMan measures at the
 head's geometric centre at impact.
 
 | Output | TrackMan's public definition | Here | Sign |
@@ -141,8 +139,8 @@ TrackMan's support pages refused automated access, so their wording above comes
 from search-result quotations and should be checked by hand.
 
 **Per-club low point offset.** On a TM4 normalized export, 6 May 2026, the reported low
-point distance is the arc's geometry plus a constant per club, fitted by the
-maintainer: +2.3 mm 7-iron (9 shots), −28.3 mm driver (8), +5.5 mm pitching wedge
+point distance is the arc's geometry plus a constant per club, fitted as:
++2.3 mm 7-iron (9 shots), −28.3 mm driver (8), +5.5 mm pitching wedge
 (7); 1.5 mm RMS after the offset. `club_delivery_payload` adds it to
 `low_point_distance_mm` and keeps the geometry (`geometry_value`) and the offset
 (`offset_mm`), with a note. Other clubs have no fitted offset yet and report the
@@ -153,7 +151,7 @@ The fit also records the low point relative to the resting ball
 (`arc.low_point_from_ball_mm`). It differs from TrackMan's figure by the head
 point's offset from the ball.
 
-**Frame (D36).** Positions arrive in the unit-boresight frame. The one
+**Frame.** Positions arrive in the unit-boresight frame. The one
 horizontal offset turns them about the vertical before the fit, so path, swing
 direction, low-point distance and low-point side are reported in
 `target_line` (with an offset) or `unit_boresight` (without one). Attack, plane
@@ -196,7 +194,7 @@ used. A chained value counts as measured when it exists and is not withheld,
 rejected or an error. The arc is at best "calculated", so today the chained
 value wins whenever it exists, and the arc fills path or attack only when the
 chained value is missing. Both values are always recorded under `cross_check`.
-For E2's collision model, `club_arc.selected_path_and_attack(payload)` returns
+For the collision model, `club_arc.selected_path_and_attack(payload)` returns
 the two selected entries.
 
 **Simulators (D31).** The resolver reads the selected path
@@ -229,7 +227,7 @@ near 1°, because their direction comes from the shot's own points.
 ## Limits
 
 - The head point is the median of tracked features, not TrackMan's geometric
-  centre (W9). Features are re-seeded for each frame pair, so the head point
+  centre. Features are re-seeded for each frame pair, so the head point
   shifts slightly between frames, and the fit residual absorbs it.
 - The model assumes a constant angular speed over the last few frames before
   contact, and uses pre-impact frames only.
@@ -239,5 +237,5 @@ near 1°, because their direction comes from the shot's own points.
 - With the stock lens and 2 ms frames (a 5 mm floor, 5 pre-impact frames), every
   shot is model geometry. Calculated values need more frames or less noise:
   the new lenses and crop modes.
-- The priors are refitted to TM4 exports after the pilot (E8). Low
-  point and swing plane have no accuracy goal until that data exists.
+- The priors are not yet refitted to TrackMan 4 exports. Low point and swing
+  plane have no accuracy goal until that data exists.

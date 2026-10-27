@@ -14,27 +14,22 @@ ENCLOSURE = SimpleNamespace(
 )
 
 
-def test_the_solved_height_moves_the_radar_with_the_camera():
-    assert server._solved_radar_height(0.081, ENCLOSURE, name="h") == pytest.approx(0.037)
+@pytest.mark.parametrize(("lens_m", "radar_m"), [(0.081, 0.037), (0.095, 0.051)])
+def test_the_solved_height_moves_the_radar_with_the_camera(lens_m, radar_m):
+    assert server._solved_radar_height(lens_m, ENCLOSURE, name="h") == pytest.approx(radar_m)
 
 
-def test_the_nominal_height_keeps_the_rig_s_radar_height():
-    assert server._solved_radar_height(0.095, ENCLOSURE, name="h") == pytest.approx(0.051)
-
-
-def test_an_impossible_solved_height_is_refused():
-    with pytest.raises(ValueError, match="between 0 and 1 m"):
-        server._solved_radar_height(1.5, None, name="the solved lens height")
-
-
-def test_a_ball_on_the_ground_is_the_default_ball_height():
-    assert server.BALL_RADIUS_M == pytest.approx(0.02135)
-
-
-def test_a_lens_height_that_would_bury_the_radar_is_refused():
-    # heights are above the hitting surface: the radar 44 mm below the lens cannot be under it
-    with pytest.raises(ValueError, match="below the hitting surface"):
-        server._solved_radar_height(0.030, ENCLOSURE, name="the solved lens height")
+@pytest.mark.parametrize(
+    ("lens_m", "enclosure", "match"),
+    [
+        (1.5, None, "between 0 and 1 m"),
+        # heights are above the hitting surface: the radar 44 mm below the lens cannot be under it
+        (0.030, ENCLOSURE, "below the hitting surface"),
+    ],
+)
+def test_an_impossible_solved_height_is_refused(lens_m, enclosure, match):
+    with pytest.raises(ValueError, match=match):
+        server._solved_radar_height(lens_m, enclosure, name="the solved lens height")
 
 
 def test_the_solved_height_is_recorded_apart_from_the_rig_file(monkeypatch):
@@ -83,7 +78,6 @@ def test_the_session_starts_with_the_rig_s_heights_and_nothing_else_filled_in(mo
     server.init_setup_handoff(_handoff_args(), ENCLOSURE)
 
     recorded = server._session_start_config()
-    # the setup record's sections replace these as they apply
     assert recorded["tee_range_handoff"] == {
         "tee_slant_range_m": None,
         "status": "pending",

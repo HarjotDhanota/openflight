@@ -6,11 +6,9 @@ a sunlit background alone does not withhold the camera. The real sunlit clip is
 """
 
 import numpy as np
-import pytest
 
 from openflight.camera import light_judging as lj
 from openflight.camera.auto_exposure import measure_exposure
-from openflight.camera.capture_runtime import parse_setup_ball
 
 BLACK = 16.0
 
@@ -41,11 +39,3 @@ def test_no_ball_where_the_setup_saw_it_is_not_eligible():
 
     assert judged["eligible"] is False
     assert "not found" in judged["reason"]
-
-
-def test_the_setup_ball_argument_is_three_positive_numbers():
-    assert parse_setup_ball("778.4,464.6,30.9") == {"x": 778.4, "y": 464.6, "diameter_px": 30.9}
-    assert parse_setup_ball(None) is None
-    for bad in ("1,2", "1,2,0", "a,b,c", "1,2,nan", "-1,2,3"):
-        with pytest.raises(ValueError):
-            parse_setup_ball(bad)

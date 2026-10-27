@@ -56,28 +56,26 @@ def test_a_measured_launch_point_and_the_ball_s_row_solve_the_offset():
     assert pair["range_source"] == "iwr_post_impact"
 
 
-def test_a_shot_ranged_only_by_the_camera_prior_is_never_a_pair():
+@pytest.mark.parametrize(
+    ("measured", "ball", "pitch", "why"),
+    [
+        ({**MEASURED, "ball_range_source": "camera_prior"}, True, -0.5, "not measured by the IWR"),
+        (MEASURED, False, -0.5, "resting ball"),
+        (MEASURED, True, None, "LIS3DH"),
+    ],
+)
+def test_a_camera_prior_range_or_no_resting_ball_or_pitch_is_never_a_pair(
+    measured, ball, pitch, why
+):
     pair = swing_tilt.swing_pair(
-        {**MEASURED, "ball_range_source": "camera_prior"},
-        ball_px=_ball_px(-2.0, 2.10),
-        lis3dh_pitch_deg=-0.5,
+        measured,
+        ball_px=_ball_px(-2.0, 2.10) if ball else None,
+        lis3dh_pitch_deg=pitch,
         camera_at_pitch=_camera,
     )
 
     assert pair["status"] == "skipped"
-    assert "not measured by the IWR" in pair["reason"]
-
-
-def test_without_the_resting_ball_or_a_stable_pitch_there_is_no_pair():
-    no_ball = swing_tilt.swing_pair(
-        MEASURED, ball_px=None, lis3dh_pitch_deg=-0.5, camera_at_pitch=_camera
-    )
-    no_pitch = swing_tilt.swing_pair(
-        MEASURED, ball_px=_ball_px(-2.0, 2.1), lis3dh_pitch_deg=None, camera_at_pitch=_camera
-    )
-
-    assert no_ball["status"] == "skipped" and "resting ball" in no_ball["reason"]
-    assert no_pitch["status"] == "skipped" and "LIS3DH" in no_pitch["reason"]
+    assert why in pair["reason"]
 
 
 def test_two_agreeing_swings_calibrate_the_unit_and_one_never_does(tmp_path):
@@ -129,8 +127,7 @@ def _lit_ball_frames(x, y, radius, count=12):
 
 def test_the_resting_ball_is_found_in_the_swing_s_own_pre_impact_frames():
     frames = _lit_ball_frames(640.0, 470.0, 20.0)
-    # the club arrives at the trigger: frames after it are not looked at
-    frames[8:, 440:500, 600:680] = 250
+    frames[8:, 440:500, 600:680] = 250  # the club arrives at the trigger
 
     ball = swing_tilt.resting_ball_px(frames, trigger_index=8, box_px=(560, 400, 720, 540))
 
@@ -171,12 +168,7 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
         swing_tilt, "record_swing_pair", lambda _path, pair, facts: {"action": "pending"}
     )
     monkeypatch.setattr(server_module, "_lis3dh_camera_pitch", lambda _inclinometer: -0.4)
-    shot = Shot(
-        ball_speed_mph=100.0,
-        timestamp=datetime.now(),
-        club=ClubType.IRON_7,
-        shot_number=4,
-    )
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), club=ClubType.IRON_7, shot_number=4)
     roll = math.radians(-2.0)
     shot.inclinometer = {
         "applied_to": ["camera"],
@@ -191,11 +183,8 @@ def test_the_kiosk_records_a_measured_swing_as_a_tilt_pair(monkeypatch, tmp_path
         "y_g": 0.0,
         "z_g": math.cos(roll),
     }
-    shot.ball_range_m, shot.ball_range_source, shot.ball_range_uncertainty_m = (
-        2.1,
-        "iwr_post_impact",
-        0.03,
-    )
+    shot.ball_range_m, shot.ball_range_uncertainty_m = 2.1, 0.03
+    shot.ball_range_source = "iwr_post_impact"
     archive = {"frames": _lit_ball_frames(640.0, 470.0, 20.0), "pre_trigger_count": 9}
 
     server_module._calibrate_camera_tilt_from_swing(shot, archive)  # pylint: disable=protected-access

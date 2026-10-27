@@ -22,10 +22,10 @@ from pathlib import Path
 
 import numpy as np
 
+from openflight.ballistics import BALL_RADIUS_M
 from openflight.camera import tester_server as ts
 from openflight.camera.ball_model import fit_lit_ball
 from openflight.camera.reference_ball_range import estimate_reference_ball_range
-from openflight.constants import BALL_RADIUS_M
 
 BALL_CENTER_HEIGHT_M = BALL_RADIUS_M
 

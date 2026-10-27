@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { FACE_SHAPES, type FaceCategory } from './faceImpact';
 
-/* The outlines are a few fair curves: C2 splines between designed breaks (corners, straight
- * stretches, the joins into the tube). These checks sample curvature along each drawn path and
- * fail on wobble: unintended inflections, kinks, curvature spikes and curvature jumps at joins.
- * Segments shorter than VISIBLE_MM (the closures hidden inside the tube) are left out: their
- * control points, rounded to 0.01 mm, carry no visible shape. */
+/* The outlines are C2 splines between designed breaks; these checks sample curvature along each
+ * path and fail on wobble (inflections, kinks, spikes, jumps at joins). Segments shorter than
+ * VISIBLE_MM (closures hidden inside the tube) are left out. */
 
 type Point = [number, number];
 type Bezier = [Point, Point, Point, Point];

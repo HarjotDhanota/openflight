@@ -1210,7 +1210,6 @@ def test_lcmf_v1_mti_uses_per_frame_capture_geometry(cal, monkeypatch):
 def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
     tee_m, horizontal_deg, launch_deg
 ):
-    """Horizontal launch is the ball's direction of motion, not its late-flight bearing."""
     cal = Calibration.identity()
     cal.tilt_rad = np.radians(10.4)
     cal.tee_range_m = tee_m

@@ -24,7 +24,8 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from openflight.camera.club_motion import detect_reference_ball  # noqa: E402
-from openflight.rig_geometry import RigGeometry, solve_setup  # noqa: E402
+from openflight.camera.teed_ball_solve import solve_setup  # noqa: E402
+from openflight.rig_geometry import RigGeometry  # noqa: E402
 
 # A tape and a pixel solve that disagree by more than this are not describing
 # the same setup; half a pixel of ball diameter is already 60-65 mm of range.

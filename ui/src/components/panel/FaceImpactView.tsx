@@ -49,9 +49,8 @@ const CONTACT_GRAIN = Array.from({ length: 380 }, (_, i) => {
   return `M ${x.toFixed(3)} ${y.toFixed(3)} l ${(0.08 + contactNoise(i + 801) * 0.32).toFixed(3)} ${(contactNoise(i + 1201) * 0.35).toFixed(3)}`;
 }).join(' ');
 
-/** The experimental impact on the club face seen from the target, with its 1-sigma ellipse,
- * the club's earlier shots faint, centre lines through the reading's face centre; mirrored for a
- * left-hander. The impact anchor sits at the unrounded mm values, the svg's units. */
+/** The experimental impact on the face seen from the target, with its 1-sigma ellipse and the
+ * club's earlier shots faint; mirrored for a left-hander. Svg units are mm, at unrounded values. */
 export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactViewProps) {
   const { t } = useI18n();
   const id = useId();

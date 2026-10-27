@@ -1,10 +1,8 @@
-"""Part E integration: model-geometry club inputs (D39) reach spin, spin axis and flight.
+"""Model-geometry club inputs reach spin, spin axis and flight with their label.
 
-E1 labels the arc's club path and attack angle "model_geometry" whenever the arc
-leans on the published prior (every shot on today's lens). E2's collision model
-inherits that label; this file checks the label rides all the way to the shot's
-spin, spin axis, flight and carry, that simulators still refuse it (D31), and
-that a missing model-geometry input is still "not measured" (no filled-in values).
+The arc labels path and attack "model_geometry" when it leans on the published prior; the label
+must ride to the shot's spin, axis, flight and carry, simulators must refuse it, and a missing
+model-geometry input is still "not measured".
 """
 
 from __future__ import annotations
@@ -91,9 +89,6 @@ def _arc_shot(**overrides):
 
 def _attach(shot):
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
-
-
-# ---- the arc's labelled path and attack reach the collision model --------------------
 
 
 def test_the_arc_path_and_attack_enter_the_collision_model_as_model_geometry():
@@ -188,7 +183,7 @@ def test_a_missing_arc_path_is_still_not_measured(entry):
 
 
 def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
-    """The real E1 payload: a rejected chained path, the arc on its prior."""
+    """The kiosk's own arc payload: a rejected chained path, the arc on its prior."""
     monkeypatch.setattr(server_module, "golfer_handed", "RH")
     shot = _arc_shot(club_delivery=None)
     shot_models._attach_club_arc(  # pylint: disable=protected-access
@@ -211,8 +206,6 @@ def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
     assert shot.collision_model["inputs"]["club_path"]["label"] == "model_geometry"
     assert shot.collision_model["metrics"]["face_angle"]["status"] == "model_geometry"
 
-
-# ---- simulators: measured or calculated only (D31); model geometry behind one switch ---
 
 MODEL_GEOMETRY_AXIS_SOURCE = (
     "model geometry (D-plane tilt, fitted launch-model inversion; club path from the arc prior)"
@@ -288,8 +281,6 @@ def test_the_switch_on_sends_every_model_geometry_value_under_its_label(monkeypa
         assert resolved.provenance[name] == "model_geometry", name
     assert resolved.provenance["vla"] == "measured"
 
-
-# ---- the shot's spin and spin axis from model-geometry inputs ------------------------
 
 SPIN_MODEL_GEOMETRY = "impulse collision model; club inputs model geometry (D39)"
 AXIS_FROM_THE_ARC = (
@@ -417,8 +408,6 @@ def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
     assert shot.spin_axis_source == AXIS_FROM_THE_ARC
 
 
-# ---- flight: every output inherits the weakest input label ---------------------------
-
 ALL_MODEL_GEOMETRY_INPUTS = (
     "model-geometry inputs: spin (impulse collision model; club inputs model geometry (D39)), spin axis, "
     "club path from the arc prior, attack angle from the arc prior"
@@ -426,7 +415,7 @@ ALL_MODEL_GEOMETRY_INPUTS = (
 
 
 def _arc_flight_shot(**overrides):
-    # a full ball speed: a flight on the line-of-sight speed is estimated (V-formulas C1)
+    # a full ball speed: a flight on the line-of-sight speed is estimated
     shot = _arc_shot(mode="rolling-buffer", ball_speed_contract="full", **overrides)
     _attach(shot)
     return shot
@@ -515,7 +504,6 @@ def test_measured_and_calculated_inputs_still_fly_as_calculated():
     ],
 )
 def test_a_missing_model_geometry_input_leaves_the_flight_not_measured(overrides, reason):
-    """No filled-in values: a model-geometry flight needs its own inputs too."""
     payload = _flight(_arc_flight_shot(**overrides)).to_dict()
 
     for block in ("as_measured", "normalized"):
@@ -526,16 +514,13 @@ def test_a_missing_model_geometry_input_leaves_the_flight_not_measured(overrides
 
 
 def test_a_weak_horizontal_launch_makes_the_model_geometry_flight_an_estimate():
-    """Below the confidence floor the axis is estimated, not withheld (V-formulas C2),
-    and estimated is weaker than model geometry."""
+    """Below the confidence floor the axis is estimated, not withheld, and estimated is weaker
+    than model geometry."""
     payload = _flight(_arc_flight_shot(launch_angle_horizontal_confidence=0.5)).to_dict()
 
     carry = payload["as_measured"]["metrics"]["carry"]
     assert carry["status"] == "estimated"
     assert "horizontal launch confidence 0.50 below 0.6" in carry["reason"]
-
-
-# ---- finalization: carry_status is the flight's label --------------------------------
 
 
 @pytest.fixture
@@ -545,9 +530,8 @@ def fusion_finalize(monkeypatch):
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 
-    # E3's full speed stands in as the shot's own ball speed: a flight on the OPS
-    # line-of-sight speed is "estimated" (V-formulas C1), and these tests are about
-    # the other inputs' labels
+    # the full speed stands in as the ball speed: a flight on the OPS line-of-sight speed is
+    # "estimated", and these tests are about the other inputs' labels
     def full_speed(shot):
         shot.ball_speed_full = {"status": "calculated", "value_mph": shot.ball_speed_mph}
         shot.ball_speed_full_mph = shot.ball_speed_mph

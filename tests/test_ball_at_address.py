@@ -1,11 +1,4 @@
-"""Per-shot re-location of the resting ball in the kiosk (13 Oct).
-
-Before each swing the kiosk finds the resting ball inside the fixed box again, from
-its own camera frames, and gives that shot its own range: the setup's radar range
-while the ball sits where the setup measured it, else that range scaled by the
-ball's size against the setup ball's (labelled). A ball outside the box is a label
-on the shot, never a block.
-"""
+"""Before each swing the kiosk re-finds the resting ball in the box and gives the shot a range."""
 
 import numpy as np
 import pytest
@@ -46,6 +39,7 @@ def test_a_ball_where_the_setup_measured_it_keeps_the_setup_s_radar_range():
     assert seen["range_m"] == pytest.approx(2.2)
     assert seen["range_source"] == "setup_radar_range"
     assert seen["center_px"] == pytest.approx([641.0, 451.0], abs=1.5)
+    assert seen["range_uncertainty_m"] is None
     assert locator.latest() == seen
 
 
@@ -56,33 +50,30 @@ def test_a_moved_ball_gets_the_setup_range_scaled_by_its_size():
 
     assert seen["state"] == "in_box"
     assert seen["range_source"] == "camera_size_ratio_to_the_setup_radar_range"
-    # a ball 16 px across where the setup's was 20 px at 2.2 m: about 2.75 m
     assert seen["range_m"] == pytest.approx(2.2 * 20.0 / 16.0, rel=0.1)
 
 
-def test_a_ball_outside_the_box_is_a_label_with_no_range():
-    seen = _locator().observe(_scene([(200.0, 650.0, 30.0)]), at=12.0)
+@pytest.mark.parametrize(
+    ("balls", "setup_range_m", "state"),
+    [
+        ([(200.0, 650.0, 30.0)], 2.2, "outside_box"),
+        ([], 2.2, "not_seen"),
+        ([(641.0, 451.0, 20.0)], None, "in_box"),
+    ],
+)
+def test_a_ball_outside_the_box_or_unseen_or_without_a_setup_range_has_no_range(
+    balls, setup_range_m, state
+):
+    locator = baa.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=setup_range_m)
 
-    assert seen["state"] == "outside_box"
+    seen = locator.observe(_scene(balls), at=12.0)
+
+    assert seen["state"] == state
     assert seen["range_m"] is None
-    assert "outside the box" in seen["reason"]
-
-
-def test_no_ball_is_not_seen_and_nothing_is_filled_in():
-    seen = _locator().observe(_scene([]), at=13.0)
-
-    assert seen["state"] == "not_seen"
-    assert seen["range_m"] is None
-
-
-def test_without_a_setup_range_a_found_ball_has_no_range():
-    locator = baa.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=None)
-
-    seen = locator.observe(_scene([(641.0, 451.0, 20.0)]), at=14.0)
-
-    assert seen["state"] == "in_box"
-    assert seen["range_m"] is None
-    assert seen["range_source"] is None
+    if state == "outside_box":  # a label on the shot, never a block
+        assert "outside the box" in seen["reason"]
+    if setup_range_m is None:
+        assert seen["range_source"] is None
 
 
 def test_the_shot_takes_the_last_look_before_its_trigger_and_never_a_later_one():
@@ -96,14 +87,11 @@ def test_the_shot_takes_the_last_look_before_its_trigger_and_never_a_later_one()
 
     assert before["range_m"] == pytest.approx(2.2)
     assert after["range_m"] == pytest.approx(2.75, rel=0.1)
-    # a look older than the limit is not this shot's
     assert stale is None
     assert locator.for_shot(99.0) is None
 
 
 def test_with_a_camera_prior_each_look_is_a_prior_with_its_uncertainty():
-    """13 Oct: the setup hands the camera's coarse estimate as a prior; each shot's own
-    look scales it, uncertainty and all, and says it is a camera prior."""
     locator = baa.BallAtAddress(
         box_px=BOX,
         setup_ball=SETUP,
@@ -119,12 +107,6 @@ def test_with_a_camera_prior_each_look_is_a_prior_with_its_uncertainty():
     assert same["range_uncertainty_m"] == pytest.approx(0.44)
     assert moved["range_source"] == "camera_size_ratio_to_the_setup_camera_prior"
     assert moved["range_uncertainty_m"] == pytest.approx(0.44 * moved["range_m"] / 2.2, rel=0.01)
-
-
-def test_without_an_uncertainty_a_look_states_none():
-    seen = _locator().observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
-
-    assert seen["range_uncertainty_m"] is None
 
 
 def test_reconfigure_takes_the_new_box_and_range_and_drops_the_old_looks():

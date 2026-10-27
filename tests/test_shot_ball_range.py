@@ -1,4 +1,4 @@
-"""Each shot records the range its metrics used, with its source and label (13 Oct, B4)."""
+"""Each shot records the range its metrics used, with its source and label."""
 
 from __future__ import annotations
 

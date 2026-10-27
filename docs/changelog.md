@@ -8,33 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Flight model refitted to TrackMan 4 (flight-fit-v1).** Ferguson,
-  McNally & McPhee's (2022) Cd/Cl/C_M form keeps its shape; its seven constants
-  are refitted to TM4 normalized exports on carry, apex, landing angle and hang
-  time jointly. Held out over 60 shots: carry RMSE 1.73 -> 0.94 yd, apex 2.09 ->
-  0.78 ft, landing angle 2.20 -> 0.65 deg, hang time 0.14 -> 0.06 s. Ferguson's
-  published constants stay selectable (`FERGUSON_2022`); carry stays
-  `calculated`, and its source names the fit. The full-speed drag referral
-  follows the flight model's drag (~0.01 mph). Refit with
-  `scripts/analysis/fit_flight_model.py`; see
-  [ballistics](how-it-works/ballistics.md).
-- **Upstream merged.** The internal hardware trigger re-arms with
-  `PA` and never clears serial input once live. One lost-dump detector serves
-  both trigger paths (a `Q` array or 1 KB of unmarked bytes before a capture
-  marker), logged as `dump_discarded`; the wait has no flush option.
-  `--camera-shot-analysis` is refused: it takes ball distance from pixel
-  size, which the sensor roles do not allow. Phones get a shot whose IWR or camera
-  result is still coming as provisional, and the late result as its final
-  version. Ballistics now use upstream's Ferguson (2022) quadratic Cd/Cl.
-- **IWR vertical launch: per-antenna floor-bounce model (LCMF-v2).** The
-  estimator now places each IWR6843LEVM antenna (RX1-RX4, TX1, TX3) from the
-  enclosure's rig file -- board rotation, aim, RX-row position, camera height
-  in use -- and fits exact direct and floor-bounced path lengths for every
-  TX/RX pair. Results are recorded as `lcmf_v2_per_antenna`. It replaces
-  LCMF-v1; LCMF-v1's TrackMan validation does not carry over. Replays of
-  sessions without a rig file read their single radar height as the RX-row
-  centre of a board turned +90 deg and give different angles from the ones
-  they recorded.
+- **Flight model refitted to TrackMan 4.** The Ferguson (2022) drag and lift
+  form keeps its shape with its constants refitted to TrackMan 4 exports; held-out
+  carry error drops from 1.7 to 0.9 yd. See [ballistics](how-it-works/ballistics.md).
+- **IWR vertical launch places each antenna from the rig file (LCMF-v2).** The
+  earlier TrackMan validation was LCMF-v1's, and replays of sessions recorded
+  without a rig file give different angles.
+- **Setup comes from the setup screen, not flags.** The ball box, aim, ball range
+  and net are kept in `~/.config/openflight/setup.json`; the old setup flags are
+  refused (see [CLI flags](reference/cli.md#unit-setup)).
+- **Camera exposure follows the resting ball before every swing** instead of
+  locking at startup. See [automatic exposure](camera/README.md#automatic-exposure).
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and
   a successful `npm install` before the kiosk can start. Old Node or a failed
@@ -80,14 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/camera/tester-pilot.md` and `docs/camera/mode-study-analysis.md`.
 
 ### Fixed
-- **The boot service finds a UART-wired OPS243 and no longer restarts
-  forever.** With no port given, the driver now probes `/dev/ttyAMA0` (and `/dev/serial0` when it names another device, never
-  the Pi 5 debug UART or a console's UART) and uses it when the radar answers
-  `?V`; an explicit port still wins. `OPENFLIGHT_OPS_PORT` names the port for
-  the service through a drop-in. A failed start under systemd now tells the
-  journal how to re-arm the unit or turn it off, and the tester's refusal
-  suggests `sudo systemctl disable --now openflight.service`. The unit's
-  restart limits only reach a Pi through a reinstalled unit file; see
+- **The boot service finds a UART-wired OPS243 and stops restarting forever.**
+  With no port given it probes `/dev/ttyAMA0`; `OPENFLIGHT_OPS_PORT` sets the
+  service's port.
+  Older units need the new unit file; see
   [Auto-start](setup/auto-start.md#updating-a-unit-installed-before-october-2026).
 - **Simulator output tags estimated launch angles as estimated.** When the
   server fills in a launch angle before the sim fan-out, the resolver tagged

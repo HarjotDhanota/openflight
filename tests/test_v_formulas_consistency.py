@@ -1,4 +1,4 @@
-"""Cross-module consistency of the Part E formulas (V-formulas audit, item 4)."""
+"""Cross-module consistency of the Part E formulas."""
 
 from __future__ import annotations
 
@@ -23,9 +23,6 @@ from openflight.launch_monitor import Shot
 CLUBS = [club for club in ClubType if club is not ClubType.UNKNOWN]
 
 
-# ---- E3's drag is E4's --------------------------------------------------------------
-
-
 def test_full_speed_referral_uses_the_flight_model_s_drag_constants():
     assert full_speed.CD_POLY is ballistics.CD_POLY
     assert full_speed.BALL_AREA_M2 == ballistics.BALL_AREA_M2
@@ -40,9 +37,6 @@ def test_full_speed_referral_uses_the_flight_model_s_drag_constants():
     assert full_speed.drag_deceleration_mps2(v, launch) == pytest.approx(
         full_speed.CD_CENTRAL * q + ballistics.GRAVITY * math.sin(math.radians(launch))
     )
-
-
-# ---- E2's forward and inverse models round-trip --------------------------------------
 
 
 @pytest.mark.parametrize("club", CLUBS, ids=lambda club: club.name)
@@ -90,7 +84,7 @@ def test_the_collision_model_inverts_its_own_forward_launch(club, path, attack, 
     ).metrics
     assert result["face_angle"].value == pytest.approx(face, abs=1e-6)
     assert result["dynamic_loft"].value == pytest.approx(loft, abs=1e-6)
-    # D37's spin loft and tilt are the ones E2 reports, from the same four angles
+    # the metric definitions' spin loft and tilt are the ones the collision model reports
     assert result["spin_loft"].value == pytest.approx(md.spin_loft_deg(loft, face, attack, path))
     tilt = md.d_plane_tilt_deg(loft, face, attack, path)
     if tilt is None:
@@ -114,9 +108,6 @@ def test_spin_loft_matches_its_closed_form():
     assert md.spin_loft_deg(loft, face, attack, path) == pytest.approx(expected, abs=1e-9)
 
 
-# ---- curve, carry side and the spin axis agree in sign ---------------------------------
-
-
 @pytest.mark.parametrize("axis", [-10.0, -3.0, 3.0, 10.0])
 @pytest.mark.parametrize("launch_h", [-4.0, 0.0, 4.0])
 def test_curve_and_carry_side_follow_the_spin_axis(axis, launch_h):
@@ -130,9 +121,6 @@ def test_curve_and_carry_side_follow_the_spin_axis(axis, launch_h):
     )
     if launch_h == 0.0:
         assert curve == pytest.approx(traj.carry_side_yards, abs=1e-9)
-
-
-# ---- raw and normalized differ only in the air ----------------------------------------
 
 
 def _fusion_shot(**overrides):
@@ -170,9 +158,6 @@ def test_raw_and_normalized_differ_only_in_the_air():
     )
 
 
-# ---- Penner's spin, in rpm, from the model's own constants ----------------------------
-
-
 def test_penner_spin_matches_the_paper_s_equations():
     v, theta = 45.0, 12.0
     m, r, big_m = 0.0459, 0.0427 / 2, 0.200
@@ -188,9 +173,6 @@ def test_penner_spin_matches_the_paper_s_equations():
         club_speed=cm.Input(v / 0.44704), spin_loft=cm.Metric(theta, "calculated", None, "deg")
     )
     assert spin.value == pytest.approx(impact.spin_rpm)
-
-
-# ---- no value is labelled better than its weakest input --------------------------------
 
 
 _RANK = {"model_geometry": 0, "calculated": 1, "measured": 2}

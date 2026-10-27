@@ -140,11 +140,7 @@ def load_catalogue(path: Path | None = None) -> LensCatalogue:
 
 
 def validate_settings(settings: Any, catalogue: LensCatalogue) -> dict[str, Any]:
-    """A lens's settings, normalized: enabled modes, the default mode, the ladder per mode.
-
-    Ladder rungs must come from the mode's allowed list; they are kept in the
-    allowed list's order (longest exposure first), without repeats.
-    """
+    """A lens's settings, normalized; ladder rungs keep the allowed list's order, no repeats."""
     if not isinstance(settings, Mapping):
         raise ValueError("settings must be an object")
     modes = settings.get("modes")
@@ -206,11 +202,7 @@ def _binning(width: int) -> int:
 def find_calibration(
     lens_id: str | None, sources: Sequence[Path | None] = ()
 ) -> dict[str, Any] | None:
-    """A checkerboard calibration for this lens, if one is kept: its focal length per mode.
-
-    ``sources`` are artifact files or directories of them; the newest fitted
-    artifact naming this ``lens_id`` wins. Other modes scale by the binning ratio.
-    """
+    """The newest checkerboard calibration for this lens in ``sources``: focal length per mode."""
     if lens_id is None:
         return None
     files: list[Path] = []

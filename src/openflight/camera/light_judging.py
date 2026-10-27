@@ -58,7 +58,6 @@ def _zone(image: np.ndarray, black_floor: float, zone_box=None) -> dict:
 
 
 def _zone_name(zone: dict) -> str:
-    """How a verdict names the zone it judged."""
     return "the box" if zone.get("zone_source") == "placement_box" else "the hitting zone"
 
 
@@ -143,7 +142,7 @@ def ball_light(
     expected_ball: dict | None = None,
     zone_box=None,
 ) -> dict | None:
-    """The resting ball's brightness in these frames, if the ball can be found.
+    """The resting ball's brightness near ``expected_ball`` (x, y, diameter_px), if found.
 
     With the setup's box (``zone_box``) the ball may rest anywhere in it: the box is
     fixed and the tester tees each ball wherever it lands. Without one, only a ball
@@ -248,10 +247,7 @@ def resting_frames(frames: np.ndarray) -> np.ndarray:
 def capture_analysis_eligibility(
     frames: np.ndarray, black_floor: float, expected_ball: dict, zone_box=None
 ) -> dict:
-    """Whether a clip's light permits camera analysis, judged on the setup's ball.
-
-    Only the ball decides; a clipped background or dark zone does not withhold the camera.
-    """
+    """Whether a clip's light permits camera analysis; only the setup's ball decides."""
     light = judge_light(resting_frames(np.asarray(frames)), black_floor, expected_ball, zone_box)
     ball = light["ball"]
     if ball is None:

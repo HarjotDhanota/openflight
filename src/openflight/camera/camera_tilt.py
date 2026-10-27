@@ -35,8 +35,7 @@ LABEL = "unit_calibration_from_validated_pairs"
 MIN_PAIRS = 2
 # this many checks in a row disagreeing on the same side re-calibrate from their median
 RECALIBRATE_AFTER = 2
-# The setup's nominal camera's angular uncertainty: the camera's vertical before the unit's
-# tilt is calibrated (about 3 deg, indoor-test-1), and at least this much after.
+# the nominal camera's angular uncertainty before and after the unit's tilt is calibrated
 UNCALIBRATED_ANGULAR_UNCERTAINTY_DEG = 3.0
 CALIBRATED_ANGULAR_UNCERTAINTY_DEG = 0.5
 
@@ -419,10 +418,8 @@ def swing_camera_pose(
 ) -> dict:
     """The camera pose one swing measures with, composed exactly as the setup's.
 
-    Pitch: the rig's boresight pitch moved by this swing's LIS3DH departure from the
-    rig's expected reading, plus the unit's offset; focal length: the rig's for this mode.
-    Without all three inputs the pose says why and stays uncalibrated. Roll goes
-    through ``camera_roll`` and is applied only on a unit that verified it.
+    Pitch = rig boresight pitch + (this swing's LIS3DH reading - the rig's expected) + the
+    unit's offset; focal length is the rig's for this mode. Missing inputs leave it uncalibrated.
     """
     from openflight.camera.ball_pixels import mode_focal_px  # noqa: PLC0415
 

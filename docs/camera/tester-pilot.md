@@ -3,6 +3,25 @@
 **Testers: follow the [tester guide](../tester-guide/README.md)**, the step-by-step setup and
 free play with pictures. This page is the maintainer's technical reference behind it.
 
+Related fork pages: the [fusion master plan](../development/fusion-master-plan.md)
+(calibration, replay, validation and promotion gates);
+[optical calibration](optical-calibration.md) (checkerboard candidates);
+the [opt-in live calibrated path](live-calibrated-fusion.md) (unqualified);
+[projection comparison](calibrated-projection.md);
+[recorded-track comparison](recorded-track-comparison.md);
+the [tester fusion diagnostic view](live-fusion-diagnostics.md);
+[tester setup requirements](tester-setup-gate.md);
+[the fixed box](tester-fixed-box.md) (placement box, lens choice, aim point);
+the [first Pi session procedure](pi-commissioning.md);
+the [static setup range capture](../iwr6843/static-range-capture.md);
+the [timing evidence bench](timing-validation.md);
+[camera-fusion replay](fusion-replay.md); the
+[accuracy benchmark](accuracy-benchmark.md);
+[raw radar and camera replay](raw-fusion-replay.md); the
+[commissioning report](commissioning-report.md); and
+[community contribution packages](community-contributions.md) (consent-bound,
+checksum-verified archives of a tester export).
+
 ## Free play for outside testers
 
 **The test is only for units with all four sensors**: the OPS243 speed radar, the IWR6843
@@ -396,6 +415,18 @@ box, light and range wait for it). B: the tilt check, by a lift of the front, th
 direction), then a turn round and back on the same spot (the roll's zero).
 C: confirm the setup. The engineering rows and notes are folded under **Details
 (for the maintainer)**.
+
+The tilt check's two roll steps:
+
+1. **Direction.** Lift the unit's left side about 2 cm; the roll must read negative
+   (`roll_verified: true`).
+2. **Zero, by reversal.** Turn the unit 180° on the same spot and tap, then turn it
+   back and tap. The floor's tilt changes sign with the turn and the board's own roll
+   (its seat and the sensor's zero-g offset) does not, so the mean of the two facings
+   is the board's roll on a level floor. `roll_zero_deg` (beyond the rig's expected
+   mount roll) and its repeatability go in `~/.config/openflight/lis3dh-mount.json`;
+   a reversal that does not repeat within 1° is tried again. The setup's pads keep
+   that repeatability (at least 0.1°).
 
 **Step 3: the ball box.** Set the unit 1.8–2.9 m behind the ball, pointing down
 the target line. The live picture opens by itself with a yellow box drawn on it:

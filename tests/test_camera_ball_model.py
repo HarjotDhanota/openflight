@@ -117,22 +117,22 @@ def _two_balls(first, second, height=400, width=640, seed=5):
     return np.clip(image[None] + noise, 0, 255).astype(np.uint8)
 
 
-def test_a_bright_door_stop_off_to_the_side_loses_to_a_dim_ball_ahead():
-    frames = _two_balls((122.0, 262.0, 10.0, 75.0), (340.0, 250.0, 10.0, 45.0))
+@pytest.mark.parametrize(
+    ("first", "second", "row", "x", "y"),
+    [
+        # a bright door stop off to the side loses to a dim ball ahead
+        ((122.0, 262.0, 10.0, 75.0), (340.0, 250.0, 10.0, 45.0), None, 340.0, 250.0),
+        # two equal balls ahead; only one sits where the distance and tilt put it
+        ((300.0, 200.0, 10.0, 80.0), (340.0, 300.0, 10.0, 80.0), (296.0, 40.0), 340.0, 300.0),
+    ],
+)
+def test_the_detector_takes_the_ball_ahead_on_the_predicted_row(first, second, row, x, y):
+    frames = _two_balls(first, second)
 
-    ball = detect_reference_ball(frames, expected_diameter_px=20.0)
+    ball = detect_reference_ball(frames, expected_diameter_px=20.0, expected_row_px=row)
 
-    assert ball.x == pytest.approx(340.0, abs=1.0)
-    assert ball.y == pytest.approx(250.0, abs=1.0)
-
-
-def test_the_row_the_floor_predicts_picks_the_ball_that_rests_there():
-    # two equal balls ahead; only one sits where the distance and tilt put it
-    frames = _two_balls((300.0, 200.0, 10.0, 80.0), (340.0, 300.0, 10.0, 80.0))
-
-    ball = detect_reference_ball(frames, expected_diameter_px=20.0, expected_row_px=(296.0, 40.0))
-
-    assert ball.y == pytest.approx(300.0, abs=1.0)
+    assert ball.x == pytest.approx(x, abs=1.0)
+    assert ball.y == pytest.approx(y, abs=1.0)
 
 
 LIGHT_OVERHEAD = np.array([0.0, -np.sin(np.radians(48.0)), np.cos(np.radians(48.0))])
@@ -148,11 +148,8 @@ def _dim_room(  # pylint: disable=too-many-arguments,too-many-locals
     levels=(18.0, 41.0, 35.7, 11.0),
     seed=11,
 ):
-    """A dim room at 1280x800: a 19.7 px ball lit from overhead, darker underneath than
-    the carpet, with a brighter square door stop far off to the left.
-
-    ``levels`` is (bin, carpet, ball shade, ball diffuse) in DN.
-    """
+    """1280x800: a 19.7 px overhead-lit ball, a door stop far left; levels are bin, carpet,
+    ball shade, ball diffuse in DN."""
     bin_dn, carpet_dn, shade_dn, diffuse_dn = levels
     rng = np.random.default_rng(seed)
     height, width = 800, 1280
@@ -194,18 +191,16 @@ def test_a_dim_ball_darker_underneath_than_the_carpet_is_still_a_ball():
     assert fit.y == pytest.approx(481.2, abs=1.0)
 
 
-def test_the_dim_ball_beats_a_brighter_square_door_stop():
-    frames = _dim_room()
-
-    ball = detect_reference_ball(frames, expected_diameter_px=19.7, expected_row_px=(492.0, 90.0))
-
-    assert ball.x == pytest.approx(760.4, abs=1.0)
-    assert ball.y == pytest.approx(481.2, abs=1.0)
-
-
-def test_a_bright_ball_barely_brighter_underneath_than_the_carpet_is_still_a_ball():
-    # the underside is only 3 DN over the carpet; the ring threshold is set by the noise
-    frames = _dim_room(door_stop=False, levels=(40.0, 150.0, 143.0, 60.0))
+@pytest.mark.parametrize(
+    "room",
+    [
+        {},  # the dim ball beats a brighter square door stop
+        # the underside only 3 DN over the carpet: the ring threshold is set by the noise
+        {"door_stop": False, "levels": (40.0, 150.0, 143.0, 60.0)},
+    ],
+)
+def test_a_dim_room_ball_is_found_past_a_door_stop_and_a_bright_carpet(room):
+    frames = _dim_room(**room)
 
     ball = detect_reference_ball(frames, expected_diameter_px=19.7, expected_row_px=(492.0, 90.0))
 
@@ -230,18 +225,18 @@ def test_a_round_reflection_above_the_rows_the_ball_can_rest_in_is_not_it():
         )
 
 
-def test_a_bright_streak_is_not_a_ball_when_the_floor_is_clipped_white():
-    frames = _dim_room(clipped_floor=True, door_stop=False, streak=True)
-
+@pytest.mark.parametrize(
+    "room",
+    [
+        {"clipped_floor": True, "door_stop": False, "streak": True},  # a streak on clipped white
+        {"ball": False, "door_stop": False, "stray": True},  # nothing elsewhere stands in
+    ],
+)
+def test_with_the_size_and_row_known_no_streak_or_stray_stands_in_for_the_ball(room):
     with pytest.raises(ValueError):
-        detect_reference_ball(frames, expected_diameter_px=19.7, expected_row_px=(486.0, 90.0))
-
-
-def test_with_the_size_and_row_known_nothing_elsewhere_stands_in_for_the_ball():
-    frames = _dim_room(ball=False, door_stop=False, stray=True)
-
-    with pytest.raises(ValueError):
-        detect_reference_ball(frames, expected_diameter_px=19.7, expected_row_px=(486.0, 90.0))
+        detect_reference_ball(
+            _dim_room(**room), expected_diameter_px=19.7, expected_row_px=(486.0, 90.0)
+        )
 
 
 def test_a_ball_on_ground_clipped_white_is_not_measured():

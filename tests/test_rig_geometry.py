@@ -1,21 +1,19 @@
-"""Enclosure geometry: the static file and the resting-ball solve."""
+"""Enclosure geometry: the static file."""
 
 from __future__ import annotations
 
 import dataclasses
 import json
 import math
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from openflight.rig_geometry import (
-    BALL_DIAMETER_MM,
     EnclosureSetup,
     RigGeometry,
-    SetupSolution,
-    solve_setup,
+    camera_rdf_offset_to_target_lfu,
+    levm_phase_centre_offset_mm,
+    levm_vertical_phase_centre_offset_mm,
 )
 
 V3 = "config/enclosure_v3_rig_geometry.json"
@@ -44,10 +42,6 @@ def rig(**overrides) -> RigGeometry:
     return RigGeometry(**base)
 
 
-def ball(x=160.0, y=100.0, diameter_px=12.0):
-    return SimpleNamespace(x=x, y=y, diameter_px=diameter_px)
-
-
 class TestTheFile:
     def test_snapshot_identity_survives_json_formatting_but_tracks_forward_offset(self, tmp_path):
         original = rig()
@@ -67,12 +61,13 @@ class TestTheFile:
         assert isinstance(loaded.iwr_offset_mm, tuple)
         assert loaded.ops_offset_mm is None
 
-    def test_a_missing_field_is_refused_not_defaulted(self, tmp_path):
+    @pytest.mark.parametrize("field", ["iwr_boresight_pitch_deg", "iwr_board_rotation_deg"])
+    def test_a_missing_field_is_refused_not_defaulted(self, tmp_path, field):
         data = dataclasses.asdict(rig())
-        data.pop("iwr_boresight_pitch_deg")
+        data.pop(field)
         path = tmp_path / "old.json"
         path.write_text(json.dumps(data))
-        with pytest.raises(ValueError, match="iwr_boresight_pitch_deg"):
+        with pytest.raises(ValueError, match=field):
             RigGeometry.from_json(path)
 
     def test_an_unknown_field_is_refused(self, tmp_path):
@@ -81,13 +76,6 @@ class TestTheFile:
         path.write_text(json.dumps(data))
         with pytest.raises(ValueError, match="radar_height_mm"):
             RigGeometry.from_json(path)
-
-    def test_an_explicit_null_names_an_unmeasured_value(self, tmp_path):
-        path = tmp_path / "rig.json"
-        rig(ops_offset_mm=None, lis3dh_mount_roll_deg=None).to_json(path)
-        loaded = RigGeometry.from_json(path)
-        assert loaded.ops_offset_mm is None
-        assert loaded.lis3dh_mount_roll_deg is None
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -116,55 +104,22 @@ class TestTheFile:
         with pytest.raises(TypeError):
             RigGeometry(focal_px=466.6667)  # pylint: disable=no-value-for-parameter
 
-    def test_the_shipped_v3_file_derives_the_measured_numbers(self):
-        setup = RigGeometry.from_json(V3).enclosure_setup()
-        assert setup.missing == ()
-        assert setup.camera_mount_height_m == pytest.approx(0.095, abs=5e-4)
-        # lens 95, RX row 44 below it, phase centre 7.85 above that
-        assert setup.radar_height_m == pytest.approx(0.0522, abs=5e-4)
-        assert setup.radar_rx_row_height_m == pytest.approx(0.0444, abs=5e-4)
-        assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=2.5e-3)
-        assert setup.iwr_tilt_deg == pytest.approx(10.0)
-
-    def test_the_v3_file_records_how_the_iwr_board_is_turned(self):
-        loaded = RigGeometry.from_json(V3)
-        assert loaded.iwr_board_rotation_deg == 90.0
-        assert "2026-09-29" in loaded.provenance
-
-    def test_a_file_without_the_board_rotation_is_refused(self, tmp_path):
-        data = dataclasses.asdict(rig())
-        data.pop("iwr_board_rotation_deg")
-        path = tmp_path / "old.json"
-        path.write_text(json.dumps(data))
-        with pytest.raises(ValueError, match="iwr_board_rotation_deg"):
-            RigGeometry.from_json(path)
-
-    def test_the_v3_provenance_says_what_it_is_not(self):
-        text = RigGeometry.from_json(V3).provenance
-        assert "20260825" in text, "must say it does not describe the August session"
-        assert "PENDING checkerboard" in text
-
 
 class TestTheEnclosureSetup:
-    def test_the_live_inputs_are_derived_not_typed(self):
-        setup = rig().enclosure_setup()
-        assert isinstance(setup, EnclosureSetup)
-        assert setup.camera_mount_height_m == pytest.approx(0.095)
-        assert setup.radar_height_m == pytest.approx(0.051)
-        assert setup.camera_lateral_offset_m == pytest.approx(-0.0)
-        assert setup.iwr_tilt_deg == 10.0
-        assert setup.missing == ()
-
     def test_lateral_sign_is_camera_relative_to_radar(self):
         setup = rig(iwr_offset_mm=(75.0, 44.0, 0.0)).enclosure_setup()
         assert setup.camera_lateral_offset_m == pytest.approx(-0.075)
 
-    def test_camera_rdf_offset_has_explicit_target_lfu_axes(self):
-        from openflight.rig_geometry import camera_rdf_offset_to_target_lfu
-
-        assert camera_rdf_offset_to_target_lfu((0.0, 44.0, -30.0)) == pytest.approx(
-            (0.0, -0.030, -0.044)
-        )
+    @pytest.mark.parametrize(
+        ("offset_mm", "lfu_m"),
+        [
+            ((0.0, 44.0, -30.0), (0.0, -0.030, -0.044)),
+            ((75.0, 44.0, -30.0), (0.075, -0.030, -0.044)),  # right of the lens: positive
+            ((-85.0, 47.0, -20.0), (-0.085, -0.020, -0.047)),  # the OPS, target-left
+        ],
+    )
+    def test_camera_rdf_offset_has_explicit_target_lfu_axes(self, offset_mm, lfu_m):
+        assert camera_rdf_offset_to_target_lfu(offset_mm) == pytest.approx(lfu_m)
 
     def test_missing_pieces_are_named_not_defaulted(self):
         setup = rig(lens_height_above_floor_mm=None, iwr_boresight_pitch_deg=None).enclosure_setup()
@@ -192,68 +147,6 @@ class TestTheEnclosureSetup:
         assert rig(iwr_offset_mm=None).enclosure_setup().tee_lateral_offset_m is None
 
 
-class TestSolveSetup:
-    def test_range_from_angular_size_is_exact_on_axis(self):
-        r = rig()
-        solution = solve_setup(ball(x=160.0, y=100.0, diameter_px=12.0), r)
-        assert solution.range_to_ball_mm == pytest.approx(r.focal_px * BALL_DIAMETER_MM / 12.0)
-        assert solution.mm_per_px_at_ball == pytest.approx(BALL_DIAMETER_MM / 12.0)
-        assert solution.lateral_offset_mm == pytest.approx(0.0)
-        assert solution.height_above_ball_mm == pytest.approx(0.0)
-
-    def test_an_off_axis_ball_reports_the_slant_not_the_depth(self):
-        r = rig()
-        depth = r.focal_px * BALL_DIAMETER_MM / 12.0
-        solution = solve_setup(ball(x=200.0, y=140.0, diameter_px=12.0), r)
-        ray = math.hypot((200.0 - 160.0) / r.focal_px, (140.0 - 100.0) / r.focal_px, 1.0)
-        assert solution.range_to_ball_mm == pytest.approx(depth * ray)
-        assert solution.mm_per_px_at_ball == pytest.approx(depth / r.focal_px)
-
-    def test_lateral_sign_a_ball_imaging_right_means_the_camera_sits_left(self):
-        solution = solve_setup(ball(x=200.0), rig())
-        assert solution.lateral_offset_mm < 0
-
-    def test_the_height_assumption_is_named(self):
-        solution = solve_setup(ball(), rig(boresight_pitch_deg=-1.0))
-        assert "ASSUMING" in solution.solved_from["height_above_ball_mm"]
-        assert solution.camera_pitch_deg == -1.0
-
-    def test_mic_distance_is_solved_when_the_rig_has_a_mic(self):
-        solution = solve_setup(ball(), rig())
-        assert solution.mic_to_ball_m is not None
-        assert 1.5 < solution.mic_to_ball_m < 1.8
-
-    def test_no_mic_offset_means_none_by_name_not_a_guess(self):
-        solution = solve_setup(ball(), rig(mic_offset_mm=None))
-        assert solution.mic_to_ball_m is None
-        assert "rig_has_no_mic_offset_acoustic_walkback_uses_its_default" in solution.warnings
-
-    def test_a_tiny_ball_warns_about_the_soft_range_solve(self):
-        solution = solve_setup(ball(diameter_px=6.0), rig())
-        assert any(w.startswith("ball_only_6.0_px") for w in solution.warnings)
-
-    def test_a_ball_against_the_frame_edge_warns(self):
-        solution = solve_setup(ball(x=8.0), rig())
-        assert "ball_near_frame_edge_diameter_at_risk" in solution.warnings
-
-    def test_a_clean_solve_carries_no_warnings(self):
-        assert solve_setup(ball(), rig()).warnings == ()
-
-    def test_a_degenerate_ball_is_refused(self):
-        with pytest.raises(ValueError):
-            solve_setup(ball(diameter_px=0.0), rig())
-
-    def test_range_disagreement_is_camera_minus_reference(self):
-        solution = solve_setup(ball(), rig())
-        assert solution.range_disagreement_mm(solution.range_to_ball_mm - 50.0) == pytest.approx(
-            50.0
-        )
-
-    def test_the_solution_is_json_safe(self):
-        assert isinstance(solve_setup(ball(), rig()), SetupSolution)
-        json.dumps(solve_setup(ball(), rig()).as_dict())
-
-
 class TestTheExpectedInclinometerOrientation:
     def test_a_file_without_mount_angles_assumes_the_board_is_parallel(self):
         expected = rig(housing_tilt_deg=10.0).expected_inclinometer_orientation()
@@ -277,8 +170,10 @@ class TestTheExpectedInclinometerOrientation:
         assert "housing_tilt_deg" in expected.missing
         assert expected.roll_deg == pytest.approx(0.0)
 
-    def test_the_shipped_v3_file_expects_a_level_enclosure(self):
-        expected = RigGeometry.from_json(V3).expected_inclinometer_orientation()
+    def test_the_shipped_v3_file_expects_a_level_enclosure_and_a_turned_lis3dh(self):
+        loaded = RigGeometry.from_json(V3)
+        assert loaded.lis3dh_mount_yaw_deg == 180.0
+        expected = loaded.expected_inclinometer_orientation()
         assert expected.pitch_deg == pytest.approx(0.0)
         assert expected.roll_deg == pytest.approx(0.0)
         assert expected.missing == ()
@@ -287,42 +182,16 @@ class TestTheExpectedInclinometerOrientation:
         json.dumps(rig().expected_inclinometer_orientation().as_dict())
 
 
-def test_the_v3_unit_declares_its_turned_lis3dh():
-    rig = RigGeometry.from_json(
-        Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json"
-    )
-
-    assert rig.lis3dh_mount_yaw_deg == 180.0
-    assert rig.expected_inclinometer_orientation().pitch_deg == 0.0
-
-
-def test_an_offset_to_the_right_of_the_lens_is_positive_lateral_like_the_camera_rays():
-    """OPS sits 85 mm target-left of the lens; lateral is target-right positive."""
-    from openflight.rig_geometry import camera_rdf_offset_to_target_lfu
-
-    assert camera_rdf_offset_to_target_lfu((75.0, 44.0, -30.0)) == pytest.approx(
-        (0.075, -0.030, -0.044)
-    )
-    assert camera_rdf_offset_to_target_lfu((-85.0, 47.0, -20.0))[0] == pytest.approx(-0.085)
-
-
 class TestTheRadarPhaseCentre:
     """The two-ray model wants the virtual array's vertical phase centre."""
 
     def test_levm_layout_puts_the_phase_centre_off_the_rx_row(self):
-        from openflight.rig_geometry import levm_vertical_phase_centre_offset_mm
-
         assert levm_vertical_phase_centre_offset_mm(90.0) == pytest.approx(7.969, abs=0.01)
         assert levm_vertical_phase_centre_offset_mm(-90.0) == pytest.approx(-7.969, abs=0.01)
         assert levm_vertical_phase_centre_offset_mm(0.0) == pytest.approx(-1.858, abs=0.01)
         assert levm_vertical_phase_centre_offset_mm(180.0) == pytest.approx(1.858, abs=0.01)
 
     def test_the_v3_mount_puts_it_up_and_back_from_the_rx_row(self):
-        from openflight.rig_geometry import (
-            levm_phase_centre_offset_mm,
-            levm_vertical_phase_centre_offset_mm,
-        )
-
         # +90 deg, aimed 10 deg up: the board's "up" leans back
         right, down, forward = levm_phase_centre_offset_mm(90.0, 10.0)
         in_plane = levm_vertical_phase_centre_offset_mm(90.0)
@@ -333,8 +202,6 @@ class TestTheRadarPhaseCentre:
         assert right == pytest.approx(-1.858, abs=0.01)
 
     def test_a_level_board_keeps_the_offset_in_its_plane(self):
-        from openflight.rig_geometry import levm_phase_centre_offset_mm
-
         assert levm_phase_centre_offset_mm(90.0, 0.0) == pytest.approx(
             (-1.858, -7.969, 0.0), abs=0.01
         )
@@ -354,8 +221,12 @@ class TestTheRadarPhaseCentre:
         assert unaimed.iwr_origin_mm == (0.0, 44.0, -30.0)
         assert rig(iwr_offset_mm=None, iwr_board_rotation_deg=90.0).iwr_origin_mm is None
 
-    def test_a_null_rotation_behaves_exactly_as_before(self):
+    def test_a_null_rotation_derives_the_live_inputs_from_the_rx_row(self):
         setup = rig().enclosure_setup()
+        assert isinstance(setup, EnclosureSetup)
+        assert setup.missing == ()
+        assert setup.camera_mount_height_m == pytest.approx(0.095)
+        assert setup.iwr_tilt_deg == 10.0
         assert setup.radar_height_m == pytest.approx(0.051)
         assert setup.radar_rx_row_height_m == pytest.approx(0.051)
         assert setup.camera_lateral_offset_m == pytest.approx(0.0)
@@ -370,6 +241,9 @@ class TestTheRadarPhaseCentre:
 
     def test_the_v3_file_places_the_radar_at_the_phase_centre(self):
         setup = RigGeometry.from_json(V3).enclosure_setup()
+        assert setup.camera_mount_height_m == pytest.approx(0.095, abs=5e-4)
+        assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=2.5e-3)
+        assert setup.iwr_tilt_deg == pytest.approx(10.0)
         assert setup.radar_height_m == pytest.approx(0.05225, abs=1e-5)
         assert setup.radar_rx_row_height_m == pytest.approx(0.0444)
         assert setup.radar_phase_centre_offset_m == pytest.approx(0.00785, abs=1e-5)

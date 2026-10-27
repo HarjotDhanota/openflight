@@ -79,7 +79,10 @@
   "tests/test_fallback_orchestration.py",
   "tests/test_attack_angle_chain.py",
   "tests/test_head_track_feeds_on.py",
-  "tests/test_label_policy.py"
+  "tests/test_label_policy.py",
+  "ui/src/data/metricCatalog.shotModels.json",
+  "ui/src/i18n/metricNames.shotModels.ts",
+  "ui/src/components/panel/MetricGroupPanel.shotModels.test.tsx"
  ],
  "decisions": {
   "pi_trace": "The Pi trace is RESEARCH end to end: product code carries no trace calls. instrumentation.py holds the recorder hooks, trace_points.py wraps the kiosk's own paths (the OPS wait, re-arm and clock sync, the capture timer, the IWR debounce, the server's enrichment steps) once research_hooks is loaded, and research_hooks installs the recorder for --pi-trace. The product keeps two seams: IWR6843CaptureMonitor.on_debounced_edge and server._await_camera_prefetch, plus the kiosk_extensions on_shot_detected hook and Shot.extras.",
@@ -537,6 +540,7 @@
   "src/openflight/camera/swing_tilt.py": "FUSION",
   "src/openflight/camera/target_line.py": "FUSION",
   "src/openflight/camera/tee_range_flow.py": "TESTER",
+  "src/openflight/camera/teed_ball_solve.py": "TESTER",
   "src/openflight/camera/tester_capture_runtime.py": "TESTER",
   "src/openflight/camera/tester_light.py": "TESTER",
   "src/openflight/camera/tester_ready_light.py": "TESTER",
@@ -696,6 +700,7 @@
   "src/openflight/unit_check.py": "TESTER",
   "tests/__init__.py": "PRODUCT",
   "tests/ble_harness.py": "PRODUCT",
+  "tests/camera_helpers.py": "FUSION",
   "tests/conftest.py": "PRODUCT",
   "tests/every_metric.py": "FUSION",
   "tests/fixtures/ball_departure/outdoors-test-5-dusk.npz": "RESEARCH",
@@ -750,6 +755,7 @@
   "tests/iwr6843_firmware_fake.py": "FUSION",
   "tests/iwr6843_line_rate_fake.py": "FUSION",
   "tests/iwr6843_partial_scene.py": "FUSION",
+  "tests/iwr6843_perf_fake.py": "RESEARCH",
   "tests/pi_trace_helpers.py": "RESEARCH",
   "tests/session_fixtures.py": "TESTER",
   "tests/setup_files.py": "FUSION",
@@ -990,7 +996,6 @@
   "tests/test_multitaper_spin.py": "PRODUCT",
   "tests/test_net_from_floor_line.py": "FUSION",
   "tests/test_no_camera_size_distance.py": "TESTER",
-  "tests/test_no_enclosure_constants.py": "FUSION",
   "tests/test_no_filled_in_values.py": "FUSION",
   "tests/test_numeric.py": "PRODUCT",
   "tests/test_openflight_service.py": "PRODUCT",
@@ -1109,6 +1114,7 @@
   "tests/test_target_line.py": "FUSION",
   "tests/test_tee_range.py": "TESTER",
   "tests/test_tee_range_setup.py": "TESTER",
+  "tests/test_teed_ball_solve.py": "TESTER",
   "tests/test_tester_box_contract.py": "TESTER",
   "tests/test_tester_camera_first_setup.py": "TESTER",
   "tests/test_tester_capture_runtime.py": "TESTER",
@@ -1245,6 +1251,7 @@
   "ui/src/components/panel/MenuSheet.test.tsx": "PRODUCT",
   "ui/src/components/panel/MenuSheet.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.ballRange.test.tsx": "PRODUCT",
+  "ui/src/components/panel/MetricGroupPanel.core.test.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.css": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.tap.test.tsx": "PRODUCT",
   "ui/src/components/panel/MetricGroupPanel.test.tsx": "PRODUCT",
@@ -1306,6 +1313,7 @@
   "ui/src/data/clubs.test.ts": "PRODUCT",
   "ui/src/data/clubs.ts": "PRODUCT",
   "ui/src/data/metricCatalog.json": "PRODUCT",
+  "ui/src/data/metricCatalog.shotModels.json": "PRODUCT",
   "ui/src/data/metricCatalog.ts": "PRODUCT",
   "ui/src/data/trainingImplements.ts": "PRODUCT",
   "ui/src/extensions/freePlay.ts": "TESTER",
@@ -1329,6 +1337,7 @@
   "ui/src/i18n/fr.ts": "PRODUCT",
   "ui/src/i18n/i18n.test.ts": "PRODUCT",
   "ui/src/i18n/index.ts": "PRODUCT",
+  "ui/src/i18n/metricNames.shotModels.ts": "PRODUCT",
   "ui/src/i18n/pt.ts": "PRODUCT",
   "ui/src/i18n/useI18n.ts": "PRODUCT",
   "ui/src/index.css": "PRODUCT",
@@ -1466,6 +1475,8 @@
   "tests/test_ble_catch_up.py": "PRODUCT",
   "tests/test_phone_catch_up.py": "PRODUCT",
   "tests/test_shot_stream.py": "PRODUCT",
-  "tests/test_shot_stream_catch_up.py": "PRODUCT"
+  "tests/test_shot_stream_catch_up.py": "PRODUCT",
+  "ui/src/components/panel/MetricGroupPanel.shotModels.test.tsx": "PRODUCT",
+  "ui/tests/metricPanelFixtures.ts": "PRODUCT"
  }
 }

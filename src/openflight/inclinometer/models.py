@@ -45,7 +45,6 @@ class OrientationSnapshot:
 
     @property
     def window_start(self) -> float:
-        """When the window's first sample was read."""
         if self.window_start_timestamp is None:
             return self.timestamp
         return self.window_start_timestamp

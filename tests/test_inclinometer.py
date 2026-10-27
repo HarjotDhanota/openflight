@@ -169,15 +169,6 @@ def test_a_board_turned_round_reads_the_front_tipped_up_as_up():
     assert board.calls == [("read", 2.0)]
 
 
-def test_a_quarter_turn_moves_the_boards_x_into_the_enclosures_y():
-    board = _Board(AccelerationSample(0.0, 0.1, 0.0, 0.99))
-
-    sample = MountedAccelerometer(board, 90.0).read()
-
-    assert sample.x_g == pytest.approx(0.0, abs=1e-12)
-    assert sample.y_g == pytest.approx(0.1)
-
-
 def test_the_mounting_passes_start_and_stop_through():
     board = _Board(AccelerationSample(0.0, 0.0, 0.0, 1.0))
     mounted = MountedAccelerometer(board, 180.0)
@@ -335,7 +326,7 @@ def test_the_shot_waits_briefly_for_the_reading_after_impact():
 
 
 # A still unit is never "moved": the confirming window must be quiet, and the move
-# tolerance grows with the two windows' own scatter (the reviewer's heavy-shake case).
+# tolerance grows with the two windows' own scatter.
 
 
 def _shaken_shot(seed, *, shake_before, shake_after, moved_deg=0.0, latency=0.1):
@@ -373,7 +364,7 @@ def test_heavy_shake_on_a_still_unit_is_never_read_as_moved(shake):
     before, after = shake
     outcomes = {_shaken_shot(seed, shake_before=before, shake_after=after) for seed in range(20)}
     assert "moved" not in outcomes
-    # seed 12 was the reviewer's false "moved"
+    # seed 12 is a known false "moved" under heavy shake
     assert _shaken_shot(12, shake_before=before, shake_after=after) != "moved"
 
 

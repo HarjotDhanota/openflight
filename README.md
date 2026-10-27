@@ -318,7 +318,6 @@ Areas of interest:
 - **Camera/radar test captures**: if you have the full sensor set, the [tester guide](docs/tester-guide/README.md) walks you through setup and free play, and the [technical reference](docs/camera/tester-pilot.md) covers what it records
 - **IWR6843 self-trigger testers**: Experimental IWR6843 firmware that triggers on the shot by itself needs testing on real OpenFlight rigs. If you have a working build with an IWR6843, say so on [Discord](https://discord.gg/w8hhG4WVMN)
 
-
 ### Running Tests
 
 ```bash

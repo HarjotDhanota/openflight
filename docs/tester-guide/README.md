@@ -11,12 +11,21 @@
 
 ## Start the unit
 
+For the regular tester release, update the checkout first:
+
+```
+cd ~/openflight
+git fetch origin && git checkout feat/tester-capture-pilot && git pull --ff-only
+```
+
+**Testing a draft PR?** Use that PR's checkout instructions instead of the update
+above, and keep its branch selected while testing.
+
 On the Pi, open a terminal:
 
 ```
 sudo systemctl stop openflight.service        # only if your unit starts OpenFlight on boot
 cd ~/openflight
-git fetch origin && git checkout feat/tester-capture-pilot && git pull
 ls /dev/serial/by-id/                          # find the IWR6843's "...if00-port0" entry
 bash scripts/start-tester.sh --host 0.0.0.0 --iwr-static-port /dev/serial/by-id/<your ...if00-port0 entry>
 ```

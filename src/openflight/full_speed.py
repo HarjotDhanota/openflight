@@ -1,4 +1,4 @@
-"""Full ball speed by measured projection, full club speed and full smash (E3).
+"""Full ball speed by measured projection, full club speed and full smash.
 
 The OPS243 measures RADIAL speed: the share of the ball's velocity along the
 line from the OPS to the ball. This module turns one radial reading into the
@@ -97,15 +97,14 @@ BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
 CLUB_SOURCE = "measured projection: OPS radial + measured club direction + rig geometry"
 SMASH_SOURCE = "metric_definitions.smash_factor (D37): full ball speed / full club speed"
 
-# cos 30 deg: see the module docstring for why.
+# At 30 deg a 1 deg launch error already costs 1.0 % of speed (40 deg: 1.5 %).
 MIN_PROJECTION = math.cos(math.radians(30.0))
 # OPS defaults for a track that does not say: 128-sample windows at 30 ksps,
 # zero-padded to 4096, so the output grid is 0.1018 mph and half a bin 0.051.
 DEFAULT_WINDOW_MS = 128.0 / 30.0
 DEFAULT_RADIAL_RESOLUTION_MPH = 0.5 * (30000.0 / 4096.0) * (0.01243 / 2.0) / MPH_TO_MPS
 
-# Stated input tolerances for the range. None of the inputs is validated yet;
-# the launch and tee-range tolerances are the D32 95th-percentile goals.
+# Stated input tolerances for the range; none of the inputs is validated yet.
 TOLERANCES = {
     "vertical_launch_deg": 1.0,
     "horizontal_launch_deg": 1.0,
@@ -115,12 +114,8 @@ TOLERANCES = {
     "air_density_fraction": 0.10,
 }
 
-# Drag: Cd(Sp) = CD_POLY in the spin parameter Sp = r omega / v, the flight
-# simulator's own drag (E3's drag is E4's): since E8a the active model, flight-fit-v1,
-# the form of Ferguson, McNally & McPhee (2022, ISEA 14, doi:10.5703/1288284317493)
-# refitted to TM4. Spin is not needed: the band Sp 0.05 (a low-spin driver) to 0.50
-# (a wedge) gives Cd 0.186-0.424 (Ferguson's published constants: 0.175-0.388), the
-# centre is used and the band goes into the range.
+# Drag: the flight simulator's Cd(Sp) = CD_POLY. Spin is not needed: Sp 0.05 (low-spin
+# driver) to 0.50 (wedge) gives Cd 0.186-0.424; the centre is used, the band goes in the range.
 DRAG_SOURCE = (
     f"{ACTIVE_AERO_MODEL.version} (Ferguson, McNally & McPhee 2022 form, ISEA 14, "
     "doi:10.5703/1288284317493, refitted to TM4) Cd(Sp) over "
@@ -176,9 +171,6 @@ _IWR_RANGE_NOTES = {
 }
 
 
-# ---------------------------------------------------------------- physics
-
-
 def drag_deceleration_mps2(
     speed_mps: float,
     vertical_deg: float,
@@ -216,9 +208,7 @@ def _solve_ball(
 ) -> Optional[tuple[float, float, float]]:
     """(speed at separation, speed at the reading, projection), all m/s, or None.
 
-    The ball's position at the reading depends on its speed, so the solve
-    iterates; it converges in a few steps because the travelled distance
-    changes the projection only slowly.
+    Iterates: the ball's position at the reading depends on its speed.
     """
     radial = radial_mph * MPH_TO_MPS
     v0 = radial
@@ -234,9 +224,6 @@ def _solve_ball(
             break
         v0 = updated
     return v0, at_reading, projection
-
-
-# ---------------------------------------------------------------- inputs
 
 
 def _vector(value: Any) -> Optional[np.ndarray]:
@@ -256,12 +243,9 @@ def select_ball_reading(
 ) -> list[tuple[float, float]]:
     """Candidate ball readings in time order: (window start ms, radial mph).
 
-    A window qualifies when it starts at or after the impact (so no club return
-    shares it) and no later than ``MAX_REFERRAL_MS`` after it, and its speed is
-    on the ball's track: at least ``MIN_PROJECTION`` of the canonical radial
-    (less 1 mph), which a well-conditioned ball reading always is and the club
-    after impact never is, and no more than 3 mph above it (the processor's
-    ball-match tolerance). The fastest such peak per window is the ball.
+    A window qualifies from impact to ``MAX_REFERRAL_MS`` after it, with speed between
+    ``MIN_PROJECTION`` of the canonical radial (less 1 mph; the club never reaches it) and
+    3 mph above it (the processor's ball-match tolerance). The fastest peak is the ball.
     """
     impact = track.get("impact_ms") if impact_ms is None else impact_ms
     canonical = track.get("canonical_radial_mph")
@@ -366,9 +350,6 @@ def _horizontal_boresight(
             return None, "a target-line horizontal launch needs the horizontal offset (D34)"
         return float(to_boresight_deg(float(horizontal_deg), float(offset_deg))), None
     return None, f"horizontal launch frame {frame!r} is not one known frame"
-
-
-# ---------------------------------------------------------------- ball
 
 
 def evaluate_full_ball_speed(
@@ -918,9 +899,7 @@ def evaluate_full_club_speed(
 ) -> dict:
     """Full club speed from ONE radial reading, the head's position and direction at its time.
 
-    The same projection and refusal threshold as the ball. Every input must be
-    at the reading's own time: the head moves on a curve, so an impact-time
-    direction does not describe a reading taken milliseconds earlier.
+    Every input must be at the reading's own time: the head moves on a curve.
     """
     base = {
         "status": NOT_MEASURED,

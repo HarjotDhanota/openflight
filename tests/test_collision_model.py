@@ -1,15 +1,8 @@
-"""E2 collision model: D-plane inversion with PING weights, Penner spin, spin axis, gyro.
+"""Collision model: D-plane inversion with PING weights, Penner spin, spin axis, gyro.
 
-Published numbers checked here come from the papers themselves:
-
-- Wood, Henrikson & Broadie 2018, Proceedings 2(6):249, Table 1
-  (doi:10.3390/proceedings2060249).
-- Penner 2001, Am. J. Phys. 69, 563, Eqs. (5), (7), (8), (10), (11) and Fig. 2
-  (doi:10.1119/1.1344164). Fig. 2 has no printed table: the values below were read
-  off the published figure by pixel digitisation at 400 dpi (see
-  docs/how-it-works/collision-model.md), so they carry a reading tolerance.
-- Cross & Nathan 2007, Am. J. Phys. 75, 658, Eq. (6) and its worked value
-  (doi:10.1119/1.2713788).
+Published numbers: Wood, Henrikson & Broadie 2018 Table 1 (doi:10.3390/proceedings2060249);
+Penner 2001 Eqs. (5)-(11) and Fig. 2, digitised at 400 dpi so read with a tolerance
+(doi:10.1119/1.1344164); Cross & Nathan 2007 Eq. (6) (doi:10.1119/1.2713788).
 """
 
 import json
@@ -82,9 +75,6 @@ def test_numpy_inputs_produce_a_json_serializable_collision(scalar):
     assert json.loads(json.dumps(result, allow_nan=False))["inputs"]["club_path"]["value"] == -2.0
 
 
-# ---- published weights (Wood et al. 2018, Table 1) ------------------------------------
-
-
 def test_published_ping_weights_are_the_papers_table_1():
     assert cm.PING_2018_ANCHORS == (
         ("driver", 0.76, 0.83),
@@ -98,7 +88,7 @@ def test_published_ping_weights_are_the_papers_table_1():
     [
         (ClubType.DRIVER, 0.76, 0.83),
         (ClubType.IRON_7, 0.69, 0.81),
-        (ClubType.LW, 0.61, 0.72),  # the fork's LW is 58 deg, the paper's wedge
+        (ClubType.LW, 0.61, 0.72),  # ClubType.LW is 58 deg, the paper's wedge
     ],
 )
 def test_each_anchor_club_gets_its_category_weights_exactly(club, horizontal, vertical):
@@ -135,9 +125,6 @@ def test_weights_never_rise_with_loft_and_are_clamped_outside_the_anchors():
 
 def test_an_unknown_club_has_no_category_and_no_weights():
     assert cm.weights_for_club(ClubType.UNKNOWN) is None
-
-
-# ---- inversion ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -223,9 +210,6 @@ def test_a_weight_of_one_makes_the_face_the_launch_direction():
     assert loft == pytest.approx(15.0)
 
 
-# ---- signs --------------------------------------------------------------------------
-
-
 def test_a_launch_right_of_path_means_face_right_of_path_and_a_fade_axis():
     result = _evaluate(path=-2.0, launch_h=1.0)
 
@@ -260,8 +244,6 @@ def test_spin_loft_and_tilt_are_the_d37_functions_of_the_recovered_face_and_loft
         d_plane_tilt_deg(loft, face, -4.0, -2.0)
     )
 
-
-# ---- Penner 2001 collision model ----------------------------------------------------
 
 # Read off Penner 2001 Fig. 2 (v_ci = 45 m/s, M = 200 g): loft -> (launch speed m/s,
 # launch angle deg, initial spin rpm).
@@ -324,9 +306,6 @@ def test_a_spin_loft_beyond_the_rolling_regime_is_not_calculated():
     assert "rolling" in metric.reason
 
 
-# ---- spin axis and gear effect ------------------------------------------------------
-
-
 def test_without_an_impact_location_the_spin_axis_is_the_centre_strike_axis_with_the_note():
     result = _evaluate(club=ClubType.DRIVER, launch_v=13.0, attack=2.0)
 
@@ -384,18 +363,12 @@ def test_a_gear_sidespin_tilts_the_axis_from_the_d_plane_tilt():
     assert "gear effect" in axis.source
 
 
-# ---- gyro ---------------------------------------------------------------------------
-
-
 def test_gyro_is_not_measured_because_the_planar_model_has_none():
     gyro = _evaluate().metrics["gyro"]
 
     assert gyro.value is None
     assert gyro.status == cm.STATUS_NOT_MEASURED
     assert "D-plane" in gyro.reason
-
-
-# ---- labels and missing inputs ------------------------------------------------------
 
 
 def test_every_output_is_labelled_calculated_with_its_source():

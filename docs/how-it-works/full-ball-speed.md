@@ -27,11 +27,11 @@ full speed = radial speed / (LOS . dir)
     - horizontal from the camera, or the IWR's horizontal when its phase
       reference is calibrated.
     A target-line angle is turned into the unit's frame by the one horizontal
-    offset (D34, `horizontal_frame.py`).
+    offset (`horizontal_frame.py`).
 - **LOS** is the unit vector from the OPS to the ball at the reading's time:
     - the OPS is where the rig file puts it (`ops_offset_mm`);
     - the ball starts where the IWR tee range and the setup's tee side offset
-      (D36) put it;
+      put it;
     - by the reading's time it has moved along `dir`. The ball's position
       depends on its speed, so the solve iterates; it converges in a few steps.
 - **The reading** is one FFT window of the OPS speed timeline, on the OPS's own
@@ -64,8 +64,8 @@ when both routes refuse; their reasons are retained. The first route refuses whe
 
 - **the geometry is ill-conditioned.** LOS . dir is below **0.866 (cos 30°)** at
   every candidate reading. The speed error grows as tan(angle) × angle error. At
-  30°, a 1° launch error (the D32 95th-percentile launch goal) already costs
-  1.0 % of speed, about 1-1.6 mph at 100-160 mph: the D32 95th-percentile budget
+  30°, a 1° launch error (the 95th-percentile launch goal) already costs
+  1.0 % of speed, about 1-1.6 mph at 100-160 mph: the 95th-percentile budget
   for full ball speed. Past 30° it grows quickly (40°: 1.5 %). On the v3 rig at
   2.1 m this refuses launches steeper than about 43°;
 - **a launch angle is absent or unsupported:** a table-estimated vertical,
@@ -86,8 +86,8 @@ changes for stated input tolerances, and each term is named in
 
 | Input | Tolerance |
 |---|---|
-| Vertical and horizontal launch | ±1° each (the D32 95th-percentile goal) |
-| IWR tee range | ±50 mm (D32) |
+| Vertical and horizontal launch | ±1° each (the 95th-percentile goal) |
+| IWR tee range | ±50 mm |
 | Tee side offset | ±50 mm |
 | OPS position | ±3 mm per axis |
 | Impact time | half the OPS transition gap; ±3 ms for a sound trigger |
@@ -123,9 +123,8 @@ OPS transition impact:
 - For the SW and LW, the reading near the tee is ill-conditioned. The method
   takes the first later window that clears 0.866.
 
-This proves the inversion, not the radar. The D32 goal is a median error of
-1 mph or less, and a 95th percentile of 2 mph or less. It is graded only against
-TrackMan shots in the pilot.
+This proves the inversion, not the radar. The goal is a median error of 1 mph or
+less, and a 95th percentile of 2 mph or less, graded against TrackMan shots.
 
 ## Second ball-speed route: peak radial projection
 

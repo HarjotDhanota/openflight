@@ -73,18 +73,10 @@ def test_the_target_line_endpoint(kiosk_state):
     }
     shown = client.get("/api/target-line").get_json()
 
-    assert unset == {
-        "status": "not_set",
-        "yaw_deg": None,
-        "total_uncertainty_deg": None,
-        "source": None,
+    assert unset == dict.fromkeys(("yaw_deg", "total_uncertainty_deg", "source"), None) | {
+        "status": "not_set"
     }
-    assert shown == {
-        "status": "set",
-        "yaw_deg": 2.4,
-        "total_uncertainty_deg": 0.9,
-        "source": "aim_point",
-    }
+    assert shown == server.setup_handoff_config["target_line"]
 
 
 def test_the_ball_at_address_endpoint(kiosk_state):
@@ -244,30 +236,26 @@ def test_the_record_s_measured_side_offset_reaches_the_radar_launch_fit(monkeypa
     assert server.setup_handoff_config["scene"]["tee_side_offset_m"] == pytest.approx(-0.14)
 
 
-def test_an_assumed_net_range_is_warned_at_start(monkeypatch, tmp_path, caplog):
-    caplog.set_level("WARNING", logger="openflight.server")
-
-    _start_iwr_kiosk(monkeypatch, tmp_path, tmp_path / "no-setup.json")
-
-    assert server.setup_handoff_config["net_range"]["assumed"] is True
-    assert any("Net range 4.60 m is ASSUMED" in r.getMessage() for r in caplog.records)
-
-
-def test_a_measured_net_range_is_not_warned_about(monkeypatch, tmp_path, caplog):
+@pytest.mark.parametrize("measured", [False, True])
+def test_only_an_assumed_net_range_is_warned_at_start(monkeypatch, tmp_path, caplog, measured):
     from tests.setup_files import write_setup  # noqa: PLC0415
 
     caplog.set_level("WARNING", logger="openflight.server")
     setup_file = tmp_path / "setup.json"
-    write_setup(setup_file, aim_yaw_deg=1.0, net_range_m=3.9)
+    if measured:
+        write_setup(setup_file, aim_yaw_deg=1.0, net_range_m=3.9)
 
     _start_iwr_kiosk(monkeypatch, tmp_path, setup_file)
 
-    assert server.setup_handoff_config["net_range"]["net_range_m"] == pytest.approx(3.9)
-    assert not any("ASSUMED" in r.getMessage() for r in caplog.records)
+    net = server.setup_handoff_config["net_range"]
+    warned = any("Net range 4.60 m is ASSUMED" in r.getMessage() for r in caplog.records)
+    assert (net["assumed"], warned) == (not measured, not measured)
+    if measured:
+        assert net["net_range_m"] == pytest.approx(3.9)
+        assert not any("ASSUMED" in r.getMessage() for r in caplog.records)
 
 
 def test_the_camera_gate_follows_the_re_located_ball_not_the_setup_ball(kiosk_state, monkeypatch):
-    """A ball teed elsewhere in the box is found where it now rests."""
     monitor = ball_at_address.BallAtAddress(box_px=BOX, setup_ball=SETUP, setup_range_m=2.2)
     monitor.observe(_scene([(700.0, 420.0, 16.0)]), at=50.0)
     server.ball_at_address_monitor = monitor
