@@ -479,8 +479,8 @@ static uint32_t l3_ticks(void)
 
 #endif
 #if defined(L3_DUMP_SKIP_TEMPERATURE)
-#if !defined(L3_DUMP_STAGE_TRACE) || !defined(L3_CAPTURE_EVIDENCE)
-#error "temperature isolation requires stage tracing and capture evidence"
+#if (!defined(L3_DUMP_STAGE_TRACE) && !defined(L3_TWO_ROUND)) || !defined(L3_CAPTURE_EVIDENCE)
+#error "temperature isolation requires capture evidence and stage tracing or Fast transfer"
 #endif
 #endif
 #ifdef L3_DUMP_STAGE_TRACE

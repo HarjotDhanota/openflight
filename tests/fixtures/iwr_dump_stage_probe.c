@@ -106,7 +106,11 @@ int main(int argc, char **argv) {
     if (scenario == 4) expected = "";
     else if (scenario == 1) expected = "freeze_call ";
     else if (scenario == 2) expected = "freeze_call stop_call ";
+#ifdef L3_DUMP_SKIP_TEMPERATURE
+    else expected = "freeze_call stop_call sleep_call header_call ";
+#else
     else expected = "freeze_call stop_call sleep_call temp_call header_call ";
+#endif
 #endif
     if (strcmp(events, expected)) { fprintf(stderr, "%s\n!=\n%s\n", events, expected); return 1; }
     return 0;

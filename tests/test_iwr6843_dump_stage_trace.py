@@ -7,7 +7,9 @@ import pytest
 from tests.test_iwr6843_two_round_firmware import ROOT, build_native_probe
 
 
-@pytest.mark.parametrize("enabled,skip_temperature", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize(
+    "enabled,skip_temperature", [(False, False), (True, False), (True, True), (False, True)]
+)
 def test_preheader_stage_order_and_failure_boundaries(tmp_path, enabled, skip_temperature):
     source = (ROOT / "firmware/iwr6843/l3_dump.c").read_text(encoding="utf-8")
     start = source.index("#if defined(L3_DUMP_SKIP_TEMPERATURE)")
@@ -30,6 +32,8 @@ def test_preheader_stage_order_and_failure_boundaries(tmp_path, enabled, skip_te
     flags = ["-DL3_DUMP_STAGE_TRACE=1"] if enabled else []
     if skip_temperature:
         flags.append("-DL3_DUMP_SKIP_TEMPERATURE=1")
+        if not enabled:
+            flags.append("-DL3_TWO_ROUND=1")
     docker, executable = build_native_probe(tmp_path, "iwr_dump_stage_probe.c", flags)
     for scenario in range(5):
         result = subprocess.run(
@@ -48,7 +52,9 @@ def test_preheader_stage_order_and_failure_boundaries(tmp_path, enabled, skip_te
         ),
     ],
 )
-def test_temperature_isolation_rejects_untraced_or_two_round_builds(tmp_path, flags, message):
+def test_temperature_isolation_rejects_untraced_full_or_mixed_trace_builds(
+    tmp_path, flags, message
+):
     source = (ROOT / "firmware/iwr6843/l3_dump.c").read_text(encoding="utf-8")
     start = source.index("#if defined(L3_DUMP_SKIP_TEMPERATURE)")
     end = source.index("#ifdef L3_CAPTURE_EVIDENCE\nstatic uint32_t gFrameSeq", start)
