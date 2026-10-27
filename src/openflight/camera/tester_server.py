@@ -4661,6 +4661,7 @@ class BoxBallLocator:
         self.camera = camera
         self.box = box
         self.wide = wide
+        self._follow = BallFollowMemory()
         self._clock = clock
         self._on_change = on_change
         self._started = clock()
@@ -4700,7 +4701,17 @@ class BoxBallLocator:
         )
         started = time.monotonic()
         try:
-            _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
+            anchor = self._follow.get()
+            _result, in_box = _guided_camera_analysis(
+                frames, self.camera, self.box, follow=anchor, follow_rivals=True
+            )
+            if anchor is not None and in_box.get("status") != "selected":
+                _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
+                anchor = None
+            if in_box.get("status") != "selected":
+                self._follow.set(None)
+            elif anchor is None:
+                self._follow.set(in_box.get("selected"))
             wide = None
             if in_box.get("status") not in {"selected", "ambiguous"} and self.wide is not None:
                 _result, wide = _guided_camera_analysis(frames, self.camera, self.wide)
@@ -4712,6 +4723,7 @@ class BoxBallLocator:
             # any failure is a missed look, and said once: field 24 Oct, the looks
             # stopped for 13 s and nothing in the log said why
             failure = f"{type(exc).__name__}: {exc}"
+            self._follow.set(None)
             classified = {"state": "waiting", "selected": None}
         took = time.monotonic() - started
         if took > BOX_BALL_SLOW_LOOK_S:
@@ -4738,7 +4750,11 @@ class BoxBallLocator:
             )
         if self._on_change is not None:
             self._on_change(current)
-        return {**result, "ball_state": classified["state"]}
+        return {
+            **result,
+            "ball_state": classified["state"],
+            "ball_search_ms": round(took * 1000, 1),
+        }
 
     def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
         """Count the found streak; a found ball stays found through a few misses."""
@@ -4993,6 +5009,7 @@ def _guided_camera_analysis(
     *,
     analysis_role: str = "live_preview",
     follow: Mapping | None = None,
+    follow_rivals: bool = False,
     confirm: Mapping | None = None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
     """Look for the resting ball inside the patch, and nowhere else (P8-2).
@@ -5004,6 +5021,8 @@ def _guided_camera_analysis(
     ball) makes the Save fit only that ball at its held size and its close rivals,
     not the eight strongest seeds three sizes each: ~1 s on the Pi instead of
     ~18 s, and a rival is still found (13 Oct light audit section 5).
+    ``follow_rivals`` keeps the whole-patch seed pass and checks the held ball
+    against close rivals, avoiding repeated free-size fits in the box preview.
     """
     if analysis_role not in {"live_preview", "independent_save_confirmation"}:
         raise ValueError("unknown guided camera analysis role")
@@ -5011,7 +5030,11 @@ def _guided_camera_analysis(
         raise ValueError("the camera searches only a confirmed patch")
     kwargs: dict = {"search": patch, "ball_center_height_m": BALL_DIAMETER_MM / 2000.0}
     following = follow is not None and analysis_role == "live_preview"
-    if following:
+    if following and follow_rivals:
+        kwargs["confirm_anchor"] = {
+            key: float(follow[key]) for key in ("x_px", "y_px", "diameter_px")
+        }
+    elif following:
         diameter = float(follow["diameter_px"])
         reach = max(40.0, FOLLOW_REACH_DIAMETERS * diameter)
         x, y = float(follow["x_px"]), float(follow["y_px"])
@@ -5042,7 +5065,13 @@ def _guided_camera_analysis(
         **_camera_range_evidence(result),
         "method": "camera_patch_size_range_v1",
         "analysis_role": analysis_role,
-        "discovery_mode": "follow_last_selection" if following else "whole_patch",
+        "discovery_mode": (
+            "anchor_plus_close_rivals"
+            if following and follow_rivals
+            else "follow_last_selection"
+            if following
+            else "whole_patch"
+        ),
         "save_search": "anchor_plus_close_rivals" if confirming else None,
         "independent": True,
         "promotion_eligible": False,
@@ -5052,7 +5081,9 @@ def _guided_camera_analysis(
             "manual_range_used": False,
             "prior_canonical_range_used": False,
         },
-        "search_region": "follow_last_selection" if following else "patch_outline",
+        "search_region": "follow_last_selection"
+        if following and not follow_rivals
+        else "patch_outline",
         "search_region_px": _search_region(kwargs.get("roi"), bounds),
         "placement_box_px": bounds,
         "patch_search": patch.to_dict(),

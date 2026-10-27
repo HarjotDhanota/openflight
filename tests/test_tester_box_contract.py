@@ -402,6 +402,92 @@ def test_the_box_locator_reports_the_ball_and_keeps_the_brightness_its_own(monke
     assert live.controls
 
 
+def test_box_refresh_reuses_its_own_detection_and_checks_rivals(monkeypatch):
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    found = {"status": "selected", "selected": inside}
+    locator, _live, _record = _locator(monkeypatch, [])
+    calls = []
+
+    def analyze(*_args, **kwargs):
+        calls.append(kwargs)
+        return None, found
+
+    monkeypatch.setattr(ts, "_guided_camera_analysis", analyze)
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    locator(frames, 1, [(300, 4.0)] * 3)
+    locator(frames, 2, [(300, 4.0)] * 3)
+    assert not calls[0].get("follow")
+    assert calls[1]["follow"] == inside
+    assert calls[1]["follow_rivals"] is True
+
+
+def test_box_refresh_keeps_the_discovery_size_until_reacquisition(monkeypatch):
+    locator, _live, _record = _locator(monkeypatch, [])
+    calls = []
+
+    def analyze(*_args, **kwargs):
+        calls.append(kwargs)
+        size = 20.0 if len(calls) == 1 else 19.8
+        return None, {
+            "status": "selected",
+            "selected": {"x_px": 640.0, "y_px": 440.0, "diameter_px": size},
+        }
+
+    monkeypatch.setattr(ts, "_guided_camera_analysis", analyze)
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    for sequence in range(3):
+        locator(frames, sequence, [(300, 4.0)] * 3)
+    assert calls[1]["follow"]["diameter_px"] == 20.0
+    assert calls[2]["follow"]["diameter_px"] == 20.0
+
+
+@pytest.mark.parametrize("status", ["not_found", "ambiguous"])
+def test_box_refresh_reacquires_after_a_failed_anchor_check(monkeypatch, status):
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    found = {"status": "selected", "selected": inside}
+    locator, _live, _record = _locator(monkeypatch, [])
+    calls = []
+    looks = iter(
+        [found, {"status": status, "selected": None}, {"status": status, "selected": None}]
+    )
+
+    def analyze(*_args, **kwargs):
+        calls.append(kwargs)
+        return None, next(looks)
+
+    monkeypatch.setattr(ts, "_guided_camera_analysis", analyze)
+    locator.wide = None
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    for sequence in range(1, 5):
+        locator(frames, sequence, [(300, 4.0)] * 3)
+    assert calls[1]["follow"] == inside
+    assert calls[2] == {}
+    assert not calls[3].get("follow")
+    assert locator.ball()["confirmable"] is False
+
+
+def test_box_anchor_check_keeps_the_full_patch_and_candidate_size_search(monkeypatch):
+    analyze = ts._guided_camera_analysis
+    locator, _live, _record = _locator(monkeypatch, [])
+    monkeypatch.setattr(ts, "_guided_camera_analysis", analyze)
+    inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
+    seen = []
+
+    def search(_frames, _camera, kwargs):
+        seen.append(dict(kwargs))
+        raise RuntimeError("stop after recording the estimator inputs")
+
+    monkeypatch.setattr(ts, "_run_ball_search", search)
+    frames = np.full((3, 800, 1280), 120, dtype=np.uint8)
+    with pytest.raises(RuntimeError, match="estimator inputs"):
+        ts._guided_camera_analysis(
+            frames, locator.camera, locator.box, follow=inside, follow_rivals=True
+        )
+    assert seen[0]["confirm_anchor"] == inside
+    assert seen[0]["search"] is locator.box
+    assert not {"roi", "expected_diameter_range_px", "max_fits"} & seen[0].keys()
+
+
 def test_the_box_locator_says_outside_the_box(monkeypatch):
     outside = {"x_px": 100.0, "y_px": 700.0, "diameter_px": 30.0}
     locator, _live, _record = _locator(
