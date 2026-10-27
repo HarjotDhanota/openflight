@@ -92,7 +92,9 @@ export interface LocationResult {
 }
 
 export interface WeatherSettings {
-  mode: 'auto' | 'manual' | 'off';
+  mode: 'auto' | 'sensor' | 'weather' | 'manual' | 'off';
+  /** Whether --air-sensor found a supported part for this server session. */
+  sensor_available: boolean;
   latitude: number | null;
   longitude: number | null;
   location_label: string | null;

@@ -3348,6 +3348,13 @@ class TestSetWeatherSettings:
         assert weather.saved
         assert weather.provider.config.mode == "manual"
 
+    @pytest.mark.parametrize("mode", ["sensor", "weather"])
+    def test_explicit_hardware_and_api_modes_are_accepted(self, weather, mode):
+        server_module.handle_set_weather_settings({"mode": mode})
+
+        assert weather.provider.config.mode == mode
+        assert weather.saved
+
     def test_the_new_resolution_is_broadcast(self, weather):
         server_module.handle_set_weather_settings(
             {"mode": "manual", "manual_temp_c": 36.0, "manual_pressure_hpa": 1010.2}
@@ -3415,6 +3422,15 @@ class TestSetWeatherSettings:
 
         for key in ("elevation_m", "manual_elevation_m", "indoor_temp_c", "manual_temp_c"):
             assert key in payload
+
+    def test_settings_payload_reports_sensor_availability(self, weather, monkeypatch):
+        monkeypatch.setattr(server_module, "air_sensor", SimpleNamespace(chip="bme280"))
+
+        assert server_module._weather_settings_payload()["sensor_available"] is True
+
+        monkeypatch.setattr(server_module, "air_sensor", None)
+
+        assert server_module._weather_settings_payload()["sensor_available"] is False
 
     def test_an_implausible_elevation_is_stored_but_warned_about(self, weather, caplog):
         """Someone might genuinely be in Leadville, so it is never silently

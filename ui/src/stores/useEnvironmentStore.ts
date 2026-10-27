@@ -36,6 +36,8 @@ export const useEnvironmentStore = create<EnvironmentState>((set) => ({
 
 /** Human label for each density source, used on the badge. */
 export const SOURCE_LABELS: Record<string, string> = {
+  bme280: 'BME280',
+  bmp280: 'BMP280',
   manual: 'Manual',
   'open-meteo': 'Weather',
   elevation: 'Elevation',

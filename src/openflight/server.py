@@ -152,9 +152,9 @@ ballistics_enabled: bool = False
 # Owns the "what is the air density right now" question. Settings come from
 # the UI and persist to ~/.config/openflight/weather.json; CLI flags are a
 # session-only override for headless and bench use. A fitted sensor pushes
-# readings in and outranks every configured source; with nothing at all the
-# provider answers "ISA sea level, source default", so nothing downstream
-# needs to care what is present.
+# readings in; the provider applies the source mode selected by the user. With
+# nothing at all it answers "ISA sea level, source default", so nothing
+# downstream needs to care what is present.
 environment_provider = EnvironmentProvider(load_weather_config())
 air_sensor = None
 air_sensor_thread: Optional[threading.Thread] = None
@@ -2420,6 +2420,7 @@ def _weather_settings_payload() -> dict:
     config = environment_provider.config
     return {
         "mode": config.mode,
+        "sensor_available": air_sensor is not None,
         "latitude": config.latitude,
         "longitude": config.longitude,
         "location_label": config.location_label,
@@ -4268,8 +4269,8 @@ def main():
         "--air-sensor",
         action="store_true",
         help=(
-            "Read air density from a BME280/BMP280 on I2C and correct carry for it. "
-            "Without this, carry assumes ISA sea level as it always has."
+            "Enable a BME280/BMP280 on I2C as an available conditions source. "
+            "The source selected in Conditions decides whether its readings apply."
         ),
     )
     parser.add_argument(

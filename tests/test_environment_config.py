@@ -129,6 +129,9 @@ class TestIsConfigured:
         assert cfg.WeatherConfig(mode=cfg.MODE_MANUAL).is_configured() is False
         assert cfg.WeatherConfig(mode=cfg.MODE_MANUAL, manual_temp_c=20.0).is_configured() is True
 
+    def test_sensor_mode_records_a_complete_user_choice(self):
+        assert cfg.WeatherConfig(mode=cfg.MODE_SENSOR).is_configured() is True
+
     def test_auto_needs_a_location_or_a_cached_fetch(self):
         assert cfg.WeatherConfig().is_configured() is False
         assert cfg.WeatherConfig(latitude=38.58).is_configured() is True
@@ -268,6 +271,9 @@ class TestAutoRefreshDue:
         """Manual entry and "no correction" have nothing to fetch."""
         assert self._config(mode=cfg.MODE_MANUAL).is_auto_refresh_due(now=1e9) is False
         assert self._config(mode=cfg.MODE_OFF).is_auto_refresh_due(now=1e9) is False
+
+    def test_explicit_weather_mode_auto_refreshes_too(self):
+        assert self._config(mode=cfg.MODE_WEATHER).is_auto_refresh_due(now=1000.0 + 30 * 60)
 
     @pytest.mark.parametrize("minutes", [15, 30, 60])
     def test_each_offered_interval_is_honoured(self, minutes):

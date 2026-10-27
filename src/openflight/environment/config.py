@@ -16,11 +16,16 @@ from typing import Optional
 
 CONFIG_PATH = Path.home() / ".config" / "openflight" / "weather.json"
 
-# Modes the user picks in the settings screen.
+# Modes the user picks in the settings screen. Automatic preserves the
+# original best-available fallback chain; the explicit modes deliberately do
+# not fall through to one another. If somebody chooses manual, for example, a
+# fitted sensor must not silently replace what they typed.
 MODE_AUTO = "auto"  # sensor if fitted, else fetched weather
-MODE_MANUAL = "manual"  # user typed the numbers
+MODE_SENSOR = "sensor"  # fitted BME280/BMP280 only
+MODE_WEATHER = "weather"  # cached Open-Meteo conditions only
+MODE_MANUAL = "manual"  # user typed the numbers only
 MODE_OFF = "off"  # ISA sea level, the pre-weather behaviour
-VALID_MODES = (MODE_AUTO, MODE_MANUAL, MODE_OFF)
+VALID_MODES = (MODE_AUTO, MODE_SENSOR, MODE_WEATHER, MODE_MANUAL, MODE_OFF)
 
 DEFAULT_HUMIDITY_PCT = 50.0
 
@@ -125,6 +130,10 @@ class WeatherConfig:
         """True when this config can produce a density without more input."""
         if self.mode == MODE_OFF:
             return False
+        if self.mode == MODE_SENSOR:
+            # Hardware availability is runtime state, not persistent config.
+            # This method answers whether the user has completed setup.
+            return True
         if self.mode == MODE_MANUAL:
             return self.manual_temp_c is not None
         return self.latitude is not None or bool(self.cached)
@@ -144,7 +153,7 @@ class WeatherConfig:
         Args:
             now: Wall-clock seconds, compared against the cached fetch stamp.
         """
-        if self.mode != MODE_AUTO or not self.location_consent:
+        if self.mode not in (MODE_AUTO, MODE_WEATHER) or not self.location_consent:
             return False
         if self.latitude is None or self.longitude is None:
             return False

@@ -19,6 +19,7 @@ const reading = (overrides: Partial<EnvironmentReading> = {}): EnvironmentReadin
 
 const settings = (overrides: Partial<Settings> = {}): Settings => ({
   mode: 'auto',
+  sensor_available: false,
   latitude: 38.58,
   longitude: -121.49,
   location_label: 'Sacramento, California',
@@ -129,13 +130,27 @@ describe('WeatherSettingsView', () => {
     expect(html).not.toContain('>10 min<');
   });
 
-  it('does not advertise a sensor, since no driver exists yet', () => {
-    // The provider hook, the precedence entry and this row were all removed
-    // rather than shipped unreachable. They return with the BME280 driver.
+  it('shows every source explicitly without enabling an unavailable sensor', () => {
     const html = render();
 
-    expect(html).not.toContain('BME280');
-    expect(html).not.toContain('Sensor');
+    expect(html).toContain('Automatic');
+    expect(html).toContain('Air sensor');
+    expect(html).toContain('Local weather');
+    expect(html).toContain('Enter manually');
+    expect(html).toContain('No correction');
+    expect(html).toMatch(/disabled=""[^>]*\/?>\s*<span>Air sensor/);
+  });
+
+  it('enables the sensor source when the server detected one', () => {
+    const html = render({ settings: settings({ sensor_available: true }) });
+
+    expect(html).not.toMatch(/disabled=""[^>]*\/?>\s*<span>Air sensor/);
+  });
+
+  it('explains automatic fallback instead of calling it local weather', () => {
+    const html = render();
+
+    expect(html).toContain('Uses the air sensor when available');
   });
 
   it('renders temperature in Fahrenheit for imperial users', () => {
@@ -207,7 +222,7 @@ describe('WeatherSettingsView', () => {
     // 5279. 1609 m is 5279 ft; 9 m is 30 ft.
     const both = settings({ elevation_m: 9, manual_elevation_m: 1609 });
 
-    const local = render({ settings: { ...both, mode: 'auto' } });
+    const local = render({ settings: { ...both, mode: 'weather' } });
     const manual = render({ settings: { ...both, mode: 'manual' } });
 
     expect(manual).toContain('>5279<');

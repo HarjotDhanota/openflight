@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Selecting manual or Open-Meteo conditions while a BME280/BMP280 was fitted
+  no longer silently applies the sensor reading. Conditions now offers
+  isolated Air sensor, Local weather, Manual, and No correction modes, plus an
+  explicit Automatic mode for sensor-first fallback.
+
 ### Added
 - **Carry corrected for measured air density.** Every carry number OpenFlight
   produced assumed ISA sea level — 15 °C, 1013.25 hPa, dry — with no way to
@@ -25,10 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temperature error) and **14 yd in Denver**; the same swing appears within one
   day at one venue, and both readings were reported as identical. Conditions
   now come from values you type or from an Open-Meteo lookup you trigger, set
-  by searching for a place or postal code. An on-unit BME280 will outrank both
-  when its driver lands, because an API returns an outdoor grid-cell average,
-  which in a 22 °C garage on a 36 °C day is a correction that is actively
-  wrong. Physics-simulated
+  by searching for a place or postal code. Automatic mode prefers an on-unit
+  BME280 because an API returns an outdoor grid-cell average, which in a 22 °C
+  garage on a 36 °C day is a correction that is actively wrong. Explicit
+  source modes remain isolated. Physics-simulated
   carry passes density into the integrator; the table estimator gets a scalar
   correction whose worst-case error against the integrator is under 1% of carry
   across the whole bag. **With nothing configured, every number is unchanged.**

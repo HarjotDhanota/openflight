@@ -1,22 +1,26 @@
 """Tests for air-density source resolution.
 
-The precedence chain is the whole contract of this subsystem:
+Explicit sensor, local-weather and manual modes are isolated. Automatic mode
+alone has a fallback chain: CLI override > sensor > Open-Meteo cache > ISA.
+Manual pressure may be estimated from its own elevation, but never borrows
+from a different source mode.
 
-    CLI override > manual > open-meteo cache > elevation > ISA default
-
-(A fitted BME280 will sit above all of these when its driver lands; it is a
-separate change, and nothing here pretends to support it yet.)
-
-Everything below pins one link of it. The two properties that matter most are
-that ``current()`` never raises (it is called from the shot path) and that an
-unconfigured system still resolves to exactly ISA sea level, which is what
-OpenFlight did before any of this existed.
+The two properties that matter most are that ``current()`` never raises (it is
+called from the shot path) and that an unavailable selected source resolves to
+exactly ISA sea level, which is what OpenFlight did before this subsystem.
 """
 
 import pytest
 
 from openflight.environment.bme280 import SensorReading
-from openflight.environment.config import MODE_AUTO, MODE_MANUAL, MODE_OFF, WeatherConfig
+from openflight.environment.config import (
+    MODE_AUTO,
+    MODE_MANUAL,
+    MODE_OFF,
+    MODE_SENSOR,
+    MODE_WEATHER,
+    WeatherConfig,
+)
 from openflight.environment.provider import (
     ASSUMED_HUMIDITY_PCT,
     ISA_DENSITY,
@@ -505,6 +509,57 @@ class TestWithASensor:
         provider.set_sensor_reading(reading(chip="bmp280", humidity_pct=None))
 
         assert provider.current().source == "bmp280"
+
+    def test_manual_mode_uses_manual_values_instead_of_the_sensor(self):
+        """Choosing a source is an instruction, not a precedence hint.
+
+        This reproduces the settings-screen bug: selecting "Enter manually"
+        while a BME280 was fitted still applied the BME280 reading.
+        """
+        provider = make_provider(
+            mode=MODE_MANUAL,
+            manual_temp_c=10.0,
+            manual_pressure_hpa=900.0,
+            manual_humidity_pct=20.0,
+        )
+        provider.set_sensor_reading(reading(temp_c=31.0, pressure_hpa=1010.0, humidity_pct=70.0))
+
+        current = provider.current()
+
+        assert current.source == "manual"
+        assert current.temp_c == pytest.approx(10.0)
+
+    def test_weather_mode_uses_open_meteo_instead_of_the_sensor(self, clock):
+        provider = make_provider(mode=MODE_WEATHER, cached=dict(CACHED))
+        provider.set_sensor_reading(reading(temp_c=31.0, pressure_hpa=1010.0, humidity_pct=70.0))
+
+        current = provider.current()
+
+        assert current.source == "open-meteo"
+        assert current.temp_c == pytest.approx(CACHED["temp_c"])
+
+    def test_sensor_mode_does_not_borrow_manual_or_weather_values(self, clock):
+        provider = make_provider(
+            mode=MODE_SENSOR,
+            manual_temp_c=10.0,
+            manual_pressure_hpa=900.0,
+            cached=dict(CACHED),
+        )
+
+        assert provider.current().source == "default"
+
+        provider.set_sensor_reading(reading())
+
+        assert provider.current().source == "bme280"
+
+    def test_automatic_mode_keeps_the_existing_sensor_first_fallback(self, clock):
+        provider = make_provider(mode=MODE_AUTO, cached=dict(CACHED))
+
+        assert provider.current().source == "open-meteo"
+
+        provider.set_sensor_reading(reading())
+
+        assert provider.current().source == "bme280"
 
 
 class TestAMissingHumidityChannel:

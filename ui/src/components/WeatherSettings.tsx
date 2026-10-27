@@ -294,11 +294,19 @@ export function WeatherSettingsView({
 
       <fieldset className="weather-modes">
         <legend>Source</legend>
-        {(['auto', 'manual', 'off'] as const).map((mode) => (
+        {(['auto', 'sensor', 'weather', 'manual', 'off'] as const).map((mode) => (
           <label key={mode}>
-            <input type="radio" name="weather-mode" checked={draft.mode === mode} onChange={() => selectMode(mode)} />
+            <input
+              type="radio"
+              name="weather-mode"
+              checked={draft.mode === mode}
+              disabled={mode === 'sensor' && !draft.sensor_available}
+              onChange={() => selectMode(mode)}
+            />
             <span>
-              {mode === 'auto' && 'Local weather'}
+              {mode === 'auto' && 'Automatic'}
+              {mode === 'sensor' && 'Air sensor'}
+              {mode === 'weather' && 'Local weather'}
               {mode === 'manual' && 'Enter manually'}
               {mode === 'off' && 'No correction'}
             </span>
@@ -307,6 +315,14 @@ export function WeatherSettingsView({
       </fieldset>
 
       {draft.mode === 'auto' && (
+        <p className="weather-hint">Uses the air sensor when available, otherwise the last fetched local weather.</p>
+      )}
+
+      {draft.mode === 'sensor' && !draft.sensor_available && (
+        <p className="weather-warning">No BME280 or BMP280 was detected at startup.</p>
+      )}
+
+      {(draft.mode === 'auto' || draft.mode === 'weather') && (
         <section className="weather-location">
           {/* Consent gates both actions, so it comes first. It used to sit
               under the buttons it controls, which read as unrelated. */}

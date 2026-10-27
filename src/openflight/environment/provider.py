@@ -4,19 +4,20 @@ One object owns the question "what is the air density right now, and how do we
 know". Everything else -- the shot path, the settings screen, the logs --
 asks it rather than reimplementing the precedence.
 
-Source order, best first:
+Automatic source order, best first:
 
   1. sensor     a fitted BME280 or BMP280, read on a background poll
-  2. manual     the user typed the numbers
-  3. open-meteo fetched for the configured location, cached until refreshed
-  4. elevation  temperature plus an ISA pressure estimate, no barometer
-  5. default    ISA sea level -- the only behaviour before this subsystem
+  2. open-meteo fetched for the configured location, cached until refreshed
+  3. default    ISA sea level -- the only behaviour before this subsystem
 
-The sensor outranks everything, including manual entry, because an API
-returns a grid-cell average of OUTDOOR conditions and a typed value goes
-stale the moment the evening cools -- while the sensor measures the air the
-ball actually flies through, indoors and out. The one thing that outranks it
-is the user saying "no correction" (mode off), which always wins.
+Manual mode uses typed pressure, or estimates it from the separately typed
+manual elevation. Neither manual input nor that estimate participates in the
+automatic chain.
+
+Explicit sensor, weather and manual modes are isolated: choosing one never
+falls through to another. Automatic mode is the opt-in best-available chain,
+where the sensor outranks fetched weather because it measures the air the ball
+actually flies through, indoors and out.
 
 Nothing here performs network or bus I/O. Values are pushed in by their
 owners; ``current()`` is a pure read so it is safe from the shot path.
@@ -30,8 +31,11 @@ from typing import Callable, Optional
 from openflight.environment.bme280 import SensorReading
 from openflight.environment.config import (
     DEFAULT_HUMIDITY_PCT,
+    MODE_AUTO,
     MODE_MANUAL,
     MODE_OFF,
+    MODE_SENSOR,
+    MODE_WEATHER,
     WeatherConfig,
 )
 from openflight.environment.density import (
@@ -142,10 +146,21 @@ class EnvironmentProvider:
         """Resolve conditions now. Never raises, never blocks."""
         if self._override is not None:
             return self._override
-        if self.config.mode == MODE_OFF:
+        mode = self.config.mode
+        if mode == MODE_OFF:
             return EnvironmentReading(ISA_DENSITY, "default")
-
-        reading = self._from_sensor() or self._from_manual() or self._from_cache()
+        if mode == MODE_SENSOR:
+            reading = self._from_sensor()
+        elif mode == MODE_WEATHER:
+            reading = self._from_cache()
+        elif mode == MODE_MANUAL:
+            reading = self._from_manual()
+        elif mode == MODE_AUTO:
+            reading = self._from_sensor() or self._from_cache()
+        else:
+            # load_config() validates this, but a direct WeatherConfig made by
+            # another caller should fail closed instead of choosing a source.
+            reading = None
         return reading or EnvironmentReading(ISA_DENSITY, "default")
 
     def _from_sensor(self) -> Optional[EnvironmentReading]:
@@ -200,8 +215,9 @@ class EnvironmentProvider:
         # Indoors, keep the fetched pressure -- buildings are not pressure
         # vessels, so outdoor pressure is right indoors -- but take the
         # temperature from the user, because indoor and outdoor air differ by
-        # far more than the pressure does. (A fitted sensor makes this whole
-        # branch moot: it measures the indoor air directly and outranks this.)
+        # far more than the pressure does. Automatic mode normally prefers a
+        # fitted sensor; explicit weather mode deliberately stays in this
+        # branch even when sensor readings are available.
         #
         # Reads indoor_temp_c, never manual_temp_c: manual entry is a separate
         # set-up, and borrowing from it meant a value typed there silently

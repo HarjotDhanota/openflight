@@ -237,8 +237,9 @@ A ~$4 BME280 on I²C measures it instead:
 scripts/start-kiosk.sh --air-sensor
 ```
 
-**With no sensor fitted, every carry number is unchanged.** The flag is opt-in,
-and without it the correction factor is exactly 1.0.
+The flag makes the sensor available; choose **Air sensor** or **Automatic** in
+**Settings → Conditions** to apply it. Without the flag the Air sensor choice
+is disabled. Manual and Open-Meteo sources still work without sensor hardware.
 
 | Part | Measures | Notes |
 | ---- | -------- | ----- |
@@ -277,23 +278,26 @@ assumed ISA sea level — 15 °C, 1013.25 hPa, dry — which is worth about 5.6 
 on a driver on a 97 °F afternoon at a **sea-level** venue, and roughly 14 yd in
 Denver. Open **Settings → Conditions** and pick a source:
 
-| Source        | How it is obtained                     | Notes                                                     |
-| ------------- | -------------------------------------- | --------------------------------------------------------- |
-| Manual        | You type temperature/pressure/humidity | Enter **absolute station pressure**, not the sea-level value a weather app shows |
-| Local weather | Open-Meteo, fetched when you tap       | Outdoor grid-cell average; no polling, no background I/O  |
-| No correction | ISA sea level                          | Exactly the pre-2026 behaviour                            |
+| Source | How it is obtained | Fallback behavior |
+| ------ | ------------------ | ----------------- |
+| Automatic | BME280/BMP280, then cached Open-Meteo | Uses the best available source |
+| Air sensor | BME280/BMP280 on I²C | Sensor only; uncorrected if missing or stale |
+| Local weather | Open-Meteo, fetched when you tap | Weather only; never replaced by the sensor |
+| Manual | You type temperature/pressure/humidity | Manual only; enter **absolute station pressure**, not a sea-level value |
+| No correction | ISA sea level | Exactly the pre-2026 behaviour |
 
-An on-unit BME280 will outrank both when its driver lands — an API reports
-outdoor conditions, and in a 22 °C garage on a 36 °C day that "correction" is
-worse than none. That is a separate change; nothing here claims sensor support
-that does not exist yet.
+The sensor is preferred only in **Automatic** mode. An API reports outdoor
+conditions, and in a 22 °C garage on a 36 °C day that can be worse than no
+correction; explicit source modes are provided for cases where the user knows
+which reading is appropriate.
 
 Playing indoors keeps the fetched **pressure** (buildings are not pressure
 vessels) and replaces only the **temperature**.
 
 Local weather has an **auto-refresh** interval — **Off / 15 / 30 / 60 minutes**. It
 only ever runs once you have fetched at least once yourself, so a fresh install
-makes no unprompted network request, and it only applies in Local weather mode.
+makes no unprompted network request, and it only applies in Automatic or Local
+weather mode.
 Worth turning on for a long session: an evening can drop 5 °C over two hours,
 which is about 1.3 yd on a driver.
 
@@ -304,8 +308,10 @@ result also fills in your elevation, which is what tells Open-Meteo to report
 pressure for your ground rather than its model's — 100 m out is about a yard on
 a driver.
 
-Manual entry and local weather are **independent set-ups**. Switch to manual,
-type whatever you like, and switching back leaves local exactly as it was.
+Sensor, manual entry, and local weather are **independent set-ups**. Selecting
+one explicit source never borrows values from either of the others. Switch to
+manual, type whatever you like, and switching back leaves local weather exactly
+as it was.
 
 **With nothing configured, every carry number is unchanged.**
 
