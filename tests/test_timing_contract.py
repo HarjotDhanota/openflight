@@ -33,7 +33,7 @@ def _queue_gate_event(capture_monitor: IWR6843CaptureMonitor, edge_wall_s: float
         previous_callback_mono_ns=capture_monitor._previous_callback_mono_ns,
     )
     capture_monitor._events = queue.Queue()
-    capture_monitor._events.put(event)
+    capture_monitor._events.put((event, capture_monitor._transfer_mode.status()))
     capture_monitor._events.put(None)
     return event
 
@@ -598,8 +598,8 @@ def test_server_publication_is_callback_to_emit_invocation_not_browser_time(monk
     )
 
 
-def test_iwr_notify_trigger_queues_only_gate_events(tmp_path):
-    """The capture loop's only producer queues a GateEvent per edge, never a bare timestamp."""
+def test_iwr_notify_trigger_queues_gate_event_and_frozen_transfer_status(tmp_path):
+    """A queued capture keeps the original event and the mode accepted at that edge."""
     capture_monitor = IWR6843CaptureMonitor(
         config_path=tmp_path / "unused.cfg",
         output_dir=tmp_path,
@@ -610,6 +610,7 @@ def test_iwr_notify_trigger_queues_only_gate_events(tmp_path):
 
     assert capture_monitor.notify_trigger(123.0) is True
 
-    queued = capture_monitor._events.get_nowait()
+    queued, status = capture_monitor._events.get_nowait()
     assert isinstance(queued, GateEvent)
     assert queued.observation.observer_wall_s == 123.0
+    assert status == capture_monitor._transfer_mode.status()
