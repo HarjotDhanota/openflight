@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Mock shots use the selected club's typical attack angle instead of the same mean for every club.
+
 ### Changed
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and
