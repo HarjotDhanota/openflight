@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Reuse an unchanged session bundle after linking it into the send folder on
+  Linux. Metadata changes trigger a hash check; modified archives are rebuilt.
+
 ### Changed
 - **Flight model refitted to TrackMan 4.** The Ferguson (2022) drag and lift
   form keeps its shape with its constants refitted to TrackMan 4 exports; held-out

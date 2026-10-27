@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tracemalloc
 import zipfile
@@ -195,6 +196,27 @@ def test_a_bundle_changed_on_disk_is_never_reused(tmp_path, viewer):
     second = _analyze(root, viewer)
     assert second["bundle"]["name"] != first_path.name
     session_bundle.validate_bundle(root / second["bundle"]["path"])
+
+
+@pytest.mark.parametrize("change_content", [False, True])
+def test_metadata_changes_recheck_the_archive_content_before_reuse(tmp_path, change_content):
+    root = capture_tree(tmp_path / "pi")
+    first = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+    path = Path(first["path"])
+    stamp = path.stat()
+    if change_content:
+        with path.open("r+b") as handle:
+            handle.seek(-1, os.SEEK_END)
+            last = handle.read(1)
+            handle.seek(-1, os.SEEK_END)
+            handle.write(bytes([last[0] ^ 1]))
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+
+    second = session_bundle.build_bundle(root, TESTER, viewer=None, provenance={})
+
+    assert second["reused"] is not change_content
+    assert (second["name"] == first["name"]) is not change_content
+    session_bundle.validate_bundle(Path(second["path"]))
 
 
 def test_duplicate_member_paths_are_refused_before_writing(tmp_path):

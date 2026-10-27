@@ -413,11 +413,10 @@ def _reusable_latest(
     latest = bundles[0]
     path = bundle_directory(sessions_root) / latest["name"]
     recorded = index["bundles"].get(latest["name"])
-    if (
-        not isinstance(recorded, dict)
-        or recorded.get("stamp") != _stamp(path)
-        or recorded.get("sha256") != latest["sha256"]
-    ):
+    archive_stamp = _stamp(path)
+    if not isinstance(recorded, dict) or recorded.get("sha256") != latest["sha256"]:
+        return None
+    if recorded.get("stamp") != archive_stamp and _file_sha256(path) != recorded["sha256"]:
         return None
     try:
         with zipfile.ZipFile(path) as archive:
@@ -458,10 +457,11 @@ def _reusable_latest(
     if content_fingerprint(tester_id, listed, provenance) != manifest.get("content_fingerprint"):
         return None
     # the decision stands only if nothing moved while it was being made
-    if _stamp(path) != recorded["stamp"] or any(
+    if _stamp(path) != archive_stamp or any(
         not source.is_file() or _stamp(source) != stamp for source, stamp in checked
     ):
         return None
+    recorded["stamp"] = archive_stamp
     return {
         "name": latest["name"],
         "path": str(path),
