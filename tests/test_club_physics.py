@@ -68,3 +68,22 @@ def test_shot_simulation_defaults_are_immutable():
 def test_registries_are_immutable(registry):
     with pytest.raises(TypeError):
         registry[ClubType.DRIVER] = registry[ClubType.UNKNOWN]
+
+
+def test_mock_attack_angle_follows_the_published_tour_averages():
+    from openflight.clubs.physics import mock_attack_angle_mean_deg
+
+    assert mock_attack_angle_mean_deg(ClubType.DRIVER) == pytest.approx(-0.9)
+    assert mock_attack_angle_mean_deg(ClubType.IRON_6) == pytest.approx(-3.7)
+    by_loft = sorted(
+        (c for c in ClubType if c is not ClubType.UNKNOWN),
+        key=lambda c: get_club_physics(c).nominal_loft_deg,
+    )
+    angles = [mock_attack_angle_mean_deg(c) for c in by_loft]
+    assert all(a >= b for a, b in zip(angles, angles[1:]))
+    assert mock_attack_angle_mean_deg(ClubType.LW) == pytest.approx(
+        mock_attack_angle_mean_deg(ClubType.IRON_9)
+    )
+    assert mock_attack_angle_mean_deg(ClubType.UNKNOWN) == pytest.approx(
+        SHOT_SIMULATION_DEFAULTS.angle_of_attack_mean_deg
+    )
