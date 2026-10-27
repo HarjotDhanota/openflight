@@ -120,3 +120,26 @@ One stationary RAM diagnostic reduced the host overview interval from 9.023 s to
 and 1.945 s respectively to median selection. These are separate stationary runs,
 not a same-shot accuracy comparison or a swing-to-screen benchmark. Reliability,
 full selected-cell timing and physical clock synchronization remain unqualified.
+
+## Serial worker verification (27 October)
+
+Overview retries now retain the failed reply even when the next reply succeeds.
+The child returns those original bytes separately from the valid overview, and
+its exchange record includes per-attempt host brackets, byte counts and errors.
+The existing monitor saves the failed bytes with its other partial protocol
+evidence. The CLI commands, retry limit and frozen-session release rules remain
+the same. These records describe host intervals, not physical acquisition time.
+
+Synthetic tests cover both echo modes, exhausted overview retries and recovery
+without losing the first reply. The monitor/child/estimator comparison also covers
+missing versus configured tee range, one damaged cells reply, and two damaged
+replies followed by recovery of every remaining cell. It checks Full/Fast metric
+and status agreement, acknowledged release, failure evidence and sparse replay.
+Synthetic inputs are confined to tests; they are not real shot measurements.
+The focused group passed 90 tests on desktop and 90 on the Pi, with all 749
+staged file hashes verified. The Pi run opened no UART and performed no RF test.
+
+The successful stationary hardware diagnostic used a scratch first-byte echo
+handshake. That adapter is not yet part of the production worker. Verify that
+transport difference before claiming the production path is hardware-qualified;
+software equivalence does not qualify command acceptance or shot-to-display time.

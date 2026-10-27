@@ -247,18 +247,35 @@ def test_failed_cells_are_kept_even_when_retry_succeeds(live_monitor, tmp_path):
     assert path.read_bytes() == capture.two_round_link.failed_payloads[0]
 
 
+@pytest.mark.parametrize("corrupt_cells", [0, 1, 2])
+@pytest.mark.parametrize("tee_range_m", [None, 1.5])
 def test_monitor_child_and_real_estimator_match_full_synthetic_shot(
-    live_monitor, ball_dump, tmp_path
+    live_monitor, ball_dump, tmp_path, tee_range_m, corrupt_cells
 ):
     raw_path = tmp_path / "ball.l3dump"
     raw_path.write_bytes(ball_dump)
-    monitor, _radar, runtime, _events = live_monitor(raw_path=str(raw_path))
-    runtime.calibration = _calibration(1.5)
+    monitor, radar, runtime, _events = live_monitor(
+        raw_path=str(raw_path), corrupt_cells=corrupt_cells
+    )
+    runtime.calibration = _calibration(tee_range_m)
     edge = time.time()
     assert monitor.notify_trigger(edge)
     two = _shot(runtime)
-    full = _shot(_runtime(_Capture(ball_dump), "full", 1.5))
+    full = _shot(_runtime(_Capture(ball_dump), "full", tee_range_m))
     _assert_same(_numbers(full), _numbers(two))
     assert two.transfer["released"] and two.transfer["cell_rounds"] >= 1
     assert two.measurement is not None and two.measurement.track_speed_mph
     assert two.transfer_mode["used"] == "two_round"
+    assert two.transfer["error"] is None
+    assert sum("error" in row for row in two.transfer["uart_exchanges"]) == corrupt_cells
+    assert not radar.busy
+    if corrupt_cells == 2:
+        assert two.transfer["fallback"] == "complete_capture_after_failed_round"
+    else:
+        assert two.transfer["fallback"] is None
+    _header, saved = read_sparse_capture(two.sparse_capture)
+    replayed = _shot(_runtime(_Capture(saved.sparse_dump()), "full", tee_range_m))
+    _assert_same(_numbers(full), _numbers(replayed))
+    _wait_until(
+        lambda: len(list((tmp_path / "dumps").glob("*.l3protocol-partial"))) == corrupt_cells
+    )
