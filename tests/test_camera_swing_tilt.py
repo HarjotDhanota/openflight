@@ -228,3 +228,21 @@ def test_a_camera_prior_shot_never_reaches_the_tilt_file(monkeypatch, tmp_path):
 
     assert shot.camera_tilt_swing_pair["status"] == "skipped"
     assert not (tmp_path / "tilt.json").exists()
+
+
+@pytest.mark.parametrize("label", ["estimated", "iwr_partial"])
+def test_an_iwr_range_weaker_than_measured_is_never_a_pair(label):
+    pair = swing_tilt.swing_pair(
+        {
+            **MEASURED,
+            "ball_range_label": label,
+            "ball_range_reason": "two IWR tracks compete: launch points 2.10 m and 2.31 m",
+        },
+        ball_px=_ball_px(-2.0, 2.10),
+        lis3dh_pitch_deg=-0.5,
+        camera_at_pitch=_camera,
+    )
+
+    assert pair["status"] == "skipped"
+    assert label in pair["reason"]
+    assert "two IWR tracks compete" in pair["reason"]

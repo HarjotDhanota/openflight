@@ -24,7 +24,7 @@ from openflight.clubs import ClubType
 from openflight.horizontal_frame import MAX_PLAUSIBLE_LAUNCH_DEG, implausible_launch_reason
 from openflight.launch_monitor import Shot
 from openflight.sim.resolver import resolve_shot
-from openflight.sim.types import PlayerState
+from openflight.sim.types import PlayerState, UnmeasuredShotError
 from openflight.source_labels import (
     AZIMUTH_UNCALIBRATED,
     WEAK_HORIZONTAL_SOURCES,
@@ -35,6 +35,7 @@ SHOT_14 = {
     "ball_speed_mph": 45.1,
     "launch_angle_vertical": 13.57,
     "launch_angle_vertical_source": "radar",
+    "inclinometer": {"applied_to": ["camera", "iwr6843"]},
     "launch_angle_horizontal": 70.6261883479819,
     "launch_angle_horizontal_confidence": 0.89,
     "launch_angle_horizontal_source": "radar_low_coherence",
@@ -69,8 +70,9 @@ def test_a_missing_horizontal_is_not_called_implausible(value):
 
 
 @pytest.mark.parametrize("source", sorted(WEAK_HORIZONTAL_SOURCES))
-def test_a_weak_horizontal_source_is_estimated(source):
-    assert horizontal_launch_label(source) == "estimated"
+def test_a_weak_horizontal_source_is_experimental(source):
+    # Q3 (25 Oct 2026): it failed its own gate (coherence, consensus)
+    assert horizontal_launch_label(source) == "experimental"
 
 
 @pytest.mark.parametrize(
@@ -92,24 +94,24 @@ def test_every_weak_horizontal_source_is_one_the_full_ball_speed_refuses():
     assert not set(WEAK_HORIZONTAL_SOURCES) & full_speed.MEASURED_HORIZONTAL_SOURCES
 
 
-def test_a_low_coherence_horizontal_record_is_estimated_not_measured():
+def test_a_low_coherence_horizontal_record_is_experimental_not_measured():
     record = shot_metrics.from_record({**SHOT_14, "launch_angle_horizontal": 3.2})[
         "launch_horizontal"
     ]
 
     assert record["value"] == pytest.approx(3.2)
-    assert record["status"] == "estimated"
+    assert record["status"] == "experimental"
     assert record["source"] == "radar_low_coherence"
     assert "low-coherence" in record["note"]
     assert "azimuth uncalibrated" in record["note"]
 
 
-def test_a_low_consensus_camera_horizontal_record_is_estimated():
+def test_a_low_consensus_camera_horizontal_record_is_experimental():
     record = shot_metrics.from_record(
         {"launch_angle_horizontal": -4.0, "launch_angle_horizontal_source": "camera_low_consensus"}
     )["launch_horizontal"]
 
-    assert record["status"] == "estimated"
+    assert record["status"] == "experimental"
     assert "low-consensus" in record["note"]
 
 
@@ -211,12 +213,12 @@ def test_the_kiosk_withholds_an_implausible_iwr_horizontal(monkeypatch):
     assert record["reason"] == shot.launch_angle_horizontal_reason
 
 
-def test_the_kiosk_shows_a_plausible_low_coherence_horizontal_as_estimated(monkeypatch):
+def test_the_kiosk_shows_a_plausible_low_coherence_horizontal_as_experimental(monkeypatch):
     shot = _iwr_shot(monkeypatch, horizontal_deg=3.2)
 
     assert shot.launch_angle_horizontal == pytest.approx(3.2)
     assert shot.launch_angle_horizontal_reason is None
-    assert shot.to_dict()["metrics"]["launch_horizontal"]["status"] == "estimated"
+    assert shot.to_dict()["metrics"]["launch_horizontal"]["status"] == "experimental"
 
 
 def test_a_camera_horizontal_replaces_a_withheld_one(monkeypatch):
@@ -245,7 +247,7 @@ def test_an_implausible_camera_horizontal_never_replaces_a_shown_one(monkeypatch
 
 
 @pytest.mark.parametrize("source", sorted(WEAK_HORIZONTAL_SOURCES))
-def test_the_collision_model_takes_a_weak_horizontal_as_estimated(source):
+def test_the_collision_model_takes_a_weak_horizontal_estimated_flagged_experimental(source):
     shot = Shot(
         ball_speed_mph=120.0,
         timestamp=datetime(2026, 10, 24),
@@ -256,12 +258,14 @@ def test_the_collision_model_takes_a_weak_horizontal_as_estimated(source):
 
     entry = shot_models._horizontal_launch_input(shot, source)  # pylint: disable=protected-access
 
+    # the model has no experimental label: estimated with the reason, flagged
     assert entry.label == "estimated"
+    assert entry.experimental is True
     assert source in entry.reason
 
 
 @pytest.mark.parametrize("source", sorted(WEAK_HORIZONTAL_SOURCES))
-def test_a_simulator_is_told_a_weak_horizontal_is_estimated(source):
+def test_a_simulator_never_gets_a_weak_horizontal(source):
     shot = Shot(
         ball_speed_mph=140.0,
         timestamp=datetime(2026, 10, 24),
@@ -274,10 +278,10 @@ def test_a_simulator_is_told_a_weak_horizontal_is_estimated(source):
         spin_axis_deg=-3.0,
     )
 
-    resolved = resolve_shot(shot, PlayerState())
+    with pytest.raises(UnmeasuredShotError) as refused:
+        resolve_shot(shot, PlayerState())
 
-    assert resolved.hla == pytest.approx(1.5)
-    assert resolved.provenance["hla"] == "estimated"
+    assert "horizontal launch (experimental)" in refused.value.missing
 
 
 # ---------------------------------------------------------------- the uncalibrated azimuth
@@ -288,8 +292,9 @@ HORIZONTAL_SOURCES = sorted(
 
 
 @pytest.mark.parametrize("source", HORIZONTAL_SOURCES)
-def test_an_uncalibrated_azimuth_is_estimated_whatever_the_source(source):
-    assert horizontal_launch_label(source, AZIMUTH_UNCALIBRATED) == "estimated"
+def test_an_uncalibrated_azimuth_is_at_best_estimated_whatever_the_source(source):
+    expected = "experimental" if source in WEAK_HORIZONTAL_SOURCES else "estimated"
+    assert horizontal_launch_label(source, AZIMUTH_UNCALIBRATED) == expected
 
 
 def test_a_calibrated_radar_horizontal_stays_measured():
@@ -299,17 +304,19 @@ def test_a_calibrated_radar_horizontal_stays_measured():
 
 @pytest.mark.parametrize("status", [None, AZIMUTH_UNCALIBRATED])
 @pytest.mark.parametrize("source", HORIZONTAL_SOURCES)
-def test_the_full_ball_speed_takes_a_horizontal_only_where_the_label_is_measured(source, status):
-    """One rule: the full ball speed's input is exactly what the kiosk calls measured."""
+def test_the_full_ball_speed_takes_every_horizontal_the_policy_labels(source, status):
+    """One rule (fix 5): the full ball speed takes exactly the horizontals the label
+    policy labels (measured, estimated, experimental) and inherits the label; a table
+    estimate is not a launch angle."""
     value, reason = full_speed._horizontal_boresight(  # pylint: disable=protected-access
         2.0, source, status, "unit_boresight", None
     )
 
-    if horizontal_launch_label(source, status) == "measured":
-        assert (value, reason) == (2.0, None)
-    else:
+    if source == "estimated":
         assert value is None
         assert reason
+    else:
+        assert (value, reason) == (2.0, None)
 
 
 UNCALIBRATED_RADAR = {
@@ -337,6 +344,7 @@ def _uncalibrated_shot(**extra):
         club=ClubType.DRIVER,
         launch_angle_vertical=12.0,
         launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
         spin_rpm=2500.0,
         spin_confidence=0.9,
         spin_axis_deg=-3.0,

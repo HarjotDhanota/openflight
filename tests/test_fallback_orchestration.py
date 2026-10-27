@@ -188,6 +188,7 @@ def test_with_the_iwr_s_launch_the_radar_wins_and_the_camera_is_a_second_opinion
         scene,
         launch_angle_vertical=16.4,
         launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
         launch_angle_vertical_confidence=0.8,
     )
     shot.ball_range_m = 1.95
@@ -223,6 +224,7 @@ def test_without_a_camera_clip_the_radar_and_ops_still_resolve_everything_they_c
         scene,
         launch_angle_vertical=16.4,
         launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
         launch_angle_vertical_confidence=0.8,
     )
 

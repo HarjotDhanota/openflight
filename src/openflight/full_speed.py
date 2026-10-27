@@ -29,8 +29,8 @@ Refusals (status ``not_measured``, value None, with the reason):
   1 deg launch error (the D32 95th-percentile launch goal) already costs 1.0 %
   of speed, about 1-1.6 mph at 100-160 mph, the D32 95th-percentile budget for
   full ball speed; past 30 deg it grows quickly (40 deg: 1.5 %);
-- a launch angle is missing, estimated, low-coherence, in an unknown or mixed
-  frame, or an IWR horizontal with no phase reference;
+- a launch angle is missing, a table estimate, of a source no label covers, or in an
+  unknown or mixed frame;
 - a geometry source is missing: the rig file or its OPS offset, the tee range,
   the radar or ball height, or the setup's tee side offset (no ball is assumed
   dead ahead: that would be a filled-in value);
@@ -79,13 +79,16 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
 from .source_labels import (
     EXPERIMENTAL_LAUNCH_SOURCES,
-    LABEL_ESTIMATED,
     LABEL_EXPERIMENTAL,
+    LABEL_MEASURED,
+    WEAK_HORIZONTAL_SOURCES,
     launch_label,
+    launch_label_note,
 )
 
 CALCULATED = "calculated"
 ESTIMATED = "estimated"
+EXPERIMENTAL = "experimental"
 NOT_MEASURED = "not_measured"
 METHOD = "measured_projection_v1"
 BALL_SOURCE = "measured projection: OPS radial + measured launch + rig geometry"
@@ -141,11 +144,18 @@ UNMODELLED = (
 
 MEASURED_VERTICAL_SOURCES = frozenset({"radar", "camera"})
 MEASURED_HORIZONTAL_SOURCES = frozenset({"radar"})
-# Camera launches with no validated geometry (source_labels): the full speed is still
-# projected on them, labelled "estimated" with the reason, never "calculated", so no
-# simulator flies it (D31) and every place shows it as a weak value.
+# Exactly the launch sources the label policy labels (source_labels.launch_label): the
+# full speed is projected on each and takes its weakest input's label (fix 5, 25 Oct
+# 2026): calculated on measured inputs, estimated on an estimated one (an uncalibrated
+# azimuth, a configured tilt, a calibrated-lens camera fallback), experimental on an
+# experimental one (a failed gate, a nominal-lens camera value). Only a calculated one
+# is flown by a simulator (D31).
 VERTICAL_SOURCES = MEASURED_VERTICAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
-HORIZONTAL_SOURCES = MEASURED_HORIZONTAL_SOURCES | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
+HORIZONTAL_SOURCES = (
+    MEASURED_HORIZONTAL_SOURCES
+    | frozenset(WEAK_HORIZONTAL_SOURCES)
+    | frozenset(EXPERIMENTAL_LAUNCH_SOURCES)
+)
 # The side offset from this shot's resting ball (its camera bearing at its range), when
 # the setup measured none: a stand-in, labelled.
 CAMERA_SIDE_OFFSET_SOURCE = "camera_resting_ball"
@@ -153,6 +163,14 @@ CAMERA_SIDE_OFFSET_SOURCE = "camera_resting_ball"
 WEAK_RANGE_SOURCES = {
     "camera_prior": "the tee range is the camera prior's (coarse)",
     "camera_ball_size": "the tee range is the resting ball's own size (experimental)",
+}
+# Each stand-in range's label (the resting ball's size follows the chain's own label:
+# estimated through a calibrated lens, Q6), and the IWR's own launch point when it is
+# weaker than measured.
+_RANGE_LABELS = {"camera_prior": ESTIMATED, "camera_ball_size": EXPERIMENTAL}
+_IWR_RANGE_NOTES = {
+    "iwr_partial": "the tee range is from a partial IWR dump (estimated)",
+    "estimated": "the tee range is one two IWR tracks compete for (estimated)",
 }
 
 
@@ -333,16 +351,12 @@ def _horizontal_boresight(
     if not _finite(horizontal_deg):
         return None, "horizontal launch is not measured"
     if source not in HORIZONTAL_SOURCES:
-        return None, f"horizontal launch source {source!r} is not a measured horizontal launch"
+        return None, f"horizontal launch source {source!r} is not a labelled horizontal launch"
     implausible = implausible_launch_reason(horizontal_deg)
     if implausible is not None:
         return None, f"horizontal launch {implausible}"
-    if launch_label(source, status) == LABEL_ESTIMATED:
-        # the kiosk's own label: an uncalibrated azimuth is "estimated", never an input
-        return None, (
-            f"horizontal launch {source!r} is estimated: it has no horizontal phase reference "
-            f"({status})"
-        )
+    # an estimated or experimental horizontal is an input: the value takes its label
+    del status
     if frame == UNIT_BORESIGHT:
         return float(horizontal_deg), None
     if frame == TARGET_LINE:
@@ -373,12 +387,22 @@ def evaluate_full_ball_speed(
     tee_range_uncertainty_m: Any = None,
     tee_range_source: Any = None,
     tee_side_offset_source: Any = None,
+    tee_range_label: Any = None,
+    vertical_label: Optional[str] = None,
+    vertical_note: Optional[str] = None,
+    horizontal_label: Optional[str] = None,
+    horizontal_note: Optional[str] = None,
 ) -> dict:
     """Full ball speed at separation from one OPS reading, or not measured with the reason.
 
     ``tee_range_m`` is the shot's own range (13 Oct): its IWR launch point, or the
     camera prior labelled; ``tee_range_uncertainty_m`` widens the range's tolerance
     when it is larger than the stated 5 cm, and ``tee_range_source`` is recorded.
+
+    The value takes its weakest input's label: ``vertical_label`` and
+    ``horizontal_label`` (with their notes) are the kiosk's own
+    (``source_labels.shot_launch_label``), else the sources' alone
+    (``source_labels.launch_label``); ``tee_range_label`` is the range chain's.
     """
     inputs = {
         "vertical_deg": finite_float(vertical_deg),
@@ -566,17 +590,33 @@ def evaluate_full_ball_speed(
     }
     half_width = math.sqrt(sum(term**2 for term in budget.values()))
     bounded = math.isfinite(half_width)
-    weak = [
-        f"{name} launch from {EXPERIMENTAL_LAUNCH_SOURCES[source]} ({LABEL_EXPERIMENTAL})"
-        for name, source in (("vertical", vertical_source), ("horizontal", horizontal_source))
-        if source in EXPERIMENTAL_LAUNCH_SOURCES
-    ]
-    if tee_range_source in WEAK_RANGE_SOURCES:
-        weak.append(WEAK_RANGE_SOURCES[tee_range_source])
-    if tee_side_offset_source == CAMERA_SIDE_OFFSET_SOURCE:
-        weak.append("the side offset is the resting ball's camera bearing (experimental)")
+    labelled = _weak_inputs(
+        (
+            (
+                "vertical",
+                vertical_source,
+                vertical_label or launch_label(vertical_source),
+                vertical_note,
+            ),
+            (
+                "horizontal",
+                horizontal_source,
+                horizontal_label or launch_label(horizontal_source, horizontal_status),
+                horizontal_note
+                or launch_label_note(horizontal_source, horizontal_status),
+            ),
+        ),
+        tee_range_source=tee_range_source,
+        tee_range_label=tee_range_label,
+        tee_side_offset_source=tee_side_offset_source,
+    )
+    weak = [text for _label, text in labelled]
+    labels = {label for label, _text in labelled}
+    status = (
+        EXPERIMENTAL if EXPERIMENTAL in labels else ESTIMATED if labelled else CALCULATED
+    )
     return {
-        "status": ESTIMATED if weak else CALCULATED,
+        "status": status,
         "weak_inputs": weak,
         "note": "; ".join(weak) or None,
         "value_mph": value,
@@ -625,6 +665,37 @@ def evaluate_full_ball_speed(
         "unmodelled": list(UNMODELLED),
         "canonical_speed_contract": "ops_radial_unchanged",
     }
+
+
+def _weak_inputs(
+    launches, *, tee_range_source, tee_range_label, tee_side_offset_source
+) -> list[tuple[str, str]]:
+    """(label, why) of every input weaker than measured: a launch angle under its label,
+    a stand-in or weaker IWR range, the camera's side offset."""
+    weak = []
+    for name, source, label, note in launches:
+        if label in (None, LABEL_MEASURED):
+            continue
+        if source in EXPERIMENTAL_LAUNCH_SOURCES:
+            why = f"{name} launch from {EXPERIMENTAL_LAUNCH_SOURCES[source]} ({label})"
+            why = f"{why}: {note}" if note else why
+        else:
+            why = f"{name} launch {label} ({note or source})"
+        weak.append((EXPERIMENTAL if label == LABEL_EXPERIMENTAL else ESTIMATED, why))
+    if tee_range_source in WEAK_RANGE_SOURCES:
+        label = _RANGE_LABELS[tee_range_source]
+        why = WEAK_RANGE_SOURCES[tee_range_source]
+        if tee_range_source == "camera_ball_size" and tee_range_label == ESTIMATED:
+            label = ESTIMATED
+            why = "the tee range is the resting ball's own size through a calibrated lens (estimated)"
+        weak.append((label, why))
+    elif tee_range_label in _IWR_RANGE_NOTES:
+        weak.append((ESTIMATED, _IWR_RANGE_NOTES[tee_range_label]))
+    if tee_side_offset_source == CAMERA_SIDE_OFFSET_SOURCE:
+        weak.append(
+            (EXPERIMENTAL, "the side offset is the resting ball's camera bearing (experimental)")
+        )
+    return weak
 
 
 # ---------------------------------------------------------------- club

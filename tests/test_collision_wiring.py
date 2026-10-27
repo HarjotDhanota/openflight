@@ -18,7 +18,8 @@ from openflight.sim.types import PlayerState, UnmeasuredShotError
 
 
 def _delivered_shot(**overrides):
-    """A 7-iron with a measured launch, a camera-fused path and attack, and club speed."""
+    """A 7-iron with a measured launch, a measured camera-fused path and attack (the high
+    tier through a calibrated lens), and club speed."""
     values = {
         "ball_speed_mph": 120.0,
         "club_speed_mph": 85.0,
@@ -30,12 +31,15 @@ def _delivered_shot(**overrides):
         "launch_angle_horizontal_frame": "target_line",
         "launch_angle_vertical": 18.0,
         "launch_angle_vertical_source": "radar",
+        "inclinometer": {"applied_to": ["camera", "iwr6843"]},
         "experimental_fused_club_path_deg": -2.0,
         "experimental_fused_club_path_frame": "target_line",
         "experimental_fused_attack_angle_deg": -4.0,
         "experimental_fused_status": "chained_high",
-        "experimental_fused_attack_angle_confidence": "medium",
-        "experimental_fused_club_path_confidence": "medium",
+        # the high tier through a calibrated lens: measured inputs (camera_club_label)
+        "experimental_fused_attack_angle_confidence": "high",
+        "experimental_fused_club_path_confidence": "high",
+        "camera_lens_intrinsics": "calibrated",
     }
     values.update(overrides)
     return Shot(**values)
@@ -417,8 +421,8 @@ def test_a_camera_delivery_without_a_low_point_carries_the_contact_note():
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
     record = _spin_record(shot)
-    # built on the camera's club delivery (an inferred geometry): experimental (25 Oct)
-    assert record["status"] == "experimental"
+    # built on the camera's high-tier delivery through a calibrated lens: calculated
+    assert record["status"] == "calculated"
     assert record["value"] == pytest.approx(shot.spin_rpm_collision)
     assert record["note"].startswith(cm.NOTE_CONTACT)
     assert "no low point" in record["note"]
@@ -435,8 +439,8 @@ def test_without_camera_club_data_there_is_no_low_point_to_miss():
     for shot in (no_hook, no_camera):
         shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
         record = _spin_record(shot)
-        # built on the camera's club delivery (an inferred geometry): experimental (25 Oct)
-        assert record["status"] == "experimental"
+        # built on the camera's high-tier delivery through a calibrated lens: calculated
+        assert record["status"] == "calculated"
         assert cm.NOTE_CONTACT not in (record["note"] or "")
 
 

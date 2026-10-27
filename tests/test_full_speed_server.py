@@ -35,6 +35,7 @@ def _shot(**overrides):
         timestamp=datetime.now(),
         launch_angle_vertical=16.0,
         launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
         launch_angle_horizontal=2.0,
         launch_angle_horizontal_source="radar",
         launch_angle_horizontal_frame="unit_boresight",
@@ -174,13 +175,49 @@ def test_the_flight_model_s_field_is_none_when_not_measured(fusion_geometry):
     assert shot.ball_speed_full_mph is None
 
 
-def test_a_camera_launch_gives_an_estimated_full_speed_the_flight_still_uses(fusion_geometry):
-    """The camera fallback's launch: the full speed is projected, labelled, never sent."""
+def test_a_camera_launch_gives_an_experimental_full_speed_the_flight_still_uses(fusion_geometry):
+    """The camera fallback's launch on a nominal lens: the full speed is projected,
+    labelled experimental on the shot field as on the record, never sent."""
     shot = _shot(launch_angle_vertical_source="camera_fallback")
 
     server_module._attach_ball_speed_contract(shot)
 
-    assert shot.ball_speed_full["status"] == "estimated"
+    assert shot.ball_speed_full["status"] == "experimental"
+    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == "experimental"
     assert "camera fallback" in shot.ball_speed_full["note"]
     # the flight flies it, labelled by it; simulators take only a calculated one
     assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
+
+
+def test_an_uncalibrated_azimuth_gives_an_estimated_full_speed(fusion_geometry):
+    """Today's field state (IWR azimuth uncalibrated): resolved, labelled estimated."""
+    shot = _shot(
+        launch_angle_horizontal_status="azimuth_uncalibrated",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
+    )
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full["status"] == "estimated"
+    assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
+    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == "estimated"
+
+
+def test_a_configured_tilt_gives_an_estimated_full_speed(fusion_geometry):
+    shot = _shot(inclinometer=None)  # no LIS3DH reading applied to the IWR
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full["status"] == "estimated"
+    assert "tilt is the configured value" in shot.ball_speed_full["note"]
+
+
+def test_a_calibrated_lens_lifts_the_camera_fallback_full_speed_to_estimated(fusion_geometry):
+    shot = _shot(
+        launch_angle_vertical_source="camera_fallback",
+        camera_lens_intrinsics="calibrated",
+    )
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_full["status"] == "estimated"

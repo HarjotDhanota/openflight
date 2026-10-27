@@ -81,6 +81,7 @@ def _arc_shot(**overrides):
         "launch_angle_horizontal_frame": "target_line",
         "launch_angle_vertical": 18.0,
         "launch_angle_vertical_source": "radar",
+        "inclinometer": {"applied_to": ["camera", "iwr6843"]},
         "experimental_fused_status": "rejected_low_path_consensus",
         "club_delivery": _club_delivery(),
     }
@@ -152,8 +153,9 @@ def test_a_measured_path_wins_over_the_arc():
         experimental_fused_club_path_deg=3.0,
         experimental_fused_club_path_frame="target_line",
         experimental_fused_attack_angle_deg=-5.0,
-        experimental_fused_club_path_confidence="medium",
-        experimental_fused_attack_angle_confidence="medium",
+        experimental_fused_club_path_confidence="high",
+        experimental_fused_attack_angle_confidence="high",
+        camera_lens_intrinsics="calibrated",
     )
 
     _attach(shot)
@@ -228,6 +230,7 @@ def _model_geometry_shot(**overrides):
         "launch_angle_horizontal_source": "camera",
         "launch_angle_vertical": 18.0,
         "launch_angle_vertical_source": "radar",
+        "inclinometer": {"applied_to": ["camera", "iwr6843"]},
         "spin_rpm": 6400.0,
         "spin_source": "model_geometry",
         "spin_method": "impulse collision model; club inputs model geometry (D39)",
@@ -383,8 +386,9 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
     shot.experimental_fused_club_path_deg = -2.0
     shot.experimental_fused_club_path_frame = "target_line"
     shot.experimental_fused_attack_angle_deg = -4.0
-    shot.experimental_fused_club_path_confidence = "medium"
-    shot.experimental_fused_attack_angle_confidence = "medium"
+    shot.experimental_fused_club_path_confidence = "high"
+    shot.experimental_fused_attack_angle_confidence = "high"
+    shot.camera_lens_intrinsics = "calibrated"
     _attach(shot)
 
     assert shot.spin_source == "calculated"
@@ -487,8 +491,9 @@ def test_measured_and_calculated_inputs_still_fly_as_calculated():
         experimental_fused_club_path_deg=-2.0,
         experimental_fused_club_path_frame="target_line",
         experimental_fused_attack_angle_deg=-4.0,
-        experimental_fused_club_path_confidence="medium",
-        experimental_fused_attack_angle_confidence="medium",
+        experimental_fused_club_path_confidence="high",
+        experimental_fused_attack_angle_confidence="high",
+        camera_lens_intrinsics="calibrated",
     )
 
     result = _flight(shot)
@@ -577,6 +582,7 @@ def test_a_fusion_carry_on_a_measured_spin_says_the_flight_s_calculated():
         club=ClubType.DRIVER,
         launch_angle_vertical=12.0,
         launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
         launch_angle_horizontal=1.0,
         launch_angle_horizontal_source="radar",
         spin_rpm=2700.0,

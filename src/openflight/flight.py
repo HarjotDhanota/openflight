@@ -350,8 +350,11 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
     if speed_label.startswith("radial"):
         why = full.get("reason")
         reasons.append(RADIAL_SPEED_REASON.format(why or "no full ball speed on the shot"))
-    elif full.get("status") == STATUS_ESTIMATED:
-        reasons.append(f"full ball speed estimated ({full.get('note') or 'a weak input'})")
+    elif full.get("status") in (STATUS_ESTIMATED, "experimental"):
+        # an experimental full speed: estimated here, experimental in its records
+        reasons.append(
+            f"full ball speed {full.get('status')} ({full.get('note') or 'a weak input'})"
+        )
     # a camera launch with no validated geometry (source_labels): experimental, so the
     # flight is at best estimated here and shot_metrics labels it experimental
     for name, source in (

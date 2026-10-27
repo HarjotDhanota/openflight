@@ -22,17 +22,20 @@ from .source_labels import (
     LABEL_CALCULATED,
     LABEL_ESTIMATED,
     LABEL_EXPERIMENTAL,
+    LABEL_IWR_PARTIAL,
     LABEL_MEASURED,
     LABEL_MODEL_GEOMETRY,
 )
 
 LABEL_NOT_MEASURED = "not_measured"
-# strongest first
+# strongest first; iwr_partial (an IWR estimate from a partial dump's intact frames) is
+# weaker than estimated, and its records read "estimated" (source_labels.record_label)
 LABEL_ORDER = (
     LABEL_MEASURED,
     LABEL_CALCULATED,
     LABEL_MODEL_GEOMETRY,
     LABEL_ESTIMATED,
+    LABEL_IWR_PARTIAL,
     LABEL_EXPERIMENTAL,
     LABEL_NOT_MEASURED,
 )

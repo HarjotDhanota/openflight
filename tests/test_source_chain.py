@@ -128,6 +128,15 @@ def test_the_order_is_strongest_first():
         "calculated",
         "model_geometry",
         "estimated",
+        "iwr_partial",
         "experimental",
         "not_measured",
     )
+
+
+def test_a_partial_iwr_label_ranks_between_estimated_and_experimental():
+    assert "iwr_partial" in source_chain.LABEL_ORDER
+    assert weakest_label("measured", "iwr_partial") == "iwr_partial"
+    assert weakest_label("estimated", "iwr_partial") == "iwr_partial"
+    assert weakest_label("iwr_partial", "experimental") == "experimental"
+    Candidate(2.1, "iwr_partial", "iwr_post_impact")

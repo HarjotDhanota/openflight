@@ -109,6 +109,16 @@ def swing_pair(
             "reason": "the shot's ball range was not measured by the IWR "
             f"({shot_range.get('ball_range_source') or 'none'})",
         }
+    label = shot_range.get("ball_range_label")
+    if label not in (None, "measured"):
+        # only a measured launch point calibrates the tilt: not a partial dump's, not one
+        # two IWR tracks compete for
+        why = shot_range.get("ball_range_reason")
+        return {
+            **base,
+            "status": "skipped",
+            "reason": f"the IWR launch point is {label}" + (f" ({why})" if why else ""),
+        }
     range_m = shot_range.get("ball_range_m")
     uncertainty = shot_range.get("ball_range_uncertainty_m")
     if range_m is None or uncertainty is None:

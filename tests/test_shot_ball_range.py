@@ -70,3 +70,53 @@ def test_without_a_range_the_metric_is_not_measured_with_the_reason():
     assert record["value"] is None
     assert record["status"] == "not_measured"
     assert record["reason"] == "no IWR capture and no camera prior"
+
+
+PARTIAL = {
+    "ball_range_m": 1.91,
+    "ball_range_source": "iwr_post_impact",
+    "ball_range_uncertainty_m": 0.115,
+    "ball_range_label": "iwr_partial",
+    "ball_range_reason": "from a partial IWR dump: frames 40-52",
+}
+
+
+def test_a_partial_dump_range_is_estimated_with_its_reason_and_lowers_what_rests_on_it():
+    metrics = fusion_shot(**PARTIAL).to_dict()["metrics"]
+
+    record = metrics["ball_range"]
+    assert record["status"] == "estimated"
+    assert "partial IWR dump" in record["note"]
+    assert "frames 40-52" in record["note"]
+    for metric_id in ("launch_vertical", "ball_speed_full", "carry"):
+        assert metrics[metric_id]["status"] == "estimated", metric_id
+        assert "partial IWR dump" in (metrics[metric_id]["note"] or ""), metric_id
+    assert metrics["ball_speed"]["status"] == "measured"
+
+
+def test_a_configured_tee_constant_is_estimated():
+    record = fusion_shot(
+        ball_range_m=2.0, ball_range_source="configured_tee", ball_range_label="measured"
+    ).to_dict()["metrics"]["ball_range"]
+
+    assert record["status"] == "estimated"
+
+
+COMPETING = {
+    "ball_range_m": 2.10,
+    "ball_range_source": "iwr_post_impact",
+    "ball_range_uncertainty_m": 0.05,
+    "ball_range_label": "estimated",
+    "ball_range_reason": "two IWR tracks compete: launch points 2.10 m and 2.31 m; camera 2.12 m",
+}
+
+
+def test_an_iwr_range_two_tracks_compete_for_lowers_every_range_dependent_metric():
+    metrics = fusion_shot(**COMPETING).to_dict()["metrics"]
+
+    assert metrics["ball_range"]["status"] == "estimated"
+    assert "two IWR tracks compete" in metrics["ball_range"]["note"]
+    for metric_id in ("launch_vertical", "ball_speed_full", "carry"):
+        assert metrics[metric_id]["status"] == "estimated", metric_id
+        assert "two IWR tracks compete" in (metrics[metric_id]["note"] or ""), metric_id
+    assert metrics["ball_speed"]["status"] == "measured"

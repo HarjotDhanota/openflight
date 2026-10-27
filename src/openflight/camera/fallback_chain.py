@@ -23,11 +23,18 @@ from ..horizontal_frame import implausible_launch_reason
 from ..source_chain import Candidate, Resolution, Route, resolve
 from ..source_labels import (
     CAMERA_FALLBACK_SOURCE,
+    INTRINSICS_CALIBRATED,
+    IWR_COMPETING_NOTE,
+    IWR_PARTIAL_NOTE,
     LABEL_ESTIMATED,
     LABEL_EXPERIMENTAL,
+    LABEL_IWR_PARTIAL,
     LABEL_MEASURED,
     WEAK_HORIZONTAL_SOURCES,
+    HorizontalOption,
     launch_label,
+    prefers_horizontal,
+    shot_launch_label,
 )
 from . import ball_launch_fallback, resting_ball_range
 from .geometry import intersect_radar_range_sphere
@@ -42,6 +49,20 @@ RESTING_BALL_PITCH_SD_DEG = 1.0
 CALIBRATED_PITCH_SD_DEG = 0.5
 # Launch sources the radar route stands on (a measured camera's included).
 MEASURED_VERTICAL_SOURCES = ("radar", "camera")
+# mode_focal's source for a checkerboard-calibrated lens (lens_profiles: intrinsics
+# "calibrated"); resting_ball_range calls the same focal "unit_calibration".
+CALIBRATED_FOCAL_SOURCE = "lens_calibrated"
+SIZE_CALIBRATED_FOCAL_SOURCE = "unit_calibration"
+
+
+def size_range_label(focal_source: Optional[str], *, tape_checked: bool = False) -> str:
+    """The resting ball's size range's label (Q6, 25 Oct 2026): estimated through a
+    calibrated lens, experimental through a nominal one. ``tape_checked`` is the hook for
+    the future validation flag: a calibrated size range checked against a tape is
+    measured. Nothing sets it yet."""
+    if focal_source != SIZE_CALIBRATED_FOCAL_SOURCE:
+        return LABEL_EXPERIMENTAL
+    return LABEL_MEASURED if tape_checked else LABEL_ESTIMATED
 
 
 def finite(value: Any) -> bool:
@@ -74,11 +95,19 @@ def ball_range_resolution(
         if shot_range.get("ball_range_source") == IWR_RANGE_SOURCE and finite(
             shot_range.get("ball_range_m")
         ):
+            # the IWR range keeps its own label and says why: a partial dump
+            # (iwr_partial) or two tracks competing for the launch point (estimated)
+            label = shot_range.get("ball_range_label")
+            label = label if label in (LABEL_IWR_PARTIAL, LABEL_ESTIMATED) else LABEL_MEASURED
+            default = IWR_PARTIAL_NOTE if label == LABEL_IWR_PARTIAL else IWR_COMPETING_NOTE
             return Candidate(
                 float(shot_range["ball_range_m"]),
-                LABEL_MEASURED,
+                label,
                 IWR_RANGE_SOURCE,
                 uncertainty=_number_or_none(shot_range.get("ball_range_uncertainty_m")),
+                note=(shot_range.get("ball_range_reason") or default)
+                if label != LABEL_MEASURED
+                else None,
             )
         return shot_range.get("ball_range_reason") or "no IWR launch point on this shot"
 
@@ -112,7 +141,7 @@ def ball_range_resolution(
             return record.get("reason") or str(record.get("status"))
         return Candidate(
             float(record["slant_range_m"]),
-            LABEL_EXPERIMENTAL,
+            size_range_label(record.get("focal_source")),
             SIZE_RANGE_SOURCE,
             uncertainty=float(record["uncertainty_m"]),
             note=record.get("note"),
@@ -152,7 +181,12 @@ def apply_ball_range(shot: Any, resolution: Resolution) -> None:
     shot.ball_range_uncertainty_m = resolution.uncertainty
     shot.ball_range_label = resolution.label
     shot.ball_range_reason = (
-        f"{earlier}; {resolution.route} stands in" if earlier and resolution.tried else None
+        f"{earlier}; {resolution.route} stands in"
+        if earlier and resolution.tried
+        # a weaker-than-measured IWR winner keeps why (a partial dump, competing tracks)
+        else resolution.note
+        if resolution.route == IWR_RANGE_SOURCE and resolution.label != LABEL_MEASURED
+        else None
     )
 
 
@@ -251,9 +285,18 @@ def first_post_index(archive: Mapping[str, Any], frame_count: int) -> int:
 def mode_focal(
     width_px: int, *, lens: Optional[Mapping[str, Any]], rig: Any
 ) -> tuple[Optional[float], Optional[str], float]:
-    """This mode's focal length, its source and relative 1-sigma: the lens record's, else
-    the rig file's (both listed, not calibrated: +-8 %)."""
+    """This mode's focal length, its source and relative 1-sigma: the lens record's (its
+    checkerboard calibration's when it has one: the calibration's own stated sigma, else
+    +-2 %; else the listing's, +-8 %), else the rig file's (listed: +-8 %)."""
     focal = lens_record_focal_px(lens, width_px)
+    if focal is not None and lens.get("intrinsics") == INTRINSICS_CALIBRATED:
+        stated = lens.get("focal_rel_sd")
+        sigma = (
+            float(stated)
+            if finite(stated) and float(stated) > 0
+            else resting_ball_range.CALIBRATED_FOCAL_REL_SD
+        )
+        return focal, CALIBRATED_FOCAL_SOURCE, sigma
     if focal is not None:
         return focal, "lens_nominal", resting_ball_range.NOMINAL_FOCAL_REL_SD
     if rig is not None and finite(getattr(rig, "focal_px", None)):
@@ -446,12 +489,23 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
 
 
 def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict[str, Resolution]:
-    """The vertical and horizontal launch: the shot's sensors, else the camera fallback."""
+    """The vertical and horizontal launch: the shot's sensors, else the camera fallback.
+
+    Each value carries the policy's label (``source_labels.shot_launch_label``): the
+    camera fallback is estimated through a calibrated lens, else experimental; a
+    low-coherence or low-consensus horizontal is experimental (Q3). The horizontal routes
+    are ranked by ``source_labels.prefers_horizontal`` (Q5): an experimental value never
+    outranks one that is not, attached sigmas decide where both have one, else the
+    radar's wins.
+    """
     accepted = isinstance(fallback, Mapping) and fallback.get("status") == "accepted"
     why_not = (
         "the camera fallback did not run"
         if not isinstance(fallback, Mapping)
         else fallback.get("reason") or str(fallback.get("status"))
+    )
+    fallback_label = launch_label(
+        CAMERA_FALLBACK_SOURCE, intrinsics=getattr(shot, "camera_lens_intrinsics", None)
     )
 
     def fallback_route(key: str, sd_key: str):
@@ -460,7 +514,7 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
                 return why_not
             return Candidate(
                 float(fallback[key]),
-                LABEL_EXPERIMENTAL,
+                fallback_label,
                 CAMERA_FALLBACK_SOURCE,
                 uncertainty=_number_or_none(fallback.get(sd_key)),
                 note=f"camera fallback ({fallback.get('n_points')} ball points)",
@@ -471,7 +525,8 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
     def vertical_sensor():
         source = getattr(shot, "launch_angle_vertical_source", None)
         if source in MEASURED_VERTICAL_SOURCES and finite(shot.launch_angle_vertical):
-            return Candidate(float(shot.launch_angle_vertical), LABEL_MEASURED, source)
+            label, note = shot_launch_label(shot, "vertical")
+            return Candidate(float(shot.launch_angle_vertical), label, source, note=note)
         return getattr(shot, "launch_angle_vertical_reason", None) or (
             "no radar vertical launch on this shot"
         )
@@ -488,16 +543,18 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
             if implausible is not None:
                 return f"{source} {implausible}"
             if (source in WEAK_HORIZONTAL_SOURCES) != weak:
-                return (
-                    f"{WEAK_HORIZONTAL_SOURCES[source]} {source}: the camera fallback outranks it"
-                    if not weak
-                    else "taken by a stronger route"
-                )
-            status = getattr(shot, "launch_angle_horizontal_status", None)
-            return Candidate(float(value), launch_label(source, status), source)
+                return "a weak sensor horizontal (its own route)" if not weak else "not weak"
+            label, note = shot_launch_label(shot, "horizontal")
+            return Candidate(float(value), label, source, note=note)
 
         return route
 
+    horizontal_routes = [
+        Route("sensor", sensor_horizontal(weak=False)),
+        Route(CAMERA_FALLBACK_SOURCE, fallback_route("horizontal_deg", "horizontal_sd_deg")),
+        # a low-coherence or low-consensus horizontal: shown, labelled experimental
+        Route("weak_sensor", sensor_horizontal(weak=True)),
+    ]
     return {
         "launch_vertical": resolve(
             "launch_vertical",
@@ -506,19 +563,31 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
                 Route(CAMERA_FALLBACK_SOURCE, fallback_route("vertical_deg", "vertical_sd_deg")),
             ],
         ),
-        "launch_horizontal": resolve(
-            "launch_horizontal",
-            [
-                Route("sensor", sensor_horizontal(weak=False)),
-                Route(
-                    CAMERA_FALLBACK_SOURCE,
-                    fallback_route("horizontal_deg", "horizontal_sd_deg"),
-                ),
-                # a low-coherence or low-consensus horizontal: shown, labelled estimated
-                Route("weak_sensor", sensor_horizontal(weak=True)),
-            ],
-        ),
+        "launch_horizontal": resolve("launch_horizontal", _ranked(horizontal_routes)),
     }
+
+
+def _ranked(routes: list[Route]) -> list[Route]:
+    """The routes with the one ``prefers_horizontal`` picks among those that give a value
+    first; the others keep their order behind it (they run only if it fails)."""
+    best, best_option = None, None
+    for route in routes:
+        try:
+            outcome = route.produce()
+        except Exception:  # pylint: disable=broad-exception-caught
+            continue  # resolve() records the error when it runs the route
+        if not isinstance(outcome, Candidate) or not finite(outcome.value):
+            continue
+        option = HorizontalOption(
+            label=outcome.label,
+            sigma_deg=outcome.uncertainty,
+            radar=str(outcome.source or "").startswith("radar"),
+        )
+        if prefers_horizontal(option, over=best_option):
+            best, best_option = route, option
+    if best is None:
+        return routes
+    return [best, *(route for route in routes if route is not best)]
 
 
 __all__ = [

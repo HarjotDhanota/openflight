@@ -3664,6 +3664,7 @@ class OnShotDetectedHelpers:
             launch_angle_horizontal_confidence=horizontal_confidence,
             launch_angle_vertical=14.0,
             launch_angle_vertical_source="radar",
+            inclinometer={"applied_to": ["camera", "iwr6843"]},
             club_path_deg=-1.5,
             club_angle_deg=2.0,
         )

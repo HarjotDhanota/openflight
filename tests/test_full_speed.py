@@ -340,12 +340,7 @@ def test_a_ball_moving_toward_the_ops_is_refused():
         ({"vertical_deg": float("nan")}, "vertical launch"),
         ({"horizontal_deg": None}, "horizontal launch"),
         ({"horizontal_source": "estimated"}, "horizontal launch"),
-        ({"horizontal_source": "radar_low_coherence"}, "horizontal launch"),
-        ({"horizontal_source": "camera_low_consensus"}, "horizontal launch"),
-        (
-            {"horizontal_source": "radar", "horizontal_status": "azimuth_uncalibrated"},
-            "phase reference",
-        ),
+        ({"horizontal_source": "kld7"}, "horizontal launch"),
         ({"horizontal_frame": "mixed"}, "frame"),
         ({"horizontal_frame": None}, "frame"),
         ({"rig": None}, "rig"),
@@ -526,23 +521,81 @@ def test_an_unbounded_range_is_none_never_infinite(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "override, words",
+    "override, words, label",
     [
-        ({"vertical_source": "camera_fallback"}, "vertical launch from camera fallback"),
-        ({"horizontal_source": "camera_fallback"}, "horizontal launch from camera fallback"),
-        ({"horizontal_source": "camera_assisted_experimental"}, "camera horizontal"),
-        ({"tee_range_source": "camera_ball_size"}, "resting ball's own size"),
-        ({"tee_range_source": "camera_prior"}, "camera prior"),
+        # a nominal lens: the camera's launch is experimental, and so is what rests on it
+        (
+            {"vertical_source": "camera_fallback"},
+            "vertical launch from camera fallback",
+            "experimental",
+        ),
+        (
+            {"horizontal_source": "camera_fallback"},
+            "horizontal launch from camera fallback",
+            "experimental",
+        ),
+        ({"horizontal_source": "camera_assisted_experimental"}, "camera horizontal", "experimental"),
+        # Q3: a horizontal that failed its own gate is experimental, and feeds on
+        ({"horizontal_source": "radar_low_coherence"}, "low-coherence", "experimental"),
+        ({"horizontal_source": "camera_low_consensus"}, "low-consensus", "experimental"),
+        # an estimated horizontal resolves, estimated (fix 5)
+        (
+            {"horizontal_source": "radar", "horizontal_status": "azimuth_uncalibrated"},
+            "azimuth uncalibrated",
+            "estimated",
+        ),
+        ({"tee_range_source": "camera_ball_size"}, "resting ball's own size", "experimental"),
+        ({"tee_range_source": "camera_prior"}, "camera prior", "estimated"),
+        (
+            {"tee_range_source": "iwr_post_impact", "tee_range_label": "iwr_partial"},
+            "partial IWR dump",
+            "estimated",
+        ),
+        (
+            {"tee_range_source": "iwr_post_impact", "tee_range_label": "estimated"},
+            "two IWR tracks compete",
+            "estimated",
+        ),
     ],
 )
-def test_a_camera_launch_or_a_stand_in_range_makes_the_full_speed_estimated(override, words):
-    """The value is projected, never calculated: no simulator flies it (D31)."""
+def test_a_weaker_input_gives_the_full_speed_its_label(override, words, label):
+    """The value is projected, labelled by its weakest input: no simulator flies it (D31)."""
     result = _evaluate(_track(120.0, 16.0, 2.0), **override)
 
-    assert result["status"] == "estimated"
+    assert result["status"] == label
     assert result["value_mph"] is not None
     assert words in result["note"]
     assert any(words in item for item in result["weak_inputs"])
+
+
+def test_the_caller_s_policy_labels_decide_the_full_speed_label():
+    """The kiosk hands its own labels in (source_labels.shot_launch_label): a calibrated
+    lens lifts the camera fallback to estimated; a configured tilt lowers the radar's."""
+    calibrated = _evaluate(
+        _track(120.0, 16.0, 2.0),
+        horizontal_source="camera_fallback",
+        horizontal_label="estimated",
+        horizontal_note="camera fallback through a calibrated lens",
+    )
+    tilt = _evaluate(
+        _track(120.0, 16.0, 2.0),
+        vertical_label="estimated",
+        vertical_note="tilt is the configured value, not measured",
+    )
+
+    assert calibrated["status"] == "estimated"
+    assert tilt["status"] == "estimated"
+    assert "tilt is the configured value" in tilt["note"]
+
+
+def test_the_weakest_input_wins_experimental_over_estimated():
+    result = _evaluate(
+        _track(120.0, 16.0, 2.0),
+        horizontal_source="radar_low_coherence",
+        tee_range_source="camera_prior",
+    )
+
+    assert result["status"] == "experimental"
 
 
 def test_a_measured_launch_on_the_shot_s_own_range_stays_calculated():
