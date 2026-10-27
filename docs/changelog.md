@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The OPS sound-trigger hardware test defaults to the Pi GPIO UART.**
+  `scripts/hardware-test/test_sound_trigger.py` now uses `/dev/ttyAMA0`
+  when `--port` is omitted. For USB, pass the device explicitly, for example
+  `--port /dev/ttyACM0`.
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and
   a successful `npm install` before the kiosk can start. Old Node or a failed
