@@ -235,6 +235,8 @@ kiosk uses when present. Both are generated from the server's list:
 ```bash
 uv run python -m openflight.shot_metrics > ui/src/data/metricCatalog.shotModels.json
 uv run python -c "import json, openflight.shot_metrics as sm; sm._modules_loaded = True; print(json.dumps(sm.catalog(), indent=2))" > ui/src/data/metricCatalog.json
+cd ui
+npx prettier --write src/data/metricCatalog.json src/data/metricCatalog.shotModels.json
 ```
 
 `tests/test_shot_metrics.py` and `tests/test_shot_metrics_registry.py` fail when

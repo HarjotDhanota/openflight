@@ -69,7 +69,13 @@ describe('ball distance in the Flight details', () => {
   ])('says %s', (_name, overrides, value, words) => {
     const html = cell(
       renderToString(
-        <MetricGroupPanel view="flight" shot={shot(ballRange(overrides))} profileName="H" clubLabel="7" unitSystem="imperial" />
+        <MetricGroupPanel
+          view="flight"
+          shot={shot(ballRange(overrides))}
+          profileName="H"
+          clubLabel="7"
+          unitSystem="imperial"
+        />
       )
     );
     expect(html).toContain(value);
