@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
+from openflight.iwr6843.command_acceptance import CommandAcceptanceError
 from openflight.iwr6843.two_round import (
     TwoRoundClient,
     TwoRoundError,
@@ -25,7 +26,11 @@ class _WireLog:
         self.attempts = []
 
     def write(self, data):
-        count = self.port.write(data)
+        try:
+            count = self.port.write(data)
+        except CommandAcceptanceError as error:
+            self.written += error.written_bytes
+            raise
         self.written += len(data) if count is None else count
         return count
 
@@ -69,6 +74,9 @@ class WorkerTwoRound:
                     except TwoRoundRemoteError as error:
                         failure = error
                         raise
+                    except CommandAcceptanceError as error:
+                        failure = error
+                        raise
                     except TwoRoundError as error:
                         failure = error
                         failed_payloads.append(bytes(wire.received[received_before:]))
@@ -83,6 +91,7 @@ class WorkerTwoRound:
                         }
                         if failure is not None:
                             row["error"] = str(failure)
+                            row["received_bytes"] += len(getattr(failure, "raw", b""))
                         wire.attempts.append(row)
             elif op == "two_round_cells":
                 cells = decode_request(
@@ -103,8 +112,10 @@ class WorkerTwoRound:
             else:
                 raise TwoRoundError(f"unknown two-round operation: {op}")
         except Exception as error:
-            if not isinstance(error, TwoRoundError):
+            extra_raw = getattr(error, "raw", b"")
+            if not isinstance(error, (TwoRoundError, CommandAcceptanceError)):
                 error = TwoRoundError(f"{type(error).__name__}: {error}")
+            wire.received.extend(extra_raw)
             error.raw = bytes(wire.received)
             error.timing = self._timing(op, started, wire)
             raise error
@@ -190,7 +201,7 @@ class SerialTwoRoundLink:
             if timing is not None:
                 timing = {**timing, "error": str(error), "partial_protocol_bytes": len(raw)}
                 self.exchanges.append(timing)
-            if isinstance(error, TwoRoundError):
+            if isinstance(error, (TwoRoundError, CommandAcceptanceError)):
                 raise
             raise TwoRoundError(str(error)) from error
         self.exchanges.append(reply["timing"])

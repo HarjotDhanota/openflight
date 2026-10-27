@@ -1,6 +1,6 @@
 # Fast mode: impact through displayed result
 
-Prepared 27 October 2026. Software instrumentation only; no new Pi run or physical
+Prepared 27 October 2026. Software instrumentation and checks; no physical
 impact-to-screen result is claimed. The two-second goal never drops a metric.
 
 Use the existing `--pi-trace` recorder, browser clock exchange and visible-result
@@ -31,7 +31,8 @@ This branch adds research-only observations:
 - Sensor-readiness samples associated with an unchanged GATE sequence. A poll
   spanning a new edge cannot associate its previous state with that edge.
 
-No estimator, trigger default, serial ordering or firmware changes are made.
+The estimator, trigger defaults and firmware are unchanged. The optional command
+handshake below changes how a CLI line is submitted, without reordering commands.
 The established Pi trace stage contract and core-eligibility verdict stay intact.
 
 ## Capture procedure
@@ -140,6 +141,39 @@ The focused group passed 90 tests on desktop and 90 on the Pi, with all 749
 staged file hashes verified. The Pi run opened no UART and performed no RF test.
 
 The successful stationary hardware diagnostic used a scratch first-byte echo
-handshake. That adapter is not yet part of the production worker. Verify that
-transport difference before claiming the production path is hardware-qualified;
-software equivalence does not qualify command acceptance or shot-to-display time.
+handshake. The production implementation below still needs a supervised hardware
+comparison; software equivalence does not qualify command acceptance or
+shot-to-display time.
+
+## Optional command acceptance handshake
+
+Append `--iwr6843-command-handshake` to the existing kiosk configuration to enable
+the experimental transport. It defaults off and requires character-echo firmware.
+The runtime configuration records the selection. It applies to auto-detection,
+configuration, support/health queries, Full dumps and Fast overview/cells/release
+on the same exclusively owned Enhanced UART. It does not open Standard.
+
+Each command sends one character, waits for its matching echo, then submits the
+remainder. The consumed echo is buffered for the original response reader,
+preserving the stream once. An echo is an early acceptance check, not proof the
+whole command completed: normal acknowledgements, CRC/session checks and release
+acknowledgement still apply. The commands remain ASCII lines of at most 255 bytes.
+
+The acceptance budget is one second, subject to the fixed serial read timeout;
+an echo returned at or after the deadline is refused. Read and write timeouts
+must be positive and at most one second. An unset write timeout is set once to
+0.25 s on enabling the adapter; reads do not reconfigure the port. These are
+software limits, not measured sensor latency or synchronization accuracy.
+
+Missing/wrong echoes and short/failed writes make the connection unusable for
+further commands. The remainder is withheld when the first character fails;
+there is no automatic retry or input flush to guess a new command boundary.
+Reset/recovery is required before reconnecting. Failure bytes and serial-write
+return counts cross the child-process boundary. Command-acceptance events retain
+host brackets, echo identity and whether the remainder write was called. Returned
+write counts do not independently prove physical UART delivery.
+
+The broader command/driver/worker/monitor/runtime/server group passed 496 tests
+on desktop and 496 on the Pi, with one absent historical-session-log skip each.
+All 753 staged source hashes matched. The Pi run used synthetic devices only;
+neither UART was opened, and hardware command acceptance remains unqualified.

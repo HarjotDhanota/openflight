@@ -575,13 +575,17 @@ class TestIWR6843ShotIntegration:
         server_module.iwr6843_runtime = None
 
     @pytest.mark.parametrize("transfer", [None, "full", "two_round"])
+    @pytest.mark.parametrize("command_handshake", [False, True])
     def test_init_iwr6843_transfer_is_the_full_dump_unless_asked(
-        self, monkeypatch, tmp_path, transfer
+        self, monkeypatch, tmp_path, transfer, command_handshake
     ):
         """The two-round transfer is off unless asked for, and the runtime config says which."""
 
+        options = []
+
         class FakeCaptureMonitor:
             def __init__(self, **kwargs):
+                options.append(kwargs)
                 self.port = "/dev/ttyUSB0"
 
             def start(self, *, armed=True):
@@ -598,6 +602,7 @@ class TestIWR6843ShotIntegration:
         config_path.write_text("profileCfg 0\n", encoding="utf-8")
         calibration_path.write_text("{}", encoding="utf-8")
         kwargs = {} if transfer is None else {"transfer": transfer}
+        kwargs["command_handshake"] = command_handshake
 
         assert server_module.init_iwr6843(
             port="/dev/ttyUSB0",
@@ -617,12 +622,16 @@ class TestIWR6843ShotIntegration:
         expected = transfer or "full"
         assert server_module.iwr6843_runtime.transfer == expected
         assert server_module.iwr6843_runtime_config["transfer"] == expected
+        assert server_module.iwr6843_runtime_config["command_handshake"] is command_handshake
+        assert options[0].get("command_handshake", False) is command_handshake
         server_module.iwr6843_runtime = None
 
     def test_cli_iwr6843_transfer_defaults_to_the_full_dump(self):
         parser = server_module.build_parser()
 
         assert parser.parse_args([]).iwr6843_transfer is None
+        assert parser.parse_args([]).iwr6843_command_handshake is False
+        assert parser.parse_args(["--iwr6843-command-handshake"]).iwr6843_command_handshake is True
         assert (
             parser.parse_args(["--iwr6843-transfer", "two_round"]).iwr6843_transfer == "two_round"
         )

@@ -33,6 +33,7 @@ import sys
 import threading
 from typing import Any, BinaryIO, Callable
 
+from openflight.iwr6843.command_acceptance import CommandAcceptanceError
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError
 from openflight.iwr6843.driver import BAUD, DumpTransferTiming, IWR6843DumpRecoveryError
 from openflight.iwr6843.serial_two_round import (
@@ -87,12 +88,14 @@ def _read_frame(stream: BinaryIO) -> tuple[dict, bytes] | None:
 
 def _error_reply(error: BaseException) -> tuple[dict, bytes]:
     reply: dict[str, Any] = {"ok": False, "error_type": type(error).__name__, "error": str(error)}
+    if isinstance(error, CommandAcceptanceError):
+        reply["acceptance_written_bytes"] = error.written_bytes
     if isinstance(error, IWR6843DeviceBusyError):
         reply.update(port=error.port, owner=error.owner)
     if isinstance(error, IWR6843DumpRecoveryError):
         reply["timing"] = error.timing.to_dict() if error.timing is not None else None
         return reply, bytes(error.raw or b"")
-    if isinstance(error, TwoRoundError):
+    if isinstance(error, (TwoRoundError, CommandAcceptanceError)):
         reply["timing"] = getattr(error, "timing", None)
         return reply, getattr(error, "raw", b"")
     return reply, b""
@@ -100,6 +103,10 @@ def _error_reply(error: BaseException) -> tuple[dict, bytes]:
 
 def _remote_error(reply: dict, payload: bytes) -> Exception:
     kind, message = reply.get("error_type"), str(reply.get("error"))
+    if kind == "CommandAcceptanceError":
+        error = CommandAcceptanceError(message, payload, reply.get("acceptance_written_bytes", 0))
+        error.timing = reply.get("timing")
+        return error
     if kind in ("TwoRoundError", "TwoRoundRemoteError"):
         error = (TwoRoundRemoteError if kind == "TwoRoundRemoteError" else TwoRoundError)(message)
         error.raw, error.timing = payload, reply.get("timing")

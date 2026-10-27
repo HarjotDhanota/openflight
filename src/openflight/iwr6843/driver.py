@@ -25,6 +25,7 @@ from typing import Any
 
 import serial
 
+from openflight.iwr6843.command_acceptance import CommandAcceptancePort
 from openflight.iwr6843.device_lock import IWR6843DeviceBusyError, IWR6843DeviceLock
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
 from openflight.iwr6843.transfer_mode import help_lists_two_round, unsupported_reason
@@ -179,12 +180,19 @@ class IWR6843Radar:
     """CLI + dump transport for the custom L3-dump firmware."""
 
     def __init__(
-        self, port: str | None = None, baud: int = BAUD, *, events: list[dict] | None = None
+        self,
+        port: str | None = None,
+        baud: int = BAUD,
+        *,
+        events: list[dict] | None = None,
+        command_handshake: bool = False,
     ):
         """Own the CLI port; ``events`` collects each ownership step, even on failure."""
         self._events = events
         if port is None:
-            port, probes = self.probe_ports(baud, events=events)
+            port, probes = self.probe_ports(
+                baud, events=events, **({"command_handshake": True} if command_handshake else {})
+            )
             if port is None:
                 detail = "; ".join(probes) or "no serial candidates"
                 raise RuntimeError(
@@ -203,6 +211,12 @@ class IWR6843Radar:
         _record(events, "lock_acquired", port)
         try:
             self.ser = open_port(port, baud)
+            if command_handshake:
+                try:
+                    self.ser = CommandAcceptancePort(self.ser, events=events, now=time.monotonic_ns)
+                except BaseException:
+                    _close_port(self.ser, port, events)
+                    raise
         except BaseException as error:
             _record(events, "open_failed", port, error=str(error))
             self._device_lock.release()
@@ -217,7 +231,7 @@ class IWR6843Radar:
 
     @staticmethod
     def probe_ports(
-        baud: int = BAUD, *, events: list[dict] | None = None
+        baud: int = BAUD, *, events: list[dict] | None = None, command_handshake: bool = False
     ) -> tuple[str | None, list[str]]:
         """Probe candidates, CP2105 Enhanced first; also return what each one did."""
         candidates: list[str] = []
@@ -255,6 +269,8 @@ class IWR6843Radar:
                     continue
                 _record(events, "opened", cand)
                 try:
+                    if command_handshake:
+                        ser = CommandAcceptancePort(ser, events=events, now=time.monotonic_ns)
                     resp = _probe_help(ser, cand, events)
                 except (OSError, serial.SerialException) as error:
                     probes.append(f"{label}: I/O error during help ({error})")

@@ -249,13 +249,14 @@ def test_failed_cells_are_kept_even_when_retry_succeeds(live_monitor, tmp_path):
 
 @pytest.mark.parametrize("corrupt_cells", [0, 1, 2])
 @pytest.mark.parametrize("tee_range_m", [None, 1.5])
+@pytest.mark.parametrize("command_handshake", [False, True])
 def test_monitor_child_and_real_estimator_match_full_synthetic_shot(
-    live_monitor, ball_dump, tmp_path, tee_range_m, corrupt_cells
+    live_monitor, ball_dump, tmp_path, tee_range_m, corrupt_cells, command_handshake
 ):
     raw_path = tmp_path / "ball.l3dump"
     raw_path.write_bytes(ball_dump)
     monitor, radar, runtime, _events = live_monitor(
-        raw_path=str(raw_path), corrupt_cells=corrupt_cells
+        raw_path=str(raw_path), corrupt_cells=corrupt_cells, command_handshake=command_handshake
     )
     runtime.calibration = _calibration(tee_range_m)
     edge = time.time()

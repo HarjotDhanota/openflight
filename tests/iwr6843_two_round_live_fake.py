@@ -3,8 +3,10 @@
 import time
 from pathlib import Path
 
+from openflight.iwr6843.command_acceptance import CommandAcceptancePort
 from openflight.iwr6843.driver import DumpTransferTiming
 from openflight.iwr6843.two_round_sim import SimulatedIWR6843TwoRound, SimulatedSerial
+from tests.iwr6843_character_port import CharacterPort
 
 
 class Radar:
@@ -20,6 +22,8 @@ class Radar:
         corrupt_overviews=0,
         corrupt_cells=0,
         echo=False,
+        command_handshake=False,
+        acceptance_failure_on=None,
     ):
         self.port = port or "fake-two-round"
         self.events = events
@@ -48,6 +52,20 @@ class Radar:
             return original_write(data)
 
         self.ser.write = write
+        if command_handshake:
+            self.model.echo = False
+            binary = self.ser
+
+            def reply(line):
+                binary.write(line)
+                return binary.read(2_000_000)
+
+            raw = CharacterPort(
+                reply,
+                failure="wrong_echo" if acceptance_failure_on else None,
+                fail_first=acceptance_failure_on.encode() if acceptance_failure_on else None,
+            )
+            self.ser = CommandAcceptancePort(raw, events=events)
 
     def two_round_support(self):
         return {"supported": True, "reason": None}

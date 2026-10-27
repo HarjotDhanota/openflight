@@ -3017,6 +3017,7 @@ def init_iwr6843(
     lateral_tee_offset_m: float = 0.0,
     board_rotation_deg: float | None = None,
     transfer: str = "full",
+    command_handshake: bool = False,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the LCMF launch estimator.
 
@@ -3071,6 +3072,7 @@ def init_iwr6843(
             port=port,
             gpio_pin=trigger_pin,
             save_dumps=save_dumps,
+            **({"command_handshake": True} if command_handshake else {}),
             gate_event_observers=(
                 [camera_capture_runtime.notify_gate_event]
                 if camera_capture_runtime is not None
@@ -3119,6 +3121,7 @@ def init_iwr6843(
         )
         iwr6843_runtime_config = {
             "enabled": True,
+            "command_handshake": command_handshake,
             "estimator": lcmf.NAME,
             "antenna_layout": calibration.antennas.as_dict(),
             "tee_range_status": (
@@ -8995,6 +8998,14 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--iwr6843-command-handshake",
+        action="store_true",
+        help=(
+            "Require first-character CLI echo before each IWR command "
+            "(experimental; echo firmware only)"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-transfer",
         choices=("full", "two_round"),
         default=None,
@@ -9443,6 +9454,7 @@ def main():
             lateral_tee_offset_m=_rig_tee_lateral_offset_m(),
             board_rotation_deg=enclosure.iwr_board_rotation_deg,
             transfer=initial_iwr6843_transfer(args)[0],
+            command_handshake=getattr(args, "iwr6843_command_handshake", False),
         ):
             iwr6843_runtime_config["session_kind"] = initial_iwr6843_transfer(args)[1]
             print(

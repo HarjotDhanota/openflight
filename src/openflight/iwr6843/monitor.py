@@ -126,13 +126,17 @@ class IWR6843CaptureMonitor:
         save_dumps: bool = False,
         trigger_observers: list[Callable[[float], None]] | None = None,
         gate_event_observers: list[Callable[[GateEvent], None]] | None = None,
+        command_handshake: bool = False,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
         self.gpio_pin = gpio_pin
         self.match_tolerance_s = match_tolerance_s
         self.save_dumps = save_dumps
-        self.radar = radar or IWR6843SerialProcess(port=port)
+        self.radar = radar or IWR6843SerialProcess(
+            port=port,
+            **({"factory_kwargs": {"command_handshake": True}} if command_handshake else {}),
+        )
         self._button_factory = button_factory
         self._button = None
         self._running = False

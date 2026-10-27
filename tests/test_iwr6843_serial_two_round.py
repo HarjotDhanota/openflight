@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from openflight.iwr6843.command_acceptance import CommandAcceptanceError
+from openflight.iwr6843.dump import parse_dump
 from openflight.iwr6843.serial_process import IWR6843SerialProcess
 from openflight.iwr6843.two_round import (
     TwoRoundError,
@@ -195,3 +197,40 @@ def test_exhausted_overview_retries_keep_both_attempts_and_hold_session(live_rad
     assert radar.busy
     with pytest.raises(RuntimeError, match="held"):
         radar.stats()
+
+
+def test_handshake_child_runs_real_binary_rounds_and_keeps_acceptance_events(live_radar):
+    radar, events = live_radar(command_handshake=True)
+    link = radar.begin_two_round()
+    result, transfer = run_two_round(link, lambda raw: parse_dump(raw)[1][0, 0, 0, 0])
+    assert result is not None and transfer.released and not radar.busy
+    rows = [row for row in events if row["event"] == "command_acceptance"]
+    assert [row["command"].split()[0] for row in rows] == ["overview", "cells", "release"]
+    assert all(row["first_byte_echo_verified"] and row["remainder_write_called"] for row in rows)
+
+
+def test_failed_handshake_preserves_raw_echo_across_rpc_without_retry(live_radar):
+    radar, events = live_radar(command_handshake=True, acceptance_failure_on="o")
+    with pytest.raises(CommandAcceptanceError) as raised:
+        radar.begin_two_round()
+    assert raised.value.raw == b"?" and radar.busy
+    assert raised.value.timing["received_bytes"] == 1
+    assert raised.value.timing["written_bytes"] == raised.value.written_bytes == 1
+    assert len(raised.value.timing["attempts"]) == 1
+    rows = [row for row in events if row["event"] == "command_acceptance"]
+    assert len(rows) == 1 and not rows[0]["remainder_write_called"]
+
+
+def test_failed_cells_handshake_does_not_retry_recover_or_claim_release(live_radar):
+    radar, events = live_radar(command_handshake=True, acceptance_failure_on="c")
+    link = radar.begin_two_round()
+    from openflight.iwr6843.dump import parse_dump
+    from openflight.iwr6843.two_round import TwoRoundTransferError
+
+    with pytest.raises(TwoRoundTransferError) as raised:
+        run_two_round(link, lambda raw: parse_dump(raw)[1][0, 0, 0, 0])
+    assert not raised.value.transfer.released and radar.busy
+    assert raised.value.transfer.fallback is None
+    assert link.failed_payloads[0] == b"?"
+    rows = [row for row in events if row["event"] == "command_acceptance"]
+    assert len(rows) == 2 and rows[-1]["command"].startswith("cells ")
