@@ -2,11 +2,11 @@
  * feature-flag set: SHA-256 of the firmware sources plus those flags.
  * Regenerate after any firmware source change: python firmware/build_fingerprint.py */
 #if !defined(L3_USB_CLOCK_COMPACT) && !defined(L3_TWO_ROUND)
-#define L3_USB_CLOCK_BUILD_ID "543a55261649303a8e0e96263c525688ab0fb925bb2aba22521f0169cf763543"
+#define L3_USB_CLOCK_BUILD_ID "a2ffdc85461b1431ab64aab6cb72b6741406b7135859f16251053ebfb0b3d811"
 #elif !defined(L3_USB_CLOCK_COMPACT) && defined(L3_TWO_ROUND)
-#define L3_USB_CLOCK_BUILD_ID "2a89481299a0a69bdb4326316c4d094c5893e3f2b39955f8715b7934f1969be5"
+#define L3_USB_CLOCK_BUILD_ID "76fabe4774518def67dd98919ce35a93fcc7092b8b51f6f4264e430ea8cabce3"
 #elif defined(L3_USB_CLOCK_COMPACT) && !defined(L3_TWO_ROUND)
-#define L3_USB_CLOCK_BUILD_ID "06bb6cb4d47cd7517db780d91254f3a6cb1f62d6365a1c5adc9b6e7ae5898b95"
+#define L3_USB_CLOCK_BUILD_ID "3032a9d2d76a5d1af1db3c892e020b696a2ba35ef979b6490343a726a999dabe"
 #elif defined(L3_USB_CLOCK_COMPACT) && defined(L3_TWO_ROUND)
-#define L3_USB_CLOCK_BUILD_ID "4529097040c25eac69a9c62c54f1fb920d2d7961a5423a7d7cbde883153d56c6"
+#define L3_USB_CLOCK_BUILD_ID "92b2360a18f3d895ea71bf954b757d94d0f4337c1a7d9d170f039dbd98ae3776"
 #endif

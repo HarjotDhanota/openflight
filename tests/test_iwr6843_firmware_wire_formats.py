@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
@@ -28,8 +30,8 @@ def _headers() -> dict[str, str]:
     }
 
 
-def test_the_registry_lists_the_five_agreed_payloads():
-    assert set(_rows()) == {"ILD1", "ILE1", "ILT1", "OFC2", "ILO1", "ILC1"}
+def test_the_registry_lists_the_agreed_payloads():
+    assert set(_rows()) == {"ILD1", "ILE1", "ILT1", "OFC2", "ILO1", "ILC1", "ILQ1"}
 
 
 def test_each_magic_is_written_in_the_header_the_registry_names():
@@ -49,17 +51,16 @@ def test_each_magic_is_defined_in_exactly_one_header():
         assert len(owners) == 1, (magic, owners)
 
 
-def test_the_stage_two_payloads_are_reserved_at_version_one_with_no_layout_yet():
+def test_the_stage_two_payloads_are_version_one_and_implemented():
     rows = _rows()
     text = TWO_ROUND.read_text(encoding="utf-8")
 
-    for magic, prefix in (("ILO1", "OVERVIEW"), ("ILC1", "CELLS")):
+    for magic, prefix in (("ILO1", "OVERVIEW"), ("ILC1", "CELLS"), ("ILQ1", "REQUEST")):
         assert rows[magic]["versions"] == "1"
-        assert rows[magic]["status"].startswith("Reserved")
+        assert rows[magic]["status"].startswith("Implemented")
         assert re.search(rf'#define L3_TWO_ROUND_{prefix}_MAGIC\s+"{magic}"', text)
         assert re.search(rf"#define L3_TWO_ROUND_{prefix}_VERSION\s+1U", text)
-    assert "PLACEHOLDER" in text
-    assert "typedef struct" not in text  # the layout comes from the host module in F2
+    assert "PLACEHOLDER" not in text
 
 
 def test_l3_dump_includes_the_stage_two_header_only_under_its_flag():
@@ -67,3 +68,13 @@ def test_l3_dump_includes_the_stage_two_header_only_under_its_flag():
 
     assert '#ifdef L3_TWO_ROUND\n#include "two_round_format.h"\n#endif\n' in source
     assert source.count('#include "two_round_format.h"') == 1
+
+
+def test_the_log16_threshold_table_is_generated_from_its_definition():
+    script = FIRMWARE_DIR.parent / "gen_log16_table.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--check"], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
