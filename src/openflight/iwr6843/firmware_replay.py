@@ -623,6 +623,7 @@ class ReplayResult:
     ball_track_frames: int = 0
     ball_track_frames_known: bool = False
     recovered_frames: tuple[int, ...] = ()  # frames the backward pass added at adoption
+    clutter_map_recorded: bool = False
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -1495,6 +1496,7 @@ def replay_dump(
         ball_track_frames=int(shot_cfg.ballTrackFrames),
         ball_track_frames_known=known_post is not None,
         recovered_frames=recovered_frames(ball_track.verdict),
+        clutter_map_recorded="clutter_map" in meta,
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -2436,6 +2438,13 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         f"  {result.shot_status}",
         f"  {result.ball_status}",
     ]
+    if result.config.band_bins is not None and result.config.band_bins > 0:
+        background = (
+            "recorded clutter map; training not qualified"
+            if result.clutter_map_recorded
+            else "no recorded clutter map; initialized from capture only"
+        )
+        lines.append("  replay background: " + background)
     if result.retain_windows:
         lines.append("  " + _retention_line(result))
     if points:

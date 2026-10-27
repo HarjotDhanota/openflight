@@ -147,6 +147,27 @@ def with_map(raw: bytes, clutter: dict) -> bytes:
     )
 
 
+@needs_compiler
+@pytest.mark.parametrize("map_count", [None, 0, 4])
+@pytest.mark.parametrize("band_bins", [None, 2.0])
+def test_replay_reports_whether_background_history_was_recorded(map_count, band_bins):
+    """A recorded map, including an empty one, is distinct from inferred history."""
+    raw = (
+        pack(version=7, clutter_map=None)
+        if map_count is None
+        else pack(clutter_map=clutter_map(count=map_count))
+    )
+    result = fr.replay_dump(raw, fr.ReplayConfig(tee_bin=22, band_bins=band_bins))
+    assert result.clutter_map_recorded is (map_count is not None)
+    report = fr.format_report(result)
+    if band_bins is None:
+        assert "replay background:" not in report
+    elif map_count is None:
+        assert "replay background: no recorded clutter map; initialized from capture only" in report
+    else:
+        assert "replay background: recorded clutter map; training not qualified" in report
+
+
 def saturated_map(raw: bytes) -> dict:
     """A map that calls everything in the capture's window clutter."""
     meta = d.parse_header(raw)
