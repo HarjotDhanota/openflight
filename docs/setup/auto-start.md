@@ -12,6 +12,17 @@ display in fullscreen kiosk mode.
 The setup script installs and enables a systemd service configured for your
 username and install path.
 
+For an OPS243 connected to a specific serial port, run
+`sudo systemctl edit openflight.service` and add:
+
+```ini
+[Service]
+Environment=OPENFLIGHT_OPS_PORT=/dev/ttyAMA0
+```
+
+Then restart the service. An explicit `--radar-port` or `--ops-port` argument
+overrides this setting. Leave it unset to use automatic port detection.
+
 <details>
 <summary>Manual steps and service management</summary>
 

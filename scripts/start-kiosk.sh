@@ -125,6 +125,16 @@ normalize_mock_swing_speed() {
 
 normalize_mock_swing_speed
 
+has_radar_port=false
+for argument in "${SERVER_ARGS[@]}"; do
+    case "$argument" in
+        --port|--port=*) has_radar_port=true ;;
+    esac
+done
+if [ "$has_radar_port" = false ] && [ -n "${OPENFLIGHT_OPS_PORT:-}" ]; then
+    SERVER_ARGS+=(--port "$OPENFLIGHT_OPS_PORT")
+fi
+
 if [ "$STARTUP_SPLASH" = true ]; then
     STARTUP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${WEB_PORT}-$$"
     STARTUP_STATUS_FILE="$STARTUP_RUNTIME_DIR/status.json"
