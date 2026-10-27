@@ -10,7 +10,13 @@ import numpy as np
 import pytest
 
 from openflight.iwr6843.serial_process import IWR6843SerialProcess
-from openflight.iwr6843.two_round import TwoRoundError, build_cells, encode_request, run_two_round
+from openflight.iwr6843.two_round import (
+    TwoRoundError,
+    build_cells,
+    encode_request,
+    parse_overview,
+    run_two_round,
+)
 from tests.iwr6843_partial_scene import pack, scene
 
 REPO = Path(__file__).resolve().parents[1]
@@ -136,3 +142,56 @@ def test_child_failure_preserves_raw_protocol_bytes_and_clock_marks(live_radar):
     assert not transfer.released and "rearm failed" in transfer.error
     assert transfer.uart_exchanges[-1]["op"] == "release"
     assert transfer.uart_exchanges[-1]["received_bytes"] > 0
+
+
+@pytest.mark.parametrize("echo", [False, True])
+def test_successful_overview_retry_keeps_failed_bytes_and_attempt_times(live_radar, echo):
+    radar, _events = live_radar(corrupt_overviews=1, echo=echo)
+    link = radar.begin_two_round()
+    overview, good = link.cached_overview
+    assert len(link.failed_payloads) == 1
+    failed = link.failed_payloads[0]
+    prefix = b"overview\n" if echo else b""
+    suffix = b"\nDone\nl3dump:/>"
+    assert failed.startswith(prefix + b"ILO1") and failed.endswith(suffix)
+    damaged = bytearray(good)
+    damaged[-9] ^= 0x5A
+    assert failed == prefix + damaged + suffix
+    with pytest.raises(TwoRoundError, match="CRC"):
+        parse_overview(failed[len(prefix) : -len(suffix)])
+    timing = link.exchanges[0]
+    attempts = timing["attempts"]
+    assert len(attempts) == 2 and "CRC" in attempts[0]["error"]
+    assert "error" not in attempts[1]
+    assert timing["received_bytes"] == sum(a["received_bytes"] for a in attempts)
+    assert timing["written_bytes"] == sum(a["written_bytes"] for a in attempts) == 18
+    assert attempts[0]["received_bytes"] == len(failed)
+    assert attempts[1]["received_bytes"] == len(good) + len(prefix) + len(suffix)
+    assert timing["started_ns"] <= attempts[0]["started_ns"]
+    assert attempts[0]["completed_ns"] <= attempts[1]["started_ns"]
+    assert attempts[1]["completed_ns"] <= timing["completed_ns"]
+    assert parse_overview(good).session_id == overview.session_id
+    link.release(link.session_id)
+    assert not radar.busy
+
+
+@pytest.mark.parametrize("echo", [False, True])
+def test_exhausted_overview_retries_keep_both_attempts_and_hold_session(live_radar, echo):
+    radar, _events = live_radar(corrupt_overviews=2, echo=echo)
+    with pytest.raises(TwoRoundError, match="CRC") as raised:
+        radar.begin_two_round()
+    timing = raised.value.timing
+    attempts = timing["attempts"]
+    assert len(attempts) == 2 and all("CRC" in a["error"] for a in attempts)
+    assert timing["received_bytes"] == len(raised.value.raw)
+    assert timing["received_bytes"] == sum(a["received_bytes"] for a in attempts)
+    assert timing["written_bytes"] == 18
+    at = 0
+    for attempt in attempts:
+        raw = raised.value.raw[at : at + attempt["received_bytes"]]
+        assert raw.startswith(b"overview\nILO1" if echo else b"ILO1")
+        assert raw.endswith(b"\nDone\nl3dump:/>")
+        at += attempt["received_bytes"]
+    assert radar.busy
+    with pytest.raises(RuntimeError, match="held"):
+        radar.stats()

@@ -22,6 +22,7 @@ class _WireLog:
         self.port = port
         self.received = bytearray()
         self.written = 0
+        self.attempts = []
 
     def write(self, data):
         count = self.port.write(data)
@@ -55,17 +56,34 @@ class WorkerTwoRound:
         wire = _WireLog(self.radar.ser)
         client = TwoRoundClient(wire, timeout_s=PROTOCOL_TIMEOUT_S)
         started = time.monotonic_ns()
+        failed_payloads = []
         try:
             if op == "two_round_begin":
                 for attempt in range(2):
+                    attempt_started = time.monotonic_ns()
+                    received_before, written_before = len(wire.received), wire.written
+                    failure = None
                     try:
                         self.overview, data = client.overview()
                         break
-                    except TwoRoundRemoteError:
+                    except TwoRoundRemoteError as error:
+                        failure = error
                         raise
-                    except TwoRoundError:
+                    except TwoRoundError as error:
+                        failure = error
+                        failed_payloads.append(bytes(wire.received[received_before:]))
                         if attempt:
                             raise
+                    finally:
+                        row = {
+                            "started_ns": attempt_started,
+                            "completed_ns": time.monotonic_ns(),
+                            "received_bytes": len(wire.received) - received_before,
+                            "written_bytes": wire.written - written_before,
+                        }
+                        if failure is not None:
+                            row["error"] = str(failure)
+                        wire.attempts.append(row)
             elif op == "two_round_cells":
                 cells = decode_request(
                     bytes.fromhex(request["request_hex"]),
@@ -90,7 +108,12 @@ class WorkerTwoRound:
             error.raw = bytes(wire.received)
             error.timing = self._timing(op, started, wire)
             raise error
-        return {"ok": True, "lease": self.lease, "timing": self._timing(op, started, wire)}, data
+        return {
+            "ok": True,
+            "lease": self.lease,
+            "timing": self._timing(op, started, wire),
+            "failed_payload_sizes": [len(raw) for raw in failed_payloads],
+        }, b"".join(failed_payloads) + data
 
     @staticmethod
     def _timing(op, started, wire):
@@ -100,6 +123,7 @@ class WorkerTwoRound:
             "completed_ns": time.monotonic_ns(),
             "written_bytes": wire.written,
             "received_bytes": len(wire.received),
+            **({"attempts": wire.attempts} if wire.attempts else {}),
         }
 
     def close(self):
@@ -119,6 +143,14 @@ class SerialTwoRoundLink:
 
     def __init__(self, call, reply, raw):
         self._call = call
+        self.failed_payloads: list[bytes] = []
+        at = 0
+        for size in reply.get("failed_payload_sizes", ()):
+            if type(size) is not int or size < 0 or at + size > len(raw):
+                raise TwoRoundError("invalid failed overview payload length")
+            self.failed_payloads.append(raw[at : at + size])
+            at += size
+        raw = raw[at:]
         self._overview = parse_overview(raw)
         self._raw = raw
         self._lease = reply["lease"]
@@ -130,7 +162,6 @@ class SerialTwoRoundLink:
         self.claimed = threading.Event()
         self.abandoned = threading.Event()
         self._operation_lock = threading.Lock()
-        self.failed_payloads: list[bytes] = []
 
     @property
     def cached_overview(self):
