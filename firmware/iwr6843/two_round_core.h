@@ -124,6 +124,9 @@ static double l3_two_power(const l3_two_state_t *s, uint32_t f, uint32_t loop,
     return (double)(real * real + imag * imag) / ((double)n * (double)n);
 }
 
+#ifdef L3_TWO_MEDIAN_CANDIDATE
+#include "median_candidate.h"
+#else
 static uint64_t l3_two_key(double power)
 {
     uint64_t bits;
@@ -176,11 +179,15 @@ static double l3_two_median(l3_two_state_t *s, uint32_t scope)
     memcpy(&value, &lower, sizeof(value));
     return (value + upper) / 2.0;
 }
+#endif
 
 static int32_t l3_two_prepare(l3_two_state_t *s, const l3_two_capture_t *capture,
                               uint32_t session)
 {
     uint32_t f, b, t, r, p;
+#ifdef L3_TWO_MEDIAN_CANDIDATE
+    if (capture && capture->bins > 64U) return -1;
+#endif
     if (!capture || !session || !capture->frames || capture->frames > L3_TWO_MAX_FRAMES ||
         !capture->loops || capture->loops > L3_TWO_MAX_LOOPS ||
         !capture->bins || capture->bins > L3_TWO_MAX_BINS || !capture->prefix ||
@@ -203,8 +210,19 @@ static int32_t l3_two_prepare(l3_two_state_t *s, const l3_two_capture_t *capture
     }
     for (b = 0U; b < L3_TWO_MAX_BINS; b++) if (s->holders[b]) s->held_bins++;
     s->elements = (uint32_t)s->map_cells * capture->loops * 8U;
+#ifdef L3_TWO_MEDIAN_CANDIDATE
+    l3_two_loadMedian(s);
+#endif
+#ifdef L3_TWO_MEDIAN_CANDIDATE
+    if (l3tr_median(&gMedianCapture, &gMedianWork, 0U, &s->noise[0]) != 0) return -1;
+#else
     s->noise[0] = (float)l3_two_median(s, 0U);
+#endif
+#ifdef L3_TWO_MEDIAN_CANDIDATE
+    if (l3tr_median(&gMedianCapture, &gMedianWork, 1U, &s->noise[1]) != 0) return -1;
+#else
     s->noise[1] = (float)l3_two_median(s, 1U);
+#endif
     return 0;
 }
 

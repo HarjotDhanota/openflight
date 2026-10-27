@@ -78,10 +78,13 @@ def build_native_probe(folder, name, flags=()):
     return docker, executable
 
 
-@pytest.fixture(scope="module")
-def probe(tmp_path_factory):
+@pytest.fixture(scope="module", params=[False, True], ids=["baseline", "candidate"])
+def probe(tmp_path_factory, request):
     folder = tmp_path_factory.mktemp("two-round-c")
-    docker, executable = build_native_probe(folder, "iwr_two_round_probe.c")
+    flags = ["-ffp-contract=off"]
+    if request.param:
+        flags += ["-DL3_TWO_MEDIAN_CANDIDATE=1"]
+    docker, executable = build_native_probe(folder, "iwr_two_round_probe.c", flags)
 
     def run(raw, request=None, *, fail_after=-1, fields=None):
         meta, _ = parse_dump(raw)
@@ -138,6 +141,7 @@ def probe(tmp_path_factory):
         )
         return result, [p.read_bytes() if p.exists() else b"" for p in output], request
 
+    run.candidate = request.param
     return run
 
 
@@ -154,6 +158,28 @@ def _raw(kind):
                 dump_trailer=trailer,
             )
         return pack(scene(count, seed=9))
+    if kind in ("max_bins", "max_frames", "single_value", "one_loop", "ties"):
+        frames, loops, bins = {
+            "max_bins": (3, 16, 64),
+            "max_frames": (64, 16, 64),
+            "single_value": (1, 1, 1),
+            "one_loop": (3, 1, 7),
+            "ties": (7, 16, 11),
+        }[kind]
+        rng = np.random.default_rng(9)
+        shape = (frames, loops * 3, 4, bins)
+        low, high = (-1, 2) if kind == "ties" else (-32768, 32768)
+        cube = rng.integers(low, high, size=shape) + 1j * rng.integers(low, high, size=shape)
+        return pack_dump(
+            cube,
+            n_tx=3,
+            version=6,
+            sample_fmt=4,
+            frame_period_us=3000,
+            range_bin_starts=[5 + i % 4 for i in range(frames)],
+            range_bin_counts=[bins] * frames,
+            frame_time_offsets_us=[3000 * i for i in range(frames)],
+        )
     rng = np.random.default_rng(32)
     shape = (3, 6 if kind == "zero" else 48, 4, 7)
     cube = rng.integers(-32768, 32768, size=shape) + 1j * rng.integers(-32768, 32768, size=shape)
@@ -173,7 +199,21 @@ def _raw(kind):
     )
 
 
-@pytest.mark.parametrize("kind", ["production", "evidence", "zero", "extremes", "random"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "production",
+        "evidence",
+        "zero",
+        "extremes",
+        "random",
+        "max_bins",
+        "max_frames",
+        "single_value",
+        "one_loop",
+        "ties",
+    ],
+)
 def test_c_packets_match_host_byte_for_byte(probe, kind):
     raw = _raw(kind)
     result, (overview, cells), wire = probe(raw)
@@ -223,3 +263,23 @@ def test_c_reports_a_short_output_write(probe):
     result, (overview, cells), _ = probe(_raw("zero"), fail_after=512)
     assert result.returncode == 4 and not cells
     assert len(overview) <= 512
+
+
+def test_candidate_refuses_wider_geometry_without_truncation(probe):
+    result, _, _ = probe(_raw("zero"), fields={2: 65})
+    assert result.returncode == (2 if probe.candidate else 0), result.stderr
+
+
+def test_optional_recorded_capture_packets(probe):
+    path = os.environ.get("OPENFLIGHT_IWR_MEDIAN_CAPTURE")
+    if not path:
+        pytest.skip("set OPENFLIGHT_IWR_MEDIAN_CAPTURE for a local recorded dump")
+    raw = Path(path).read_bytes()
+    result, (overview, cells), wire = probe(raw)
+    assert result.returncode == 0, result.stderr
+    assert overview == two_round.build_overview(raw, session_id=SESSION)
+    meta = parse_dump(raw)[0]
+    request = two_round.decode_request(
+        wire, range_bin_counts=meta["range_bin_counts"], n_samples=meta["n_samples"]
+    )
+    assert cells == two_round.build_cells(raw, request)

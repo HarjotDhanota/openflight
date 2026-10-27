@@ -100,3 +100,23 @@ stages or add independently computed percentiles. Report per-shot elapsed time,
 then p50/p95/p99/max, sample counts and all unobserved/failed attempts. Keep USB
 close time separate from metric-display latency while retaining it as a reliability
 failure. Narrow clock intervals do not establish physical acquisition alignment.
+
+
+## Optional exact median selector
+
+Compile with `L3_TWO_MEDIAN_CANDIDATE=1` to select the bounded histogram/candidate
+implementation. It retains the baseline selector by default and refuses captures
+wider than 64 bins rather than truncating them. The working capture uses 53 bins.
+The alternative consumes about 25 KB additional static RAM in the inspected TI
+build; check the linker map for each build configuration.
+
+Native tests compare complete overview and cell packets with the host reference
+for both selectors, including ties, extreme samples and supported geometry limits.
+Set `OPENFLIGHT_IWR_MEDIAN_CAPTURE` to a local full dump for the optional recorded
+capture check; captures are not stored in this repository.
+
+One stationary RAM diagnostic reduced the host overview interval from 9.023 s to
+3.632 s (derived intervals). The nominal 200 MHz device counter attributed 7.336 s
+and 1.945 s respectively to median selection. These are separate stationary runs,
+not a same-shot accuracy comparison or a swing-to-screen benchmark. Reliability,
+full selected-cell timing and physical clock synchronization remain unqualified.
