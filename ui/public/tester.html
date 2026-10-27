@@ -1004,6 +1004,43 @@
       .tester-entry input[aria-invalid='true'] {
         border-color: var(--bad);
       }
+      #tester-entry-dialog {
+        width: min(960px, calc(100% - 16px));
+        max-height: calc(100dvh - 16px);
+        padding: 0;
+        border: 0;
+        color: var(--fg);
+        background: var(--panel);
+      }
+      #tester-entry-dialog::backdrop {
+        background: #0009;
+      }
+      #tester-entry-dialog .tester-entry__label {
+        margin: 0 0 4px;
+      }
+      #tester-entry-dialog .note,
+      #tester-entry-dialog .problem {
+        margin: 4px 0 0;
+        font-size: 0.75rem;
+        line-height: 1.25;
+      }
+      #tester-touch-keys {
+        display: grid;
+        gap: 4px;
+        margin-top: 6px;
+      }
+      .tester-key-row {
+        display: flex;
+        gap: 4px;
+      }
+      .tester-key-row button {
+        flex: 1;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0 4px;
+        font-size: 1rem;
+        touch-action: manipulation;
+      }
       .lens {
         margin: 12px 0;
         padding: 10px 12px;
@@ -1641,11 +1678,13 @@
               <button type="submit" id="tester-use">Use this ID</button>
               <button type="button" id="tester-cancel" hidden>Cancel</button>
             </div>
+            <div id="tester-touch-keys" role="group" aria-label="Tester ID keyboard" hidden></div>
             <p class="note" id="tester-entry-hint">
               Letters, numbers, dots, dashes and underscores; start with a letter or number; up to 80 characters.
             </p>
             <p class="problem" id="tester-entry-error" role="alert" hidden></p>
           </form>
+          <dialog id="tester-entry-dialog" aria-label="Enter tester ID"></dialog>
           <input type="hidden" id="tester-id" value="" />
         </div>
         <div class="field-row">
@@ -6737,6 +6776,65 @@
       // on the unit, so no tester sees another's; typing an existing ID resumes its data. ---
       // the server's SAFE_SEGMENT rule (tester_server.py), checked here before anything is sent
       const TESTER_ID_RULE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+      const testerDialog = el('tester-entry-dialog');
+      const testerForm = el('tester-picker');
+      const testerInput = el('tester-entry');
+      const testerKeys = el('tester-touch-keys');
+      const testerHome = testerForm.parentNode;
+      let testerShift = false;
+      function editTesterId(text, backspace = false) {
+        const start = testerInput.selectionStart ?? testerInput.value.length;
+        const end = testerInput.selectionEnd ?? start;
+        const from = backspace && start === end ? Math.max(0, start - 1) : start;
+        if (testerInput.value.length - (end - from) + text.length > 80) return;
+        testerInput.setRangeText(text, from, end, 'end');
+        testerInput.dispatchEvent(new Event('input', { bubbles: true }));
+        testerInput.focus({ preventScroll: true });
+      }
+      if (onUnitScreen) {
+        testerInput.inputMode = 'none';
+        for (const row of [
+          '1234567890',
+          'qwertyuiop',
+          'asdfghjkl',
+          'zxcvbnm',
+          ['.', '-', '_', 'Shift', 'Backspace', 'Hide keyboard'],
+        ]) {
+          const line = document.createElement('div');
+          line.className = 'tester-key-row';
+          for (const key of row) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = key;
+            if (key.length === 1) button.dataset.char = key;
+            if (key === 'Shift') button.setAttribute('aria-pressed', 'false');
+            button.addEventListener('pointerdown', (event) => event.preventDefault());
+            button.addEventListener('click', () => {
+              if (key === 'Hide keyboard') testerDialog.close();
+              else if (key === 'Shift') {
+                testerShift = !testerShift;
+                button.setAttribute('aria-pressed', String(testerShift));
+                for (const letter of testerKeys.querySelectorAll('[data-char]')) {
+                  letter.textContent = testerShift ? letter.dataset.char.toUpperCase() : letter.dataset.char;
+                }
+              } else
+                editTesterId(key === 'Backspace' ? '' : testerShift ? key.toUpperCase() : key, key === 'Backspace');
+            });
+            line.append(button);
+          }
+          testerKeys.append(line);
+        }
+        testerInput.addEventListener('click', () => {
+          if (testerDialog.open) return;
+          testerDialog.append(testerForm);
+          testerKeys.hidden = false;
+          testerDialog.showModal();
+        });
+        testerDialog.addEventListener('close', () => {
+          testerKeys.hidden = true;
+          testerHome.insertBefore(testerForm, testerDialog);
+        });
+      }
       let testerPickerOpen = false;
       function showTesterEntryError(message) {
         el('tester-entry-error').textContent = message || '';
@@ -6752,6 +6850,7 @@
         el('tester-change').hidden = !current || open;
         el('tester-cancel').hidden = !current;
         if (!open) {
+          if (testerDialog.open) testerDialog.close();
           el('tester-entry').value = '';
           showTesterEntryError(null);
         }

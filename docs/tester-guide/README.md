@@ -57,7 +57,7 @@ Everything is touch: tap buttons, and drag the page (or a list) up and down with
 
 Work down the page. Each step opens when the one before it is done, and the bar at the top says where you are. Steps 3, 4 and 6 write one setup record, `setup.json`, in your tester folder. The kiosk the page starts loads it at start. If you change the lens, the unit or the box, the steps that depended on it show as needing redoing: redo them.
 
-**1. Tester and lens.** Type your tester ID in the box and tap **Use this ID** (or press Enter). Use the same ID every time you test, so your sessions stay together; it can have letters, numbers, dots, dashes and underscores. Tap **Indoors** or **Outdoors**, **Right-handed** or **Left-handed**, then the lens fitted to the unit (**Stock 2.8 mm** unless you've changed it).
+**1. Tester and lens.** On the unit's screen, tap the ID box to open the built-in touch keyboard; **Hide keyboard** closes it. Type your tester ID in the box and tap **Use this ID** (or press Enter). Use the same ID every time you test, so your sessions stay together; it can have letters, numbers, dots, dashes and underscores. Tap **Indoors** or **Outdoors**, **Right-handed** or **Left-handed**, then the lens fitted to the unit (**Stock 2.8 mm** unless you've changed it).
 
 <img src="images/1-tester.png" width="480" alt="Step 1: a tester ID typed in the box, Indoors or Outdoors, and Right-handed or Left-handed"> <img src="images/1-lens.png" width="480" alt="Step 1: the stock 2.8 mm lens tapped">
 
