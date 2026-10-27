@@ -10,8 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Reuse an unchanged session bundle after linking it into the send folder on
   Linux. Metadata changes trigger a hash check; modified archives are rebuilt.
+- Keep constant-delay timing diagnostics unresolved and reject non-NPZ frame
+  inputs consistently on Python 3.10's dependency versions.
 
 ### Changed
+- Keep SciPy below 1.18 until its changed resting-ball fit passes the existing
+  outline regression. Detector accuracy tolerances are unchanged.
 - **Flight model refitted to TrackMan 4.** The Ferguson (2022) drag and lift
   form keeps its shape with its constants refitted to TrackMan 4 exports; held-out
   carry error drops from 1.7 to 0.9 yd. See [ballistics](how-it-works/ballistics.md).

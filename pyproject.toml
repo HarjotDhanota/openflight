@@ -25,7 +25,8 @@ classifiers = [
 dependencies = [
     "pyserial>=3.5",
     "numpy>=1.20.0",
-    "scipy>=1.10.0",
+    # SciPy 1.18 changes the resting-ball fit; retain the regression-tested range.
+    "scipy>=1.10.0,<1.18",
     "tomli>=2.0.1; python_version < '3.11'",
     # Camera tracking is currently disabled; keep these out of the base install.
     # "trackers @ git+https://github.com/roboflow/trackers.git",
@@ -57,7 +58,7 @@ camera = [
 analysis = [
     "numpy>=1.20.0",
     "matplotlib>=3.5.0",
-    "scipy>=1.7.0",
+    "scipy>=1.7.0,<1.18",
 ]
 # Bluetooth Low Energy GATT server for the optional iOS connection.
 ble = [

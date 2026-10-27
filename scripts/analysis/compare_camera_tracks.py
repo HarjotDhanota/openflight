@@ -46,6 +46,8 @@ def _decode_json(raw: bytes, label: str, path: Path) -> dict[str, Any]:
 
 def _decode_archive(raw: bytes, path: Path) -> dict[str, np.ndarray]:
     try:
+        if not zipfile.is_zipfile(io.BytesIO(raw)):
+            raise ValueError("expected an NPZ archive")
         with np.load(io.BytesIO(raw), allow_pickle=False) as bundle:
             return {name: np.asarray(bundle[name]).copy() for name in bundle.files}
     except (OSError, TypeError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:

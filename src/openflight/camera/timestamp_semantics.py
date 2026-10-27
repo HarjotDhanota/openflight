@@ -207,8 +207,8 @@ def exposure_slope(points: Sequence[tuple[float, float]]) -> dict:
         return {**base, "slope": None, "ci95": None, "verdict": "unresolved_too_few_points"}
     fit = stats.linregress(exposures, delays)
     half = float(stats.t.ppf(0.975, len(points) - 2) * fit.stderr)
-    if not (math.isfinite(float(fit.slope)) and math.isfinite(half)):
-        # e.g. a zero-noise fit: scipy gives a NaN stderr, so there is no interval to judge.
+    if np.ptp(delays) == 0.0 or not (math.isfinite(float(fit.slope)) and math.isfinite(half)):
+        # Constant delays have zero or NaN stderr depending on the scipy version.
         slope = float(fit.slope) if math.isfinite(float(fit.slope)) else None
         return {**base, "slope": slope, "ci95": None, "verdict": "unresolved"}
     low, high = float(fit.slope) - half, float(fit.slope) + half
