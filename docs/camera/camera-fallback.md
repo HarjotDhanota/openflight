@@ -18,7 +18,7 @@ down. A gap is closed by adding a route, never by a special case.
 | Vertical launch | the radar (IWR LCMF, K-LD7); the camera fallback | measured; experimental |
 | Horizontal launch | the radar or a camera horizontal on the IWR's depth; the camera fallback; a low-coherence or low-consensus horizontal | as `source_labels.launch_label`; experimental; estimated |
 | Side offset | the setup's measured offset; the resting ball on its camera bearing | measured; experimental |
-| Spin | an accepted OPS spin; the collision model's spin; the kinematic spin (`spin_estimate`, D38) | measured; the model's label; calculated on a calculated full speed, estimated on the radial one |
+| Spin | an accepted OPS spin; the collision model's spin; the kinematic spin (spin-refit-v1, `spin_estimate.refit_route`, D38: [spin refit](../how-it-works/spin-refit.md)); the OPS's reading below the floor | measured; the model's label; calculated on a calculated full speed, estimated on the radial one; experimental |
 
 Club path and attack keep their own chain (`shot_models.displayed_club_path`, the club
 arc, and whatever club-delivery result the camera gives).

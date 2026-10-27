@@ -16,6 +16,7 @@ from .clubs import ClubType
 from .clubs.physics import get_club_physics
 from .numeric import finite as _finite
 from .ops243 import SpeedReading
+from .source_labels import is_spin_refit_method
 
 # Spin confidence threshold for "high" quality — used across modules.
 # Measured spin is trusted for physics simulation only above this level.
@@ -267,6 +268,9 @@ class Shot:
     # Raw radar-measured spin, kept when --calculated-spin rewrites
     # spin_rpm with the kinematic estimate (for offline scoring)
     spin_rpm_measured: Optional[float] = None
+    # the spin refit's 68 % range [low, high] rpm (its held-out error); shown only
+    # while spin_method names the refit
+    spin_rpm_range: Optional[list] = None
     # "measured", "calculated", "model_geometry" (assumed swing geometry), or None
     spin_source: Optional[str] = None
     spin_method: Optional[str] = None
@@ -614,6 +618,11 @@ class Shot:
             "inclinometer": self.inclinometer,
             "spin_rpm": self.spin_rpm,
             "spin_rpm_measured": self.spin_rpm_measured,
+            "spin_rpm_range": (
+                list(self.spin_rpm_range)
+                if self.spin_rpm_range and is_spin_refit_method(self.spin_method)
+                else None
+            ),
             "spin_source": self.spin_source,
             "spin_method": self.spin_method,
             "spin_method_measured": self.spin_method_measured,

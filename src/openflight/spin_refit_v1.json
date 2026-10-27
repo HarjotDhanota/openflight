@@ -1,0 +1,828 @@
+{
+ "schema": "openflight.spin_refit",
+ "version": "spin-refit-v1",
+ "name": "spin refit v1",
+ "form": "spin_rpm = coefficient x speed_mph x sin(angle)^exponent, least squares on log(spin / speed)",
+ "source": "fitted to TM exports' measured shots (club, ball speed, club speed, vertical launch in; total spin out), cross-validated leaving one session out; fit domain: TM-measured spin, ball speed >= 50 mph, vertical launch >= 5 deg, no topspin",
+ "fitted_on": "2026-10-25",
+ "script": "scripts/analysis/fit_spin_refit.py",
+ "data": [
+  {
+   "name": "OpenFlight-Test.Normalized.csv",
+   "path": "session_logs/OpenFlight-Test.Normalized.csv",
+   "sha256": "df84641f883a5c7afedca24c009efad896a3843d00e5908d89215f8f3726e072",
+   "shots": 24,
+   "fit_shots": 22,
+   "in_repo": true,
+   "origin": "a TM4 normalized export, 6 May 2026 (one player)"
+  },
+  {
+   "name": "tm4-public-swingsync-2026-10-12.csv",
+   "path": "../tm-exports/tm4-public-swingsync-2026-10-12.csv (beside the checkout)",
+   "sha256": "d4dbf8e6056feed8d4ae3947536c0e8a2607663b245ff49ee16b26bcb000ee60",
+   "shots": 43,
+   "fit_shots": 36,
+   "in_repo": false,
+   "origin": "a public TM4 SwingSync session, 12 Oct 2026"
+  },
+  {
+   "name": "swingsync-2026-10-04.csv",
+   "path": "../openflight-test-bench/archive/analysis-archive/2026-10-04-session-f86a2951/trackman-1004/swingsync-2026-10-04.csv (beside the checkout)",
+   "sha256": "c72a975e4b6caf390e10f22736938a2b3bc2cddd5f0bd37846eba17b1cc199b6",
+   "shots": 63,
+   "fit_shots": 54,
+   "in_repo": false,
+   "origin": "a TM4 SwingSync session, 4 Oct 2026 (test-bench archive)"
+  }
+ ],
+ "radial_speed_shortfall": 0.061,
+ "radial_speed_shortfall_basis": "95th percentile of 1 - speed_correction.radial_speed_factor over the fitted shots, ball 2 m in front of the OPS and 0.15 m below it; the OPS radial ball speed is never corrected, only the range's top widened by it",
+ "tiers": {
+  "club_speed": {
+   "speed": "club_speed",
+   "angle": "loft",
+   "coefficient": 101.444,
+   "exponent": 0.7899,
+   "formula": "101.4 x club speed x sin(loft)^0.79",
+   "speed_range_mph": [
+    45,
+    122
+   ],
+   "angle_range_deg": [
+    10.5,
+    46.0
+   ],
+   "range_factors": {
+    "all": [
+     0.69,
+     1.481
+    ],
+    "wedge": [
+     0.698,
+     1.424
+    ],
+    "iron": [
+     0.762,
+     1.326
+    ],
+    "wood": [
+     0.571,
+     2.391
+    ]
+   },
+   "cv": {
+    "all": {
+     "n": 128,
+     "mae_rpm": 1494.0,
+     "median_abs_pct": 25.9,
+     "bias_pct": 14.2,
+     "median_pct": -5.9,
+     "sd_pct": 81.2
+    },
+    "wedge": {
+     "n": 46,
+     "mae_rpm": 1698.0,
+     "median_abs_pct": 27.4,
+     "bias_pct": 2.4,
+     "median_pct": -18.0,
+     "sd_pct": 46.2
+    },
+    "iron": {
+     "n": 62,
+     "mae_rpm": 1122.0,
+     "median_abs_pct": 14.6,
+     "bias_pct": 26.0,
+     "median_pct": -0.6,
+     "sd_pct": 101.3
+    },
+    "wood": {
+     "n": 20,
+     "mae_rpm": 2178.0,
+     "median_abs_pct": 59.2,
+     "bias_pct": 4.8,
+     "median_pct": -26.3,
+     "sd_pct": 71.9
+    },
+    "grouping": "leave one session out (one export = one session = one player)",
+    "evaluated_on": "every TM-measured shot the tier runs on, mishits included",
+    "folds": [
+     {
+      "held_out": "2026-05-06",
+      "coefficient": 85.281,
+      "exponent": 0.4873
+     },
+     {
+      "held_out": "2026-10-04",
+      "coefficient": 123.659,
+      "exponent": 1.1062
+     },
+     {
+      "held_out": "2026-10-12",
+      "coefficient": 99.541,
+      "exponent": 0.7708
+     }
+    ],
+    "leave_one_club_out": {
+     "all": {
+      "n": 128,
+      "mae_rpm": 1436.0,
+      "median_abs_pct": 25.5,
+      "bias_pct": 10.3,
+      "median_pct": -5.0,
+      "sd_pct": 79.1
+     },
+     "wedge": {
+      "n": 46,
+      "mae_rpm": 1807.0,
+      "median_abs_pct": 30.8,
+      "bias_pct": -9.3,
+      "median_pct": -25.5,
+      "sd_pct": 39.1
+     },
+     "iron": {
+      "n": 62,
+      "mae_rpm": 1123.0,
+      "median_abs_pct": 17.0,
+      "bias_pct": 27.7,
+      "median_pct": 1.7,
+      "sd_pct": 102.7
+     },
+     "wood": {
+      "n": 20,
+      "mae_rpm": 1555.0,
+      "median_abs_pct": 33.9,
+      "bias_pct": 1.3,
+      "median_pct": -11.1,
+      "sd_pct": 48.0
+     }
+    },
+    "comparators_same_shots": {
+     "all": {
+      "n": 125,
+      "club_speed tier (held out by session)": {
+       "n": 125,
+       "mae_rpm": 1478.0,
+       "median_abs_pct": 25.9,
+       "bias_pct": 15.3,
+       "median_pct": -5.1,
+       "sd_pct": 81.8
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 125,
+       "mae_rpm": 1799.0,
+       "median_abs_pct": 29.6,
+       "bias_pct": -6.3,
+       "median_pct": -15.1,
+       "sd_pct": 53.9
+      },
+      "collision model (TM attack + path)": {
+       "n": 125,
+       "mae_rpm": 1283.0,
+       "median_abs_pct": 20.8,
+       "bias_pct": 17.2,
+       "median_pct": 9.8,
+       "sd_pct": 51.4
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 125,
+       "mae_rpm": 1266.0,
+       "median_abs_pct": 21.3,
+       "bias_pct": 2.4,
+       "median_pct": -3.3,
+       "sd_pct": 44.1
+      }
+     },
+     "wedge": {
+      "n": 46,
+      "club_speed tier (held out by session)": {
+       "n": 46,
+       "mae_rpm": 1698.0,
+       "median_abs_pct": 27.4,
+       "bias_pct": 2.4,
+       "median_pct": -18.0,
+       "sd_pct": 46.2
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 46,
+       "mae_rpm": 2197.0,
+       "median_abs_pct": 35.4,
+       "bias_pct": -11.8,
+       "median_pct": -24.1,
+       "sd_pct": 44.7
+      },
+      "collision model (TM attack + path)": {
+       "n": 46,
+       "mae_rpm": 1360.0,
+       "median_abs_pct": 14.6,
+       "bias_pct": 23.4,
+       "median_pct": 8.2,
+       "sd_pct": 47.5
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 46,
+       "mae_rpm": 1521.0,
+       "median_abs_pct": 23.9,
+       "bias_pct": -2.0,
+       "median_pct": -14.1,
+       "sd_pct": 37.7
+      }
+     },
+     "iron": {
+      "n": 59,
+      "club_speed tier (held out by session)": {
+       "n": 59,
+       "mae_rpm": 1069.0,
+       "median_abs_pct": 12.9,
+       "bias_pct": 29.0,
+       "median_pct": 0.5,
+       "sd_pct": 103.0
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 59,
+       "mae_rpm": 1432.0,
+       "median_abs_pct": 18.8,
+       "bias_pct": -3.5,
+       "median_pct": -8.3,
+       "sd_pct": 57.2
+      },
+      "collision model (TM attack + path)": {
+       "n": 59,
+       "mae_rpm": 1218.0,
+       "median_abs_pct": 24.0,
+       "bias_pct": 20.9,
+       "median_pct": 12.2,
+       "sd_pct": 57.0
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 59,
+       "mae_rpm": 1060.0,
+       "median_abs_pct": 14.9,
+       "bias_pct": 7.5,
+       "median_pct": -0.3,
+       "sd_pct": 50.7
+      }
+     },
+     "wood": {
+      "n": 20,
+      "club_speed tier (held out by session)": {
+       "n": 20,
+       "mae_rpm": 2178.0,
+       "median_abs_pct": 59.2,
+       "bias_pct": 4.8,
+       "median_pct": -26.3,
+       "sd_pct": 71.9
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 20,
+       "mae_rpm": 1970.0,
+       "median_abs_pct": 52.8,
+       "bias_pct": -1.6,
+       "median_pct": -0.2,
+       "sd_pct": 64.1
+      },
+      "collision model (TM attack + path)": {
+       "n": 20,
+       "mae_rpm": 1296.0,
+       "median_abs_pct": 25.7,
+       "bias_pct": -7.8,
+       "median_pct": -9.1,
+       "sd_pct": 34.8
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 20,
+       "mae_rpm": 1286.0,
+       "median_abs_pct": 30.1,
+       "bias_pct": -2.5,
+       "median_pct": -3.8,
+       "sd_pct": 36.9
+      }
+     }
+    }
+   }
+  },
+  "club": {
+   "speed": "ball_speed",
+   "angle": "loft",
+   "coefficient": 86.218,
+   "exponent": 0.9339,
+   "formula": "86.2 x ball speed x sin(loft)^0.93",
+   "speed_range_mph": [
+    50,
+    179
+   ],
+   "angle_range_deg": [
+    10.5,
+    46.0
+   ],
+   "range_factors": {
+    "all": [
+     0.704,
+     1.574
+    ],
+    "wedge": [
+     0.735,
+     1.531
+    ],
+    "iron": [
+     0.749,
+     1.419
+    ],
+    "wood": [
+     0.594,
+     2.53
+    ]
+   },
+   "cv": {
+    "all": {
+     "n": 128,
+     "mae_rpm": 1590.0,
+     "median_abs_pct": 27.0,
+     "bias_pct": 12.4,
+     "median_pct": -3.2,
+     "sd_pct": 76.1
+    },
+    "wedge": {
+     "n": 46,
+     "mae_rpm": 1807.0,
+     "median_abs_pct": 27.5,
+     "bias_pct": -1.5,
+     "median_pct": -19.3,
+     "sd_pct": 44.8
+    },
+    "iron": {
+     "n": 62,
+     "mae_rpm": 1245.0,
+     "median_abs_pct": 17.8,
+     "bias_pct": 26.2,
+     "median_pct": 5.4,
+     "sd_pct": 93.6
+    },
+    "wood": {
+     "n": 20,
+     "mae_rpm": 2164.0,
+     "median_abs_pct": 58.2,
+     "bias_pct": 1.6,
+     "median_pct": -24.5,
+     "sd_pct": 68.4
+    },
+    "grouping": "leave one session out (one export = one session = one player)",
+    "evaluated_on": "every TM-measured shot the tier runs on, mishits included",
+    "folds": [
+     {
+      "held_out": "2026-05-06",
+      "coefficient": 73.882,
+      "exponent": 0.6544
+     },
+     {
+      "held_out": "2026-10-04",
+      "coefficient": 106.357,
+      "exponent": 1.256
+     },
+     {
+      "held_out": "2026-10-12",
+      "coefficient": 81.979,
+      "exponent": 0.8891
+     }
+    ],
+    "leave_one_club_out": {
+     "all": {
+      "n": 128,
+      "mae_rpm": 1574.0,
+      "median_abs_pct": 26.7,
+      "bias_pct": 7.3,
+      "median_pct": -1.0,
+      "sd_pct": 75.2
+     },
+     "wedge": {
+      "n": 46,
+      "mae_rpm": 1992.0,
+      "median_abs_pct": 32.1,
+      "bias_pct": -16.3,
+      "median_pct": -28.1,
+      "sd_pct": 36.3
+     },
+     "iron": {
+      "n": 62,
+      "mae_rpm": 1273.0,
+      "median_abs_pct": 22.1,
+      "bias_pct": 29.1,
+      "median_pct": 8.5,
+      "sd_pct": 96.0
+     },
+     "wood": {
+      "n": 20,
+      "mae_rpm": 1543.0,
+      "median_abs_pct": 28.4,
+      "bias_pct": -6.2,
+      "median_pct": -8.6,
+      "sd_pct": 44.4
+     }
+    },
+    "comparators_same_shots": {
+     "all": {
+      "n": 125,
+      "club tier (held out by session)": {
+       "n": 125,
+       "mae_rpm": 1556.0,
+       "median_abs_pct": 26.0,
+       "bias_pct": 13.8,
+       "median_pct": -1.5,
+       "sd_pct": 76.5
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 125,
+       "mae_rpm": 1799.0,
+       "median_abs_pct": 29.6,
+       "bias_pct": -6.3,
+       "median_pct": -15.1,
+       "sd_pct": 53.9
+      },
+      "collision model (TM attack + path)": {
+       "n": 125,
+       "mae_rpm": 1283.0,
+       "median_abs_pct": 20.8,
+       "bias_pct": 17.2,
+       "median_pct": 9.8,
+       "sd_pct": 51.4
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 125,
+       "mae_rpm": 1266.0,
+       "median_abs_pct": 21.3,
+       "bias_pct": 2.4,
+       "median_pct": -3.3,
+       "sd_pct": 44.1
+      }
+     },
+     "wedge": {
+      "n": 46,
+      "club tier (held out by session)": {
+       "n": 46,
+       "mae_rpm": 1807.0,
+       "median_abs_pct": 27.5,
+       "bias_pct": -1.5,
+       "median_pct": -19.3,
+       "sd_pct": 44.8
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 46,
+       "mae_rpm": 2197.0,
+       "median_abs_pct": 35.4,
+       "bias_pct": -11.8,
+       "median_pct": -24.1,
+       "sd_pct": 44.7
+      },
+      "collision model (TM attack + path)": {
+       "n": 46,
+       "mae_rpm": 1360.0,
+       "median_abs_pct": 14.6,
+       "bias_pct": 23.4,
+       "median_pct": 8.2,
+       "sd_pct": 47.5
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 46,
+       "mae_rpm": 1521.0,
+       "median_abs_pct": 23.9,
+       "bias_pct": -2.0,
+       "median_pct": -14.1,
+       "sd_pct": 37.7
+      }
+     },
+     "iron": {
+      "n": 59,
+      "club tier (held out by session)": {
+       "n": 59,
+       "mae_rpm": 1155.0,
+       "median_abs_pct": 16.3,
+       "bias_pct": 29.9,
+       "median_pct": 8.3,
+       "sd_pct": 94.5
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 59,
+       "mae_rpm": 1432.0,
+       "median_abs_pct": 18.8,
+       "bias_pct": -3.5,
+       "median_pct": -8.3,
+       "sd_pct": 57.2
+      },
+      "collision model (TM attack + path)": {
+       "n": 59,
+       "mae_rpm": 1218.0,
+       "median_abs_pct": 24.0,
+       "bias_pct": 20.9,
+       "median_pct": 12.2,
+       "sd_pct": 57.0
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 59,
+       "mae_rpm": 1060.0,
+       "median_abs_pct": 14.9,
+       "bias_pct": 7.5,
+       "median_pct": -0.3,
+       "sd_pct": 50.7
+      }
+     },
+     "wood": {
+      "n": 20,
+      "club tier (held out by session)": {
+       "n": 20,
+       "mae_rpm": 2164.0,
+       "median_abs_pct": 58.2,
+       "bias_pct": 1.6,
+       "median_pct": -24.5,
+       "sd_pct": 68.4
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 20,
+       "mae_rpm": 1970.0,
+       "median_abs_pct": 52.8,
+       "bias_pct": -1.6,
+       "median_pct": -0.2,
+       "sd_pct": 64.1
+      },
+      "collision model (TM attack + path)": {
+       "n": 20,
+       "mae_rpm": 1296.0,
+       "median_abs_pct": 25.7,
+       "bias_pct": -7.8,
+       "median_pct": -9.1,
+       "sd_pct": 34.8
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 20,
+       "mae_rpm": 1286.0,
+       "median_abs_pct": 30.1,
+       "bias_pct": -2.5,
+       "median_pct": -3.8,
+       "sd_pct": 36.9
+      }
+     }
+    }
+   }
+  },
+  "launch": {
+   "speed": "ball_speed",
+   "angle": "launch",
+   "coefficient": 188.244,
+   "exponent": 1.2,
+   "formula": "188.2 x ball speed x sin(launch)^1.2",
+   "speed_range_mph": [
+    50,
+    179
+   ],
+   "angle_range_deg": [
+    5.0,
+    35.0
+   ],
+   "range_factors": {
+    "all": [
+     0.636,
+     1.462
+    ],
+    "wedge": [
+     0.645,
+     1.472
+    ],
+    "iron": [
+     0.735,
+     1.297
+    ],
+    "wood": [
+     0.501,
+     1.426
+    ]
+   },
+   "cv": {
+    "all": {
+     "n": 116,
+     "mae_rpm": 1575.0,
+     "median_abs_pct": 26.3,
+     "bias_pct": 11.5,
+     "median_pct": 0.5,
+     "sd_pct": 57.1
+    },
+    "wedge": {
+     "n": 44,
+     "mae_rpm": 1902.0,
+     "median_abs_pct": 31.2,
+     "bias_pct": 2.4,
+     "median_pct": -14.9,
+     "sd_pct": 46.9
+    },
+    "iron": {
+     "n": 56,
+     "mae_rpm": 1176.0,
+     "median_abs_pct": 17.7,
+     "bias_pct": 13.1,
+     "median_pct": 3.6,
+     "sd_pct": 62.1
+    },
+    "wood": {
+     "n": 16,
+     "mae_rpm": 2075.0,
+     "median_abs_pct": 40.8,
+     "bias_pct": 31.0,
+     "median_pct": 30.3,
+     "sd_pct": 62.2
+    },
+    "grouping": "leave one session out (one export = one session = one player)",
+    "evaluated_on": "every TM-measured shot the tier runs on, mishits included",
+    "folds": [
+     {
+      "held_out": "2026-05-06",
+      "coefficient": 186.989,
+      "exponent": 1.2
+     },
+     {
+      "held_out": "2026-10-04",
+      "coefficient": 193.424,
+      "exponent": 1.2
+     },
+     {
+      "held_out": "2026-10-12",
+      "coefficient": 185.852,
+      "exponent": 1.2
+     }
+    ],
+    "leave_one_club_out": {
+     "all": {
+      "n": 116,
+      "mae_rpm": 1601.0,
+      "median_abs_pct": 28.5,
+      "bias_pct": 9.0,
+      "median_pct": -0.1,
+      "sd_pct": 56.6
+     },
+     "wedge": {
+      "n": 44,
+      "mae_rpm": 1984.0,
+      "median_abs_pct": 32.6,
+      "bias_pct": -3.4,
+      "median_pct": -19.6,
+      "sd_pct": 44.1
+     },
+     "iron": {
+      "n": 56,
+      "mae_rpm": 1150.0,
+      "median_abs_pct": 16.6,
+      "bias_pct": 11.9,
+      "median_pct": 1.7,
+      "sd_pct": 60.6
+     },
+     "wood": {
+      "n": 16,
+      "mae_rpm": 2131.0,
+      "median_abs_pct": 41.6,
+      "bias_pct": 33.0,
+      "median_pct": 27.4,
+      "sd_pct": 66.2
+     }
+    },
+    "comparators_same_shots": {
+     "all": {
+      "n": 116,
+      "launch tier (held out by session)": {
+       "n": 116,
+       "mae_rpm": 1575.0,
+       "median_abs_pct": 26.3,
+       "bias_pct": 11.5,
+       "median_pct": 0.5,
+       "sd_pct": 57.1
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 116,
+       "mae_rpm": 1632.0,
+       "median_abs_pct": 28.4,
+       "bias_pct": -0.1,
+       "median_pct": -9.7,
+       "sd_pct": 50.9
+      },
+      "collision model (TM attack + path)": {
+       "n": 116,
+       "mae_rpm": 1167.0,
+       "median_abs_pct": 18.3,
+       "bias_pct": 22.6,
+       "median_pct": 10.8,
+       "sd_pct": 48.9
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 116,
+       "mae_rpm": 1138.0,
+       "median_abs_pct": 19.8,
+       "bias_pct": 6.6,
+       "median_pct": -2.3,
+       "sd_pct": 42.0
+      }
+     },
+     "wedge": {
+      "n": 44,
+      "launch tier (held out by session)": {
+       "n": 44,
+       "mae_rpm": 1902.0,
+       "median_abs_pct": 31.2,
+       "bias_pct": 2.4,
+       "median_pct": -14.9,
+       "sd_pct": 46.9
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 44,
+       "mae_rpm": 2068.0,
+       "median_abs_pct": 34.5,
+       "bias_pct": -8.0,
+       "median_pct": -23.5,
+       "sd_pct": 42.0
+      },
+      "collision model (TM attack + path)": {
+       "n": 44,
+       "mae_rpm": 1262.0,
+       "median_abs_pct": 14.1,
+       "bias_pct": 27.5,
+       "median_pct": 9.0,
+       "sd_pct": 44.4
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 44,
+       "mae_rpm": 1413.0,
+       "median_abs_pct": 23.6,
+       "bias_pct": 1.3,
+       "median_pct": -13.4,
+       "sd_pct": 35.2
+      }
+     },
+     "iron": {
+      "n": 56,
+      "launch tier (held out by session)": {
+       "n": 56,
+       "mae_rpm": 1176.0,
+       "median_abs_pct": 17.7,
+       "bias_pct": 13.1,
+       "median_pct": 3.6,
+       "sd_pct": 62.1
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 56,
+       "mae_rpm": 1205.0,
+       "median_abs_pct": 18.7,
+       "bias_pct": 1.2,
+       "median_pct": -8.0,
+       "sd_pct": 54.9
+      },
+      "collision model (TM attack + path)": {
+       "n": 56,
+       "mae_rpm": 1056.0,
+       "median_abs_pct": 21.5,
+       "bias_pct": 25.7,
+       "median_pct": 14.5,
+       "sd_pct": 54.5
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 56,
+       "mae_rpm": 878.0,
+       "median_abs_pct": 12.6,
+       "bias_pct": 11.7,
+       "median_pct": 1.7,
+       "sd_pct": 48.4
+      }
+     },
+     "wood": {
+      "n": 16,
+      "launch tier (held out by session)": {
+       "n": 16,
+       "mae_rpm": 2075.0,
+       "median_abs_pct": 40.8,
+       "bias_pct": 31.0,
+       "median_pct": 30.3,
+       "sd_pct": 62.2
+      },
+      "first fit 170 v sin(LA)^1.2": {
+       "n": 16,
+       "mae_rpm": 1928.0,
+       "median_abs_pct": 40.8,
+       "bias_pct": 17.3,
+       "median_pct": 14.5,
+       "sd_pct": 57.3
+      },
+      "collision model (TM attack + path)": {
+       "n": 16,
+       "mae_rpm": 1296.0,
+       "median_abs_pct": 22.4,
+       "bias_pct": -2.0,
+       "median_pct": -4.5,
+       "sd_pct": 32.3
+      },
+      "Penner 2001 (TM attack + path)": {
+       "n": 16,
+       "mae_rpm": 1292.0,
+       "median_abs_pct": 23.5,
+       "bias_pct": 3.7,
+       "median_pct": 1.0,
+       "sd_pct": 34.3
+      }
+     }
+    }
+   }
+  }
+ }
+}

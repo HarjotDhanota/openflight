@@ -88,7 +88,7 @@ from .sim import (
 )
 from .source_labels import MODEL_LABELS
 from .speed_correction import evaluate_experimental_total_speed
-from .spin_estimate import calculated_spin_rpm
+from .spin_estimate import calculated_spin_rpm, refit_route
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 from .timing import clone_stage_timing, measured_stage, set_legacy_provenance
@@ -6348,19 +6348,12 @@ def _isolated_stage(shot: Shot, name: str, stage, *args, **kwargs):
         return _STAGE_FAILED
 
 
-# Kinematic spin (spin_estimate): fitted to the 2026-06-08 TrackMan session, 10.5 %
-# median error on TrackMan's own inputs. D38: fitted physics, labelled.
-KINEMATIC_SPIN_METHOD = (
-    "kinematic 170 v sin(LA)^1.2 (spin_estimate, fitted to TrackMan 2026-06-08; "
-    "used when no OPS spin is accepted and the collision model has none)"
-)
-
-
 def _apply_fallback_spin(shot: Shot) -> bool:
     """The spin's last route: with no accepted OPS spin and no collision spin, the
-    kinematic spin from the ball speed and the vertical launch (D38), labelled by its
-    inputs: calculated on the full ball speed, estimated on the radial one; the launch's
-    own label (a camera fallback's: experimental) reaches it in ``shot_metrics``."""
+    kinematic spin (spin-refit-v1, D38: ``spin_estimate.refit_route``) from the best tier
+    the shot's inputs allow, with its 68 % range in ``spin_rpm_range``, labelled by its
+    inputs: calculated on a calculated full speed, estimated on the radial one; the
+    launch's own label (a camera fallback's: experimental) reaches it in ``shot_metrics``."""
     from .source_chain import Candidate, Route, resolve  # noqa: PLC0415
 
     accepted = (
@@ -6387,19 +6380,7 @@ def _apply_fallback_spin(shot: Shot) -> bool:
         return f"collision model: {reason or 'no spin'}"
 
     def kinematic():
-        source = shot.launch_angle_vertical_source
-        if source not in ("radar", "camera", "camera_fallback") or not _finite(
-            shot.launch_angle_vertical
-        ):
-            return "no vertical launch from a sensor"
-        full = shot.ball_speed_full_mph if _finite(shot.ball_speed_full_mph) else None
-        speed = full if full is not None else shot.ball_speed_mph
-        spin = calculated_spin_rpm(speed, shot.launch_angle_vertical)
-        if spin is None:
-            return "outside the kinematic model's launch range"
-        full_status = (shot.ball_speed_full or {}).get("status")
-        label = "calculated" if full is not None and full_status == "calculated" else "estimated"
-        return Candidate(float(spin), label, KINEMATIC_SPIN_METHOD)
+        return refit_route(shot)
 
     def ops_below_floor():
         # the OPS's own reading below the floor stays on the shot under its own label
@@ -6426,18 +6407,16 @@ def _apply_fallback_spin(shot: Shot) -> bool:
         shot.spin_rpm_measured = shot.spin_rpm
         shot.spin_method_measured = shot.spin_method
     shot.spin_rpm = round(float(resolution.value), 0)
-    shot.spin_method = (
-        KINEMATIC_SPIN_METHOD
-        if resolution.label == "calculated"
-        else f"{KINEMATIC_SPIN_METHOD}; on the OPS radial ball speed (no full speed)"
-    )
+    shot.spin_method = resolution.source
+    shot.spin_rpm_range = [round(value, 0) for value in resolution.details["range_rpm"]]
     shot.spin_source = resolution.label
     shot.spin_confidence = None
     logger.info(
-        "[SERVER] Kinematic spin: %.0f rpm (%s, launch %s)",
+        "[SERVER] Kinematic spin: %.0f rpm (%s, %s tier, 68%% range %s)",
         shot.spin_rpm,
         resolution.label,
-        shot.launch_angle_vertical_source,
+        resolution.details["tier"],
+        shot.spin_rpm_range,
     )
     return True
 

@@ -248,9 +248,14 @@ def test_with_neither_the_iwr_nor_the_camera_the_ops_readings_still_publish(kios
     assert metrics["smash_factor"]["value"] is not None
     assert metrics["launch_vertical"]["status"] == "not_measured"
     assert "camera_fallback" in metrics["launch_vertical"]["reason"]
-    # the OPS's own spin, under the label it always had
-    assert metrics["spin_rate"]["value"] == pytest.approx(2300.0)
-    assert metrics["spin_rate"]["source"] == "multitaper_ungated"
+    # no launch, but a club: spin-refit-v1's club tier on the OPS radial speed, with its
+    # range; the OPS's own reading below the floor is kept beside it
+    assert shot.input_sources["spin"]["route"] == "kinematic"
+    assert metrics["spin_rate"]["status"] == "estimated"
+    assert metrics["spin_rate"]["source"].startswith("estimated (model: spin refit v1")
+    assert metrics["spin_rate"]["range"] is not None
+    assert shot.spin_rpm_measured == pytest.approx(2300.0)
+    assert shot.spin_method_measured == "multitaper_ungated"
 
 
 def test_a_stage_that_raises_is_its_own_reason_and_the_shot_still_logs(kiosk, scene):

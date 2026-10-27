@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Spin fallback refitted to TM exports (spin-refit-v1).** The spin chain's
+  kinematic route (after an accepted OPS spin and the collision model) is now a
+  tiered fit to three TM sessions' measured shots: the club and a full club
+  speed, else the club and the ball speed, else (no club) the vertical launch
+  and the ball speed. Held out by session over 125 shots, the club tier's MAE is
+  1556 rpm against 1799 for the first fit (`170 v sin(LA)^1.2`). Every value
+  carries its held-out 68 % range (`spin_rpm_range`) and names its model, data,
+  tier and speed. It is `estimated` on the OPS radial ball speed and
+  `calculated` on a calculated full one. See
+  [spin refit](how-it-works/spin-refit.md).
 - **Flight model refitted to TrackMan 4 (flight-fit-v1).** Ferguson,
   McNally & McPhee's (2022) Cd/Cl/C_M form keeps its shape; its seven constants
   are refitted to TM4 normalized exports on carry, apex, landing angle and hang

@@ -89,6 +89,15 @@ def is_model_geometry_source(source: Optional[str]) -> bool:
     return bool(source) and source.startswith(SPIN_AXIS_MODEL_GEOMETRY_PREFIX)
 
 
+# The spin refit's source text names its model so: "<label> (model: spin refit v1, ...".
+SPIN_REFIT_METHOD_MARKER = "(model: spin refit "
+
+
+def is_spin_refit_method(method: Optional[str]) -> bool:
+    """Whether a Shot.spin_method names the spin refit (whose range the shot carries)."""
+    return bool(method) and SPIN_REFIT_METHOD_MARKER in method
+
+
 def is_estimated_source(source: Optional[str]) -> bool:
     """Whether a Shot source label names a value built on an estimated input."""
     return bool(source) and source.startswith(SPIN_AXIS_ESTIMATED_PREFIX)

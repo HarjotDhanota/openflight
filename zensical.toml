@@ -83,6 +83,7 @@ nav = [
     "how-it-works/ballistics.md",
     "how-it-works/club-arc.md",
     "how-it-works/collision-model.md",
+    "how-it-works/spin-refit.md",
     "how-it-works/positioning.md",
     "how-it-works/setting-up.md",
   ] },

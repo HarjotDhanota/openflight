@@ -492,7 +492,9 @@ The spin it displaces is kept in `spin_rpm_measured` (its method in
 spin. A model's value is never labelled measured.
 
 **The `--calculated-spin` flag.** Its formula, `170 · v · sin(LA)^1.2` in
-`spin_estimate.py`, is empirical, not a published collision model. When the
+`spin_estimate.py`, is empirical, not a published collision model. Without the
+flag, the spin chain's kinematic route after this model is spin-refit-v1
+([spin refit](spin-refit.md)). When the
 flag is on, its value is recorded in `spin_rpm_calculated_empirical`. If
 the collision model's spin is calculated for the shot, that is the one used;
 over a model-geometry model spin, the formula's calculated value is used

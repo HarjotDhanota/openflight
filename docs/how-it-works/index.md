@@ -43,6 +43,11 @@ each stage.
     spin and smash indices from published physics (Penner 2001, Cross & Nathan
     2007) with constants fitted by the maintainer, labelled calculated.
 
+- :material-rotate-3d-variant: **[Spin refit](spin-refit.md)**
+
+    The spin fallback: a tiered fit to TM exports on the club, the speeds or
+    the launch, labelled with its model, its inputs and its held-out range.
+
 - :material-map-marker-radius-outline: **[Radar positioning](positioning.md)**
 
     Where each radar goes and why the geometry matters.

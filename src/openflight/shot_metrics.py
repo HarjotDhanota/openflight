@@ -27,6 +27,7 @@ from .source_labels import (
     is_calculated_source,
     is_measured_source,
     is_model_geometry_source,
+    is_spin_refit_method,
     launch_label,
 )
 
@@ -294,6 +295,8 @@ def _spin_rate(shot):
         shot.get("spin_rpm"),
         status,
         source=_sensor_source(shot, shot.get("spin_method") or source),
+        # the spin refit's 68 % range (its held-out error), while its spin is the shot's
+        range_=shot.get("spin_rpm_range") if is_spin_refit_method(shot.get("spin_method")) else None,
         reason=reason,
         note=note,
     )
