@@ -224,6 +224,12 @@ def _traced_emit(shot: Shot, event: str, payload: dict, *, final: bool, update_k
     """
     trace_fields = _trace_emit_fields(shot, event, payload, final=final, update_kind=update_kind)
     attempt_id = trace_points.attempt_of(shot)
+    instrumentation.mark(
+        "server_processing_state",
+        attempt_id,
+        revision=trace_fields.get("revision"),
+        processing_complete=trace_points.publication_complete(),
+    )
     instrumentation.mark("server_emit_invoked", attempt_id, **trace_fields)
     error = None
     try:

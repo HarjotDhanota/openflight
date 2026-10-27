@@ -4,6 +4,7 @@ import json
 import math
 import queue
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 import serial
@@ -45,6 +46,78 @@ def _radar(monkeypatch, **serial_kwargs):
 
 def _named(marks, name):
     return [m for m in marks if m["name"] == name]
+
+
+def test_fast_runtime_trace_retains_mode_exchanges_and_round_analysis(recorder):
+    shot = SimpleNamespace(extras={"trace_attempt_id": "fast-shot"})
+    result = SimpleNamespace(
+        capture=SimpleNamespace(sequence=7),
+        transfer_mode={"requested": "two_round", "used": "two_round", "fallback_reason": None},
+        transfer={"session_id": 8, "released": True, "uart_exchanges": [{"op": "overview"}]},
+        capture_wait_duration_ns=100,
+        aggregate_duration_ns=500,
+    )
+    trace_points._enriching.shot = shot
+    try:
+        wrapped = trace_points.traced_iwr_runtime(lambda *_a, **_kw: result)
+        assert wrapped(object()) is result
+    finally:
+        trace_points._enriching.shot = None
+    mark = _named(read_marks(recorder), "iwr_runtime_result")[0]
+    assert mark["attempt_id"] == "fast-shot"
+    assert mark["capture_sequence"] == 7
+    assert mark["transfer_mode"] == result.transfer_mode
+    assert mark["transfer"] == result.transfer
+    assert mark["aggregate_duration_ns"] == 500
+
+
+def test_finished_publication_is_distinct_from_a_pending_finalized_result(recorder):
+    shot = SimpleNamespace(extras={"trace_attempt_id": "fast-shot"})
+    observations = []
+
+    def finalize(_shot, **_kwargs):
+        observations.append(trace_points.publication_complete())
+
+    wrapped = trace_points.traced_finalization(finalize)
+    wrapped(shot, awaits_late_result=True)
+    wrapped(shot, awaits_late_result=True, late_update=object())
+    wrapped(shot)
+    assert observations == [False, True, True]
+    assert trace_points.publication_complete() is None
+
+
+def test_finalization_trace_restores_context_and_preserves_error(recorder):
+    def fail(_shot):
+        raise RuntimeError("publication failed")
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        trace_points.traced_finalization(fail)(SimpleNamespace(extras={}))
+    assert trace_points.publication_complete() is None
+
+
+def test_runtime_trace_failure_never_changes_the_estimator_result(recorder, monkeypatch):
+    sentinel = object()
+    wrapped = trace_points.traced_iwr_runtime(lambda *_a: sentinel)
+    assert wrapped(object()) is sentinel
+
+
+def test_readiness_poll_spanning_a_new_edge_cannot_attach_old_ready_state(recorder):
+    recorder.note_edge()
+
+    def publish():
+        recorder.note_edge()
+        return {"state": "green"}
+
+    assert trace_points.traced_ready_light(publish)() == {"state": "green"}
+    sample = _named(read_marks(recorder), "pipeline_ready_sample")[0]
+    assert sample["last_edge_seq"] is None
+
+
+def test_readiness_poll_retains_unchanged_edge_identity(recorder):
+    recorder.note_edge()
+    trace_points.traced_ready_light(lambda: {"state": "green"})()
+    sample = _named(read_marks(recorder), "pipeline_ready_sample")[0]
+    assert sample["last_edge_seq"] == 1
 
 
 # --- OPS capture timer (timing.py) -----------------------------------------------------

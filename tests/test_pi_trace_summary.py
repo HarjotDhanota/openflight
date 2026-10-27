@@ -233,6 +233,128 @@ def as_text(rows):
     return [json.dumps(row) + "\n" for row in rows]
 
 
+def test_fast_trace_reports_actual_exchanges_without_turning_fallback_into_fast(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    at(
+        rec,
+        "iwr_runtime_result",
+        "t-1",
+        T0,
+        2200,
+        transfer_mode={"requested": "two_round", "used": "full", "fallback_reason": "unsupported"},
+        capture_sequence=7,
+        capture_wait_duration_ns=10 * MS,
+        aggregate_duration_ns=200 * MS,
+        transfer=None,
+    )
+    trace, attempts, _ledger = analyse(rec, None)
+    assert trace["integrity"]["valid"]
+    timing = attempts[0]["iwr_transfer"]
+    assert timing["mode"]["used"] == "full"
+    assert timing["exchange_ms"] is None
+
+
+def test_fast_trace_splits_uart_rounds_and_keeps_failed_exchange(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    at(
+        rec,
+        "iwr_runtime_result",
+        "t-1",
+        T0,
+        3000,
+        transfer_mode={"requested": "two_round", "used": "none", "fallback_reason": "lost release"},
+        capture_sequence=7,
+        capture_wait_duration_ns=10 * MS,
+        aggregate_duration_ns=1100 * MS,
+        transfer={
+            "session_id": 8,
+            "released": False,
+            "error": "lost release",
+            "analysis_s": [0.1, 0.2],
+            "uart_exchanges": [
+                {"op": "overview", "started_ns": T0 + 100 * MS, "completed_ns": T0 + 740 * MS},
+                {"op": "cells", "started_ns": T0 + 2200 * MS, "completed_ns": T0 + 2440 * MS},
+                {
+                    "op": "release",
+                    "started_ns": T0 + 2800 * MS,
+                    "completed_ns": T0 + 2810 * MS,
+                    "error": "lost release",
+                },
+            ],
+        },
+    )
+    _trace, attempts, _ledger = analyse(rec, None)
+    timing = attempts[0]["iwr_transfer"]
+    assert timing["exchange_ms"] == {"overview": 640.0, "cells": 240.0, "release": 10.0}
+    assert timing["analysis_ms"] == [100.0, 200.0]
+    assert timing["released"] is False
+    assert timing["exchanges"][-1]["error"] == "lost release"
+
+
+def test_completed_revision_excludes_pending_final_and_keeps_late_display(new_trace):
+    rec = new_trace()
+    edge(rec, T0)
+    ops(rec, "t-1", T0)
+    samples(rec, T0, times_ms=(1900, 3000))
+    emit(rec, "t-1", T0, 1885, 1)
+    at(rec, "server_processing_state", "t-1", T0, 1885, revision=1, processing_complete=False)
+    paint(rec, "t-1", T0, 1, 1900)
+    emit(rec, "t-1", T0, 2900, 2, update_kind="late_update")
+    at(rec, "server_processing_state", "t-1", T0, 2900, revision=2, processing_complete=True)
+    paint(rec, "t-1", T0, 2, 2920, received=2905, kind="late_update")
+    _trace, attempts, _ledger = analyse(rec, None)
+    attempt = attempts[0]
+    assert attempt["completed_revision"] == 2
+    assert attempt["stages_ms"]["anchor_to_completed_post_render"] == pytest.approx(2920)
+    assert attempt["stages_ms"]["anchor_to_first_post_render"] == pytest.approx(1900)
+
+
+def test_legacy_final_flag_does_not_invent_processing_completion(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    _trace, attempts, _ledger = analyse(rec, None)
+    assert attempts[0]["completed_revision"] is None
+    assert "anchor_to_completed_post_render" not in attempts[0]["stages_ms"]
+
+
+def test_completed_display_needs_matching_visible_core(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0, rendered={"ball_speed_mph": 999, "launch_angle_vertical": 18})
+    at(rec, "server_processing_state", "t-1", T0, 1885, revision=1, processing_complete=True)
+    _trace, attempts, _ledger = analyse(rec, None)
+    assert attempts[0]["completed_revision"] == 1
+    assert "anchor_to_completed_post_render" not in attempts[0]["stages_ms"]
+
+
+def test_readiness_is_a_same_edge_sensor_poll_not_the_ops_rearm(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    at(rec, "pipeline_ready_sample", None, T0, 2500, state="amber", last_edge_seq=1)
+    at(rec, "pipeline_ready_sample", None, T0, 2600, state="green", last_edge_seq=2)
+    at(rec, "pipeline_ready_sample", None, T0, 2700, state="green", last_edge_seq=1)
+    _trace, attempts, _ledger = analyse(rec, None)
+    attempt = attempts[0]
+    assert attempt["stages_ms"]["anchor_to_ready_observed"] == pytest.approx(2700)
+    assert (
+        attempt["readiness"]["semantics"]
+        == "reported_sensor_readiness_at_poll_not_exact_transition"
+    )
+
+
+def test_fast_report_does_not_relabel_exchange_time_as_wire_or_impact(new_trace):
+    rec = new_trace()
+    shot(rec, "t-1", T0)
+    trace, attempts, ledger = analyse(rec, None, allowance=None)
+    summary = pts.summarize(trace, attempts, ledger, allowance_ms=None)
+    report = pts.render_markdown(summary)
+    assert "Fast pipeline evidence per attempt" in report
+    assert "not pure wire time" in report
+    assert "not physical screen presentation" in report
+    assert summary["p1"]["complete"] is False
+
+
 # --- percentiles and browser mapping ---------------------------------------------------------
 
 

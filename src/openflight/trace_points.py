@@ -16,6 +16,7 @@ import numpy as np
 
 from openflight import instrumentation, server
 from openflight.iwr6843.monitor import IWR6843CaptureMonitor
+from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.ops243 import OPS243Radar
 from openflight.timing import OpsCaptureTimer
 
@@ -24,6 +25,7 @@ _installed = False
 _install_lock = threading.Lock()
 # the shot each enrichment thread is working on (its camera wait has only the future)
 _enriching = threading.local()
+_publishing = threading.local()
 
 
 def attempt_of(shot) -> str | None:
@@ -285,7 +287,80 @@ def traced_enrich(enrich):
         try:
             return enrich(shot)
         finally:
+            instrumentation.mark("enrichment_done", attempt_of(shot))
             _enriching.shot = None
+
+    return traced
+
+
+def traced_iwr_runtime(process):
+    """Retain the real child exchange brackets on the matched shot's trace."""
+
+    @functools.wraps(process)
+    def traced(self, *args, **kwargs):
+        result = process(self, *args, **kwargs)
+        if _tracing():
+
+            def record():
+                instrumentation.mark(
+                    "iwr_runtime_result",
+                    attempt_of(getattr(_enriching, "shot", None)),
+                    capture_sequence=getattr(result.capture, "sequence", None),
+                    transfer_mode=result.transfer_mode,
+                    transfer=result.transfer,
+                    capture_wait_duration_ns=result.capture_wait_duration_ns,
+                    aggregate_duration_ns=result.aggregate_duration_ns,
+                )
+
+            _guarded("IWR runtime timing", record)
+        return result
+
+    return traced
+
+
+def publication_complete() -> bool | None:
+    """Whether this publication has finished enrichment, independent of final=True."""
+    return getattr(_publishing, "complete", None)
+
+
+def traced_finalization(finalize):
+    """Distinguish completed processing from an OPS result awaiting late enrichment."""
+
+    @functools.wraps(finalize)
+    def traced(shot, *args, **kwargs):
+        previous = publication_complete()
+        _publishing.complete = (
+            not kwargs.get("awaits_late_result", False) or kwargs.get("late_update") is not None
+        )
+        instrumentation.mark("finalization_started", attempt_of(shot))
+        try:
+            return finalize(shot, *args, **kwargs)
+        finally:
+            instrumentation.mark("finalization_done", attempt_of(shot))
+            _publishing.complete = previous
+
+    return traced
+
+
+def traced_ready_light(publish):
+    """Sample reported sensor readiness without treating a poll as the transition."""
+
+    @functools.wraps(publish)
+    def traced(*args, **kwargs):
+        edge_before = instrumentation.last_edge_seq() if _tracing() else None
+        payload = publish(*args, **kwargs)
+        if _tracing():
+            edge_after = instrumentation.last_edge_seq()
+            _guarded(
+                "readiness sample",
+                lambda: instrumentation.mark(
+                    "pipeline_ready_sample",
+                    None,
+                    state=payload.get("state"),
+                    last_edge_seq=edge_after if edge_after == edge_before else None,
+                ),
+            )
+        return payload
 
     return traced
 
@@ -370,6 +445,8 @@ SERVER_WRAPPERS = {
     "_await_camera_prefetch": traced_await,
     "_fuse_camera_measurements": traced_fuse_camera,
     "_queue_shot_finalization": traced_queue_finalization,
+    "_finalize_shot_detected": traced_finalization,
+    "_publish_ready_light": traced_ready_light,
 }
 
 
@@ -388,4 +465,5 @@ def install() -> None:
         _wrap_ops243()
         _wrap_debounce()
         _wrap_server()
+        IWR6843Runtime.process_shot = traced_iwr_runtime(IWR6843Runtime.process_shot)
         _installed = True

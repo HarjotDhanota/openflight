@@ -118,6 +118,12 @@ STAGES: tuple[tuple[str, str, str], ...] = (
     ("goal_emit_to_receive", "emit_goal", "received_goal"),
     ("goal_receive_to_post_render", "received_goal", "painted_goal"),
     ("anchor_to_goal_post_render", "anchor", "painted_goal"),
+    ("enrichment", "enrichment_started", "enrichment_done"),
+    ("callback_to_completed_emit", "server_callback_started", "emit_completed"),
+    ("completed_emit_to_receive", "emit_completed", "received_completed"),
+    ("completed_receive_to_post_render", "received_completed", "painted_completed"),
+    ("anchor_to_completed_post_render", "anchor", "painted_completed"),
+    ("anchor_to_ready_observed", "anchor", "pipeline_ready_observed"),
 )
 
 
@@ -577,6 +583,11 @@ def _revisions(own: Sequence[dict], samples: Sequence[dict], sid: Optional[str])
         if m["name"] == "server_emit_returned" and m.get("error") is not None
     }
     revisions = []
+    processing = {
+        m.get("revision"): m.get("processing_complete")
+        for m in own
+        if m["name"] == "server_processing_state"
+    }
     for number in sorted(emits):
         emit = emits[number]
         revisions.append(
@@ -584,6 +595,7 @@ def _revisions(own: Sequence[dict], samples: Sequence[dict], sid: Optional[str])
                 "revision": number,
                 "update_kind": emit.get("update_kind"),
                 "final": emit.get("final"),
+                "processing_complete": processing.get(number),
                 "event": emit.get("event"),
                 "core_eligible": emit.get("core_eligible") is True,
                 "core_reasons": list(emit.get("core_reasons") or []),
@@ -613,6 +625,45 @@ def _goal_revision(revisions: Sequence[dict]) -> Optional[dict]:
     return (painted or eligible or [None])[0]
 
 
+def _completed_revision(revisions: Sequence[dict]) -> Optional[dict]:
+    completed = [r for r in revisions if r.get("processing_complete") is True]
+    return completed[-1] if completed else None
+
+
+def _iwr_transfer(own: Sequence[dict]) -> dict | None:
+    records = [m for m in own if m["name"] == "iwr_runtime_result"]
+    if len(records) != 1:
+        return None
+    record = records[0]
+    transfer = record.get("transfer") or {}
+    exchanges = transfer.get("uart_exchanges", [])
+    durations: dict[str, float] = {}
+    for exchange in exchanges:
+        start, end = exchange.get("started_ns"), exchange.get("completed_ns")
+        valid_ticks = (
+            isinstance(start, int)
+            and not isinstance(start, bool)
+            and isinstance(end, int)
+            and not isinstance(end, bool)
+        )
+        if valid_ticks and end >= start and exchange.get("op") in ("overview", "cells", "release"):
+            op = exchange["op"]
+            durations[op] = durations.get(op, 0.0) + (end - start) / MS
+    return {
+        "mode": record.get("transfer_mode"),
+        "capture_sequence": record.get("capture_sequence"),
+        "capture_wait_duration_ns": record.get("capture_wait_duration_ns"),
+        "aggregate_duration_ns": record.get("aggregate_duration_ns"),
+        "session_id": transfer.get("session_id"),
+        "released": transfer.get("released"),
+        "error": transfer.get("error"),
+        "exchanges": exchanges,
+        "exchange_ms": durations or None,
+        "analysis_ms": [s * 1000 for s in transfer.get("analysis_s", [])],
+        "semantics": "host_command_response_brackets_include_firmware_and_scheduling",
+    }
+
+
 def _stage_marks(usable: Sequence[dict]) -> list[dict]:
     """Marks that time a stage: a re-arm that did not re-arm (exception, write timeout)
     is not a re-arm time (A-M7), so its stage stays unobserved; the outcome is kept."""
@@ -631,10 +682,13 @@ def _stage_times(usable: Sequence[dict], anchor: dict, revisions: Sequence[dict]
     for label, revision in (
         ("first", revisions[0] if revisions else None),
         ("goal", _goal_revision(revisions)),
+        ("completed", _completed_revision(revisions)),
     ):
         if revision is None:
             continue
         times[f"emit_{label}"] = [revision["emit_ns"]]
+        if label == "completed" and (revision["paint"] != QUALIFYING or revision["emit_error"]):
+            continue
         for key, name in (("received_ns", "received"), ("painted_ns", "painted")):
             if revision[key] is not None:
                 times[f"{name}_{label}"] = [revision[key]]
@@ -690,6 +744,10 @@ def _attempt(own: list, edges: list, samples: list, rate_hz: float, sid: Optiona
         "untagged_emits": _untagged_emits(own),
         "first_revision": revisions[0]["revision"] if revisions else None,
         "goal_revision": goal["revision"] if goal else None,
+        "completed_revision": (
+            _completed_revision(revisions)["revision"] if _completed_revision(revisions) else None
+        ),
+        "iwr_transfer": _iwr_transfer(own),
         "core_ready_ns": core_ready["monotonic_ns"] if core_ready else None,
         "stages_ms": _stages_ms(_stage_times(_stage_marks(usable), anchor, revisions)),
         "rearm_outcome": rearm_done.get("outcome") if rearm_done else None,
@@ -731,8 +789,36 @@ def build_attempts(
             attempt["event_wall_s"] = (attempt["first_byte_ns"] + offset) / 1e9
         else:
             attempt["event_wall_s"] = None
+        _add_readiness(attempt, marks)
     attempts.sort(key=lambda a: a["start_ns"])
     return attempts
+
+
+def _add_readiness(attempt: dict, marks: Sequence[dict]) -> None:
+    attempt["readiness"] = None
+    edge_seq = attempt.get("edge_seq")
+    if edge_seq is None:
+        return
+    ready = next(
+        (
+            m
+            for m in sorted(marks, key=lambda m: m["monotonic_ns"])
+            if m["name"] == "pipeline_ready_sample"
+            and m.get("state") == "green"
+            and m.get("last_edge_seq") == edge_seq
+            and m["monotonic_ns"] >= attempt["first_byte_ns"]
+        ),
+        None,
+    )
+    if ready is None:
+        return
+    attempt["readiness"] = {
+        "observed_ns": ready["monotonic_ns"],
+        "semantics": "reported_sensor_readiness_at_poll_not_exact_transition",
+    }
+    if attempt["anchor_ns"] is not None:
+        middle = sum(attempt["anchor_ns"]) // 2
+        attempt["stages_ms"]["anchor_to_ready_observed"] = (ready["monotonic_ns"] - middle) / MS
 
 
 # --- step 2b: the owner's sheet and the reconciled ledger ---------------------------------
@@ -1463,6 +1549,40 @@ def _stage_lines(summary: dict) -> list[str]:
     return lines
 
 
+def _transfer_lines(summary: dict) -> list[str]:
+    lines = [
+        "## Fast pipeline evidence per attempt",
+        "",
+        "Command/response brackets include firmware work and scheduling; they are not pure "
+        "wire time. Overview may overlap OPS collection. Do not add overlapping stages.",
+        "",
+        "Completed post-render means the newest observed processing-complete revision's "
+        "live core was acknowledged, not physical screen presentation or every metric tab. "
+        "Readiness is a sensor-state poll, not an exact rearm transition. "
+        "Missing marks stay unknown.",
+        "",
+        "| attempt | requested / used | overview ms | cells ms | release ms | released | "
+        "completed revision | completed post-render ms after anchor | "
+        "readiness ms after anchor | error / fallback |",
+        "|---|---|---:|---:|---:|---|---:|---:|---:|---|",
+    ]
+    for attempt in summary["attempts"]:
+        transfer = attempt.get("iwr_transfer") or {}
+        mode = transfer.get("mode") or {}
+        exchanges = transfer.get("exchange_ms") or {}
+        stages = attempt["stages_ms"]
+        lines.append(
+            f"| {attempt['attempt_id']} | {mode.get('requested', 'unknown')} / "
+            f"{mode.get('used', 'unknown')} | {_ms(exchanges.get('overview'))} | "
+            f"{_ms(exchanges.get('cells'))} | {_ms(exchanges.get('release'))} | "
+            f"{transfer.get('released')} | {attempt.get('completed_revision')} | "
+            f"{_ms(stages.get('anchor_to_completed_post_render'))} | "
+            f"{_ms(stages.get('anchor_to_ready_observed'))} | "
+            f"{transfer.get('error') or mode.get('fallback_reason') or 'none'} |"
+        )
+    return lines + [""]
+
+
 def _ledger_lines(summary: dict) -> list[str]:
     lines = [
         "## Ledger (one row per sheet row)",
@@ -1497,6 +1617,14 @@ def render_markdown(summary: dict) -> str:
         "the start and end of each run, per the gate checklist).",
         "",
     ]
-    for section in (_t1_lines, _p1_lines, _o4_lines, _context_lines, _stage_lines, _ledger_lines):
+    for section in (
+        _t1_lines,
+        _p1_lines,
+        _o4_lines,
+        _context_lines,
+        _stage_lines,
+        _transfer_lines,
+        _ledger_lines,
+    ):
         lines += section(summary)
     return "\n".join(lines)

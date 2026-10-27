@@ -108,6 +108,44 @@ def test_mode_is_frozen_at_edge_even_if_ui_changes_before_ops_arrives(live_monit
     assert runtime.transfer_mode.status().requested == "full"
 
 
+def test_trace_retains_real_serial_child_exchanges_on_the_matched_shot(
+    live_monitor, monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    from openflight import pi_trace, research_hooks, trace_points
+    from openflight.iwr6843.dump import parse_dump
+    from tests.pi_trace_helpers import read_marks
+
+    assert research_hooks.extension is not None
+    monitor, _radar, runtime, _events = live_monitor()
+    recorder = pi_trace.TraceRecorder(tmp_path / "fast-trace.jsonl")
+    pi_trace.set_recorder(recorder)
+    trace_points._enriching.shot = SimpleNamespace(extras={"trace_attempt_id": "fast-shot"})
+
+    def analyse(raw, *_args, **_kwargs):
+        _meta, cube = parse_dump(raw)
+        complex(cube[0, 0, 0, 0])
+        return _Analysis(measurement=None, withheld_reason="synthetic_scene")
+
+    monkeypatch.setattr(runtime, "_analyse", analyse)
+    try:
+        edge = time.time()
+        assert monitor.notify_trigger(edge)
+        result = runtime.process_shot(impact_timestamp=edge, ball_speed_mph=100, club="7i")
+    finally:
+        trace_points._enriching.shot = None
+        pi_trace.set_recorder(None)
+    marks = [m for m in read_marks(recorder) if m["name"] == "iwr_runtime_result"]
+    assert len(marks) == 1 and marks[0]["attempt_id"] == "fast-shot"
+    assert marks[0]["transfer_mode"]["used"] == "two_round"
+    assert marks[0]["transfer"] == result.transfer
+    assert result.transfer["released"]
+    exchanges = result.transfer["uart_exchanges"]
+    assert [e["op"] for e in exchanges] == ["overview", "cells", "release"]
+    assert all(e["started_ns"] <= e["completed_ns"] for e in exchanges)
+
+
 def test_unmatched_capture_releases_and_saves_overview_instead_of_freezing_forever(
     live_monitor, monkeypatch, tmp_path
 ):
