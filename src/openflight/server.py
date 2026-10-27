@@ -41,6 +41,7 @@ from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
     get_club_physics,
     get_club_simulation_profile,
+    mock_attack_angle_mean_deg,
 )
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, SPIN_CONFIDENCE_RELIABLE, Shot, summarize_shots
 from .ops243 import (
@@ -4708,7 +4709,7 @@ class MockLaunchMonitor:
 
         club_aoa = round(
             random.gauss(
-                defaults.angle_of_attack_mean_deg,
+                mock_attack_angle_mean_deg(self._current_club),
                 defaults.angle_of_attack_std_dev_deg,
             ),
             1,
