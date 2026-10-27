@@ -4,6 +4,27 @@ Raw tester exports are local evidence. They are never uploaded by FlightWeb or
 by the contribution-package tool. Build a package only after a contributor has
 given the documented consent for the intended audience.
 
+## Collection and reference review
+
+Contributors collect and package sessions; **frame marking is not required**.
+Harjot selects recordings for annotation and curates the official benchmark's
+reference matches and acceptance criteria. Keep incomplete captures and observed
+misses so the maintainer can evaluate availability as well as successful shots.
+
+Automatic session review reports capture failures, labelled outputs and recorded
+coverage. A session without independent references is **accuracy not graded**.
+It is still useful for robustness and bug reproduction. Once reviewed marks or
+reference measurements exist, the benchmark grades automatically on each code
+version. Incoming annotations are not automatically approved references.
+
+For selected captures, the maintainer can annotate copies on their own computer
+using [saved-capture review](recorded-track-comparison.md). Download the manifests;
+browser annotation drafts are not included by **Review and package**. Annotation
+does not alter the measurement pipeline or replace raw evidence. The tools are
+local and open source; this review policy is not an account permission system.
+
+## Packaging
+
 Create a metadata file with no name, email, address, machine name, or local
 path. `contributor_id` is a pseudonym, not an account identifier.
 

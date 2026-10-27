@@ -708,7 +708,17 @@ def camera_ball(  # pylint: disable=too-many-return-statements
         return stage("camera_ball", FAIL, cause="DATA", gate="ball_flight", evidence=facts)
     # no IWR range, no distance: the camera never gives one (D17)
     if status in ("rejected_calibrated_requires_iwr_range", "rejected_no_iwr_range"):
-        return _blocked("camera_ball", upstream["lcmf"], gate="ball_flight")
+        if upstream["lcmf"]["status"] in (FAIL, NOT_REACHED):
+            return _blocked("camera_ball", upstream["lcmf"], gate="ball_flight")
+        timing = estimate.get("timing_anchor")
+        return stage(
+            "camera_ball",
+            FAIL,
+            cause="DATA" if timing == "no_ball_departure" else "UNKNOWN",
+            gate="ball_flight",
+            evidence=f"{facts}; camera has no usable IWR range; timing {timing or 'not recorded'}; "
+            f"range evidence {estimate.get('range_evidence_status') or 'not recorded'}",
+        )
     if status in ("rejected_reference_ball_not_found", "rejected_implausible_reference_ball"):
         facts = f"{status} ({_reference_facts(diagnostics)})"
         gate = mapping(diagnostics.get("gate"))

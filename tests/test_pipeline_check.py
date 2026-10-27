@@ -314,6 +314,41 @@ def test_a_blocked_stage_inherits_the_root_cause():
     )
 
 
+@pytest.mark.parametrize(
+    "status", ["rejected_no_iwr_range", "rejected_calibrated_requires_iwr_range"]
+)
+@pytest.mark.parametrize("upstream_status", [check.PASS, check.LABELLED, check.NOT_REQUESTED])
+@pytest.mark.parametrize("timing_anchor,cause", [("no_ball_departure", "DATA"), (None, "UNKNOWN")])
+def test_camera_range_refusal_does_not_inherit_a_successful_launch_cause(
+    status, upstream_status, timing_anchor, cause
+):
+    result = {"ball_estimate": {"status": status, "timing_anchor": timing_anchor}}
+    row = check.camera_ball(
+        result, _upstream(lcmf=check.stage("lcmf", upstream_status)), setup_ball=None
+    )
+
+    assert (row["status"], row["cause"], row["blocked_by"]) == (check.FAIL, cause, None)
+    assert status in row["evidence"]
+    assert row["gate"] == check.GATES["ball_flight"]
+
+
+def test_camera_range_refusal_preserves_the_failed_upstream_root_cause():
+    tee = check.stage("tee_range", check.FAIL, cause="DATA", evidence="no range")
+    lcmf = check.lcmf(
+        {"status": "withheld", "reason": "tee_range_unresolved"}, _upstream(tee_range=tee)
+    )
+    row = check.camera_ball(
+        {"ball_estimate": {"status": "rejected_no_iwr_range"}},
+        _upstream(lcmf=lcmf),
+        setup_ball=None,
+    )
+    assert (row["status"], row["cause"], row["blocked_by"]) == (
+        check.NOT_REACHED,
+        "DATA",
+        "tee_range",
+    )
+
+
 def test_a_face_angle_on_a_low_consensus_start_direction_is_labelled():
     live = {
         "face_angle_status": "d_plane_estimate",
