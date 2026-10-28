@@ -1280,6 +1280,10 @@
       .ball-mark[data-state='ambiguous'] {
         stroke: #ffb300;
       }
+      .ball-mark[data-state='found'][data-confirmable='false'] {
+        stroke: #ffb300;
+        stroke-dasharray: 6 4;
+      }
       .ball-check circle {
         fill: #1b8a3a;
         stroke: #ffffff;
@@ -3498,6 +3502,7 @@
       const ballConfirmable = (ball) => ball?.state === 'found' && ball.confirmable !== false;
       function ballStatusText(ball) {
         if (!ball) return BALL_STATE_TEXT.waiting;
+        if (ball.observation_state === 'retained') return 'Last seen here: checking the ball again before you confirm…';
         let text = ball.message || BALL_STATE_TEXT[ball.state] || String(ball.state);
         if (ball.state === 'found' && !ballConfirmable(ball)) {
           return Number(ball.look_age_s) > 2
@@ -3560,12 +3565,13 @@
           mark.setAttribute('cy', Number(ball.center_px[1]).toFixed(1));
           mark.setAttribute('r', (ball.diameter_px / 2 + 4 * k).toFixed(1));
           mark.dataset.state = ball.state;
+          mark.dataset.confirmable = String(ballConfirmable(ball));
           mark.setAttribute('display', 'inline');
         } else {
           mark.setAttribute('display', 'none');
         }
         const check = el('placement-check');
-        if (ball.state === 'found') {
+        if (ballConfirmable(ball)) {
           // the check mark sits on the box's top-right corner, big enough to see from the ball
           const r = 18 * k;
           const top = Math.min(...outline.map((point) => point[1]));

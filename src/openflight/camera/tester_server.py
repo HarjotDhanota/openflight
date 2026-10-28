@@ -4671,6 +4671,8 @@ class BoxBallLocator:
         self._found_looks = 0
         self._misses = 0
         self._found_at: float | None = None
+        self._candidate: dict | None = None
+        self._reacquiring = False
         self._failure: str | None = None
         self._state: dict = self._ball_payload({"state": "waiting", "selected": None}, None)
 
@@ -4680,6 +4682,7 @@ class BoxBallLocator:
         now = self._clock()
         return {
             "state": state,
+            "observation_state": classified.get("observation_state", state),
             "looked_at": now,
             "center_px": (
                 [round(float(selected["x_px"]), 1), round(float(selected["y_px"]), 1)]
@@ -4689,7 +4692,7 @@ class BoxBallLocator:
             "diameter_px": round(float(selected["diameter_px"]), 2) if selected else None,
             "stable_s": round(now - stable_since, 2) if stable_since is not None else None,
             "stable_since": stable_since,
-            "message": placement_box.BALL_MESSAGES[state],
+            "message": classified.get("message") or placement_box.BALL_MESSAGES[state],
             "frame_size_px": [int(self.camera.image_width_px), int(self.camera.image_height_px)],
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
@@ -4701,12 +4704,13 @@ class BoxBallLocator:
             or self._clock() - self._started >= BOX_BALL_SETTLE_S
         )
         started = time.monotonic()
+        in_box: dict = {}
         try:
             anchor = self._follow.get()
             _result, in_box = _guided_camera_analysis(
                 frames, self.camera, self.box, follow=anchor, follow_rivals=True
             )
-            if anchor is not None and in_box.get("status") != "selected":
+            if anchor is not None and in_box.get("status") not in {"selected", "ambiguous"}:
                 _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
                 anchor = None
             if in_box.get("status") != "selected":
@@ -4734,18 +4738,38 @@ class BoxBallLocator:
                 logger.info("[BOX_BALL] the ball search failed: %s", failure)
             self._failure = failure
             previous = self._state
+            if (
+                classified["state"] == "found"
+                and self._candidate is not None
+                and not _same_box_ball(self._candidate, classified["selected"])
+                and any(
+                    item.get("rejection_reason") is None
+                    and item.get("score") is not None
+                    and _same_box_ball(self._candidate, item)
+                    for item in in_box.get("candidates", ())
+                )
+            ):
+                classified = {"state": "ambiguous", "selected": None}
+                self._follow.set(None)
             classified = self._hold_found(previous, classified)
             stable_since = None
             if classified["state"] == "found":
                 same = _same_box_ball(previous, classified["selected"])
                 stable_since = previous.get("stable_since") if same else self._clock()
+                if not same and classified.get("observation_state") == "observed":
+                    self._follow.set(classified["selected"])
             self._state = self._ball_payload(classified, stable_since)
             current = self._with_freshness(dict(self._state))
-        if previous.get("state") != current["state"]:
+        if (previous.get("state"), previous.get("observation_state")) != (
+            current["state"],
+            current["observation_state"],
+        ):
             logger.info(
-                "[BOX_BALL] ball %s -> %s (found looks %d, misses %d)",
+                "[BOX_BALL] ball %s -> %s (%s, frame %d, found looks %d, misses %d)",
                 previous.get("state"),
                 current["state"],
+                current["observation_state"],
+                frame_sequence,
                 self._found_looks,
                 self._misses,
             )
@@ -4755,22 +4779,53 @@ class BoxBallLocator:
             **result,
             "ball_state": classified["state"],
             "ball_search_ms": round(took * 1000, 1),
+            "ball_observation": {
+                "frame_sequence": frame_sequence,
+                "status": in_box.get("status", "analysis_error"),
+                "selected": in_box.get("selected"),
+                "candidates": in_box.get("candidates", []),
+                "observation_state": current["observation_state"],
+            },
         }
 
     def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
-        """Count the found streak; a found ball stays found through a few misses."""
+        """Confirm one identity; distinguish a retained marker from fresh support."""
         if classified["state"] == "found":
-            same = _same_box_ball(previous, classified["selected"])
+            selected = classified["selected"]
+            same = self._candidate is not None and _same_box_ball(self._candidate, selected)
+            if not same:
+                self._reacquiring = self._candidate is not None
             self._found_looks = self._found_looks + 1 if same else 1
+            self._candidate = {
+                "state": "found",
+                "center_px": [selected["x_px"], selected["y_px"]],
+                "diameter_px": selected["diameter_px"],
+            }
             self._misses = 0
             self._found_at = self._clock()
-            return dict(classified)
+            if self._found_looks >= BOX_BALL_FOUND_LOOKS:
+                self._reacquiring = False
+            if self._reacquiring:
+                return {
+                    "state": "waiting",
+                    "selected": None,
+                    "observation_state": "acquiring",
+                    "message": "Checking the new ball position. Keep the ball still.",
+                }
+            return {**classified, "observation_state": "observed"}
+        if classified["state"] in {"ambiguous", "outside_box"}:
+            self._found_looks = 0
+            self._misses = 0
+            self._found_at = None
+            self._reacquiring = self._candidate is not None
+            return {**classified, "observation_state": classified["state"]}
         if previous.get("state") == "found" and self._misses < BOX_BALL_MISS_TOLERANCE:
             # a missed look: the ball found a moment ago is still the ball
             self._misses += 1
             center = previous.get("center_px") or [0.0, 0.0]
             return {
                 "state": "found",
+                "observation_state": "retained",
                 "selected": {
                     "x_px": center[0],
                     "y_px": center[1],
@@ -4780,6 +4835,8 @@ class BoxBallLocator:
         self._found_looks = 0
         self._misses = 0
         self._found_at = None
+        self._candidate = None
+        self._reacquiring = False
         return dict(classified)
 
     def _with_freshness(self, state: dict) -> dict:
@@ -4793,6 +4850,7 @@ class BoxBallLocator:
         state["missed_looks"] = self._misses if state.get("state") == "found" else 0
         state["confirmable"] = bool(
             state.get("state") == "found"
+            and state.get("observation_state") == "observed"
             and self._found_looks >= BOX_BALL_FOUND_LOOKS
             and age is not None
             and age <= BOX_BALL_LOOK_MAX_AGE_S
@@ -8889,6 +8947,7 @@ def create_app(
         return {
             "state": state,
             "center_px": ball.get("center_px"),
+            "observation_state": ball.get("observation_state"),
             "diameter_px": ball.get("diameter_px"),
             "stable_s": ball.get("stable_s"),
             "range_m": ranged.get("range_m"),
@@ -9094,7 +9153,10 @@ def create_app(
         camera, reading, roll = patch_camera()
         binding = placement_box_binding(eligibility)
         ball = box_ball_now(tester_id)
-        if ball.get("state") == "found" and not ball.get("confirmable", True):
+        if (
+            ball.get("state") == "found"
+            or ball.get("observation_state") in {"ambiguous", "acquiring"}
+        ) and not ball.get("confirmable", True):
             # field 24 Oct: a box confirmed on a look 13.2 s old; only a fresh one
             age = ball.get("look_age_s")
             raise RuntimeError(

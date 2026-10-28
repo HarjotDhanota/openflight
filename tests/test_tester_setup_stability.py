@@ -475,6 +475,41 @@ def test_a_box_is_confirmed_only_on_a_fresh_found_look(tmp_path, inputs, monkeyp
     assert seen["stable_s"] >= 1.0
 
 
+@pytest.mark.parametrize("missing", ["ambiguous", "not_found", "replacement"])
+def test_box_confirmation_requires_current_unambiguous_support(
+    tmp_path, inputs, monkeypatch, missing
+):
+    from tests.test_tester_tee_range_flow import FakeLive
+
+    live = FakeLive()
+    app, tester = app_for(tmp_path, inputs, monkeypatch, live_view=live)
+    client = app.test_client()
+    client.post("/api/tester/placement-box", json={"tester_id": tester, "action": "show"})
+    locator = live.analyzer
+    locator._clock = Clock()
+    current = [
+        {"status": "selected", "selected": {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}}
+    ]
+    monkeypatch.setattr(ts, "_guided_camera_analysis", lambda *_args, **_kwargs: (None, current[0]))
+    frames = np.full((3, 800, 1280), 105, dtype=np.uint8)
+    locator(frames, 1)
+    locator(frames, 2)
+    assert box_state(client, tester)["ball"]["confirmable"] is True
+    current[0] = (
+        {"status": "selected", "selected": {"x_px": 720.0, "y_px": 440.0, "diameter_px": 20.0}}
+        if missing == "replacement"
+        else {"status": missing, "selected": None}
+    )
+    locator(frames, 3)
+    ball = box_state(client, tester)["ball"]
+    assert ball["confirmable"] is False
+    assert (
+        ball["observation_state"]
+        == {"ambiguous": "ambiguous", "not_found": "retained", "replacement": "acquiring"}[missing]
+    )
+    assert confirm_box(client, tester, "unsupported-ball").status_code == 409
+
+
 def test_a_failing_live_analyzer_is_logged_once(monkeypatch, caplog):
     from tests.test_tester_server import (  # pylint: disable=import-outside-toplevel
         FakeCamera,

@@ -400,3 +400,32 @@ for (const viewport of [
     }
   });
 }
+
+for (const viewport of [{ width: 800, height: 400 }, { width: 800, height: 480 }, { width: 1024, height: 600 }]) {
+  test(`a retained ball marker cannot look confirmed at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const mocks = await boxStep(page, { ball: foundBall({ confirmable: true, observation_state: 'observed' }) });
+    await page.goto('/tester.html');
+    const marker = page.locator('#placement-ball');
+    const check = page.locator('#placement-check');
+    await expect(check).toHaveAttribute('display', 'inline');
+
+    mocks.setBall(foundBall({ confirmable: false, observation_state: 'retained', look_age_s: 0.5 }));
+    await expect(page.locator('#placement-confirm')).toBeDisabled();
+    await expect(check).toHaveAttribute('display', 'none');
+    await expect(marker).toHaveAttribute('cx', '640.0');
+    await expect(marker).toHaveCSS('stroke-dasharray', '6px, 4px');
+    await expect(page.locator('#placement-ball-status')).toContainText('Last seen here');
+
+    for (const state of ['ambiguous', 'waiting']) {
+      mocks.setBall(foundBall({ state, center_px: null, diameter_px: null, confirmable: false, message: null }));
+      await expect(marker).toHaveAttribute('display', 'none');
+      await expect(page.locator('#placement-confirm')).toBeDisabled();
+    }
+    mocks.setBall(foundBall({ center_px: [740, 478], confirmable: true, observation_state: 'observed' }));
+    await expect(marker).toHaveAttribute('cx', '740.0');
+    await expect(marker).toHaveAttribute('display', 'inline');
+    await expect(check).toHaveAttribute('display', 'inline');
+    await expect(page.locator('#placement-confirm')).toBeEnabled();
+  });
+}
