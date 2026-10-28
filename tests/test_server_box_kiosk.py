@@ -79,7 +79,8 @@ def test_the_target_line_endpoint(kiosk_state):
     assert shown == server.setup_handoff_config["target_line"]
 
 
-def test_the_ball_at_address_endpoint(kiosk_state):
+def test_the_ball_at_address_endpoint(kiosk_state, monkeypatch):
+    monkeypatch.setattr(server.time, "time", lambda: 6.0)
     client = server.app.test_client()
     server.ball_at_address_monitor = None
     unknown = client.get("/api/ball-at-address").get_json()
@@ -289,5 +290,7 @@ def test_a_look_whose_worker_failed_is_skipped_and_logged(kiosk_state, caplog):
     with caplog.at_level("WARNING", logger=server.logger.name):
         look = server.ball_at_address_look(monitor, Runtime(), now=3.0, locate=unavailable)
 
-    assert look is None and monitor.latest() is None
+    assert look is None
+    assert monitor.latest()["state"] == "unavailable"
+    assert monitor.latest()["range_m"] is None
     assert any("the worker died" in record.getMessage() for record in caplog.records)

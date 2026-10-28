@@ -347,6 +347,19 @@ def test_no_fresh_look_says_nothing_about_the_ball(look):
     assert light["state"] == "green"
 
 
+@pytest.mark.parametrize("state", ["acquiring", "ambiguous", "unavailable"])
+def test_unresolved_identity_is_amber_without_blocking_a_shot(state):
+    light = compute_state(_states(setup=_setup(), ball_look=_look(state)), NOW)
+    assert (light["state"], light["word"]) == ("amber", "WAIT")
+
+
+def test_a_known_stale_live_look_is_amber_instead_of_a_ball_ready_indication():
+    look = {**_look("unknown", at=NOW - 5.1), "observation_state": "stale"}
+    light = compute_state(_states(setup=_setup(), ball_look=look), NOW)
+    assert light["state"] == "amber"
+    assert light["cause"] == "waiting for a fresh ball look"
+
+
 _FAULT = {"camera_available": True, "setup_possible": False, "setup_fault": True}
 
 

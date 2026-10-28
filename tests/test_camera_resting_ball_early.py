@@ -102,7 +102,15 @@ def test_a_size_already_measured_is_not_measured_again(monkeypatch):
 
 
 def test_the_kiosk_measures_the_resting_ball_before_the_iwr_finishes(monkeypatch, measured):
-    monkeypatch.setattr(server, "shot_reference_ball", lambda _at: dict(SEED))
+    monkeypatch.setattr(
+        server,
+        "shot_ball_at_address",
+        lambda _at: {
+            "state": "in_box",
+            "center_px": [SEED["x"], SEED["y"]],
+            "diameter_px": SEED["diameter_px"],
+        },
+    )
     archive = _archive()
 
     elapsed = server._measure_resting_ball_early(  # pylint: disable=protected-access
@@ -117,7 +125,15 @@ def test_a_failed_early_measure_leaves_the_chain_to_measure_it(monkeypatch):
     def broken(*_a, **_k):
         raise RuntimeError("fit diverged")
 
-    monkeypatch.setattr(server, "shot_reference_ball", lambda _at: dict(SEED))
+    monkeypatch.setattr(
+        server,
+        "shot_ball_at_address",
+        lambda _at: {
+            "state": "in_box",
+            "center_px": [SEED["x"], SEED["y"]],
+            "diameter_px": SEED["diameter_px"],
+        },
+    )
     monkeypatch.setattr(fallback_chain, "resting_ball_measure", broken)
     archive = _archive()
 
@@ -194,7 +210,15 @@ def test_rejected_prior_leaves_the_size_fallback_experimental():
 
 
 def test_reference_check_does_not_compare_a_cache_for_another_seed(monkeypatch):
-    monkeypatch.setattr(server, "shot_reference_ball", lambda _at: {**SEED, "x": 300.0})
+    monkeypatch.setattr(
+        server,
+        "shot_ball_at_address",
+        lambda _at: {
+            "state": "in_box",
+            "center_px": [300.0, SEED["y"]],
+            "diameter_px": SEED["diameter_px"],
+        },
+    )
     archive = {
         RESTING_BALL_KEY: RestingBallMeasure(
             seed=(320.0, 210.0, 30.0), found=(320.0, 210.0, 30.0), size=_size(45.0)

@@ -51,9 +51,15 @@ SETUP_SECTIONS = (
 )
 UNUSABLE = ("not_set", "stale")
 # A shot takes a ball look this recent as its own (ball_at_address.MAX_LOOK_AGE_S).
-BALL_LOOK_MAX_AGE_S = 30.0
+BALL_LOOK_MAX_AGE_S = 5.0
 # ball_not_in_box, by what the look saw
-BALL_NOT_IN_BOX = {"not_seen": "no ball in the box", "outside_box": "ball outside the box"}
+BALL_NOT_IN_BOX = {
+    "not_seen": "no ball in the box",
+    "outside_box": "ball outside the box",
+    "acquiring": "checking the changed ball position",
+    "ambiguous": "more than one ball-like object",
+    "unavailable": "ball check unavailable",
+}
 
 
 @dataclass(frozen=True)
@@ -203,7 +209,9 @@ def setup_causes(
         "state", "not_set"
     ) not in UNUSABLE and "box" not in unapplied
     words = BALL_NOT_IN_BOX.get((ball_look or {}).get("state"))
-    if box_in_force and words:
+    if box_in_force and (ball_look or {}).get("observation_state") == "stale":
+        causes.append(("amber", "waiting for a fresh ball look"))
+    elif box_in_force and words:
         observed = ball_look.get("observed_at")  # type: ignore[union-attr]
         if observed is not None and now - float(observed) <= BALL_LOOK_MAX_AGE_S:
             causes.append(("amber", words))

@@ -6508,6 +6508,10 @@
             in_box: `✓ Ready for a swing: the ball is in the box${range}.`,
             outside_box: 'Not ready: the ball is outside the box. Move it back into the box.',
             not_seen: 'Not ready: the camera cannot see a ball in the box.',
+            acquiring: 'Not ready: checking the changed ball position. Keep the ball still.',
+            ambiguous: 'Not ready: more than one ball-like object is supported. Keep only the ball in the box.',
+            unavailable: 'Not ready: the ball check is temporarily unavailable. Waiting for the camera.',
+            unknown: 'Not ready: waiting for a fresh look at the ball.',
           }[state] || '';
       }
 

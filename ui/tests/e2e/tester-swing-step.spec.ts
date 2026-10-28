@@ -188,6 +188,28 @@ test('Start is off while the ladder runs, and back once it stops', async ({ page
   await expect(start).toHaveText('Start the exposure ladder');
 });
 
+for (const viewport of [{ width: 800, height: 400 }, { width: 800, height: 480 }, { width: 1024, height: 600 }]) {
+  test(`unresolved address identity is explained at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    let status: Status = { ball_at_address: { state: 'in_box', range_m: 2.31 } };
+    await swingStep(page, () => ladder(null, {}, null, true), () => status);
+    await page.goto('/tester.html');
+    const address = page.locator('#address-status');
+    await expect(address).toContainText('Ready for a swing');
+    for (const [state, text] of [
+      ['acquiring', 'checking the changed ball position'],
+      ['ambiguous', 'more than one ball-like object'],
+      ['unavailable', 'ball check is temporarily unavailable'],
+      ['unknown', 'waiting for a fresh look'],
+    ]) {
+      status = { ball_at_address: { state, range_m: null } };
+      await expect(address).toContainText(text);
+      await expect(address).not.toContainText('✓');
+      await expect(address).not.toContainText('2.31');
+    }
+  });
+}
+
 test('live numbers, the ball at address and the kiosk come from the status poll', async ({ page }) => {
   let status: Status = {
     live_metrics: {
