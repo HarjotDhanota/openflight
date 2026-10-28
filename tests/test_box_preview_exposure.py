@@ -100,15 +100,27 @@ def test_a_black_start_at_dusk_settles_into_the_viewing_band():
     assert steps <= 5
 
 
-def test_short_exposures_with_more_gain_are_preferred_within_the_sensor():
+def test_stationary_preview_uses_exposure_before_amplifying_noise():
     live = RecordingLive()
     controller = ts.BoxPreviewExposure(live, ARM, (300, 4.0))
 
-    assert controller.split(1600.0) == (101, pytest.approx(15.84, abs=0.01))
+    assert controller.split(1600.0) == (1600, 1.0)
+    exposure, gain = controller.split(11_000.0)
+    assert exposure == 8033
+    assert gain == pytest.approx(1.37, abs=0.01)
     assert controller.split(5.0) == (ts.BOX_PREVIEW_EXPOSURE_MIN_US, 1.0)
     exposure, gain = controller.split(10_000_000.0)
     assert gain == ts.BOX_PREVIEW_GAIN_MAX
     assert exposure < 1_000_000 / ARM.fps  # under the frame period
+
+
+def test_an_already_bright_high_gain_preview_is_rebalanced():
+    scene = LinearScene(light=0.011)
+    live = RecordingLive()
+    controller = ts.BoxPreviewExposure(live, ARM, (1000, 8.0))
+    controller(scene.frames(1000, 8.0), 1, [(1000, 8.0)] * 3)
+    assert live.requests == [(8000, 1.0)]
+    assert controller.status()["state"] == "adjusting"
 
 
 def test_it_judges_the_box_when_one_is_placed():

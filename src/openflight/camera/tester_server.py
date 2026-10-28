@@ -4471,9 +4471,9 @@ class BoxPreviewExposure:
     measures the frame's median and clipped share (over the placed box when there
     is one, else the whole frame) on frames the sensor took at the last request,
     and asks for the exposure x gain that the linear response (signal ~ exposure x
-    gain above black) puts at the band's middle. Short exposures with more gain
-    are preferred. Display only: nothing it chooses is saved, and the setup, the
-    light screen and the ladder never read it; its log lines say so.
+    gain above black) puts at the band's middle. Stationary preview spends the
+    exposure budget before raising gain. Display only: nothing it chooses is saved,
+    and the setup, the light screen and the ladder never read it; its log lines say so.
     """
 
     def __init__(
@@ -4503,10 +4503,8 @@ class BoxPreviewExposure:
         self.owner: object = self
 
     def split(self, product: float) -> tuple[int, float]:
-        """Exposure and gain for this exposure x gain: the shortest exposure, then gain."""
-        exposure = max(
-            BOX_PREVIEW_EXPOSURE_MIN_US, math.ceil(float(product) / BOX_PREVIEW_GAIN_MAX)
-        )
+        """Use the stationary preview's exposure budget before increasing gain."""
+        exposure = max(BOX_PREVIEW_EXPOSURE_MIN_US, math.ceil(float(product)))
         exposure = min(exposure, self._exposure_max)
         gain = min(BOX_PREVIEW_GAIN_MAX, max(1.0, float(product) / exposure))
         return int(exposure), round(gain, 2)
@@ -4554,11 +4552,14 @@ class BoxPreviewExposure:
             clipped = float(np.mean(region >= 250) * 100.0)
             self._measured = {"median_dn": round(median, 1), "clipped_pct": round(clipped, 2)}
             low, high = BOX_PREVIEW_MEDIAN_DN
-            if low <= median <= high and clipped < BOX_PREVIEW_MAX_CLIPPED_PCT:
+            in_band = low <= median <= high and clipped < BOX_PREVIEW_MAX_CLIPPED_PCT
+            if in_band and self.split(math.prod(self._requested)) == self._requested:
                 self._state = "settled"
                 return {"status": BOX_PREVIEW_PURPOSE, "preview_exposure": self._state}
             signal = median - self._black
-            if median >= 250.0:
+            if in_band:
+                factor = 1.0
+            elif median >= 250.0:
                 factor = 1.0 / 8.0  # clipped: the level says nothing but "less"
             elif signal < 2.0:
                 factor = BOX_PREVIEW_MAX_STEP  # black: the level says nothing but "more"
