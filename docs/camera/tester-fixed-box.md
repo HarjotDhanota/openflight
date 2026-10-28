@@ -326,3 +326,9 @@ is tried with the same circle limits and ray-consensus requirement. Missing rim
 evidence never substitutes the seed as a measurement. Estimator policy version
 8 invalidates older qualification artifacts after these fitter changes.
 
+Stationary setup preview uses the available frame exposure budget before raising
+gain, including rebalancing an already bright high-gain preview. At 120 fps the
+existing frame margin permits at most 8033 microseconds. These controls remain
+preview-only; swing exposures, light-screen measurements and saved locks retain
+their own settings. Lower-gain live reacquisition still requires validation;
+this policy alone does not establish detector availability or accuracy.
