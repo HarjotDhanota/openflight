@@ -142,6 +142,9 @@ def rebuild_shot(record: dict, *, ignore_iwr: bool) -> Shot:
     # the processor's spin quality label, logged as the shot's spin_quality
     values["spin_result_quality"] = record.get("spin_quality")
     values["club"] = ClubType(record.get("club") or ClubType.DRIVER.value)
+    reference = (record.get("input_sources") or {}).get("ball_reference")
+    if isinstance(reference, dict):
+        values["input_sources"] = {"ball_reference": dict(reference)}
     if not ignore_iwr:
         for name in IWR_FIELDS:
             if name in names and record.get(name) is not None:

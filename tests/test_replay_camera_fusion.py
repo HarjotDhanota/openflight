@@ -18,6 +18,45 @@ from scripts.analysis.replay_camera_fusion import (
 )
 
 
+def test_reconstructed_range_does_not_restore_a_rejected_camera_prior():
+    from scripts.analysis.replay_camera_fusion import _ball_range_chain
+
+    resolution = _ball_range_chain(
+        {
+            "iwr6843": {
+                "range_prior": {
+                    "range_m": 3.2,
+                    "uncertainty_m": 0.5,
+                    "source": "camera_ball_at_address",
+                }
+            }
+        },
+        {"input_sources": {"ball_reference": {"range_prior_rejection": "reference conflict"}}},
+        None,
+    )
+
+    assert not resolution.present
+    assert "reference conflict" in resolution.reason
+
+
+def test_kiosk_chain_replay_retains_reference_rejection_without_reusing_model_outputs():
+    from scripts.analysis.replay_shot_chain import rebuild_shot
+
+    record = {
+        "timestamp": "2026-10-27T12:00:00",
+        "club": "7-iron",
+        "ball_speed_mph": 100.0,
+        "input_sources": {
+            "ball_reference": {"status": "conflict", "range_prior_rejection": "reference conflict"},
+            "spin": {"value": 5000.0},
+        },
+    }
+
+    shot = rebuild_shot(record, ignore_iwr=True)
+
+    assert shot.input_sources == {"ball_reference": record["input_sources"]["ball_reference"]}
+
+
 def _write_replay_fixture(tmp_path):
     capture_dir = tmp_path / "camera" / "camera_000001"
     capture_dir.mkdir(parents=True)

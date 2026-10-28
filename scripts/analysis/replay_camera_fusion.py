@@ -278,6 +278,9 @@ def _ball_range_chain(config: dict[str, Any], shot: dict[str, Any], archive):
             )
         },
         prior=LaunchRangePrior.from_dict(iwr.get("range_prior")),
+        range_prior_rejection=_mapping(
+            _mapping(shot.get("input_sources")).get("ball_reference")
+        ).get("range_prior_rejection"),
         size_route=size_range_route(
             archive,
             seed=camera.get("setup_ball"),

@@ -163,3 +163,76 @@ def test_the_replay_snapshot_records_the_prior():
 
     assert snapshot["range_prior"] == PRIOR.to_dict()
     assert snapshot["per_shot_inputs"]["range_prior"] == PRIOR.to_dict()
+
+
+def test_a_rejected_reference_cannot_restore_the_session_prior(seen):
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING
+    ) as estimate:
+        result = _runtime().process_shot(
+            **SHOT, range_prior=PRIOR, range_prior_rejection="ball reference conflicts with clip"
+        )
+
+    assert estimate.call_args.kwargs["prior"] is None
+    assert "calibration" not in seen
+    assert result.measurement is None
+    assert result.ball_range.range_m is None
+    assert "ball reference conflicts with clip" in result.ball_range.reason
+
+
+def test_a_rejected_prior_does_not_discard_the_iwr_launch_point(seen):
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=_measured()
+    ) as estimate:
+        result = _runtime().process_shot(**SHOT, range_prior_rejection="reference conflict")
+
+    assert estimate.call_args.kwargs["prior"] is None
+    assert seen["calibration"].tee_range_m == 2.08
+    assert result.ball_range.source == "iwr_post_impact"
+
+
+def test_the_replay_snapshot_preserves_prior_rejection():
+    snapshot = _runtime().replay_config_snapshot(
+        range_prior=PRIOR, range_prior_rejection="reference conflict"
+    )
+
+    assert snapshot["range_prior"] == PRIOR.to_dict()
+    assert snapshot["per_shot_inputs"]["range_prior"] is None
+    assert snapshot["per_shot_inputs"]["range_prior_rejection"] == "reference conflict"
+
+
+def test_a_snapshot_replay_cannot_resurrect_the_rejected_default_prior(seen):
+    import json
+
+    snapshot = json.loads(
+        json.dumps(
+            _runtime().replay_config_snapshot(
+                **{key: value for key, value in SHOT.items() if key != "impact_timestamp"},
+                range_prior_rejection="reference conflict",
+            )
+        )
+    )
+    inputs = snapshot["per_shot_inputs"]
+    restored = _runtime(prior=lr.LaunchRangePrior(**snapshot["range_prior"]))
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING
+    ) as estimate:
+        result = restored.process_shot(
+            **SHOT,
+            range_prior=inputs["range_prior"],
+            range_prior_rejection=inputs["range_prior_rejection"],
+        )
+
+    assert estimate.call_args.kwargs["prior"] is None
+    assert result.measurement is None
+    assert "calibration" not in seen
+
+
+def test_rejecting_a_prior_keeps_an_explicit_configured_range(seen):
+    with patch("openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING):
+        result = _runtime(tee_range_m=1.372).process_shot(
+            **SHOT, range_prior_rejection="reference conflict"
+        )
+
+    assert seen["calibration"].tee_range_m == 1.372
+    assert result.ball_range.source == "configured_tee"

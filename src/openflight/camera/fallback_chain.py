@@ -82,6 +82,7 @@ def ball_range_resolution(
     shot_range: Mapping[str, Any],
     prior: Any = None,
     size_route: Optional[Callable[[], Any]] = None,
+    range_prior_rejection: Optional[str] = None,
 ) -> Resolution:
     """The shot's ball range: its IWR launch point, the camera prior, its resting ball.
 
@@ -112,6 +113,8 @@ def ball_range_resolution(
         return shot_range.get("ball_range_reason") or "no IWR launch point on this shot"
 
     def camera_prior():
+        if range_prior_rejection:
+            return range_prior_rejection
         if shot_range.get("ball_range_source") == PRIOR_RANGE_SOURCE and finite(
             shot_range.get("ball_range_m")
         ):
@@ -284,6 +287,47 @@ class RestingBallMeasure:
     seed: Optional[tuple[float, float, float]]
     found: Optional[tuple[float, float, float]]
     size: Optional[resting_ball_range.RestingBallSize]
+
+
+def ball_reference_check(measure: Optional[RestingBallMeasure]) -> dict:
+    """Compare the saved reference with this clip's independently fitted outline."""
+    record = {"status": "unavailable", "range_prior_rejection": None}
+    if measure is None or measure.seed is None or measure.size is None:
+        return {**record, "reason": "no saved reference and fitted outline to compare"}
+    from .ball_flight import EXPECTED_SIZE_RATIO  # noqa: PLC0415
+
+    x, y, diameter = measure.seed
+    size = measure.size
+    if (
+        diameter <= 0
+        or not all(finite(value) for value in (x, y, diameter, size.x, size.y, size.diameter_px))
+        or size.diameter_px <= 0
+    ):
+        return {**record, "reason": "invalid reference or fitted outline"}
+    distance = math.hypot(size.x - x, size.y - y)
+    ratio = size.diameter_px / diameter
+    # Use the existing scene/impact detector agreement bounds, without relaxing them.
+    position_limit = max(8.0, 0.75 * diameter)
+    low, high = EXPECTED_SIZE_RATIO
+    consistent = distance <= position_limit and low <= ratio <= high
+    return {
+        "status": "consistent" if consistent else "conflict",
+        "reference": {"x": x, "y": y, "diameter_px": diameter},
+        "observed": {
+            "x": size.x,
+            "y": size.y,
+            "diameter_px": size.diameter_px,
+            "diameter_sd_px": size.diameter_sd_px,
+            "windows": size.windows,
+        },
+        "centre_distance_px": distance,
+        "diameter_ratio": ratio,
+        "position_limit_px": position_limit,
+        "diameter_ratio_limits": [low, high],
+        "range_prior_rejection": None
+        if consistent
+        else ("saved ball reference conflicts with the shot clip's fitted outline"),
+    }
 
 
 def _seed_key(seed: Optional[Mapping[str, Any]]) -> Optional[tuple[float, float, float]]:
