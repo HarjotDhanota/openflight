@@ -1077,6 +1077,23 @@ class TestLiveView:
         assert applied == [(280, 4.0)] * count
         assert self.live.capture_context_snapshot()["applied_controls"]
 
+    def test_the_box_analyzer_receives_its_input_delivery_time(self):
+        received = []
+
+        class TimedBox(ts.BoxBallLocator):
+            def __init__(self):
+                pass
+
+            def __call__(self, _frames, _sequence, _applied=None, *, observed_at=None):
+                received.append(observed_at)
+                return {"status": "not_found", "selected": None}
+
+        started = time.monotonic()
+        self.live.start(ts.ARMS["arm1"], 300, 4.0, analyzer=TimedBox())
+        assert _wait(lambda: received)
+        assert received[0] is not None
+        assert started <= received[0] <= time.monotonic()
+
     def test_changing_controls_restarts_analysis_from_fresh_frames(self):
         self.live.start(ts.ARMS["arm1"], 300, 4.0)
         assert _wait(lambda: len(self.live.recent_applied_controls()) >= 3)

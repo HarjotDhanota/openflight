@@ -375,7 +375,7 @@ def _locator(monkeypatch, looks):
         ts, "_guided_camera_analysis", lambda *_args, **_kwargs: (None, next(calls))
     )
     live = _ScriptedLive()
-    clock = iter(float(value) for value in range(100))
+    clock = iter(float(value) / 100.0 for value in range(10000))
     brightness = ts.BoxPreviewExposure(live, ts.ARMS["arm5"], (300, 4.0))
     locator = ts.BoxBallLocator(brightness, camera, search, search, clock=lambda: next(clock))
     live.analyzer = locator
