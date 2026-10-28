@@ -59,6 +59,24 @@ green check appears only when the current observation is confirmable. Live analy
 includes the frame sequence, candidate evidence and `observation_state`, separately
 from the displayed position, to help diagnose identity changes.
 
+After two fitted looks qualify the same ball, the box preview may check the
+current binned pixels across the entire search rectangle instead of fitting it
+again. Each check compares with the last fitted picture; it never walks the
+reference forward. A changed or noisy patch, unknown/changing applied controls,
+camera/patch/frame-format change or replacement analysis worker requires a fit.
+A broad anchor-and-rival search is due within the unchanged two-second freshness
+window even when the pixels keep matching. Misses, ambiguity and failures clear
+the watcher. Repeated frame sequences add neither work nor confirmation support.
+
+`ball_search_mode` distinguishes `searched` from `watched` and
+`ball_search_calls` counts detector calls (null if a failure prevents accounting).
+`ball_observation.watch` records the fitted source sequence, search age and pixel
+comparison. A watched position reuses that fit's coordinates; it does not report
+newly fitted candidates or a new size/range measurement. The independent Save
+search, guided range measurement and per-shot estimators do not use this watcher.
+Its desktop tests and timing comparisons do not qualify Pi capture performance
+or field reliability; quiet-pixel agreement alone cannot establish ball identity.
+
 ### The distance: measured on each swing (13 Oct, decision "a")
 
 The setup no longer measures the resting ball's distance with the radar. The camera
