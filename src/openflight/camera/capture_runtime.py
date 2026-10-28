@@ -472,7 +472,8 @@ class CameraCaptureRuntime:
                 "AnalogueGain": self.settings.gain,
                 "FrameDurationLimits": (frame_duration_us, frame_duration_us),
             },
-            buffer_count=8,
+            # Measured host/GIL stalls exhausted 8 buffers at both kiosk capture rates.
+            buffer_count=16 if self.settings.fps <= 120.0 else 32,
             display=None,
             encode=None,
         )

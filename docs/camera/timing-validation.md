@@ -1,5 +1,15 @@
 # Offline camera timing evidence
 
+## Capture buffers
+
+The camera requests 16 capture buffers through 120 fps and 32 above it. Live Pi
+preflight tests exhausted the old 8-buffer pool during same-process JSON/GIL
+stalls. The larger pools retained frames in the tested modes while callbacks
+still arrived late. This uses more buffer memory and is a bounded-stall
+mitigation, not a callback-latency guarantee or an acquisition-clock correction.
+
+## Offline mapping candidate
+
 The M1 timing bench fits camera sensor-to-host timestamp correlation on declared
 fit captures and evaluates separate validation captures without refitting.
 It preserves input hashes, cadence/gap diagnostics, residuals and unsuccessful
