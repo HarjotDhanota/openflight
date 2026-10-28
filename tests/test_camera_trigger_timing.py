@@ -63,14 +63,42 @@ def test_the_trigger_records_the_sensor_clock_beside_the_monotonic_clock(tmp_pat
     monkeypatch.setattr(capture_runtime, "_boottime_ns", lambda: 5_750)
     runtime = CameraCaptureRuntime(output_dir=tmp_path)
     runtime._running = True
-    runtime._ring = SimpleNamespace(trigger=lambda _stamp: True)
+    runtime._ring = SimpleNamespace(trigger=lambda _stamp, **_kwargs: True)
 
     assert runtime.notify_trigger(10.0)
 
     assert runtime._trigger_clocks.get_nowait() == {
         "host_monotonic_ns": 5_000,
         "boottime_ns": 5_750,
+        "boottime_minus_monotonic_bounds_ns": [750, 750],
     }
+
+
+def test_clock_conversion_brackets_a_stall_between_clock_reads(tmp_path, monkeypatch):
+    from openflight.clock_mapping import EdgeObservation
+    from openflight.gate_timing import GateEvent
+
+    ticks = iter([30_000_000, 40_000_000])
+    monkeypatch.setattr(capture_runtime.time, "monotonic_ns", lambda: next(ticks))
+    monkeypatch.setattr(capture_runtime, "_boottime_ns", lambda: 35_000_750)
+    event = GateEvent("gate-a", EdgeObservation(None, 800_000, 800_100, 0, 0, 0, "LGPIOFactory"))
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    runtime._running = True
+    tail = {}
+    runtime._ring = SimpleNamespace(trigger=lambda _stamp, **kwargs: tail.update(kwargs) or True)
+
+    assert runtime.notify_gate_event(event)
+    clocks = runtime._trigger_clocks.get_nowait()
+    assert clocks["boottime_minus_monotonic_bounds_ns"] == [-4_999_250, 5_000_750]
+    assert clocks["gate_boottime_interval_ns"] == [-4_199_250, 5_800_850]
+    assert tail["sensor_timestamp_ns"] == 5_800_850
+    capture = TriggeredCapture(
+        frames=_frames(4), pre_trigger_count=2, trigger_host_timestamp_ns=30_000_000
+    )
+    saved = runtime._save_capture(1, 123.0, capture, trigger_clocks=clocks)
+    assert saved.metadata["trigger_clocks"]["gate_boottime_interval_ns"] == [-4_199_250, 5_800_850]
+    with np.load(saved.path / "frames.npz") as archive:
+        assert list(archive["gate_boottime_interval_ns"]) == [-4_199_250, 5_800_850]
 
 
 def test_boottime_falls_back_cleanly_where_the_os_has_no_such_clock(monkeypatch):

@@ -68,7 +68,7 @@ def test_camera_records_shared_event_beside_its_later_callback(tmp_path, monkeyp
     monkeypatch.setattr(capture_runtime, "_boottime_ns", lambda: 30_000_750)
     runtime = CameraCaptureRuntime(output_dir=tmp_path)
     runtime._running = True
-    runtime._ring = SimpleNamespace(trigger=lambda _stamp: True)
+    runtime._ring = SimpleNamespace(trigger=lambda _stamp, **_kwargs: True)
     assert runtime.notify_gate_event(event)
     clocks = runtime._trigger_clocks.get_nowait()
     assert clocks["host_monotonic_ns"] == 30_000_000
