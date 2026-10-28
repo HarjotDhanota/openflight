@@ -26,6 +26,7 @@ from collections import Counter, deque
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -67,6 +68,7 @@ from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
 from openflight.camera.paired_eligibility import evaluate_paired_capture
+from openflight.camera.patch_watch import PatchWatch
 from openflight.camera.reference_ball_range import (
     _BALL_ABOVE_SURFACE_M,
     _HITTING_RANGE_M,
@@ -4675,6 +4677,10 @@ class BoxBallLocator:
         self._reacquiring = False
         self._failure: str | None = None
         self._state: dict = self._ball_payload({"state": "waiting", "selected": None}, None)
+        self._watch = PatchWatch(BOX_BALL_LOOK_MAX_AGE_S)
+        self._watch_selected: dict | None = None
+        self._last_sequence: int | None = None
+        self._last_result: dict = {}
 
     def _ball_payload(self, classified: Mapping, stable_since: float | None) -> dict:
         selected = classified.get("selected") or {}
@@ -4697,7 +4703,57 @@ class BoxBallLocator:
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
 
+    def _watch_context(self, frames, applied) -> str | None:
+        if (
+            self.brightness.status()["state"] not in {"settled", "limit"}
+            or applied is None
+            or len(applied) != len(frames)
+            or len(frames) < 3
+            or any(None in pair or tuple(pair) != tuple(applied[0]) for pair in applied)
+        ):
+            return None
+        return repr((self.camera, self.box, applied, id(_BALL_SEARCH_POOL)))
+
+    def _look_in_box(self, frames, sequence, applied, at):
+        context = self._watch_context(frames, applied)
+        bounds = self.box.bounds_px(self.camera.image_width_px, self.camera.image_height_px)
+        evidence = (
+            self._watch.check(frames, bounds, context, at=at, sequence=sequence)
+            if context is not None
+            else {"matched": False, "reason": "controls unknown or settling"}
+        )
+        if evidence["matched"] and self._watch_selected is not None:
+            return (
+                {
+                    "status": "selected",
+                    "selected": deepcopy(self._watch_selected),
+                    "candidates": [],
+                },
+                evidence,
+                0,
+                context,
+            )
+        self._watch.forget()
+        self._watch_selected = None
+        anchor = self._follow.get()
+        _result, analysis = _guided_camera_analysis(
+            frames, self.camera, self.box, follow=anchor, follow_rivals=True
+        )
+        calls = 1
+        if anchor is not None and analysis.get("status") not in {"selected", "ambiguous"}:
+            _result, analysis = _guided_camera_analysis(frames, self.camera, self.box)
+            anchor, calls = None, calls + 1
+        if analysis.get("status") != "selected":
+            self._follow.set(None)
+        elif anchor is None:
+            self._follow.set(analysis.get("selected"))
+        return analysis, evidence, calls, context
+
     def __call__(self, frames: np.ndarray, frame_sequence: int, applied=None) -> dict:
+        with self._lock:
+            if self._last_sequence is not None and frame_sequence <= self._last_sequence:
+                return deepcopy(self._last_result)
+        look_at = self._clock()
         result = dict(self.brightness(frames, frame_sequence, applied))
         settled = (
             self.brightness.status()["state"] in {"settled", "limit"}
@@ -4705,21 +4761,15 @@ class BoxBallLocator:
         )
         started = time.monotonic()
         in_box: dict = {}
+        watch, calls, context = {"matched": False}, 0, None
         try:
-            anchor = self._follow.get()
-            _result, in_box = _guided_camera_analysis(
-                frames, self.camera, self.box, follow=anchor, follow_rivals=True
+            in_box, watch, calls, context = self._look_in_box(
+                frames, frame_sequence, applied, look_at
             )
-            if anchor is not None and in_box.get("status") not in {"selected", "ambiguous"}:
-                _result, in_box = _guided_camera_analysis(frames, self.camera, self.box)
-                anchor = None
-            if in_box.get("status") != "selected":
-                self._follow.set(None)
-            elif anchor is None:
-                self._follow.set(in_box.get("selected"))
             wide = None
             if in_box.get("status") not in {"selected", "ambiguous"} and self.wide is not None:
                 _result, wide = _guided_camera_analysis(frames, self.camera, self.wide)
+                calls += 1
             classified = placement_box.classify_ball(
                 in_box, wide, outline_px=self.box.outline_px, settled=settled
             )
@@ -4729,6 +4779,9 @@ class BoxBallLocator:
             # stopped for 13 s and nothing in the log said why
             failure = f"{type(exc).__name__}: {exc}"
             self._follow.set(None)
+            self._watch.forget()
+            self._watch_selected = None
+            calls = None
             classified = {"state": "waiting", "selected": None}
         took = time.monotonic() - started
         if took > BOX_BALL_SLOW_LOOK_S:
@@ -4760,6 +4813,20 @@ class BoxBallLocator:
                     self._follow.set(classified["selected"])
             self._state = self._ball_payload(classified, stable_since)
             current = self._with_freshness(dict(self._state))
+        if (
+            not watch["matched"]
+            and current["confirmable"]
+            and context is not None
+            and in_box.get("method") == "camera_patch_size_range_v1"
+        ):
+            self._watch.remember(
+                frames,
+                self.box.bounds_px(self.camera.image_width_px, self.camera.image_height_px),
+                context,
+                at=look_at,
+                sequence=frame_sequence,
+            )
+            self._watch_selected = deepcopy(in_box["selected"])
         if (previous.get("state"), previous.get("observation_state")) != (
             current["state"],
             current["observation_state"],
@@ -4775,18 +4842,25 @@ class BoxBallLocator:
             )
         if self._on_change is not None:
             self._on_change(current)
-        return {
+        payload = {
             **result,
             "ball_state": classified["state"],
             "ball_search_ms": round(took * 1000, 1),
+            "ball_search_mode": "watched" if watch["matched"] else "searched",
+            "ball_search_calls": calls,
             "ball_observation": {
                 "frame_sequence": frame_sequence,
                 "status": in_box.get("status", "analysis_error"),
                 "selected": in_box.get("selected"),
                 "candidates": in_box.get("candidates", []),
                 "observation_state": current["observation_state"],
+                "watch": watch,
             },
         }
+        with self._lock:
+            self._last_sequence = frame_sequence
+            self._last_result = deepcopy(payload)
+        return payload
 
     def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
         """Confirm one identity; distinguish a retained marker from fresh support."""
