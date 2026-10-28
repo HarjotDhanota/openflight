@@ -1524,7 +1524,9 @@ class TestGuidedRangeAnalyzer:
         assert calls[0][2] == {
             "search": patch,
             "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "height_independent": True,
         }
+        assert analysis["method"] == "camera_image_box_size_range_v2"
         assert analysis["dependency_facts"] == {
             "iwr_range_used": False,
             "manual_range_used": False,
@@ -1671,8 +1673,10 @@ class TestGuidedRangeAnalyzer:
         assert calls[-1] == {
             "search": patch,
             "ball_center_height_m": ts.BALL_DIAMETER_MM / 2000.0,
+            "height_independent": True,
             "confirm_anchor": {"x_px": 160.0, "y_px": 140.0, "diameter_px": 14.0},
         }
+        assert analysis["method"] == "camera_image_box_size_range_v2"
         assert analysis["save_search"] == "anchor_plus_close_rivals"
         assert analysis["analysis_role"] == "independent_save_confirmation"
         assert analysis["independent"] is True
