@@ -1127,6 +1127,7 @@ def test_the_camera_never_uses_the_radar_while_it_searches(tmp_path, inputs, mon
     allowed = {
         "search",
         "ball_center_height_m",
+        "height_independent",
         "roi",
         "expected_diameter_range_px",
         "max_fits",

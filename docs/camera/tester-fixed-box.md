@@ -285,3 +285,25 @@ the resting ball's size, its peak and median DN, the clipped share, the applied
 exposure and gain, the mode's frame rate, and the blur ceiling for this mode and
 lens (1.5 px of smear at the toe's 13.6 m/s image speed at the ball's range,
 never past 300 µs).
+# Detection before position estimation
+
+The setup preview and independent Save use `camera_image_box_size_range_v2`.
+They search the visible image outline with the existing lit-ball and rim detector,
+without predicting diameter from a floor row. The bounded size search covers
+camera distances of 0.5–4 m; that is an operating envelope, not a measured range.
+The drawn outline remains the search boundary, including for raised balls.
+
+After detection, apparent diameter and calibrated local angular scale estimate
+camera distance. The point is camera origin plus that distance times the unit
+viewing ray, including its vertical component. No mat or tee height is needed.
+`size_height_uncertainty_m` propagates the existing size and angular uncertainties;
+it does not qualify the unvalidated size model. Position estimates remain
+experimental and do not replace accepted IWR range. The size route does not
+infer a new camera height or silently force the ball onto a surface plane.
+
+The live ball payload includes `position_estimate` only when its current selected
+observation supplies geometry. A retained marker supplies no fresh position.
+Identity, ambiguity, currentness, exposure association, worker isolation and
+periodic whole-box refresh remain required. The older estimator mode is retained
+for legacy callers and matched-input comparisons; optical calibration alone does
+not establish field accuracy for either mode.

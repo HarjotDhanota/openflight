@@ -38,6 +38,27 @@ def test_a_single_rival_does_not_move_the_marker(observe):
     assert changed["confirmable"] is False
 
 
+def test_position_estimate_is_current_and_disappears_with_a_retained_marker(observe):
+    _locator, look = observe
+    selected = {
+        **A,
+        "size_point_lfu_m": [0.0, 1.8, 0.16],
+        "size_camera_range_m": 1.8,
+        "size_range_uncertainty_m": 0.36,
+        "size_height_uncertainty_m": 0.035,
+    }
+    look(selected)
+    found, _ = look(selected)
+    estimate = found["position_estimate"]
+    assert estimate["point_lfu_m"] == [0.0, 1.8, 0.16]
+    assert estimate["height_relative_to_camera_m"] == pytest.approx(0.065)
+    assert estimate["status"] == "experimental"
+    retained, _ = look(None, status="not_found")
+    assert retained["observation_state"] == "retained"
+    assert retained["position_estimate"] is None
+    assert not retained["confirmable"]
+
+
 def test_explicit_ambiguity_immediately_disables_confirmation(observe):
     _locator, look = observe
     look(A)

@@ -51,7 +51,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
         "name": "camera_reference_ball_size_range",
-        "version": 5,
+        "version": 6,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "the_ground_patch_outline_only",
@@ -78,6 +78,9 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "ambiguity_score_margin": _AMBIGUITY_SCORE_MARGIN,
         "full_radar_range_m": list(_FULL_RADAR_RANGE_M),
         "independent_save_confirmation": True,
+        "image_box_position": "origin_plus_size_range_times_unit_ray",
+        "image_box_camera_range_m": list(_FULL_RADAR_RANGE_M),
+        "image_box_height_prior_used": False,
     }
 
 
@@ -322,6 +325,7 @@ class ReferenceBallRangeCandidate:
     lateral_from_patch_m: float | None = None
     # diffuse brightness over misfit, for ranking
     fit_quality: float | None = None
+    size_height_uncertainty_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -807,6 +811,8 @@ def _patch_candidate(  # pylint: disable=too-many-locals
     camera: BallPlaneCamera,
     ball_center_height_m: float,
     search,
+    *,
+    height_independent: bool = False,
 ) -> ReferenceBallRangeCandidate:
     """Range from apparent size, and where aside of the patch centre that puts the ball."""
     try:
@@ -847,7 +853,7 @@ def _patch_candidate(  # pylint: disable=too-many-locals
         "withheld"
         if reason is not None
         else "high"
-        if camera.accuracy_qualified
+        if camera.accuracy_qualified and not height_independent
         else "experimental"
     )
     return ReferenceBallRangeCandidate(
@@ -858,24 +864,42 @@ def _patch_candidate(  # pylint: disable=too-many-locals
         size_point_lfu_m=(
             float(origin[0] + relative[0]),
             float(origin[1] + relative[1]),
-            float(ball_center_height_m),
+            float(origin[2] + relative[2]) if height_independent else float(ball_center_height_m),
         ),
         size_radar_range_m=radar_range,
-        floor_camera_range_m=size_range,
+        floor_camera_range_m=None if height_independent else size_range,
         size_camera_range_m=size_range,
-        floor_range_uncertainty_m=size_uncertainty,
+        floor_range_uncertainty_m=None if height_independent else size_uncertainty,
         size_range_uncertainty_m=size_uncertainty,
         range_disagreement_m=None,
-        consistency_sigma=abs(residual) / _CAMERA_HEIGHT_PRIOR_SIGMA_M,
+        consistency_sigma=None
+        if height_independent
+        else abs(residual) / _CAMERA_HEIGHT_PRIOR_SIGMA_M,
         source=camera.source,
         confidence=confidence,
         score=abs(lateral) / search.half_size_m if reason is None else None,
         rejection_reason=reason,
-        camera_height_m=camera_height,
-        camera_height_uncertainty_m=height_uncertainty,
-        floor_height_residual_m=residual,
+        camera_height_m=None if height_independent else camera_height,
+        camera_height_uncertainty_m=None if height_independent else height_uncertainty,
+        floor_height_residual_m=None if height_independent else residual,
         lateral_from_patch_m=lateral,
         fit_quality=getattr(ball, "fit_quality", None),
+        size_height_uncertainty_m=height_uncertainty if height_independent else None,
+    )
+
+
+def image_box_search(camera: BallPlaneCamera, search):
+    """Keep the image outline; search sizes across the supported camera distances."""
+    points = list(search.outline_px)
+    points.append(tuple(np.mean(points, axis=0)))
+    focals = [_local_focal_size(camera, x, y) for x, y in points]
+    near, far = _FULL_RADAR_RANGE_M
+    return replace(
+        search,
+        diameter_px=(
+            2 * min(focals) * math.asin(GOLF_BALL_DIAMETER_M / (2 * far)),
+            2 * max(focals) * math.asin(GOLF_BALL_DIAMETER_M / (2 * near)),
+        ),
     )
 
 
@@ -939,12 +963,14 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     max_fits: int = REFERENCE_SEED_FITS,
     hold_diameter_px: float | None = None,
     confirm_anchor: Mapping[str, Any] | None = None,
+    height_independent: bool = False,
 ) -> ReferenceBallRangeResult:
     """Find the resting ball inside the patch (``search``, a ``PatchSearch``).
 
     ``roi`` and ``expected_diameter_range_px`` only narrow the search. ``confirm_anchor``
     (x_px, y_px, diameter_px of the stable live ball) fits it at its held size and only
-    its close rivals.
+    its close rivals. ``height_independent`` searches the image outline without a
+    ground-row prior and returns a size-derived 3D point, labelled experimental.
     """
     if frames.ndim != 3 or frames.shape[1:] != (
         camera.image_height_px,
@@ -952,6 +978,8 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     ):
         raise ValueError("camera frames do not match the declared saved-image mode")
     width, height = camera.image_width_px, camera.image_height_px
+    if height_independent:
+        search = image_box_search(camera, search)
     # a centre near the outline's edge needs its whole disk inside the region
     bounds = search.bounds_px(
         width, height, PATCH_SEED_MARGIN_PX + float(search.diameter_px[1]) / 2.0
@@ -969,10 +997,20 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
         "search_outline_px": [[round(x, 1), round(y, 1)] for x, y in search.outline_px],
         "roi_px": list(region) if region is not None else None,
         "diameter_search_px": [float(smallest), float(largest)],
-        "floor_row": "diagnostic_only_until_the_camera_tilt_is_calibrated",
+        "floor_row": "not_used"
+        if height_independent
+        else "diagnostic_only_until_the_camera_tilt_is_calibrated",
         "seed_size_by_row": (
-            "calibrated_tilt" if tilt_is_calibrated(camera) else "not_used_tilt_uncalibrated"
+            "not_used_image_box"
+            if height_independent
+            else "calibrated_tilt"
+            if tilt_is_calibrated(camera)
+            else "not_used_tilt_uncalibrated"
         ),
+        "position_method": "size_and_camera_bearing"
+        if height_independent
+        else "assumed_ball_plane",
+        "camera_distance_search_m": list(_FULL_RADAR_RANGE_M) if height_independent else None,
         "save_search": (
             "anchor_plus_close_rivals" if confirm_anchor is not None else "strongest_seeds"
         ),
@@ -990,7 +1028,9 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
         frames,
         expected_diameters_px=diameters,
         roi=region,
-        seed_filter=_patch_seed_filter(search, camera, ball_center_height_m),
+        seed_filter=_patch_seed_filter(search)
+        if height_independent
+        else _patch_seed_filter(search, camera, ball_center_height_m),
         max_fits=max_fits,
         hold_diameter_px=hold_diameter_px,
         confirm_anchor=(
@@ -1004,7 +1044,10 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
         ),
     )
     candidates = tuple(
-        _patch_candidate(ball, camera, ball_center_height_m, search) for ball in observed
+        _patch_candidate(
+            ball, camera, ball_center_height_m, search, height_independent=height_independent
+        )
+        for ball in observed
     )
     # the most ball-like fit first; nearer the patch centre breaks a tie
     plausible = sorted(

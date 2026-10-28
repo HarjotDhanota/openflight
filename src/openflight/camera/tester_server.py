@@ -4696,6 +4696,20 @@ class BoxBallLocator:
                 else None
             ),
             "diameter_px": round(float(selected["diameter_px"]), 2) if selected else None,
+            "position_estimate": (
+                {
+                    "point_lfu_m": selected["size_point_lfu_m"],
+                    "height_relative_to_camera_m": float(selected["size_point_lfu_m"][2])
+                    - self.camera.camera_origin_lfu[2],
+                    "height_uncertainty_m": selected.get("size_height_uncertainty_m"),
+                    "camera_range_m": selected.get("size_camera_range_m"),
+                    "range_uncertainty_m": selected.get("size_range_uncertainty_m"),
+                    "status": "experimental",
+                    "method": "ball_size_and_camera_bearing",
+                }
+                if selected.get("size_point_lfu_m") is not None
+                else None
+            ),
             "stable_s": round(now - stable_since, 2) if stable_since is not None else None,
             "stable_since": stable_since,
             "message": classified.get("message") or placement_box.BALL_MESSAGES[state],
@@ -4817,7 +4831,8 @@ class BoxBallLocator:
             not watch["matched"]
             and current["confirmable"]
             and context is not None
-            and in_box.get("method") == "camera_patch_size_range_v1"
+            and in_box.get("method")
+            in {"camera_patch_size_range_v1", "camera_image_box_size_range_v2"}
         ):
             self._watch.remember(
                 frames,
@@ -5161,7 +5176,11 @@ def _guided_camera_analysis(
         raise ValueError("unknown guided camera analysis role")
     if not isinstance(patch, ground_patch.PatchSearch):
         raise ValueError("the camera searches only a confirmed patch")
-    kwargs: dict = {"search": patch, "ball_center_height_m": BALL_DIAMETER_MM / 2000.0}
+    kwargs: dict = {
+        "search": patch,
+        "ball_center_height_m": BALL_DIAMETER_MM / 2000.0,
+        "height_independent": True,
+    }
     following = follow is not None and analysis_role == "live_preview"
     if following and follow_rivals:
         kwargs["confirm_anchor"] = {
@@ -5196,7 +5215,7 @@ def _guided_camera_analysis(
     bounds = list(patch.bounds_px(camera.image_width_px, camera.image_height_px))
     return result, {
         **_camera_range_evidence(result),
-        "method": "camera_patch_size_range_v1",
+        "method": "camera_image_box_size_range_v2",
         "analysis_role": analysis_role,
         "discovery_mode": (
             "anchor_plus_close_rivals"
