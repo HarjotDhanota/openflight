@@ -64,6 +64,62 @@ def _capture():
     )
 
 
+def test_same_clip_conflict_rejects_prior_before_iwr_fitting(monkeypatch):
+    from openflight.camera.fallback_chain import RESTING_BALL_KEY, RestingBallMeasure
+    from openflight.camera.resting_ball_range import RestingBallSize
+
+    seen = {}
+    seed = {"x": 380.0, "y": 195.0, "diameter_px": 13.5}
+    archive = {
+        RESTING_BALL_KEY: RestingBallMeasure(
+            seed=(380.0, 195.0, 13.5),
+            found=(380.0, 195.0, 13.5),
+            size=RestingBallSize(409.0, 199.0, 21.4, 1.0, 6),
+        )
+    }
+
+    def process_shot(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(capture=None, measurement=None, club_path=None)
+
+    def snapshot(**kwargs):
+        seen["snapshot"] = kwargs
+        return {"sha256": "test"}
+
+    monkeypatch.setattr(
+        server_module,
+        "iwr6843_runtime",
+        SimpleNamespace(
+            process_shot=process_shot, replay_config_snapshot=snapshot, range_prior=PRIOR
+        ),
+    )
+    monkeypatch.setattr(server_module, "camera_capture_runtime", object())
+    monkeypatch.setattr(
+        server_module,
+        "_prefetch_camera_capture",
+        lambda _shot: server_module._CameraPrefetchResult(None, archive, 0.0, 0.0, 0.0),
+    )
+    monkeypatch.setattr(server_module, "shot_reference_ball", lambda _ts: seed)
+    monkeypatch.setattr(
+        server_module,
+        "shot_ball_at_address",
+        lambda _ts: {"state": "in_box", "range_m": 3.2, "range_uncertainty_m": 0.5},
+    )
+    monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
+    monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)
+    monkeypatch.setattr(server_module, "_fuse_camera_measurements", lambda *_args: None)
+    monkeypatch.setattr(server_module, "kld7_vertical", None)
+    monkeypatch.setattr(server_module, "kld7_horizontal", None)
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    shot = _shot()
+
+    server_module._enrich_shot_from_optional_hardware(shot)
+
+    assert seen.get("range_prior_rejection"), "conflicting camera prior reached IWR fitting"
+    assert seen["snapshot"]["range_prior_rejection"] == seen["range_prior_rejection"]
+    assert shot.input_sources["ball_reference"]["status"] == "conflict"
+
+
 def test_the_shot_records_the_range_its_runtime_used(monkeypatch):
     seen = {}
     launch = lr.LaunchRangeEstimate(

@@ -56,6 +56,27 @@ def test_a_shared_still_scene_finds_and_fits_the_same_ball():
     )
 
 
+def test_a_stale_seed_is_not_confirmation_when_the_clip_finds_a_different_ball():
+    from openflight.camera.fallback_chain import ball_reference_check, keep_resting_ball_measure
+
+    archive = {
+        "frames": _lit_clip(BALL),
+        "sensor_timestamp_ns": np.arange(24, dtype=np.int64) * 8_333_333,
+        "pre_trigger_count": 24,
+    }
+    seed = {"x": 292.0, "y": 210.0, "diameter_px": 20.0}
+
+    measure = keep_resting_ball_measure(archive, seed)
+    record = ball_reference_check(measure)
+
+    assert measure.found == (292.0, 210.0, 20.0)
+    assert measure.size is not None
+    assert measure.size.x == pytest.approx(BALL["x"], abs=1.0)
+    assert measure.size.diameter_px == pytest.approx(BALL["diameter_px"], abs=1.0)
+    assert record["status"] == "conflict"
+    assert record["range_prior_rejection"]
+
+
 def _scene_finds(monkeypatch, found):
     monkeypatch.setattr(ball_flight, "detect_reference_ball", lambda *_a, **_k: found)
 

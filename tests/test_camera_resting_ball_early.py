@@ -131,3 +131,79 @@ def test_a_failed_early_measure_leaves_the_chain_to_measure_it(monkeypatch):
 
 def test_no_clip_no_early_measure():
     assert server._measure_resting_ball_early(SimpleNamespace(impact_timestamp=1.0), None) is None  # pylint: disable=protected-access
+
+
+@pytest.mark.parametrize(
+    "position,diameter,status",
+    [
+        ((320.1, 209.9), 30.4, "consistent"),
+        ((350.0, 210.0), 30.4, "conflict"),
+        ((320.1, 209.9), 45.0, "conflict"),
+    ],
+)
+def test_reference_check_uses_the_fitted_outline(position, diameter, status):
+    size = resting_ball_range.RestingBallSize(
+        x=position[0], y=position[1], diameter_px=diameter, diameter_sd_px=1.0, windows=5
+    )
+    measure = RestingBallMeasure(seed=(320.0, 210.0, 30.0), found=(320.0, 210.0, 30.0), size=size)
+
+    record = fallback_chain.ball_reference_check(measure)
+
+    assert record["status"] == status
+    assert record["observed"]["x"] == position[0]
+    assert record["observed"]["diameter_px"] == diameter
+    assert bool(record["range_prior_rejection"]) == (status == "conflict")
+
+
+def test_echoing_the_seed_without_an_outline_is_not_reference_agreement():
+    measure = RestingBallMeasure(seed=(320.0, 210.0, 30.0), found=(320.0, 210.0, 30.0), size=None)
+
+    record = fallback_chain.ball_reference_check(measure)
+
+    assert record["status"] == "unavailable"
+    assert record["range_prior_rejection"] is None
+
+
+def test_a_conflicting_prior_cannot_reappear_in_the_camera_range_chain():
+    result = fallback_chain.ball_range_resolution(
+        shot_range={"ball_range_m": 3.2, "ball_range_source": "camera_prior"},
+        prior=SimpleNamespace(range_m=3.2, uncertainty_m=0.5),
+        range_prior_rejection="reference conflict",
+    )
+
+    assert not result.present
+    assert "reference conflict" in result.reason
+
+
+def test_rejected_prior_leaves_the_size_fallback_experimental():
+    result = fallback_chain.ball_range_resolution(
+        shot_range={},
+        prior=SimpleNamespace(range_m=3.2, uncertainty_m=0.5),
+        range_prior_rejection="reference conflict",
+        size_route=lambda: {
+            "status": "measured_from_size",
+            "slant_range_m": 2.0,
+            "uncertainty_m": 0.2,
+            "focal_source": "nominal",
+        },
+    )
+
+    assert result.source == "camera_ball_size"
+    assert result.label == "experimental"
+    assert ("camera_prior", "reference conflict") in result.tried
+
+
+def test_reference_check_does_not_compare_a_cache_for_another_seed(monkeypatch):
+    monkeypatch.setattr(server, "shot_reference_ball", lambda _at: {**SEED, "x": 300.0})
+    archive = {
+        RESTING_BALL_KEY: RestingBallMeasure(
+            seed=(320.0, 210.0, 30.0), found=(320.0, 210.0, 30.0), size=_size(45.0)
+        )
+    }
+    shot = SimpleNamespace(impact_timestamp=100.0, input_sources={"existing": "retained"})
+
+    server._record_ball_reference_check(shot, archive)  # pylint: disable=protected-access
+
+    assert shot.input_sources["existing"] == "retained"
+    assert shot.input_sources["ball_reference"]["status"] == "unavailable"
+    assert shot.input_sources["ball_reference"]["range_prior_rejection"] is None

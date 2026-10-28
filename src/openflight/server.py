@@ -4707,6 +4707,11 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         club = shot.club.value
         at_address = shot_ball_at_address(shot.impact_timestamp)
         own_prior = _look_range_prior(at_address)
+        reference = (shot.input_sources or {}).get("ball_reference") or {}
+        prior_rejection = reference.get("range_prior_rejection")
+        prior_inputs = {"range_prior": own_prior} if own_prior is not None else {}
+        if prior_rejection:
+            prior_inputs["range_prior_rejection"] = prior_rejection
         snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
         iwr_runtime_config_snapshot = (
             snapshotter(  # pylint: disable=not-callable
@@ -4720,7 +4725,8 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     else {}
                 ),
                 **({"ball_at_address": at_address} if at_address is not None else {}),
-                **({"range_prior": own_prior} if own_prior is not None else {}),
+                **prior_inputs,
+                **({"ball_reference": reference} if reference else {}),
             )
             if callable(snapshotter)
             else None
@@ -4732,7 +4738,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             club_speed_mph=shot.club_speed_mph,
             tilt_deg=effective_tilt_deg,
             **roll_inputs,
-            **({"range_prior": own_prior} if own_prior is not None else {}),
+            **prior_inputs,
         )
         capture = shot_result.capture
         measurement = shot_result.measurement
@@ -5063,6 +5069,25 @@ def _measure_resting_ball_early(shot: Shot, camera_archive) -> float | None:
 def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
     """Wait for this shot's camera match and archive load."""
     return camera_future.result()
+
+
+def _record_ball_reference_check(shot: Shot, camera_archive) -> None:
+    """Keep the cached clip/reference comparison before the IWR fits its pose."""
+    if camera_archive is None:
+        return
+    from .camera.fallback_chain import (  # noqa: PLC0415
+        RESTING_BALL_KEY,
+        RestingBallMeasure,
+        ball_reference_check,
+    )
+
+    measure = camera_archive.get(RESTING_BALL_KEY)
+    seed = shot_reference_ball(shot.impact_timestamp)
+    key = tuple(seed.get(name) for name in ("x", "y", "diameter_px")) if seed else None
+    if not isinstance(measure, RestingBallMeasure) or measure.seed != key:
+        measure = None
+    record = ball_reference_check(measure)
+    shot.input_sources = {**(shot.input_sources or {}), "ball_reference": record}
 
 
 def _fuse_camera_club_delivery(
@@ -5661,6 +5686,9 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
             },
             prior=prior,
             size_route=size_route,
+            range_prior_rejection=((shot.input_sources or {}).get("ball_reference") or {}).get(
+                "range_prior_rejection"
+            ),
         )
         apply_ball_range(shot, resolution)
         if resolution.present and resolution.route != "iwr_post_impact":
@@ -6129,15 +6157,43 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     # The orientation before any estimator uses it; its wait for the reading after
     # impact overlaps the camera fetch and the IWR's dump.
     _isolated_stage(shot, "inclinometer", _snapshot_inclinometer_for_shot, shot)
-    iwr6843_ms = _isolated_stage(shot, "iwr6843", _process_iwr6843_angle, shot)
-    if iwr6843_ms is _STAGE_FAILED:
-        iwr6843_ms = None
     kld7_ms = None
     camera_capture_ms = None
     camera_archive_load_ms = None
     camera_resting_ball_ms = None
     camera_wait_ms = None
     camera_analysis_ms = None
+    camera_capture = None
+    camera_archive = None
+    if camera_future is not None:
+        camera_wait_started = time.monotonic()
+        try:
+            prefetched = _await_camera_prefetch(camera_future)
+            camera_capture = prefetched.capture
+            camera_archive = prefetched.archive
+            camera_capture_ms = prefetched.match_ms
+            camera_archive_load_ms = prefetched.archive_load_ms
+            camera_resting_ball_ms = prefetched.resting_ball_ms
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Camera capture matching error: %s", error, exc_info=True)
+            log_session_error(
+                "Camera capture matching failed",
+                component="camera_capture",
+                context={
+                    "stage": "camera_capture_match",
+                    "ball_speed_mph": shot.ball_speed_mph,
+                },
+                exc=error,
+            )
+        finally:
+            camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
+            if camera_executor is not None:
+                camera_executor.shutdown(wait=True, cancel_futures=False)
+
+    _isolated_stage(shot, "ball_reference", _record_ball_reference_check, shot, camera_archive)
+    iwr6843_ms = _isolated_stage(shot, "iwr6843", _process_iwr6843_angle, shot)
+    if iwr6843_ms is _STAGE_FAILED:
+        iwr6843_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
         if shot.mode != "mock":
@@ -6333,33 +6389,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             exc=e,
         )
 
-    camera_capture = None
-    camera_archive = None
     if camera_future is not None:
-        camera_wait_started = time.monotonic()
-        try:
-            prefetched = _await_camera_prefetch(camera_future)
-            camera_capture = prefetched.capture
-            camera_archive = prefetched.archive
-            camera_capture_ms = prefetched.match_ms
-            camera_archive_load_ms = prefetched.archive_load_ms
-            camera_resting_ball_ms = prefetched.resting_ball_ms
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            logger.warning("[SERVER] Camera capture matching error: %s", error, exc_info=True)
-            log_session_error(
-                "Camera capture matching failed",
-                component="camera_capture",
-                context={
-                    "stage": "camera_capture_match",
-                    "ball_speed_mph": shot.ball_speed_mph,
-                },
-                exc=error,
-            )
-        finally:
-            camera_wait_ms = (time.monotonic() - camera_wait_started) * 1000.0
-            if camera_executor is not None:
-                camera_executor.shutdown(wait=True, cancel_futures=False)
-
         _isolated_stage(shot, "camera_capture_log", _log_camera_capture_match, shot, camera_capture)
 
     camera_analysis_started = time.monotonic()

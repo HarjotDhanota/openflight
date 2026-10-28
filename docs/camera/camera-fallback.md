@@ -44,6 +44,19 @@ length or the lens's listed one (+-8 %). On Harjot-outdoor-test-1 the 28 shots w
 resting ball measured 41.2-45.3 px, 1.92-2.12 m at the 6 mm lens's listed 2000 px; shot
 14's IWR launch point was 1.91 +- 0.12 m.
 
+Before IWR pose fitting, the kiosk compares the saved ball reference with this clip's
+cached outline fit. A centre displacement beyond `max(8 px, 0.75 reference diameters)`
+or an observed/reference diameter ratio outside `0.75..1.33` rejects the camera range
+prior for that shot. These are the existing scene/impact detector agreement bounds.
+Both the per-shot and session-default prior are excluded from IWR ranging and the
+later camera range chain; a qualifying IWR range still wins. The size fallback keeps
+its existing lens-dependent label. A missing fit is unavailable, not agreement, and
+does not itself reject a prior. Agreement is a consistency check, not validated ball
+identity or distance. The comparison is recorded in `Shot.input_sources.ball_reference`
+and the IWR replay snapshot, including the rejection reason. This waits for the
+existing camera prefetch before IWR analysis; capture monitoring remains independent,
+and the Pi latency impact needs measurement.
+
 ## The launch (`camera/ball_launch_fallback.py`)
 
 After impact the ball is a compact round blob against the median of the frames 75-25 ms

@@ -380,6 +380,8 @@ class IWR6843Runtime:
         tee_range_m: float | None = None,
         ball_at_address: dict | None = None,
         range_prior: LaunchRangePrior | None = None,
+        range_prior_rejection: str | None = None,
+        ball_reference: dict | None = None,
     ) -> dict:
         """Freeze every primitive needed by the hardware-free estimator."""
         payload = {
@@ -409,10 +411,14 @@ class IWR6843Runtime:
                 "tee_range_m": tee_range_m,
                 "ball_at_address": ball_at_address,
                 "range_prior": (range_prior or self.range_prior).to_dict()
-                if (range_prior or self.range_prior)
+                if (range_prior or self.range_prior) and not range_prior_rejection
                 else None,
             },
         }
+        if range_prior_rejection:
+            payload["per_shot_inputs"]["range_prior_rejection"] = range_prior_rejection
+        if ball_reference is not None:
+            payload["per_shot_inputs"]["ball_reference"] = ball_reference
         encoded = json.dumps(
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
@@ -452,6 +458,7 @@ class IWR6843Runtime:
         tilt_deg: float | None = None,
         tee_range_m: float | None = None,
         range_prior: LaunchRangePrior | None = None,
+        range_prior_rejection: str | None = None,
         roll_deg: float | None = None,
     ) -> IWR6843ShotResult:
         """Match one OPS shot to TI data, range its launch point, and run LCMF.
@@ -502,7 +509,7 @@ class IWR6843Runtime:
             shot_calibration = replace(shot_calibration, tee_range_m=float(tee_range_m))
         prepared = None
         if hasattr(shot_calibration, "tee_range_m"):
-            prior = range_prior or self.range_prior
+            prior = None if range_prior_rejection else (range_prior or self.range_prior)
             try:
                 prepared = prepare_lcmf_capture(raw)
             except (ValueError, IndexError) as error:
@@ -521,6 +528,11 @@ class IWR6843Runtime:
                         prior=prior,
                     ),
                     partial_record,
+                )
+            if range_prior_rejection:
+                launch_range = replace(
+                    launch_range,
+                    reason="; ".join(filter(None, (launch_range.reason, range_prior_rejection))),
                 )
             configured = shot_calibration.tee_range_m
             if configured is not None:
