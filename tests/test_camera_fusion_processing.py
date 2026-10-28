@@ -53,7 +53,8 @@ def _context():
     return fp.build_context(**_context_kwargs())
 
 
-def test_sound_inputs_are_frozen_and_reach_replay_without_inventing_contact(monkeypatch):
+@pytest.mark.parametrize("source", [None, "sound_gate", "ops_speed_trigger"])
+def test_sound_inputs_are_frozen_and_reach_replay_without_inventing_contact(monkeypatch, source):
     from openflight.acoustic_timing import sound_timing_inputs
 
     seen = {}
@@ -74,10 +75,15 @@ def test_sound_inputs_are_frozen_and_reach_replay_without_inventing_contact(monk
         "sensor_timestamp_ns": np.arange(20),
         "gate_boottime_interval_ns": np.array([100_000_000, 101_000_000]),
     }
+    if source is not None:
+        archive["trigger_source"] = np.str_(source)
     fp.process_camera_fusion(context, archive)
     assert seen["head"].sound_timing["nominal_sound_speed_m_s_assumed"] == 343
     assert seen["head"].contact_window_ns is None
-    assert seen["head"].gate_interval_ns == (100_000_000, 101_000_000)
+    assert seen["head"].trigger_source == source
+    assert seen["head"].gate_interval_ns == (
+        None if source == "ops_speed_trigger" else (100_000_000, 101_000_000)
+    )
     assert seen["head"].legacy_sound_model is False
 
 

@@ -48,3 +48,22 @@ trace, server, logging, OPS trigger and provenance paths; four skipped because
 Linux CLOCK_BOOTTIME or historical capture fixtures were unavailable. Ruff passed
 on changed Python files; backend pylint passed its 9.0 threshold (9.77/10).
 No real sensor hardware was exercised.
+
+## Trigger source and acoustic contact
+
+New sound events serialize `source: sound_gate`; camera trigger metadata and NPZ
+archives retain `trigger_source: sound_gate`. This tag identifies the capture
+request, not physical impact or calibrated clock accuracy. The existing camera
+notification entry points remain sound-only; no OPS event is routed through them.
+
+The live and frozen head-track paths read the archive's source before estimating
+contact. Explicit OPS, unknown or malformed sources cannot use acoustic travel,
+detector calibration or the legacy callback-based sound window. Unlabelled older
+archives keep their historical sound interpretation, with their existing
+unqualified status; their source is not retrospectively labelled as observed.
+Explicit sound captures retain the same acoustic math and calibration rules.
+
+This is preparation for supporting both trigger paths. The shared OPS event
+coordinator, sync-input wiring/qualification and internal-trigger camera/IWR route
+remain pending. The current internal-trigger full-fusion startup restriction stays
+in place. No firmware, IWR transaction flow or live trigger selection changed.

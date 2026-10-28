@@ -253,6 +253,7 @@ class HeadTrackContext:
     sound_timing: Optional[Mapping[str, Any]] = None
     gate_interval_ns: Optional[tuple[float, float]] = None
     legacy_sound_model: bool = False
+    trigger_source: Optional[str] = None
 
 
 def gate_latency_ns(metadata: Any) -> Optional[float]:
@@ -268,6 +269,19 @@ def gate_latency_ns(metadata: Any) -> Optional[float]:
     return (low + high) / 2.0 if math.isfinite(low) and math.isfinite(high) else None
 
 
+def _capture_trigger_source(archive: Mapping[str, Any]) -> Optional[str]:
+    if "trigger_source" not in archive:
+        return None
+    try:
+        value = np.asarray(archive["trigger_source"])
+        if value.ndim != 0 or value.dtype.kind not in "US":
+            return "invalid"
+        source = value.item()
+        return source.decode("utf-8") if isinstance(source, bytes) else source
+    except (TypeError, ValueError):
+        return "invalid"
+
+
 def head_track_context(
     archive: Mapping[str, Any],
     *,
@@ -275,9 +289,11 @@ def head_track_context(
     sound_timing: Optional[Mapping[str, Any]] = None,
     **fields,
 ) -> HeadTrackContext:
-    """One clip's context: the acoustic contact window on its sensor (boottime) clock."""
+    """Acoustic contact support only for sound or unlabelled legacy captures."""
     window, gate = None, None
-    if archive.get("sensor_timestamp_ns") is not None:
+    source = _capture_trigger_source(archive)
+    sound_source = source is None or source == "sound_gate"
+    if sound_source and archive.get("sensor_timestamp_ns") is not None:
         if "gate_boottime_interval_ns" in archive:
             try:
                 bounds = np.asarray(archive["gate_boottime_interval_ns"], dtype=float)
@@ -298,7 +314,8 @@ def head_track_context(
         exposure_us=None if exposure is None else np.asarray(exposure),
         sound_timing=sound_timing,
         gate_interval_ns=gate,
-        legacy_sound_model=sound_timing is None,
+        legacy_sound_model=sound_timing is None and sound_source,
+        trigger_source=source,
         **fields,
     )
 

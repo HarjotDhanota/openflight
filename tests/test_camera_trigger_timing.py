@@ -68,6 +68,7 @@ def test_the_trigger_records_the_sensor_clock_beside_the_monotonic_clock(tmp_pat
     assert runtime.notify_trigger(10.0)
 
     assert runtime._trigger_clocks.get_nowait() == {
+        "trigger_source": "sound_gate",
         "host_monotonic_ns": 5_000,
         "boottime_ns": 5_750,
         "boottime_minus_monotonic_bounds_ns": [750, 750],

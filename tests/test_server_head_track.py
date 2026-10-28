@@ -62,6 +62,18 @@ def test_the_live_path_hands_the_head_track_its_context(monkeypatch, tmp_path, c
     assert context.exposure_us.tolist() == [68] * 24
 
 
+@pytest.mark.parametrize("source", ["sound_gate", "ops_speed_trigger"])
+def test_live_head_context_keeps_recorded_trigger_source(monkeypatch, tmp_path, captured, source):
+    _live_server(monkeypatch, tmp_path)
+    shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
+    archive = {**_archive(), "trigger_source": np.str_(source)}
+    server._fuse_camera_club_delivery(shot, _capture(tmp_path), camera_archive=archive)
+    context = captured["head_track"]
+    assert context.trigger_source == source
+    assert context.contact_window_ns is None
+    assert context.legacy_sound_model is False
+
+
 def test_without_an_iwr_the_shots_own_ball_range_still_runs_the_chain(
     monkeypatch, tmp_path, captured
 ):

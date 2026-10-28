@@ -31,6 +31,25 @@ def _record(**changes):
     return sound_contact_record([100_000_000, 100_400_000], **kwargs)
 
 
+@pytest.mark.parametrize("source", ["ops_speed_trigger", "ops_capture_end", "unknown", ""])
+def test_non_sound_event_never_uses_acoustic_calibration(source):
+    record = _record(trigger_source=source)
+    assert record["trigger_source"] == source
+    assert record["status"] == "unavailable"
+    assert record["contact_interval_ns"] is None
+    assert record["gate_to_contact_delay_ns"] is None
+    assert "sound_gate" in record["reason"]
+    assert "travel_time_ns_nominal_derived" not in record
+
+
+def test_explicit_sound_source_preserves_legacy_acoustic_calculation():
+    old, explicit = _record(), _record(trigger_source="sound_gate")
+    assert old["trigger_source"] is None
+    assert explicit["trigger_source"] == "sound_gate"
+    assert old["contact_interval_ns"] == explicit["contact_interval_ns"]
+    assert old["gate_to_contact_delay_ns"] == explicit["gate_to_contact_delay_ns"]
+
+
 def test_sound_travel_is_distance_over_speed_with_explicit_default_assumption():
     assert sound_travel_time_ns([0, 0, 2], [0, 0, 0]) == pytest.approx(2 / 343 * 1e9)
     assert sound_travel_time_ns([0, 0, 2], [0, 0, 0], speed_m_s=340) == pytest.approx(2 / 340 * 1e9)

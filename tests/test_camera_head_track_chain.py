@@ -35,6 +35,39 @@ from tests.test_camera_head_track import (
 YAW_OFFSET_DEG = -2.2
 
 
+@pytest.mark.parametrize(
+    "source",
+    ["ops_speed_trigger", "ops_capture_end", "unknown", "", np.array(["sound_gate"]), 1, None],
+)
+def test_explicit_non_sound_or_malformed_source_cannot_infer_acoustic_contact(source):
+    archive = {
+        "sensor_timestamp_ns": np.arange(4),
+        "trigger_boottime_ns": np.int64(130_000_000),
+        "gate_boottime_interval_ns": np.array([100_000_000, 101_000_000]),
+        "trigger_source": np.asarray(source),
+    }
+    context = head_track_context(archive)
+    assert context.contact_window_ns is None
+    assert context.gate_interval_ns is None
+    assert context.legacy_sound_model is False
+    assert context.trigger_source is not None
+
+
+def test_explicit_sound_source_and_unlabelled_legacy_archive_have_identical_contact_support():
+    archive = {
+        "sensor_timestamp_ns": np.arange(4),
+        "trigger_boottime_ns": np.int64(130_000_000),
+        "gate_boottime_interval_ns": np.array([100_000_000, 101_000_000]),
+    }
+    old = head_track_context(archive)
+    explicit = head_track_context({**archive, "trigger_source": np.str_("sound_gate")})
+    assert old.trigger_source is None
+    assert explicit.trigger_source == "sound_gate"
+    assert old.contact_window_ns == explicit.contact_window_ns
+    assert old.gate_interval_ns == explicit.gate_interval_ns
+    assert old.legacy_sound_model is explicit.legacy_sound_model is True
+
+
 def test_contact_window_uses_whole_sensor_clock_gate_interval_not_callback_midpoint():
     archive = {
         "sensor_timestamp_ns": np.arange(4),
@@ -238,6 +271,29 @@ def test_missing_sound_calibration_cannot_use_an_existing_assumed_window(no_stab
     assert timing["contact_interval_ns"] is None
     assert "not calibrated" in timing["reason"]
     assert any("not calibrated" in note for note in delivery.notes)
+
+
+def test_ops_event_cannot_use_an_existing_sound_window_even_with_calibration(no_stable_clubhead):
+    context = _context(
+        Swing(),
+        trigger_source="ops_speed_trigger",
+        sound_timing=sound_timing_inputs(
+            SimpleNamespace(mic_offset_mm=[-80, 0, 0]),
+            calibration={
+                "detector_delay_bounds_ns": [0, 0],
+                "sound_speed_bounds_m_s": [343, 343],
+                "path_error_bound_m": 0.0,
+                "provenance": "synthetic fixture only",
+            },
+        ),
+        gate_interval_ns=(CONTACT_NS + 6e6, CONTACT_NS + 6.1e6),
+    )
+    delivery = _run(Swing(), head_track=context)
+    assert delivery.head_track["status"] == "rejected_no_contact_time"
+    timing = delivery.head_track["contact_timing"]
+    assert timing["trigger_source"] == "ops_speed_trigger"
+    assert timing["contact_interval_ns"] is None
+    assert "sound_gate" in timing["reason"]
 
 
 @pytest.mark.parametrize("handed", ["RH", "LH"])

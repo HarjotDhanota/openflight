@@ -64,7 +64,9 @@ def sound_timing_inputs(rig, *, calibration: Mapping | None = None) -> dict:
     }
 
 
-def sound_contact_record(gate_interval_ns, *, ball_camera_ruf_m, inputs: Mapping) -> dict:
+def sound_contact_record(
+    gate_interval_ns, *, ball_camera_ruf_m, inputs: Mapping, trigger_source: str | None = None
+) -> dict:
     """Conditional contact bounds, with unknown detector/environment terms left missing.
 
     Positions use unmirrored camera right/up/forward axes. Calibration must provide
@@ -77,6 +79,7 @@ def sound_contact_record(gate_interval_ns, *, ball_camera_ruf_m, inputs: Mapping
         "label": "experimental",
         "clock": "CLOCK_BOOTTIME",
         "physical_timing_qualified": False,
+        "trigger_source": trigger_source,
         "nominal_sound_speed_m_s_assumed": SPEED_OF_SOUND_M_S,
         "contact_interval_ns": None,
         "gate_to_contact_delay_ns": None,
@@ -87,6 +90,10 @@ def sound_contact_record(gate_interval_ns, *, ball_camera_ruf_m, inputs: Mapping
     def unavailable(reason):
         return {**record, "reason": reason}
 
+    if trigger_source is not None and (
+        not isinstance(trigger_source, str) or trigger_source != "sound_gate"
+    ):
+        return unavailable("acoustic contact correction requires a sound_gate trigger")
     ball, mic = _vector(ball_camera_ruf_m), _vector(inputs.get("mic_camera_ruf_m"))
     if ball is None or mic is None:
         return unavailable(
