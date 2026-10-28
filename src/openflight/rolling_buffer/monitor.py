@@ -212,6 +212,7 @@ class RollingBufferMonitor:
         """
         radar_kwargs = {} if ops_baud is None else {"uart_baud": ops_baud}
         self.radar = OPS243Radar(port=port, **radar_kwargs)
+        self.radar.capture_evidence_callback = self._log_ops_capture_evidence
         self.processor = RollingBufferProcessor(sample_rate=sample_rate_ksps * 1000)
         self.trigger_type = trigger_type
         self.sample_rate_ksps = sample_rate_ksps
@@ -227,6 +228,12 @@ class RollingBufferMonitor:
         self._shots: List[Shot] = []
         self._shot_sequence_number = 0
         self._current_club: ClubType = ClubType.DRIVER
+
+    @staticmethod
+    def _log_ops_capture_evidence(evidence):
+        session = get_session_logger()
+        if session is not None:
+            session.log_ops_capture_evidence(evidence)
 
     def connect(self) -> bool:
         """
@@ -675,6 +682,7 @@ class RollingBufferMonitor:
                         # Log raw I/Q data for offline analysis
                         session_logger.log_rolling_buffer_capture(
                             shot_number=shot.shot_number,
+                            capture_id=capture.capture_id,
                             sample_time=capture.sample_time,
                             trigger_time=capture.trigger_time,
                             i_samples=capture.i_samples,

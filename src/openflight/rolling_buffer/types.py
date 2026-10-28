@@ -41,6 +41,7 @@ class IQCapture:
     trigger_timestamp: Optional[float] = None
     trigger_timestamp_source: Optional[str] = None
     clock_sync_offset_s: Optional[float] = None
+    capture_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Infer the hardware trigger epoch when first-byte timing is available."""
