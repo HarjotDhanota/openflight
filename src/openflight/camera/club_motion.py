@@ -232,15 +232,22 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
     hold_diameter_px: float | None = None,
     confirm_anchor: tuple[float, float, float] | None = None,
     rival_fraction: float = CONFIRM_RIVAL_FRACTION,
+    preferred_diameters_px: Sequence[float] | None = None,
 ) -> list[ReferenceBall]:
     """Enumerate distinct lit-sphere fits over a caller-supplied size range.
 
     ``seed_filter`` drops impossible places before they use up ``max_fits``. ``confirm_anchor``
     (x, y, diameter px) fits that held ball plus rivals scoring ``rival_fraction`` of its score.
+    Preferred diameters add prioritized proposals without constraining the fitted size.
     """
     if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
-    diameters = sorted({float(value) for value in expected_diameters_px})
+    preferred = (
+        {float(value) for value in preferred_diameters_px}
+        if preferred_diameters_px is not None
+        else set()
+    )
+    diameters = sorted({float(value) for value in expected_diameters_px} | preferred)
     if not diameters or any(not math.isfinite(value) or value <= 0.0 for value in diameters):
         raise ValueError("expected ball diameters must be finite and positive")
 
@@ -292,7 +299,9 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
     margin = ALL_ROUND_MARGIN_NOISE * picture_noise / factor
     cap = CONFIRM_MAX_SEEDS if confirm_anchor is not None else max_fits
     kept: list[tuple[float, float, float, float]] = []
-    for score, x, y, radius, row, col in sorted(seeds, key=lambda item: item[0], reverse=True):
+    for score, x, y, radius, row, col in sorted(
+        seeds, key=lambda item: (2 * item[3] in preferred, item[0]), reverse=True
+    ):
         if any(math.hypot(x - kx, y - ky) <= max(radius, kr) for _ks, kx, ky, kr in kept):
             continue
         if not _brighter_all_round(coarse, row, col, radius / factor, margin):

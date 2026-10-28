@@ -51,7 +51,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
         "name": "camera_reference_ball_size_range",
-        "version": 6,
+        "version": 7,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "the_ground_patch_outline_only",
@@ -81,6 +81,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "image_box_position": "origin_plus_size_range_times_unit_ray",
         "image_box_camera_range_m": list(_FULL_RADAR_RANGE_M),
         "image_box_height_prior_used": False,
+        "image_box_size_hints": "existing_window_proposals_first_never_a_height_gate",
     }
 
 
@@ -978,6 +979,9 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
     ):
         raise ValueError("camera frames do not match the declared saved-image mode")
     width, height = camera.image_width_px, camera.image_height_px
+    preferred_diameters = (
+        np.geomspace(*search.diameter_px, _DIAMETER_HYPOTHESES) if height_independent else None
+    )
     if height_independent:
         search = image_box_search(camera, search)
     # a centre near the outline's edge needs its whole disk inside the region
@@ -1042,6 +1046,7 @@ def estimate_patch_ball(  # pylint: disable=too-many-locals
             if confirm_anchor is not None
             else None
         ),
+        **({"preferred_diameters_px": preferred_diameters} if height_independent else {}),
     )
     candidates = tuple(
         _patch_candidate(
