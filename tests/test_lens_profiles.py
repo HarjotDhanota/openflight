@@ -1,6 +1,7 @@
 """The lens on the unit: profiles, focal length per mode, calibration lookup and settings."""
 
 import json
+import os
 
 import pytest
 
@@ -100,3 +101,53 @@ def test_the_rig_takes_the_lens_s_focal_in_its_own_mode(catalogue, rig):
 
     assert scaled.image_width == rig.image_width
     assert scaled.focal_px == pytest.approx(rig.focal_px * 6.0 / 2.8)
+
+
+@pytest.mark.parametrize("newest_width", [1280, 640])
+def test_each_mode_uses_its_own_focal_even_when_the_other_file_is_newer(
+    tmp_path, catalogue, rig, newest_width
+):
+    for width, height, focal in ((1280, 800, 2008.0), (640, 400, 1006.0)):
+        path = tmp_path / f"{width}.json"
+        path.write_text(json.dumps(_artifact("6mm", width, height, focal)), encoding="utf-8")
+        stamp = 2000 if width == newest_width else 1000
+        os.utime(path, (stamp, stamp))
+
+    lens = lens_profiles.active_lens(rig, catalogue, "6mm", [tmp_path])
+
+    assert lens.focal_px(1280) == pytest.approx(2008.0)
+    assert lens.focal_px(640) == pytest.approx(1006.0)
+
+
+def test_newest_calibration_is_selected_within_each_mode(tmp_path, catalogue, rig):
+    for name, width, height, focal, stamp in (
+        ("full-old", 1280, 800, 1980.0, 1000),
+        ("full-new", 1280, 800, 2008.0, 2000),
+        ("half", 640, 400, 1006.0, 3000),
+    ):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(_artifact("6mm", width, height, focal)), encoding="utf-8")
+        os.utime(path, (stamp, stamp))
+
+    lens = lens_profiles.active_lens(rig, catalogue, "6mm", [tmp_path])
+
+    assert lens.focal_px(1280) == pytest.approx(2008.0)
+    assert lens.focal_px(640) == pytest.approx(1006.0)
+    record = lens.to_dict()["calibration_by_arm"]
+    assert record["arm5"]["path"] == str(tmp_path / "full-new.json")
+    assert record["arm6"]["path"] == str(tmp_path / "half.json")
+    assert record["arm5"]["basis"] == record["arm6"]["basis"] == "matching_saved_image_mode"
+
+
+def test_single_mode_scaled_fallback_is_identified_in_provenance(tmp_path, catalogue, rig):
+    path = tmp_path / "full.json"
+    path.write_text(json.dumps(_artifact("6mm", fx=2008.0)), encoding="utf-8")
+
+    lens = lens_profiles.active_lens(rig, catalogue, "6mm", [path])
+
+    assert lens.focal_px(1280) == pytest.approx(2008.0)
+    assert lens.focal_px(640) == pytest.approx(1004.0)
+    record = lens.to_dict()["calibration_by_arm"]
+    assert record["arm5"]["basis"] == "matching_saved_image_mode"
+    assert record["arm6"]["basis"] == "scaled_from_other_mode"
+    assert record["arm6"]["fitted_width_px"] == 1280
