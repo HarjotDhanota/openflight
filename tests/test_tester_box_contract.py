@@ -441,15 +441,13 @@ def test_box_refresh_keeps_the_discovery_size_until_reacquisition(monkeypatch):
     assert calls[2]["follow"]["diameter_px"] == 20.0
 
 
-@pytest.mark.parametrize("status", ["not_found", "ambiguous"])
-def test_box_refresh_reacquires_after_a_failed_anchor_check(monkeypatch, status):
+def test_box_refresh_reacquires_after_a_failed_anchor_check(monkeypatch):
     inside = {"x_px": 640.0, "y_px": 440.0, "diameter_px": 20.0}
     found = {"status": "selected", "selected": inside}
     locator, _live, _record = _locator(monkeypatch, [])
     calls = []
-    looks = iter(
-        [found, {"status": status, "selected": None}, {"status": status, "selected": None}]
-    )
+    missed = {"status": "not_found", "selected": None}
+    looks = iter([found, missed, missed, missed, missed])
 
     def analyze(*_args, **kwargs):
         calls.append(kwargs)

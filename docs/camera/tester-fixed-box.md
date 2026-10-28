@@ -47,6 +47,18 @@ after 6 s). The size the search accepts is the ball's physical range: from the
 box's padded near edge to 0.6 m past the window (`size_far_margin_m`), not to
 the horizon a padded row reaches.
 
+A different detector winner must be seen consistently before replacing the marker.
+If the previous object still passes the current checks, the view stays ambiguous.
+An ambiguous result is not retried just to obtain a single winner, and it disables
+confirmation immediately. A genuinely moved ball can be reacquired; no coordinates
+are smoothed between the old and new objects.
+
+An ordinary missed look may retain the previous position briefly, shown as a dashed
+amber ring with “Last seen here”. That retained position cannot be confirmed. The
+green check appears only when the current observation is confirmable. Live analysis
+includes the frame sequence, candidate evidence and `observation_state`, separately
+from the displayed position, to help diagnose identity changes.
+
 ### The distance: measured on each swing (13 Oct, decision "a")
 
 The setup no longer measures the resting ball's distance with the radar. The camera
