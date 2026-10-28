@@ -129,7 +129,7 @@ def _render_batch(params: np.ndarray, yy: np.ndarray, xx: np.ndarray) -> np.ndar
 
 
 def _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper):
-    """Forward differences with scipy's '2-point' steps, all variants drawn at once."""
+    """Scipy's residual differences and column layout, all variants drawn at once."""
     lower, upper = np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)
     epsilon = np.sqrt(np.finfo(np.float64).eps)
 
@@ -140,10 +140,10 @@ def _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper):
         step = np.where(outside, -step, step)
         step = (params + step) - params
         variants = np.vstack([params, params + np.diag(step)])
-        pictures = _render_batch(variants, yy, xx)
+        pictures = (_render_batch(variants, yy, xx) - patch) / noise_dn
         base = pictures[0][use]
         changed = pictures[1:][:, use]
-        return ((changed - base) / step[:, None]).T / noise_dn
+        return np.asfortranarray(((changed - base) / step[:, None]).T)
 
     return jacobian
 
@@ -189,27 +189,37 @@ def fit_lit_ball(
     )
     if fit is None or expected_radius:
         return fit
-    return measure_rim(image, fit)
+    return measure_rim(image, fit, seed_center=(x, y))
 
 
-def measure_rim(image: np.ndarray, fit: LitBall) -> LitBall:
+def measure_rim(
+    image: np.ndarray, fit: LitBall, *, seed_center: tuple[float, float] | None = None
+) -> LitBall:
     """``fit`` with its centre and size from the circle its outline follows, at full resolution.
 
     The outline is sought all round but the bottom, never in the shaded underside or the
-    shadow under it. The sphere stands where no circle of about its size follows the outline.
+    shadow under it. If shading pulls the fit off the outline, retry around the original
+    seed with the same circle gates. Without a measured circle the sphere stands.
     """
     radius = fit.radius_px
     reach = int(math.ceil((RIM_SIZE_REACH[1] + 0.2) * radius)) + 3
     height, width = image.shape
-    top, left = max(0, int(fit.y) - reach), max(0, int(fit.x) - reach)
-    bottom, right = min(height, int(fit.y) + reach + 1), min(width, int(fit.x) + reach + 1)
-    edges, ray_count = _rim_edges(
-        image[top:bottom, left:right].astype(np.float64), fit, fit.x - left, fit.y - top
-    )
-    circle = _outline_circle(edges, ray_count, fit.x - left, fit.y - top, radius)
-    if circle is None or abs(circle[2] / radius - 1.0) <= RIM_SIZE_AGREES_FRACTION:
-        return fit
-    return replace(fit, x=circle[0] + left, y=circle[1] + top, radius_px=circle[2])
+    centers = [(fit.x, fit.y)]
+    if seed_center is not None and seed_center != centers[0]:
+        centers.append(seed_center)
+    for index, (x, y) in enumerate(centers):
+        top, left = max(0, int(y) - reach), max(0, int(x) - reach)
+        bottom, right = min(height, int(y) + reach + 1), min(width, int(x) + reach + 1)
+        edges, ray_count = _rim_edges(
+            image[top:bottom, left:right].astype(np.float64), fit, x - left, y - top
+        )
+        circle = _outline_circle(edges, ray_count, x - left, y - top, radius)
+        if circle is None:
+            continue
+        if index == 0 and abs(circle[2] / radius - 1.0) <= RIM_SIZE_AGREES_FRACTION:
+            return fit
+        return replace(fit, x=circle[0] + left, y=circle[1] + top, radius_px=circle[2])
+    return fit
 
 
 def _rim_edges(patch: np.ndarray, fit: LitBall, x: float, y: float) -> tuple[np.ndarray, int]:

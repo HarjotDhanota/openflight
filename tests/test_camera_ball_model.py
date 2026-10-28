@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy import ndimage
 
-from openflight.camera.ball_model import fit_lit_ball
+from openflight.camera.ball_model import LitBall, fit_lit_ball, measure_rim
 from openflight.camera.club_motion import detect_reference_ball
 
 LIGHT_UPPER_LEFT = np.array([-0.55, -0.55, 0.63]) / np.linalg.norm([-0.55, -0.55, 0.63])
@@ -320,6 +320,30 @@ def test_the_size_comes_from_the_lit_rim_not_the_shaded_underside_or_its_shadow(
     assert fit.diameter_px == pytest.approx(42.0, rel=0.03)
     assert fit.x == pytest.approx(100.3, abs=0.75)
     assert fit.y == pytest.approx(100.6, abs=0.75)
+
+
+def test_rim_can_recover_from_a_sphere_pulled_down_into_the_shadow():
+    fit = LitBall(
+        x=101.28,
+        y=113.08,
+        radius_px=29.69,
+        light_azimuth_deg=269.32,
+        light_tilt_deg=74.17,
+        diffuse_dn=266.76,
+        shade_dn=55.66,
+        ground_dn=84.93,
+        misfit_dn=2.69,
+        rim_step_dn=136.76,
+    )
+    measured = measure_rim(_sky_lit_ball(), fit, seed_center=(101.0, 98.0))
+    assert measured.diameter_px == pytest.approx(42.0, rel=0.03)
+    assert measured.x == pytest.approx(100.3, abs=0.75)
+    assert measured.y == pytest.approx(100.6, abs=0.75)
+
+
+def test_an_unsupported_seed_does_not_invent_a_rim_measurement():
+    fit = LitBall(80.0, 80.0, 20.0, 270.0, 60.0, 120.0, 50.0, 80.0, 2.0)
+    assert measure_rim(np.full((160, 160), 80.0), fit, seed_center=(70.0, 70.0)) == fit
 
 
 @pytest.mark.parametrize("start_radius", [13.0, 16.0, 19.0])
