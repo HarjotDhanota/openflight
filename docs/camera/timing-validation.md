@@ -132,7 +132,34 @@ Verify the actual OV9281 driver/mode against an independent event before
 selecting a start/end/mid-exposure correction. Do not infer such a correction
 from frame delivery lag.
 
-The existing head-track sound-delay model (0.5–4 ms) is not repaired by this clock
-mapping. Acoustic travel, electronics latency, radar trigger segmentation and
-FFT time support are separate terms. A shared physical-contact estimate must
-include them explicitly; it must not relabel a sound-arrival edge as impact.
+## Sound arrival and physical contact
+
+New live/frozen camera contexts carry `sound_timing`: the microphone offset from
+the rig and explicit acoustic calibration, if available. The head-track fallback
+uses this shot's ball ray and range in unmirrored camera right/up/forward axes.
+It records distance and nominal travel using the existing **assumed** 343 m/s
+air speed. Handedness does not flip the physical microphone offset.
+
+A finite contact interval requires supplied `detector_delay_bounds_ns`,
+`sound_speed_bounds_m_s`, `path_error_bound_m` and calibration `provenance`.
+These must be established for the actual installation; there are no default
+detector or error bounds. The path error is a bound, not the range chain's
+one-sigma estimate. The full recorded sensor-clock GATE interval is required;
+a callback midpoint does not substitute for missing evidence.
+
+For gate interval `[g0,g1]`, travel `[a0,a1]` and detector delay `[d0,d1]`,
+conditional contact is `[g0-a1-d1, g1-a0-d0]`. The output
+`head_track.contact_timing` retains inputs, terms and missing-data reasons.
+The head tracker assumes a uniform interval when deriving its contact-time sigma;
+that sensitivity model is not a measured standard deviation.
+Missing or invalid calibration leaves this sound-dependent fallback pending;
+it does not fill in a contact time. New-context full club speed uses this same
+total delay exactly once when referring an OPS reading to the camera track.
+Independent GPIO edge accuracy, camera optical timestamp semantics and the
+OPS sample-clock mapping remain unqualified even with supplied calibration.
+
+Saved contexts without `sound_timing` preserve their legacy unqualified
+0.5–4 ms total-delay replay assumption and identify it as `legacy_unqualified`.
+Legacy full-speed records retain their travel-only interpretation. The OPS-only
+full-ball-speed route still uses that older nominal walk-back; this change does
+not qualify its contact anchor or change the canonical radial speed.

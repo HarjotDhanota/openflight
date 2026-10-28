@@ -8,10 +8,12 @@ fed to the arc or the collision model.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from openflight.acoustic_timing import sound_timing_inputs
 from openflight.camera import club_delivery
 from openflight.camera.club_delivery import CameraDeliveryGeometry, estimate_chained_delivery
 from openflight.camera.head_track import SOURCE, HeadTrackContext, head_track_context
@@ -220,3 +222,58 @@ def test_context_without_sensor_timestamps_has_no_window():
     context = head_track_context({"trigger_boottime_ns": np.int64(1)})
 
     assert context.contact_window_ns is None
+
+
+def test_missing_sound_calibration_cannot_use_an_existing_assumed_window(no_stable_clubhead):
+    swing = Swing()
+    context = _context(
+        swing,
+        sound_timing=sound_timing_inputs(SimpleNamespace(mic_offset_mm=[-80, 0, 0])),
+        gate_interval_ns=(CONTACT_NS + 6e6, CONTACT_NS + 6.1e6),
+    )
+    delivery = _run(swing, head_track=context)
+    timing = delivery.head_track["contact_timing"]
+    assert delivery.head_track["status"] == "rejected_no_contact_time"
+    assert timing["travel_time_ns_nominal_derived"] > 4e6
+    assert timing["contact_interval_ns"] is None
+    assert "not calibrated" in timing["reason"]
+    assert any("not calibrated" in note for note in delivery.notes)
+
+
+@pytest.mark.parametrize("handed", ["RH", "LH"])
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_explicit_synthetic_delay_recovers_contact_for_both_hands_and_images(
+    no_stable_clubhead, handed, mirrored
+):
+    swing = Swing(handed=handed, mirrored=mirrored)
+    # Exact fixture terms only; these are not a sound-detector calibration.
+    calibration = {
+        "detector_delay_bounds_ns": [200_000, 200_000],
+        "sound_speed_bounds_m_s": [343, 343],
+        "path_error_bound_m": 0.0,
+        "provenance": "synthetic swing truth only",
+    }
+    mic = np.array([-0.08, 0.0, 0.0])
+    ball = BALL_LUF - np.array([0.0, CAMERA_HEIGHT_M, 0.0])
+    delay = np.linalg.norm(ball - mic) / 343 * 1e9 + 200_000
+    context = _context(
+        swing,
+        sound_timing=sound_timing_inputs(
+            SimpleNamespace(mic_offset_mm=[-80, 0, 0]), calibration=calibration
+        ),
+        gate_interval_ns=(CONTACT_NS + delay - 100_000, CONTACT_NS + delay + 100_000),
+    )
+    delivery = _run(
+        swing, head_track=context, geometry=_geometry(horizontal_pixel_sign=-1 if mirrored else 1)
+    )
+    assert delivery.status == SOURCE, delivery.notes
+    assert delivery.head_track["contact_ns"] == pytest.approx(CONTACT_NS, abs=1000)
+    assert delivery.head_track["contact_timing"]["physical_timing_qualified"] is False
+
+
+def test_legacy_archive_contact_assumption_is_explicitly_identified():
+    context = head_track_context(
+        {"sensor_timestamp_ns": np.arange(4), "trigger_boottime_ns": np.int64(130_000_000)}
+    )
+    assert context.legacy_sound_model is True
+    assert context.sound_timing is None

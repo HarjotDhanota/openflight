@@ -30,6 +30,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from . import kiosk_extensions
+from .acoustic_timing import sound_timing_inputs
 from .air.bme280 import find_bme280
 from .air.conditions import AirConditions, isa_default
 from .air.service import AirSensorService
@@ -5196,6 +5197,7 @@ def _head_track_context(shot: Shot, camera_capture, archive):
     return head_track_context(
         archive,
         gate_latency=gate_latency_ns(getattr(camera_capture, "metadata", None)),
+        sound_timing=sound_timing_inputs(rig_geometry),
         handedness=shot_handedness(shot),
         club=shot.club,
         setup_ball=shot_reference_ball(shot.impact_timestamp),
@@ -5912,6 +5914,7 @@ def _fuse_camera_measurements(
                 handedness=shot_handedness(shot),
                 gate_latency_ns=gate_latency_ns(getattr(camera_capture, "metadata", None)),
                 target_yaw_sigma_deg=_target_line_sigma_deg(),
+                sound_timing=sound_timing_inputs(rig_geometry),
             )
             shot.camera_fusion_context = context
             result = process_camera_fusion(context, camera_archive)

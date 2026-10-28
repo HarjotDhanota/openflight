@@ -154,6 +154,7 @@ def build_context(
     handedness: str | None = None,
     gate_latency_ns: float | None = None,
     target_yaw_sigma_deg: float | None = None,
+    sound_timing: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze every non-archive input of one shot: nothing from any other shot.
 
@@ -165,6 +166,8 @@ def build_context(
     uncertainty, the OPS's place, the aim's uncertainty, the LIS3DH camera pitch).
     ``handedness``, ``gate_latency_ns`` (the trigger's GPIO edge to camera callback) and
     ``target_yaw_sigma_deg`` serve the camera head track.
+    ``sound_timing`` freezes microphone geometry and explicit delay calibration;
+    its absence identifies legacy replay rather than a calibrated contact anchor.
     """
     payload = {
         "schema": SCHEMA,
@@ -203,6 +206,8 @@ def build_context(
         payload["gate_latency_ns"] = float(gate_latency_ns)
     if target_yaw_sigma_deg is not None:
         payload["target_yaw_sigma_deg"] = float(target_yaw_sigma_deg)
+    if sound_timing is not None:
+        payload["sound_timing"] = dict(sound_timing)
     payload = _json_value(payload)
     payload["sha256"] = geometry_fingerprint(payload)
     return payload
@@ -295,6 +300,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             head_track=head_track_context(
                 archive,
                 gate_latency=context.get("gate_latency_ns"),
+                sound_timing=context.get("sound_timing"),
                 # contexts frozen before the head track carry no hand: right-handed
                 handedness=context.get("handedness") or "RH",
                 club=ClubType(context["club"]),

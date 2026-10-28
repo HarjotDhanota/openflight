@@ -54,6 +54,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
+from .acoustic_timing import sound_travel_time_ns
 from .flight_sim import (
     ACTIVE_AERO_MODEL,
     AIR_DENSITY_STD,
@@ -437,8 +438,12 @@ def evaluate_full_ball_speed(
                 "a sound-trigger impact needs the rig's mic offset for the acoustic walk-back",
                 inputs=inputs,
             )
-        distance = float(np.linalg.norm(geometry["ball_rest_m"] - geometry["mic_m"]))
-        walk_back_ms = 1000.0 * distance / SPEED_OF_SOUND_M_S
+        walk_back_ms = (
+            sound_travel_time_ns(
+                geometry["ball_rest_m"], geometry["mic_m"], speed_m_s=SPEED_OF_SOUND_M_S
+            )
+            / 1e6
+        )
     elif impact_source != "ops_transition":
         return _not_measured(
             f"impact source {impact_source!r} is not a measured impact", inputs=inputs
@@ -1019,6 +1024,9 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
     record = head_track if isinstance(head_track, dict) else {}
     if record.get("status") != "ok" or not isinstance(record.get("turn"), dict):
         why = record.get("status") or "not run"
+        timing = record.get("contact_timing")
+        if isinstance(timing, dict) and timing.get("reason"):
+            why = f"{why}: {timing['reason']}"
         return refused(f"no camera head track direction ({why})")
     flags = [record.get(name) for name in ("club_path_flag", "attack_angle_flag")]
     if any(flags):
@@ -1045,12 +1053,30 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         return refused("no measured impact time on the OPS clock")
     impact_source = ops_track.get("impact_source")
     walk_back_ms = 0.0
+    timing = record.get("contact_timing")
     if impact_source == "sound_trigger":
-        mic = _camera_relative(getattr(rig, "mic_offset_mm", None))
-        ball = _vector(record["turn"].get("ball_m"))
-        if mic is None or ball is None:
-            return refused("a sound-trigger impact needs the rig's mic offset and the ball")
-        walk_back_ms = 1000.0 * float(np.linalg.norm(ball - mic)) / SPEED_OF_SOUND_M_S
+        if timing is not None and not isinstance(timing, dict):
+            return refused("no bounded shared acoustic contact delay")
+        if timing is not None and timing.get("status") != "legacy_unqualified":
+            try:
+                delay = np.asarray(timing.get("gate_to_contact_delay_ns"), dtype=float)
+                valid = (
+                    timing.get("status") == "model_interval"
+                    and delay.shape == (2,)
+                    and np.all(np.isfinite(delay))
+                    and 0 <= delay[0] <= delay[1]
+                )
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                return refused("no bounded shared acoustic contact delay")
+            walk_back_ms = float(np.mean(delay)) / 1e6
+        else:
+            mic = _camera_relative(getattr(rig, "mic_offset_mm", None))
+            ball = _vector(record["turn"].get("ball_m"))
+            if mic is None or ball is None:
+                return refused("a sound-trigger impact needs the rig's mic offset and the ball")
+            walk_back_ms = sound_travel_time_ns(ball, mic, speed_m_s=SPEED_OF_SOUND_M_S) / 1e6
     elif impact_source != "ops_transition":
         return refused(f"impact source {impact_source!r} is not a measured impact")
     window_ms = float(ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
@@ -1100,6 +1126,15 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         "impact_walk_back_ms": walk_back_ms,
         "clock": ops_track.get("clock", "ops_capture"),
         "camera_contact_ns": contact_ns,
+        "contact_timing": timing
+        or {
+            "status": (
+                "ops_transition"
+                if impact_source == "ops_transition"
+                else "legacy_travel_only_unqualified"
+            )
+        },
+        "physical_timing_qualified": False,
     }
     if core["status"] != CALCULATED:
         return refused(core["reason"], projection=core.get("projection"), reading=reading_record)

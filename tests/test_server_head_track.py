@@ -56,10 +56,9 @@ def test_the_live_path_hands_the_head_track_its_context(monkeypatch, tmp_path, c
     assert context.handedness == "LH"
     assert context.club == ClubType.IRON_7
     assert context.yaw_sigma_deg == pytest.approx(1.7)
-    assert context.contact_window_ns == (
-        pytest.approx(160_000_000 - 800_000 - 4e6),
-        pytest.approx(160_000_000 - 800_000 - 0.5e6),
-    )
+    assert context.contact_window_ns is None
+    assert context.sound_timing["calibration"] is None
+    assert context.legacy_sound_model is False
     assert context.exposure_us.tolist() == [68] * 24
 
 
@@ -87,3 +86,18 @@ def test_without_an_iwr_or_a_ball_range_the_rejection_stands(monkeypatch, tmp_pa
 
     assert captured == {}
     assert shot.experimental_fused_status == "rejected_no_ball_range"
+
+
+def test_live_sound_contact_has_no_bounded_window_without_detector_delay_calibration(
+    monkeypatch, tmp_path, captured
+):
+    _live_server(monkeypatch, tmp_path)
+    shot = Shot(ball_speed_mph=100.0, club_speed_mph=80.0, timestamp=datetime.now())
+    archive = _archive()
+    archive["gate_boottime_interval_ns"] = np.array([159_000_000, 159_400_000])
+
+    server._fuse_camera_club_delivery(shot, _capture(tmp_path), camera_archive=archive)
+
+    # The old 0.5-4 ms total delay does not even cover sound travel at a 2 m tee.
+    assert captured["head_track"].contact_window_ns is None
+    assert captured["head_track"].gate_interval_ns == (159_000_000, 159_400_000)
