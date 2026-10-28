@@ -80,6 +80,8 @@ def test_the_shot_takes_the_last_look_before_its_trigger_and_never_a_later_one()
     locator = _locator()
     locator.observe(_scene([(641.0, 451.0, 20.0)]), at=100.0)
     locator.observe(_scene([(700.0, 420.0, 16.0)]), at=104.0)
+    assert locator.for_shot(104.1)["range_m"] is None
+    locator.observe(_scene([(700.0, 420.0, 16.0)]), at=104.2)
 
     before = locator.for_shot(103.0)
     after = locator.for_shot(104.5)
@@ -101,7 +103,9 @@ def test_with_a_camera_prior_each_look_is_a_prior_with_its_uncertainty():
     )
 
     same = locator.observe(_scene([(641.0, 451.0, 20.0)]), at=10.0)
-    moved = locator.observe(_scene([(700.0, 420.0, 16.0)]), at=11.0)
+    pending = locator.observe(_scene([(700.0, 420.0, 16.0)]), at=11.0)
+    assert pending["range_m"] is None
+    moved = locator.observe(_scene([(700.0, 420.0, 16.0)]), at=11.5)
 
     assert same["range_source"] == "setup_camera_prior"
     assert same["range_uncertainty_m"] == pytest.approx(0.44)

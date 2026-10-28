@@ -99,11 +99,16 @@ def test_same_clip_conflict_rejects_prior_before_iwr_fitting(monkeypatch):
         "_prefetch_camera_capture",
         lambda _shot: server_module._CameraPrefetchResult(None, archive, 0.0, 0.0, 0.0),
     )
-    monkeypatch.setattr(server_module, "shot_reference_ball", lambda _ts: seed)
     monkeypatch.setattr(
         server_module,
         "shot_ball_at_address",
-        lambda _ts: {"state": "in_box", "range_m": 3.2, "range_uncertainty_m": 0.5},
+        lambda _ts: {
+            "state": "in_box",
+            "range_m": 3.2,
+            "range_uncertainty_m": 0.5,
+            "center_px": [seed["x"], seed["y"]],
+            "diameter_px": seed["diameter_px"],
+        },
     )
     monkeypatch.setattr(server_module, "_snapshot_inclinometer_for_shot", lambda _shot: None)
     monkeypatch.setattr(server_module, "_attach_camera_replay", lambda *_args: None)

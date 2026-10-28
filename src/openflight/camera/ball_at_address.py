@@ -35,6 +35,7 @@ import pickle
 import threading
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeout
 from concurrent.futures.process import BrokenProcessPool
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
@@ -44,7 +45,8 @@ from . import ground_patch, worker_scheduling
 
 SCHEMA = "openflight.ball_at_address.v1"
 SAME_SPOT_DIAMETERS = 0.5
-MAX_LOOK_AGE_S = 30.0
+MAX_LOOK_AGE_S = 5.0
+IDENTITY_CONFIRM_LOOKS = 2
 # the tuned detector's size limits (9-30 px at 640x400) are centred on the setup ball
 _TUNED_GEOMETRIC_MIDDLE_PX = math.sqrt(9.0 * 30.0)
 
@@ -61,7 +63,7 @@ def _now_utc() -> str:
 
 # A look's search: (image, box, outline, pixel scale) -> {"in_box": [x, y, d] | None,
 # "outside": [x, y, d] | None}
-Locate = Callable[[np.ndarray, Sequence[int], Any, Any], dict]
+Locate = Callable[..., dict]
 LOOK_TIMEOUT_S = 10.0
 
 
@@ -88,6 +90,28 @@ def _inside(x: float, y: float, box: Sequence[int], outline) -> bool:
     return x0 <= x <= x1 and y0 <= y <= y1
 
 
+def _same_ball(first, second) -> bool:
+    """The existing box preview's spatial identity bounds, in this image's pixels."""
+    size = max(first[2], second[2], 1.0)
+    return math.hypot(first[0] - second[0], first[1] - second[1]) <= max(3.0, 0.2 * size) and abs(
+        first[2] - second[2]
+    ) <= max(2.0, 0.15 * size)
+
+
+def _current_anchor(image, anchor):
+    from .club_motion import ReferenceBall, measure_resting_ball  # noqa: PLC0415
+
+    ball = ReferenceBall(*anchor, area_px=0)
+    try:
+        measured = measure_resting_ball(np.repeat(image[None], 3, axis=0), ball, anchor[2])
+    except (RuntimeError, ValueError) as exc:
+        raise LookUnavailable(f"the previous ball's current fit failed: {exc}") from exc
+    if measured is None:
+        return None
+    current = [float(measured.x), float(measured.y), float(measured.diameter_px)]
+    return current if _same_ball(anchor, current) else None
+
+
 def locate(
     image: np.ndarray,
     box: Sequence[int],
@@ -95,6 +119,7 @@ def locate(
     pixel_scale: float | None,
     *,
     find: Callable | None = None,
+    anchor=None,
 ) -> dict:
     """A look's search: the ball in the box, else one just outside it (a label).
 
@@ -103,9 +128,24 @@ def locate(
     find = find or _find_ball
     x0, y0, x1, y1 = (int(value) for value in box)
     found = find(image, (x0, y0, x1, y1), pixel_scale)
-    if found is not None and _inside(found.x, found.y, box, outline_px):
-        in_box = [float(found.x), float(found.y), float(found.diameter_px)]
-        return {"in_box": in_box, "outside": None}
+    in_box = (
+        [float(found.x), float(found.y), float(found.diameter_px)]
+        if found is not None and _inside(found.x, found.y, box, outline_px)
+        else None
+    )
+    if anchor is not None and (in_box is None or not _same_ball(anchor, in_box)):
+        held = _current_anchor(image, anchor)
+        if held is not None and _inside(held[0], held[1], box, outline_px):
+            if in_box is not None:
+                return {
+                    "in_box": None,
+                    "outside": None,
+                    "ambiguous": True,
+                    "candidates": [held, in_box],
+                }
+            in_box = held
+    if in_box is not None:
+        return {"in_box": in_box, "outside": None, "candidates": [in_box]}
     width, height = x1 - x0, y1 - y0
     wider = (x0 - width, y0 - height, x1 + width, y1 + height)
     elsewhere = find(image, wider, pixel_scale)
@@ -142,10 +182,12 @@ class LookWorker:
                 )
             return self._pool
 
-    def locate(self, image, box, outline_px, pixel_scale) -> dict:
+    def locate(self, image, box, outline_px, pixel_scale, *, anchor=None) -> dict:
         """``locate`` in the worker process."""
         try:
-            future = self._worker().submit(locate, image, box, outline_px, pixel_scale)
+            future = self._worker().submit(
+                locate, image, box, outline_px, pixel_scale, anchor=anchor
+            )
             return future.result(timeout=self.timeout_s)
         except (BrokenProcessPool, FutureTimeout, OSError, pickle.PicklingError) as exc:
             self.close()
@@ -187,6 +229,10 @@ class BallAtAddress:
         self._lock = threading.Lock()
         self._looks: list[dict] = []
         self._generation = 0
+        self._candidate = None
+        self._support = 0
+        self._reacquiring = False
+        self._last_frame_id = None
 
     def reconfigure(  # pylint: disable=too-many-arguments
         self, box_px, setup_ball, setup_range_m, range_prior, *, outline_px=None
@@ -212,6 +258,10 @@ class BallAtAddress:
             )
             self.setup_range_kind = "camera_prior" if prior_only else "radar_range"
             self._looks = []
+            self._candidate = None
+            self._support = 0
+            self._reacquiring = False
+            self._last_frame_id = None
             self._generation += 1
 
     def _pixel_scale(self) -> float | None:
@@ -225,9 +275,16 @@ class BallAtAddress:
     def _in_box(self, x: float, y: float) -> bool:
         return _inside(x, y, self.box, self.outline_px)
 
-    def _locate_here(self, image, box, outline_px, _pixel_scale) -> dict:
+    def _locate_here(self, image, box, outline_px, _pixel_scale, *, anchor=None) -> dict:
         """``locate`` in this process, through ``_find``."""
-        return locate(image, box, outline_px, None, find=lambda img, roi, _: self._find(img, roi))
+        return locate(
+            image,
+            box,
+            outline_px,
+            None,
+            find=lambda img, roi, _: self._find(img, roi),
+            anchor=anchor,
+        )
 
     def _range(self, x: float, y: float, diameter: float) -> tuple[float | None, str | None]:
         if self.setup_range_m is None or not self.setup_ball:
@@ -241,33 +298,94 @@ class BallAtAddress:
             return None, None
         return self.setup_range_m * setup_d / diameter, f"camera_size_ratio_to_the_setup_{kind}"
 
-    def observe(self, image: np.ndarray, *, at: float, locate: Locate | None = None) -> dict:
+    def observe(
+        self,
+        image: np.ndarray,
+        *,
+        at: float,
+        locate: Locate | None = None,
+        frame_id: int | None = None,
+        frame_metadata: Mapping | None = None,
+    ) -> dict:
         """Look for the resting ball in this frame; keep and return what was found.
 
         ``locate`` runs the search (the kiosk's ``LookWorker.locate``); by default it runs
-        here. A ``LookUnavailable`` from it leaves no look.
+        here. A failed worker records unavailable evidence before raising.
         """
         with self._lock:
             generation = self._generation
+            if (
+                frame_id is not None
+                and self._last_frame_id is not None
+                and frame_id <= self._last_frame_id
+                and self._looks
+            ):
+                return deepcopy(self._looks[-1])
+            box, outline, scale = self.box, self.outline_px, self._pixel_scale()
+            anchor = self._candidate
         search = locate or self._locate_here
-        found = search(image, self.box, self.outline_px, self._pixel_scale())
+        failure = None
+        try:
+            found = search(image, box, outline, scale, **({"anchor": anchor} if anchor else {}))
+        except LookUnavailable as error:
+            failure = error
+            found = {"in_box": None, "outside": None}
+        with self._lock:
+            if generation != self._generation:
+                return {
+                    "state": "unknown",
+                    "reason": "address configuration changed during the look",
+                }
+            if self._looks and float(at) <= self._looks[-1]["observed_at"]:
+                return deepcopy(self._looks[-1])
+            look = self._keep_look(found, at, frame_id, frame_metadata, failure)
+        if failure is not None:
+            raise failure
+        return deepcopy(look)
+
+    def _keep_look(self, found, at, frame_id, frame_metadata, failure) -> dict:
         state, reason = "not_seen", "no ball in the box"
         center = diameter = range_m = source = None
-        if found["in_box"] is not None:
+        if failure is not None:
+            state, reason = "unavailable", str(failure)
+        elif found.get("ambiguous"):
+            state, reason = "ambiguous", "more than one currently supported ball candidate"
+            self._support = 0
+            self._reacquiring = self._candidate is not None
+        elif found["in_box"] is not None:
             x, y, size = (float(value) for value in found["in_box"])
             state, reason = "in_box", None
-            center = [round(x, 1), round(y, 1)]
-            diameter = round(size, 2)
-            range_m, source = self._range(x, y, size)
+            candidate = (x, y, size)
+            same = self._candidate is not None and _same_ball(self._candidate, candidate)
+            if not same:
+                self._reacquiring = self._candidate is not None
+            self._support = self._support + 1 if same else 1
+            self._candidate = candidate
+            if self._support >= IDENTITY_CONFIRM_LOOKS:
+                self._reacquiring = False
+            if self._reacquiring:
+                state, reason = "acquiring", "checking the changed ball position"
+            else:
+                center = [round(x, 1), round(y, 1)]
+                diameter = round(size, 2)
+                range_m, source = self._range(x, y, size)
         elif found["outside"] is not None:
             x, y, size = (float(value) for value in found["outside"])
             state = "outside_box"
             reason = "the ball is outside the box: its shot is labelled, not blocked"
             center = [round(x, 1), round(y, 1)]
             diameter = round(size, 2)
+        if state in {"not_seen", "outside_box", "unavailable"}:
+            self._support = 0
+            self._reacquiring = self._candidate is not None
         look = {
             "schema": SCHEMA,
             "state": state,
+            "observation_state": "observed" if state == "in_box" else state,
+            "identity_support": self._support,
+            "candidate_px": deepcopy(found.get("in_box")),
+            "candidates": deepcopy(found.get("candidates", [])),
+            "range_prior_rejection": None if state == "in_box" else reason,
             "reason": reason,
             "center_px": center,
             "diameter_px": diameter,
@@ -279,20 +397,21 @@ class BallAtAddress:
                 else None
             ),
             "observed_at": float(at),
+            "frame_id": frame_id,
+            "frame_metadata": deepcopy(frame_metadata),
             "updated_at": _now_utc(),
             "box_px": list(self.box),
             "outline_px": [list(point) for point in self.outline_px] if self.outline_px else None,
             "lens": self.lens,
         }
-        with self._lock:
-            # a look begun before a reconfigure was judged against the old box
-            if generation == self._generation:
-                self._looks = [*self._looks[-9:], look]
-        return dict(look)
+        self._last_frame_id = frame_id
+        self._looks = [*self._looks[-9:], look]
+        return look
 
     def latest(self) -> dict | None:
+        """The last observation as recorded; callers qualify it against their clock."""
         with self._lock:
-            return dict(self._looks[-1]) if self._looks else None
+            return deepcopy(self._looks[-1]) if self._looks else None
 
     def for_shot(self, trigger_at: float) -> dict | None:
         """The last look before this shot's trigger, no older than ``MAX_LOOK_AGE_S``."""
@@ -303,4 +422,4 @@ class BallAtAddress:
         look = looks[-1]
         if float(trigger_at) - look["observed_at"] > MAX_LOOK_AGE_S:
             return None
-        return dict(look)
+        return deepcopy(look)

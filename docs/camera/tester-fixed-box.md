@@ -131,7 +131,7 @@ writes afresh, in the pixels of the mode it starts each kiosk at; the kiosk conv
 nothing.
 About once a second, between clips, the kiosk finds the resting ball in it on its
 latest frame. A shot takes the last look before its trigger (none older than
-30 s): the setup's range while the ball sits where the setup measured it
+5 s): the setup's range while the ball sits where the setup measured it
 (within half a diameter), else that range scaled by the setup ball's size over
 this ball's. Since 13 Oct the setup's range is the camera prior, so a look is
 that shot's own prior, with the prior's relative uncertainty
@@ -139,6 +139,26 @@ that shot's own prior, with the prior's relative uncertainty
 outside the box, or none, labels the shot and carries no range. The look is in
 the IWR record's `per_shot_inputs`; `GET /api/ball-at-address` serves the
 latest, and the tester's status relays it as `ball_at_address`.
+
+A changed winner needs two consistent observations from different captured
+frames before it can replace the address ball. While that check is pending
+(`acquiring`), it supplies no center or range. When the winner changes, the
+worker also fits the previous location in the current image: two supported
+objects give `ambiguous`, without a range. This check does not enumerate every
+object on initial acquisition or prove that a selected object is a golf ball.
+Repeated reads of one frame add no support and do not refresh its age. Worker
+failure is `unavailable`; a stale live look is `unknown`, including for the ready
+light and swing exposure.
+
+Before asynchronous shot enrichment starts, the server freezes the pre-trigger
+look and its reference seed in `Shot.input_sources.ball_at_address`. Unresolved
+identity explicitly rejects the camera prior, including the runtime's default
+prior; it cannot restore the old setup ball. The shot's cached fitted ball
+outline also checks the saved center and diameter through
+`Shot.input_sources.ball_reference`. Independent accepted radar range and an
+explicit bench range remain separate range sources. Capture arrival and sensor
+timestamp metadata are retained; they do not establish exposure-to-impact
+timing calibration.
 
 The setup's side offset reaches the radar launch fit (`lateral_tee_offset_m`).
 

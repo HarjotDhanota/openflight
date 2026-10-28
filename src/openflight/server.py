@@ -1520,6 +1520,11 @@ def shot_ball_at_address(trigger_at: float | None) -> dict | None:
 def shot_reference_ball(trigger_at: float | None) -> dict | None:
     """Where this shot's resting ball is: its own look in the box, else the setup's ball."""
     look = shot_ball_at_address(trigger_at)
+    return _reference_ball_from_look(look)
+
+
+def _reference_ball_from_look(look: dict | None) -> dict | None:
+    """An unresolved observation cannot silently select the older setup object."""
     if look is not None and look.get("state") == "in_box" and look.get("center_px"):
         return {
             "x": float(look["center_px"][0]),
@@ -1527,16 +1532,60 @@ def shot_reference_ball(trigger_at: float | None) -> dict | None:
             "diameter_px": float(look["diameter_px"]),
             "source": "ball_at_address",
         }
+    if look is not None:
+        return None
     setup = camera_capture_config.get("setup_ball") if camera_capture_config else None
     return {**dict(setup), "source": "setup_ball"} if setup else None
 
 
+def _shot_ball_context(shot: Shot) -> dict:
+    """Freeze the pre-trigger address evidence before asynchronous enrichment starts."""
+    sources = getattr(shot, "input_sources", None) or {}
+    if "ball_at_address" not in sources:
+        look = shot_ball_at_address(shot.impact_timestamp)
+        rejection = None
+        if look is not None and look.get("state") != "in_box":
+            rejection = (
+                look.get("range_prior_rejection")
+                or look.get("reason")
+                or (f"address ball is {look.get('state', 'unavailable')}")
+            )
+        elif look is None and ball_at_address_monitor is not None:
+            rejection = "no fresh pre-trigger address observation"
+        sources = {
+            **sources,
+            "ball_at_address": {
+                "look": deepcopy(look),
+                "seed": None if rejection else _reference_ball_from_look(look),
+                "range_prior_rejection": rejection,
+            },
+        }
+        shot.input_sources = sources
+    return deepcopy(sources["ball_at_address"])
+
+
 def resting_ball_look() -> dict | None:
     """The latest resting-ball look in the box, for the swing exposure; None without a box."""
+    from .camera.ball_at_address import MAX_LOOK_AGE_S  # noqa: PLC0415
+
     monitor = ball_at_address_monitor
     if monitor is None:
         return None
-    return monitor.latest() or {"state": "unknown", "reason": "no look at the box yet"}
+    latest = monitor.latest() or {"state": "unknown", "reason": "no look at the box yet"}
+    observed_at = latest.get("observed_at")
+    if observed_at is not None and time.time() - float(observed_at) > MAX_LOOK_AGE_S:
+        reason = "no fresh look at the ball in the box"
+        return {
+            **latest,
+            "state": "unknown",
+            "observation_state": "stale",
+            "reason": reason,
+            "range_prior_rejection": reason,
+            **dict.fromkeys(
+                ("center_px", "diameter_px", "range_m", "range_source", "range_uncertainty_m")
+            ),
+        }
+    return latest
 
 
 def ball_at_address_look(monitor, runtime, *, now: float, locate=None) -> dict | None:
@@ -1559,7 +1608,26 @@ def ball_at_address_look(monitor, runtime, *, now: float, locate=None) -> dict |
     if not frames:
         return None
     try:
-        return monitor.observe(frames[-1].image, at=now, locate=locate)
+        frame = frames[-1]
+        frame_id = getattr(frame, "host_timestamp_ns", None)
+        observed_at = now
+        if frame_id is not None:
+            observed_at -= max(0.0, (time.monotonic_ns() - frame_id) / 1e9)
+        return monitor.observe(
+            frame.image,
+            at=observed_at,
+            locate=locate,
+            frame_id=frame_id,
+            frame_metadata={
+                key: getattr(frame, key, None)
+                for key in (
+                    "sensor_timestamp_ns",
+                    "host_timestamp_ns",
+                    "exposure_us",
+                    "analogue_gain",
+                )
+            },
+        )
     except LookUnavailable as exc:
         logger.warning("[BALL_AT_ADDRESS] look skipped: %s", exc)
         return None
@@ -1795,7 +1863,7 @@ def api_target_line():
 def api_ball_at_address():
     """The resting ball's last look in the fixed box."""
     monitor = ball_at_address_monitor
-    latest = monitor.latest() if monitor is not None else None
+    latest = resting_ball_look()
     if latest is None:
         return jsonify(
             {
@@ -3816,7 +3884,7 @@ def _ready_light_states() -> SensorStates | None:
     elif camera_capture_config.get("error"):
         camera = {"running": False}  # a requested camera that failed to start
     setup = setup_service.snapshot() if setup_service is not None else None
-    look = ball_at_address_monitor.latest() if ball_at_address_monitor is not None else None
+    look = resting_ball_look()
     states = SensorStates(
         ops=ops,
         iwr=iwr,
@@ -4705,10 +4773,13 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         effective_roll_deg = shot.inclinometer.get("effective_iwr_roll_deg") if for_iwr else None
         roll_inputs = {"roll_deg": effective_roll_deg} if effective_roll_deg is not None else {}
         club = shot.club.value
-        at_address = shot_ball_at_address(shot.impact_timestamp)
+        at_address = _shot_ball_context(shot)["look"]
         own_prior = _look_range_prior(at_address)
         reference = (shot.input_sources or {}).get("ball_reference") or {}
-        prior_rejection = reference.get("range_prior_rejection")
+        prior_rejection = (
+            reference.get("range_prior_rejection")
+            or _shot_ball_context(shot)["range_prior_rejection"]
+        )
         prior_inputs = {"range_prior": own_prior} if own_prior is not None else {}
         if prior_rejection:
             prior_inputs["range_prior_rejection"] = prior_rejection
@@ -5059,7 +5130,7 @@ def _measure_resting_ball_early(shot: Shot, camera_archive) -> float | None:
     try:
         from .camera.fallback_chain import keep_resting_ball_measure  # noqa: PLC0415
 
-        keep_resting_ball_measure(camera_archive, shot_reference_ball(shot.impact_timestamp))
+        keep_resting_ball_measure(camera_archive, _shot_ball_context(shot)["seed"])
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Early resting-ball measure failed: %s", error, exc_info=True)
         return None
@@ -5073,7 +5144,8 @@ def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
 
 def _record_ball_reference_check(shot: Shot, camera_archive) -> None:
     """Keep the cached clip/reference comparison before the IWR fits its pose."""
-    if camera_archive is None:
+    context = _shot_ball_context(shot)
+    if camera_archive is None and not context["range_prior_rejection"]:
         return
     from .camera.fallback_chain import (  # noqa: PLC0415
         RESTING_BALL_KEY,
@@ -5081,12 +5153,15 @@ def _record_ball_reference_check(shot: Shot, camera_archive) -> None:
         ball_reference_check,
     )
 
-    measure = camera_archive.get(RESTING_BALL_KEY)
-    seed = shot_reference_ball(shot.impact_timestamp)
+    measure = camera_archive.get(RESTING_BALL_KEY) if camera_archive is not None else None
+    seed = context["seed"]
     key = tuple(seed.get(name) for name in ("x", "y", "diameter_px")) if seed else None
     if not isinstance(measure, RestingBallMeasure) or measure.seed != key:
         measure = None
     record = ball_reference_check(measure)
+    if context["range_prior_rejection"]:
+        record["address_observation"] = context["look"]
+        record["range_prior_rejection"] = context["range_prior_rejection"]
     shot.input_sources = {**(shot.input_sources or {}), "ball_reference": record}
 
 
@@ -5225,7 +5300,7 @@ def _head_track_context(shot: Shot, camera_capture, archive):
         sound_timing=sound_timing_inputs(rig_geometry),
         handedness=shot_handedness(shot),
         club=shot.club,
-        setup_ball=shot_reference_ball(shot.impact_timestamp),
+        setup_ball=_shot_ball_context(shot)["seed"],
         lens_focal_px=lens_record_focal_px(
             rig_geometry_config.get("lens"), int(np.shape(archive["frames"])[-1])
         ),
@@ -5650,9 +5725,8 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
 
         size_range_route = fallback_chain.size_range_route
 
-        prior = _look_range_prior(shot_ball_at_address(shot.impact_timestamp)) or getattr(
-            iwr6843_runtime, "range_prior", None
-        )
+        context = _shot_ball_context(shot)
+        prior = _look_range_prior(context["look"]) or getattr(iwr6843_runtime, "range_prior", None)
         scene = setup_handoff_config.get("scene") or {}
         calibration = getattr(iwr6843_runtime, "calibration", None)
         radar_height = getattr(calibration, "radar_height_m", None) if calibration else None
@@ -5667,7 +5741,7 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
         calibrated = focal_source == CALIBRATED_FOCAL_SOURCE
         size_route = size_range_route(
             camera_archive,
-            seed=shot_reference_ball(shot.impact_timestamp),
+            seed=context["seed"],
             lens_focal_px=None if calibrated else focal,
             calibrated_focal_px=focal if calibrated else None,
             camera_origin_lfu=_camera_origin_lfu(),
@@ -5688,7 +5762,8 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
             size_route=size_route,
             range_prior_rejection=((shot.input_sources or {}).get("ball_reference") or {}).get(
                 "range_prior_rejection"
-            ),
+            )
+            or context["range_prior_rejection"],
         )
         apply_ball_range(shot, resolution)
         if resolution.present and resolution.route != "iwr_post_impact":
@@ -5932,7 +6007,7 @@ def _fuse_camera_measurements(
                 session_uuid=session_uuid,
                 shot_number=shot_number,
                 notes=camera_notes,
-                setup_ball=shot_reference_ball(shot.impact_timestamp),
+                setup_ball=_shot_ball_context(shot)["seed"],
                 camera_pose=_swing_camera_pose(shot),
                 lens_focal_px=lens_record_focal_px(
                     rig_geometry_config.get("lens"), int(np.shape(camera_archive["frames"])[-1])
@@ -6149,6 +6224,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
         return _ShotEnrichmentResult(iwr6843_ms=monitor.enrich(shot))
 
     enrichment_started = time.monotonic()
+    _isolated_stage(shot, "ball_at_address", _shot_ball_context, shot)
     camera_executor: ThreadPoolExecutor | None = None
     camera_future: Future[_CameraPrefetchResult] | None = None
     if camera_capture_runtime is not None and shot.mode != "mock":
