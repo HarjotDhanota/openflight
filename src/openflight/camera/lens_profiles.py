@@ -202,7 +202,7 @@ def _binning(width: int) -> int:
 def find_calibration(
     lens_id: str | None, sources: Sequence[Path | None] = ()
 ) -> dict[str, Any] | None:
-    """The newest checkerboard calibration for this lens in ``sources``: focal length per mode."""
+    """Use the newest matching calibration per mode, retaining the single-file scaled fallback."""
     if lens_id is None:
         return None
     files: list[Path] = []
@@ -234,15 +234,30 @@ def find_calibration(
             continue
     if not found:
         return None
-    _mtime, path, width, focal, artifact = max(found, key=lambda item: item[0])
-    by_arm = {
-        arm_id: focal * _binning(width) / _binning(arm_width)
-        for arm_id, (arm_width, _h) in ARM_SIZES.items()
-    }
+    _mtime, path, width, _focal, artifact = max(found, key=lambda item: item[0])
+    by_arm, calibration_by_arm = {}, {}
+    for arm_id, (arm_width, arm_height) in ARM_SIZES.items():
+        matching = [
+            item
+            for item in found
+            if item[2] == arm_width
+            and item[4]["mode_profile"]["saved_image"].get("height") == arm_height
+        ]
+        _stamp, arm_path, fitted_width, arm_focal, arm_artifact = max(
+            matching or found, key=lambda item: item[0]
+        )
+        by_arm[arm_id] = arm_focal * _binning(fitted_width) / _binning(arm_width)
+        calibration_by_arm[arm_id] = {
+            "path": str(arm_path),
+            "fitted_width_px": fitted_width,
+            "mode_profile_sha256": arm_artifact.get("mode_profile_sha256"),
+            "basis": "matching_saved_image_mode" if matching else "scaled_from_other_mode",
+        }
     return {
         "path": str(path),
         "fitted_width_px": width,
         "focal_px_by_arm": by_arm,
+        "calibration_by_arm": calibration_by_arm,
         "distortion_coefficients": artifact.get("distortion_coefficients"),
         "mode_profile_sha256": artifact.get("mode_profile_sha256"),
         "validation": (artifact.get("validation") or {}).get("median_view_rms_px")
@@ -290,6 +305,7 @@ class ActiveLens:
                 key: round(value, 4) for key, value in self.focal_px_by_arm.items()
             },
             "calibration_path": (self.calibration or {}).get("path"),
+            "calibration_by_arm": (self.calibration or {}).get("calibration_by_arm", {}),
             "note": self.label(),
         }
 

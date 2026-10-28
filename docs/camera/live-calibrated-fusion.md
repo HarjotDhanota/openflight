@@ -85,3 +85,10 @@ does not reread current calibration files.
 One optical profile applies only to capture arms whose saved mode matches that
 profile exactly. Other arms continue on the recorded legacy baseline and report
 the calibrated candidate as rejected; run them with their own profile to opt in.
+
+The lens catalogue's calibration directory chooses the newest matching file
+separately for 1280x800 and 640x400. Its recorded `calibration_by_arm` identifies
+the source for each focal length. When only one mode has a file, the existing
+scaled focal fallback is recorded as `scaled_from_other_mode`. This directory
+lookup supplies focal lengths; use the optical-calibration and placement flags
+above to apply the full principal point, Brown distortion and placement model.
