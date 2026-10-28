@@ -34,5 +34,5 @@ references; green regions would be gated candidates. No green region is recovere
 Overlay resizing is for inspection only. Geometry uses native saved pixels.
 
 Detailed local evidence, public-source research, integration risks and validation
-protocol live in `../../research/tracking-improvement-2026-10-27/REPORT.txt` from
+protocol live in `../research/tracking-improvement-2026-10-27/REPORT.txt` from
 the checkout root. Recordings, photographs and generated overlays stay outside Git.

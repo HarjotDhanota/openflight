@@ -1,0 +1,24 @@
+Offline result at prototype 35baf3c5, baseline 80355096, 27 October 2026.
+
+Original archive and all 126 manifest members verified. Four shots map to camera
+sequences 1/3/4/5, each 59 native 640x400 frames at about 276.47 fps, exposure 298 us.
+Normal delivery retains 5/6 hosel observations on shots 1/2. Shot 1's turn ratio
+0.478 remains flagged; shot 2 retains its OPS speed conflict. Shots 3/4 return
+before the newer fallback. No production routing was changed.
+
+Full-frame shaft-localized candidates retain 4 pre-contact anchors on shot 1
+(39-42) and 5 on shot 4 (39-43). Both background variants preserve existing
+core/area gates and recover zero qualifying masks or face landmarks. Shots 2/3
+retain their no-IWR-range prerequisite refusal. Zero impact coordinates recovered.
+These inspected shots are development data, with no independent launch/strike
+coordinates. No hardware validation, deployment, merge, push or PR occurred.
+
+Validation: 212 existing related tests passed; 22 portable prototype tests passed.
+Existing private field grading retains 1 pass and 1 unresolved mask-extraction
+failure. Ruff/format/hooks pass. Selector Pylint is 9.47/10 with complexity notices.
+Failed prototype fixtures and the unresolved field failure remain in local evidence.
+
+Review this as research only; do not promote it to a live availability fix.
+No production source/config/dependency/API changes are included. The experiment
+deliberately reuses private helpers and must be reviewed again if their contracts
+change. Local detailed report/evidence are at the path documented in README.md.
