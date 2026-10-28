@@ -51,6 +51,14 @@ START = {
 WIDE = {"width": 1280, "height": 800, "focal": 2.0 * synthetic.FOCAL}
 
 
+@pytest.mark.parametrize(
+    "detail", ["no_body_thick_enough_to_be_a_clubhead", "no_moving_component_near_the_ball"]
+)
+def test_failed_head_extraction_does_not_claim_the_head_was_absent(detail):
+    code = f"no_template_for_this_club_no_head_mask_{detail}"
+    assert live.plain_reason(code) == "the club head could not be isolated in the clip"
+
+
 def _slant_m() -> float:
     drop = synthetic.CAMERA_HEIGHT_MM - il.BALL_RADIUS_MM
     return math.sqrt(20.0**2 + drop**2 + synthetic.BALL_RANGE_MM**2) / 1000.0

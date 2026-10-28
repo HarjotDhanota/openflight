@@ -75,7 +75,7 @@ PLAIN_REASONS: tuple[tuple[str, str], ...] = (
     (r"^ball_moved_before", "the ball moved before the clip's reference frames ended"),
     (r"^clip_has_\d+_frames", "the clip is too short"),
     (r"^no_background_frames", "the swing starts too early in the clip"),
-    (r"^no_template_for_this_club_no_head_mask", "the club head did not show in the clip"),
+    (r"^no_template_for_this_club_no_head_mask", "the club head could not be isolated in the clip"),
     (r"^no_accepted_frame_", "the head outline did not fit the frames around contact"),
     (r"^bracket_", "the frames around contact are too far apart"),
     (r"^carried_outline_has_no_heel_toe_span", "the head outline has no heel-to-toe span"),
