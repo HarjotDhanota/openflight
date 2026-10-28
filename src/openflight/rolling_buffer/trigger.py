@@ -670,6 +670,9 @@ class SoundTrigger(TriggerStrategy):
             response,
             first_byte_timestamp=first_byte_timestamp,
         )
+        if capture is not None:
+            evidence = getattr(radar, "last_hardware_capture_evidence", None)
+            capture.capture_id = evidence.get("capture_id") if evidence else None
 
         if not capture:
             radar.rearm_rolling_buffer(self.pre_trigger_segments)
@@ -854,6 +857,9 @@ class HardwareTriggeredCapture(TriggerStrategy):
                 response,
                 first_byte_timestamp=first_byte_timestamp,
             )
+            if capture is not None:
+                evidence = getattr(radar, "last_hardware_capture_evidence", None)
+                capture.capture_id = evidence.get("capture_id") if evidence else None
         except Exception as error:  # pylint: disable=broad-exception-caught
             parse_error = error
             logger.warning("[TRIGGER] Hardware capture parse failed: %s", error, exc_info=True)
