@@ -61,7 +61,7 @@ from openflight.camera import (
     target_line,
     tester_ready_light,
     tilt_calibration_admin,
-    worker_lifetime,
+    worker_scheduling,
 )
 from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
@@ -4982,7 +4982,7 @@ def configure_ball_search_workers(workers: int) -> None:
                 mp_context=multiprocessing.get_context("spawn"),
                 # a killed server never shuts the pool down; its workers must not
                 # outlive it (29 Sept: two orphans per test run)
-                initializer=worker_lifetime.exit_with_parent,
+                initializer=worker_scheduling.initialize_analysis_worker,
             )
             for _ in range(workers):
                 _BALL_SEARCH_POOL.submit(int)  # import the worker's modules now, not on first use

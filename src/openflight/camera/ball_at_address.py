@@ -40,7 +40,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
-from . import ground_patch, worker_lifetime
+from . import ground_patch, worker_scheduling
 
 SCHEMA = "openflight.ball_at_address.v1"
 SAME_SPOT_DIAMETERS = 0.5
@@ -138,7 +138,7 @@ class LookWorker:
                 self._pool = ProcessPoolExecutor(
                     max_workers=1,
                     mp_context=multiprocessing.get_context("spawn"),
-                    initializer=worker_lifetime.exit_with_parent,
+                    initializer=worker_scheduling.initialize_analysis_worker,
                 )
             return self._pool
 
