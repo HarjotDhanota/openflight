@@ -53,8 +53,9 @@ No real sensor hardware was exercised.
 
 New sound events serialize `source: sound_gate`; camera trigger metadata and NPZ
 archives retain `trigger_source: sound_gate`. This tag identifies the capture
-request, not physical impact or calibrated clock accuracy. The existing camera
-notification entry points remain sound-only; no OPS event is routed through them.
+request, not physical impact or calibrated clock accuracy. The legacy camera
+GATE entry point remains sound-only. A separate typed capture-request entry point
+can retain sound or OPS event evidence; no live OPS input is subscribed here.
 
 The live and frozen head-track paths read the archive's source before estimating
 contact. Explicit OPS, unknown or malformed sources cannot use acoustic travel,
@@ -63,7 +64,32 @@ archives keep their historical sound interpretation, with their existing
 unqualified status; their source is not retrospectively labelled as observed.
 Explicit sound captures retain the same acoustic math and calibration rules.
 
-This is preparation for supporting both trigger paths. The shared OPS event
-coordinator, sync-input wiring/qualification and internal-trigger camera/IWR route
-remain pending. The current internal-trigger full-fusion startup restriction stays
-in place. No firmware, IWR transaction flow or live trigger selection changed.
+This is preparation for supporting both trigger paths. Live sync-input wiring,
+qualification and the internal-trigger camera/IWR route remain pending. The current
+internal-trigger full-fusion startup restriction stays in place. No firmware,
+IWR transaction flow or live trigger selection changed.
+
+## Selected-source request routing
+
+`CaptureRequest` carries source, event/boot/arm identities, the observed kernel
+MONOTONIC interval, receipt time and coarse wall time for association. It never
+claims that the event is impact or supplies physical edge uncertainty.
+`CaptureTriggerRouter` accepts one selected sound or OPS rising event per arm.
+Other sources, including OPS capture-end edges, do not request a capture. Stale
+boot/arm, reused event and missing kernel timing are retained as refusal results.
+Rejected/failed consumers do not suppress the other consumers or retry a partial
+capture. The caller must save every result and explicitly disarm/rearm only after
+the capture owners release their buffers. Callbacks run without the router lock;
+in-flight notification prevents disarm. Device readiness is not inferred here.
+
+Consumers execute in supplied order: enqueue the IWR request first, then notify
+the camera. They must not wait on transfers. The typed camera entry point maps
+the original kernel interval through its bracketed camera clock reads, counts its
+tail after the mapped upper bound and retains `capture_request`, callback lag and
+`capture_event_boottime_interval_ns`. OPS requests never create sound GATE fields.
+
+New typed captures also save `pre_trigger_count_by_capture_event`; exposure-based
+analysis prefers it to the callback's legacy count. The old callback timestamp
+and count remain diagnostic evidence, and older clips keep their interpretation.
+The frame boundary is the interval's upper bound, not a claimed exact electrical
+edge, shutter time or impact. No sensor timing has been physically qualified.

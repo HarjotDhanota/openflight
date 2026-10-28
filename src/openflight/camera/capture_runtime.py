@@ -35,6 +35,7 @@ from openflight.camera.triggered_buffer import (
     unpack_r8_frame,
     unpack_yuv420_y_plane,
 )
+from openflight.capture_trigger import CAPTURE_SOURCES, CaptureRequest
 from openflight.gate_timing import GateEvent
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 
@@ -938,16 +939,35 @@ class CameraCaptureRuntime:
         """Freeze on the shared GATE, retaining its original observation."""
         return self.notify_trigger(event.observation.observer_wall_s, gate_event=event)
 
+    def notify_capture_request(self, request: CaptureRequest) -> bool:
+        """Retain one routed event without interpreting a radar trigger as sound."""
+        return self.notify_trigger(request.observer_wall_s, capture_request=request)
+
     def notify_trigger(
-        self, timestamp: float | None = None, *, gate_event: GateEvent | None = None
+        self,
+        timestamp: float | None = None,
+        *,
+        gate_event: GateEvent | None = None,
+        capture_request: CaptureRequest | None = None,
     ) -> bool:
-        """Freeze the camera ring on a sound-trigger edge."""
+        """Freeze on the existing sound path or an explicitly routed capture request."""
+        if capture_request is not None:
+            if not isinstance(capture_request, CaptureRequest):
+                raise TypeError("capture notification requires a CaptureRequest")
+            if gate_event is not None or capture_request.source not in CAPTURE_SOURCES:
+                raise ValueError("capture request must name one rising trigger source")
+            if capture_request.kernel_mono_interval_ns is None:
+                raise ValueError("routed capture request needs an observed kernel interval")
         # Timed first: gathering evidence under the frame lock delayed the stamp 14-31 ms.
         trigger_host_ns = time.monotonic_ns()
         trigger_boottime_ns = _boottime_ns()
         clock_read_end_ns = time.monotonic_ns()
+        if capture_request is not None and capture_request.received_mono_ns > trigger_host_ns:
+            raise ValueError("capture request receipt is after the camera callback clock")
         clocks = {
-            "trigger_source": "sound_gate",
+            "trigger_source": capture_request.source
+            if capture_request is not None
+            else "sound_gate",
             "host_monotonic_ns": trigger_host_ns,
             "boottime_ns": trigger_boottime_ns,
             "boottime_minus_monotonic_bounds_ns": (
@@ -956,7 +976,8 @@ class CameraCaptureRuntime:
                 else None
             ),
         }
-        gate_sensor_interval = None
+        event_sensor_interval = None
+        interval = None
         if gate_event is not None:
             interval = gate_event.kernel_mono_interval_ns
             clocks["gate_event"] = gate_event.to_dict()
@@ -965,11 +986,23 @@ class CameraCaptureRuntime:
                 if interval is not None
                 else None
             )
-            if interval is not None and trigger_boottime_ns is not None:
-                low, high = clocks["boottime_minus_monotonic_bounds_ns"]
-                gate_sensor_interval = [interval[0] + low, interval[1] + high]
-            clocks["gate_boottime_interval_ns"] = gate_sensor_interval
-        tail_sensor_ns = gate_sensor_interval[1] if gate_sensor_interval is not None else None
+        elif capture_request is not None:
+            interval = capture_request.kernel_mono_interval_ns
+            clocks["capture_request"] = capture_request.to_dict()
+            clocks["capture_to_camera_callback_ns"] = [
+                trigger_host_ns - interval[1],
+                trigger_host_ns - interval[0],
+            ]
+        if interval is not None and trigger_boottime_ns is not None:
+            low, high = clocks["boottime_minus_monotonic_bounds_ns"]
+            event_sensor_interval = [interval[0] + low, interval[1] + high]
+        if gate_event is not None:
+            clocks["gate_boottime_interval_ns"] = event_sensor_interval
+        if capture_request is not None:
+            clocks["capture_event_boottime_interval_ns"] = event_sensor_interval
+            if capture_request.source == "sound_gate":
+                clocks["gate_boottime_interval_ns"] = event_sensor_interval
+        tail_sensor_ns = event_sensor_interval[1] if event_sensor_interval is not None else None
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
         if not self._running:
             return self._reject_trigger(trigger_epoch, "camera_stopped", "capture is not running")
@@ -1578,6 +1611,14 @@ class CameraCaptureRuntime:
             )
         if "trigger_source" in clocks:
             exposure_split["trigger_source"] = np.str_(clocks["trigger_source"])
+        if clocks.get("capture_event_boottime_interval_ns") is not None:
+            event_interval = clocks["capture_event_boottime_interval_ns"]
+            exposure_split["capture_event_boottime_interval_ns"] = np.asarray(
+                event_interval, dtype=np.int64
+            )
+            exposure_split["pre_trigger_count_by_capture_event"] = np.int32(
+                pre_trigger_count_by_exposure(sensor_ns, event_interval[1])
+            )
         if capture.tail_after_sensor_ns is not None:
             exposure_split["tail_after_sensor_ns"] = np.int64(capture.tail_after_sensor_ns)
 
@@ -1640,6 +1681,9 @@ class CameraCaptureRuntime:
                         key: clocks[key]
                         for key in (
                             "trigger_source",
+                            "capture_request",
+                            "capture_to_camera_callback_ns",
+                            "capture_event_boottime_interval_ns",
                             "gate_event",
                             "gate_to_camera_callback_ns",
                             "boottime_minus_monotonic_bounds_ns",

@@ -53,10 +53,20 @@ def pre_trigger_count_by_exposure(
 
 def exposure_trigger_index(archive: Mapping[str, Any], frame_count: int) -> int | None:
     """The last frame exposed at or before the trigger, or None for clips without that count."""
-    if "pre_trigger_count_by_exposure" not in archive:
+    key = (
+        "pre_trigger_count_by_capture_event"
+        if "pre_trigger_count_by_capture_event" in archive
+        else "pre_trigger_count_by_exposure"
+    )
+    if key not in archive:
         return None
     try:
-        count = int(np.asarray(archive["pre_trigger_count_by_exposure"]))
+        raw = np.asarray(archive[key])
+        if key == "pre_trigger_count_by_capture_event" and (
+            raw.shape != () or raw.dtype.kind not in "iu"
+        ):
+            return None
+        count = int(raw)
     except (TypeError, ValueError):
         return None
     return count - 1 if 1 <= count <= frame_count else None
