@@ -59,6 +59,48 @@ def test_position_estimate_is_current_and_disappears_with_a_retained_marker(obse
     assert not retained["confirmable"]
 
 
+def test_a_slow_fit_cannot_make_old_frames_fresh(monkeypatch):
+    locator, _live, _record = _locator(monkeypatch, [])
+    now = [100.0]
+    locator._clock = lambda: now[0]
+    frames = np.full((3, 800, 1280), 105, np.uint8)
+
+    def slow(*_args, **_kwargs):
+        now[0] += 3.0
+        return None, {"status": "selected", "selected": A, "candidates": []}
+
+    monkeypatch.setattr(ts, "_guided_camera_analysis", slow)
+    locator(frames, 1, [(300, 4.0)] * 3)
+    locator(frames, 2, [(300, 4.0)] * 3)
+    ball = locator.ball()
+    assert ball["look_age_s"] >= 3.0
+    assert ball["observation_state"] == "stale"
+    assert not ball["confirmable"]
+    assert ball["position_estimate"] is None
+
+
+def test_input_delivery_age_is_included_even_when_the_fit_is_fast(observe, monkeypatch):
+    locator, _look = observe
+    locator._clock = lambda: 100.0
+    frames = np.full((3, 800, 1280), 105, np.uint8)
+    monkeypatch.setattr(
+        ts,
+        "_guided_camera_analysis",
+        lambda *_a, **_k: (None, {"status": "selected", "selected": A, "candidates": []}),
+    )
+    locator(frames, 1, [(300, 4.0)] * 3, observed_at=96.0)
+    assert locator.ball()["look_age_s"] >= 4.0
+    assert locator.ball()["observation_time_basis"] == "preview_delivery_monotonic"
+
+
+@pytest.mark.parametrize("observed_at", [float("nan"), float("inf"), 101.0])
+def test_invalid_input_times_cannot_refresh_confirmation(observe, observed_at):
+    locator, _look = observe
+    locator._clock = lambda: 100.0
+    with pytest.raises(ValueError, match="observation time"):
+        locator(np.zeros((3, 800, 1280), np.uint8), 1, observed_at=observed_at)
+
+
 def test_explicit_ambiguity_immediately_disables_confirmation(observe):
     _locator, look = observe
     look(A)

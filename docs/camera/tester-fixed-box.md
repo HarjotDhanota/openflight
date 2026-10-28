@@ -307,3 +307,11 @@ Identity, ambiguity, currentness, exposure association, worker isolation and
 periodic whole-box refresh remain required. The older estimator mode is retained
 for legacy callers and matched-input comparisons; optical calibration alone does
 not establish field accuracy for either mode.
+
+Ball observation freshness includes search time. `LiveView` supplies the latest
+input frame's host delivery time on `CLOCK_MONOTONIC`; a direct locator call
+without that timestamp uses analysis start. Completing a slow fit never resets
+the observation's age. Stale results keep only a labelled marker hypothesis,
+with confirmation disabled and no current position estimate. This host delivery
+age does not resolve the sensor's exposure/readout timestamp convention or
+qualify camera-to-radar synchronization.

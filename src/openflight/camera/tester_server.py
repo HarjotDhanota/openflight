@@ -4763,11 +4763,21 @@ class BoxBallLocator:
             self._follow.set(analysis.get("selected"))
         return analysis, evidence, calls, context
 
-    def __call__(self, frames: np.ndarray, frame_sequence: int, applied=None) -> dict:
+    def __call__(
+        self,
+        frames: np.ndarray,
+        frame_sequence: int,
+        applied=None,
+        *,
+        observed_at: float | None = None,
+    ) -> dict:
         with self._lock:
             if self._last_sequence is not None and frame_sequence <= self._last_sequence:
                 return deepcopy(self._last_result)
-        look_at = self._clock()
+        started_at = self._clock()
+        look_at = started_at if observed_at is None else float(observed_at)
+        if not math.isfinite(look_at) or look_at > started_at:
+            raise ValueError("ball observation time must be finite and not in the future")
         result = dict(self.brightness(frames, frame_sequence, applied))
         settled = (
             self.brightness.status()["state"] in {"settled", "limit"}
@@ -4818,7 +4828,7 @@ class BoxBallLocator:
             ):
                 classified = {"state": "ambiguous", "selected": None}
                 self._follow.set(None)
-            classified = self._hold_found(previous, classified)
+            classified = self._hold_found(previous, classified, observed_at=look_at)
             stable_since = None
             if classified["state"] == "found":
                 same = _same_box_ball(previous, classified["selected"])
@@ -4826,6 +4836,12 @@ class BoxBallLocator:
                 if not same and classified.get("observation_state") == "observed":
                     self._follow.set(classified["selected"])
             self._state = self._ball_payload(classified, stable_since)
+            self._state["looked_at"] = look_at
+            self._state["observation_time_basis"] = (
+                "preview_delivery_monotonic"
+                if observed_at is not None
+                else "analysis_start_monotonic"
+            )
             current = self._with_freshness(dict(self._state))
         if (
             not watch["matched"]
@@ -4877,7 +4893,9 @@ class BoxBallLocator:
             self._last_result = deepcopy(payload)
         return payload
 
-    def _hold_found(self, previous: Mapping, classified: Mapping) -> dict:
+    def _hold_found(
+        self, previous: Mapping, classified: Mapping, *, observed_at: float | None = None
+    ) -> dict:
         """Confirm one identity; distinguish a retained marker from fresh support."""
         if classified["state"] == "found":
             selected = classified["selected"]
@@ -4891,7 +4909,7 @@ class BoxBallLocator:
                 "diameter_px": selected["diameter_px"],
             }
             self._misses = 0
-            self._found_at = self._clock()
+            self._found_at = self._clock() if observed_at is None else observed_at
             if self._found_looks >= BOX_BALL_FOUND_LOOKS:
                 self._reacquiring = False
             if self._reacquiring:
@@ -4936,6 +4954,10 @@ class BoxBallLocator:
         looked = self._found_at if state.get("state") == "found" else state.get("looked_at")
         age = max(0.0, now - float(looked)) if looked is not None else None
         state["look_age_s"] = round(age, 2) if age is not None else None
+        if state.get("state") == "found" and age is not None and age > BOX_BALL_LOOK_MAX_AGE_S:
+            state["observation_state"] = "stale"
+            state["position_estimate"] = None
+            state["message"] = "The last ball observation is old. Looking again."
         state["missed_looks"] = self._misses if state.get("state") == "found" else 0
         state["confirmable"] = bool(
             state.get("state") == "found"
@@ -7602,6 +7624,7 @@ class LiveView:
                 expected_row = self._expected_row
                 analyzer = self._analyzer
                 frame_sequence = self._frame_sequence
+                observed_at = self._latest_frame_at
                 context_generation = self._context_generation
             if len(recent) < 3:
                 continue
@@ -7618,7 +7641,11 @@ class LiveView:
             frames = np.stack(recent)
             if analyzer is not None:
                 try:
-                    association = dict(analyzer(frames, frame_sequence, applied))
+                    association = dict(
+                        analyzer(frames, frame_sequence, applied, observed_at=observed_at)
+                        if isinstance(analyzer, BoxBallLocator)
+                        else analyzer(frames, frame_sequence, applied)
+                    )
                     last_failure = None
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     failure = f"{type(analyzer).__name__}: {type(exc).__name__}: {exc}"
