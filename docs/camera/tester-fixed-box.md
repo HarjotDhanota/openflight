@@ -292,6 +292,9 @@ They search the visible image outline with the existing lit-ball and rim detecto
 without predicting diameter from a floor row. The bounded size search covers
 camera distances of 0.5–4 m; that is an operating envelope, not a measured range.
 The drawn outline remains the search boundary, including for raised balls.
+Existing window-size proposals are tried first, followed by the wider size grid
+within the same fit budget. These are search hints, not a height acceptance gate;
+a finite proposal budget can still miss a ball or rival.
 
 After detection, apparent diameter and calibrated local angular scale estimate
 camera distance. The point is camera origin plus that distance times the unit

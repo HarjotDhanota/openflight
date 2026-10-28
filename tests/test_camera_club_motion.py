@@ -28,6 +28,15 @@ def test_detect_reference_ball_prefers_round_center_candidate():
     assert ball.diameter_px == pytest.approx(math.sqrt(4 * 81 / math.pi), rel=0.1)
 
 
+@pytest.mark.parametrize("diameter", [0.0, -1.0, math.nan, math.inf])
+def test_reference_ball_rejects_invalid_preferred_sizes(diameter):
+    frames = np.zeros((3, 80, 120), dtype=np.uint8)
+    with pytest.raises(ValueError, match="finite and positive"):
+        club_motion.reference_ball_candidates(
+            frames, expected_diameters_px=[12.0], preferred_diameters_px=[diameter]
+        )
+
+
 def test_detect_reference_ball_finds_dark_ball_in_bright_spotlight():
     frames = np.full((12, 100, 160), 185, dtype=np.uint8)
     yy, xx = np.indices(frames.shape[1:])
