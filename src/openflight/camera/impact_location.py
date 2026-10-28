@@ -543,11 +543,11 @@ def _disk_kernel(radius: float) -> np.ndarray:
 def flying_ball(
     frame: np.ndarray, ball: RestingBall, background: np.ndarray
 ) -> tuple[float, float, float] | None:
-    """The brightest ball-sized disk above the tee row, or None (fail closed).
+    """The newly bright ball-sized disk above the tee row, or None (fail closed).
 
-    Ported from ``head_outline.flying_ball``: accepted only when at least
-    ``BALL_BRIGHTNESS_FRACTION`` as bright as the resting ball on the
-    background. Returns ``(x, y, veto_radius)``.
+    Accepted only when at least ``BALL_BRIGHTNESS_FRACTION`` as bright as the
+    resting ball and brighter than its own background. Static highlights are
+    excluded before ranking. Returns ``(x, y, veto_radius)``.
     """
     radius = ball.diameter_px / 2.0
     kernel = _disk_kernel(radius)
@@ -562,9 +562,11 @@ def flying_ball(
     window = (np.abs(grid_x - ball.x) <= BALL_SEARCH_SPAN * ball.diameter_px) & (
         grid_y <= ball.y + radius
     )
-    scored = np.where(window, response, -1.0)
+    change = response - reference
+    eligible = window & (response >= BALL_BRIGHTNESS_FRACTION * teed) & (change >= CAP_FLOOR_DN)
+    scored = np.where(eligible, change, -1.0)
     flat = int(np.argmax(scored))
-    if float(scored.ravel()[flat]) < BALL_BRIGHTNESS_FRACTION * teed:
+    if float(scored.ravel()[flat]) < CAP_FLOOR_DN:
         return None
     found_row, found_column = divmod(flat, response.shape[1])
     return (float(found_column), float(found_row), radius + BALL_VETO_PAD_PX)
@@ -733,6 +735,9 @@ def find_contact(  # pylint: disable=too-many-branches
     (a club passing behind an untouched ball can move the rim, never the
     cap). Without a usable rim the cap decides. The flying ball alone is
     accepted last. Each witness's first persistent frame is reported.
+
+    Static highlights cannot witness flight. With a persistent cap departure,
+    earlier glints are ignored; a lost rim with an unchanged cap is occlusion.
     """
     count = int(frames.shape[0])
     if frames.ndim != 3 or count < MIN_CLIP_FRAMES:
@@ -762,6 +767,8 @@ def find_contact(  # pylint: disable=too-many-branches
 
     flying_frame: int | None = None
     for index in range(reference_count, count):
+        if cap_frame is not None and index < cap_frame:
+            continue
         found = flying_ball(frames[index], ball, reference)
         if found is None:
             continue
@@ -785,7 +792,9 @@ def find_contact(  # pylint: disable=too-many-branches
     if edge_frame is not None:
         if _within(cap_frame, edge_frame, CAP_CONFIRM_FRAMES):
             contact, source, confirmed = edge_frame, "top_edge", "cap"
-        elif _within(flying_frame, edge_frame, FLYING_CONFIRM_FRAMES):
+        elif _within(flying_frame, edge_frame, FLYING_CONFIRM_FRAMES) and (
+            rises[edge_frame] is not None or change[edge_frame] >= CAP_CHANGED_FRACTION
+        ):
             contact, source, confirmed = edge_frame, "top_edge", "flying_ball"
     if contact is None and cap_frame is not None:
         if _within(flying_frame, cap_frame, FLYING_CONFIRM_FRAMES):
