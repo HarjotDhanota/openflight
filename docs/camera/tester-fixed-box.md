@@ -318,3 +318,11 @@ the observation's age. Stale results keep only a labelled marker hypothesis,
 with confirmation disabled and no current position estimate. This host delivery
 age does not resolve the sensor's exposure/readout timestamp convention or
 qualify camera-to-radar synchronization.
+
+The sphere fitter's batched numerical derivative uses the same residual
+arithmetic and matrix layout as its scalar reference. A free-size fit can drift
+into a cast shadow; if its first rim search fails, the original candidate centre
+is tried with the same circle limits and ray-consensus requirement. Missing rim
+evidence never substitutes the seed as a measurement. Estimator policy version
+8 invalidates older qualification artifacts after these fitter changes.
+
