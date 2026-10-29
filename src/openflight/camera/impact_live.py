@@ -138,11 +138,15 @@ class LiveAnalyser:
         pool_max_swings: int = POOL_MAX_SWINGS,
         analysis_max_width: int | None = ANALYSIS_MAX_WIDTH,
         lens_id: str | None = None,
+        club_part_diagnostics: bool = False,
     ):
         self.swings_needed = max(1, int(swings_needed))
         self.pool_max_swings = max(self.swings_needed, int(pool_max_swings))
         self.analysis_max_width = analysis_max_width
         self.lens_id = lens_id
+        if not isinstance(club_part_diagnostics, bool):
+            raise ValueError("club_part_diagnostics must be boolean")
+        self.club_part_diagnostics = club_part_diagnostics
         self._pools: dict[str, _Pool] = {}
         self._session: Any = object()
 
@@ -203,6 +207,20 @@ class LiveAnalyser:
             "range_input_decision": clip.extra.get("range_input_decision", {}),
             "optics_input_decision": clip.extra.get("optics_input_decision", {}),
         }
+        if self.club_part_diagnostics:
+            from .club_diagnostics import analyse_clip  # noqa: PLC0415
+
+            diagnostic_started = time.perf_counter()
+            try:
+                base["club_part_diagnostics"] = analyse_clip(clip)
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                base["club_part_diagnostics"] = {
+                    "status": "withheld_invalid_diagnostic_inputs",
+                    "reason": f"diagnostic_failed_{type(error).__name__}",
+                    "physical_pose": None,
+                    "strike": None,
+                }
+            stages["club_diagnostics_ms"] = (time.perf_counter() - diagnostic_started) * 1000
         pool_key = f"{clip.club}_{clip.frame_size}"
         pool_key += "_" + impact_session.template_context_key(
             clip, equipment_id=job.get("equipment_id")
@@ -644,15 +662,26 @@ class ImpactLiveExtension(kiosk_extensions.KioskExtension):
 
     def __init__(self, runner_factory=None):
         self.enabled = False
+        self.club_part_diagnostics = False
         self._start: dict[str, Any] = {}
         self._clips: dict[tuple, str] = {}
         self.dispatcher = Dispatcher(
-            runner_factory or ProcessRunner,
+            runner_factory
+            or (
+                lambda on_result: ProcessRunner(
+                    on_result, settings={"club_part_diagnostics": self.club_part_diagnostics}
+                )
+            ),
             self._publish,
             self._log,
         )
 
     def add_arguments(self, parser) -> None:
+        parser.add_argument(
+            "--impact-club-part-diagnostics",
+            action="store_true",
+            help="Include experimental club-image evidence with post-shot impact readings",
+        )
         parser.add_argument(
             "--no-impact-live",
             action="store_true",
@@ -661,6 +690,7 @@ class ImpactLiveExtension(kiosk_extensions.KioskExtension):
 
     def configure(self, args, parser) -> None:
         self.enabled = not getattr(args, "no_impact_live", False)
+        self.club_part_diagnostics = getattr(args, "impact_club_part_diagnostics", False) is True
 
     def session_start_config(self, config: dict) -> None:
         start = {key: config.get(key) for key in START_KEYS if key in config}
