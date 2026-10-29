@@ -90,6 +90,21 @@ def body_velocity(first, second, duration_s):
     return se3_log(relative) / duration_s
 
 
+def exposure_interval_ns(sensor_timestamp_ns, exposure_us, timestamp_semantics):
+    """Return the complete sensor integration interval in its own clock."""
+    if not np.isfinite([sensor_timestamp_ns, exposure_us]).all() or exposure_us <= 0:
+        raise ValueError("finite sensor time and positive exposure required")
+    if timestamp_semantics not in {"recorded_start", "recorded_midpoint", "recorded_end"}:
+        raise ValueError("known sensor exposure timestamp semantics required")
+    start = (
+        sensor_timestamp_ns
+        + {"recorded_start": 0, "recorded_midpoint": -0.5, "recorded_end": -1}[timestamp_semantics]
+        * exposure_us
+        * 1000
+    )
+    return [float(start), float(start + exposure_us * 1000)]
+
+
 def exposure_offsets(exposure_us, timestamp_semantics, *, samples=3, collision_offset_s=None):
     """Midpoint quadrature, splitting at an explicitly supplied contact hypothesis."""
     if not np.isfinite(exposure_us) or exposure_us <= 0 or type(samples) is not int or samples < 1:

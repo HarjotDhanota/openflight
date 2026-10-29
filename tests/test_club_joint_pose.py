@@ -300,3 +300,57 @@ def test_axis_factor_uses_reference_pixels_when_analysis_view_is_resized():
     assert a["initial_factor_squared_norms"]["axis"] == pytest.approx(
         b["initial_factor_squared_norms"]["axis"], abs=1e-12
     )
+
+
+def test_numeric_camera_change_cannot_hide_behind_the_same_view_identity():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    frames = [frame(10, parameters), frame(11, parameters)]
+    frames[1]["camera"] = {**CAMERA, "focal_xy_px": [65, 65]}
+    with pytest.raises(ValueError, match="numeric view changed"):
+        solve(frames, [parameters, parameters])
+
+
+def test_output_retains_pose_frame_binding_and_declares_model_translation_units():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    result = solve([one], [parameters], max_evaluations=1)
+    assert result["capture_sha256"] == one["identity"].capture_sha256
+    assert result["frames"][0]["identity"] == vars(one["identity"])
+    assert result["translation_units"] == "static_model_units"
+
+
+@pytest.mark.parametrize(
+    "semantics,shift",
+    [("recorded_start", 0), ("recorded_midpoint", -149000), ("recorded_end", -298000)],
+)
+def test_phase_support_uses_entire_exposure_not_just_pose_anchor(semantics, shift):
+    from dataclasses import replace
+
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    one["identity"] = replace(one["identity"], timestamp_semantics=semantics)
+    result = solve([one], [parameters], max_evaluations=1)
+    support = result["phase_exposure_support"][0][0]
+    start = one["identity"].sensor_timestamp_ns + shift
+    assert support["used_interval_ns"] == [start, start + 298000]
+    assert support["identity"] == vars(one["identity"])
+
+
+def test_contact_split_support_names_both_used_subintervals():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    one["ball_masks"] = np.zeros((6, 64, 80), bool)
+    touch = one["identity"].sensor_timestamp_ns + 100000
+    result = solve(
+        [one],
+        [parameters],
+        max_evaluations=1,
+        collision_window_ns=[touch - 100000, touch + 200000],
+        collision_time_hypothesis_ns=touch,
+    )
+    support = [row for phase in result["phase_exposure_support"] for row in phase]
+    assert [row["used_interval_ns"] for row in support] == [
+        [touch - 100000, touch],
+        [touch, touch + 198000],
+    ]
+    assert all(row["split_contact_hypothesis_ns"] == touch for row in support)
