@@ -330,6 +330,11 @@ Full reference remeasurement retains every original radius start. Explicit size
 starts supplied by callers are preserved. This can withhold an unseen candidate
 that needs another screening initialization; recorded development success does
 not qualify general sensitivity.
+The seed pass reuses equal rounded box-filter outputs within that image only;
+each scale retains its original fractional ring weights. A bounded cache holds
+sector-sampling masks, never scene pixels or detection decisions. Every sector
+mean is read again from the current image. These reuse steps preserve candidate
+calculations and do not extend any observation or qualification lifetime.
 A free-size fit can drift
 into a cast shadow; if its first rim search fails, the original candidate centre
 is tried with the same circle limits and ray-consensus requirement. Missing rim

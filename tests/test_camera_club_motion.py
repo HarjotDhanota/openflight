@@ -15,6 +15,57 @@ from openflight.camera.club_motion import (
 )
 
 
+def test_search_reuses_equal_rounded_filters_without_reusing_old_image_pixels(monkeypatch):
+    yy, xx = np.indices((96, 128))
+    frames = np.where((xx - 64) ** 2 + (yy - 60) ** 2 < 10**2, 180, 40).astype(np.uint8)
+    frames = np.repeat(frames[None], 5, axis=0)
+    original = club_motion._box_mean
+    calls = []
+
+    def measured(image, side):
+        calls.append(max(1, int(round(side))))
+        return original(image, side)
+
+    monkeypatch.setattr(club_motion, "_box_mean", measured)
+    monkeypatch.setattr(club_motion, "fit_lit_ball", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(club_motion, "propose_ball_center", lambda *_args: None)
+    sizes = list(np.linspace(14.0, 22.0, 17))
+    for image in (frames, np.full_like(frames, 20)):
+        calls.clear()
+        club_motion.reference_ball_candidates(image, expected_diameters_px=sizes)
+        assert len(calls) == len(set(calls))
+        assert calls
+
+
+def test_sector_sampling_reuses_geometry_but_rechecks_changed_pixels(monkeypatch):
+    yy, xx = np.indices((100, 100))
+    distance = np.hypot(xx - 50, yy - 50)
+    image = np.where(distance < 8, 120.0, 30.0)
+    changed = image.copy()
+    changed[(distance >= 1.6 * 9) & (distance <= 2.3 * 9)] = 180.0
+    calls = []
+    original = np.indices
+
+    def measured(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(club_motion.np, "indices", measured)
+    assert club_motion._brighter_all_round(image, 50, 50, 9, 3)
+    assert not club_motion._brighter_all_round(changed, 50, 50, 9, 3)
+    assert len(calls) <= 1
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_reused_rounded_filters_keep_each_scales_original_contrast(dtype):
+    image = np.random.default_rng(9).normal(70, 25, (67, 83)).astype(dtype)[::2, 1::2]
+    means = {}
+    for radius in np.linspace(1.0, 12.0, 37):
+        expected = club_motion._disk_contrast(image, radius)
+        actual = club_motion._disk_contrast(image, radius, means)
+        np.testing.assert_array_equal(actual, expected)
+
+
 def test_detect_reference_ball_prefers_round_center_candidate():
     frames = np.full((12, 80, 120), 30, dtype=np.uint8)
     yy, xx = np.indices(frames.shape[1:])

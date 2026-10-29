@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Sequence
 
 import numpy as np
@@ -82,11 +83,22 @@ def _box_mean(image: np.ndarray, side: float) -> np.ndarray:
     return ndimage.uniform_filter(image, size=max(1, int(round(side))), mode="nearest")
 
 
-def _disk_contrast(image: np.ndarray, radius: float) -> np.ndarray:
+def _disk_contrast(
+    image: np.ndarray, radius: float, means: dict[int, np.ndarray] | None = None
+) -> np.ndarray:
     """Inscribed square of a disk of this radius against the square ring just outside it."""
-    inner = _box_mean(image, 1.4 * radius)
+
+    def mean(side):
+        if means is None:
+            return _box_mean(image, side)
+        size = max(1, int(round(side)))
+        if size not in means:
+            means[size] = _box_mean(image, side)
+        return means[size]
+
+    inner = mean(1.4 * radius)
     mid_side, out_side = 2.6 * radius, 4.0 * radius
-    mid, out = _box_mean(image, mid_side), _box_mean(image, out_side)
+    mid, out = mean(mid_side), mean(out_side)
     ring = (out * out_side**2 - mid * mid_side**2) / (out_side**2 - mid_side**2)
     return inner - ring
 
@@ -97,27 +109,37 @@ def _bin(image: np.ndarray, factor: int) -> np.ndarray:
     return blocks.mean(axis=(1, 3))
 
 
+@lru_cache(maxsize=64)
+def _round_samples(shape: tuple[int, int], row: int, col: int, radius: float):
+    """Bounded sampling geometry only; no scene pixels or brightness are cached."""
+    yy, xx = np.indices(shape)
+    distance = np.hypot(xx - col, yy - row)
+    middle = distance <= 0.7 * radius
+    sector = ((np.arctan2(yy - row, xx - col) + np.pi) / (2 * np.pi) * 8).astype(int) % 8
+    ring = (distance >= 1.6 * radius) & (distance <= 2.3 * radius)
+    sectors = []
+    for index in range(8):
+        mask = ring & (sector == index)
+        if np.any(mask):
+            mask.flags.writeable = False
+            sectors.append(mask)
+    middle.flags.writeable = False
+    return middle, tuple(sectors)
+
+
 def _brighter_all_round(
     image: np.ndarray, row: int, col: int, radius: float, margin: float
 ) -> bool:
     reach = int(math.ceil(2.3 * radius)) + 1
     top, left = max(0, row - reach), max(0, col - reach)
     image = image[top : row + reach + 1, left : col + reach + 1]
-    row, col = row - top, col - left
-    yy, xx = np.indices(image.shape)
-    distance = np.hypot(xx - col, yy - row)
-    middle = image[distance <= 0.7 * radius]
-    if not middle.size:
+    middle, sectors = _round_samples(image.shape, row - top, col - left, radius)
+    values = image[middle]
+    if not values.size:
         return False
-    level = float(middle.mean()) - margin
-    sector = ((np.arctan2(yy - row, xx - col) + np.pi) / (2 * np.pi) * 8).astype(int) % 8
-    ring = (distance >= 1.6 * radius) & (distance <= 2.3 * radius)
-    darker = checked = 0
-    for index in range(8):
-        values = image[ring & (sector == index)]
-        if values.size:
-            checked += 1
-            darker += int(values.mean() <= level)
+    level = float(values.mean()) - margin
+    darker = sum(int(image[mask].mean() <= level) for mask in sectors)
+    checked = len(sectors)
     return checked >= 4 and darker >= 0.75 * checked
 
 
@@ -268,9 +290,10 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
     floor = max(8.0, 3.0 * picture_noise / factor)
 
     seeds: list[tuple[float, float, float, float, int, int]] = []
+    means: dict[int, np.ndarray] = {}
     for diameter in diameters:
         coarse_r = diameter / 2.0 / factor
-        score = _disk_contrast(coarse, coarse_r)[wy0:wy1, wx0:wx1]
+        score = _disk_contrast(coarse, coarse_r, means)[wy0:wy1, wx0:wx1]
         peaks = (score == ndimage.maximum_filter(score, size=max(3, int(coarse_r)))) & (
             score >= floor
         )
