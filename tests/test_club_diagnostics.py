@@ -147,3 +147,31 @@ def test_opted_in_analysis_preserves_synthetic_legacy_metrics(tmp_path):
     extra = on["club_part_diagnostics"]
     assert extra["status"] == "current_image_hypotheses_only" and extra["frames"]
     assert extra["physical_pose"] is extra["strike"] is None
+
+
+def test_missing_metric_range_does_not_prevent_image_only_club_observations(tmp_path):
+    from test_impact_live import Session
+
+    job = Session(tmp_path).job(range_source="camera_prior")
+    analyser = impact_live.LiveAnalyser(club_part_diagnostics=True)
+    observed = analyser.analyse(job)
+    baseline = impact_live.LiveAnalyser().analyse(job)
+    assert observed["reason_code"] == baseline["reason_code"] == "no_ball_range_for_this_shot"
+    extra = observed["club_part_diagnostics"]
+    assert extra["frames"] and extra["status"] == "current_image_hypotheses_only"
+    assert extra["window_selection"]["source"] == "image_departure_only"
+    assert extra["window_selection"]["first_touch_interval_ns"] is None
+    assert extra["physical_pose"] is extra["strike"] is None
+    assert observed["template"]["swings"] == 0
+
+
+def test_image_only_selection_does_not_modify_the_metric_preparation(tmp_path):
+    from test_impact_live import Session
+
+    job = Session(tmp_path).job(range_source="camera_prior")
+    current = impact_live.LiveAnalyser()._prepare(job)
+    contact, window = current.prepared.contact, current.prepared.window
+    assert not window and contact.status == "rejected"
+    result = diagnostic.analyse_clip(current)
+    assert result["frames"]
+    assert current.prepared.contact is contact and current.prepared.window is window
