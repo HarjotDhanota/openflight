@@ -17,8 +17,8 @@ post-session method of ``openflight.camera.impact_location`` and
   keeps a reading to a few seconds on a Pi 5;
 - the reading goes on ``Shot.impact_location`` and out as a shot update. Its two
   metric records are labelled ``experimental`` and feed no other metric;
-- a reading still being worked on when the next shot arrives is dropped, and
-  says so. Every reading and refusal is written to the session log
+- readings remain queued when subsequent shots arrive. Every reading and refusal
+  is written to the session log
   (``impact_location`` entries).
 
 The kiosk loads this module through the ``openflight.kiosk_extensions`` entry
@@ -37,8 +37,10 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -345,7 +347,7 @@ def worker_main(argv: list[str]) -> int:
     # import that looks at stdin waits for a pending pipe read on another thread.
     importlib.import_module("openflight.camera.impact_session")
     importlib.import_module("cv2").setNumThreads(1)
-    jobs: queue.Queue = queue.Queue()
+    jobs: queue.Queue = queue.Queue(maxsize=1)
     cancelled = {"through": 0}
 
     def read_commands() -> None:
@@ -353,6 +355,8 @@ def worker_main(argv: list[str]) -> int:
             try:
                 command = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(command, dict):
                 continue
             if command.get("type") == "job":
                 jobs.put(command)
@@ -410,14 +414,20 @@ class ProcessRunner:
         ).start()
 
     def _read(self, process: subprocess.Popen) -> None:
-        for line in read_lines(process.stdout.fileno()):
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if message.get("type") == "result":
-                self._on_result(message)
-        self._on_result({"type": "worker_exited", "runner": self})
+        try:
+            for line in read_lines(process.stdout.fileno()):
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(message, dict) and message.get("type") == "result":
+                    self._on_result(message)
+        except (OSError, UnicodeError) as error:
+            logger.warning("[IMPACT] result pipe failed: %s", error)
+            if process.poll() is None:
+                process.terminate()
+        finally:
+            self._on_result({"type": "worker_exited", "runner": self})
 
     @staticmethod
     def _write(process: subprocess.Popen, command: dict) -> None:
@@ -468,10 +478,11 @@ class _OpenJob:
     session_uuid: str | None
     submitted: float
     runner: Any = None
+    body_path: Path | None = None
 
 
 class Dispatcher:
-    """Sends shots to the worker and puts each reading on its shot, or drops it."""
+    """Retains shot requests with one active worker job and spooled waiting bodies."""
 
     def __init__(self, runner_factory, publish, log):
         self._runner_factory = runner_factory
@@ -481,6 +492,10 @@ class Dispatcher:
         self._open: dict[int, _OpenJob] = {}
         self._next_id = 0
         self._runner = None
+        self._waiting = deque()
+        self._active_id = None
+        self._spool = None
+        self._stopped = False
 
     def _ensure_runner(self):
         if self._runner is None:
@@ -491,6 +506,8 @@ class Dispatcher:
         """Start the worker now, so its imports are done before the first shot."""
         try:
             with self._lock:
+                if self._stopped:
+                    return
                 self._ensure_runner()
         except OSError as error:
             logger.warning("[IMPACT] the impact worker did not start: %s", error)
@@ -500,39 +517,63 @@ class Dispatcher:
         with self._lock:
             self._next_id += 1
             job_id = self._next_id
+            job = _OpenJob(shot, body.get("session_uuid"), time.monotonic())
+            self._open[job_id] = job
             try:
-                runner = self._ensure_runner()
-            except OSError:
-                runner = None
-            self._open[job_id] = _OpenJob(shot, body.get("session_uuid"), time.monotonic(), runner)
-        try:
-            if runner is None:
-                raise OSError("the impact worker did not start")
-            runner.submit({"job_id": job_id, **body})
-        except OSError as error:
-            logger.warning("[IMPACT] the worker did not take shot #%s: %s", shot.shot_number, error)
-            with self._lock:
-                if self._runner is runner:
-                    self._runner = None
-            self._finish(job_id, _refused("analysis_failed_worker_unavailable"))
+                if self._stopped:
+                    raise OSError("impact analysis is stopped")
+                if self._spool is None:
+                    self._spool = tempfile.TemporaryDirectory(prefix="openflight-impact-")
+                job.body_path = Path(self._spool.name) / f"{job_id}.json"
+                job.body_path.write_text(json.dumps(body, default=str), encoding="utf-8")
+                self._waiting.append(job_id)
+                queued = True
+            except (OSError, TypeError, ValueError):
+                queued = False
+        if queued:
+            self._dispatch_next()
+        else:
+            self._finish(job_id, _refused("analysis_failed_job_not_retained"))
         return job_id
 
     def next_shot_arrived(self) -> None:
-        """A new shot: drop every reading still open (the worker stops on it too)."""
-        with self._lock:
-            dropped = sorted(self._open)
-            runner = self._runner
-        if not dropped:
-            return
-        if runner is not None:
-            runner.cancel_through(dropped[-1])
-        for job_id in dropped:
-            self._finish(job_id, _dropped())
+        """Keep active and waiting readings: D19 is a goal, never a cutoff."""
+
+    def _dispatch_next(self) -> None:
+        while True:
+            with self._lock:
+                if self._active_id is not None or not self._waiting or self._stopped:
+                    return
+                job_id = self._waiting.popleft()
+                job = self._open[job_id]
+                self._active_id = job_id
+                try:
+                    runner = self._ensure_runner()
+                except OSError:
+                    runner = None
+                job.runner = runner
+            try:
+                if runner is None:
+                    raise OSError("the impact worker did not start")
+                body = json.loads(job.body_path.read_text(encoding="utf-8"))
+                runner.submit({**body, "job_id": job_id})
+                job.body_path.unlink(missing_ok=True)
+                return
+            except (OSError, TypeError, ValueError) as error:
+                logger.warning(
+                    "[IMPACT] worker did not take shot #%s: %s", job.shot.shot_number, error
+                )
+                with self._lock:
+                    if self._runner is runner:
+                        self._runner = None
+                self._finish(job_id, _refused("analysis_failed_worker_unavailable"), dispatch=False)
 
     def on_result(self, message: dict) -> None:
         """A reading from the worker, or word that it exited."""
         if message.get("type") == "worker_exited":
             runner = message.get("runner")
+            if runner is None:
+                return
             with self._lock:
                 orphans = sorted(k for k, job in self._open.items() if job.runner is runner)
                 if self._runner is runner:
@@ -540,30 +581,60 @@ class Dispatcher:
             for job_id in orphans:
                 self._finish(job_id, {**_refused("worker_stopped"), "reason": STOPPED_REASON})
             return
-        self._finish(int(message["job_id"]), dict(message.get("reading") or {}))
+        job_id = message.get("job_id")
+        if not isinstance(job_id, int) or isinstance(job_id, bool):
+            return
+        with self._lock:
+            if job_id != self._active_id:
+                return
+        reading = message.get("reading")
+        self._finish(
+            job_id,
+            dict(reading)
+            if isinstance(reading, dict)
+            else _refused("analysis_failed_invalid_worker_reading"),
+        )
 
-    def _finish(self, job_id: int, reading: dict) -> None:
+    def _finish(self, job_id: int, reading: dict, *, dispatch=True) -> None:
         with self._lock:
             job = self._open.pop(job_id, None)
+            if self._active_id == job_id:
+                self._active_id = None
         if job is None:
             return
+        if job.body_path is not None:
+            try:
+                job.body_path.unlink(missing_ok=True)
+            except OSError as error:
+                logger.warning("[IMPACT] retained job cleanup failed: %s", error)
         reading["latency_ms"] = round((time.monotonic() - job.submitted) * 1000.0, 1)
         try:
             self._publish(job.shot, reading, job.session_uuid)
             self._log(job.session_uuid, {"shot_number": job.shot.shot_number, **reading})
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning("[IMPACT] shot #%s reading not shown: %s", job.shot.shot_number, error)
+        if dispatch:
+            self._dispatch_next()
 
     def stop(self) -> None:
         """Stop the worker (kiosk shutdown)."""
         with self._lock:
             runner, self._runner = self._runner, None
+            self._stopped = True
+            self._waiting.clear()
+            pending = list(self._open)
         if runner is not None:
             runner.stop()
+        for job_id in pending:
+            self._finish(
+                job_id, {**_refused("worker_stopped"), "reason": STOPPED_REASON}, dispatch=False
+            )
+        if self._spool is not None:
+            self._spool.cleanup()
 
 
 class ImpactLiveExtension(kiosk_extensions.KioskExtension):
-    """The kiosk's hooks: note each shot's clip, send it once shown, drop on the next shot.
+    """The kiosk's hooks: retain each shot's clip request and publish its late reading.
 
     Off until the kiosk configures it (``configure``), so importing it changes nothing.
     """

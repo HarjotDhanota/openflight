@@ -2,7 +2,7 @@
 
 A running outline per club is built from the session's own swings; until it has
 enough swings a shot says how far along it is, every other refusal is named,
-and a reading still being worked on when the next shot arrives is dropped.
+and a late reading remains attached to its own shot when subsequent shots arrive.
 """
 
 from __future__ import annotations
@@ -354,19 +354,19 @@ def test_a_reading_is_put_on_the_shot_published_and_logged(kiosk):
     assert record["analysis_ms"] == 812.0
 
 
-def test_a_reading_still_open_when_the_next_shot_arrives_is_dropped(kiosk):
+def test_a_reading_still_open_when_the_next_shot_arrives_is_retained(kiosk):
     first = _kiosk_shot(1)
     kiosk.extension.on_camera_capture(first, _capture())
     kiosk.extension.after_shot_published(first, update_kind="first")
     kiosk.extension.on_shot_accepted(_kiosk_shot(2))
-    assert first.impact_location["status"] == "dropped"
-    assert first.impact_location["reason"] == live.DROPPED_REASON
-    assert kiosk.runner.cancelled == [kiosk.runner.jobs[0]["job_id"]]
-    assert kiosk.log.events[0][1]["status"] == "dropped"
+    assert first.impact_location is None
+    assert kiosk.runner.cancelled == []
+    assert kiosk.log.events == []
     kiosk.extension.dispatcher.on_result(
         {"job_id": kiosk.runner.jobs[0]["job_id"], "reading": {"status": "ok"}}
     )
-    assert first.impact_location["status"] == "dropped"
+    assert first.impact_location["status"] == "ok"
+    assert kiosk.log.events[0][1]["status"] == "ok"
     assert len(kiosk.published) == 1
 
 
