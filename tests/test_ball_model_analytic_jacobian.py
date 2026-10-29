@@ -1,5 +1,7 @@
 """Direct image derivatives preserve the sphere model and nonsmooth fallback."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -57,3 +59,42 @@ def test_fast_false_positive_stays_withheld_when_reference_solver_refuses(monkey
 
     monkeypatch.setattr(model, "_fit_sphere", fitted)
     assert model.fit_lit_ball(np.ones((80, 80)), 40, 40, 8) is None
+
+
+@pytest.mark.parametrize(
+    "options,size_count",
+    [
+        ({}, 1),
+        ({"reference_jacobian": True}, 3),
+        ({"check_other_starts": True}, 3),
+        ({"size_starts": (0.85, 1.0, 1.2)}, 3),
+        ({"expected_radius": 8.0}, 1),
+        ({"batched": False}, 3),
+    ],
+)
+def test_screen_avoids_duplicate_radius_starts_but_keeps_lights_and_reference_starts(
+    monkeypatch, options, size_count
+):
+    yy, xx = np.indices((80, 80), dtype=float)
+    params = np.array([40, 40, 8, np.radians(270), np.radians(60), 60, 90, 60, 0, 0])
+    image = model._render(params, yy, xx)
+    starts = []
+
+    def solve(_residuals, initial, **_kwargs):
+        starts.append(initial.copy())
+        return SimpleNamespace(x=initial, cost=float(len(starts)))
+
+    monkeypatch.setattr(model.optimize, "least_squares", solve)
+    options = dict(options)
+    monkeypatch.setattr(model, "BATCHED_JACOBIAN", options.pop("batched", True))
+    defaults = dict(
+        noise_dn=1,
+        expected_radius=None,
+        size_tolerance=0.01,
+        size_starts=None,
+        extra_light_starts=True,
+    )
+    model._fit_sphere(image, 40, 40, 8, **{**defaults, **options})
+    assert len({round(float(initial[2]), 5) for initial in starts}) == size_count
+    assert len({round(float(initial[3]), 5) for initial in starts}) == 3
+    assert len(starts) == 3 * size_count

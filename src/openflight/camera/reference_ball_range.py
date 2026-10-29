@@ -51,7 +51,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
         "name": "camera_reference_ball_size_range",
-        "version": 13,
+        "version": 14,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "the_ground_patch_outline_only",
@@ -84,6 +84,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "image_box_size_hints": "existing_window_proposals_first_never_a_height_gate",
         "sphere_jacobian": "analytic_negative_screen_reference_measurement_and_held_fits",
         "sphere_jacobian_boundary_rho2": 1e-6,
+        "sphere_negative_screen_size_starts": "single_seed_radius_all_existing_lights",
         "rim_retry": "original_seed_with_unchanged_circle_gates",
         "seed_center_retry": "failed_strongest_free_seed_linear_shading_center_only",
         "seed_center_retry_limit": 1,

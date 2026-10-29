@@ -324,6 +324,12 @@ retaining column layout and the same blur and clipping. Near a square-root rim
 boundary it uses the existing batched numerical derivative. Every positive
 screen is recomputed with the reference derivative before supplying geometry.
 Held-size fits and scoped retries retain the reference derivative throughout.
+The default negative screen starts at the coarse proposal's radius and retains
+every existing light direction; its radius still varies over the original bounds.
+Full reference remeasurement retains every original radius start. Explicit size
+starts supplied by callers are preserved. This can withhold an unseen candidate
+that needs another screening initialization; recorded development success does
+not qualify general sensitivity.
 A free-size fit can drift
 into a cast shadow; if its first rim search fails, the original candidate centre
 is tried with the same circle limits and ray-consensus requirement. Missing rim
@@ -346,7 +352,7 @@ reference fit. Its radius starts from that current proposal, not the old held
 measurement. The same sphere/rim qualification and all selected rival fits still
 run; live identity, Save consistency and input-age checks remain required.
 Failure still falls back to the full search. Successful held fits do not use this
-reacquisition path. Estimator policy version 13 invalidates older qualifications.
+reacquisition path. Estimator policy version 14 invalidates older qualifications.
 Recorded development replays do not establish field accuracy or live readiness.
 
 Stationary setup preview uses the available frame exposure budget before raising
