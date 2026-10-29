@@ -237,12 +237,14 @@ def fit_lit_ball(
     size_tolerance: float = 0.01,
     size_starts: Sequence[float] | None = None,
     extra_light_starts: bool = True,
+    check_other_starts: bool = False,
 ) -> LitBall | None:
     """Fit a lit sphere near (x, y); ``expected_radius`` holds its size to ``size_tolerance``.
 
     ``size_starts`` are the free size's starting fractions of ``radius``; ``extra_light_starts``
     False starts the light only from its measured lean, for a centre already placed.
     A free size, and its centre, are then measured on the ball's outline (``measure_rim``).
+    ``check_other_starts`` checks already-computed starts if the cheapest fails the gates.
     """
     fit = _fit_sphere(
         image,
@@ -254,6 +256,7 @@ def fit_lit_ball(
         size_tolerance=size_tolerance,
         size_starts=size_starts,
         extra_light_starts=extra_light_starts,
+        check_other_starts=check_other_starts,
     )
     if fit is None or expected_radius:
         return fit
@@ -421,6 +424,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
     size_tolerance: float,
     size_starts: Sequence[float] | None,
     extra_light_starts: bool,
+    check_other_starts: bool = False,
 ) -> LitBall | None:
     """The lit sphere's own fit: centre, size and light, and the look-alike gates."""
     binning = 2 if max(radius, expected_radius or 0.0) > 12.0 else 1
@@ -435,6 +439,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
             size_tolerance=size_tolerance,
             size_starts=size_starts,
             extra_light_starts=extra_light_starts,
+            check_other_starts=check_other_starts,
         )
         if fit is None:
             return None
@@ -488,6 +493,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
         return (_render(params, yy, xx) - patch)[use] / noise_dn
 
     best = None
+    solutions = []
     sizes = (1.0,) if expected_radius else tuple(size_starts or (0.85, 1.0, 1.2))
     # an off-centre seed can turn the lean the wrong way: also start upper left and right
     lights = [azimuth] + [
@@ -543,38 +549,51 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
             )
         except (ValueError, np.linalg.LinAlgError):
             continue
+        if check_other_starts:
+            solutions.append(result)
         if best is None or result.cost < best.cost:
             best = result
     if best is None:
         return None
-    cx, cy, r, azimuth, tilt, shade, diffuse, ground, _gx, _gy = best.x
-    misfit = np.abs(_render(best.x, yy, xx) - patch)
-    misfit_dn = float(np.median(misfit[use & (np.hypot(xx - cx, yy - cy) <= 1.3 * r)]) * 1.4826)
-    # no model beats the pixels' own noise: clipped white fits any bright sphere otherwise
-    misfit_dn = max(misfit_dn, noise_dn)
-    if diffuse < MIN_DIFFUSE_NOISE_MULTIPLE * noise_dn or misfit_dn > MAX_MISFIT_FRACTION * diffuse:
-        return None
-    step = _lit_rim_step(patch, cx, cy, r, azimuth)
-    if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
-        return None
-    turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth)
-    if (
-        float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
-        or _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION
-    ):
-        return None
-    return LitBall(
-        x=float(cx + left),
-        y=float(cy + top),
-        radius_px=float(r),
-        light_azimuth_deg=math.degrees(azimuth) % 360.0,
-        light_tilt_deg=math.degrees(tilt),
-        diffuse_dn=float(diffuse),
-        shade_dn=float(shade),
-        ground_dn=float(ground),
-        misfit_dn=misfit_dn,
-        rim_step_dn=step,
-    )
+
+    def qualified(solution):
+        cx, cy, r, azimuth, tilt, shade, diffuse, ground, _gx, _gy = solution.x
+        misfit = np.abs(_render(solution.x, yy, xx) - patch)
+        misfit_dn = float(np.median(misfit[use & (np.hypot(xx - cx, yy - cy) <= 1.3 * r)]) * 1.4826)
+        # no model beats the pixels' own noise: clipped white fits any bright sphere otherwise
+        misfit_dn = max(misfit_dn, noise_dn)
+        if (
+            diffuse < MIN_DIFFUSE_NOISE_MULTIPLE * noise_dn
+            or misfit_dn > MAX_MISFIT_FRACTION * diffuse
+        ):
+            return None
+        step = _lit_rim_step(patch, cx, cy, r, azimuth)
+        if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
+            return None
+        turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth)
+        if (
+            float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
+            or _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION
+        ):
+            return None
+        return LitBall(
+            x=float(cx + left),
+            y=float(cy + top),
+            radius_px=float(r),
+            light_azimuth_deg=math.degrees(azimuth) % 360.0,
+            light_tilt_deg=math.degrees(tilt),
+            diffuse_dn=float(diffuse),
+            shade_dn=float(shade),
+            ground_dn=float(ground),
+            misfit_dn=misfit_dn,
+            rim_step_dn=step,
+        )
+
+    for solution in sorted(solutions if check_other_starts else [best], key=lambda item: item.cost):
+        fit = qualified(solution)
+        if fit is not None:
+            return fit
+    return None
 
 
 def _lit_rim_step(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float) -> float:

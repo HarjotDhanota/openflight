@@ -332,7 +332,9 @@ are discarded: the original lit-sphere and rim checks must qualify the new centr
 at the original starting size. There is at most one additional fit per search;
 the other proposals still run, including rivals. Successful original fits,
 held-size fits and independent held-ball confirmation are unchanged. Estimator
-policy version 9 invalidates older qualification artifacts after these changes.
+policy version 10 invalidates older qualification artifacts after these changes.
+Only the recentered retry checks its already-computed optimizer starts in cost
+order when the cheapest fails the existing gates; it does not add solver starts.
 Recorded development replays do not establish field accuracy or live readiness.
 
 Stationary setup preview uses the available frame exposure budget before raising
