@@ -178,7 +178,7 @@ class LiveAnalyser:
         self, job: Mapping[str, Any], should_stop: Callable[[], bool] | None = None
     ) -> dict[str, Any]:
         """One shot's reading: ok with both axes, or refused with a named reason."""
-        from openflight.camera import impact_location as il  # noqa: PLC0415
+        from openflight.camera import impact_location as il, impact_session  # noqa: PLC0415
 
         started = time.perf_counter()
         stop = should_stop or (lambda: False)
@@ -204,8 +204,9 @@ class LiveAnalyser:
             "optics_input_decision": clip.extra.get("optics_input_decision", {}),
         }
         pool_key = f"{clip.club}_{clip.frame_size}"
-        if clip.extra.get("optics_template_key"):
-            pool_key += "_" + clip.extra["optics_template_key"]
+        pool_key += "_" + impact_session.template_context_key(
+            clip, equipment_id=job.get("equipment_id")
+        )
         pool = self._pools.setdefault(pool_key, _Pool())
 
         def finish(reading: dict[str, Any]) -> dict[str, Any]:

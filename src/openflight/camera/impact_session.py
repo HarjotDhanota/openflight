@@ -481,6 +481,7 @@ def bin_frames(frames: np.ndarray, factor: int) -> np.ndarray:
 def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
     clip.extra.pop("capture_npz_sha256", None)
     clip.extra.pop("capture_sensor_interval_ns", None)
+    clip.extra.pop("template_capture_context", None)
     try:
         metadata = json.loads((clip.path / "metadata.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -532,6 +533,15 @@ def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
     if clip.trigger_index is None and isinstance(metadata.get("pre_trigger_frames"), int):
         clip.trigger_index = int(metadata["pre_trigger_frames"])
     clip.frame_size = f"{frames.shape[2]}x{frames.shape[1]}"
+    clip.extra["template_capture_context"] = geometry_fingerprint(
+        {
+            "recorded_settings": settings,
+            "capture_mode": metadata.get("capture_mode"),
+            "frame_size": clip.frame_size,
+            "exposure_us": clip.exposure_us,
+        }
+    )
+    clip.extra["template_context_scope"] = "recorded_settings_and_mode_not_physical_qualification"
     return frames, metadata
 
 
@@ -571,6 +581,7 @@ def prepare_clip(  # pylint: disable=too-many-locals
     run = run or RunRecord({}, {}, {}, {}, None)
     clip.shot_number = run.captures.get(clip.shot_id)
     shot = run.shots.get(clip.shot_number, {}) if clip.shot_number is not None else {}
+    clip.extra["equipment_id"] = shot.get("equipment_id")
     from . import impact_optics  # noqa: PLC0415
 
     rectified, camera, radar_offset = None, None, None
@@ -771,10 +782,34 @@ def result_row(
     return row
 
 
+def template_context_key(clip: Clip, *, equipment_id=None) -> str:
+    """Partition shape priors by recorded context; unknowns stay unqualified."""
+    camera = getattr(clip.prepared, "camera", None)
+    return geometry_fingerprint(
+        {
+            "handedness": clip.handedness,
+            "capture_context": clip.extra.get("template_capture_context"),
+            "optics": clip.extra.get("optics_template_key"),
+            "equipment_id": equipment_id
+            if equipment_id is not None
+            else clip.extra.get("equipment_id"),
+            "camera": None
+            if camera is None
+            else {
+                "focal_px": camera.focal_px,
+                "principal_point_px": (
+                    np.asarray(camera.principal_point_px)
+                    + getattr(clip.prepared, "roi_origin", (0, 0))
+                ).tolist(),
+                "source": camera.source,
+            },
+        }
+    )
+
+
 def _group(clip: Clip, scope: str) -> str:
     key = clip.frame_size if scope == "session" else f"{clip.club}_{clip.frame_size}"
-    optics = clip.extra.get("optics_template_key")
-    return f"{key}_{optics}" if optics else key
+    return f"{key}_{template_context_key(clip)}"
 
 
 def analyse_session(
