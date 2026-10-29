@@ -21,6 +21,7 @@ from openflight.camera import (  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_camera_impact_location as synthetic  # noqa: E402
 from impact_angle_fixtures import bind_test_angles  # noqa: E402
+from impact_range_fixtures import bind_test_range  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "impact_location.py"
 _spec = importlib.util.spec_from_file_location("impact_location_cli", SCRIPT)
@@ -74,6 +75,7 @@ def write_session(
     )
     start = {
         "type": "session_start",
+        "session_uuid": "synthetic-session",
         "config": {
             "golfer": {"handed": handed, "source": "setup"},
             "rig_geometry": {
@@ -97,6 +99,7 @@ def write_session(
         },
     }
     bind_test_angles(shot, clip / "frames.npz")
+    bind_test_range(shot, clip / "frames.npz", "synthetic-session")
     events = [
         start,
         {"type": "camera_capture", "shot_number": 1, "capture_path": f"/srv/sessions/{CLIP}"},
@@ -210,14 +213,16 @@ def test_a_camera_range_prior_is_never_used_and_the_refusal_is_named(tmp_path):
     assert row["label"] == "experimental_unqualified"
 
 
-def test_range_sources_in_order():
+def test_unbound_range_sources_are_refused_and_explicit_research_override_remains():
     run = session.RunRecord(
         {}, {}, {}, {}, {"selected_range_m": 1.6, "selected_uncertainty_m": 0.05}
     )
-    assert session.shot_range_m({"ball_range_m": 1.5, "ball_range_source": "iwr"}, run, None)[
-        2
-    ] == ("shot_iwr")
-    assert session.shot_range_m({}, run, None) == (1.6, 0.05, "run_tee_range_selected")
+    assert session.shot_range_m({"ball_range_m": 1.5, "ball_range_source": "iwr"}, run, None) == (
+        None,
+        None,
+        "none",
+    )
+    assert session.shot_range_m({}, run, None) == (None, None, "none")
     empty = session.RunRecord({}, {}, {}, {}, None)
     assert session.shot_range_m({}, empty, 2.0) == (2.0, None, "command_line")
     assert session.shot_range_m({}, empty, None) == (None, None, "none")
