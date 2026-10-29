@@ -85,6 +85,18 @@ def _light_at(runtime, index):
     return index * runtime.settings.exposure_us * runtime.settings.gain
 
 
+def test_runtime_uses_the_opt_in_half_stop_target_from_config(tmp_path, monkeypatch):
+    config = sx.load_config()
+    config["ball_exposure_bias_stops"] = 0.5
+    monkeypatch.setattr(sx, "load_config", lambda: config)
+    runtime = _runtime(tmp_path)
+    env = runtime._swing_policy.envelope
+    assert env.ball_exposure_bias_stops == 0.5
+    assert env.target_peak_fraction == pytest.approx(0.55 * 2**0.5)
+    assert env.exposure_ceiling_us == 294
+    assert env.gain_cap == CAP
+
+
 def test_the_sensor_limits_are_read_from_the_camera_and_recorded(tmp_path):
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,
