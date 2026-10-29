@@ -323,8 +323,17 @@ The sphere fitter's batched numerical derivative uses the same residual
 arithmetic and matrix layout as its scalar reference. A free-size fit can drift
 into a cast shadow; if its first rim search fails, the original candidate centre
 is tried with the same circle limits and ray-consensus requirement. Missing rim
-evidence never substitutes the seed as a measurement. Estimator policy version
-8 invalidates older qualification artifacts after these fitter changes.
+evidence never substitutes the seed as a measurement.
+
+If the strongest free-size proposal fails its lit fit, a bounded whole-disk
+shading model may propose a different starting centre. It uses both ball halves
+and background row structure observed at the patch margins. Its size and shading
+are discarded: the original lit-sphere and rim checks must qualify the new centre
+at the original starting size. There is at most one additional fit per search;
+the other proposals still run, including rivals. Successful original fits,
+held-size fits and independent held-ball confirmation are unchanged. Estimator
+policy version 9 invalidates older qualification artifacts after these changes.
+Recorded development replays do not establish field accuracy or live readiness.
 
 Stationary setup preview uses the available frame exposure budget before raising
 gain, including rebalancing an already bright high-gain preview. At 120 fps the

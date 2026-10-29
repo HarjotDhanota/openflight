@@ -15,7 +15,7 @@ import numpy as np
 from scipy import ndimage
 
 from openflight.camera import ball_pixels
-from openflight.camera.ball_model import fit_lit_ball
+from openflight.camera.ball_model import fit_lit_ball, propose_ball_center
 from openflight.constants import BALL_DIAMETER_MM
 
 # (x_px, y_px, diameter_px) -> boolean mask of seeds a resting ball could be
@@ -336,17 +336,18 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
         ]
 
     found: list[tuple[float, ReferenceBall]] = []
-    for x, y, start_radius, held_radius, starts, extra_lights in targets:
-        fit = fit_lit_ball(
-            image,
-            x,
-            y,
-            start_radius,
-            noise_dn=picture_noise,
-            expected_radius=held_radius,
+    for index, (x, y, start_radius, held_radius, starts, extra_lights) in enumerate(targets):
+        fit_kwargs = {
+            "noise_dn": picture_noise,
+            "expected_radius": held_radius,
             **({"size_starts": starts} if starts is not None else {}),
             **({} if extra_lights else {"extra_light_starts": False}),
-        )
+        }
+        fit = fit_lit_ball(image, x, y, start_radius, **fit_kwargs)
+        if fit is None and index == 0 and held_radius is None and confirm_anchor is None:
+            center = propose_ball_center(image, x, y, start_radius)
+            if center is not None:
+                fit = fit_lit_ball(image, *center, start_radius, **fit_kwargs)
         if fit is None:
             continue
         candidate = ReferenceBall(
