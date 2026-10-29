@@ -20,6 +20,7 @@ from openflight.camera import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_camera_impact_location as synthetic  # noqa: E402
+from impact_angle_fixtures import bind_test_angles  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "impact_location.py"
 _spec = importlib.util.spec_from_file_location("impact_location_cli", SCRIPT)
@@ -64,6 +65,8 @@ def write_session(
         frames=frames,
         pre_trigger_count=np.int32(11),
         exposure_us=np.full(len(frames), 300.0),
+        sensor_timestamp_ns=1_000_000_000
+        + np.arange(len(frames), dtype=np.int64) * round(1e9 / synthetic.FPS),
     )
     (clip / "metadata.json").write_text(
         json.dumps({"delivered_fps": synthetic.FPS, "settings": {"mirror_horizontal": False}}),
@@ -93,6 +96,7 @@ def write_session(
             "attack_angle": {"value": -2.0, "status": "measured"},
         },
     }
+    bind_test_angles(shot, clip / "frames.npz")
     events = [
         start,
         {"type": "camera_capture", "shot_number": 1, "capture_path": f"/srv/sessions/{CLIP}"},
@@ -158,7 +162,7 @@ def test_the_cli_reads_both_axes_from_a_recorded_session(tmp_path):
     assert row["ball_range_mm"] == pytest.approx(synthetic.BALL_RANGE_MM, abs=1.0)
     assert row["face_centre_height_source"] == "face_photo_marks_n3"
     assert row["face_centre_from_toe_source"] == "reference_geometry_face_centre_rule"
-    assert row["dynamic_loft_source"] == "shot_metric_calculated"
+    assert row["dynamic_loft_source"] == "synthetic_independent_angle"
     assert row["face_photo"] == "face-photos/shot-0001.pgm"
     assert row["impact_offset_mm"] == pytest.approx(8.0, abs=2.5)
     assert row["impact_height_mm"] == pytest.approx(synthetic.height_truth(0.0, 0.0), abs=2.5)
