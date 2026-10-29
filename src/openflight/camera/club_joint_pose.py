@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import asdict
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 from scipy.optimize import least_squares
 
+from ..rig_geometry import geometry_fingerprint
 from . import club_exposure, club_pose_hypotheses, club_rigid_motion
 from .club_sequence import ClubFrameIdentity
 
@@ -57,15 +59,9 @@ def _prepare(frame, seed, collision, samples, contact_hypothesis):
         samples=samples,
         collision_offset_s=contact_offset,
     )
-    beginning = (
-        identity.sensor_timestamp_ns
-        + {"recorded_start": 0, "recorded_midpoint": -0.5, "recorded_end": -1}[
-            identity.timestamp_semantics
-        ]
-        * identity.exposure_us
-        * 1000
+    beginning, ending = club_rigid_motion.exposure_interval_ns(
+        identity.sensor_timestamp_ns, identity.exposure_us, identity.timestamp_semantics
     )
-    ending = beginning + identity.exposure_us * 1000
     if (
         contact_hypothesis is None
         and collision is not None
@@ -112,6 +108,7 @@ def _prepare(frame, seed, collision, samples, contact_hypothesis):
         "balls": balls,
         "depth_order": frame["depth_order"],
         "contact_offset_s": contact_offset,
+        "exposure_interval_ns": [beginning, ending],
         "contact_within_exposure": contact_hypothesis is not None
         and beginning < contact_hypothesis < ending,
     }
@@ -195,6 +192,8 @@ def refine_window(
     identities = [row["identity"] for row in prepared]
     if len({identity.context_key for identity in identities}) != 1:
         raise ValueError("one capture/view/control/optics/equipment context per window required")
+    if len({geometry_fingerprint(frame["camera"]) for frame in frames}) != 1:
+        raise ValueError("camera numeric view changed without context reset")
     if np.any(np.diff([identity.sensor_timestamp_ns for identity in identities]) <= 0) or np.any(
         np.diff([identity.frame_index for identity in identities]) <= 0
     ):
@@ -208,6 +207,10 @@ def refine_window(
         "qualified_face_normal": None,
         "strike": None,
         "depth_source": "CAD_conditioned_not_measured_range",
+        "capture_sha256": identities[0].capture_sha256,
+        "camera_coordinate_frame": "declared_pinhole_optical_RDF",
+        "translation_units": "static_model_units",
+        "optics_id": identities[0].optics_id,
         "collision_time_hypothesis_ns": collision_time_hypothesis_ns,
         "contact_time_is_measured": False,
         "analysis_to_reference_pixel_scale": analysis_scale,
@@ -225,6 +228,7 @@ def refine_window(
             "frames": [
                 {
                     "frame_index": row["identity"].frame_index,
+                    "identity": asdict(row["identity"]),
                     "status": row["status"],
                     "conditional_parameters": None,
                 }
@@ -274,6 +278,27 @@ def refine_window(
                 else:
                     row[name] = len(phases)
                     phases.append([])
+    phase_support = [[] for _ in phases]
+    for index in active:
+        row = prepared[index]
+        low, high = row["exposure_interval_ns"]
+        spans = [(row["before_phase"], low, high)]
+        if row["contact_within_exposure"]:
+            spans = [
+                (row["before_phase"], low, collision_time_hypothesis_ns),
+                (row["after_phase"], collision_time_hypothesis_ns, high),
+            ]
+        for phase, start, end in spans:
+            phase_support[phase].append(
+                {
+                    "identity": asdict(row["identity"]),
+                    "full_exposure_interval_ns": [low, high],
+                    "used_interval_ns": [start, end],
+                    "split_contact_hypothesis_ns": collision_time_hypothesis_ns
+                    if row["contact_within_exposure"]
+                    else None,
+                }
+            )
     active_position = {index: position for position, index in enumerate(active)}
     seeds = np.asarray([prepared[index]["seed"] for index in active])
     twists = []
@@ -424,6 +449,7 @@ def refine_window(
     for index, row in enumerate(prepared):
         record = {
             "frame_index": row["identity"].frame_index,
+            "identity": asdict(row["identity"]),
             "status": row["status"],
             "conditional_parameters": None,
         }
@@ -458,6 +484,7 @@ def refine_window(
         "status": "conditional_joint_SE3_fit",
         "frames": records,
         "phase_body_twists": rates.tolist(),
+        "phase_exposure_support": phase_support,
         "phase_frames": [[identities[i].frame_index for i in phase] for phase in phases],
         "phase_motion_observed_intervals": [max(0, len(phase) - 1) for phase in phases],
         "initial_factor_squared_norms": {
