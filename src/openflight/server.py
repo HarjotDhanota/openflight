@@ -4743,6 +4743,12 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
     """The range this shot's metrics used, with its source, uncertainty and label."""
     launch = getattr(shot_result, "launch_range", None)
     chosen = getattr(shot_result, "ball_range", None)
+    from .camera.impact_range_evidence import from_iwr_result  # noqa: PLC0415
+
+    monitor = getattr(iwr6843_runtime, "capture_monitor", None)
+    shot.impact_range_evidence = from_iwr_result(
+        shot, shot_result, match_tolerance_s=getattr(monitor, "match_tolerance_s", None)
+    )
     shot.iwr_launch_range = launch.to_dict() if launch is not None else None
     if chosen is not None:
         shot.ball_range_m = chosen.range_m
@@ -5887,6 +5893,14 @@ def _fuse_camera_measurements(
         return
     if camera_archive is _CAMERA_ARCHIVE_UNSET:
         camera_archive = _load_camera_capture_archive(camera_capture)
+    from .camera.impact_range_evidence import bind_camera  # noqa: PLC0415
+
+    shot.impact_range_evidence = bind_camera(
+        shot.impact_range_evidence,
+        camera_archive.get("_capture_npz_sha256") if camera_archive is not None else None,
+        session_uuid=shot.camera_fusion_session_uuid,
+        shot_number=shot.shot_number,
+    )
     if isinstance(captured_auto_exposure, dict):
         from openflight.camera.optical_quality import (  # noqa: PLC0415
             capture_optical_quality,

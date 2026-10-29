@@ -9,10 +9,10 @@ result is labelled ``experimental_unqualified`` and every refusal names its reas
 
 Per-shot inputs, each with its source:
 
-- the ball's range: the shot's own IWR range (``ball_range_m``, never a camera
-  prior), else the run's selected tee range, else the session's tee-range
-  handoff, else ``range_m`` from the caller; the IWR slant range becomes the
-  ball's depth through the rig's IWR offset and the resting ball's ray;
+- the ball's range: versioned own-shot IWR evidence bound to this camera capture;
+  run/session scalars and camera priors cannot supply it. An explicit caller
+  ``range_m`` remains an unqualified research override. IWR slant range becomes
+  ball depth through the rig's IWR offset and the resting ball's ray;
 - the resting ball: the caller's, else the detector at the size that range
   implies, else the ladder's recorded ball;
 - club speed (OPS), dynamic loft, face angle and attack from the shot record's
@@ -315,25 +315,32 @@ def ball_depth_mm(
 
 
 def shot_range_m(
-    shot: Mapping[str, Any], run: RunRecord, given_m: float | None
+    shot: Mapping[str, Any],
+    run: RunRecord,
+    given_m: float | None,
+    *,
+    capture_npz_sha256: str | None = None,
+    decision: dict[str, Any] | None = None,
 ) -> tuple[float | None, float | None, str]:
-    """(IWR slant range m, its sigma m, source) for one shot, in the documented order."""
-    value = _number(shot.get("ball_range_m"))
-    source = str(shot.get("ball_range_source") or "")
-    if value and not source.startswith("camera"):
-        return value, _number(shot.get("ball_range_uncertainty_m")), f"shot_{source or 'iwr'}"
-    selected = _number((run.tee_range or {}).get("selected_range_m"))
-    if selected:
-        sigma = _number((run.tee_range or {}).get("selected_uncertainty_m"))
-        return selected, sigma, "run_tee_range_selected"
-    config = run.start.get("config") or {}
-    handoff = config.get("tee_range_handoff") or {}
-    for key in ("tee_slant_range_m", "range_m"):
-        value = _number(handoff.get(key)) if isinstance(handoff, dict) else None
-        if value and "camera" not in str(handoff.get("source", "")):
-            return value, None, f"session_tee_range_handoff_{handoff.get('source', 'unknown')}"
-    if given_m:
-        return float(given_m), None, "command_line"
+    """Own-shot bound range, or an explicitly supplied unqualified research override."""
+    from openflight.camera.impact_range_evidence import read_shot_range  # noqa: PLC0415
+
+    try:
+        value, sigma, evidence = read_shot_range(
+            shot, session_uuid=run.start.get("session_uuid"), capture_sha256=capture_npz_sha256
+        )
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        if decision is not None:
+            decision.update(accepted=False, reason=str(exc), physical_qualified=False)
+    else:
+        if decision is not None:
+            decision.update(accepted=True, reason=None, evidence=evidence, physical_qualified=False)
+        return value, sigma, f"shot_{evidence['selected']['ball_range_source']}"
+    override = _number(given_m)
+    if override is not None and override > 0:
+        if decision is not None:
+            decision.update(research_override=True, source="command_line")
+        return override, None, "command_line"
     return None, None, "none"
 
 
@@ -581,7 +588,13 @@ def prepare_clip(  # pylint: disable=too-many-locals
     focal, focal_source = focal_px(run.start, rig, int(width), lens_id=options.lens_id)
     camera = il.ImpactCamera(focal, ((width - 1) / 2.0, (height - 1) / 2.0), focal_source)
     clip.extra["rig_source"] = rig_source
-    range_m, sigma_m, clip.range_source = shot_range_m(shot, run, options.range_m)
+    range_m, sigma_m, clip.range_source = shot_range_m(
+        shot,
+        run,
+        options.range_m,
+        capture_npz_sha256=clip.extra.get("capture_npz_sha256"),
+        decision=clip.extra.setdefault("range_input_decision", {}),
+    )
     if options.ball is not None:
         clip.ball, clip.ball_source = il.RestingBall(*options.ball), "command_line"
     else:
@@ -655,6 +668,7 @@ def result_row(
         "relative_path": clip.relative_path,
         "dynamic_lie": clip.extra.get("dynamic_lie"),
         "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
+        "range_input_decision": clip.extra.get("range_input_decision", {}),
     }
     if location is None:
         reason = clip.error or "not_analysed"

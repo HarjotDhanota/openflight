@@ -377,6 +377,8 @@ class Shot:
     ball_range_uncertainty_m: Optional[float] = None
     ball_range_label: Optional[str] = None
     ball_range_reason: Optional[str] = None
+    # Experimental impact provenance, not RF-time or physical-accuracy qualification.
+    impact_range_evidence: Optional[dict] = None
     # The lens's intrinsics on this shot's camera clip: "calibrated" (a checkerboard
     # calibration) or "nominal" (the listing's focal length); None without a clip. Camera
     # values follow it (source_labels.camera_club_label, launch_label).
@@ -556,6 +558,7 @@ class Shot:
             "ball_range_uncertainty_m": self.ball_range_uncertainty_m,
             "ball_range_label": self.ball_range_label,
             "ball_range_reason": self.ball_range_reason,
+            "impact_range_evidence": deepcopy(self.impact_range_evidence),
             "camera_lens_intrinsics": self.camera_lens_intrinsics,
             "iwr6843_launch_status": self.iwr6843_launch_status,
             "input_sources": deepcopy(self.input_sources),
