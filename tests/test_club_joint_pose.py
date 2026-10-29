@@ -354,3 +354,102 @@ def test_contact_split_support_names_both_used_subintervals():
         [touch, touch + 198000],
     ]
     assert all(row["split_contact_hypothesis_ns"] == touch for row in support)
+
+
+def test_assigned_current_support_outside_model_contributes_without_becoming_foreground():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    one["current_foreground"][:] = False
+    one["current_background"][:] = False
+    one["current_object_support"] = {
+        "points_px": [[20, 20], [21, 20]],
+        "owners": ["head", "head"],
+        "association_id": "conditional-current-body",
+        "observation_ids": ["own-current-change"],
+    }
+    result = solve([one], [parameters], max_evaluations=1)
+    assert result["initial_factor_squared_norms"]["object_support"] > 0
+    assert result["frames"][0]["explicit_foreground_pixels"] == 0
+    assert result["frames"][0]["current_object_support"]["assigned_head_count"] == 2
+    assert result["physical_pose"] is result["qualified_face_normal"] is result["strike"] is None
+
+
+def test_unknown_pixels_remove_assigned_head_support_without_fabricating_background():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    one["current_object_support"] = {
+        "points_px": [[20, 20]],
+        "owners": ["head"],
+        "association_id": "conditional-current-body",
+        "observation_ids": ["own-current-change"],
+    }
+    one["unknown"][20, 20] = True
+    result = solve([one], [parameters], max_evaluations=1)
+    assert result["initial_factor_squared_norms"]["object_support"] == 0
+    assert result["frames"][0]["current_object_support"]["assigned_head_count"] == 0
+
+
+def test_assigned_object_support_cache_retains_exact_factor_and_parameter_parity():
+    parameters = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, parameters)
+    one["current_object_support"] = {
+        "points_px": [[20, 20], [21, 20]],
+        "owners": ["head", "head"],
+        "association_id": "conditional-current-body",
+        "observation_ids": ["own-current-change"],
+    }
+    cached = solve([one], [parameters], max_evaluations=2, cache_exposure=True)
+    uncached = solve([one], [parameters], max_evaluations=2, cache_exposure=False)
+    assert cached["frames"] == uncached["frames"]
+    assert cached["factor_squared_norms"] == uncached["factor_squared_norms"]
+
+
+def test_joint_support_recovers_observed_upper_head_without_requiring_internal_ridge_boundary():
+    from openflight.camera._club_object_support import triangle_union_distance
+
+    truth = [0, 0, 0, 0, 0, np.log(8)]
+    one = frame(10, truth)
+    one["current_foreground"][:] = False
+    one["current_background"][:] = False
+    one["edges"][:] = False
+    one["edges"][32, 32:49] = True
+    one["edges"][39, 32:49] = True
+    one["edges"][25:40, 32] = True
+    one["edges"][25:40, 48] = True
+    one["edges"][25, 38:42] = True
+    seed = [np.pi / 3, 0, 0, 0, 0.5, np.log(8)]
+    points = np.array([[38, 25], [39, 25], [40, 25]])
+    original = solve([one], [seed], max_evaluations=30)
+    one["current_object_support"] = {
+        "points_px": points,
+        "owners": ["head"] * len(points),
+        "association_id": "conditional_upper_arc",
+        "observation_ids": ["own_current_upper_pixels"],
+    }
+    supported = solve([one], [seed], max_evaluations=30)
+
+    def missing_distance(result):
+        twist = result["phase_body_twists"][0]
+        transforms = club_rigid_motion.exposure_poses(
+            result["frames"][0]["conditional_parameters"],
+            twist,
+            twist,
+            club_rigid_motion.exposure_offsets(298, "recorded_start")[0],
+        )
+        distances = [
+            triangle_union_distance(
+                points,
+                club_pose_hypotheses.project(
+                    model()["triangles"], club_rigid_motion.to_parameters(transform), CAMERA
+                ),
+            )
+            for transform in transforms
+        ]
+        return np.min(distances, axis=0).mean()
+
+    assert missing_distance(original) > 3
+    assert missing_distance(supported) < missing_distance(original)
+    assert missing_distance(supported) <= 3.1
+    assert supported["frames"][0]["explicit_foreground_pixels"] == 0
+    assert supported["frames"][0]["intra_exposure_motion"] == "singleton_twist_not_observed"
+    assert supported["physical_pose"] is supported["strike"] is None
