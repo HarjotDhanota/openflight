@@ -1,5 +1,7 @@
 """A bright-cap seed may need a whole-disk center before the qualified fit."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -70,7 +72,7 @@ def test_only_failed_strongest_free_seed_gets_one_retry_and_rival_is_still_fitte
     assert len(found) == 1
     assert calls[1][0:2] == proposals[0]
     assert calls[1][2] == calls[0][2]
-    assert calls[1][3] == calls[0][3]
+    assert calls[1][3] == {**calls[0][3], "check_other_starts": True}
     assert abs(calls[-1][0] - calls[0][0]) > 50
 
 
@@ -80,3 +82,39 @@ def test_held_and_already_qualified_fits_do_not_get_recentered(monkeypatch, opti
 
     assert len(calls) == 2
     assert not proposals
+
+
+def test_recentered_fit_can_use_an_existing_start_when_lowest_cost_fails_gates(monkeypatch):
+    yy, xx = np.indices((96, 128), dtype=float)
+    params = np.array([64.3, 47.8, 9, np.radians(250), np.radians(55), 60, 120, 70, 0, 0])
+    image = ball_model._render(params, yy, xx)
+    calls = []
+
+    def solved(_residuals, initial, **_kwargs):
+        left = int(65.3) - int(np.ceil(2.4 * 9)) - 3
+        top = int(46.8) - int(np.ceil(2.4 * 9)) - 3
+        good = params.copy()
+        good[:2] -= [left, top]
+        if not calls:
+            good[6] = 0.0
+        result = SimpleNamespace(x=good, cost=float(len(calls)))
+        calls.append(initial)
+        return result
+
+    monkeypatch.setattr(ball_model.optimize, "least_squares", solved)
+    options = dict(
+        noise_dn=1,
+        expected_radius=None,
+        size_tolerance=0.01,
+        size_starts=None,
+        extra_light_starts=True,
+    )
+    fit = ball_model._fit_sphere(image, 65.3, 46.8, 9, **options, check_other_starts=True)
+    assert fit is not None
+    assert fit.x == pytest.approx(64.3, abs=0.5)
+    assert fit.y == pytest.approx(47.8, abs=0.5)
+    assert fit.radius_px == pytest.approx(9, abs=0.5)
+    count = len(calls)
+    calls.clear()
+    assert ball_model._fit_sphere(image, 65.3, 46.8, 9, **options) is None
+    assert len(calls) == count
