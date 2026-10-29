@@ -2,7 +2,8 @@
 
 Reuses the native-model support acquisition and fixed-hull refinement objectives.
 The current shaft-line factor is retained throughout both optimizations. Models
-and their face frames are static inputs, never deformed per image.
+and their face frames are static inputs, never deformed per image. Body and axis
+likelihood blocks use mean squared cost independently of sampling density.
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def acquire(model, outline, camera, axis_pixels, *, max_evaluations=100):
     def residual(value):
         predicted = project(vertices, value, camera)
         return np.r_[
-            (predicted @ DIRECTIONS.T).max(axis=0) - supports,
+            ((predicted @ DIRECTIONS.T).max(axis=0) - supports) / np.sqrt(len(DIRECTIONS)),
             _axis_factor(value, model, axis_pixels, camera),
         ]
 
@@ -114,7 +115,7 @@ def acquire(model, outline, camera, axis_pixels, *, max_evaluations=100):
                 {
                     "parameters": fit.x.tolist(),
                     "success": bool(fit.success),
-                    "cost": float(np.mean(residual(fit.x) ** 2)),
+                    "cost": float(np.sum(residual(fit.x) ** 2)),
                     "evaluations": int(fit.nfev),
                 }
             )
@@ -153,7 +154,9 @@ def refine(model, parameters, camera, current_edges, axis_pixels, unknown, *, ma
         hidden = np.zeros(len(pixel), bool)
         hidden[valid] = unknown[pixel[valid, 1], pixel[valid, 0]]
         delta[hidden] = 0
-        return np.r_[delta.ravel(), _axis_factor(value, model, axis_pixels, camera)]
+        return np.r_[
+            delta.ravel() / np.sqrt(len(samples)), _axis_factor(value, model, axis_pixels, camera)
+        ]
 
     lower, upper = (
         np.r_[[-2 * np.pi] * 3, [-np.inf] * 2, np.log(radius * 1.01)],
@@ -172,7 +175,7 @@ def refine(model, parameters, camera, current_edges, axis_pixels, unknown, *, ma
         "parameters": fit.x.tolist(),
         "evaluations": int(fit.nfev),
         "success": bool(fit.success),
-        "objective_rms_px": float(np.sqrt(np.mean(residual(fit.x) ** 2))),
+        "normalized_objective_norm": float(np.linalg.norm(residual(fit.x))),
         "scope": "conditional_on_static_model_and_image_evidence",
         "depth_source": "CAD_conditioned_not_measured_range",
         "axis_factor_during_refinement": bool(len(axis_pixels)),
