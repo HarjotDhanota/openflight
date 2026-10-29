@@ -4732,7 +4732,7 @@ class BoxBallLocator:
             return None
         return repr((self.camera, self.box, applied, id(_BALL_SEARCH_POOL)))
 
-    def _look_in_box(self, frames, sequence, applied, at):
+    def _look_in_box(self, frames, sequence, applied, at, on_object_hint=None):
         context = self._watch_context(frames, applied)
         bounds = self.box.bounds_px(self.camera.image_width_px, self.camera.image_height_px)
         evidence = (
@@ -4761,7 +4761,11 @@ class BoxBallLocator:
             follow=anchor,
             follow_rivals=True,
             **(
-                {"object_hint_model": self._object_hint_model, "applied_controls": applied}
+                {
+                    "object_hint_model": self._object_hint_model,
+                    "applied_controls": applied,
+                    "on_object_hint": on_object_hint,
+                }
                 if self._object_hint_model is not None and anchor is None
                 else {}
             ),
@@ -4783,6 +4787,7 @@ class BoxBallLocator:
         applied=None,
         *,
         observed_at: float | None = None,
+        on_object_hint: Callable[[dict], None] | None = None,
     ) -> dict:
         with self._lock:
             if self._last_sequence is not None and frame_sequence <= self._last_sequence:
@@ -4791,6 +4796,11 @@ class BoxBallLocator:
         look_at = started_at if observed_at is None else float(observed_at)
         if not math.isfinite(look_at) or look_at > started_at:
             raise ValueError("ball observation time must be finite and not in the future")
+
+        def publish_hint(hint):
+            if on_object_hint is not None:
+                on_object_hint(self._hint_payload(hint, frames, frame_sequence, applied, look_at))
+
         result = dict(self.brightness(frames, frame_sequence, applied))
         settled = (
             self.brightness.status()["state"] in {"settled", "limit"}
@@ -4801,7 +4811,7 @@ class BoxBallLocator:
         watch, calls, context = {"matched": False}, 0, None
         try:
             in_box, watch, calls, context = self._look_in_box(
-                frames, frame_sequence, applied, look_at
+                frames, frame_sequence, applied, look_at, publish_hint
             )
             wide = None
             if in_box.get("status") not in {"selected", "ambiguous"} and self.wide is not None:
@@ -4903,23 +4913,29 @@ class BoxBallLocator:
         }
         hint = in_box.get("diagnostics", {}).get("object_hint")
         if hint is not None:
-            hint = deepcopy(hint)
-            if self._clock() - look_at > BOX_BALL_LOOK_MAX_AGE_S:
-                hint.update(status="stale", selected=None, reason="input observation is old")
-            hint["input_identity"] = {
-                "frame_sequence": frame_sequence,
-                "frame_count": len(frames),
-                "frame_size_px": [frames.shape[2], frames.shape[1]],
-                "observed_at_monotonic": look_at,
-                "applied_controls": deepcopy(applied),
-                "camera_model": _camera_model_evidence(self.camera),
-                "patch_search": self.box.to_dict(),
-            }
-            payload["ball_observation"]["object_hint"] = hint
+            payload["ball_observation"]["object_hint"] = self._hint_payload(
+                hint, frames, frame_sequence, applied, look_at
+            )
         with self._lock:
             self._last_sequence = frame_sequence
             self._last_result = deepcopy(payload)
         return payload
+
+    def _hint_payload(self, hint, frames, sequence, applied, at):
+        hint = deepcopy(hint)
+        hint.update(metric_eligible=False, confirmable=False)
+        if self._clock() - at > BOX_BALL_LOOK_MAX_AGE_S:
+            hint.update(status="stale", selected=None, reason="input observation is old")
+        hint["input_identity"] = {
+            "frame_sequence": sequence,
+            "frame_count": len(frames),
+            "frame_size_px": [frames.shape[2], frames.shape[1]],
+            "observed_at_monotonic": at,
+            "applied_controls": deepcopy(applied),
+            "camera_model": _camera_model_evidence(self.camera),
+            "patch_search": self.box.to_dict(),
+        }
+        return hint
 
     def _hold_found(
         self, previous: Mapping, classified: Mapping, *, observed_at: float | None = None
@@ -5193,34 +5209,41 @@ def _run_ball_search(
     *,
     object_hint_model: Path | None = None,
     applied_controls=None,
+    on_object_hint: Callable[[dict], None] | None = None,
 ) -> ReferenceBallRangeResult:
     pool = _BALL_SEARCH_POOL
-    if pool is not None:
-        try:
-            if object_hint_model is not None:
-                return pool.submit(
-                    golf_ball_hint.estimate_with_hint,
+    hint = None
+    if object_hint_model is not None:
+        hint = golf_ball_hint.unavailable("search worker unavailable or disabled")
+        if pool is not None:
+            try:
+                hint = pool.submit(
+                    golf_ball_hint.safe_propose,
                     frames,
                     camera,
-                    kwargs,
-                    str(object_hint_model),
+                    kwargs["search"],
                     applied_controls,
+                    str(object_hint_model),
                 ).result()
-            return pool.submit(
+            except (BrokenProcessPool, pickle.PicklingError, TypeError, AttributeError) as exc:
+                hint = golf_ball_hint.unavailable(f"hint worker failed: {type(exc).__name__}")
+        if on_object_hint is not None:
+            on_object_hint(deepcopy(hint))
+    if pool is not None:
+        try:
+            result = pool.submit(
                 reference_ball_range.estimate_patch_ball, frames, camera, **kwargs
             ).result()
         except (BrokenProcessPool, pickle.PicklingError, TypeError, AttributeError) as exc:
             logger.warning("Ball search worker unavailable (%s); searching in-process", exc)
-    result = estimate_patch_ball(frames, camera, **kwargs)
-    if object_hint_model is not None:
-        result = replace(
-            result,
-            diagnostics={
-                **result.diagnostics,
-                "object_hint": golf_ball_hint.unavailable("search worker unavailable or disabled"),
-            },
-        )
-    return result
+            result = estimate_patch_ball(frames, camera, **kwargs)
+    else:
+        result = estimate_patch_ball(frames, camera, **kwargs)
+    return (
+        replace(result, diagnostics={**result.diagnostics, "object_hint": hint})
+        if hint is not None
+        else result
+    )
 
 
 def _guided_camera_analysis(
@@ -5234,6 +5257,7 @@ def _guided_camera_analysis(
     confirm: Mapping | None = None,
     object_hint_model: Path | None = None,
     applied_controls=None,
+    on_object_hint: Callable[[dict], None] | None = None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
     """Look for the resting ball inside the patch, and nowhere else (P8-2).
 
@@ -5290,7 +5314,11 @@ def _guided_camera_analysis(
         camera,
         kwargs,
         **(
-            {"object_hint_model": object_hint_model, "applied_controls": applied_controls}
+            {
+                "object_hint_model": object_hint_model,
+                "applied_controls": applied_controls,
+                "on_object_hint": on_object_hint,
+            }
             if object_hint_model is not None and analysis_role == "live_preview"
             else {}
         ),
@@ -5336,7 +5364,11 @@ def _guided_camera_analysis(
         "timing": {
             "detector_duration_ms": elapsed_ms,
             "clock": "host_performance_counter_duration",
-            "scope": "reference_ball_estimator_only",
+            "scope": (
+                "object_hint_then_reference_ball_estimator"
+                if object_hint_model is not None and analysis_role == "live_preview"
+                else "reference_ball_estimator_only"
+            ),
         },
         "stable_count": 0,
         "stable_span_s": 0.0,
@@ -7511,6 +7543,7 @@ class LiveView:
         self._recent_applied: deque[tuple[float | None, float | None]] = deque(maxlen=5)
         self._ball: dict | None = None
         self._association: dict | None = None
+        self._object_hint: dict | None = None
         self._analysis_image: np.ndarray | None = None
         self._analysis_frame_sequence: int | None = None
         self._frame_sequence = 0
@@ -7570,6 +7603,7 @@ class LiveView:
                     self._recent_applied.clear()
                     self._ball = None
                     self._association = None
+                    self._object_hint = None
                     self._analysis_image = None
                     self._analysis_frame_sequence = None
                     self._latest_frame_at = None
@@ -7595,6 +7629,7 @@ class LiveView:
             self._recent_applied.clear()
             self._ball = None
             self._association = None
+            self._object_hint = None
             self._analysis_image = None
             self._analysis_frame_sequence = None
             self._frame_sequence = 0
@@ -7637,6 +7672,7 @@ class LiveView:
             self._recent_applied.clear()
             self._ball = None
             self._association = None
+            self._object_hint = None
             self._analysis_image = None
             self._analysis_frame_sequence = None
             self._latest_frame_at = None
@@ -7651,6 +7687,7 @@ class LiveView:
             stop_event = self._active_stop
             threads = (("capture", self._thread), ("analyzer", self._looker))
             self._run_generation += 1
+            self._object_hint = None
         if stop_event is not None:
             stop_event.set()
         for _role, thread in threads:
@@ -7701,10 +7738,33 @@ class LiveView:
                 continue
             last_context, last_sequence, last_at = context_generation, frame_sequence, now
             frames = np.stack(recent)
+
+            def publish_hint(hint):
+                with self._lock:
+                    if (
+                        not stop_event.is_set()
+                        and generation == self._run_generation
+                        and context_generation == self._context_generation
+                        and analyzer is self._analyzer
+                        and self._arm == arm
+                        and self._error is None
+                    ):
+                        self._object_hint = deepcopy(hint)
+
             if analyzer is not None:
                 try:
                     association = dict(
-                        analyzer(frames, frame_sequence, applied, observed_at=observed_at)
+                        analyzer(
+                            frames,
+                            frame_sequence,
+                            applied,
+                            observed_at=observed_at,
+                            **(
+                                {"on_object_hint": publish_hint}
+                                if getattr(analyzer, "_object_hint_model", None) is not None
+                                else {}
+                            ),
+                        )
                         if isinstance(analyzer, BoxBallLocator)
                         else analyzer(frames, frame_sequence, applied)
                     )
@@ -7812,6 +7872,12 @@ class LiveView:
     def snapshot(self) -> tuple[np.ndarray | None, dict]:
         with self._lock:
             image, metadata = self._image, self._metadata
+            hint = deepcopy(self._object_hint)
+            if hint is not None:
+                age = time.monotonic() - hint["input_identity"]["observed_at_monotonic"]
+                hint["look_age_s"] = max(0.0, age)
+                if age > BOX_BALL_LOOK_MAX_AGE_S:
+                    hint.update(status="stale", selected=None, reason="input observation is old")
             status = {
                 "running": self.running,
                 "arm_id": self._arm.arm_id if self._arm else None,
@@ -7826,6 +7892,7 @@ class LiveView:
                 "error": self._error,
                 "ball": self._ball,
                 "association": self._association,
+                "object_hint": hint,
             }
             floor = self._black_floor
         if image is not None:
@@ -7925,6 +7992,7 @@ class LiveView:
             with self._lock:
                 if generation == self._run_generation and self._arm == arm:
                     self._error = f"{type(exc).__name__}: {exc}"
+                    self._object_hint = None
         finally:
             if camera is not None:
                 for close in ("stop", "close"):

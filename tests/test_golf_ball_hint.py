@@ -175,8 +175,22 @@ def test_every_hint_outcome_preserves_full_geometry(monkeypatch, status):
         "height_independent": True,
         "ball_center_height_m": 0.02135,
     }
-    found = hints.estimate_with_hint(
-        np.zeros((3, 400, 640), np.uint8), v3_camera(640, 400), kwargs, "unused", [(300, 4)] * 3
+
+    class Pool:
+        def submit(self, func, *args, **kwargs):
+            class Done:
+                def result(self):
+                    return func(*args, **kwargs)
+
+            return Done()
+
+    monkeypatch.setattr(ts, "_BALL_SEARCH_POOL", Pool())
+    found = ts._run_ball_search(
+        np.zeros((3, 400, 640), np.uint8),
+        v3_camera(640, 400),
+        kwargs,
+        object_hint_model=Path("unused"),
+        applied_controls=[(300, 4)] * 3,
     )
     assert replace(found, diagnostics=canonical.diagnostics) == canonical
     assert calls == [kwargs]
@@ -189,9 +203,7 @@ def test_disabled_worker_keeps_inference_out_of_server_process(monkeypatch):
     canonical = ts.ReferenceBallRangeResult("not_found", "withheld", None, (), {})
     monkeypatch.setattr(ts, "_BALL_SEARCH_POOL", None)
     monkeypatch.setattr(ts, "estimate_patch_ball", lambda *_a, **_k: canonical)
-    monkeypatch.setattr(
-        hints, "estimate_with_hint", lambda *_a: pytest.fail("no in-process inference")
-    )
+    monkeypatch.setattr(hints, "safe_propose", lambda *_a: pytest.fail("no in-process inference"))
     found = ts._run_ball_search(
         np.zeros((3, 400, 640), np.uint8), v3_camera(640, 400), {}, object_hint_model=Path("unused")
     )
@@ -256,12 +268,12 @@ def test_worker_dispatches_pinned_hint_task(monkeypatch):
     canonical = ts.ReferenceBallRangeResult("not_found", "withheld", None, (), {})
 
     class Pool:
-        def submit(self, func, *args):
+        def submit(self, func, *args, **kwargs):
             calls.append((func, args))
 
             class Done:
                 def result(self):
-                    return canonical
+                    return hints.unavailable("test") if func is hints.safe_propose else canonical
 
             return Done()
 
@@ -271,12 +283,13 @@ def test_worker_dispatches_pinned_hint_task(monkeypatch):
     ts._run_ball_search(
         frames,
         v3_camera(640, 400),
-        {},
+        {"search": image_search(640, 400)},
         object_hint_model=Path("model.onnx"),
         applied_controls=controls,
     )
-    assert calls[0][0] is hints.estimate_with_hint
-    assert calls[0][1][-2:] == ("model.onnx", controls)
+    assert calls[0][0] is hints.safe_propose
+    assert calls[0][1][-2:] == (controls, "model.onnx")
+    assert calls[1][0] is hints.ranges.estimate_patch_ball
 
 
 def test_spawn_worker_missing_model_still_returns_original_geometry(tmp_path):
