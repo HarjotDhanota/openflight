@@ -206,3 +206,12 @@ def safe_propose(frames, camera, search, applied, model_path):
         return propose(frames, camera, search, applied, model_path)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return unavailable(f"model hint failed: {type(exc).__name__}")
+
+
+def warm_model(model_path):
+    """Load/compile weights before preview use; synthetic output is never published."""
+    try:
+        detector_for(model_path).detect(np.zeros((256, 256), np.uint8))
+        return {"status": "warmed", "model_sha256": MODEL_SHA256}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return unavailable(f"model warmup failed: {type(exc).__name__}")
