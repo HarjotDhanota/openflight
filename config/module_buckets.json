@@ -866,6 +866,7 @@
   "tests/test_box_ball_identity.py": "TESTER",
   "tests/test_box_ball_watch.py": "TESTER",
   "tests/test_ball_model_batched_jacobian.py": "FUSION",
+  "tests/test_ball_model_analytic_jacobian.py": "FUSION",
   "tests/test_ball_seed_center.py": "FUSION",
   "tests/test_ball_outline_size_outdoor.py": "RESEARCH",
   "tests/test_ball_pixels.py": "FUSION",

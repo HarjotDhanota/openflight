@@ -51,7 +51,7 @@ def camera_range_estimator_policy() -> dict[str, Any]:
     """Return the camera range policy bound by qualification artifacts."""
     return {
         "name": "camera_reference_ball_size_range",
-        "version": 10,
+        "version": 13,
         "detector": "reference_ball_candidates_v2_merged_seeds",
         "seed_fits": REFERENCE_SEED_FITS,
         "search_region": "the_ground_patch_outline_only",
@@ -82,11 +82,16 @@ def camera_range_estimator_policy() -> dict[str, Any]:
         "image_box_camera_range_m": list(_FULL_RADAR_RANGE_M),
         "image_box_height_prior_used": False,
         "image_box_size_hints": "existing_window_proposals_first_never_a_height_gate",
-        "sphere_jacobian": "residual_differences_column_layout",
+        "sphere_jacobian": "analytic_negative_screen_reference_measurement_and_held_fits",
+        "sphere_jacobian_boundary_rho2": 1e-6,
         "rim_retry": "original_seed_with_unchanged_circle_gates",
         "seed_center_retry": "failed_strongest_free_seed_linear_shading_center_only",
         "seed_center_retry_limit": 1,
         "seed_center_retry_solutions": "existing_optimizer_starts_in_cost_order_with_same_gates",
+        "held_anchor_light_retry": "failed_anchor_only_same_radius_gates_alternate_lights",
+        "held_anchor_light_retry_limit": 1,
+        "held_anchor_reacquisition": "failed_held_fits_current_near_seed_center_reference_fit",
+        "held_anchor_reacquisition_limit": 1,
     }
 
 
