@@ -558,7 +558,8 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
         if check_other_starts or reference_jacobian or expected_radius is not None
         else _analytic_jacobian
     )
-    sizes = (1.0,) if expected_radius else tuple(size_starts or (0.85, 1.0, 1.2))
+    screen = BATCHED_JACOBIAN and jacobian_factory is _analytic_jacobian and size_starts is None
+    sizes = (1.0,) if expected_radius or screen else tuple(size_starts or (0.85, 1.0, 1.2))
     # an off-centre seed can turn the lean the wrong way: also start upper left and right
     lights = [azimuth] + [
         math.radians(a)

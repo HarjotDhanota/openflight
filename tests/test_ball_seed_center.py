@@ -120,7 +120,7 @@ def test_recentered_fit_can_use_an_existing_start_when_lowest_cost_fails_gates(m
     assert fit.radius_px == pytest.approx(9, abs=0.5)
     count = len(calls)
     calls.clear()
-    assert ball_model._fit_sphere(image, 65.3, 46.8, 9, **options) is None
+    assert ball_model._fit_sphere(image, 65.3, 46.8, 9, **options, reference_jacobian=True) is None
     assert len(calls) == count
 
 
