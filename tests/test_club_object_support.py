@@ -57,6 +57,21 @@ def test_reflected_native_view_preserves_distance_and_triangle_winding_is_irrele
     )
 
 
+def test_pruning_keeps_long_skinny_triangle_with_distant_centroid():
+    long = np.array([[[0, 0], [1000, 0], [0, 0.01]]], float)
+    decoys = np.array([[[980 + i, 5], [981 + i, 5], [980 + i, 6]] for i in range(16)], float)
+    triangles = np.concatenate([long, decoys])
+    assert triangle_union_distance([[990, 0.00001], [990, -1]], triangles) == pytest.approx([0, 1])
+
+
+def test_explicit_empty_current_candidate_set_creates_no_background_observation():
+    candidates = owned(np.empty((0, 2)), [])
+    residual = exposure_support_residual(
+        rectangle()[None], np.zeros((1, 40, 50), bool), candidates, depth_order="head_front"
+    )
+    assert residual.size == 0
+
+
 @pytest.mark.parametrize("scale", [1, 0.25])
 def test_continuous_factor_recovers_upper_arc_twelve_native_pixels_from_wrong_ridge(scale):
     points = np.array([[20, 8], [22, 8], [24, 8]], float) * scale
