@@ -852,6 +852,61 @@ def _median_pairwise_slope(times: np.ndarray, values: np.ndarray) -> float:
     return float(np.median(slopes))
 
 
+def _launch_positions_m(ranges_m, bearing_rad, tee_position_m, vertical_launch_deg, roll_rad):
+    tee_x, tee_y, tee_z = tee_position_m
+    cosine = math.cos(roll_rad)
+    if tee_x <= 0 or abs(cosine) < 1e-6 or not -90 < vertical_launch_deg < 90:
+        raise ValueError("horizontal geometry has no supported forward branch")
+    rise = math.tan(math.radians(vertical_launch_deg))
+    positions = []
+    for radius, bearing in zip(ranges_m, bearing_rad, strict=True):
+        lateral = np.polynomial.Polynomial(
+            [radius * math.sin(bearing) / cosine, -math.tan(roll_rad)]
+        )
+        if abs(rise) < 1e-8:
+            roots = [complex(tee_z)]
+            forward = None
+        else:
+            # Eliminate x between the range sphere and the launch cone; retain
+            # only roots satisfying the original, unsquared forward equations.
+            forward = np.polynomial.Polynomial(
+                [
+                    rise**2 * (radius**2 - 2 * lateral.coef[0] * tee_y + tee_x**2 + tee_y**2)
+                    - tee_z**2,
+                    -2 * rise**2 * lateral.coef[1] * tee_y + 2 * tee_z,
+                    -(rise**2 + 1),
+                ]
+            ) / (2 * rise**2 * tee_x)
+            equation = (
+                forward * forward
+                + lateral * lateral
+                + np.polynomial.Polynomial([-(radius**2), 0, 1])
+            )
+            roots = equation.roots()
+        candidates = []
+        for root in roots:
+            if abs(root.imag) > 1e-7:
+                continue
+            z = float(root.real)
+            y = float(lateral(z))
+            square = radius**2 - y**2 - z**2
+            if square < 0:
+                continue
+            x = math.sqrt(square)
+            residual = z - tee_z - rise * math.hypot(x - tee_x, y - tee_y)
+            if x < tee_x - 1e-7 or abs(residual) > 1e-7:
+                continue
+            if forward is not None and abs(forward(z) - x) > 1e-7:
+                continue
+            point = np.array([x, y, z])
+            if not any(np.linalg.norm(point - other) < 1e-6 for other in candidates):
+                candidates.append(point)
+        if len(candidates) != 1:
+            raise ValueError("horizontal geometry has missing or ambiguous forward roots")
+        positions.append(candidates[0])
+    return np.asarray(positions)
+
+
 def launch_direction_deg(  # pylint: disable=too-many-arguments
     times_s: np.ndarray,
     ranges_m: np.ndarray,
@@ -868,19 +923,27 @@ def launch_direction_deg(  # pylint: disable=too-many-arguments
     height from the vertical launch along the line from ``tee_position_m`` (forward,
     lateral, height from the phase centre). Gravity is ignored.
     """
-    tee_x_m, tee_y_m, tee_z_m = tee_position_m
-    rise = math.tan(math.radians(vertical_launch_deg))
-    board_lateral_m = ranges_m * np.sin(bearing_rad)
-    height_m = np.full_like(ranges_m, tee_z_m)
-    for _ in range(4):  # the lateral and the height depend on each other: settle both
-        lateral_m = antennas.world_lateral_m(board_lateral_m, height_m, roll_rad)
-        downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
-        travelled_m = np.hypot(np.maximum(downrange_m - tee_x_m, 0.0), lateral_m - tee_y_m)
-        height_m = tee_z_m + travelled_m * rise
-    lateral_m = antennas.world_lateral_m(board_lateral_m, height_m, roll_rad)
-    downrange_m = np.sqrt(np.maximum(ranges_m**2 - lateral_m**2 - height_m**2, 0.0))
-    v_lateral = _median_pairwise_slope(times_s, lateral_m)
-    v_forward = _median_pairwise_slope(times_s, downrange_m)
+    times_s, ranges_m, bearing_rad = (
+        np.asarray(value, dtype=float) for value in (times_s, ranges_m, bearing_rad)
+    )
+    if (
+        times_s.ndim != 1
+        or times_s.size < 3
+        or ranges_m.shape != times_s.shape
+        or bearing_rad.shape != times_s.shape
+        or not np.all(np.diff(times_s) > 0)
+        or not all(
+            np.isfinite(value).all() for value in (times_s, ranges_m, bearing_rad, tee_position_m)
+        )
+        or not np.isfinite([vertical_launch_deg, roll_rad]).all()
+        or np.any(ranges_m <= 0)
+    ):
+        raise ValueError("horizontal geometry requires finite aligned samples at distinct times")
+    positions = _launch_positions_m(
+        ranges_m, bearing_rad, tee_position_m, vertical_launch_deg, roll_rad
+    )
+    v_lateral = _median_pairwise_slope(times_s, positions[:, 1])
+    v_forward = _median_pairwise_slope(times_s, positions[:, 0])
     return math.degrees(math.atan2(v_lateral, v_forward))
 
 
@@ -948,14 +1011,17 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
         np.asarray([shot.track.range_at(time_s, geometry.range_res_m) for time_s in t_array])
         - cal.range_bias_m
     )
-    angle_deg = launch_direction_deg(
-        t_array,
-        ranges_m,
-        bearing_rad,
-        tee_position_m,
-        vertical_launch_deg,
-        roll_rad=cal.roll_rad,
-    )
+    try:
+        angle_deg = launch_direction_deg(
+            t_array,
+            ranges_m,
+            bearing_rad,
+            tee_position_m,
+            vertical_launch_deg,
+            roll_rad=cal.roll_rad,
+        )
+    except ValueError:
+        return None, coherence, "hlcmf_v2_geometry_unresolved"
     if coherence < HORIZONTAL_COHERENCE_MIN:
         return angle_deg, coherence, "hlcmf_v2_low_coherence"
     return angle_deg, coherence, "hlcmf_v2_accepted"
