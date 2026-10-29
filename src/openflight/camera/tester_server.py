@@ -50,6 +50,7 @@ from openflight.camera import (
     camera_roll,
     camera_tilt,
     free_play_ladder,
+    golf_ball_hint,
     ground_patch,
     lens_profiles,
     lens_settings,
@@ -4658,6 +4659,7 @@ class BoxBallLocator:
         *,
         clock: Callable[[], float] = time.monotonic,
         on_change: Callable[[dict], None] | None = None,
+        object_hint_model: Path | None = None,
     ):
         self.brightness = brightness
         # the live view knows this locator as its analyzer: brightness changes are its
@@ -4668,6 +4670,7 @@ class BoxBallLocator:
         self._follow = BallFollowMemory()
         self._clock = clock
         self._on_change = on_change
+        self._object_hint_model = object_hint_model
         self._started = clock()
         self._lock = threading.Lock()
         # the found streak, the misses since the last found look, and its time
@@ -4752,7 +4755,16 @@ class BoxBallLocator:
         self._watch_selected = None
         anchor = self._follow.get()
         _result, analysis = _guided_camera_analysis(
-            frames, self.camera, self.box, follow=anchor, follow_rivals=True
+            frames,
+            self.camera,
+            self.box,
+            follow=anchor,
+            follow_rivals=True,
+            **(
+                {"object_hint_model": self._object_hint_model, "applied_controls": applied}
+                if self._object_hint_model is not None and anchor is None
+                else {}
+            ),
         )
         calls = 1
         if anchor is not None and analysis.get("status") not in {"selected", "ambiguous"}:
@@ -4889,6 +4901,21 @@ class BoxBallLocator:
                 "watch": watch,
             },
         }
+        hint = in_box.get("diagnostics", {}).get("object_hint")
+        if hint is not None:
+            hint = deepcopy(hint)
+            if self._clock() - look_at > BOX_BALL_LOOK_MAX_AGE_S:
+                hint.update(status="stale", selected=None, reason="input observation is old")
+            hint["input_identity"] = {
+                "frame_sequence": frame_sequence,
+                "frame_count": len(frames),
+                "frame_size_px": [frames.shape[2], frames.shape[1]],
+                "observed_at_monotonic": look_at,
+                "applied_controls": deepcopy(applied),
+                "camera_model": _camera_model_evidence(self.camera),
+                "patch_search": self.box.to_dict(),
+            }
+            payload["ball_observation"]["object_hint"] = hint
         with self._lock:
             self._last_sequence = frame_sequence
             self._last_result = deepcopy(payload)
@@ -5160,17 +5187,40 @@ def configure_ball_search_workers(workers: int) -> None:
 
 
 def _run_ball_search(
-    frames: np.ndarray, camera: BallPlaneCamera, kwargs: Mapping
+    frames: np.ndarray,
+    camera: BallPlaneCamera,
+    kwargs: Mapping,
+    *,
+    object_hint_model: Path | None = None,
+    applied_controls=None,
 ) -> ReferenceBallRangeResult:
     pool = _BALL_SEARCH_POOL
     if pool is not None:
         try:
+            if object_hint_model is not None:
+                return pool.submit(
+                    golf_ball_hint.estimate_with_hint,
+                    frames,
+                    camera,
+                    kwargs,
+                    str(object_hint_model),
+                    applied_controls,
+                ).result()
             return pool.submit(
                 reference_ball_range.estimate_patch_ball, frames, camera, **kwargs
             ).result()
         except (BrokenProcessPool, pickle.PicklingError, TypeError, AttributeError) as exc:
             logger.warning("Ball search worker unavailable (%s); searching in-process", exc)
-    return estimate_patch_ball(frames, camera, **kwargs)
+    result = estimate_patch_ball(frames, camera, **kwargs)
+    if object_hint_model is not None:
+        result = replace(
+            result,
+            diagnostics={
+                **result.diagnostics,
+                "object_hint": golf_ball_hint.unavailable("search worker unavailable or disabled"),
+            },
+        )
+    return result
 
 
 def _guided_camera_analysis(
@@ -5182,6 +5232,8 @@ def _guided_camera_analysis(
     follow: Mapping | None = None,
     follow_rivals: bool = False,
     confirm: Mapping | None = None,
+    object_hint_model: Path | None = None,
+    applied_controls=None,
 ) -> tuple[ReferenceBallRangeResult, dict]:
     """Look for the resting ball inside the patch, and nowhere else (P8-2).
 
@@ -5233,7 +5285,16 @@ def _guided_camera_analysis(
             key: float(confirm[key]) for key in ("x_px", "y_px", "diameter_px")
         }
     started_at = time.perf_counter()
-    result = _run_ball_search(frames, camera, kwargs)
+    result = _run_ball_search(
+        frames,
+        camera,
+        kwargs,
+        **(
+            {"object_hint_model": object_hint_model, "applied_controls": applied_controls}
+            if object_hint_model is not None and analysis_role == "live_preview"
+            else {}
+        ),
+    )
     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
     bounds = list(patch.bounds_px(camera.image_width_px, camera.image_height_px))
     return result, {
@@ -8133,6 +8194,7 @@ def create_app(
     lis3dh_mount_path: Path | None = None,
     require_lis3dh_orientation: bool = False,
     send_dir: Path | None = None,
+    ball_hint_model: Path | None = None,
 ) -> Flask:
     """Build the standalone tester service.
 
@@ -9210,6 +9272,7 @@ def create_app(
                 ground_patch.PatchSearch.from_record(record),
                 ground_patch.PatchSearch.from_record(wide),
                 on_change=lambda ball: box_ball_last.__setitem__(tester_id, ball),
+                object_hint_model=ball_hint_model,
             )
             analyzer = locator
         else:
@@ -12525,6 +12588,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--tee-range-qualification", type=Path, default=None)
     parser.add_argument(
+        "--ball-hint-model",
+        type=Path,
+        default=None,
+        help="Opt-in 320px golf ONNX object hints; geometry and confirmation remain unchanged",
+    )
+    parser.add_argument(
         "--ball-search-workers",
         type=int,
         default=2,
@@ -12625,6 +12694,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tester_control_port=args.port,
             bind_host=args.host,
             internal_sync_clock_package=args.internal_sync_clock_package,
+            ball_hint_model=args.ball_hint_model,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()

@@ -244,24 +244,16 @@ def _lit_ball_near_size(  # pylint: disable=too-many-arguments,too-many-position
     return candidates[0] if candidates else None
 
 
-def reference_ball_candidates(  # pylint: disable=too-many-locals
+def reference_ball_seeds(  # pylint: disable=too-many-locals
     frames: np.ndarray,
     *,
     expected_diameters_px: Sequence[float],
     roi: tuple[int, int, int, int] | None = None,
     seed_filter: SeedFilter | None = None,
-    max_fits: int = REFERENCE_SEED_FITS,
-    hold_diameter_px: float | None = None,
-    confirm_anchor: tuple[float, float, float] | None = None,
-    rival_fraction: float = CONFIRM_RIVAL_FRACTION,
+    max_seeds: int = REFERENCE_SEED_FITS,
     preferred_diameters_px: Sequence[float] | None = None,
-) -> list[ReferenceBall]:
-    """Enumerate distinct lit-sphere fits over a caller-supplied size range.
-
-    ``seed_filter`` drops impossible places before they use up ``max_fits``. ``confirm_anchor``
-    (x, y, diameter px) fits that held ball plus rivals scoring ``rival_fraction`` of its score.
-    Preferred diameters add prioritized proposals without constraining the fitted size.
-    """
+) -> tuple[np.ndarray, float, list[tuple[float, float, float, float]]]:
+    """Return contrast proposals and current image/noise, without fitting geometry."""
     if frames.dtype != np.uint8 or frames.ndim != 3 or frames.shape[0] < 3:
         raise ValueError("frames must be uint8 with shape (n, height, width) and n >= 3")
     preferred = (
@@ -320,7 +312,7 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
             )
 
     margin = ALL_ROUND_MARGIN_NOISE * picture_noise / factor
-    cap = CONFIRM_MAX_SEEDS if confirm_anchor is not None else max_fits
+    cap = max_seeds
     kept: list[tuple[float, float, float, float]] = []
     for score, x, y, radius, row, col in sorted(
         seeds, key=lambda item: (2 * item[3] in preferred, item[0]), reverse=True
@@ -333,6 +325,35 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
         if len(kept) >= cap:
             break
 
+    return image, picture_noise, kept
+
+
+def reference_ball_candidates(  # pylint: disable=too-many-locals
+    frames: np.ndarray,
+    *,
+    expected_diameters_px: Sequence[float],
+    roi: tuple[int, int, int, int] | None = None,
+    seed_filter: SeedFilter | None = None,
+    max_fits: int = REFERENCE_SEED_FITS,
+    hold_diameter_px: float | None = None,
+    confirm_anchor: tuple[float, float, float] | None = None,
+    rival_fraction: float = CONFIRM_RIVAL_FRACTION,
+    preferred_diameters_px: Sequence[float] | None = None,
+) -> list[ReferenceBall]:
+    """Enumerate distinct lit-sphere fits over a caller-supplied size range.
+
+    ``seed_filter`` drops impossible places before they use up ``max_fits``. ``confirm_anchor``
+    (x, y, diameter px) fits that held ball plus rivals scoring ``rival_fraction`` of its score.
+    Preferred diameters add prioritized proposals without constraining the fitted size.
+    """
+    image, picture_noise, kept = reference_ball_seeds(
+        frames,
+        expected_diameters_px=expected_diameters_px,
+        roi=roi,
+        seed_filter=seed_filter,
+        max_seeds=CONFIRM_MAX_SEEDS if confirm_anchor is not None else max_fits,
+        preferred_diameters_px=preferred_diameters_px,
+    )
     held = hold_diameter_px / 2.0 if hold_diameter_px is not None else None
     # (x, y, start radius, held radius, size starts, extra light starts)
     targets: list[tuple[float, float, float, float | None, tuple[float, ...] | None, bool]]
