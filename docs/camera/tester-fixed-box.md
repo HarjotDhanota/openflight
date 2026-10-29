@@ -319,8 +319,12 @@ with confirmation disabled and no current position estimate. This host delivery
 age does not resolve the sensor's exposure/readout timestamp convention or
 qualify camera-to-radar synchronization.
 
-The sphere fitter's batched numerical derivative uses the same residual
-arithmetic and matrix layout as its scalar reference. A free-size fit can drift
+The sphere fitter uses direct derivatives to screen ordinary free-size fits,
+retaining column layout and the same blur and clipping. Near a square-root rim
+boundary it uses the existing batched numerical derivative. Every positive
+screen is recomputed with the reference derivative before supplying geometry.
+Held-size fits and scoped retries retain the reference derivative throughout.
+A free-size fit can drift
 into a cast shadow; if its first rim search fails, the original candidate centre
 is tried with the same circle limits and ray-consensus requirement. Missing rim
 evidence never substitutes the seed as a measurement.
@@ -330,11 +334,19 @@ shading model may propose a different starting centre. It uses both ball halves
 and background row structure observed at the patch margins. Its size and shading
 are discarded: the original lit-sphere and rim checks must qualify the new centre
 at the original starting size. There is at most one additional fit per search;
-the other proposals still run, including rivals. Successful original fits,
-held-size fits and independent held-ball confirmation are unchanged. Estimator
-policy version 10 invalidates older qualification artifacts after these changes.
-Only the recentered retry checks its already-computed optimizer starts in cost
-order when the cheapest fails the existing gates; it does not add solver starts.
+the other proposals still run, including rivals. If the single-light fit for a held
+confirmation anchor fails, one retry uses the existing alternate light directions
+at the same held radius and tolerance. Both live following and independent Save
+still fit all their selected rivals. Only these scoped retries check their
+computed optimizer starts in cost order when the cheapest fails the existing
+gates. The held-anchor retry adds light starts, not a wider radius search.
+If both held fits fail and the current image supplies a coarse proposal near the
+anchor, one whole-disk center proposal can initialize an independent free-size
+reference fit. Its radius starts from that current proposal, not the old held
+measurement. The same sphere/rim qualification and all selected rival fits still
+run; live identity, Save consistency and input-age checks remain required.
+Failure still falls back to the full search. Successful held fits do not use this
+reacquisition path. Estimator policy version 13 invalidates older qualifications.
 Recorded development replays do not establish field accuracy or live readiness.
 
 Stationary setup preview uses the available frame exposure budget before raising

@@ -350,6 +350,26 @@ def reference_ball_candidates(  # pylint: disable=too-many-locals
                 fit = fit_lit_ball(
                     image, *center, start_radius, **fit_kwargs, check_other_starts=True
                 )
+        elif fit is None and index == 0 and held_radius is not None and confirm_anchor is not None:
+            fit = fit_lit_ball(
+                image,
+                x,
+                y,
+                start_radius,
+                **{**fit_kwargs, "extra_light_starts": True, "check_other_starts": True},
+            )
+            if fit is None and near:
+                _score, seed_x, seed_y, seed_radius = near[0]
+                center = propose_ball_center(image, seed_x, seed_y, seed_radius)
+                if center is not None:
+                    fit = fit_lit_ball(
+                        image,
+                        *center,
+                        seed_radius,
+                        noise_dn=picture_noise,
+                        expected_radius=None,
+                        check_other_starts=True,
+                    )
         if fit is None:
             continue
         candidate = ReferenceBall(

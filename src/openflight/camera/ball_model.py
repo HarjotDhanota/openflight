@@ -148,6 +148,64 @@ def _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper):
     return jacobian
 
 
+def _analytic_jacobian(yy, xx, patch, use, noise_dn, lower, upper):
+    """Differentiate the same renderer; retain numerical differences at its square-root rim."""
+    fallback = _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper)
+    xx0, yy0 = xx - xx.mean(), yy - yy.mean()
+
+    def jacobian(params):  # pylint: disable=too-many-locals
+        cx, cy, radius, azimuth, tilt, shade, diffuse, ground, ground_x, ground_y = params
+        dx, dy = xx - cx, yy - cy
+        rho2 = (dx * dx + dy * dy) / (radius * radius)
+        if np.any(np.abs(1.0 - rho2) < 1e-6):
+            return fallback(params)
+        nz = np.sqrt(np.clip(1.0 - rho2, 0.0, None))
+        inv_nz = np.zeros_like(nz)
+        np.divide(1.0, nz, out=inv_nz, where=nz > 0.0)
+        sin_az, cos_az = np.sin(azimuth), np.cos(azimuth)
+        sin_tilt, cos_tilt = np.sin(tilt), np.cos(tilt)
+        light_x, light_y, light_z = sin_tilt * cos_az, sin_tilt * sin_az, cos_tilt
+        nx, ny = dx / radius, dy / radius
+        irradiance = nx * light_x + ny * light_y + nz * light_z
+        lit = np.maximum(irradiance, 0.0)
+        ball = shade + diffuse * lit
+        floor = ground + ground_x * xx0 + ground_y * yy0
+        distance = np.hypot(dx, dy)
+        cover = np.clip(radius + 0.5 - distance, 0.0, 1.0)
+        edge = (cover > 0.0) & (cover < 1.0)
+        inv_distance = np.zeros_like(distance)
+        np.divide(1.0, distance, out=inv_distance, where=distance > 0.0)
+        weight = cover * diffuse * (irradiance > 0.0)
+        derivatives = np.stack(
+            [
+                edge * dx * inv_distance * (ball - floor)
+                + weight * (-light_x / radius + light_z * dx / radius**2 * inv_nz),
+                edge * dy * inv_distance * (ball - floor)
+                + weight * (-light_y / radius + light_z * dy / radius**2 * inv_nz),
+                edge * (ball - floor)
+                + weight
+                * (
+                    -nx * light_x / radius
+                    - ny * light_y / radius
+                    + light_z * rho2 / radius * inv_nz
+                ),
+                weight * (-nx * light_y + ny * light_x),
+                weight * (nx * cos_tilt * cos_az + ny * cos_tilt * sin_az - nz * sin_tilt),
+                cover,
+                cover * lit,
+                1.0 - cover,
+                (1.0 - cover) * xx0,
+                (1.0 - cover) * yy0,
+            ]
+        )
+        derivatives = ndimage.gaussian_filter(derivatives, (0.0, EDGE_BLUR_PX, EDGE_BLUR_PX))
+        rendered = ndimage.gaussian_filter(cover * ball + (1.0 - cover) * floor, EDGE_BLUR_PX)
+        derivatives[:, (rendered <= 0.0) | (rendered >= 255.0)] = 0.0
+        return np.asfortranarray(derivatives[:, use].T / noise_dn)
+
+    return jacobian
+
+
 def _bin2(image: np.ndarray) -> np.ndarray:
     height, width = (image.shape[0] // 2) * 2, (image.shape[1] // 2) * 2
     return (
@@ -246,11 +304,7 @@ def fit_lit_ball(
     A free size, and its centre, are then measured on the ball's outline (``measure_rim``).
     ``check_other_starts`` checks already-computed starts if the cheapest fails the gates.
     """
-    fit = _fit_sphere(
-        image,
-        x,
-        y,
-        radius,
+    options = dict(
         noise_dn=noise_dn,
         expected_radius=expected_radius,
         size_tolerance=size_tolerance,
@@ -258,6 +312,9 @@ def fit_lit_ball(
         extra_light_starts=extra_light_starts,
         check_other_starts=check_other_starts,
     )
+    fit = _fit_sphere(image, x, y, radius, **options)
+    if fit is not None and BATCHED_JACOBIAN and expected_radius is None and not check_other_starts:
+        fit = _fit_sphere(image, x, y, radius, **options, reference_jacobian=True)
     if fit is None or expected_radius:
         return fit
     return measure_rim(image, fit, seed_center=(x, y))
@@ -425,6 +482,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
     size_starts: Sequence[float] | None,
     extra_light_starts: bool,
     check_other_starts: bool = False,
+    reference_jacobian: bool = False,
 ) -> LitBall | None:
     """The lit sphere's own fit: centre, size and light, and the look-alike gates."""
     binning = 2 if max(radius, expected_radius or 0.0) > 12.0 else 1
@@ -440,6 +498,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
             size_starts=size_starts,
             extra_light_starts=extra_light_starts,
             check_other_starts=check_other_starts,
+            reference_jacobian=reference_jacobian,
         )
         if fit is None:
             return None
@@ -494,6 +553,11 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
 
     best = None
     solutions = []
+    jacobian_factory = (
+        _batched_jacobian
+        if check_other_starts or reference_jacobian or expected_radius is not None
+        else _analytic_jacobian
+    )
     sizes = (1.0,) if expected_radius else tuple(size_starts or (0.85, 1.0, 1.2))
     # an off-centre seed can turn the lean the wrong way: also start upper left and right
     lights = [azimuth] + [
@@ -537,7 +601,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
                 residuals,
                 initial,
                 jac=(
-                    _batched_jacobian(yy, xx, patch, use, noise_dn, lower, upper)
+                    jacobian_factory(yy, xx, patch, use, noise_dn, lower, upper)
                     if BATCHED_JACOBIAN
                     else "2-point"
                 ),

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from openflight.camera import ball_model, club_motion
-from tests.test_camera_ball_model import _lit_ball
+from tests.test_camera_ball_model import _lit_ball, _lit_strip
 
 
 def test_dark_side_and_background_edge_contribute_to_the_proposed_center():
@@ -35,12 +35,16 @@ def test_center_proposal_handles_native_and_coarser_scales(radius):
     assert center[1] == pytest.approx(cy, abs=0.1 * radius)
 
 
-def _search(monkeypatch, *, held=None, first_succeeds=False):
+def _two_disks():
     yy, xx = np.indices((160, 200))
     image = np.full((160, 200), 40.0)
     image[(xx - 70) ** 2 + (yy - 100) ** 2 < 12**2] = 100
     image[(xx - 140) ** 2 + (yy - 100) ** 2 < 12**2] = 90
-    frames = np.repeat(image[None].astype(np.uint8), 5, axis=0)
+    return np.repeat(image[None].astype(np.uint8), 5, axis=0)
+
+
+def _search(monkeypatch, *, held=None, first_succeeds=False):
+    frames = _two_disks()
     calls, proposals = [], []
     accepted = ball_model.LitBall(70, 100, 12, 270, 60, 80, 40, 40, 2)
 
@@ -118,3 +122,82 @@ def test_recentered_fit_can_use_an_existing_start_when_lowest_cost_fails_gates(m
     calls.clear()
     assert ball_model._fit_sphere(image, 65.3, 46.8, 9, **options) is None
     assert len(calls) == count
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_failed_held_anchor_gets_one_bounded_light_retry_without_losing_rival(monkeypatch, recover):
+    frames = _two_disks()
+    calls = []
+
+    def fitted(_image, x, y, radius, **options):
+        calls.append((x, y, radius, options))
+        if recover and options.get("check_other_starts"):
+            return ball_model.LitBall(x, y, radius, 270, 60, 80, 40, 40, 2)
+        return None
+
+    monkeypatch.setattr(club_motion, "fit_lit_ball", fitted)
+    monkeypatch.setattr(club_motion, "propose_ball_center", lambda *_args: None)
+    found = club_motion.reference_ball_candidates(
+        frames, expected_diameters_px=[24], max_fits=2, confirm_anchor=(70, 100, 24)
+    )
+    assert len(calls) == 3
+    assert calls[0][:3] == calls[1][:3] == (70, 100, 12)
+    assert calls[1][3] == {**calls[0][3], "extra_light_starts": True, "check_other_starts": True}
+    assert calls[-1][0] > 130
+    assert len(found) == int(recover)
+
+
+@pytest.mark.parametrize("outcome", ["qualified", "unqualified", "no_center"])
+def test_failed_anchor_reacquires_from_current_seed_and_still_checks_rivals(monkeypatch, outcome):
+    calls, proposals = [], []
+
+    def fitted(_image, x, y, radius, **options):
+        calls.append((x, y, radius, options))
+        if outcome == "qualified" and (x, y) == (71.5, 102.5):
+            return ball_model.LitBall(x, y, radius, 270, 60, 80, 40, 40, 2)
+        return None
+
+    def proposed(_image, x, y, radius):
+        proposals.append((x, y, radius))
+        return None if outcome == "no_center" else (71.5, 102.5)
+
+    monkeypatch.setattr(club_motion, "fit_lit_ball", fitted)
+    monkeypatch.setattr(club_motion, "propose_ball_center", proposed)
+    found = club_motion.reference_ball_candidates(
+        _two_disks(), expected_diameters_px=[24], max_fits=2, confirm_anchor=(69, 98, 26)
+    )
+    assert len(proposals) == 1
+    assert abs(proposals[0][0] - 70) < 3
+    assert abs(proposals[0][1] - 100) < 3
+    assert proposals[0][2] == 12
+    assert calls[0][:3] == calls[1][:3] == (69, 98, 13)
+    assert len(calls) == (3 if outcome == "no_center" else 4)
+    assert calls[-1][0] > 130
+    if outcome != "no_center":
+        assert calls[2][:3] == (71.5, 102.5, 12)
+        assert calls[2][3] == {
+            "noise_dn": calls[0][3]["noise_dn"],
+            "expected_radius": None,
+            "check_other_starts": True,
+        }
+    assert len(found) == int(outcome == "qualified")
+
+
+def test_absent_anchor_never_gets_a_center_from_a_distant_proposal(monkeypatch):
+    monkeypatch.setattr(club_motion, "fit_lit_ball", lambda *_args, **_kwargs: None)
+
+    def unexpected(*_args):
+        pytest.fail("a distant object cannot provide a local reacquisition center")
+
+    monkeypatch.setattr(club_motion, "propose_ball_center", unexpected)
+    assert not club_motion.reference_ball_candidates(
+        _two_disks(), expected_diameters_px=[24], max_fits=2, confirm_anchor=(10, 10, 24)
+    )
+
+
+def test_a_held_anchor_cannot_turn_an_empty_lit_strip_into_a_ball():
+    image = np.clip(np.round(_lit_strip()), 0, 255).astype(np.uint8)
+    frames = np.repeat(image[None], 5, axis=0)
+    assert not club_motion.reference_ball_candidates(
+        frames, expected_diameters_px=[42], confirm_anchor=(160, 120, 42)
+    )
