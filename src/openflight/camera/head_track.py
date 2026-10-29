@@ -545,6 +545,17 @@ def _track_hosel(
     return {index: points[index] for index in range(first, last + 1)}
 
 
+@dataclass(frozen=True)
+class ShaftAxisObservation:
+    """Current projected line and search endpoint; neither is physical hosel registration."""
+
+    point_px: tuple[float, float]
+    direction_px: tuple[float, float]
+    end_px: Optional[tuple[float, float]]
+    support_pixels_px: tuple[tuple[int, int], ...]
+    refined: bool
+
+
 def _shaft_end(
     mask: np.ndarray,
     walk_mask: np.ndarray,
@@ -554,7 +565,28 @@ def _shaft_end(
     gap_px: float,
     golfer_on_left: bool,
 ) -> Optional[tuple[float, float]]:
-    """The lower end of the longest steep line leaning toward the golfer, on its refit axis."""
+    """Preserve the existing distal-end contract for delivery callers."""
+    observation = observe_shaft_axis(
+        mask,
+        walk_mask,
+        min_length_px=min_length_px,
+        band_px=band_px,
+        gap_px=gap_px,
+        golfer_on_left=golfer_on_left,
+    )
+    return observation.end_px if observation is not None else None
+
+
+def observe_shaft_axis(
+    mask: np.ndarray,
+    walk_mask: np.ndarray,
+    *,
+    min_length_px: float,
+    band_px: float,
+    gap_px: float,
+    golfer_on_left: bool,
+) -> Optional[ShaftAxisObservation]:
+    """Export the existing lower-shaft line fit and its actual supporting pixels."""
     binary = mask.astype(np.uint8) * 255
     lines = cv2.HoughLinesP(
         binary,
@@ -592,12 +624,25 @@ def _shaft_end(
             & (along <= length - 3.0 * band_px)
         )
         if int(near.sum()) < 10:
-            return float(lower[0]), float(lower[1])
+            return ShaftAxisObservation(
+                tuple(origin),
+                tuple(unit),
+                (float(lower[0]), float(lower[1])),
+                tuple(zip(xs[near].tolist(), ys[near].tolist())),
+                False,
+            )
         slope, intercept = np.polyfit(along[near], across[near], 1)
         origin = origin + normal * intercept
         unit = (unit + normal * slope) / math.hypot(1.0, slope)
         normal = np.array([-unit[1], unit[0]])
-    return _axis_end(walk_mask, origin, unit, start=0.5 * length, gap_px=gap_px)
+    end = _axis_end(walk_mask, origin, unit, start=0.5 * length, gap_px=gap_px)
+    return ShaftAxisObservation(
+        tuple(origin),
+        tuple(unit),
+        end,
+        tuple(zip(xs[near].tolist(), ys[near].tolist())),
+        True,
+    )
 
 
 def _axis_end(
