@@ -1174,6 +1174,7 @@ class CameraCaptureRuntime:
             fps=settings.fps,
             armed_profile=settings.enforced_profile,
             black_floor_dn=SENSOR_BLACK_LEVEL_DN,
+            ball_exposure_bias_stops=config.get("ball_exposure_bias_stops", 0.0),
         )
         self._swing_policy = sx.SwingExposurePolicy(envelope)
         logger.info(

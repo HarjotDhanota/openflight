@@ -32,6 +32,8 @@ BALL_CLIPPED_MAX_PCT = 5.0
 # Target for the core's p95, as a share of the clip range: clear of clipping, well above the gate.
 TARGET_PEAK_FRACTION = 0.55
 HOLD_BAND = (0.40, 0.75)
+MAX_BALL_EXPOSURE_BIAS_STOPS = 0.5
+MAX_BIASED_HOLD_FRACTION = 0.90
 # A clipped ball's light is only a lower bound: each look darkens by this factor.
 SATURATED_STEP = 0.25
 CONFIRM_LOOKS = 2
@@ -81,6 +83,7 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
     config = json.loads(source.read_text(encoding="utf-8"))
     if config.get("schema") != CONFIG_SCHEMA:
         raise ValueError(f"{source} must use schema {CONFIG_SCHEMA}")
+    _ball_exposure_bias(config.get("ball_exposure_bias_stops", 0.0))
     for arm_id, mode in (config.get("modes") or {}).items():
         derived = _derived_ceiling_us(config, arm_id)
         if int(mode.get("blur_ceiling_us", -1)) != derived:
@@ -89,6 +92,16 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
                 f"but its budget and speeds give {derived} us"
             )
     return config
+
+
+def _ball_exposure_bias(value: Any) -> float:
+    try:
+        bias = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ball exposure bias must be between 0 and 0.5 stops") from exc
+    if not math.isfinite(bias) or not 0 <= bias <= MAX_BALL_EXPOSURE_BIAS_STOPS:
+        raise ValueError("ball exposure bias must be between 0 and 0.5 stops")
+    return bias
 
 
 def blur_ceiling_us(config: Mapping[str, Any], arm_id: str | None) -> int:
@@ -269,6 +282,21 @@ class Envelope:
     frame_period_us: int
     black_floor_dn: float = BLACK_LEVEL_DN
     ceiling_source: str = "blur_ceiling"
+    ball_exposure_bias_stops: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "ball_exposure_bias_stops", _ball_exposure_bias(self.ball_exposure_bias_stops)
+        )
+
+    @property
+    def target_peak_fraction(self) -> float:
+        return TARGET_PEAK_FRACTION * 2**self.ball_exposure_bias_stops
+
+    @property
+    def hold_band(self) -> tuple[float, float]:
+        factor = 2**self.ball_exposure_bias_stops
+        return HOLD_BAND[0] * factor, min(MAX_BIASED_HOLD_FRACTION, HOLD_BAND[1] * factor)
 
     @property
     def floor_setting(self) -> Setting:
@@ -296,8 +324,9 @@ class Envelope:
             "frame_period_us": self.frame_period_us,
             "ladder_us": list(self.ladder),
             "black_floor_dn": self.black_floor_dn,
-            "target_peak_fraction": TARGET_PEAK_FRACTION,
-            "hold_band": list(HOLD_BAND),
+            "target_peak_fraction": self.target_peak_fraction,
+            "hold_band": list(self.hold_band),
+            "ball_exposure_bias_stops": self.ball_exposure_bias_stops,
             "gate_dn": BALL_GATE_DN,
         }
 
@@ -309,6 +338,7 @@ def build_envelope(
     fps: float,
     armed_profile: Mapping[str, Any] | None = None,
     black_floor_dn: float = BLACK_LEVEL_DN,
+    ball_exposure_bias_stops: float = 0.0,
 ) -> Envelope:
     """The policy's box: sensor minimum to the lowest of the ceilings, gain 1 to the cap."""
     if fps <= 0:
@@ -335,6 +365,7 @@ def build_envelope(
         frame_period_us=frame_period_us,
         black_floor_dn=float(black_floor_dn),
         ceiling_source=source,
+        ball_exposure_bias_stops=ball_exposure_bias_stops,
     )
 
 
@@ -516,7 +547,7 @@ def choose_setting(peak_index: float, median_index: float, envelope: Envelope) -
     ``peak_index`` and ``median_index`` are the ball's p95 and median in DN above black
     per microsecond x gain.
     """
-    target_dn = TARGET_PEAK_FRACTION * envelope.clip_range_dn
+    target_dn = envelope.target_peak_fraction * envelope.clip_range_dn
     wanted = target_dn / peak_index if peak_index > 0 and math.isfinite(peak_index) else math.inf
     setting = setting_for_product(wanted, envelope)
     fraction, signal = _predict(setting, peak_index, median_index, envelope)
@@ -638,7 +669,7 @@ class SwingExposurePolicy:
 
     def _hysteresis(self) -> dict:
         return {
-            "band": list(HOLD_BAND),
+            "band": list(self.envelope.hold_band),
             "confirm_looks": self.confirm_looks,
             "pending_direction": self._pending_direction,
             "pending_count": self._pending_count,
@@ -739,13 +770,13 @@ class SwingExposurePolicy:
         in_band = (
             not reading.saturated
             and not reading.under_gate
-            and HOLD_BAND[0] <= fraction <= HOLD_BAND[1]
+            and env.hold_band[0] <= fraction <= env.hold_band[1]
         )
         at_floor = current.exposure_us <= env.ladder[0] and current.gain <= env.gain_min + 1e-6
         at_top = (
             current.exposure_us >= env.exposure_ceiling_us and current.gain >= env.gain_cap - 1e-6
         )
-        direction = "darker" if (reading.saturated or fraction > HOLD_BAND[1]) else "brighter"
+        direction = "darker" if (reading.saturated or fraction > env.hold_band[1]) else "brighter"
         severe = reading.saturated or reading.under_gate
         target: Setting | None = None
         note = ""
@@ -919,14 +950,14 @@ class SwingExposurePolicy:
             f"Ball-driven: {verb} {after.text()}; the ball's peak "
             f"{'should reach' if target is not None else 'is'} "
             f"{(predicted_fraction if target is not None else reading.peak_fraction):.2f} "
-            f"of clip (target {TARGET_PEAK_FRACTION:g})"
+            f"of clip (target {env.target_peak_fraction:g})"
         )
-        if after.same_as(env.top_setting) and predicted_fraction < HOLD_BAND[0]:
+        if after.same_as(env.top_setting) and predicted_fraction < env.hold_band[0]:
             text += (
                 f"; at the blur ceiling ({env.exposure_ceiling_us} us) and the gain cap the "
                 f"ball stays under target, above the {BALL_GATE_DN:.0f} DN gate"
             )
-        elif after.same_as(env.floor_setting) and predicted_fraction > HOLD_BAND[1]:
+        elif after.same_as(env.floor_setting) and predicted_fraction > env.hold_band[1]:
             text += "; at the sensor's shortest exposure and gain 1"
         if note:
             text += f" ({note})"

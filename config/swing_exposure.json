@@ -1,5 +1,6 @@
 {
   "schema": "openflight.swing_exposure_config.v1",
+  "ball_exposure_bias_stops": 0.0,
   "rule": "Use the lowest exposure unless more is needed: the resting ball is the light meter; the shortest exposure first, gain before exposure, never past the blur ceiling (owner, 13 Oct 2026).",
   "blur_budget_mm": {
     "approach": 4.0,

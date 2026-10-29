@@ -2,6 +2,7 @@
 
 import json
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -48,6 +49,68 @@ def reading(*, signal, peak, exposure_us, gain, clipped_pct=0.0, black=BLACK):
         center_px=(640.0, 600.0),
         diameter_px=40.0,
     )
+
+
+def test_half_stop_bias_raises_the_target_without_relaxing_the_blur_or_gain_limits():
+    base = envelope()
+    biased = sx.build_envelope(
+        limits(), blur_ceiling_us=294, fps=120.0, ball_exposure_bias_stops=0.5
+    )
+    before = sx.choose_setting(0.15, 0.1, base)
+    after = sx.choose_setting(0.15, 0.1, biased)
+    assert after.wanted_product / before.wanted_product == pytest.approx(math.sqrt(2))
+    assert after.predicted_peak_fraction == pytest.approx(0.55 * math.sqrt(2), abs=0.01)
+    assert after.setting.exposure_us <= base.exposure_ceiling_us
+    assert after.setting.gain <= base.gain_cap
+    assert sx.choose_setting(1e-4, 1e-4, biased).setting == base.top_setting
+    record = biased.to_dict()
+    assert record["ball_exposure_bias_stops"] == 0.5
+    assert record["target_peak_fraction"] == pytest.approx(0.55 * math.sqrt(2))
+
+
+def test_half_stop_policy_reaches_its_target_and_holds_without_oscillating():
+    env = replace(envelope(), ball_exposure_bias_stops=0.5)
+    policy = sx.SwingExposurePolicy(env)
+    current = sx.Setting(104, 8)
+    base_reading = reading(signal=80, peak=0.55 * CLIP_RANGE, exposure_us=104, gain=8)
+    first = policy.decide(base_reading, current)
+    assert first.target is not None and first.target.product > current.product
+    scale = first.target.product / current.product
+    settled = reading(
+        signal=80 * scale,
+        peak=0.55 * CLIP_RANGE * scale,
+        exposure_us=first.target.exposure_us,
+        gain=first.target.gain,
+    )
+    assert policy.decide(settled, first.target).target is None
+    assert policy.decide(settled, first.target).target is None
+    assert first.hysteresis["band"][0] > sx.HOLD_BAND[0]
+    assert first.hysteresis["band"][1] < 1
+
+
+def test_half_stop_bias_still_backs_off_from_actual_ball_clipping():
+    policy = sx.SwingExposurePolicy(replace(envelope(), ball_exposure_bias_stops=0.5))
+    current = sx.Setting(104, 8)
+    clipped = reading(signal=180, peak=234, exposure_us=104, gain=8, clipped_pct=8)
+    decision = policy.decide(clipped, current)
+    assert decision.target is not None and decision.target.product < current.product
+    assert not decision.analysis_eligible
+
+
+@pytest.mark.parametrize("stops", [-0.1, 0.5001, 1.0, float("nan"), float("inf")])
+def test_unqualified_bias_settings_are_refused(stops):
+    with pytest.raises(ValueError, match="bias"):
+        sx.build_envelope(limits(), blur_ceiling_us=294, fps=120, ball_exposure_bias_stops=stops)
+
+
+def test_bias_is_opt_in_and_invalid_saved_config_is_rejected(tmp_path):
+    config = sx.load_config()
+    assert config.get("ball_exposure_bias_stops", 0.0) == 0.0
+    config["ball_exposure_bias_stops"] = 1.0
+    path = tmp_path / "invalid-bias.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="bias"):
+        sx.load_config(path)
 
 
 @pytest.mark.parametrize("arm_id", ["arm5", "arm6", None])
