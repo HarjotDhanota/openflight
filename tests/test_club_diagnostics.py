@@ -64,6 +64,21 @@ def test_missing_frame_timing_has_named_refusal_without_inventing_it():
     assert result["frames"] == []
 
 
+def test_uncertain_ball_veto_retains_an_unexcluded_club_acquisition_branch():
+    current = clip()
+    current.prepared.masks.ball_vetoes = {index: (56, 42, 15) for index in range(8, 12)}
+    before = current.prepared.frames.copy()
+    result = diagnostic.analyse_clip(current)
+    for row in result["frames"]:
+        assert row["ball_identity_branch"] == "ball_excluded"
+        assert len(row["alternatives"]) == 1
+        alternative = row["alternatives"][0]
+        assert alternative["ball_identity_branch"] == "ball_identity_uncertain"
+        assert alternative["ball_veto_used"] is None
+        assert alternative["association"]["physical_pose"] is None
+    assert np.array_equal(current.prepared.frames, before)
+
+
 def test_no_prepared_window_keeps_legacy_refusal_and_has_no_prediction():
     assert diagnostic.analyse_clip(SimpleNamespace(prepared=None))["frames"] == []
 
