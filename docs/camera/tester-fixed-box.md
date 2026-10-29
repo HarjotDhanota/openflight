@@ -352,8 +352,18 @@ reference fit. Its radius starts from that current proposal, not the old held
 measurement. The same sphere/rim qualification and all selected rival fits still
 run; live identity, Save consistency and input-age checks remain required.
 Failure still falls back to the full search. Successful held fits do not use this
-reacquisition path. Estimator policy version 14 invalidates older qualifications.
+reacquisition path. Estimator policy version 15 invalidates older qualifications.
 Recorded development replays do not establish field accuracy or live readiness.
+
+A dark marking can supply the strongest edge inside the top of the ball. If
+the original flank edges already agree with the fitted circle on both sides,
+the top's inward edge can be checked against a circle through local edge peaks
+of either contrast sign. This requires the existing circle bounds, at least
+16 agreeing rays across the arc, and support in the top and both flank regions.
+Peak strength must exceed the image noise bound. The original signed brightness,
+misfit, radius-offset and curvature thresholds still apply. This recovery does
+not apply to outward top edges or unsupported flanks. It changes rim evidence
+selection, not the thresholds; saved-case success is not general qualification.
 
 Stationary setup preview uses the available frame exposure budget before raising
 gain, including rebalancing an already bright high-gain preview. At 120 fps the

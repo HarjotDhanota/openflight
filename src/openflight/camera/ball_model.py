@@ -635,7 +635,7 @@ def _fit_sphere(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
         step = _lit_rim_step(patch, cx, cy, r, azimuth)
         if step < max(MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn, MIN_RIM_STEP_FRACTION * diffuse):
             return None
-        turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth)
+        turns, offsets = _lit_rim_offsets(patch, cx, cy, r, azimuth, noise_dn=noise_dn)
         if (
             float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
             or _rim_flank_bulge(turns, offsets) > MAX_RIM_FLANK_BULGE_FRACTION
@@ -677,7 +677,7 @@ def _lit_rim_step(patch: np.ndarray, cx: float, cy: float, r: float, azimuth: fl
 
 
 def _lit_rim_offsets(
-    patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float
+    patch: np.ndarray, cx: float, cy: float, r: float, azimuth: float, *, noise_dn: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Where the lit rim's edge lies on rays either side of the light: each ray's turn
     from the light in degrees, and its edge's distance past the circle over the radius."""
@@ -690,7 +690,55 @@ def _lit_rim_offsets(
     values = ndimage.map_coordinates(smooth, [ys.ravel(), xs.ravel()], order=1, mode="nearest")
     falls = -np.gradient(values.reshape(xs.shape), 0.25, axis=1)
     edges = radii[np.argmax(falls, axis=1)]
-    return turns, (edges - r) / r
+    offsets = (edges - r) / r
+    return _marked_rim_offsets(turns, offsets, falls, xs, ys, cx, cy, r, noise_dn)
+
+
+def _marked_rim_offsets(  # pylint: disable=too-many-arguments,too-many-locals
+    turns, offsets, falls, xs, ys, cx, cy, radius, noise_dn
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recover an ink-obscured top only when both original flanks follow the circle."""
+    top = np.abs(turns) <= RIM_TOP_HALF_ARC_DEG
+    low, high = RIM_FLANK_ARC_DEG
+    flanks = [(turns >= low) & (turns <= high), (turns <= -low) & (turns >= -high)]
+    if (
+        _rim_flank_bulge(turns, offsets) <= MAX_RIM_FLANK_BULGE_FRACTION
+        or float(np.median(np.abs(offsets))) > MAX_RIM_OFFSET_FRACTION
+        or float(np.median(offsets[top])) >= -MAX_RIM_OFFSET_FRACTION
+        or any(
+            np.count_nonzero(np.abs(offsets[side]) <= MAX_RIM_OFFSET_FRACTION)
+            < np.count_nonzero(side) / 2
+            for side in flanks
+        )
+    ):
+        return turns, offsets
+    # Ink can reverse the local edge's contrast. Require a measured circle across
+    # the arc; choosing whichever peak is nearest the predicted radius is not evidence.
+    strength = np.abs(falls)
+    threshold = np.maximum(
+        MIN_RIM_STEP_NOISE_MULTIPLE * noise_dn,
+        MIN_RIM_STEP_FRACTION * strength.max(axis=1),
+    )
+    rows, index = np.nonzero(
+        (strength[:, 1:-1] >= strength[:, :-2])
+        & (strength[:, 1:-1] > strength[:, 2:])
+        & (strength[:, 1:-1] >= threshold[:, None])
+    )
+    index += 1
+    edges = np.column_stack([rows, xs[rows, index], ys[rows, index], strength[rows, index]])
+    circle = _outline_circle(edges, len(turns), cx, cy, radius)
+    if circle is None:
+        return turns, offsets
+    chosen = _rays_agreeing(
+        edges, len(turns), circle, max(RIM_SIZE_TOLERANCE_PX, RIM_SIZE_TOLERANCE_FRACTION * radius)
+    )
+    keep = chosen >= 0
+    if np.count_nonzero(keep) < RIM_SIZE_MIN_RAYS or any(
+        np.count_nonzero(keep & region) < 2 for region in [top, *flanks]
+    ):
+        return turns, offsets
+    selected = edges[chosen[keep]]
+    return turns[keep], (np.hypot(selected[:, 1] - cx, selected[:, 2] - cy) - radius) / radius
 
 
 def _rim_flank_bulge(turns: np.ndarray, offsets: np.ndarray) -> float:
