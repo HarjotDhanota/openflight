@@ -37,6 +37,102 @@ RIG = json.loads(
 CLIP = "camera_20261020_100001_000_001"
 
 
+def test_explicit_optics_candidate_is_not_silently_ignored(tmp_path):
+    from tests.camera_helpers import calibration_artifact
+
+    root = write_session(tmp_path)
+    clip = session.find_clips(root)[0]
+    run = session.read_run(clip.run_dir)
+    options = session.Options(ball=(320, 200, 26))
+    options.optical_calibration = calibration_artifact()
+    session.prepare_clip(clip, {clip.run_dir: run}, {}, options)
+    assert clip.error == "calibrated_optics: raw ball override requires rectified coordinates"
+    assert clip.prepared is None
+
+
+def test_capture_bound_calibrated_context_reaches_impact_and_live_diagnostics(tmp_path):
+    from openflight.camera.calibrated_projection import build_calibrated_camera_model
+    from openflight.camera.fusion_processing import build_context
+    from openflight.camera.impact_live import LiveAnalyser
+    from openflight.rig_geometry import geometry_fingerprint
+    from tests.camera_helpers import calibration_artifact, camera_placement, mode_profile
+    from tests.test_calibrated_projection import _capture_mode
+    from tests.test_camera_fusion_processing import _context_kwargs
+
+    root = write_session(tmp_path)
+    clip = session.find_clips(root)[0]
+    run = session.read_run(clip.run_dir)
+    profile = mode_profile()
+    profile["crop_readout_mapping"].update(
+        scaler_crop="not_applicable_raw_stream", driver_vertical_offset_px=174
+    )
+    artifact = calibration_artifact(profile)
+    model = build_calibrated_camera_model(
+        artifact, camera_placement(), observed_pitch_deg=7, observed_roll_deg=-3
+    )
+    metadata_path = clip.path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    with np.load(clip.path / "frames.npz", allow_pickle=False) as archive:
+        count = len(archive["frames"])
+    mode = _capture_mode(model.projection.mode_profile)
+    for key, values in mode["frames"].items():
+        mode["frames"][key] = [values[0]] * count
+    metadata["capture_mode"] = mode
+    metadata_path.write_text(json.dumps(metadata))
+    geometry = _context_kwargs()["geometry"].with_calibrated_model(
+        model.snapshot,
+        {
+            "status": "unverified",
+            "reasons": ["calibration remains unqualified"],
+            "mode_profile_sha256": model.projection.mode_profile["sha256"],
+        },
+    )
+    shot = run.shots[1]
+    shot["camera_fusion_context"] = build_context(
+        **{
+            **_context_kwargs(),
+            "geometry": geometry,
+            "shot_number": 1,
+            "session_uuid": run.start["session_uuid"],
+            "capture_npz_sha256": shot["impact_range_evidence"]["camera_capture_sha256"],
+        }
+    )
+    job = {
+        "session_uuid": run.start["session_uuid"],
+        "shot_number": 1,
+        "clip_path": str(clip.path),
+        "shot": shot,
+        "start": run.start["config"],
+    }
+    reading = LiveAnalyser(analysis_max_width=320).analyse(job)
+    decision = reading["optics_input_decision"]
+    assert decision["applied"] and not decision["research_override"]
+    assert decision["depth_origin_source"] == "recorded_calibrated_placement"
+    assert decision["analysis_binning_factor"] == 2
+    assert reading["range_input_decision"]["accepted"]
+    assert reading["dynamic_lie"]["status"] == "not_measured"
+    assert (
+        reading["dynamic_lie"]["reason"]
+        == "rectified optics need a full-placement shaft-plane estimator"
+    )
+    context = shot["camera_fusion_context"]
+    context["capture_npz_sha256"] = "b" * 64
+    context.pop("sha256")
+    context["sha256"] = geometry_fingerprint(context)
+    refused = LiveAnalyser().analyse(job)
+    assert refused["status"] == "rejected"
+    assert "does not match" in refused["optics_input_decision"]["reason"]
+    assert not refused["optics_input_decision"]["applied"]
+    shot["calibrated_camera_status"] = "rejected"
+    shot["camera_fusion_context"] = {"available": False, "reason": "mode mismatch"}
+    refused = LiveAnalyser().analyse(job)
+    assert refused["status"] == "rejected"
+    assert (
+        refused["optics_input_decision"]["reason"]
+        == "declared calibrated camera was rejected upstream"
+    )
+
+
 def _rig_parameters() -> dict:
     return {**RIG, "iwr_offset_mm": [0.0, 0.0, 0.0], "lens_height_above_floor_mm": 95.0}
 

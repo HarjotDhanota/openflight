@@ -144,6 +144,7 @@ def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, ha
 
     from openflight.camera.impact_live import LiveAnalyser
     from tests.every_metric import fusion_shot
+    from tests.impact_range_fixtures import bind_test_range
     from tests.test_impact_live import Session
 
     job = Session(tmp_path).job(handedness=hand)
@@ -153,6 +154,7 @@ def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, ha
         frames=frames,
         exposure_us=np.full(len(frames), 300.0),
     )
+    bind_test_range(job["shot"], Path(job["clip_path"]) / "frames.npz", job["session_uuid"])
     reading = LiveAnalyser().analyse(job)
     assert reading["status"] == "rejected"
     assert reading["reason_code"] == "building_the_head_outline"

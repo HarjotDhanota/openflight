@@ -42,6 +42,7 @@ import numpy as np
 from openflight.ballistics import MPH_TO_MPS
 from openflight.camera import impact_location as il
 from openflight.camera.impact_angle_evidence import ANGLE_SIGMA_BY_STATUS, AngleEvidence
+from openflight.rig_geometry import geometry_fingerprint
 
 SCHEMA = "openflight.impact_location.v2"
 ANCHOR_SCHEMA = "openflight.face_centre_anchors.v1"
@@ -295,7 +296,12 @@ def focal_px(
 
 
 def ball_depth_mm(
-    rig, ball: il.RestingBall, camera: il.ImpactCamera, slant_range_mm: float
+    rig,
+    ball: il.RestingBall,
+    camera: il.ImpactCamera,
+    slant_range_mm: float,
+    *,
+    radar_offset_mm=None,
 ) -> float | None:
     """The resting ball's depth ahead of the lens: its ray meets the IWR's range sphere."""
     ray = np.array(
@@ -306,7 +312,10 @@ def ball_depth_mm(
         ]
     )
     ray /= np.linalg.norm(ray)
-    offset = np.asarray(rig.iwr_offset_mm or (0.0, 0.0, 0.0), dtype=float)
+    offset = np.asarray(
+        (rig.iwr_offset_mm or (0.0, 0.0, 0.0)) if radar_offset_mm is None else radar_offset_mm,
+        dtype=float,
+    )
     b = float(ray @ offset)
     discriminant = b * b - float(offset @ offset) + slant_range_mm**2
     if discriminant <= 0.0:
@@ -455,6 +464,7 @@ class Options:  # pylint: disable=too-many-instance-attributes
     template_scope: str = "club"
     lens_id: str | None = None
     analysis_max_width: int | None = None
+    optical_calibration: Mapping[str, Any] | None = None
 
 
 def bin_frames(frames: np.ndarray, factor: int) -> np.ndarray:
@@ -554,17 +564,70 @@ def prepare_clip(  # pylint: disable=too-many-locals
     clip: Clip, runs: dict[Path, RunRecord], ladder: dict[str, dict], options: Options
 ) -> None:
     """Fill the clip's inputs from its session and prepare it, or record why not."""
-    frames, _metadata = _load_frames(clip)
+    frames, metadata = _load_frames(clip)
     if frames is None:
         return
-    if options.analysis_max_width and frames.shape[2] > options.analysis_max_width:
-        clip.extra["recorded_frame_size"] = clip.frame_size
-        frames = bin_frames(frames, math.ceil(frames.shape[2] / options.analysis_max_width))
-        clip.frame_size = f"{frames.shape[2]}x{frames.shape[1]}"
     run = runs.get(clip.run_dir) if clip.run_dir is not None else None
     run = run or RunRecord({}, {}, {}, {}, None)
     clip.shot_number = run.captures.get(clip.shot_id)
     shot = run.shots.get(clip.shot_number, {}) if clip.shot_number is not None else {}
+    from . import impact_optics  # noqa: PLC0415
+
+    rectified, camera, radar_offset = None, None, None
+    decision = clip.extra["optics_input_decision"] = {
+        "applied": False,
+        "physical_qualified": False,
+        "reason": "no_recorded_optical_candidate",
+    }
+    try:
+        model = impact_optics.recorded_model(
+            shot, run.start.get("session_uuid"), clip.extra.get("capture_npz_sha256")
+        )
+        if model is not None and options.optical_calibration is not None:
+            raise ValueError("research candidate cannot replace recorded calibrated optics")
+        artifact = model.snapshot["artifact"] if model is not None else options.optical_calibration
+        if artifact is not None:
+            if options.ball is not None:
+                raise ValueError("raw ball override requires rectified coordinates")
+            mode = impact_optics.check_mode(
+                frames,
+                metadata,
+                artifact,
+                research_override=options.optical_calibration is not None,
+            )
+            rectified = impact_optics.rectify(frames, artifact)
+            frames, camera = rectified.frames, rectified.camera
+            clip.mirrored = False
+            decision.update(
+                rectified.decision,
+                mode_evidence=mode,
+                research_override=options.optical_calibration is not None,
+                reason=None,
+            )
+            clip.extra["optics_template_key"] = geometry_fingerprint(rectified.decision)
+            if model is not None:
+                radar_offset = (
+                    model.optical_to_world_lfu.T
+                    @ (model.radar_origin_lfu - model.camera_origin_lfu)
+                    * 1000
+                )
+                decision["depth_origin_source"] = "recorded_calibrated_placement"
+                decision["placement_applied"] = True
+                decision["placement_scope"] = "ball_depth_only"
+            else:
+                decision["depth_origin_source"] = "session_rig_unqualified"
+    except (ValueError, TypeError, KeyError) as exc:
+        decision["reason"] = str(exc)
+        clip.error = f"calibrated_optics: {exc}"
+        return
+    if options.analysis_max_width and frames.shape[2] > options.analysis_max_width:
+        clip.extra["recorded_frame_size"] = clip.frame_size
+        factor = math.ceil(frames.shape[2] / options.analysis_max_width)
+        frames = bin_frames(frames, factor)
+        clip.frame_size = f"{frames.shape[2]}x{frames.shape[1]}"
+        if rectified is not None:
+            camera = rectified.binned_camera(factor)
+            decision["analysis_binning_factor"] = factor
     handed, handed_source = shot_handedness(shot, run.start)
     clip.handedness = options.handedness or handed
     clip.extra["handedness_source"] = "command_line" if options.handedness else handed_source
@@ -585,8 +648,9 @@ def prepare_clip(  # pylint: disable=too-many-locals
         return
     rig, rig_source = session_rig(run.start)
     height, width = frames.shape[1:]
-    focal, focal_source = focal_px(run.start, rig, int(width), lens_id=options.lens_id)
-    camera = il.ImpactCamera(focal, ((width - 1) / 2.0, (height - 1) / 2.0), focal_source)
+    if camera is None:
+        focal, focal_source = focal_px(run.start, rig, int(width), lens_id=options.lens_id)
+        camera = il.ImpactCamera(focal, ((width - 1) / 2.0, (height - 1) / 2.0), focal_source)
     clip.extra["rig_source"] = rig_source
     range_m, sigma_m, clip.range_source = shot_range_m(
         shot,
@@ -598,11 +662,13 @@ def prepare_clip(  # pylint: disable=too-many-locals
     if options.ball is not None:
         clip.ball, clip.ball_source = il.RestingBall(*options.ball), "command_line"
     else:
-        clip.ball = _find_ball(clip, frames, camera, rig, range_m, ladder)
+        clip.ball = _find_ball(clip, frames, camera, rig, range_m, {} if rectified else ladder)
     if clip.ball is None:
         return
     if range_m:
-        clip.range_mm = ball_depth_mm(rig, clip.ball, camera, range_m * 1000.0)
+        clip.range_mm = ball_depth_mm(
+            rig, clip.ball, camera, range_m * 1000.0, radar_offset_mm=radar_offset
+        )
         clip.range_sigma_mm = (sigma_m or il.DEFAULT_RANGE_SIGMA_MM / 1000.0) * 1000.0
     lens_height = _number(getattr(rig, "lens_height_above_floor_mm", None))
     clip.face = shot_face_inputs(
@@ -632,10 +698,14 @@ def prepare_clip(  # pylint: disable=too-many-locals
         name=clip.shot_id,
         club=clip.club,
     )
-    from openflight.camera.dynamic_lie import estimate_dynamic_lie  # noqa: PLC0415
+    from openflight.camera.dynamic_lie import estimate_dynamic_lie, unavailable  # noqa: PLC0415
 
-    clip.extra["dynamic_lie"] = estimate_dynamic_lie(
-        clip.prepared, pitch_deg=rig.boresight_pitch_deg, geometry_source=rig_source
+    clip.extra["dynamic_lie"] = (
+        unavailable("rectified optics need a full-placement shaft-plane estimator")
+        if rectified is not None
+        else estimate_dynamic_lie(
+            clip.prepared, pitch_deg=rig.boresight_pitch_deg, geometry_source=rig_source
+        )
     )
 
 
@@ -669,6 +739,7 @@ def result_row(
         "dynamic_lie": clip.extra.get("dynamic_lie"),
         "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
         "range_input_decision": clip.extra.get("range_input_decision", {}),
+        "optics_input_decision": clip.extra.get("optics_input_decision", {}),
     }
     if location is None:
         reason = clip.error or "not_analysed"
@@ -701,7 +772,9 @@ def result_row(
 
 
 def _group(clip: Clip, scope: str) -> str:
-    return clip.frame_size if scope == "session" else f"{clip.club}_{clip.frame_size}"
+    key = clip.frame_size if scope == "session" else f"{clip.club}_{clip.frame_size}"
+    optics = clip.extra.get("optics_template_key")
+    return f"{key}_{optics}" if optics else key
 
 
 def analyse_session(
