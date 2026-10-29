@@ -158,6 +158,74 @@ def _bin2(image: np.ndarray) -> np.ndarray:
     )
 
 
+def propose_ball_center(  # pylint: disable=too-many-locals
+    image: np.ndarray, x: float, y: float, radius: float
+) -> tuple[float, float] | None:
+    """A whole-disk starting center, never a qualified center or size measurement.
+
+    Fit linear shading over both ball halves and row structure sampled at the
+    patch margins. Only the geometric center initializes a subsequent lit fit.
+    """
+    factor = max(1, math.ceil(radius / 10.0))
+    if factor > 1:
+        height, width = (image.shape[0] // factor) * factor, (image.shape[1] // factor) * factor
+        image = (
+            image[:height, :width]
+            .reshape(height // factor, factor, width // factor, factor)
+            .mean(axis=(1, 3))
+        )
+    x, y, radius = (x + 0.5) / factor - 0.5, (y + 0.5) / factor - 0.5, radius / factor
+    reach = math.ceil(3.0 * radius) + 3
+    top, left = max(0, int(y) - reach), max(0, int(x) - reach)
+    patch = image[top : int(y) + reach + 1, left : int(x) + reach + 1].astype(float)
+    if min(patch.shape) < 8 or np.ptp(patch) == 0.0:
+        return None
+    yy, xx = np.indices(patch.shape, dtype=float)
+    margin = max(3, round(0.1 * patch.shape[1]))
+    rows = ndimage.gaussian_filter1d(
+        np.median(np.hstack([patch[:, :margin], patch[:, -margin:]]), axis=1), 0.7
+    )
+    rows = rows[:, None] - np.median(rows)
+    xx, yy = xx + left - x, yy + top - y
+    target = patch.ravel()
+
+    def residual(params):
+        dx, dy = xx - params[0], yy - params[1]
+        r = params[2]
+        nz = np.sqrt(np.clip(1.0 - (dx * dx + dy * dy) / (r * r), 0.0, None))
+        cover = np.clip(r + 0.5 - np.hypot(dx, dy), 0.0, 1.0)
+        basis = np.stack(
+            [
+                cover,
+                cover * dx / r,
+                cover * dy / r,
+                cover * nz,
+                1.0 - cover,
+                (1.0 - cover) * xx,
+                (1.0 - cover) * yy,
+                (1.0 - cover) * np.broadcast_to(rows, xx.shape),
+            ],
+            axis=-1,
+        )
+        basis = ndimage.gaussian_filter(basis, (0.7, 0.7, 0.0)).reshape(-1, 8)
+        coefficients = np.linalg.lstsq(basis, target, rcond=None)[0]
+        return basis @ coefficients - target
+
+    try:
+        result = optimize.least_squares(
+            residual,
+            [0.0, 0.0, radius],
+            bounds=([-radius, -radius, 0.5 * radius], [radius, radius, 2.0 * radius]),
+            max_nfev=100,
+        )
+    except (ValueError, np.linalg.LinAlgError):
+        return None
+    dx, dy, _radius = result.x
+    if not result.success or math.hypot(dx, dy) > radius:
+        return None
+    return float((x + dx + 0.5) * factor - 0.5), float((y + dy + 0.5) * factor - 0.5)
+
+
 def fit_lit_ball(
     image: np.ndarray,
     x: float,
