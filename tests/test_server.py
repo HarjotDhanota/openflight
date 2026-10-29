@@ -812,7 +812,7 @@ class TestIWR6843ShotIntegration:
             angle_deg=18.5,
             horizontal_deg=2.25,
             horizontal_confidence=0.63,
-            horizontal_status="hlcmf_v0_accepted",
+            horizontal_status="hlcmf_v1_accepted",
             n_snapshots=18,
             n_frames=5,
             component_std_deg=1.4,
@@ -6326,6 +6326,21 @@ class TestIwrAzimuthCalibration:
         assert shot.iwr6843_horizontal_deg is None
         server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
         assert shot.launch_angle_horizontal == pytest.approx(2.25)
+
+    @pytest.mark.parametrize("status", ["hlcmf_v3_wide_model_unqualified", None, "future_unknown"])
+    def test_an_unqualified_model_diagnostic_is_experimental_and_not_fused(
+        self, monkeypatch, status
+    ):
+        shot = self._run(
+            monkeypatch,
+            phase_reference=-0.5,
+            horizontal_deg=35,
+            horizontal_status=status,
+        )
+        assert shot.launch_angle_horizontal == 35
+        assert shot.launch_angle_horizontal_source == "radar_model_unqualified"
+        assert shot.iwr6843_horizontal_deg is None
+        assert shot.to_dict()["metrics"]["launch_horizontal"]["status"] == "experimental"
 
     def test_uncalibrated_radar_horizontal_and_path_are_marked(self, monkeypatch):
         shot = self._run(monkeypatch, phase_reference=None)

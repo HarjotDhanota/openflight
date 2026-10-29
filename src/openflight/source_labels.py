@@ -44,6 +44,7 @@ CENTRE_STRIKE_NOTE = "assumes a centre-face strike"
 # labelled "experimental" (Q3, 25 Oct 2026) with every output built on them.
 WEAK_HORIZONTAL_SOURCES = {
     "radar_low_coherence": "low-coherence",
+    "radar_model_unqualified": "horizontal model or status not qualified",
     "camera_low_consensus": "low-consensus",
 }
 

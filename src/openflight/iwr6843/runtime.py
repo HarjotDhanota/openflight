@@ -65,23 +65,27 @@ def horizontal_confidence_from(coherence: float | None) -> float:
 
 LOW_COHERENCE_HORIZONTAL = "hlcmf_v2_low_coherence"
 # Recorded sessions carry the superseded late-flight bearing's label.
-LOW_COHERENCE_HORIZONTAL_STATUSES = frozenset({"hlcmf_v1_low_coherence", LOW_COHERENCE_HORIZONTAL})
+LOW_COHERENCE_HORIZONTAL_STATUSES = frozenset(
+    {"hlcmf_v1_low_coherence", LOW_COHERENCE_HORIZONTAL, "hlcmf_v3_low_motion_coherence"}
+)
 
 
 def camera_horizontal_input(measurement) -> tuple[float | None, float | None]:
-    """The IWR horizontal and confidence camera fusion may use; a low-coherence
-    horizontal is shown, labelled, but never weighed against the camera."""
+    """Only explicitly accepted, finite horizontal measurements enter camera fusion."""
     if measurement is None or not getattr(measurement, "accepted", False):
         return None, None
     horizontal = getattr(measurement, "horizontal_deg", None)
+    confidence = getattr(measurement, "horizontal_confidence", None)
     if (
         horizontal is None
-        or getattr(measurement, "horizontal_status", None) in LOW_COHERENCE_HORIZONTAL_STATUSES
+        or confidence is None
+        or not math.isfinite(horizontal)
+        or not math.isfinite(confidence)
+        or getattr(measurement, "horizontal_status", None)
+        not in {"hlcmf_v1_accepted", "hlcmf_v2_accepted", "hlcmf_v3_accepted"}
     ):
         return None, None
-    return horizontal, horizontal_confidence_from(
-        getattr(measurement, "horizontal_confidence", None)
-    )
+    return horizontal, horizontal_confidence_from(confidence)
 
 
 def _ops_candidate_rank(candidate: RecoveryCandidate) -> tuple[float, int, float]:

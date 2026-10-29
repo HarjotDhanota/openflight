@@ -6,7 +6,7 @@ import pytest
 from openflight.iwr6843 import lcmf
 
 
-@pytest.mark.parametrize("vertical", [-5, 0, 22, 45, 55])
+@pytest.mark.parametrize("vertical", [-5, 0, 0.5, 22, 45, 55])
 @pytest.mark.parametrize("horizontal", [-70, -20, 0, 20, 70])
 @pytest.mark.parametrize("roll", [-10, 0, 10])
 def test_exact_cartesian_launch_direction(vertical, horizontal, roll):
@@ -31,4 +31,15 @@ def test_incompatible_range_and_tee_are_not_clamped_into_a_direction():
             np.zeros(3),
             (1.6, 0, -0.06),
             20,
+        )
+
+
+def test_multiple_physical_forward_roots_are_not_arbitrarily_selected():
+    with pytest.raises(ValueError, match="ambiguous"):
+        lcmf.launch_direction_deg(
+            np.array([0.01, 0.02, 0.03]),
+            np.full(3, 1.85),
+            np.zeros(3),
+            (1.6, 0, -1.0),
+            84,
         )

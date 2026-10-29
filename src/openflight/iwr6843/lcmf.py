@@ -47,6 +47,8 @@ MPH_PER_MS = tracking.MPH_PER_MS
 HORIZONTAL_TAIL_FRAMES = 8
 HORIZONTAL_COHERENCE_MIN = 0.90
 HORIZONTAL_MOTION_MIN_FRAMES = 3
+# Software coverage prior, matching the existing camera fallback, not a swing limit.
+HORIZONTAL_MODEL_MAX_ABS_DEG = 20.0
 
 # One collapsed channel must not drag the answer down. 8.0 sits in an observed
 # gap: agreeing channels spread 4.59 deg, collapsed ones 15.9-20.2 deg
@@ -139,6 +141,13 @@ class LCMFResult:
             "horizontal_raw_deg": self.horizontal_raw_deg,
             "horizontal_confidence": self.horizontal_confidence,
             "horizontal_status": self.horizontal_status,
+            "horizontal_quality_basis": (
+                "motion_phase_residual"
+                if (self.horizontal_status or "").startswith("hlcmf_v3_")
+                else "temporal_phase_concentration"
+                if self.horizontal_status
+                else None
+            ),
             "horizontal_frame": self.horizontal_frame,
             "effective_tdm_tau_s": self.effective_tdm_tau_s,
             "effective_loop_period_s": self.effective_loop_period_s,
@@ -959,7 +968,7 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
     phase_velocity_ms: float | None = None,
     prepared: PreparedLCMFCapture | None = None,
 ) -> tuple[float | None, float | None, str | None]:
-    """HLCMF-v2: horizontal launch as the ball's direction of motion.
+    """HLCMF-v3: horizontal motion and phase consistency after accounting for motion.
 
     Each frame's TX2 phase is the ball's lateral direction cosine, taken
     against TX1 and TX3 separately, unwrapped and midpointed (averaging the
@@ -981,10 +990,10 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
         return None, None, None
     geometry, snapshots = collected
     if len(snapshots) < 6:
-        return None, None, "hlcmf_v2_insufficient_snapshots"
+        return None, None, "hlcmf_v3_insufficient_snapshots"
     frames = sorted({snapshot[0] for snapshot in snapshots})
     if len(frames) < HORIZONTAL_MOTION_MIN_FRAMES:
-        return None, None, "hlcmf_v2_insufficient_frames"
+        return None, None, "hlcmf_v3_insufficient_frames"
     times: list[float] = []
     vs_tx1: list[float] = []
     vs_tx3: list[float] = []
@@ -996,11 +1005,6 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
         times.append(float(np.mean([snapshot[1] for snapshot in in_frame])))
     midpoint = 0.5 * (_continuous_phase(np.asarray(vs_tx1)) + _continuous_phase(np.asarray(vs_tx3)))
     frame_phases = [float(phase) for phase in np.angle(np.exp(1j * midpoint))]
-    _mean_deg, coherence = _referenced_horizontal_mean(
-        frame_phases,
-        [1.0] * len(frame_phases),
-        phase_reference_rad=phase_reference_rad,
-    )
     phases = np.asarray(frame_phases)
     if phase_reference_rad is not None:
         phases = np.angle(np.exp(1j * (phases - phase_reference_rad)))
@@ -1021,10 +1025,24 @@ def _tx2_horizontal_motion(  # pylint: disable=too-many-locals
             roll_rad=cal.roll_rad,
         )
     except ValueError:
-        return None, coherence, "hlcmf_v2_geometry_unresolved"
+        return None, None, "hlcmf_v3_geometry_unresolved"
+    points = _launch_positions_m(
+        ranges_m, bearing_rad, tee_position_m, vertical_launch_deg, cal.roll_rad
+    )
+    centred_times = t_array - t_array[0]
+    velocity = np.array([_median_pairwise_slope(centred_times, values) for values in points.T])
+    intercept = np.median(points - centred_times[:, None] * velocity, axis=0)
+    predicted = intercept + centred_times[:, None] * velocity
+    board_lateral = predicted[:, 1] * math.cos(cal.roll_rad) + predicted[:, 2] * math.sin(
+        cal.roll_rad
+    )
+    predicted_phase = -np.pi * board_lateral / np.linalg.norm(predicted, axis=1)
+    coherence = float(abs(np.mean(np.exp(1j * (phases - predicted_phase)))))
     if coherence < HORIZONTAL_COHERENCE_MIN:
-        return angle_deg, coherence, "hlcmf_v2_low_coherence"
-    return angle_deg, coherence, "hlcmf_v2_accepted"
+        return angle_deg, coherence, "hlcmf_v3_low_motion_coherence"
+    if abs(angle_deg) > HORIZONTAL_MODEL_MAX_ABS_DEG:
+        return angle_deg, coherence, "hlcmf_v3_wide_model_unqualified"
+    return angle_deg, coherence, "hlcmf_v3_accepted"
 
 
 def estimate_lcmf_v1(

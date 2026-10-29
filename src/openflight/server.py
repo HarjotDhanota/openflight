@@ -4903,7 +4903,10 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             horizontal_deg = getattr(measurement, "horizontal_deg", None)
             horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
             horizontal_status = getattr(measurement, "horizontal_status", None)
-            from .iwr6843.runtime import camera_horizontal_input  # noqa: PLC0415
+            from .iwr6843.runtime import (  # noqa: PLC0415
+                LOW_COHERENCE_HORIZONTAL_STATUSES,
+                camera_horizontal_input,
+            )
 
             fused_horizontal, fused_confidence = camera_horizontal_input(measurement)
             horizontal_frame = getattr(measurement, "horizontal_frame", None) or (
@@ -4921,12 +4924,14 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                     frame=horizontal_frame,
                 )
             elif horizontal_deg is not None:
-                # a low-coherence horizontal is shown but never handed to the camera
+                # Unqualified diagnostics retain their reason and never enter camera fusion.
                 _put_launch_horizontal(
                     shot,
                     horizontal_deg,
                     horizontal_confidence_from(horizontal_confidence),
-                    "radar_low_coherence",
+                    "radar_low_coherence"
+                    if horizontal_status in LOW_COHERENCE_HORIZONTAL_STATUSES
+                    else "radar_model_unqualified",
                     status=_iwr_azimuth_status(),
                     frame=horizontal_frame,
                 )

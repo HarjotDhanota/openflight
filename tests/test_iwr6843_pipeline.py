@@ -1230,7 +1230,8 @@ def test_hlcmf_measures_the_direction_of_motion_not_a_late_bearing(
     result = estimate_lcmf_v1(raw, cal, ball_speed_mph=45.0 * 2.23694, club="9i")
 
     assert result.accepted
-    assert result.horizontal_status == "hlcmf_v2_accepted"
+    assert result.horizontal_status == "hlcmf_v3_accepted"
+    assert result.to_dict()["horizontal_quality_basis"] == "motion_phase_residual"
     assert result.horizontal_deg == pytest.approx(horizontal_deg, abs=0.5)
     # the late-flight bearing on the same capture is biased
     shot = process_dump(
@@ -1346,8 +1347,8 @@ def test_horizontal_proxy_withholds_incoherent_frames(monkeypatch):
     assert status == "hlcmf_v1_low_coherence"
 
 
-def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
-    """HLCMF-v2 keeps v1's coherence gate, under its own status."""
+def test_impossible_alternating_bearings_withhold_horizontal_geometry(monkeypatch):
+    """Alternating boresight/endfire samples do not define a forward launch."""
     n_frames, n_loops, n_tx, n_rx, n_bins = 12, 10, 3, 4, 80
     cube = np.zeros((n_frames, n_loops * n_tx, n_rx, n_bins), dtype=complex)
     raw = pack_dump(
@@ -1385,6 +1386,6 @@ def test_direction_of_motion_keeps_the_coherence_gate(monkeypatch):
         tee_position_m=(1.5, 0.0, 0.0),
     )
 
-    assert angle_deg is not None and math.isfinite(angle_deg)
-    assert coherence is not None and coherence < HORIZONTAL_COHERENCE_MIN
-    assert status == "hlcmf_v2_low_coherence"
+    assert angle_deg is None
+    assert coherence is None
+    assert status == "hlcmf_v3_geometry_unresolved"
