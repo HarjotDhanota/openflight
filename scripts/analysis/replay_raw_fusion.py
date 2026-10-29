@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Replay one shot through saved raw OPS, optional IWR, and recorded camera stages."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -15,6 +16,9 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
 import numpy as np
 
 from openflight import rig_geometry
@@ -22,6 +26,7 @@ from openflight.camera.fusion_processing import process_camera_fusion
 from openflight.camera.geometry_contract import geometry_fingerprint
 from openflight.clubs import ClubType
 from openflight.iwr6843.club import ClubWindowPolicy
+from openflight.iwr6843.launch_range import LaunchRangePrior
 from openflight.iwr6843.lcmf import antenna_layout
 from openflight.iwr6843.monitor import tx_order_from_config
 from openflight.iwr6843.replay import build_replay_calibration
@@ -35,7 +40,7 @@ from openflight.raw_radar_replay import (
     benchmark_candidate_from_raw_replays,
     load_session_events,
     locate_recorded_capture,
-    replay_iwr_capture_bytes,
+    replay_iwr_shot_bytes,
     replay_ops_capture,
     session_shot_events,
 )
@@ -455,6 +460,7 @@ def replay(args, *, frozen_session=None) -> dict:
             calibration_snapshot = runtime_config.get("calibration")
             radar_snapshot = runtime_config.get("radar_config")
             per_shot_inputs = runtime_config.get("per_shot_inputs")
+            effective = None
             if args.iwr_calibration:
                 calibration_bytes = args.iwr_calibration.read_bytes()
                 tee_range_m = args.iwr_tee_m
@@ -521,6 +527,7 @@ def replay(args, *, frozen_session=None) -> dict:
                     ball_height_m=ball_height_m,
                     board_rotation_deg=board_rotation_deg,
                     roll_deg=roll_deg,
+                    effective_snapshot=effective,
                 )
                 tx_order = tx_order_from_config(frozen_radar_config)
             capture_path, capture_resolution, raw = (
@@ -578,45 +585,48 @@ def replay(args, *, frozen_session=None) -> dict:
                     "replayed": replayed_inputs,
                     "changed": changed_inputs,
                 }
-            if tee_range_m is None:
-                report["stages"]["iwr6843"] = {
-                    "status": "withheld",
-                    "reason": "tee_range_unresolved",
-                    "club_path": None,
-                    **capture_evidence,
-                    "equivalence_status": "raw_evidence_preserved_estimator_not_run",
-                }
-            else:
-                measurement, club_path = replay_iwr_capture_bytes(
-                    raw,
-                    calibration,
-                    ball_speed_mph=float(ball_speed),
-                    club=club,
-                    club_speed_mph=club_speed,
-                    net_range_m=runtime_config.get("net_range_m"),
-                    tx_order=tx_order,
-                    tdm_sign_policy=runtime_config["tdm_sign_policy"],
-                    azimuth_offset_deg=float(runtime_config["azimuth_offset_deg"]),
-                    horizontal_phase_reference_rad=runtime_config.get(
-                        "horizontal_phase_reference_rad"
-                    ),
-                    club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
-                    club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
-                    # a session before D17 also recorded earlier shots' tracks
-                    # (recovery_observations); each shot now replays on its own
-                )
-                iwr_measurement, iwr_club_path = measurement, club_path
-                report["stages"]["iwr6843"] = {
-                    **measurement.to_dict(),
-                    "club_path": club_path.to_dict() if club_path is not None else None,
-                    **capture_evidence,
-                    # the replay runs today's estimator (to_dict names it) on
-                    # this layout, not necessarily what the session recorded
-                    "antenna_layout": _antenna_layout_record(calibration),
-                    "equivalence_status": (
-                        "production_pipeline_replayed_caller_config_source_revision_not_proven"
-                    ),
-                }
+            shot_inputs = per_shot_inputs if isinstance(per_shot_inputs, dict) else {}
+            prior = LaunchRangePrior.from_dict(
+                shot_inputs.get("range_prior") or runtime_config.get("range_prior")
+            )
+            result = replay_iwr_shot_bytes(
+                raw,
+                calibration,
+                ball_speed_mph=float(ball_speed),
+                club=club,
+                club_speed_mph=club_speed,
+                net_range_m=runtime_config.get("net_range_m"),
+                tx_order=tx_order,
+                tdm_sign_policy=runtime_config["tdm_sign_policy"],
+                azimuth_offset_deg=runtime_config["azimuth_offset_deg"],
+                horizontal_phase_reference_rad=runtime_config.get("horizontal_phase_reference_rad"),
+                club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
+                club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
+                range_prior=prior,
+                range_prior_rejection=shot_inputs.get("range_prior_rejection"),
+                tee_range_m=shot_inputs.get("tee_range_m")
+                if not args.iwr_calibration
+                else tee_range_m,
+            )
+            measurement, club_path = result.measurement, result.club_path
+            iwr_measurement, iwr_club_path = measurement, club_path
+            report["stages"]["iwr6843"] = {
+                **(
+                    measurement.to_dict()
+                    if measurement is not None
+                    else {"status": "withheld", "reason": result.withheld_reason}
+                ),
+                "club_path": club_path.to_dict() if club_path is not None else None,
+                "launch_range": result.launch_range.to_dict() if result.launch_range else None,
+                "ball_range": result.ball_range.to_dict() if result.ball_range else None,
+                **capture_evidence,
+                # the replay runs today's estimator (to_dict names it) on
+                # this layout, not necessarily what the session recorded
+                "antenna_layout": _antenna_layout_record(calibration),
+                "equivalence_status": (
+                    "live_range_and_estimator_replayed_transport_timing_not_exercised"
+                ),
+            }
         except Exception as error:  # stage failures belong in the artifact
             report["stages"]["iwr6843"] = {
                 "status": "error",

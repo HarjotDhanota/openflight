@@ -241,3 +241,34 @@ def test_the_replay_calibration_takes_the_recorded_roll(tmp_path):
 
     assert build().roll_rad == 0.0
     assert math.degrees(build(roll_deg=-2.0).roll_rad) == pytest.approx(-2.0)
+
+
+def test_replay_restores_effective_offsets_and_keeps_the_saved_layout():
+    effective = {
+        "range_bias_m": 0.067,
+        "lateral_tee_offset_m": -0.064,
+        "tee_range_uncertainty_m": 0.12,
+        "antenna_layout": {
+            "board_rotation_deg": 90.0,
+            "rx_row_height_m": 0.0444,
+            "basis": antennas.RIG_BASIS,
+            "patches": "levm_ecad",
+        },
+    }
+    cal = build_replay_calibration(
+        "config/iwr6843_calibration_reference.json",
+        tee_range_m=None,
+        tilt_deg=11.0,
+        radar_height_m=0.052,
+        ball_height_m=0.02135,
+        board_rotation_deg=90.0,
+        roll_deg=-2,
+        effective_snapshot=effective,
+    )
+
+    assert cal.range_bias_m == 0.067
+    assert cal.lateral_tee_offset_m == -0.064
+    assert cal.tee_range_uncertainty_m == 0.12
+    assert cal.antennas.as_dict() == effective["antenna_layout"]
+    assert math.degrees(cal.tilt_rad) == pytest.approx(11)
+    assert math.degrees(cal.roll_rad) == pytest.approx(-2)

@@ -8,6 +8,7 @@ import math
 import re
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from .clubs import ClubType
@@ -520,7 +521,7 @@ def replay_iwr_capture_bytes(
     club_impact_correction_s: float,
     horizontal_phase_reference_rad: float | None = None,
 ):
-    """Run the complete production ball/club estimator on frozen dump bytes."""
+    """Run ball/club estimation with a supplied tee range, without live range resolution."""
     from .iwr6843.runtime import process_raw_capture
 
     return process_raw_capture(
@@ -536,4 +537,49 @@ def replay_iwr_capture_bytes(
         horizontal_phase_reference_rad=horizontal_phase_reference_rad,
         club_window_policy=club_window_policy,
         club_impact_correction_s=club_impact_correction_s,
+    )
+
+
+def replay_iwr_shot_bytes(
+    raw: bytes,
+    calibration,
+    *,
+    ball_speed_mph: float,
+    club: str | None,
+    net_range_m: float | None,
+    tx_order: str,
+    tdm_sign_policy: str,
+    club_speed_mph: float | None,
+    azimuth_offset_deg: float | None,
+    club_window_policy,
+    club_impact_correction_s: float,
+    horizontal_phase_reference_rad: float | None = None,
+    range_prior=None,
+    range_prior_rejection: str | None = None,
+    tee_range_m: float | None = None,
+):
+    """Replay live range resolution and estimation; transport/timing are not exercised."""
+    from .iwr6843.runtime import IWR6843Runtime
+
+    capture = SimpleNamespace(valid=True, raw=raw)
+    monitor = SimpleNamespace(capture_for_shot=lambda *_args, **_kwargs: capture)
+    runtime = IWR6843Runtime(
+        capture_monitor=monitor,
+        calibration=calibration,
+        net_range_m=net_range_m,
+        tx_order=tx_order,
+        tdm_sign_policy=tdm_sign_policy,
+        azimuth_offset_deg=azimuth_offset_deg,
+        horizontal_phase_reference_rad=horizontal_phase_reference_rad,
+        club_window_policy=club_window_policy,
+        club_impact_correction_s=club_impact_correction_s,
+        range_prior=range_prior,
+    )
+    return runtime.process_shot(
+        impact_timestamp=None,
+        ball_speed_mph=ball_speed_mph,
+        club=club,
+        club_speed_mph=club_speed_mph,
+        tee_range_m=tee_range_m,
+        range_prior_rejection=range_prior_rejection,
     )

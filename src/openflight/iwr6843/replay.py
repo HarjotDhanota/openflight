@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from openflight.iwr6843.antennas import AntennaLayout
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.calibration_session import (
     clone_calibration,
@@ -263,6 +264,7 @@ def build_replay_calibration(
     ball_height_m: float,
     board_rotation_deg: float | None = None,
     roll_deg: float | None = None,
+    effective_snapshot: dict | None = None,
 ) -> Calibration:
     """Load array calibration and apply replay geometry overrides.
 
@@ -270,7 +272,7 @@ def build_replay_calibration(
     (`lcmf.antenna_layout`); with it, the rig-derived phase centre's. ``roll_deg``
     is the shot's recorded roll (a unit that verified and zeroed it).
     """
-    return clone_calibration(
+    calibration = clone_calibration(
         Calibration.load(str(calibration_path)),
         tee_range_m=tee_range_m,
         tilt_deg=tilt_deg,
@@ -279,6 +281,23 @@ def build_replay_calibration(
         board_rotation_deg=board_rotation_deg,
         roll_deg=roll_deg,
     )
+    if effective_snapshot is not None:
+        for name in ("range_bias_m", "lateral_tee_offset_m", "tee_range_uncertainty_m"):
+            if name in effective_snapshot:
+                setattr(calibration, name, float(effective_snapshot[name]))
+        if "antenna_layout" in effective_snapshot:
+            layout = effective_snapshot["antenna_layout"]
+            if layout is None:
+                calibration.antennas = None
+            else:
+                if layout.get("patches") != "levm_ecad":
+                    raise ValueError("recorded custom antenna coordinates are unavailable")
+                calibration.antennas = AntennaLayout(
+                    board_rotation_deg=float(layout["board_rotation_deg"]),
+                    rx_row_height_m=float(layout["rx_row_height_m"]),
+                    basis=layout["basis"],
+                )
+    return calibration
 
 
 def write_records(records: Iterable[ReplayRecord], path: str | Path, output_format: str) -> None:

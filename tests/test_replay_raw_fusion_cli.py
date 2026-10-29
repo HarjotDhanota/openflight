@@ -489,6 +489,7 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
         horizontal_deg=1.0,
         # the LCMF field the kiosk reads (server._process_iwr6843_angle)
         horizontal_confidence=0.81234,
+        horizontal_status="hlcmf_v3_accepted",
         range_evidence=None,
         to_dict=lambda: {
             "status": "accepted",
@@ -500,7 +501,11 @@ def test_unified_camera_recomputation_receives_replayed_radar_context(tmp_path, 
     monkeypatch.setattr(cli, "build_replay_calibration", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(cli, "tx_order_from_config", lambda _path: "normal")
     monkeypatch.setattr(
-        cli, "replay_iwr_capture_bytes", lambda *_args, **_kwargs: (measurement, None)
+        cli,
+        "replay_iwr_shot_bytes",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            measurement=measurement, club_path=None, launch_range=None, ball_range=None
+        ),
     )
     calibration = tmp_path / "cal.json"
     config = tmp_path / "radar.cfg"
@@ -551,6 +556,8 @@ def _replay_recorded_iwr(
                 "tee_slant_range_m": 1.5,
                 "radar_height_m": 0.05,
                 "ball_height_m": 0.04,
+                "lateral_tee_offset_m": -0.064,
+                "range_bias_m": 0.067,
             },
         },
         "radar_config": {
@@ -601,7 +608,11 @@ def _replay_recorded_iwr(
     monkeypatch.setattr(cli, "tx_order_from_config", lambda _path: "normal")
     measurement = SimpleNamespace(range_evidence=None, to_dict=lambda: {"status": "rejected"})
     monkeypatch.setattr(
-        cli, "replay_iwr_capture_bytes", lambda *_args, **_kwargs: (measurement, None)
+        cli,
+        "replay_iwr_shot_bytes",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            measurement=measurement, club_path=None, launch_range=None, ball_range=None
+        ),
     )
     result = cli.replay(
         _args(tmp_path, session, iwr=True, recompute_iwr_inputs=recompute_iwr_inputs)
@@ -653,6 +664,8 @@ def test_recorded_iwr_snapshot_restores_base_tilt_and_base64_config(tmp_path, mo
     assert result["stages"]["iwr6843"]["runtime_config_source"] == "recorded_per_shot_snapshot"
     assert seen["tilt_deg"] == 12.5
     assert seen["roll_deg"] is None
+    assert seen["effective_snapshot"]["lateral_tee_offset_m"] == -0.064
+    assert seen["effective_snapshot"]["range_bias_m"] == 0.067
     assert result["stages"]["iwr6843"]["config_sha256"] == hashlib.sha256(radar_bytes).hexdigest()
 
 
@@ -665,7 +678,9 @@ def test_a_verified_units_recorded_roll_is_replayed_as_the_kiosk_ran_it(tmp_path
     assert seen["roll_deg"] == -2.0
 
 
-def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_path, monkeypatch):
+def test_recorded_unresolved_range_runs_live_resolution_and_preserves_refusal(
+    tmp_path, monkeypatch
+):
     session = _session(tmp_path)
     raw = tmp_path / "iwr.bin"
     raw.write_bytes(b"raw")
@@ -730,17 +745,26 @@ def test_recorded_unresolved_range_preserves_raw_capture_without_estimating(tmp_
     )
     monkeypatch.setattr(cli, "build_replay_calibration", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(cli, "tx_order_from_config", lambda _path: "normal")
-    monkeypatch.setattr(
-        cli,
-        "replay_iwr_capture_bytes",
-        lambda *_args, **_kwargs: pytest.fail("range-dependent estimator ran"),
-    )
+    calls = []
+
+    def unresolved(raw, calibration, **kwargs):
+        calls.append(raw)
+        return SimpleNamespace(
+            measurement=None,
+            club_path=None,
+            launch_range=None,
+            ball_range=None,
+            withheld_reason="tee_range_unresolved",
+        )
+
+    monkeypatch.setattr(cli, "replay_iwr_shot_bytes", unresolved)
 
     result = cli.replay(_args(tmp_path, session, iwr=True))
 
     stage = result["stages"]["iwr6843"]
     assert stage["status"] == "withheld"
     assert stage["reason"] == "tee_range_unresolved"
+    assert calls == [b"raw"]
     assert stage["capture_sha256"] == hashlib.sha256(b"raw").hexdigest()
     moving = result["stages"]["moving_iwr_range"]
     assert moving["status"] == "withheld_track_error"
