@@ -244,18 +244,51 @@ def loop_power(mti: np.ndarray) -> np.ndarray:
     return power.reshape(n_frames * n_loops, mti.shape[-1])
 
 
+def _gate_peak_bins(row, lo, hi, snr_min, max_peaks):
+    gate = row[lo:hi]
+    base = np.median(gate) + 1e-12
+    if max_peaks == 1:
+        candidates = [int(np.argmax(gate))]
+    else:
+        padded = np.pad(gate, 1, constant_values=-np.inf)
+        candidates = np.flatnonzero((gate > padded[:-2]) & (gate >= padded[2:]))
+        candidates = candidates[np.argsort(-gate[candidates], kind="stable")]
+    peaks = []
+    for idx in candidates:
+        if gate[idx] / base <= snr_min:
+            continue
+        peak = float(lo + idx)
+        j = int(peak)
+        if lo < j < hi - 1:
+            y_0, y_1, y_2 = row[j - 1], row[j], row[j + 1]
+            den = y_0 - 2 * y_1 + y_2
+            if den < 0 and abs((y_0 - y_2) / (2 * den)) < 1:
+                peak += (y_0 - y_2) / (2 * den)
+        # Separate refined peaks beyond two 1.2-bin inlier bands: one loop gets one vote.
+        if any(abs(peak - previous) < 3.0 for previous in peaks):
+            continue
+        peaks.append(peak)
+        if len(peaks) == max_peaks:
+            break
+    return peaks
+
+
 def _detections(
     power: np.ndarray,
     geo: Geometry,
     snr_min: float = 4.0,
     max_range_m: float | None = None,
     gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
+    max_peaks_per_loop: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-loop sub-bin peaks inside ``gates_m``, SNR-gated.
 
     ``max_range_m`` clamps the gates — set it just short of the NET so
     ball-riding-up-the-net motion never enters the track or angle fits.
+    Multiple peaks retain weaker movers; the default preserves single-peak searches.
     """
+    if max_peaks_per_loop < 1:
+        raise ValueError("max_peaks_per_loop must be positive")
     n_samples = power.shape[1]
     res = geo.range_res_m
     loops_idx: list[int] = []
@@ -277,20 +310,9 @@ def _detections(
                 g_hi = min(abs_hi - frame_start, frame_count - 2)
                 if g_hi - g_lo < 3:
                     continue
-                gate = row[g_lo:g_hi]
-                base = np.median(gate) + 1e-12
-                idx = int(np.argmax(gate))
-                if gate[idx] / base <= snr_min:
-                    continue
-                peak_local = float(g_lo + idx)
-                j = int(peak_local)
-                if g_lo < j < g_hi - 1:
-                    y_0, y_1, y_2 = row[j - 1], row[j], row[j + 1]
-                    den = y_0 - 2 * y_1 + y_2
-                    if den < 0 and abs((y_0 - y_2) / (2 * den)) < 1:
-                        peak_local += (y_0 - y_2) / (2 * den)
-                loops_idx.append(row_index)
-                bins.append(frame_start + peak_local)
+                for peak in _gate_peak_bins(row, g_lo, g_hi, snr_min, max_peaks_per_loop):
+                    loops_idx.append(row_index)
+                    bins.append(frame_start + peak)
         return np.asarray(loops_idx), np.asarray(bins)
 
     for lo_m, hi_m in gates_m:
@@ -303,6 +325,12 @@ def _detections(
         g_lo = max(abs_lo - geo.range_bin_start, 0)
         g_hi = min(abs_hi - geo.range_bin_start, n_samples - 2)
         if g_hi - g_lo < 3:
+            continue
+        if max_peaks_per_loop > 1:
+            for row_index, row in enumerate(power):
+                for peak in _gate_peak_bins(row, g_lo, g_hi, snr_min, max_peaks_per_loop):
+                    loops_idx.append(row_index)
+                    bins.append(geo.range_bin_start + peak)
             continue
         gate = power[:, g_lo:g_hi]
         base = np.median(gate, axis=1) + 1e-12
@@ -864,6 +892,7 @@ def search_ball(  # pylint: disable=too-many-arguments,too-many-locals
     time_window_s: tuple[float, float] | None = None,
     anchor: TrackAnchor | None = None,
     ops_speed_ms: float | None = None,
+    max_peaks_per_loop: int = 1,
 ) -> TrackSearch:
     """The exhaustive range-walk search on one MTI cube (``search_range_walks``).
 
@@ -871,7 +900,13 @@ def search_ball(  # pylint: disable=too-many-arguments,too-many-locals
     walk gets its quadratic refit (the local radial speed).
     """
     power = loop_power(mti)
-    loops_idx, bins = _detections(power, geo, max_range_m=max_range_m, gates_m=gates_m)
+    loops_idx, bins = _detections(
+        power,
+        geo,
+        max_range_m=max_range_m,
+        gates_m=gates_m,
+        max_peaks_per_loop=max_peaks_per_loop,
+    )
     if loops_idx.size < MIN_TRACK_INLIERS:
         return TrackSearch(selected=None, n_detections=int(loops_idx.size))
     res = geo.range_res_m
@@ -920,6 +955,7 @@ def find_ball(  # pylint: disable=too-many-arguments
     time_window_s: tuple[float, float] | None = None,
     anchor: TrackAnchor | None = None,
     ops_speed_ms: float | None = None,
+    max_peaks_per_loop: int = 1,
 ) -> BallTrack | None:
     """The picked range walk inside ``gates_m``/``speed_bounds_ms``; None when no
     plausible streak exists. Deterministic: every point pair is tried (``search_ball``).
@@ -951,4 +987,5 @@ def find_ball(  # pylint: disable=too-many-arguments
         time_window_s=time_window_s,
         anchor=anchor,
         ops_speed_ms=ops_speed_ms,
+        max_peaks_per_loop=max_peaks_per_loop,
     ).track

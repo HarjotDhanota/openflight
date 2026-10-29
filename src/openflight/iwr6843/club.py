@@ -71,6 +71,8 @@ CLUB_SPEED_BOUNDS_MS = (18.0, 45.0)
 
 CLUB_MIN_FRAMES = 4
 CLUB_MIN_SNAPSHOTS = 24
+# Bounded candidate budget, not a physical target count.
+CLUB_MAX_PEAKS_PER_LOOP = 3
 
 # How many frames of approach history to fit, counting BACK from impact -- not
 # a ring slot. The clubhead's useful range walk spans 0.90-1.33 m (measured,
@@ -396,6 +398,7 @@ def find_club(
         speed_bounds_ms=speed_bounds_ms,
         min_ball_ms=max(speed_bounds_ms[0], ops_speed_ms * CLUB_PREFERRED_SPEED_RATIO),
         time_window_s=window_s,
+        max_peaks_per_loop=CLUB_MAX_PEAKS_PER_LOOP,
     )
     mode = "ops_speed_prior"
     if track is None:
@@ -409,6 +412,7 @@ def find_club(
             speed_bounds_ms=CLUB_SPEED_BOUNDS_MS,
             min_ball_ms=CLUB_SPEED_BOUNDS_MS[0],
             time_window_s=window_s,
+            max_peaks_per_loop=CLUB_MAX_PEAKS_PER_LOOP,
         )
         mode = "broad_fallback"
     if track is None:
@@ -692,7 +696,9 @@ def estimate_club_path(
     impact_mismatch = selection.impact_error_m > impact_error_limit_m(cal.tee_range_uncertainty_m)
     # a track failing its identity gates is kept for replay but never becomes camera depth
     track_status = (
-        "rejected_club_speed_mismatch"
+        "rejected_ambiguous_club_track"
+        if track.ambiguity is not None
+        else "rejected_club_speed_mismatch"
         if speed_mismatch
         else "rejected_impact_contact_mismatch"
         if impact_mismatch
@@ -723,6 +729,9 @@ def estimate_club_path(
             status=track_status,
         ),
     )
+    if track.ambiguity is not None:
+        result.status = track_status
+        return result
 
     path_window_s = impact_centered_window_s(
         geo,
