@@ -482,12 +482,15 @@ def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
     clip.extra.pop("capture_npz_sha256", None)
     clip.extra.pop("capture_sensor_interval_ns", None)
     clip.extra.pop("template_capture_context", None)
+    clip.extra.pop("capture_frame_timestamps_ns", None)
+    clip.extra.pop("capture_frame_exposure_us", None)
     try:
         metadata = json.loads((clip.path / "metadata.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         metadata = {}
     try:
         raw_path = clip.path / "frames.npz"
+        exposures = None
         hasher = hashlib.sha256()
         with raw_path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -499,7 +502,8 @@ def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
                 if "pre_trigger_count" in data.files:
                     clip.trigger_index = int(data["pre_trigger_count"])
                 if "exposure_us" in data.files:
-                    clip.exposure_us = float(np.median(data["exposure_us"]))
+                    exposures = np.asarray(data["exposure_us"], dtype=float)
+                    clip.exposure_us = float(np.median(exposures))
                 stamps = (
                     np.asarray(data["sensor_timestamp_ns"])
                     if "sensor_timestamp_ns" in data.files
@@ -521,6 +525,14 @@ def _load_frames(clip: Clip) -> tuple[np.ndarray | None, dict[str, Any]]:
         and np.all(np.diff(stamps.astype(object)) > 0)
     ):
         clip.extra["capture_sensor_interval_ns"] = (int(stamps[0]), int(stamps[-1]))
+        clip.extra["capture_frame_timestamps_ns"] = tuple(int(t) for t in stamps)
+    if (
+        exposures is not None
+        and exposures.shape == (len(frames),)
+        and np.isfinite(exposures).all()
+        and (exposures > 0).all()
+    ):
+        clip.extra["capture_frame_exposure_us"] = tuple(float(t) for t in exposures)
     fps = _number(metadata.get("delivered_fps")) or 0.0
     if fps <= 0.0 and stamps is not None and stamps.size > 2:
         interval = float(np.median(np.diff(stamps.astype(np.float64))))
