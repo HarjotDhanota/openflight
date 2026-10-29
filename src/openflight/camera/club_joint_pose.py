@@ -10,7 +10,7 @@ from scipy.ndimage import distance_transform_edt
 from scipy.optimize import least_squares
 
 from ..rig_geometry import geometry_fingerprint
-from . import club_exposure, club_pose_hypotheses, club_rigid_motion
+from . import _club_object_support, club_exposure, club_pose_hypotheses, club_rigid_motion
 from .club_sequence import ClubFrameIdentity
 
 
@@ -79,10 +79,15 @@ def _prepare(frame, seed, collision, samples, contact_hypothesis):
     axis = np.asarray(frame["axis_pixels"], float).reshape(-1, 2)
     if not np.isfinite(axis).all() or len(axis) == 1:
         raise ValueError("finite current infinite-axis support required")
+    objects = _club_object_support.support_candidates(frame.get("current_object_support"), shape)
+    if objects is not None:
+        pixel = objects["pixel"]
+        objects["owners"][unknown[pixel[:, 1], pixel[:, 0]]] = "unassigned"
     if (
         not (edges & ~unknown).any()
         and not ((foreground | background) & ~unknown).any()
         and not len(axis)
+        and (objects is None or not np.any(objects["owners"] == "head"))
     ):
         return {**result, "status": "withheld_no_current_image_evidence"}
     balls = np.asarray(frame["ball_masks"])
@@ -98,6 +103,7 @@ def _prepare(frame, seed, collision, samples, contact_hypothesis):
         "edges": edges,
         "unknown": unknown,
         "axis": axis,
+        "objects": objects,
         "foreground": foreground & ~unknown,
         "background": background & ~unknown,
         "distance": np.minimum(distance_transform_edt(~edges), 6)
@@ -346,6 +352,21 @@ def refine_window(
             after_twist=after,
             collision_offset_s=row["contact_offset_s"],
         )
+        scene["object_support_residual"] = np.empty(0)
+        if row["objects"] is not None and np.any(row["objects"]["owners"] == "head"):
+            projected = [
+                club_pose_hypotheses.project(
+                    model["triangles"], club_rigid_motion.to_parameters(transform), row["camera"]
+                )
+                for transform in scene["transforms"]
+            ]
+            scene["object_support_residual"] = _club_object_support.exposure_support_residual(
+                projected,
+                row["balls"],
+                row["objects"],
+                depth_order=row["depth_order"],
+                analysis_scale=analysis_scale,
+            )
         render_evaluations += 1
         if cache_exposure:
             scene_cache[index] = (key, scene)
@@ -362,6 +383,7 @@ def refine_window(
                 "axis",
                 "foreground",
                 "background",
+                "object_support",
                 "motion",
                 "rate_prior",
                 "domain",
@@ -370,6 +392,7 @@ def refine_window(
         for index in active:
             row, parameters = prepared[index], poses[active_position[index]]
             scene = render(index, parameters, rates)
+            result["object_support"].append(scene["object_support_residual"])
             visible = scene["head_boundary"] * ~row["unknown"]
             if row["edges"].any():
                 result["edge_candidates"].append(
@@ -463,7 +486,11 @@ def refine_window(
             if visible_fraction == 0:
                 status = "withheld_no_visible_head_boundary"
             elif not row["edges"].any() and not (row["foreground"] | row["background"]).any():
-                status = "conditional_axis_only"
+                status = (
+                    "conditional_assigned_object_support_only"
+                    if (row["objects"] is not None and np.any(row["objects"]["owners"] == "head"))
+                    else "conditional_axis_only"
+                )
             record.update(
                 status=status,
                 conditional_parameters=poses[active_position[index]].tolist(),
@@ -473,6 +500,19 @@ def refine_window(
                 explicit_foreground_pixels=int(row["foreground"].sum()),
                 explicit_background_pixels=int(row["background"].sum()),
                 current_axis_points=len(row["axis"]),
+                current_object_support=None
+                if row["objects"] is None
+                else {
+                    "association_id": row["objects"]["association_id"],
+                    "observation_ids": row["objects"]["observation_ids"],
+                    "assigned_head_count": int(np.sum(row["objects"]["owners"] == "head")),
+                    "scope": (
+                        "fixed current-pixel assignment hypothesis; "
+                        "conservative visible-support distance lower bound"
+                    ),
+                    "is_verified_foreground": False,
+                    "is_visibility_confidence": False,
+                },
                 contact_within_exposure=row["contact_within_exposure"],
                 intra_exposure_motion="joint_conditional_body_twist"
                 if len(phases[phase_of[index]]) > 1
