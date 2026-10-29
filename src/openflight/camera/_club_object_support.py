@@ -43,15 +43,21 @@ def triangle_union_distance(points, triangles):
     if points.size == 0:
         return np.empty(0)
     centers = triangles.mean(axis=1)
-    radius = np.linalg.norm(triangles - centers[:, None], axis=-1).max()
+    radii = np.linalg.norm(triangles - centers[:, None], axis=-1).max(axis=1)
+    radius = radii.max()
     tree = cKDTree(centers)
     _, nearest = tree.query(points, k=min(8, len(triangles)))
     nearest = np.asarray(nearest).reshape(len(points), -1)
     best = _distances(points[:, None], triangles[nearest]).min(axis=1)
     for index in np.flatnonzero(best > 0):
         limit = np.nextafter(best[index] + radius, np.inf)
-        candidates = tree.query_ball_point(points[index], limit)
-        best[index] = min(best[index], _distances(points[index], triangles[candidates]).min())
+        candidates = np.asarray(tree.query_ball_point(points[index], limit), int)
+        lower_bound = (
+            np.linalg.norm(centers[candidates] - points[index], axis=1) - radii[candidates]
+        )
+        kept = candidates[lower_bound <= np.nextafter(best[index], np.inf)]
+        if len(kept):
+            best[index] = min(best[index], _distances(points[index], triangles[kept]).min())
     return best
 
 
