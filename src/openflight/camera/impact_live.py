@@ -199,8 +199,12 @@ class LiveAnalyser:
             "dynamic_lie": clip.extra.get("dynamic_lie"),
             "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
             "range_input_decision": clip.extra.get("range_input_decision", {}),
+            "optics_input_decision": clip.extra.get("optics_input_decision", {}),
         }
-        pool = self._pools.setdefault(f"{clip.club}_{clip.frame_size}", _Pool())
+        pool_key = f"{clip.club}_{clip.frame_size}"
+        if clip.extra.get("optics_template_key"):
+            pool_key += "_" + clip.extra["optics_template_key"]
+        pool = self._pools.setdefault(pool_key, _Pool())
 
         def finish(reading: dict[str, Any]) -> dict[str, Any]:
             reading.setdefault("template", self._template_note(pool))
