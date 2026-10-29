@@ -6,7 +6,11 @@ when invoking `openflight.camera.tester_server`; leave search workers enabled.
 The default is off. No new inference package is required beyond the camera
 extra's OpenCV. The adapter checks the existing model's SHA-256 before loading.
 
-Each worker loads one model lazily. Current contrast seeds, including rivals,
+With the tester CLI flag, workers load and compile the model during server
+startup, before opening the preview. This startup cost is reported separately;
+the synthetic warmup output never becomes an observation. Direct programmatic
+users can request the same preheat through `configure_ball_search_workers`.
+Missing/wrong weights leave full geometry available. Current contrast seeds, including rivals,
 generate two shifted 256px crops for the 320px model. Two distinct crop origins
 must overlap by more than 0.6 IoU and score at least 0.6. These experimental
 thresholds came from saved-image development. Overlapping crops use the same
@@ -22,11 +26,17 @@ the evidence and never refresh its timestamp. Completed geometry also retains
 the hint in `ball_observation.object_hint`, with stale selections removed.
 The model cache retains weights only; it retains no scene pixels or decisions.
 
-The worker completes the model task first, publishes its result without waiting
-for geometry, then runs the unchanged full geometry search. Tasks are sequential;
-the existing analysis thread and worker pool are reused without an extra queue.
-The early API result can be inspected while fitting continues. This does not
-accelerate confirmation or change the preview overlay, exposure metering, metric diameter,
+With the additional `--ball-hint-independent` experimental flag, the live preview
+uses a separate analysis thread for model observations, sharing
+the existing process pool with geometry. It samples the latest frames again when
+the previous model task finishes, even if geometry is still fitting or following
+an earlier ball position. Only one model task can be pending; old runs cannot
+queue more. Two workers allow independent progress. One worker serializes tasks.
+The geometry loop skips its old inline model task when this loop is active.
+Direct one-shot searches can still deliver a hint callback before geometry.
+This switch is off by default: a paced Pi replay showed more model updates but
+slower geometry through CPU contention. Without it, the serialized callback path
+is retained. Neither mode accelerates the geometry solver or changes the preview overlay, exposure metering, metric diameter,
 distance, height, identity, watcher or Save gates. A proposed hint always carries
 `metric_eligible=false` and `confirmable=false`. Model boxes never become physical
 diameters. Follow checks and independent Save searches do not run the model.
@@ -38,6 +48,7 @@ process. No model assets or default settings are changed.
 
 Saved recent exposure/marked-ball cases support further experiments, but older
 dim cases remain missed. Live movement, occlusion, multiple balls, exposure changes
-and sustained load still need qualification. Cold worker/model startup can exceed
-the freshness limit and must be reported separately from warm inference. An early
-API hint is not a measured reduction in live acquisition or screen latency.
+and sustained load still need qualification. A subsequent movement recording
+exposed missed relocated balls and an occluder mistaken for a ball. Faster refresh
+does not fix classification. This remains an experimental API, off by default;
+no live tracking, size accuracy or Ready-time improvement is qualified.

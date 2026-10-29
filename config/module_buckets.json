@@ -124,6 +124,13 @@
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
+  "docs/camera/ball-exposure-bias.md": "TESTER",
+  "docs/camera/ball-model-hints.md": "TESTER",
+  "src/openflight/camera/golf_ball_hint.py": "FUSION",
+  "tests/test_ball_hint_delivery.py": "TESTER",
+  "tests/test_ball_hint_refresh.py": "TESTER",
+  "tests/test_ball_worker_integration.py": "TESTER",
+  "tests/test_golf_ball_hint.py": "FUSION",
   "scripts/hardware-test/test_iwr_early_notification.py": "TESTER",
   "tests/test_full_speed_shot_aim.py": "FUSION",
   "tests/test_ballistics_ground_contact.py": "FUSION",

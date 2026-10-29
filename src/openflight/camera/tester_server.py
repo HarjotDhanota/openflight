@@ -12,6 +12,7 @@ import math
 import multiprocessing
 import os
 import pickle
+import queue
 import re
 import shlex
 import signal
@@ -24,7 +25,7 @@ import uuid
 import zlib
 from collections import Counter, deque
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import CancelledError, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
@@ -4732,7 +4733,7 @@ class BoxBallLocator:
             return None
         return repr((self.camera, self.box, applied, id(_BALL_SEARCH_POOL)))
 
-    def _look_in_box(self, frames, sequence, applied, at, on_object_hint=None):
+    def _look_in_box(self, frames, sequence, applied, at, on_object_hint=None, separate_hint=False):
         context = self._watch_context(frames, applied)
         bounds = self.box.bounds_px(self.camera.image_width_px, self.camera.image_height_px)
         evidence = (
@@ -4766,7 +4767,7 @@ class BoxBallLocator:
                     "applied_controls": applied,
                     "on_object_hint": on_object_hint,
                 }
-                if self._object_hint_model is not None and anchor is None
+                if self._object_hint_model is not None and anchor is None and not separate_hint
                 else {}
             ),
         )
@@ -4788,6 +4789,7 @@ class BoxBallLocator:
         *,
         observed_at: float | None = None,
         on_object_hint: Callable[[dict], None] | None = None,
+        separate_hint: bool = False,
     ) -> dict:
         with self._lock:
             if self._last_sequence is not None and frame_sequence <= self._last_sequence:
@@ -4811,7 +4813,7 @@ class BoxBallLocator:
         watch, calls, context = {"matched": False}, 0, None
         try:
             in_box, watch, calls, context = self._look_in_box(
-                frames, frame_sequence, applied, look_at, publish_hint
+                frames, frame_sequence, applied, look_at, publish_hint, separate_hint
             )
             wide = None
             if in_box.get("status") not in {"selected", "ambiguous"} and self.wide is not None:
@@ -5180,9 +5182,16 @@ def _camera_model_evidence(camera: BallPlaneCamera) -> dict:
 # worker process keeps capture smooth and uses the Pi's other cores.
 _BALL_SEARCH_POOL: ProcessPoolExecutor | None = None
 _BALL_SEARCH_POOL_LOCK = threading.Lock()
+_BALL_HINT_LOCK = threading.Lock()
 
 
-def configure_ball_search_workers(workers: int) -> None:
+def _initialize_ball_search_worker(model_path, ready):
+    worker_scheduling.initialize_analysis_worker()
+    if model_path is not None:
+        ready.put(golf_ball_hint.warm_model(model_path))
+
+
+def configure_ball_search_workers(workers: int, *, object_hint_model: Path | None = None) -> None:
     """Start (or, with 0, stop) the worker processes that run the ball search."""
     global _BALL_SEARCH_POOL  # pylint: disable=global-statement
     with _BALL_SEARCH_POOL_LOCK:
@@ -5190,16 +5199,51 @@ def configure_ball_search_workers(workers: int) -> None:
             _BALL_SEARCH_POOL.shutdown(wait=False, cancel_futures=True)
             _BALL_SEARCH_POOL = None
         if workers > 0:
+            context = multiprocessing.get_context("spawn")
+            ready = context.Queue() if object_hint_model is not None else None
             # spawn, not fork: the tester has camera and web threads that a fork would copy
             _BALL_SEARCH_POOL = ProcessPoolExecutor(
                 max_workers=workers,
-                mp_context=multiprocessing.get_context("spawn"),
+                mp_context=context,
                 # a killed server never shuts the pool down; its workers must not
                 # outlive it (29 Sept: two orphans per test run)
-                initializer=worker_scheduling.initialize_analysis_worker,
+                initializer=_initialize_ball_search_worker,
+                initargs=(str(object_hint_model) if object_hint_model is not None else None, ready),
             )
             for _ in range(workers):
                 _BALL_SEARCH_POOL.submit(int)  # import the worker's modules now, not on first use
+            if ready is not None:
+                try:
+                    for _ in range(workers):
+                        status = ready.get(timeout=30)
+                        if status["status"] != "warmed":
+                            logger.warning("Ball hint warmup unavailable: %s", status["reason"])
+                except queue.Empty:
+                    logger.warning("Ball hint warmup did not finish before startup timeout")
+                finally:
+                    ready.close()
+
+
+def _run_object_hint(frames, camera, search, applied_controls, model_path):
+    pool = _BALL_SEARCH_POOL
+    if pool is None:
+        return golf_ball_hint.unavailable("search worker unavailable or disabled")
+    if not _BALL_HINT_LOCK.acquire(blocking=False):
+        return golf_ball_hint.unavailable("previous hint still processing")
+    try:
+        return pool.submit(
+            golf_ball_hint.safe_propose, frames, camera, search, applied_controls, str(model_path)
+        ).result()
+    except (
+        CancelledError,
+        BrokenProcessPool,
+        pickle.PicklingError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        return golf_ball_hint.unavailable(f"hint worker failed: {type(exc).__name__}")
+    finally:
+        _BALL_HINT_LOCK.release()
 
 
 def _run_ball_search(
@@ -5214,19 +5258,9 @@ def _run_ball_search(
     pool = _BALL_SEARCH_POOL
     hint = None
     if object_hint_model is not None:
-        hint = golf_ball_hint.unavailable("search worker unavailable or disabled")
-        if pool is not None:
-            try:
-                hint = pool.submit(
-                    golf_ball_hint.safe_propose,
-                    frames,
-                    camera,
-                    kwargs["search"],
-                    applied_controls,
-                    str(object_hint_model),
-                ).result()
-            except (BrokenProcessPool, pickle.PicklingError, TypeError, AttributeError) as exc:
-                hint = golf_ball_hint.unavailable(f"hint worker failed: {type(exc).__name__}")
+        hint = _run_object_hint(
+            frames, camera, kwargs.get("search"), applied_controls, object_hint_model
+        )
         if on_object_hint is not None:
             on_object_hint(deepcopy(hint))
     if pool is not None:
@@ -7553,6 +7587,8 @@ class LiveView:
         self._cues: Callable[[Mapping], dict] | None = None
         self._analyzer: Callable[[np.ndarray, int], Mapping] | None = None
         self._looker: threading.Thread | None = None
+        self._hint_looker: threading.Thread | None = None
+        self._independent_hints = False
 
     @property
     def running(self) -> bool:
@@ -7578,6 +7614,7 @@ class LiveView:
         cues: Callable[[Mapping], dict] | None = None,
         expected_row: tuple[float, float] | None = None,
         analyzer: Callable[[np.ndarray, int], Mapping] | None = None,
+        independent_hints: bool = False,
     ) -> None:
         """Open the arm's mode, or only change exposure and gain if it is already open."""
         controls = live_controls(arm, exposure_us, gain)
@@ -7588,8 +7625,10 @@ class LiveView:
                 self._arm != arm
                 or self._analyzer is not analyzer
                 or (prior_controls is not None and prior_controls != controls)
+                or independent_hints != self._independent_hints
             )
             if reuse:
+                self._independent_hints = independent_hints
                 self._pending = controls
                 self._black_floor = black_floor
                 self._expected = expected_diameter_px
@@ -7607,6 +7646,7 @@ class LiveView:
                     self._analysis_image = None
                     self._analysis_frame_sequence = None
                     self._latest_frame_at = None
+                self._start_hint_looker_locked()
                 return
         self.stop()
         with self._lock:
@@ -7638,6 +7678,7 @@ class LiveView:
             self._expected_row = expected_row
             self._cues = cues
             self._analyzer = analyzer
+            self._independent_hints = independent_hints
             self._thread = threading.Thread(
                 target=self._run,
                 args=(arm, stop_event, generation),
@@ -7654,6 +7695,64 @@ class LiveView:
                 name="tester-live-ball",
             )
             self._looker.start()
+            self._start_hint_looker_locked()
+
+    def _start_hint_looker_locked(self):
+        if (
+            self._independent_hints
+            and getattr(self._analyzer, "_object_hint_model", None) is not None
+            and (self._hint_looker is None or not self._hint_looker.is_alive())
+        ):
+            self._hint_looker = threading.Thread(
+                target=self._look_hints,
+                args=(self._arm, self._active_stop, self._run_generation),
+                daemon=True,
+                name="tester-live-hint",
+            )
+            self._hint_looker.start()
+
+    def _publish_object_hint(self, hint, context):
+        arm, stop_event, generation, context_generation, analyzer = context
+        with self._lock:
+            if (
+                not stop_event.is_set()
+                and generation == self._run_generation
+                and context_generation == self._context_generation
+                and analyzer is self._analyzer
+                and self._arm == arm
+                and self._error is None
+            ):
+                self._object_hint = deepcopy(hint)
+
+    def _look_hints(self, arm, stop_event, generation):
+        previous = None
+        while not stop_event.wait(0.05):
+            with self._lock:
+                if generation != self._run_generation or self._arm != arm:
+                    return
+                analyzer = self._analyzer
+                model = getattr(analyzer, "_object_hint_model", None)
+                sequence = self._frame_sequence
+                context_generation = self._context_generation
+                if (
+                    not isinstance(analyzer, BoxBallLocator)
+                    or not self._independent_hints
+                    or model is None
+                    or len(self._recent) < 3
+                    or self._latest_frame_at is None
+                    or self._error is not None
+                    or (context_generation, sequence) == previous
+                ):
+                    continue
+                frames = np.stack(self._recent)
+                applied = list(self._recent_applied)
+                at = self._latest_frame_at
+            previous = (context_generation, sequence)
+            hint = _run_object_hint(frames, analyzer.camera, analyzer.box, applied, model)
+            bound = analyzer._hint_payload(hint, frames, sequence, applied, at)
+            self._publish_object_hint(
+                bound, (arm, stop_event, generation, context_generation, analyzer)
+            )
 
     def change_controls(self, exposure_us: int, gain: float, owner: object = None) -> None:
         """Request new controls on the open mode and restart analysis from fresh frames.
@@ -7685,7 +7784,11 @@ class LiveView:
     def stop(self) -> None:
         with self._lock:
             stop_event = self._active_stop
-            threads = (("capture", self._thread), ("analyzer", self._looker))
+            threads = (
+                ("capture", self._thread),
+                ("analyzer", self._looker),
+                ("hint", self._hint_looker),
+            )
             self._run_generation += 1
             self._object_hint = None
         if stop_event is not None:
@@ -7703,6 +7806,8 @@ class LiveView:
                 self._thread = None
             if self._looker is threads[1][1]:
                 self._looker = None
+            if self._hint_looker is threads[2][1]:
+                self._hint_looker = None
             if self._active_stop is stop_event:
                 self._active_stop = None
             self._prune_retired_locked()
@@ -7740,16 +7845,9 @@ class LiveView:
             frames = np.stack(recent)
 
             def publish_hint(hint):
-                with self._lock:
-                    if (
-                        not stop_event.is_set()
-                        and generation == self._run_generation
-                        and context_generation == self._context_generation
-                        and analyzer is self._analyzer
-                        and self._arm == arm
-                        and self._error is None
-                    ):
-                        self._object_hint = deepcopy(hint)
+                self._publish_object_hint(
+                    hint, (arm, stop_event, generation, context_generation, analyzer)
+                )
 
             if analyzer is not None:
                 try:
@@ -7760,7 +7858,16 @@ class LiveView:
                             applied,
                             observed_at=observed_at,
                             **(
-                                {"on_object_hint": publish_hint}
+                                {
+                                    "on_object_hint": publish_hint,
+                                    **(
+                                        {"separate_hint": True}
+                                        if self._independent_hints
+                                        and self._hint_looker is not None
+                                        and self._hint_looker.is_alive()
+                                        else {}
+                                    ),
+                                }
                                 if getattr(analyzer, "_object_hint_model", None) is not None
                                 else {}
                             ),
@@ -8263,6 +8370,7 @@ def create_app(
     require_lis3dh_orientation: bool = False,
     send_dir: Path | None = None,
     ball_hint_model: Path | None = None,
+    ball_hint_independent: bool = False,
 ) -> Flask:
     """Build the standalone tester service.
 
@@ -9347,7 +9455,17 @@ def create_app(
             brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=None)
             analyzer = brightness
         with live_owner_lock:
-            live.start(arm, exposure_us, gain, analyzer=analyzer)
+            live.start(
+                arm,
+                exposure_us,
+                gain,
+                analyzer=analyzer,
+                **(
+                    {"independent_hints": True}
+                    if kind == "placement_box" and ball_hint_independent
+                    else {}
+                ),
+            )
             guided_analyzer["value"] = None
             box_preview_exposure["value"] = brightness
             box_locator["value"] = locator
@@ -12662,6 +12780,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Opt-in 320px golf ONNX object hints; geometry and confirmation remain unchanged",
     )
     parser.add_argument(
+        "--ball-hint-independent",
+        action="store_true",
+        help="Experimental independent hint refresh; may slow geometry through CPU contention",
+    )
+    parser.add_argument(
         "--ball-search-workers",
         type=int,
         default=2,
@@ -12704,6 +12827,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="The visible folder each finished bundle is also put in, to send from",
     )
     args = parser.parse_args(argv)
+    if args.ball_hint_independent and args.ball_hint_model is None:
+        parser.error("--ball-hint-independent requires --ball-hint-model")
     if (args.camera_optical_calibration is None) != (args.camera_placement is None):
         parser.error("calibrated camera fusion requires both calibration and placement")
     sessions_root = args.sessions_root.expanduser().resolve()
@@ -12725,7 +12850,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.port,
         sessions_root,
     )
-    configure_ball_search_workers(max(0, args.ball_search_workers))
+    configure_ball_search_workers(
+        max(0, args.ball_search_workers), object_hint_model=args.ball_hint_model
+    )
     enclosure = EnclosureTilt(
         args.rig_geometry,
         bus=args.inclinometer_bus,
@@ -12763,6 +12890,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bind_host=args.host,
             internal_sync_clock_package=args.internal_sync_clock_package,
             ball_hint_model=args.ball_hint_model,
+            ball_hint_independent=args.ball_hint_independent,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()
