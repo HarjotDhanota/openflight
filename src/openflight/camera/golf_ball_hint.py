@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -201,11 +200,9 @@ def propose(frames, camera, search, applied, model_path: str) -> dict:
     return result
 
 
-def estimate_with_hint(frames, camera, kwargs, model_path, applied):
-    """Worker entry: hints are diagnostic alongside the unchanged full estimator."""
+def safe_propose(frames, camera, search, applied, model_path):
+    """Worker entry: a failed model must not prevent the independent geometry search."""
     try:
-        hint = propose(frames, camera, kwargs["search"], applied, model_path)
+        return propose(frames, camera, search, applied, model_path)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        hint = unavailable(f"model hint failed: {type(exc).__name__}")
-    result = ranges.estimate_patch_ball(frames, camera, **kwargs)
-    return replace(result, diagnostics={**result.diagnostics, "object_hint": hint})
+        return unavailable(f"model hint failed: {type(exc).__name__}")

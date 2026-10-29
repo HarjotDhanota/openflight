@@ -13,16 +13,20 @@ thresholds came from saved-image development. Overlapping crops use the same
 pixels and are not independent observations. Multiple qualifying objects remain
 ambiguous. Unknown, mixed or invalid applied exposure/gain suppresses inference.
 
-The hint appears in `ball_observation.object_hint` with its ending frame sequence,
-window size, mode, camera/search context, applied controls and host delivery time.
-Old hints lose their selection. LiveView also discards completed associations
-from superseded control/mode generations. Hints do not persist across calls.
+The hint appears early in `GET /api/tester/live` as the separate `object_hint`
+field. It includes its ending frame sequence, window size, mode, camera/search
+context, applied controls and host delivery time. It expires two seconds after
+input delivery, even while geometry is still busy. Control/mode/analyzer changes
+and stopping clear it; superseded callbacks cannot republish it. Snapshots copy
+the evidence and never refresh its timestamp. Completed geometry also retains
+the hint in `ball_observation.object_hint`, with stale selections removed.
 The model cache retains weights only; it retains no scene pixels or decisions.
 
-This first integration is diagnostic: it runs before the unchanged full geometry
-search in the worker, and both results are delivered together. It adds processing
-time and can already be stale when that search finishes. It does not accelerate
-confirmation or change the preview overlay, exposure metering, metric diameter,
+The worker completes the model task first, publishes its result without waiting
+for geometry, then runs the unchanged full geometry search. Tasks are sequential;
+the existing analysis thread and worker pool are reused without an extra queue.
+The early API result can be inspected while fitting continues. This does not
+accelerate confirmation or change the preview overlay, exposure metering, metric diameter,
 distance, height, identity, watcher or Save gates. A proposed hint always carries
 `metric_eligible=false` and `confirmable=false`. Model boxes never become physical
 diameters. Follow checks and independent Save searches do not run the model.
@@ -34,5 +38,6 @@ process. No model assets or default settings are changed.
 
 Saved recent exposure/marked-ball cases support further experiments, but older
 dim cases remain missed. Live movement, occlusion, multiple balls, exposure changes
-and sustained load still need qualification. A future scheduling or metering
-change should be measured separately before claiming faster acquisition.
+and sustained load still need qualification. Cold worker/model startup can exceed
+the freshness limit and must be reported separately from warm inference. An early
+API hint is not a measured reduction in live acquisition or screen latency.
