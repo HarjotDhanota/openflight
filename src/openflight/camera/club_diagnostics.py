@@ -15,23 +15,32 @@ from .club_sequence import ClubAssociationGraph, ClubFrameIdentity, bind_observa
 
 
 def _window(prepared, stamps):
+    selection = {"source": "legacy_prepared_window", "first_touch_interval_ns": None}
     if prepared.window:
-        return prepared.window, {
-            "source": "legacy_prepared_window",
-            "first_touch_interval_ns": None,
-        }
-    departure = impact_location.find_contact(prepared.frames, prepared.ball)
-    selection = {
-        "source": "image_departure_only",
-        "departure": dataclasses.asdict(departure),
-        "first_touch_interval_ns": None,
-        "metric_preparation_refusal": prepared.contact.reason,
-    }
+        departure = getattr(prepared, "contact", None)
+        if departure is None or departure.status != "ok":
+            return prepared.window, selection
+    else:
+        departure = impact_location.find_contact(prepared.frames, prepared.ball)
+        selection.update(
+            source="image_departure_only", metric_preparation_refusal=prepared.contact.reason
+        )
+    selection["departure"] = dataclasses.asdict(departure)
     if departure.status != "ok" or departure.last_rest_frame is None:
         return (), selection
     last = departure.last_rest_frame
-    first = int(np.searchsorted(stamps, stamps[last] - impact_location.WINDOW_BEFORE_S * 1e9))
-    return tuple(range(first, min(len(stamps), last + 2))), selection
+    first = (
+        min(prepared.window)
+        if prepared.window
+        else int(np.searchsorted(stamps, stamps[last] - impact_location.WINDOW_BEFORE_S * 1e9))
+    )
+    stop = int(
+        np.searchsorted(
+            stamps, stamps[last + 1] + impact_location.WINDOW_BEFORE_S * 1e9, side="right"
+        )
+    )
+    selection["post_departure_duration_s"] = impact_location.WINDOW_BEFORE_S
+    return tuple(range(first, stop)), selection
 
 
 def analyse_clip(clip):
@@ -81,6 +90,17 @@ def analyse_clip(clip):
     for index in window:
         frame = frames[index]
         veto = None if prepared.masks is None else prepared.masks.ball_vetoes.get(index)
+        veto_source = "legacy_current_ball_candidate" if veto is not None else "unavailable"
+        departure = selection.get("departure")
+        if (
+            index not in prepared.window
+            and departure is not None
+            and index > departure["last_rest_frame"]
+        ):
+            veto = impact_location.flying_ball(frame, ball, background)
+            veto_source = (
+                "readonly_diagnostic_current_ball_candidate" if veto is not None else "unavailable"
+            )
         identity = ClubFrameIdentity(
             clip.extra["capture_npz_sha256"],
             int(index),
@@ -124,6 +144,7 @@ def analyse_clip(clip):
                     **branch,
                     "identity": dataclasses.asdict(identity),
                     "coordinate_mapping": mapping,
+                    "ball_veto_source": veto_source,
                     "association": trackers[key].update(packet),
                     "visibility_input": (
                         "own uncertain current flying-ball proposal; separate identity branches"

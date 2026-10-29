@@ -175,3 +175,19 @@ def test_image_only_selection_does_not_modify_the_metric_preparation(tmp_path):
     result = diagnostic.analyse_clip(current)
     assert result["frames"]
     assert current.prepared.contact is contact and current.prepared.window is window
+
+
+def test_postshot_diagnostic_window_includes_current_frames_after_departure(tmp_path):
+    from test_impact_live import Session
+
+    current = impact_live.LiveAnalyser()._prepare(Session(tmp_path).job())
+    result = diagnostic.analyse_clip(current)
+    departure = current.prepared.contact.contact_frame
+    stamps = current.extra["capture_frame_timestamps_ns"]
+    expected_last = max(
+        i for i, stamp in enumerate(stamps) if stamp <= stamps[departure] + 12000000
+    )
+    assert expected_last > departure
+    assert max(r["identity"]["frame_index"] for r in result["frames"]) == expected_last
+    assert max(current.prepared.window) == departure
+    assert result["window_selection"]["first_touch_interval_ns"] is None
