@@ -8,10 +8,30 @@ import hashlib
 import numpy as np
 
 from ..rig_geometry import geometry_fingerprint
-from . import club_acquisition
+from . import club_acquisition, impact_location
 from .club_sequence import ClubAssociationGraph, ClubFrameIdentity, bind_observation
 
 # pylint: disable=no-member
+
+
+def _window(prepared, stamps):
+    if prepared.window:
+        return prepared.window, {
+            "source": "legacy_prepared_window",
+            "first_touch_interval_ns": None,
+        }
+    departure = impact_location.find_contact(prepared.frames, prepared.ball)
+    selection = {
+        "source": "image_departure_only",
+        "departure": dataclasses.asdict(departure),
+        "first_touch_interval_ns": None,
+        "metric_preparation_refusal": prepared.contact.reason,
+    }
+    if departure.status != "ok" or departure.last_rest_frame is None:
+        return (), selection
+    last = departure.last_rest_frame
+    first = int(np.searchsorted(stamps, stamps[last] - impact_location.WINDOW_BEFORE_S * 1e9))
+    return tuple(range(first, min(len(stamps), last + 2))), selection
 
 
 def analyse_clip(clip):
@@ -30,15 +50,19 @@ def analyse_clip(clip):
         "strike": None,
     }
     prepared = clip.prepared
-    if prepared is None or not prepared.window:
+    if prepared is None:
         return {**result, "status": "withheld_no_prepared_contact_window"}
     stamps = clip.extra.get("capture_frame_timestamps_ns")
     exposures = clip.extra.get("capture_frame_exposure_us")
     count = len(prepared.frames)
     if stamps is None or exposures is None or len(stamps) != count or len(exposures) != count:
         return {**result, "status": "withheld_missing_per_frame_sensor_time_or_exposure"}
+    window, selection = _window(prepared, stamps)
+    result["window_selection"] = selection
+    if not window:
+        return {**result, "status": "withheld_no_image_departure_window"}
     frames = prepared.frames
-    first = min(prepared.window)
+    first = min(window)
     past = min(8, first)
     if past < 3:
         return {**result, "status": "withheld_no_past_background"}
@@ -54,7 +78,7 @@ def analyse_clip(clip):
         "optics_key": clip.extra.get("optics_template_key"),
     }
     view_id = geometry_fingerprint(mapping)
-    for index in prepared.window:
+    for index in window:
         frame = frames[index]
         veto = None if prepared.masks is None else prepared.masks.ball_vetoes.get(index)
         identity = ClubFrameIdentity(
