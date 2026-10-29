@@ -29,6 +29,7 @@ from openflight.launch_monitor import Shot  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_camera_impact_location as synthetic  # noqa: E402
+from impact_angle_fixtures import bind_test_angles  # noqa: E402
 
 RIG = json.loads(
     (Path(__file__).resolve().parents[1] / "config" / "enclosure_v3_rig_geometry.json").read_text(
@@ -74,6 +75,8 @@ def write_clip(folder: Path, *, truth_mm: float = 8.0, mirror: bool = False, **r
         frames=frames,
         pre_trigger_count=np.int32(11),
         exposure_us=np.full(len(frames), 300.0),
+        sensor_timestamp_ns=1_000_000_000
+        + np.arange(len(frames), dtype=np.int64) * round(1e9 / synthetic.FPS),
     )
     (folder / "metadata.json").write_text(
         json.dumps({"delivered_fps": synthetic.FPS, "settings": {"mirror_horizontal": False}}),
@@ -118,7 +121,9 @@ class Session:
             "session_uuid": self.uuid,
             "shot_number": self.count,
             "clip_path": str(clip),
-            "shot": shot_record(self.count, club=club, **kwargs),
+            "shot": bind_test_angles(
+                shot_record(self.count, club=club, **kwargs), clip / "frames.npz"
+            ),
             "start": START,
             "handedness": handedness,
         }

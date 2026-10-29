@@ -197,6 +197,7 @@ class LiveAnalyser:
             "ball_range_source": clip.range_source,
             "stages_ms": stages,
             "dynamic_lie": clip.extra.get("dynamic_lie"),
+            "angle_input_decisions": clip.extra.get("angle_input_decisions", {}),
         }
         pool = self._pools.setdefault(f"{clip.club}_{clip.frame_size}", _Pool())
 
