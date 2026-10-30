@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +28,7 @@ def dump_summary(raw, split):
     for line in raw.decode("ascii").splitlines():
         if not line.strip().startswith("{"):
             continue
-        pairs = json.loads(line, object_pairs_hook=list)
+        pairs = json.loads(line, object_pairs_hook=list, parse_float=Decimal)
         for key, value in pairs:
             if key in ("sample_time", "trigger_time", "I", "Q"):
                 if key in values:
@@ -42,16 +42,21 @@ def dump_summary(raw, split):
             or any(type(value) is not int or not 0 <= value <= 4095 for value in array)
         ):
             raise ValueError("complete original 12-bit 4096-pair capture required")
-    if any(not isinstance(values.get(key), str) for key in ("sample_time", "trigger_time")):
-        raise ValueError("original timestamp strings required")
-    stamps = [Decimal(values[key]) for key in ("sample_time", "trigger_time")]
+    if any(
+        type(values.get(key)) not in (str, int, Decimal) for key in ("sample_time", "trigger_time")
+    ):
+        raise ValueError("original numeric or string timestamps required")
+    try:
+        stamps = [Decimal(values[key]) for key in ("sample_time", "trigger_time")]
+    except InvalidOperation as error:
+        raise ValueError("invalid device timestamp") from error
     if any(not value.is_finite() or value < 0 for value in stamps) or stamps[1] < stamps[0]:
         raise ValueError("invalid device capture times")
     return {
         "raw_sha256": hashlib.sha256(raw).hexdigest(),
         "sample_count": 4096,
-        "sample_time_text": values["sample_time"],
-        "trigger_time_text": values["trigger_time"],
+        "sample_time_text": str(values["sample_time"]),
+        "trigger_time_text": str(values["trigger_time"]),
         "device_trigger_minus_sample_ns": int((stamps[1] - stamps[0]) * 1_000_000_000),
         "nominal_first_to_last_ns": 136_500_000,
         "nominal_buffer_periods_ns": math.ceil(4096 * 1_000_000_000 / 30_000),

@@ -34,6 +34,13 @@ def test_grid_uses_first_to_last_sample_span_and_preserves_device_strings():
     assert result["sample_time_text"] == "10.000"
 
 
+def test_numeric_device_timestamps_use_exact_decimal_parsing():
+    raw = raw_capture().replace(b'"10.000"', b"6808.427").replace(b'"10.026"', b"6808.453")
+    result = bench.dump_summary(raw, 6)
+    assert result["device_trigger_minus_sample_ns"] == 26_000_000
+    assert result["sample_time_text"] == "6808.427"
+
+
 @pytest.mark.parametrize(
     "change",
     [
