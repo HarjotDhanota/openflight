@@ -183,6 +183,7 @@ class NativeFusionExtension(KioskExtension):
         self.finished = threading.Event()
         self.finished.set()
         self.sequence = 0
+        self.current_attempt = None
         self.original_camera_match = None
         self.terminating = False
 
@@ -287,6 +288,7 @@ class NativeFusionExtension(KioskExtension):
                 raise InterruptedError("session stopped")
         self.sequence += 1
         folder = self.files.folder / f"attempt-{self.sequence:03d}"
+        self.current_attempt = folder
         self.worker_alive = True
 
         def cancelled():
@@ -349,6 +351,7 @@ class NativeFusionExtension(KioskExtension):
         self.files.publish(
             "processing", message="Normal fusion is calculating this attempt's metrics."
         )
+        self.record_stage("processing_started")
         if started:
             started()
         return capture
@@ -367,11 +370,29 @@ class NativeFusionExtension(KioskExtension):
     def on_shot_detected(self, shot):
         """Freeze this attempt's identity before asynchronous normal enrichment."""
         shot.extras["native_sensor_timing"] = dict(self.association)
+        self.record_stage("ball_strike_detected", shot)
 
     def on_shot_accepted(self, shot):
         """Only accepted shots enter the asynchronous final-publication wait."""
         self.finished.clear()
         self.publishing = True
+        self.record_stage("accepted", shot)
+
+    def record_stage(self, stage, shot=None):
+        """Record host processing/publication milestones without inventing screen paint."""
+        folder = getattr(self, "current_attempt", None)
+        if folder is not None:
+            with (folder / "publication.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "stage": stage,
+                            "host_mono_ns": time.monotonic_ns(),
+                            "shot_number": getattr(shot, "shot_number", None),
+                        }
+                    )
+                    + "\n"
+                )
 
     def extend_shot_record(self, shot, record):
         """Publish timing qualification alongside the ordinary metric records."""
@@ -381,6 +402,7 @@ class NativeFusionExtension(KioskExtension):
     def after_shot_published(self, shot, *, update_kind):
         """Release acquisition only after this shot's final normal pipeline output."""
         if shot.extras.get("native_sensor_timing") == self.association:
+            self.record_stage("published", shot)
             self.finished.set()
 
     def ready_light_states(self, states):

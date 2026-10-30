@@ -39,6 +39,7 @@ def test_legacy_and_explicit_selection(payload, expected):
         ({"trigger_policy": "sound", "capture_mode": "native_internal"}, Path("sealed")),
         ({"trigger_policy": "invented"}, Path("sealed")),
         ({"trigger_policy": None}, Path("sealed")),
+        ({"capture_mode": []}, Path("sealed")),
     ],
 )
 def test_unavailable_or_conflicting_selection_refuses_before_jobs(tmp_path, payload, package):
@@ -89,6 +90,7 @@ def test_policy_reaches_launch_and_run_snapshot(tmp_path, selected):
     assert response.status_code == 202, response.json
     command = jobs.calls[0][1][0]
     run = Path(command[command.index("--log-dir") + 1])
+    assert "--pi-trace" in command
     assert json.loads((run / "trigger-policy.json").read_text()) == policy.snapshot(selected)
     if selected != "sound":
         assert command[command.index("--tester-trigger-policy") + 1] == selected

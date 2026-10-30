@@ -65,7 +65,7 @@ def validate(policy, *, package=True):
 def selection(payload, action, package):
     """Map legacy native_internal explicitly and reject conflicting saved selections."""
     mode = payload.get("capture_mode")
-    if mode is not None and mode not in {"sound", "native_internal"}:
+    if mode is not None and (not isinstance(mode, str) or mode not in {"sound", "native_internal"}):
         raise ValueError("capture_mode must be sound or native_internal")
     policy = payload.get("trigger_policy", "independent" if mode == "native_internal" else "sound")
     validate(policy, package=package)
