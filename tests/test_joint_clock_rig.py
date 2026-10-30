@@ -96,6 +96,22 @@ def test_boot_or_initial_high_refuses_preparation(tmp_path):
     assert not rig.gpio_ready.is_set()
 
 
+@pytest.mark.parametrize("accept", [False, None])
+def test_camera_rejection_or_invalid_acknowledgement_marks_trial_failed(tmp_path, accept):
+    camera = SimpleNamespace(notify_capture_request=lambda _item: accept, stop=lambda: None)
+    rig = control(tmp_path, camera)
+    rig.arm_id = rig.router.arm(90)
+    rig.observe_gpio(
+        {"type": "edge", "edge": "rising", "timestamp_ns": 100, "received_mono_ns": 110}
+    )
+    with pytest.raises(RuntimeError, match="joint companion failed"):
+        rig.close()
+    result = json.loads((tmp_path / "RESULT.json").read_text())
+    assert result["status"] == "failed"
+    assert result["errors"][0]["component"] == "capture-routing"
+    assert (tmp_path / "routing.jsonl").is_file()
+
+
 @pytest.mark.parametrize("edge_during_rearm", [False, True])
 def test_native_trial_rearms_after_setup_before_waiting(tmp_path, edge_during_rearm):
     seen = []

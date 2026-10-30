@@ -49,7 +49,18 @@ class RigControl:
                 received_mono_ns=row["received_mono_ns"],
                 observer_wall_s=time.time(),
             )
-            self.emit("routing.jsonl", self.router.dispatch(request))
+            outcome = self.router.dispatch(request)
+            self.emit("routing.jsonl", outcome)
+            if outcome["status"] == "dispatched" and any(
+                item["status"] != "accepted" for item in outcome["consumers"].values()
+            ):
+                self.errors.append(
+                    {
+                        "component": "capture-routing",
+                        "event_id": request.event_id,
+                        "consumers": outcome["consumers"],
+                    }
+                )
 
     def _record(self):
         try:
