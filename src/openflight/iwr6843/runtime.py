@@ -223,7 +223,14 @@ def ops_guided_measurement(
     )
     # a track the IWR could not tell from a different walk is settled by the OPS speed
     ambiguous = getattr(baseline, "track_ambiguity", None) is not None
-    if sound and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC and not ambiguous:
+    channel_ambiguous = (
+        baseline.status == "rejected_channel_ambiguous" and baseline.tracker_quality != "reject"
+    )
+    if (
+        (sound or channel_ambiguous)
+        and speed_error <= OPS_TRACK_SPEED_TOLERANCE_FRAC
+        and not ambiguous
+    ):
         return baseline
     unresolved = (
         TRACK_AMBIGUOUS_STATUS
