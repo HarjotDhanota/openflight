@@ -783,8 +783,7 @@ class OPS243Radar:
                 # mid-dump). Abandon the sync; the caller falls back to
                 # first-byte timing. Retrying writes would only re-block.
                 logger.warning(
-                    "[OPS] Clock sync C? write timed out — port jammed, "
-                    "abandoning clock sync"
+                    "[OPS] Clock sync C? write timed out — port jammed, abandoning clock sync"
                 )
                 return False
             buf = ""
@@ -1667,14 +1666,22 @@ class OPS243Radar:
         cancel_event: Optional[threading.Event] = None,
         on_first_byte: Optional[Callable[[], None]] = None,
         gate_edge_time: Optional[Callable[[], Optional[float]]] = None,
+        *,
+        software_trigger_event: Optional[threading.Event] = None,
     ) -> str:
-        """Read one dump and preserve evidence before parsing or re-arming."""
+        """Read one dump; an optional per-attempt event requests S! on this reader."""
         evidence = OpsCaptureEvidence(getattr(self, "_hardware_arm_context", None))
         self.last_hardware_capture_evidence = None
         error = None
         try:
             return self._read_hardware_trigger(
-                timeout, dump_grace, cancel_event, on_first_byte, gate_edge_time, evidence=evidence
+                timeout,
+                dump_grace,
+                cancel_event,
+                on_first_byte,
+                gate_edge_time,
+                evidence=evidence,
+                software_trigger_event=software_trigger_event,
             )
         except BaseException as exc:
             error = type(exc).__name__
@@ -1701,6 +1708,7 @@ class OPS243Radar:
         gate_edge_time: Optional[Callable[[], Optional[float]]] = None,
         *,
         evidence: OpsCaptureEvidence,
+        software_trigger_event: Optional[threading.Event] = None,
     ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
@@ -1722,6 +1730,9 @@ class OPS243Radar:
             gate_edge_time: Returns the host epoch of the latest BCM17 GATE edge,
                 or None. An edge with no dump within GATE_EDGE_DUMP_TIMEOUT_S
                 ends the wait so the caller can re-arm.
+            software_trigger_event: Fresh event owned by this attempt. Requests
+                one S! from this reader, without clearing input or re-arming.
+                Command bounds are host observations, not device trigger times.
 
         Serial input is never cleared here: a dump can already be arriving.
 
@@ -1741,6 +1752,7 @@ class OPS243Radar:
         response_lines = []
         idle_bytes = bytearray()
         capture_markers = (b'{"sample_time"', b'{"trigger_time"')
+        request_blockers = (*capture_markers, b'{"trigger_velocity_detected"', b'{"I"', b'{"Q"')
         start_time = time.time()
         deadline = start_time + timeout
         last_data_time = None
@@ -1754,6 +1766,7 @@ class OPS243Radar:
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
         saw_orphan_marker = False
+        saw_velocity_notice = False
         if recovery_required:
             logger.info(
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
@@ -1773,6 +1786,10 @@ class OPS243Radar:
                 if not capture_started:
                     evidence.prefix_read(chunk)
                     idle_bytes.extend(chunk)
+                    saw_velocity_notice |= b'"trigger_velocity_detected"' in idle_bytes
+                    saw_orphan_marker |= (
+                        software_trigger_event is not None and b'{"I"' in idle_bytes
+                    )
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
                     if not marker_offsets:
@@ -1780,7 +1797,14 @@ class OPS243Radar:
                             saw_orphan_marker = True
                         # Preserve enough trailing bytes to recognize a marker split
                         # across reads, while discarding unsolicited CLI/clock noise.
-                        max_marker = max(len(marker) for marker in capture_markers)
+                        max_marker = max(
+                            len(marker)
+                            for marker in (
+                                request_blockers
+                                if software_trigger_event is not None
+                                else capture_markers
+                            )
+                        )
                         if len(idle_bytes) > max_marker:
                             discarded_bytes += len(idle_bytes) - max_marker
                             del idle_bytes[:-max_marker]
@@ -1845,7 +1869,12 @@ class OPS243Radar:
 
                 time.sleep(0.01)
             else:
-                if cancel_event is not None and cancel_event.is_set() and last_data_time is None:
+                if (
+                    cancel_event is not None
+                    and cancel_event.is_set()
+                    and last_data_time is None
+                    and evidence.software_trigger_command is None
+                ):
                     logger.info("[OPS] Hardware trigger wait cancelled before capture")
                     outcome = "cancelled"
                     break
@@ -1874,7 +1903,44 @@ class OPS243Radar:
                         self.last_hardware_trigger_missed_edge_timestamp = edge_time
                         outcome = "missed_edge"
                         break
-                time.sleep(0.02)
+                    partial_marker = software_trigger_event is not None and any(
+                        marker.startswith(bytes(idle_bytes[-length:]))
+                        for marker in request_blockers
+                        for length in range(1, min(len(marker), len(idle_bytes)) + 1)
+                    )
+                    if (
+                        software_trigger_event is not None
+                        and software_trigger_event.is_set()
+                        and evidence.software_trigger_command is None
+                        and not (partial_marker or saw_orphan_marker or saw_velocity_notice)
+                        and not recovery_required
+                        and discarded_bytes < self.DISCARDED_DUMP_MIN_BYTES
+                    ):
+                        command = {
+                            "started_mono_ns": time.monotonic_ns(),
+                            "write_return_mono_ns": None,
+                            "flush_return_mono_ns": None,
+                            "bytes_written": None,
+                            "error": None,
+                        }
+                        evidence.software_trigger_command = command
+                        try:
+                            command["bytes_written"] = self.serial.write(b"S!\r")
+                            command["write_return_mono_ns"] = time.monotonic_ns()
+                            if command["bytes_written"] != 3:
+                                raise serial.SerialException(
+                                    "incomplete OPS software trigger write"
+                                )
+                            self.serial.flush()
+                            command["flush_return_mono_ns"] = time.monotonic_ns()
+                        except BaseException as exc:
+                            command["error"] = type(exc).__name__
+                            raise
+                        deadline = max(deadline, time.time() + dump_grace)
+                if software_trigger_event is not None and not software_trigger_event.is_set():
+                    software_trigger_event.wait(0.02)
+                else:
+                    time.sleep(0.02)
 
         full_response = "".join(response_lines) if capture_started else ""
         if not capture_started:

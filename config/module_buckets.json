@@ -1102,6 +1102,7 @@
   "tests/test_ops243_mode_commands.py": "PRODUCT",
   "tests/test_ops243_rearm.py": "PRODUCT",
   "tests/test_ops243_rearm_race.py": "FUSION",
+  "tests/test_ops243_software_trigger_wait.py": "FUSION",
   "tests/test_ops243_uart.py": "FUSION",
   "tests/test_ops_capture_evidence.py": "FUSION",
   "tests/test_ops_clock_association.py": "RESEARCH",
