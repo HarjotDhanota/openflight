@@ -65,7 +65,7 @@ def test_line_above_horizon_gives_default():
     result = _solve(camera, line)
 
     assert result == {
-        "value_m": 4.6,
+        "value_m": 5.3528,
         "source": "default_not_measured",
         "reason": "above the horizon",
     }
@@ -77,7 +77,7 @@ def test_line_nearer_than_ball_gives_default():
     result = _solve(camera, _line_at(camera, 0.9))
 
     assert result["source"] == "default_not_measured"
-    assert result["value_m"] == 4.6
+    assert result["value_m"] == pytest.approx(5.3528)
     assert result["reason"] == "in front of the ball"
 
 

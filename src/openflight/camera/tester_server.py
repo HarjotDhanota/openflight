@@ -1729,7 +1729,9 @@ def _net_setup_section(
     else:
         reason = "aim point skipped" if aim["state"] == "skipped" else "no floor line marked"
         net = setup_service.default_net(reason)
-    return setup_service.stamped_net(net, aim.get("floor_line"), ctx)
+    return setup_service.stamped_net(
+        net, aim.get("floor_line"), ctx, box_id=aim.get("inputs", {}).get("box_id")
+    )
 
 
 def _ball_range_setup_section(

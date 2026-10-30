@@ -215,6 +215,30 @@ def test_aim_and_range_go_through_the_api_and_the_target_line_route(kiosk, scene
     assert look["reason"] == "no look yet" and look["state"] == "unknown"
 
 
+@pytest.mark.parametrize("distance", [0, -1, True, "3", math.nan, math.inf])
+def test_api_refuses_invalid_ball_to_net_distance(kiosk, distance):
+    _start(kiosk)
+    response = kiosk.client.post(
+        "/api/setup/aim", json={"action": "skip", "ball_to_net_m": distance}
+    )
+    assert response.status_code == 400
+
+
+def test_api_saves_entered_ball_to_net_distance(kiosk, scene):
+    _start(kiosk)
+    scene.in_box = BALL_PX
+    kiosk.client.post("/api/setup/box", json={"action": "confirm"})
+    response = kiosk.client.post("/api/setup/aim", json={"action": "skip", "ball_to_net_m": 3.2004})
+    assert response.status_code == 200
+    net = response.get_json()["setup"]["net_range"]
+    assert net["source"] == "user_entered" and net["value_m"] == pytest.approx(5.2004)
+    assert server.setup_handoff_config["net_range"]["net_range_m"] == pytest.approx(5.2004)
+    assert server.setup_handoff_config["net_range"]["ball_to_net_m"] == pytest.approx(3.2004)
+    assert (
+        server.setup_handoff_config["net_range"]["monitor_to_ball_source"] == "placement_box_centre"
+    )
+
+
 def test_the_view_is_the_latest_camera_frame(kiosk, monkeypatch):
     class Frame:
         image = np.full((800, 1280), 40, dtype=np.uint8)

@@ -1,8 +1,8 @@
 """The setup service: owns the per-unit setup record and performs the box, aim and range actions.
 
-Every action runs the before hook, computes from the camera alone, saves the loaded record,
-applies the sections that changed, announces the change and runs the after hook. Nothing
-here is typed in by the tester: a value is measured, or it is a labelled default.
+Every action runs the before hook, computes from the camera or an entered net distance,
+saves the loaded record, applies changed sections, announces the change and runs the after
+hook. Camera estimates, entered setup distances and defaults retain their sources.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ import numpy as np
 
 from openflight import kiosk_extensions
 from openflight.camera import ground_patch, placement_box, reference_ball_range, target_line
+from openflight.constants import DEFAULT_BALL_TO_NET_M, DEFAULT_MONITOR_TO_BALL_M
 from openflight.setup_record import (
     SECTIONS,
     SaveRefused,
@@ -161,35 +163,61 @@ def skipped_aim_section(box_id: str) -> dict:
     }
 
 
-def default_net(reason: str) -> dict:
+def default_net(reason: str, *, ball_forward_m: float = DEFAULT_MONITOR_TO_BALL_M) -> dict:
     return {
         "state": "default",
-        "value_m": target_line.DEFAULT_NET_RANGE_M,
+        "value_m": ball_forward_m + DEFAULT_BALL_TO_NET_M,
+        "ball_to_net_m": DEFAULT_BALL_TO_NET_M,
+        "monitor_to_ball_m": ball_forward_m,
+        "monitor_to_ball_source": "placement_box_centre",
         "source": "default_not_measured",
         "reason": reason,
+    }
+
+
+def entered_net(distance_m, ball_forward_m: float) -> dict:
+    """Convert an entered ball-to-screen length into the existing rig-origin net frame."""
+    if (
+        isinstance(distance_m, bool)
+        or not isinstance(distance_m, (int, float))
+        or not math.isfinite(distance_m)
+        or distance_m <= 0.0
+    ):
+        raise ValueError("ball-to-net distance must be a positive finite number")
+    return {
+        "state": "set",
+        "value_m": ball_forward_m + distance_m,
+        "ball_to_net_m": distance_m,
+        "monitor_to_ball_m": ball_forward_m,
+        "monitor_to_ball_source": "placement_box_centre",
+        "source": "user_entered",
     }
 
 
 def floor_line_net(camera, roll, ball_lfu, floor, tilt_pad) -> dict:
     """The net distance the floor line measures, or the labelled default and why."""
     if floor is None:
-        return default_net("no floor line marked")
+        return default_net("no floor line marked", ball_forward_m=float(ball_lfu[1]))
     net = target_line.net_range_from_floor_line(
         camera, floor, ball_lfu=ball_lfu, tilt_pad_deg=tilt_pad, roll_deg=roll
     )
     if net["source"] != "camera_floor_line":
-        return {"state": "default", **net}
+        return default_net(net["reason"], ball_forward_m=float(ball_lfu[1]))
     if net["uncertainty_m"] >= net["value_m"]:
-        return default_net(TOO_UNCERTAIN)
+        return default_net(TOO_UNCERTAIN, ball_forward_m=float(ball_lfu[1]))
     return {"state": "set", **net}
 
 
-def stamped_net(net: dict, floor, ctx: StartContext) -> dict:
-    """A net range stamped with the floor line, lens and tilt it was measured under."""
+def stamped_net(net: dict, floor, ctx: StartContext, *, box_id: str | None = None) -> dict:
+    """Bind net setup to its camera context and any box-centre conversion."""
     return {
         **net,
         "inputs": section_inputs(
-            "net_range", floor_line=floor, lens_id=ctx.lens_id, tilt_deg=ctx.tilt_offset_deg
+            "net_range",
+            floor_line=floor,
+            lens_id=ctx.lens_id,
+            tilt_deg=ctx.tilt_offset_deg,
+            **({"box_id": box_id} if "ball_to_net_m" in net else {}),
         ),
     }
 
@@ -335,9 +363,10 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         *,
         aim_px=None,
         floor_line_px=None,
+        ball_to_net_m=None,
     ) -> dict:
         """Show the aim view, confirm a tapped aim point, skip it, or clear it."""
-        payload = {"aim_px": aim_px, "floor_line_px": floor_line_px}
+        payload = {"aim_px": aim_px, "floor_line_px": floor_line_px, "ball_to_net_m": ball_to_net_m}
         perform = {
             "show": self._aim_show,
             "confirm": self._aim_confirm,
@@ -557,7 +586,11 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
         tilt_pad = placement_box.pads_deg(self._config, self._ctx.tilt_calibrated)[0]
         try:
             floor = target_line.parse_floor_line(payload["floor_line_px"], camera)
-            net = floor_line_net(camera, roll, ball, floor, tilt_pad)
+            net = (
+                floor_line_net(camera, roll, ball, floor, tilt_pad)
+                if payload["ball_to_net_m"] is None
+                else entered_net(payload["ball_to_net_m"], float(ball[1]))
+            )
             lens_forward = float(camera.camera_origin_lfu[1])
 
             def solve(floor_line):
@@ -586,14 +619,24 @@ class SetupService:  # pylint: disable=too-many-instance-attributes
             )
         return {
             "aim": aim_section(line, floor=floor, floor_line_used=used_floor, box_id=box["id"]),
-            "net_range": stamped_net(net, floor, self._ctx),
+            "net_range": stamped_net(net, floor, self._ctx, box_id=box["id"]),
         }
 
-    def _aim_skip(self, record: dict, _payload: dict) -> dict:
+    def _aim_skip(self, record: dict, payload: dict) -> dict:
         box = self._need_box(record)
+        camera, _roll = self._view()
+        forward = float(self._box_centre_lfu(camera)[1])
+        try:
+            net = (
+                default_net("aim point skipped", ball_forward_m=forward)
+                if payload["ball_to_net_m"] is None
+                else entered_net(payload["ball_to_net_m"], forward)
+            )
+        except ValueError as exc:
+            raise _Refused(str(exc)) from exc
         return {
             "aim": skipped_aim_section(box["id"]),
-            "net_range": stamped_net(default_net("aim point skipped"), None, self._ctx),
+            "net_range": stamped_net(net, None, self._ctx, box_id=box["id"]),
         }
 
     def _box_centre_lfu(self, camera) -> tuple[float, float]:

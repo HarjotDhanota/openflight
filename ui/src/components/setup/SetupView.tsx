@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { SetupActionBody, SetupActionResult, SetupActionSection, SetupSnapshot } from '../../hooks/useSetup';
 import { useCameraStill } from '../../hooks/useCameraStill';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import { useI18n } from '../../i18n/useI18n';
 import type { MessageKey } from '../../i18n';
 import type { Handed } from '../../stores/useSystemStore';
@@ -8,6 +9,7 @@ import { getServerOrigin } from '../../utils/serverOrigin';
 import { PanelAction } from '../panel/PanelAction';
 import { PanelHeader } from '../panel/PanelHeader';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { NetDistanceInput } from './NetDistanceInput';
 import { isInImage, toCamera, toScreen, type Px, type SetupViewRect } from './setupGeometry';
 import { boxOutline } from './setupOverlay';
 import {
@@ -83,12 +85,16 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
   const [aimTap, setAimTap] = useState<Px | null>(null);
   // null: the saved floor line stands; [] cleared; one or two taps
   const [floorTaps, setFloorTaps] = useState<Px[] | null>(null);
+  const [netText, setNetText] = useState<string | null>(null);
+  const sideRef = useRef<HTMLElement>(null);
+  const sideDrag = useDragScroll(sideRef);
 
   const goTo = (index: number) => {
     setStepIndex(index);
     setRefusal(null);
     setAimTap(null);
     setFloorTaps(null);
+    setNetText(null);
     setTapMode('aim');
   };
 
@@ -198,8 +204,22 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
   const aimPoint = aimTap ?? savedAim;
   const savedFloor = setup.aim.state === 'set' ? (setup.aim.floor_line ?? null) : null;
   const floorLine: Px[] = floorTaps ?? savedFloor ?? [];
+  const savedNet =
+    isUsable(setup.net_range) && setup.net_range.source === 'user_entered' && setup.net_range.ball_to_net_m != null
+      ? String(Number((setup.net_range.ball_to_net_m / 0.3048).toFixed(3)))
+      : '';
+  const netValue = (netText ?? savedNet).trim();
+  const netValid =
+    netValue === '' ||
+    (/^(?:\d+\.?\d*|\.\d+)$/.test(netValue) && Number.isFinite(Number(netValue)) && Number(netValue) > 0);
+  const netBody = (): Pick<SetupActionBody, 'ball_to_net_m'> =>
+    netValue === '' ? {} : { ball_to_net_m: Number(netValue) * 0.3048 };
   // a saved floor line the service measured nothing from is drawn as not used
-  const floorRejected = floorTaps === null && savedFloor !== null && setup.net_range.source !== 'camera_floor_line';
+  const floorRejected =
+    floorTaps === null &&
+    savedFloor !== null &&
+    (setup.aim.floor_line_used === false ||
+      (setup.aim.floor_line_used == null && setup.net_range.source !== 'camera_floor_line'));
   const ball: Px | null = step === 'box' ? (liveBox?.ball_px ?? null) : (setup.box.ball_px ?? liveBox?.ball_px ?? null);
   const ballDiameter = step === 'box' ? liveBox?.diameter_px : setup.box.diameter_px;
   const outline = boxOutline(setup, { live: true });
@@ -219,7 +239,8 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
 
   const confirmAim = async () => {
     if (!aimPoint) return;
-    const body: SetupActionBody = { action: 'confirm', aim_px: aimPoint };
+    if (!netValid) return;
+    const body: SetupActionBody = { action: 'confirm', aim_px: aimPoint, ...netBody() };
     if (floorLine.length === 2) body.floor_line_px = [floorLine[0], floorLine[1]];
     const result = await run('aim', body);
     if (result.ok) {
@@ -230,7 +251,8 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
   };
 
   const skipAim = async () => {
-    const result = await run('aim', { action: 'skip' });
+    if (!netValid) return;
+    const result = await run('aim', { action: 'skip', ...netBody() });
     if (result.ok) {
       setAimTap(null);
       setFloorTaps(null);
@@ -410,14 +432,20 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
         </div>
         {unapplied('aim')}
         {unapplied('net_range')}
+        <NetDistanceInput value={netText ?? savedNet} onChange={setNetText} disabled={busy || !boxReady} />
+        {!netValid ? (
+          <p className="setup-view__warning" role="alert">
+            {t('setup.net.invalid')}
+          </p>
+        ) : null}
         <div className="setup-view__actions">
           <PanelAction
-            disabled={busy || !boxReady || !aimPoint || floorLine.length === 1}
+            disabled={busy || !boxReady || !aimPoint || floorLine.length === 1 || !netValid}
             onClick={() => void confirmAim()}
           >
             {t('setup.confirm')}
           </PanelAction>
-          <PanelAction variant="secondary" disabled={busy || !boxReady} onClick={() => void skipAim()}>
+          <PanelAction variant="secondary" disabled={busy || !boxReady || !netValid} onClick={() => void skipAim()}>
             {t('setup.skip')}
           </PanelAction>
         </div>
@@ -537,7 +565,7 @@ export function SetupView({ setup, loadFailed = false, act, handed, onDone }: Se
         </nav>
         <div className={`setup-view__content${stage ? '' : ' setup-view__content--wide'}`}>
           {stage}
-          <aside className="setup-view__side">
+          <aside className="setup-view__side" ref={sideRef} {...sideDrag}>
             <h2 className="setup-view__title">{t(STEP_LABELS[step])}</h2>
             {side}
             {notice ? (

@@ -608,8 +608,8 @@ def box_display(client, tester):
     return box_state(client, tester)["box"]
 
 
-# the fixed box's centre on the ground: 1.8-2.9 m ahead of the lens, on its axis
-FIXED_CENTRE = [0.0, 2.35]
+# The default box centre is 2 m ahead of the monitor.
+FIXED_CENTRE = [0.0, 2.0]
 
 
 def confirm_box(client, tester, request_id, origin=None, centre=None):
@@ -2803,7 +2803,7 @@ class TestTheNetRange:
         _args, handed = ts.tee_range_handoff(solution, use_unqualified=True)
 
         assert handed["net_range"]["status"] == "not_found"
-        assert handed["net_range"]["default_m"] == pytest.approx(4.6)
+        assert handed["net_range"]["default_m"] == pytest.approx(5.3528)
 
     def test_a_measured_net_reaches_the_swing_server(self, tmp_path, inputs, monkeypatch):
         inputs["rig"].write_bytes(Path(ts.DEFAULT_RIG_GEOMETRY).read_bytes())
@@ -2843,7 +2843,7 @@ def test_the_swing_server_flags_an_unmeasured_net(tmp_path, monkeypatch):
     command = ["--iwr6843", "--inclinometer"]
     session = _session_start_for(command, Path(ts.DEFAULT_RIG_GEOMETRY), tmp_path, monkeypatch)
     assert session["net_range"] == {
-        "net_range_m": pytest.approx(4.6),
+        "net_range_m": pytest.approx(5.3528),
         "source": "default_not_measured",
         "range_space": "apparent",
         "assumed": True,
@@ -2999,7 +2999,7 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     assert shown["state"] == "needs_confirmation"
     # 13 Oct: the fixed, TrackMan-style box: 1.8-2.9 m ahead of the lens, 0.3 m aside
     assert shown["mode"] == "fixed"
-    assert shown["placement_window_m"] == [1.8, 2.9]
+    assert shown["placement_window_m"] == [1.8, 2.2]
     assert shown["frame_size_px"] == [1280, 800]
     assert len(shown["box_outline_px"]) == 4
     assert shown["ball"]["state"] == "waiting"
@@ -3009,7 +3009,7 @@ def test_the_box_step_shows_the_live_preview_before_anything_else(tmp_path, inpu
     assert box["arm_id"] == "arm5"
     assert box["frame_size_px"] == [1280, 800]
     assert box["patch"]["size_m"] == pytest.approx(0.6)
-    assert box["patch"]["depth_m"] == pytest.approx(1.1)
+    assert box["patch"]["depth_m"] == pytest.approx(0.4)
     assert box["patch"]["centre_lfu_m"] == pytest.approx(FIXED_CENTRE)
     assert box["side_offset_m"] == pytest.approx(0.0, abs=1e-6)
     assert box["source"] == "fixed_box"
@@ -4195,7 +4195,7 @@ def test_a_ball_2_2_m_out_in_the_fixed_box_works_end_to_end(tmp_path, inputs, mo
     assert shown["ball"]["center_px"] == pytest.approx([640.0, 440.0], abs=0.5)
     assert shown["ball"]["range_status"] == "validated"
     assert shown["ball"]["range_m"] == pytest.approx(2.2, abs=0.03)
-    assert shown["distance_note"] == "inside the 1.8–2.9 m window"
+    assert shown["distance_note"] == "inside the 1.8–2.2 m window"
 
 
 def _tilting_camera(monkeypatch):

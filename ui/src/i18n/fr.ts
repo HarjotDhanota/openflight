@@ -1,6 +1,15 @@
 import type { Messages } from './en';
 
 export const fr: Messages = {
+  'setup.net.label': 'Balle au filet (pieds)',
+  'setup.net.keypad': 'Clavier',
+  'setup.net.feet': 'Distance en pieds',
+  'setup.net.help':
+    'Saisissez une distance mesurée pour remplacer la ligne au sol. Vide : ligne au sol ou 11 pieds par défaut.',
+  'setup.net.clear': 'Effacer',
+  'setup.net.invalid': 'Saisissez une distance supérieure à zéro.',
+  'setup.net.entered': '{value} pieds de la balle au filet (saisi)',
+  'setup.net.ballDefault': '{value} pieds de la balle au filet (par défaut, non mesuré)',
   'nav.live': 'Direct',
   'nav.profiles': 'Profils',
   'nav.stats': 'Stats',
@@ -290,7 +299,8 @@ export const fr: Messages = {
   'setup.step.range': 'Distance de la balle',
   'setup.step.ready': 'Vérification',
   'setup.view': 'Vue de la caméra',
-  'setup.box.instruction': 'Posez une balle dans le cadre dessiné sur la vue, puis confirmez.',
+  'setup.box.instruction':
+    'Placez le moniteur à 1,8–2,2 m derrière la balle. Posez la balle dans le cadre, puis confirmez.',
   'setup.ball.found': 'Balle trouvée dans le cadre',
   'setup.ball.outside_box': 'La balle est hors du cadre. Placez-la dedans.',
   'setup.ball.no_ball': 'Aucune balle vue. Posez une balle dans le cadre.',

@@ -1,4 +1,4 @@
-"""The fixed placement box: ground 1.8-2.9 m out along the boresight, 0.3 m either side."""
+"""The fixed placement box: ground 1.8-2.2 m out along the boresight, 0.3 m either side."""
 
 import math
 
@@ -36,12 +36,12 @@ def test_the_fixed_box_covers_the_window_on_the_ground():
     assert corners[:, 0].min() == pytest.approx(-0.3)
     assert corners[:, 0].max() == pytest.approx(0.3)
     assert corners[:, 1].min() == pytest.approx(1.8)
-    assert corners[:, 1].max() == pytest.approx(2.9)
+    assert corners[:, 1].max() == pytest.approx(2.2)
     again = ground_patch.GroundPatch.from_dict(box.to_dict())
     np.testing.assert_allclose(again.corners(0.0), corners)
 
 
-@pytest.mark.parametrize("forward_m", [1.8, 2.35, 2.9])
+@pytest.mark.parametrize("forward_m", [1.8, 2.0, 2.2])
 @pytest.mark.parametrize("lateral_m", [-0.29, 0.0, 0.29])
 @pytest.mark.parametrize("true_pitch_deg", [-4.5, -3.0, 0.0, 3.0, 4.5])
 def test_a_ball_anywhere_in_the_window_is_inside_the_drawn_box_at_an_unknown_tilt(
@@ -74,9 +74,9 @@ def test_the_box_widens_with_the_lens_and_tightens_with_a_calibrated_tilt():
     "range_m,note",
     [
         (None, "distance not measured yet"),
-        (2.2, "inside the 1.8–2.9 m window"),
+        (2.0, "inside the 1.8–2.2 m window"),
         (1.2, "closer than 1.8 m: numbers labelled, not blocked"),
-        (3.4, "farther than 2.9 m: numbers labelled, not blocked"),
+        (3.4, "farther than 2.2 m: numbers labelled, not blocked"),
     ],
 )
 def test_the_distance_note_labels_never_blocks(range_m, note):

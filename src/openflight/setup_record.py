@@ -21,7 +21,7 @@ _INPUT_KEYS = {
     "box": ("lens_id", "rig_sha256", "tilt_deg"),
     "aim": ("box_id",),
     "ball_range": ("box_id",),
-    "net_range": ("floor_line", "lens_id", "tilt_deg"),
+    "net_range": ("floor_line", "lens_id", "tilt_deg", "box_id"),
     # a lens height is solved against the box's ball, with or without a ball range
     "scene": ("box_id",),
 }
@@ -162,6 +162,11 @@ def evaluate(record: dict, ctx: StartContext, *, tilt_margin_deg: float) -> dict
                 _changed("lens", inputs.get("lens_id"), ctx.lens_id)
                 or _tilt_changed(inputs.get("tilt_deg"), ctx.tilt_offset_deg, tilt_margin_deg)
                 or blocked("aim")
+                or (
+                    blocked("box") or _changed("box", inputs.get("box_id"), box.get("id"))
+                    if "ball_to_net_m" in out[name]
+                    else None
+                )
                 or _changed("floor line", inputs.get("floor_line"), aim.get("floor_line"))
             )
         raise ValueError(f"unknown setup section {name!r}")

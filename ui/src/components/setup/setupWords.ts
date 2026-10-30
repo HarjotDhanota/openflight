@@ -109,6 +109,11 @@ export function rangeWords(section: SetupSection): string {
 
 export function netWords(section: SetupSection): string {
   if (section.value_m == null) return quietReason(section);
+  if (section.ball_to_net_m != null) {
+    return t(section.source === 'user_entered' ? 'setup.net.entered' : 'setup.net.ballDefault', {
+      value: plain(section.ball_to_net_m / 0.3048),
+    });
+  }
   if (section.source === 'camera_floor_line' && section.uncertainty_m != null) {
     return t('setup.net.measured', { value: metres(section.value_m), spread: metres(section.uncertainty_m) });
   }

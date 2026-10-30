@@ -1826,10 +1826,22 @@ def apply_setup_net_range(net: dict | None) -> None:
         "source": source,
         # a floor-line tap is a horizontal distance, not slant range; the gate margin covers it
         "range_space": (
-            "horizontal_from_the_unit" if source == "camera_floor_line" else "apparent"
+            "horizontal_from_the_unit"
+            if source in ("camera_floor_line", "user_entered")
+            else "apparent"
         ),
         "assumed": assumed,
-        **{key: net[key] for key in ("uncertainty_m", "reason") if net and key in net},
+        **{
+            key: net[key]
+            for key in (
+                "uncertainty_m",
+                "reason",
+                "ball_to_net_m",
+                "monitor_to_ball_m",
+                "monitor_to_ball_source",
+            )
+            if net and key in net
+        },
     }
     _when_idle(lambda: _set_net_range(handoff))
 
@@ -2222,6 +2234,14 @@ def api_setup_action(section: str):
         )
     if section == "aim":
         aim_px, floor_line_px = body.get("aim_px"), body.get("floor_line_px")
+        ball_to_net_m = body.get("ball_to_net_m")
+        if ball_to_net_m is not None and (
+            isinstance(ball_to_net_m, bool)
+            or not isinstance(ball_to_net_m, (int, float))
+            or not math.isfinite(ball_to_net_m)
+            or ball_to_net_m <= 0.0
+        ):
+            return _setup_refusal("ball-to-net distance must be a positive finite number", 400)
         if aim_px is not None and not _is_pixel(aim_px):
             return _setup_refusal("aim_px must be [x, y], finite numbers", 400)
         if floor_line_px is not None and not (
@@ -2231,7 +2251,10 @@ def api_setup_action(section: str):
         ):
             return _setup_refusal("floor_line_px must be two [x, y] points, finite numbers", 400)
         result = service.aim(
-            action, aim_px=body.get("aim_px"), floor_line_px=body.get("floor_line_px")
+            action,
+            aim_px=body.get("aim_px"),
+            floor_line_px=body.get("floor_line_px"),
+            ball_to_net_m=ball_to_net_m,
         )
     elif section == "box":
         result = service.box(action)

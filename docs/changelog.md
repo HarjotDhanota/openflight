@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Default placement to 1.8–2.2 m behind the ball and ball-to-net distance to
+  11 ft; allow an entered ball-to-net distance with a touch keypad in Setup.
 - Include simultaneous floor-line endpoint errors in target-line uncertainty.
 - Reuse an unchanged session bundle after linking it into the send folder on
   Linux. Metadata changes trigger a hash check; modified archives are rebuilt.

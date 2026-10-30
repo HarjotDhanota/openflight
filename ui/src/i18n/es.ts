@@ -1,6 +1,15 @@
 import type { Messages } from './en';
 
 export const es: Messages = {
+  'setup.net.label': 'Bola a red (pies)',
+  'setup.net.keypad': 'Teclado',
+  'setup.net.feet': 'Distancia en pies',
+  'setup.net.help':
+    'Introduce una distancia medida para sustituir la línea del suelo. Vacío: línea del suelo o 11 pies por defecto.',
+  'setup.net.clear': 'Borrar',
+  'setup.net.invalid': 'Introduce una distancia mayor que cero.',
+  'setup.net.entered': '{value} pies de bola a red (introducido)',
+  'setup.net.ballDefault': '{value} pies de bola a red (por defecto, sin medir)',
   'nav.live': 'En vivo',
   'nav.profiles': 'Perfiles',
   'nav.stats': 'Estadísticas',
@@ -290,7 +299,7 @@ export const es: Messages = {
   'setup.step.range': 'Distancia a la bola',
   'setup.step.ready': 'Comprobación',
   'setup.view': 'Vista de la cámara',
-  'setup.box.instruction': 'Pon una bola en el recuadro dibujado en la vista y confirma.',
+  'setup.box.instruction': 'Coloca el monitor a 1,8–2,2 m detrás de la bola. Pon la bola en el recuadro y confirma.',
   'setup.ball.found': 'Bola encontrada en el recuadro',
   'setup.ball.outside_box': 'La bola está fuera del recuadro. Muévela dentro.',
   'setup.ball.no_ball': 'No se ve ninguna bola. Pon una bola en el recuadro.',

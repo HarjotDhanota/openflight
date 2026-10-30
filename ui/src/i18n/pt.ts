@@ -1,6 +1,15 @@
 import type { Messages } from './en';
 
 export const pt: Messages = {
+  'setup.net.label': 'Bola à rede (pés)',
+  'setup.net.keypad': 'Teclado',
+  'setup.net.feet': 'Distância em pés',
+  'setup.net.help':
+    'Insira uma distância medida para substituir a linha do chão. Vazio: linha do chão ou padrão de 11 pés.',
+  'setup.net.clear': 'Limpar',
+  'setup.net.invalid': 'Insira uma distância maior que zero.',
+  'setup.net.entered': '{value} pés da bola à rede (inserido)',
+  'setup.net.ballDefault': '{value} pés da bola à rede (padrão, não medido)',
   'nav.live': 'Ao vivo',
   'nav.profiles': 'Perfis',
   'nav.stats': 'Estatísticas',
@@ -290,7 +299,7 @@ export const pt: Messages = {
   'setup.step.range': 'Distância da bola',
   'setup.step.ready': 'Verificação',
   'setup.view': 'Vista da câmera',
-  'setup.box.instruction': 'Coloque uma bola no quadro desenhado na vista e confirme.',
+  'setup.box.instruction': 'Coloque o monitor a 1,8–2,2 m atrás da bola. Coloque a bola no quadro e confirme.',
   'setup.ball.found': 'Bola encontrada no quadro',
   'setup.ball.outside_box': 'A bola está fora do quadro. Coloque-a dentro.',
   'setup.ball.no_ball': 'Nenhuma bola vista. Coloque uma bola no quadro.',

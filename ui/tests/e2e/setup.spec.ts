@@ -6,6 +6,7 @@ import { drawnAt, expect, gotoApp, setHanded } from './helpers';
 const SIZES = [
   { width: 1024, height: 600 },
   { width: 800, height: 480 },
+  { width: 800, height: 400 },
 ] as const;
 const HANDS = ['RH', 'LH'] as const;
 type Hand = (typeof HANDS)[number];
@@ -103,20 +104,35 @@ class MockSetup {
             warnings: [],
           },
           net_range:
-            floor && this.floorRejected === null
-              ? { state: 'set', value_m: 3.917, uncertainty_m: 0.204, source: 'camera_floor_line' }
-              : {
-                  state: 'default',
-                  value_m: 4.6,
-                  source: 'default_not_measured',
-                  reason: floor ? this.floorRejected : 'no floor line marked',
-                },
+            body.ball_to_net_m != null
+              ? {
+                  state: 'set',
+                  value_m: 2 + Number(body.ball_to_net_m),
+                  ball_to_net_m: body.ball_to_net_m,
+                  source: 'user_entered',
+                }
+              : floor && this.floorRejected === null
+                ? { state: 'set', value_m: 3.917, uncertainty_m: 0.204, source: 'camera_floor_line' }
+                : {
+                    state: 'default',
+                    value_m: 4.6,
+                    source: 'default_not_measured',
+                    reason: floor ? this.floorRejected : 'no floor line marked',
+                  },
         });
       }
       if (action === 'skip') {
         this.set({
           aim: { state: 'skipped', floor_line: null, source: 'skipped', reason: 'the tester skipped the aim point' },
-          net_range: { state: 'default', value_m: 4.6, source: 'default_not_measured', reason: 'aim point skipped' },
+          net_range:
+            body.ball_to_net_m != null
+              ? {
+                  state: 'set',
+                  value_m: 2 + Number(body.ball_to_net_m),
+                  ball_to_net_m: body.ball_to_net_m,
+                  source: 'user_entered',
+                }
+              : { state: 'default', value_m: 4.6, source: 'default_not_measured', reason: 'aim point skipped' },
         });
       }
     } else if (section === 'range' && action === 'measure') {
@@ -249,6 +265,52 @@ test.describe('a kiosk that cannot set up', () => {
 for (const size of SIZES) {
   for (const hand of HANDS) {
     test.describe(`${size.width}x${size.height} ${hand}`, () => {
+      test('entered net distance supports the touch keypad and persists across steps', async ({ page }) => {
+        const mock = await open(page, hand);
+        await toAimStep(page);
+        const field = page.getByLabel('Ball to net (ft)', { exact: true });
+        await expect(field).toHaveAttribute('placeholder', '11');
+        const side = page.locator('.setup-view__side');
+        const overflow = await side.evaluate((element) => element.scrollHeight > element.clientHeight);
+        if (overflow) {
+          await side.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          const region = (await side.boundingBox())!;
+          const keypadButton = (await page.getByRole('button', { name: 'Keypad', exact: true }).boundingBox())!;
+          await page.mouse.move(
+            keypadButton.x + keypadButton.width / 2,
+            Math.min(keypadButton.y + 10, region.y + region.height - 5)
+          );
+          await page.mouse.down();
+          await page.mouse.move(keypadButton.x + keypadButton.width / 2, region.y + 5, { steps: 12 });
+          await page.mouse.up();
+          expect(await side.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+          await expect(page.getByRole('dialog')).toHaveCount(0);
+        }
+        await page.getByRole('button', { name: 'Keypad', exact: true }).click();
+        const keypad = page.getByRole('dialog', { name: 'Ball to net (ft)' });
+        for (const key of ['1', '0', '.', '5']) {
+          await keypad.getByRole('button', { name: key, exact: true }).tap();
+        }
+        await expect(keypad.getByLabel('Distance in feet')).toHaveValue('10.5');
+        const bounds = (await keypad.boundingBox())!;
+        expect(bounds.y).toBeGreaterThanOrEqual(0);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(size.height);
+        await page.screenshot({ path: test.info().outputPath('net-keypad.png') });
+        await keypad.getByRole('button', { name: 'Done', exact: true }).tap();
+        await field.fill('0');
+        await expect(page.getByRole('button', { name: 'Skip', exact: true })).toBeDisabled();
+        await field.fill('10.5');
+        await page.getByRole('button', { name: 'Skip', exact: true }).click();
+        const post = mock.posts.findLast((item) => item.section === 'aim' && item.body.action === 'skip')!;
+        expect(Number(post.body.ball_to_net_m)).toBeCloseTo(10.5 * 0.3048, 9);
+        await expect(page.locator('.setup-view__saved')).toContainText('10.5 ft ball to net (entered)');
+        await page.getByRole('button', { name: 'Ready check' }).click();
+        await expect(page.locator('[data-section="net_range"]')).toContainText('10.5 ft ball to net (entered)');
+        await page.getByRole('button', { name: '2 Aim', exact: true }).click();
+        await expect(page.getByLabel('Ball to net (ft)', { exact: true })).toHaveValue('10.5');
+      });
       test.use({ viewport: size, hasTouch: true });
 
       test('walks the four steps; the saved aim is in camera pixels', async ({ page }) => {
@@ -325,6 +387,13 @@ for (const size of SIZES) {
         const [first, second] = post.body.floor_line_px as [Px, Px];
         expectNear(first, FLOOR[0], 4);
         expectNear(second, FLOOR[1], 4);
+        await page.getByLabel('Ball to net (ft)', { exact: true }).fill('10.5');
+        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(page.locator('.setup-view__saved')).toContainText('10.5 ft ball to net (entered)');
+        await expect(page.locator('.setup-view__floor-line')).not.toHaveClass(/rejected/);
+        await page.getByLabel('Ball to net (ft)', { exact: true }).fill('');
+        await page.getByRole('button', { name: 'Confirm', exact: true }).click();
+        await expect(page.locator('.setup-view__saved')).toContainText('from the floor line');
       });
 
       test('a skipped aim shows the net as the default, not measured', async ({ page }) => {

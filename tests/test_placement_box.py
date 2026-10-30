@@ -15,6 +15,12 @@ from tests.camera_helpers import lit_spheres as _lit_spheres, v3_camera as _v3
 RADIUS_M = 0.0427 / 2.0
 
 
+def test_default_monitor_to_ball_window_is_one_point_eight_to_two_point_two_metres():
+    from openflight.camera.placement_box import load_config  # noqa: PLC0415
+
+    assert load_config().placement_window_m == (1.8, 2.2)
+
+
 def _ball_pixel(camera, lateral_m, distance_m, height_m=RADIUS_M):
     origin = np.asarray(camera.camera_origin_lfu)
     forward = math.sqrt(distance_m**2 - lateral_m**2 - (height_m - origin[2]) ** 2)

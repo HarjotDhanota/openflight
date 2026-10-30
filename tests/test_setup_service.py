@@ -1,4 +1,4 @@
-"""The setup service: box, aim and range actions on the per-unit record, camera only."""
+"""Setup actions, including camera estimates and explicitly entered net distances."""
 
 from __future__ import annotations
 
@@ -263,6 +263,56 @@ def test_aim_confirm_stores_record_and_net_from_floor_line(make, scene):
     assert recorder.calls["aim"] == [aim] and recorder.calls["net_range"] == [net]
 
 
+@pytest.mark.parametrize("action", ["confirm", "skip"])
+def test_default_net_is_eleven_feet_beyond_the_box_centre(make, scene, action):
+    service, _ = make()
+    _confirm_box(service, scene)
+    result = service.aim(action, aim_px=AIM_PX)
+    assert result["ok"], result["reason"]
+    net = result["setup"]["net_range"]
+    assert net["ball_to_net_m"] == pytest.approx(11 * 0.3048)
+    assert net["value_m"] == pytest.approx(2.0 + 11 * 0.3048)
+    assert net["source"] == "default_not_measured"
+
+
+@pytest.mark.parametrize("action", ["confirm", "skip"])
+@pytest.mark.parametrize("feet", [8.0, 10.5, 13.0])
+def test_entered_ball_to_net_distance_is_saved_and_applied(make, scene, action, feet):
+    service, recorder = make()
+    _confirm_box(service, scene)
+    result = service.aim(action, aim_px=AIM_PX, ball_to_net_m=feet * 0.3048)
+    assert result["ok"], result["reason"]
+    net = result["setup"]["net_range"]
+    assert net["state"] == "set" and net["source"] == "user_entered"
+    assert net["ball_to_net_m"] == pytest.approx(feet * 0.3048)
+    assert net["value_m"] == pytest.approx(2.0 + feet * 0.3048)
+    assert recorder.calls["net_range"][-1] == net
+    assert service.snapshot()["net_range"] == net
+
+
+@pytest.mark.parametrize("distance", [0, -1, True, "3", float("nan"), float("inf")])
+def test_invalid_entered_net_distance_keeps_saved_setup(make, scene, distance):
+    service, _ = make()
+    _confirm_box(service, scene)
+    revision = service.revision
+    result = service.aim("skip", ball_to_net_m=distance)
+    assert not result["ok"]
+    assert service.revision == revision
+
+
+def test_entered_distance_overrides_floor_net_and_survives_restart(make, scene):
+    service, _ = make()
+    _confirm_box(service, scene)
+    result = service.aim(
+        "confirm", aim_px=AIM_PX, floor_line_px=_floor_line(), ball_to_net_m=10.5 * 0.3048
+    )
+    net = result["setup"]["net_range"]
+    assert result["ok"] and net["source"] == "user_entered"
+    assert net["value_m"] == pytest.approx(5.2004)
+    restarted, _ = make()
+    assert restarted.snapshot()["net_range"] == net
+
+
 @pytest.mark.parametrize(
     ("action", "kwargs", "state"),
     [("skip", {}, "skipped"), ("confirm", {"aim_px": AIM_PX}, "set")],
@@ -279,7 +329,7 @@ def test_an_aim_without_a_floor_line_keeps_the_labelled_default_net(
     assert result["ok"], result["reason"]
     assert result["setup"]["aim"]["state"] == state
     net = result["setup"]["net_range"]
-    assert net["source"] == "default_not_measured" and net["value_m"] == 4.6
+    assert net["source"] == "default_not_measured" and net["value_m"] == pytest.approx(5.3528)
     assert net["reason"] and "uncertainty_m" not in net
     assert recorder.calls["net_range"] == [net]
 
@@ -300,7 +350,7 @@ def test_a_floor_line_more_uncertain_than_it_is_long_is_the_default(make, scene,
     result = service.aim("confirm", aim_px=AIM_PX, floor_line_px=_floor_line())
 
     net = result["setup"]["net_range"]
-    assert net["source"] == "default_not_measured" and net["value_m"] == 4.6
+    assert net["source"] == "default_not_measured" and net["value_m"] == pytest.approx(5.3528)
     assert net["reason"] == "too uncertain to measure"
 
 

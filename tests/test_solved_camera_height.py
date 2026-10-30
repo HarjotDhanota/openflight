@@ -92,7 +92,7 @@ def test_the_session_starts_with_the_rig_s_heights_and_nothing_else_filled_in(mo
     assert scene["ball_height_basis"] == "assumed_on_surface"
     assert scene["tee_side_offset_source"] == "assumed_directly_downrange"
     assert recorded["net_range"] == {
-        "net_range_m": pytest.approx(4.6),
+        "net_range_m": pytest.approx(5.3528),
         "source": "default_not_measured",
         "range_space": "apparent",
         "assumed": True,

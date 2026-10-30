@@ -63,7 +63,7 @@ def test_the_placement_box_get_carries_every_contract_field(tmp_path, inputs, mo
     ).get_json()
 
     assert shown["mode"] == "fixed"
-    assert shown["placement_window_m"] == [1.8, 2.9]
+    assert shown["placement_window_m"] == [1.8, 2.2]
     assert shown["frame_size_px"] == [1280, 800]
     assert len(shown["box_outline_px"]) == 4
     assert set(shown["ball"]) >= {

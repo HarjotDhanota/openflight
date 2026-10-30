@@ -55,6 +55,15 @@ describe('setup words', () => {
     );
   });
 
+  it('distinguishes entered ball-to-net feet from the unmeasured default', () => {
+    expect(netWords({ state: 'set', value_m: 5.2004, ball_to_net_m: 10.5 * 0.3048, source: 'user_entered' })).toBe(
+      '10.5 ft ball to net (entered)'
+    );
+    expect(
+      netWords({ state: 'default', value_m: 5.3528, ball_to_net_m: 11 * 0.3048, source: 'default_not_measured' })
+    ).toBe('11 ft ball to net (default, not measured)');
+  });
+
   it('says why a floor line gave no net distance', () => {
     const rejected = (reason: string) => ({
       state: 'default',

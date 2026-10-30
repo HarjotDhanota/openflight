@@ -22,6 +22,7 @@ export interface SetupSection {
   range_m?: number;
   uncertainty_m?: number | null;
   value_m?: number;
+  ball_to_net_m?: number;
   lens_height_m?: number | null;
 }
 
@@ -64,6 +65,7 @@ export interface SetupActionBody {
   action: string;
   aim_px?: Px;
   floor_line_px?: [Px, Px];
+  ball_to_net_m?: number;
 }
 
 /** `reason` is the server's refusal; null with `ok` false means the kiosk was not reached. */

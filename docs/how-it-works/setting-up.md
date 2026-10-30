@@ -5,8 +5,8 @@ icon: lucide/crosshair
 # Setting Up
 
 The kiosk's **Setup** screen tells the unit where the ball is, where you are aiming and
-how far away the ball sits. You tap the camera view and press **Confirm**. You type
-nothing, and the unit needs no restart.
+how far away the ball sits. You tap the camera view and press **Confirm**, and can
+enter the ball-to-net distance. The unit needs no restart.
 
 Open it from **Finish setup** on the Live screen, which shows while a step is still to do,
 or from **Setup** in the bottom bar. A left-handed profile shows the camera view
@@ -24,6 +24,7 @@ steps. **Back** and **Next** move between them.
 
 ### 1. Ball in the box
 
+Place the monitor **1.8–2.2 m behind the ball** (2.0 m at the box centre).
 The camera view shows a fixed box. Put one ball anywhere in it and wait for **Ball
 found in the box**, then tap **Confirm**. The unit looks for the ball only inside this box.
 The aim and the ball range belong to the box, not to the ball's spot in it: move the ball
@@ -46,13 +47,21 @@ Optionally, switch **What a tap marks** to **Floor line** and tap two points whe
 floor meets the net. The unit turns the line into a distance to the net. **Clear floor
 line** removes it.
 
-!!! note "The net distance is 4.6 m unless you mark the floor line"
+Use **Ball to net (ft)** to enter a measured distance. **Keypad** opens touch
+controls. The entered distance overrides the floor-derived net distance and is
+saved with **Confirm** or **Skip**, labelled **entered**. Clear the field to use
+the floor line, or the default when no usable floor line is available.
 
-    Without a floor line the net distance is the default **4.6 m**. The Ready check
-    shows it as **Not measured**. With a floor line it shows the measured distance and
-    its spread, **from the floor line**. A floor line the unit cannot use (above the
-    horizon, nearer than the ball, too close to the horizon or too uncertain) is not
-    used, and the screen says why.
+!!! note "The default is 11 feet from the ball to the net"
+
+    Without an entered distance or usable floor line, the default is **11 ft
+    (3.3528 m) beyond the ball**, labelled **not measured**. The radar's distance
+    limit is measured from the monitor, so the box-centre distance is added:
+    **2.0 m + 3.3528 m = 5.3528 m** with the default placement window.
+    The box centre is a setup assumption, not a measured ball range.
+
+    A usable floor line shows its estimated distance and spread, **from the floor
+    line**. If it cannot be used, the setup retains a labelled default.
 
 ### 3. Ball range
 
@@ -70,7 +79,7 @@ a plain note:
 | --- | --- |
 | **Confirmed** or **Set** | Done, and in effect. |
 | **Skipped** | You skipped it; the screen says what that means. |
-| **Not measured** | The unit uses a labelled default (the 4.6 m net, the enclosure's lens height). |
+| **Not measured** | The unit uses a labelled default (11 ft ball to net, the enclosure's lens height). |
 | **Not set** | Not done yet. |
 | **Needs redoing** | It was done, then something it depended on changed. The note says what. |
 
