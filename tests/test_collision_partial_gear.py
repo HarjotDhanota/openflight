@@ -69,3 +69,26 @@ def test_gear_spin_keeps_its_known_coordinate_even_without_a_d_plane(coordinate)
     assert result.metrics["spin_rate"].present
     assert not result.metrics["d_plane_tilt"].present
     assert result.inputs[coordinate].value == 8.0
+
+
+def test_unknown_partial_and_measured_centred_contact_stay_distinct():
+    unknown = evaluate()
+    partial = evaluate(impact_offset_mm=cm.Input(8.0))
+    centred = evaluate(impact_offset_mm=cm.Input(0.0), impact_height_mm=cm.Input(0.0))
+
+    for name in ("spin_rate", "spin_axis"):
+        assert unknown.metrics[name].condition == cm.CONDITION_CENTRED_CONTACT
+        assert "impact_height_mm" in partial.metrics[name].condition
+        assert "assumed 0 mm" in partial.metrics[name].condition
+        assert centred.metrics[name].condition is None
+        assert centred.metrics[name].value == pytest.approx(unknown.metrics[name].value)
+    assert unknown.to_dict()["metrics"]["spin_rate"]["condition"] == cm.CONDITION_CENTRED_CONTACT
+    assert "condition" not in centred.to_dict()["metrics"]["spin_rate"]
+    assert unknown.to_dict()["forward"]["condition"] == cm.CONDITION_CENTRED_CONTACT
+    assert "condition" not in centred.to_dict()["forward"]
+
+
+def test_metrics_without_a_strike_dependence_carry_no_condition():
+    unknown = evaluate().to_dict()["metrics"]
+    for name in ("face_angle", "dynamic_loft", "spin_loft", "face_to_path", "d_plane_tilt"):
+        assert "condition" not in unknown[name]

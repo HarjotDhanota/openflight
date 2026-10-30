@@ -81,6 +81,7 @@ def truth_launch(club, speed, path, attack, face, loft):
         club_path_deg=path,
         face_angle_deg=face,
         dynamic_loft_deg=loft,
+        assume_centred=True,
     )
     launch_h, launch_v, spin = (
         impact.launch_horizontal_deg,

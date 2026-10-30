@@ -14,6 +14,7 @@ from openflight.clubs.physics import get_club_physics
 
 
 def _forward(club=ClubType.IRON_7, speed=85.0, attack=-4.0, path=0.0, face=0.0, loft=22.0, **kw):
+    kw.setdefault("assume_centred", True)
     return cf.forward(
         club=club,
         club_speed_mph=speed,
@@ -395,3 +396,43 @@ def test_the_model_reproduces_its_known_answers(club, delivery, expected):
         impact.spin_axis_deg,
     )
     assert got == pytest.approx(expected, abs=2e-4)
+
+
+def _bare(**location):
+    return cf.forward(
+        club=ClubType.IRON_7,
+        club_speed_mph=85.0,
+        attack_angle_deg=-4.0,
+        club_path_deg=0.0,
+        face_angle_deg=0.0,
+        dynamic_loft_deg=22.0,
+        **location,
+    )
+
+
+def test_an_unknown_strike_location_is_not_a_centred_strike():
+    unknown = _bare()
+
+    assert unknown.centre_spin_rpm > 0.0
+    assert unknown.gear_back_rpm is None and unknown.gear_side_rpm is None
+    assert unknown.spin_rpm is None and unknown.spin_axis_deg is None
+    assert unknown.ball_speed_mph is None
+    assert not unknown.impact_location
+
+
+def test_one_known_coordinate_gives_only_its_own_gear_term():
+    partial = _bare(impact_offset_mm=8.0)
+
+    assert partial.gear_side_rpm is not None
+    assert partial.gear_back_rpm is None
+    assert partial.spin_rpm is None and partial.ball_speed_mph is None
+
+
+def test_a_centred_strike_is_assumed_only_when_asked_and_matches_a_measured_centre():
+    assumed = _bare(assume_centred=True)
+    measured = _bare(impact_offset_mm=0.0, impact_height_mm=0.0)
+
+    for field in ("ball_speed_mph", "spin_rpm", "spin_axis_deg", "gear_back_rpm", "gear_side_rpm"):
+        assert getattr(assumed, field) == pytest.approx(getattr(measured, field))
+    assert not assumed.impact_location
+    assert measured.impact_location

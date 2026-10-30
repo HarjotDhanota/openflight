@@ -73,6 +73,7 @@ def test_the_collision_model_inverts_its_own_forward_launch(club, path, attack, 
         club_path_deg=path,
         face_angle_deg=face,
         dynamic_loft_deg=loft,
+        assume_centred=True,
     )
     result = cm.evaluate(
         club=club,

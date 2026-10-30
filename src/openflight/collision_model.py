@@ -53,6 +53,7 @@ SOURCE_SMASH_INDEX = "ball speed / expected ball speed (normal-impulse index)"
 SOURCE_AXIS = "D-plane tilt (D37)"
 SOURCE_GEAR = "Cross & Nathan 2007 gear effect (Am. J. Phys. 75, 658)"
 NOTE_NO_GEAR = "no impact location: centre-face strike assumed, no gear effect"
+CONDITION_CENTRED_CONTACT = "centred contact assumed: impact location not measured"
 NOTE_NO_FITTED_INDEX = "no fitted index for this club: expected value from its category"
 NOTE_CONTACT = "low confidence: possible flier or heavy contact"
 CONTACT_ATTACK_LIMIT_DEG = -2.0
@@ -199,13 +200,18 @@ class Metric:
     frame: Optional[str] = None
     reason: Optional[str] = None
     note: Optional[str] = None
+    # An assumption the value depends on that no observation supports (e.g. centred contact).
+    condition: Optional[str] = None
 
     @property
     def present(self) -> bool:
         return self.value is not None and self.status != STATUS_NOT_MEASURED
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        record = asdict(self)
+        if record["condition"] is None:
+            del record["condition"]
+        return record
 
 
 def _not_measured(unit: str, reason: str, source: Optional[str] = None) -> Metric:
@@ -808,9 +814,11 @@ def _delivery_metrics(face, loft, attack_angle, club_path, frame):
 
 
 def _forward_impact(club, club_speed, attack, path, face, loft, location, handedness):
+    """Missing coordinates are put at the face centre only as an explicit condition."""
     if not (club_speed.present and club_speed.value > 0.0 and face.present and loft.present):
         return None
     return collision_forward.forward(
+        assume_centred=len(location) < 2,
         club=club,
         club_speed_mph=club_speed.value,
         attack_angle_deg=attack.value,
@@ -1077,6 +1085,10 @@ def evaluate(
         spin = replace(spin, note=f"{spin.note}; {location_note}" if spin.note else location_note)
         axis = replace(axis, note=f"{axis.note}; {location_note}" if axis.note else location_note)
         inputs[missing] = Input(None, reason=location_note)
+    condition = None if len(location) == 2 else location_note or CONDITION_CENTRED_CONTACT
+    if condition is not None:
+        spin = replace(spin, condition=condition) if spin.present else spin
+        axis = replace(axis, condition=condition) if axis.present else axis
     if location and (axis.present or spin.present):
         given = {"impact_offset_mm": impact_offset_mm, "impact_height_mm": impact_height_mm}
         inputs.update({name: given[name] for name in location})
@@ -1090,6 +1102,8 @@ def evaluate(
     forward = _forward_record(impact)
     if forward is not None and location_note is not None:
         forward["impact_location_note"] = location_note
+    if forward is not None and condition is not None:
+        forward["condition"] = condition
 
     return CollisionResult(
         metrics={

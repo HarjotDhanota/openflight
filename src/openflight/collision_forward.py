@@ -283,17 +283,17 @@ def centre_spin_rpm(
 class ForwardImpact:
     """The model's ball launch for one delivery (mph, deg, rpm; axis + curves right)."""
 
-    ball_speed_mph: float
+    ball_speed_mph: Optional[float]
     launch_vertical_deg: float
     launch_horizontal_deg: float
-    spin_rpm: float
-    spin_axis_deg: float
+    spin_rpm: Optional[float]
+    spin_axis_deg: Optional[float]
     spin_loft_deg: float
     d_plane_tilt_deg: float
     centre_spin_rpm: float
     centre_spin_axis_deg: float
-    gear_back_rpm: float
-    gear_side_rpm: float
+    gear_back_rpm: Optional[float]
+    gear_side_rpm: Optional[float]
     impact_location: bool
 
 
@@ -323,11 +323,13 @@ def forward(
     impact_offset_mm: Optional[float] = None,
     impact_height_mm: Optional[float] = None,
     handedness: Optional[str] = None,
+    assume_centred: bool = False,
 ) -> Optional[ForwardImpact]:
     """The ball's launch for a delivery; None for an unknown club or an undefined one.
 
     ``impact_offset_mm`` is + toward the toe, ``impact_height_mm`` + above the face
-    centre; either missing is the face centre.
+    centre. A missing coordinate is unknown: its gear term, and the ball speed, spin
+    and axis that need it, are None unless ``assume_centred`` puts it at the centre.
     """
     model = _model(club)
     inputs = (club_speed_mph, attack_angle_deg, club_path_deg, face_angle_deg, dynamic_loft_deg)
@@ -360,21 +362,27 @@ def forward(
     centre_axis = math.degrees(math.atan(math.tan(math.radians(tilt)) * gain))
 
     located = impact_offset_mm is not None or impact_height_mm is not None
-    x = float(impact_offset_mm or 0.0) / 1000.0
-    y = float(impact_height_mm or 0.0) / 1000.0
+    default = 0.0 if assume_centred else None
+    x = default if impact_offset_mm is None else float(impact_offset_mm) / 1000.0
+    y = default if impact_height_mm is None else float(impact_height_mm) / 1000.0
     hand = -1.0 if str(handedness or "").strip().upper() == LEFT_HANDED else 1.0
     normal = centre_speed * MPH_TO_M_S * math.cos(d)
     lever = BALL_MASS_KG * constants.cg_depth_m * normal / (KAPPA * BALL_RADIUS_M) * RAD_S_TO_RPM
     i_z, i_x = constants.moi_vertical_kg_m2, constants.moi_horizontal_kg_m2
-    gear_side = -hand * constants.gear_toe_heel * lever * x / (i_z * head.k_toe)
-    gear_back = -constants.gear_height * lever * y / (i_x * head.k_loft)
-    spin, axis = combine_spin(centre_spin, centre_axis, gear_back, gear_side)
-    base = 1.0 + head.mass_ratio
-    effective = base + BALL_MASS_KG * (
-        constants.loss_toe_heel * x * x / i_z + constants.loss_height * y * y / i_x
+    gear_side = (
+        None if x is None else -hand * constants.gear_toe_heel * lever * x / (i_z * head.k_toe)
     )
+    gear_back = None if y is None else -constants.gear_height * lever * y / (i_x * head.k_loft)
+    spin = axis = ball_speed = None
+    if x is not None and y is not None:
+        spin, axis = combine_spin(centre_spin, centre_axis, gear_back, gear_side)
+        base = 1.0 + head.mass_ratio
+        effective = base + BALL_MASS_KG * (
+            constants.loss_toe_heel * x * x / i_z + constants.loss_height * y * y / i_x
+        )
+        ball_speed = centre_speed * base / effective
     return ForwardImpact(
-        ball_speed_mph=centre_speed * base / effective,
+        ball_speed_mph=ball_speed,
         launch_vertical_deg=launch_v,
         launch_horizontal_deg=launch_h,
         spin_rpm=spin,

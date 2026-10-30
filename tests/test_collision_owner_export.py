@@ -51,6 +51,7 @@ def _forward(club, shot, speed, attack, path, face, loft):
         dynamic_loft_deg=loft,
         impact_offset_mm=number(shot, "Impact Offset"),
         impact_height_mm=number(shot, "Impact Height"),
+        assume_centred=True,
     )
 
 

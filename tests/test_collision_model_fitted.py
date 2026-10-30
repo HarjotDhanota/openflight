@@ -39,7 +39,7 @@ def _forward_for(result, club, **kwargs):
         club_path_deg=result.inputs["club_path"].value,
         face_angle_deg=metrics["face_angle"].value,
         dynamic_loft_deg=metrics["dynamic_loft"].value,
-        **kwargs,
+        **{"assume_centred": True, **kwargs},
     )
 
 
