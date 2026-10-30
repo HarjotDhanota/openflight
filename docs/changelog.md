@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Preserve shared acoustic contact-delay evidence through the club-arc adapter
+  so full club speed uses the supplied timing or its explicit refusal.
 - Refuse full club-speed projection from head geometry whose OPS input has no
   matching contact-time reference; retain the model's actual time and clock.
 - Withhold public head-track angles and arc positions when that reference is
