@@ -131,16 +131,17 @@ def execute(helper, folder, package, *, with_companion=False):
                     raise
                 state["startup_b64"] = base64.b64encode(startup).decode()
                 collector = ActiveCollector(handle, build=BUILD, host_boot=boot, sleep=time.sleep)
+                state["collection"] = collector.collect_active()
+                state["baseline_lifecycle"] = dict(collector.state)
                 if with_companion:
                     with companion(folder / "ops-camera", helper) as control:
-                        state["collection"] = collector.collect_active(
+                        state["joint_collection"] = collector.collect_active(
                             count=64,
                             pause_s=0.05,
                             on_active=control.start_wait,
+                            fresh=False,
                         )
                     state["camera_used"] = state["ops_used"] = True
-                else:
-                    state["collection"] = collector.collect_active()
         helper.require_unowned()
         if helper.boot_identity() != boot:
             raise ValueError("host rebooted during trial")

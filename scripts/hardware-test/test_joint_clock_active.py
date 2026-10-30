@@ -202,3 +202,18 @@ def test_package_tampering_fails_before_import_or_device_open(tmp_path):
     (tmp_path / "MANIFEST.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="sealed"):
         load_package(tmp_path)
+
+
+def test_baseline_and_joint_cycles_share_one_runtime_and_require_stop():
+    collector, port = setup()
+    with pytest.raises(ValueError, match="previous verified stop"):
+        collector.collect_active(count=2, fresh=False)
+    assert port.writes == []
+    first = collector.collect_active(count=3)
+    second = collector.collect_active(count=4, fresh=False)
+    assert first["runtime"] == second["runtime"]
+    assert first["connection"] == second["connection"]
+    assert len(second["conditional_maps"]) == 4
+    assert collector.state["stop_verified"]
+    requests = [row["command"] for row in collector.rows if row["command"].startswith("triggerLog")]
+    assert len(requests) == len(set(requests))

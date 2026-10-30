@@ -150,7 +150,7 @@ class ActiveCollector(Collector):
             row["error"] = "StatusQualificationError"
             raise
 
-    def collect_active(self, *, count=24, pause_s=0.025, on_active=None):
+    def collect_active(self, *, count=24, pause_s=0.025, on_active=None, fresh=True):
         """No swing needed: finite RF frames and an enabled nominal tee detector."""
         if type(count) is not int or not 2 <= count <= 64:
             raise ValueError("probe count must be in 2..64")
@@ -160,11 +160,17 @@ class ActiveCollector(Collector):
             or not (math.isfinite(pause_s) and 0.005 <= pause_s <= 0.05)
         ):
             raise ValueError("bounded probe pause required")
-        self.identity(initial=True)
-        self.idle()
+        if type(fresh) is not bool or (not fresh and not self.state["stop_verified"]):
+            raise ValueError("a repeated trial requires the previous verified stop")
+        self.identity(initial=fresh)
+        if fresh:
+            self.idle()
+        else:
+            self.status(active=False)
         for command in CONFIGURATION:
             self.command(command)
         try:
+            self.state["stop_acknowledged"] = self.state["stop_verified"] = False
             self.state["rf_start_attempted"] = True
             self.command("sensorStart")
             self.sleep(pause_s)

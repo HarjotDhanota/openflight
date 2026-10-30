@@ -92,7 +92,9 @@ it preserves partial replies and refuses speculative recovery writes; stop
 verification then remains unavailable and physical restoration is required.
 
 Add `--with-ops-camera` for simultaneous native OPS arming and camera load.
-It collects 64 probes spaced by 50 ms, within a four-second batch deadline.
+It first runs and stops the IWR-only baseline, then configures the companion and
+restarts acquisition on the same UART/runtime. No second RAM boot is needed.
+The loaded phase collects 64 probes spaced by 50 ms, within a four-second batch deadline.
 The OPS wait begins after IWR reports active RF. The IWR detector remains
 independent: OPS never forces an IWR capture. A shared host boot identifies
 the trial, not a shared physical shot. A later held shot uses the existing
