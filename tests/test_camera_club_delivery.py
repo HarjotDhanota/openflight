@@ -11,6 +11,7 @@ from openflight.camera.club_delivery import (
     SCENE_P995_MIN,
     ApproachPairEstimate,
     CameraDeliveryGeometry,
+    CameraOpsReference,
     ChainedDelivery,
     FusedDelivery,
     TraceResult,
@@ -448,13 +449,23 @@ def _project_camera_ops_pair(
     for index in range(12):
         feature_offset = np.array([0.001 * (index - 5.5), 0.0, 0.001 * ((index % 3) - 1)])
         tracks.append([project(contact + feature_offset + velocity * time_s) for time_s in times])
-    return np.asarray(tracks), times, ball, geometry
+    head_relative = contact - geometry.camera_origin
+    rotation = np.array(
+        [[math.cos(yaw), -math.sin(yaw), 0.0], [math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]]
+    )
+    head = geometry.camera_origin + rotation @ head_relative
+    ops = geometry.camera_origin + np.array([0.05, 0.0, -0.04])
+    los = (head - ops) / np.linalg.norm(head - ops)
+    radial = float(los @ (rotation @ velocity)) * 2.23694
+    reference = CameraOpsReference(tuple(ops), tuple(head), float(times[-1]), "test_camera")
+    geometry = replace(geometry, setup_pitch_deg=0.0, setup_focal_px=focal_px)
+    return np.asarray(tracks), times, ball, geometry, radial, reference
 
 
 class TestCameraOpsFallback:
     @pytest.mark.parametrize("forward_offset", [0.0, 0.03, -0.03])
     def test_recovers_known_delivery_without_iwr_range(self, forward_offset):
-        tracks, times, ball, geometry = _project_camera_ops_pair(
+        tracks, times, ball, geometry, radial, reference = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
             camera_yaw_deg=0.0,
@@ -466,7 +477,9 @@ class TestCameraOpsFallback:
             times,
             ball=ball,
             geometry=geometry,
-            ops_club_speed_mph=35.0 * 2.23694,
+            ops_club_speed_mph=radial,
+            ops_reference=reference,
+            timestamp_source="test_camera",
         )
 
         assert result is not None
@@ -474,7 +487,7 @@ class TestCameraOpsFallback:
         assert result.attack_angle_deg == pytest.approx(-5.0, abs=0.25)
 
     def test_rejects_missing_or_nonphysical_ops_speed(self):
-        tracks, times, ball, geometry = _project_camera_ops_pair(
+        tracks, times, ball, geometry, _radial, _reference = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
         )
@@ -492,7 +505,7 @@ class TestCameraOpsFallback:
 
     def test_yawed_unit_reports_path_from_its_own_boresight(self):
         # the teed ball does not set the zero: a unit aimed 3 deg right reads 3 deg less path
-        tracks, times, ball, geometry = _project_camera_ops_pair(
+        tracks, times, ball, geometry, radial, reference = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
             camera_yaw_deg=3.0,
@@ -503,7 +516,9 @@ class TestCameraOpsFallback:
             times,
             ball=ball,
             geometry=geometry,
-            ops_club_speed_mph=35.0 * 2.23694,
+            ops_club_speed_mph=radial,
+            ops_reference=reference,
+            timestamp_source="test_camera",
         )
 
         assert result is not None
@@ -511,7 +526,7 @@ class TestCameraOpsFallback:
         assert result.attack_angle_deg == pytest.approx(-5.0, abs=0.25)
 
     def test_mirrored_capture_preserves_fallback_path_sign(self):
-        tracks, times, ball, geometry = _project_camera_ops_pair(
+        tracks, times, ball, geometry, radial, reference = _project_camera_ops_pair(
             path_deg=3.0,
             aoa_deg=-5.0,
             camera_yaw_deg=0.0,
@@ -525,7 +540,9 @@ class TestCameraOpsFallback:
             times,
             ball=mirrored_ball,
             geometry=replace(geometry, horizontal_pixel_sign=-1.0),
-            ops_club_speed_mph=35.0 * 2.23694,
+            ops_club_speed_mph=radial,
+            ops_reference=reference,
+            timestamp_source="test_camera",
         )
 
         assert result is not None
@@ -571,6 +588,7 @@ class TestCameraOpsFallback:
             range_evidence=None,
             geometry=geometry,
             ops_club_speed_mph=80.0,
+            ops_reference=CameraOpsReference((0.0, 0.0, 0.0), (0.0, 1.5, 0.04), 0.08, "host"),
         )
 
         assert result.status == "camera_ops_fallback"
@@ -951,6 +969,7 @@ def _camera_ops_only(monkeypatch, *, range_evidence=None, **geometry):
             **geometry,
         ),
         ops_club_speed_mph=80.0,
+        ops_reference=CameraOpsReference((0.0, 0.0, 0.0), (0.0, 1.5, 0.04), 0.08, "host"),
     )
 
 
@@ -1041,12 +1060,23 @@ def test_both_club_path_branches_share_the_unit_boresight_zero(path_deg, offset_
         geometry=geometry,
         ops_club_speed_mph=35.0 * 2.23694,
     )
+    lateral = offset_px * 1.3 / 933.33
+    forward = math.sqrt(
+        1.3**2 - lateral**2 - (geometry.ball_height_m - geometry.radar_height_m) ** 2
+    )
+    head = np.array([lateral, forward, geometry.ball_height_m])
+    ops = np.array([0.0, 0.0, geometry.radar_height_m])
+    direction = np.array([math.tan(math.radians(path_deg)), 1.0, math.tan(math.radians(-4.0))])
+    velocity = 35.0 * direction / np.linalg.norm(direction)
+    radial = float((head - ops) @ velocity / np.linalg.norm(head - ops)) * 2.23694
     camera_ops = camera_ops_delivery_from_feature_pair(
         tracks,
         times,
         ball=ball,
-        geometry=geometry,
-        ops_club_speed_mph=35.0 * 2.23694,
+        geometry=replace(geometry, setup_focal_px=933.33, setup_pitch_deg=0.0),
+        ops_club_speed_mph=radial,
+        ops_reference=CameraOpsReference(tuple(ops), tuple(head), float(times[-1]), "test_camera"),
+        timestamp_source="test_camera",
     )
 
     assert chained is not None and camera_ops is not None
