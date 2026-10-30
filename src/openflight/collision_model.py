@@ -1061,6 +1061,15 @@ def evaluate(
     if spin.present and flags:
         spin = _with_note(spin, f"{NOTE_CONTACT} ({'; '.join(flags)})")
     axis = _axis_metric(centre, impact, spin, bool(location))
+    location_note = None
+    if len(location) == 1:
+        missing = next(
+            name for name in ("impact_offset_mm", "impact_height_mm") if name not in location
+        )
+        location_note = f"partial impact location: {missing} not measured, assumed 0 mm"
+        spin = replace(spin, note=f"{spin.note}; {location_note}" if spin.note else location_note)
+        axis = replace(axis, note=f"{axis.note}; {location_note}" if axis.note else location_note)
+        inputs[missing] = Input(None, reason=location_note)
     if location and axis.present:
         given = {"impact_offset_mm": impact_offset_mm, "impact_height_mm": impact_height_mm}
         inputs.update({name: given[name] for name in location})
@@ -1071,6 +1080,9 @@ def evaluate(
     if smash_index.present:
         inputs["ball_speed_mph"] = ball_speed
     gyro = _not_measured("deg", GYRO_REASON, SOURCE_PENNER)
+    forward = _forward_record(impact)
+    if forward is not None and location_note is not None:
+        forward["impact_location_note"] = location_note
 
     return CollisionResult(
         metrics={
@@ -1088,5 +1100,5 @@ def evaluate(
         weights=weights_for_club(club),
         inputs=inputs,
         face_method=face_method,
-        forward=_forward_record(impact),
+        forward=forward,
     )
