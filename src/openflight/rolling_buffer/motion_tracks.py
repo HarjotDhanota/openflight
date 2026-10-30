@@ -303,6 +303,8 @@ def analyze(processor, capture):
     statistic_size = POLICY["club_statistic_peaks"]
     half_statistic = statistic_size // 2
     for path in history:
+        if flight and path.peaks[0].time_ms >= earliest_flight_ms:
+            continue
         part = tuple(peak for peak in path.peaks if peak.time_ms <= limit)
         if (
             len(part) < statistic_size + 1

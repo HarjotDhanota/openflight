@@ -1,5 +1,6 @@
 """Known I/Q velocities grade trajectory identity and retained club-only motion."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -189,3 +190,25 @@ def test_late_tail_fit_keeps_the_earlier_supported_flight_interval(shot):
         if abs(candidate.speed_mph - motion.ball.speed_mph) <= motion.resolution_mph
     )
     assert motion.ball.peaks[0].time_ms <= candidate_start + motion.window_samples / 30
+
+
+def test_a_line_born_after_ball_onset_is_not_the_approaching_club():
+    """May 2026 range session shot 3: TrackMan club 86.2 mph; a rising return near
+    122 mph that begins after the 114.8 mph ball line was read as the club."""
+    session = Path(__file__).parents[1] / "session_logs/session_20260506_152406_range.jsonl"
+    event = next(
+        event
+        for event in map(json.loads, session.read_text().splitlines())
+        if event["type"] == "rolling_buffer_capture" and event["shot_number"] == 3
+    )
+    capture = IQCapture(
+        sample_time=event["sample_time"],
+        trigger_time=event["trigger_time"],
+        i_samples=event["i_samples"],
+        q_samples=event["q_samples"],
+    )
+    motion = RollingBufferProcessor().analyze_motion(capture)
+    assert motion.ball is not None and motion.club is not None
+    assert motion.ball.speed_mph == pytest.approx(114.8, abs=0.5)
+    assert motion.club.speed_mph == pytest.approx(86.2, abs=2)
+    assert motion.club.peaks[0].time_ms < motion.ball.peaks[0].time_ms
