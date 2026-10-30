@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Use each shot's saved target line when reconstructing full ball speed from
+  target-relative launch, so a later aim adjustment cannot change that shot.
 - Detect ground contact on the first flight-integration step, preventing
   negative flight time and airborne distance on downward ground-level launches.
 - Reuse an unchanged session bundle after linking it into the send folder on
