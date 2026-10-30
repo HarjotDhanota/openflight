@@ -602,7 +602,8 @@ def simulate(
         # is sufficient because dt (2 ms) is tiny relative to the timescale
         # of the descent — the state is effectively linear across one step
         # even though the full trajectory is not.
-        if z <= 0.0 and t > dt:
+        # A downward ground-level launch contacts on the first step, at t=0.
+        if z <= 0.0:
             prev_z = state[2]
             denom = prev_z - z
             frac = prev_z / denom if abs(denom) > 1e-9 else 0.0
