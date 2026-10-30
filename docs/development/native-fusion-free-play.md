@@ -39,6 +39,19 @@ confirm reconnection before starting another hardware action. The warning
 survives a tester restart. Native startup waits for the physical confirmations;
 shutdown joins the acquisition owner before releasing the shared UART.
 
+The 30 October upstream self-trigger fix (`cb8fbffb`) also applies to the separate
+RAM clock image: `l3dump` must consume the self-trigger's existing freeze instead
+of starting a second tail. The rebuilt candidate is at
+`research/native-fusion-continuation-2026-10-30/clock-freeze/package-001` in the
+parent workspace. Select that directory with `--internal-sync-clock-package`.
+Its build fingerprint starts `9378430e`; the original `c2dd981e` package remains
+accepted for comparison. Both manifests and images are explicitly pinned. The
+collector and preflight use the selected package's identity. Restart the tester
+process when changing packages; imported helpers cannot be mixed in one process.
+This candidate compiled and passed software checks but has not been RAM-loaded
+or tested on the board. The earlier sealed deployment packet still contains
+the original image and does not acquire this update automatically.
+
 For an isolated Pi stage using an already tested environment, set
 `UV_PROJECT_ENVIRONMENT` to that environment and `OPENFLIGHT_UV_RUN_ARGS=--no-sync`.
 Only the explicitly selected native test path then skips environment rebuilding;

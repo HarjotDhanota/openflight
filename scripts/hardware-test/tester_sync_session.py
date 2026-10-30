@@ -18,7 +18,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from run_joint_clock import BUILD, load_package  # noqa: E402
+from run_joint_clock import load_package  # noqa: E402
 
 RESTORE_INSTRUCTIONS = (
     "S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5 unchanged, then reconnect only IWR USB."
@@ -338,7 +338,10 @@ def open_runtime(package, files):
                 startup = helper.startup(handle)
                 (output / "startup.bin").write_bytes(startup)
                 collector = ShotCollector(
-                    handle, build=BUILD, host_boot=helper.boot_identity(), sleep=time.sleep
+                    handle,
+                    build=helper.verify_package()["source_fingerprint"],
+                    host_boot=helper.boot_identity(),
+                    sleep=time.sleep,
                 )
                 collector.establish_fresh_runtime()
                 yield collector

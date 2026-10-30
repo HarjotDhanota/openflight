@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Admit the rebuilt IWR RAM clock package that preserves a self-trigger's
+  existing freeze, and bind collectors to the selected reviewed image.
 - Preserve the original spin observation's confidence and source when a collision
   estimate replaces it; never restore a model's confidence as radar confidence.
 - Integrate the conditional head model exactly at the OPS reading time, including

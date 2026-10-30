@@ -13,16 +13,24 @@ from pathlib import Path
 BUILD = "c2dd981eb48225a75e431a7930f3ded38068e8720cc0007ef4dd163fe4514ce1"
 IMAGE_SHA = "12b15e27b138ad4ba62e17dfbf5cd75deb2151809274fe51f2c47d2b3da6e192"
 MANIFEST_SHA = "1814a600bec8cc6a8e65957ff498c0cc6689412e954840bcbe770c905b7faeb8"
+REVIEWED_PACKAGES = {
+    MANIFEST_SHA: (BUILD, IMAGE_SHA),
+    "21f9d6c4d14b44b9d5ea0dbd23a8ba885dd1f49e52bcae04f92b4aab715d2573": (
+        "9378430e391e8da317ce7552c6173159c8416490a5090f659b1da04fc37d0879",
+        "e3b90b8b88a331ae10192660a9e1cc8092db8d0f17959f79c8d394e41163a0ea",
+    ),
+}
 
 
 def load_package(folder):
     """Verify retained inputs before importing any of the device helpers."""
     folder = folder.resolve(strict=True)
     manifest_bytes = (folder / "MANIFEST.json").read_bytes()
-    if hashlib.sha256(manifest_bytes).hexdigest() != MANIFEST_SHA:
+    identity = REVIEWED_PACKAGES.get(hashlib.sha256(manifest_bytes).hexdigest())
+    if identity is None:
         raise ValueError("expected sealed idle-package manifest")
     manifest = json.loads(manifest_bytes)
-    if manifest["source_fingerprint"] != BUILD or manifest["ram_sha256"] != IMAGE_SHA:
+    if (manifest["source_fingerprint"], manifest["ram_sha256"]) != identity:
         raise ValueError("wrong reviewed firmware identity")
     for name, info in manifest["files"].items():
         member = (folder / name).resolve(strict=True)
@@ -107,10 +115,11 @@ def execute(helper, folder, package, *, with_companion=False, existing_runtime=N
     port_name = helper.enhanced_port()
     folder.mkdir(parents=True, exist_ok=False)
     boot, previous_errors = helper.boot_identity(), helper.kernel_errors()
+    manifest = helper.verify_package()
     state = {
         "host_boot": boot,
-        "firmware_build": BUILD,
-        "ram_sha256": IMAGE_SHA,
+        "firmware_build": manifest["source_fingerprint"],
+        "ram_sha256": manifest["ram_sha256"],
         "status": "prepared",
         "uart_opened": False,
         "flash_performed": False,
@@ -145,7 +154,9 @@ def execute(helper, folder, package, *, with_companion=False, existing_runtime=N
                         state["startup_b64"] = base64.b64encode(error.raw).decode()
                         raise
                     state["startup_b64"] = base64.b64encode(startup).decode()
-                collector = ActiveCollector(handle, build=BUILD, host_boot=boot, sleep=time.sleep)
+                collector = ActiveCollector(
+                    handle, build=manifest["source_fingerprint"], host_boot=boot, sleep=time.sleep
+                )
                 if existing_runtime is not None:
                     state["verified_attachment"] = collector.attach_stopped_runtime(
                         existing_runtime
@@ -203,7 +214,15 @@ def main():
     if bool(args.expected_runtime) != args.execute_existing_rf:
         parser.error("--execute-existing-rf requires --expected-runtime, exclusively")
     if not (args.execute_ram_rf or args.execute_ops_camera or args.execute_existing_rf):
-        print(json.dumps({"preflight": "passed", "devices_opened": False, "firmware_build": BUILD}))
+        print(
+            json.dumps(
+                {
+                    "preflight": "passed",
+                    "devices_opened": False,
+                    "firmware_build": helper.verify_package()["source_fingerprint"],
+                }
+            )
+        )
         return
     if args.output is None:
         parser.error("--output required for execution")
