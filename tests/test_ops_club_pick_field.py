@@ -23,6 +23,7 @@ from openflight.rolling_buffer.processor import RollingBufferProcessor
 from openflight.rolling_buffer.types import IQCapture
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ops_club_pick" / "outdoor-test-1-arm5.npz"
+UNUSABLE_CAPTURES = (5, 8)
 
 # Gross mis-picks at e31b3025 (20: after impact; 9 and 33: ~4 mph low).
 FIXED_SHOTS = (9, 20, 33)
@@ -90,7 +91,10 @@ def test_the_fixture_is_small_and_holds_every_capture_of_the_session(archive):
 
 
 @pytest.mark.parametrize("shot", range(1, 34))
-def test_ball_speed_is_unchanged_on_every_capture(archive, processed, shot):
+def test_usable_ball_speeds_are_preserved_and_unusable_captures_rejected(archive, processed, shot):
+    if shot in UNUSABLE_CAPTURES:
+        assert processed[shot] is None
+        return
     assert processed[shot].ball_speed_mph == pytest.approx(
         _value(archive, "recorded_ball_mph", shot), abs=1e-9
     )
@@ -107,6 +111,9 @@ def test_club_speed_matches_the_independent_ridge(archive, processed, shot):
 @pytest.mark.parametrize("shot", range(1, 34))
 def test_club_is_never_read_after_the_ball_line_is_established(archive, processed, shot):
     result = processed[shot]
+    if shot in UNUSABLE_CAPTURES:
+        assert result is None
+        return
     onset_ms = RESOLVED_BALL_ONSET_MS.get(shot, _value(archive, "independent_ball_onset_ms", shot))
     if result.club_speed_mph is None or np.isnan(onset_ms):
         return
@@ -116,6 +123,9 @@ def test_club_is_never_read_after_the_ball_line_is_established(archive, processe
 @pytest.mark.parametrize("shot", range(1, 34))
 def test_club_is_never_read_after_the_impact_estimate(processed, shot):
     result = processed[shot]
+    if shot in UNUSABLE_CAPTURES:
+        assert result is None
+        return
     if result.club_speed_mph is None or result.impact.timestamp_ms is None:
         return
     assert result.club_timestamp_ms + _window_ms() <= result.impact.timestamp_ms

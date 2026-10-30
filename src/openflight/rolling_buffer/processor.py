@@ -17,6 +17,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 from ..clubs import ClubType
 from ..launch_monitor import SPIN_CONFIDENCE_HIGH
 from .multitaper import estimate_multitaper_spin, repair_clipped_iq
+from .quality import CaptureQuality, assess_capture
 from .types import (
     ImpactEstimate,
     IQCapture,
@@ -61,6 +62,10 @@ class RollingBufferProcessor:
     # Signal processing
     ADC_RANGE = 4096  # 12-bit ADC
     VOLTAGE_REF = 3.3  # Reference voltage
+
+    ADC_RAIL_MARGIN = 10
+    MAX_WINDOW_RAIL_FRACTION = 0.05
+    ZERO_FILLED_RUN_SAMPLES = 128
 
     # Magnitude threshold for valid peaks. Low threshold lets weak signals
     # through; they get filtered later by the 15 mph speed check.
@@ -463,6 +468,16 @@ class RollingBufferProcessor:
 
         return results
 
+    def capture_quality(self, capture: IQCapture) -> CaptureQuality:
+        """Return this capture's raw-sample support without changing its samples."""
+        return assess_capture(
+            capture.i_samples,
+            capture.q_samples,
+            rail_margin=self.ADC_RAIL_MARGIN,
+            max_rail_fraction=self.MAX_WINDOW_RAIL_FRACTION,
+            zero_run_samples=self.ZERO_FILLED_RUN_SAMPLES,
+        )
+
     def _iter_capture_windows(
         self,
         capture: IQCapture,
@@ -481,13 +496,18 @@ class RollingBufferProcessor:
         """
         i_data = np.asarray(capture.i_samples)
         q_data = np.asarray(capture.q_samples)
+        quality = self.capture_quality(capture)
 
         start = 0
         while start + self.WINDOW_SIZE <= len(i_data):
             i_block = i_data[start : start + self.WINDOW_SIZE]
             q_block = q_data[start : start + self.WINDOW_SIZE]
 
-            peaks = self._process_block(i_block, q_block)
+            peaks = (
+                self._process_block(i_block, q_block)
+                if quality.supports_window(start, start + self.WINDOW_SIZE)
+                else []
+            )
             timestamp_ms = (start / self.SAMPLE_RATE) * 1000
             yield (
                 start,
@@ -1728,6 +1748,10 @@ class RollingBufferProcessor:
             (noise > 0)
             & (band_magnitude.max(axis=1) >= self.BALL_LINE_ONSET_SNR * noise)
             & (band_magnitude.argmax(axis=1) > 0)
+        )
+        quality = self.capture_quality(capture)
+        present &= np.array(
+            [quality.supports_window(int(start), int(start) + window_size) for start in starts]
         )
         run = self.BALL_LINE_ONSET_WINDOWS
         for index in range(len(present) - run + 1):
