@@ -1001,7 +1001,8 @@ def evaluate(
 ) -> CollisionResult:
     """Every collision-model metric for one shot, from that shot's inputs.
 
-    ``ball_speed_mph`` is the full speed; impact location is mm (+ toe, + up) and drives
+    Both speeds are full speeds at impact, not radial or precontact readings.
+    Impact location is mm (+ toe, + up) and drives
     the gear effect; ``handedness`` is RH unless "LH". ``low_point_distance_mm`` feeds only
     the contact note (None: no camera club data).
     """

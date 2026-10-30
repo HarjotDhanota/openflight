@@ -126,8 +126,18 @@ def test_the_fusion_shot_labels_follow_their_producers():
     assert status["smash_factor_full"] == "not_measured"
 
 
-def test_the_fusion_shot_has_a_spin_index_and_a_smash_index():
-    metrics = fusion_shot().to_dict()["metrics"]
+def test_full_impact_club_speed_enables_the_spin_index_and_smash_index():
+    from openflight import shot_models  # noqa: PLC0415
+
+    shot = fusion_shot()
+    shot.club_speed_full = {
+        "status": "calculated",
+        "value_mph": 85.0,
+        "referred_to": "impact",
+        "reference_point": "clubhead",
+    }
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+    metrics = shot.to_dict()["metrics"]
 
     for name in ("spin_index", "smash_index"):
         assert metrics[name]["status"] == "calculated", name

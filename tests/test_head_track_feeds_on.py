@@ -49,10 +49,16 @@ def _head_track_positions() -> list[dict]:
 
 def _head_track_shot(head_positions=(), **overrides) -> Shot:
     """A 7-iron with a measured radar launch, a weak OPS spin and only the head track's
-    club data, built as the kiosk builds it."""
+    club data, plus a known-answer full impact speed."""
     values = {
         "ball_speed_mph": 120.0,
         "club_speed_mph": 85.0,
+        "club_speed_full": {
+            "status": "calculated",
+            "value_mph": 85.0,
+            "referred_to": "impact",
+            "reference_point": "clubhead",
+        },
         "timestamp": datetime(2026, 10, 25, 9, 0, 0),
         "club": ClubType.IRON_7,
         "launch_angle_vertical": 18.0,
