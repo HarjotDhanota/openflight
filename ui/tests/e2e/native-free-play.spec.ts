@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { gotoApp, KIOSK_VIEWPORTS, simulateShot, withControlSocket } from './helpers';
-import { mockConfirmedPlacementBox, useTester } from './testerHelpers';
+import { fulfillJson, mockConfirmedPlacementBox, mockSetupDone, RECORDING, useTester } from './testerHelpers';
 
 for (const viewport of KIOSK_VIEWPORTS) {
   test.describe(`native free play ${viewport.width}x${viewport.height}`, () => {
@@ -49,6 +49,12 @@ for (const viewport of KIOSK_VIEWPORTS) {
       });
       const prepare = page.getByRole('button', { name: 'Area empty; prepare next attempt' });
       await expect(prepare).toBeVisible();
+      expect(
+        await page
+          .locator('.native-sync > span')
+          .first()
+          .evaluate((node) => node.scrollHeight <= node.clientHeight + 1)
+      ).toBe(true);
       expect((await page.locator('.session-status').boundingBox())!.height).toBeLessThanOrEqual(
         viewport.height > 520 ? 96.5 : 60.5
       );
@@ -147,6 +153,41 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await page.locator('#native-free-play-restored').tap();
       expect(requests[1]).toEqual({ command: 'restored', phase_token: 'final-identity' });
       await page.screenshot({ path: test.info().outputPath('native-tester-reset.png') });
+    });
+
+    test('selected policy reaches Start and stays locked during recording', async ({ page }) => {
+      await useTester(page);
+      const world: { freePlay: object } = { freePlay: { enabled: false } };
+      await mockSetupDone(page, world);
+      await page.route('**/api/tester/free-play/native-sync', (route) =>
+        fulfillJson(route, {
+          configured: true,
+          enabled: false,
+          trigger_policies: [
+            { id: 'sound', label: 'Sound baseline', available: true, reason: 'Sound comparison.' },
+            {
+              id: 'hybrid',
+              label: 'Hybrid confirmation (OPS retention)',
+              available: true,
+              reason: 'Retain before confirmation.',
+            },
+          ],
+        })
+      );
+      const starts: Record<string, unknown>[] = [];
+      await page.route('**/api/tester/run', async (route) => {
+        starts.push(route.request().postDataJSON());
+        world.freePlay = RECORDING;
+        await fulfillJson(route, { free_play: RECORDING, job: { state: 'running', action: 'free_play' } }, 202);
+      });
+      await page.goto('/tester.html');
+      await page.locator('#free-play-resolution button[data-resolution="arm5"]').tap();
+      await page.locator('#first-club button[data-club="7-iron"]').tap();
+      await page.locator('#native-free-play').selectOption('hybrid');
+      await page.locator('#step-free-play').tap();
+      await expect.poll(() => starts.length).toBe(1);
+      expect(starts[0]).toMatchObject({ action: 'free_play', trigger_policy: 'hybrid' });
+      await expect(page.locator('#native-free-play')).toBeDisabled();
     });
   });
 }

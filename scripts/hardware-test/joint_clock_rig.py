@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from openflight.capture_trigger import CaptureRequest, CaptureTriggerRouter
+from openflight.timing import OpsCaptureTimer
 
 
 class RigControl:
@@ -45,6 +46,7 @@ class RigControl:
             "ops_speed_trigger", boot_id, {"camera": camera.notify_capture_request}
         )
         self.native_capture = False
+        self.trace_attempt_id = None
         self.camera_started = self.ops_connected = False
 
     def emit(self, name, row):
@@ -185,14 +187,36 @@ class RigControl:
         if acknowledgements != [3]:
             raise RuntimeError("P3 acknowledgement failed")
         self.arm_id = self.router.arm(self.now())
+        self.emit(
+            "ops-control.jsonl",
+            {
+                "type": "arm_requested",
+                "mono_ns": self.now(),
+                "arm_id": self.arm_id,
+            },
+        )
         if not self.radar.rearm_internal_speed_trigger():
             raise RuntimeError("explicit native rearm failed")
+        self.emit(
+            "ops-control.jsonl",
+            {
+                "type": "arm_completed",
+                "mono_ns": self.now(),
+                "arm_id": self.arm_id,
+            },
+        )
 
     def _capture(self):
         try:
+            timer = OpsCaptureTimer.start()
+            self.trace_attempt_id = getattr(timer, "attempt_id", None)
             raw = self.radar.wait_for_hardware_trigger(
-                timeout=self.wait_s, dump_grace=8, cancel_event=self.stop
+                timeout=self.wait_s,
+                dump_grace=8,
+                cancel_event=self.stop,
+                on_first_byte=timer.first_marker_callback,
             )
+            timer.response_completed()
             if raw:
                 payload = raw.encode("ascii")
                 (self.folder / "ops-response.raw").write_bytes(payload)

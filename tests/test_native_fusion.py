@@ -383,6 +383,10 @@ def test_normal_stop_packages_native_originals_and_association(tmp_path, monkeyp
         "ops-camera/ops-response.raw": b"original OPS",
         "ops-camera/gpio.jsonl": b'{"edge":"rising"}\n',
         "fusion-association.json": b'{"physical_timing_qualified":false}\n',
+        "trigger-policy.json": b'{"policy":"hybrid"}\n',
+        "policy-decision.json": b'{"publication_allowed":false}\n',
+        "iwr-observations.jsonl": b'{"detector":"iwr"}\n',
+        "publication.jsonl": b'{"stage":"processing_started"}\n',
     }
 
     def save_originals():

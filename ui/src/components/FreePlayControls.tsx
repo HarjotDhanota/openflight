@@ -73,7 +73,7 @@ export function FreePlayStatus({
                 : state.phase === 'recording'
                   ? state.paused
                     ? 'Free play: paused'
-                    : 'Sound baseline: recording'
+                    : 'Sound baseline'
                   : waiting
                     ? 'Stopping and packaging…'
                     : 'Free play needs attention'}

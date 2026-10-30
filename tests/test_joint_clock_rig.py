@@ -102,6 +102,29 @@ def test_boot_or_initial_high_refuses_preparation(tmp_path):
     assert not rig.gpio_ready.is_set()
 
 
+def test_native_wait_joins_the_existing_trace_without_adding_a_gate_observer(tmp_path, monkeypatch):
+    calls = []
+    timer = SimpleNamespace(
+        attempt_id="owned-trace",
+        first_marker_callback=lambda: calls.append("first_byte"),
+        response_completed=lambda: calls.append("completed"),
+    )
+    monkeypatch.setattr(rig_module, "OpsCaptureTimer", SimpleNamespace(start=lambda: timer))
+    rig = control(tmp_path, SimpleNamespace(notify_capture_request=lambda _r: True))
+
+    def wait(**kwargs):
+        kwargs["on_first_byte"]()
+        return ""
+
+    rig.radar = SimpleNamespace(
+        wait_for_hardware_trigger=wait, last_hardware_trigger_outcome="timeout"
+    )
+    rig._capture()
+    assert calls == ["first_byte", "completed"]
+    assert rig.trace_attempt_id == "owned-trace"
+    assert not rig.native_capture and not rig.errors
+
+
 @pytest.mark.parametrize("complete", [False, True])
 def test_native_capture_requires_complete_original_ops_arrays(tmp_path, complete):
     raw = json.dumps(

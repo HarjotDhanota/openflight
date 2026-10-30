@@ -11303,6 +11303,7 @@ def create_app(
             native_control = None
             if action == "free_play":
                 run_id = uuid.uuid4().hex
+                commands[0].append("--pi-trace")
                 commands[0].extend(
                     [
                         "--tester-id",

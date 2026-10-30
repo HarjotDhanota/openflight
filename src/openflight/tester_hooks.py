@@ -937,6 +937,7 @@ def _session_start_config(config: dict) -> None:
             deepcopy(free_play_plan["resolution"]) if free_play_plan is not None else None
         )
         config["free_play"]["exposure_plan"] = deepcopy(free_play_plan)
+        config["trigger_policy"] = deepcopy(free_play_config.get("trigger_policy"))
 
 
 def _ready_light_states(states):
