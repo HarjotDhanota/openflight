@@ -397,7 +397,7 @@ def face_and_loft_from_launch(
     club_path_deg: float,
     attack_angle_deg: float,
 ) -> Optional[tuple[float, float]]:
-    """(face angle, dynamic loft) whose forward launch is the given one, or None."""
+    """The low-spin-loft inverse branch, or None outside its forward model."""
     model = _model(club)
     angles = (launch_vertical_deg, launch_horizontal_deg, club_path_deg, attack_angle_deg)
     if model is None or not _finite(*angles):
@@ -408,9 +408,11 @@ def face_and_loft_from_launch(
     if ball is None or u is None:
         return None
     psi = math.degrees(math.acos(max(-1.0, min(1.0, math.fsum(p * q for p, q in zip(ball, u))))))
+    if psi >= 90.0:
+        return None
     away = _plane_toward(ball, u)
     if away is None:
-        return None
+        return launch_horizontal_deg, launch_vertical_deg
     away = [-v for v in away]
     delta = 0.0
     for _ in range(100):
@@ -418,6 +420,9 @@ def face_and_loft_from_launch(
         delta = launch_offset_deg(constants, loft, min(psi + delta, 89.9))
         if abs(delta - previous) < 1e-12:
             break
+    spin_loft = psi + delta
+    if spin_loft >= 90.0 or abs(launch_offset_deg(constants, loft, spin_loft) - delta) > 1e-8:
+        return None
     d = math.radians(delta)
     normal = [math.cos(d) * p + math.sin(d) * q for p, q in zip(ball, away)]
     face = math.degrees(math.atan2(normal[1], normal[0]))
