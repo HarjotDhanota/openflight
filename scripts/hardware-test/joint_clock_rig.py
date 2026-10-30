@@ -26,6 +26,7 @@ class RigControl:
             "ops_speed_trigger", boot_id, {"camera": camera.notify_capture_request}
         )
         self.native_capture = False
+        self.camera_started = self.ops_connected = False
 
     def emit(self, name, row):
         with self.lock:
@@ -60,6 +61,8 @@ class RigControl:
                 boot_id=self.boot_id,
                 stop_event=self.stop,
             )
+            if not self.stop.is_set():
+                raise TimeoutError("GPIO observation expired before the trial finished")
         except BaseException as error:  # pylint: disable=broad-exception-caught
             self.errors.append({"component": "gpio", "error": repr(error)})
             self.gpio_ready.set()
@@ -92,15 +95,30 @@ class RigControl:
 
     def prepare(self):
         """Start buffering/edge observation before the OPS arm command."""
+        try:
+            self._prepare()
+        except BaseException as error:
+            self.errors.append({"component": "prepare", "error": repr(error)})
+            raise
+
+    def _prepare(self):
         self.folder.mkdir(parents=True, exist_ok=False)
         self.gpio_thread = threading.Thread(target=self._record, name="trial-gpio")
         self.gpio_thread.start()
         if not self.gpio_ready.wait(3) or self.errors:
             raise RuntimeError("GPIO recorder did not become ready")
         self.camera.start()
+        self.camera_started = True
         self.frame_thread = threading.Thread(target=self._frames, name="trial-frame-clocks")
         self.frame_thread.start()
         self.radar.connect()
+        self.ops_connected = True
+        if self.radar.serial is not None:
+            from ops_serial_journal import SerialJournal
+
+            self.radar.serial = SerialJournal(
+                self.radar.serial, lambda row: self.emit("ops-serial.jsonl", row)
+            )
         if self.radar.validate_internal_trigger_firmware() != "1.3.3":
             raise ValueError("this joint trial requires observed OPS v1.3.3")
         self.radar.capture_evidence_callback = lambda row: self.emit(
@@ -112,6 +130,27 @@ class RigControl:
             pre_trigger_segments=6,
             sample_rate_ksps=30,
         )
+        self.radar._send_command("PI")
+        response = self.radar._send_command("P3")
+        acknowledgements = []
+        for line in response.splitlines():
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and "PowerReduction" in payload:
+                acknowledgements.append(payload["PowerReduction"])
+        self.emit(
+            "ops-control.jsonl",
+            {
+                "type": "power_request",
+                "requested_level": 3,
+                "response": response,
+                "effective_rf_power_verified": False,
+            },
+        )
+        if acknowledgements != [3] or not self.radar.rearm_internal_speed_trigger():
+            raise RuntimeError("P3 acknowledgement or explicit native rearm failed")
         self.arm_id = self.router.arm(self.now())
 
     def _capture(self):
@@ -174,8 +213,9 @@ class RigControl:
                     {
                         "host_boot": self.boot_id,
                         "arm_id": self.arm_id,
-                        "camera_used": True,
-                        "ops_native_trigger_used": True,
+                        "camera_used": self.camera_started,
+                        "ops_native_trigger_used": self.arm_id is not None,
+                        "ops_connected": self.ops_connected,
                         "iwr_software_capture_requested": False,
                         "camera_sound_gpio_used": False,
                         "native_capture_observed": self.native_capture,

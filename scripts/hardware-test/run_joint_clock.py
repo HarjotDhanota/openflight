@@ -104,8 +104,9 @@ def execute(helper, folder, package, *, with_companion=False):
         "uart_opened": False,
         "flash_performed": False,
         "standard_opened": False,
-        "camera_used": False,
-        "ops_used": False,
+        "camera_used": None if with_companion else False,
+        "ops_used": None if with_companion else False,
+        "companion_requested": with_companion,
         "physical_timing_qualified": False,
     }
     collector = None

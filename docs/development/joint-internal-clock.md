@@ -51,6 +51,11 @@ the camera at 640x400/300 fps, temporary manual 300 us/gain 4, with a 200 ms
 pre-ring and 150 ms sensor-timed post-tail. It does not open the sound GPIO,
 change stored settings, send OPS `S!`, or request an IWR capture.
 
+After setup it explicitly requests idle, requires a unique P3 acknowledgement,
+and rearms with PA, reusing the previously tested lower-power trial sequence.
+P3 acknowledgement is not independent verification of effective RF power.
+Original UART reads/writes and their host brackets are retained in a journal.
+
 The native wait lasts four seconds, with an eight-second grace for any dump
 already in progress. No event is an expected empty control. An event freezes
 the camera once; raw OPS bytes and both GPIO edges are retained. Clock samples

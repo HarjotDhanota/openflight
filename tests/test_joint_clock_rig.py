@@ -93,3 +93,55 @@ def test_boot_or_initial_high_refuses_preparation(tmp_path):
     with pytest.raises(ValueError, match="initial level"):
         rig.observe_gpio({"type": "start", "boot_id": "boot-a", "initial_level": 1})
     assert not rig.gpio_ready.is_set()
+
+
+def test_native_trial_rearms_after_setup_before_waiting(tmp_path):
+    class Radar:
+        serial = None
+        native_ready = False
+        last_hardware_trigger_outcome = "timeout"
+
+        def connect(self):
+            return True
+
+        def validate_internal_trigger_firmware(self):
+            return "1.3.3"
+
+        def configure_for_internal_speed_trigger(self, **_kwargs):
+            self.native_ready = False
+
+        def _send_command(self, command):
+            return '{"PowerReduction":3}' if command == "P3" else ""
+
+        def rearm_internal_speed_trigger(self):
+            self.native_ready = True
+            return True
+
+        def wait_for_hardware_trigger(self, **_kwargs):
+            if not self.native_ready:
+                raise RuntimeError("setup left the radar idle")
+            return ""
+
+    def recorder(_chip, _line, _duration, emit, **kwargs):
+        emit({"type": "start", "boot_id": "boot-a", "initial_level": 0})
+        kwargs["stop_event"].wait(3)
+
+    camera = SimpleNamespace(
+        start=lambda: None,
+        stop=lambda: None,
+        notify_capture_request=lambda _item: True,
+        _ring=SimpleNamespace(latest_frame=None),
+    )
+    rig = rig_module.RigControl(
+        folder=tmp_path / "control",
+        boot_id="boot-a",
+        radar=Radar(),
+        camera=camera,
+        recorder=recorder,
+    )
+    try:
+        rig.prepare()
+        rig.start_wait()
+    finally:
+        rig.close()
+    assert json.loads((rig.folder / "RESULT.json").read_text())["status"] == "complete"
