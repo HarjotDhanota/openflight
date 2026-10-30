@@ -1990,8 +1990,12 @@
           <p id="free-play-range-text"></p>
           <button type="button" id="free-play-range-retry">Try the ball range again</button>
         </div>
-        <label id="native-free-play-choice" hidden><input id="native-free-play" type="checkbox" />
-          Use IWR + OPS native triggers (timing test; physical alignment unvalidated)</label>
+        <label id="native-free-play-choice" for="native-free-play">Capture policy (between stopped runs)</label>
+        <select id="native-free-play" aria-describedby="trigger-policy-reason">
+          <option value="sound">Sound baseline</option>
+        </select>
+        <p id="trigger-policy-reason" class="note" role="status">Existing sound capture route.</p>
+        <details><summary>Unavailable trigger routes</summary><div id="trigger-policy-unavailable"></div></details>
         <div id="native-free-play-controls" class="setup-warning" hidden aria-live="polite">
           <strong id="native-free-play-phase"></strong>
           <p id="native-free-play-message"></p>
@@ -5939,6 +5943,7 @@
         const phase = state?.enabled ? state.phase : null;
         el('maintainer-track-tools').hidden = Boolean(state?.enabled);
         const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(phase);
+        el('native-free-play').disabled = active || freePlayPending;
         el('verdict-card').hidden = active;
         el('ladder-panel').hidden = active;
         el('ladder-controls').hidden = active;
@@ -6698,7 +6703,22 @@
           const response = await fetch('/api/tester/free-play/native-sync', { cache: 'no-store' });
           if (!response.ok) return;
           nativeFreePlay = await response.json();
-          el('native-free-play-choice').hidden = !nativeFreePlay.configured;
+          if (nativeFreePlay.trigger_policies) {
+            const select = el('native-free-play'), selected = select.value;
+            select.replaceChildren(...nativeFreePlay.trigger_policies.map((policy) => {
+              const option = document.createElement('option');
+              option.value = policy.id; option.textContent = policy.label + (policy.available ? '' : ' — unavailable');
+              option.disabled = !policy.available;
+              return option;
+            }));
+            select.value = selected;
+            renderTriggerPolicy();
+            el('trigger-policy-unavailable').replaceChildren(...nativeFreePlay.trigger_policies.filter((p) => !p.available).map((policy) => {
+              const paragraph = document.createElement('p');
+              paragraph.textContent = `${policy.label}: ${policy.reason}`;
+              return paragraph;
+            }));
+          }
           el('native-free-play-controls').hidden = !nativeFreePlay.enabled;
           el('native-free-play-phase').textContent = nativeFreePlay.phase || '';
           const restoreReady = nativeFreePlay.normal_boot_restore_needed && nativeFreePlay.resources_released;
@@ -6712,6 +6732,11 @@
           el('native-free-play-restored').disabled = nativeBusy || !nativeFreePlay.resources_released;
         } catch (error) { el('native-free-play-error').textContent = String(error); }
       }
+      function renderTriggerPolicy() {
+        const policy = nativeFreePlay.trigger_policies?.find((p) => p.id === el('native-free-play').value);
+        if (policy) el('trigger-policy-reason').textContent = policy.reason;
+      }
+      el('native-free-play').onchange = renderTriggerPolicy;
       async function nativeFreePlayCommand(command) {
         if (nativeBusy) return;
         nativeBusy = true;
@@ -6737,7 +6762,7 @@
             action: 'free_play',
             resolution: freePlayResolution,
             club: firstClub,
-            capture_mode: el('native-free-play').checked ? 'native_internal' : 'sound',
+            trigger_policy: el('native-free-play').value,
             // on the unit's own screen the kiosk shows in this window, never a second one
             kiosk_window: onUnitScreen ? 'shared' : 'own',
           });

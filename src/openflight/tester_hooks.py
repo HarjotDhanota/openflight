@@ -827,6 +827,7 @@ def _add_arguments(parser) -> None:
     parser.add_argument("--tester-free-play", action="store_true")
     parser.add_argument("--tester-native-sync-package", type=Path, default=None)
     parser.add_argument("--tester-native-sync-control", type=Path, default=None)
+    parser.add_argument("--tester-trigger-policy", default=None)
     parser.add_argument("--tester-id")
     parser.add_argument("--tester-run-id")
     parser.add_argument("--tester-control-port", type=int, default=8765)
@@ -857,6 +858,16 @@ def _configure(args, parser) -> None:
     native_package = getattr(args, "tester_native_sync_package", None)
     native_control = getattr(args, "tester_native_sync_control", None)
     native_sync = native_package is not None
+    selected_policy = getattr(args, "tester_trigger_policy", None)
+    if selected_policy is not None:
+        from openflight.camera.trigger_policy import validate
+
+        try:
+            validate(selected_policy, package=native_package)
+            if (selected_policy != "sound") != native_sync:
+                raise ValueError("trigger policy conflicts with native package selection")
+        except ValueError as error:
+            parser.error(str(error))
     if native_sync != (native_control is not None):
         parser.error("native fusion requires both package and control directory")
     if native_sync:
@@ -877,7 +888,9 @@ def _configure(args, parser) -> None:
 
         register(
             NativeFusionExtension(
-                args.tester_native_sync_package.resolve(), args.tester_native_sync_control.resolve()
+                args.tester_native_sync_package.resolve(),
+                args.tester_native_sync_control.resolve(),
+                policy=selected_policy or "independent",
             )
         )
     global study_mode_enabled, tester_setup_required, tester_config_hash  # pylint: disable=global-statement
@@ -899,6 +912,11 @@ def _configure(args, parser) -> None:
         )
         if native_sync:
             free_play_config["native_sync_enabled"] = True
+        from openflight.camera.trigger_policy import snapshot
+
+        free_play_config["trigger_policy"] = snapshot(
+            selected_policy or ("independent" if native_sync else "sound")
+        )
     global free_play_plan, free_play_plan_path, free_play_study  # pylint: disable=global-statement
     free_play_plan = free_play_plan_path = free_play_study = None
     if args.free_play_ladder:
