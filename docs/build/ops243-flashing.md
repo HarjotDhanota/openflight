@@ -6,6 +6,9 @@ Do not use it for XMC4700, OPS243-C or a board that requires JTAG.
 
 ## 1. Get the parts
 
+**Total cost: about $30 for the flashing parts below**, assuming you already
+have the Pi, radar, soldering iron and solder.
+
 | Part | Included / needed |
 | --- | --- |
 | [Raspberry Pi Debug Probe](https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC0889?qs=amGC7iS6iy9zSCCLsPnjYw%3D%3D&mgh=1) | USB cable and female-ended debug lead included |
@@ -58,8 +61,6 @@ Shut down the Pi and unplug its power. Disconnect any separate radar power.
     | **J3 pin 1 — v1.3.3 sampling signal** | **13 (GPIO27)** |
 
 5. Connect the probe's USB cable to the Pi. Restore Pi power.
-
-![Pi physical pin 4 supplies radar J3 pin 9 with 5 V; Pi physical pin 14 connects to radar J3 pin 10 for ground. The v1.3.3 signal connects radar J3 pin 1 to Pi physical pin 13, GPIO27. Keep existing UART wires connected.](../assets/ops243-flashing-gpio.svg)
 
 ## 4. Open Terminal and install the tools
 
