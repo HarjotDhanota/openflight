@@ -53,3 +53,19 @@ def test_no_location_and_complete_location_keep_existing_contracts():
         assert complete.metrics[name].note is None
     assert "impact_location_note" not in absent.to_dict()["forward"]
     assert "impact_location_note" not in complete.to_dict()["forward"]
+
+
+@pytest.mark.parametrize("coordinate", ["impact_offset_mm", "impact_height_mm"])
+def test_gear_spin_keeps_its_known_coordinate_even_without_a_d_plane(coordinate):
+    result = cm.evaluate(
+        club=ClubType.DRIVER,
+        club_path=cm.Input(0.0, frame="target_line"),
+        attack_angle=cm.Input(0.0),
+        launch_horizontal=cm.Input(0.0, frame="target_line"),
+        launch_vertical=cm.Input(0.0),
+        club_speed_mph=cm.Input(85.0),
+        **{coordinate: cm.Input(8.0)},
+    )
+    assert result.metrics["spin_rate"].present
+    assert not result.metrics["d_plane_tilt"].present
+    assert result.inputs[coordinate].value == 8.0
