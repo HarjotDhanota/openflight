@@ -184,7 +184,7 @@ def test_the_drag_term_is_published_and_small():
 
 
 def test_the_range_brackets_the_value_and_names_each_input():
-    result = _evaluate(_track(120.0, 16.0, 2.0))
+    result = _evaluate(_track(120.0, 16.0, 2.0, starts=[42.0]))
 
     low, high = result["range_mph"]
     assert low < result["value_mph"] < high
@@ -213,7 +213,7 @@ RIG_WITH_MIC = SimpleNamespace(
 
 
 def test_a_sound_trigger_impact_widens_the_range():
-    precise = _evaluate(_track(120.0, 16.0, 2.0))
+    precise = _evaluate(_track(120.0, 16.0, 2.0, starts=[42.0]))
     loose = _evaluate(
         _track(120.0, 16.0, 2.0, impact_source="sound_trigger", impact_uncertainty_ms=4.0),
         rig=RIG_WITH_MIC,
