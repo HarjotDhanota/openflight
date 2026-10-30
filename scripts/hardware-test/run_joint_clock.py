@@ -20,15 +20,21 @@ REVIEWED_PACKAGES = {
         "e3b90b8b88a331ae10192660a9e1cc8092db8d0f17959f79c8d394e41163a0ea",
     ),
 }
+# The older image's l3dump refuses a ring the self-trigger has already frozen, and the
+# host dumps only after capture stops, so only the freeze-safe image can retain shot dumps.
+SHOT_DUMP_PACKAGES = frozenset({"21f9d6c4d14b44b9d5ea0dbd23a8ba885dd1f49e52bcae04f92b4aab715d2573"})
 
 
-def load_package(folder):
+def load_package(folder, *, shot_dumps=False):
     """Verify retained inputs before importing any of the device helpers."""
     folder = folder.resolve(strict=True)
     manifest_bytes = (folder / "MANIFEST.json").read_bytes()
-    identity = REVIEWED_PACKAGES.get(hashlib.sha256(manifest_bytes).hexdigest())
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    identity = REVIEWED_PACKAGES.get(digest)
     if identity is None:
         raise ValueError("expected sealed idle-package manifest")
+    if shot_dumps and digest not in SHOT_DUMP_PACKAGES:
+        raise ValueError("shot sessions need the freeze-safe reviewed package")
     manifest = json.loads(manifest_bytes)
     if (manifest["source_fingerprint"], manifest["ram_sha256"]) != identity:
         raise ValueError("wrong reviewed firmware identity")

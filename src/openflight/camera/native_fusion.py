@@ -171,7 +171,7 @@ class NativeFusionExtension(KioskExtension):
         self.tools = importlib.import_module("tester_sync_session")
         if Path(self.tools.__file__).resolve().parent != scripts:
             raise ValueError("native acquisition helpers belong to another checkout")
-        clock.load_package(package)
+        clock.load_package(package, shot_dumps=True)
         self.package = package
         self.files = self.tools.SessionFiles(control)
         self.files.state["trigger_policy"] = deepcopy(self.policy)

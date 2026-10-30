@@ -46,6 +46,32 @@ def test_changed_manifest_is_refused_before_helper_import(tmp_path):
         run_joint_clock.load_package(tmp_path)
 
 
+def test_shot_sessions_refuse_a_reviewed_package_whose_dump_refuses_a_frozen_ring(
+    tmp_path, monkeypatch
+):
+    manifest = tmp_path / "MANIFEST.json"
+    manifest.write_text("{}")
+    digest = run_joint_clock.hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setitem(run_joint_clock.REVIEWED_PACKAGES, digest, ("build", "image"))
+    with pytest.raises(ValueError, match="freeze-safe"):
+        run_joint_clock.load_package(tmp_path, shot_dumps=True)
+
+
+def test_only_the_freeze_safe_image_is_admitted_for_shot_dumps():
+    assert run_joint_clock.SHOT_DUMP_PACKAGES == {
+        "21f9d6c4d14b44b9d5ea0dbd23a8ba885dd1f49e52bcae04f92b4aab715d2573"
+    }
+    assert run_joint_clock.SHOT_DUMP_PACKAGES < set(run_joint_clock.REVIEWED_PACKAGES)
+
+
+def test_the_pre_fix_package_remains_an_idle_clock_package_only():
+    folder = os.environ.get("OPENFLIGHT_CLOCK_PREFIX_PACKAGE")
+    if not folder:
+        pytest.skip("OPENFLIGHT_CLOCK_PREFIX_PACKAGE not supplied")
+    with pytest.raises(ValueError, match="freeze-safe"):
+        run_joint_clock.load_package(Path(folder), shot_dumps=True)
+
+
 @pytest.mark.parametrize("member", ["clock.ram.bin", "result_clock.py"])
 def test_changed_reviewed_member_is_refused_before_helper_import(tmp_path, member):
     folder = os.environ.get("OPENFLIGHT_CLOCK_FREEZE_PACKAGE")
@@ -84,7 +110,10 @@ def test_native_runtime_collector_uses_the_selected_firmware_identity(tmp_path, 
         startup=lambda _handle: b"startup",
         boot_identity=lambda: "test-boot",
     )
-    monkeypatch.setattr(session, "load_package", lambda _package: helper)
+    loads = []
+    monkeypatch.setattr(
+        session, "load_package", lambda _package, **kwargs: loads.append(kwargs) or helper
+    )
     monkeypatch.setattr(session, "resource_ownership", lambda: {"resources_released": True})
     monkeypatch.setitem(sys.modules, "joint_shot_clock", SimpleNamespace(ShotCollector=Collector))
     (tmp_path / "clock.ram.bin").write_bytes(b"test-image")
@@ -96,3 +125,4 @@ def test_native_runtime_collector_uses_the_selected_firmware_identity(tmp_path, 
     )
     with session.open_runtime(tmp_path, files):
         assert observed == [build]
+    assert loads == [{"shot_dumps": True}]

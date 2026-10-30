@@ -334,7 +334,7 @@ def open_runtime(package, files):
     """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
     from joint_shot_clock import ShotCollector
 
-    helper = load_package(package)
+    helper = load_package(package, shot_dumps=True)
     output = files.folder
     collector = None
     boot_restore_needed = False
@@ -416,7 +416,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
-    load_package(args.clock_package)
+    load_package(args.clock_package, shot_dumps=True)
     if not args.execute:
         print(
             json.dumps(

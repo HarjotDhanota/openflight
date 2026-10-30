@@ -229,7 +229,7 @@ def test_boot_restore_requirement_is_persisted_before_uart_setup_or_reset(
         IWR6843DeviceLock=lambda _port: nullcontext(),
         open_serial=lambda _port: nullcontext(object()),
     )
-    monkeypatch.setattr(session, "load_package", lambda _path: helper)
+    monkeypatch.setattr(session, "load_package", lambda _path, **_kwargs: helper)
     monkeypatch.setattr(session, "resource_ownership", lambda: {"resources_released": True})
     monkeypatch.setattr(files, "wait", wait)
     with pytest.raises(RuntimeError, match="test interruption"):
