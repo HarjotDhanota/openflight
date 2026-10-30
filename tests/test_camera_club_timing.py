@@ -21,6 +21,7 @@ from openflight.camera.ball_flight import CameraBallEstimate
 from openflight.camera.club_delivery import (
     ApproachPairEstimate,
     CameraDeliveryGeometry,
+    CameraOpsReference,
     ChainedDelivery,
     estimate_chained_delivery,
 )
@@ -102,6 +103,9 @@ def test_an_arrival_stall_leaves_the_delivery_unchanged(monkeypatch, range_evide
         "range_evidence": evidence,
         "geometry": _geometry(),
         "ops_club_speed_mph": 80.0,
+        "ops_reference": CameraOpsReference(
+            (0.0, 0.0, 0.1), (0.0, 1.5, 0.04), float(sensor[41]) / 1e9, "sensor_timestamp_ns"
+        ),
     }
 
     steady = estimate_chained_delivery(frames, clean, sensor_timestamp_ns=sensor, **kwargs)
@@ -127,6 +131,9 @@ def test_a_clip_without_sensor_timestamps_still_times_by_arrival(monkeypatch):
         range_evidence=None,
         geometry=_geometry(),
         ops_club_speed_mph=80.0,
+        ops_reference=CameraOpsReference(
+            (0.0, 0.0, 0.1), (0.0, 1.5, 0.04), float(stalled[41]) / 1e9, "host_timestamp_ns"
+        ),
     )
 
     assert seen[0][0] == pytest.approx(tuple(stalled[[38, 41]] / 1e9))

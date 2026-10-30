@@ -5,8 +5,8 @@ impact. Its preferred path spans the final approach through the first
 post-impact frame, combining camera transverse motion, IWR6843 depth, and OPS
 club speed. A fully pre-impact interval is the next choice so launched-ball or
 deflected-head pixels cannot silently replace a missing impact track. When IWR
-club range is unavailable, camera perspective flow plus OPS speed closes a
-lower-confidence 3D fallback. Both paths remain experimental pending broader
+club range is unavailable, camera flow plus OPS radial speed needs an explicit
+head position, sensor origin and reading-time binding. Both paths remain experimental pending broader
 source-of-truth validation.
 
 The older radar-AoA/camera-trace functions remain below for replay comparisons,
@@ -247,6 +247,20 @@ class ApproachPairEstimate:
     n_features: int
     # Median (lateral, up, forward) per frame; None without IWR depth.
     positions_m: tuple[tuple[float, float, float], ...] | None = None
+
+
+@dataclass(frozen=True)
+class CameraOpsReference:
+    """OPS origin and tracked head position at a reading on the camera clock.
+
+    Positions use the delivery geometry's lateral, forward, up frame in metres.
+    The reading must be associated with this head and the pair's final timestamp.
+    """
+
+    ops_origin_lfu: tuple[float, float, float]
+    head_position_lfu: tuple[float, float, float]
+    timestamp_s: float
+    clock: str
 
 
 def _ratio_within(ratio: float | None, bounds: tuple[float, float]) -> bool:
@@ -704,14 +718,15 @@ def camera_ops_delivery_from_feature_pair(
     ball,
     geometry: CameraDeliveryGeometry,
     ops_club_speed_mph: float,
+    ops_reference: CameraOpsReference | None = None,
+    timestamp_source: str | None = None,
 ) -> ApproachPairEstimate | None:
-    """Recover impact velocity from camera flow constrained by OPS speed.
+    """Recover a constant interval velocity from camera flow and OPS radial speed.
 
-    A down-the-line camera measures lateral and vertical image motion but not
-    forward velocity directly. At the known contact point, the two perspective
-    flow equations plus the OPS velocity magnitude form a closed 3D solution.
-    The teed ball supplies the pitch reference, not the yaw: path is measured
-    from the unit's boresight.
+    Two perspective equations and LOS dot velocity close the solution. Depth and
+    LOS refer to the head at the final frame, at the OPS reading's time. No ball
+    position or contact time silently stands in for this reference. This is an
+    interval model, not a measurement of instantaneous impact delivery.
     """
     pixels = np.asarray(feature_pixels, dtype=float)
     times = np.asarray(timestamps_s, dtype=float)
@@ -722,18 +737,34 @@ def camera_ops_delivery_from_feature_pair(
     elapsed = float(times[1] - times[0])
     if elapsed <= 0.0 or not math.isfinite(ops_club_speed_mph) or ops_club_speed_mph <= 0.0:
         return None
-
-    camera_ball_range_m = math.sqrt(
-        (geometry.ball_lateral_offset_m - geometry.camera_lateral_offset_m) ** 2
-        + geometry.camera_ball_forward_m**2
-        + (geometry.ball_height_m - geometry.camera_height_m) ** 2
-    )
-    focal_px = ball.diameter_px * camera_ball_range_m / geometry.ball_diameter_m
-    calibrated = geometry.setup_pitch_deg is not None and geometry.setup_focal_px is not None
-    if calibrated:
-        focal_px = float(geometry.setup_focal_px)
-    if not math.isfinite(focal_px) or focal_px <= 0.0:
+    if (
+        ops_reference is None
+        or timestamp_source is None
+        or ops_reference.clock != timestamp_source
+        or not math.isfinite(ops_reference.timestamp_s)
+        or not math.isclose(ops_reference.timestamp_s, float(times[-1]), rel_tol=0.0, abs_tol=1e-9)
+        or not np.all(np.isfinite(pixels))
+        or geometry.calibrated_model is not None
+    ):
         return None
+    try:
+        head = np.asarray(ops_reference.head_position_lfu, dtype=float)
+        ops = np.asarray(ops_reference.ops_origin_lfu, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if head.shape != (3,) or ops.shape != (3,) or not np.all(np.isfinite([head, ops])):
+        return None
+    distance = float(np.linalg.norm(head - ops))
+    if distance <= 0.0:
+        return None
+    los = (head - ops) / distance
+    focal_px, pitch_rad, _radar, _check = _camera_model(ball, geometry)
+    sine, cosine = math.sin(pitch_rad), math.cos(pitch_rad)
+    relative = head - geometry.camera_origin
+    head_depth_m = cosine * relative[1] + sine * relative[2]
+    if not math.isfinite(head_depth_m) or head_depth_m <= 0.0:
+        return None
+    sight = np.array([los[0], -sine * los[1] + cosine * los[2], cosine * los[1] + sine * los[2]])
 
     center_x = geometry.image_width_px / 2.0
     center_y = geometry.image_height_px / 2.0
@@ -747,18 +778,6 @@ def camera_ops_delivery_from_feature_pair(
             geometry.roll_correction_deg,
         )
 
-    ball_x, ball_z = normalized(np.asarray([[ball.x, ball.y]], dtype=float))
-    ball_x = float(ball_x[0])
-    ball_z = float(ball_z[0])
-    expected_elevation = math.atan2(
-        geometry.ball_height_m - geometry.camera_height_m,
-        geometry.camera_ball_forward_m,
-    )
-    pitch_rad = expected_elevation - math.atan2(ball_z, 1.0)
-    if calibrated:
-        pitch_rad = math.radians(float(geometry.setup_pitch_deg))
-    contact_depth_m = camera_ball_range_m / math.sqrt(1.0 + ball_x**2 + ball_z**2)
-
     first_x, first_z = normalized(pixels[:, 0])
     last_x, last_z = normalized(pixels[:, 1])
     x_rate = (last_x - first_x) / elapsed
@@ -766,25 +785,24 @@ def camera_ops_delivery_from_feature_pair(
     speed_ms = ops_club_speed_mph / 2.23694
     velocities = []
     for image_x, image_z, dx_dt, dz_dt in zip(
-        last_x,
-        last_z,
+        first_x,
+        first_z,
         x_rate,
         z_rate,
         strict=True,
     ):
-        # Vx = depth*du/dt + u*Vforward and likewise for Vz. Substituting
-        # both into |V|=OPS speed leaves one quadratic in camera-forward V.
-        coefficient_a = 1.0 + image_x**2 + image_z**2
-        coefficient_b = 2.0 * contact_depth_m * (image_x * dx_dt + image_z * dz_dt)
-        coefficient_c = contact_depth_m**2 * (dx_dt**2 + dz_dt**2) - speed_ms**2
-        discriminant = coefficient_b**2 - 4.0 * coefficient_a * coefficient_c
-        if discriminant < 0.0:
+        # The finite perspective difference uses first-frame u and final-frame Z.
+        # Substituting Vx=Z*du/dt+u*Vz in LOS dot V gives a linear solve for Vz.
+        denominator = sight[2] + sight[0] * image_x + sight[1] * image_z
+        if not math.isfinite(denominator) or abs(denominator) <= 1e-8:
             continue
-        camera_forward = (-coefficient_b + math.sqrt(discriminant)) / (2.0 * coefficient_a)
-        if camera_forward <= 0.0:
+        camera_forward = (
+            speed_ms - head_depth_m * (sight[0] * dx_dt + sight[1] * dz_dt)
+        ) / denominator
+        if not math.isfinite(camera_forward) or camera_forward <= 0.0:
             continue
-        camera_lateral = contact_depth_m * dx_dt + image_x * camera_forward
-        camera_vertical = contact_depth_m * dz_dt + image_z * camera_forward
+        camera_lateral = head_depth_m * dx_dt + image_x * camera_forward
+        camera_vertical = head_depth_m * dz_dt + image_z * camera_forward
 
         world_forward = math.cos(pitch_rad) * camera_forward - math.sin(pitch_rad) * camera_vertical
         world_vertical = (
@@ -811,7 +829,7 @@ def camera_ops_delivery_from_feature_pair(
     return ApproachPairEstimate(
         path_deg=path_deg,
         attack_angle_deg=attack_angle_deg,
-        speed_ratio_ops=float(np.linalg.norm(center) * 2.23694 / ops_club_speed_mph),
+        speed_ratio_ops=None,
         velocity_mad_mph=velocity_mad_mph,
         n_features=len(velocity),
     )
@@ -1021,6 +1039,7 @@ def estimate_chained_delivery(
     reference_ball_selected: bool = False,
     sensor_timestamp_ns: np.ndarray | None = None,
     head_track: HeadTrackContext | None = None,
+    ops_reference: CameraOpsReference | None = None,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
@@ -1033,8 +1052,10 @@ def estimate_chained_delivery(
     )
     range_evidence = accepted_range_evidence(range_evidence)
     notes: list[str] = []
+    if range_evidence is None and ops_reference is None:
+        notes.append("camera+OPS needs the OPS origin, associated head position and reading time")
     if ops_club_speed_mph is None:
-        # Without the IWR range, depth comes from the OPS club speed.
+        # The camera+OPS route needs a radial reading as well as its geometry.
         if range_evidence is None:
             return ChainedDelivery(status="rejected_no_ops_speed")
         notes.append("no OPS club speed: speed ratio unchecked")
@@ -1137,6 +1158,7 @@ def estimate_chained_delivery(
     impact_t_s = range_evidence.impact_t_s if range_evidence is not None else None
     pair_estimates: dict[tuple[int, int], ApproachPairEstimate] = {}
     head_thicknesses = []
+    ops_reference_needed = False
     for offsets in APPROACH_PATH_OFFSETS:
         indexes = np.asarray([impact_idx + offset for offset in offsets])
         feature_tracks, head_thickness = _clubhead_pair_tracks(
@@ -1152,9 +1174,13 @@ def estimate_chained_delivery(
             head_thicknesses.append(head_thickness)
         if feature_tracks is None:
             continue
+        if range_evidence is None and ops_reference is None:
+            ops_reference_needed = True
         camera_times_s = timestamps_ns[indexes].astype(float) / 1e9
         try:
-            if range_evidence is None and geometry.calibrated_model is not None:
+            if range_evidence is None and (
+                geometry.calibrated_model is not None or ops_reference is None
+            ):
                 estimate = None
             elif range_evidence is None:
                 estimate = camera_ops_delivery_from_feature_pair(
@@ -1163,6 +1189,8 @@ def estimate_chained_delivery(
                     ball=ball,
                     geometry=geometry,
                     ops_club_speed_mph=ops_club_speed_mph,
+                    ops_reference=ops_reference,
+                    timestamp_source=timestamp_source,
                 )
             else:
                 relative_s = camera_times_s - contact_camera_s
@@ -1214,6 +1242,8 @@ def estimate_chained_delivery(
     if not pair_estimates:
         if range_evidence is None and geometry.calibrated_model is not None:
             return ChainedDelivery(status="rejected_calibrated_requires_iwr_range", **common)
+        if ops_reference_needed:
+            return fallback(ChainedDelivery(status="rejected_no_ops_reference", **common), ball)
         return fallback(ChainedDelivery(status="rejected_no_stable_clubhead", **common), ball)
     result = combine_approach_estimates(
         list(pair_estimates.values()),

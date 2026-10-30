@@ -165,7 +165,7 @@ def test_the_horizontal_offset_reaches_the_arc(monkeypatch):
     assert turned["metrics"]["club_path_deg"]["frame"] == "target_line"
 
 
-def test_camera_ops_fallback_has_no_head_positions(monkeypatch):
+def test_unbound_camera_ops_has_no_head_positions(monkeypatch):
     ball, _evidence, geometry = _scene(monkeypatch)
     result = estimate_chained_delivery(
         np.full((60, HEIGHT, WIDTH), 150, dtype=np.uint8),
@@ -177,11 +177,11 @@ def test_camera_ops_fallback_has_no_head_positions(monkeypatch):
         reference_ball=ball,
     )
 
-    assert result.status == "camera_ops_fallback"
+    assert result.status == "rejected_no_ops_reference"
     assert result.head_positions == ()
     payload = club_delivery_payload(asdict(result), club=ClubType.IRON_7, handedness="RH")
     assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
-    assert "camera_ops_fallback" in payload["metrics"]["swing_plane_deg"]["reason"]
+    assert "rejected_no_ops_reference" in payload["metrics"]["swing_plane_deg"]["reason"]
 
 
 def test_a_head_track_delivery_is_experimental_and_names_its_source():
