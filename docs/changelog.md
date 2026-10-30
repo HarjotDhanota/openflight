@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Keep full-speed uncertainty unbounded when timing leaves supported windows
+  or a tolerance is unknown; reject invalid FFT durations instead of defaulting.
 - Require ordered OPS transition observations and include both FFT windows in
   their conditional timing tolerance; simultaneous peaks cannot anchor impact.
 - Use the ball path's first observed window support for spin and impact inputs;

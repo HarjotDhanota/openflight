@@ -279,6 +279,15 @@ def _not_measured(reason: str, **extra: Any) -> dict:
     return result
 
 
+def _nonnegative_tolerance(value: Any) -> float:
+    return float(value) if _finite(value) and value >= 0.0 else math.nan
+
+
+def _supported_time_ms(value: float, low: float, high: float) -> bool:
+    # One picosecond only accommodates roundoff in window-centre arithmetic.
+    return _finite(value) and low - 1e-9 <= value <= high + 1e-9
+
+
 def _ball_geometry(
     rig: Any,
     tee_range_m: Any,
@@ -449,7 +458,10 @@ def evaluate_full_ball_speed(
             f"impact source {impact_source!r} is not a measured impact", inputs=inputs
         )
     impact_ms -= walk_back_ms
-    window_ms = float(ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
+    window_value = ops_track.get("window_ms")
+    window_ms = DEFAULT_WINDOW_MS if window_value is None else finite_float(window_value)
+    if window_ms is None or window_ms <= 0.0:
+        return _not_measured("invalid OPS FFT window duration", inputs=inputs)
     candidates = select_ball_reading(ops_track, impact_ms)
     if not candidates:
         return _not_measured(
@@ -499,12 +511,14 @@ def evaluate_full_ball_speed(
         ops_shift: tuple = (0.0, 0.0, 0.0),
         decel: Optional[Callable[[float], float]] = None,
     ) -> float:
+        if not _supported_time_ms(t * 1000.0, 0.5 * window_ms, MAX_REFERRAL_MS + 0.5 * window_ms):
+            return math.nan
         geo, _ = _ball_geometry(rig, tee_range, radar_height_m, ball_height_m, side, ops_shift)
         if geo is None:
             return math.nan
         d = launch_direction(vertical_deg_, horizontal_deg_)
         drag = decel or (lambda v: drag_deceleration_mps2(v, vertical_deg_, cd=CD_CENTRAL))
-        result = _solve_ball(radial_mph, max(t, 0.0), geo["ops_m"], geo["ball_rest_m"], d, drag)
+        result = _solve_ball(radial_mph, t, geo["ops_m"], geo["ball_rest_m"], d, drag)
         return result[0] / MPH_TO_MPS if result else math.nan
 
     def spread(*values: float) -> float:
@@ -515,7 +529,7 @@ def evaluate_full_ball_speed(
     if _finite(tee_range_uncertainty_m):
         tol["tee_range_m"] = max(tol["tee_range_m"], float(tee_range_uncertainty_m))
     resolution = float(ops_track.get("radial_resolution_mph") or DEFAULT_RADIAL_RESOLUTION_MPH)
-    impact_tol_s = float(ops_track.get("impact_uncertainty_ms") or 0.0) / 1000.0
+    impact_tol_s = _nonnegative_tolerance(ops_track.get("impact_uncertainty_ms")) / 1000.0
     # the FFT peak is about the window's mean radial; the value takes it at the centre
     mean_projection = float(
         np.mean(
@@ -608,13 +622,15 @@ def evaluate_full_ball_speed(
         "range_mph": [value - half_width, value + half_width] if bounded else None,
         "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances"
         if bounded
-        else "unbounded: an input moved by its tolerance leaves the geometry",
+        else "unbounded: an input tolerance is missing, invalid or leaves the supported geometry",
         # an unbounded term (its perturbed geometry has no solution) reads None
         "uncertainty_mph": {
             name: term if math.isfinite(term) else None for name, term in budget.items()
         },
         "tolerances": dict(
-            tol, impact_time_ms=impact_tol_s * 1000.0, radial_resolution_mph=resolution
+            tol,
+            impact_time_ms=finite_float(impact_tol_s * 1000.0),
+            radial_resolution_mph=resolution,
         ),
         "tee_range_source": tee_range_source,
         "source": BALL_SOURCE,
@@ -1116,7 +1132,12 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
             walk_back_ms = sound_travel_time_ns(ball, mic, speed_m_s=SPEED_OF_SOUND_M_S) / 1e6
     elif impact_source != "ops_transition":
         return refused(f"impact source {impact_source!r} is not a measured impact")
-    window_ms = float(reading.get("window_ms") or ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
+    window_value = reading.get("window_ms")
+    if window_value is None:
+        window_value = ops_track.get("window_ms")
+    window_ms = DEFAULT_WINDOW_MS if window_value is None else finite_float(window_value)
+    if window_ms is None or window_ms <= 0.0:
+        return refused("invalid OPS FFT window duration")
     centre_ms = float(reading["window_start_ms"]) + 0.5 * window_ms
     before_ms = float(impact_ms) - walk_back_ms - centre_ms
     if before_ms < 0.0:
@@ -1133,6 +1154,8 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
     def projection_at(
         before: float, *, path=0.0, attack=0.0, depth=0.0, ops_shift=(0.0, 0.0, 0.0)
     ) -> float:
+        if not _supported_time_ms(before, 0.0, MAX_CLUB_READING_BEFORE_CONTACT_MS):
+            return math.nan
         state = head_state_at(record, contact_ns - before * 1e6)
         if state is None:
             return math.nan
@@ -1186,11 +1209,11 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         return max(finite) if finite and len(finite) == len(values) else math.inf
 
     time_sigma_ms = math.hypot(
-        float(ops_track.get("impact_uncertainty_ms") or 0.0),
-        float(record.get("contact_sigma_ms") or 0.0),
+        _nonnegative_tolerance(ops_track.get("impact_uncertainty_ms")),
+        _nonnegative_tolerance(record.get("contact_sigma_ms")),
     )
-    path_sigma = float(record.get("club_path_sigma_deg") or 0.0)
-    attack_sigma = float(record.get("attack_angle_sigma_deg") or 0.0)
+    path_sigma = _nonnegative_tolerance(record.get("club_path_sigma_deg"))
+    attack_sigma = _nonnegative_tolerance(record.get("attack_angle_sigma_deg"))
     depth_m = TOLERANCES["tee_range_m"]
     ops_mm = TOLERANCES["ops_position_mm"]
     resolution = float(ops_track.get("radial_resolution_mph") or DEFAULT_RADIAL_RESOLUTION_MPH)
@@ -1206,11 +1229,18 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
     def ops_axis(axis: int, sign: float) -> tuple:
         return tuple(sign * ops_mm * (axis == k) for k in range(3))
 
+    def timing_projection(before: float) -> float:
+        if not _supported_time_ms(
+            before, 0.5 * window_ms, MAX_CLUB_READING_BEFORE_CONTACT_MS - 0.5 * window_ms
+        ):
+            return math.nan
+        return projection_at(before)
+
     budget = {
         "radial_resolution": resolution / projection,
         "reading_time": spread(
-            value_for(projection_at(max(before_ms - time_sigma_ms, 0.0))),
-            value_for(projection_at(before_ms + time_sigma_ms)),
+            value_for(timing_projection(before_ms - time_sigma_ms)),
+            value_for(timing_projection(before_ms + time_sigma_ms)),
         ),
         "fft_window": abs(projection / window_mean - 1.0) * value,
         "club_path": spread(
@@ -1245,17 +1275,20 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         "range_mph": [value - half_width, value + half_width] if bounded else None,
         "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances"
         if bounded
-        else "unbounded: an input moved by its tolerance leaves the geometry",
+        else "unbounded: an input tolerance is missing, invalid or leaves the supported geometry",
         "uncertainty_mph": {
             name: term if math.isfinite(term) else None for name, term in budget.items()
         },
         "tolerances": {
-            "reading_time_ms": time_sigma_ms,
-            "club_path_deg": path_sigma,
-            "attack_angle_deg": attack_sigma,
-            "head_depth_m": depth_m,
-            "ops_position_mm": ops_mm,
-            "radial_resolution_mph": resolution,
+            name: finite_float(tolerance)
+            for name, tolerance in {
+                "reading_time_ms": time_sigma_ms,
+                "club_path_deg": path_sigma,
+                "attack_angle_deg": attack_sigma,
+                "head_depth_m": depth_m,
+                "ops_position_mm": ops_mm,
+                "radial_resolution_mph": resolution,
+            }.items()
         },
         "direction_source": "camera_head_track",
         "note": CLUB_HEAD_TRACK_NOTE,
