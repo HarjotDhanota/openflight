@@ -578,7 +578,6 @@ def simulate(
 
     # rpm → rad/s; integrated with the flight (Ferguson 2022's Eq. 4 spin-down moment).
     omega = conditions.spin_rpm * 2 * math.pi / 60.0
-    backspin_share = math.cos(math.radians(conditions.spin_axis_deg))
 
     points: list[TrajectoryPoint] = [
         TrajectoryPoint(0.0, 0.0, 0.0, 0.0, conditions.ball_speed_mph, conditions.spin_rpm)
@@ -621,7 +620,7 @@ def simulate(
                     omega * 60 / (2 * math.pi),
                 )
             )
-            return _trajectory(points, final, max_z, t_hit, backspin_share, air_density, aero)
+            return _trajectory(points, final, max_z, t_hit, axis, air_density, aero)
 
         state = new_state
 
@@ -641,7 +640,7 @@ def simulate(
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort
-    return _trajectory(points, state, max_z, t, backspin_share, air_density, aero)
+    return _trajectory(points, state, max_z, t, axis, air_density, aero)
 
 
 def _trajectory(
@@ -649,17 +648,19 @@ def _trajectory(
     final: tuple,
     max_z: float,
     t_end: float,
-    backspin_share: float = 1.0,
+    spin_axis: tuple = (0.0, -1.0, 0.0),
     air_density: float = AIR_DENSITY_STD,
     aero: Optional[AeroModel] = None,
 ) -> Trajectory:
     """The Trajectory ending at state ``final`` (metres).
 
-    ``backspin_share`` is cos(spin axis tilt): the share of the spin that bounces and rolls.
+    Project the world spin axis across the landing heading for the turf model.
     """
     fx, fy, _, fvx, fvy, fvz = final[:6]
     v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
     horizontal = math.sqrt(fvx * fvx + fvy * fvy)
+    heading = math.atan2(fvy, fvx)
+    backspin_share = spin_axis[0] * math.sin(heading) - spin_axis[1] * math.cos(heading)
     return Trajectory(
         points=points,
         carry_yards=math.hypot(fx, fy) * M_TO_YD,
@@ -669,7 +670,7 @@ def _trajectory(
         landing_speed_mph=v_final * MPS_TO_MPH,
         landing_angle_deg=math.degrees(math.atan2(-fvz, horizontal)),
         downrange_yards=fx * M_TO_YD,
-        landing_heading_deg=math.degrees(math.atan2(fvy, fvx)),
+        landing_heading_deg=math.degrees(heading),
         landing_backspin_rpm=final[6] * backspin_share * 60 / (2 * math.pi),
         air_density_kg_m3=air_density,
         aero=aero,
@@ -708,7 +709,7 @@ def hop_flight(
             traj.downrange_yards / M_TO_YD,
             speed * math.cos(angle) * math.cos(heading),
             -speed * math.sin(angle),
-            -traj.landing_backspin_rpm * math.pi / 30.0,
+            math.copysign(traj.points[-1].spin_rpm * math.pi / 30.0, om),
         )
 
     return fly

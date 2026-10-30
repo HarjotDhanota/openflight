@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Project backspin across the landing heading for turf rollout; preserve the
+  global spin direction in planar hops, including backward hops.
 - Keep full-speed uncertainty unbounded when timing leaves supported windows
   or a tolerance is unknown; reject invalid FFT durations instead of defaulting.
 - Require ordered OPS transition observations and include both FFT windows in

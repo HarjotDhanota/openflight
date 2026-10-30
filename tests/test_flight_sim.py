@@ -389,10 +389,17 @@ class TestTurfRollIsTheFairwayModel:
         assert bounce_and_roll_yards(39.0) is None
 
     def test_the_trajectory_carries_its_landing_backspin(self):
-        traj = _yawed(0.0, axis=20.0)
+        launch = _driver(axis=20.0)
+        traj = simulate(launch)
         spin = traj.points[-1].spin_rpm
         assert 0.0 < spin < 2700.0
-        assert traj.landing_backspin_rpm == pytest.approx(spin * math.cos(math.radians(20.0)))
+        tilt = math.radians(launch.spin_axis_deg)
+        elevation = math.radians(launch.launch_angle_v)
+        heading = math.radians(traj.landing_heading_deg)
+        share = math.cos(tilt) * math.cos(heading) - math.sin(tilt) * math.sin(
+            elevation
+        ) * math.sin(heading)
+        assert traj.landing_backspin_rpm == pytest.approx(spin * share)
 
     def test_total_rolls_on_along_the_landing_heading(self):
         from openflight.flight_sim import bounce_and_roll_yards
