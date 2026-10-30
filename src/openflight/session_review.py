@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping
 
 from openflight.camera import attempt_ledger
 from openflight.camera.paired_eligibility import NO_RADAR_SHOT
+from openflight.camera.trigger_comparison import build_comparison
 from openflight.capture_facts import capture_facts
 from openflight.raw_radar_replay import load_session_events
 from openflight.review_metrics import STATUSES, finite, mapping, overlay, review_replay
@@ -442,6 +443,7 @@ def _review_run(run: _Run) -> list[dict[str, Any]]:
         if e.get("type") == "shot_detected" and isinstance(e.get("shot_number"), int)
     }
     _summarize_triggers_and_ledger(run, events, len(shots))
+    run.summary["trigger_comparison"] = build_comparison(run.path, run.root, events)
     outcomes = _diagnostic_outcomes(events)
     by_number: dict[int, list[dict[str, Any]]] = {}
     for event in events:
@@ -615,6 +617,18 @@ def report_markdown(review: Mapping[str, Any]) -> str:
         if refused:
             listed = ", ".join(f"{count} {reason}" for reason, count in sorted(refused.items()))
             lines.append(f"- camera refused triggers: {listed}")
+        comparison = run.get("trigger_comparison")
+        if comparison:
+            lines.append(
+                f"- trigger policy: {comparison['settings'].get('label', 'legacy native')}"
+            )
+            lines.extend(f"- {key}: {value}" for key, value in comparison["counts"].items())
+            for capture in comparison["attempts"]:
+                lines.append(
+                    f"- {capture['attempt']}: published={capture['published']}; "
+                    f"{capture['decision'].get('reason')}; evidence={capture['evidence_directory']}"
+                )
+            lines.extend(f"- limitation: {reason}" for reason in comparison["limitations"])
         lines.append("")
         for attempt in review.get("attempts") or []:
             if attempt["arm_id"] != run["arm_id"] or attempt["run"] != run["run"]:
