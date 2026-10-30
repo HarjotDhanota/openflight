@@ -285,10 +285,12 @@ def _uncertainty(  # pylint: disable=too-many-arguments,too-many-locals
     )
     if solved.method == "floor_point" and floor is not None:
         moved = []
-        for index in range(2):
-            for sign in (1.0, -1.0):
+        # Both ends can miss the same boundary together, or tilt in opposite directions.
+        for first_sign in (1.0, -1.0):
+            for second_sign in (1.0, -1.0):
                 shifted = [list(end) for end in floor]
-                shifted[index][1] += sign * FLOOR_LINE_PIXEL_UNCERTAINTY_PX
+                shifted[0][1] += first_sign * FLOOR_LINE_PIXEL_UNCERTAINTY_PX
+                shifted[1][1] += second_sign * FLOOR_LINE_PIXEL_UNCERTAINTY_PX
                 moved.append(sol(floor_px=shifted))
         parts["floor_line_px_deg"] = spread("floor_line_px_deg", moved)
     bounded = not unbounded

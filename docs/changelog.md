@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target-relative launch, so a later aim adjustment cannot change that shot.
 - Detect ground contact on the first flight-integration step, preventing
   negative flight time and airborne distance on downward ground-level launches.
+- Include simultaneous floor-line endpoint errors in target-line uncertainty.
 - Reuse an unchanged session bundle after linking it into the send folder on
   Linux. Metadata changes trigger a hash check; modified archives are rebuilt.
 - Keep constant-delay timing diagnostics unresolved and reject non-NPZ frame

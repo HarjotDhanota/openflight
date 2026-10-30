@@ -138,6 +138,7 @@
   "tests/test_iwr6843_channel_ambiguity.py": "FUSION",
   "tests/test_mixed_frame_consumers.py": "FUSION",
   "tests/test_ops_club_support.py": "FUSION",
+  "tests/test_floor_line_uncertainty.py": "FUSION",
   "tests/test_ball_onset_reference.py": "FUSION",
   "tests/test_full_speed_time_support.py": "FUSION",
   "tests/test_head_contact_handoff.py": "FUSION",
