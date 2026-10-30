@@ -17,6 +17,9 @@
   "tests"
  ],
  "part_e": [
+  "tests/test_ballistics_ground_contact.py",
+  "tests/test_collision_mixed_frame_domain.py",
+  "tests/test_speed_reference_contract.py",
   "tests/test_collision_ball_speed_contract.py",
   "tests/test_collision_horizontal_normalization.py",
   "tests/test_collision_inverse_domain.py",
@@ -115,6 +118,9 @@
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
+  "tests/test_ballistics_ground_contact.py": "FUSION",
+  "tests/test_collision_mixed_frame_domain.py": "FUSION",
+  "tests/test_speed_reference_contract.py": "FUSION",
   "tests/test_camera_ops_radial.py": "FUSION",
   "tests/test_collision_ball_speed_contract.py": "FUSION",
   "tests/test_collision_horizontal_normalization.py": "FUSION",
