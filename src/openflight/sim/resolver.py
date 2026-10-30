@@ -27,7 +27,7 @@ _REQUIRED = (
 
 
 def _sendable(entry: dict) -> bool:
-    if not _finite(entry.get("value")):
+    if not _finite(entry.get("value")) or entry.get("frame") == "mixed":
         return False
     status = entry.get("status")
     return (
@@ -56,7 +56,10 @@ def _missing_fields(metrics: dict, spin: Optional[tuple]) -> tuple[list, list, l
         if _sendable(entry) and (metric_id != "spin_rate" or spin is not None):
             continue
         status = entry.get("status")
-        missing.append(f"{name} (experimental)" if status == "experimental" else name)
+        if entry.get("frame") == "mixed":
+            missing.append(f"{name} (mixed horizontal frames)")
+        else:
+            missing.append(f"{name} (experimental)" if status == "experimental" else name)
         if entry.get("value") is None:
             continue
         if status == MODEL_GEOMETRY:

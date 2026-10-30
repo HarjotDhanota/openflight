@@ -201,6 +201,12 @@ def _as_measured_air(shot: Shot) -> tuple[Optional[float], str, Optional[str]]:
 def _missing_reason(shot: Shot) -> str:
     """Why resolve_launch gave no launch conditions, in the shot's own terms."""
     reasons = []
+    for name, frame in (
+        ("horizontal launch", shot.launch_angle_horizontal_frame),
+        ("spin axis", shot.spin_axis_frame),
+    ):
+        if frame == "mixed":
+            reasons.append(f"{name} uses mixed horizontal frames")
     speed, _ = ball_speed_for_flight(shot)
     if speed is None:
         reasons.append("ball speed not measured")
