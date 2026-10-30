@@ -186,13 +186,12 @@ def stable_flights(history, resolution, window_ms):
             if last.time_ms - part[0].time_ms < minimum_span:
                 break
             speed = np.array([point.speed_mph for point in part])
+            if np.ptp(speed) > 2 * resolution:
+                continue
             times = np.array([point.time_ms for point in part])
             fit = np.polyfit(times - times[0], speed, 1)
             error = speed - np.polyval(fit, times - times[0])
             if abs(fit[0]) > resolution / window_ms or np.max(np.abs(error)) > resolution:
-                continue
-            # A flight changes little over its observed span, unlike a swing arc.
-            if np.ptp(speed) > 2 * resolution:
                 continue
             candidates.append((float(np.median(speed)), part, float(np.std(error))))
             break
