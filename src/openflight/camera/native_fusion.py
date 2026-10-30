@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from openflight.camera import trigger_policy
 from openflight.kiosk_extensions import KioskExtension
 from openflight.ops_sync import analyze_recording
 from openflight.rolling_buffer.trigger import HardwareTriggeredCapture
@@ -157,7 +158,13 @@ class NativeFusionExtension(KioskExtension):
         """The native path is allowed only while this explicit owner is installed."""
         return True
 
-    def __init__(self, package, control):
+    def __init__(self, package, control, *, policy="independent"):
+        self.policy = trigger_policy.snapshot(policy)
+        if policy == "sound":
+            raise ValueError("native acquisition cannot use sound policy")
+        saved = Path(control) / "trigger-policy.json"
+        if saved.exists() and json.loads(saved.read_text()) != self.policy:
+            raise ValueError("run trigger policy differs from launch selection")
         scripts = Path(__file__).resolve().parents[3] / "scripts/hardware-test"
         sys.path.insert(0, str(scripts))
         clock = importlib.import_module("run_joint_clock")
@@ -167,6 +174,7 @@ class NativeFusionExtension(KioskExtension):
         clock.load_package(package)
         self.package = package
         self.files = self.tools.SessionFiles(control)
+        self.files.state["trigger_policy"] = deepcopy(self.policy)
         self.stack = ExitStack()
         self.collector = self.monitor = self.camera = None
         self.iwr_capture = self.camera_path = self.association = None
@@ -289,7 +297,10 @@ class NativeFusionExtension(KioskExtension):
         result = self.tools.attempt(
             self.collector, self.files, folder, camera=self.camera, radar=radar, cancelled=cancelled
         )
+        settings = getattr(self, "policy", trigger_policy.snapshot("independent"))
+        (folder / "trigger-policy.json").write_text(json.dumps(settings, indent=2) + "\n")
         if not result.get("ops_capture_observed"):
+            self.save_policy_decision(folder, result, {"reason": "no_ops_capture"}, settings)
             return None
         try:
             camera_path, association = bind_attempt(folder, result)
@@ -305,6 +316,12 @@ class NativeFusionExtension(KioskExtension):
             (folder / "fusion-association.json").write_text(
                 json.dumps(association, indent=2) + "\n"
             )
+        outcome = self.save_policy_decision(folder, result, association, settings)
+        if not outcome["publication_allowed"]:
+            self.files.publish(
+                "next", message="Hybrid unconfirmed; evidence saved. Prepare another attempt."
+            )
+            return None
         raw = (folder / "ops-camera/ops-response.raw").read_text()
         capture = processor.parse_capture(raw)
         if capture is None:
@@ -335,6 +352,17 @@ class NativeFusionExtension(KioskExtension):
         if started:
             started()
         return capture
+
+    def save_policy_decision(self, folder, result, association, settings):
+        """Retained attempts include failures and no-shot outcomes under every policy."""
+        outcome = trigger_policy.decision(
+            settings,
+            ops=result.get("ops_capture_observed"),
+            iwr="iwr_shot_id" in result,
+            association=association,
+        )
+        (folder / "policy-decision.json").write_text(json.dumps(outcome, indent=2) + "\n")
+        return outcome
 
     def on_shot_detected(self, shot):
         """Freeze this attempt's identity before asynchronous normal enrichment."""
@@ -369,6 +397,7 @@ class NativeFusionExtension(KioskExtension):
             "physical_timing_qualified": False,
             "control_directory": str(self.files.folder),
         }
+        config["trigger_policy"] = deepcopy(self.policy)
         config["camera_capture"]["trigger_source"] = "ops_speed_trigger"
         config["iwr6843"].update(trigger_source="firmware_self_trigger", trigger_pin_bcm=None)
 
