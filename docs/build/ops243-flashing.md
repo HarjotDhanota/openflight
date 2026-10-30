@@ -1,175 +1,305 @@
-# Flashing the OPS243-A with a Debug Probe
+# Flash the OPS243-A to v1.3.3
 
-Update an OPS243-A to **1.3.3** using a Raspberry Pi Debug Probe, a
-10-pin breakout board and OpenOCD. This community procedure was tested on
-one **XMC4500 revision AC, 1 MiB** radar using a Pi 5 running Raspberry Pi OS
-Trixie and OpenOCD 0.12.0+dev-snapshot (2026-02-16-16:07).
+For an **XMC4500 revision AC / 1 MiB OPS243-A**, with OpenFlight installed in
+`~/openflight` on a Raspberry Pi. This guide uses the [GPIO UART wiring](ops243-uart.md).
+Do not use it for XMC4700, OPS243-C or a board that requires JTAG.
 
-Send `?P` through the radar's existing serial connection to check the processor
-before buying parts. This firmware does not support XMC4700 or OPS243-C.
-Some D2 and later boards require JTAG; the Pi Debug Probe supports SWD only.
-For those boards, use [OmniPreSense's programming procedure](https://omnipresense.com/wp-content/uploads/2025/02/AN-013-F_Code-Update.pdf).
+## 1. Get the parts
 
-## Parts and soldering
-
-Have these already or buy them before starting:
-
-| Item | What to check |
+| Part | Included / needed |
 | --- | --- |
-| Official Raspberry Pi Debug Probe | USB data cable and the supplied three-wire debug cable |
-| Arm Cortex JTAG/SWD breakout board | 10-pin, 2 × 5, 1.27 mm target connector; a Treedix breakout was used |
-| Matching ribbon cable | Female-to-female, 10-pin, 1.27 mm, fitting both the breakout and radar J2 |
-| DuPont connectors / header pins | Fit the breakout's solder pads and the probe cable ends; check what your breakout includes |
-| Soldering iron and solder | Required to attach the DuPont connectors to the breakout board |
-| Raspberry Pi and OPS243-A | Raspberry Pi OS, internet access, terminal/SSH access and stable power |
+| [Raspberry Pi Debug Probe](https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC0889?qs=amGC7iS6iy9zSCCLsPnjYw%3D%3D&mgh=1) | USB cable and female-ended debug lead included |
+| [Treedix breakout board](https://a.co/d/0iXOxKd0) | Ribbon cable included |
+| 3 header pins | **Not included**; one each for GND, SWIO and CLK |
+| Soldering iron and solder | For attaching the three header pins |
+| 1 female-to-female jumper wire | OPS243 J3 pin 1 to Pi physical pin 13 |
 
-**Soldering is required for the breakout used here:** solder the DuPont
-connectors onto the breakout board so the probe's three leads can plug in.
-Do this with everything disconnected and unpowered. Check the joints for
-bridges and verify continuity from each connector to the intended ribbon pin.
+## 2. Update the Debug Probe
 
-## 1. Prepare the Pi and probe
+Do this on your computer before connecting the probe to the radar.
 
-From your OpenFlight checkout, copy the supplied scripts into a fresh working
-folder. Use a separate folder for each radar; its backup belongs to that sensor.
+1. Unplug Pi and radar power. Disconnect the probe's USB and D cables.
+2. Open the [official Debug Probe releases](https://github.com/raspberrypi/debugprobe/releases/latest).
+   Under **Assets**, download **`debugprobe.uf2`**.
+3. Remove the probe's top cover to reach the **BOOTSEL** button.
+4. Hold **BOOTSEL** while plugging the probe's USB into your computer.
+   Release it when the **RPI-RP2** drive appears.
+5. Open **RPI-RP2** and drag **`debugprobe.uf2`** onto it.
+6. Wait for the drive to disappear. The probe has restarted with its updated firmware.
+7. Unplug the probe's USB and replace the cover.
+
+## 3. Solder and connect
+
+Shut down the Pi and unplug its power. Disconnect any separate radar power.
+
+![Colored arrows show the D-port connections to GND, SWIO and CLK. The ribbon plug is seated inside the breakout socket. The bottom detail shows the three soldered header pins.](../assets/ops243-debug-probe-wiring.svg)
+
+1. Solder the three header pins onto the breakout's **GND, SWIO and CLK** pads.
+   Check for solder bridges.
+2. Plug the supplied debug lead into the probe's **D** port. Push its female
+   ends onto the soldered header pins:
+
+    | Probe lead | Breakout pin |
+    | --- | --- |
+    | Black | GND |
+    | Yellow | SWIO |
+    | Orange | CLK |
+
+    Leave the other breakout pins disconnected.
+
+3. Connect the included ribbon cable from the breakout to the radar's **J2**
+   connector. Match the connector key and pin-1 markings.
+4. Keep the radar's micro-USB unplugged. Check these connections:
+
+    | OPS243 connection | Raspberry Pi physical pin |
+    | --- | --- |
+    | J3 pin 9 — 5 V | 4 |
+    | J3 pin 10 — GND | 14 |
+    | **J3 pin 1 — v1.3.3 sampling signal** | **13 (GPIO27)** |
+
+5. Connect the probe's USB cable to the Pi. Restore Pi power.
+
+![Pi physical pin 4 supplies radar J3 pin 9 with 5 V; Pi physical pin 14 connects to radar J3 pin 10 for ground. The v1.3.3 signal connects radar J3 pin 1 to Pi physical pin 13, GPIO27. Keep existing UART wires connected.](../assets/ops243-flashing-gpio.svg)
+
+## 4. Open Terminal and install the tools
+
+On the Pi desktop, click **Terminal**. If using SSH, use the terminal connected
+to your Pi.
+
+**Copy each box in full, paste it into Terminal, press Enter, and wait.**
+Include the final `PY` line when shown. If asked for a password, type the Pi
+password and press Enter; it will not appear as you type.
+
+**Stop at the first error. Keep the output so you can ask for help.**
+
+Update the package list:
 
 ```bash
-cd ~/openflight
-cp -R firmware/ops243-update ~/ops243-update
-cd ~/ops243-update
 sudo apt update
+```
+
+Install the tools:
+
+```bash
 sudo apt install -y openocd python3
 ```
 
-Inspect the scripts before running them. Firmware is downloaded from a pinned
-vendor commit during preparation; no firmware or sensor backups ship here.
+Create the working folder:
 
-If OpenOCD warns about old Debug Probe firmware, disconnect target power and
-the debug cable. Download **`debugprobe.uf2`** from the
-[official releases](https://github.com/raspberrypi/debugprobe/releases/latest).
-Remove the probe cover, hold BOOTSEL while connecting USB, and copy the UF2
-onto the RPI-RP2 drive. The probe reboots automatically. See
-[Raspberry Pi's update instructions](https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html#updating-the-firmware-on-the-debug-probe).
+```bash
+mkdir -p ~/ops243-backup
+```
 
-## 2. Wire the breakout
+Open it:
 
-Remove Pi and radar power before connecting anything. Use the probe's **D**
-(debug) port and wire its cable to the breakout:
+```bash
+cd ~/ops243-backup
+```
 
-| Probe lead | Breakout signal | Cortex ribbon pin |
-| --- | --- | --- |
-| Yellow / SD | SWIO / SWDIO / TMS | 2 |
-| Orange / SC | CLK / SWCLK / TCK | 4 |
-| Black / GND | Ordinary GND | 3 or 5 |
+Use this folder for one radar. Keep any existing original backup.
 
-Follow signal names and continuity if colors or labels differ. Leave **SWO**,
-GNDd, VCC/VTref, RST, TDI and TDO disconnected on the probe side. The probe's
-**U** port is UART and is unused here.
+## 5. Stop OpenFlight
 
-Connect the ribbon from the breakout to the radar's **J2 programming connector**,
-matching pin 1 and the key. J3 is the power/UART header. Connect the probe's USB
-to the Pi running OpenOCD; a desktop can SSH into that Pi.
-
-The tested radar stayed [powered through J3](ops243-uart.md#2-wire-it): Pi
-physical pin 4 → J3 pin 9 (5 V), Pi physical pin 14 → J3 pin 10 (GND), with
-radar micro-USB unplugged. Keep the probe's black ground connected too. The
-probe has 3.3 V I/O and does **not** power the radar; do not feed 5 V into its
-debug signals or combine radar power sources. Restore power after wiring.
-
-## 3. Back up the radar
-
-Stop OpenFlight, or close any other application controlling the radar. Skip
-the service command if OpenFlight is not installed as a service.
+If OpenFlight runs as a service:
 
 ```bash
 sudo systemctl stop openflight
-cd ~/ops243-update
-bash 01_backup.sh
 ```
 
-Require **XMC4500 Rev AC**, flash size **0x00100000**, all 12 sectors
-unprotected, **1048576 bytes** backed up, and **`contents match`**. The script
-refuses to overwrite an existing backup. Copy `ops243-before-update.bin` and
-`backup-sha256.txt` to another device before proceeding.
+Otherwise, close OpenFlight or any other program using the radar.
 
-## 4. Prepare, then flash
+## 6. Back up the radar
 
-Prepare the image first; this command does not access hardware:
+Stay in `~/ops243-backup`. Copy this entire box:
 
 ```bash
-python3 prepare_update.py
+test ! -e ops243-before-update.bin && \
+sudo openocd -f interface/cmsis-dap.cfg \
+  -c "transport select swd" \
+  -f target/xmc4xxx.cfg \
+  -c "adapter speed 1000" \
+  -c "init" \
+  -c "poll" \
+  -c "halt 0" \
+  -c "wait_halt 5000" \
+  -c "flash probe 0" \
+  -c "flash info 0" \
+  -c "flash read_bank 0 ops243-before-update.bin" \
+  -c "flash verify_bank 0 ops243-before-update.bin" \
+  -c "resume" \
+  -c "shutdown"
 ```
 
-Require `Preflight passed: backup, firmware, and merged images match.` It checks
-the pinned firmware hash and HEX records, retaining the backup's bytes outside
-the supplied firmware. Do not change persistent radar settings between backup
-and flashing.
+Continue only if the output includes all four lines below and every displayed
+sector is **unprotected**:
 
-The next command writes flash. Keep power and wiring stable until it finishes:
+```text
+XMC4500 - Rev: AC
+size 0x00100000
+wrote 1048576 bytes to file ops243-before-update.bin
+contents match
+```
+
+If nothing runs, the backup file may already exist. Stop; do not delete or
+replace it.
+
+In the Pi's File Manager, open **Home → ops243-backup**. Copy
+**`ops243-before-update.bin`** to a USB drive or another computer before continuing.
+Keep the Terminal open in the same folder.
+
+## 7. Download and prepare v1.3.3
+
+Copy the whole box, from `python3` through the final `PY`. It downloads the
+firmware, checks it, and prepares the files using your backup.
 
 ```bash
-bash 03_flash.sh
+python3 - <<'PY'
+from pathlib import Path
+from urllib.request import urlopen
+import hashlib
+
+original = Path("ops243-before-update.bin").read_bytes()
+assert len(original) == 1048576, "Backup must be exactly 1 MiB"
+url = (
+    "https://raw.githubusercontent.com/omnipresense/OPS243-A_Firmware/"
+    "efaceefb8fa547071cb925c0d20d2e38363ace67/"
+    "OPS243_CW_v1.3.3_20261016_1230.hex"
+)
+raw = urlopen(url, timeout=60).read()
+expected_hash = (
+    "169a6c6c7ae14bcc7da3e7201e31c623"
+    "149da65e9f3df7598da70e0ae3e9d81c"
+)
+assert hashlib.sha256(raw).hexdigest() == expected_hash, "Wrong HEX file"
+image = bytearray(original)
+base = 0
+written = 0
+for line in raw.decode("ascii").splitlines():
+    r = bytes.fromhex(line[1:])
+    n, kind = r[0], r[3]
+    data = r[4:4+n]
+    assert len(r) == n+5 and sum(r) % 256 == 0, "Invalid HEX record"
+    if kind == 4:
+        base = int.from_bytes(data, "big") << 16
+    elif kind == 0:
+        offset = base + int.from_bytes(r[1:3], "big") - 0x0C000000
+        assert 0 <= offset <= len(image)-n, "Address outside flash"
+        image[offset:offset+n] = data
+        written += n
+    elif kind == 1:
+        break
+    elif kind != 5:
+        raise ValueError("Unexpected HEX record")
+assert written == 286768, "Unexpected firmware size"
+Path("OPS243-v1.3.3.hex").write_bytes(raw)
+Path("ops243-first64k.bin").write_bytes(image[:0x10000])
+Path("ops243-app.bin").write_bytes(image[0x20000:0x80000])
+Path("ops243-expected.bin").write_bytes(image)
+print("Prepared v1.3.3; original backup retained.")
+PY
 ```
 
-The script checks chip/flash IDs and protection settings, compares the live
-flash against the backup, then writes the application and first 64 KiB blocks.
-Require this sequence:
+Continue only when it prints this with no error:
+
+```text
+Prepared v1.3.3; original backup retained.
+```
+
+Stay in the same Terminal and folder. Do not change the generated files.
+
+## 8. Flash the radar
+
+Keep power and cables connected. Allow about four minutes. Copy the whole box:
+
+```bash
+sudo openocd -f interface/cmsis-dap.cfg \
+  -c "transport select swd" \
+  -f target/xmc4xxx.cfg \
+  -c "adapter speed 1000" \
+  -c "init" \
+  -c "poll" \
+  -c "reset run" \
+  -c "sleep 1000" \
+  -c "poll" \
+  -c "halt 0" \
+  -c "wait_halt 5000" \
+  -c "flash probe 0" \
+  -c "flash verify_bank 0 ops243-before-update.bin" \
+  -c "flash write_image erase ops243-app.bin 0x0C020000 bin" \
+  -c "flash write_image erase ops243-first64k.bin 0x0C000000 bin" \
+  -c "flash verify_bank 0 ops243-expected.bin" \
+  -c "shutdown"
+```
+
+Continue only when these messages appear in this order:
 
 ```text
 contents match
 wrote 393216 bytes from file ops243-app.bin
 wrote 65536 bytes from file ops243-first64k.bin
 contents match
+shutdown command invoked
 ```
 
-The **last** match verifies the complete 1 MiB against the expected image,
-including retained bytes. The tested writes took about 3½ minutes. The CPU
-is left halted for the power cycle below.
+Require the **second `contents match`**, after both writes. It verifies the
+complete flash. Keep the command as shown; `reset init` and `reset halt` timed
+out in this setup.
 
-## 5. Power cycle and verify
+If flashing fails, leave power and cables connected. Keep the backup and error
+output. Do not rerun the flashing block after a partial write.
+
+## 9. Power off and disconnect the probe
 
 ```bash
 sudo poweroff
 ```
 
-Wait for shutdown, **physically unplug Pi power**, disconnect the probe's D
-cable, then restore power. A reboot does not remove GPIO 5 V. Remove any
-separate radar power source too before disconnecting wires.
+1. Wait for the Pi to shut down.
+2. Physically unplug Pi power and any separate radar power.
+3. Disconnect the probe's D cable from the breakout.
+4. Restore Pi power and wait for startup.
 
-For the tested Pi 5 GPIO UART layout:
+## 10. Check the version
+
+Open Terminal again, or reconnect over SSH. Stop the OpenFlight service if used:
 
 ```bash
 sudo systemctl stop openflight
-cd ~/openflight
-uv run python ~/ops243-update/check_version_openflight.py
 ```
 
-Require **`OPS243 firmware: 1.3.3`**. The helper uses `/dev/ttyAMA0`. For another
-serial layout, send `?V` through its actual port and configured baud rate.
-Keep radar micro-USB unplugged when using the GPIO UART. Restart OpenFlight
-with `sudo systemctl start openflight` and check normal readings. Retain the
-original backup permanently.
+Open your OpenFlight folder:
 
-## If a step fails
+```bash
+cd ~/openflight
+```
 
-| Failure | Action |
-| --- | --- |
-| Wrong IDs, protected sectors, hash or backup mismatch | Stop and investigate; do not remove guards or replace the original backup. |
-| Probe missing / halt timeout | Check USB data cable, probe firmware, wiring and 1000 kHz speed. The flash script uses `reset run`, waits one second, then halts; `reset init` and `reset halt` timed out in the tested setup. |
-| Erase, write or final comparison fails | Keep power/wiring stable and preserve logs and the backup for diagnosis. Do not rerun after a partial write or use a mass erase. |
-| UART busy / wrong version | Stop the application using the port, check the port and confirm a physical power cycle. |
+Copy this whole box, including the final `PY`:
 
-## Firmware and validation
+```bash
+uv run python - <<'PY'
+import sys
+sys.path.insert(0, "src")
+from openflight.ops243 import OPS243Radar
+radar = OPS243Radar(port="/dev/ttyAMA0")
+try:
+    radar.connect()
+    print("OPS243 firmware:", radar.get_firmware_version())
+finally:
+    radar.disconnect()
+PY
+```
 
-The scripts pin `OPS243_CW_v1.3.3_20261016_1230.hex` from vendor commit
-[`efaceefb8fa547071cb925c0d20d2e38363ace67`](https://github.com/omnipresense/OPS243-A_Firmware/tree/efaceefb8fa547071cb925c0d20d2e38363ace67),
-SHA-256 `169a6c6c7ae14bcc7da3e7201e31c623149da65e9f3df7598da70e0ae3e9d81c`.
-They write complete physical-sector blocks, preserving other bytes from the
-backup; see [XMC4500 sector limitations](https://kb.segger.com/Infineon_XMC4xxx)
-and [OpenOCD flash commands](https://openocd.org/doc/html/Flash-Commands.html).
-Retained settings may still be migrated by the new firmware after boot.
+Continue only when you see:
 
-The supplied kit records one user-operated update on 29 October 2026: verified
-1 MiB backup, both blocks written, complete flash comparison passed, and a
-post-boot 1.3.3 response. The packaged scripts' additional guards were checked
-offline; they have not had a separate end-to-end hardware run.
+```text
+OPS243 firmware: 1.3.3
+```
+
+Restart the OpenFlight service:
+
+```bash
+sudo systemctl start openflight
+```
+
+If you start OpenFlight manually, open it as usual. Check normal radar readings
+and keep the original backup permanently.

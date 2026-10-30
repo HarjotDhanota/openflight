@@ -29,7 +29,7 @@ it is done and verified.
 - :material-memory: **[OPS243 firmware update](ops243-flashing.md)**
 
     *When needed.* Flash a supported XMC4500 radar with a Pi Debug Probe and
-    breakout board. Requires soldering the breakout's DuPont connectors.
+    breakout board. Requires soldering three header pins (not included).
 
 - :material-battery-outline: **[Battery](battery.md)**
 
@@ -49,6 +49,6 @@ items have long lead times, and a partial build cannot be verified end to end.
 
 You will need a soldering iron for the R17 gain resistor on the SEN-14262; see
 [sound trigger wiring](sound-trigger.md#before-you-wire-solder-r17). If updating
-the OPS243 with the Debug Probe route, you also need to solder DuPont
-connectors onto the breakout board. Have the connectors, iron and solder
-before starting.
+the OPS243 with the Debug Probe route, solder three header pins onto the
+breakout's GND, SWIO and CLK pads. Header pins are not included; have them,
+an iron and solder before starting.

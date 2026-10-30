@@ -75,14 +75,16 @@ These are one-off programming tools; they are not needed during normal use.
 
 | Part | What to have or buy |
 | --- | --- |
-| **Raspberry Pi Debug Probe** | Official probe, USB data cable and supplied three-wire debug cable; [Raspberry Pi](https://www.raspberrypi.com/products/debug-probe/) |
-| **10-pin JTAG/SWD breakout and ribbon cable** | Arm Cortex 2 × 5, 1.27 mm connector and matching female-to-female ribbon for radar J2; a Treedix breakout was used |
-| **DuPont connectors / header pins** | Suitable for the breakout solder pads and the probe cable ends; check whether the breakout includes them |
-| **Soldering iron and solder** | Required to solder the DuPont connectors onto the breakout board |
+| **Raspberry Pi Debug Probe** | Official SC0889 probe with supplied USB cable and female-ended debug lead; [Mouser](https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC0889?qs=amGC7iS6iy9zSCCLsPnjYw%3D%3D&mgh=1) / [Raspberry Pi](https://www.raspberrypi.com/products/debug-probe/) |
+| **Treedix 10-pin JTAG/SWD breakout** | Arm Cortex 2 × 5, 1.27 mm connector; matching female-to-female ribbon cable for radar J2 is included; [Amazon](https://a.co/d/0iXOxKd0) |
+| **3 header pins (not included)** | One each for the breakout's GND, SWIO and CLK pads |
+| **Soldering iron and solder** | Required to solder the header pins onto the breakout board |
+| **1 female-to-female jumper wire** | For v1.3.3: OPS243 J3 pin 1 (GPIO4_0) to Pi physical pin 13 (GPIO27), carrying the rolling-buffer sampling-status output |
 
-**Some soldering is required:** attach the DuPont connectors to the breakout
-before wiring the probe. Have those connectors, an iron and solder already,
-or buy them with the breakout. Follow the [flashing guide](../build/ops243-flashing.md)
+**Some soldering is required:** solder three header pins onto **GND, SWIO and
+CLK** before wiring the probe. Header pins are **not included** with the breakout;
+have them already or buy them, along with an iron and solder.
+Follow the [flashing guide](../build/ops243-flashing.md)
 for the pin mapping, power arrangement and supported board checks.
 
 **Vendor alternative:** use a SEGGER programmer and Infineon's XMCFlasher,
@@ -411,8 +413,8 @@ same power-button header, and takes the same 12 V adapter.
 With the internal hardware trigger, the Sound Trigger line ($18) becomes
 optional and drops out of every total above for a radar that already reports
 supported firmware. For one that arrived with 1.3.1 or older, budget for the
-one-off [programming tools](#ops243-firmware-update-tools), including breakout
-connectors and soldering supplies if using the Pi Debug Probe route.
+one-off [programming tools](#ops243-firmware-update-tools), including three header
+pins and soldering supplies if using the Pi Debug Probe route.
 
 OpenFlight works without any angle radar: you get ball speed, club speed, smash
 factor, spin rate, and estimated carry. The angle radar adds measured launch
