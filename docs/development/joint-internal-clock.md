@@ -133,3 +133,23 @@ Keep MONOTONIC, BOOTTIME, sensor metadata and IWR runtime counters distinct.
 Neither matching triggers nor narrow intervals prove sub-ms physical alignment.
 OPS edge-to-sample timing, IWR ISR-to-ADC timing, camera exposure semantics,
 drift under load and same-shot association still require bench evidence.
+
+## Preparing an actual swing session
+
+The empty-lane runner is bounded to six nominal seconds of RF and a four-second
+OPS wait. Its bin32/SNR1 detector is a bench setting, not a discovered golf-ball
+position. Do not use this command unchanged for a full swing session. The later
+shot trial needs an IWR-derived address region, a suitable bounded wait, held
+result/frame-clock retrieval on the same UART lease, and joint capture identities.
+The normal restored firmware has no clock bridge; a fresh temporary RAM runtime
+and fresh probes are required. Neither software collection nor an idle result
+rejection validates a held shot's frame association.
+
+The camera route must be armed before calling native OPS rearm: PA can trigger
+while the driver waits for its fill interval. Rejected/invalid camera request
+acknowledgements mark the trial failed, with routing evidence retained. Neither
+fix turns a native threshold event into an impact timestamp.
+
+The separate no-swing OPS collector (`ops-sample-clock.md`) tests software-requested
+captures across buffer splits. Its pulse associations remain unqualified; it
+does not calibrate a native trigger's detection delay or edge-to-ADC phase.

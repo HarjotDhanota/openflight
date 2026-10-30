@@ -25,7 +25,8 @@ retained, not independently verified RF power-off evidence.
 The driver response must equal the original bytes read during its S! transaction.
 This detects its ASCII decoder dropping corrupt bytes. All four capture fields
 must be unique, both ADC arrays must contain 4096 valid paired values, and device
-time strings must be finite and ordered. GPIO pulse associations use the observed
+time numbers or strings must be finite and ordered. Numeric timestamp lexemes
+are parsed with Decimal to preserve their original precision. GPIO associations use the observed
 arm-to-complete-response window and stay `associated_unqualified`. The completion
 time is an upper window bound, never mislabelled as first UART byte time.
 
