@@ -146,6 +146,37 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     from openflight.ops243 import OPS243Radar
 
     folder.mkdir(exist_ok=False)
+    policy = files.state.get("trigger_policy")
+    if policy is not None:
+        (folder / "trigger-policy.json").write_text(json.dumps(policy, indent=2) + "\n")
+
+    def observe(phase, state):
+        with (folder / "iwr-observations.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "detector": "iwr",
+                        "phase": phase,
+                        "state": state,
+                        "host_received_mono_ns": time.monotonic_ns(),
+                        "device_timestamp": None,
+                        "timestamp_meaning": "host receipt of polled status; device clocks in iwr-held.json",
+                        "exchange_index": len(collector.rows) - 1,
+                        "physical_timing_qualified": False,
+                    }
+                )
+                + "\n"
+            )
+        files.publish(
+            phase,
+            iwr=state,
+            message="Armed: make one swing. Both radars decide independently."
+            if phase == "armed"
+            else "Keep the area empty while learning the background."
+            if phase == "learning_background"
+            else "Place the ball, then stay still.",
+        )
+
     result = {
         "status": "partial",
         "physical_timing_qualified": False,
@@ -162,16 +193,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     row_start = len(collector.rows)
     try:
         collector.begin()
-        index, address = collector.wait_ball(
-            lambda phase, state: files.publish(
-                phase,
-                iwr=state,
-                message="Keep the hitting area empty while the radar learns the background."
-                if phase == "learning_background"
-                else "Place the ball at the intended hitting position, then stay still.",
-            ),
-            cancelled,
-        )
+        index, address = collector.wait_ball(observe, cancelled)
         result["address_observation"] = address
         files.publish("preparing_sensors", message="Stay still while the camera and OPS arm.")
         camera = camera or CameraCaptureRuntime(
@@ -200,13 +222,10 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         )
         rig.prepare()
         collector.arm(index)
+        result["armed_mono_ns"] = time.monotonic_ns()
         rig.start_wait()
-        held = collector.wait_result(
-            lambda phase, state: files.publish(
-                phase, iwr=state, message="Armed: make one swing. Both radars decide independently."
-            ),
-            cancelled,
-        )
+        held = collector.wait_result(observe, cancelled)
+        result["iwr_result_received_mono_ns"] = time.monotonic_ns()
         files.publish("saving", message="Saving both radar records and the camera clip.")
         (folder / "iwr-result.bin").write_bytes(base64.b64decode(held["result_b64"]))
         (folder / "iwr-clock.bin").write_bytes(base64.b64decode(held["packet_b64"]))
@@ -234,6 +253,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
             (folder / "iwr-dump.partial.bin").write_bytes(error.raw)
         raise
     finally:
+        result["disarm_requested_mono_ns"] = time.monotonic_ns()
         try:
             collector.finish()
         except BaseException as error:
@@ -248,12 +268,14 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                 except Exception as error:
                     result["companion_error"] = repr(error)
                 result["ops_capture_observed"] = rig.native_capture
+                result["trace_attempt_id"] = rig.trace_attempt_id
                 result["camera_root"] = str(camera_root)
                 result["camera"] = camera_evidence(
                     camera_root, rig, previous_metadata=previous_metadata
                 )
             result["iwr_exchanges"] = collector.rows[row_start:]
             result["iwr_lifecycle"] = dict(collector.state)
+            result["finished_mono_ns"] = time.monotonic_ns()
             if (
                 "iwr_raw" in result
                 and result.get("ops_capture_observed")
