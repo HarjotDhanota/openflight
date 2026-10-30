@@ -8,10 +8,10 @@ import pytest
 
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult
-from openflight.iwr6843.lcmf import LCMFResult
+from openflight.iwr6843.lcmf import BallRangeEvidence, LCMFResult
 from openflight.iwr6843.recovery import RecoveryCandidate
-from openflight.iwr6843.runtime import IWR6843Runtime
-from openflight.iwr6843.tracking import BallTrack
+from openflight.iwr6843.runtime import IWR6843Runtime, camera_horizontal_input
+from openflight.iwr6843.tracking import BallTrack, accepted_range_evidence
 
 
 @pytest.fixture(autouse=True)
@@ -236,6 +236,83 @@ def test_ops_guided_estimator_prefers_dual_channel_corroboration():
 
     assert result.measurement.angle_deg == pytest.approx(16.5)
     assert result.measurement.status == "accepted_ops_guided"
+
+
+@pytest.mark.parametrize("single_channel", [True, False])
+def test_ops_guided_conflicting_angles_do_not_become_launch_depth_or_club_timing(single_channel):
+    baseline = LCMFResult(status="accepted", angle_deg=33.3, track_speed_mph=60.0)
+    candidates = [_candidate(100.0), _candidate(102.0)]
+    recoveries = [
+        LCMFResult(
+            status="accepted_low_confidence_recovery",
+            angle_deg=angle,
+            raw_angle_deg=angle,
+            track_speed_mph=candidate.track.speed_mph,
+            n_frames=7,
+            single_channel=single_channel,
+            horizontal_deg=4.0,
+            horizontal_confidence=0.95,
+            horizontal_status="hlcmf_v3_accepted",
+            tdm_sign_used=1,
+            impact_t_s=candidate.impact_s,
+            range_evidence=BallRangeEvidence(
+                candidate.track, SimpleNamespace(), candidate.impact_s
+            ),
+        )
+        for angle, candidate in zip((13.8, 39.1), candidates)
+    ]
+
+    with (
+        patch("openflight.iwr6843.runtime.estimate_lcmf_v1", side_effect=[baseline, *recoveries]),
+        patch("openflight.iwr6843.runtime.find_recovery_candidates", return_value=candidates),
+        patch("openflight.iwr6843.runtime.estimate_club_path", return_value=None) as club,
+    ):
+        result = _runtime().process_shot(
+            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
+        )
+
+    measurement = result.measurement
+    assert not measurement.accepted
+    assert measurement.status == "rejected_ops_guided_angle_ambiguous"
+    assert measurement.angle_deg is None
+    assert measurement.horizontal_deg is None
+    assert camera_horizontal_input(measurement) == (None, None)
+    assert accepted_range_evidence(measurement.range_evidence) is None
+    assert measurement.impact_t_s is None
+    assert club.call_args.kwargs["impact_t_s"] is None
+    assert measurement.track_ambiguity["angle_spread_deg"] == pytest.approx(25.3)
+    assert len(measurement.to_dict()["track_ambiguity"]["candidates"]) == 2
+    assert baseline.accepted and all(item.accepted for item in recoveries)
+
+
+@pytest.mark.parametrize("spread, accepted", [(7.9, True), (8.0, True), (8.1, False)])
+def test_ops_guided_recovery_uses_the_existing_channel_disagreement_budget(spread, accepted):
+    baseline = LCMFResult(status="accepted", angle_deg=33.3, track_speed_mph=60.0)
+    candidates = [_candidate(100.0), _candidate(102.0)]
+    recoveries = [
+        LCMFResult(
+            status="accepted_low_confidence_recovery",
+            angle_deg=angle,
+            track_speed_mph=c.track.speed_mph,
+            n_frames=7,
+            single_channel=True,
+        )
+        for angle, c in zip((13.0, 13.0 + spread), candidates)
+    ]
+
+    with (
+        patch("openflight.iwr6843.runtime.estimate_lcmf_v1", side_effect=[baseline, *recoveries]),
+        patch("openflight.iwr6843.runtime.find_recovery_candidates", return_value=candidates),
+    ):
+        measurement = (
+            _runtime()
+            .process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="7i")
+            .measurement
+        )
+
+    assert measurement.accepted is accepted
+    if accepted:
+        assert measurement.angle_deg == pytest.approx(13.0)
 
 
 def test_club_path_receives_ball_tdm_sign():

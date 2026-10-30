@@ -20,6 +20,7 @@ from openflight.iwr6843.launch_range import (
     shot_ball_range,
 )
 from openflight.iwr6843.lcmf import (
+    CHANNEL_SPREAD_MAX_DEG,
     LCMFResult,
     PreparedLCMFCapture,
     estimate_lcmf_v1,
@@ -146,6 +147,55 @@ def _recovery_result_rank(
     )
 
 
+def _checked_ops_recovery(
+    recoveries: list[tuple[RecoveryCandidate, LCMFResult]],
+) -> LCMFResult:
+    """Withhold when equally corroborated recovery tracks disagree on launch."""
+    _candidate, selected = min(recoveries, key=lambda item: _recovery_result_rank(item[0], item[1]))
+    peers = [
+        (candidate, result)
+        for candidate, result in recoveries
+        if result.single_channel == selected.single_channel
+    ]
+    angles = [result.angle_deg for _candidate, result in peers]
+    spread = max(angles) - min(angles)
+    if spread > CHANNEL_SPREAD_MAX_DEG:
+        status = "rejected_ops_guided_angle_ambiguous"
+        evidence = selected.range_evidence
+        return replace(
+            selected,
+            status=status,
+            angle_deg=None,
+            horizontal_deg=None,
+            horizontal_raw_deg=None,
+            horizontal_confidence=None,
+            horizontal_status=None,
+            impact_t_s=None,
+            range_evidence=replace(evidence, status=status) if evidence is not None else None,
+            track_ambiguity={
+                "reason": "OPS-compatible tracks give conflicting launch angles",
+                "angle_spread_deg": spread,
+                "max_spread_deg": CHANNEL_SPREAD_MAX_DEG,
+                "candidates": [
+                    {
+                        "launch_angle_deg": result.angle_deg,
+                        "track_speed_mph": result.track_speed_mph,
+                        "impact_t_s": result.impact_t_s,
+                        "single_channel": result.single_channel,
+                        "n_frames": result.n_frames,
+                        "scope": candidate.scope,
+                        "speed_ratio": candidate.speed_ratio,
+                    }
+                    for candidate, result in peers
+                ],
+            },
+        )
+    status = (
+        "accepted_ops_guided_single_channel" if selected.single_channel else "accepted_ops_guided"
+    )
+    return replace(selected, status=status)
+
+
 def ops_guided_measurement(
     raw: bytes,
     calibration: Calibration,
@@ -216,15 +266,7 @@ def ops_guided_measurement(
         ):
             recoveries.append((candidate, result))
     if recoveries:
-        _candidate, selected = min(
-            recoveries, key=lambda item: _recovery_result_rank(item[0], item[1])
-        )
-        status = (
-            "accepted_ops_guided_single_channel"
-            if selected.single_channel
-            else "accepted_ops_guided"
-        )
-        return replace(selected, status=status)
+        return _checked_ops_recovery(recoveries)
     return replace(baseline, status=unresolved) if sound else baseline
 
 
