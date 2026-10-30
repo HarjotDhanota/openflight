@@ -67,14 +67,22 @@ def test_every_dump_gives_the_same_answer_twice(runs):
         assert second["competing"] == first["competing"], key
 
 
-def test_shot_14_keeps_its_range_and_its_ops_guided_launch(runs):
+def test_shot_14_keeps_its_range_and_exposes_conflicting_ops_guided_angles(runs):
     shot = runs["shot14"]
 
     assert shot["range_m"] == pytest.approx(1.91, abs=0.02)
     assert shot["range_label"] == "measured"
-    # the IWR-only baseline walk is ambiguous, so the OPS speed picks the launch's walk
-    assert shot["launch_status"].startswith("accepted_ops_guided")
-    assert shot["launch_deg"] == pytest.approx(13.6, abs=0.3)
+    assert shot["launch_status"] == "rejected_ops_guided_angle_ambiguous"
+    assert shot["launch_deg"] is None
+    assert shot["horizontal_deg"] is None
+    ambiguity = shot["launch_track_ambiguity"]
+    assert ambiguity["reason"] == "OPS-compatible tracks give conflicting launch angles"
+    angles = [candidate["launch_angle_deg"] for candidate in ambiguity["candidates"]]
+    assert min(angles) == pytest.approx(12.06, abs=0.1)
+    assert max(angles) == pytest.approx(20.16, abs=0.1)
+    assert ambiguity["angle_spread_deg"] == pytest.approx(max(angles) - min(angles))
+    assert ambiguity["angle_spread_deg"] > ambiguity["max_spread_deg"]
+    assert any(abs(angle - 13.6) < 0.3 for angle in angles)
 
 
 @pytest.mark.parametrize(
