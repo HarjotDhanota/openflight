@@ -61,10 +61,10 @@ def bundle(tmp_path):
     (radar / "routing.jsonl").write_text(
         json.dumps({"status": "dispatched", "request": request}) + "\n"
     )
-    edges = [
-        {"type": "edge", "edge": "rising", "timestamp_ns": 100},
-        {"type": "edge", "edge": "falling", "timestamp_ns": 120},
-    ]
+    from tests.test_ops_sync import recording
+
+    edges = recording(((100, "rising"), (120, "falling")))
+    edges[0].update(boot_id="boot", mono_ns=90)
     (radar / "gpio.jsonl").write_text("".join(json.dumps(row) + "\n" for row in edges))
     result = {
         "status": "captured_unqualified",
@@ -450,3 +450,66 @@ def test_normal_stop_quiesces_native_owner_before_closing_ports_and_finalizes_be
         "after_capture_stop",
         "log.end",
     ]
+
+
+@pytest.mark.parametrize("fault", [None, "moved_rig", "different_session", "missing"])
+def test_native_admission_uses_its_own_saved_trigger_evidence(monkeypatch, tmp_path, fault):
+    from copy import deepcopy
+    from datetime import datetime
+
+    from openflight import server, tester_hooks
+    from openflight.launch_monitor import Shot
+    from tests.test_tester_setup_readiness import _active_logger, _trigger_evidence
+
+    _active_logger(monkeypatch, tmp_path)
+    evidence = _trigger_evidence(tmp_path)
+    if fault == "moved_rig":
+        evidence.update(ready=False, blockers=[{"id": "lis3dh", "reason": "rig moved"}])
+    elif fault == "different_session":
+        evidence["observations"]["runtime"]["session_uuid"] = "previous"
+    elif fault == "missing":
+        evidence = None
+    owner = object.__new__(NativeFusionExtension)
+    owner.trigger_evidence = deepcopy(evidence)
+    camera = SimpleNamespace(
+        capture_for_shot=lambda *_a, **_kw: None, trigger_evidence_for_shot=lambda _timestamp: None
+    )
+    monkeypatch.setattr(server, "camera_capture_runtime", camera)
+    monkeypatch.setattr(server, "camera_capture_config", {})
+    monkeypatch.setattr(server, "iwr6843_runtime_config", {})
+    monkeypatch.setattr(
+        server, "monitor", SimpleNamespace(radar=SimpleNamespace(_send_command=lambda _cmd: ""))
+    )
+    monkeypatch.setattr(server, "log_session_error", lambda *_a, **_kw: None)
+    monkeypatch.setattr(tester_hooks, "tester_setup_required", True)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True})
+    owner.before_monitor_start()
+    shot = Shot(ball_speed_mph=100, timestamp=datetime.now(), impact_timestamp=None)
+    assert tester_hooks._admit_shot(shot) == (fault not in {"moved_rig", "different_session"})
+    assert ("missing_trigger_evidence" in shot.extras) == (fault == "missing")
+    assert camera.trigger_evidence_for_shot(None) is None
+    assert evidence is None or evidence.get("blockers") == (
+        [{"id": "lis3dh", "reason": "rig moved"}] if fault == "moved_rig" else None
+    )
+
+
+@pytest.mark.parametrize(
+    "fault", ["lost_edge", "pending", "missing_end", "wrong_boot", "wrong_clock"]
+)
+def test_native_fusion_requires_a_complete_gpio_recording_not_just_two_edges(tmp_path, fault):
+    folder, result, _camera = bundle(tmp_path)
+    path = folder / "ops-camera/gpio.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    if fault == "lost_edge":
+        rows[2]["line_seqno"] += 2
+    elif fault == "pending":
+        rows[-1]["pending_at_end"] = True
+    elif fault == "missing_end":
+        rows.pop()
+    elif fault == "wrong_boot":
+        rows[0]["boot_id"] = "other"
+    else:
+        rows[0]["event_clock"] = "realtime"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError):
+        bind_attempt(folder, result)

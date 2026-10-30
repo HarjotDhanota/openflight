@@ -100,10 +100,12 @@ def verify_clip(path, metadata):
             raise ValueError("saved frame clocks do not match pixels")
 
 
-def camera_evidence(folder, rig):
+def camera_evidence(folder, rig, *, previous_metadata=()):
     """Verify that the requested event actually produced a saved clip."""
     matches, errors = [], []
     for path in (folder / "camera").rglob("metadata.json"):
+        if path in previous_metadata:
+            continue
         try:
             metadata = json.loads(path.read_text())
             event = metadata.get("trigger_clocks", {}).get("capture_request", {})
@@ -150,6 +152,8 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     }
     rig = None
     external_camera = camera is not None
+    camera_root = camera.output_dir.parent if external_camera else folder / "ops-camera"
+    previous_metadata = frozenset((camera_root / "camera").rglob("metadata.json"))
     cancelled = cancelled or files.cancelled
     row_start = len(collector.rows)
     try:
@@ -240,9 +244,10 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
                 except Exception as error:
                     result["companion_error"] = repr(error)
                 result["ops_capture_observed"] = rig.native_capture
-                camera_root = camera.output_dir.parent if external_camera else folder / "ops-camera"
                 result["camera_root"] = str(camera_root)
-                result["camera"] = camera_evidence(camera_root, rig)
+                result["camera"] = camera_evidence(
+                    camera_root, rig, previous_metadata=previous_metadata
+                )
             result["iwr_exchanges"] = collector.rows[row_start:]
             result["iwr_lifecycle"] = dict(collector.state)
             if (

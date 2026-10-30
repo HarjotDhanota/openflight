@@ -130,3 +130,68 @@ def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypat
     assert result["status"] == "partial"
     assert ("stop_error" in result) == stop_fails
     assert collector.state["stop_verified"] != stop_fails
+
+
+@pytest.mark.parametrize("new_fault", [None, "missing_pixels", "duplicate"])
+def test_current_attempt_is_not_poisoned_by_a_previous_incomplete_camera_clip(
+    tmp_path, monkeypatch, new_fault
+):
+    import threading
+
+    import joint_clock_rig
+    import tester_sync_session as session
+    from test_joint_shot_clock import wire
+
+    collector, port = wire()
+    camera_root = tmp_path / "run"
+    old = camera_root / "camera/capture-old/metadata.json"
+    old.parent.mkdir(parents=True)
+    old.write_text('{"interrupted":')
+    camera = SimpleNamespace(output_dir=camera_root / "camera")
+
+    def save_clip(name):
+        folder = camera.output_dir / name
+        folder.mkdir()
+        (folder / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "pre_trigger_frames": 1,
+                    "post_trigger_frames": 1,
+                    "trigger_clocks": {
+                        "capture_request": {"arm_id": "current", "boot_id": "synthetic-boot"}
+                    },
+                }
+            )
+        )
+        if new_fault != "missing_pixels":
+            np.savez(
+                folder / "frames.npz",
+                frames=np.zeros((2, 4, 4), np.uint8),
+                sensor_timestamp_ns=np.array([10, 20]),
+                host_timestamp_ns=np.array([30, 40]),
+            )
+
+    class Rig:
+        arm_id, boot_id, native_capture = "current", "synthetic-boot", True
+
+        def __init__(self, **_kwargs):
+            self.stop = threading.Event()
+
+        def prepare(self):
+            pass
+
+        def start_wait(self):
+            port.active, port.held = False, True
+
+        def close(self):
+            save_clip("capture-current")
+            if new_fault == "duplicate":
+                save_clip("capture-duplicate")
+
+    monkeypatch.setattr(joint_clock_rig, "RigControl", Rig)
+    monkeypatch.setattr(collector, "read_raw_dump", lambda _radar: (b"original IWR", {"bytes": 12}))
+    files = SessionFiles(tmp_path / "control")
+    session.attempt(collector, files, tmp_path / "attempt-001", camera=camera)
+    result = json.loads((tmp_path / "attempt-001/RESULT.json").read_text())
+    assert result["status"] == ("captured_unqualified" if new_fault is None else "partial")
+    assert old.read_text() == '{"interrupted":'

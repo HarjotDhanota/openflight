@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from openflight.kiosk_extensions import KioskExtension
+from openflight.ops_sync import analyze_recording
 from openflight.rolling_buffer.trigger import HardwareTriggeredCapture
 
 
@@ -40,6 +42,13 @@ def bind_attempt(folder, result):
     edges = [
         json.loads(line) for line in (folder / "ops-camera/gpio.jsonl").read_text().splitlines()
     ]
+    audit = analyze_recording(edges)
+    if (
+        audit["stream_issues"]
+        or audit["boot_id"] != request["boot_id"]
+        or edges[0].get("line_offset") != 27
+    ):
+        raise ValueError(f"native OPS GPIO recording is incomplete or mismatched: {audit}")
     edges = [
         row
         for row in edges
@@ -63,6 +72,7 @@ def bind_attempt(folder, result):
         "host_boot": request["boot_id"],
         "iwr_shot_id": held["record"]["shot_id"],
         "iwr_generation": held["record"]["generation"],
+        "gpio_recording_valid": True,
         "iwr_frame_conditional_mono_interval_ns": interval,
         "camera_coverage_mono_interval_ns": coverage,
         "physical_timing_qualified": False,
@@ -160,6 +170,7 @@ class NativeFusionExtension(KioskExtension):
         self.stack = ExitStack()
         self.collector = self.monitor = self.camera = None
         self.iwr_capture = self.camera_path = self.association = None
+        self.trigger_evidence = None
         self.closed, self.worker_alive, self.publishing = False, False, False
         self.finished = threading.Event()
         self.finished.set()
@@ -214,6 +225,7 @@ class NativeFusionExtension(KioskExtension):
         self.monitor, self.camera = server.monitor, server.camera_capture_runtime
         self.original_camera_match = self.camera.capture_for_shot
         self.camera.capture_for_shot = self.camera_for_shot
+        self.camera.trigger_evidence_for_shot = self.evidence_for_shot
         self.monitor.trigger = NativeFusionTrigger(self)
         self.monitor.radar._send_command("PI")  # pylint: disable=protected-access
         server.camera_capture_config["trigger_source"] = "ops_speed_trigger"
@@ -234,6 +246,11 @@ class NativeFusionExtension(KioskExtension):
                 return capture
         return None
 
+    def evidence_for_shot(self, _timestamp):
+        """Consume this owned capture's frozen setup without inventing an impact epoch."""
+        evidence, self.trigger_evidence = self.trigger_evidence, None
+        return deepcopy(evidence)
+
     def acquire(self, radar, processor, stop, started):
         """One controlled attempt; no new arm until the previous final publication."""
         from openflight.iwr6843.monitor import IWR6843Capture
@@ -252,6 +269,7 @@ class NativeFusionExtension(KioskExtension):
                 time.sleep(0.05)
             self.publishing = False
         self.iwr_capture = self.camera_path = self.association = None
+        self.trigger_evidence = None
         self.files.publish(
             "next",
             message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
@@ -299,7 +317,9 @@ class NativeFusionExtension(KioskExtension):
             timing = result["iwr_raw"]["transfer_timing"]
             duration = timing["cli_ready_ns"] - timing["request_written_ns"]
             with (camera_path / "metadata.json").open() as stream:
-                request = json.load(stream)["trigger_clocks"]["capture_request"]
+                metadata = json.load(stream)
+            request = metadata["trigger_clocks"]["capture_request"]
+            self.trigger_evidence = deepcopy(metadata.get("tester_setup"))
             self.iwr_capture = IWR6843Capture(
                 sequence=self.sequence,
                 trigger_timestamp=request["observer_wall_s"],
