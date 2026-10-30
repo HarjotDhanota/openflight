@@ -51,6 +51,7 @@ No thresholds, calibration, geometry or accuracy labels change.
 ## Primary sources checked
 
 * [OmniPreSense AN-027](https://omnipresense.com/wp-content/uploads/2025/06/AN-027-A_Rolling-Buffer-1.pdf), pages 1–3: fixed ring, sample rates, segmented prehistory, trigger input/API and rearm. Local internal-speed command ordering remains from the reviewed driver, not inferred from this rolling-buffer note.
+* [OmniPreSense AN-010-AD](https://omnipresense.com/wp-content/uploads/2025/10/AN-010-AD_API_Interface.pdf), pages 21 and 27: newer mode names GC (rolling) and GS (normal), with S!, S#n and HOST_INT. It supersedes the old G1/G0 names in AN-027. These documents do not qualify the 1.3.3 sampling-output edge as physical impact; that remains a separately gated local firmware/driver route.
 * [TI IWR6843 datasheet Rev F](https://www.ti.com/lit/ds/symlink/iwr6843.pdf): hardware interfaces do not establish this custom firmware's trigger behavior.
 * [Fusion architecture issue](https://github.com/open-flight/openflight/issues/289): detection, synchronization, association and fusion remain separate. The linked comment was not exposed by the fetched page; no unobserved comment claim is used.
 * Local `joint_shot_clock.py`, `joint_clock_active.py`, `tester_sync_session.py`,
