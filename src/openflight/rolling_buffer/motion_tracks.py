@@ -6,14 +6,14 @@ import numpy as np
 from scipy.signal import find_peaks
 
 POLICY = {
-    "version": 1,
+    "version": 2,
     "window_samples": 256,
     "hop_samples": 32,
     "window_function": "hamming",
     "retained_peaks": 8,
     "max_gap_frames": 3,
     "hypotheses_per_peak": 2,
-    "innovation_resolution_units": 2,
+    "innovation_resolution_units": 3,
     "flight_span_windows": 3,
     "club_span_windows": 1,
     "club_unaccelerated_span_windows": 2,
@@ -21,6 +21,10 @@ POLICY = {
     "club_statistic_peaks": 5,
     "flight_band_min_resolution_units": 0.5,
     "flight_band_sigma": 3,
+    "flight_model_interval": "full_qualified_span",
+    "continuation_span_windows": 1,
+    "continuation_change_resolution_units": 3,
+    "approach_change_resolution_units": 2,
 }
 
 
@@ -58,6 +62,16 @@ class MotionTrack:
 
 
 @dataclass(frozen=True)
+class FlightRejection:
+    """A stable portion embedded in a measured changing-speed path."""
+
+    track: MotionTrack
+    approach: tuple[Peak, ...]
+    continuation: tuple[Peak, ...]
+    reason: str = "stable_portion_with_changing_speed_before_and_after"
+
+
+@dataclass(frozen=True)
 class DopplerMotion:
     """Club evidence survives without a qualified ball-flight track."""
 
@@ -66,6 +80,7 @@ class DopplerMotion:
     alternatives: tuple[MotionTrack, ...]
     resolution_mph: float
     window_samples: int = 256
+    flight_rejections: tuple[FlightRejection, ...] = ()
 
 
 def extract(processor, capture):
@@ -171,17 +186,50 @@ def stable_flights(history, resolution, window_ms):
             if last.time_ms - part[0].time_ms < minimum_span:
                 break
             speed = np.array([point.speed_mph for point in part])
+            if np.ptp(speed) > 2 * resolution:
+                continue
             times = np.array([point.time_ms for point in part])
             fit = np.polyfit(times - times[0], speed, 1)
             error = speed - np.polyval(fit, times - times[0])
             if abs(fit[0]) > resolution / window_ms or np.max(np.abs(error)) > resolution:
                 continue
-            # A flight changes little over its observed span, unlike a swing arc.
-            if np.ptp(speed) > 2 * resolution:
-                continue
             candidates.append((float(np.median(speed)), part, float(np.std(error))))
             break
     return sorted(candidates, key=lambda candidate: (candidate[0], len(candidate[1])), reverse=True)
+
+
+def qualify_continuations(flights, history, resolution, window_ms):
+    """A flat portion of a longer accelerating/decelerating path is not flight."""
+    changing = {}
+    for path in history:
+        last = path.peaks[-1]
+        for index, peak in enumerate(path.peaks):
+            if last.time_ms - peak.time_ms < POLICY["continuation_span_windows"] * window_ms:
+                break
+            if abs(last.speed_mph - peak.speed_mph) >= (
+                POLICY["continuation_change_resolution_units"] * resolution
+            ):
+                changing.setdefault(peak, []).append((path.peaks, index))
+    accepted, rejected = [], []
+    for speed, peaks, residual in flights:
+        for full_path, end in changing.get(peaks[-1], []):
+            if peaks[0] not in full_path:
+                continue
+            start = full_path.index(peaks[0])
+            if start < 3:
+                continue
+            approach_speed = float(np.mean([peak.speed_mph for peak in full_path[:3]]))
+            if abs(approach_speed - speed) < (
+                POLICY["approach_change_resolution_units"] * resolution
+            ):
+                continue
+            rejected.append(
+                FlightRejection(MotionTrack(speed, peaks), full_path[:start], full_path[end:])
+            )
+            break
+        else:
+            accepted.append((speed, peaks, residual))
+    return accepted, tuple(rejected)
 
 
 def analyze(processor, capture):
@@ -190,21 +238,21 @@ def analyze(processor, capture):
     history = paths(frames, resolution)
     window_ms = POLICY["window_samples"] / processor.SAMPLE_RATE * 1000
     flights = stable_flights(history, resolution, window_ms)
+    flights, rejected = qualify_continuations(flights, history, resolution, window_ms)
     flight = flights[0] if flights else None
     if flight:
         same = [candidate for candidate in flights if abs(candidate[0] - flight[0]) <= resolution]
         flight = min(same, key=lambda candidate: candidate[1][0].time_ms)
-        earliest_flight_ms = flight[1][0].time_ms
-        tail = tuple(
-            peak for peak in flight[1] if peak.time_ms >= flight[1][-1].time_ms - 3 * window_ms
+        model_peaks = flight[1]
+        model_times = np.array([peak.time_ms for peak in model_peaks])
+        model_fit = np.polyfit(
+            model_times - model_times[0], [peak.speed_mph for peak in model_peaks], 1
         )
-        tail_times = np.array([peak.time_ms for peak in tail])
-        tail_fit = np.polyfit(tail_times - tail_times[0], [peak.speed_mph for peak in tail], 1)
-        tail_error = np.array([peak.speed_mph for peak in tail]) - np.polyval(
-            tail_fit, tail_times - tail_times[0]
+        model_error = np.array([peak.speed_mph for peak in model_peaks]) - np.polyval(
+            model_fit, model_times - model_times[0]
         )
         band = max(
-            POLICY["flight_band_sigma"] * float(np.std(tail_error)),
+            POLICY["flight_band_sigma"] * float(np.std(model_error)),
             resolution * POLICY["flight_band_min_resolution_units"],
         )
         recovered = []
@@ -213,7 +261,8 @@ def analyze(processor, capture):
             matches = [
                 peak
                 for peak in frame
-                if abs(peak.speed_mph - np.polyval(tail_fit, peak.time_ms - tail_times[0])) <= band
+                if abs(peak.speed_mph - np.polyval(model_fit, peak.time_ms - model_times[0]))
+                <= band
             ]
             if not matches:
                 missing += 1
@@ -224,7 +273,7 @@ def analyze(processor, capture):
                     min(
                         matches,
                         key=lambda peak: abs(
-                            peak.speed_mph - np.polyval(tail_fit, peak.time_ms - tail_times[0])
+                            peak.speed_mph - np.polyval(model_fit, peak.time_ms - model_times[0])
                         ),
                     )
                 )
@@ -234,10 +283,11 @@ def analyze(processor, capture):
             flight = (
                 float(np.median([peak.speed_mph for peak in recovered])),
                 tuple(recovered),
-                float(np.std(tail_error)),
+                float(np.std(model_error)),
             )
     limit = flight[1][0].time_ms + 2 * window_ms if flight else float("inf")
     if flight:
+        earliest_flight_ms = flight[1][0].time_ms
         flight_times = np.array([peak.time_ms for peak in flight[1]])
         flight_fit = np.polyfit(
             flight_times - flight_times[0], [peak.speed_mph for peak in flight[1]], 1
@@ -304,4 +354,5 @@ def analyze(processor, capture):
         MotionTrack(club[0], club[1], club[2]) if club else None,
         tuple(MotionTrack(candidate[0], candidate[1]) for candidate in flights[:3]),
         resolution,
+        flight_rejections=rejected,
     )
