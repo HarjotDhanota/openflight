@@ -1,11 +1,12 @@
 # Trigger comparison operator guide and handoff
 
-Local worktree: `openflight-trigger-policies`, branch
-`feat/trigger-policies-2026-10-30`, based on
-`5584a432ec06de88371afb76ba9bb524c0dbc3bd`. Capability commit `6c0eefe5`;
-selection/publication policies `813b6613`, journals/trace `bc8f5ee8`, and normal
-review report `901ed87b`. The parent workspace evidence directory is
-`research/trigger-policies-2026-10-30`. Nothing was pushed or deployed.
+Use the combined normal worktree `openflight-fusion-native-integration`, branch
+`integration/fusion-native-triggers-2026-10-30`. The five policy commits from
+`openflight-trigger-policies` at `854915f9` were integrated on the reviewed
+metric/clock source `64193a85`. The original isolated policy checkout is preserved.
+Combined validation and package details are in the parent workspace directory
+`research/native-trigger-policy-integration-2026-10-30`; original policy evidence
+remains in `research/trigger-policies-2026-10-30`. Nothing was pushed or deployed.
 
 ## Choose and run
 
@@ -137,13 +138,11 @@ This is not a full-project green claim. The original handoff's
 unrelated baseline failures remain outside this workstream. No Pi, sensor,
 wiring, firmware load, reset, swing, physical latency or accuracy test occurred.
 
-The integration worktree advanced independently to `52ab4912` during this task.
-Its newer onset, transition, head-motion, full-speed and spin-provenance changes
-are deliberately excluded. The recorded changed-file range at that observation
-had no overlap with this workstream's tracked files. This does not replace a
-fresh integration review or testing on the chosen combined source.
-At the final ownership check, that agent was also editing reviewed clock-package
-support in `run_joint_clock.py`, `tester_sync_session.py` and the native free-play
-guide, with a new package test. Those uncommitted edits overlap our collector and
-guide files. Reconcile their package-build selection with our additive journals;
-do not overwrite it or assume this branch accepts the newly reviewed package.
+The combined normal source includes the newer metric/onset/transition/head/spin
+fixes and the reviewed clock-package support. `tester_sync_session.py` retains
+the selected package's firmware identity alongside the policy journals;
+`run_joint_clock.py` retains both exact manifest/image identities. The rebuilt
+RAM package includes the upstream raw-dump freeze fix, but has not been loaded
+or tested on this rig. See [native free play](native-fusion-free-play.md) for its
+location and restart requirements. Use the combined handoff's validation results
+for this source; the preceding test counts describe the original policy branch.
