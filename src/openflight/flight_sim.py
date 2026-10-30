@@ -433,7 +433,8 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
 
     source: Literal["measured", "calculated", "model_geometry", "estimated"]
     if (
-        _finite(shot.spin_rpm)
+        shot.spin_source not in MODEL_SPIN_SOURCES
+        and _finite(shot.spin_rpm)
         and _finite(shot.spin_confidence)
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
