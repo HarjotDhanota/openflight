@@ -3,6 +3,8 @@
 A known club delivery becomes a known launch (forward collision model, iron axis fit, Penner
 2001 ball speed), arc positions and OPS readings; through the server's own functions every output
 must come back with the delivery's value and label, RH and LH, at target yaw 0 and +-3 deg.
+The positive harness supplies an ideal full impact-speed input separately from OPS;
+the live reading-time route is tested without that supplied input too.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import numpy as np
 import pytest
 
 import openflight.server as server_module
-from openflight import collision_forward, shot_models
+from openflight import collision_forward, full_speed, shot_models
 from openflight.club_arc import LOW_POINT_OFFSETS_MM, prior_for_club
 from openflight.clubs import ClubType
 from openflight.flight import AIR_DENSITY_NORMALIZED, FLIGHT_METRICS
@@ -179,6 +181,7 @@ TEE_RANGE, BALL_H, SIDE = 2.10, 0.02135, 0.03
 
 @pytest.fixture
 def kiosk(monkeypatch):
+    reading_speed = full_speed.evaluate_full_club_speed_head_track
     rig = RigGeometry.from_json(str(REPO / "config" / "enclosure_v3_rig_geometry.json"))
     radar_h = rig.enclosure_setup().radar_height_m
     calibration = SimpleNamespace(
@@ -194,10 +197,23 @@ def kiosk(monkeypatch):
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
 
-    def set_up(*, yaw, handed):
+    def set_up(*, yaw, handed, impact_speed_mph):
         offset = offset_from_target_yaw(yaw) if yaw else None
         monkeypatch.setattr(server_module, "horizontal_offset_deg", offset)
         monkeypatch.setattr(server_module, "golfer_handed", handed)
+        producer = reading_speed
+        if impact_speed_mph is not None:
+
+            def producer(**_kwargs):
+                return {
+                    "status": "calculated",
+                    "value_mph": impact_speed_mph,
+                    "referred_to": "impact",
+                    "reference_point": "clubhead",
+                    "source": "synthetic constant-angular-speed impact reference",
+                }
+
+        monkeypatch.setattr(full_speed, "evaluate_full_club_speed_head_track", producer)
         return rig, radar_h, offset
 
     return set_up
@@ -210,13 +226,15 @@ DELIVERIES = {
 }
 
 
-def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False):
+def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False, impact_reference=True):
     club, speed, path, attack, face, loft = delivery
     if handed == "LH":
         # a left-hander's in-to-out path is left of the target line: mirror the delivery
         path, face = -path, -face
     truth = truth_launch(club, speed, path, attack, face, loft)
-    rig, radar_h, offset = kiosk(yaw=yaw, handed=handed)
+    rig, radar_h, offset = kiosk(
+        yaw=yaw, handed=handed, impact_speed_mph=speed if impact_reference else None
+    )
 
     ops_m, ball_bore = _ops_and_ball(rig, TEE_RANGE, radar_h, BALL_H, SIDE)
     # the published prior's plane and radius: the arc fit recovers them exactly
@@ -345,13 +363,16 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
     assert metrics["spin_axis"]["status"] == collision_label
     assert metrics["gyro"]["status"] == "not_measured"
 
-    # speeds: full ball speed calculated; smash stays the labelled radial ratio
+    # The ideal impact-speed input supports full smash; the radial ratio stays separate.
     full = shot.ball_speed_full
     assert full["status"] == "calculated", full.get("reason")
     assert full["value_mph"] == pytest.approx(truth["ball_speed"], abs=0.15)
     assert full["range_mph"][0] <= truth["ball_speed"] <= full["range_mph"][1]
     assert shot.ball_speed_full_mph == full["value_mph"]
-    assert shot.smash_factor_full["status"] == "not_measured"
+    assert shot.smash_factor_full["status"] == "calculated"
+    assert shot.smash_factor_full["value"] == pytest.approx(
+        truth["ball_speed"] / truth["speed"], abs=0.002
+    )
     assert shot.smash_factor_status == SMASH_RADIAL_RATIO
 
     # flight: both airs, every output, the flight's label is the weakest input's
@@ -399,6 +420,22 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
         shot.flight["as_measured"]["metrics"]["carry"]["value"]
     )
     assert shot.carry_status == flight_label
+
+
+@pytest.mark.parametrize("measured_club", [False, True])
+def test_reading_time_route_does_not_supply_the_ideal_impact_input(kiosk, measured_club):
+    shot, _truth = run_shot(
+        kiosk,
+        delivery=DELIVERIES["rh_7iron_draw"],
+        handed="RH",
+        yaw=0,
+        measured_club=measured_club,
+        impact_reference=False,
+    )
+    assert shot.face_angle_deg is not None and shot.dynamic_loft_deg is not None
+    assert shot.collision_model["inputs"]["club_speed_mph"]["value"] is None
+    assert shot.spin_rpm is None and shot.spin_rpm_collision is None
+    assert shot.smash_factor_full["status"] == "not_measured"
 
 
 @pytest.mark.parametrize("handed", ["RH", "LH"])

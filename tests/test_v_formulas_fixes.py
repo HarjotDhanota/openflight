@@ -134,10 +134,17 @@ _USES_LAUNCH_H = (
 
 
 def _collision_shot(**overrides):
-    """A 7-iron with a measured path, attack, vertical launch and club speed."""
+    """A 7-iron with explicit full impact speed for the collision-label controls."""
     values = dict(
         ball_speed_mph=120.0,
         club_speed_mph=85.0,
+        club_speed_full={
+            "status": "calculated",
+            "value_mph": 85.0,
+            "referred_to": "impact",
+            "reference_point": "clubhead",
+            "source": "synthetic full impact-speed input",
+        },
         timestamp=datetime(2026, 10, 13),
         club=ClubType.IRON_7,
         launch_angle_horizontal=1.0,
