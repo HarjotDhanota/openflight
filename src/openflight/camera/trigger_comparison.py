@@ -102,6 +102,9 @@ def _attempt(folder, run, root):
                 "decision": "retained_independent_detection",
             }
         )
+    notification = _json(folder / "iwr-trigger-observation.json", None)
+    if isinstance(notification, dict):
+        candidates.append({**notification, "detector": "iwr", "decision": "polled_latch_observed"})
     clips = []
     camera_root = Path(result.get("camera_root", folder / "ops-camera"))
     if not camera_root.is_relative_to(run):

@@ -124,6 +124,7 @@
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
+  "scripts/hardware-test/test_iwr_early_notification.py": "TESTER",
   "docs/development/trigger-policy-capabilities.md": "TESTER",
   "docs/development/trigger-policy-operator-guide.md": "TESTER",
   "scripts/hardware-test/test_reviewed_clock_packages.py": "TESTER",

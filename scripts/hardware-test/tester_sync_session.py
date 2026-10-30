@@ -170,7 +170,9 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         files.publish(
             phase,
             iwr=state,
-            message="Armed: make one swing. Both radars decide independently."
+            message="IWR latch observed; hold still while capture completes."
+            if phase == "armed" and state.get("trigger", {}).get("latched") == "1"
+            else "Armed: make one swing. Both radars decide independently."
             if phase == "armed"
             else "Keep the area empty while learning the background."
             if phase == "learning_background"
@@ -185,6 +187,12 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         "sound_gpio_used": False,
         "iwr_forced_capture": False,
     }
+
+    def trigger_observed(event):
+        with (folder / "iwr-trigger-observation.json").open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, indent=2) + "\n")
+        result["iwr_trigger_observation"] = event
+
     rig = None
     external_camera = camera is not None
     camera_root = camera.output_dir.parent if external_camera else folder / "ops-camera"
@@ -224,7 +232,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         collector.arm(index)
         result["armed_mono_ns"] = time.monotonic_ns()
         rig.start_wait()
-        held = collector.wait_result(observe, cancelled)
+        held = collector.wait_result(observe, cancelled, on_trigger=trigger_observed)
         result["iwr_result_received_mono_ns"] = time.monotonic_ns()
         files.publish("saving", message="Saving both radar records and the camera clip.")
         (folder / "iwr-result.bin").write_bytes(base64.b64decode(held["result_b64"]))

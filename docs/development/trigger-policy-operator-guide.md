@@ -112,6 +112,14 @@ common hardware capture, verify the actual wiring, input handler/firmware and
 each buffer's semantics. No dropdown or offline replay closes either gate.
 All records keep `physical_timing_qualified: false`.
 
+Native attempts now save `iwr-trigger-observation.json` when the host first sees
+the IWR latch. The review's candidate timeline shows this observation separately
+from the later held result. Its timestamp is host receipt of a polled status,
+not a device event/contact time; expected shot/generation IDs are not validated
+result IDs. It does not request OPS capture or enable the unavailable IWR-led
+mode. The current 50 ms polling interval cannot guarantee retention with the
+configured 25.6 ms OPS prehistory; the complete dump spans 136.5 ms.
+
 ## Integration boundaries and validation
 
 Review this work as separate capability, policy-selection, journal/trace and

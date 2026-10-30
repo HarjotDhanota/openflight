@@ -1,6 +1,7 @@
 """One finite self-triggered IWR attempt on a fresh, identified RAM runtime."""
 
 import hashlib
+from copy import deepcopy
 from dataclasses import asdict
 
 from joint_clock_active import (
@@ -42,6 +43,7 @@ class ShotCollector(ActiveCollector):
         self.next_shot = 1
         self.fresh_runtime = False
         self.observed_ball = None
+        self.trigger_observation = None
 
     def establish_fresh_runtime(self):
         """Only the RAM loader's fresh startup may initialize generation tracking."""
@@ -82,6 +84,7 @@ class ShotCollector(ActiveCollector):
         # The pinned image resets ResultClock only at sensorStart and dump/release rearm.
         self.generation += 1
         self.observed_ball = None
+        self.trigger_observation = None
         self.command("debugCfg 0")
         self.command("triggerCfg 32 1 0")
         self.command("ball cfg 1 1")
@@ -124,13 +127,33 @@ class ShotCollector(ActiveCollector):
             raise ValueError("IWR did not arm cleanly")
         return state
 
-    def wait_result(self, publish, cancelled):
+    def wait_result(self, publish, cancelled, *, on_trigger=None):
         """Poll within the finite RF budget; fetch a held result without forcing capture."""
         deadline = min(self.deadline_ns, self.now() + 30_000_000_000)
         while self.now() < deadline:
             if cancelled():
                 raise InterruptedError("session stopped")
             state = self.snapshot()
+            if state["trigger"]["latched"] == "1" and self.trigger_observation is None:
+                rows = getattr(self, "rows", ())
+                row = rows[-1] if rows else {}
+                self.trigger_observation = {
+                    "schema": "openflight.iwr-trigger-observation.v1",
+                    "expected_shot_id": self.next_shot,
+                    "expected_generation": self.generation,
+                    "host_received_mono_ns": self.now(),
+                    "exchange_index": len(rows) - 1 if rows else None,
+                    "stats_exchange": {
+                        key: row.get(key)
+                        for key in ("before_ns", "write_return_ns", "cli_ready_ns")
+                    },
+                    "capture_active_in_status": state["capture"]["active"] == "1",
+                    "device_timestamp": None,
+                    "timestamp_meaning": "host observation of polled latch; not physical trigger or contact",
+                    "physical_timing_qualified": False,
+                }
+                if on_trigger is not None:
+                    on_trigger(deepcopy(self.trigger_observation))
             publish("armed", state)
             if state["trigger"]["latched"] == "1" and state["capture"]["active"] == "0":
                 raw, _ = self.exchange("triggerLog result", done_count=2)
