@@ -289,3 +289,19 @@ def test_attach_cannot_clear_a_poisoned_collector():
     with pytest.raises(ExchangeError):
         collector.attach_stopped_runtime("123456789abcdef0")
     assert port.writes == []
+
+
+@pytest.mark.parametrize("error_type", [InterruptedError, KeyboardInterrupt])
+def test_interrupted_lifecycle_reply_prevents_cleanup_writes(error_type):
+    collector, port = setup()
+
+    def interrupt(_size):
+        raise error_type("tester stop during UART reply")
+
+    port.read = interrupt
+    with pytest.raises((ExchangeError, error_type)):
+        collector.command("sensorStart")
+    assert collector.failed
+    with pytest.raises(ExchangeError):
+        collector.command("sensorStop")
+    assert port.writes == [b"sensorStart\n"]

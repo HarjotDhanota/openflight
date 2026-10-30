@@ -287,6 +287,7 @@ def mode_focal_px(arm: Arm, rig_geometry: Path, lens=None) -> float:
 
 
 ACTION_LABELS = {
+    "internal_sync": "Internal-trigger sensor capture session",
     "free_play": "Free play: recording shots",
     "preflight": "Hardware and software preflight",
     "gain": "Find the gain for this arm",
@@ -296,7 +297,7 @@ ACTION_LABELS = {
     "tee_range": "Capture automatic tee-range evidence",
 }
 # a hardware step that hangs is stopped; the ladder runs as long as the tester swings
-ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0}
+ACTION_TIMEOUT_S = {"preflight": 120.0, "gain": 900.0, "tee_range": 120.0, "internal_sync": 3600.0}
 TEE_RANGE_ORIENTATION_DRIFT_DEG = 0.5
 STATIC_CAPTURE_SPAWN_GRACE_S = 10.0
 STATIC_CAPTURE_RESTART_GRACE_S = 120.0
@@ -2804,7 +2805,7 @@ def action_commands(
     confirmed box in this arm's pixels: the gain screen measures its hitting zone
     there (P7-15).
     """
-    if action not in ACTION_LABELS:
+    if action not in ACTION_LABELS or action == "internal_sync":
         raise ValueError("unknown tester action")
     if kiosk_window not in KIOSK_WINDOWS:
         raise ValueError(f"kiosk_window must be one of {', '.join(KIOSK_WINDOWS)}")
@@ -7941,6 +7942,7 @@ def create_app(
     allow_unverified_geometry: bool = False,
     tester_control_port: int = 8765,
     bind_host: str = "127.0.0.1",
+    internal_sync_clock_package: Path | None = None,
     package_manager: TesterJobManager | None = None,
     static_radar=None,
     camera_tilt_path: Path | None = None,
@@ -8133,6 +8135,24 @@ def create_app(
             live.stop()
             live_owner["guided"] = None
             guided_analyzer["value"] = None
+
+    from openflight.camera.internal_sync_routes import InternalSyncController, register
+
+    def release_for_internal_sync():
+        stop_live()
+        release_static_radar()
+
+    register(
+        app,
+        InternalSyncController(
+            root=sessions_root / "internal-sync",
+            package=internal_sync_clock_package,
+            jobs=jobs,
+            source=REPO_ROOT,
+            release=release_for_internal_sync,
+        ),
+        REPO_ROOT / "ui/public/internal-sync.html",
+    )
 
     def stop_guided_live(
         tester_id: str, epoch_id: str | None = None, arm_id: str | None = None
@@ -12314,6 +12334,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--radar-port", default=DEFAULT_RADAR_PORT, help="OPS243 serial port")
     parser.add_argument(
+        "--internal-sync-clock-package",
+        type=Path,
+        default=None,
+        help="TESTER CAPTURE ONLY: enable the reviewed RAM IWR + native OPS + camera experiment",
+    )
+    parser.add_argument(
         "--no-inclinometer", action="store_true", help="Leave the LIS3DH unread (not on a Pi)"
     )
     parser.add_argument("--inclinometer-address", type=lambda value: int(value, 0), default=0x18)
@@ -12392,6 +12418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_unverified_geometry=True,
             tester_control_port=args.port,
             bind_host=args.host,
+            internal_sync_clock_package=args.internal_sync_clock_package,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()

@@ -12,7 +12,12 @@ from openflight.capture_trigger import CaptureRequest, CaptureTriggerRouter
 class RigControl:
     """Observe native OPS events; never send an IWR capture or use a sound GPIO."""
 
-    def __init__(self, *, folder, boot_id, radar, camera, recorder, now=time.monotonic_ns):
+    def __init__(
+        self, *, folder, boot_id, radar, camera, recorder, now=time.monotonic_ns, wait_s=4
+    ):
+        if type(wait_s) is not int or not 4 <= wait_s <= 30:
+            raise ValueError("native wait must be an integer in 4..30 seconds")
+        self.wait_s = wait_s
         self.folder = Path(folder)
         self.boot_id, self.radar, self.camera = boot_id, radar, camera
         self.recorder, self.now = recorder, now
@@ -67,7 +72,7 @@ class RigControl:
             self.recorder(
                 "/dev/gpiochip0",
                 27,
-                30,
+                90,
                 self.observe_gpio,
                 boot_id=self.boot_id,
                 stop_event=self.stop,
@@ -168,7 +173,15 @@ class RigControl:
 
     def _capture(self):
         try:
-            raw = self.radar.wait_for_hardware_trigger(timeout=4, dump_grace=8)
+            raw = self.radar.wait_for_hardware_trigger(
+                timeout=self.wait_s, dump_grace=8, cancel_event=self.stop
+            )
+            if raw:
+                from ops_sample_clock import dump_summary
+
+                payload = raw.encode("ascii")
+                (self.folder / "ops-response.raw").write_bytes(payload)
+                self.emit("ops-summary.jsonl", dump_summary(payload, 6))
             self.native_capture = bool(raw)
             self.emit(
                 "ops-control.jsonl",
@@ -192,8 +205,10 @@ class RigControl:
         """Finish all owned acquisition before closing serial and camera resources."""
         try:
             if self.capture_thread is not None:
-                self.capture_thread.join(15)
+                self.capture_thread.join(self.wait_s + 11)
                 if self.capture_thread.is_alive():
+                    self.stop.set()
+                    self.radar.disconnect()
                     raise RuntimeError("OPS collector did not return within its bound")
             if getattr(self.radar, "serial", None) is not None:
                 try:

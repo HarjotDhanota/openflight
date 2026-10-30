@@ -70,6 +70,9 @@ def counter_maps(observations, build, runtime):
 class ActiveCollector(Collector):
     """Separate active-mode lifecycle; the sealed idle collector stays unchanged."""
 
+    LIFECYCLE_COMMANDS = (*CONFIGURATION, *ARM_COMMANDS, "sensorStart", "sensorStop")
+    DOUBLE_COMPLETION_COMMANDS = ("debugCfg 0", "triggerCfg 32 1 1")
+
     def __init__(self, *args, sleep, **kwargs):
         super().__init__(*args, **kwargs)
         self.sleep = sleep
@@ -84,7 +87,7 @@ class ActiveCollector(Collector):
         """Only the fixed finite profile and stop/start may change device state."""
         if self.failed:
             raise ExchangeError("uncertain connection; no recovery writes permitted")
-        if command not in (*CONFIGURATION, *ARM_COMMANDS, "sensorStart", "sensorStop"):
+        if command not in self.LIFECYCLE_COMMANDS:
             raise ValueError("command outside bounded RF clock scope")
         row = {
             "command": command,
@@ -95,7 +98,7 @@ class ActiveCollector(Collector):
         }
         self.rows.append(row)
         raw = bytearray()
-        completions = 2 if command in ("debugCfg 0", "triggerCfg 32 1 1") else 1
+        completions = 2 if command in self.DOUBLE_COMPLETION_COMMANDS else 1
         row["expected_completions"] = completions
         try:
             encoded = (command + "\n").encode("ascii")
@@ -130,6 +133,9 @@ class ActiveCollector(Collector):
         except (OSError, ValueError, TimeoutError) as error:
             self.failed, row["error"] = True, type(error).__name__
             raise ExchangeError(str(error)) from error
+        except BaseException as error:
+            self.failed, row["error"] = True, type(error).__name__
+            raise
         finally:
             row["after_ns"] = self.now()
             row["received_b64"] = base64.b64encode(raw).decode()

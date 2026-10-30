@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Internal-trigger capture · OpenFlight tester</title>
+<style>
+:root{color-scheme:dark;font-size:clamp(16px,1.8vw,22px)}*{box-sizing:border-box}body{margin:0;background:#0b1521;color:#e2edf8;font:1rem/1.5 system-ui,sans-serif}main{max-width:60rem;margin:auto;padding:1rem}h1{font-size:1.7rem;margin:.6rem 0}h2{font-size:1.2rem}a{color:#87d9ff}section{padding:1rem;background:#142236;border:1px solid #344a62;border-radius:.6rem;margin:1rem 0}.notice{border-left:.25rem solid #ffcc79;padding:.7rem 1rem;background:#29271f}.actions{display:flex;flex-wrap:wrap;gap:.7rem}button{font:inherit;min-height:3rem;padding:.55rem 1rem;color:#e2edf8;background:#254c60;border:1px solid #72cbd5;border-radius:.4rem;touch-action:manipulation;cursor:pointer}button:disabled{opacity:.5;cursor:default}#stop{background:#653035;border-color:#ed9e97}#phase{font-size:1.3rem;color:#70e3cf;font-weight:650}.muted{color:#a9bdd1}#error{color:#ffb2a5;white-space:pre-wrap}#attempts{overflow:auto;max-height:30rem;touch-action:pan-y}.attempt{border-bottom:1px solid #344a62;padding:1rem 0}.attempt a{display:inline-block;margin:.4rem .7rem .4rem 0;min-height:2.3rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}details{margin:.8rem 0}
+</style>
+<main>
+<a href="/">← Tester</a>
+<h1>Internal-trigger sensor capture</h1>
+<p>Record the IWR self-trigger, OPS self-trigger and camera frames together. Each attempt keeps the original data, including partial captures and dry swings.</p>
+<p class="notice">Timing experiment: physical sub-ms synchronization, impact timing and metric accuracy are not validated. This mode records evidence; it does not publish shot metrics to the kiosk.</p>
+<section aria-live="polite">
+<div id="phase">Loading status…</div>
+<p id="message">Checking tester configuration.</p>
+<p id="setup" class="muted"></p>
+<div class="actions">
+<button id="start" type="button">Start capture session</button>
+<button id="confirm" type="button" hidden>Confirm</button>
+<button id="stop" type="button" disabled>Stop session</button>
+</div>
+<p id="error" role="alert"></p>
+</section>
+<section id="restore" hidden><h2>Restore normal IWR boot</h2><p id="restore-message"></p><p>Keep the original saved firmware. The experiment used RAM only.</p><button id="restored" type="button">Normal switches restored; IWR USB reconnected</button></section>
+<section><h2>Sensor status</h2><div id="sensors">No attempt armed.</div><details><summary>Recorded state</summary><pre id="raw"></pre></details></section>
+<section><h2>Saved attempts</h2><p>Inspect the first two ball strikes before a larger block. “Captured” means files were saved, not that their metrics are accurate.</p><div id="attempts"></div></section>
+</main>
+<script>
+let state={}, busy=false, attemptsKey='';
+const byId=id=>document.getElementById(id);
+const phases={idle:'Ready',starting:'Preparing session',switches:'Set RAM boot switches',reset:'Press IWR RESET',loading:'Loading temporary firmware',next:'Prepare next attempt',learning_background:'Learning the empty hitting area',place_ball:'Place the ball',preparing_sensors:'Preparing OPS and camera',armed:'Armed — make one swing',saving:'Saving captures',stopped:'Stopped',failed:'Session stopped with an error',finished:'Finished'};
+const controls={switches:['switches_set','Switches set; RESET not pressed'],reset:['reset_pressed','RESET pressed; waited at least one second'],next:['next','Prepare next attempt']};
+function link(label,name){const a=document.createElement('a');a.textContent=label;a.href='/api/tester/internal-sync/file/'+encodeURIComponent(state.session_id)+'/'+name.split('/').map(encodeURIComponent).join('/');return a;}
+function render(){
+ const phase=state.phase||'idle',action=controls[phase];
+ byId('phase').textContent=phases[phase]||phase;
+ byId('message').textContent=state.message||'';
+ byId('setup').textContent=state.configured?'Camera: 640×400, 300 fps requested, 300 µs exposure requested, gain 4. Sound GPIO is not used.':'Enable this experiment by starting the tester with --internal-sync-clock-package and the reviewed firmware package.';
+ byId('start').disabled=busy||!state.configured||!['idle','stopped','failed','finished'].includes(phase)||Boolean(state.normal_boot_restore_needed);
+ byId('confirm').hidden=!action;byId('confirm').disabled=busy;byId('confirm').textContent=action?action[1]:'Confirm';
+ byId('stop').disabled=busy||['idle','stopped','failed','finished'].includes(phase);
+ byId('restore').hidden=!state.normal_boot_restore_needed;
+ byId('restore-message').textContent=state.restore_instructions||'';
+ const iwr=state.iwr;
+ byId('sensors').textContent=iwr?'IWR: '+iwr.capture.active+' active; detector '+iwr.trigger.enabled+'; latched '+iwr.trigger.latched+'; ball '+iwr.ball.state+' at bin '+iwr.ball.bin+'. OPS and camera arm after this attempt’s ball lock.':'No live IWR state yet.';
+ byId('raw').textContent=JSON.stringify(state,null,2);
+ const list=byId('attempts'),key=JSON.stringify([state.session_id,state.attempts]);
+ if(key===attemptsKey)return;attemptsKey=key;list.replaceChildren();
+ for(const item of state.attempts||[]){const row=document.createElement('div');row.className='attempt';const title=document.createElement('strong');title.textContent=item.name+' · '+(item.status==='captured_unqualified'?'Captured · timing unvalidated':'Partial capture');row.append(title);if(item.error){const p=document.createElement('p');p.textContent=item.error;row.append(p);}row.append(document.createElement('br'),link('Attempt record',item.name+'/RESULT.json'));if(item.iwr_shot_id)row.append(link('IWR held result',item.name+'/iwr-held.json'),link('IWR raw dump',item.name+'/iwr-dump.bin'));for(const clip of item.camera?.clips||[])row.append(link('Camera timing',item.name+'/ops-camera/'+clip.metadata),link('Camera frames',item.name+'/ops-camera/'+clip.metadata.replace(/metadata\.json$/,'frames.npz')));list.append(row);}
+}
+async function refresh(){try{const response=await fetch('/api/tester/internal-sync',{cache:'no-store'});if(!response.ok)throw Error('Status request failed');state=await response.json();render();}catch(error){byId('error').textContent=error.message;}}
+async function post(path,payload){if(busy)return;busy=true;render();byId('error').textContent='';try{const response=await fetch('/api/tester/internal-sync/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');await refresh();}catch(error){byId('error').textContent=error.message;}finally{busy=false;render();}}
+byId('start').onclick=()=>post('start',{});
+byId('confirm').onclick=()=>post('command',{command:controls[state.phase]?.[0],phase_token:state.phase_token});
+byId('stop').onclick=()=>post('command',{command:'stop',phase_token:state.phase_token});
+byId('restored').onclick=()=>post('command',{command:'restored',phase_token:state.phase_token});
+let drag=null,suppressClick=false;
+const main=document.querySelector('main');
+main.addEventListener('dragstart',event=>event.preventDefault());
+main.addEventListener('pointerdown',event=>{
+ if(event.pointerType!=='mouse'||event.button!==0)return;
+ const list=event.target.closest('#attempts'),element=list&&list.scrollHeight>list.clientHeight?list:document.scrollingElement;
+ drag={pointer:event.pointerId,y:event.clientY,top:element.scrollTop,element,moved:false};suppressClick=false;
+});
+main.addEventListener('pointermove',event=>{
+ if(!drag||event.pointerId!==drag.pointer)return;
+ const delta=event.clientY-drag.y;if(!drag.moved&&Math.abs(delta)<16)return;
+ drag.moved=true;main.setPointerCapture(event.pointerId);drag.element.scrollTop=drag.top-delta;event.preventDefault();
+});
+function endDrag(event){if(!drag||event.pointerId!==drag.pointer)return;suppressClick=drag.moved;drag=null;if(main.hasPointerCapture(event.pointerId))main.releasePointerCapture(event.pointerId);}
+main.addEventListener('pointerup',endDrag);main.addEventListener('pointercancel',endDrag);
+main.addEventListener('click',event=>{if(suppressClick){event.preventDefault();event.stopPropagation();suppressClick=false;}},true);
+refresh();setInterval(refresh,750);
+</script>
+</html>

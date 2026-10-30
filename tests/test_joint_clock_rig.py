@@ -96,6 +96,26 @@ def test_boot_or_initial_high_refuses_preparation(tmp_path):
     assert not rig.gpio_ready.is_set()
 
 
+@pytest.mark.parametrize("complete", [False, True])
+def test_native_capture_requires_complete_original_ops_arrays(tmp_path, complete):
+    raw = json.dumps(
+        {
+            "I": [2048] * (4096 if complete else 10),
+            "Q": [2048] * 4096,
+            "sample_time": 1.0,
+            "trigger_time": 1.0256,
+        }
+    )
+    rig = control(tmp_path, SimpleNamespace(notify_capture_request=lambda _: True))
+    rig.radar = SimpleNamespace(
+        wait_for_hardware_trigger=lambda **_: raw, last_hardware_trigger_outcome="received"
+    )
+    rig._capture()
+    assert (tmp_path / "ops-response.raw").read_text() == raw
+    assert rig.native_capture == complete
+    assert bool(rig.errors) != complete
+
+
 @pytest.mark.parametrize("accept", [False, None])
 def test_camera_rejection_or_invalid_acknowledgement_marks_trial_failed(tmp_path, accept):
     camera = SimpleNamespace(notify_capture_request=lambda _item: accept, stop=lambda: None)
