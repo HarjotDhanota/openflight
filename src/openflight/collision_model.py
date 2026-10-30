@@ -1071,7 +1071,7 @@ def evaluate(
         spin = replace(spin, note=f"{spin.note}; {location_note}" if spin.note else location_note)
         axis = replace(axis, note=f"{axis.note}; {location_note}" if axis.note else location_note)
         inputs[missing] = Input(None, reason=location_note)
-    if location and axis.present:
+    if location and (axis.present or spin.present):
         given = {"impact_offset_mm": impact_offset_mm, "impact_height_mm": impact_height_mm}
         inputs.update({name: given[name] for name in location})
     spin_index = _spin_index(club, spin_input, club_speed_mph, spin_loft)
