@@ -20,6 +20,7 @@ simulator's on measured inputs only, else not measured (D17; owner decision 1).
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict, replace
 
 # model_metrics adds these models' metrics to the shot-metric catalogue on import
 from openflight import (  # noqa: F401  pylint: disable=unused-import
@@ -30,7 +31,7 @@ from openflight import (  # noqa: F401  pylint: disable=unused-import
 )
 from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.flight import STATUS_MODEL_GEOMETRY as FLIGHT_STATUS_MODEL_GEOMETRY, compute_flight
-from openflight.horizontal_frame import MIXED
+from openflight.horizontal_frame import MIXED, TARGET_LINE, UNIT_BORESIGHT, to_reported_deg
 from openflight.launch_monitor import (
     CARRY_CALCULATED,
     CARRY_ESTIMATED,
@@ -464,6 +465,33 @@ def _full_impact_club_speed_input(shot: Shot) -> collision_model.Input:
     )
 
 
+def _normalize_collision_horizontal_inputs(inputs: dict, target_line) -> tuple[dict, dict | None]:
+    """Use the shot's saved aim to put compatible horizontal inputs in one frame."""
+    names = ("club_path", "launch_horizontal")
+    given = [inputs[name] for name in names]
+    snapshot = target_line if isinstance(target_line, dict) else {}
+    offset = snapshot.get("horizontal_offset_deg")
+    if (
+        not all(value.present for value in given)
+        or {value.frame for value in given} != {UNIT_BORESIGHT, TARGET_LINE}
+        or snapshot.get("frame") != TARGET_LINE
+        or not _finite(offset)
+    ):
+        return inputs, None
+    normalized = dict(inputs)
+    for name, value in zip(names, given, strict=True):
+        if value.frame == UNIT_BORESIGHT:
+            normalized[name] = replace(
+                value, value=float(to_reported_deg(value.value, offset)), frame=TARGET_LINE
+            )
+    return normalized, {
+        "output_frame": TARGET_LINE,
+        "offset_deg": float(offset),
+        "target_line_revision": snapshot.get("revision"),
+        "original_inputs": {name: asdict(value) for name, value in zip(names, given, strict=True)},
+    }
+
+
 def _low_point_input(shot: Shot) -> collision_model.Input | None:
     """The arc's low point (contact note only); None without camera club data."""
     from openflight.club_arc import NO_CAMERA_DELIVERY  # noqa: PLC0415
@@ -614,14 +642,19 @@ def _attach_collision_model(shot: Shot) -> None:
 
     Each run starts from scratch, so a late re-run never keeps an earlier run's values.
     """
+    inputs, conversion = _normalize_collision_horizontal_inputs(
+        _collision_inputs(shot), shot.target_line
+    )
     result = collision_model.evaluate(
         club=shot.club,
         handedness=server.shot_handedness(shot),
         low_point_distance_mm=_low_point_input(shot),
-        **_collision_inputs(shot),
+        **inputs,
     )
     metrics = result.metrics
     shot.collision_model = result.to_dict()
+    if conversion is not None:
+        shot.collision_model["horizontal_frame_conversion"] = conversion
     # how the attack angle was chosen, every route's refusal kept (decision 3)
     sources = dict(shot.input_sources or {})
     sources["attack_angle"] = attack_angle_resolution(shot).to_dict()
