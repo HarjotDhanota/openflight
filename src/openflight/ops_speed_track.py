@@ -105,10 +105,14 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
     wavelength = float(constants.get("WAVELENGTH_M") or 0.01243)
     window_ms = 1000.0 * window / sample_rate
     if impact.source == "ops_transition":
-        gap = impact.transition_gap_ms if _finite(impact.transition_gap_ms) else 0.0
-        uncertainty = max(0.5 * gap, 500.0 * step / sample_rate)
+        gap = impact.transition_gap_ms
+        if not _finite(gap) or gap <= 0.0:
+            return None
+        uncertainty = max(0.5 * (gap + window_ms), 500.0 * step / sample_rate)
+        uncertainty_basis = "conditional union of the transition FFT supports"
     else:
         uncertainty = SOUND_TRIGGER_IMPACT_TOLERANCE_MS
+        uncertainty_basis = "unmeasured trigger tolerance"
     outbound = [
         [float(reading.timestamp_ms), float(reading.speed_mph)]
         for reading in timeline.readings
@@ -152,6 +156,8 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         "impact_ms": float(impact_ms),
         "impact_source": impact.source,
         "impact_uncertainty_ms": uncertainty,
+        "impact_uncertainty_basis": uncertainty_basis,
+        "impact_physical_timing_qualified": False,
         "window_ms": window_ms,
         "radial_resolution_mph": 0.5 * (sample_rate / fft_size) * (wavelength / 2.0) / MPH_TO_MPS,
         "canonical_radial_mph": float(processed.ball_speed_mph),

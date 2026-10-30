@@ -37,8 +37,8 @@ def test_ops_speed_track_keeps_outbound_readings_around_impact_on_the_ops_clock(
     assert track["clock"] == "ops_capture"
     assert track["impact_ms"] == 40.0
     assert track["impact_source"] == "ops_transition"
-    # half the club-to-ball transition gap
-    assert track["impact_uncertainty_ms"] == pytest.approx(1.0)
+    # The gap is between window centres; both windows still have finite support.
+    assert track["impact_uncertainty_ms"] == pytest.approx(1.0 + WINDOW_MS / 2)
     assert track["window_ms"] == pytest.approx(WINDOW_MS)
     assert track["radial_resolution_mph"] == pytest.approx(0.0509, abs=1e-3)
     assert track["canonical_radial_mph"] == 118.0
