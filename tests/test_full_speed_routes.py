@@ -225,6 +225,21 @@ def test_full_club_speed_recovers_the_head_speed_from_one_reading(before_contact
     assert "experimental" in result["note"]
 
 
+def test_club_specific_window_is_used_for_projection_time_and_contact_overlap():
+    swing = Swing()
+    window_ms = 256 / 30
+    good = _club_track(swing, 8)
+    good["club_reading"].update(window_ms=window_ms, window_start_ms=50 - 8 - window_ms / 2)
+    result = _club(swing, ops_track=good)
+    assert result["status"] == EXPERIMENTAL, result["reason"]
+    assert result["reading"]["time_before_contact_ms"] == pytest.approx(8)
+    crossing = _club_track(swing, 4)
+    crossing["club_reading"].update(window_ms=window_ms, window_start_ms=50 - 4 - window_ms / 2)
+    result = _club(swing, ops_track=crossing)
+    assert result["status"] == NOT_MEASURED
+    assert "window crosses contact" in result["reason"]
+
+
 @pytest.mark.parametrize("handed", ["RH", "LH"])
 @pytest.mark.parametrize("mirrored", [False, True])
 def test_full_club_speed_uses_physical_direction_for_each_hand_and_image(handed, mirrored):

@@ -16,6 +16,7 @@ from scipy.signal import butter, find_peaks, sosfiltfilt
 
 from ..clubs import ClubType
 from ..launch_monitor import SPIN_CONFIDENCE_HIGH
+from .motion_tracks import POLICY, DopplerMotion, analyze
 from .multitaper import estimate_multitaper_spin, repair_clipped_iq
 from .quality import CaptureQuality, assess_capture
 from .types import (
@@ -186,7 +187,7 @@ class RollingBufferProcessor:
     IMPACT_TRANSITION_MIN_DELTA_MPH = 15.0
     IMPACT_TRANSITION_MAX_GAP_MS = 25.0
 
-    def __init__(self, sample_rate: int = 30000):
+    def __init__(self, sample_rate: int = 30000, *, legacy_speed_selection: bool = False):
         """Initialize processor with pre-computed window function.
 
         Args:
@@ -195,6 +196,7 @@ class RollingBufferProcessor:
         """
         self.SAMPLE_RATE = sample_rate
         self.hanning_window = np.hanning(self.WINDOW_SIZE)
+        self.legacy_speed_selection = legacy_speed_selection
 
     def replay_config(
         self, *, club_type: ClubType, spin_prior_policy: str, resolved_spin_prior_rpm: float | None
@@ -219,6 +221,9 @@ class RollingBufferProcessor:
             "spin_prior_policy": spin_prior_policy,
             "resolved_spin_prior_rpm": resolved_spin_prior_rpm,
             "constants": constants,
+            "speed_selection": "legacy_v1" if self.legacy_speed_selection else "doppler_paths_v1",
+            "speed_window_samples": self.WINDOW_SIZE if self.legacy_speed_selection else 256,
+            "motion_policy": None if self.legacy_speed_selection else dict(POLICY),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -2006,6 +2011,52 @@ class RollingBufferProcessor:
         nearby = [s for s in speeds if abs(s - ball_bin) <= 2.0]
         return max(nearby) if nearby else float(ball_bin)
 
+    def analyze_motion(self, capture: IQCapture) -> DopplerMotion:
+        """Keep club-only motion for training, independent of normal-shot acceptance."""
+        return analyze(self, capture)
+
+    def _process_motion_capture(
+        self, capture, config, expected_spin_rpm, expected_spin_for_ball_speed
+    ):
+        motion = self.analyze_motion(capture)
+        if motion.ball is None:
+            logger.info("[PROCESSOR] No persistent flight; club motion retained by analyze_motion")
+            return None
+        timeline = self.process_overlapping(capture)
+        half_window_ms = motion.window_samples / self.SAMPLE_RATE * 500
+        ball_timestamp = motion.ball.timestamp_ms - half_window_ms
+        if expected_spin_rpm is None and expected_spin_for_ball_speed is not None:
+            expected_spin_rpm = expected_spin_for_ball_speed(motion.ball.speed_mph)
+        spin = self.detect_spin_multitaper(
+            capture, motion.ball.speed_mph, ball_timestamp, expected_spin_rpm=expected_spin_rpm
+        )
+        impact_timeline = SpeedTimeline(
+            readings=[
+                reading
+                for reading in timeline.readings
+                if reading.timestamp_ms >= ball_timestamp
+                or abs(reading.speed_mph - motion.ball.speed_mph)
+                > self.BALL_SPEED_MATCH_TOLERANCE_MPH
+            ],
+            sample_rate_hz=timeline.sample_rate_hz,
+            capture=capture,
+        )
+        club_speed = motion.club.speed_mph if motion.club else None
+        return ProcessedCapture(
+            timeline=timeline,
+            ball_speed_mph=motion.ball.speed_mph,
+            ball_timestamp_ms=ball_timestamp,
+            club_speed_mph=club_speed,
+            club_timestamp_ms=(motion.club.timestamp_ms - half_window_ms if motion.club else None),
+            spin=spin,
+            capture=capture,
+            impact=self.estimate_impact(
+                impact_timeline, motion.ball.speed_mph, club_speed, capture
+            ),
+            processor_config=self._resolve_replay_config(config, expected_spin_rpm),
+            motion=motion,
+        )
+
     def process_capture(
         self,
         capture: IQCapture,
@@ -2037,6 +2088,10 @@ class RollingBufferProcessor:
             resolved_spin_prior_rpm=None,
         )
         # Use non-overlapping (standard) processing to find ball speed.
+        if not self.legacy_speed_selection:
+            return self._process_motion_capture(
+                capture, frozen_processor_config, expected_spin_rpm, expected_spin_for_ball_speed
+            )
         # Ball speed = the most-repeated speed across independent windows,
         # NOT the maximum. A single FFT window with a noise spike at 200 mph
         # would poison max(), but mode-based detection ignores it because

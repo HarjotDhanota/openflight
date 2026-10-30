@@ -6,6 +6,10 @@ e31b3025, and an independent re-measurement made outside the processor from the
 same I/Q: the club trace's ridge in a 4.3 ms window ending about 4.5 ms before the
 ball line is established on a 256-sample spectrogram (``independent_*``).
 
+These assertions replay the legacy selection policy explicitly. The new default
+trajectory policy is graded against known I/Q in test_ops_motion_tracks; it does
+not promise numerical equality with these historical selections.
+
 At e31b3025 the club pick was anchored on the *strongest* ball reading. When that
 reading came long after the ball first appeared, the pick landed after impact
 (shot 20: 33 mph read at 82 ms, the ridge before the ball is ~60 mph) or fell back
@@ -60,7 +64,7 @@ def archive():
 
 @pytest.fixture(scope="module")
 def processed(archive):
-    processor = RollingBufferProcessor()
+    processor = RollingBufferProcessor(legacy_speed_selection=True)
     club_type = ClubType(str(archive["club_type"]))
     results = {}
     for index, shot in enumerate(archive["shot"]):

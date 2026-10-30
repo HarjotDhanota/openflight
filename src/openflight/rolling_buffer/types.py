@@ -7,7 +7,10 @@ the processed speed timeline, and spin detection results.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from .motion_tracks import DopplerMotion
 
 from ..launch_monitor import SPIN_CONFIDENCE_RELIABLE
 
@@ -359,6 +362,7 @@ class ProcessedCapture:
     capture: Optional[IQCapture] = None
     impact: Optional[ImpactEstimate] = None
     processor_config: Optional[dict] = None
+    motion: Optional["DopplerMotion"] = None
 
     @property
     def impact_timestamp_ms(self) -> Optional[float]:

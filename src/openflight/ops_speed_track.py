@@ -56,6 +56,16 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         if _finite(club_ms) and _finite(club_mph)
         else None
     )
+    motion = getattr(processed, "motion", None)
+    if club_reading is not None and motion is not None and motion.club is not None:
+        observation = motion.club.peaks[motion.club.reference_index]
+        club_reading = {
+            "window_start_ms": float(
+                observation.time_ms - 500 * motion.window_samples / sample_rate
+            ),
+            "window_ms": float(1000 * motion.window_samples / sample_rate),
+            "radial_mph": float(observation.speed_mph),
+        }
     return {
         "clock": "ops_capture",
         "timestamps": "fft_window_start_ms_from_capture_start",

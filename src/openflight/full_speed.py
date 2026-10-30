@@ -1079,7 +1079,7 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
             walk_back_ms = sound_travel_time_ns(ball, mic, speed_m_s=SPEED_OF_SOUND_M_S) / 1e6
     elif impact_source != "ops_transition":
         return refused(f"impact source {impact_source!r} is not a measured impact")
-    window_ms = float(ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
+    window_ms = float(reading.get("window_ms") or ops_track.get("window_ms") or DEFAULT_WINDOW_MS)
     centre_ms = float(reading["window_start_ms"]) + 0.5 * window_ms
     before_ms = float(impact_ms) - walk_back_ms - centre_ms
     if before_ms < 0.0:
