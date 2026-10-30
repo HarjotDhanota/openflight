@@ -719,7 +719,7 @@ def _inverted_face_and_loft(
     )
     if solved is None:
         gone = _not_measured(
-            "deg", "launch along the club's direction: no D plane", SOURCE_INVERSION
+            "deg", "launch outside or unresolved in the fitted inverse model", SOURCE_INVERSION
         )
         return gone, gone, frame
     face_value, loft_value = solved
