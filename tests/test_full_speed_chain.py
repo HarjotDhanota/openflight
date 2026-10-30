@@ -112,18 +112,19 @@ def _with_head_track(shot, swing=Swing(), before_contact_ms=6.0):
     return shot
 
 
-def test_the_full_club_speed_and_smash_come_from_the_head_track(fusion_geometry):
+def test_reading_time_full_club_speed_does_not_supply_full_impact_smash(fusion_geometry):
     shot = _attach(_with_head_track(_shot()))
 
     club = shot.club_speed_full
     assert club["status"] == EXPERIMENTAL, club["reason"]
     assert club["value_mph"] >= club["reading"]["radial_mph"]
     smash = shot.smash_factor_full
-    assert smash["status"] == EXPERIMENTAL
-    assert smash["value"] == pytest.approx(shot.ball_speed_full["value_mph"] / club["value_mph"])
+    assert smash["status"] == NOT_MEASURED
+    assert smash["value"] is None
+    assert "impact" in smash["reason"]
     records = shot_metrics.records(shot.to_dict())
     assert records["club_speed_full"]["status"] == EXPERIMENTAL
-    assert records["smash_factor_full"]["status"] == EXPERIMENTAL
+    assert records["smash_factor_full"]["status"] == NOT_MEASURED
 
 
 def test_without_a_head_track_the_full_club_speed_says_why(fusion_geometry):

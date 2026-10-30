@@ -524,7 +524,7 @@ def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
     if full and status not in (*MODEL_LABELS, collision_model.LABEL_MEASURED, LABEL_EXPERIMENTAL):
         why = full.get("reason") or f"unsupported full ball speed status {status!r}"
         return collision_model.Input(None, reason=f"full ball speed not measured ({why})")
-    if full.get("referred_to") not in (None, "separation"):
+    if full.get("referred_to") not in (None, "separation", "launch"):
         return collision_model.Input(None, reason="full ball speed is not referred to separation")
     if _finite(speed) and speed > 0:
         if status in (collision_model.STATUS_ESTIMATED, LABEL_EXPERIMENTAL):

@@ -451,8 +451,13 @@ def test_full_club_speed_refuses_a_grazing_direction():
     assert "ill-conditioned" in result["reason"]
 
 
-def _full(value):
-    return {"status": CALCULATED, "value_mph": value}
+def _full(value, *, club=False):
+    return {
+        "status": CALCULATED,
+        "value_mph": value,
+        "referred_to": "impact" if club else "separation",
+        "reference_point": "clubhead" if club else "ball",
+    }
 
 
 def _not(reason):
@@ -460,7 +465,7 @@ def _not(reason):
 
 
 def test_smash_is_calculated_when_both_speeds_are_full():
-    result = evaluate_full_smash(_full(130.0), _full(92.0))
+    result = evaluate_full_smash(_full(130.0), _full(92.0, club=True))
     assert result["status"] == CALCULATED
     assert result["value"] == pytest.approx(130.0 / 92.0)
     assert "smash_factor" in result["source"]
@@ -474,7 +479,7 @@ def test_smash_is_not_measured_when_the_club_speed_is_radial():
 
 
 def test_smash_is_not_measured_when_the_ball_speed_is_radial():
-    result = evaluate_full_smash(_not("x"), _full(92.0))
+    result = evaluate_full_smash(_not("x"), _full(92.0, club=True))
     assert result["status"] == NOT_MEASURED
     assert "ball speed is not a full speed" in result["reason"]
 
