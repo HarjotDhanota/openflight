@@ -30,6 +30,7 @@ import logging
 import math
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -144,7 +145,7 @@ class _IwrTap:
     @contextmanager
     def installed(self) -> Iterator[None]:
         """Wrap the replay's IWR estimator and its rebuilt-context camera call."""
-        original_iwr = raw_replay.replay_iwr_capture_bytes
+        original_iwr = raw_replay.replay_iwr_shot_bytes
         original_camera = raw_replay.process_camera_fusion
 
         def tapped_iwr(raw, calibration, **kwargs):
@@ -152,21 +153,21 @@ class _IwrTap:
                 raw + repr((vars(calibration), sorted(kwargs.items()))).encode("utf-8")
             ).hexdigest()
             if key not in self.results:
-                self.results[key] = (*original_iwr(raw, calibration, **kwargs), calibration)
+                self.results[key] = (original_iwr(raw, calibration, **kwargs), calibration)
             self.last = self.results[key]
-            return self.last[:2]
+            return self.last[0]
 
         def tapped_camera(context, archive):
             # only the recomputed_radar_context call runs in this module's namespace
             self.recomputed_context = dict(context)
             return original_camera(context, archive)
 
-        raw_replay.replay_iwr_capture_bytes = tapped_iwr
+        raw_replay.replay_iwr_shot_bytes = tapped_iwr
         raw_replay.process_camera_fusion = tapped_camera
         try:
             yield
         finally:
-            raw_replay.replay_iwr_capture_bytes = original_iwr
+            raw_replay.replay_iwr_shot_bytes = original_iwr
             raw_replay.process_camera_fusion = original_camera
 
 
@@ -198,14 +199,15 @@ class _ReplayedIwrRuntime:
             if self._matched
             else None
         )
-        measurement, club_path = (self._result or (None, None))[:2]
+        if self._result is not None:
+            return replace(self._result[0], capture=capture)
         withheld = (
             "tee_range_unresolved"
             if self._matched and self.calibration.tee_range_m is None
             else None
         )
         return SimpleNamespace(
-            capture=capture, measurement=measurement, club_path=club_path, withheld_reason=withheld
+            capture=capture, measurement=None, club_path=None, withheld_reason=withheld
         )
 
 
@@ -305,7 +307,7 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
 
     runtime_config = mapping(iwr_event.get("runtime_config"))
     calibration = (
-        iwr_result[2] if iwr_result is not None else _effective_calibration(runtime_config)
+        iwr_result[1] if iwr_result is not None else _effective_calibration(runtime_config)
     )
     camera_config = dict(mapping(config.get("camera_capture")))
     metadata = dict(mapping(camera_event.get("metadata")))

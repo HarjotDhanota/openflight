@@ -3,12 +3,49 @@
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
 from openflight import pipeline_check as check
 from scripts.analysis import check_pipeline as runner
 from tests.session_fixtures import FLIGHT_HORIZONTAL_DEG, LAUNCH_DEG, TESTER, capture_tree
+
+
+def test_iwr_tap_preserves_live_range_result_and_reuses_identical_inputs(monkeypatch):
+    from openflight.iwr6843.runtime import IWR6843ShotResult
+
+    calls = []
+    result = IWR6843ShotResult(
+        capture=None,
+        measurement=None,
+        withheld_reason="angle ambiguous",
+        launch_range=object(),
+        ball_range=object(),
+    )
+
+    def replay(raw, calibration, **kwargs):
+        calls.append((raw, calibration, kwargs))
+        return result
+
+    monkeypatch.setattr(runner.raw_replay, "replay_iwr_shot_bytes", replay)
+    calibration = SimpleNamespace(tee_range_m=None)
+    tap = runner._IwrTap()
+    with tap.installed():
+        for _ in range(2):
+            assert (
+                runner.raw_replay.replay_iwr_shot_bytes(b"original", calibration, tee_range_m=1.6)
+                is result
+            )
+    assert len(calls) == 1
+    assert tap.last == (result, calibration)
+    runtime = runner._ReplayedIwrRuntime(calibration, tap.last, {}, matched=True)
+    handed = runtime.process_shot()
+    assert handed.launch_range is result.launch_range
+    assert handed.ball_range is result.ball_range
+    assert handed.withheld_reason == "angle ambiguous"
+    assert handed.capture.valid
+    assert runner.raw_replay.replay_iwr_shot_bytes is replay
 
 
 def test_the_setup_ball_argument_is_three_positive_numbers():
