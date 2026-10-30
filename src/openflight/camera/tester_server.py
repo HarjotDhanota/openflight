@@ -11210,6 +11210,9 @@ def create_app(
                 lens_settings = lens_store.settings(lens_id)
                 params = replace(params, arm_id=free_play_resolution(payload, lens_settings))
             mode = native_free_play.capture_mode(payload or {}, action, internal_sync_clock_package)
+            policy = native_free_play.trigger_policy.selection(
+                payload or {}, action, internal_sync_clock_package
+            )
             native_controls.require_restored()
             club = first_club(payload) if action == "free_play" else CLUB
             # the page on the unit's own screen shows free play's kiosk in its window
@@ -11314,7 +11317,7 @@ def create_app(
                     commands[0].append("--tester-geometry-unverified")
                 if mode == "native_internal":
                     native_control = native_free_play.configure_command(
-                        commands[0], internal_sync_clock_package, run_id
+                        commands[0], internal_sync_clock_package, run_id, policy
                     )
             busy = _range_resources_busy(live_yields=True)
             if busy:
@@ -11371,6 +11374,10 @@ def create_app(
                             free_play_ladder.write_json(run_dir / free_play_ladder.PLAN_NAME, plan)
                     active_runtime_dir["path"] = run_dir
                 if action == "free_play":
+                    (run_dir / "trigger-policy.json").write_text(
+                        json.dumps(native_free_play.trigger_policy.snapshot(policy), indent=2)
+                        + "\n"
+                    )
                     free_play.begin(
                         params.tester_id,
                         run_id,
@@ -11380,7 +11387,7 @@ def create_app(
                         kiosk_window=kiosk_window,
                     )
                 if native_control is not None:
-                    native_controls.prepare(native_control, run_id)
+                    native_controls.prepare(native_control, run_id, policy)
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
                 if action == "free_play":

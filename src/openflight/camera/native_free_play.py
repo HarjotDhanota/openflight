@@ -5,23 +5,21 @@ from pathlib import Path
 
 from flask import jsonify, request
 
+from openflight.camera import trigger_policy
 from openflight.camera.internal_sync_routes import SESSION, InternalSyncController
 
 
 def capture_mode(payload, action, package):
     """An explicit test selection; ordinary free play keeps its existing default."""
-    mode = payload.get("capture_mode", "sound")
-    if mode not in {"sound", "native_internal"}:
-        raise ValueError("capture_mode must be sound or native_internal")
-    if mode == "native_internal" and (action != "free_play" or package is None):
-        raise ValueError("native internal capture requires configured tester free play")
-    return mode
+    policy = trigger_policy.selection(payload, action, package)
+    return "sound" if policy == "sound" else "native_internal"
 
 
-def configure_command(command, package, run_id):
+def configure_command(command, package, run_id, policy="independent"):
     """Extend the actual kiosk command; preserve setup, optics, club and session paths."""
     run_dir = Path(command[command.index("--log-dir") + 1])
     control = run_dir / "native-sync" / run_id
+    trigger_policy.validate(policy, package=package)
     command.extend(
         [
             "--trigger",
@@ -30,6 +28,8 @@ def configure_command(command, package, run_id):
             str(Path(package).resolve()),
             "--tester-native-sync-control",
             str(control),
+            "--tester-trigger-policy",
+            policy,
             "--camera-capture-pre-ms",
             "200",
             "--camera-capture-post-ms",
@@ -67,9 +67,11 @@ class FreePlayNativeControls:
             raise ValueError("Invalid retained native free-play identity")
         self.controller.session = run_id
 
-    def prepare(self, control, run_id):
+    def prepare(self, control, run_id, policy="independent"):
         """The normal setup admission and run files must already have been written."""
+        settings = trigger_policy.snapshot(policy)
         control.mkdir(parents=True, exist_ok=False)
+        (control / "trigger-policy.json").write_text(json.dumps(settings, indent=2) + "\n")
         (control / "status.json").write_text(
             json.dumps(
                 {
@@ -77,6 +79,7 @@ class FreePlayNativeControls:
                     "message": "Starting the normal fusion kiosk with native capture.",
                     "attempts": [],
                     "physical_timing_qualified": False,
+                    "trigger_policy": settings,
                 }
             )
             + "\n"
@@ -106,7 +109,9 @@ class FreePlayNativeControls:
 
         @app.get("/api/tester/free-play/native-sync")
         def native_status():
-            return jsonify(self.status())
+            return jsonify(
+                {**self.status(), "trigger_policies": trigger_policy.capabilities(self.package)}
+            )
 
         @app.post("/api/tester/free-play/native-sync/command")
         def native_command():

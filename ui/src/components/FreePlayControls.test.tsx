@@ -13,6 +13,7 @@ describe('Free-play status', () => {
       <FreePlayStatus state={{ enabled: true, phase: 'recording', geometry_unverified: true }} onAction={noop} />
     );
     expect(html).toContain('Stop &amp; package');
+    expect(html).toContain('Sound baseline: recording');
     expect(html).toContain('Geometry unverified');
   });
   it('prevents a second stop while packaging', () => {

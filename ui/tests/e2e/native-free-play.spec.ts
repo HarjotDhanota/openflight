@@ -23,6 +23,7 @@ for (const viewport of KIOSK_VIEWPORTS) {
             enabled: true,
             phase,
             phase_token: 'owned-attempt',
+            trigger_policy: { label: 'Hybrid confirmation (OPS retention)' },
             message:
               phase === 'next'
                 ? 'Remove the ball, leave the hitting area empty, then prepare the next attempt.'
@@ -59,7 +60,9 @@ for (const viewport of KIOSK_VIEWPORTS) {
       }
       await page.screenshot({ path: test.info().outputPath('native-kiosk-next.png') });
       await prepare.tap();
-      await expect(page.getByText('Armed: make one swing.', { exact: true })).toBeVisible();
+      await expect(
+        page.getByText('Hybrid confirmation (OPS retention): Armed: make one swing.', { exact: true })
+      ).toBeVisible();
       expect(requests).toEqual([{ phase_token: 'owned-attempt' }]);
       await expect(prepare).toHaveCount(0);
       await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
@@ -79,6 +82,39 @@ for (const viewport of KIOSK_VIEWPORTS) {
         route.fulfill({
           json: {
             configured: true,
+            trigger_policies: [
+              { id: 'sound', label: 'Sound baseline', available: true, reason: 'Existing sound capture route.' },
+              {
+                id: 'independent',
+                label: 'Independent native detectors',
+                available: true,
+                reason: 'Each radar retains independently.',
+              },
+              {
+                id: 'ops_led',
+                label: 'OPS-led (IWR association only)',
+                available: true,
+                reason: 'OPS cannot initiate IWR capture.',
+              },
+              {
+                id: 'hybrid',
+                label: 'Hybrid confirmation (OPS retention)',
+                available: true,
+                reason: 'Retain promptly; confirm by clock/coverage.',
+              },
+              {
+                id: 'iwr_led',
+                label: 'IWR-led (recommended experiment)',
+                available: false,
+                reason: 'IWR notification exceeds OPS prehistory.',
+              },
+              {
+                id: 'common_hardware',
+                label: 'Common hardware trigger',
+                available: false,
+                reason: 'No verified common wiring.',
+              },
+            ],
             enabled: true,
             phase: stopped ? 'stopped' : 'reset',
             phase_token: stopped ? 'final-identity' : 'reset-identity',
@@ -97,7 +133,13 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect(page.locator('#native-free-play-choice')).toBeVisible();
       await expect(page.locator('#native-free-play-message')).toContainText('Press RESET once');
       await expect(page.locator('#native-free-play-restored')).toBeHidden();
-      await page.locator('#native-free-play').check();
+      await expect(page.locator('#native-free-play')).toHaveValue('sound');
+      await expect(page.locator('#native-free-play option[value="iwr_led"]')).toBeDisabled();
+      await expect(page.locator('#native-free-play option[value="common_hardware"]')).toBeDisabled();
+      await page.locator('#native-free-play').selectOption('ops_led');
+      await expect(page.locator('#trigger-policy-reason')).toContainText('OPS cannot initiate IWR capture.');
+      await page.waitForTimeout(1100);
+      await expect(page.locator('#native-free-play')).toHaveValue('ops_led');
       await page.locator('#native-free-play-confirm').tap();
       expect(requests).toEqual([{ command: 'reset_pressed', phase_token: 'reset-identity' }]);
       stopped = true;

@@ -5,6 +5,7 @@ interface NativeState {
   phase?: string;
   phase_token?: string;
   message?: string;
+  trigger_policy?: { label: string };
 }
 
 export function NativeSyncControls() {
@@ -49,7 +50,10 @@ export function NativeSyncControls() {
   }
   return (
     <div className="native-sync" aria-label="Native capture controls">
-      <span>{state.message}</span>
+      <span>
+        {state.trigger_policy?.label ? `${state.trigger_policy.label}: ` : ''}
+        {state.message}
+      </span>
       {state.phase === 'next' ? (
         <button type="button" disabled={busy} onClick={next} aria-label="Area empty; prepare next attempt">
           Prepare capture
