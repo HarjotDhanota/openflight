@@ -456,7 +456,7 @@ def test_a_non_finite_input_is_a_missing_input():
     assert result.metrics["face_angle"].status == cm.STATUS_NOT_MEASURED
 
 
-def test_horizontal_metrics_carry_the_frame_of_their_inputs_and_mixed_is_named():
+def test_horizontal_metrics_carry_one_frame_and_refuse_mixed_inputs():
     same = _evaluate()
     assert same.metrics["face_angle"].frame == "target_line"
     assert same.metrics["spin_axis"].frame == "target_line"
@@ -464,8 +464,8 @@ def test_horizontal_metrics_carry_the_frame_of_their_inputs_and_mixed_is_named()
 
     mixed = _evaluate(frames={"path": "unit_boresight", "launch_h": "target_line"})
     assert mixed.metrics["face_angle"].frame == "mixed"
-    assert mixed.metrics["face_angle"].value is not None
-    assert "frames" in mixed.metrics["face_angle"].note
+    assert mixed.metrics["face_angle"].value is None
+    assert "mixed horizontal frames" in mixed.metrics["face_angle"].reason
 
 
 def test_the_result_serialises_every_metric_with_status_source_and_frame():

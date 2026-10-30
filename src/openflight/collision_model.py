@@ -38,6 +38,7 @@ STATUS_MODEL_GEOMETRY = shot_metrics.MODEL_GEOMETRY
 STATUS_ESTIMATED = shot_metrics.ESTIMATED
 STATUS_NOT_MEASURED = shot_metrics.NOT_MEASURED
 _INPUT_LABELS = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY, LABEL_ESTIMATED)
+MIXED_FRAME_REASON = "launch and club path use mixed horizontal frames"
 
 SOURCE_INVERSION = "D-plane inversion of the fitted launch model"
 SOURCE_D37 = "D37 definition (metric_definitions) of the calculated face and loft"
@@ -354,6 +355,8 @@ def rigid_body_face(
     for name, value in inputs.items():
         if not value.present:
             return refused(value.missing_reason(name))
+    if combined_frame(club_path.frame, launch_horizontal.frame) == MIXED:
+        return refused(MIXED_FRAME_REASON)
     if spin_built_from_face(spin_rpm):
         return refused(CIRCULAR_SPIN_REASON)
     if ball_speed_mph.value <= 0.0:
@@ -744,6 +747,9 @@ def _face_and_loft(
     path, attack = inputs["club_path"], inputs["attack_angle"]
     launch_h, launch_v = inputs["launch_horizontal"], inputs["launch_vertical"]
     spin = inputs["spin_rpm"]
+    if path.present and launch_h.present and combined_frame(path.frame, launch_h.frame) == MIXED:
+        gone = _not_measured("deg", MIXED_FRAME_REASON, SOURCE_INVERSION)
+        return replace(gone, frame=MIXED), gone, MIXED, None
     if spin.present and spin.label == LABEL_MEASURED:
         face, loft = rigid_body_face(
             ball_speed_mph=inputs["ball_speed_mph"],

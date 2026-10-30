@@ -65,12 +65,15 @@ def test_saved_offset_normalizes_both_mixed_orders(offset, boresight_input, monk
         {"frame": "target_line", "horizontal_offset_deg": float("nan")},
     ],
 )
-def test_unbound_mixed_frames_keep_their_diagnostic_status(snapshot, monkeypatch):
+def test_unbound_mixed_frames_retain_inputs_without_publishing_a_model_angle(snapshot, monkeypatch):
     monkeypatch.setattr(server, "horizontal_offset_deg", -3.0)
     current = attach(
         _delivered_shot(experimental_fused_club_path_frame="unit_boresight", target_line=snapshot)
     )
-    assert current.spin_axis_frame == "mixed"
+    assert current.spin_axis_deg is None
+    assert current.collision_model["inputs"]["club_path"]["frame"] == "unit_boresight"
+    assert current.collision_model["inputs"]["launch_horizontal"]["frame"] == "target_line"
+    assert current.experimental_face_angle_status == "mixed_horizontal_frames"
     assert "horizontal_frame_conversion" not in current.collision_model
 
 
@@ -107,5 +110,6 @@ def test_a_late_run_does_not_reuse_an_old_frame_conversion():
     assert "horizontal_frame_conversion" in current.collision_model
     current.target_line = None
     attach(current)
-    assert current.spin_axis_frame == "mixed"
+    assert current.spin_axis_deg is None
+    assert current.experimental_face_angle_status == "mixed_horizontal_frames"
     assert "horizontal_frame_conversion" not in current.collision_model
