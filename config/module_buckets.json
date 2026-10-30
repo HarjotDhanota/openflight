@@ -17,6 +17,11 @@
   "tests"
  ],
  "part_e": [
+  "tests/test_full_speed_time_support.py",
+  "tests/test_head_contact_handoff.py",
+  "tests/test_head_delivery_reference.py",
+  "tests/test_head_speed_reference.py",
+  "tests/test_spin_observation_provenance.py",
   "tests/test_full_speed_shot_aim.py",
   "tests/test_ballistics_ground_contact.py",
   "tests/test_collision_mixed_frame_domain.py",
