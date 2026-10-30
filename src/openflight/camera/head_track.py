@@ -934,9 +934,6 @@ def _fit_chord_turn(chords) -> tuple[np.ndarray, np.ndarray, float]:
     return _rotate(reference, axis, float(phase)), axis, float(omega)
 
 
-_STATE_STEPS = 32
-
-
 def head_state_at(
     record: Mapping[str, Any], t_ns: float
 ) -> Optional[tuple[np.ndarray, np.ndarray]]:
@@ -962,10 +959,14 @@ def head_state_at(
 
     anchor = min(positions, key=lambda point: abs(float(point["t_ns"]) - float(t_ns)))
     point = np.array([anchor["lateral_m"], anchor["up_m"], anchor["forward_m"]], dtype=float)
-    times = np.linspace(float(anchor["t_ns"]), float(t_ns), _STATE_STEPS + 1)
-    step_s = (times[1] - times[0]) / 1e9
-    for middle in 0.5 * (times[:-1] + times[1:]):
-        point = point + speed * step_s * direction(float(middle))
+    elapsed_s = (float(t_ns) - float(anchor["t_ns"])) / 1e9
+    half_angle = 0.5 * omega * elapsed_s
+    anchor_angle = omega * (float(anchor["t_ns"]) - float(turn["t_ns"])) / 1e9
+    middle_direction = _rotate(start, axis, anchor_angle + half_angle)
+    parallel = axis * float(axis @ start)
+    # The exact integral of a rotated vector; sinc also covers zero angular rate.
+    average_direction = parallel + np.sinc(half_angle / math.pi) * (middle_direction - parallel)
+    point = point + speed * elapsed_s * average_direction
     return point, direction(float(t_ns))
 
 
