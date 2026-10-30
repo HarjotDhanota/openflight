@@ -685,7 +685,9 @@ def _attach_collision_model(shot: Shot) -> None:
         shot.experimental_face_angle_launch_source = shot.launch_angle_horizontal_source
     else:
         shot.experimental_face_angle_status = (
-            "missing_measured_start_direction"
+            "mixed_horizontal_frames"
+            if face.reason == collision_model.MIXED_FRAME_REASON
+            else "missing_measured_start_direction"
             if not result.inputs["launch_horizontal"].present
             else "missing_accepted_club_path"
             if not result.inputs["club_path"].present

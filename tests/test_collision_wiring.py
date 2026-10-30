@@ -215,13 +215,15 @@ def test_a_low_confidence_horizontal_launch_gives_an_estimated_spin_axis():
     assert shot.spin_axis_source.startswith("estimated")
 
 
-def test_mixed_frames_are_computed_and_named():
+def test_mixed_frames_are_retained_as_inputs_and_refused_for_calculation():
     shot = _delivered_shot(experimental_fused_club_path_frame="unit_boresight")
 
     shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
 
-    assert shot.spin_axis_frame == "mixed"
-    assert shot.experimental_face_angle_status == "d_plane_estimate_mixed_frames"
+    assert shot.spin_axis_deg is None
+    assert shot.experimental_face_angle_status == "mixed_horizontal_frames"
+    assert shot.collision_model["inputs"]["club_path"]["frame"] == "unit_boresight"
+    assert shot.collision_model["inputs"]["launch_horizontal"]["frame"] == "target_line"
 
 
 def test_a_rerun_with_fewer_inputs_clears_its_own_earlier_values():

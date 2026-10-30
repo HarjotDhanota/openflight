@@ -55,7 +55,7 @@ class TestSpinAxisFromTheCollisionModel(OnShotDetectedHelpers):
         assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
         assert shot.spin_axis_source == collision_model.SPIN_AXIS_SOURCE_MODEL
 
-    def test_spin_axis_names_the_frame_its_two_legs_share(self, monkeypatch):
+    def test_spin_axis_refuses_legs_without_a_common_frame(self, monkeypatch):
         """Face to path cancels the horizontal offset only within one frame."""
         shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
         shot.launch_angle_horizontal_frame = "target_line"
@@ -63,8 +63,8 @@ class TestSpinAxisFromTheCollisionModel(OnShotDetectedHelpers):
 
         self._run_with_no_radar_hardware(monkeypatch, shot)
 
-        assert shot.spin_axis_deg == pytest.approx(self._expected_spin_axis(), abs=0.05)
-        assert shot.to_dict()["spin_axis_frame"] == "mixed"
+        assert shot.spin_axis_deg is None
+        assert "mixed horizontal frames" in shot.collision_model["metrics"]["spin_axis"]["reason"]
 
     def test_spin_axis_estimated_when_horizontal_confidence_below_gate(self, monkeypatch):
         """Below the horizontal leg's confidence floor the axis is labelled estimated,
@@ -326,7 +326,7 @@ def test_server_records_the_frame_of_every_horizontal_metric(monkeypatch):
     assert shot.to_dict()["launch_angle_horizontal_frame"] == "target_line"
 
 
-def test_face_angle_from_two_frames_is_labelled_mixed():
+def test_face_angle_from_two_frames_without_a_transform_is_unavailable():
     shot = _shot(
         launch_angle_horizontal=2.0,
         launch_angle_horizontal_source="camera_assisted_experimental",
@@ -337,9 +337,10 @@ def test_face_angle_from_two_frames_is_labelled_mixed():
 
     shot_models._attach_collision_model(shot)
 
-    assert shot.experimental_face_angle_deg is not None
-    assert shot.experimental_face_angle_frame == "mixed"
-    assert shot.experimental_face_angle_status.endswith("_mixed_frames")
+    assert shot.experimental_face_angle_deg is None
+    assert shot.experimental_face_angle_frame is None
+    assert shot.experimental_face_angle_status == "mixed_horizontal_frames"
+    assert "mixed horizontal frames" in shot.collision_model["metrics"]["face_angle"]["reason"]
 
 
 def test_full_ball_speed_is_given_the_shot_s_range_and_its_uncertainty(monkeypatch):
