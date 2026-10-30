@@ -225,6 +225,7 @@ class RollingBufferProcessor:
             "speed_window_samples": self.WINDOW_SIZE if self.legacy_speed_selection else 256,
             "motion_policy": None if self.legacy_speed_selection else dict(POLICY),
             "impact_fallback_policy": "explicit_sound_capture_v1",
+            "coherent_ball_support_policy": "first_window_start_v1",
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -2030,16 +2031,18 @@ class RollingBufferProcessor:
         timeline = self.process_overlapping(capture)
         half_window_ms = motion.window_samples / self.SAMPLE_RATE * 500
         ball_timestamp = motion.ball.timestamp_ms - half_window_ms
+        # The selected speed observation may be later than the path's first support.
+        flight_start_ms = motion.ball.peaks[0].time_ms - half_window_ms
         if expected_spin_rpm is None and expected_spin_for_ball_speed is not None:
             expected_spin_rpm = expected_spin_for_ball_speed(motion.ball.speed_mph)
         spin = self.detect_spin_multitaper(
-            capture, motion.ball.speed_mph, ball_timestamp, expected_spin_rpm=expected_spin_rpm
+            capture, motion.ball.speed_mph, flight_start_ms, expected_spin_rpm=expected_spin_rpm
         )
         impact_timeline = SpeedTimeline(
             readings=[
                 reading
                 for reading in timeline.readings
-                if reading.timestamp_ms >= ball_timestamp
+                if reading.timestamp_ms >= flight_start_ms
                 or abs(reading.speed_mph - motion.ball.speed_mph)
                 > self.BALL_SPEED_MATCH_TOLERANCE_MPH
             ],
