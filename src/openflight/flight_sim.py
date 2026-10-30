@@ -47,6 +47,7 @@ from .ballistics import (
     MPS_TO_MPH,
 )
 from .bounce_roll import TURF_ROLL_V2, HopFlight, TurfRollModel
+from .horizontal_frame import MIXED
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 from .numeric import finite as _finite
 
@@ -424,6 +425,8 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
     without a finite ball speed there is nothing to simulate. The ball speed is the
     full ball speed when the shot has one (ball_speed_for_flight), else the radial.
     """
+    if MIXED in (shot.launch_angle_horizontal_frame, shot.spin_axis_frame):
+        return None
     ball_speed, _ = ball_speed_for_flight(shot)
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
