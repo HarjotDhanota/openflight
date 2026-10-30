@@ -161,6 +161,8 @@ def test_relocation_never_reads_outside_the_session_folder(tmp_path):
 
 
 def test_iwr_stage_replays_a_copied_session_with_pi_paths(tmp_path, monkeypatch):
+    from openflight.iwr6843.runtime import IWR6843ShotResult
+
     session = _copied_session(tmp_path)
     seen = {}
     monkeypatch.setattr(cli, "build_replay_calibration", lambda *_a, **_k: object())
@@ -168,8 +170,9 @@ def test_iwr_stage_replays_a_copied_session_with_pi_paths(tmp_path, monkeypatch)
     measurement = SimpleNamespace(range_evidence=None, to_dict=lambda: {"status": "rejected"})
     monkeypatch.setattr(
         cli,
-        "replay_iwr_capture_bytes",
-        lambda raw, *_a, **kwargs: seen.update(raw=raw, club=kwargs["club"]) or (measurement, None),
+        "replay_iwr_shot_bytes",
+        lambda raw, *_a, **kwargs: seen.update(raw=raw, club=kwargs["club"])
+        or IWR6843ShotResult(capture=None, measurement=measurement),
     )
     calibration = tmp_path / "cal.json"
     calibration.write_text("{}", encoding="utf-8")
