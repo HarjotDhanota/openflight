@@ -73,7 +73,9 @@ def test_processing_keeps_raw_iq_and_explicit_track_support():
 def test_club_projection_keeps_actual_window_width_and_observed_peak():
     from openflight.ops_speed_track import ops_speed_track
 
-    result = RollingBufferProcessor().process_capture(swing_capture(67))
+    capture = swing_capture(67)
+    capture.trigger_type = "sound"
+    result = RollingBufferProcessor().process_capture(capture)
     assert result is not None
     track = ops_speed_track(result)
     assert track is not None

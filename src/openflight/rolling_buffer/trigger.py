@@ -283,6 +283,7 @@ class SpeedTriggeredCapture(TriggerStrategy):
                 logger.info("[TRIGGER] Buffer captured %.1fms after trigger", total_delay_ms)
 
                 if capture:
+                    capture.trigger_type = "speed"
                     # Validate capture has ball speed
                     timeline = processor.process_standard(capture)
                     outbound = [
@@ -671,6 +672,7 @@ class SoundTrigger(TriggerStrategy):
             first_byte_timestamp=first_byte_timestamp,
         )
         if capture is not None:
+            capture.trigger_type = "sound"
             evidence = getattr(radar, "last_hardware_capture_evidence", None)
             capture.capture_id = evidence.get("capture_id") if evidence else None
 
@@ -858,6 +860,7 @@ class HardwareTriggeredCapture(TriggerStrategy):
                 first_byte_timestamp=first_byte_timestamp,
             )
             if capture is not None:
+                capture.trigger_type = "hardware"
                 evidence = getattr(radar, "last_hardware_capture_evidence", None)
                 capture.capture_id = evidence.get("capture_id") if evidence else None
         except Exception as error:  # pylint: disable=broad-exception-caught

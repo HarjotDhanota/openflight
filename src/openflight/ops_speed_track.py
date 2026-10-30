@@ -90,6 +90,12 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
     timeline = getattr(processed, "timeline", None)
     if impact is None or not _finite(impact_ms) or timeline is None:
         return None
+    capture = getattr(processed, "capture", None)
+    if impact.source == "sound_trigger" and getattr(capture, "trigger_type", None) in (
+        "hardware",
+        "speed",
+    ):
+        return None
     config = getattr(processed, "processor_config", None) or {}
     constants = config.get("constants") or {}
     sample_rate = float(config.get("sample_rate_hz") or 30000.0)

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Preserve the configured OPS trigger mode through capture, logging and replay;
+  native or unknown capture events no longer become sound-derived impact.
 - Preserve shared acoustic contact-delay evidence through the club-arc adapter
   so full club speed uses the supplied timing or its explicit refusal.
 - Refuse full club-speed projection from head geometry whose OPS input has no
