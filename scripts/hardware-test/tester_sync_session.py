@@ -20,6 +20,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from run_joint_clock import BUILD, load_package  # noqa: E402
 
+RESTORE_INSTRUCTIONS = (
+    "S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5 unchanged, then reconnect only IWR USB."
+)
+
 
 class SessionFiles:
     """Atomic status and phase-bound operator commands; no arbitrary device commands."""
@@ -303,20 +307,23 @@ def open_runtime(package, files):
     helper = load_package(package)
     output = files.folder
     collector = None
-    entered_rom = False
+    boot_restore_needed = False
     try:
         helper.require_unowned()
         if not resource_ownership()["resources_released"]:
             raise ValueError("IWR, OPS and camera must be unowned before this session")
+        boot_restore_needed = True
         files.publish(
             "switches",
             message="Set RAM boot: S1.1 ON, S1.2 OFF, S1.3 ON. Leave S1.4/S1.5 unchanged. Do not press RESET yet.",
+            normal_boot_restore_needed=True,
+            restore_instructions=RESTORE_INSTRUCTIONS,
+            resources_released=False,
         )
         files.wait("switches_set")
         port = helper.enhanced_port()
         with helper.IWR6843DeviceLock(port):
             with helper.open_serial(port) as handle:
-                entered_rom = True
                 files.publish(
                     "reset",
                     message="Enhanced UART is open. Press IWR RESET once, wait at least one second, then confirm.",
@@ -347,10 +354,8 @@ def open_runtime(package, files):
         files.publish(
             files.state["phase"],
             **resource_ownership(),
-            normal_boot_restore_needed=entered_rom,
-            restore_instructions="S1.1 OFF, S1.2 OFF, S1.3 ON; leave S1.4/S1.5 unchanged, then reconnect only IWR USB."
-            if entered_rom
-            else None,
+            normal_boot_restore_needed=boot_restore_needed,
+            restore_instructions=RESTORE_INSTRUCTIONS if boot_restore_needed else None,
         )
 
 

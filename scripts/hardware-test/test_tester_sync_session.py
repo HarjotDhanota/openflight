@@ -195,3 +195,42 @@ def test_current_attempt_is_not_poisoned_by_a_previous_incomplete_camera_clip(
     result = json.loads((tmp_path / "attempt-001/RESULT.json").read_text())
     assert result["status"] == ("captured_unqualified" if new_fault is None else "partial")
     assert old.read_text() == '{"interrupted":'
+
+
+@pytest.mark.parametrize("failed_at", ["switches", "port_lookup", "reset"])
+def test_boot_restore_requirement_is_persisted_before_uart_setup_or_reset(
+    tmp_path, monkeypatch, failed_at
+):
+    from contextlib import nullcontext
+
+    import tester_sync_session as session
+    from test_joint_shot_clock import wire
+
+    wire()
+    files, observed = SessionFiles(tmp_path), []
+
+    def wait(expected):
+        observed.append(json.loads((tmp_path / "status.json").read_text()))
+        if (expected == "switches_set" and failed_at == "switches") or expected == "reset_pressed":
+            raise RuntimeError("test interruption before RAM load")
+
+    def port():
+        if failed_at == "port_lookup":
+            raise RuntimeError("test interruption during port lookup")
+        return "/dev/test"
+
+    helper = SimpleNamespace(
+        require_unowned=lambda: None,
+        enhanced_port=port,
+        IWR6843DeviceLock=lambda _port: nullcontext(),
+        open_serial=lambda _port: nullcontext(object()),
+    )
+    monkeypatch.setattr(session, "load_package", lambda _path: helper)
+    monkeypatch.setattr(session, "resource_ownership", lambda: {"resources_released": True})
+    monkeypatch.setattr(files, "wait", wait)
+    with pytest.raises(RuntimeError, match="test interruption"):
+        with session.open_runtime(tmp_path, files):
+            pytest.fail("RAM loader must not run in this control")
+    assert observed and all(state.get("normal_boot_restore_needed") is True for state in observed)
+    assert files.state["normal_boot_restore_needed"] is True
+    assert files.state["resources_released"] is True

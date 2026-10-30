@@ -74,14 +74,18 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await useTester(page);
       await mockConfirmedPlacementBox(page);
       const requests: object[] = [];
+      let stopped = false;
       await page.route('**/api/tester/free-play/native-sync', (route) =>
         route.fulfill({
           json: {
             configured: true,
             enabled: true,
-            phase: 'reset',
-            phase_token: 'reset-identity',
+            phase: stopped ? 'stopped' : 'reset',
+            phase_token: stopped ? 'final-identity' : 'reset-identity',
             message: 'Press RESET once, wait at least one second, then confirm.',
+            normal_boot_restore_needed: true,
+            resources_released: stopped,
+            restore_instructions: 'Restore normal IWR boot after stopping.',
           },
         })
       );
@@ -91,9 +95,15 @@ for (const viewport of KIOSK_VIEWPORTS) {
       });
       await page.goto('/tester.html');
       await expect(page.locator('#native-free-play-choice')).toBeVisible();
+      await expect(page.locator('#native-free-play-message')).toContainText('Press RESET once');
+      await expect(page.locator('#native-free-play-restored')).toBeHidden();
       await page.locator('#native-free-play').check();
       await page.locator('#native-free-play-confirm').tap();
       expect(requests).toEqual([{ command: 'reset_pressed', phase_token: 'reset-identity' }]);
+      stopped = true;
+      await expect(page.locator('#native-free-play-message')).toContainText('Restore normal IWR boot');
+      await page.locator('#native-free-play-restored').tap();
+      expect(requests[1]).toEqual({ command: 'restored', phase_token: 'final-identity' });
       await page.screenshot({ path: test.info().outputPath('native-tester-reset.png') });
     });
   });

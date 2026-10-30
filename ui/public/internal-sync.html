@@ -40,7 +40,7 @@ function render(){
  byId('start').disabled=busy||!state.configured||!['idle','stopped','failed','finished'].includes(phase)||Boolean(state.normal_boot_restore_needed);
  byId('confirm').hidden=!action;byId('confirm').disabled=busy;byId('confirm').textContent=action?action[1]:'Confirm';
  byId('stop').disabled=busy||['idle','stopped','failed','finished'].includes(phase);
- byId('restore').hidden=!state.normal_boot_restore_needed;
+ byId('restore').hidden=!(state.normal_boot_restore_needed&&state.resources_released);
  byId('restore-message').textContent=state.restore_instructions||'';
  const iwr=state.iwr;
  byId('sensors').textContent=iwr?'IWR: '+iwr.capture.active+' active; detector '+iwr.trigger.enabled+'; latched '+iwr.trigger.latched+'; ball '+iwr.ball.state+' at bin '+iwr.ball.bin+'. OPS and camera arm after this attempt’s ball lock.':'No live IWR state yet.';

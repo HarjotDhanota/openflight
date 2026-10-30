@@ -6701,13 +6701,14 @@
           el('native-free-play-choice').hidden = !nativeFreePlay.configured;
           el('native-free-play-controls').hidden = !nativeFreePlay.enabled;
           el('native-free-play-phase').textContent = nativeFreePlay.phase || '';
-          el('native-free-play-message').textContent = nativeFreePlay.normal_boot_restore_needed
+          const restoreReady = nativeFreePlay.normal_boot_restore_needed && nativeFreePlay.resources_released;
+          el('native-free-play-message').textContent = restoreReady
             ? nativeFreePlay.restore_instructions : nativeFreePlay.message || '';
           const action = nativeConfirm[nativeFreePlay.phase];
           el('native-free-play-confirm').hidden = !action;
           el('native-free-play-confirm').disabled = nativeBusy;
           el('native-free-play-confirm').textContent = action?.[1] || 'Confirm';
-          el('native-free-play-restored').hidden = !nativeFreePlay.normal_boot_restore_needed;
+          el('native-free-play-restored').hidden = !restoreReady;
           el('native-free-play-restored').disabled = nativeBusy || !nativeFreePlay.resources_released;
         } catch (error) { el('native-free-play-error').textContent = String(error); }
       }
