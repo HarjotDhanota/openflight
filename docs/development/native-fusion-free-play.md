@@ -8,7 +8,9 @@ qualified for same-event matching or sub-millisecond acquisition timing.
 
 Start the tester with `--internal-sync-clock-package /path/to/package-001`.
 Complete normal setup, choose the session resolution and club, select
-**Use IWR + OPS native triggers**, then press **Start free play**. The tester
+**Independent native detectors** in Capture policy, then press **Start free play**.
+The [trigger comparison guide](trigger-policy-operator-guide.md) describes the
+additional policies and unavailable hardware routes. The tester
 page provides the RAM switch and RESET instructions. Follow each displayed
 instruction before confirming it. No flash write is performed.
 
