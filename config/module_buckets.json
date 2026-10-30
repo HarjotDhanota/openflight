@@ -17,6 +17,13 @@
   "tests"
  ],
  "part_e": [
+  "tests/test_collision_ball_speed_contract.py",
+  "tests/test_collision_horizontal_normalization.py",
+  "tests/test_collision_inverse_domain.py",
+  "tests/test_collision_partial_gear.py",
+  "tests/test_collision_speed_contract.py",
+  "tests/test_flight_spin_provenance.py",
+  "tests/test_mixed_frame_consumers.py",
   "docs/how-it-works/ballistics.md",
   "docs/how-it-works/club-arc.md",
   "docs/how-it-works/collision-model.md",
@@ -108,6 +115,16 @@
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
+  "tests/test_camera_ops_radial.py": "FUSION",
+  "tests/test_collision_ball_speed_contract.py": "FUSION",
+  "tests/test_collision_horizontal_normalization.py": "FUSION",
+  "tests/test_collision_inverse_domain.py": "FUSION",
+  "tests/test_collision_partial_gear.py": "FUSION",
+  "tests/test_collision_speed_contract.py": "FUSION",
+  "tests/test_flight_spin_provenance.py": "FUSION",
+  "tests/test_iwr6843_channel_ambiguity.py": "FUSION",
+  "tests/test_mixed_frame_consumers.py": "FUSION",
+  "tests/test_ops_club_support.py": "FUSION",
   "docs/development/joint-internal-clock.md": "TESTER",
   "docs/development/native-fusion-free-play.md": "TESTER",
   "docs/development/ops-sample-clock.md": "TESTER",
