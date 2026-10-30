@@ -1,10 +1,21 @@
 # Trigger comparison operator guide and handoff
 
-Combined local worktree: `openflight-bench-unified`, branch
-`integration/bench-unified-2026-10-30`. It starts from reviewed bench `e4c8b55d`
-and includes the first-IWR-latch observation and OPS single-reader request work
-from `04dde5e5` and `23f9226a`. IWR-led is still unavailable; these components
-do not establish physical timing. No hardware deployment occurred.
+Use `openflight-integration`, branch `integration/2026-10-24`, for the combined
+test session. It contains reviewed combined checkpoint `812c0d66`: the metric
+and floor fixes from `e4c8b55d`, trigger comparison policies, first-IWR-latch
+observation and OPS single-reader request transport from `04dde5e5`/`23f9226a`.
+The isolated worktrees are development checkpoints, not separate test targets.
+All further completed, reviewed work for this session lands on this integration
+branch before the test package is frozen. No hardware deployment occurred.
+
+The normal setup, capture-policy selection, live metrics and Stop/package run
+together on this source. IWR-led/common-hardware acquisition is still incomplete;
+the selector reports that status. Conditional D-plane pose/strike refinement is
+planned, not an implemented feature of this checkpoint. Claude's club-part model
+has no completed committed handoff yet, and new ball weights still require their
+downstream pipeline evaluation/integration. Their development artifacts must not
+be mistaken for enabled runtime models. The OPS selection research still fails
+its accuracy gates and is not silently substituted for the current processor.
 
 Original standalone worktree: `openflight-trigger-policies`, branch
 `feat/trigger-policies-2026-10-30`, based on
