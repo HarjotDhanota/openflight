@@ -2,8 +2,9 @@
 
 Outbound readings from impact to ``MAX_REFERRAL_MS`` after it, on the OPS's own clock,
 with the impact time, its source and uncertainty, and the club pick: the one FFT window
-the processor read the club speed from (its start and radial speed). Holds no model of
-its own.
+the processor read the club speed from (its start and radial speed). The coherent
+club path's observed peaks retain their individual FFT support, without filling
+gaps or claiming that overlapping windows are independent. Holds no model of its own.
 """
 
 from __future__ import annotations
@@ -63,6 +64,19 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         else None
     )
     motion = getattr(processed, "motion", None)
+    club_readings = []
+    if motion is not None and motion.club is not None:
+        club_window_ms = 1000.0 * motion.window_samples / sample_rate
+        club_readings = [
+            {
+                "frame": int(peak.frame),
+                "window_start_ms": float(peak.time_ms - 0.5 * club_window_ms),
+                "window_ms": club_window_ms,
+                "radial_mph": float(peak.speed_mph),
+                "snr": float(peak.snr),
+            }
+            for peak in motion.club.peaks
+        ]
     if club_reading is not None and motion is not None and motion.club is not None:
         observation = motion.club.peaks[motion.club.reference_index]
         club_reading = {
@@ -83,4 +97,6 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         "canonical_radial_mph": float(processed.ball_speed_mph),
         "outbound": outbound,
         "club_reading": club_reading,
+        "club_readings": club_readings,
+        "club_readings_source": "coherent_spectral_path" if club_readings else None,
     }
