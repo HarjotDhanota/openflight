@@ -804,6 +804,7 @@ def _repack(meta: dict, values: np.ndarray, layout: _Layout, kept: list[int], tr
         range_bin_counts=kept_counts,
         frame_time_offsets_us=[meta["frame_time_offsets_us"][frame] - origin for frame in kept],
         temperature_report=meta.get("temperature_report") if version != 6 else None,
+        clutter_map=meta.get("clutter_map"),
         capture_evidence=capture_evidence,
         frame_evidence=frame_evidence,
         dump_trailer=dump_trailer,

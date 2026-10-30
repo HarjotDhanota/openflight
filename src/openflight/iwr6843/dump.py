@@ -39,7 +39,7 @@ from openflight.iwr6843.music import est_music_fbss, steer
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
 TEMP_REPORT = struct.Struct("<Ihhhhhhhhhh")
-MAX_SUPPORTED_DUMP_VERSION = 9
+MAX_SUPPORTED_DUMP_VERSION = 10
 # TI mmWaveLink rlRfTempData_t temperature fields are signed, 1 LSB = 1 deg C.
 TEMP_REPORT_KEYS = (
     "device_time_ms",
@@ -64,6 +64,11 @@ TIMED_FRAME_DESCRIPTOR = struct.Struct("<BBH")
 DUMP_VERSION_EVIDENCE_TEMPERATURE = 8
 DUMP_VERSION_EVIDENCE = 9
 EVIDENCE_VERSIONS = (DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_EVIDENCE)
+DUMP_VERSION_CLUTTER = 10
+# Mirrors firmware/iwr6843/dump_format.h l3_clutter_report_t (12 B); the map that follows
+# is count float32 means, count float32 spreads, then count uint8 update counts.
+CLUTTER_REPORT = struct.Struct("<HHIB3x")
+CLUTTER_ENTRY_NBYTES = 9
 # Mirrors firmware/iwr6843/dump_format.h l3_capture_evidence_t (40 B, last byte padding).
 CAPTURE_EVIDENCE = struct.Struct("<4sHHIIIIIIIBBBx")
 CAPTURE_EVIDENCE_MAGIC = b"ILE1"
@@ -104,9 +109,53 @@ _TIMED_SAMPLE_FORMATS = (
 
 def _has_temperature_extension(version: int, sample_fmt: int) -> bool:
     """Identify schemas that append the temperature report after the header."""
-    return version in (7, DUMP_VERSION_EVIDENCE_TEMPERATURE) or (
+    return version in (7, DUMP_VERSION_EVIDENCE_TEMPERATURE, DUMP_VERSION_CLUTTER) or (
         version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS
     )
+
+
+def _clutter_bytes(clutter_map: dict) -> bytes:
+    """Encode the clutter report and its per-bin noise map."""
+    count = clutter_map["count"]
+    if (
+        not len(clutter_map["mean"])
+        == len(clutter_map["spread"])
+        == len(clutter_map["seen"])
+        == count
+    ):
+        raise ValueError("clutter map count must match its mean, spread and seen entries")
+    return (
+        CLUTTER_REPORT.pack(
+            clutter_map["first_bin"], count, clutter_map["updates"], clutter_map["range_window"]
+        )
+        + np.asarray(clutter_map["mean"], dtype="<f4").tobytes()
+        + np.asarray(clutter_map["spread"], dtype="<f4").tobytes()
+        + np.asarray(clutter_map["seen"], dtype=np.uint8).tobytes()
+    )
+
+
+def _parse_clutter(raw: bytes, offset: int) -> tuple[dict, int]:
+    """Decode the clutter report and map at ``offset``; return it and its size."""
+    if len(raw) < offset + CLUTTER_REPORT.size:
+        raise ValueError("short clutter report extension")
+    first_bin, count, updates, range_window = CLUTTER_REPORT.unpack_from(raw, offset)
+    nbytes = CLUTTER_REPORT.size + CLUTTER_ENTRY_NBYTES * count
+    if len(raw) < offset + nbytes:
+        raise ValueError("short clutter map extension")
+    start = offset + CLUTTER_REPORT.size
+    mean = np.frombuffer(raw, dtype="<f4", count=count, offset=start)
+    spread = np.frombuffer(raw, dtype="<f4", count=count, offset=start + 4 * count)
+    seen = np.frombuffer(raw, dtype=np.uint8, count=count, offset=start + 8 * count)
+    clutter_map = {
+        "first_bin": first_bin,
+        "count": count,
+        "updates": updates,
+        "range_window": range_window,
+        "mean": tuple(float(value) for value in mean),
+        "spread": tuple(float(value) for value in spread),
+        "seen": tuple(int(value) for value in seen),
+    }
+    return clutter_map, nbytes
 
 
 def _has_evidence(version: int) -> bool:
@@ -206,6 +255,7 @@ def pack_dump(
     capture_evidence: dict | None = None,
     frame_evidence: tuple[dict, ...] | list[dict] | None = None,
     dump_trailer: dict | None = None,
+    clutter_map: dict | None = None,
 ) -> bytes:
     """Complex cube [n_frames, chirps_per_frame, n_rx, n_samples] -> dump bytes.
 
@@ -236,6 +286,12 @@ def pack_dump(
         temp_prefix = TEMP_REPORT.pack(*temp_values)
     elif _has_temperature_extension(version, sample_fmt):
         raise ValueError("dump version 5+ requires a temperature report")
+    if version == DUMP_VERSION_CLUTTER:
+        if clutter_map is None:
+            raise ValueError("dump version 10 needs its clutter map")
+        temp_prefix += _clutter_bytes(clutter_map)
+    elif clutter_map is not None:
+        raise ValueError("a clutter map requires dump version 10")
     frame_prefix = b""
     if sample_fmt in (
         SAMPLE_RANGE_FFT_IQ16_WINDOWED,
@@ -382,6 +438,10 @@ def parse_header(raw: bytes) -> dict:
         temp = TEMP_REPORT.unpack_from(raw, HEADER.size)
         temperature_report = dict(zip(TEMP_REPORT_KEYS, temp, strict=True))
         header_nbytes += TEMP_REPORT.size
+    clutter_map = None
+    if ver == DUMP_VERSION_CLUTTER:
+        clutter_map, clutter_nbytes = _parse_clutter(raw, header_nbytes)
+        header_nbytes += clutter_nbytes
     range_metadata_nbytes = (
         TIMED_FRAME_DESCRIPTOR.size * nf + (2 * nf)
         if fmt == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED
@@ -418,6 +478,7 @@ def parse_header(raw: bytes) -> dict:
         dump_trailer=None,
         header_nbytes=header_nbytes,
         temperature_report=temperature_report,
+        clutter_map=clutter_map,
     )
 
 
@@ -571,6 +632,7 @@ def _repack_kwargs(meta: dict) -> dict:
         "capture_evidence": meta.get("capture_evidence"),
         "frame_evidence": meta.get("frame_evidence"),
         "dump_trailer": meta.get("dump_trailer"),
+        "clutter_map": meta.get("clutter_map"),
     }
 
 

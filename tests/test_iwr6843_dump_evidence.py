@@ -315,11 +315,11 @@ def test_project_tx_pair_keeps_an_unassociated_record_unstamped():
     assert projected[offset:evidence_end] == raw[offset:evidence_end]
 
 
-def test_a_version_above_9_is_still_refused():
+def test_a_version_above_10_is_still_refused():
     raw, _ = _v8(_cube())
-    bumped = raw[:4] + (10).to_bytes(2, "little") + raw[6:]
+    bumped = raw[:4] + (11).to_bytes(2, "little") + raw[6:]
 
-    with pytest.raises(ValueError, match="unsupported dump version 10"):
+    with pytest.raises(ValueError, match="unsupported dump version 11"):
         parse_dump(bumped)
 
 
