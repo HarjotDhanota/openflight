@@ -150,14 +150,16 @@ def _ops_and_ball(rig, tee_range, radar_h, ball_h, side):
     return ops_m, ball
 
 
-def ops_track(full_mph, launch_v, launch_h_boresight, ops_m, ball, impact_ms=40.0):
-    """Radial readings of a ball leaving ``ball`` on a straight line, at window centres."""
+def ops_track(
+    full_mph, launch_v, launch_h_boresight, ops_m, ball, impact_ms=40.0, first_window_after_ms=2.0
+):
+    """Straight-flight window-centre readings, defaulting past the contact tolerance."""
     window = 128 / 30.0
     d = _unit(launch_v, launch_h_boresight)
     v0 = full_mph * MPH
     readings = []
     for i in range(6):
-        start = impact_ms + 0.5 + 1.0667 * i
+        start = impact_ms + first_window_after_ms + 1.0667 * i
         t = (start + 0.5 * window - impact_ms) / 1000.0
         decel = 0.5 * 1.225 * 0.28 * math.pi * 0.02135**2 / 0.04593 * v0**2
         decel += 9.81 * math.sin(math.radians(launch_v))
@@ -226,7 +228,16 @@ DELIVERIES = {
 }
 
 
-def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False, impact_reference=True):
+def run_shot(
+    kiosk,
+    *,
+    delivery,
+    handed,
+    yaw,
+    measured_club=False,
+    impact_reference=True,
+    first_window_after_ms=2.0,
+):
     club, speed, path, attack, face, loft = delivery
     if handed == "LH":
         # a left-hander's in-to-out path is left of the target line: mirror the delivery
@@ -281,7 +292,14 @@ def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False, impact_refere
         if offset is not None
         else None,
     )
-    track = ops_track(truth["ball_speed"], truth["launch_v"], launch_h_bore, ops_m, ball_bore)
+    track = ops_track(
+        truth["ball_speed"],
+        truth["launch_v"],
+        launch_h_bore,
+        ops_m,
+        ball_bore,
+        first_window_after_ms=first_window_after_ms,
+    )
     shot.ball_speed_mph = track["canonical_radial_mph"]
     shot.ops_speed_track = track
     if measured_club:
@@ -423,6 +441,25 @@ def test_a_known_delivery_comes_back_with_every_metric_and_label(
         shot.flight["as_measured"]["metrics"]["carry"]["value"]
     )
     assert shot.carry_status == flight_label
+
+
+@pytest.mark.parametrize("measured_club", [False, True])
+def test_contact_tolerance_crossing_the_first_fft_window_keeps_uncertainty_unbounded(
+    kiosk, measured_club
+):
+    shot, truth = run_shot(
+        kiosk,
+        delivery=DELIVERIES["rh_7iron_draw"],
+        handed="RH",
+        yaw=0,
+        measured_club=measured_club,
+        first_window_after_ms=0.5,
+    )
+    full = shot.ball_speed_full
+    assert full["status"] == "calculated"
+    assert full["value_mph"] == pytest.approx(truth["ball_speed"], abs=0.15)
+    assert full["range_mph"] is None
+    assert full["uncertainty_mph"]["impact_time"] is None
 
 
 @pytest.mark.parametrize("measured_club", [False, True])

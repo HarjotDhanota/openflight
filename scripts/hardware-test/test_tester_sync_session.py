@@ -89,6 +89,7 @@ def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypat
 
     class Rig:
         arm_id, boot_id, native_capture = "arm", "synthetic-boot", True
+        trace_attempt_id = "parser-attempt-trace"
 
         def __init__(self, **_kwargs):
             self.stop = threading.Event()
@@ -128,6 +129,7 @@ def test_attempt_saves_real_parser_output_and_original_bytes(tmp_path, monkeypat
     assert (tmp_path / "attempt-001/iwr-result.bin").read_bytes() == port.result
     result = json.loads((tmp_path / "attempt-001/RESULT.json").read_text())
     assert result["status"] == "partial"
+    assert result["trace_attempt_id"] == "parser-attempt-trace"
     assert ("stop_error" in result) == stop_fails
     assert collector.state["stop_verified"] != stop_fails
 
@@ -173,6 +175,7 @@ def test_current_attempt_is_not_poisoned_by_a_previous_incomplete_camera_clip(
 
     class Rig:
         arm_id, boot_id, native_capture = "current", "synthetic-boot", True
+        trace_attempt_id = "camera-attempt-trace"
 
         def __init__(self, **_kwargs):
             self.stop = threading.Event()
@@ -194,6 +197,7 @@ def test_current_attempt_is_not_poisoned_by_a_previous_incomplete_camera_clip(
     session.attempt(collector, files, tmp_path / "attempt-001", camera=camera)
     result = json.loads((tmp_path / "attempt-001/RESULT.json").read_text())
     assert result["status"] == ("captured_unqualified" if new_fault is None else "partial")
+    assert result["trace_attempt_id"] == "camera-attempt-trace"
     assert old.read_text() == '{"interrupted":'
 
 
