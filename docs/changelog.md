@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Refuse full club-speed projection from head geometry whose OPS input has no
+  matching contact-time reference; retain the model's actual time and clock.
 - Use each shot's saved target line when reconstructing full ball speed from
   target-relative launch, so a later aim adjustment cannot change that shot.
 - Detect ground contact on the first flight-integration step, preventing

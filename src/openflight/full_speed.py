@@ -1033,6 +1033,19 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         return refused(
             f"the camera head track flagged its direction: {next(f for f in flags if f)}"
         )
+    reference = record.get("speed_reference")
+    contact_reference_ns = record["turn"].get("contact_ns")
+    if not (
+        isinstance(reference, dict)
+        and reference.get("status") == "explicit_contact_model"
+        and reference.get("referred_to") == "contact"
+        and reference.get("method") == "camera_to_ball_radial"
+        and reference.get("clock") == "sensor_timestamp_ns"
+        and _finite(reference.get("timestamp_ns"))
+        and _finite(contact_reference_ns)
+        and math.isclose(reference["timestamp_ns"], contact_reference_ns, rel_tol=0.0, abs_tol=1.0)
+    ):
+        return refused("the head geometry's OPS speed reference is not bound to its contact model")
     if not isinstance(ops_track, dict):
         return refused("no OPS speed track for this shot")
     reading = ops_track.get("club_reading")
@@ -1222,6 +1235,7 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         },
         "direction_source": "camera_head_track",
         "note": CLUB_HEAD_TRACK_NOTE,
+        "geometry_speed_reference": dict(reference),
         "reason": None,
         "projection": projection,
         "referred_to": "the reading's time",
