@@ -164,6 +164,7 @@ class HeadTrackInputs:
     club: Any = ClubType.UNKNOWN
     ops_speed_time_ns: Optional[float] = None
     ops_speed_clock: Optional[str] = None
+    ops_speed_referred_to: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +264,9 @@ class HeadTrackContext:
     gate_interval_ns: Optional[tuple[float, float]] = None
     legacy_sound_model: bool = False
     trigger_source: Optional[str] = None
+    ops_speed_time_ns: Optional[float] = None
+    ops_speed_clock: Optional[str] = None
+    ops_speed_referred_to: Optional[str] = None
 
 
 def gate_latency_ns(metadata: Any) -> Optional[float]:
@@ -336,16 +340,22 @@ def _rejected(status: str, note: str, **extra) -> HeadTrack:
 def _speed_reference(inputs: HeadTrackInputs, contact_ns: float) -> dict:
     stamp = inputs.ops_speed_time_ns
     finite = _finite(stamp)
+    low, high = inputs.contact_window_ns
     bound = (
         finite
         and inputs.ops_speed_clock == "sensor_timestamp_ns"
-        and math.isclose(stamp, contact_ns, rel_tol=0.0, abs_tol=1.0)
+        and inputs.ops_speed_referred_to == "contact"
+        and low <= stamp <= high
     )
     return {
         "status": "explicit_contact_model" if bound else "unbound",
+        "radial_mph": float(inputs.ops_club_speed_mph),
         "timestamp_ns": float(stamp) if finite else None,
         "clock": inputs.ops_speed_clock,
         "referred_to": "contact" if bound else None,
+        "declared_referred_to": inputs.ops_speed_referred_to,
+        "contact_interval_ns": [float(low), float(high)],
+        "model_contact_ns": float(contact_ns),
         "method": "camera_to_ball_radial",
         "physical_timing_qualified": False,
     }

@@ -1329,6 +1329,9 @@ def _head_track_fallback(
             ball_range_sigma_m=context.ball_range_sigma_m,
             handedness=context.handedness,
             club=context.club,
+            ops_speed_time_ns=context.ops_speed_time_ns,
+            ops_speed_clock=context.ops_speed_clock,
+            ops_speed_referred_to=context.ops_speed_referred_to,
         )
     )
     record = track.to_dict()
@@ -1348,6 +1351,24 @@ def _head_track_fallback(
             rejected,
             head_track=record,
             notes=(*rejected.notes, f"camera head track: {track.status}: {reason}"),
+        )
+    if (track.speed_reference or {}).get("status") != "explicit_contact_model":
+        return replace(
+            rejected,
+            status="rejected_no_ops_reference",
+            club_path_deg=None,
+            attack_angle_deg=None,
+            speed_mph=None,
+            head_positions=(),
+            confidence_tier="withheld",
+            path_confidence_tier="withheld",
+            attack_confidence_tier="withheld",
+            head_track=record,
+            notes=(
+                *rejected.notes,
+                "camera head track: no contact-bound OPS speed reference; conditional model "
+                "and observed pixels retained as diagnostics",
+            ),
         )
     path = track.club_path_deg if track.club_path_flag is None else None
     attack = track.attack_angle_deg if track.attack_angle_flag is None else None

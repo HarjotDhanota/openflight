@@ -112,3 +112,32 @@ def test_independent_contact_radial_generator_has_an_explicit_model_reference():
     assert reference["clock"] == "sensor_timestamp_ns"
     assert reference["referred_to"] == "contact"
     assert reference["physical_timing_qualified"] is False
+
+
+@pytest.mark.parametrize("offset_ns", [-250_000, 250_000])
+def test_speed_timestamp_within_contact_interval_is_retained(offset_ns):
+    inputs = replace(_inputs(Swing()), ops_speed_time_ns=CONTACT_NS + offset_ns)
+    reference = ht.estimate_head_track(inputs).to_dict()["speed_reference"]
+    assert reference["status"] == "explicit_contact_model"
+    assert reference["timestamp_ns"] == CONTACT_NS + offset_ns
+    assert reference["contact_interval_ns"] == [CONTACT_NS - 1e6, CONTACT_NS + 1e6]
+
+
+@pytest.mark.parametrize("offset_ns", [-250_000, 250_000])
+def test_full_speed_keeps_a_reference_within_contact_interval(offset_ns):
+    head = _head_record(Swing())
+    head["speed_reference"].update(
+        timestamp_ns=CONTACT_NS + offset_ns,
+        contact_interval_ns=[CONTACT_NS - 1e6, CONTACT_NS + 1e6],
+    )
+    result = full_speed.evaluate_full_club_speed_head_track(
+        ops_track=_club_track(Swing(), 8), head_track=head, rig=CLUB_RIG
+    )
+    assert result["status"] == "experimental", result["reason"]
+
+
+def test_timestamp_without_a_contact_declaration_cannot_bind_the_model():
+    inputs = replace(_inputs(Swing()), ops_speed_referred_to=None)
+    reference = ht.estimate_head_track(inputs).to_dict()["speed_reference"]
+    assert reference["status"] == "unbound"
+    assert reference["referred_to"] is None

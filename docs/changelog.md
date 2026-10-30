@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Withhold public head-track angles and arc positions when that reference is
+  missing; retain conditional fits and observed pixels for diagnosis.
 - Refuse full club-speed projection from head geometry whose OPS input has no
   matching contact-time reference; retain the model's actual time and clock.
 - Use each shot's saved target line when reconstructing full ball speed from

@@ -154,6 +154,7 @@ def _inputs(
         ops_club_speed_mph=ops_mph,
         ops_speed_time_ns=CONTACT_NS,
         ops_speed_clock="sensor_timestamp_ns",
+        ops_speed_referred_to="contact",
         contact_window_ns=(
             CONTACT_NS - window_ms[0] * 1e6,
             CONTACT_NS + window_ms[1] * 1e6,

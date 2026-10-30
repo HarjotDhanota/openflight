@@ -982,6 +982,7 @@ _HEAD_TRACK_STATE_KEYS = (
     "club_path_flag",
     "attack_angle_flag",
     "speed_mph",
+    "speed_reference",
 )
 
 
