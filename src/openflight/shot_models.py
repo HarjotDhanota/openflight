@@ -827,6 +827,10 @@ def _attach_full_speeds(shot: Shot) -> None:
     shot.input_sources = sources
     vertical_label, vertical_note = shot_launch_label(shot, "vertical")
     horizontal_label, horizontal_note = shot_launch_label(shot, "horizontal")
+    line = shot.target_line if isinstance(shot.target_line, dict) else {}
+    horizontal_offset = line.get("horizontal_offset_deg")
+    if line.get("frame") != TARGET_LINE or not _finite(horizontal_offset):
+        horizontal_offset = None
     shot.ball_speed_full = _full_ball_speed_chain(
         shot,
         lambda: evaluate_full_ball_speed(
@@ -842,7 +846,7 @@ def _attach_full_speeds(shot: Shot) -> None:
             horizontal_source=shot.launch_angle_horizontal_source,
             horizontal_status=shot.launch_angle_horizontal_status,
             horizontal_frame=shot.launch_angle_horizontal_frame,
-            horizontal_offset_deg=server.horizontal_offset_deg,
+            horizontal_offset_deg=horizontal_offset,
             rig=server.rig_geometry,
             tee_range_m=calibrated("tee_range_m"),
             tee_range_uncertainty_m=getattr(shot, "ball_range_uncertainty_m", None),
