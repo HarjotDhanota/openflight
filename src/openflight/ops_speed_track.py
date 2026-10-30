@@ -9,6 +9,7 @@ gaps or claiming that overlapping windows are independent. Holds no model of its
 
 from __future__ import annotations
 
+import math
 from typing import Any, Optional
 
 from .ballistics import MPH_TO_MPS
@@ -19,6 +20,64 @@ MAX_REFERRAL_MS = 30.0
 
 # Impact tolerance for a sound trigger: its jitter and latency are unmeasured, so wide.
 SOUND_TRIGGER_IMPACT_TOLERANCE_MS = 3.0
+
+
+def _club_window(processed: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Copy exact sample support for the selected coherent spectral observation."""
+    motion = getattr(processed, "motion", None)
+    if motion is None or motion.club is None:
+        return None, "no coherent spectral club observation"
+    capture = getattr(processed, "capture", None)
+    if capture is None:
+        return None, "the selected club observation has no raw capture"
+    config = getattr(processed, "processor_config", None) or {}
+    policy = config.get("motion_policy") or {}
+    constants = config.get("constants") or {}
+    rate = config.get("sample_rate_hz")
+    wavelength = constants.get("WAVELENGTH_M")
+    size, hop = policy.get("window_samples"), policy.get("hop_samples")
+    fft_size = constants.get("FFT_SIZE")
+    if (
+        not _finite(rate)
+        or rate <= 0
+        or not _finite(wavelength)
+        or wavelength <= 0
+        or not isinstance(size, int)
+        or size != motion.window_samples
+        or size <= 0
+        or not isinstance(hop, int)
+        or hop <= 0
+        or not isinstance(fft_size, int)
+        or fft_size < size
+        or policy.get("window_function") != "hamming"
+    ):
+        return None, "the selected club observation has no matching FFT processing metadata"
+    peak = motion.club.peaks[motion.club.reference_index]
+    start = int(peak.frame) * hop
+    expected = (peak.time_ms * rate / 1000.0) - size / 2
+    if start < 0 or not math.isclose(start, expected, rel_tol=0.0, abs_tol=1e-6):
+        return None, "the selected club frame and timestamp disagree on its sample support"
+    stop = start + size
+    i_values, q_values = capture.i_samples, capture.q_samples
+    if len(i_values) != len(q_values) or stop > len(i_values):
+        return None, "the selected club window is not fully present in the raw capture"
+    i_samples, q_samples = list(i_values[start:stop]), list(q_values[start:stop])
+    if not all(_finite(value) for value in (*i_samples, *q_samples)):
+        return None, "the selected club window contains nonfinite samples"
+    return {
+        "clock": "ops_capture",
+        "capture_id": getattr(capture, "capture_id", None),
+        "frame": int(peak.frame),
+        "sample_start": start,
+        "sample_stop": stop,
+        "sample_rate_hz": float(rate),
+        "wavelength_m": float(wavelength),
+        "fft_size": fft_size,
+        "window_function": policy["window_function"],
+        "i_samples": i_samples,
+        "q_samples": q_samples,
+        "point_identity": "unqualified_spectral_scatterer",
+    }, None
 
 
 def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS) -> Optional[dict]:
@@ -86,6 +145,7 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
             "window_ms": float(1000 * motion.window_samples / sample_rate),
             "radial_mph": float(observation.speed_mph),
         }
+    club_window, club_window_reason = _club_window(processed)
     return {
         "clock": "ops_capture",
         "timestamps": "fft_window_start_ms_from_capture_start",
@@ -99,4 +159,6 @@ def ops_speed_track(processed: Any, *, max_referral_ms: float = MAX_REFERRAL_MS)
         "club_reading": club_reading,
         "club_readings": club_readings,
         "club_readings_source": "coherent_spectral_path" if club_readings else None,
+        "club_window": club_window,
+        "club_window_reason": club_window_reason,
     }
