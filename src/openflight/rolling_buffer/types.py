@@ -45,6 +45,7 @@ class IQCapture:
     trigger_timestamp_source: Optional[str] = None
     clock_sync_offset_s: Optional[float] = None
     capture_id: Optional[str] = None
+    trigger_type: Optional[str] = None  # configured mode, not proof of physical contact
 
     def __post_init__(self) -> None:
         """Infer the hardware trigger epoch when first-byte timing is available."""
@@ -175,7 +176,7 @@ class ImpactEstimate:
     """
     Capture-relative estimate of when ball strike occurred.
 
-    The OPS hardware trigger remains the fallback. When the speed timeline has a
+    A configured sound capture can supply a separate fallback. When the timeline has a
     clear club-to-ball transition, the midpoint between the last club-like frame
     and first ball-like frame is a better impact instant for K-LD7 correlation.
     """

@@ -367,6 +367,7 @@ def replay_ops_capture(
             else None
         ),
         trigger_timestamp_source=entry.get("trigger_timestamp_source"),
+        trigger_type=entry.get("trigger_type"),
         clock_sync_offset_s=(
             _finite(entry["clock_sync_offset_s"], "clock_sync_offset_s")
             if entry.get("clock_sync_offset_s") is not None

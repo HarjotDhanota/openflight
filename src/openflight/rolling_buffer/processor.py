@@ -224,6 +224,7 @@ class RollingBufferProcessor:
             "speed_selection": "legacy_v1" if self.legacy_speed_selection else "doppler_paths_v1",
             "speed_window_samples": self.WINDOW_SIZE if self.legacy_speed_selection else 256,
             "motion_policy": None if self.legacy_speed_selection else dict(POLICY),
+            "impact_fallback_policy": "explicit_sound_capture_v1",
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1853,9 +1854,13 @@ class RollingBufferProcessor:
         If the timeline has a clean jump from a club-like outbound speed to the
         first ball-like outbound speed, use the midpoint of those frame centers.
         If that jump is under the configured delta threshold, or either side of
-        the transition is missing, fall back to the hardware sound trigger.
+        the transition is missing, only a configured sound capture has a sound fallback.
         """
-        sound_trigger_ms = capture.trigger_offset_ms if capture is not None else None
+        sound_trigger_ms = (
+            capture.trigger_offset_ms
+            if capture is not None and capture.trigger_type == "sound"
+            else None
+        )
 
         def fallback(
             reason: str,

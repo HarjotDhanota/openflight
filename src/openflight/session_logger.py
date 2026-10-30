@@ -857,6 +857,7 @@ class SessionLogger:
         processor_config: Optional[Dict] = None,
         stage_timing: Optional[Dict] = None,
         capture_id: Optional[str] = None,
+        trigger_type: Optional[str] = None,
     ):
         """
         Log raw rolling buffer capture data for offline analysis.
@@ -929,6 +930,7 @@ class SessionLogger:
             {
                 "shot_number": shot_number,
                 "capture_id": capture_id,
+                "trigger_type": trigger_type,
                 "sample_time": sample_time,
                 "trigger_time": trigger_time,
                 "trigger_offset_ms": trigger_offset_ms,

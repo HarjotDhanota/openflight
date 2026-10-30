@@ -583,6 +583,8 @@ class RollingBufferMonitor:
                         self._notify_processing("failed")
                     continue
 
+                if capture.trigger_type is None:
+                    capture.trigger_type = self.trigger_type
                 # Process capture (FFT + speed/spin extraction)
                 self._notify_processing("calculating")
                 process_start = time.time()
@@ -683,6 +685,7 @@ class RollingBufferMonitor:
                         session_logger.log_rolling_buffer_capture(
                             shot_number=shot.shot_number,
                             capture_id=capture.capture_id,
+                            trigger_type=capture.trigger_type,
                             sample_time=capture.sample_time,
                             trigger_time=capture.trigger_time,
                             i_samples=capture.i_samples,
@@ -941,10 +944,12 @@ class RollingBufferMonitor:
                 if capture.trigger_timestamp is not None
                 else capture.first_byte_timestamp
             )
-            impact_timestamp = trigger_epoch
-
+            sound_capture = capture.trigger_type == "sound" or (
+                capture.trigger_type is None and self.trigger_type == "sound"
+            )
             impact_timestamp_kld7 = self._impact_epoch_from_processed(processed)
-            if impact_timestamp_kld7 is None:
+            impact_timestamp = trigger_epoch if sound_capture else impact_timestamp_kld7
+            if impact_timestamp_kld7 is None and sound_capture:
                 impact_timestamp_kld7 = trigger_epoch
 
         # Create shot with extended fields
@@ -991,8 +996,10 @@ class RollingBufferMonitor:
         if capture is None or capture.trigger_timestamp is None:
             return None
 
+        if processed.impact_source == "sound_trigger" and capture.trigger_type != "sound":
+            return None
         if processed.impact_timestamp_ms is None:
-            return capture.trigger_timestamp
+            return capture.trigger_timestamp if capture.trigger_type == "sound" else None
 
         impact_delta_ms = processed.impact_timestamp_ms - capture.trigger_offset_ms
         return capture.trigger_timestamp + impact_delta_ms / 1000.0

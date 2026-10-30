@@ -604,6 +604,7 @@ class TestHardwareTriggeredCapture:
         result = trigger.wait_for_trigger(radar, processor, timeout=1.0)
 
         assert result is capture
+        assert result.trigger_type == "hardware"
         processor.parse_capture.assert_called_once_with(
             '{"Q": [1]}',
             first_byte_timestamp=12345.678,
@@ -2281,6 +2282,7 @@ class TestImpactEstimate:
             trigger_time=100.068,
             i_samples=[0] * 4096,
             q_samples=[0] * 4096,
+            trigger_type="sound",
         )
 
     def test_clear_transition_uses_midpoint_between_frame_centers(
