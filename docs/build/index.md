@@ -26,6 +26,11 @@ it is done and verified.
 
     *Optional.* LIS3DH enclosure-level tilt compensation.
 
+- :material-memory: **[OPS243 firmware update](ops243-flashing.md)**
+
+    *When needed.* Flash a supported XMC4500 radar with a Pi Debug Probe and
+    breakout board. Requires soldering the breakout's DuPont connectors.
+
 - :material-battery-outline: **[Battery](battery.md)**
 
     *Optional.* Geekworm X1202/X1206 UPS with native telemetry.
@@ -42,5 +47,8 @@ it is done and verified.
 Order everything from the **[parts list](../get-started/parts.md)** first — some
 items have long lead times, and a partial build cannot be verified end to end.
 
-You will need a soldering iron for exactly one joint: the R17 gain resistor on
-the SEN-14262. See [sound trigger wiring](sound-trigger.md#before-you-wire-solder-r17).
+You will need a soldering iron for the R17 gain resistor on the SEN-14262; see
+[sound trigger wiring](sound-trigger.md#before-you-wire-solder-r17). If updating
+the OPS243 with the Debug Probe route, you also need to solder DuPont
+connectors onto the breakout board. Have the connectors, iron and solder
+before starting.

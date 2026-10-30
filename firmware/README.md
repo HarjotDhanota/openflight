@@ -1,4 +1,6 @@
-# IWR6843 Firmware
+# Radar Firmware
+
+## IWR6843
 
 The firmware developer guide now lives in the documentation site:
 
@@ -20,3 +22,4 @@ image ships in [`releases/`](releases/), and the
 | `releases/` | Prebuilt, validated firmware images |
 | `flash_iwr6843.py` | Flashing tool |
 | `Dockerfile`, `Makefile` | Build toolchain |
+| `ops243-update/` | OPS243-A backup, preparation and flashing helpers; see the [Debug Probe guide](../docs/build/ops243-flashing.md) for parts, soldering and instructions |

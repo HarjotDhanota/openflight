@@ -1,0 +1,4 @@
+*.bin
+*.hex
+backup-sha256.txt
+prepared-sha256.json

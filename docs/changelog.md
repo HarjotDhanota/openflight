@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OPS243-A Debug Probe flashing guide and helper scripts.** A concise
+  [XMC4500 AC / 1 MiB procedure](build/ops243-flashing.md) for firmware 1.3.3
+  covers parts, breakout DuPont connector soldering, SWD wiring, verified
+  backup, guarded writes and post-boot verification.
 - **Phone-assisted IWR6843 tilt calibration.** A phone can send a stable
   accelerometer measurement with the BLE command
   `iwr6843_orientation_calibration` or `POST /api/calibration/iwr6843/orientation`
