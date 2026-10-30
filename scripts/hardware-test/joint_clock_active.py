@@ -4,7 +4,7 @@ import base64
 import math
 from dataclasses import asdict
 
-from clock_evidence import map_tick
+from clock_evidence import _hex, map_tick
 from usb_collector import PROMPT, Collector, ExchangeError
 
 CONFIGURATION = (
@@ -20,9 +20,8 @@ CONFIGURATION = (
     "captureFormat iq16",
     "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1",
     "lowPower 0 0",
-    "debugCfg 0",
-    "triggerCfg 32 1 1",
 )
+ARM_COMMANDS = ("debugCfg 0", "triggerCfg 32 1 1")
 RATE_BOUNDS = (199_980_000, 200_020_000)
 MAX_PROXIMITY_NS = 8_000_000_000
 
@@ -85,7 +84,7 @@ class ActiveCollector(Collector):
         """Only the fixed finite profile and stop/start may change device state."""
         if self.failed:
             raise ExchangeError("uncertain connection; no recovery writes permitted")
-        if command not in (*CONFIGURATION, "sensorStart", "sensorStop"):
+        if command not in (*CONFIGURATION, *ARM_COMMANDS, "sensorStart", "sensorStop"):
             raise ValueError("command outside bounded RF clock scope")
         row = {
             "command": command,
@@ -175,6 +174,8 @@ class ActiveCollector(Collector):
             self.state["stop_acknowledged"] = self.state["stop_verified"] = False
             self.state["rf_start_attempted"] = True
             self.command("sensorStart")
+            for command in ARM_COMMANDS:
+                self.command(command)
             self.sleep(pause_s)
             before = self.status(active=True)
             if on_active is not None:
@@ -196,6 +197,7 @@ class ActiveCollector(Collector):
                 "build": self.build,
                 "runtime": self.context.boot,
                 "configuration": list(CONFIGURATION),
+                "post_start_arm_commands": list(ARM_COMMANDS),
                 "finite_rf_duration_ms_configured": 6000,
                 "tee_bin": {"value": 32, "meaning": "nominal bench detector, not calibrated tee"},
                 "before": before,
@@ -210,3 +212,17 @@ class ActiveCollector(Collector):
                 self.state["stop_acknowledged"] = True
                 self.status(active=False)
                 self.state["stop_verified"] = True
+
+    def attach_stopped_runtime(self, expected_runtime):
+        """Establish a new lease to an identified, idle image; reuse no old clock map."""
+        _hex(expected_runtime, 16)
+        self.identity(initial=False)
+        if self.context.boot != expected_runtime:
+            raise ValueError("existing runtime identity differs; no RF requested")
+        before = self.status(active=False)
+        if before["trigger"]["latched"] != "0":
+            raise ValueError("held capture present; attachment will not discard it")
+        self.command("sensorStop")
+        after = self.status(active=False)
+        self.state["stop_acknowledged"] = self.state["stop_verified"] = True
+        return {"before": before, "after": after, "reused_clock_mapping": False}

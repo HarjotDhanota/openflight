@@ -88,7 +88,18 @@ def companion(folder, helper):
         control.close()
 
 
-def execute(helper, folder, package, *, with_companion=False):
+def open_existing_serial(port_name):
+    """Open the already-running application's UART at its working baud, lines low."""
+    import serial  # pylint: disable=import-outside-toplevel
+
+    handle = serial.Serial(baudrate=1_041_667, timeout=0.05, write_timeout=0.25, exclusive=True)
+    handle.port = port_name
+    handle.dtr = handle.rts = False
+    handle.open()
+    return handle
+
+
+def execute(helper, folder, package, *, with_companion=False, existing_runtime=None):
     """Same Enhanced UART through ROM upload, diagnostics, RF and verified stop."""
     from joint_clock_active import ActiveCollector  # pylint: disable=import-outside-toplevel
 
@@ -108,30 +119,38 @@ def execute(helper, folder, package, *, with_companion=False):
         "ops_used": None if with_companion else False,
         "companion_requested": with_companion,
         "physical_timing_qualified": False,
+        "expected_existing_runtime": existing_runtime,
     }
     collector = None
     try:
-        print("UARTs closed. Set the board's RAM-boot switches; do not RESET yet.", flush=True)
-        if input("Type READY when the switches are set: ").strip() != "READY":
-            raise ValueError("cancelled before UART open")
+        if existing_runtime is None:
+            print("UARTs closed. Set the board's RAM-boot switches; do not RESET yet.", flush=True)
+            if input("Type READY when the switches are set: ").strip() != "READY":
+                raise ValueError("cancelled before UART open")
+        opener = open_existing_serial if existing_runtime is not None else helper.open_serial
         with helper.IWR6843DeviceLock(port_name):
-            with helper.open_serial(port_name) as handle:
+            with opener(port_name) as handle:
                 state["uart_opened"] = True
-                print("Enhanced UART open. Press RESET once and wait one second.", flush=True)
-                if input("Type RAM after RESET: ").strip() != "RAM":
-                    raise ValueError("cancelled before RAM transfer")
-                helper.RamOnlyLoader(handle).load_ram((package / "clock.ram.bin").read_bytes())
-                state["ram_rom_acknowledged"] = True
-                handle.baudrate = 1_041_667
-                handle.timeout, handle.write_timeout = 0.05, 0.25
-                try:
-                    startup = helper.startup(handle)
-                except RuntimeError as error:
-                    state["startup_b64"] = base64.b64encode(error.raw).decode()
-                    raise
-                state["startup_b64"] = base64.b64encode(startup).decode()
+                if existing_runtime is None:
+                    print("Enhanced UART open. Press RESET once and wait one second.", flush=True)
+                    if input("Type RAM after RESET: ").strip() != "RAM":
+                        raise ValueError("cancelled before RAM transfer")
+                    helper.RamOnlyLoader(handle).load_ram((package / "clock.ram.bin").read_bytes())
+                    state["ram_rom_acknowledged"] = True
+                    handle.baudrate = 1_041_667
+                    handle.timeout, handle.write_timeout = 0.05, 0.25
+                    try:
+                        startup = helper.startup(handle)
+                    except RuntimeError as error:
+                        state["startup_b64"] = base64.b64encode(error.raw).decode()
+                        raise
+                    state["startup_b64"] = base64.b64encode(startup).decode()
                 collector = ActiveCollector(handle, build=BUILD, host_boot=boot, sleep=time.sleep)
-                state["collection"] = collector.collect_active()
+                if existing_runtime is not None:
+                    state["verified_attachment"] = collector.attach_stopped_runtime(
+                        existing_runtime
+                    )
+                state["collection"] = collector.collect_active(fresh=existing_runtime is None)
                 state["baseline_lifecycle"] = dict(collector.state)
                 if with_companion:
                     with companion(folder / "ops-camera", helper) as control:
@@ -174,12 +193,16 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--execute-ram-rf", action="store_true")
     mode.add_argument("--execute-ops-camera", action="store_true")
+    mode.add_argument("--execute-existing-rf", action="store_true")
+    parser.add_argument("--expected-runtime")
     parser.add_argument("--with-ops-camera", action="store_true")
     args = parser.parse_args()
     helper = load_package(args.clock_package)
-    if args.with_ops_camera and not args.execute_ram_rf:
-        parser.error("--with-ops-camera requires --execute-ram-rf")
-    if not (args.execute_ram_rf or args.execute_ops_camera):
+    if args.with_ops_camera and not (args.execute_ram_rf or args.execute_existing_rf):
+        parser.error("--with-ops-camera requires RF mode")
+    if bool(args.expected_runtime) != args.execute_existing_rf:
+        parser.error("--execute-existing-rf requires --expected-runtime, exclusively")
+    if not (args.execute_ram_rf or args.execute_ops_camera or args.execute_existing_rf):
         print(json.dumps({"preflight": "passed", "devices_opened": False, "firmware_build": BUILD}))
         return
     if args.output is None:
@@ -189,7 +212,13 @@ def main():
         with companion(args.output, helper) as control:
             control.start_wait()
         return
-    execute(helper, args.output, args.clock_package.resolve(), with_companion=args.with_ops_camera)
+    execute(
+        helper,
+        args.output,
+        args.clock_package.resolve(),
+        with_companion=args.with_ops_camera,
+        existing_runtime=args.expected_runtime,
+    )
 
 
 if __name__ == "__main__":

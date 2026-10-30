@@ -95,6 +95,25 @@ capture. It retains all probes, rejects ambiguous wraps/resets and verifies
 it preserves partial replies and refuses speculative recovery writes; stop
 verification then remains unavailable and physical restoration is required.
 
+The self-trigger is enabled **after** `sensorStart`, which clears it. The
+first active status must confirm `enabled=1`; setting it only before start
+does not arm this firmware.
+
+An already-loaded, stopped image can be tested without another RAM upload:
+
+```bash
+uv run --no-sync python scripts/hardware-test/run_joint_clock.py \
+  --clock-package "$OPENFLIGHT_CLOCK_PACKAGE" --execute-existing-rf \
+  --expected-runtime <the-retained-clock-runtime-nonce> \
+  --with-ops-camera --output /path/to/new-attached-trial
+```
+
+This takes a new exclusive Enhanced lease at the application's working baud.
+It requires the exact reviewed build and expected runtime, no active/held
+capture, and an acknowledged, status-verified stop before acquisition. It
+does not reset the device, clear an uncertain stream, upload an image, or
+reuse previous counter offsets. All mapping probes belong to the new lease.
+
 Add `--with-ops-camera` for simultaneous native OPS arming and camera load.
 It first runs and stops the IWR-only baseline, then configures the companion and
 restarts acquisition on the same UART/runtime. No second RAM boot is needed.

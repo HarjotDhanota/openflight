@@ -15,6 +15,7 @@ from run_joint_clock import load_package  # noqa: E402
 PACKAGE = Path(os.environ["OPENFLIGHT_CLOCK_PACKAGE"]).resolve()
 load_package(PACKAGE)
 from joint_clock_active import (  # noqa: E402
+    ARM_COMMANDS,
     CONFIGURATION,
     ActiveCollector,
     counter_maps,
@@ -33,26 +34,30 @@ class ActivePort(WIRE.Port):
     def __init__(self, clock):
         super().__init__(clock)
         self.active = False
+        self.enabled = False
         self.bad_status = None
         self.frame = 0
         self.start_fault = False
 
     def write(self, data):
         command = data.decode().strip()
-        if command in (*CONFIGURATION, "sensorStart", "sensorStop", "stats"):
+        if command in (*CONFIGURATION, *ARM_COMMANDS, "sensorStart", "sensorStop", "stats"):
             self.writes.append(data)
             assert not self.pending
             if command == "sensorStart":
                 self.active = True
+                self.enabled = False
                 if self.start_fault:
                     self.pending = b"Error: start failed\nError -1\nl3dump:/>"
                     return len(data)
             if command == "sensorStop":
                 self.active = False
+            if command == "triggerCfg 32 1 1":
+                self.enabled = True
             if command == "stats":
                 raw = (
                     f"frames={self.frame} active={int(self.active)} rf_faults=0 hwa_missed=0\n"
-                    f"trig phase=ARMED latched=0 enabled={int(self.active)}\n"
+                    f"trig phase=ARMED latched=0 enabled={int(self.enabled)}\n"
                     "Done\nl3dump:/>"
                 ).encode()
                 if self.bad_status and self.active:
@@ -242,3 +247,45 @@ def test_regular_sdk_command_does_not_accept_a_double_completion():
     port.edit = lambda _command, _raw: b"Done\nDone\nl3dump:/>"
     with pytest.raises(ExchangeError):
         collector.command("flushCfg")
+
+
+def test_attach_to_identified_stopped_image_builds_fresh_probe_maps():
+    collector, port = setup()
+    port.runtime, port.frame = "123456789abcdef0", 12
+    attached = collector.attach_stopped_runtime(port.runtime)
+    assert attached["reused_clock_mapping"] is False
+    result = collector.collect_active(count=3, fresh=False)
+    assert result["runtime"] == port.runtime
+    assert result["before"]["trigger"]["enabled"] == "1"
+    assert collector.state["stop_verified"]
+
+
+def test_attach_refuses_a_reset_runtime_before_state_changing_commands():
+    collector, port = setup()
+    with pytest.raises(ValueError, match="runtime identity differs"):
+        collector.attach_stopped_runtime("123456789abcdef0")
+    assert len(port.writes) == 1
+    assert port.writes[0].startswith(b"triggerLog clockProbe")
+
+
+@pytest.mark.parametrize("active,latched", [(True, False), (False, True)])
+def test_attach_never_stops_an_active_or_held_capture(active, latched):
+    collector, port = setup()
+    port.runtime, port.active = "123456789abcdef0", active
+    if latched:
+        port.edit = (
+            lambda command, raw: raw.replace(b"latched=0", b"latched=1")
+            if command == "stats"
+            else raw
+        )
+    with pytest.raises(ValueError):
+        collector.attach_stopped_runtime(port.runtime)
+    assert b"sensorStop\n" not in port.writes
+
+
+def test_attach_cannot_clear_a_poisoned_collector():
+    collector, port = setup()
+    collector.failed = True
+    with pytest.raises(ExchangeError):
+        collector.attach_stopped_runtime("123456789abcdef0")
+    assert port.writes == []
