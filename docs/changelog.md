@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Include simultaneous floor-line endpoint errors in target-line uncertainty.
 - Reuse an unchanged session bundle after linking it into the send folder on
   Linux. Metadata changes trigger a hash check; modified archives are rebuilt.
 - Keep constant-delay timing diagnostics unresolved and reject non-NPZ frame
