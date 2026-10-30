@@ -54,6 +54,8 @@ HORIZONTAL_MODEL_MAX_ABS_DEG = 20.0
 # gap: agreeing channels spread 4.59 deg, collapsed ones 15.9-20.2 deg
 # (2026-07-25 session 140533).
 CHANNEL_SPREAD_MAX_DEG = 8.0
+# Conservative conditioning policy, not a calibrated model-probability threshold.
+CHANNEL_CURVATURE_MIN_RATIO = 2.0
 
 # A single-channel estimate has no cross-check. 0.7 keeps it above the
 # fallback-estimate confidence of 0.5 while marking it weaker than a
@@ -477,17 +479,17 @@ def combine_channels(
     """Combine channel estimates, dropping an outlier rather than averaging it.
 
     ``evidence`` is each channel's objective curvature from
-    ``grid_curvature`` (higher is better conditioned) and breaks the tie when
-    the channels disagree. Only channels that actually measured something
-    participate (see ``measured_channels``).
+    ``grid_curvature`` (higher is better conditioned). Disagreeing channels
+    need a twofold curvature advantage to choose one. Only channels that
+    actually measured something participate (see ``measured_channels``).
 
     Returns the angle, the channels that contributed, and whether the result
     rests on a single channel. The angle is ``None`` when no channel is
     defensible: with the channels disagreeing beyond
     ``CHANNEL_SPREAD_MAX_DEG``, selection needs strictly positive curvature
-    to name a winner, and when nothing has any -- every channel flat, off the
-    grid, or unscored -- picking one would be arbitrary. Rejecting is the
-    honest answer; ``channels_used`` is then empty.
+    and the declared dominance margin to name a winner. When nothing has any
+    -- every channel flat, off the grid, or unscored -- picking one would be
+    arbitrary. Rejecting is the honest answer; ``channels_used`` is then empty.
     """
     candidates = measured_channels(components, evidence)
     names = list(candidates)
@@ -501,7 +503,12 @@ def combine_channels(
     conditioned = [name for name in names if float(evidence[name]) > 0.0]
     if not conditioned:
         return None, [], False
-    best = max(conditioned, key=lambda name: float(evidence[name]))
+    conditioned.sort(key=lambda name: float(evidence[name]), reverse=True)
+    best = conditioned[0]
+    if len(conditioned) > 1 and float(evidence[best]) < (
+        CHANNEL_CURVATURE_MIN_RATIO * float(evidence[conditioned[1]])
+    ):
+        return None, [], False
     return candidates[best], [best], True
 
 
@@ -1184,14 +1191,25 @@ def estimate_lcmf_v1(
         channel_components, channel_evidence
     )
     if raw_angle_deg is None:
-        return _result_from_track(
-            "rejected_no_conditioned_channel",
+        measured = measured_channels(channel_components, channel_evidence)
+        status = (
+            "rejected_channel_ambiguous"
+            if any(float(channel_evidence[name]) > 0.0 for name in measured)
+            else "rejected_no_conditioned_channel"
+        )
+        result = _result_from_track(
+            status,
             shot,
             cal=cal,
             effective_tdm_tau_s=tdm_tau_s,
             effective_loop_period_s=loop_period_s,
             evidence_status=evidence_status,
         )
+        result.components_deg = components
+        result.n_snapshots = len(indices)
+        result.n_frames = len(np.unique(cache["frame"][indices]))
+        result.component_std_deg = float(np.std(list(measured.values()))) if measured else None
+        return result
     try:
         horizontal_deg, horizontal_conf, horizontal_status = _tx2_horizontal_motion(
             full_raw,
