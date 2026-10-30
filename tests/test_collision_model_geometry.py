@@ -71,6 +71,13 @@ def _arc_shot(**overrides):
     values = {
         "ball_speed_mph": 120.0,
         "club_speed_mph": 85.0,
+        # Known-answer full impact input, independent of the raw radial field.
+        "club_speed_full": {
+            "status": "calculated",
+            "value_mph": 85.0,
+            "referred_to": "impact",
+            "reference_point": "clubhead",
+        },
         "timestamp": datetime(2026, 10, 12, 9, 0, 0),
         "club": ClubType.IRON_7,
         "launch_angle_horizontal": 1.0,
@@ -383,7 +390,7 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
     _attach(shot)
 
     assert shot.spin_source == "calculated"
-    assert shot.spin_method == "impulse collision model; club inputs measured"
+    assert shot.spin_method == "impulse collision model; club inputs calculated"
     assert shot.spin_axis_source == cm.SPIN_AXIS_SOURCE_IRON
     assert shot.spin_rpm_measured == 900.0
     assert shot.spin_method_measured == "ops_fft"
@@ -398,7 +405,7 @@ def test_a_rerun_from_model_geometry_to_calculated_keeps_the_displaced_measured_
 
 def test_a_missing_input_under_a_model_geometry_spin_is_still_not_measured():
     """No filled-in values: no club speed, no spin; the axis needs no club speed."""
-    shot = _arc_shot(club_speed_mph=None)
+    shot = _arc_shot(club_speed_mph=None, club_speed_full=None)
 
     _attach(shot)
 
@@ -499,7 +506,7 @@ def test_measured_and_calculated_inputs_still_fly_as_calculated():
 @pytest.mark.parametrize(
     "overrides, reason",
     [
-        ({"club_speed_mph": None}, "spin not measured"),
+        ({"club_speed_mph": None, "club_speed_full": None}, "spin not measured"),
         ({"club_delivery": None}, "spin not measured"),
     ],
 )

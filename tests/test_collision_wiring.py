@@ -21,6 +21,13 @@ def _delivered_shot(**overrides):
     values = {
         "ball_speed_mph": 120.0,
         "club_speed_mph": 85.0,
+        # Known-answer full impact input; the raw OPS field alone cannot supply it.
+        "club_speed_full": {
+            "status": "calculated",
+            "value_mph": 85.0,
+            "referred_to": "impact",
+            "reference_point": "clubhead",
+        },
         "timestamp": datetime(2026, 10, 12, 9, 0, 0),
         "club": ClubType.IRON_7,
         "launch_angle_horizontal": 1.0,

@@ -420,7 +420,6 @@ def _collision_inputs(shot: Shot) -> dict:
     launch_source = shot.launch_angle_horizontal_source
     if launch_source and shot.launch_angle_horizontal_status == AZIMUTH_UNCALIBRATED:
         launch_source = f"{launch_source} (azimuth uncalibrated)"
-    speed = shot.club_speed_mph
     return {
         "club_path": (
             _displayed_input(path, path_source, _club_path_frame_of(shot, path_source), shot)
@@ -433,14 +432,36 @@ def _collision_inputs(shot: Shot) -> dict:
             launch_source if shot.launch_angle_horizontal_source != "estimated" else "estimated",
         ),
         "launch_vertical": _launch_input(shot, "vertical", shot.launch_angle_vertical_source),
-        "club_speed_mph": (
-            collision_model.Input(speed, collision_model.LABEL_MEASURED, "ops243_radial")
-            if _finite(speed) and speed > 0
-            else collision_model.Input(None, reason="club speed not measured")
-        ),
+        "club_speed_mph": _full_impact_club_speed_input(shot),
         "ball_speed_mph": _full_ball_speed_input(shot),
         "spin_rpm": _spin_input(shot),
     }
+
+
+def _full_impact_club_speed_input(shot: Shot) -> collision_model.Input:
+    """Only a full clubhead speed referred to impact belongs in the collision."""
+    full = shot.club_speed_full if isinstance(shot.club_speed_full, dict) else {}
+    value, label = full.get("value_mph"), full.get("status")
+    if (
+        not _finite(value)
+        or value <= 0.0
+        or full.get("referred_to") != "impact"
+        or full.get("reference_point") != "clubhead"
+        or label not in (*MODEL_LABELS, collision_model.LABEL_MEASURED, LABEL_EXPERIMENTAL)
+    ):
+        return collision_model.Input(
+            None,
+            reason="full club speed at impact not measured for the clubhead: the OPS reading is radial; "
+            "a precontact full-speed reading is not an impact referral",
+        )
+    return collision_model.Input(
+        float(value),
+        collision_model.LABEL_ESTIMATED if label == LABEL_EXPERIMENTAL else label,
+        full.get("source") or "full clubhead speed at impact",
+        reason=full.get("note")
+        or ("full clubhead speed experimental" if label == LABEL_EXPERIMENTAL else None),
+        experimental=label == LABEL_EXPERIMENTAL,
+    )
 
 
 def _low_point_input(shot: Shot) -> collision_model.Input | None:
