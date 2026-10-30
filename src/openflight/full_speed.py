@@ -1257,6 +1257,8 @@ def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
     A full ball speed over a radial club speed is never computed: it would be a
     ratio of two different kinds of speed. The ratio takes the weaker speed's label
     (measured > calculated > model geometry > estimated > experimental).
+    The ball must be referred to launch/separation, the clubhead to impact;
+    an earlier reading-time club speed is not an impact-speed observation.
     """
     base = {"status": NOT_MEASURED, "value": None, "source": SMASH_SOURCE}
     if not _is_full(ball_full):
@@ -1266,6 +1268,12 @@ def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
             **base,
             "reason": "the club speed is not a full speed: it is the OPS radial reading (D21)",
         }
+    if ball_full.get("referred_to") not in ("launch", "separation"):
+        return {**base, "reason": "the full ball speed is not referred to launch/separation"}
+    if club_full.get("referred_to") != "impact":
+        return {**base, "reason": "the full club speed is not referred to impact"}
+    if club_full.get("reference_point") != "clubhead":
+        return {**base, "reason": "the full impact speed has no bound clubhead reference point"}
     value = smash_factor(ball_full["value_mph"], club_full["value_mph"])
     if value is None or not math.isfinite(value):
         return {**base, "reason": "no ratio is defined for these speeds"}

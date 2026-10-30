@@ -378,8 +378,13 @@ def test_full_club_speed_refuses_a_flagged_head_track():
     assert "flagged" in result["reason"]
 
 
-def _speed(status, value):
-    return {"status": status, "value_mph": value}
+def _speed(status, value, *, club=False):
+    return {
+        "status": status,
+        "value_mph": value,
+        "referred_to": "impact" if club else "separation",
+        "reference_point": "clubhead" if club else "ball",
+    }
 
 
 @pytest.mark.parametrize(
@@ -392,7 +397,7 @@ def _speed(status, value):
     ],
 )
 def test_full_smash_takes_the_weaker_speed_s_label(ball, club, label):
-    result = evaluate_full_smash(_speed(ball, 120.0), _speed(club, 88.0))
+    result = evaluate_full_smash(_speed(ball, 120.0), _speed(club, 88.0, club=True))
 
     assert result["status"] == label
     assert result["value"] == pytest.approx(120.0 / 88.0)
