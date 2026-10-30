@@ -23,7 +23,15 @@ from openflight.ops_sync import analyze_recording  # noqa: E402
 
 
 def record_gpio(
-    chip_path, line, duration_s, emit, *, api=None, now=time.monotonic_ns, boot_id=None
+    chip_path,
+    line,
+    duration_s,
+    emit,
+    *,
+    api=None,
+    now=time.monotonic_ns,
+    boot_id=None,
+    stop_event=None,
 ):
     """Request one input line exclusively; save kernel sequence counters and times."""
     if not math.isfinite(duration_s) or duration_s <= 0 or type(line) is not int or line < 0:
@@ -73,6 +81,8 @@ def record_gpio(
         deadline = started + math.ceil(duration_s * 1e9)
         try:
             while (remaining := deadline - now()) > 0:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 if not request.wait_edge_events(timedelta(seconds=min(remaining / 1e9, 0.1))):
                     continue
                 for edge in request.read_edge_events(max_events=64):
