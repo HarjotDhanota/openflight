@@ -10,9 +10,11 @@ Its lower end is where the shaft axis leaves the club at the heel: one rigid poi
 club, sharp from 22 to 298 us, used as the hosel. Every fully pre-contact frame is
 searched; the last connected approach retains all visible, uncropped hosel points.
 
-Geometry. The OPS radial club speed is the head's speed along its line of sight to the
-ball at contact; the head's speed ``S`` is taken as constant over the last frames. The
-head's depth at contact is the resting ball's (from its range); earlier depths are
+Geometry. This conditional model assumes contact radial speed along the camera-to-ball
+ray. An untimed runtime scalar does not establish that reference; it is recorded as
+unbound and cannot scale a later full-club-speed result. The head's speed ``S`` is taken
+as constant over the last frames. Its depth at contact is the resting ball's (from its
+range); earlier depths are
 walked back chord by chord at each chord's forward speed. Each chord between two frames
 gives a velocity: its transverse part from the hosel's image motion at its depth, its
 forward part from ``S``. For a circle swept at a constant rate the chord is parallel to
@@ -58,6 +60,7 @@ import numpy as np
 
 from openflight.camera.geometry import deroll_normalized_offsets
 from openflight.clubs import ClubType
+from openflight.numeric import finite as _finite
 
 SOURCE = "camera_head_track"
 MPH_PER_MPS = 2.23694
@@ -159,6 +162,8 @@ class HeadTrackInputs:
     ball_range_sigma_m: float = 0.05
     handedness: str = "RH"
     club: Any = ClubType.UNKNOWN
+    ops_speed_time_ns: Optional[float] = None
+    ops_speed_clock: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +193,7 @@ class HeadTrack:
     position_sigma_m: Optional[float] = None
     # the turn the angles use: a direction at a time, the axis and rate it turns at
     turn: Optional[dict] = None
+    speed_reference: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """A JSON-ready record of the track, its chords and its uncertainty."""
@@ -214,6 +220,9 @@ class HeadTrack:
             "positions": [dict(point) for point in self.positions],
             "position_sigma_m": self.position_sigma_m,
             "turn": dict(self.turn) if self.turn is not None else None,
+            "speed_reference": dict(self.speed_reference)
+            if self.speed_reference is not None
+            else None,
         }
 
 
@@ -324,6 +333,24 @@ def _rejected(status: str, note: str, **extra) -> HeadTrack:
     return HeadTrack(status=status, notes=(note,), **extra)
 
 
+def _speed_reference(inputs: HeadTrackInputs, contact_ns: float) -> dict:
+    stamp = inputs.ops_speed_time_ns
+    finite = _finite(stamp)
+    bound = (
+        finite
+        and inputs.ops_speed_clock == "sensor_timestamp_ns"
+        and math.isclose(stamp, contact_ns, rel_tol=0.0, abs_tol=1.0)
+    )
+    return {
+        "status": "explicit_contact_model" if bound else "unbound",
+        "timestamp_ns": float(stamp) if finite else None,
+        "clock": inputs.ops_speed_clock,
+        "referred_to": "contact" if bound else None,
+        "method": "camera_to_ball_radial",
+        "physical_timing_qualified": False,
+    }
+
+
 def estimate_head_track(  # pylint: disable=too-many-return-statements
     inputs: HeadTrackInputs,
 ) -> HeadTrack:
@@ -405,6 +432,7 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
             f"the tracked chords turn at {nominal.turn_rate_ratio:.2f}x the published arc's rate "
             "(a misplaced hosel or contact time): flagged, not shown"
         )
+    speed_reference = _speed_reference(inputs, contact_ns)
     return HeadTrack(
         status="ok",
         club_path_deg=round(nominal.path_deg, 2),
@@ -430,6 +458,13 @@ def estimate_head_track(  # pylint: disable=too-many-return-statements
         positions=positions,
         position_sigma_m=round(HOSEL_PIXEL_SIGMA * deepest / inputs.camera.focal_px, 5),
         turn=nominal.turn,
+        speed_reference=speed_reference,
+        notes=()
+        if speed_reference["status"] == "explicit_contact_model"
+        else (
+            "untimed or differently referred OPS scalar: this conditional head model assumes "
+            "contact radial speed along the camera-to-ball ray",
+        ),
     )
 
 
