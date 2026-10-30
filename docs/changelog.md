@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Integrate the conditional head model exactly at the OPS reading time, including
+  zero turn rate and backward propagation, without changing its observed anchor.
 - Keep full-speed uncertainty unbounded when timing leaves supported windows
   or a tolerance is unknown; reject invalid FFT durations instead of defaulting.
 - Require ordered OPS transition observations and include both FFT windows in
