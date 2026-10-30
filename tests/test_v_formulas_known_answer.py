@@ -277,6 +277,9 @@ def run_shot(kiosk, *, delivery, handed, yaw, measured_club=False, impact_refere
         mode="rolling-buffer",
         camera_lens_intrinsics="calibrated",
         inclinometer={"applied_to": ["camera", "iwr6843"]},
+        target_line={"frame": "target_line", "horizontal_offset_deg": offset, "revision": 1}
+        if offset is not None
+        else None,
     )
     track = ops_track(truth["ball_speed"], truth["launch_v"], launch_h_bore, ops_m, ball_bore)
     shot.ball_speed_mph = track["canonical_radial_mph"]
