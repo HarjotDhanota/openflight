@@ -977,6 +977,7 @@ _HEAD_TRACK_STATE_KEYS = (
     "position_sigma_m",
     "contact_ns",
     "contact_sigma_ms",
+    "contact_timing",
     "club_path_sigma_deg",
     "attack_angle_sigma_deg",
     "club_path_flag",
