@@ -214,7 +214,9 @@ shutdown_server() {
 
     log "Requesting graceful hardware shutdown..."
     if curl -fsS --max-time 2 -X POST "http://$HOST:$WEB_PORT/api/shutdown" >/dev/null 2>&1; then
-        for _ in {1..80}; do
+        shutdown_polls=80
+        if has_server_arg --tester-native-sync-package; then shutdown_polls=240; fi
+        for ((attempt=0; attempt<shutdown_polls; attempt++)); do
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
                 wait "$SERVER_PID" 2>/dev/null || true
                 SERVER_PID=""
@@ -453,6 +455,13 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 UV_SYNC_ARGS=(--quiet)
+if has_server_arg --tester-native-sync-package && [ "${OPENFLIGHT_UV_RUN_ARGS:-}" = "--no-sync" ]; then
+    if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ] || [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
+        show_startup_failure "server" "Existing test environment unavailable" "Set UV_PROJECT_ENVIRONMENT to the tested camera environment."
+    fi
+    uv run --no-sync python -c 'import picamera2, numpy, scipy, flask_socketio, serial' || \
+        show_startup_failure "server" "Existing test environment incomplete" "The selected environment cannot import the required camera and fusion packages."
+else
 # One interpreter on the Pi: camera starts, or units whose venv sees system site
 # packages or whose system Python has picamera2, use /usr/bin/python3.
 if has_camera_arg || use_pi_system_python; then
@@ -473,6 +482,7 @@ uv sync "${UV_SYNC_ARGS[@]}" || show_startup_failure \
     "server" \
     "OpenFlight preparation failed" \
     "Dependency preparation failed. Check the terminal log, then relaunch OpenFlight."
+fi
 
 configure_kld7_latency
 
@@ -486,7 +496,9 @@ uv run "${UV_RUN_ARGS[@]}" "${SERVER_CMD[@]}" &
 SERVER_PID=$!
 
 log "Waiting for server to start..."
-for _ in {1..30}; do
+startup_polls=30
+if has_server_arg --tester-native-sync-package; then startup_polls=3600; fi
+for ((attempt=0; attempt<startup_polls; attempt++)); do
     curl -fsS "http://$HOST:$WEB_PORT" >/dev/null 2>&1 && break
     kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.5

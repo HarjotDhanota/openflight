@@ -43,6 +43,33 @@
   line-height: 1.15;
 }
 
+.session-status:has(.ready-light) > .free-play--native {
+  flex-basis: 65%;
+}
+
+.session-status:has(.free-play--native) .ready-light__cause {
+  display: none;
+}
+
+.native-sync {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.free-play__status .native-sync span {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}
+
+.native-sync button {
+  max-width: 7rem;
+  white-space: normal;
+}
+
 .free-play__status span {
   max-width: 100%;
   overflow: hidden;

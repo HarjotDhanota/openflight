@@ -13,11 +13,25 @@ class RigControl:
     """Observe native OPS events; never send an IWR capture or use a sound GPIO."""
 
     def __init__(
-        self, *, folder, boot_id, radar, camera, recorder, now=time.monotonic_ns, wait_s=4
+        self,
+        *,
+        folder,
+        boot_id,
+        radar,
+        camera,
+        recorder,
+        now=time.monotonic_ns,
+        wait_s=4,
+        keep_camera=False,
+        keep_radar=False,
     ):
         if type(wait_s) is not int or not 4 <= wait_s <= 30:
             raise ValueError("native wait must be an integer in 4..30 seconds")
         self.wait_s = wait_s
+        self.keep_camera = keep_camera
+        self.keep_radar = keep_radar
+        self.original_serial = getattr(radar, "serial", None)
+        self.original_evidence_callback = getattr(radar, "capture_evidence_callback", None)
         self.folder = Path(folder)
         self.boot_id, self.radar, self.camera = boot_id, radar, camera
         self.recorder, self.now = recorder, now
@@ -127,8 +141,11 @@ class RigControl:
         self.camera_started = True
         self.frame_thread = threading.Thread(target=self._frames, name="trial-frame-clocks")
         self.frame_thread.start()
-        self.radar.connect()
+        if not getattr(getattr(self.radar, "serial", None), "is_open", False):
+            self.radar.connect()
         self.ops_connected = True
+        self.original_serial = self.radar.serial
+        self.original_evidence_callback = getattr(self.radar, "capture_evidence_callback", None)
         if self.radar.serial is not None:
             from ops_serial_journal import SerialJournal
 
@@ -177,10 +194,10 @@ class RigControl:
                 timeout=self.wait_s, dump_grace=8, cancel_event=self.stop
             )
             if raw:
-                from ops_sample_clock import dump_summary
-
                 payload = raw.encode("ascii")
                 (self.folder / "ops-response.raw").write_bytes(payload)
+                from ops_sample_clock import dump_summary
+
                 self.emit("ops-summary.jsonl", dump_summary(payload, 6))
             self.native_capture = bool(raw)
             self.emit(
@@ -222,7 +239,11 @@ class RigControl:
                         },
                     )
                 finally:
-                    self.radar.disconnect()
+                    if self.keep_radar:
+                        self.radar.serial = self.original_serial
+                        self.radar.capture_evidence_callback = self.original_evidence_callback
+                    else:
+                        self.radar.disconnect()
         finally:
             self.stop.set()
             for worker in (self.gpio_thread, self.frame_thread):
@@ -230,7 +251,8 @@ class RigControl:
                     worker.join(3)
                     if worker.is_alive():
                         self.errors.append({"component": worker.name, "error": "did not close"})
-            self.camera.stop()
+            if not self.keep_camera:
+                self.camera.stop()
             if self.arm_id is not None:
                 self.router.disarm()
             (self.folder / "camera-clocks.json").write_text(

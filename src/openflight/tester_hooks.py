@@ -204,6 +204,17 @@ def _tester_setup_readiness(
         "worker_alive": bool(iwr_worker is not None and iwr_worker.is_alive()),
         "serial_open": bool(iwr_serial is not None and getattr(iwr_serial, "is_open", False)),
     }
+    if free_play_config.get("native_sync_enabled") and iwr_monitor is not None:
+        native_health = iwr_monitor.ready_snapshot()
+        iwr_ok = bool(server.iwr6843_runtime_config.get("enabled")) and all(
+            native_health.get(key) for key in ("running", "worker_alive", "serial_open")
+        )
+        checks[-1] = {
+            "id": "iwr6843",
+            "status": "pass" if iwr_ok else "block",
+            "reason": None if iwr_ok else "Native IWR acquisition worker or UART is unavailable",
+        }
+        observations["iwr6843"] = native_health
     checked_at = time.time() if checked_at is None else checked_at
     selection = (
         server.inclinometer_service.snapshot_for_impact(checked_at)
@@ -640,6 +651,9 @@ def _free_play_exposure_at_shot() -> dict:
 def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
     """Close acquisition only after accepted shots have finished writing."""
     resume_free_play()
+    from openflight import kiosk_extensions
+
+    kiosk_extensions.call_all("before_capture_stop")
     if server.monitor is not None:
         server.monitor.stop()
         capture_thread = getattr(server.monitor, "_capture_thread", None)
@@ -670,6 +684,7 @@ def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
     if server.monitor is not None:
         server.monitor.disconnect()
         server.monitor = None
+    kiosk_extensions.call_all("after_capture_stop")
     session = server.get_session_logger()
     if session is not None:
         session.end_session()
@@ -810,6 +825,8 @@ def _add_arguments(parser) -> None:
         help="Required SHA-256 fingerprint of the measured tester rig geometry",
     )
     parser.add_argument("--tester-free-play", action="store_true")
+    parser.add_argument("--tester-native-sync-package", type=Path, default=None)
+    parser.add_argument("--tester-native-sync-control", type=Path, default=None)
     parser.add_argument("--tester-id")
     parser.add_argument("--tester-run-id")
     parser.add_argument("--tester-control-port", type=int, default=8765)
@@ -837,6 +854,32 @@ def _configure(args, parser) -> None:
         parser.error("--free-play-ladder is free play's: add --tester-free-play")
     if args.tester_setup_required and not args.tester_config_hash:
         parser.error("--tester-setup-required requires --tester-config-hash")
+    native_package = getattr(args, "tester_native_sync_package", None)
+    native_control = getattr(args, "tester_native_sync_control", None)
+    native_sync = native_package is not None
+    if native_sync != (native_control is not None):
+        parser.error("native fusion requires both package and control directory")
+    if native_sync:
+        if (
+            not args.tester_free_play
+            or not args.tester_setup_required
+            or args.trigger != "hardware"
+            or not args.iwr6843
+            or not args.camera_capture
+            or args.mock
+            or args.swing_speed
+        ):
+            parser.error(
+                "native fusion requires real admitted free play, hardware trigger, IWR and camera"
+            )
+        from openflight.camera.native_fusion import NativeFusionExtension
+        from openflight.kiosk_extensions import register
+
+        register(
+            NativeFusionExtension(
+                args.tester_native_sync_package.resolve(), args.tester_native_sync_control.resolve()
+            )
+        )
     global study_mode_enabled, tester_setup_required, tester_config_hash  # pylint: disable=global-statement
     study_mode_enabled = bool(args.study_mode)
     tester_setup_required = bool(args.tester_setup_required)
@@ -854,6 +897,8 @@ def _configure(args, parser) -> None:
             unit_id=platform.node(),
             geometry_unverified=args.tester_geometry_unverified,
         )
+        if native_sync:
+            free_play_config["native_sync_enabled"] = True
     global free_play_plan, free_play_plan_path, free_play_study  # pylint: disable=global-statement
     free_play_plan = free_play_plan_path = free_play_study = None
     if args.free_play_ladder:

@@ -8,7 +8,7 @@ export default defineConfig({
     // Relative fetch('/api/shutdown') from the UI hits Vite; proxy to the mock/backend.
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.VITE_SOCKET_URL ?? 'http://localhost:8080',
         changeOrigin: true,
       },
     },

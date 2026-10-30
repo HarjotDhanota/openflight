@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { PanelAction } from './panel/PanelAction';
+import { NativeSyncControls } from './NativeSyncControls';
 import { openTesterPage, returnToTesterPage } from '../utils/testerPage';
 import './FreePlayControls.css';
 
@@ -23,6 +24,7 @@ interface FreePlayState {
   exposure_study?: ExposureStudy | null;
   paused?: { cause: string } | null;
   tester_url?: string | null;
+  native_sync_enabled?: boolean;
 }
 
 const useFreePlayStore = create<{ state: FreePlayState | null }>(() => ({ state: null }));
@@ -48,26 +50,41 @@ export function FreePlayStatus({
   // controls take its band, so "Package ready" and the file name read in full
   const finished = ['stopping', 'packaging', 'ready'].includes(state.phase ?? '');
   return (
-    <div className={finished ? 'free-play free-play--finished' : 'free-play'} aria-label="Free play">
+    <div
+      className={
+        finished
+          ? 'free-play free-play--finished'
+          : state.native_sync_enabled
+            ? 'free-play free-play--native'
+            : 'free-play'
+      }
+      aria-label="Free play"
+    >
       <div className="free-play__status" role="status" aria-live="polite">
-        <strong className={ready ? 'free-play__ready' : undefined}>
-          {ready
-            ? state.bundle?.name
-              ? `Package ready: ${state.bundle.name} · ${SEND_FROM}`
-              : `Package ready · ${SEND_FROM}`
-            : state.phase === 'recording'
-              ? state.paused
-                ? 'Free play: paused'
-                : 'Free play: recording'
-              : waiting
-                ? 'Stopping and packaging…'
-                : 'Free play needs attention'}
-        </strong>
-        {state.geometry_unverified && !finished ? <span>Geometry unverified</span> : null}
-        {state.exposure_study?.text && !finished ? (
-          <span className="free-play__study">{state.exposure_study.text}</span>
-        ) : null}
-        {state.error ? <span role="alert">{state.error}</span> : null}
+        {!finished && state.native_sync_enabled ? (
+          <NativeSyncControls />
+        ) : (
+          <>
+            <strong className={ready ? 'free-play__ready' : undefined}>
+              {ready
+                ? state.bundle?.name
+                  ? `Package ready: ${state.bundle.name} · ${SEND_FROM}`
+                  : `Package ready · ${SEND_FROM}`
+                : state.phase === 'recording'
+                  ? state.paused
+                    ? 'Free play: paused'
+                    : 'Free play: recording'
+                  : waiting
+                    ? 'Stopping and packaging…'
+                    : 'Free play needs attention'}
+            </strong>
+            {state.geometry_unverified && !finished ? <span>Geometry unverified</span> : null}
+            {state.exposure_study?.text && !finished ? (
+              <span className="free-play__study">{state.exposure_study.text}</span>
+            ) : null}
+            {state.error ? <span role="alert">{state.error}</span> : null}
+          </>
+        )}
       </div>
       <button
         type="button"

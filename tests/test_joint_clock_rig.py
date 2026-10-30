@@ -21,6 +21,12 @@ rig_module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(rig_module)
 
 
+@pytest.fixture(autouse=True)
+def script_imports(monkeypatch):
+    """Dynamic loading must provide the same sibling imports as the real launcher."""
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+
+
 def test_recorder_stops_cleanly_on_companion_cancellation():
     api, request, _ = fake_api()
     stop = Event()

@@ -18,10 +18,11 @@ COMMANDS = {"switches": "switches_set", "reset": "reset_pressed", "next": "next"
 class InternalSyncController:
     """Prepare one isolated session; operators confirm physical steps in the page."""
 
-    def __init__(self, *, root, package, jobs, source, release):
+    def __init__(self, *, root, package, jobs, source, release, job_action="internal_sync"):
         self.root = Path(root).expanduser().resolve()
         self.package = Path(package).expanduser().resolve() if package else None
         self.jobs, self.source, self.release = jobs, Path(source), release
+        self.job_action = job_action
         self.lock = threading.Lock()
         latest = self.root / "latest-session.txt"
         self.session = latest.read_text().strip() if latest.exists() else None
@@ -49,7 +50,7 @@ class InternalSyncController:
                 state["normal_boot_restoration"] = "owner_confirmed_not_independently_queried"
             job = self.jobs.status()
             state["job"] = job
-            if job.get("action") == "internal_sync" and job.get("state") == "error":
+            if job.get("action") == self.job_action and job.get("state") == "error":
                 state.update(phase="failed", message=job.get("message", "Session failed"))
         return state
 

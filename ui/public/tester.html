@@ -1990,6 +1990,15 @@
           <p id="free-play-range-text"></p>
           <button type="button" id="free-play-range-retry">Try the ball range again</button>
         </div>
+        <label id="native-free-play-choice" hidden><input id="native-free-play" type="checkbox" />
+          Use IWR + OPS native triggers (timing test; physical alignment unvalidated)</label>
+        <div id="native-free-play-controls" class="setup-warning" hidden aria-live="polite">
+          <strong id="native-free-play-phase"></strong>
+          <p id="native-free-play-message"></p>
+          <button id="native-free-play-confirm" type="button" hidden>Confirm</button>
+          <button id="native-free-play-restored" type="button" hidden>Normal switches restored; IWR USB reconnected</button>
+          <p id="native-free-play-error" class="problem" role="alert"></p>
+        </div>
         <button type="button" class="primary" id="step-free-play">Start free play</button>
         <button type="button" id="free-play-stop" hidden>Stop &amp; package</button>
         <button type="button" class="primary" id="free-play-done" hidden>Done</button>
@@ -6678,6 +6687,42 @@
           ladderRequestRunning = false;
         }
       }
+      let nativeFreePlay = {}, nativeBusy = false;
+      const nativeConfirm = {
+        switches: ['switches_set', 'Switches set; RESET not pressed'],
+        reset: ['reset_pressed', 'RESET pressed; waited at least one second'],
+        next: ['next', 'Hitting area empty; prepare next attempt'],
+      };
+      async function refreshNativeFreePlay() {
+        try {
+          const response = await fetch('/api/tester/free-play/native-sync', { cache: 'no-store' });
+          if (!response.ok) return;
+          nativeFreePlay = await response.json();
+          el('native-free-play-choice').hidden = !nativeFreePlay.configured;
+          el('native-free-play-controls').hidden = !nativeFreePlay.enabled;
+          el('native-free-play-phase').textContent = nativeFreePlay.phase || '';
+          el('native-free-play-message').textContent = nativeFreePlay.normal_boot_restore_needed
+            ? nativeFreePlay.restore_instructions : nativeFreePlay.message || '';
+          const action = nativeConfirm[nativeFreePlay.phase];
+          el('native-free-play-confirm').hidden = !action;
+          el('native-free-play-confirm').disabled = nativeBusy;
+          el('native-free-play-confirm').textContent = action?.[1] || 'Confirm';
+          el('native-free-play-restored').hidden = !nativeFreePlay.normal_boot_restore_needed;
+          el('native-free-play-restored').disabled = nativeBusy || !nativeFreePlay.resources_released;
+        } catch (error) { el('native-free-play-error').textContent = String(error); }
+      }
+      async function nativeFreePlayCommand(command) {
+        if (nativeBusy) return;
+        nativeBusy = true;
+        try {
+          await post('/api/tester/free-play/native-sync/command', { command, phase_token: nativeFreePlay.phase_token });
+          el('native-free-play-error').textContent = '';
+        } catch (error) { el('native-free-play-error').textContent = error.message; }
+        finally { nativeBusy = false; refreshNativeFreePlay(); }
+      }
+      el('native-free-play-confirm').onclick = () => nativeFreePlayCommand(nativeConfirm[nativeFreePlay.phase]?.[0]);
+      el('native-free-play-restored').onclick = () => nativeFreePlayCommand('restored');
+      refreshNativeFreePlay(); setInterval(refreshNativeFreePlay, 1000);
       el('step-free-play').addEventListener('click', async () => {
         freePlayPending = true;
         el('step-free-play').disabled = true;
@@ -6691,6 +6736,7 @@
             action: 'free_play',
             resolution: freePlayResolution,
             club: firstClub,
+            capture_mode: el('native-free-play').checked ? 'native_internal' : 'sound',
             // on the unit's own screen the kiosk shows in this window, never a second one
             kiosk_window: onUnitScreen ? 'shared' : 'own',
           });

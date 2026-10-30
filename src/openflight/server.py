@@ -2973,7 +2973,10 @@ def init_iwr6843(
         calibration.lateral_tee_offset_m = float(lateral_tee_offset_m)
         calibration.antennas = _antenna_layout(radar_height_m, board_rotation_deg, tilt_deg)
 
-        capture_monitor = IWR6843CaptureMonitor(
+        capture_factory = (
+            kiosk_extensions.first("iwr_capture_monitor_factory") or IWR6843CaptureMonitor
+        )
+        capture_monitor = capture_factory(
             config_path=config_path,
             output_dir=output_dir,
             port=port,
@@ -7891,7 +7894,11 @@ def start_monitor(
                 "trigger_magnitude": getattr(hardware_trigger, "trigger_magnitude", None),
                 "pre_trigger_segments": getattr(hardware_trigger, "pre_trigger_segments", None),
                 "sample_rate_ksps": sample_rate_ksps,
-                "aux_trigger_fanout": "unavailable_no_qualified_trigger_edge",
+                "aux_trigger_fanout": (
+                    "experimental_ops_gpio27_camera_independent_iwr"
+                    if session_config.get("native_sensor_timing", {}).get("enabled")
+                    else "unavailable_no_qualified_trigger_edge"
+                ),
             }
         session_logger.start_session(
             radar_port=port if not mock else "mock",
@@ -9011,6 +9018,7 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
     kiosk_extensions.call_all("configure", args, parser)
+    native_sync = kiosk_extensions.first("native_internal_fusion") is True
     global golfer_handed  # pylint: disable=global-statement
     golfer_handed = args.handed
     _apply_kld7_device_defaults(args)
@@ -9039,7 +9047,7 @@ def main():
         parser.error("--trigger hardware requires --sample-rate 30")
     if args.trigger == "hardware" and not 0 <= args.pre_trigger_segments <= 32:
         parser.error("--pre-trigger-segments must be between 0 and 32")
-    if args.trigger == "hardware" and (args.iwr6843 or args.camera_capture):
+    if args.trigger == "hardware" and (args.iwr6843 or args.camera_capture) and not native_sync:
         parser.error(
             "--trigger hardware is OPS-only: it has no qualified low-latency trigger edge "
             "for --iwr6843 or --camera-capture. Keep --trigger sound for synchronized "

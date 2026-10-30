@@ -5,11 +5,12 @@ import { uniqueE2eSetupPath } from './tests/e2e/isolateSetupPath';
 
 // OPENFLIGHT_E2E_UI_PORT moves the dev server off 5173 (another checkout's may hold it).
 const PORT = Number(process.env.OPENFLIGHT_E2E_UI_PORT ?? 5173);
+const BACKEND_PORT = Number(process.env.OPENFLIGHT_E2E_BACKEND_PORT ?? 8080);
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
 const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url));
 const E2E_SETUP_PATH = uniqueE2eSetupPath();
-const BACKEND_ARGS = `--mock --host ${HOST} --web-port 8080 --no-logging --setup-file "${E2E_SETUP_PATH}"`;
+const BACKEND_ARGS = `--mock --host ${HOST} --web-port ${BACKEND_PORT} --no-logging --setup-file "${E2E_SETUP_PATH}"`;
 const BACKEND_COMMAND = `uv run openflight-server ${BACKEND_ARGS}`;
 
 const E2E_PROFILES_PATH = uniqueE2eProfilesPath();
@@ -39,7 +40,7 @@ export default defineConfig({
   webServer: [
     {
       command: BACKEND_COMMAND,
-      url: `http://${HOST}:8080`,
+      url: `http://${HOST}:${BACKEND_PORT}`,
       reuseExistingServer: false,
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       env: backendEnv(),
@@ -50,7 +51,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       cwd: CONFIG_DIR,
       // the UI finds the backend on 8080 by itself only from port 5173 (serverOrigin.ts)
-      env: { ...backendEnv(), VITE_SOCKET_URL: process.env.VITE_SOCKET_URL ?? `http://${HOST}:8080` },
+      env: { ...backendEnv(), VITE_SOCKET_URL: process.env.VITE_SOCKET_URL ?? `http://${HOST}:${BACKEND_PORT}` },
     },
   ],
   projects: [

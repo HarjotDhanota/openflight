@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -128,7 +129,7 @@ def camera_evidence(folder, rig):
     }
 
 
-def attempt(collector, files, folder):
+def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None):
     """Both radars self-trigger; OPS GPIO retains the camera; IWR is never forced."""
     from joint_clock_rig import RigControl
     from ops_serial_journal import SerialJournal
@@ -148,6 +149,8 @@ def attempt(collector, files, folder):
         "iwr_forced_capture": False,
     }
     rig = None
+    external_camera = camera is not None
+    cancelled = cancelled or files.cancelled
     row_start = len(collector.rows)
     try:
         collector.begin()
@@ -159,11 +162,11 @@ def attempt(collector, files, folder):
                 if phase == "learning_background"
                 else "Place the ball at the intended hitting position, then stay still.",
             ),
-            files.cancelled,
+            cancelled,
         )
         result["address_observation"] = address
         files.publish("preparing_sensors", message="Stay still while the camera and OPS arm.")
-        camera = CameraCaptureRuntime(
+        camera = camera or CameraCaptureRuntime(
             output_dir=folder / "ops-camera/camera",
             use_gpio_trigger=False,
             settings=CameraCaptureSettings(
@@ -180,10 +183,12 @@ def attempt(collector, files, folder):
         rig = RigControl(
             folder=folder / "ops-camera",
             boot_id=collector.host_boot,
-            radar=OPS243Radar(port="/dev/ttyAMA0"),
+            radar=radar or OPS243Radar(port="/dev/ttyAMA0"),
             camera=camera,
             recorder=record_gpio,
             wait_s=30,
+            keep_camera=external_camera,
+            keep_radar=radar is not None,
         )
         rig.prepare()
         collector.arm(index)
@@ -192,7 +197,7 @@ def attempt(collector, files, folder):
             lambda phase, state: files.publish(
                 phase, iwr=state, message="Armed: make one swing. Both radars decide independently."
             ),
-            files.cancelled,
+            cancelled,
         )
         files.publish("saving", message="Saving both radar records and the camera clip.")
         (folder / "iwr-result.bin").write_bytes(base64.b64decode(held["result_b64"]))
@@ -235,7 +240,9 @@ def attempt(collector, files, folder):
                 except Exception as error:
                     result["companion_error"] = repr(error)
                 result["ops_capture_observed"] = rig.native_capture
-                result["camera"] = camera_evidence(folder / "ops-camera", rig)
+                camera_root = camera.output_dir.parent if external_camera else folder / "ops-camera"
+                result["camera_root"] = str(camera_root)
+                result["camera"] = camera_evidence(camera_root, rig)
             result["iwr_exchanges"] = collector.rows[row_start:]
             result["iwr_lifecycle"] = dict(collector.state)
             if (
@@ -283,12 +290,13 @@ def resource_ownership():
         return {"resources_released": False, "ownership_error": repr(error)}
 
 
-def run(package, output):
-    """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
+@contextmanager
+def open_runtime(package, files):
+    """One RAM boot and UART lease shared by standalone and normal fusion sessions."""
     from joint_shot_clock import ShotCollector
 
     helper = load_package(package)
-    files = SessionFiles(output)
+    output = files.folder
     collector = None
     entered_rom = False
     try:
@@ -321,17 +329,7 @@ def run(package, output):
                     handle, build=BUILD, host_boot=helper.boot_identity(), sleep=time.sleep
                 )
                 collector.establish_fresh_runtime()
-                for index in range(1, 101):
-                    files.publish(
-                        "next",
-                        message="Leave the hitting area empty, with the ball removed, then prepare the next attempt.",
-                        attempt_number=index,
-                    )
-                    files.wait("next")
-                    attempt(collector, files, output / f"attempt-{index:03d}")
-                files.publish("finished", message="Session limit reached.")
-    except (InterruptedError, KeyboardInterrupt):
-        files.publish("stopped", message="Session stopped. Original attempt records retained.")
+                yield collector
     except BaseException as error:
         files.publish(
             "failed", error=repr(error), message="Acquisition stopped; original evidence retained."
@@ -349,6 +347,24 @@ def run(package, output):
             if entered_rom
             else None,
         )
+
+
+def run(package, output):
+    """The UI supplies real switch/RESET confirmations; upload is RAM-only."""
+    files = SessionFiles(output)
+    try:
+        with open_runtime(package, files) as collector:
+            for index in range(1, 101):
+                files.publish(
+                    "next",
+                    message="Remove the ball, leave the hitting area empty, then prepare the next attempt.",
+                    attempt_number=index,
+                )
+                files.wait("next")
+                attempt(collector, files, output / f"attempt-{index:03d}")
+            files.publish("finished", message="Session limit reached.")
+    except (InterruptedError, KeyboardInterrupt):
+        files.publish("stopped", message="Session stopped. Original attempt records retained.")
 
 
 def main():

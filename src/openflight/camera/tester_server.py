@@ -8153,6 +8153,12 @@ def create_app(
         ),
         REPO_ROOT / "ui/public/internal-sync.html",
     )
+    from openflight.camera import native_free_play
+
+    native_controls = native_free_play.FreePlayNativeControls(
+        internal_sync_clock_package, jobs, REPO_ROOT, sessions_root=sessions_root
+    )
+    native_controls.register(app)
 
     def stop_guided_live(
         tester_id: str, epoch_id: str | None = None, arm_id: str | None = None
@@ -11203,6 +11209,8 @@ def create_app(
                 lens_id = lens_store.selected() or lens_catalogue.reference_lens_id
                 lens_settings = lens_store.settings(lens_id)
                 params = replace(params, arm_id=free_play_resolution(payload, lens_settings))
+            mode = native_free_play.capture_mode(payload or {}, action, internal_sync_clock_package)
+            native_controls.require_restored()
             club = first_club(payload) if action == "free_play" else CLUB
             # the page on the unit's own screen shows free play's kiosk in its window
             kiosk_window = (
@@ -11289,6 +11297,7 @@ def create_app(
                 kiosk_window=kiosk_window,
             )
             run_id = None
+            native_control = None
             if action == "free_play":
                 run_id = uuid.uuid4().hex
                 commands[0].extend(
@@ -11303,6 +11312,10 @@ def create_app(
                     c["id"] == "geometry" and c["status"] == "warn" for c in eligibility["checks"]
                 ):
                     commands[0].append("--tester-geometry-unverified")
+                if mode == "native_internal":
+                    native_control = native_free_play.configure_command(
+                        commands[0], internal_sync_clock_package, run_id
+                    )
             busy = _range_resources_busy(live_yields=True)
             if busy:
                 raise RuntimeError(busy)
@@ -11366,6 +11379,8 @@ def create_app(
                         resolution=plan["resolution"],
                         kiosk_window=kiosk_window,
                     )
+                if native_control is not None:
+                    native_controls.prepare(native_control, run_id)
                 jobs.start(action, commands, log_path, on_finish=on_finish)
             except Exception:
                 if action == "free_play":

@@ -51,6 +51,12 @@ class KioskExtension:  # pylint: disable=unused-argument
     def on_shutdown(self) -> None:
         """During hardware cleanup at exit."""
 
+    def before_capture_stop(self) -> None:
+        """Quiesce a shared acquisition owner before free-play services close."""
+
+    def after_capture_stop(self) -> None:
+        """Finalize capture evidence before free play closes its log and packages."""
+
     def diagnostic_camera(self) -> bool:
         """True when a study page drives the camera and may exceed the armed profile."""
         return False
@@ -65,6 +71,14 @@ class KioskExtension:  # pylint: disable=unused-argument
 
     def iwr_optional(self) -> Optional[str]:
         """Why the run may continue without a failed IWR6843, or None to exit."""
+        return None
+
+    def iwr_capture_monitor_factory(self):
+        """A tester-owned IWR acquisition adapter, or None for normal GPIO capture."""
+        return None
+
+    def native_internal_fusion(self):
+        """True for an explicitly configured tester acquisition owner, otherwise None."""
         return None
 
     def session_start_config(self, config: dict) -> None:
