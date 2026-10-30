@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import time
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -95,7 +96,10 @@ def test_boot_or_initial_high_refuses_preparation(tmp_path):
     assert not rig.gpio_ready.is_set()
 
 
-def test_native_trial_rearms_after_setup_before_waiting(tmp_path):
+@pytest.mark.parametrize("edge_during_rearm", [False, True])
+def test_native_trial_rearms_after_setup_before_waiting(tmp_path, edge_during_rearm):
+    seen = []
+
     class Radar:
         serial = None
         native_ready = False
@@ -115,6 +119,16 @@ def test_native_trial_rearms_after_setup_before_waiting(tmp_path):
 
         def rearm_internal_speed_trigger(self):
             self.native_ready = True
+            if edge_during_rearm:
+                stamp = time.monotonic_ns()
+                rig.observe_gpio(
+                    {
+                        "type": "edge",
+                        "edge": "rising",
+                        "timestamp_ns": stamp,
+                        "received_mono_ns": stamp,
+                    }
+                )
             return True
 
         def wait_for_hardware_trigger(self, **_kwargs):
@@ -129,7 +143,7 @@ def test_native_trial_rearms_after_setup_before_waiting(tmp_path):
     camera = SimpleNamespace(
         start=lambda: None,
         stop=lambda: None,
-        notify_capture_request=lambda _item: True,
+        notify_capture_request=lambda item: seen.append(item) is None,
         _ring=SimpleNamespace(latest_frame=None),
     )
     rig = rig_module.RigControl(
@@ -145,3 +159,4 @@ def test_native_trial_rearms_after_setup_before_waiting(tmp_path):
     finally:
         rig.close()
     assert json.loads((rig.folder / "RESULT.json").read_text())["status"] == "complete"
+    assert len(seen) == int(edge_during_rearm)

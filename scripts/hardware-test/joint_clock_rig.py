@@ -149,9 +149,11 @@ class RigControl:
                 "effective_rf_power_verified": False,
             },
         )
-        if acknowledgements != [3] or not self.radar.rearm_internal_speed_trigger():
-            raise RuntimeError("P3 acknowledgement or explicit native rearm failed")
+        if acknowledgements != [3]:
+            raise RuntimeError("P3 acknowledgement failed")
         self.arm_id = self.router.arm(self.now())
+        if not self.radar.rearm_internal_speed_trigger():
+            raise RuntimeError("explicit native rearm failed")
 
     def _capture(self):
         try:
