@@ -12,8 +12,10 @@ The normal setup, capture-policy selection, live metrics and Stop/package run
 together on this source. IWR-led/common-hardware acquisition is still incomplete;
 the selector reports that status. Conditional D-plane pose/strike refinement is
 planned, not an implemented feature of this checkpoint. Claude's versioned
-club-part label/crop contract is included; trained club weights and inference
-integration remain pending. New ball weights still require their downstream
+club-part label/crop contract is included. Its trained pilot remains disabled:
+the September 30 comparison has worse boundaries and more false detections than
+the current route, and both routes miss the September 29 dusk heads. A qualified
+club model and inference integration remain pending. New ball weights still require their downstream
 pipeline evaluation/integration. Their development artifacts must not
 be mistaken for enabled runtime models. The OPS selection research still fails
 its accuracy gates and is not silently substituted for the current processor.
