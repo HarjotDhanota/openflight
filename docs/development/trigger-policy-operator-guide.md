@@ -120,6 +120,14 @@ result IDs. It does not request OPS capture or enable the unavailable IWR-led
 mode. The current 50 ms polling interval cannot guarantee retention with the
 configured 25.6 ms OPS prehistory; the complete dump spans 136.5 ms.
 
+The owner confirmed on 30 October that sound GATE is disconnected from OPS
+J3 pin 3. Verify that connection before using the Sound comparison baseline;
+this confirmation does not describe the detector's power or other GPIO wiring.
+The OPS driver now accepts an optional per-attempt software-trigger event on its
+existing dump reader. It sends S! once without clearing input, preserving an
+already arriving dump and recording host write/flush bounds. This transport is
+not connected to the normal IWR latch callback yet and does not enable IWR-led.
+
 ## Integration boundaries and validation
 
 Review this work as separate capability, policy-selection, journal/trace and

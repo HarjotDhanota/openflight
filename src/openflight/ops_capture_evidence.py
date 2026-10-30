@@ -35,6 +35,7 @@ class OpsCaptureEvidence:
         self.marker_observed = None
         self.raw = bytearray()
         self.raw_received = 0
+        self.software_trigger_command = None
 
     def prefix_read(self, chunk):
         """Save bounded pre-marker input, including split notification lines."""
@@ -90,6 +91,7 @@ class OpsCaptureEvidence:
             "arm_command_completed_mono_ns": self.context.get("command_completed_mono_ns"),
             "arm_command_error": self.context.get("error"),
             "arm_observation": "host_command_bounds_not_device_acknowledgement",
+            "software_trigger_command": self.software_trigger_command,
             "pre_trigger_segments": self.context.get("pre_trigger_segments"),
             "dump_start_mono_ns": self.marker_observed,
             "response_completed_mono_ns": time.monotonic_ns(),
