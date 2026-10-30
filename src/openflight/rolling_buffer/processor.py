@@ -226,6 +226,7 @@ class RollingBufferProcessor:
             "motion_policy": None if self.legacy_speed_selection else dict(POLICY),
             "impact_fallback_policy": "explicit_sound_capture_v1",
             "coherent_ball_support_policy": "first_window_start_v1",
+            "impact_transition_policy": "ordered_fft_observations_v1",
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         payload["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1917,7 +1918,7 @@ class RollingBufferProcessor:
                 continue
             reading_center_ms = self._reading_center_ms(reading)
             transition_gap_ms = first_ball_center_ms - reading_center_ms
-            if transition_gap_ms < 0:
+            if transition_gap_ms <= 0:
                 continue
             if transition_gap_ms > self.IMPACT_TRANSITION_MAX_GAP_MS:
                 continue
