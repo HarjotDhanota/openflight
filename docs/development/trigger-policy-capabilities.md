@@ -23,6 +23,15 @@ OPS ring, so **IWR-led retention is unavailable**. A stats poll is neither a
 qualified early interrupt nor a contact timestamp. Lowering sample rate changes
 the OPS measurable speed range and is outside this task.
 
+The host collector now records the first polled latch observation immediately,
+before waiting for the complete result. This is an observation hook, not an
+IWR-led capture route or a measured detector timestamp. The current 50 ms polling
+interval also exceeds the configured OPS prehistory: `S#6` is 768 samples, or
+25.6 ms at 30 ksps. The full 136.5 ms dump is not a permissible notification
+delay. An IWR-led experiment must qualify the early path against the selected
+prehistory and required post-event coverage, including host/command delays and
+the still-unqualified relationship between detection and physical contact.
+
 ## Policies
 
 * `sound`: existing default comparison baseline.

@@ -66,12 +66,20 @@ def test_shared_collector_journals_partial_attempts_without_new_acquisition(
             assert index == 32
             calls.append("iwr_arm")
 
-        def wait_result(self, publish, _cancelled):
+        def wait_result(self, publish, _cancelled, *, on_trigger=None):
             publish("armed", {"trigger": {"latched": "0"}})
             if outcome == "timeout":
                 raise TimeoutError("no IWR detection")
             if outcome == "cancel":
                 raise InterruptedError("session stopped")
+            on_trigger(
+                {
+                    "capture_active_in_status": True,
+                    "host_received_mono_ns": 1,
+                    "device_timestamp": None,
+                    "physical_timing_qualified": False,
+                }
+            )
             return {
                 "result_b64": base64.b64encode(b"result").decode(),
                 "packet_b64": base64.b64encode(b"clock").decode(),
@@ -105,4 +113,5 @@ def test_shared_collector_journals_partial_attempts_without_new_acquisition(
     assert all(row["device_timestamp"] is None for row in observations)
     assert calls == ["iwr_begin", "rig_prepare", "iwr_arm", "rig_wait", "iwr_finish", "rig_closed"]
     assert (folder / "iwr-dump.bin").exists() == (outcome == "complete")
+    assert (folder / "iwr-trigger-observation.json").exists() == (outcome == "complete")
     assert files.state["attempts"][0]["name"] == "attempt-001"

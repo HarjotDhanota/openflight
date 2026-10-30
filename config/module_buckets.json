@@ -124,6 +124,7 @@
   "ui/electron/main.js": "imports the tester's windowed-kiosk options (windowOptions.js); upstream keeps its inline kiosk window"
  },
  "files": {
+  "scripts/hardware-test/test_iwr_early_notification.py": "TESTER",
   "tests/test_full_speed_shot_aim.py": "FUSION",
   "tests/test_ballistics_ground_contact.py": "FUSION",
   "tests/test_collision_mixed_frame_domain.py": "FUSION",

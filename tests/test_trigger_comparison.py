@@ -50,6 +50,24 @@ def test_no_labels_does_not_invent_negatives_or_accuracy(tmp_path):
     assert (folder / "ops-camera/ops-response.raw").read_bytes() == b"original raw IQ"
 
 
+def test_polled_latch_is_reviewable_without_becoming_confirmation_or_contact_time(tmp_path):
+    _, folder = attempt(tmp_path, 1)
+    event = {
+        "host_received_mono_ns": 60_001_000_000,
+        "capture_active_in_status": True,
+        "device_timestamp": None,
+        "physical_timing_qualified": False,
+    }
+    write(folder / "iwr-trigger-observation.json", event)
+    item = build_comparison(tmp_path, tmp_path)["attempts"][0]
+    notifications = [c for c in item["candidates"] if c.get("decision") == "polled_latch_observed"]
+    assert len(notifications) == 1
+    assert notifications[0]["host_received_mono_ns"] == event["host_received_mono_ns"]
+    assert notifications[0]["device_timestamp"] is None
+    assert not item["full_sensor_association"]
+    assert not item["counterfactual_policy_decisions"]["hybrid"]["publication_allowed"]
+
+
 def test_labels_grade_missed_shots_dry_swings_false_captures_and_duplicates(tmp_path):
     names = [attempt(tmp_path, index, ops=index != 5, iwr=index == 4)[0] for index in range(1, 6)]
     write(
