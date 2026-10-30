@@ -492,8 +492,13 @@ def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
     """The full ball speed, calculated; the radial speed never stands in for it."""
     speed = shot.ball_speed_full_mph
     full = shot.ball_speed_full if isinstance(shot.ball_speed_full, dict) else {}
+    status = full.get("status")
+    if full and status not in (*MODEL_LABELS, collision_model.LABEL_MEASURED, LABEL_EXPERIMENTAL):
+        why = full.get("reason") or f"unsupported full ball speed status {status!r}"
+        return collision_model.Input(None, reason=f"full ball speed not measured ({why})")
+    if full.get("referred_to") not in (None, "separation"):
+        return collision_model.Input(None, reason="full ball speed is not referred to separation")
     if _finite(speed) and speed > 0:
-        status = full.get("status")
         if status in (collision_model.STATUS_ESTIMATED, LABEL_EXPERIMENTAL):
             # an experimental full speed feeds on, entered estimated and flagged
             return collision_model.Input(
@@ -504,7 +509,11 @@ def _full_ball_speed_input(shot: Shot) -> collision_model.Input:
                 experimental=status == LABEL_EXPERIMENTAL,
             )
         return collision_model.Input(
-            float(speed), collision_model.LABEL_CALCULATED, "full ball speed"
+            float(speed),
+            collision_model.LABEL_MODEL_GEOMETRY
+            if status == collision_model.LABEL_MODEL_GEOMETRY
+            else collision_model.LABEL_CALCULATED,
+            "full ball speed",
         )
     why = full.get("reason") or "not computed on this shot yet"
     return collision_model.Input(None, reason=f"full ball speed not measured ({why})")
