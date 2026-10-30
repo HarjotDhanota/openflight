@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Refuse full club-speed projection from head geometry whose OPS input has no
   matching contact-time reference; retain the model's actual time and clock.
+- Withhold public head-track angles and arc positions when that reference is
+  missing; retain conditional fits and observed pixels for diagnosis.
 - Use the shot's saved aim when converting target-line launch for full ball
   speed, so changing alignment cannot rotate an earlier shot's correction.
 - Default placement to 1.8–2.2 m behind the ball and ball-to-net distance to

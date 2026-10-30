@@ -111,6 +111,9 @@ def _context(swing: Swing, **changes) -> HeadTrackContext:
         "exposure_us": np.full(24, swing.exposure_us),
         "handedness": swing.handed,
         "club": ClubType.IRON_7,
+        "ops_speed_time_ns": CONTACT_NS,
+        "ops_speed_clock": "sensor_timestamp_ns",
+        "ops_speed_referred_to": "contact",
     }
     values.update(changes)
     return HeadTrackContext(**values)

@@ -983,6 +983,30 @@ def _turned(direction: np.ndarray, *, path_deg: float = 0.0, attack_deg: float =
     )
 
 
+def _head_reference_time_matches(reference: dict, record: dict) -> bool:
+    stamp = reference["timestamp_ns"]
+    contact = record["turn"]["contact_ns"]
+    interval = reference.get("contact_interval_ns")
+    if interval is None:
+        return math.isclose(stamp, contact, rel_tol=0.0, abs_tol=1.0)
+    if not isinstance(interval, (list, tuple)) or len(interval) != 2:
+        return False
+    low, high = interval
+    sigma_ms = record.get("contact_sigma_ms")
+    return (
+        _finite(low)
+        and _finite(high)
+        and low <= stamp <= high
+        and math.isclose(contact, (low + high) / 2.0, rel_tol=0.0, abs_tol=1.0)
+        and _finite(sigma_ms)
+        and sigma_ms >= 0.0
+        # The head record rounds contact_sigma_ms to three decimals.
+        and math.isclose(
+            sigma_ms, (high - low) / math.sqrt(12.0) / 1e6, rel_tol=0.0, abs_tol=0.000500001
+        )
+    )
+
+
 def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig: Any) -> dict:
     """Full club speed from the one OPS club reading and the head track's direction then.
 
@@ -1043,7 +1067,7 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
         and reference.get("clock") == "sensor_timestamp_ns"
         and _finite(reference.get("timestamp_ns"))
         and _finite(contact_reference_ns)
-        and math.isclose(reference["timestamp_ns"], contact_reference_ns, rel_tol=0.0, abs_tol=1.0)
+        and _head_reference_time_matches(reference, record)
     ):
         return refused("the head geometry's OPS speed reference is not bound to its contact model")
     if not isinstance(ops_track, dict):
