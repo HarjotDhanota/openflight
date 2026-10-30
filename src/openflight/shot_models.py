@@ -703,6 +703,12 @@ def _attach_collision_model(shot: Shot) -> None:
         if shot.spin_source not in MODEL_LABELS:
             shot.spin_rpm_measured = shot.spin_rpm
             shot.spin_method_measured = shot.spin_method
+            sources["spin_observation"] = {
+                "value": shot.spin_rpm,
+                "confidence": shot.spin_confidence,
+                "source": shot.spin_source,
+                "method": shot.spin_method,
+            }
         shot.spin_rpm = shot.spin_rpm_collision
         shot.spin_source = spin_status
         shot.spin_method = _collision_spin_method(shot)
@@ -711,7 +717,13 @@ def _attach_collision_model(shot: Shot) -> None:
         # an earlier run's model spin; give back the measured one it displaced
         shot.spin_rpm = shot.spin_rpm_measured
         shot.spin_method = shot.spin_method_measured
-        shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
+        observation = sources.get("spin_observation")
+        if isinstance(observation, dict):
+            shot.spin_confidence = observation.get("confidence")
+            shot.spin_source = observation.get("source")
+        else:
+            shot.spin_confidence = None
+            shot.spin_source = "measured" if shot.spin_rpm_measured is not None else None
     if shot.face_angle_deg is not None or shot.spin_rpm_collision is not None:
         logger.info(
             "[SERVER] Collision model: face=%s loft=%s spin loft=%s spin=%s rpm axis=%s",
