@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Use the ball path's first observed window support for spin and impact inputs;
+  moving the selected speed reference no longer changes those inputs.
 - Preserve shared acoustic contact-delay evidence through the club-arc adapter
   so full club speed uses the supplied timing or its explicit refusal.
 - Withhold public head-track angles and arc positions when that reference is
