@@ -11,11 +11,25 @@ branch before the test package is frozen. No hardware deployment occurred.
 The normal setup, capture-policy selection, live metrics and Stop/package run
 together on this source. IWR-led/common-hardware acquisition is still incomplete;
 the selector reports that status. Conditional D-plane pose/strike refinement is
-planned, not an implemented feature of this checkpoint. Claude's club-part model
-has no completed committed handoff yet, and new ball weights still require their
-downstream pipeline evaluation/integration. Their development artifacts must not
+planned, not an implemented feature of this checkpoint. Claude's versioned
+club-part label/crop contract is included; trained club weights and inference
+integration remain pending. New ball weights still require their downstream
+pipeline evaluation/integration. Their development artifacts must not
 be mistaken for enabled runtime models. The OPS selection research still fails
 its accuracy gates and is not silently substituted for the current processor.
+
+The same integration branch also includes the completed ball-preview refresh
+series (`perf/ball-hint-refresh` through `580d8004`), matching lens calibrations
+per resolution, and the club observation/conditional-pose source stack through
+`b9a988e4`. These are integrated source components, not a claim of resolved face
+angle or impact location. The normal preview uses the existing geometric checks;
+`--ball-hint-model` optionally supplies the already approved detector proposals.
+It does not enable the newer research weights. The impact extension's
+`--impact-club-part-diagnostics` enables retained image/part diagnostics; it does
+not publish physical pose or strike. Optical strike fitting remains paused.
+
+Future completed handoffs are integrated here before rebuilding the joint-session
+packet. Do not switch to the isolated feature branches to run part of the session.
 
 Original standalone worktree: `openflight-trigger-policies`, branch
 `feat/trigger-policies-2026-10-30`, based on
