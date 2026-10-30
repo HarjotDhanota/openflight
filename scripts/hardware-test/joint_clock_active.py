@@ -96,6 +96,8 @@ class ActiveCollector(Collector):
         }
         self.rows.append(row)
         raw = bytearray()
+        completions = 2 if command in ("debugCfg 0", "triggerCfg 32 1 1") else 1
+        row["expected_completions"] = completions
         try:
             encoded = (command + "\n").encode("ascii")
             count = self.port.write(encoded)
@@ -115,8 +117,8 @@ class ActiveCollector(Collector):
                     normalized.decode("ascii")
                     lines = normalized[: -len(PROMPT)].splitlines()
                     if (
-                        lines.count(b"Done") != 1
-                        or not normalized.endswith(b"Done\n" + PROMPT)
+                        lines.count(b"Done") != completions
+                        or not normalized.endswith(b"Done\n" * completions + PROMPT)
                         or b"Error" in normalized
                         or b"not recognized" in normalized
                     ):

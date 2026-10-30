@@ -21,6 +21,10 @@ in the parent workspace. `run_joint_clock.py` checks the original manifest,
 every member hash and the image identity before importing device helpers.
 The old `run_idle.py` remains unchanged and still cannot start RF.
 
+Custom `debugCfg` and `triggerCfg` handlers print their own completion, followed
+by the SDK's completion. The active collector requires exactly two for those
+commands and exactly one for ordinary profile/start/stop commands.
+
 With that directory assigned to `OPENFLIGHT_CLOCK_PACKAGE`, run:
 
 ```bash

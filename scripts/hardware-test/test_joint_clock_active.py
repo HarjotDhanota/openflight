@@ -58,7 +58,8 @@ class ActivePort(WIRE.Port):
                 if self.bad_status and self.active:
                     raw = self.bad_status(raw)
             else:
-                raw = b"Done\nl3dump:/>"
+                count = 2 if command in ("debugCfg 0", "triggerCfg 32 1 1") else 1
+                raw = b"Done\n" * count + WIRE.PROMPT
             self.pending = self.edit(command, raw)
             return len(data)
         result = super().write(data)
@@ -217,3 +218,27 @@ def test_baseline_and_joint_cycles_share_one_runtime_and_require_stop():
     assert collector.state["stop_verified"]
     requests = [row["command"] for row in collector.rows if row["command"].startswith("triggerLog")]
     assert len(requests) == len(set(requests))
+
+
+@pytest.mark.parametrize("command", ["debugCfg 0", "triggerCfg 32 1 1"])
+@pytest.mark.parametrize("chunk", [1, 7, 65536])
+def test_custom_cli_handler_and_sdk_each_supply_one_completion(command, chunk):
+    collector, port = setup()
+    port.chunk = chunk
+    port.edit = lambda _command, _raw: b"Done\nDone\nl3dump:/>"
+    assert collector.command(command) == b"Done\nDone\nl3dump:/>"
+
+
+@pytest.mark.parametrize("count", [0, 1, 3])
+def test_custom_completion_count_is_exact_not_an_arbitrary_extra_done(count):
+    collector, port = setup()
+    port.edit = lambda _command, _raw: b"Done\n" * count + WIRE.PROMPT
+    with pytest.raises(ExchangeError):
+        collector.command("debugCfg 0")
+
+
+def test_regular_sdk_command_does_not_accept_a_double_completion():
+    collector, port = setup()
+    port.edit = lambda _command, _raw: b"Done\nDone\nl3dump:/>"
+    with pytest.raises(ExchangeError):
+        collector.command("flushCfg")
