@@ -1056,11 +1056,26 @@
             const ledger = run.attempt_ledger
               ? `<details><summary>Operator swing tally</summary>${definitionList(run.attempt_ledger)}</details>`
               : '';
+            const comparison = run.trigger_comparison;
+            const triggerReport = comparison ? `<details class="trigger-comparison"><summary>Trigger policy comparison: ${esc(comparison.settings?.label || 'legacy native')}</summary>
+              ${definitionList(comparison.counts)}
+              <details><summary>Screen latency traces (post-render proxy)</summary>${definitionList({ traces: comparison.screen_traces, baseline_triggers: comparison.baseline_trigger_events })}</details>
+              <p>${(comparison.limitations || []).map(esc).join(' ')}</p>
+              ${(comparison.label_errors || []).map((error) => `<p class="error">${esc(error)}</p>`).join('')}
+              ${(comparison.attempts || []).map((attempt) => `<article data-trigger-attempt="${esc(attempt.attempt)}">
+                <h4>${esc(attempt.attempt)} · ${attempt.published ? 'published' : 'no published shot'}</h4>
+                <p>${esc(attempt.decision?.reason)}</p>
+                <details><summary>Candidate timeline (host observations)</summary>${(attempt.candidates || []).map((event) => definitionList(event)).join('')}</details>
+                <details><summary>Actual capture coverage and association</summary>${definitionList(attempt.association)}${definitionList({ ops: attempt.ops_sample_coverage, iwr_clock: attempt.iwr_clock, routing: attempt.routing, rearm_command_ns: attempt.host_rearm_command_ns, rearm: attempt.controls, processing_to_publication_ns: attempt.processing_to_publication_ns, publication: attempt.publication })}</details>
+                ${(attempt.camera_clips || []).map((clip) => `<div class="frames">${Object.entries(clip.preview_frames).map(([key, path]) => figure(path, key + ' raw frame', null)).join('')}</div>`).join('')}
+                <details><summary>Counterfactual decisions on retained evidence</summary>${definitionList(attempt.counterfactual_policy_decisions)}</details>
+              </article>`).join('')}
+              </details>` : '';
             return `<div class="stack"><p><b>${esc(run.arm_id)} / ${esc(run.run)}</b> <span class="muted">session ${esc(
               run.session_uuid || 'unreadable'
             )} · SHA-256 ${esc((run.session_sha256 || '').slice(0, 12))}…</span></p>${
               errors ? `<ul>${errors}</ul>` : ''
-            }${triggers}${cameraRefusals}${ledger}</div>`;
+            }${triggers}${cameraRefusals}${ledger}${triggerReport}</div>`;
           })
           .join('');
         const photos = review.unattached_impact_photos || [];
