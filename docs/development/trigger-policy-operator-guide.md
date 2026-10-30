@@ -1,6 +1,12 @@
 # Trigger comparison operator guide and handoff
 
-Local worktree: `openflight-trigger-policies`, branch
+Combined local worktree: `openflight-bench-unified`, branch
+`integration/bench-unified-2026-10-30`. It starts from reviewed bench `e4c8b55d`
+and includes the first-IWR-latch observation and OPS single-reader request work
+from `04dde5e5` and `23f9226a`. IWR-led is still unavailable; these components
+do not establish physical timing. No hardware deployment occurred.
+
+Original standalone worktree: `openflight-trigger-policies`, branch
 `feat/trigger-policies-2026-10-30`, based on
 `5584a432ec06de88371afb76ba9bb524c0dbc3bd`. Capability commit `6c0eefe5`;
 selection/publication policies `813b6613`, journals/trace `bc8f5ee8`, and normal
