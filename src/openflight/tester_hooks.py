@@ -526,6 +526,10 @@ def _start_shot_ball_search() -> None:
     shot_ball_search.start()
 
 
+def _shot_ball_search_not_running(_frames, _controls, *, timeout_s):  # pylint: disable=unused-argument
+    return {"status": "unavailable", "reason": "free play's shot-ball search is not running"}
+
+
 def _close_shot_ball_search() -> None:
     global shot_ball_search  # pylint: disable=global-statement
     search, shot_ball_search = shot_ball_search, None
@@ -704,6 +708,7 @@ def _finish_free_play_capture(timeout_s: float = 60.0) -> None:
     if free_play_study is not None:
         # every accepted shot has its verdict: the ladder is complete or partial
         free_play_study.finish()
+    _close_shot_ball_search()
     for service in (
         server.camera_capture_runtime,
         server.iwr6843_runtime,
@@ -1088,10 +1093,10 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
             _start_shot_ball_search()
 
     def shot_ball_finder(self):
-        return shot_ball_search.find if shot_ball_search is not None else None
-
-    def before_capture_stop(self) -> None:
-        _close_shot_ball_search()
+        if not free_play_config.get("enabled"):
+            return None
+        search = shot_ball_search
+        return search.find if search is not None else _shot_ball_search_not_running
 
     def on_shutdown(self) -> None:
         _close_shot_ball_search()

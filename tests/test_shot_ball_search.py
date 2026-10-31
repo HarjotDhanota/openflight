@@ -304,17 +304,63 @@ def test_no_tester_root_no_record(tmp_path, monkeypatch):
     assert tester_hooks._placement_box_record() is None  # pylint: disable=protected-access
 
 
-def test_the_tester_kiosk_offers_the_search_only_while_free_play_runs_it(monkeypatch):
+def test_the_tester_kiosk_offers_the_search_only_in_free_play(monkeypatch):
     extension = tester_hooks.TesterKioskExtension()
-    monkeypatch.setattr(tester_hooks, "shot_ball_search", None)
+    running = SimpleNamespace(find=lambda *a, **k: None, close=lambda: None)
+    monkeypatch.setattr(tester_hooks, "shot_ball_search", running)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {})
     assert extension.shot_ball_finder() is None
 
-    closed = []
-    running = SimpleNamespace(find=lambda *a, **k: None, close=lambda: closed.append(1))
-    monkeypatch.setattr(tester_hooks, "shot_ball_search", running)
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True})
     assert extension.shot_ball_finder() is running.find
 
+
+def test_free_play_without_a_running_search_still_says_why_on_each_shot(monkeypatch):
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"enabled": True})
+    monkeypatch.setattr(tester_hooks, "shot_ball_search", None)
+
+    finder = tester_hooks.TesterKioskExtension().shot_ball_finder()
+
+    answer = finder(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)
+    assert answer["status"] == "unavailable" and answer["reason"]
+
+
+def _stoppable_kiosk(monkeypatch, *, pending):
+    closed = []
+    monkeypatch.setattr(
+        tester_hooks, "shot_ball_search", SimpleNamespace(close=lambda: closed.append(1))
+    )
+    monkeypatch.setattr(tester_hooks, "free_play_study", None)
+    monkeypatch.setattr(tester_hooks.server, "monitor", None)
+    monkeypatch.setattr(tester_hooks.server, "camera_capture_runtime", None)
+    monkeypatch.setattr(tester_hooks.server, "iwr6843_runtime", None)
+    monkeypatch.setattr(tester_hooks.server, "inclinometer_service", None)
+    monkeypatch.setattr(tester_hooks.server, "get_session_logger", lambda: None)
+    monkeypatch.setattr(tester_hooks.server, "shot_processing_pending", lambda: pending[0])
+    return closed
+
+
+def test_stop_keeps_the_search_for_shots_still_finishing(monkeypatch):
+    pending = [True]
+    closed = _stoppable_kiosk(monkeypatch, pending=pending)
+
+    with pytest.raises(RuntimeError, match="finishing"):
+        tester_hooks._finish_free_play_capture(timeout_s=0)  # pylint: disable=protected-access
+
+    assert closed == [] and tester_hooks.shot_ball_search is not None
+    pending[0] = False
+    tester_hooks._finish_free_play_capture(timeout_s=0)  # pylint: disable=protected-access
+    assert closed == [1] and tester_hooks.shot_ball_search is None
+
+
+def test_capture_stop_alone_does_not_close_the_search_but_shutdown_does(monkeypatch):
+    closed = []
+    monkeypatch.setattr(
+        tester_hooks, "shot_ball_search", SimpleNamespace(close=lambda: closed.append(1))
+    )
+    extension = tester_hooks.TesterKioskExtension()
+
     extension.before_capture_stop()
+    assert closed == []
     extension.on_shutdown()
-    assert closed == [1]
-    assert tester_hooks.shot_ball_search is None
+    assert closed == [1] and tester_hooks.shot_ball_search is None
