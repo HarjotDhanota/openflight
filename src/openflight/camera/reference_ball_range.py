@@ -506,6 +506,20 @@ def _camera_height_bounds(_camera: BallPlaneCamera) -> tuple[float, float]:
     return _CAMERA_HEIGHT_RANGE_M
 
 
+def ray_meets_radar_range(
+    camera: BallPlaneCamera, pixel_xy: Any, radar_slant_range_m: float
+) -> tuple[np.ndarray, float]:
+    """The pixel's unit ray and the distance along it from the lens to where it meets
+    the radar's range sphere (the radar offset inside the enclosure)."""
+    ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
+    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
+    along = float(np.dot(ray, offset))
+    discriminant = along * along - float(np.dot(offset, offset)) + radar_slant_range_m**2
+    if discriminant < 0.0:
+        raise ValueError("radar range is shorter than the camera-to-radar offset")
+    return ray, along + math.sqrt(discriminant)
+
+
 def solve_camera_height_from_radar(
     camera: BallPlaneCamera,
     pixel_xy: Any,
@@ -519,13 +533,7 @@ def solve_camera_height_from_radar(
     The ball lies on its pixel ray where its range from the radar (offset inside the
     enclosure) equals the measured range; independent of the fitted diameter.
     """
-    ray = np.asarray(camera.ray_model.rays(np.asarray(pixel_xy, dtype=float)), dtype=float)
-    offset = np.asarray(camera.radar_origin_lfu) - np.asarray(camera.camera_origin_lfu)
-    along = float(np.dot(ray, offset))
-    discriminant = along * along - float(np.dot(offset, offset)) + radar_slant_range_m**2
-    if discriminant < 0.0:
-        raise ValueError("radar range is shorter than the camera-to-radar offset")
-    distance = along + math.sqrt(discriminant)
+    ray, distance = ray_meets_radar_range(camera, pixel_xy, radar_slant_range_m)
     down = -float(ray[2])
     height = ball_center_height_m + distance * down
     angular = math.sin(math.radians(camera.angular_uncertainty_deg))
