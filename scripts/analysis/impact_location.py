@@ -11,6 +11,12 @@ bundle or a bundle ``.zip``) with ``openflight.camera.impact_session``, and writ
   overlays/<clip>.png           the analysed frames with mask, placed outline and
                                 the reading -- LOOK AT THESE FIRST
 
+With ``--placement`` it runs the D-plane-constrained placement instead
+(``openflight.camera.impact_placement``: the category's population-average club at the
+shot's face angle and loft, or their labelled priors, placed on the bracket frames by
+its toe and sole edges) and writes impact_placement.csv / .json and
+overlays/placement_<clip>.png. Same labels, same refusals-by-name, same ``--truth``.
+
 With ``--truth`` (CSV: ``shot_id`` and ``impact_offset_mm`` and/or ``impact_height_mm``,
 measured on face photos) it adds agreement per axis: bias, RMS, SD after bias, n,
 and how many truths fall inside the reported 1- and 2-sigma.
@@ -37,6 +43,7 @@ if str(ROOT / "src") not in sys.path:
 
 from openflight.camera import (  # noqa: E402
     impact_location as il,
+    impact_placement as placement,
     impact_session as session,
 )
 
@@ -128,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-scope", choices=("club", "session"), default="club")
     parser.add_argument("--shot", action="append", default=[])
     parser.add_argument("--no-overlays", action="store_true")
+    parser.add_argument(
+        "--placement",
+        action="store_true",
+        help="run the D-plane-constrained club placement (impact_placement) instead",
+    )
     return parser
 
 
@@ -149,15 +161,15 @@ def main(argv: list[str] | None = None) -> int:
         template_scope=args.template_scope,
         lens_id=args.lens_id,
     )
-    report = session.analyse_session(
-        root, options, overlays=None if args.no_overlays else args.out / "overlays"
-    )
+    overlays = None if args.no_overlays else args.out / "overlays"
+    route = placement if args.placement else session
+    report = route.analyse_session(root, options, overlays=overlays)
     if not report["rows"]:
         print(f"no camera clips (frames.npz) under {root}")
         return 1
     if args.truth:
         report["agreement"] = score(report["rows"], read_truth(args.truth))
-    session.write_report(report, args.out)
+    written = route.write_report(report, args.out)
     for line in session.summary_lines(report):
         print(line)
     for axis, stats in (report.get("agreement") or {}).items():
@@ -167,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"RMSE {stats['rmse_mm']:.1f} mm, within 1/2 sigma "
                 f"{stats['within_1_sigma']:.0%}/{stats['within_2_sigma']:.0%}"
             )
-    print(f"wrote {args.out / 'impact_location.csv'} and impact_location.json")
+    print(f"wrote {written[0]} and {written[1].name}")
     print(json.dumps({"label": il.EXPERIMENTAL_LABEL}))
     return 0
 

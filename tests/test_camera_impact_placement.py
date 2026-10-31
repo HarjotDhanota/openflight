@@ -723,3 +723,24 @@ def test_the_session_route_reads_the_shots_own_d_plane_and_scene(tmp_path):
     assert row["dynamic_loft_source"] == "synthetic_independent_angle"
     assert row["lie_source"] == ip.PRIOR_LIE
     assert row["lens_height_source"] == il.RIG_LENS_HEIGHT
+
+
+def test_the_cli_flag_writes_the_placement_report_and_overlays(tmp_path):
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "analysis" / "impact_location.py"
+    spec = importlib.util.spec_from_file_location("impact_location_cli_placement", script)
+    cli = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = cli
+    spec.loader.exec_module(cli)
+    root = write_session(tmp_path)
+    out = tmp_path / "out"
+    assert cli.main([str(root), "--out", str(out), "--placement"]) == 0
+    report = json.loads((out / "impact_placement.json").read_text(encoding="utf-8"))
+    assert report["schema"] == ip.SCHEMA
+    assert report["rows"][0]["status"] == "ok"
+    header = (out / "impact_placement.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "impact_offset_sigma_mm" in header and "face_angle_source" in header
+    overlay = out / "overlays" / f"placement_{CLIP}.png"
+    assert overlay.is_file()
+    assert not (out / "impact_location.json").exists()
