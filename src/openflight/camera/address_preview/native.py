@@ -57,7 +57,10 @@ def build(
     target = library_path(source, cache_dir)
     if target.is_file():
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise NativeUnavailable(f"cannot create the library cache {target.parent}: {exc}") from exc
     partial = target.with_name(f"{target.stem}.{os.getpid()}-{uuid.uuid4().hex}{target.suffix}")
     # MinGW-style Windows linkers export nothing from a DLL unless told to
     exports = ["-Wl,--export-all-symbols"] if os.name == "nt" else []
@@ -70,18 +73,24 @@ def build(
         str(partial),
     ]
     try:
-        subprocess.run(
-            arguments, check=True, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_S
-        )
-        # another process may have built the same source meanwhile: either copy is it
-        os.replace(partial, target)
-    except FileNotFoundError as exc:
-        raise NativeUnavailable(f"no C compiler: {arguments[0]} was not found") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip().splitlines()[-1:] or ["no output"]
-        raise NativeUnavailable(f"compiling {source.name} failed: {detail[0]}") from exc
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise NativeUnavailable(f"compiling {source.name} failed: {exc}") from exc
+        try:
+            subprocess.run(
+                arguments, check=True, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_S
+            )
+        except FileNotFoundError as exc:
+            raise NativeUnavailable(f"no C compiler: {arguments[0]} was not found") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip().splitlines()[-1:] or ["no output"]
+            raise NativeUnavailable(f"compiling {source.name} failed: {detail[0]}") from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise NativeUnavailable(f"compiling {source.name} failed: {exc}") from exc
+        try:
+            os.replace(partial, target)
+        except OSError as exc:
+            # another process built the same source meanwhile, and Windows will not
+            # replace a library that is loaded: that copy is this library
+            if not target.is_file():
+                raise NativeUnavailable(f"storing {target.name} failed: {exc}") from exc
     finally:
         partial.unlink(missing_ok=True)
     return target
