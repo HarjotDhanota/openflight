@@ -34,6 +34,22 @@ REAL_BALL = (723.5, 424.3)  # a graded 24 Oct ball, inside the moved band
 CRUMPLED = (415.0, 533.4)  # the white crumpled object on the grass below the mat
 
 
+@pytest.fixture(autouse=True)
+def closed_after_each_test(monkeypatch):
+    """Every search a test starts is closed after it (its read retries stop)."""
+    started = []
+    start = sbs.ShotBallSearch.start
+
+    def recording(self):
+        started.append(self)
+        start(self)
+
+    monkeypatch.setattr(sbs.ShotBallSearch, "start", recording)
+    yield
+    for finder in started:
+        finder.close()
+
+
 def to640(value):
     return (value + 0.5) / 2.0 - 0.5
 
@@ -92,8 +108,8 @@ class Pool:
             if self.warm_done:
                 future.set_result(0)
             return future
-        if function is sbs.close_fit_pool:
-            future.set_result(None)
+        if function in (sbs.close_fit_pool, sbs.load_inputs):
+            future.set_result(True)
             return future
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
@@ -107,18 +123,29 @@ class Pool:
 
 
 PENDING = object()
+CAMERA = SimpleNamespace(name="camera", image_width_px=1280, image_height_px=800)
+CAMERA_640 = SimpleNamespace(name="camera", image_width_px=640, image_height_px=400)
 
 
-def _search(pool, record=RECORD, camera=SimpleNamespace(name="camera"), available=True):
+def _search(pool, record=RECORD, camera=CAMERA, available=True):
     finder = sbs.ShotBallSearch(
         lambda: record,
         lambda: camera,
         executor_factory=lambda _event: pool,
         availability=lambda: {"available": available, "reason": None if available else "no cc"},
+        retry_s=0.01,
     )
     finder.start()
     finder.wait_started(timeout_s=5)
     return finder
+
+
+def _loaded(pool):
+    return next(args for function, args in pool.submitted if function is sbs.load_inputs)
+
+
+def _searched(pool):
+    return [args for function, args in pool.submitted if function is sbs.run_search]
 
 
 def _frames(width=1280, height=800):
@@ -137,20 +164,20 @@ def test_a_proposal_inside_the_band_is_selected():
 
     assert answer["status"] == "selected"
     assert answer["ball"] == {"x": REAL_BALL[0], "y": REAL_BALL[1], "diameter_px": 48.0}
-    function, (frames, camera, patch, controls) = pool.submitted[-1]
-    assert function is sbs.run_search and camera.name == "camera"
+    [(frames, controls)] = _searched(pool)
     assert frames.shape == (5, 800, 1280) and controls == [(298.0, 10.0)] * 5
-    assert patch.outline_px[0] == (301.2, 674.4)
+    camera, patch = _loaded(pool)
+    assert camera is CAMERA and patch.outline_px[0] == (301.2, 674.4)
 
 
 def test_a_640_proposal_is_judged_in_640_pixels_with_a_halved_patch():
     pool = Pool([_proposed(to640(REAL_BALL[0]), to640(REAL_BALL[1]), 12.0)])
-    finder = _search(pool)
+    finder = _search(pool, camera=CAMERA_640)
 
     answer = finder.find(_frames(640, 400), [(298.0, 1.94)] * 5, timeout_s=3.0)
 
     assert answer["status"] == "selected"
-    assert pool.submitted[-1][1][2].outline_px[0] == (150.6, 337.2)
+    assert _loaded(pool)[1].outline_px[0] == (150.6, 337.2)
 
 
 def test_a_proposal_outside_the_band_is_refused_and_says_where_it_was():
@@ -182,6 +209,49 @@ def test_a_missing_record_is_no_band_and_never_searches():
     assert all(function is int for function, _ in pool.submitted)
 
 
+def test_the_record_and_camera_are_read_once_off_the_shot_path():
+    reads = []
+    pool = Pool([_proposed(*REAL_BALL), _proposed(*REAL_BALL)])
+    finder = sbs.ShotBallSearch(
+        lambda: reads.append("record") or RECORD,
+        lambda: reads.append("camera") or CAMERA,
+        executor_factory=lambda _event: pool,
+        availability=lambda: {"available": True, "reason": None},
+    )
+    finder.start()
+    finder.wait_started(timeout_s=5)
+
+    for _ in range(2):
+        assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)["status"] == "selected"
+
+    assert reads == ["record", "camera"]
+    assert [function for function, _ in pool.submitted].count(sbs.load_inputs) == 1
+
+
+def test_a_camera_not_ready_at_start_is_read_again_in_the_background():
+    cameras = [None, CAMERA]
+    pool = Pool([_proposed(*REAL_BALL)])
+    finder = sbs.ShotBallSearch(
+        lambda: RECORD,
+        lambda: cameras.pop(0) if len(cameras) > 1 else cameras[0],
+        executor_factory=lambda _event: pool,
+        availability=lambda: {"available": True, "reason": None},
+        retry_s=0.01,
+    )
+    finder.start()
+    assert finder.wait_ready(timeout_s=5)
+
+    assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)["status"] == "selected"
+
+
+def test_frames_of_another_mode_than_prepared_are_not_searched():
+    pool = Pool([])
+    answer = _search(pool).find(_frames(640, 400), [(298.0, 1.94)] * 5, timeout_s=3.0)
+
+    assert answer["status"] == "no_band" and "640x400" in answer["reason"]
+    assert _searched(pool) == []
+
+
 def test_a_record_without_a_confirmed_ball_is_no_band():
     record = {key: value for key, value in RECORD.items() if key != "ball_at_confirm"}
     answer = _search(Pool([]), record=record).find(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)
@@ -199,6 +269,7 @@ def test_no_camera_model_is_no_search():
         broken,
         executor_factory=lambda _event: Pool([]),
         availability=lambda: {"available": True, "reason": None},
+        retry_s=0.01,
     )
     finder.start()
     finder.wait_started(timeout_s=5)
@@ -268,11 +339,10 @@ def test_close_ends_the_fit_pool_and_the_worker():
 def test_close_leaves_no_worker_processes():
     before = {process.pid for process in multiprocessing.active_children()}
     finder = sbs.ShotBallSearch(
-        lambda: RECORD, lambda: None, availability=lambda: {"available": True, "reason": None}
+        lambda: RECORD, lambda: CAMERA, availability=lambda: {"available": True, "reason": None}
     )
     finder.start()
-    finder.wait_started(timeout_s=30)
-    assert finder.wait_warm(timeout_s=180)
+    assert finder.wait_ready(timeout_s=180)
 
     finder.close()
 

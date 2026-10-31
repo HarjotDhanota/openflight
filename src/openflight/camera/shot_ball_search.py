@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 EXPECTED_DIAMETER_1280_PX = 45.0
 MIN_BAND_MARGIN_PX = 10.0
 CLOSE_TIMEOUT_S = 30.0
+INPUTS_RETRY_S = 5.0
+WORKER_START_TIMEOUT_S = preview.POOL_START_TIMEOUT_S
 
 
 def mode_factor(record, frame_shape) -> float:
@@ -86,11 +88,23 @@ class BallBand:
         return min(rows) + self.dy - self.margin <= y <= max(rows) + self.dy + self.margin
 
 
-def run_search(frames, camera, patch, controls) -> dict:
+# the camera model and box the worker searches with: set once per session (load_inputs)
+_WORKER_INPUTS: dict = {}
+
+
+def load_inputs(camera, patch) -> bool:
+    """Give the worker the session's camera model and box, so a shot sends only its frames."""
+    _WORKER_INPUTS.update(camera=camera, patch=patch)
+    return True
+
+
+def run_search(frames, controls) -> dict:
     """One broad search in the worker; a shot is searched on its own pixels only."""
+    if not _WORKER_INPUTS:
+        return {"status": "unavailable", "reason": "the worker has no camera model or box"}
     search._REUSE_CACHE.clear()  # pylint: disable=protected-access
     started = time.perf_counter()
-    result = search.search(frames, camera, patch, controls)
+    result = search.search(frames, _WORKER_INPUTS["camera"], _WORKER_INPUTS["patch"], controls)
     return {
         "status": result.get("status"),
         "reason": result.get("reason"),
@@ -113,31 +127,41 @@ def _answer(status: str, reason: str | None, **extra) -> dict:
 
 
 class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
-    """The search worker, warmed once; ``find`` is the kiosk's ``shot_ball_finder``."""
+    """The search worker, warmed once; ``find`` is the kiosk's ``shot_ball_finder``.
 
-    def __init__(
+    The placement record and the camera model are read off the shot path and given to
+    the worker once; until both are usable they are read again every ``retry_s``.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         record_loader,
         camera_loader,
         *,
         executor_factory=_broad_worker_pool,
         availability=native.availability,
+        retry_s: float = INPUTS_RETRY_S,
     ):
         self._record_loader = record_loader
         self._camera_loader = camera_loader
         self._executor_factory = executor_factory
         self._availability = availability
+        self._retry_s = retry_s
         self._lock = threading.Lock()
         self._cancel = multiprocessing.get_context("spawn").Event()
         self._started = threading.Event()
+        self._ready = threading.Event()
+        self._stopping = threading.Event()
         self._executor = None
         self._warm = None
         self._pending = None
+        self._prepared = None
+        self._not_ready = ("warming", "the search's camera model and box are not read yet")
         self._unavailable: str | None = None
         self._closed = False
 
     def start(self) -> None:
-        """Build the native residual and start the worker off the caller's thread."""
+        """Build the residual, start the worker and read its inputs, off the caller's thread."""
         threading.Thread(target=self._start, name="shot-ball-search-start", daemon=True).start()
 
     def _start(self) -> None:
@@ -147,27 +171,58 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
                 self._disable(f"the search's native residual is unavailable: {available['reason']}")
                 return
             with self._lock:
-                if not self._closed:
-                    self._executor = self._executor_factory(self._cancel)
-                    self._warm = self._executor.submit(int)
+                if self._closed:
+                    return
+                self._executor = self._executor_factory(self._cancel)
+                self._warm = self._executor.submit(int)
+            while not self._prepare():
+                self._started.set()
+                if self._stopping.wait(self._retry_s):
+                    return
         except Exception as error:  # pylint: disable=broad-exception-caught
             self._disable(f"the search worker did not start: {type(error).__name__}: {error}")
         finally:
             self._started.set()
 
+    def _not_yet(self, status: str, reason: str) -> bool:
+        with self._lock:
+            self._not_ready = (status, reason)
+        return False
+
+    def _prepare(self) -> bool:
+        """Read the record and the camera and hand them to the worker; False to try again."""
+        try:
+            record = self._record_loader()
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            return self._not_yet("no_band", str(error) or type(error).__name__)
+        if record is None:
+            return self._not_yet("no_band", "this tester has no placement record")
+        try:
+            camera = self._camera_loader()
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            return self._not_yet("no_camera", f"{type(error).__name__}: {error}")
+        if camera is None:
+            return self._not_yet("no_camera", "no camera model for this mode")
+        try:
+            shape = (int(camera.image_height_px), int(camera.image_width_px))
+            factor = mode_factor(record, shape)
+            band = BallBand.from_record(record, factor)
+            patch = PatchSearch.from_record(record, factor=factor)
+        except (KeyError, TypeError, ValueError) as error:
+            return self._not_yet("no_band", str(error))
+        self._executor.submit(load_inputs, camera, patch).result(timeout=WORKER_START_TIMEOUT_S)
+        with self._lock:
+            self._prepared = (shape, band)
+        self._ready.set()
+        return True
+
     def wait_started(self, timeout_s: float) -> bool:
-        """Whether starting (native build, worker launch) finished within ``timeout_s``."""
+        """Whether starting (residual, worker, first read of the inputs) ended in ``timeout_s``."""
         return self._started.wait(timeout_s)
 
-    def wait_warm(self, timeout_s: float) -> bool:
-        """Whether the worker finished starting within ``timeout_s``."""
-        warm = self._warm
-        if warm is None:
-            return False
-        try:
-            return warm.result(timeout=timeout_s) == 0
-        except Exception:  # pylint: disable=broad-exception-caught
-            return False
+    def wait_ready(self, timeout_s: float) -> bool:
+        """Whether the worker had its camera model and box within ``timeout_s``."""
+        return self._ready.wait(timeout_s)
 
     def _disable(self, reason: str) -> None:
         with self._lock:
@@ -179,40 +234,38 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
     def find(  # pylint: disable=too-many-return-statements
         self, frames, controls, *, timeout_s: float
     ) -> dict:
-        """The shot's ball in ``frames`` if the search selects one inside the band, else why not."""
+        """The shot's ball in ``frames`` if the search selects one inside the band, else why not.
+
+        Only the search runs here, and the whole call stays within ``timeout_s``.
+        """
+        entered = time.monotonic()
         with self._lock:
             if self._unavailable is not None or self._closed:
                 return _answer("unavailable", self._unavailable or "the search is closed")
             warm, executor, pending = self._warm, self._executor, self._pending
+            prepared, not_ready = self._prepared, self._not_ready
         if warm is None or not warm.done():
             return _answer("warming", "the search worker is still starting")
         if warm.exception() is not None:
             self._disable(f"the search worker did not start: {warm.exception()}")
             return _answer("unavailable", self._unavailable)
+        if prepared is None:
+            return _answer(*not_ready)
+        shape, band = prepared
+        height, width = np.shape(frames)[-2:]
+        if (height, width) != shape:
+            return _answer(
+                "no_band",
+                f"the frames are {width}x{height}; the search is set up for {shape[1]}x{shape[0]}",
+            )
         if pending is not None and not pending.done():
             return _answer("busy", "the previous shot's search is still stopping")
-        frames = np.ascontiguousarray(frames)
-        try:
-            record = self._record_loader()
-            if record is None:
-                return _answer("no_band", "this tester has no placement record")
-            factor = mode_factor(record, frames.shape)
-            band = BallBand.from_record(record, factor)
-            patch = PatchSearch.from_record(record, factor=factor)
-        except (KeyError, TypeError, ValueError) as error:
-            return _answer("no_band", str(error))
-        try:
-            camera = self._camera_loader()
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            return _answer("no_camera", f"{type(error).__name__}: {error}")
-        if camera is None:
-            return _answer("no_camera", "no camera model for this mode")
         self._cancel.clear()
         try:
-            future = executor.submit(run_search, frames, camera, patch, list(controls))
+            future = executor.submit(run_search, np.ascontiguousarray(frames), list(controls))
             with self._lock:
                 self._pending = future
-            result = future.result(timeout=timeout_s)
+            result = future.result(timeout=max(0.0, timeout_s - (time.monotonic() - entered)))
         except FutureTimeout:
             self._cancel.set()
             return _answer("timeout", f"the search took longer than {timeout_s:.1f} s")
@@ -245,6 +298,7 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
                 return
             self._closed = True
             executor = self._executor
+        self._stopping.set()
         if executor is None:
             return
         self._cancel.set()
