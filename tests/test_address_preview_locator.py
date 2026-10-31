@@ -291,7 +291,7 @@ def test_an_unavailable_preview_falls_back_to_the_classic_locator(monkeypatch, c
     ball = adapter.ball()
 
     assert len(fallbacks) == 1
-    assert pipeline.closed == 1
+    assert _wait(lambda: pipeline.closed == 1)
     assert payload["ball_search_mode"] in {"searched", "watched"}
     assert ball["state"] == "found" and ball["confirmable"] is True
     assert ball["locator"] == {
@@ -632,3 +632,26 @@ def test_a_box_step_that_cannot_open_the_camera_ends_its_preview(monkeypatch, tm
     assert opened.status_code != 200
     assert len(pipelines) == 1
     assert _wait(lambda: pipelines[0].closed == 1)
+
+
+def test_falling_back_never_waits_for_the_preview_to_close():
+    release = threading.Event()
+
+    class Hung(FakePipeline):
+        def close(self):
+            release.wait(timeout=5.0)
+            super().close()
+
+    clock = Clock()
+    adapter, _live, _changes, _fallbacks = _adapter(clock=clock, pipeline_factory=Hung)
+    pipeline = adapter._pipeline  # pylint: disable=protected-access
+    pipeline.failure = "RuntimeError: the search worker failed"
+    try:
+        started = time.monotonic()
+        ball = adapter.ball()
+        adapter(FRAMES, 5, APPLIED, observed_at=clock.t)
+        assert time.monotonic() - started < 1.0
+        assert ball["locator"]["active"] == "classic"
+    finally:
+        release.set()
+    assert _wait(lambda: pipeline.closed == 1)
