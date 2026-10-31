@@ -4,13 +4,15 @@ Stages S1-S3 of the D-plane-constrained placement model (research/impact-model-2
 PLAN.txt). The D-plane supplies the head's ORIENTATION at impact; the ball's position is
 known; the camera only PLACES a fixed-orientation club model at the contact moment.
 
-S1 orientation. Face angle and dynamic loft come in with their sigmas and labels: from
-the collision model's D-plane inversion (``orientation_from_collision``: the metric's
-status sets its sigma, ``ANGLE_SIGMA_BY_STATUS``), from the shot's capture-bound angles
-as ``impact_session`` already reads them (``orientation_from_face_inputs``), else from
-the category priors ``FaceInputs.priors`` keeps. Dynamic lie (the face's roll about its
-normal, dynamic minus static lie, + toe up) is a labelled prior unless a shaft lie is
-supplied (``lie_from_shaft``). All of them are conditional inputs, never "measured".
+S1 orientation. Face angle and dynamic loft come in with their sigmas and labels, by one
+rule (``orientation_for_shot``, per angle): the shot's capture-bound angle as
+``impact_session`` already reads it (``orientation_from_face_inputs``), else the
+collision model's D-plane inversion the shot record carries (``orientation_from_collision``:
+the metric's status sets its sigma, ``ANGLE_SIGMA_BY_STATUS``), else the category priors
+``FaceInputs.priors`` keeps; ``Orientation.provenance`` names each angle's origin and
+label. Dynamic lie (the face's roll about its normal, dynamic minus static lie, + toe up)
+is a labelled prior unless a shaft lie is supplied (``lie_from_shaft``). All of them are
+conditional inputs, never "measured".
 
 S2 placement. The club is the population-average head outline of its category
 (``club_outline_reference.json``, the kiosk's face-on drawing, about the face centre of
@@ -72,11 +74,22 @@ from scipy import ndimage
 
 from openflight.camera import impact_location as il, impact_session as session
 from openflight.camera.impact_angle_evidence import ANGLE_SIGMA_BY_STATUS
+from openflight.collision_model import STATUS_NOT_MEASURED, Metric
+from openflight.source_labels import LABEL_ESTIMATED
 
 SCHEMA = "openflight.impact_placement.v1"
 LABEL = il.EXPERIMENTAL_LABEL
 
 PRIOR_LIE = "prior_dynamic_lie_equals_static_lie"
+# Where each orientation angle came from (``Orientation.provenance``): an angle bound to
+# the shot's own capture, the shot's collision-model D-plane inversion, a category prior,
+# or a value a caller gave. A prior is an assumed input: its label is "estimated".
+ORIGIN_CAPTURE = "capture_angle"
+ORIGIN_D_PLANE = "d_plane"
+ORIGIN_PRIOR = "prior"
+ORIGIN_GIVEN = "given"
+ANGLES = ("face_angle", "dynamic_loft", "lie")
+METRIC_FIELDS = frozenset(Metric.__dataclass_fields__)
 # ASSUMED, not sourced: no population dynamic-lie spread is imported.
 LIE_PRIOR_SIGMA_DEG = 4.0
 PRIOR_PATH = "prior_square_club_path"
@@ -144,6 +157,8 @@ class Orientation:
     dynamic_loft: il.Labelled
     lie: il.Labelled
     notes: tuple[str, ...] = ()
+    origins: Mapping[str, str] = field(default_factory=dict, compare=False)
+    labels: Mapping[str, str] = field(default_factory=dict, compare=False)
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-ready fields."""
@@ -155,22 +170,57 @@ class Orientation:
         """(face angle, loft, lie) in degrees."""
         return (self.face_angle.value, self.dynamic_loft.value, self.lie.value)
 
+    def provenance(self) -> dict[str, dict[str, str]]:
+        """Each angle's origin (``ORIGIN_*``) and label; an unrecorded one is a given value."""
+        return {
+            name: {
+                "origin": self.origins.get(name, ORIGIN_GIVEN),
+                "label": self.labels.get(name, LABEL_ESTIMATED),
+            }
+            for name in ANGLES
+        }
+
 
 def _lie_prior() -> il.Labelled:
     return il.Labelled(0.0, LIE_PRIOR_SIGMA_DEG, PRIOR_LIE)
 
 
+_PRIORS_ONLY = {name: ORIGIN_PRIOR for name in ANGLES}
+_ESTIMATED = {name: LABEL_ESTIMATED for name in ANGLES}
+
+
+def _lie_origin(lie: il.Labelled | None) -> tuple[str, str]:
+    return (ORIGIN_PRIOR, LABEL_ESTIMATED) if lie is None else (ORIGIN_GIVEN, LABEL_ESTIMATED)
+
+
 def orientation_priors(club: str | None) -> Orientation:
     """The category priors ``FaceInputs.priors`` keeps; lie the static lie, labelled."""
     face = il.FaceInputs.priors(club)
-    return Orientation(face.face_angle, face.dynamic_loft, _lie_prior())
+    return Orientation(
+        face.face_angle, face.dynamic_loft, _lie_prior(), (), dict(_PRIORS_ONLY), dict(_ESTIMATED)
+    )
 
 
 def orientation_from_face_inputs(
     face: il.FaceInputs, lie: il.Labelled | None = None
 ) -> Orientation:
-    """The face angle and loft a shot's ``FaceInputs`` carries (its own angles or priors)."""
-    return Orientation(face.face_angle, face.dynamic_loft, lie or _lie_prior())
+    """The face angle and loft a shot's ``FaceInputs`` carries (its own angles or priors).
+
+    An angle with capture-bound evidence carries its producer's status as its label; a
+    category prior (``FaceInputs.priors``, its source starting "prior") is a prior;
+    anything else a given value.
+    """
+    origins, labels = {}, {}
+    for name in ("face_angle", "dynamic_loft"):
+        value = getattr(face, name)
+        if value.evidence is not None:
+            origins[name], labels[name] = ORIGIN_CAPTURE, value.evidence.status
+        elif value.source.startswith("prior"):
+            origins[name], labels[name] = ORIGIN_PRIOR, LABEL_ESTIMATED
+        else:
+            origins[name], labels[name] = ORIGIN_GIVEN, LABEL_ESTIMATED
+    origins["lie"], labels["lie"] = _lie_origin(lie)
+    return Orientation(face.face_angle, face.dynamic_loft, lie or _lie_prior(), (), origins, labels)
 
 
 def orientation_from_collision(
@@ -191,6 +241,8 @@ def orientation_from_collision(
     """
     prior = orientation_priors(club)
     notes: list[str] = []
+    origins, labels = dict(prior.origins), dict(prior.labels)
+    origins["lie"], labels["lie"] = _lie_origin(lie)
 
     def take(name: str, metric: Any, fallback: il.Labelled) -> il.Labelled:
         value = getattr(metric, "value", None)
@@ -207,6 +259,7 @@ def orientation_from_collision(
             if value is None:
                 notes.append(f"{name}: target_line_transform_unknown; prior used")
                 return fallback
+        origins[name], labels[name] = ORIGIN_D_PLANE, status
         return il.Labelled(value, ANGLE_SIGMA_BY_STATUS[status], f"{status} ({metric.source})")
 
     return Orientation(
@@ -214,6 +267,56 @@ def orientation_from_collision(
         take("dynamic_loft", dynamic_loft, prior.dynamic_loft),
         lie or prior.lie,
         tuple(notes),
+        origins,
+        labels,
+    )
+
+
+def _recorded_metric(entry: Any) -> Metric:
+    """A collision-model metric as a shot record carries it (``Metric.to_dict``)."""
+    if not isinstance(entry, Mapping):
+        return Metric(None, STATUS_NOT_MEASURED, None, "deg", reason="not_recorded_on_this_shot")
+    return Metric(**{key: entry.get(key) for key in METRIC_FIELDS})
+
+
+def orientation_for_shot(
+    face: il.FaceInputs,
+    collision: Mapping[str, Any] | None,
+    *,
+    club: str | None,
+    handedness: str = "right",
+    target_line_offset_deg: float | None = None,
+    lie: il.Labelled | None = None,
+) -> Orientation:
+    """The one orientation rule for a recorded or live shot, each angle labelled.
+
+    Per angle: the shot's own capture-bound angle (``FaceInputs`` evidence, as
+    ``impact_session.shot_face_inputs`` accepts it), else the shot's collision-model
+    D-plane inversion (``collision``: the shot record's ``collision_model`` block), else
+    the category prior. Notes say why a D-plane angle was not used.
+    """
+    own = orientation_from_face_inputs(face, lie)
+    metrics = collision.get("metrics") if isinstance(collision, Mapping) else None
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    d_plane = orientation_from_collision(
+        _recorded_metric(metrics.get("face_angle")),
+        _recorded_metric(metrics.get("dynamic_loft")),
+        club=club,
+        handedness=handedness,
+        target_line_offset_deg=target_line_offset_deg,
+        lie=lie,
+    )
+    chosen = {
+        name: own if own.origins[name] == ORIGIN_CAPTURE else d_plane
+        for name in ("face_angle", "dynamic_loft")
+    }
+    return Orientation(
+        chosen["face_angle"].face_angle,
+        chosen["dynamic_loft"].dynamic_loft,
+        own.lie,
+        tuple(note for note in d_plane.notes if chosen[note.split(":", 1)[0]] is d_plane),
+        {**{n: chosen[n].origins[n] for n in chosen}, "lie": own.origins["lie"]},
+        {**{n: chosen[n].labels[n] for n in chosen}, "lie": own.labels["lie"]},
     )
 
 
@@ -1686,6 +1789,48 @@ def caption(placement: ImpactPlacement) -> str:
 # --- the session route ---------------------------------------------------------------
 
 
+def place_clip(
+    clip: session.Clip,
+    shot: Mapping[str, Any],
+    start: Mapping[str, Any],
+    *,
+    centre_from_toe: il.Labelled | None = None,
+) -> tuple[ImpactPlacement, Orientation, SceneHeights]:
+    """One prepared clip placed and read: the session route's and the live producer's call.
+
+    ``clip`` as ``impact_session.prepare_clip`` left it (prepared, with its face inputs);
+    ``shot`` its shot record (its ``collision_model`` block gives the D-plane angles);
+    ``start`` the session start record (the aim). The orientation is
+    ``orientation_for_shot``'s, the scene the face inputs' lens height, the attack and
+    face centre the face inputs'; ``centre_from_toe`` overrides the face centre for research.
+    """
+    face = clip.face
+    scene = SceneHeights.from_face_inputs(face)
+    orientation = orientation_for_shot(
+        face,
+        shot.get("collision_model") if isinstance(shot, Mapping) else None,
+        club=clip.club,
+        handedness=clip.handedness,
+        target_line_offset_deg=session.target_line_offset_deg(start),
+    )
+    placement = place_impact(
+        clip.prepared,
+        orientation,
+        scene=scene,
+        attack_angle=face.attack_angle,
+        centre_from_toe=centre_from_toe or face.face_centre_from_toe,
+        centre_height=face.face_centre_height,
+    )
+    placement.diagnostics["orientation_provenance"] = orientation.provenance()
+    placement.diagnostics["dynamic_lie_estimate_not_used"] = clip.extra.get("dynamic_lie")
+    return placement, orientation, scene
+
+
+def orientation_origin(orientation: Orientation) -> str:
+    """Each angle's origin in one line, e.g. ``face_angle=d_plane dynamic_loft=prior lie=prior``."""
+    return " ".join(f"{n}={p['origin']}" for n, p in orientation.provenance().items())
+
+
 CSV_FIELDS = (
     "shot_id",
     "run",
@@ -1711,6 +1856,7 @@ CSV_FIELDS = (
     "dynamic_loft_source",
     "lie_deg",
     "lie_source",
+    "orientation_origin",
     "lens_height_mm",
     "lens_height_source",
     "ball_range_mm",
@@ -1726,9 +1872,10 @@ def analyse_session(
 ) -> dict[str, Any]:
     """Every clip of a recorded session placed and read; the report as a JSON-ready dict.
 
-    Clips are prepared exactly as ``impact_session`` prepares them (range, ball, lens,
-    the shot's own angles or the priors); the scene's heights come from the session's
-    start record. No self-built template is made or used.
+    Clips are prepared exactly as ``impact_session`` prepares them (range, ball, lens)
+    and placed by ``place_clip`` (the orientation rule ``orientation_for_shot``: the
+    shot's capture-bound angles, else its D-plane, else the priors); the scene's heights
+    come from the session's start record. No self-built template is made or used.
     """
     options = options or session.Options()
     clips = session.find_clips(root)
@@ -1761,21 +1908,17 @@ def analyse_session(
             )
             rows.append(row)
             continue
-        scene = SceneHeights.from_face_inputs(clip.face)
-        orientation = orientation_from_face_inputs(clip.face)
-        placement = place_impact(
-            clip.prepared,
-            orientation,
-            scene=scene,
-            attack_angle=clip.face.attack_angle,
+        run = runs.get(clip.run_dir) if clip.run_dir is not None else None
+        placement, orientation, scene = place_clip(
+            clip,
+            run.shots.get(clip.shot_number, {}) if run is not None else {},
+            run.start if run is not None else {},
             centre_from_toe=(
                 il.Labelled(float(options.face_centre_from_toe_mm), 0.0, il.RESEARCH_OVERRIDE)
                 if options.face_centre_from_toe_mm is not None
-                else clip.face.face_centre_from_toe
+                else None
             ),
-            centre_height=clip.face.face_centre_height,
         )
-        placement.diagnostics["dynamic_lie_estimate_not_used"] = clip.extra.get("dynamic_lie")
         row.update(
             status=placement.status,
             reason=placement.reason,
@@ -1793,6 +1936,7 @@ def analyse_session(
             dynamic_loft_source=orientation.dynamic_loft.source,
             lie_deg=orientation.lie.value,
             lie_source=orientation.lie.source,
+            orientation_origin=orientation_origin(orientation),
             lens_height_mm=scene.lens_height.value,
             lens_height_source=scene.lens_height.source,
         )

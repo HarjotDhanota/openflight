@@ -506,6 +506,102 @@ def test_the_d_plane_metrics_enter_with_their_status_sigma_and_label():
     assert unknown_frame.face_angle.source == il.PRIOR_SQUARE
 
 
+D_PLANE_SOURCE = "D-plane inversion of the fitted launch model"
+
+
+def collision_record(
+    face=2.0, face_status="calculated", frame="unit_boresight", loft=24.0, loft_status="estimated"
+):
+    """A shot's recorded collision-model block, as ``CollisionResult.to_dict`` writes it."""
+    return {
+        "model_version": "test",
+        "metrics": {
+            "face_angle": Metric(face, face_status, D_PLANE_SOURCE, "deg", frame).to_dict(),
+            "dynamic_loft": Metric(loft, loft_status, D_PLANE_SOURCE, "deg").to_dict(),
+            "spin_rate": Metric(5000.0, "calculated", D_PLANE_SOURCE, "rpm").to_dict(),
+        },
+    }
+
+
+def capture_angle(value: float) -> il.Labelled:
+    """A face angle bound to the shot's own capture (the 2D route's independent angle)."""
+    from openflight.camera.impact_angle_evidence import AngleEvidence
+
+    evidence = AngleEvidence(
+        metric="face_angle",
+        value_deg=value,
+        source="camera_face",
+        status="measured",
+        frame="unit_boresight",
+        note=None,
+        shot_number=1,
+        capture_npz_sha256="0" * 64,
+        observation_ids=("camera-face-1",),
+        sensor_interval_ns=(1, 2),
+        reference_point="face_normal",
+        sigma_deg=2.0,
+    )
+    return il.Labelled(value, 2.0, "camera_face", evidence)
+
+
+def test_a_shots_orientation_is_its_capture_angle_then_its_d_plane_then_the_prior():
+    from openflight.camera.impact_angle_evidence import ANGLE_SIGMA_BY_STATUS
+
+    priors = il.FaceInputs.priors("7-iron")
+    own = priors.with_changes(face_angle=capture_angle(1.0))
+    got = ip.orientation_for_shot(own, collision_record(), club="7-iron", handedness="right")
+    assert got.face_angle == own.face_angle
+    assert got.dynamic_loft.value == 24.0
+    assert got.dynamic_loft.sigma == ANGLE_SIGMA_BY_STATUS["estimated"]
+    assert got.dynamic_loft.source.startswith("estimated")
+    assert got.lie.source == ip.PRIOR_LIE
+    assert got.provenance() == {
+        "face_angle": {"origin": ip.ORIGIN_CAPTURE, "label": "measured"},
+        "dynamic_loft": {"origin": ip.ORIGIN_D_PLANE, "label": "estimated"},
+        "lie": {"origin": ip.ORIGIN_PRIOR, "label": "estimated"},
+    }
+    d_plane = ip.orientation_for_shot(priors, collision_record(), club="7-iron")
+    assert d_plane.face_angle.value == 2.0
+    assert d_plane.face_angle.source.startswith("calculated")
+    assert d_plane.provenance()["face_angle"] == {
+        "origin": ip.ORIGIN_D_PLANE,
+        "label": "calculated",
+    }
+    none = ip.orientation_for_shot(priors, None, club="7-iron")
+    assert none.values() == ip.orientation_priors("7-iron").values()
+    assert {p["origin"] for p in none.provenance().values()} == {ip.ORIGIN_PRIOR}
+    assert {p["label"] for p in none.provenance().values()} == {"estimated"}
+
+
+def test_a_d_plane_angle_the_shot_could_not_give_falls_to_its_prior_and_says_why():
+    priors = il.FaceInputs.priors("7-iron")
+    record = collision_record()
+    record["metrics"]["face_angle"] = Metric(
+        None, "not_measured", D_PLANE_SOURCE, "deg", reason="missing accepted club path"
+    ).to_dict()
+    got = ip.orientation_for_shot(priors, record, club="7-iron")
+    assert got.face_angle.source == il.PRIOR_SQUARE
+    assert got.provenance()["face_angle"]["origin"] == ip.ORIGIN_PRIOR
+    assert "missing accepted club path" in got.notes[0]
+    assert got.provenance()["dynamic_loft"]["origin"] == ip.ORIGIN_D_PLANE
+
+
+def test_a_target_line_d_plane_face_comes_into_the_analysis_orientation():
+    priors = il.FaceInputs.priors("7-iron")
+    record = collision_record(frame="target_line")
+    right = ip.orientation_for_shot(priors, record, club="7-iron", target_line_offset_deg=0.5)
+    left = ip.orientation_for_shot(
+        priors, record, club="7-iron", handedness="left", target_line_offset_deg=0.5
+    )
+    assert right.face_angle.value == pytest.approx(1.5)
+    assert left.face_angle.value == pytest.approx(-1.5)
+    unknown = ip.orientation_for_shot(priors, record, club="7-iron")
+    assert unknown.provenance()["face_angle"]["origin"] == ip.ORIGIN_PRIOR
+    start = {"config": {"target_line": {"horizontal_offset_deg": 0.5}}}
+    assert session.target_line_offset_deg(start) == 0.5
+    assert session.target_line_offset_deg({}) is None
+
+
 def test_a_shaft_lie_becomes_the_faces_roll_against_the_static_lie():
     lie = ip.lie_from_shaft(65.3, 3.0, "7-iron", "camera_lower_shaft")
     assert lie.value == pytest.approx(3.0)
@@ -639,7 +735,10 @@ def test_the_gear_effect_hook_iterates_until_the_strike_settles():
 CLIP = "camera_20261031_100001_000_001"
 
 
-def write_session(tmp_path: Path, *, strike_u=7.0, strike_v=-11.0, loft=27.0) -> Path:
+def write_session(
+    tmp_path: Path, *, strike_u=7.0, strike_v=-11.0, loft=27.0, angles: str = "capture"
+) -> Path:
+    """A recorded session of one rendered shot; ``angles``: capture-bound or D-plane."""
     frames, ball = render(strike_u=strike_u, strike_v=strike_v, loft=loft)
     run = tmp_path / "tester" / "arm6" / "paired" / "run-01"
     clip = run / "arm6" / "camera" / CLIP
@@ -695,6 +794,11 @@ def write_session(tmp_path: Path, *, strike_u=7.0, strike_v=-11.0, loft=27.0) ->
             "attack_angle": {"value": ATTACK_DEG, "status": "measured"},
         },
     }
+    if angles == "d_plane":
+        del shot["metrics"]["face_angle"], shot["metrics"]["dynamic_loft"]
+        shot["collision_model"] = collision_record(
+            face=0.0, face_status="calculated", loft=loft, loft_status="calculated"
+        )
     bind_test_angles(shot, clip / "frames.npz")
     bind_test_range(shot, clip / "frames.npz", "synthetic-session")
     events = [
@@ -723,6 +827,17 @@ def test_the_session_route_reads_the_shots_own_d_plane_and_scene(tmp_path):
     assert row["dynamic_loft_source"] == "synthetic_independent_angle"
     assert row["lie_source"] == ip.PRIOR_LIE
     assert row["lens_height_source"] == il.RIG_LENS_HEIGHT
+
+
+def test_the_session_route_takes_the_shots_d_plane_when_it_has_no_capture_angles(tmp_path):
+    report = ip.analyse_session(write_session(tmp_path, angles="d_plane"))
+    row = report["rows"][0]
+    assert row["status"] == "ok", row["reason"]
+    assert row["face_angle_source"].startswith("calculated")
+    assert row["dynamic_loft_source"].startswith("calculated")
+    assert row["dynamic_loft_deg"] == 27.0
+    assert row["orientation_origin"] == "face_angle=d_plane dynamic_loft=d_plane lie=prior"
+    assert row["impact_offset_mm"] == pytest.approx(7.0, abs=3.0)
 
 
 def test_the_cli_flag_writes_the_placement_report_and_overlays(tmp_path):

@@ -405,6 +405,13 @@ def face_angle_in_analysis_orientation(
     return value_deg if handedness == "right" else -value_deg
 
 
+def target_line_offset_deg(start: Mapping[str, Any]) -> float | None:
+    """The session's aim: the target line's horizontal offset from the boresight, or None."""
+    config = start.get("config") if isinstance(start, Mapping) else None
+    target = config.get("target_line") if isinstance(config, Mapping) else None
+    return _number(target.get("horizontal_offset_deg")) if isinstance(target, Mapping) else None
+
+
 def shot_face_inputs(
     shot: Mapping[str, Any],
     club: str,
@@ -449,13 +456,8 @@ def shot_face_inputs(
         if evidence is not None:
             value = evidence.value_deg
             if name == "face_angle":
-                offset = _number(
-                    ((start.get("config") or {}).get("target_line") or {}).get(
-                        "horizontal_offset_deg"
-                    )
-                )
                 value = face_angle_in_analysis_orientation(
-                    value, evidence.frame, offset, handedness
+                    value, evidence.frame, target_line_offset_deg(start), handedness
                 )
                 if value is None:
                     evidence, reason = None, "target_line_transform_unknown"
