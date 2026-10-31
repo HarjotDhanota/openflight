@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
-CAPTURE_SOURCES = ("sound_gate", "ops_speed_trigger")
+CAPTURE_SOURCES = ("sound_gate", "ops_speed_trigger", "ops_requested_capture")
 
 
 def _ns(value):

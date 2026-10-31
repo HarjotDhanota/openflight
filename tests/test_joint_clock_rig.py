@@ -225,3 +225,139 @@ def test_native_trial_rearms_after_setup_before_waiting(tmp_path, edge_during_re
         rig.close()
     assert json.loads((rig.folder / "RESULT.json").read_text())["status"] == "complete"
     assert len(seen) == int(edge_during_rearm)
+
+
+def iwr_rig(tmp_path, camera, **kwargs):
+    return rig_module.RigControl(
+        folder=tmp_path,
+        boot_id="boot-a",
+        radar=SimpleNamespace(),
+        camera=camera,
+        recorder=lambda *_args, **_kwargs: None,
+        now=lambda: 90,
+        mode="iwr_request",
+        **{"pre_trigger_segments": 16, **kwargs},
+    )
+
+
+@pytest.mark.parametrize("split", [-1, 33, 16.0, True, None])
+def test_iwr_request_mode_needs_a_whole_ops_split(tmp_path, split):
+    with pytest.raises(ValueError, match="split"):
+        iwr_rig(tmp_path, SimpleNamespace(), pre_trigger_segments=split)
+
+
+def test_iwr_request_mode_guards_the_speed_trigger_and_sets_the_chosen_split(tmp_path):
+    configured = []
+
+    class Radar:
+        serial = None
+        last_hardware_trigger_outcome = "timeout"
+
+        def connect(self):
+            return True
+
+        def validate_internal_trigger_firmware(self):
+            return "1.3.3"
+
+        def configure_for_internal_speed_trigger(self, **kwargs):
+            configured.append(kwargs)
+
+        def _send_command(self, command):
+            return '{"PowerReduction":3}' if command == "P3" else ""
+
+        def rearm_internal_speed_trigger(self):
+            return True
+
+        def wait_for_hardware_trigger(self, **_kwargs):
+            return ""
+
+    def recorder(_chip, _line, _duration, emit, **kwargs):
+        emit({"type": "start", "boot_id": "boot-a", "initial_level": 0})
+        kwargs["stop_event"].wait(3)
+
+    camera = SimpleNamespace(
+        start=lambda: None,
+        stop=lambda: None,
+        notify_capture_request=lambda _item: True,
+        _ring=SimpleNamespace(latest_frame=None),
+    )
+    rig = rig_module.RigControl(
+        folder=tmp_path / "control",
+        boot_id="boot-a",
+        radar=Radar(),
+        camera=camera,
+        recorder=recorder,
+        mode="iwr_request",
+        pre_trigger_segments=16,
+    )
+    try:
+        rig.prepare()
+    finally:
+        rig.close()
+    assert configured == [
+        {
+            "trigger_threshold_mph": 198,
+            "trigger_magnitude": 2000,
+            "pre_trigger_segments": 16,
+            "sample_rate_ksps": 30,
+        }
+    ]
+
+
+def test_one_iwr_notice_requests_one_owned_ops_capture(tmp_path):
+    rig = iwr_rig(tmp_path, SimpleNamespace(notify_capture_request=lambda _item: True))
+    notice = {"notice_source": "triggered_line", "host_received_mono_ns": 80}
+    assert not rig.request_ops_capture(notice)
+    assert not rig.request_event.is_set()
+    rig.arm_id = rig.router.arm(90)
+    assert rig.request_ops_capture(notice)
+    assert rig.request_event.is_set()
+    assert not rig.request_ops_capture({**notice, "notice_source": "polled_latch"})
+    rows = [json.loads(line) for line in (tmp_path / "ops-control.jsonl").read_text().splitlines()]
+    assert [row["outcome"] for row in rows] == ["refused_unarmed", "requested", "refused_duplicate"]
+    assert rows[1]["arm_id"] == rig.arm_id
+    assert rows[1]["iwr_notice"] == notice
+    assert rows[1]["physical_timing_qualified"] is False
+
+
+def test_the_request_reaches_the_single_ops_reader_as_this_attempts_event(tmp_path):
+    seen = {}
+    rig = iwr_rig(tmp_path, SimpleNamespace(notify_capture_request=lambda _item: True))
+
+    def wait(**kwargs):
+        seen.update(kwargs)
+        return ""
+
+    rig.radar = SimpleNamespace(
+        wait_for_hardware_trigger=wait, last_hardware_trigger_outcome="timeout"
+    )
+    rig._capture()
+    assert seen["software_trigger_event"] is rig.request_event
+
+
+def test_a_requested_capture_retains_the_camera_under_its_own_source(tmp_path):
+    seen = []
+    rig = iwr_rig(
+        tmp_path, SimpleNamespace(notify_capture_request=lambda item: seen.append(item) is None)
+    )
+    rig.arm_id = rig.router.arm(90)
+    rig.observe_gpio(
+        {"type": "edge", "edge": "rising", "timestamp_ns": 100, "received_mono_ns": 110}
+    )
+    assert [item.source for item in seen] == ["ops_requested_capture"]
+
+
+def test_a_native_speed_dump_is_refused_in_iwr_request_mode(tmp_path):
+    raw = json.dumps(
+        {"I": [2048] * 4096, "Q": [2048] * 4096, "sample_time": 1.0, "trigger_time": 1.0256}
+    )
+    raw = '{"trigger_velocity_detected": -150.0}\n' + raw
+    rig = iwr_rig(tmp_path, SimpleNamespace(notify_capture_request=lambda _item: True))
+    rig.radar = SimpleNamespace(
+        wait_for_hardware_trigger=lambda **_: raw, last_hardware_trigger_outcome="received"
+    )
+    rig._capture()
+    assert (tmp_path / "ops-response.raw").read_text() == raw
+    assert not rig.native_capture
+    assert rig.ops_capture_origin == "native_speed"
+    assert rig.errors[-1]["component"] == "ops-origin"

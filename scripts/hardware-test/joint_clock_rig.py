@@ -9,9 +9,14 @@ from pathlib import Path
 from openflight.capture_trigger import CaptureRequest, CaptureTriggerRouter
 from openflight.timing import OpsCaptureTimer
 
+# IWR master: OPS speed-trigger guard limits (bench precedent ops_sample_clock); every
+# dump's origin is still checked, since a guard does not prove the detector off.
+IWR_REQUEST_GUARD = {"trigger_threshold_mph": 198, "trigger_magnitude": 2000}
+NATIVE_NOTICE = b'"trigger_velocity_detected"'
+
 
 class RigControl:
-    """Observe native OPS events; never send an IWR capture or use a sound GPIO."""
+    """Observe OPS captures, native or IWR-requested; never send an IWR capture or use sound."""
 
     def __init__(
         self,
@@ -25,9 +30,21 @@ class RigControl:
         wait_s=4,
         keep_camera=False,
         keep_radar=False,
+        mode="ops_speed_trigger",
+        pre_trigger_segments=6,
     ):
         if type(wait_s) is not int or not 4 <= wait_s <= 30:
             raise ValueError("native wait must be an integer in 4..30 seconds")
+        if mode not in ("ops_speed_trigger", "iwr_request"):
+            raise ValueError("unknown OPS acquisition mode")
+        if type(pre_trigger_segments) is not int or not 0 <= pre_trigger_segments <= 32:
+            raise ValueError("OPS pre-trigger split must be a whole number of segments, 0..32")
+        self.mode, self.pre_trigger_segments = mode, pre_trigger_segments
+        self.request_event = threading.Event() if mode == "iwr_request" else None
+        self.ops_capture_origin = None
+        self.capture_source = (
+            "ops_requested_capture" if mode == "iwr_request" else "ops_speed_trigger"
+        )
         self.wait_s = wait_s
         self.keep_camera = keep_camera
         self.keep_radar = keep_radar
@@ -43,7 +60,7 @@ class RigControl:
         self.arm_id = None
         self.gpio_thread = self.capture_thread = self.frame_thread = None
         self.router = CaptureTriggerRouter(
-            "ops_speed_trigger", boot_id, {"camera": camera.notify_capture_request}
+            self.capture_source, boot_id, {"camera": camera.notify_capture_request}
         )
         self.native_capture = False
         self.trace_attempt_id = None
@@ -63,7 +80,7 @@ class RigControl:
         if row["type"] == "edge" and row["edge"] == "rising" and self.arm_id is not None:
             request = CaptureRequest(
                 event_id=uuid.uuid4().hex,
-                source="ops_speed_trigger",
+                source=self.capture_source,
                 boot_id=self.boot_id,
                 arm_id=self.arm_id,
                 kernel_mono_interval_ns=(row["timestamp_ns"], row["timestamp_ns"]),
@@ -159,10 +176,14 @@ class RigControl:
         self.radar.capture_evidence_callback = lambda row: self.emit(
             "ops.jsonl", {"type": "ops_capture_evidence", "trigger_type": "hardware", **row}
         )
+        detector = (
+            IWR_REQUEST_GUARD
+            if self.mode == "iwr_request"
+            else {"trigger_threshold_mph": 25, "trigger_magnitude": 25}
+        )
         self.radar.configure_for_internal_speed_trigger(
-            trigger_threshold_mph=25,
-            trigger_magnitude=25,
-            pre_trigger_segments=6,
+            **detector,
+            pre_trigger_segments=self.pre_trigger_segments,
             sample_rate_ksps=30,
         )
         self.radar._send_command("PI")
@@ -206,6 +227,43 @@ class RigControl:
             },
         )
 
+    def request_ops_capture(self, notice):
+        """One IWR notice per armed attempt asks the single OPS reader for one S! capture."""
+        if self.request_event is None:
+            raise ValueError("this rig does not take IWR capture requests")
+        with self.lock:
+            outcome = (
+                "refused_unarmed"
+                if self.arm_id is None
+                else "refused_duplicate"
+                if self.request_event.is_set()
+                else "requested"
+            )
+            if outcome == "requested":
+                self.request_event.set()
+        self.emit(
+            "ops-control.jsonl",
+            {
+                "type": "iwr_capture_request",
+                "outcome": outcome,
+                "mono_ns": self.now(),
+                "arm_id": self.arm_id,
+                "iwr_notice": notice,
+                "physical_timing_qualified": False,
+            },
+        )
+        return outcome == "requested"
+
+    def _origin(self, payload):
+        """Which detector produced this dump; only the expected one is a capture."""
+        if self.mode == "ops_speed_trigger":
+            return "native_speed", None
+        if NATIVE_NOTICE in payload:
+            return "native_speed", "native speed dump while waiting for the IWR request"
+        if not self.request_event.is_set():
+            return "unrequested", "OPS dump without an IWR request"
+        return "iwr_request", None
+
     def _capture(self):
         try:
             timer = OpsCaptureTimer.start()
@@ -215,15 +273,21 @@ class RigControl:
                 dump_grace=8,
                 cancel_event=self.stop,
                 on_first_byte=timer.first_marker_callback,
+                software_trigger_event=self.request_event,
             )
             timer.response_completed()
+            accepted = bool(raw)
             if raw:
                 payload = raw.encode("ascii")
                 (self.folder / "ops-response.raw").write_bytes(payload)
+                self.ops_capture_origin, refusal = self._origin(payload)
+                if refusal is not None:
+                    accepted = False
+                    self.errors.append({"component": "ops-origin", "error": refusal})
                 from ops_sample_clock import dump_summary
 
-                self.emit("ops-summary.jsonl", dump_summary(payload, 6))
-            self.native_capture = bool(raw)
+                self.emit("ops-summary.jsonl", dump_summary(payload, self.pre_trigger_segments))
+            self.native_capture = accepted
             self.emit(
                 "ops-control.jsonl",
                 {
@@ -288,7 +352,14 @@ class RigControl:
                         "host_boot": self.boot_id,
                         "arm_id": self.arm_id,
                         "camera_used": self.camera_started,
-                        "ops_native_trigger_used": self.arm_id is not None,
+                        "acquisition_mode": self.mode,
+                        "pre_trigger_segments": self.pre_trigger_segments,
+                        "ops_native_trigger_used": self.mode == "ops_speed_trigger"
+                        and self.arm_id is not None,
+                        "ops_software_capture_requested": bool(
+                            self.request_event and self.request_event.is_set()
+                        ),
+                        "ops_capture_origin": self.ops_capture_origin,
                         "ops_connected": self.ops_connected,
                         "iwr_software_capture_requested": False,
                         "camera_sound_gpio_used": False,
