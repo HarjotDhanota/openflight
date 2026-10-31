@@ -50,6 +50,10 @@ class Calibration:
     # Where each LEVM antenna sits; None: LCMF takes ``radar_height_m`` as the RX-row
     # centre of a board turned +90 deg.
     antennas: AntennaLayout | None = None
+    # How far the plane the radar's floor bounce comes from lies below the hitting
+    # surface: the base in front of the unit when the surface is raised above it
+    # (``surface_height``); 0 when the unit stands on the hitting surface.
+    reflecting_plane_depth_m: float = 0.0
 
     @property
     def radar_height_m(self) -> float:

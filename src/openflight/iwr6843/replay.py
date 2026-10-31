@@ -282,8 +282,14 @@ def build_replay_calibration(
         roll_deg=roll_deg,
     )
     if effective_snapshot is not None:
-        for name in ("range_bias_m", "lateral_tee_offset_m", "tee_range_uncertainty_m"):
-            if name in effective_snapshot:
+        for name in (
+            "range_bias_m",
+            "lateral_tee_offset_m",
+            "tee_range_uncertainty_m",
+            # the plane the floor bounce came from, below the hitting surface
+            "reflecting_plane_depth_m",
+        ):
+            if effective_snapshot.get(name) is not None:
                 setattr(calibration, name, float(effective_snapshot[name]))
         if "antenna_layout" in effective_snapshot:
             layout = effective_snapshot["antenna_layout"]

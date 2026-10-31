@@ -1160,6 +1160,7 @@
   "tests/test_kld7_two_ray.py": "PRODUCT",
   "tests/test_latest_shot_api.py": "FUSION",
   "tests/test_launch_monitor.py": "FUSION",
+  "tests/test_lcmf_reflecting_plane.py": "FUSION",
   "tests/test_lens_profiles.py": "PRODUCT",
   "tests/test_lens_settings.py": "TESTER",
   "tests/test_license.py": "PRODUCT",

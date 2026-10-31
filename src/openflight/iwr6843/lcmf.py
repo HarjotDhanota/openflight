@@ -8,7 +8,7 @@ rig (`openflight.iwr6843.antennas`). Not yet validated against a reference instr
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 
 import numpy as np
 
@@ -347,16 +347,26 @@ def _model_geometry(
     The tee range is measured from the virtual array's phase centre (the
     bistatic mean over the eight pairs differs by hundredths of a millimetre).
     """
+    # Heights come above the hitting surface; the floor-image model's mirror is the
+    # plane the bounce comes from, ``reflecting_plane_depth_m`` below it (surface_height).
+    depth_m = float(getattr(cal, "reflecting_plane_depth_m", 0.0) or 0.0)
     layout = antenna_layout(cal)
+    if depth_m:
+        layout = dataclass_replace(layout, rx_row_height_m=layout.rx_row_height_m + depth_m)
     positions = layout.positions_m(cal.tilt_rad, cal.roll_rad)
     tx_positions, rx_positions = antennas.channel_positions_m(positions, tx_order)
     phase_centre_height_m = layout.phase_centre_height_m(cal.tilt_rad, cal.roll_rad)
-    vertical_delta_m = cal.tee_ball_height_m - phase_centre_height_m
+    if phase_centre_height_m <= 0.0:
+        # a mirror above the radar models nothing: the camera route takes the vertical
+        raise ValueError("radar_below_the_hitting_surface:_geometry_not_modelled")
+    ball_height_m = cal.tee_ball_height_m + depth_m
+    vertical_delta_m = ball_height_m - phase_centre_height_m
     lateral_m = cal.lateral_tee_offset_m
     return {
         "speed_ms": ball_speed_mph / MPH_PER_MS,
         "tee_x_m": math.sqrt(max(cal.tee_range_m**2 - vertical_delta_m**2 - lateral_m**2, 0.25)),
-        "ball_height_m": cal.tee_ball_height_m,
+        "reflecting_plane_depth_m": depth_m,
+        "ball_height_m": ball_height_m,
         "phase_centre_height_m": phase_centre_height_m,
         "lateral_offset_m": lateral_m,
         "antenna_layout": layout,
