@@ -599,3 +599,36 @@ def test_the_box_step_runs_the_chosen_locator(monkeypatch, tmp_path, choice, kin
         assert pipelines[0].camera.image_width_px == ts.ARMS[ts.PLACEMENT_BOX_ARM].width
         assert pipelines[0].box == live.analyzer.box
         assert pipelines[0].kwargs["model_path"] == ts.ADDRESS_PREVIEW_MODEL
+
+
+def test_a_box_step_that_cannot_open_the_camera_ends_its_preview(monkeypatch, tmp_path):
+    from tests.test_box_preview_exposure import RIG, EligibleSetup, LinearScene, SceneLive, Tilt
+
+    pipelines = []
+
+    def pipeline(*args, **kwargs):
+        pipelines.append(FakePipeline(*args, **kwargs))
+        return pipelines[-1]
+
+    class StuckLive(SceneLive):
+        def start(self, *_args, **_kwargs):
+            raise RuntimeError("previous live camera capture is still stopping")
+
+    monkeypatch.setattr(ts, "AddressPreviewPipeline", pipeline)
+    app = ts.create_app(
+        sessions_root=tmp_path / "sessions",
+        rig_geometry=RIG,
+        manager=ts.TesterJobManager(),
+        live_view=StuckLive(LinearScene(light=0.8)),
+        tilt=Tilt(),
+        setup_policy=EligibleSetup(),
+        box_ball_locator="preview",
+    )
+
+    opened = app.test_client().post(
+        "/api/tester/placement-box", json={"tester_id": "20261030-stuck", "action": "show"}
+    )
+
+    assert opened.status_code != 200
+    assert len(pipelines) == 1
+    assert _wait(lambda: pipelines[0].closed == 1)
