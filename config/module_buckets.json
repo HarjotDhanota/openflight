@@ -1084,6 +1084,7 @@
   "tests/test_iwr6843_device_lock.py": "FUSION",
   "tests/test_iwr6843_driver.py": "FUSION",
   "tests/test_iwr6843_driver_timing.py": "FUSION",
+  "tests/test_iwr6843_dump_clutter.py": "FUSION",
   "tests/test_iwr6843_dump_evidence.py": "FUSION",
   "tests/test_iwr6843_dump_starvation_check.py": "RESEARCH",
   "tests/test_iwr6843_feasibility_run.py": "RESEARCH",
