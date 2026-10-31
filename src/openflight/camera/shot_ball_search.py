@@ -12,8 +12,11 @@ search proposed when no ball was in the box (research/free-play-ball-shot-search
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import multiprocessing
+import os
+import signal
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeout
@@ -28,7 +31,11 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_DIAMETER_1280_PX = 45.0
 MIN_BAND_MARGIN_PX = 10.0
-CLOSE_TIMEOUT_S = 30.0
+CLOSE_TIMEOUT_S = 10.0
+# a search still running this long after its cancel, or at this many later shots, is
+# taken to ignore it: the worker and its fit workers are ended and the search stays off
+STUCK_SEARCH_S = 10.0
+STUCK_SEARCH_SHOTS = 2
 INPUTS_RETRY_S = 5.0
 WORKER_START_TIMEOUT_S = preview.POOL_START_TIMEOUT_S
 
@@ -92,6 +99,13 @@ class BallBand:
 _WORKER_INPUTS: dict = {}
 
 
+def warm_worker() -> list[int]:
+    """The worker is up: its fit workers' pids, to end them should the worker ever hang."""
+    pool = search._FIT_POOL  # pylint: disable=protected-access
+    processes = getattr(pool, "_processes", None) or {}
+    return [process.pid for process in processes.values()]
+
+
 def load_inputs(camera, patch) -> bool:
     """Give the worker the session's camera model and box, so a shot sends only its frames."""
     _WORKER_INPUTS.update(camera=camera, patch=patch)
@@ -141,12 +155,21 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
         executor_factory=_broad_worker_pool,
         availability=native.availability,
         retry_s: float = INPUTS_RETRY_S,
+        close_timeout_s: float = CLOSE_TIMEOUT_S,
+        stuck_after_s: float = STUCK_SEARCH_S,
+        stuck_shots: int = STUCK_SEARCH_SHOTS,
     ):
         self._record_loader = record_loader
         self._camera_loader = camera_loader
         self._executor_factory = executor_factory
         self._availability = availability
         self._retry_s = retry_s
+        self._close_timeout_s = close_timeout_s
+        self._stuck_after_s = stuck_after_s
+        self._stuck_shots = stuck_shots
+        self._cancelled_at: float | None = None
+        self._busy_shots = 0
+        self._terminated = False
         self._lock = threading.Lock()
         self._cancel = multiprocessing.get_context("spawn").Event()
         self._started = threading.Event()
@@ -174,7 +197,7 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
                 if self._closed:
                     return
                 self._executor = self._executor_factory(self._cancel)
-                self._warm = self._executor.submit(int)
+                self._warm = self._executor.submit(warm_worker)
             while not self._prepare():
                 self._started.set()
                 if self._stopping.wait(self._retry_s):
@@ -259,7 +282,7 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
                 f"the frames are {width}x{height}; the search is set up for {shape[1]}x{shape[0]}",
             )
         if pending is not None and not pending.done():
-            return _answer("busy", "the previous shot's search is still stopping")
+            return self._busy(executor, entered)
         self._cancel.clear()
         try:
             future = executor.submit(run_search, np.ascontiguousarray(frames), list(controls))
@@ -268,11 +291,50 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
             result = future.result(timeout=max(0.0, timeout_s - (time.monotonic() - entered)))
         except FutureTimeout:
             self._cancel.set()
+            with self._lock:
+                self._cancelled_at, self._busy_shots = time.monotonic(), 0
             return _answer("timeout", f"the search took longer than {timeout_s:.1f} s")
         except Exception as error:  # pylint: disable=broad-exception-caught
             self._disable(f"the search worker failed: {type(error).__name__}: {error}")
             return _answer("worker_failed", self._unavailable)
         return self._judge(result, band)
+
+    def _busy(self, executor, now: float) -> dict:
+        """The previous search has not stopped yet; one that ignores its cancel is ended."""
+        with self._lock:
+            self._busy_shots += 1
+            shots = self._busy_shots
+            waited = now - (self._cancelled_at if self._cancelled_at is not None else now)
+        if shots < self._stuck_shots and waited < self._stuck_after_s:
+            return _answer("busy", "the previous shot's search is still stopping")
+        reason = (
+            f"the previous search ignored its cancel for {waited:.0f} s and {shots} shots: "
+            "the search worker was stopped"
+        )
+        self._disable(reason)
+        self._terminate(executor)
+        return _answer("worker_failed", reason)
+
+    def _terminate(self, executor) -> None:
+        """End the worker and its fit workers without waiting for them to answer (once)."""
+        with self._lock:
+            if self._terminated:
+                return
+            self._terminated = True
+        processes = list((getattr(executor, "_processes", None) or {}).values())
+        warm = self._warm
+        fit_pids = (
+            warm.result() if warm is not None and warm.done() and not warm.exception() else []
+        )
+        executor.shutdown(wait=False, cancel_futures=True)
+        for process in processes:
+            process.terminate()
+        for pid in fit_pids:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+        for process in processes:
+            process.join(timeout=self._close_timeout_s)
+        logger.warning("[BALL_AT_ADDRESS] The per-shot search worker was ended")
 
     @staticmethod
     def _judge(result: dict, band: BallBand) -> dict:
@@ -292,7 +354,7 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
         return _answer("selected", None, ball=ball, **timing)
 
     def close(self) -> None:
-        """Stop any search and end the worker and its fit processes; waits for them."""
+        """Stop any search and end the worker and its fit processes, within a bounded wait."""
         with self._lock:
             if self._closed:
                 return
@@ -303,7 +365,12 @@ class ShotBallSearch:  # pylint: disable=too-many-instance-attributes
             return
         self._cancel.set()
         try:
-            executor.submit(close_fit_pool).result(timeout=CLOSE_TIMEOUT_S)
+            executor.submit(close_fit_pool).result(timeout=self._close_timeout_s)
         except Exception:  # pylint: disable=broad-exception-caught
-            logger.warning("[BALL_AT_ADDRESS] The search's fit workers did not stop cleanly")
+            logger.warning(
+                "[BALL_AT_ADDRESS] The search worker did not stop within %.0f s",
+                self._close_timeout_s,
+            )
+            self._terminate(executor)
+            return
         executor.shutdown(wait=True, cancel_futures=True)

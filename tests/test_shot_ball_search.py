@@ -8,6 +8,7 @@ plus max(0.5 x 45 px, 10 px); 640x400 anchors use p640 = (p1280 + 0.5) / 2 - 0.5
 from __future__ import annotations
 
 import multiprocessing
+import time
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -95,21 +96,25 @@ def test_a_record_without_its_band_or_confirmed_ball_has_no_band(missing):
 class Pool:
     """A stand-in for the broad worker: ``answers`` are what each search returns (or raises)."""
 
-    def __init__(self, answers, *, warm_done=True):
+    def __init__(self, answers, *, warm_done=True, closes=True):
         self.answers = list(answers)
         self.submitted = []
-        self.shut_down = False
+        self.shut_down = None
         self.warm_done = warm_done
+        self.closes = closes
+        self._processes = {1: Process()}
 
     def submit(self, function, *args):
         self.submitted.append((function, args))
         future = Future()
-        if function is int:
+        if function is sbs.warm_worker:
             if self.warm_done:
-                future.set_result(0)
+                future.set_result([4101, 4102])
             return future
-        if function in (sbs.close_fit_pool, sbs.load_inputs):
+        if function is sbs.load_inputs or (function is sbs.close_fit_pool and self.closes):
             future.set_result(True)
+            return future
+        if function is sbs.close_fit_pool:
             return future
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
@@ -118,8 +123,27 @@ class Pool:
             future.set_result(answer)
         return future
 
-    def shutdown(self, wait=True, cancel_futures=False):  # pylint: disable=unused-argument
-        self.shut_down = True
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.shut_down = {"wait": wait, "cancel_futures": cancel_futures}
+
+
+class Process:
+    def __init__(self):
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+    def join(self, timeout=None):  # pylint: disable=unused-argument
+        return None
+
+
+@pytest.fixture
+def signalled(monkeypatch):
+    """The pids the search sent a stop signal to (no real process is touched)."""
+    sent = []
+    monkeypatch.setattr(sbs.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    return sent
 
 
 PENDING = object()
@@ -206,7 +230,7 @@ def test_a_missing_record_is_no_band_and_never_searches():
     answer = finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)
 
     assert answer["status"] == "no_band"
-    assert all(function is int for function, _ in pool.submitted)
+    assert all(function is sbs.warm_worker for function, _ in pool.submitted)
 
 
 def test_the_record_and_camera_are_read_once_off_the_shot_path():
@@ -332,7 +356,7 @@ def test_close_ends_the_fit_pool_and_the_worker():
     finder.close()
 
     assert any(function is sbs.close_fit_pool for function, _ in pool.submitted)
-    assert pool.shut_down
+    assert pool.shut_down == {"wait": True, "cancel_futures": True}
     assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=3.0)["status"] == "unavailable"
 
 
@@ -434,3 +458,78 @@ def test_capture_stop_alone_does_not_close_the_search_but_shutdown_does(monkeypa
     assert closed == []
     extension.on_shutdown()
     assert closed == [1] and tester_hooks.shot_ball_search is None
+
+
+def _stuck(pool, **kwargs):
+    finder = sbs.ShotBallSearch(
+        lambda: RECORD,
+        lambda: CAMERA,
+        executor_factory=lambda _event: pool,
+        availability=lambda: {"available": True, "reason": None},
+        **kwargs,
+    )
+    finder.start()
+    finder.wait_ready(timeout_s=5)
+    return finder
+
+
+def test_a_search_that_ignores_its_cancel_is_stopped_after_another_shot(signalled):
+    pool = Pool([PENDING])
+    finder = _stuck(pool, stuck_after_s=60.0, stuck_shots=2)
+
+    assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)["status"] == "timeout"
+    assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)["status"] == "busy"
+    stopped = finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)
+
+    assert stopped["status"] == "worker_failed" and "ignored its cancel" in stopped["reason"]
+    assert pool.shut_down == {"wait": False, "cancel_futures": True}
+    assert pool._processes[1].terminated  # pylint: disable=protected-access
+    assert sorted(pid for pid, _ in signalled) == [4101, 4102]
+    later = finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)
+    assert later["status"] == "unavailable" and "ignored its cancel" in later["reason"]
+
+
+def test_a_search_that_ignores_its_cancel_too_long_is_stopped_at_the_next_shot(signalled):
+    pool = Pool([PENDING])
+    finder = _stuck(pool, stuck_after_s=0.0)
+
+    finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)
+
+    assert finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)["status"] == "worker_failed"
+    assert pool._processes[1].terminated  # pylint: disable=protected-access
+    assert signalled
+
+
+def test_close_never_waits_forever_for_a_hung_worker(signalled):
+    pool = Pool([], closes=False)
+    finder = _stuck(pool, close_timeout_s=0.01)
+
+    finder.close()
+
+    assert pool.shut_down == {"wait": False, "cancel_futures": True}
+    assert pool._processes[1].terminated  # pylint: disable=protected-access
+    assert sorted(pid for pid, _ in signalled) == [4101, 4102]
+
+
+def test_a_hung_real_worker_is_ended_with_its_fit_workers(monkeypatch):
+    before = {process.pid for process in multiprocessing.active_children()}
+    sent = []
+    kill = sbs.os.kill
+    monkeypatch.setattr(sbs.os, "kill", lambda pid, sig: sent.append(pid) or kill(pid, sig))
+    finder = sbs.ShotBallSearch(
+        lambda: RECORD,
+        lambda: CAMERA,
+        availability=lambda: {"available": True, "reason": None},
+        stuck_after_s=0.0,
+    )
+    finder.start()
+    assert finder.wait_ready(timeout_s=180)
+    hung = finder._executor.submit(time.sleep, 60)  # pylint: disable=protected-access
+    finder._pending = hung  # pylint: disable=protected-access
+
+    answer = finder.find(_frames(), [(298.0, 10.0)] * 5, timeout_s=0.01)
+
+    assert answer["status"] == "worker_failed"
+    assert len(sent) == 2
+    finder.close()
+    assert {process.pid for process in multiprocessing.active_children()} <= before
