@@ -326,3 +326,27 @@ def test_a_failure_keeping_the_resting_frames_never_stops_clips_being_saved(tmp_
     assert [capture.sequence for capture in saved] == [1, 2]
     assert all(capture.valid for capture in saved)
     assert runtime._after_shot is None  # saved without after-shot frames
+
+
+@pytest.mark.parametrize("trigger", ["idle_recheck", "after_shot"])
+def test_a_restart_during_a_metering_step_is_never_undone_by_a_lock(tmp_path, trigger):
+    runtime = _locked(_runtime(tmp_path), now=1000.0)
+    original = runtime._decide_and_apply
+
+    def decide_then_restart(*args, **kwargs):
+        decided = original(*args, **kwargs)
+        runtime.restart_ball_search("the box moved on another thread")
+        return decided
+
+    runtime._decide_and_apply = decide_then_restart
+    if trigger == "after_shot":
+        _save_shot(runtime, IN_BAND)
+        now = 1010.0
+    else:
+        now = 1300.0
+
+    decision = runtime._swing_exposure_step(now)
+
+    assert decision is not None and decision.reading.passes and not decision.should_apply
+    assert _triggers(runtime)[-1] == trigger
+    assert runtime.auto_exposure_status()["metering_state"] == "searching"

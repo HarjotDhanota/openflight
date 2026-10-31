@@ -461,6 +461,7 @@ class CameraCaptureRuntime:
         self._metering_trigger: str | None = None
         self._last_metering_mono: float | None = None
         self._changed_since_lock = False
+        self._search_generation = 0
         self._resting_balls: dict[int, _ShotRestingBall] = {}
         self._after_shot: _ShotRestingBall | None = None
         # Read without a lock by the ready light.
@@ -1321,6 +1322,7 @@ class CameraCaptureRuntime:
         """Run the metering due at ``now`` (monotonic s): a claimed shot's, a search, or idle."""
         with self._auto_exposure_lock:
             shot, self._after_shot = self._after_shot, None
+            generation = self._search_generation
         if shot is not None:
             decision, deferred = self._meter_saved_shot(shot)
             if deferred:
@@ -1328,7 +1330,7 @@ class CameraCaptureRuntime:
                     self._after_shot = self._after_shot or shot
                 return None
             if decision is not None:
-                self._advance_metering(decision, now)
+                self._advance_metering(decision, now, generation)
                 return decision
         with self._auto_exposure_lock:
             state, last = self._metering_state, self._last_metering_mono
@@ -1339,7 +1341,7 @@ class CameraCaptureRuntime:
         else:
             decision = self._run_auto_exposure_cycle(trigger="idle_recheck")
         if decision is not None:
-            self._advance_metering(decision, now)
+            self._advance_metering(decision, now, generation)
         return decision
 
     @staticmethod
@@ -1352,11 +1354,18 @@ class CameraCaptureRuntime:
             and decision.hysteresis.get("pending_direction") is None
         )
 
-    def _advance_metering(self, decision: sx.SwingExposureDecision, now: float) -> None:
-        """Lock on a settled reading; search again on a lost ball or a second change."""
+    def _advance_metering(
+        self, decision: sx.SwingExposureDecision, now: float, generation: int
+    ) -> None:
+        """Lock on a settled reading; search again on a lost ball or a second change.
+
+        A decision from before a restarted search (``generation``) changes nothing.
+        """
         settled = self._settled(decision)
         why = None
         with self._auto_exposure_lock:
+            if generation != self._search_generation:
+                return
             if self._metering_state == "searching":
                 if settled:
                     self._metering_state, self._changed_since_lock = "locked", False
@@ -1379,6 +1388,7 @@ class CameraCaptureRuntime:
             self._swing_policy.restart_search(why)
             with self._auto_exposure_lock:
                 self._metering_state = "searching"
+                self._search_generation += 1
             logger.info("[CAMERA] Ball search restarts: %s", why)
 
     def _note_look_box(self, look: Mapping) -> None:
