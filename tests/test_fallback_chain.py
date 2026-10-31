@@ -350,3 +350,80 @@ def test_an_iwr_range_two_tracks_compete_for_keeps_estimated_and_its_reason():
     assert (resolution.label, resolution.source) == ("estimated", "iwr_post_impact")
     assert shot.ball_range_label == "estimated"
     assert shot.ball_range_reason.startswith("two IWR tracks compete")
+
+
+# ---------------------------------------------------------------- the vertical (30 Oct 2026)
+
+ACCEPTED = {
+    "status": "accepted",
+    "vertical_deg": 18.58,
+    "vertical_sd_deg": 2.5,
+    "horizontal_deg": 2.0,
+    "horizontal_sd_deg": 2.7,
+    "n_points": 6,
+}
+
+
+def _radar_vertical(value, **values):
+    return _shot(
+        launch_angle_vertical=value,
+        launch_angle_vertical_source="radar",
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
+        **values,
+    )
+
+
+def test_a_radar_vertical_on_the_camera_prior_range_is_estimated_in_the_chain():
+    # Oct 27 shot 2: 35.87 on the camera prior's 3.217 m was "measured" in the chain
+    shot = _radar_vertical(35.87, ball_range_source="camera_prior", ball_range_label="estimated")
+
+    resolved = chain.launch_resolutions(shot, None)["launch_vertical"]
+
+    assert (resolved.source, resolved.label) == ("radar", "estimated")
+    assert "camera prior" in resolved.note
+
+
+def test_the_plausible_vertical_bounds_are_named_and_generous():
+    assert (chain.MIN_PLAUSIBLE_VERTICAL_DEG, chain.MAX_PLAUSIBLE_VERTICAL_DEG) == (-10.0, 60.0)
+    assert chain.implausible_vertical_reason(-10.0) is None
+    assert chain.implausible_vertical_reason(60.0) is None
+    assert chain.implausible_vertical_reason(None) is None
+    assert "-10" in chain.implausible_vertical_reason(-10.5)
+    assert "60" in chain.implausible_vertical_reason(61.0)
+
+
+@pytest.mark.parametrize("value", [72.4, -14.0])
+def test_an_implausible_radar_vertical_is_refused_and_the_camera_stands_in(value):
+    resolved = chain.launch_resolutions(_radar_vertical(value), ACCEPTED)["launch_vertical"]
+
+    assert (resolved.source, resolved.value) == ("camera_fallback", 18.58)
+    ((route, why),) = resolved.tried
+    assert route == "radar" and f"{value:+.1f}" in why
+
+
+def test_an_implausible_camera_vertical_is_refused_too():
+    shot = _shot(launch_angle_vertical_reason="no IWR capture matched this shot")
+
+    resolved = chain.launch_resolutions(shot, {**ACCEPTED, "vertical_deg": 75.0})["launch_vertical"]
+
+    assert not resolved.present
+    assert "camera_fallback: camera_fallback +75.0" in resolved.reason
+
+
+def test_a_radar_vertical_far_from_the_camera_stays_first_but_reads_experimental():
+    # Oct 27 shot 3: radar 29.99 against an accepted 18.58 +- 2.5 (4.6 sigma); radar is
+    # primary for the ball, so it stays, labelled experimental with both values named
+    resolved = chain.launch_resolutions(_radar_vertical(29.99), ACCEPTED)["launch_vertical"]
+
+    assert (resolved.source, resolved.value, resolved.label) == ("radar", 29.99, "experimental")
+    assert "29.99" in resolved.note and "18.58" in resolved.note
+    assert "4.6 sigma" in resolved.note
+
+
+def test_a_radar_vertical_within_three_sigma_of_the_camera_stays_measured():
+    # Oct 27 shot 4: 28.50 against 21.52 +- 3.13 (2.2 sigma)
+    fallback = {**ACCEPTED, "vertical_deg": 21.52, "vertical_sd_deg": 3.13}
+
+    resolved = chain.launch_resolutions(_radar_vertical(28.50), fallback)["launch_vertical"]
+
+    assert (resolved.source, resolved.label, resolved.note) == ("radar", "measured", None)

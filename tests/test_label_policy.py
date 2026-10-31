@@ -451,3 +451,91 @@ def test_an_older_iwr_candidate_cannot_reach_simulators_as_an_estimate(monkeypat
     assert shot.to_dict()["metrics"]["attack_angle"]["status"] == "experimental"
     with pytest.raises(UnmeasuredShotError):
         resolver.resolve_shot(shot, PlayerState())
+
+
+# ---------------------------------------------------------------- the radar vertical (30 Oct 2026)
+
+
+def _vertical_shot(value=29.99, **values):
+    shot = _shot(
+        launch_angle_vertical=value,
+        launch_angle_vertical_source="radar",
+        launch_angle_horizontal=2.0,
+        launch_angle_horizontal_source="radar",
+        launch_angle_horizontal_confidence=0.8,
+        inclinometer={"applied_to": ["camera", "iwr6843"]},
+        **values,
+    )
+    shot.experimental_fused_club_path_deg = 1.0
+    shot.experimental_fused_attack_angle_deg = -4.0
+    shot.experimental_fused_status = "chained_high"
+    shot.experimental_fused_club_path_confidence = "high"
+    shot.experimental_fused_attack_angle_confidence = "high"
+    return shot
+
+
+def _vertical_everywhere(shot, fallback=None):
+    """The radar vertical's label in the chain, the collision input and the record."""
+    resolved = chain.launch_resolutions(shot, fallback)["launch_vertical"]
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+    entry = shot.collision_model["inputs"]["launch_vertical"]
+    return (
+        resolved.label,
+        (entry["label"], entry["experimental"]),
+        shot.to_dict()["metrics"]["launch_vertical"]["status"],
+    )
+
+
+def test_a_radar_vertical_on_the_camera_prior_is_estimated_in_all_three_places():
+    # Oct 27 shot 2/3: the chain and the collision input said "measured", the record
+    # "estimated (rests on the camera prior's ball distance)"
+    shot = _vertical_shot(
+        35.87,
+        ball_range_m=3.217,
+        ball_range_source="camera_prior",
+        ball_range_label="estimated",
+        camera_lens_intrinsics="calibrated",
+    )
+
+    assert _vertical_everywhere(shot) == ("estimated", ("estimated", False), "estimated")
+    reason = shot.collision_model["inputs"]["launch_vertical"]["reason"]
+    assert labels.CAMERA_PRIOR_NOTE in reason
+
+
+def test_a_radar_vertical_that_disagrees_with_the_camera_is_experimental_in_all_three_places():
+    fallback = {**FALLBACK, "vertical_deg": 18.58, "vertical_sd_deg": 2.5}
+    shot = _vertical_shot(29.99, camera_fallback_launch=fallback)
+
+    assert _vertical_everywhere(shot, fallback) == (
+        "experimental",
+        ("estimated", True),
+        "experimental",
+    )
+    assert "4.6 sigma" in shot.collision_model["inputs"]["launch_vertical"]["reason"]
+    assert "launch_vertical" in labels.experimental_collision_inputs(shot.collision_model)
+
+
+def test_an_implausible_radar_vertical_with_no_stand_in_is_withheld_from_the_shot():
+    shot = _vertical_shot(72.4)
+
+    server_module._apply_camera_fallback_launch(  # pylint: disable=protected-access
+        shot, {"status": "not_run", "reason": "no camera clip for this shot"}
+    )
+
+    assert shot.launch_angle_vertical is None
+    assert shot.launch_angle_vertical_source is None
+    assert "+72.4" in shot.launch_angle_vertical_reason
+    assert shot.input_sources["launch_vertical"]["value"] is None
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+    assert shot.collision_model["inputs"]["launch_vertical"]["value"] is None
+
+
+def test_an_implausible_radar_vertical_gives_way_to_an_accepted_camera_one():
+    shot = _vertical_shot(72.4)
+
+    server_module._apply_camera_fallback_launch(shot, FALLBACK)  # pylint: disable=protected-access
+
+    assert (shot.launch_angle_vertical, shot.launch_angle_vertical_source) == (
+        15.4,
+        "camera_fallback",
+    )

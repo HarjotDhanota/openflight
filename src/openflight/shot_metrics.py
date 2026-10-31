@@ -22,8 +22,6 @@ from .source_labels import (
     EXPERIMENTAL_INPUT_SOURCES,
     EXPERIMENTAL_LAUNCH_NOTE,
     EXPERIMENTAL_LAUNCH_SOURCES,
-    IWR_COMPETING_NOTE,
-    IWR_PARTIAL_NOTE,
     LABEL_CALCULATED as CALCULATED,
     LABEL_ESTIMATED as ESTIMATED,
     LABEL_EXPERIMENTAL as EXPERIMENTAL,
@@ -35,7 +33,7 @@ from .source_labels import (
     is_calculated_source,
     is_measured_source,
     is_model_geometry_source,
-    record_label,
+    range_source_label,
     shot_launch_label,
 )
 
@@ -508,36 +506,10 @@ BALL_RANGE_SOURCES = {
     "configured_tee": "a fixed range set in code (not used by the kiosk)",
 }
 BALL_RANGE_UNVALIDATED = "per-swing IWR range: not validated against a tape yet"
-CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"
-BALL_SIZE_RANGE_NOTE = (
-    "rests on the resting ball's own size for its distance (experimental, not validated "
-    "against a tape)"
-)
-BALL_SIZE_RANGE_CALIBRATED_NOTE = (
-    "rests on the resting ball's own size through a calibrated lens (estimated, not "
-    "validated against a tape)"
-)
-# The label every range-dependent value takes from the range's source, and why.
-RANGE_SOURCE_LABELS = {
-    "camera_prior": (ESTIMATED, CAMERA_PRIOR_NOTE),
-    "camera_ball_size": (EXPERIMENTAL, BALL_SIZE_RANGE_NOTE),
-}
-
-
-def _range_source_label(shot) -> tuple[Optional[str], Optional[str]]:
-    """(label, why) every range-dependent value takes from the shot's range, or (None,
-    None) for a measured one. The chain's own label decides where it is weaker than the
-    source alone says: a partial IWR dump (estimated), the resting ball's size through a
-    calibrated lens (estimated, Q6; experimental through a nominal one)."""
-    source, label = shot.get("ball_range_source"), shot.get("ball_range_label")
-    if source == "iwr_post_impact" and label == LABEL_IWR_PARTIAL:
-        return record_label(LABEL_IWR_PARTIAL), IWR_PARTIAL_NOTE
-    if source == "iwr_post_impact" and label == ESTIMATED:
-        # two IWR tracks compete for the launch point (iwr6843.launch_range): its reason
-        return ESTIMATED, shot.get("ball_range_reason") or IWR_COMPETING_NOTE
-    if source == "camera_ball_size" and label == ESTIMATED:
-        return ESTIMATED, BALL_SIZE_RANGE_CALIBRATED_NOTE
-    return RANGE_SOURCE_LABELS.get(source, (None, None))
+# The label every range-dependent value takes from the range's source, and why: one
+# function (source_labels.range_source_label) for these records and the radar's launch
+# angles in the chain and the collision input (30 Oct 2026).
+_range_source_label = range_source_label
 
 
 # Sensor readings that do not rest on the ball's range. The spin is one only when the

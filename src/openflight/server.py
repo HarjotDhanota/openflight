@@ -95,7 +95,7 @@ from .sim import (
     load_sim_config,
     resolve_shot,
 )
-from .source_labels import MODEL_LABELS
+from .source_labels import MODEL_LABELS, implausible_vertical_reason
 from .speed_correction import evaluate_experimental_total_speed
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
@@ -4902,12 +4902,18 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         elif measurement.accepted:
             # an ambiguous track's launch is estimated (source_labels.shot_launch_label)
             shot.iwr6843_launch_status = getattr(measurement, "status", None)
-            shot.launch_angle_vertical = measurement.angle_deg
-            # Device-level provenance is retained in iwr6843_capture. The
-            # public Shot contract uses "radar" for all measured radar angles.
-            shot.launch_angle_vertical_source = "radar"
-            shot.launch_angle_vertical_confidence = vertical_confidence(measurement)
-            shot.launch_angle_confidence = shot.launch_angle_vertical_confidence
+            implausible_vertical = implausible_vertical_reason(measurement.angle_deg)
+            if implausible_vertical is not None:
+                # no struck ball leaves at it: withheld, the way a horizontal is
+                logger.warning("[SERVER] Vertical launch withheld: radar %s", implausible_vertical)
+                shot.launch_angle_vertical_reason = f"radar {implausible_vertical}"
+            else:
+                shot.launch_angle_vertical = measurement.angle_deg
+                # Device-level provenance is retained in iwr6843_capture. The
+                # public Shot contract uses "radar" for all measured radar angles.
+                shot.launch_angle_vertical_source = "radar"
+                shot.launch_angle_vertical_confidence = vertical_confidence(measurement)
+                shot.launch_angle_confidence = shot.launch_angle_vertical_confidence
             shot.angle_source = "radar"
             horizontal_deg = getattr(measurement, "horizontal_deg", None)
             horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
@@ -5836,6 +5842,14 @@ def _apply_camera_fallback_launch(shot: Shot, fallback: dict | None) -> None:
                 vertical.uncertainty or float("nan"),
             )
         elif not vertical.present:
+            if implausible_vertical_reason(shot.launch_angle_vertical) is not None:
+                # every route refused it and none stands in: no flight, collision model or
+                # full speed reads a vertical no struck ball leaves at
+                logger.warning("[SERVER] Vertical launch withheld: %s", vertical.reason)
+                shot.launch_angle_vertical = None
+                shot.launch_angle_vertical_source = None
+                shot.launch_angle_vertical_confidence = None
+                shot.launch_angle_confidence = None
             shot.launch_angle_vertical_reason = vertical.reason
         if horizontal.route == "camera_fallback":
             _apply_camera_horizontal_decision(

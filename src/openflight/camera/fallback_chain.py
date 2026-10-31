@@ -30,8 +30,11 @@ from ..source_labels import (
     LABEL_EXPERIMENTAL,
     LABEL_IWR_PARTIAL,
     LABEL_MEASURED,
+    MAX_PLAUSIBLE_VERTICAL_DEG,
+    MIN_PLAUSIBLE_VERTICAL_DEG,
     WEAK_HORIZONTAL_SOURCES,
     HorizontalOption,
+    implausible_vertical_reason,
     launch_label,
     prefers_horizontal,
     shot_launch_label,
@@ -592,6 +595,13 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
     are ranked by ``source_labels.prefers_horizontal`` (Q5): a value that failed its own
     gate never outranks one that passed, an experimental value never outranks one that is
     not, attached sigmas decide where both have one, else the radar's wins.
+
+    The vertical routes keep their order, the radar's first (owner: radar is primary for
+    the ball). Each refuses a value outside the plausible vertical
+    (``implausible_vertical_reason``); a radar vertical on a camera range takes the
+    range's label, and one beyond ``source_labels.VERTICAL_DISAGREEMENT_SIGMAS`` of an
+    accepted camera fallback stays first, labelled experimental with both values in its
+    note (30 Oct 2026).
     """
     accepted = isinstance(fallback, Mapping) and fallback.get("status") == "accepted"
     why_not = (
@@ -603,10 +613,13 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
         CAMERA_FALLBACK_SOURCE, intrinsics=getattr(shot, "camera_lens_intrinsics", None)
     )
 
-    def fallback_route(key: str, sd_key: str):
+    def fallback_route(key: str, sd_key: str, implausible: Optional[Callable] = None):
         def route():
             if not accepted or not finite(fallback.get(key)):
                 return why_not
+            refused = implausible(fallback[key]) if implausible is not None else None
+            if refused is not None:
+                return f"{CAMERA_FALLBACK_SOURCE} {refused}"
             return Candidate(
                 float(fallback[key]),
                 fallback_label,
@@ -620,7 +633,11 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
     def vertical_sensor():
         source = getattr(shot, "launch_angle_vertical_source", None)
         if source in MEASURED_VERTICAL_SOURCES and finite(shot.launch_angle_vertical):
-            label, note = shot_launch_label(shot, "vertical")
+            implausible = implausible_vertical_reason(shot.launch_angle_vertical)
+            if implausible is not None:
+                return f"{source} {implausible}"
+            # the radar's check against the camera is the one the record makes too
+            label, note = shot_launch_label(shot, "vertical", camera_fallback=fallback)
             return Candidate(float(shot.launch_angle_vertical), label, source, note=note)
         return getattr(shot, "launch_angle_vertical_reason", None) or (
             "no radar vertical launch on this shot"
@@ -655,7 +672,10 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
             "launch_vertical",
             [
                 Route("radar", vertical_sensor),
-                Route(CAMERA_FALLBACK_SOURCE, fallback_route("vertical_deg", "vertical_sd_deg")),
+                Route(
+                    CAMERA_FALLBACK_SOURCE,
+                    fallback_route("vertical_deg", "vertical_sd_deg", implausible_vertical_reason),
+                ),
             ],
         ),
         "launch_horizontal": resolve("launch_horizontal", _ranked(horizontal_routes)),
@@ -691,6 +711,9 @@ __all__ = [
     "ball_range_resolution",
     "fallback_inputs",
     "first_post_index",
+    "implausible_vertical_reason",
+    "MAX_PLAUSIBLE_VERTICAL_DEG",
+    "MIN_PLAUSIBLE_VERTICAL_DEG",
     "keep_resting_ball_measure",
     "mode_focal",
     "launch_resolutions",

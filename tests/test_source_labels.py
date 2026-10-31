@@ -236,3 +236,119 @@ def test_a_radar_launch_on_a_weaker_iwr_range_takes_its_label(range_label, launc
 
     assert labels.shot_launch_label(shot, "vertical")[0] == launch
     assert labels.shot_launch_label(shot, "horizontal")[0] == launch
+
+
+# ---------------------------------------------------------------- the radar vertical (30 Oct 2026)
+
+
+@pytest.mark.parametrize(
+    ("range_source", "range_label", "launch", "note"),
+    [
+        ("camera_prior", "estimated", "estimated", labels.CAMERA_PRIOR_NOTE),
+        ("camera_ball_size", "experimental", "experimental", labels.BALL_SIZE_RANGE_NOTE),
+        ("camera_ball_size", "estimated", "estimated", labels.BALL_SIZE_RANGE_CALIBRATED_NOTE),
+    ],
+)
+def test_a_radar_launch_on_a_camera_range_takes_the_range_s_label(
+    range_source, range_label, launch, note
+):
+    # Oct 27 shot 2: radar 35.87 on the camera prior's 3.217 m read "measured" in the chain
+    # and the collision input while the published metric said "estimated"
+    shot = _shot(ball_range_source=range_source, ball_range_label=range_label)
+
+    for axis in ("vertical", "horizontal"):
+        label, why = labels.shot_launch_label(shot, axis)
+        assert label == launch, axis
+        assert note in why
+
+
+def test_the_range_label_is_one_function_for_the_launch_and_the_metrics():
+    from openflight import shot_metrics  # noqa: PLC0415
+
+    for source, label in (
+        ("camera_prior", "estimated"),
+        ("camera_ball_size", "experimental"),
+        ("camera_ball_size", "estimated"),
+        ("iwr_post_impact", "iwr_partial"),
+        ("iwr_post_impact", "estimated"),
+        ("iwr_post_impact", "measured"),
+        (None, None),
+    ):
+        shot = _shot(ball_range_source=source, ball_range_label=label)
+        assert shot_metrics._range_source_label(shot) == (  # pylint: disable=protected-access
+            labels.range_source_label(shot)
+        )
+
+
+def test_a_camera_launch_does_not_take_the_range_label_here():
+    shot = _shot(launch_angle_vertical_source="camera_fallback", ball_range_source="camera_prior")
+
+    assert labels.CAMERA_PRIOR_NOTE not in (labels.shot_launch_label(shot, "vertical")[1] or "")
+
+
+SHOT_3_FALLBACK = {"status": "accepted", "vertical_deg": 18.58, "vertical_sd_deg": 2.5}
+SHOT_4_FALLBACK = {"status": "accepted", "vertical_deg": 21.52, "vertical_sd_deg": 3.13}
+
+
+def test_a_radar_vertical_beyond_three_sigma_of_the_camera_reads_experimental():
+    # Oct 27 shot 3: radar 29.99 against an accepted camera 18.58 +- 2.5 (4.6 sigma)
+    shot = _shot(launch_angle_vertical=29.99, camera_fallback_launch=SHOT_3_FALLBACK)
+
+    label, why = labels.shot_launch_label(shot, "vertical")
+
+    assert label == "experimental"
+    assert "29.99" in why and "18.58" in why and "4.6 sigma" in why
+    # the horizontal is not the vertical's business
+    assert labels.shot_launch_label(shot, "horizontal")[0] == "measured"
+
+
+def test_a_radar_vertical_within_three_sigma_keeps_its_label():
+    # Oct 27 shot 4: radar 28.50 against an accepted camera 21.52 +- 3.13 (2.2 sigma)
+    shot = _shot(launch_angle_vertical=28.50, camera_fallback_launch=SHOT_4_FALLBACK)
+
+    assert labels.shot_launch_label(shot, "vertical") == ("measured", None)
+
+
+@pytest.mark.parametrize(
+    "fallback",
+    [
+        {**SHOT_3_FALLBACK, "status": "withheld_residual"},
+        {**SHOT_3_FALLBACK, "vertical_sd_deg": None},
+        {**SHOT_3_FALLBACK, "vertical_sd_deg": 0.0},
+        {**SHOT_3_FALLBACK, "vertical_deg": None},
+        None,
+    ],
+    ids=["not-accepted", "no-sigma", "zero-sigma", "no-value", "no-fallback"],
+)
+def test_without_an_accepted_camera_vertical_and_its_sigma_there_is_no_check(fallback):
+    shot = _shot(launch_angle_vertical=29.99, camera_fallback_launch=fallback)
+
+    assert labels.shot_launch_label(shot, "vertical") == ("measured", None)
+
+
+def test_the_check_takes_the_fallback_it_is_given_over_the_shot_s():
+    shot = _shot(launch_angle_vertical=29.99)
+
+    label, _why = labels.shot_launch_label(shot, "vertical", camera_fallback=SHOT_3_FALLBACK)
+
+    assert label == "experimental"
+
+
+@pytest.mark.parametrize(
+    ("radar", "radar_sd", "camera", "camera_sd", "sigmas"),
+    [
+        (29.99, None, 18.58, 2.5, 4.564),
+        (28.50, None, 21.52, 3.13, None),
+        # the radar's own sigma, when the measurement carries one, joins the camera's
+        (29.99, 3.0, 18.58, 2.5, None),
+        (10.0, None, 18.0, 2.0, 4.0),
+    ],
+)
+def test_the_disagreement_counts_combined_sigmas(radar, radar_sd, camera, camera_sd, sigmas):
+    found = labels.vertical_disagreement(radar, camera, camera_sd, radar_sd_deg=radar_sd)
+
+    if sigmas is None:
+        assert found is None
+    else:
+        assert found == pytest.approx(sigmas, abs=1e-3)
+    assert labels.VERTICAL_DISAGREEMENT_SIGMAS == 3.0

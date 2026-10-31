@@ -270,24 +270,130 @@ def _weaker(first: str, second: Optional[str]) -> str:
     return max(first, second, key=_RECORD_ORDER.index)
 
 
-def _iwr_range_label(shot: Any) -> tuple[Optional[str], Optional[str]]:
-    """(record label, note) of an IWR launch point weaker than measured: two tracks
-    competing for it (estimated) or a partial dump (estimated); else (None, None). The
-    LCMF uses it as the tee range, so the radar's launch angles rest on it."""
-    if _field(shot, "ball_range_source") != "iwr_post_impact":
-        return None, None
-    label = _field(shot, "ball_range_label")
-    if label == LABEL_IWR_PARTIAL:
+# The ball range's source, as the range chain (camera/fallback_chain) leaves it on the
+# shot, and what every value resting on a range weaker than an IWR launch point is
+# labelled, with why.
+CAMERA_PRIOR_NOTE = "rests on the camera prior's ball distance (coarse, estimated)"
+BALL_SIZE_RANGE_NOTE = (
+    "rests on the resting ball's own size for its distance (experimental, not validated "
+    "against a tape)"
+)
+BALL_SIZE_RANGE_CALIBRATED_NOTE = (
+    "rests on the resting ball's own size through a calibrated lens (estimated, not "
+    "validated against a tape)"
+)
+RANGE_SOURCE_LABELS = {
+    "camera_prior": (LABEL_ESTIMATED, CAMERA_PRIOR_NOTE),
+    "camera_ball_size": (LABEL_EXPERIMENTAL, BALL_SIZE_RANGE_NOTE),
+}
+
+
+def range_source_label(shot: Any) -> tuple[Optional[str], Optional[str]]:
+    """(record label, why) every value resting on the shot's ball range takes from it, or
+    (None, None) for a measured one: the camera prior (estimated), the resting ball's size
+    (experimental; estimated through a calibrated lens, Q6), an IWR launch point from a
+    partial dump or with two tracks competing for it (estimated).
+
+    The one source of truth for the range's label: the published metrics
+    (``shot_metrics``) and the radar's launch angles (``shot_launch_label``, in the chain
+    and the collision input) read it, since the LCMF uses the range as its tee range."""
+    source, label = _field(shot, "ball_range_source"), _field(shot, "ball_range_label")
+    if source == "iwr_post_impact" and label == LABEL_IWR_PARTIAL:
         return record_label(label), IWR_PARTIAL_NOTE
-    if label == LABEL_ESTIMATED:
+    if source == "iwr_post_impact" and label == LABEL_ESTIMATED:
+        # two IWR tracks compete for the launch point (iwr6843.launch_range): its reason
         return LABEL_ESTIMATED, _field(shot, "ball_range_reason") or IWR_COMPETING_NOTE
-    return None, None
+    if source == "camera_ball_size" and label == LABEL_ESTIMATED:
+        return LABEL_ESTIMATED, BALL_SIZE_RANGE_CALIBRATED_NOTE
+    return RANGE_SOURCE_LABELS.get(source, (None, None))
 
 
-def shot_launch_label(shot: Any, axis: str) -> tuple[str, Optional[str]]:
+def _positive(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+# The vertical launch a struck ball can leave at, generous on purpose (a gross-error
+# check, not a gate): a topped or bladed ball starts a few degrees down at most, and a
+# flop shot off a lob wedge leaves near 50 deg at most. A vertical outside -10..+60 deg
+# is not the ball's (a phase wrap, the club, a reflection): every vertical route of the
+# launch chain (camera/fallback_chain) refuses it with why and the kiosk withholds it, the
+# way a horizontal beyond a shank is (horizontal_frame.MAX_PLAUSIBLE_LAUNCH_DEG). 30 Oct
+# 2026.
+MIN_PLAUSIBLE_VERTICAL_DEG = -10.0
+MAX_PLAUSIBLE_VERTICAL_DEG = 60.0
+
+
+def implausible_vertical_reason(vertical_deg: Any) -> Optional[str]:
+    """Why a vertical launch is no golf ball's, or None for a plausible (or missing) one."""
+    value = _number(vertical_deg)
+    if value is None or MIN_PLAUSIBLE_VERTICAL_DEG <= value <= MAX_PLAUSIBLE_VERTICAL_DEG:
+        return None
+    return (
+        f"{value:+.1f} deg is outside {MIN_PLAUSIBLE_VERTICAL_DEG:+.0f}.."
+        f"{MAX_PLAUSIBLE_VERTICAL_DEG:+.0f} deg: not the ball's vertical launch"
+    )
+
+
+# 30 Oct 2026 (owner): radar is primary for the ball, so a radar vertical stays first even
+# when an accepted camera fallback disagrees with it; beyond this many combined 1-sigmas
+# (the camera's vertical_sd_deg and the radar's own, when its measurement carries one) it
+# reads experimental with both values in its note. Oct 27 shot 3: 29.99 against 18.58 +-
+# 2.5 is 4.6 sigma; shot 4: 28.50 against 21.52 +- 3.13 is 2.2 and stands.
+VERTICAL_DISAGREEMENT_SIGMAS = 3.0
+
+
+def vertical_disagreement(
+    radar_deg: Any, camera_deg: Any, camera_sd_deg: Any, *, radar_sd_deg: Any = None
+) -> Optional[float]:
+    """How many combined 1-sigmas a radar vertical is from the camera's, when that is more
+    than ``VERTICAL_DISAGREEMENT_SIGMAS``; None when it is within, or a value or the
+    camera's sigma is missing. A radar sigma not given counts as 0."""
+    radar, camera = _number(radar_deg), _number(camera_deg)
+    camera_sd = _positive(camera_sd_deg)
+    if radar is None or camera is None or camera_sd is None:
+        return None
+    combined = math.hypot(camera_sd, _positive(radar_sd_deg) or 0.0)
+    sigmas = abs(radar - camera) / combined
+    return sigmas if sigmas > VERTICAL_DISAGREEMENT_SIGMAS else None
+
+
+def _vertical_disagreement_note(shot: Any, camera_fallback: Any) -> Optional[str]:
+    """Why a radar vertical reads experimental against an accepted camera fallback, or
+    None. The IWR's LCMF vertical carries no per-shot sigma, so the radar's counts as 0."""
+    fallback = camera_fallback
+    if fallback is None:
+        fallback = _field(shot, "camera_fallback_launch")
+    if not isinstance(fallback, Mapping) or fallback.get("status") != "accepted":
+        return None
+    radar = _field(shot, "launch_angle_vertical")
+    camera, camera_sd = fallback.get("vertical_deg"), fallback.get("vertical_sd_deg")
+    sigmas = vertical_disagreement(radar, camera, camera_sd)
+    if sigmas is None:
+        return None
+    return (
+        f"radar vertical {float(radar):.2f} deg disagrees with the accepted camera fallback "
+        f"{float(camera):.2f} +- {float(camera_sd):.2f} deg by {sigmas:.1f} sigma (beyond "
+        f"{VERTICAL_DISAGREEMENT_SIGMAS:g}): the radar's stands, experimental"
+    )
+
+
+def shot_launch_label(
+    shot: Any, axis: str, *, camera_fallback: Optional[Mapping[str, Any]] = None
+) -> tuple[str, Optional[str]]:
     """(label, note) of a shot's vertical or horizontal launch, read from its own fields
-    (a ``Shot`` or its record): source, status, the camera tier and the lens; a radar
-    launch also takes an ambiguous IWR track (estimated) and a weaker IWR launch point."""
+    (a ``Shot`` or its record): source, status, the camera tier and the lens. A radar
+    launch also takes an ambiguous IWR track (estimated) and the label of the ball range
+    it rests on (``range_source_label``); a radar vertical beyond
+    ``VERTICAL_DISAGREEMENT_SIGMAS`` of an accepted camera fallback (``camera_fallback``,
+    else the shot's own ``camera_fallback_launch``) is experimental."""
     intrinsics = _field(shot, "camera_lens_intrinsics")
     if axis == "vertical":
         source = _field(shot, "launch_angle_vertical_source") or _field(shot, "angle_source")
@@ -309,10 +415,16 @@ def shot_launch_label(shot: Any, axis: str) -> tuple[str, Optional[str]]:
         if launch_status == TRACK_AMBIGUOUS_STATUS:
             label = _weaker(label, LABEL_ESTIMATED)
             notes.append(TRACK_AMBIGUOUS_NOTE)
-        range_label, range_note = _iwr_range_label(shot)
+        range_label, range_note = range_source_label(shot)
         if range_label is not None:
             label = _weaker(label, range_label)
             notes.append(range_note)
+        disagreement = (
+            _vertical_disagreement_note(shot, camera_fallback) if axis == "vertical" else None
+        )
+        if disagreement is not None:
+            label = _weaker(label, LABEL_EXPERIMENTAL)
+            notes.append(disagreement)
     return label, "; ".join(dict.fromkeys(note for note in notes if note)) or None
 
 

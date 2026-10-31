@@ -110,3 +110,16 @@ def test_a_failed_capture_with_nothing_recovered_is_still_an_error(monkeypatch, 
         "state": "error",
         "reason": "short dump: 731,264 of 732,812 bytes",
     }
+
+
+def test_an_implausible_radar_vertical_never_reaches_the_shot(monkeypatch, emitted):
+    # 30 Oct 2026: a vertical outside -10..+60 deg is withheld the way a horizontal
+    # beyond a shank is; the reason stays for the launch chain to report
+    _runtime(monkeypatch, LCMFResult(status="accepted", angle_deg=72.4, component_std_deg=0.8))
+    shot = _shot()
+
+    server_module._process_iwr6843_angle(shot)  # pylint: disable=protected-access
+
+    assert shot.launch_angle_vertical is None
+    assert shot.launch_angle_vertical_source is None
+    assert shot.launch_angle_vertical_reason.startswith("radar +72.4 deg is outside")
