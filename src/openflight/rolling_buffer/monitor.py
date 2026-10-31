@@ -23,6 +23,7 @@ from ..timing import (
     new_stage_timing,
     set_legacy_provenance,
 )
+from .motion_tracks import DopplerMotion, buffer_coverage
 from .processor import RollingBufferProcessor
 from .trigger import create_trigger
 from .types import ProcessedCapture, SpeedTimeline
@@ -986,6 +987,10 @@ class RollingBufferMonitor:
         )
         # the OPS readings around impact, kept for a model that projects the speed
         shot.ops_speed_track = ops_speed_track(processed)
+        if isinstance(processed.motion, DopplerMotion) and processed.capture is not None:
+            shot.ops_buffer_coverage = buffer_coverage(
+                processed.motion, len(processed.capture.i_samples), self.processor.SAMPLE_RATE
+            )
 
         return shot
 

@@ -212,3 +212,45 @@ def test_a_line_born_after_ball_onset_is_not_the_approaching_club():
     assert motion.ball.speed_mph == pytest.approx(114.8, abs=0.5)
     assert motion.club.speed_mph == pytest.approx(86.2, abs=2)
     assert motion.club.peaks[0].time_ms < motion.ball.peaks[0].time_ms
+
+
+def test_buffer_coverage_reports_a_ball_followed_to_the_buffer_end():
+    from openflight.rolling_buffer.motion_tracks import buffer_coverage
+
+    capture = swing_capture(110)
+    motion = RollingBufferProcessor().analyze_motion(capture)
+    coverage = buffer_coverage(motion, len(capture.i_samples), 30000)
+    assert coverage["buffer_ms"] == pytest.approx(4096 / 30)
+    assert coverage["ball_first_ms"] == motion.ball.peaks[0].time_ms
+    assert coverage["history_before_ball_ms"] == coverage["ball_first_ms"]
+    assert coverage["ball_reaches_buffer_end"] is True
+    assert coverage["ball_visible_ms"] == pytest.approx(
+        motion.ball.peaks[-1].time_ms - motion.ball.peaks[0].time_ms
+    )
+
+
+def test_buffer_coverage_tells_a_ball_lost_before_the_buffer_end():
+    from openflight.rolling_buffer.motion_tracks import buffer_coverage
+
+    capture = swing_capture(67)
+    times = np.arange(4096) / 30000
+    frequency = 2 * 67 / 2.23694 / 0.01243
+    removed = 400 * (times >= 0.100) * np.exp(2j * np.pi * frequency * times)
+    capture.i_samples = np.round(np.array(capture.i_samples) - removed.real).astype(int).tolist()
+    capture.q_samples = np.round(np.array(capture.q_samples) - removed.imag).astype(int).tolist()
+    motion = RollingBufferProcessor().analyze_motion(capture)
+    coverage = buffer_coverage(motion, len(capture.i_samples), 30000)
+    assert coverage["ball_reaches_buffer_end"] is False
+    assert coverage["ball_last_ms"] < 110
+
+
+def test_buffer_coverage_of_a_dry_swing_has_no_ball_answer():
+    from openflight.rolling_buffer.motion_tracks import buffer_coverage
+
+    capture = swing_capture()
+    coverage = buffer_coverage(
+        RollingBufferProcessor().analyze_motion(capture), len(capture.i_samples), 30000
+    )
+    assert coverage["ball_first_ms"] is None
+    assert coverage["ball_reaches_buffer_end"] is None
+    assert coverage["club_first_ms"] is not None

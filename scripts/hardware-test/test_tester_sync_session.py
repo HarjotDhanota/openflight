@@ -238,3 +238,58 @@ def test_boot_restore_requirement_is_persisted_before_uart_setup_or_reset(
     assert observed and all(state.get("normal_boot_restore_needed") is True for state in observed)
     assert files.state["normal_boot_restore_needed"] is True
     assert files.state["resources_released"] is True
+
+
+@pytest.mark.parametrize("selected,split", [("iwr_led", 12), ("ops_led", None)])
+def test_iwr_master_asks_the_ops_for_one_capture_on_the_iwr_notice(
+    tmp_path, monkeypatch, selected, split
+):
+    import threading
+
+    import joint_clock_rig
+    import tester_sync_session as session
+    from test_joint_shot_clock import wire
+
+    from openflight.camera import capture_runtime, trigger_policy
+
+    collector, port = wire()
+    built, requests = [], []
+
+    class Rig:
+        arm_id, boot_id, native_capture = "arm", "synthetic-boot", True
+        trace_attempt_id = "iwr-master-trace"
+
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+            self.stop = threading.Event()
+
+        def prepare(self):
+            pass
+
+        def start_wait(self):
+            port.active, port.held = False, True
+
+        def request_ops_capture(self, notice):
+            requests.append(notice)
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(joint_clock_rig, "RigControl", Rig)
+    monkeypatch.setattr(capture_runtime, "CameraCaptureRuntime", lambda **_kwargs: object())
+    monkeypatch.setattr(collector, "read_raw_dump", lambda _radar: (b"raw", {"bytes": 3}))
+    files = SessionFiles(tmp_path)
+    files.state["trigger_policy"] = trigger_policy.snapshot(selected, split)
+    session.attempt(collector, files, tmp_path / "attempt-001")
+    result = json.loads((tmp_path / "attempt-001/RESULT.json").read_text())
+    if selected == "iwr_led":
+        assert built[0]["mode"] == "iwr_request"
+        assert built[0]["pre_trigger_segments"] == 12
+        assert len(requests) == 1
+        assert requests[0]["expected_generation"] == collector.generation
+        assert result["ops_trigger_source"] == "iwr_request"
+    else:
+        assert "mode" not in built[0]
+        assert requests == []
+        assert result["ops_trigger_source"] == "native_speed"

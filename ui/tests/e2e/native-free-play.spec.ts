@@ -189,6 +189,41 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect(page.locator('#native-free-play')).toBeDisabled();
     });
 
+    test('IWR master sends its chosen OPS split; other routes send none', async ({ page }) => {
+      await useTester(page);
+      const world: { freePlay: object } = { freePlay: { enabled: false } };
+      await mockSetupDone(page, world);
+      await page.route('**/api/tester/free-play/native-sync', (route) =>
+        fulfillJson(route, {
+          configured: true,
+          enabled: false,
+          trigger_policies: [
+            { id: 'ops_led', label: 'OPS master (IWR self-detects)', available: true, reason: 'OPS first.' },
+            { id: 'iwr_led', label: 'IWR master', available: true, reason: 'IWR notice requests OPS.' },
+          ],
+        })
+      );
+      const starts: Record<string, unknown>[] = [];
+      await page.route('**/api/tester/run', async (route) => {
+        starts.push(route.request().postDataJSON());
+        world.freePlay = RECORDING;
+        await fulfillJson(route, { free_play: RECORDING, job: { state: 'running', action: 'free_play' } }, 202);
+      });
+      await page.goto('/tester.html');
+      await page.locator('#free-play-resolution button[data-resolution="arm5"]').tap();
+      await page.locator('#first-club button[data-club="7-iron"]').tap();
+      await page.locator('#native-free-play').selectOption('ops_led');
+      await expect(page.locator('#ops-split')).toBeHidden();
+      await page.locator('#native-free-play').selectOption('iwr_led');
+      await expect(page.locator('#ops-split')).toBeVisible();
+      await expect(page.locator('#ops-split')).toHaveValue('16');
+      await page.locator('#ops-split').selectOption('12');
+      await page.locator('#step-free-play').tap();
+      await expect.poll(() => starts.length).toBe(1);
+      expect(starts[0]).toMatchObject({ trigger_policy: 'iwr_led', ops_pre_trigger_segments: 12 });
+      await expect(page.locator('#ops-split')).toBeDisabled();
+    });
+
     test('Start without a chosen trigger architecture sends nothing', async ({ page }) => {
       await useTester(page);
       const world: { freePlay: object } = { freePlay: { enabled: false } };

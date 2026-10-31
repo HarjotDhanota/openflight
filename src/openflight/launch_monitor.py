@@ -241,6 +241,8 @@ class Shot:
     smash_factor_full: Optional[dict] = None
     # OPS readings around impact (full_speed.ops_speed_track); never serialized.
     ops_speed_track: Optional[dict] = field(default=None, repr=False, compare=False)
+    # How the OPS buffer covered this shot (motion_tracks.buffer_coverage); never serialized.
+    ops_buffer_coverage: Optional[dict] = field(default=None, repr=False, compare=False)
     peak_magnitude: Optional[float] = None
     readings: List[SpeedReading] = field(default_factory=list)
     club: ClubType = ClubType.DRIVER

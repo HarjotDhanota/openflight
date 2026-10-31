@@ -1999,6 +1999,12 @@
           <option value="" disabled selected>Choose a trigger architecture</option>
         </select>
         <p id="trigger-policy-reason" class="note" role="status">Choose how the radars and camera trigger for this run.</p>
+        <label id="ops-split-choice" for="ops-split" hidden>OPS history kept before the IWR request</label>
+        <select id="ops-split" hidden>
+          <option value="12">51 ms before / 85 ms after (S#12)</option>
+          <option value="16" selected>68 ms before / 68 ms after (S#16)</option>
+          <option value="20">85 ms before / 51 ms after (S#20)</option>
+        </select>
         <details><summary>Unavailable trigger routes</summary><div id="trigger-policy-unavailable"></div></details>
         <div id="native-free-play-controls" class="setup-warning" hidden aria-live="polite">
           <strong id="native-free-play-phase"></strong>
@@ -5950,6 +5956,7 @@
         el('maintainer-track-tools').hidden = Boolean(state?.enabled);
         const active = ['recording', 'stopping', 'packaging', 'ready', 'error'].includes(phase);
         el('native-free-play').disabled = active || freePlayPending;
+        el('ops-split').disabled = active || freePlayPending;
         el('verdict-card').hidden = active;
         el('ladder-panel').hidden = active;
         el('ladder-controls').hidden = active;
@@ -6743,6 +6750,9 @@
       function renderTriggerPolicy() {
         const policy = nativeFreePlay.trigger_policies?.find((p) => p.id === el('native-free-play').value);
         if (policy) el('trigger-policy-reason').textContent = policy.reason;
+        const iwrMaster = el('native-free-play').value === 'iwr_led';
+        el('ops-split').hidden = !iwrMaster;
+        el('ops-split-choice').hidden = !iwrMaster;
       }
       el('native-free-play').onchange = renderTriggerPolicy;
       async function nativeFreePlayCommand(command) {
@@ -6772,6 +6782,9 @@
             resolution: freePlayResolution,
             club: firstClub,
             trigger_policy: el('native-free-play').value,
+            ...(el('native-free-play').value === 'iwr_led'
+              ? { ops_pre_trigger_segments: Number(el('ops-split').value) }
+              : {}),
             // on the unit's own screen the kiosk shows in this window, never a second one
             kiosk_window: onUnitScreen ? 'shared' : 'own',
           });

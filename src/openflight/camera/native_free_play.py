@@ -15,11 +15,12 @@ def capture_mode(payload, action, package):
     return "sound" if policy == "sound" else "native_internal"
 
 
-def configure_command(command, package, run_id, policy="independent"):
+def configure_command(command, package, run_id, policy="independent", ops_split=None):
     """Extend the actual kiosk command; preserve setup, optics, club and session paths."""
     run_dir = Path(command[command.index("--log-dir") + 1])
     control = run_dir / "native-sync" / run_id
     trigger_policy.validate(policy, package=package)
+    split = trigger_policy.ops_split(policy, ops_split)
     command.extend(
         [
             "--trigger",
@@ -36,6 +37,8 @@ def configure_command(command, package, run_id, policy="independent"):
             "150",
         ]
     )
+    if policy == "iwr_led":
+        command.extend(["--tester-ops-pre-trigger-segments", str(split)])
     return control
 
 

@@ -52,7 +52,6 @@ def test_other_tester_actions_keep_the_sound_route():
     [
         ({}, Path("sealed")),
         ({"trigger_policy": "sound"}, Path("sealed")),
-        ({"trigger_policy": "iwr_led"}, Path("sealed")),
         ({"trigger_policy": "common_hardware"}, Path("sealed")),
         ({"trigger_policy": "independent"}, None),
         ({"trigger_policy": "hybrid", "capture_mode": "sound"}, Path("sealed")),
@@ -83,7 +82,7 @@ def test_unavailable_or_conflicting_selection_refuses_before_jobs(tmp_path, payl
     assert not list(tmp_path.rglob("trigger-policy.json"))
 
 
-@pytest.mark.parametrize("selected", ["independent", "ops_led", "hybrid"])
+@pytest.mark.parametrize("selected", ["independent", "ops_led", "hybrid", "iwr_led"])
 def test_policy_reaches_launch_and_run_snapshot(tmp_path, selected):
     setup_saw_ball(tmp_path)
     package = tmp_path / "sealed"
@@ -141,10 +140,12 @@ def test_free_play_offers_the_five_architectures_and_explains_each_block(tmp_pat
         "Common hardware trigger",
     ]
     available = [row["id"] for row in routes if row["available"]]
-    assert available == ([] if package is None else ["ops_led", "independent", "hybrid"])
+    assert available == ([] if package is None else ["ops_led", "iwr_led", "independent", "hybrid"])
     for row in routes:
         assert row["available"] or row["reason"].startswith("Unavailable")
-    assert "C1" in next(r["reason"] for r in routes if r["id"] == "iwr_led")
+    if package is not None:
+        reason = next(r["reason"] for r in routes if r["id"] == "iwr_led")
+        assert "not timing-qualified" in reason.lower()
 
 
 @pytest.mark.parametrize("selected", ["independent", "ops_led", "hybrid"])
@@ -218,3 +219,56 @@ def test_the_staged_clock_package_beside_the_checkout_is_found(tmp_path):
     assert tester_server.staged_clock_package(source) is None
     (tmp_path / "clock-package" / "MANIFEST.json").write_text("{}")
     assert tester_server.staged_clock_package(source) == tmp_path / "clock-package"
+
+
+def test_iwr_master_carries_its_own_ops_split_and_other_routes_keep_theirs():
+    assert policy.snapshot("iwr_led")["ops_pre_trigger_segments"] == 16
+    assert policy.snapshot("iwr_led", 12)["ops_pre_trigger_segments"] == 12
+    assert policy.snapshot("iwr_led")["ops_initiated_by_iwr"] is True
+    for name in ("ops_led", "independent", "hybrid"):
+        assert policy.snapshot(name)["ops_pre_trigger_segments"] == 6
+        assert policy.snapshot(name)["ops_initiated_by_iwr"] is False
+        with pytest.raises(ValueError, match="split"):
+            policy.snapshot(name, 12)
+    for bad in (-1, 33, 12.5, True, "12"):
+        with pytest.raises(ValueError, match="split"):
+            policy.snapshot("iwr_led", bad)
+
+
+def test_iwr_master_publishes_an_ops_capture_it_initiated():
+    outcome = policy.decision(policy.snapshot("iwr_led"), ops=True, iwr=True, association={})
+    assert outcome["publication_allowed"]
+    assert outcome["iwr_role"] == "initiator"
+    assert not policy.decision(policy.snapshot("iwr_led"), ops=False, iwr=True, association={})[
+        "publication_allowed"
+    ]
+
+
+def test_the_chosen_iwr_master_split_reaches_the_kiosk_and_the_run(tmp_path):
+    setup_saw_ball(tmp_path)
+    package = tmp_path / "sealed"
+    package.mkdir()
+    (package / "MANIFEST.json").write_text("{}")
+    jobs = Jobs()
+    client = eligible_app(
+        sessions_root=tmp_path,
+        manager=jobs,
+        internal_sync_clock_package=package,
+        lens_settings_path=tmp_path / "lens.json",
+    ).test_client()
+    payload = {
+        "action": "free_play",
+        "tester_id": "20260922-name",
+        "arm_id": "arm5",
+        "environment": "indoors",
+        "resolution": "arm5",
+        "trigger_policy": "iwr_led",
+    }
+    refused = client.post("/api/tester/run", json={**payload, "ops_pre_trigger_segments": 40})
+    assert refused.status_code == 400 and not jobs.calls
+    response = client.post("/api/tester/run", json={**payload, "ops_pre_trigger_segments": 12})
+    assert response.status_code == 202, response.json
+    command = jobs.calls[0][1][0]
+    assert command[command.index("--tester-ops-pre-trigger-segments") + 1] == "12"
+    run = Path(command[command.index("--log-dir") + 1])
+    assert json.loads((run / "trigger-policy.json").read_text()) == policy.snapshot("iwr_led", 12)

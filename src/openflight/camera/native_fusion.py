@@ -158,8 +158,8 @@ class NativeFusionExtension(KioskExtension):
         """The native path is allowed only while this explicit owner is installed."""
         return True
 
-    def __init__(self, package, control, *, policy="independent"):
-        self.policy = trigger_policy.snapshot(policy)
+    def __init__(self, package, control, *, policy="independent", ops_pre_trigger_segments=None):
+        self.policy = trigger_policy.snapshot(policy, ops_pre_trigger_segments)
         if policy == "sound":
             raise ValueError("native acquisition cannot use sound policy")
         saved = Path(control) / "trigger-policy.json"
@@ -223,6 +223,12 @@ class NativeFusionExtension(KioskExtension):
                 )
             return jsonify({"accepted": True})
 
+    def camera_trigger_source(self):
+        """The camera follows the OPS capture's GPIO edge, requested or native."""
+        if (getattr(self, "policy", None) or {}).get("policy") == "iwr_led":
+            return "ops_requested_capture"
+        return "ops_speed_trigger"
+
     def iwr_capture_monitor_factory(self):
         """Replace only acquisition; the normal calibrated IWR runtime processes bytes."""
         return lambda **kwargs: NativeCaptureMonitor(self, **kwargs)
@@ -237,7 +243,7 @@ class NativeFusionExtension(KioskExtension):
         self.camera.trigger_evidence_for_shot = self.evidence_for_shot
         self.monitor.trigger = NativeFusionTrigger(self)
         self.monitor.radar._send_command("PI")  # pylint: disable=protected-access
-        server.camera_capture_config["trigger_source"] = "ops_speed_trigger"
+        server.camera_capture_config["trigger_source"] = self.camera_trigger_source()
         server.iwr6843_runtime_config["trigger_source"] = "firmware_self_trigger"
         server.iwr6843_runtime_config["physical_timing_qualified"] = False
 
@@ -370,7 +376,26 @@ class NativeFusionExtension(KioskExtension):
     def on_shot_detected(self, shot):
         """Freeze this attempt's identity before asynchronous normal enrichment."""
         shot.extras["native_sensor_timing"] = dict(self.association)
+        self.save_buffer_coverage(shot)
         self.record_stage("ball_strike_detected", shot)
+
+    def save_buffer_coverage(self, shot):
+        """Each attempt's OPS history before the ball and after it, against its split."""
+        folder = getattr(self, "current_attempt", None)
+        coverage = getattr(shot, "ops_buffer_coverage", None)
+        if folder is None or coverage is None:
+            return
+        split = (getattr(self, "policy", None) or {}).get(
+            "ops_pre_trigger_segments", trigger_policy.NATIVE_OPS_SPLIT
+        )
+        block_ms = 128 / 30
+        record = {
+            "ops_pre_trigger_segments": split,
+            "planned_history_before_request_ms": split * block_ms,
+            "planned_after_request_ms": (32 - split) * block_ms,
+            **coverage,
+        }
+        (folder / "ops-coverage.json").write_text(json.dumps(record, indent=2) + "\n")
 
     def on_shot_accepted(self, shot):
         """Only accepted shots enter the asynchronous final-publication wait."""
@@ -420,7 +445,7 @@ class NativeFusionExtension(KioskExtension):
             "control_directory": str(self.files.folder),
         }
         config["trigger_policy"] = deepcopy(self.policy)
-        config["camera_capture"]["trigger_source"] = "ops_speed_trigger"
+        config["camera_capture"]["trigger_source"] = self.camera_trigger_source()
         config["iwr6843"].update(trigger_source="firmware_self_trigger", trigger_pin_bcm=None)
 
     def terminate(self, *_args):

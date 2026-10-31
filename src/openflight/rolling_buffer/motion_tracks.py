@@ -358,3 +358,31 @@ def analyze(processor, capture):
         resolution,
         flight_rejections=rejected,
     )
+
+
+def buffer_coverage(motion, sample_count, sample_rate):
+    """How much of the OPS buffer held history before the ball and whether it saw the ball out.
+
+    Times are spectral window centres from the capture start; the ball's first support is
+    not contact. A ball line ending within three hops of the last window ran to the buffer
+    end (more post-history could show more flight); earlier, the return itself was lost.
+    """
+    window_ms = POLICY["window_samples"] / sample_rate * 1000
+    hop_ms = POLICY["hop_samples"] / sample_rate * 1000
+    buffer_ms = sample_count / sample_rate * 1000
+    last_centre_ms = buffer_ms - window_ms / 2
+    ball, club = motion.ball, motion.club
+    first = float(ball.peaks[0].time_ms) if ball else None
+    last = float(ball.peaks[-1].time_ms) if ball else None
+    return {
+        "schema": "openflight.ops-buffer-coverage.v1",
+        "buffer_ms": buffer_ms,
+        "last_window_centre_ms": last_centre_ms,
+        "ball_first_ms": first,
+        "ball_last_ms": last,
+        "ball_visible_ms": last - first if ball else None,
+        "history_before_ball_ms": first,
+        "ball_reaches_buffer_end": last >= last_centre_ms - 3 * hop_ms if ball else None,
+        "club_first_ms": float(club.peaks[0].time_ms) if club else None,
+        "physical_contact_time": None,
+    }

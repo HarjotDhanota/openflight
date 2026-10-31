@@ -149,6 +149,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
     policy = files.state.get("trigger_policy")
     if policy is not None:
         (folder / "trigger-policy.json").write_text(json.dumps(policy, indent=2) + "\n")
+    iwr_master = (policy or {}).get("policy") == "iwr_led"
 
     def observe(phase, state):
         with (folder / "iwr-observations.jsonl").open("a", encoding="utf-8") as stream:
@@ -172,6 +173,8 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
             iwr=state,
             message="IWR latch observed; hold still while capture completes."
             if phase == "armed" and state.get("trigger", {}).get("latched") == "1"
+            else "Armed: make one swing. The IWR decides; OPS and camera follow."
+            if phase == "armed" and iwr_master
             else "Armed: make one swing. Both radars decide independently."
             if phase == "armed"
             else "Keep the area empty while learning the background."
@@ -183,7 +186,7 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         "status": "partial",
         "physical_timing_qualified": False,
         "iwr_trigger_source": "firmware_self_trigger",
-        "ops_trigger_source": "native_speed",
+        "ops_trigger_source": "iwr_request" if iwr_master else "native_speed",
         "sound_gpio_used": False,
         "iwr_forced_capture": False,
     }
@@ -192,6 +195,8 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
         with (folder / "iwr-trigger-observation.json").open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(event, indent=2) + "\n")
         result["iwr_trigger_observation"] = event
+        if iwr_master:
+            result["ops_capture_requested"] = rig.request_ops_capture(event)
 
     rig = None
     external_camera = camera is not None
@@ -227,6 +232,11 @@ def attempt(collector, files, folder, *, camera=None, radar=None, cancelled=None
             wait_s=30,
             keep_camera=external_camera,
             keep_radar=radar is not None,
+            **(
+                {"mode": "iwr_request", "pre_trigger_segments": policy["ops_pre_trigger_segments"]}
+                if iwr_master
+                else {}
+            ),
         )
         rig.prepare()
         collector.arm(index)

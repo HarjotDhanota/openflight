@@ -519,3 +519,23 @@ def test_native_fusion_requires_a_complete_gpio_recording_not_just_two_edges(tmp
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(ValueError):
         bind_attempt(folder, result)
+
+
+def test_each_native_attempt_saves_its_ops_buffer_coverage_with_the_split(tmp_path):
+    import threading
+
+    from openflight.camera import trigger_policy
+
+    owner = object.__new__(NativeFusionExtension)
+    owner.association = {"event_id": "current"}
+    owner.finished = threading.Event()
+    owner.publishing = False
+    owner.policy = trigger_policy.snapshot("iwr_led", 12)
+    owner.current_attempt = tmp_path
+    coverage = {"ball_first_ms": 40.0, "ball_reaches_buffer_end": False}
+    owner.on_shot_detected(SimpleNamespace(extras={}, ops_buffer_coverage=coverage))
+    saved = json.loads((tmp_path / "ops-coverage.json").read_text())
+    assert saved["ops_pre_trigger_segments"] == 12
+    assert saved["planned_history_before_request_ms"] == pytest.approx(12 * 128 / 30)
+    assert saved["planned_after_request_ms"] == pytest.approx(20 * 128 / 30)
+    assert saved["ball_first_ms"] == 40.0 and saved["ball_reaches_buffer_end"] is False

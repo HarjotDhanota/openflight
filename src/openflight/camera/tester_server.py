@@ -11653,6 +11653,9 @@ def create_app(
             policy = native_free_play.trigger_policy.selection(
                 payload or {}, action, internal_sync_clock_package
             )
+            ops_split = (payload or {}).get("ops_pre_trigger_segments")
+            if action == "free_play":
+                native_free_play.trigger_policy.ops_split(policy, ops_split)
             native_controls.require_restored()
             club = first_club(payload) if action == "free_play" else CLUB
             # the page on the unit's own screen shows free play's kiosk in its window
@@ -11758,7 +11761,7 @@ def create_app(
                     commands[0].append("--tester-geometry-unverified")
                 if mode == "native_internal":
                     native_control = native_free_play.configure_command(
-                        commands[0], internal_sync_clock_package, run_id, policy
+                        commands[0], internal_sync_clock_package, run_id, policy, ops_split
                     )
             busy = _range_resources_busy(live_yields=True)
             if busy:
@@ -11816,7 +11819,9 @@ def create_app(
                     active_runtime_dir["path"] = run_dir
                 if action == "free_play":
                     (run_dir / "trigger-policy.json").write_text(
-                        json.dumps(native_free_play.trigger_policy.snapshot(policy), indent=2)
+                        json.dumps(
+                            native_free_play.trigger_policy.snapshot(policy, ops_split), indent=2
+                        )
                         + "\n"
                     )
                     free_play.begin(
