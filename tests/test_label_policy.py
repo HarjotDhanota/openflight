@@ -85,8 +85,21 @@ def test_a_camera_horizontal_replaces_a_low_coherence_radar_one_unless_it_is_exp
     server_module._apply_camera_horizontal_decision(  # pylint: disable=protected-access
         weak, 6.0, 0.15, "camera_low_consensus"
     )
-    # experimental against experimental, no sigma: the radar's stays
+    # both failed their own gate, no sigma: the radar's stays
     assert weak.launch_angle_horizontal_source == "radar_low_coherence"
+
+    nominal = _shot(
+        launch_angle_horizontal=43.8, launch_angle_horizontal_source="radar_low_coherence"
+    )
+    nominal.experimental_camera_horizontal_status = "camera_assisted_experimental_agreement"
+    server_module._apply_camera_horizontal_decision(  # pylint: disable=protected-access
+        nominal, 9.5, 0.6, "camera_assisted_experimental"
+    )
+    # experimental against experimental, but only the radar's failed its gate
+    assert (nominal.launch_angle_horizontal, nominal.launch_angle_horizontal_source) == (
+        9.5,
+        "camera_assisted_experimental",
+    )
 
 
 def test_with_no_radar_horizontal_the_camera_one_is_shown(azimuth_calibrated):
@@ -97,13 +110,14 @@ def test_with_no_radar_horizontal_the_camera_one_is_shown(azimuth_calibrated):
     assert shot.launch_angle_horizontal == 1.7
 
 
-def test_the_camera_fallback_never_outranks_a_weak_radar_horizontal_on_a_nominal_lens():
+def test_an_accepted_camera_fallback_outranks_a_radar_horizontal_that_failed_its_gate():
     shot = _shot(launch_angle_horizontal=3.2, launch_angle_horizontal_source="radar_low_coherence")
 
     resolved = chain.launch_resolutions(shot, FALLBACK)["launch_horizontal"]
 
-    # both experimental; only the fallback carries a sigma: the radar wins (Q5)
-    assert (resolved.source, resolved.label) == ("radar_low_coherence", "experimental")
+    # both experimental on a nominal lens, but only the radar's failed its own gate
+    # (Oct 27 shot 4: +43.8 low-coherence radar over an accepted 9.5 camera -> face +55)
+    assert (resolved.source, resolved.label) == ("camera_fallback", "experimental")
 
 
 def test_through_a_calibrated_lens_the_fallback_outranks_an_experimental_radar_horizontal():

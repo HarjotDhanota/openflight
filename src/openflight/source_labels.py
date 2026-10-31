@@ -323,12 +323,13 @@ def horizontal_launch_label(source: Optional[str], status: Optional[str] = None)
 
 @dataclass(frozen=True)
 class HorizontalOption:
-    """One horizontal launch on offer: its label, attached 1-sigma (deg) if any, and
-    whether the radar measured it."""
+    """One horizontal launch on offer: its label, attached 1-sigma (deg) if any, whether
+    the radar measured it, and whether it failed its own gate (WEAK_HORIZONTAL_SOURCES)."""
 
     label: str
     sigma_deg: Optional[float] = None
     radar: bool = False
+    failed_gate: bool = False
 
 
 def _sigma(option: HorizontalOption) -> Optional[float]:
@@ -344,6 +345,8 @@ _HORIZONTAL_LABEL_RANK = (LABEL_MEASURED, LABEL_CALCULATED, LABEL_MODEL_GEOMETRY
 def prefers_horizontal(candidate: HorizontalOption, *, over: Optional[HorizontalOption]) -> bool:
     """Whether ``candidate`` replaces the horizontal shown now (``over``), Q5 (25 Oct 2026):
 
+    0. a value that failed its own gate never outranks one that passed (30 Oct 2026: a
+       low-coherence radar +43.8 beat an accepted 9.5 camera value and made face +55);
     1. an experimental value never outranks one that is not (it would never reach a
        simulator, and the weakest input wins);
     2. with a sigma on both, the smaller one wins, whatever the labels;
@@ -352,6 +355,8 @@ def prefers_horizontal(candidate: HorizontalOption, *, over: Optional[Horizontal
     """
     if over is None:
         return True
+    if candidate.failed_gate != over.failed_gate:
+        return over.failed_gate
     if (candidate.label == LABEL_EXPERIMENTAL) != (over.label == LABEL_EXPERIMENTAL):
         return over.label == LABEL_EXPERIMENTAL
     mine, theirs = _sigma(candidate), _sigma(over)

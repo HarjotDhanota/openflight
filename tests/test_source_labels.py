@@ -168,6 +168,12 @@ def test_the_shot_label_reads_a_shot_object_as_well_as_a_record():
         (("experimental", None, True), ("experimental", 1.8, False), False),
         # nothing shown yet: any value is shown
         (None, ("experimental", None, False), True),
+        # a value that failed its own gate never outranks one that passed
+        (("experimental", None, True, True), ("experimental", None, False), True),
+        (("experimental", None, False), ("experimental", None, True, True), False),
+        (("experimental", 5.0, False), ("experimental", 0.1, True, True), False),
+        # both failed: the rules above decide
+        (("experimental", None, True, True), ("experimental", None, False, True), False),
     ],
 )
 def test_a_horizontal_is_chosen_by_sigma_then_the_radar_and_never_x_over_non_x(
@@ -176,8 +182,10 @@ def test_a_horizontal_is_chosen_by_sigma_then_the_radar_and_never_x_over_non_x(
     def option(spec):
         if spec is None:
             return None
-        label, sigma, radar = spec
-        return labels.HorizontalOption(label=label, sigma_deg=sigma, radar=radar)
+        label, sigma, radar, *failed = spec
+        return labels.HorizontalOption(
+            label=label, sigma_deg=sigma, radar=radar, failed_gate=bool(failed and failed[0])
+        )
 
     assert labels.prefers_horizontal(option(candidate), over=option(current)) is wins
 

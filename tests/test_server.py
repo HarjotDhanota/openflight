@@ -6324,8 +6324,10 @@ class TestIwrAzimuthCalibration:
         assert shot.launch_angle_horizontal == pytest.approx(2.25)
         assert shot.launch_angle_horizontal_source == "radar_low_coherence"
         assert shot.iwr6843_horizontal_deg is None
+        # the radar's failed its own gate; a camera value that passed replaces it
         server_module._apply_camera_horizontal_decision(shot, 4.0, 0.3, "camera_only_experimental")
-        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal == pytest.approx(4.0)
+        assert shot.launch_angle_horizontal_source == "camera_only_experimental"
 
     @pytest.mark.parametrize("status", ["hlcmf_v3_wide_model_unqualified", None, "future_unknown"])
     def test_an_unqualified_model_diagnostic_is_experimental_and_not_fused(

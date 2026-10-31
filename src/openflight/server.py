@@ -5335,6 +5335,7 @@ def _horizontal_option(shot: Shot, source: str | None, status: str | None):
     the camera fallback's carries its own sigma, no other source attaches one yet."""
     from .source_labels import (  # noqa: PLC0415
         CAMERA_FALLBACK_SOURCE,
+        WEAK_HORIZONTAL_SOURCES,
         HorizontalOption,
         camera_horizontal_tier,
         launch_label,
@@ -5352,6 +5353,7 @@ def _horizontal_option(shot: Shot, source: str | None, status: str | None):
         ),
         sigma_deg=sigma,
         radar=str(source or "").startswith("radar"),
+        failed_gate=source in WEAK_HORIZONTAL_SOURCES,
     )
 
 

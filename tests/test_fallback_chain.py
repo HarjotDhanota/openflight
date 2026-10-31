@@ -269,13 +269,14 @@ def test_a_failing_fallback_stage_is_its_own_error_and_the_rest_still_runs(monke
     assert "club_delivery" in result and "ball_estimate" in result
 
 
-def test_a_weak_radar_horizontal_stands_before_the_fallback_and_after_it_is_gone():
+def test_a_weak_radar_horizontal_stands_only_after_the_fallback_is_gone():
     shot = _shot(launch_angle_horizontal=3.2, launch_angle_horizontal_source="radar_low_coherence")
     fallback = {"status": "accepted", "vertical_deg": 12.0, "horizontal_deg": 1.0, "n_points": 4}
 
-    # both experimental on a nominal lens, no sigma on the radar's: the radar wins (Q5)
+    # both experimental on a nominal lens; the radar's failed its own gate, the camera's
+    # passed: the camera's wins
     assert chain.launch_resolutions(shot, fallback)["launch_horizontal"].source == (
-        "radar_low_coherence"
+        "camera_fallback"
     )
     withheld = chain.launch_resolutions(shot, {"status": "withheld_residual", "reason": "x"})
     weak = withheld["launch_horizontal"]

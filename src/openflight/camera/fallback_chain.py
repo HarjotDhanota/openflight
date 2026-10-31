@@ -589,9 +589,9 @@ def launch_resolutions(shot: Any, fallback: Optional[Mapping[str, Any]]) -> dict
     Each value carries the policy's label (``source_labels.shot_launch_label``): the
     camera fallback is estimated through a calibrated lens, else experimental; a
     low-coherence or low-consensus horizontal is experimental (Q3). The horizontal routes
-    are ranked by ``source_labels.prefers_horizontal`` (Q5): an experimental value never
-    outranks one that is not, attached sigmas decide where both have one, else the
-    radar's wins.
+    are ranked by ``source_labels.prefers_horizontal`` (Q5): a value that failed its own
+    gate never outranks one that passed, an experimental value never outranks one that is
+    not, attached sigmas decide where both have one, else the radar's wins.
     """
     accepted = isinstance(fallback, Mapping) and fallback.get("status") == "accepted"
     why_not = (
@@ -677,6 +677,7 @@ def _ranked(routes: list[Route]) -> list[Route]:
             label=outcome.label,
             sigma_deg=outcome.uncertainty,
             radar=str(outcome.source or "").startswith("radar"),
+            failed_gate=outcome.source in WEAK_HORIZONTAL_SOURCES,
         )
         if prefers_horizontal(option, over=best_option):
             best, best_option = route, option
