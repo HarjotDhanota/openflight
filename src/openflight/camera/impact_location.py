@@ -2168,7 +2168,7 @@ def _round(budget: Mapping[str, float]) -> dict[str, float]:
     return {k: round(v, 2) for k, v in budget.items()}
 
 
-def _face_rotation_mm(shot: PreparedShot, before: Alignment, after: Alignment) -> float:
+def _face_rotation_mm(shot: PreparedShot, before_frame: int, after_frame: int) -> float:
     """The toe's arc against the straight line between the bracket frames.
 
     A point ``r`` from the shaft turning at ``w`` leaves the chord by
@@ -2176,10 +2176,38 @@ def _face_rotation_mm(shot: PreparedShot, before: Alignment, after: Alignment) -
     """
     last_rest = shot.contact.last_rest_frame
     assert last_rest is not None
-    t_before = (last_rest + shot.contact_fraction - before.frame) / shot.fps
-    t_after = (after.frame - last_rest - shot.contact_fraction) / shot.fps
+    t_before = (last_rest + shot.contact_fraction - before_frame) / shot.fps
+    t_after = (after_frame - last_rest - shot.contact_fraction) / shot.fps
     rate = math.radians(FACE_CLOSURE_RATE_DEG_S)
     return MAX_IRON_BLADE_MM * rate**2 * t_before * t_after / 2.0
+
+
+def bracket_chord_terms_mm(
+    shot: PreparedShot, before_frame: int, after_frame: int
+) -> dict[str, float]:
+    """What a straight line between the bracket frames misses at contact, in mm.
+
+    ``arc_chord_mm``: the head's arc (``ARC_RADIUS_MM`` in the ``SWING_PLANE_DEG``
+    plane) against its chord; ``face_rotation_mm``: the toe turning about the shaft
+    at the ASSUMED ``FACE_CLOSURE_RATE_DEG_S``. Both are budget terms of any reading
+    interpolated across the bracket.
+    """
+    last_rest = shot.contact.last_rest_frame
+    assert last_rest is not None
+    fraction, speed = shot.contact_fraction, shot.club_speed_mps
+    travelled_before = speed * (last_rest + fraction - before_frame) * 1000.0 / shot.fps
+    travelled_after = (
+        speed
+        * POST_IMPACT_SPEED_FRACTION
+        * (after_frame - last_rest - fraction)
+        * 1000.0
+        / shot.fps
+    )
+    arc_radius = ARC_RADIUS_MM / math.cos(math.radians(SWING_PLANE_DEG))
+    return {
+        "arc_chord_mm": travelled_before * travelled_after / (2.0 * arc_radius),
+        "face_rotation_mm": _face_rotation_mm(shot, before_frame, after_frame),
+    }
 
 
 def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
@@ -2197,16 +2225,7 @@ def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
         * shot.plate_mm_per_px
         * math.hypot((1.0 - weight) * reading["ratio_before"], weight * reading["ratio_after"])
     )
-    last_rest = shot.contact.last_rest_frame
-    travelled_before = speed * (last_rest + fraction - before.frame) * 1000.0 / shot.fps
-    travelled_after = (
-        speed
-        * POST_IMPACT_SPEED_FRACTION
-        * (after.frame - last_rest - fraction)
-        * 1000.0
-        / shot.fps
-    )
-    arc_radius = ARC_RADIUS_MM / math.cos(math.radians(SWING_PLANE_DEG))
+    chord = bracket_chord_terms_mm(shot, before.frame, after.frame)
     budget = {
         "alignment_mm": alignment,
         "contact_timing_mm": timing,
@@ -2220,8 +2239,8 @@ def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
             - reread(key, range_mm=shot.ball_range_mm - shot.ball_range_sigma_mm)
         )
         / 2.0,
-        "arc_chord_mm": travelled_before * travelled_after / (2.0 * arc_radius),
-        "face_rotation_mm": _face_rotation_mm(shot, before, after),
+        "arc_chord_mm": chord["arc_chord_mm"],
+        "face_rotation_mm": chord["face_rotation_mm"],
         "face_angle_mm": abs(
             reread(key, face_angle=face.face_angle.value + face.face_angle.sigma)
             - reread(key, face_angle=face.face_angle.value - face.face_angle.sigma)

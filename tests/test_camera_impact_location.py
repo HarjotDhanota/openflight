@@ -618,3 +618,24 @@ def test_a_bracket_too_slow_to_interpolate_is_still_refused_by_name():
     result = analyse(frames, ball, **_at_fps(45.0))
     assert result.status == "rejected"
     assert result.reason.startswith("bracket_") and result.reason.endswith("_spans_22.2_ms")
+
+
+def test_the_bracket_chord_terms_are_the_offset_budgets_own():
+    frames, ball = render_swing(truth_mm=-6.0)
+    shot = il.prepare_shot(
+        frames,
+        ball,
+        fps=FPS,
+        camera=camera(),
+        club_speed_mps=CLUB_SPEED,
+        ball_range_mm=BALL_RANGE_MM,
+    )
+    template, _ = il.build_self_template([shot])
+    result = il.locate_impact(shot, template, face=face_inputs())
+    assert result.status == "ok", result.reason
+    before, after = result.diagnostics["bracket_frames"]
+    terms = il.bracket_chord_terms_mm(shot, before, after)
+    budget = result.diagnostics["offset_uncertainty_budget_mm"]
+    assert budget["arc_chord_mm"] == pytest.approx(terms["arc_chord_mm"], abs=0.006)
+    assert budget["face_rotation_mm"] == pytest.approx(terms["face_rotation_mm"], abs=0.006)
+    assert terms["arc_chord_mm"] > 0.0 and terms["face_rotation_mm"] > 0.0
