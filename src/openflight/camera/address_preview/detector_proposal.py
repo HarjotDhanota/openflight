@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import cv2
@@ -14,10 +15,35 @@ from openflight.camera.ground_patch import point_in_polygon
 
 from .search import refine_candidate
 
+_THREADS_LOCK = threading.Lock()
+_THREADS = {"users": 0, "prior": None}
+
+
+def hold_single_thread() -> None:
+    """OpenCV on one thread while any preview runs, as the research preview ran it.
+
+    The setting is process-wide: the first holder records the tester's own
+    setting and the last one to release it puts it back.
+    """
+    with _THREADS_LOCK:
+        if _THREADS["users"] == 0:
+            _THREADS["prior"] = cv2.getNumThreads()
+            cv2.setNumThreads(1)
+        _THREADS["users"] += 1
+
+
+def release_single_thread() -> None:
+    """Give back a hold; the last one restores the tester's own OpenCV threads."""
+    with _THREADS_LOCK:
+        if _THREADS["users"] == 0:
+            return
+        _THREADS["users"] -= 1
+        if _THREADS["users"] == 0:
+            cv2.setNumThreads(_THREADS["prior"])
+
 
 def warm(model_path) -> None:
-    """Load the pinned detector now, with OpenCV single-threaded."""
-    cv2.setNumThreads(1)
+    """Load the pinned detector now (call with OpenCV held single-threaded)."""
     detector_for(str(model_path)).detect(np.zeros((256, 256), np.uint8))
 
 

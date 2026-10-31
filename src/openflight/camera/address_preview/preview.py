@@ -23,7 +23,12 @@ from openflight.camera.ground_patch import point_in_polygon
 from openflight.camera.worker_scheduling import initialize_analysis_worker
 
 from .appearance import propose as appearance_propose, remember as remember_appearance
-from .detector_proposal import propose as fast_propose, warm as warm_fast
+from .detector_proposal import (
+    hold_single_thread,
+    propose as fast_propose,
+    release_single_thread,
+    warm as warm_fast,
+)
 from .exposure_bridge import measure as measure_control_frames
 from .local_refresh import refresh_local
 from .rank import templates
@@ -92,8 +97,11 @@ class Preview:  # pylint: disable=too-many-instance-attributes
         self.bridge_events = deque(maxlen=512)
         self.fast_events = deque(maxlen=512)
         self.preheat_ms = 0
+        self.holds_single_thread = False
         try:
             if model_path is not None:
+                hold_single_thread()
+                self.holds_single_thread = True
                 warm_fast(model_path)
             if pool is None:
                 start = time.monotonic()
@@ -103,6 +111,7 @@ class Preview:  # pylint: disable=too-many-instance-attributes
         except BaseException:
             if self.owns_pool:
                 self.pool.shutdown(wait=False, cancel_futures=True)
+            self._release_threads()
             raise
         self.watch = PatchWatch(2)
         self.bounds = None
@@ -664,6 +673,11 @@ class Preview:  # pylint: disable=too-many-instance-attributes
                 "confirmable": False,
             }
 
+    def _release_threads(self):
+        if self.holds_single_thread:
+            self.holds_single_thread = False
+            release_single_thread()
+
     def close(self):
         """Discard pending work and end the worker processes this preview started."""
         with self.lock:
@@ -686,3 +700,4 @@ class Preview:  # pylint: disable=too-many-instance-attributes
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
             self.pool.shutdown(wait=True, cancel_futures=True)
+            self._release_threads()
