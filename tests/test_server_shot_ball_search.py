@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from openflight import kiosk_extensions as ke, server
+from openflight.iwr6843.launch_range import PER_SHOT_PRIOR_DISAGREES, LaunchRangePrior
 from tests.test_server_ball_range import _shot
 
 LIVE = {"state": "in_box", "center_px": [640.0, 450.0], "diameter_px": 44.0, "range_m": 2.2}
@@ -212,7 +213,63 @@ def test_a_live_look_at_another_spot_cannot_lend_its_range_prior(kiosk):
 
     context = shot.input_sources["ball_at_address"]
     assert context["seed"]["x"] == 900.0
-    assert context["range_prior_rejection"]
+    assert context["look_prior_refused"]
+    # only the look's own prior is refused: the setup prior still stands
+    assert context["range_prior_rejection"] is None
+
+
+SETUP_PRIOR = LaunchRangePrior(range_m=1.80, uncertainty_m=0.38, source="iwr_tee_range")
+LOOK_WITH_PRIOR = {**LIVE, "range_m": 1.60, "range_uncertainty_m": 0.34}
+
+
+@pytest.fixture
+def iwr(monkeypatch):
+    """An IWR runtime with the setup prior that records what the IWR stage was given."""
+    seen = {}
+
+    def process_shot(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(capture=None, measurement=None, club_path=None, withheld_reason=None)
+
+    monkeypatch.setattr(
+        server,
+        "iwr6843_runtime",
+        SimpleNamespace(process_shot=process_shot, range_prior=SETUP_PRIOR, calibration=None),
+    )
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    return seen
+
+
+def test_a_look_at_another_spot_leaves_the_setup_prior_to_the_agreement_rule(
+    kiosk, iwr, monkeypatch
+):
+    monkeypatch.setattr(server, "shot_ball_at_address", lambda _at: deepcopy(LOOK_WITH_PRIOR))
+    ke.register(
+        Finder({"status": "selected", "ball": {"x": 900.0, "y": 450.0, "diameter_px": 46.0}})
+    )
+    shot = _shot()
+    _prefetch(shot)
+
+    server._process_iwr6843_angle(shot)  # pylint: disable=protected-access
+    server._resolve_shot_ball_range(shot, None)  # pylint: disable=protected-access
+
+    assert "range_prior" not in iwr and "range_prior_rejection" not in iwr
+    assert shot.input_sources["range_prior_choice"]["chosen"] == "setup"
+    assert shot.ball_range_m == pytest.approx(SETUP_PRIOR.range_m)
+
+
+def test_a_look_at_the_shots_ball_still_passes_the_agreement_rule(kiosk, iwr, monkeypatch):
+    far = {**LOOK_WITH_PRIOR, "range_m": 3.217, "range_uncertainty_m": 0.68}
+    monkeypatch.setattr(server, "shot_ball_at_address", lambda _at: deepcopy(far))
+    ke.register(Finder({"status": "selected", "ball": dict(FOUND)}))
+    shot = _shot()
+    _prefetch(shot)
+
+    server._process_iwr6843_angle(shot)  # pylint: disable=protected-access
+
+    assert iwr["range_prior"].range_m == pytest.approx(3.217)
+    choice = shot.input_sources["range_prior_choice"]
+    assert choice["chosen"] == "setup" and choice["rejection"] == PER_SHOT_PRIOR_DISAGREES
 
 
 def test_the_search_runs_on_the_camera_prefetch_thread_not_the_capture_thread(kiosk):

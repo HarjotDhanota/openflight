@@ -1452,6 +1452,14 @@ def _look_range_prior(look: dict | None):
         return None
 
 
+def _shot_look_prior(shot: Shot):
+    """The shot's own look as its range prior, unless the shot's ball is somewhere else."""
+    context = _shot_ball_context(shot)
+    if context.get("look_prior_refused"):
+        return None
+    return _look_range_prior(context["look"])
+
+
 def _shot_range_prior_choice(shot: Shot):
     """The prior this shot uses: its own look's when it agrees with the setup's.
 
@@ -1461,7 +1469,7 @@ def _shot_range_prior_choice(shot: Shot):
     from .iwr6843.launch_range import choose_range_prior  # noqa: PLC0415
 
     choice = choose_range_prior(
-        _look_range_prior(_shot_ball_context(shot)["look"]),
+        _shot_look_prior(shot),
         getattr(iwr6843_runtime, "range_prior", None),
     )
     if choice.chosen is not None:
@@ -1648,8 +1656,8 @@ def _find_shot_ball(shot: Shot, camera_archive) -> None:
         look = context["look"] or {}
         if look.get("state") == "in_box" and look.get("center_px"):
             apart = math.hypot(look["center_px"][0] - seed["x"], look["center_px"][1] - seed["y"])
-            if apart > 0.5 * seed["diameter_px"] and not context["range_prior_rejection"]:
-                context["range_prior_rejection"] = (
+            if apart > 0.5 * seed["diameter_px"]:
+                context["look_prior_refused"] = (
                     "the live look is a different spot from the shot's own frames"
                 )
         context.update(seed=seed, ball_source="shot_frames_search")
@@ -4875,7 +4883,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         roll_inputs = {"roll_deg": effective_roll_deg} if effective_roll_deg is not None else {}
         club = shot.club.value
         at_address = _shot_ball_context(shot)["look"]
-        own_prior = _look_range_prior(at_address)
+        own_prior = _shot_look_prior(shot)
         reference = (shot.input_sources or {}).get("ball_reference") or {}
         prior_rejection = (
             reference.get("range_prior_rejection")
