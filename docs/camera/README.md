@@ -251,17 +251,25 @@ derivation are in `config/swing_exposure.json`.
   - Still too dark at the ceiling with the gain capped: clips are labelled **too
     dark: add light**.
   - Neither label blocks anything: the shot is analysed and labelled.
-- **Before every swing.** About once a second, between clips, the kiosk measures the
+- **Until locked.** About once a second, between clips, the kiosk measures the
   resting ball in the setup's box and sets the controls for the next swing. A ball
   between 0.40 and 0.75 of clip is left alone; a mild change waits for two looks
-  that agree; a clipped or too-dark ball moves at once.
+  that agree; a clipped or too-dark ball moves at once. A passing ball whose
+  setting is held locks the controls.
+- **Locked.** The controls are held still. After each shot (a clip an OPS shot
+  claims; a false trigger's clip is not used), the ball in that clip's own resting
+  frames is measured at the controls they were taken at, and any change is applied
+  for the next swing, never while a clip is being collected. With no shot for
+  5 minutes, the live ball is measured once. No passing ball, a second change in a
+  row, a moved box or a restarted search goes back to measuring once a second.
 - **No ball.** The last setting is kept, with the reason. After about 3 s with no
   ball, the policy sweeps its range one step brighter, then darker, until the ball
   is found (status **Searching for the ball**); if none is, it holds the last good
   setting and says **no ball found in the box (searched the full range)**.
 - **Decisions.** The last twenty, with their inputs, are in
-  `auto_exposure.recent_decisions` on `/api/camera/exposure-quality`, and each
-  clip's metadata carries the decision in force at its trigger.
+  `auto_exposure.recent_decisions` on `/api/camera/exposure-quality`, each with its
+  `trigger` (`seed`, `searching`, `after_shot` or `idle_recheck`); each clip's
+  metadata carries the decision in force at its trigger and the `metering_state`.
 - **Before the first ball.** `--camera-light-index` seeds the policy with the setup's
   measured light. Without it the kiosk uses the light remembered from its last
   ball-judged setting, else the startup `--camera-capture-exposure-us` ×

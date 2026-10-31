@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Setup comes from the setup screen, not flags.** The ball box, aim, ball range
   and net are kept in `~/.config/openflight/setup.json`; the old setup flags are
   refused (see [CLI flags](reference/cli.md#unit-setup)).
+- **Camera exposure locks once the resting ball is held, then re-meters after
+  each shot** from that shot's own resting frames, or after 5 idle minutes,
+  instead of every second. See
+  [automatic exposure](camera/README.md#automatic-exposure).
 - **Camera exposure follows the resting ball before every swing** instead of
   locking at startup. See [automatic exposure](camera/README.md#automatic-exposure).
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
