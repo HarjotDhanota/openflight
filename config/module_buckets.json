@@ -1196,6 +1196,7 @@
   "tests/test_probe_ops_output_options.py": "RESEARCH",
   "tests/test_profiles.py": "PRODUCT",
   "tests/test_project_metadata.py": "PRODUCT",
+  "tests/test_radar_trackman_regression.py": "FUSION",
   "tests/test_raw_radar_replay.py": "RESEARCH",
   "tests/test_read_bme280_script.py": "PRODUCT",
   "tests/test_ready_light.py": "PRODUCT",
