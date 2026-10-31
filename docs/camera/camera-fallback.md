@@ -115,3 +115,13 @@ The kiosk (`server._fuse_camera_measurements`) and the replays call the same
 through the kiosk's own functions (`--ignore-iwr` forces the fallback on a session whose
 IWR worked); `scripts/analysis/replay_camera_fusion.py` rebuilds a context with no
 recorded tee range through the same range chain.
+
+The shot-chain replay preserves recorded address evidence and measures/checks the
+resting outline before fusion, as the live handoff does. Older sessions can supply
+the ball seed and aim uncertainty from their frozen context, after session, shot,
+capture hash and context fingerprint checks. It reports missing address look/freshness
+without inventing readiness. A session seed is explicitly labelled when no per-shot
+seed exists. Aim overrides take precedence and never carry into another shot.
+Existing reference rejections remain effective if a new fit is unavailable.
+The replay retains recorded IWR readings; it does not rerun radar extraction after
+changing a camera range prior. Accepted replay fits do not establish physical accuracy.

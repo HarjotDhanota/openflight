@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Replay recorded shots through the kiosk's own chain: the same values the kiosk gives.
 
-Each shot is rebuilt from its sensor readings only (the OPS speeds and spin, the IWR's
-launch and range when it measured them, the LIS3DH reading), its camera clip is loaded,
-and the kiosk's functions run on it exactly as live: ``server._fuse_camera_measurements``
+Each shot is rebuilt from its recorded sensor readings and ball-reference evidence,
+its camera clip is loaded, and the kiosk's early resting-ball measurement and reference
+check run before ``server._fuse_camera_measurements``
 (the ball-range chain, the shared camera fusion with the camera fallback, the launch
 chain), the shot models' hooks, and ``server._finalize_shot_detected`` (full speeds,
 spin, carry). The OPS readings after impact are re-derived from the saved I/Q, as the
@@ -12,6 +12,9 @@ kiosk derived them, for the full ball speed.
 ``--ignore-iwr`` drops the IWR's launch and range, to force the camera fallback on a
 session whose IWR worked (the cross-check). Output: one JSON record per shot with the
 kiosk's logged metrics (before) and the replayed ones (after).
+Legacy context seeds and aim uncertainty are restored only after identity/hash checks.
+Missing address look/freshness remains unknown; IWR extraction is not rerun. This is
+an offline reconstruction using the current code, not a validation of live readiness.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import io
 import json
 import math
 import sys
+from copy import deepcopy
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +40,7 @@ from openflight.iwr6843.launch_range import LaunchRangePrior
 from openflight.launch_monitor import Shot
 from openflight.ops_speed_track import ops_speed_track
 from openflight.raw_radar_replay import load_session_events, locate_recorded_capture
-from openflight.rig_geometry import RigGeometry
+from openflight.rig_geometry import RigGeometry, geometry_fingerprint
 
 # The sensor readings a shot is rebuilt from; everything else the chain derives again.
 OPS_FIELDS = (
@@ -142,9 +146,14 @@ def rebuild_shot(record: dict, *, ignore_iwr: bool) -> Shot:
     # the processor's spin quality label, logged as the shot's spin_quality
     values["spin_result_quality"] = record.get("spin_quality")
     values["club"] = ClubType(record.get("club") or ClubType.DRIVER.value)
-    reference = (record.get("input_sources") or {}).get("ball_reference")
-    if isinstance(reference, dict):
-        values["input_sources"] = {"ball_reference": dict(reference)}
+    sources = record.get("input_sources") or {}
+    evidence = {
+        name: deepcopy(sources[name])
+        for name in ("ball_reference", "ball_at_address")
+        if isinstance(sources.get(name), dict)
+    }
+    if evidence:
+        values["input_sources"] = evidence
     if not ignore_iwr:
         for name in IWR_FIELDS:
             if name in names and record.get(name) is not None:
@@ -240,18 +249,103 @@ def _plain(value: Any):
     return value
 
 
-def replay_shot(events, start, record, run_dir: Path, *, ignore_iwr: bool) -> dict:
+def _restore_recorded_inputs(shot, start, record, archive, line, aim_uncertainty_deg):
+    """Restore observations, never derived launch/range outputs or invented readiness."""
+    context = record.get("camera_fusion_context") or {}
+    if context.get("available") is True:
+        if (
+            not start.get("session_uuid")
+            or context.get("session_uuid") != start["session_uuid"]
+            or context.get("shot_number") != record["shot_number"]
+        ):
+            raise ValueError("camera fusion context identity does not match the session and shot")
+        payload = {key: value for key, value in context.items() if key != "sha256"}
+        if context.get("sha256") != geometry_fingerprint(payload):
+            raise ValueError("camera fusion context fingerprint mismatch")
+        if archive is None or archive.get("_capture_npz_sha256") != context.get(
+            "capture_npz_sha256"
+        ):
+            raise ValueError("camera fusion context does not match the capture archive")
+    else:
+        context = {}
+
+    notes = ["IWR readings are retained, not re-extracted with the replayed range prior"]
+    sources = shot.input_sources or {}
+    if "ball_at_address" in sources:
+        seed_source = "recorded_address"
+    else:
+        seed_source = "recorded_context" if "setup_ball" in context else "session_setup"
+        seed = (
+            context.get("setup_ball")
+            if "setup_ball" in context
+            else (server.camera_capture_config.get("setup_ball"))
+        )
+        sources["ball_at_address"] = {
+            "look": None,
+            "seed": deepcopy(seed),
+            "range_prior_rejection": None,
+        }
+        notes.append("original address look/freshness absent; no readiness validation")
+        if seed_source == "session_setup":
+            notes.append("per-shot ball seed absent; session setup seed only")
+    shot.input_sources = sources
+
+    aim_source = "session_setup"
+    if aim_uncertainty_deg is not None:
+        line["total_uncertainty_deg"] = float(aim_uncertainty_deg)
+        aim_source = "explicit_override"
+    else:
+        aim = (context.get("camera_fallback") or {}).get("horizontal_offset_sd_deg")
+        if aim is not None:
+            line["total_uncertainty_deg"] = float(aim)
+            aim_source = "recorded_context"
+    if line.get("total_uncertainty_deg") is None:
+        aim_source = "unavailable"
+        notes.append("aim uncertainty absent; replay uncertainty is incomplete")
+    return {
+        "ball_seed_source": seed_source,
+        "aim_uncertainty_source": aim_source,
+        "limitations": notes,
+    }
+
+
+def replay_shot(
+    events,
+    start,
+    record,
+    run_dir: Path,
+    *,
+    ignore_iwr: bool,
+    aim_uncertainty_deg: float | None = None,
+) -> dict:
     """One shot through the kiosk's chain; its before and after metrics."""
     number = record["shot_number"]
     shot = rebuild_shot(record, ignore_iwr=ignore_iwr)
     shot.camera_fusion_session_uuid = start.get("session_uuid")
     shot.ops_speed_track = ops_track_for(events, number, shot.club.value)
     capture, archive = load_clip(events, number, run_dir)
-    server._fuse_camera_measurements(shot, capture, archive)  # pylint: disable=protected-access
-    server._isolated_stage(  # pylint: disable=protected-access
-        shot, "after_enrichment", kiosk_extensions.call_all, "after_enrichment", shot
+    handoff = server.setup_handoff_config
+    line = deepcopy(handoff.get("target_line") or {})
+    replay_inputs = _restore_recorded_inputs(
+        shot, start, record, archive, line, aim_uncertainty_deg
     )
-    server._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
+    server.setup_handoff_config = {**handoff, "target_line": line}
+    try:
+        reference = deepcopy((shot.input_sources or {}).get("ball_reference") or {})
+        server._measure_resting_ball_early(shot, archive)  # pylint: disable=protected-access
+        server._record_ball_reference_check(shot, archive)  # pylint: disable=protected-access
+        if reference.get("range_prior_rejection"):
+            current = shot.input_sources.setdefault("ball_reference", {})
+            current["recorded_range_prior_rejection"] = reference["range_prior_rejection"]
+            if not current.get("range_prior_rejection"):
+                current["range_prior_rejection"] = reference["range_prior_rejection"]
+        server._fuse_camera_measurements(shot, capture, archive)  # pylint: disable=protected-access
+        server._isolated_stage(  # pylint: disable=protected-access
+            shot, "after_enrichment", kiosk_extensions.call_all, "after_enrichment", shot
+        )
+        server._finalize_shot_detected(shot, emit_event="shot")  # pylint: disable=protected-access
+    finally:
+        server.setup_handoff_config = handoff
     after = shot.to_dict()
     return _plain(
         {
@@ -263,6 +357,7 @@ def replay_shot(events, start, record, run_dir: Path, *, ignore_iwr: bool) -> di
             "input_sources": after.get("input_sources"),
             "camera_fallback_launch": after.get("camera_fallback_launch"),
             "stage_errors": after.get("stage_errors"),
+            "replay_inputs": replay_inputs,
             "recorded": {
                 "launch_angle_vertical": record.get("launch_angle_vertical"),
                 "launch_angle_vertical_source": record.get("launch_angle_vertical_source"),
@@ -283,8 +378,8 @@ def main() -> int:
     parser.add_argument(
         "--aim-uncertainty-deg",
         type=float,
-        help="the setup aim's uncertainty (setup.json aim.uncertainty_deg); the session "
-        "start does not record it",
+        help="override recorded aim uncertainty; otherwise use the shot's frozen context "
+        "when available, then the session setup",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -299,7 +394,16 @@ def main() -> int:
         if wanted is not None and record["shot_number"] not in wanted:
             continue
         try:
-            results.append(replay_shot(events, start, record, run_dir, ignore_iwr=args.ignore_iwr))
+            results.append(
+                replay_shot(
+                    events,
+                    start,
+                    record,
+                    run_dir,
+                    ignore_iwr=args.ignore_iwr,
+                    aim_uncertainty_deg=args.aim_uncertainty_deg,
+                )
+            )
         except Exception as error:  # pylint: disable=broad-exception-caught
             results.append(
                 {"shot_number": record["shot_number"], "error": f"{type(error).__name__}: {error}"}
