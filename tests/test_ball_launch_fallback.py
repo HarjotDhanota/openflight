@@ -259,3 +259,20 @@ def test_two_points_fit_but_cannot_be_checked_so_they_are_withheld():
     assert result.status == "withheld_insufficient_track"
     assert result.n_points == 2
     assert "needs 3" in result.reason
+
+
+def test_each_track_point_and_the_origin_say_which_centre_they_are():
+    scene = render_scene()
+
+    payload = estimate(scene).to_dict()
+    unknown_origin = estimate(scene, geometry_for(scene)).to_dict()
+    named_origin = estimate(
+        scene, geometry_for(scene, rest_centre_kind="whole_ball_resting_outline")
+    ).to_dict()
+
+    assert payload["track"]
+    assert {point["centre_kind"] for point in payload["track"]} == {"highlight_centroid"}
+    assert unknown_origin["camera"]["rest_centre_kind"] is None
+    assert named_origin["camera"]["rest_centre_kind"] == "whole_ball_resting_outline"
+    assert named_origin["vertical_deg"] == unknown_origin["vertical_deg"]
+    assert named_origin["vertical_sd_deg"] == unknown_origin["vertical_sd_deg"]

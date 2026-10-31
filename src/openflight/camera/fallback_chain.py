@@ -558,6 +558,7 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
         ops_lfu=tuple(inputs["ops_lfu"]) if inputs.get("ops_lfu") else None,
         horizontal_offset_deg=geometry.ball_horizontal_output_offset_deg,
         horizontal_offset_sd_deg=float(inputs.get("horizontal_offset_sd_deg") or 0.0),
+        rest_centre_kind=ball_launch_fallback.WHOLE_BALL_RESTING_OUTLINE,
     )
     ops = context.get("ops_ball_speed_mph")
     result = ball_launch_fallback.estimate_camera_ball_launch(
