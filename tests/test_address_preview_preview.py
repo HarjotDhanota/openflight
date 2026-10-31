@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 import numpy as np
@@ -221,3 +222,32 @@ def test_a_preview_that_fails_to_start_gives_the_threads_back():
         assert cv2.getNumThreads() == 3  # pylint: disable=no-member
     finally:
         cv2.setNumThreads(prior)  # pylint: disable=no-member
+
+
+class _NeverStarts:
+    instances = []
+
+    def __init__(self, *_args, **kwargs):
+        self.kwargs = kwargs
+        self.shut = False
+        _NeverStarts.instances.append(self)
+
+    def submit(self, *_args, **_kwargs):
+        return self
+
+    def result(self, timeout=None):
+        self.timeout = timeout
+        raise FutureTimeout
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.shut = True
+
+
+def test_a_slow_first_start_has_a_generous_budget_and_says_why_it_failed(monkeypatch):
+    monkeypatch.setattr(preview_module, "ProcessPoolExecutor", _NeverStarts)
+    with pytest.raises(RuntimeError, match="did not start within 180 s"):
+        preview_module.Preview(model_path=None)
+    pool = _NeverStarts.instances[-1]
+    assert pool.timeout == preview_module.POOL_START_TIMEOUT_S == 180
+    assert search.FIT_POOL_START_TIMEOUT_S == 120
+    assert pool.shut

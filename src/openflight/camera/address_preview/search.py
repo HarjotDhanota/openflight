@@ -24,7 +24,12 @@ import atexit
 import math
 import multiprocessing
 import time
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    TimeoutError as FutureTimeout,
+    wait,
+)
 from copy import deepcopy
 
 import numpy as np
@@ -42,6 +47,7 @@ from .stability import stable_geometry
 from .watch import CHANGE_FLOOR_DN, CHANGE_NOISE_MULTIPLE, picture
 
 FIT_WORKERS = 2
+FIT_POOL_START_TIMEOUT_S = 120
 MAX_REUSE_AGE_S = 2.0
 CENTRE_TOLERANCE_PX = 2.0
 
@@ -113,7 +119,13 @@ def warm_fit_pool() -> bool:
             initializer=_initialize_fit_worker,
         )
         warmed = [_FIT_POOL.submit(fit_boot) for _ in range(FIT_WORKERS)]
-        if not all(future.result(timeout=30) for future in warmed):
+        try:
+            ready = all(future.result(timeout=FIT_POOL_START_TIMEOUT_S) for future in warmed)
+        except FutureTimeout as exc:
+            raise RuntimeError(
+                f"the fit workers did not start within {FIT_POOL_START_TIMEOUT_S} s"
+            ) from exc
+        if not ready:
             raise RuntimeError("the fit workers did not start")
     return True
 
