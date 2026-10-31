@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from openflight.camera.address_preview import preview as preview_module, search
 from openflight.camera.ground_patch import PatchSearch
@@ -184,3 +186,38 @@ def test_close_leaves_no_worker_process_alive():
     while any(_alive(pid) for pid in pids) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not [pid for pid in pids if _alive(pid)]
+
+
+MODEL = Path(__file__).resolve().parents[1] / "models" / "golf_ball_yolo11n_new_320.onnx"
+
+
+def test_opencv_runs_single_threaded_only_while_a_preview_runs():
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    prior = cv2.getNumThreads()  # pylint: disable=no-member
+    cv2.setNumThreads(3)  # pylint: disable=no-member
+    try:
+        first = preview_module.Preview(pool=FakePool(), clock=Clock(), model_path=str(MODEL))
+        assert cv2.getNumThreads() == 1  # pylint: disable=no-member
+        second = preview_module.Preview(pool=FakePool(), clock=Clock(), model_path=str(MODEL))
+        first.close()
+        # the newer preview still detects on one thread, as the research preview did
+        assert cv2.getNumThreads() == 1  # pylint: disable=no-member
+        second.close()
+        second.close()
+        assert cv2.getNumThreads() == 3  # pylint: disable=no-member
+    finally:
+        cv2.setNumThreads(prior)  # pylint: disable=no-member
+
+
+def test_a_preview_that_fails_to_start_gives_the_threads_back():
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    prior = cv2.getNumThreads()  # pylint: disable=no-member
+    cv2.setNumThreads(3)  # pylint: disable=no-member
+    try:
+        with pytest.raises((OSError, ValueError)):
+            preview_module.Preview(pool=FakePool(), clock=Clock(), model_path="missing.onnx")
+        assert cv2.getNumThreads() == 3  # pylint: disable=no-member
+    finally:
+        cv2.setNumThreads(prior)  # pylint: disable=no-member
