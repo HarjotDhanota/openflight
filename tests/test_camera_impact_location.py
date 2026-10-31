@@ -544,3 +544,46 @@ def test_a_template_build_stops_when_asked_and_says_so():
     template, reason = il.build_self_template([shot], should_stop=lambda: next(calls) >= 2)
     assert (template, reason) == (None, "stopped")
     assert il.build_self_template([shot], should_stop=lambda: False)[1] == "ok"
+
+
+def _dark_head_with_a_broken_rim(gap_px: int = 3) -> np.ndarray:
+    """A head as dark as the net behind it: only its rim moves, and the rim has gaps."""
+    frames = np.zeros((4, 120, 120), np.uint8)
+    yy, xx = np.mgrid[0:120, 0:120]
+    radius = np.hypot(yy - 60, xx - 60)
+    rim = (radius >= 22) & (radius <= 28)
+    for angle in (0.0, 0.5 * math.pi, math.pi, 1.5 * math.pi):
+        along = np.abs(np.angle(np.exp(1j * (np.arctan2(yy - 60, xx - 60) - angle)))) * 25
+        rim &= along > gap_px / 2.0
+    frames[3][rim] = 120
+    return frames
+
+
+def test_moving_masks_close_rim_gaps_in_millimetres_not_pixels():
+    frames = _dark_head_with_a_broken_rim()
+    fine = il._moving_masks(frames, slice(0, 3), [3], mm_per_px=lambda _index: 1.0)
+    fixed = il._moving_masks(frames, slice(0, 3), [3])
+    assert fine[3][60, 60]
+    assert not fixed[3][60, 60]
+
+
+def test_moving_masks_keep_the_three_pixel_closing_at_the_research_scale():
+    frames = _dark_head_with_a_broken_rim(gap_px=1)
+    research = il._moving_masks(
+        frames, slice(0, 3), [3], mm_per_px=lambda _index: il.RESEARCH_MM_PER_PX
+    )
+    fixed = il._moving_masks(frames, slice(0, 3), [3])
+    assert np.array_equal(research[3], fixed[3])
+
+
+def test_head_masks_close_gaps_at_the_shot_s_own_scale():
+    from types import SimpleNamespace
+
+    shot = SimpleNamespace(
+        frames=_dark_head_with_a_broken_rim(),
+        mm_per_px=lambda _index: 1.0,
+        contact=SimpleNamespace(last_rest_frame=None),
+        ball=None,
+    )
+    report = il.head_masks(shot, [3], slice(0, 3))
+    assert 3 in report.masks, report.reasons

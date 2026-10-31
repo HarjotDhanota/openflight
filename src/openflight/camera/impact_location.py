@@ -123,6 +123,8 @@ MIN_HEAD_AREA_MM2 = 60.0 * RESEARCH_MM_PER_PX**2
 MAX_HEAD_AREA_MM2 = 11_000.0
 HEAD_CORE_MM = 4.0 * RESEARCH_MM_PER_PX
 SHAFT_MAX_MM = 3.5 * RESEARCH_MM_PER_PX
+# The 3x3 closing the moving-mask thresholds were tuned with, in millimetres.
+MOVING_CLOSE_MM = 3.0 * RESEARCH_MM_PER_PX
 SHAFT_REACH_MM = 60.0 * RESEARCH_MM_PER_PX
 
 ROI_HALF_WIDTH_MM = 330.0
@@ -967,14 +969,27 @@ def _split_head(component: np.ndarray, mm_per_px: float) -> tuple[np.ndarray, np
 
 
 def _moving_masks(
-    frames: np.ndarray, background: slice, wanted: Iterable[int]
+    frames: np.ndarray,
+    background: slice,
+    wanted: Iterable[int],
+    mm_per_px: Callable[[int], float] | None = None,
 ) -> dict[int, np.ndarray]:
+    """Pixels that differ from the background median, gaps closed and holes filled.
+
+    With ``mm_per_px`` the closing spans ``MOVING_CLOSE_MM`` at each frame's own
+    scale; without it, the fixed 3x3 of the research scale. A fixed 3x3 at a
+    finer scale leaves a dark head's broken rim open, so its interior is never
+    filled and no body is thick enough to be a clubhead.
+    """
     stack = frames[background].astype(np.float32)
     median = np.median(stack, axis=0)
     threshold = np.maximum(MOVING_SIGMA * stack.std(axis=0), MOVING_FLOOR_DN)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     out: dict[int, np.ndarray] = {}
     for index in wanted:
+        size = (
+            3 if mm_per_px is None else max(3, int(round(MOVING_CLOSE_MM / mm_per_px(index))) | 1)
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
         raw = np.abs(frames[index].astype(np.float32) - median) > threshold
         closed = cv2.morphologyEx(raw.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
         out[index] = ndimage.binary_fill_holes(closed > 0)
@@ -989,7 +1004,7 @@ def head_masks(shot: PreparedShot, window: Sequence[int], background: slice) -> 
     it); the departing ball is vetoed on frames after contact.
     """
     frames = shot.frames
-    moving = _moving_masks(frames, background, window)
+    moving = _moving_masks(frames, background, window, shot.mm_per_px)
     background_image = np.median(frames[background].astype(np.float32), axis=0)
     grid_y, grid_x = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
     masks: dict[int, np.ndarray] = {}
