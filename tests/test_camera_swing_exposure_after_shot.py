@@ -350,3 +350,25 @@ def test_a_restart_during_a_metering_step_is_never_undone_by_a_lock(tmp_path, tr
     assert decision is not None and decision.reading.passes and not decision.should_apply
     assert _triggers(runtime)[-1] == trigger
     assert runtime.auto_exposure_status()["metering_state"] == "searching"
+
+
+def test_an_older_saved_look_never_rolls_the_box_back(tmp_path):
+    runtime = _runtime(tmp_path, locator=False)
+    ball = {"state": "in_box", "center_px": [swing.BALL[0], swing.BALL[1]]}
+    ball["diameter_px"] = swing.BALL[2]
+    seen_at = time.time()
+    runtime.set_resting_ball_locator(
+        lambda: {**ball, "box_px": [50, 50, 90, 90], "observed_at": seen_at + 1.0}
+    )
+    _locked(runtime)  # the live look already saw the box at its new place
+    runtime.set_resting_ball_locator(
+        lambda: {**ball, "box_px": [40, 40, 80, 80], "observed_at": seen_at - 1.0}
+    )
+    restarts = []
+    runtime._swing_policy.restart_search = restarts.append
+
+    _save_shot(runtime, IN_BAND)  # the clip's look is older than the one noted
+    runtime._swing_exposure_step(1010.0)
+
+    assert restarts == []
+    assert runtime._last_look_box == (50, 50, 90, 90)

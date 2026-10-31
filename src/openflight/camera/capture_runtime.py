@@ -448,6 +448,7 @@ class CameraCaptureRuntime:
         self._swing_decisions: deque[dict] = deque(maxlen=SWING_EXPOSURE_DECISIONS_KEPT)
         self._swing_thread: threading.Thread | None = None
         self._last_look_box: tuple | None = None
+        self._last_look_box_at: float | None = None
         self._auto_exposure_stop = threading.Event()
         self._auto_exposure_lock = threading.Lock()
         self._auto_exposure_decision = sx.unavailable_decision(
@@ -1392,6 +1393,12 @@ class CameraCaptureRuntime:
             logger.info("[CAMERA] Ball search restarts: %s", why)
 
     def _note_look_box(self, look: Mapping) -> None:
+        """Restart the search when the box moved; a look older than the last noted is ignored."""
+        observed = look.get("observed_at")
+        if observed is not None:
+            if self._last_look_box_at is not None and float(observed) < self._last_look_box_at:
+                return
+            self._last_look_box_at = float(observed)
         box = tuple(look["box_px"]) if look.get("box_px") else None
         if box is not None and self._last_look_box is not None and box != self._last_look_box:
             self.restart_ball_search(f"the box moved to {list(box)}")
