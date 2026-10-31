@@ -240,6 +240,8 @@ def test_the_shared_processing_gives_the_camera_fallback_launch_without_any_iwr(
     assert fallback["horizontal_deg"] == pytest.approx(-2.0, abs=0.6)
     assert fallback["label"] == "experimental"
     assert fallback["inputs"]["pitch_source"] == "resting_ball"
+    assert fallback["camera"]["rest_centre_kind"] == "whole_ball_resting_outline"
+    assert {point["centre_kind"] for point in fallback["track"]} == {"highlight_centroid"}
     # the IWR-depth estimator has no range track and says so; the fallback stands alone
     assert result["ball_estimate"]["status"].startswith("rejected")
 

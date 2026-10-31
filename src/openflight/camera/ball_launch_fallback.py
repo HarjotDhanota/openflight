@@ -81,6 +81,10 @@ DEFAULT_ROLL_SD_DEG = 0.3
 
 DISTANCE_FROM_BALL_SIZE = "camera_ball_size"
 PITCH_FROM_RESTING_BALL = "resting_ball"
+# What an image position measures: the thresholded blob's difference-weighted centroid
+# (the lit cap, above the ball's centre in side light), or the resting ball's outline.
+HIGHLIGHT_CENTROID = "highlight_centroid"
+WHOLE_BALL_RESTING_OUTLINE = "whole_ball_resting_outline"
 
 # Ball blobs: size against the resting ball's, roundness and fill.
 BLOB_SIZE_FRACTION = (0.3, 1.6)
@@ -189,6 +193,7 @@ class FallbackGeometry:  # pylint: disable=too-many-instance-attributes
     horizontal_offset_deg: Optional[float] = None
     horizontal_offset_sd_deg: float = 0.0
     roll_sd_deg: float = DEFAULT_ROLL_SD_DEG
+    rest_centre_kind: Optional[str] = None
 
 
 def resting_ball_pitch_deg(
@@ -255,6 +260,7 @@ class TrackPoint:
     diameter_px: float
     contrast_dn: float
     crowding: float = 0.0
+    centre_kind: str = HIGHLIGHT_CENTROID
 
 
 def frame_times_s(sensor_timestamp_ns, exposure_us) -> np.ndarray:
@@ -718,6 +724,7 @@ def estimate_camera_ball_launch(
         "origin_lfu_m": [float(value) for value in camera.origin_lfu],
         "rest_px": [float(value) for value in geometry.rest_px],
         "rest_diameter_px": float(geometry.rest_diameter_px),
+        "rest_centre_kind": geometry.rest_centre_kind,
     }
     times = frame_times_s(sensor_timestamp_ns, exposure_us)
     track = track_launch_ball(

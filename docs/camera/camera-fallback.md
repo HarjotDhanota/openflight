@@ -79,6 +79,9 @@ exposure centre:
 
     P(t) = P0 + v u (t - t0)  (+ gravity),  u = (cos V sin H, cos V cos H, sin V)
 
+Each track point is a highlight centroid (`centre_kind`); the resting ball is its outline
+centre (`camera.rest_centre_kind`). The two kinds are not the same point on the ball.
+
 P0 is the resting ball on its own ray at the range above. The camera sees bearings;
 depth along the line comes from the OPS243's radial speed, `v (LOS . u)` at a reading a
 few milliseconds after impact, which ties the speed to the direction. The ball's image
