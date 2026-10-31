@@ -390,6 +390,21 @@ def shot_range_m(
     return None, None, "none"
 
 
+def face_angle_in_analysis_orientation(
+    value_deg: float, frame: str | None, target_line_offset_deg: float | None, handedness: str
+) -> float | None:
+    """A recorded face angle in the analysis orientation (+ open, toe trailing), or None.
+
+    A target-line angle needs the session's aim (its horizontal offset) to come back to
+    the camera's boresight; a left-handed golfer's angle changes sign with the mirror.
+    """
+    if frame == "target_line":
+        if target_line_offset_deg is None:
+            return None
+        value_deg -= target_line_offset_deg
+    return value_deg if handedness == "right" else -value_deg
+
+
 def shot_face_inputs(
     shot: Mapping[str, Any],
     club: str,
@@ -439,11 +454,11 @@ def shot_face_inputs(
                         "horizontal_offset_deg"
                     )
                 )
-                if evidence.frame == "target_line" and offset is None:
+                value = face_angle_in_analysis_orientation(
+                    value, evidence.frame, offset, handedness
+                )
+                if value is None:
                     evidence, reason = None, "target_line_transform_unknown"
-                else:
-                    value -= offset if evidence.frame == "target_line" else 0.0
-                    value = value if handedness == "right" else -value
             if evidence is not None:
                 changes[name] = il.Labelled(
                     value,

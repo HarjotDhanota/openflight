@@ -441,3 +441,12 @@ def test_a_session_s_setup_solve_stands_when_the_shot_has_none():
         pytest.approx(10.0),
         "range_setup",
     )
+
+
+def test_a_face_angle_comes_into_the_analysis_orientation_through_one_rule():
+    convert = session.face_angle_in_analysis_orientation
+    assert convert(3.0, "unit_boresight", None, "right") == 3.0
+    assert convert(3.0, "target_line", 2.0, "right") == pytest.approx(1.0)
+    assert convert(3.0, "target_line", 2.0, "left") == pytest.approx(-1.0)
+    assert convert(3.0, "unit_boresight", 2.0, "left") == -3.0
+    assert convert(3.0, "target_line", None, "right") is None
