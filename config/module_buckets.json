@@ -925,6 +925,7 @@
   "tests/setup_files.py": "FUSION",
   "tests/spin_synth.py": "PRODUCT",
   "tests/test_accuracy_benchmark.py": "RESEARCH",
+  "tests/test_address_preview_locator.py": "TESTER",
   "tests/test_address_preview_native.py": "TESTER",
   "tests/test_address_preview_pipeline.py": "TESTER",
   "tests/test_address_preview_preview.py": "TESTER",
