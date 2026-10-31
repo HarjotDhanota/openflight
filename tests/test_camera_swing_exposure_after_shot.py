@@ -305,3 +305,24 @@ def test_unclaimed_clips_keep_only_a_few_resting_frame_sets(tmp_path):
 
 def test_the_idle_wait_is_the_owner_s_five_minutes():
     assert capture_runtime.SWING_EXPOSURE_IDLE_RECHECK_S == 300.0
+
+
+def test_a_failure_keeping_the_resting_frames_never_stops_clips_being_saved(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path)
+
+    def broken(*_args):
+        raise RuntimeError("keeping failed")
+
+    monkeypatch.setattr(runtime, "_keep_resting_ball", broken)
+    for _ in range(2):
+        swing._add_frames(runtime, IN_BAND, count=runtime.settings.pre_frames)
+        assert runtime.notify_trigger()
+        swing._add_frames(runtime, IN_BAND, count=runtime.settings.post_frames)
+        runtime._ready.put(runtime._ring.pop_capture())
+    runtime._ready.put(None)
+    runtime._save_loop()
+
+    saved = [runtime.capture_for_shot(None, timeout_s=0.0) for _ in range(2)]
+    assert [capture.sequence for capture in saved] == [1, 2]
+    assert all(capture.valid for capture in saved)
+    assert runtime._after_shot is None  # saved without after-shot frames

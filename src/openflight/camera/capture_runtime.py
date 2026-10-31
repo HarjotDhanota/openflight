@@ -1720,7 +1720,14 @@ class CameraCaptureRuntime:
             sequence = self._sequence
             self._saving_since = time.time()
             if self.settings.auto_exposure:
-                self._keep_resting_ball(sequence, trigger_epoch, capture)
+                try:
+                    self._keep_resting_ball(sequence, trigger_epoch, capture)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning(
+                        "[CAMERA] Capture #%d saves without after-shot metering",
+                        sequence,
+                        exc_info=True,
+                    )
             try:
                 saved = self._save_capture(
                     sequence,
