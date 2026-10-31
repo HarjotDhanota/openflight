@@ -374,3 +374,70 @@ def test_without_an_analysis_width_the_clip_keeps_its_size():
     binned = session.bin_frames(frames, 2)
     assert binned.shape == (2, 2, 3) and binned.dtype == np.uint8
     assert binned[0, 0, 0] == round(np.mean(frames[0, :2, :2]))
+
+
+def test_the_lens_height_is_the_shot_s_own_above_the_hitting_surface():
+    """surface_height (30 Oct): a solved surface moves the lens height impact uses."""
+    from openflight.rig_geometry import RigGeometry
+
+    rig = RigGeometry(**_rig_parameters())
+    shot = {
+        "scene_heights": {
+            "in_force": {
+                "source": "solved_session",
+                "lens_height_m": 0.027,
+                "surface_height_sigma_m": 0.012,
+            }
+        }
+    }
+
+    value, sigma, source = session.shot_lens_height_mm(shot, {}, rig)
+    assert (value, sigma, source) == (pytest.approx(27.0), pytest.approx(12.0), "solved_session")
+    face = session.shot_face_inputs(
+        shot,
+        "7-iron",
+        "right",
+        {},
+        lens_height_mm=value,
+        lens_height_sigma_mm=sigma,
+        lens_height_source=source,
+    )
+    assert (face.lens_height.value, face.lens_height.sigma, face.lens_height.source) == (
+        pytest.approx(27.0),
+        pytest.approx(12.0),
+        "solved_session",
+    )
+
+
+def test_without_a_solve_the_rig_s_lens_height_stands():
+    from openflight.rig_geometry import RigGeometry
+
+    rig = RigGeometry(**_rig_parameters())
+    nominal = {"scene_heights": {"in_force": {"source": "rig_nominal", "lens_height_m": 0.095}}}
+
+    for shot in ({}, nominal):
+        value, sigma, source = session.shot_lens_height_mm(shot, {}, rig)
+        assert value == pytest.approx(95.0)
+        assert sigma == pytest.approx(il.LENS_HEIGHT_SIGMA_MM)
+        assert source == il.RIG_LENS_HEIGHT
+
+
+def test_a_session_s_setup_solve_stands_when_the_shot_has_none():
+    from openflight.rig_geometry import RigGeometry
+
+    rig = RigGeometry(**_rig_parameters())
+    start = {
+        "config": {
+            "scene": {
+                "lens_height_used_m": 0.081,
+                "lens_height_used_source": "range_setup",
+                "lens_height_solved_uncertainty_m": 0.010,
+            }
+        }
+    }
+
+    assert session.shot_lens_height_mm({}, start, rig) == (
+        pytest.approx(81.0),
+        pytest.approx(10.0),
+        "range_setup",
+    )

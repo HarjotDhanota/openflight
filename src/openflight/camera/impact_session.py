@@ -323,6 +323,43 @@ def ball_depth_mm(
     return float((b + math.sqrt(discriminant)) * ray[2])
 
 
+def shot_lens_height_mm(
+    shot: Mapping[str, Any], start: Mapping[str, Any], rig
+) -> tuple[float | None, float | None, str]:
+    """The lens height above the hitting surface this shot used, its sigma and source.
+
+    The shot's own record first (``scene_heights``, surface_height), then the session's
+    setup solve, then the rig file's (the unit standing on the hitting surface).
+    """
+    in_force = ((shot.get("scene_heights") or {}) if isinstance(shot, Mapping) else {}).get(
+        "in_force"
+    ) or {}
+    scene = ((start.get("config") or {}).get("scene") or {}) if isinstance(start, Mapping) else {}
+    for lens, sigma, source in (
+        (
+            in_force.get("lens_height_m"),
+            in_force.get("surface_height_sigma_m"),
+            in_force.get("source"),
+        ),
+        (
+            scene.get("lens_height_used_m"),
+            scene.get("lens_height_solved_uncertainty_m"),
+            scene.get("lens_height_used_source"),
+        ),
+    ):
+        if source not in (None, "rig_nominal") and _number(lens) is not None:
+            return (
+                float(lens) * 1000.0,
+                float(sigma) * 1000.0 if _number(sigma) is not None else il.LENS_HEIGHT_SIGMA_MM,
+                str(source),
+            )
+    return (
+        _number(getattr(rig, "lens_height_above_floor_mm", None)),
+        il.LENS_HEIGHT_SIGMA_MM,
+        il.RIG_LENS_HEIGHT,
+    )
+
+
 def shot_range_m(
     shot: Mapping[str, Any],
     run: RunRecord,
@@ -360,13 +397,20 @@ def shot_face_inputs(
     start: Mapping[str, Any],
     *,
     lens_height_mm: float | None,
+    lens_height_sigma_mm: float | None = None,
+    lens_height_source: str | None = None,
     anchors: Mapping[str, il.Labelled] | None = None,
     capture_npz_sha256: str | None = None,
     capture_sensor_interval_ns: tuple[int, int] | None = None,
     decisions: dict[str, Any] | None = None,
 ) -> il.FaceInputs:
     """Use explicitly unconditioned, capture-bound angles; retain priors otherwise."""
-    face = il.FaceInputs.priors(club, lens_height_mm=lens_height_mm)
+    face = il.FaceInputs.priors(
+        club,
+        lens_height_mm=lens_height_mm,
+        lens_height_sigma_mm=lens_height_sigma_mm,
+        lens_height_source=lens_height_source,
+    )
     changes: dict[str, il.Labelled] = {}
     metrics = shot.get("metrics")
     metrics = metrics if isinstance(metrics, Mapping) else {}
@@ -693,13 +737,16 @@ def prepare_clip(  # pylint: disable=too-many-locals
             rig, clip.ball, camera, range_m * 1000.0, radar_offset_mm=radar_offset
         )
         clip.range_sigma_mm = (sigma_m or il.DEFAULT_RANGE_SIGMA_MM / 1000.0) * 1000.0
-    lens_height = _number(getattr(rig, "lens_height_above_floor_mm", None))
+    lens_height, lens_sigma, lens_source = shot_lens_height_mm(shot, run.start, rig)
+    clip.extra["lens_height_source"] = lens_source
     clip.face = shot_face_inputs(
         shot,
         clip.club,
         clip.handedness,
         run.start,
         lens_height_mm=lens_height,
+        lens_height_sigma_mm=lens_sigma if lens_height is not None else None,
+        lens_height_source=lens_source if lens_height is not None else None,
         anchors=options.anchors,
         capture_npz_sha256=clip.extra.get("capture_npz_sha256"),
         capture_sensor_interval_ns=clip.extra.get("capture_sensor_interval_ns"),

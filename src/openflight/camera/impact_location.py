@@ -471,8 +471,19 @@ class FaceInputs:  # pylint: disable=too-many-instance-attributes
     lens_height: Labelled
 
     @classmethod
-    def priors(cls, club: str | None, *, lens_height_mm: float | None = None) -> "FaceInputs":
-        """Category values for every input, each labelled with where it came from."""
+    def priors(
+        cls,
+        club: str | None,
+        *,
+        lens_height_mm: float | None = None,
+        lens_height_sigma_mm: float | None = None,
+        lens_height_source: str | None = None,
+    ) -> "FaceInputs":
+        """Category values for every input, each labelled with where it came from.
+
+        The lens height is above the hitting surface: the rig file's, or a solved one
+        (``surface_height``) with its own sigma and source.
+        """
         category = club_category(club)
         table = CATEGORY_PRIORS[category or "iron"]
         widen = 1.0 if category else UNKNOWN_CLUB_SIGMA_SCALE
@@ -494,8 +505,11 @@ class FaceInputs:  # pylint: disable=too-many-instance-attributes
             effective_bounce=prior("effective_bounce"),
             lens_height=Labelled(
                 DEFAULT_LENS_HEIGHT_MM if lens_height_mm is None else float(lens_height_mm),
-                LENS_HEIGHT_SIGMA_MM,
-                RIG_LENS_HEIGHT if lens_height_mm is not None else "default_lens_height",
+                LENS_HEIGHT_SIGMA_MM
+                if lens_height_sigma_mm is None
+                else float(lens_height_sigma_mm),
+                lens_height_source
+                or (RIG_LENS_HEIGHT if lens_height_mm is not None else "default_lens_height"),
             ),
         )
 
