@@ -9868,17 +9868,22 @@ def create_app(
             brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=None)
             analyzer = brightness
         with live_owner_lock:
-            live.start(
-                arm,
-                exposure_us,
-                gain,
-                analyzer=analyzer,
-                **(
-                    {"independent_hints": True}
-                    if kind == "placement_box" and ball_hint_independent
-                    else {}
-                ),
-            )
+            try:
+                live.start(
+                    arm,
+                    exposure_us,
+                    gain,
+                    analyzer=analyzer,
+                    **(
+                        {"independent_hints": True}
+                        if kind == "placement_box" and ball_hint_independent
+                        else {}
+                    ),
+                )
+            except Exception:
+                # the address preview already started its workers: end them
+                _retire_analyzer(analyzer)
+                raise
             guided_analyzer["value"] = None
             box_preview_exposure["value"] = brightness
             box_locator["value"] = locator
