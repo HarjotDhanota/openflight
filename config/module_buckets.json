@@ -1653,6 +1653,7 @@
   "tests/test_fallback_chain.py": "FUSION",
   "tests/test_fallback_orchestration.py": "FUSION",
   "scripts/analysis/replay_shot_chain.py": "RESEARCH",
+  "tests/test_replay_shot_chain.py": "RESEARCH",
   "docs/camera/camera-fallback.md": "DOCS-USER",
   "scripts/analysis/camera_fallback_fixtures.py": "RESEARCH",
   "tests/fixtures/camera_fallback/outdoor-test-1-shot-28-launch.npz": "RESEARCH",
