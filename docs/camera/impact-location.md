@@ -48,8 +48,10 @@ Both axes are the face coordinates of the contact point **P = B − r·n̂**:
    session's clips. Each frame is placed by translation and roll at the scale the depth
    model sets (OPS club speed). This step is ported unchanged from the September v1.
 4. **Interpolate to contact.** The last frame before contact and the first after it
-   bracket contact, at most 9 ms apart. Heel, toe and the sole line are interpolated
-   between them, in millimetres, to the contact moment.
+   bracket contact, at most 20 ms apart. Heel, toe and the sole line are interpolated
+   between them, in millimetres, to the contact moment. A longer gap is not refused
+   below 20 ms: its straight-line error is priced in the budget (arc chord, face
+   rotation), so a slower clip reads with a wider sigma.
 
 ## The face centre
 
@@ -147,6 +149,7 @@ So the face angle F, + open in the analysis orientation, is taken out before C i
 | club speed | 3 % when measured (OPS), 15 % when assumed |
 | range scale | The range's own sigma (IWR spread, else one 46.9 mm bin) |
 | arc chord | The straight chord against the curved path |
+| face rotation | The toe (87 mm from the shaft) closing at an ASSUMED 3000 deg/s bound, not measured; about 2.9 mm at 102 fps, 2.3 mm at 115 fps, 0.4 mm at 276 fps (contact mid-gap) |
 | face angle | The face angle's sigma |
 | face centre | C's sigma (0 under the research override) |
 | contact frame ambiguity | Only when the contact witnesses or the ball clock flag it |

@@ -162,7 +162,9 @@ BALL_SIZE_RANGE_TOLERANCE = 1.35
 WINDOW_BEFORE_S = 0.012
 BACKGROUND_LEAD_S = 0.032
 MIN_BACKGROUND_FRAMES = 3
-MAX_BRACKET_S = 0.0090
+# The straight-line interpolation's error is priced in the budget (arc chord, face
+# rotation); this only refuses brackets too long for a straight line to mean anything.
+MAX_BRACKET_S = 0.020
 
 UPSAMPLE = 4  # template pixels per plate pixel
 TEMPLATE_HALF_WIDTH_MM = 110.0
@@ -205,6 +207,11 @@ GIVEN_FRACTION_SIGMA = 0.1
 BALL_CENTRE_SIGMA_PX = 0.5
 DEFAULT_RANGE_SIGMA_MM = 46.875
 ARC_RADIUS_MM = 1140.0
+# Face closing about the shaft inside the bracket. ASSUMED upper bound, not measured
+# and not sourced: no closure-rate prior is imported. The toe turns at
+# MAX_IRON_BLADE_MM from the shaft.
+FACE_CLOSURE_RATE_DEG_S = 3000.0
+FACE_CLOSURE_RATE_SOURCE = "assumed_upper_bound_not_measured"
 SWING_PLANE_DEG = 58.9
 EDGE_PROFILE_HALF_PX = 6
 EDGE_MIN_CONTRAST_BLUR_DN = 12.0
@@ -2147,6 +2154,20 @@ def _round(budget: Mapping[str, float]) -> dict[str, float]:
     return {k: round(v, 2) for k, v in budget.items()}
 
 
+def _face_rotation_mm(shot: PreparedShot, before: Alignment, after: Alignment) -> float:
+    """The toe's arc against the straight line between the bracket frames.
+
+    A point ``r`` from the shaft turning at ``w`` leaves the chord by
+    ``r * w**2 * t_before * t_after / 2`` at contact, the arc chord's form.
+    """
+    last_rest = shot.contact.last_rest_frame
+    assert last_rest is not None
+    t_before = (last_rest + shot.contact_fraction - before.frame) / shot.fps
+    t_after = (after.frame - last_rest - shot.contact_fraction) / shot.fps
+    rate = math.radians(FACE_CLOSURE_RATE_DEG_S)
+    return MAX_IRON_BLADE_MM * rate**2 * t_before * t_after / 2.0
+
+
 def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
     shot, reading, reread, before, after, face, fraction_sigma, speed_sigma
 ) -> dict[str, float]:
@@ -2186,6 +2207,7 @@ def _offset_budget(  # pylint: disable=too-many-arguments,too-many-locals
         )
         / 2.0,
         "arc_chord_mm": travelled_before * travelled_after / (2.0 * arc_radius),
+        "face_rotation_mm": _face_rotation_mm(shot, before, after),
         "face_angle_mm": abs(
             reread(key, face_angle=face.face_angle.value + face.face_angle.sigma)
             - reread(key, face_angle=face.face_angle.value - face.face_angle.sigma)
@@ -2410,6 +2432,10 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
     diagnostics.update(
         {
             "offset_uncertainty_budget_mm": _round(offset_budget),
+            "face_rotation_rate_deg_s": {
+                "value": FACE_CLOSURE_RATE_DEG_S,
+                "source": FACE_CLOSURE_RATE_SOURCE,
+            },
             "interpolation_weight": round(reading["weight"], 4),
             "depth_ratio_before": round(reading["ratio_before"], 4),
             "depth_ratio_after": round(reading["ratio_after"], 4),

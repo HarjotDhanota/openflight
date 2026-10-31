@@ -587,3 +587,34 @@ def test_head_masks_close_gaps_at_the_shot_s_own_scale():
     )
     report = il.head_masks(shot, [3], slice(0, 3))
     assert 3 in report.masks, report.reasons
+
+
+def _at_fps(fps: float) -> dict:
+    """The same rendered swing read at another frame rate: the club speed keeps its step."""
+    return {"fps": fps, "club_speed_mps": CLUB_SPEED * fps / FPS}
+
+
+def test_a_one_frame_bracket_at_102_fps_reads_and_prices_the_face_turning():
+    frames, ball = render_swing(truth_mm=4.0)
+    result = analyse(frames, ball, **_at_fps(101.8))
+    assert result.status == "ok", result.reason
+    budget = result.diagnostics["offset_uncertainty_budget_mm"]
+    assert budget["face_rotation_mm"] > 0.0
+    assert result.impact_offset_sigma_mm >= budget["face_rotation_mm"]
+
+
+def test_the_face_rotation_term_grows_with_the_bracket_gap():
+    frames, ball = render_swing(truth_mm=4.0)
+    fast = analyse(frames, ball, **_at_fps(FPS))
+    slow = analyse(frames, ball, **_at_fps(101.8))
+    assert fast.status == slow.status == "ok"
+    fast_term = fast.diagnostics["offset_uncertainty_budget_mm"]["face_rotation_mm"]
+    slow_term = slow.diagnostics["offset_uncertainty_budget_mm"]["face_rotation_mm"]
+    assert slow_term > fast_term > 0.0
+
+
+def test_a_bracket_too_slow_to_interpolate_is_still_refused_by_name():
+    frames, ball = render_swing(truth_mm=4.0)
+    result = analyse(frames, ball, **_at_fps(45.0))
+    assert result.status == "rejected"
+    assert result.reason.startswith("bracket_") and result.reason.endswith("_spans_22.2_ms")
