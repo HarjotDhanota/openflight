@@ -1,7 +1,8 @@
 """E3 wiring: the full ball speed's two routes, the full club speed and the full smash.
 
-The launch-based projection goes first; the OPS total-speed projection resolves the
-shot when it refuses, and the choice with every refusal is kept under
+Both routes run; the stronger label wins and a tie keeps the launch-based projection
+first (30 Oct 2026). The OPS total-speed projection resolves the shot when the projection
+refuses or is weaker, and the choice with every refusal and the runner-up is kept under
 ``input_sources["ball_speed_full"]``. The full club speed reads the camera head track's
 state from the club delivery; without it it is not measured with the reason.
 """
@@ -50,7 +51,10 @@ def test_the_launch_based_projection_goes_first(fusion_geometry):
     assert shot.ball_speed_full["status"] == CALCULATED
     assert shot.ball_speed_full["route"] == "measured_projection"
     chain = shot.input_sources["ball_speed_full"]
-    assert chain["route"] == "measured_projection" and chain["tried"] == []
+    assert chain["route"] == "measured_projection"
+    # both routes gave a calculated value: the tie keeps the order, the runner-up is kept
+    assert [entry["route"] for entry in chain["tried"]] == ["ops_total_projection"]
+    assert "same label" in chain["tried"][0]["reason"]
 
 
 def test_the_ops_total_projection_resolves_a_missing_horizontal(fusion_geometry):
@@ -136,11 +140,36 @@ def test_without_a_head_track_the_full_club_speed_says_why(fusion_geometry):
     assert "club speed is not a full speed" in shot.smash_factor_full["reason"]
 
 
-def test_a_failed_horizontal_gate_stays_experimental_in_the_first_route(fusion_geometry):
+def test_a_failed_horizontal_gate_loses_to_the_stronger_total_projection(fusion_geometry):
+    # Oct 27 shots 3/4: the projection on a gate-failed horizontal (experimental) beat the
+    # OPS total projection, which does not use the horizontal; the stronger label now wins
     shot = _attach(_shot(launch_angle_horizontal_source="radar_low_coherence"))
+
+    assert shot.ball_speed_full["route"] == "ops_total_projection"
+    assert shot.ball_speed_full["status"] == CALCULATED
+    assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
+    chain = shot.input_sources["ball_speed_full"]
+    assert (chain["route"], chain["label"]) == ("ops_total_projection", CALCULATED)
+    (loser,) = chain["tried"]
+    assert loser["route"] == "measured_projection"
+    assert "experimental" in loser["reason"] and "outranks" in loser["reason"]
+    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == CALCULATED
+
+
+def test_with_only_the_projection_on_a_failed_gate_it_still_stands_experimental(
+    fusion_geometry, monkeypatch
+):
+    monkeypatch.setattr(
+        "openflight.full_speed.evaluate_total_speed_projection",
+        lambda **_kwargs: {"status": "not_measured", "value_mph": None, "reason": "no total"},
+    )
+    shot = _attach(_shot(launch_angle_horizontal_source="radar_low_coherence"))
+
     assert shot.ball_speed_full["route"] == "measured_projection"
     assert shot.ball_speed_full["status"] == EXPERIMENTAL
-    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == EXPERIMENTAL
+    assert shot.input_sources["ball_speed_full"]["tried"] == [
+        {"route": "ops_total_projection", "reason": "no total"}
+    ]
 
 
 @pytest.mark.parametrize("lens,label", [("nominal", EXPERIMENTAL), ("calibrated", ESTIMATED)])

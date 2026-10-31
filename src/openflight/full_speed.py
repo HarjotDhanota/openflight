@@ -766,7 +766,8 @@ def evaluate_total_speed_projection(
 
     The second full-ball-speed route (``shot_models``), used when the launch-based
     projection refuses (a missing horizontal launch, no measured side
-    offset, no OPS reading in the referral window, an ill-conditioned line of sight). It
+    offset, no OPS reading in the referral window, an ill-conditioned line of sight) or
+    carries a weaker label (an experimental horizontal; 30 Oct 2026). It
     needs no horizontal launch and no OPS timeline: ``radial_speed_factor`` predicts the
     peak share of the ball's speed the OPS sees over its first 70 ms from the vertical
     launch and where the ball sits from the OPS (``_ball_geometry``), and the canonical

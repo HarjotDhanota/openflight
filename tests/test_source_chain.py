@@ -140,3 +140,71 @@ def test_a_partial_iwr_label_ranks_between_estimated_and_experimental():
     assert weakest_label("estimated", "iwr_partial") == "iwr_partial"
     assert weakest_label("iwr_partial", "experimental") == "experimental"
     Candidate(2.1, "iwr_partial", "iwr_post_impact")
+
+
+# ---------------------------------------------------------------- strongest label first (30 Oct 2026)
+
+
+def test_the_stronger_label_wins_and_the_loser_says_why_it_lost():
+    resolution = source_chain.resolve_strongest(
+        "ball_speed_full",
+        [
+            Route("measured_projection", lambda: Candidate(96.3, "experimental", "projection")),
+            Route("ops_total_projection", lambda: Candidate(79.4, "estimated", "total")),
+        ],
+    )
+
+    assert (resolution.value, resolution.label, resolution.route) == (
+        79.4,
+        "estimated",
+        "ops_total_projection",
+    )
+    ((name, why),) = resolution.tried
+    assert name == "measured_projection"
+    assert "96.30" in why and "experimental" in why
+    assert "ops_total_projection" in why and "estimated" in why
+
+
+def test_a_tie_keeps_the_route_order_and_records_the_runner_up():
+    resolution = source_chain.resolve_strongest(
+        "ball_speed_full",
+        [
+            Route("measured_projection", lambda: Candidate(88.0, "calculated", "projection")),
+            Route("ops_total_projection", lambda: Candidate(87.5, "calculated", "total")),
+        ],
+    )
+
+    assert resolution.route == "measured_projection"
+    ((name, why),) = resolution.tried
+    assert name == "ops_total_projection"
+    assert "same label" in why
+
+
+def test_with_one_value_the_strongest_resolution_is_the_first_route_s():
+    routes = [
+        Route("measured_projection", lambda: "no horizontal launch"),
+        Route("ops_total_projection", lambda: Candidate(87.5, "experimental", "total")),
+    ]
+
+    strongest = source_chain.resolve_strongest("ball_speed_full", routes)
+
+    assert strongest == resolve("ball_speed_full", routes)
+
+
+def test_every_route_runs_and_an_error_is_a_refusal_in_order():
+    def broken():
+        raise ValueError("broken projection")
+
+    resolution = source_chain.resolve_strongest(
+        "ball_speed_full",
+        [
+            Route("measured_projection", broken),
+            Route("ops_total_projection", lambda: Candidate(87.5, "calculated", "total")),
+            Route("third", lambda: Candidate(90.0, "experimental", "third")),
+        ],
+    )
+
+    assert resolution.route == "ops_total_projection"
+    assert [name for name, _why in resolution.tried] == ["measured_projection", "third"]
+    assert "broken projection" in resolution.tried[0][1]
+    assert "outranks" in resolution.tried[1][1]

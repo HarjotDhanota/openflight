@@ -11,10 +11,14 @@ speed. On a 7-iron it reads about 3 mph low; on a wedge, 4-8 mph low.
 
 OpenFlight keeps that radial reading as the canonical `ball_speed_mph` (see the
 [speed contract](../camera/speed-contract.md)). It also computes the **full**
-ball speed in `ball_speed_full`, using the shot's own inputs. Two routes run in
-order: a timed launch-based projection, then a peak-radial model if that route
-refuses or raises. `input_sources.ball_speed_full` records the chosen route and
-every preceding refusal. Neither route changes the canonical radial reading.
+ball speed in `ball_speed_full`, using the shot's own inputs. Two routes run: a
+timed launch-based projection and a peak-radial model. When both give a value,
+the stronger label wins (measured, calculated, model geometry, estimated,
+experimental); a tie keeps the launch-based projection. So a projection built on
+a horizontal that failed its own gate (experimental) gives way to a peak-radial
+value that does not use the horizontal. `input_sources.ball_speed_full` records
+the chosen route, every refusal and the value that lost, with why. Neither route
+changes the canonical radial reading.
 
 ## The method
 
@@ -59,7 +63,7 @@ feed an experimental projection; they never become measured inputs.
 
 ## When the first route refuses
 
-A refusal tries the peak-radial route below. Full speed is **not measured** only
+A refusal leaves the peak-radial route below. Full speed is **not measured** only
 when both routes refuse; their reasons are retained. The first route refuses when:
 
 - **the geometry is ill-conditioned.** LOS . dir is below **0.866 (cos 30°)** at

@@ -41,7 +41,7 @@ from openflight.launch_monitor import (
     Shot,
 )
 from openflight.numeric import finite as _finite
-from openflight.source_chain import Candidate, Resolution, Route, resolve
+from openflight.source_chain import Candidate, Resolution, Route, resolve, resolve_strongest
 from openflight.source_labels import (
     AZIMUTH_UNCALIBRATED,
     AZIMUTH_UNCALIBRATED_NOTE,
@@ -757,12 +757,15 @@ def _tee_side_offset(shot: Shot) -> tuple:
 
 
 def _full_ball_speed_chain(shot: Shot, measured_projection, total_projection) -> dict:
-    """The full ball speed's routes in order; the winner's record with every refusal kept.
+    """The full ball speed's routes; the winner's record with every refusal kept.
 
-    ``total_projection`` runs the OPS total-speed projection only when the launch-based
-    projection (``measured_projection``) refused. The resolution is recorded under
-    ``input_sources["ball_speed_full"]``; a shot neither route resolves keeps the first
-    route's record with both reasons.
+    Both run: the launch-based projection (``measured_projection``) and the OPS
+    total-speed projection (``total_projection``, which does not use the horizontal).
+    The stronger label wins and a tie keeps the projection first (30 Oct 2026: on Oct 27
+    shots 3 and 4 the projection on a gate-failed horizontal won as experimental over a
+    stronger total projection and fed the carry); the runner-up is kept in ``tried``
+    with why it lost. The resolution is recorded under ``input_sources["ball_speed_full"]``;
+    a shot neither route resolves keeps the first route's record with both reasons.
     """
     records: dict[str, dict] = {}
 
@@ -779,7 +782,7 @@ def _full_ball_speed_chain(shot: Shot, measured_projection, total_projection) ->
 
         return Route(name, run)
 
-    resolution = resolve(
+    resolution = resolve_strongest(
         "ball_speed_full",
         [
             route(BALL_SPEED_FULL_ROUTES[0], measured_projection),
@@ -804,8 +807,9 @@ def _attach_full_speeds(shot: Shot) -> None:
 
     The canonical radial ball speed is unchanged; each full speed is its own field
     with its status, range and reason (openflight.full_speed). The full ball speed is
-    the launch-based projection, else the OPS total-speed projection; the full club
-    speed is the OPS club reading on the camera head track's direction (experimental).
+    the launch-based or the OPS total-speed projection, the stronger label first; the
+    full club speed is the OPS club reading on the camera head track's direction
+    (experimental).
     """
     from openflight.full_speed import (  # noqa: PLC0415
         evaluate_full_ball_speed,

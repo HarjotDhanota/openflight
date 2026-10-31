@@ -194,8 +194,10 @@ def test_a_camera_launch_gives_an_experimental_full_speed_the_flight_still_uses(
     assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
 
 
-def test_an_uncalibrated_azimuth_gives_an_estimated_full_speed(fusion_geometry):
-    """Today's field state (IWR azimuth uncalibrated): resolved, labelled estimated."""
+def test_an_uncalibrated_azimuth_lets_the_total_projection_win_calculated(fusion_geometry):
+    """Today's field state (IWR azimuth uncalibrated): the launch-based projection rests on
+    the estimated horizontal; the OPS total projection does not use it and is calculated,
+    so the stronger label wins (30 Oct 2026) and the projection is kept as the runner-up."""
     shot = _shot(
         launch_angle_horizontal_status="azimuth_uncalibrated",
         inclinometer={"applied_to": ["camera", "iwr6843"]},
@@ -203,9 +205,13 @@ def test_an_uncalibrated_azimuth_gives_an_estimated_full_speed(fusion_geometry):
 
     server_module._attach_ball_speed_contract(shot)
 
-    assert shot.ball_speed_full["status"] == "estimated"
+    assert shot.ball_speed_full["route"] == "ops_total_projection"
+    assert shot.ball_speed_full["status"] == "calculated"
     assert shot.ball_speed_full_mph == shot.ball_speed_full["value_mph"]
-    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == "estimated"
+    assert shot.to_dict()["metrics"]["ball_speed_full"]["status"] == "calculated"
+    (loser,) = shot.input_sources["ball_speed_full"]["tried"]
+    assert loser["route"] == "measured_projection"
+    assert "(estimated)" in loser["reason"] and "outranks" in loser["reason"]
 
 
 def test_a_configured_tilt_gives_an_estimated_full_speed(fusion_geometry):

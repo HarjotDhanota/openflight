@@ -154,6 +154,58 @@ def resolve(input_name: str, routes: Sequence[Route]) -> Resolution:
     return Resolution(input=input_name, tried=tuple(tried))
 
 
+def _shown(value: Any) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{float(value):.2f}"
+    return str(value)
+
+
+def resolve_strongest(input_name: str, routes: Sequence[Route]) -> Resolution:
+    """Every route runs; the value with the strongest label wins, a tie keeps the route
+    order. Each refusal is kept as ``resolve`` keeps it, and each value that lost is kept
+    in ``tried`` with its own label and why it lost, so the choice is visible. With one
+    value (or none) the winner is ``resolve``'s; a later route's refusal is kept too."""
+    outcomes: list[tuple[Route, Union[Candidate, str]]] = []
+    for route in routes:
+        try:
+            outcome = route.produce()
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            outcomes.append((route, f"error: {type(error).__name__}: {error}"))
+            continue
+        if isinstance(outcome, Candidate) and not _finite(outcome.value):
+            outcome = f"{route.name} gave a non-finite value"
+        outcomes.append((route, outcome or f"{route.name} gave nothing"))
+    given = [(route, outcome) for route, outcome in outcomes if isinstance(outcome, Candidate)]
+    if not given:
+        return Resolution(input=input_name, tried=tuple((r.name, why) for r, why in outcomes))
+    winner, best = min(given, key=lambda pair: LABEL_ORDER.index(pair[1].label))
+    tried: list[tuple[str, str]] = []
+    for route, outcome in outcomes:
+        if route is winner:
+            continue
+        if not isinstance(outcome, Candidate):
+            tried.append((route.name, outcome))
+            continue
+        gave = f"gave {_shown(outcome.value)} ({outcome.label})"
+        why = (
+            f"{winner.name} ran first with the same label"
+            if outcome.label == best.label
+            else f"{winner.name} ({best.label}) outranks it"
+        )
+        tried.append((route.name, f"{gave}; {why}"))
+    return Resolution(
+        input=input_name,
+        value=best.value,
+        label=best.label,
+        source=best.source,
+        route=winner.name,
+        uncertainty=best.uncertainty,
+        note=best.note,
+        tried=tuple(tried),
+        details=best.details,
+    )
+
+
 __all__ = [
     "Candidate",
     "LABEL_NOT_MEASURED",
@@ -161,5 +213,6 @@ __all__ = [
     "Resolution",
     "Route",
     "resolve",
+    "resolve_strongest",
     "weakest_label",
 ]
