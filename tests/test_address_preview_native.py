@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -115,3 +116,51 @@ def test_a_build_failure_is_remembered_and_reported(monkeypatch):
     }
     assert native.availability()["available"] is False
     assert len(calls) == 1
+
+
+def test_an_unwritable_cache_is_reported_and_remembered(monkeypatch, tmp_path):
+    blocked = tmp_path / "a-file"
+    blocked.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(native.NativeUnavailable, match="cache"):
+        native.build(cache_dir=blocked / "cache", command=["openflight-no-such-compiler"])
+    monkeypatch.setattr(native, "_LOADED", {"library": None, "error": None})
+    monkeypatch.setattr(native, "default_cache_dir", lambda: blocked / "cache")
+    assert native.availability()["available"] is False
+    assert "cache" in native.availability()["reason"]
+
+
+def _fake_compile(made):
+    def run(arguments, **_kwargs):
+        Path(arguments[-1]).write_bytes(b"compiled")
+        made.append(arguments[-1])
+
+    return run
+
+
+def test_a_library_another_process_has_loaded_is_kept(monkeypatch, tmp_path):
+    made = []
+    target = native.library_path(native.SOURCE, tmp_path)
+    tmp_path.mkdir(exist_ok=True)
+
+    def refuse(_partial, destination):
+        Path(destination).write_bytes(b"loaded elsewhere")
+        raise PermissionError("the DLL is in use")
+
+    monkeypatch.setattr(native.subprocess, "run", _fake_compile(made))
+    monkeypatch.setattr(native.os, "replace", refuse)
+    assert native.build(cache_dir=tmp_path, command=["cc"]) == target
+    assert target.read_bytes() == b"loaded elsewhere"
+    assert not Path(made[0]).exists()
+
+
+def test_a_library_that_cannot_be_stored_is_unavailable(monkeypatch, tmp_path):
+    made = []
+
+    def refuse(_partial, _destination):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(native.subprocess, "run", _fake_compile(made))
+    monkeypatch.setattr(native.os, "replace", refuse)
+    with pytest.raises(native.NativeUnavailable, match="read-only"):
+        native.build(cache_dir=tmp_path, command=["cc"])
+    assert not Path(made[0]).exists()
