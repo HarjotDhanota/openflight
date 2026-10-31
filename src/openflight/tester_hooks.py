@@ -502,8 +502,15 @@ def load_free_play_plan(path) -> dict:
     return plan
 
 
+# the kiosk's confirmed box and the placement record's, in the capture's pixels
+PLACEMENT_BOX_MATCH_PX = 2.0
+
+
 def _placement_box_record() -> dict | None:
-    """This tester's confirmed placement record: the folder named for the tester above the run."""
+    """This tester's placement record (the folder named for the tester above the run).
+
+    Raises ValueError when it is not the record of the setup this kiosk runs with.
+    """
     from openflight.camera import tester_server  # pylint: disable=import-outside-toplevel
 
     session = server.get_session_logger()
@@ -512,7 +519,35 @@ def _placement_box_record() -> dict | None:
         return None
     run_dir = Path(session.log_dir).expanduser().resolve()
     root = next((path for path in (run_dir, *run_dir.parents) if path.name == tester_id), None)
-    return tester_server.read_last_placement_box(root) if root is not None else None
+    record = tester_server.read_last_placement_box(root) if root is not None else None
+    if record is not None:
+        _check_placement_binding(record, tester_id)
+    return record
+
+
+def _check_placement_binding(record: dict, tester_id: str) -> None:
+    """The placement record must be the kiosk's confirmed box: tester, rig, lens and box."""
+    # pylint: disable-next=import-outside-toplevel
+    from openflight.camera.shot_ball_search import mode_factor
+
+    service = server.setup_service
+    box = (service.snapshot().get("box") or {}) if service is not None else {}
+    if box.get("state") != "confirmed":
+        raise ValueError("the kiosk has no confirmed setup box to check the placement record by")
+    binding = record.get("setup_binding") or {}
+    if binding.get("tester_id") != tester_id:
+        raise ValueError(f"the placement record is tester {binding.get('tester_id')}'s")
+    if tester_config_hash and binding.get("config_hash") != tester_config_hash:
+        raise ValueError("the placement record was confirmed on another rig configuration")
+    if binding.get("lens_id") != (box.get("inputs") or {}).get("lens_id"):
+        raise ValueError("the placement record was confirmed with another lens")
+    if not str(box.get("id") or "").startswith(f"{binding.get('box_id')}-"):
+        raise ValueError("the placement record is for another box than the kiosk's")
+    settings = server.camera_capture_runtime.settings
+    factor = mode_factor(record, (int(settings.height), int(settings.width)))
+    expected = [(float(value) + 0.5) * factor - 0.5 for value in record["box_px"]]
+    if max(abs(a - float(b)) for a, b in zip(expected, box["box_px"])) > PLACEMENT_BOX_MATCH_PX:
+        raise ValueError("the placement record's box is not where the kiosk's box is")
 
 
 def _start_shot_ball_search() -> None:

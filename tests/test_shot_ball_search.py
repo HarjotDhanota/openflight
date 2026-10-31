@@ -373,29 +373,102 @@ def test_close_leaves_no_worker_processes():
     assert {process.pid for process in multiprocessing.active_children()} <= before
 
 
-def test_the_tester_root_is_found_above_the_free_play_run(tmp_path, monkeypatch):
+BINDING = {
+    "tester_id": "tester-7",
+    "lens_id": "6mm",
+    "box_id": "a237c7ddc054d3e2",
+    "config_hash": "c0",
+}
+SETUP_BOX = {
+    "state": "confirmed",
+    "box_px": [301, 296, 975, 676],
+    "id": "a237c7ddc054d3e2-3dcc15da1820",
+    "inputs": {"lens_id": "6mm"},
+}
+
+
+@pytest.fixture
+def tester_run(tmp_path, monkeypatch):
+    """A free-play run below the tester's folder, set up with SETUP_BOX at 1280x800."""
     root = tmp_path / "tester-7"
     run = root / "arm5" / "paired" / "run-01"
     run.mkdir(parents=True)
+    state = SimpleNamespace(
+        root=root.resolve(), record={**RECORD, "setup_binding": dict(BINDING)}, box=SETUP_BOX
+    )
     monkeypatch.setattr(tester_hooks, "free_play_config", {"tester_id": "tester-7"})
+    monkeypatch.setattr(tester_hooks, "tester_config_hash", "c0")
     monkeypatch.setattr(
         tester_hooks.server, "get_session_logger", lambda: SimpleNamespace(log_dir=run)
     )
     monkeypatch.setattr(
-        "openflight.camera.tester_server.read_last_placement_box",
-        lambda path: {"root": Path(path)},
+        tester_hooks.server,
+        "setup_service",
+        SimpleNamespace(snapshot=lambda: {"box": state.box}),
     )
-
-    assert tester_hooks._placement_box_record() == {"root": root.resolve()}  # pylint: disable=protected-access
-
-
-def test_no_tester_root_no_record(tmp_path, monkeypatch):
-    monkeypatch.setattr(tester_hooks, "free_play_config", {"tester_id": "someone-else"})
     monkeypatch.setattr(
-        tester_hooks.server, "get_session_logger", lambda: SimpleNamespace(log_dir=tmp_path)
+        tester_hooks.server,
+        "camera_capture_runtime",
+        SimpleNamespace(settings=SimpleNamespace(width=1280, height=800)),
+    )
+    monkeypatch.setattr(
+        "openflight.camera.tester_server.read_last_placement_box",
+        lambda path: dict(state.record, root=Path(path)),
+    )
+    return state
+
+
+def _record():
+    return tester_hooks._placement_box_record()  # pylint: disable=protected-access
+
+
+def test_the_tester_root_is_found_above_the_free_play_run(tester_run):
+    assert _record()["root"] == tester_run.root
+
+
+def test_no_tester_root_no_record(tester_run, monkeypatch):
+    monkeypatch.setattr(tester_hooks, "free_play_config", {"tester_id": "someone-else"})
+
+    assert _record() is None
+
+
+def test_a_640_kiosk_matches_the_record_in_binned_pixels(tester_run, monkeypatch):
+    tester_run.box = {**SETUP_BOX, "box_px": [150, 147, 488, 338]}
+    monkeypatch.setattr(
+        tester_hooks.server,
+        "camera_capture_runtime",
+        SimpleNamespace(settings=SimpleNamespace(width=640, height=400)),
     )
 
-    assert tester_hooks._placement_box_record() is None  # pylint: disable=protected-access
+    assert _record()["root"] == tester_run.root
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"box": {**SETUP_BOX, "inputs": {"lens_id": "2.8mm"}}}, "lens"),
+        ({"box": {**SETUP_BOX, "id": "ffffffffffffffff-3dcc15da1820"}}, "box"),
+        ({"box": {**SETUP_BOX, "box_px": [301, 296, 975, 640]}}, "box"),
+        ({"box": {**SETUP_BOX, "state": "stale"}}, "confirmed"),
+        ({"binding": {**BINDING, "tester_id": "tester-8"}}, "tester"),
+        ({"binding": {**BINDING, "config_hash": "other"}}, "rig"),
+    ],
+)
+def test_a_record_for_another_setup_is_refused_with_why(tester_run, change, reason):
+    if "box" in change:
+        tester_run.box = change["box"]
+    if "binding" in change:
+        tester_run.record = {**tester_run.record, "setup_binding": change["binding"]}
+
+    with pytest.raises(ValueError, match=reason):
+        _record()
+
+
+def test_no_setup_record_no_band(tester_run, monkeypatch):
+    monkeypatch.setattr(tester_hooks.server, "setup_service", None)
+
+    with pytest.raises(ValueError, match="setup"):
+        _record()
 
 
 def test_the_tester_kiosk_offers_the_search_only_in_free_play(monkeypatch):
