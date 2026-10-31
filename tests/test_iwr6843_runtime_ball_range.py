@@ -236,3 +236,40 @@ def test_rejecting_a_prior_keeps_an_explicit_configured_range(seen):
 
     assert seen["calibration"].tee_range_m == 1.372
     assert result.ball_range.source == "configured_tee"
+
+
+FAR_LOOK = lr.LaunchRangePrior(range_m=3.40, uncertainty_m=0.68, source="camera_ball_at_address")
+
+
+def test_a_per_shot_prior_far_from_the_setup_prior_gives_way_to_it(seen):
+    # 3.40 m is 1.29 m from the setup's 2.11 +/- 0.42 m: beyond 2 x 0.42 m
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=MISSING
+    ) as estimate:
+        result = _runtime().process_shot(**SHOT, range_prior=FAR_LOOK)
+
+    assert estimate.call_args.kwargs["prior"] == PRIOR
+    assert seen["calibration"].tee_range_m == 2.11
+    assert result.ball_range.range_m == 2.11
+    assert result.ball_range.source == "camera_prior"
+    assert "3.40" in result.ball_range.reason and "2.11" in result.ball_range.reason
+
+
+def test_a_refused_per_shot_prior_never_vetoes_the_iwr_launch_point(seen):
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=_measured()
+    ) as estimate:
+        result = _runtime().process_shot(**SHOT, range_prior=FAR_LOOK)
+
+    assert estimate.call_args.kwargs["prior"] == PRIOR
+    assert result.ball_range.source == "iwr_post_impact"
+    assert result.ball_range.range_m == 2.08
+
+
+def test_the_replay_snapshot_records_the_prior_used_and_why_the_look_was_refused():
+    snapshot = _runtime().replay_config_snapshot(ball_speed_mph=100.0, range_prior=FAR_LOOK)
+
+    inputs = snapshot["per_shot_inputs"]
+    assert inputs["range_prior"] == PRIOR.to_dict()
+    assert inputs["range_prior_choice"]["rejection"] == lr.PER_SHOT_PRIOR_DISAGREES
+    assert inputs["range_prior_choice"]["per_shot"] == FAR_LOOK.to_dict()

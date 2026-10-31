@@ -558,8 +558,13 @@ def replay_iwr_shot_bytes(
     range_prior=None,
     range_prior_rejection: str | None = None,
     tee_range_m: float | None = None,
+    per_shot_range_prior=None,
 ):
-    """Replay live range resolution and estimation; transport/timing are not exercised."""
+    """Replay live range resolution and estimation; transport/timing are not exercised.
+
+    ``range_prior`` is the setup's prior, ``per_shot_range_prior`` the shot's own look's;
+    the runtime chooses between them as it does live.
+    """
     from .iwr6843.runtime import IWR6843Runtime
 
     capture = SimpleNamespace(valid=True, raw=raw)
@@ -582,5 +587,6 @@ def replay_iwr_shot_bytes(
         club=club,
         club_speed_mph=club_speed_mph,
         tee_range_m=tee_range_m,
+        range_prior=per_shot_range_prior,
         range_prior_rejection=range_prior_rejection,
     )

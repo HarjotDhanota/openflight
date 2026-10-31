@@ -586,9 +586,10 @@ def replay(args, *, frozen_session=None) -> dict:
                     "changed": changed_inputs,
                 }
             shot_inputs = per_shot_inputs if isinstance(per_shot_inputs, dict) else {}
-            prior = LaunchRangePrior.from_dict(
-                shot_inputs.get("range_prior") or runtime_config.get("range_prior")
-            )
+            # the shot's recorded prior against the setup's: the runtime chooses as live
+            # (an older log's look that disagrees with the setup prior gives way to it)
+            setup_prior = LaunchRangePrior.from_dict(runtime_config.get("range_prior"))
+            shot_prior = LaunchRangePrior.from_dict(shot_inputs.get("range_prior"))
             result = replay_iwr_shot_bytes(
                 raw,
                 calibration,
@@ -602,7 +603,8 @@ def replay(args, *, frozen_session=None) -> dict:
                 horizontal_phase_reference_rad=runtime_config.get("horizontal_phase_reference_rad"),
                 club_window_policy=ClubWindowPolicy(**runtime_config["club_window_policy"]),
                 club_impact_correction_s=float(runtime_config["club_impact_correction_s"]),
-                range_prior=prior,
+                range_prior=setup_prior,
+                per_shot_range_prior=shot_prior,
                 range_prior_rejection=shot_inputs.get("range_prior_rejection"),
                 tee_range_m=shot_inputs.get("tee_range_m")
                 if not args.iwr_calibration

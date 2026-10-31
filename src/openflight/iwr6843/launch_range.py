@@ -50,6 +50,11 @@ _TRACK_TOLERANCE_BINS = 1.2
 # labelled AMBIGUOUS_LABEL.
 COMPETING_SIGMAS = 2.0
 AMBIGUOUS_LABEL = "estimated"
+# A shot's own prior (its resting-ball look) is used only when it lies within this many of
+# the setup prior's sigma of it (``choose_range_prior``); further off, the camera has
+# latched onto something else (27 Oct shots 2-4: 13-20 px objects for a ~25 px ball).
+PER_SHOT_PRIOR_AGREEMENT_SIGMAS = 2.0
+PER_SHOT_PRIOR_DISAGREES = "per_shot_prior_disagrees_with_setup_prior"
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,80 @@ class LaunchRangePrior:
             )
         except (KeyError, TypeError, ValueError):
             return None
+
+
+@dataclass(frozen=True)
+class RangePriorChoice:
+    """The prior a shot uses: its own look's, else the setup's, and why the look was refused."""
+
+    prior: LaunchRangePrior | None
+    chosen: str | None  # per_shot | setup | None
+    per_shot: LaunchRangePrior | None = None
+    setup: LaunchRangePrior | None = None
+    difference_m: float | None = None
+    allowed_m: float | None = None
+    rejection: str | None = None  # PER_SHOT_PRIOR_DISAGREES, or None
+    reason: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "chosen": self.chosen,
+            "prior": self.prior.to_dict() if self.prior is not None else None,
+            "per_shot": self.per_shot.to_dict() if self.per_shot is not None else None,
+            "setup": self.setup.to_dict() if self.setup is not None else None,
+            "difference_m": self.difference_m,
+            "allowed_m": self.allowed_m,
+            "rejection": self.rejection,
+            "reason": self.reason,
+        }
+
+
+def choose_range_prior(
+    per_shot: LaunchRangePrior | None,
+    setup: LaunchRangePrior | None,
+    *,
+    per_shot_own_sigma_m: float | None = None,
+) -> RangePriorChoice:
+    """The prior a shot uses: its own look's when it agrees with the setup's, else the setup's.
+
+    The look's prior is used only within ``PER_SHOT_PRIOR_AGREEMENT_SIGMAS`` setup sigmas
+    of the setup prior, combined in quadrature with ``per_shot_own_sigma_m`` when the look
+    has a sigma of its own. The resting-ball look's ``uncertainty_m`` is not its own: it
+    is the setup prior's sigma scaled by the size ratio (``camera.ball_at_address``), so
+    adding it would count the setup's error twice. Without a setup prior the look stands
+    unchecked; without a look, the setup prior. Every caller (the IWR runtime, the
+    kiosk's ball-range chain, the replays) chooses here.
+    """
+    if per_shot is None or setup is None:
+        prior = per_shot if per_shot is not None else setup
+        chosen = None if prior is None else "per_shot" if per_shot is not None else "setup"
+        return RangePriorChoice(prior=prior, chosen=chosen, per_shot=per_shot, setup=setup)
+    sigma = setup.uncertainty_m
+    if per_shot_own_sigma_m is not None and math.isfinite(per_shot_own_sigma_m):
+        sigma = math.hypot(sigma, max(0.0, float(per_shot_own_sigma_m)))
+    allowed = PER_SHOT_PRIOR_AGREEMENT_SIGMAS * sigma
+    difference = abs(per_shot.range_m - setup.range_m)
+    common = {
+        "per_shot": per_shot,
+        "setup": setup,
+        "difference_m": difference,
+        "allowed_m": allowed,
+    }
+    if difference <= allowed:
+        return RangePriorChoice(prior=per_shot, chosen="per_shot", **common)
+    return RangePriorChoice(
+        prior=setup,
+        chosen="setup",
+        rejection=PER_SHOT_PRIOR_DISAGREES,
+        reason=(
+            f"the shot's own camera prior {per_shot.range_m:.2f} +/- "
+            f"{per_shot.uncertainty_m:.2f} m ({per_shot.source}) disagrees with the setup "
+            f"prior {setup.range_m:.2f} +/- {setup.uncertainty_m:.2f} m by "
+            f"{difference:.2f} m, more than {allowed:.2f} m "
+            f"({PER_SHOT_PRIOR_AGREEMENT_SIGMAS:g} sigma): the setup prior stands in"
+        ),
+        **common,
+    )
 
 
 @dataclass(frozen=True)

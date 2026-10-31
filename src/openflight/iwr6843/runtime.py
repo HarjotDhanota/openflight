@@ -13,9 +13,11 @@ from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult, ClubWindowPolicy, estimate_club_path
 from openflight.iwr6843.launch_range import (
+    CAMERA_PRIOR_SOURCE,
     LaunchRangeEstimate,
     LaunchRangePrior,
     ShotBallRange,
+    choose_range_prior,
     estimate_launch_range,
     shot_ball_range,
 )
@@ -437,6 +439,7 @@ class IWR6843Runtime:
         ball_reference: dict | None = None,
     ) -> dict:
         """Freeze every primitive needed by the hardware-free estimator."""
+        choice = choose_range_prior(range_prior, self.range_prior)
         payload = {
             "range_prior": self.range_prior.to_dict() if self.range_prior else None,
             "schema_version": 1,
@@ -463,11 +466,13 @@ class IWR6843Runtime:
                 "effective_roll_deg": effective_roll_deg,
                 "tee_range_m": tee_range_m,
                 "ball_at_address": ball_at_address,
-                "range_prior": (range_prior or self.range_prior).to_dict()
-                if (range_prior or self.range_prior) and not range_prior_rejection
+                "range_prior": choice.prior.to_dict()
+                if choice.prior is not None and not range_prior_rejection
                 else None,
             },
         }
+        if choice.rejection:
+            payload["per_shot_inputs"]["range_prior_choice"] = choice.to_dict()
         if range_prior_rejection:
             payload["per_shot_inputs"]["range_prior_rejection"] = range_prior_rejection
         if ball_reference is not None:
@@ -517,6 +522,8 @@ class IWR6843Runtime:
         """Match one OPS shot to TI data, range its launch point, and run LCMF.
 
         Range: the shot's own launch point, else the labelled camera prior, else none.
+        The prior is ``range_prior`` (the shot's own look) only when it agrees with the
+        setup's ``self.range_prior`` (``launch_range.choose_range_prior``).
         ``roll_deg`` (the unit's verified roll) turns the board about its boresight.
         """
         process_started_ns = time.monotonic_ns()
@@ -562,7 +569,9 @@ class IWR6843Runtime:
             shot_calibration = replace(shot_calibration, tee_range_m=float(tee_range_m))
         prepared = None
         if hasattr(shot_calibration, "tee_range_m"):
-            prior = None if range_prior_rejection else (range_prior or self.range_prior)
+            # the shot's own look only when it agrees with the setup prior
+            choice = choose_range_prior(range_prior, self.range_prior)
+            prior = None if range_prior_rejection else choice.prior
             try:
                 prepared = prepare_lcmf_capture(raw)
             except (ValueError, IndexError) as error:
@@ -598,6 +607,8 @@ class IWR6843Runtime:
                 )
             else:
                 ball_range = shot_ball_range(launch_range, prior)
+                if choice.rejection and ball_range.source == CAMERA_PRIOR_SOURCE:
+                    ball_range = replace(ball_range, reason=f"{ball_range.reason}; {choice.reason}")
                 if ball_range.range_m is not None:
                     shot_calibration = replace(
                         shot_calibration,

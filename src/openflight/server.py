@@ -1449,6 +1449,28 @@ def _look_range_prior(look: dict | None):
         return None
 
 
+def _shot_range_prior_choice(shot: Shot):
+    """The prior this shot uses: its own look's when it agrees with the setup's.
+
+    ``launch_range.choose_range_prior`` decides, as the IWR runtime does with the same
+    two priors; the choice (and why a look was refused) is kept on the shot.
+    """
+    from .iwr6843.launch_range import choose_range_prior  # noqa: PLC0415
+
+    choice = choose_range_prior(
+        _look_range_prior(_shot_ball_context(shot)["look"]),
+        getattr(iwr6843_runtime, "range_prior", None),
+    )
+    if choice.chosen is not None:
+        shot.input_sources = {
+            **(shot.input_sources or {}),
+            "range_prior_choice": choice.to_dict(),
+        }
+    if choice.rejection:
+        logger.info("[SERVER] Shot range prior: %s", choice.reason)
+    return choice
+
+
 @dataclass(frozen=True)
 class SceneCalibration:
     """The shot's range and the scene's heights, for a unit whose IWR gave no calibration."""
@@ -4792,6 +4814,9 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         prior_inputs = {"range_prior": own_prior} if own_prior is not None else {}
         if prior_rejection:
             prior_inputs["range_prior_rejection"] = prior_rejection
+        else:
+            # the runtime makes the same choice; the shot keeps why a look was refused
+            _shot_range_prior_choice(shot)
         snapshotter = getattr(iwr6843_runtime, "replay_config_snapshot", None)
         iwr_runtime_config_snapshot = (
             snapshotter(  # pylint: disable=not-callable
@@ -5748,7 +5773,11 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
         size_range_route = fallback_chain.size_range_route
 
         context = _shot_ball_context(shot)
-        prior = _look_range_prior(context["look"]) or getattr(iwr6843_runtime, "range_prior", None)
+        prior_rejection = ((shot.input_sources or {}).get("ball_reference") or {}).get(
+            "range_prior_rejection"
+        ) or context["range_prior_rejection"]
+        # the shot's own look only when it agrees with the setup prior
+        prior = None if prior_rejection else _shot_range_prior_choice(shot).prior
         scene = setup_handoff_config.get("scene") or {}
         calibration = getattr(iwr6843_runtime, "calibration", None)
         radar_height = getattr(calibration, "radar_height_m", None) if calibration else None
@@ -5782,10 +5811,7 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
             },
             prior=prior,
             size_route=size_route,
-            range_prior_rejection=((shot.input_sources or {}).get("ball_reference") or {}).get(
-                "range_prior_rejection"
-            )
-            or context["range_prior_rejection"],
+            range_prior_rejection=prior_rejection,
         )
         apply_ball_range(shot, resolution)
         if resolution.present and resolution.route != "iwr_post_impact":

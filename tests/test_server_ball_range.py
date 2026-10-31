@@ -213,3 +213,72 @@ def test_the_camera_and_full_speed_use_the_shot_s_own_range(monkeypatch, ranged)
     if ranged:
         assert shot_calibration.tee_range_uncertainty_m == 0.03
     assert calibration.tee_range_m is None  # the session's calibration is never changed
+
+
+SETUP_PRIOR = lr.LaunchRangePrior(range_m=1.80, uncertainty_m=0.38, source="camera_prior")
+# 27 Oct shot 2's look: a 13.5 px object taken for the ball
+FAR_LOOK = {
+    "state": "in_box",
+    "range_m": 3.217,
+    "range_uncertainty_m": 0.68,
+    "range_source": "camera_size_ratio_to_the_setup_camera_prior",
+    "center_px": [381.2, 194.9],
+    "diameter_px": 13.52,
+}
+
+
+def test_the_iwr_stage_records_why_the_shot_s_look_was_refused(monkeypatch):
+    def process_shot(**_kwargs):
+        return SimpleNamespace(capture=None, measurement=None, club_path=None, withheld_reason=None)
+
+    monkeypatch.setattr(
+        server_module,
+        "iwr6843_runtime",
+        SimpleNamespace(process_shot=process_shot, range_prior=SETUP_PRIOR),
+    )
+    monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server_module, "shot_ball_at_address", lambda _ts: FAR_LOOK)
+    shot = _shot()
+
+    server_module._process_iwr6843_angle(shot)  # pylint: disable=protected-access
+
+    choice = shot.input_sources["range_prior_choice"]
+    assert choice["chosen"] == "setup"
+    assert choice["rejection"] == lr.PER_SHOT_PRIOR_DISAGREES
+    assert "3.22" in choice["reason"] and "1.80" in choice["reason"]
+
+
+def test_without_an_iwr_range_the_chain_takes_the_setup_prior_over_a_far_look(monkeypatch):
+    monkeypatch.setattr(
+        server_module,
+        "iwr6843_runtime",
+        SimpleNamespace(range_prior=SETUP_PRIOR, calibration=None),
+    )
+    monkeypatch.setattr(server_module, "shot_ball_at_address", lambda _ts: FAR_LOOK)
+    shot = _shot()
+
+    server_module._resolve_shot_ball_range(shot, None)  # pylint: disable=protected-access
+
+    assert "ball_range_error" not in shot.input_sources
+    assert shot.ball_range_m == pytest.approx(1.80)
+    assert shot.ball_range_source == "camera_prior"
+    assert shot.input_sources["range_prior_choice"]["rejection"] == lr.PER_SHOT_PRIOR_DISAGREES
+
+
+def test_a_look_that_agrees_with_the_setup_prior_is_the_chain_s_prior(monkeypatch):
+    monkeypatch.setattr(
+        server_module,
+        "iwr6843_runtime",
+        SimpleNamespace(range_prior=SETUP_PRIOR, calibration=None),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "shot_ball_at_address",
+        lambda _ts: {**FAR_LOOK, "range_m": 1.60, "range_uncertainty_m": 0.34},
+    )
+    shot = _shot()
+
+    server_module._resolve_shot_ball_range(shot, None)  # pylint: disable=protected-access
+
+    assert shot.ball_range_m == pytest.approx(1.60)
+    assert shot.input_sources["range_prior_choice"]["chosen"] == "per_shot"

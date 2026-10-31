@@ -214,3 +214,89 @@ class TestTheShotSBallRange:
 def test_the_prior_s_uncertainty_widens_the_club_gate(uncertainty_m, gate_m, error_limit_m):
     assert club.club_gate_m(2.0, uncertainty_m) == pytest.approx(gate_m)
     assert club.impact_error_limit_m(uncertainty_m) == pytest.approx(error_limit_m)
+
+
+# ---------------------------------------------------------------- which prior a shot uses
+
+SETUP = lr.LaunchRangePrior(range_m=1.80, uncertainty_m=0.38, source="camera_prior")
+
+
+def _look(range_m: float, uncertainty_m: float) -> lr.LaunchRangePrior:
+    return lr.LaunchRangePrior(range_m, uncertainty_m, "camera_ball_at_address")
+
+
+def test_a_per_shot_prior_that_agrees_with_the_setup_prior_is_the_shot_s_prior():
+    look = _look(1.60, 0.34)
+
+    choice = lr.choose_range_prior(look, SETUP)
+
+    assert choice.prior == look
+    assert choice.chosen == "per_shot"
+    assert choice.rejection is None
+
+
+def test_a_per_shot_prior_beyond_twice_the_setup_sigma_is_refused_and_says_why():
+    # 27 Oct shot 2: the camera latched onto a 13.5 px object, 3.217 m against 1.80 m
+    look = _look(3.217, 0.68)
+
+    choice = lr.choose_range_prior(look, SETUP)
+
+    assert choice.prior == SETUP
+    assert choice.chosen == "setup"
+    assert choice.rejection == lr.PER_SHOT_PRIOR_DISAGREES
+    assert "3.22" in choice.reason and "1.80" in choice.reason
+    record = choice.to_dict()
+    assert record["per_shot"] == look.to_dict()
+    assert record["setup"] == SETUP.to_dict()
+    assert record["difference_m"] == pytest.approx(1.417)
+    assert record["allowed_m"] == pytest.approx(2 * 0.38)
+
+
+def test_the_gate_is_two_setup_sigmas_on_either_side():
+    allowed = lr.PER_SHOT_PRIOR_AGREEMENT_SIGMAS * SETUP.uncertainty_m
+    assert lr.PER_SHOT_PRIOR_AGREEMENT_SIGMAS == 2.0
+
+    assert lr.choose_range_prior(_look(1.80 + allowed - 0.01, 0.4), SETUP).chosen == "per_shot"
+    assert lr.choose_range_prior(_look(1.80 - allowed + 0.01, 0.3), SETUP).chosen == "per_shot"
+    assert lr.choose_range_prior(_look(1.80 + allowed + 0.01, 0.5), SETUP).chosen == "setup"
+    assert lr.choose_range_prior(_look(1.80 - allowed - 0.01, 0.2), SETUP).chosen == "setup"
+
+
+def test_a_per_shot_sigma_of_its_own_widens_the_gate_in_quadrature():
+    look = _look(2.70, 0.57)  # 0.90 m off: beyond 2 x 0.38, inside 2 x hypot(0.38, 0.5)
+
+    assert lr.choose_range_prior(look, SETUP).chosen == "setup"
+    choice = lr.choose_range_prior(look, SETUP, per_shot_own_sigma_m=0.5)
+    assert choice.chosen == "per_shot"
+    assert choice.to_dict()["allowed_m"] == pytest.approx(2 * math.hypot(0.38, 0.5))
+
+
+def test_without_a_setup_prior_the_per_shot_prior_stands_unchecked():
+    look = _look(3.217, 0.68)
+
+    choice = lr.choose_range_prior(look, None)
+
+    assert choice.prior == look
+    assert choice.chosen == "per_shot"
+    assert choice.rejection is None
+
+
+@pytest.mark.parametrize(
+    ("per_shot", "setup", "chosen"),
+    [(None, SETUP, "setup"), (None, None, None)],
+)
+def test_without_a_per_shot_prior_the_setup_prior_or_none(per_shot, setup, chosen):
+    choice = lr.choose_range_prior(per_shot, setup)
+
+    assert choice.prior == setup
+    assert choice.chosen == chosen
+    assert choice.rejection is None
+
+
+def test_choosing_twice_is_choosing_once():
+    # the kiosk passes the chosen prior on (replays, the runtime's own check)
+    first = lr.choose_range_prior(_look(3.217, 0.68), SETUP)
+    again = lr.choose_range_prior(first.prior, SETUP)
+
+    assert again.prior == SETUP
+    assert again.rejection is None

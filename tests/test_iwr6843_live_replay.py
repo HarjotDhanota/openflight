@@ -66,3 +66,46 @@ def test_replay_resolves_or_withholds_range_like_live(monkeypatch, measured, pri
         assert result.withheld_reason == "tee_range_unresolved"
         assert not seen
     assert cal.tee_range_m is None
+
+
+@pytest.mark.parametrize(
+    ("look_m", "expected_m"),
+    [(1.60, 1.60), (3.217, 1.80)],
+    ids=["look_agrees", "look_refused"],
+)
+def test_replay_chooses_between_the_shot_s_look_and_the_setup_prior_like_live(
+    monkeypatch, look_m, expected_m
+):
+    cal = Calibration.identity()
+    cal.meta["radar_height_m"] = 0.05
+    setup = LaunchRangePrior(1.80, 0.38, "camera_prior")
+    look = LaunchRangePrior(look_m, 0.21 * look_m, "camera_ball_at_address")
+    monkeypatch.setattr(runtime, "prepare_lcmf_capture", lambda raw: SimpleNamespace(raw=raw))
+    seen = {}
+
+    def launch(self, prepared, calibration, **kwargs):
+        seen["prior"] = kwargs["prior"]
+        return LaunchRangeEstimate(status="not_measured", reason="test range")
+
+    monkeypatch.setattr(runtime.IWR6843Runtime, "_launch_range", launch)
+    monkeypatch.setattr(
+        runtime, "process_raw_capture", lambda *_a, **_k: (SimpleNamespace(status="ok"), None)
+    )
+    result = raw_radar_replay.replay_iwr_shot_bytes(
+        b"own-shot",
+        cal,
+        ball_speed_mph=90,
+        club="7-iron",
+        club_speed_mph=None,
+        net_range_m=4.7,
+        tx_order="normal",
+        tdm_sign_policy="positive",
+        azimuth_offset_deg=0,
+        club_window_policy=ClubWindowPolicy(),
+        club_impact_correction_s=0,
+        range_prior=setup,
+        per_shot_range_prior=look,
+    )
+
+    assert seen["prior"].range_m == expected_m
+    assert result.ball_range.range_m == expected_m
