@@ -66,6 +66,8 @@ from openflight.camera import (
     tilt_calibration_admin,
     worker_scheduling,
 )
+from openflight.camera.address_preview.display import unavailable as display_unavailable
+from openflight.camera.address_preview.pipeline import AddressPreviewPipeline
 from openflight.camera.auto_exposure import hitting_zone
 from openflight.camera.club_motion import detect_reference_ball
 from openflight.camera.fusion_diagnostics import register_fusion_diagnostics
@@ -5031,6 +5033,348 @@ class BoxBallLocator:
             return self._with_freshness(dict(self._state))
 
 
+# The box step's ball locator (owner decision 30 Oct): the address preview from the
+# ball-tracker replay, or today's BoxBallLocator ("classic"), which also takes over
+# whenever the preview cannot run.
+BOX_BALL_LOCATORS = ("preview", "classic")
+ADDRESS_PREVIEW_MODEL = REPO_ROOT / "models" / "golf_ball_yolo11n_new_320.onnx"
+BOX_BALL_RECHECKING = "Checking the ball again. Keep it still in the box."
+
+
+def _preview_ball(view: Mapping) -> dict | None:
+    selected = view.get("selected")
+    if not selected:
+        return None
+    return {
+        "x_px": float(selected["x_px"]),
+        "y_px": float(selected["y_px"]),
+        "diameter_px": 2.0 * float(selected["radius_px"]),
+    }
+
+
+class AddressPreviewLocator:  # pylint: disable=too-many-instance-attributes
+    """The box step's live analyzer with the address preview finding the ball.
+
+    It keeps ``BoxBallLocator``'s contract: the same payload and ``ball()`` keys and
+    meanings, brightness as ``BoxPreviewExposure`` sets it, and nothing it finds is
+    a distance. Every live frame is offered to the preview, which analyses each new
+    five-frame window; a look reports the newest committed ball, drawn only while
+    its fit is under 2 s old and the current window still matches it (``ball()``
+    checks again on every read). A ball is ``confirmable`` once
+    ``BOX_BALL_FOUND_LOOKS`` looks in a row found the same one and its measurement
+    is at most ``BOX_BALL_LOOK_MAX_AGE_S`` old; up to ``BOX_BALL_MISS_TOLERANCE``
+    missed looks after it say "checking again", never a retained outline.
+    ``rivals_checked`` says the broad search found no rival for it.
+
+    When the preview cannot run (no compiled solver, its workers would not start or
+    failed) the classic locator from ``fallback`` takes over, said once in the log
+    and in ``locator``.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        brightness: BoxPreviewExposure,
+        camera: BallPlaneCamera,
+        box: ground_patch.PatchSearch,
+        *,
+        fallback: Callable[[], BoxBallLocator],
+        model_path: Path = ADDRESS_PREVIEW_MODEL,
+        clock: Callable[[], float] = time.monotonic,
+        on_change: Callable[[dict], None] | None = None,
+        pipeline_factory: Callable[..., object] | None = None,
+    ):
+        self.brightness = brightness
+        brightness.owner = self
+        self.camera = camera
+        self.box = box
+        self._clock = clock
+        self._on_change = on_change
+        self._fallback_factory = fallback
+        self._fallback: BoxBallLocator | None = None
+        self._fallback_reason: str | None = None
+        self._started = clock()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._preview_closed = False
+        self._found_looks = 0
+        self._misses = 0
+        self._candidate: dict | None = None
+        factory = pipeline_factory or AddressPreviewPipeline
+        self._pipeline = factory(camera, box, model_path=model_path, clock=clock)
+        self._state: dict = self._ball_payload(
+            {"state": "waiting", "selected": None}, None, display_unavailable("no look yet")
+        )
+
+    @property
+    def _object_hint_model(self) -> Path | None:
+        # the preview runs its own detector; only the classic fallback asks for hints
+        fallback = self._fallback
+        return getattr(fallback, "_object_hint_model", None) if fallback is not None else None
+
+    def _hint_payload(self, *args):
+        return self._fallback._hint_payload(*args)  # pylint: disable=protected-access
+
+    def _locator(self) -> dict:
+        return {
+            "requested": "preview",
+            "active": "classic" if self._fallback is not None else "preview",
+            "reason": self._fallback_reason,
+        }
+
+    def _check_preview(self) -> None:
+        """Hand the box to the classic locator once the preview cannot run."""
+        if self._fallback is not None or self._closed:
+            return
+        failure = self._pipeline.status()["failure"]
+        if failure is None:
+            return
+        with self._lock:
+            if self._fallback is not None or self._closed:
+                return
+            fallback = self._fallback_factory()
+            self.brightness.owner = self
+            self._fallback_reason = failure
+            self._fallback = fallback
+            self._preview_closed = True
+        logger.warning(
+            "[BOX_BALL] the address preview cannot run (%s): the classic locator finds the ball",
+            failure,
+        )
+        self._pipeline.close()
+
+    def offer(self, pixels: np.ndarray, metadata: Mapping, sequence: int, observed_at: float):
+        """A new live frame for the preview (constant work; never waits for a fit)."""
+        if self._fallback is None and not self._closed:
+            self._pipeline.offer(pixels, metadata, sequence, observed_at)
+
+    def _classify(self, view: Mapping, search: Mapping | None, settled: bool) -> dict:
+        selected = _preview_ball(view)
+        if selected is not None:
+            return {"state": "found", "observation_state": "observed", "selected": selected}
+        if search and search.get("current_controls"):
+            if search.get("status") == "ambiguous":
+                return {"state": "ambiguous", "selected": None}
+            if search.get("status") == "unavailable" and settled:
+                return {"state": "no_ball", "selected": None}
+        return {"state": "waiting", "selected": None}
+
+    def _hold(self, previous: Mapping, classified: dict) -> dict:
+        """The found streak and missed looks; a miss after a ball says it is checking."""
+        if classified["state"] == "found":
+            selected = classified["selected"]
+            same = self._candidate is not None and _same_box_ball(self._candidate, selected)
+            self._found_looks = self._found_looks + 1 if same else 1
+            self._candidate = {
+                "state": "found",
+                "center_px": [selected["x_px"], selected["y_px"]],
+                "diameter_px": selected["diameter_px"],
+            }
+            self._misses = 0
+            return classified
+        self._found_looks = 0
+        recent = (
+            previous.get("state") == "found" or previous.get("observation_state") == "acquiring"
+        )
+        if (
+            classified["state"] != "ambiguous"
+            and self._candidate is not None
+            and recent
+            and self._misses < BOX_BALL_MISS_TOLERANCE
+        ):
+            self._misses += 1
+            return {
+                "state": "waiting",
+                "observation_state": "acquiring",
+                "selected": None,
+                "message": BOX_BALL_RECHECKING,
+            }
+        self._misses = 0
+        self._candidate = None
+        return classified
+
+    def _ball_payload(self, classified: Mapping, stable_since: float | None, view: Mapping) -> dict:
+        selected = classified.get("selected") or {}
+        state = classified["state"]
+        now = self._clock()
+        return {
+            "state": state,
+            "observation_state": classified.get("observation_state", state),
+            "looked_at": now,
+            "measured_at": view.get("source_observed_at_monotonic") if selected else None,
+            "center_px": (
+                [round(float(selected["x_px"]), 1), round(float(selected["y_px"]), 1)]
+                if selected
+                else None
+            ),
+            "diameter_px": round(float(selected["diameter_px"]), 2) if selected else None,
+            # an image-box outline only: the IWR gives the distance
+            "position_estimate": None,
+            "stable_s": round(now - stable_since, 2) if stable_since is not None else None,
+            "stable_since": stable_since,
+            "message": classified.get("message") or placement_box.BALL_MESSAGES[state],
+            "frame_size_px": [int(self.camera.image_width_px), int(self.camera.image_height_px)],
+            "rivals_checked": bool(selected) and view.get("status") == "proposal",
+            "display_check": view.get("display_check"),
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _with_freshness(self, state: dict) -> dict:
+        """Add how old the measurement is and whether a confirm may take it (under the lock)."""
+        now = self._clock()
+        if state.get("stable_since") is not None:
+            state["stable_s"] = round(now - float(state["stable_since"]), 2)
+        found = state.get("state") == "found"
+        looked = state.get("measured_at") if found else state.get("looked_at")
+        age = max(0.0, now - float(looked)) if looked is not None else None
+        state["look_age_s"] = round(age, 2) if age is not None else None
+        state["missed_looks"] = self._misses
+        state["confirmable"] = bool(
+            found
+            and state.get("observation_state") == "observed"
+            and self._found_looks >= BOX_BALL_FOUND_LOOKS
+            and age is not None
+            and age <= BOX_BALL_LOOK_MAX_AGE_S
+        )
+        return state
+
+    def __call__(  # pylint: disable=too-many-locals
+        self,
+        frames: np.ndarray,
+        frame_sequence: int,
+        applied=None,
+        *,
+        observed_at: float | None = None,
+        on_object_hint: Callable[[dict], None] | None = None,
+        separate_hint: bool = False,
+    ) -> dict:
+        self._check_preview()
+        if self._fallback is not None:
+            payload = self._fallback(
+                frames,
+                frame_sequence,
+                applied,
+                observed_at=observed_at,
+                on_object_hint=on_object_hint,
+                separate_hint=separate_hint,
+            )
+            return {**payload, "ball_locator": self._locator()}
+        started_at = self._clock()
+        look_at = started_at if observed_at is None else float(observed_at)
+        if not math.isfinite(look_at) or look_at > started_at:
+            raise ValueError("ball observation time must be finite and not in the future")
+        result = dict(self.brightness(frames, frame_sequence, applied))
+        settled = (
+            self.brightness.status()["state"] in {"settled", "limit"}
+            or self._clock() - self._started >= BOX_BALL_SETTLE_S
+        )
+        began = time.monotonic()
+        view = self._pipeline.read()
+        search = self._pipeline.status()["last_search"]
+        took = time.monotonic() - began
+        classified = self._classify(view, search, settled)
+        with self._lock:
+            previous = self._state
+            classified = self._hold(previous, classified)
+            stable_since = None
+            if classified["state"] == "found":
+                same = _same_box_ball(previous, classified["selected"])
+                stable_since = previous.get("stable_since") if same else self._clock()
+            self._state = self._ball_payload(classified, stable_since, view)
+            self._state["looked_at"] = look_at
+            self._state["observation_time_basis"] = (
+                "preview_delivery_monotonic"
+                if observed_at is not None
+                else "analysis_start_monotonic"
+            )
+            current = self._with_freshness(dict(self._state))
+        if (previous.get("state"), previous.get("observation_state")) != (
+            current["state"],
+            current["observation_state"],
+        ):
+            logger.info(
+                "[BOX_BALL] ball %s -> %s (%s, frame %d, address preview, found looks %d)",
+                previous.get("state"),
+                current["state"],
+                current["observation_state"],
+                frame_sequence,
+                self._found_looks,
+            )
+        if self._on_change is not None:
+            self._on_change(current)
+        return {
+            **result,
+            "ball_state": classified["state"],
+            "ball_search_ms": round(took * 1000, 1),
+            "ball_search_mode": "address_preview",
+            "ball_search_calls": 0,
+            "ball_observation": {
+                "frame_sequence": frame_sequence,
+                "status": view.get("status"),
+                "selected": _preview_ball(view),
+                "candidates": [],
+                "observation_state": current["observation_state"],
+                "watch": {
+                    "matched": view.get("selected") is not None,
+                    "reason": view.get("display_check"),
+                },
+                "source_sequence": view.get("source_sequence"),
+                "measurement_method": view.get("measurement_method"),
+                "rivals_checked": current["rivals_checked"],
+                "metric_eligible": False,
+                "confirmable": False,
+            },
+            "ball_locator": self._locator(),
+        }
+
+    def status(self) -> dict:
+        return self.brightness.status()
+
+    def ball(self) -> dict:
+        """The ball now: the last look, its outline withdrawn once the current read drops it."""
+        self._check_preview()
+        fallback = self._fallback
+        if fallback is not None:
+            return {**fallback.ball(), "locator": self._locator()}
+        view = self._pipeline.read()
+        current = _preview_ball(view)
+        with self._lock:
+            state = dict(self._state)
+            if state["state"] == "found" and current is not None:
+                # a refresh since the look renews the measurement it is drawn from
+                state["measured_at"] = view.get("source_observed_at_monotonic")
+            state = self._with_freshness(state)
+        if state["state"] == "found" and (current is None or not _same_box_ball(state, current)):
+            state.update(
+                state="waiting",
+                observation_state="acquiring",
+                center_px=None,
+                diameter_px=None,
+                stable_s=None,
+                stable_since=None,
+                rivals_checked=False,
+                confirmable=False,
+                message=BOX_BALL_RECHECKING,
+            )
+        state["display_check"] = view.get("display_check")
+        state["locator"] = self._locator()
+        return state
+
+    def close(self) -> None:
+        """End the preview's thread and worker processes (and any fallback); waits for them."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            close_preview = not self._preview_closed
+            self._preview_closed = True
+            fallback = self._fallback
+        if close_preview:
+            self._pipeline.close()
+        close = getattr(fallback, "close", None)
+        if callable(close):
+            close()
+
+
 # The ladder's blur ceiling for a mode and lens: the exposure at which the 7-iron
 # toe's measured image speed (13.6 m/s across the picture, the smear budget's own
 # figure) smears 1.5 px at the ball's range (arm 3's figure), never past the 4 mm
@@ -7552,6 +7896,13 @@ def live_controls(arm: Arm, exposure_us: int, gain: float) -> dict:
     }
 
 
+def _retire_analyzer(analyzer) -> None:
+    """End a replaced live analyzer's own workers, off the caller's thread."""
+    close = getattr(analyzer, "close", None)
+    if callable(close):
+        threading.Thread(target=close, name="tester-live-analyzer-close").start()
+
+
 class LiveView:
     """One arm's readout mode streamed to the page; exposure and gain change live."""
 
@@ -7636,6 +7987,7 @@ class LiveView:
                 or independent_hints != self._independent_hints
             )
             if reuse:
+                previous = self._analyzer
                 self._independent_hints = independent_hints
                 self._pending = controls
                 self._black_floor = black_floor
@@ -7655,8 +8007,13 @@ class LiveView:
                     self._analysis_frame_sequence = None
                     self._latest_frame_at = None
                 self._start_hint_looker_locked()
-                return
-        self.stop()
+        if reuse:
+            if previous is not analyzer:
+                _retire_analyzer(previous)
+            return
+        previous = self._halt()
+        if previous is not analyzer:
+            _retire_analyzer(previous)
         with self._lock:
             self._prune_retired_locked()
             if any(role == "capture" for role, _thread in self._retired_threads):
@@ -7743,7 +8100,7 @@ class LiveView:
                 sequence = self._frame_sequence
                 context_generation = self._context_generation
                 if (
-                    not isinstance(analyzer, BoxBallLocator)
+                    not isinstance(analyzer, (BoxBallLocator, AddressPreviewLocator))
                     or not self._independent_hints
                     or model is None
                     or len(self._recent) < 3
@@ -7790,7 +8147,13 @@ class LiveView:
             return list(self._recent_applied)
 
     def stop(self) -> None:
+        """Stop the camera and its threads, and end an analyzer that has worker processes."""
+        _retire_analyzer(self._halt())
+
+    def _halt(self):
+        """Stop the camera and its threads; the analyzer they ran."""
         with self._lock:
+            analyzer = self._analyzer
             stop_event = self._active_stop
             threads = (
                 ("capture", self._thread),
@@ -7819,6 +8182,7 @@ class LiveView:
             if self._active_stop is stop_event:
                 self._active_stop = None
             self._prune_retired_locked()
+        return analyzer
 
     def _look(self, arm: Arm, stop_event: threading.Event, generation: int) -> None:
         try:
@@ -7880,7 +8244,7 @@ class LiveView:
                                 else {}
                             ),
                         )
-                        if isinstance(analyzer, BoxBallLocator)
+                        if isinstance(analyzer, (BoxBallLocator, AddressPreviewLocator))
                         else analyzer(frames, frame_sequence, applied)
                     )
                     last_failure = None
@@ -8103,6 +8467,19 @@ class LiveView:
                     )
                     self._frame_sequence += 1
                     self._latest_frame_at = time.monotonic()
+                    offer = getattr(self._analyzer, "offer", None)
+                    frame = (
+                        image,
+                        {
+                            "ExposureTime": metadata.get("ExposureTime"),
+                            "AnalogueGain": metadata.get("AnalogueGain"),
+                        },
+                        self._frame_sequence,
+                        self._latest_frame_at,
+                    )
+                if offer is not None:
+                    # outside the lock: the analyzer queues the frame, it never waits
+                    offer(*frame)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             with self._lock:
                 if generation == self._run_generation and self._arm == arm:
@@ -8379,6 +8756,7 @@ def create_app(
     send_dir: Path | None = None,
     ball_hint_model: Path | None = None,
     ball_hint_independent: bool = False,
+    box_ball_locator: str = "classic",
 ) -> Flask:
     """Build the standalone tester service.
 
@@ -8402,7 +8780,13 @@ def create_app(
 
     ``bind_host`` is the address the server listens on; ``/api/tester/ping`` says
     from it whether a phone could open the page (the kiosk's Tester button).
+
+    ``box_ball_locator`` is what finds the ball in the box step: ``preview`` (the
+    address preview, falling back to classic when it cannot run; the command
+    line's default) or ``classic`` (``BoxBallLocator``).
     """
+    if box_ball_locator not in BOX_BALL_LOCATORS:
+        raise ValueError(f"box_ball_locator must be one of {BOX_BALL_LOCATORS}")
     if (optical_calibration is None) != (camera_placement is None):
         raise ValueError("calibrated camera fusion requires both calibration and placement")
     app = Flask(__name__)
@@ -9204,7 +9588,7 @@ def create_app(
     )
     # the box step's ball, per tester: the live locator's latest look, kept after it stops
     box_ball_last: dict[str, dict] = {}
-    box_locator: dict[str, BoxBallLocator | None] = {"value": None}
+    box_locator: dict[str, BoxBallLocator | AddressPreviewLocator | None] = {"value": None}
     # what a setup's pairing decided, as the contract's range_status
     RANGE_STATUS = {
         "validated": "validated",
@@ -9325,6 +9709,9 @@ def create_app(
             "confirmable": bool(ball.get("confirmable", state == "found")),
             "look_age_s": ball.get("look_age_s"),
             "missed_looks": ball.get("missed_looks", 0),
+            # the address preview's: its broad search found no rival, and what is looking
+            "rivals_checked": ball.get("rivals_checked"),
+            "locator": ball.get("locator"),
         }
 
     def placement_box_status(
@@ -9450,13 +9837,31 @@ def create_app(
             # the picture's brightness is set for viewing only, never recorded (P7-15b)
             brightness = BoxPreviewExposure(live, arm, (exposure_us, gain), box_px=record["box_px"])
             box_ball_last.pop(tester_id, None)
-            locator = BoxBallLocator(
-                brightness,
-                camera,
-                ground_patch.PatchSearch.from_record(record),
-                ground_patch.PatchSearch.from_record(wide),
-                on_change=lambda ball: box_ball_last.__setitem__(tester_id, ball),
-                object_hint_model=ball_hint_model,
+            box = ground_patch.PatchSearch.from_record(record)
+
+            def remember_ball(ball):
+                box_ball_last[tester_id] = ball
+
+            def classic_locator() -> BoxBallLocator:
+                return BoxBallLocator(
+                    brightness,
+                    camera,
+                    box,
+                    ground_patch.PatchSearch.from_record(wide),
+                    on_change=remember_ball,
+                    object_hint_model=ball_hint_model,
+                )
+
+            locator = (
+                AddressPreviewLocator(
+                    brightness,
+                    camera,
+                    box,
+                    fallback=classic_locator,
+                    on_change=remember_ball,
+                )
+                if box_ball_locator == "preview"
+                else classic_locator()
             )
             analyzer = locator
         else:
@@ -9543,7 +9948,7 @@ def create_app(
                 if isinstance(age, (int, float)) and age > BOX_BALL_LOOK_MAX_AGE_S
                 else "the camera is still checking the ball: confirm once the check is green"
             )
-        for key in ("stable_since", "looked_at", "confirmable", "missed_looks"):
+        for key in ("stable_since", "looked_at", "measured_at", "confirmable", "missed_looks"):
             ball.pop(key, None)
         record = {
             **fixed_box_record(camera, reading, roll, lens=current_lens(), config=box_config),
@@ -12804,6 +13209,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Worker processes for the resting-ball search (0 runs it in the tester process)",
     )
     parser.add_argument(
+        "--box-ball-locator",
+        choices=BOX_BALL_LOCATORS,
+        default="preview",
+        help=(
+            "What finds the ball in the box step: the address preview (it falls back to "
+            "classic by itself when it cannot run), or the classic box locator"
+        ),
+    )
+    parser.add_argument(
         "--use-unqualified-tee-range",
         action="store_true",
         help=(
@@ -12909,6 +13323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             internal_sync_clock_package=clock_package,
             ball_hint_model=args.ball_hint_model,
             ball_hint_independent=args.ball_hint_independent,
+            box_ball_locator=args.box_ball_locator,
         )
         # the kiosk's screen follows the ladder even with no page polling (P7-14)
         app.extensions["openflight_ready_light"].start()
