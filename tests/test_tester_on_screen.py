@@ -16,10 +16,12 @@ from openflight.camera import tester_server as ts
 from tests import test_tester_server as tester_server_tests
 from tests.test_free_play import Jobs
 from tests.test_tester_server import (
+    FREE_PLAY_ROUTE,
     RIG,
     TESTER_SETUP,
     eligible_app,
     params,
+    reviewed_package,
     setup_saw_ball,
 )
 
@@ -66,7 +68,12 @@ def _start_free_play(tmp_path, monkeypatch, **extra):
     setup_saw_ball(tmp_path)
     monkeypatch.setattr(ts, "setup_light_warning", lambda _: {"light_index_dn_per_us_gain": 0.25})
     manager = Jobs()
-    app = eligible_app(sessions_root=tmp_path, manager=manager, tester_control_port=9000)
+    app = eligible_app(
+        sessions_root=tmp_path,
+        manager=manager,
+        tester_control_port=9000,
+        internal_sync_clock_package=reviewed_package(tmp_path),
+    )
     response = app.test_client().post(
         "/api/tester/run",
         json={
@@ -75,6 +82,7 @@ def _start_free_play(tmp_path, monkeypatch, **extra):
             "arm_id": "arm1",
             "environment": "indoors",
             "resolution": "arm5",
+            **FREE_PLAY_ROUTE,
             **extra,
         },
     )

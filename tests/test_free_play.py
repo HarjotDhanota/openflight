@@ -13,10 +13,12 @@ from flask import Flask
 from openflight import free_play, server, tester_hooks
 from openflight.camera import free_play_ladder as fpl, tester_server as ts
 from tests.test_tester_server import (
+    FREE_PLAY_ROUTE,
     SETUP_BALL_PX,
     TESTER_SETUP,
     eligible_app,
     params,
+    reviewed_package,
     setup_saw_ball,
 )
 
@@ -75,7 +77,12 @@ def test_free_play_starts_without_a_gain_screen_or_ladder(
     )
     monkeypatch.setattr(ts, "setup_light_warning", lambda _: {"light_index_dn_per_us_gain": 0.25})
     manager = Jobs()
-    app = eligible_app(sessions_root=tmp_path, manager=manager, lens_settings_path=settings_path)
+    app = eligible_app(
+        sessions_root=tmp_path,
+        manager=manager,
+        lens_settings_path=settings_path,
+        internal_sync_clock_package=reviewed_package(tmp_path),
+    )
     response = app.test_client().post(
         "/api/tester/run",
         json={
@@ -84,6 +91,7 @@ def test_free_play_starts_without_a_gain_screen_or_ladder(
             "arm_id": "arm1",
             "environment": "indoors",
             "resolution": default_arm,
+            **FREE_PLAY_ROUTE,
         },
     )
     assert response.status_code == 202, response.get_json()
@@ -569,7 +577,12 @@ def free_play_app(tmp_path, modes=("arm5", "arm6"), default_arm="arm5", ladder=N
         settings["ladder"] = ladder
     store.save_settings(catalogue.reference_lens_id, settings)
     manager = Jobs()
-    app = eligible_app(sessions_root=tmp_path, manager=manager, lens_settings_path=settings_path)
+    app = eligible_app(
+        sessions_root=tmp_path,
+        manager=manager,
+        lens_settings_path=settings_path,
+        internal_sync_clock_package=reviewed_package(tmp_path),
+    )
     return app, manager
 
 
@@ -581,6 +594,7 @@ def start_free_play(app, **extra):
             "tester_id": "20260922-name",
             "arm_id": "arm1",
             "environment": "indoors",
+            **FREE_PLAY_ROUTE,
             **extra,
         },
     )

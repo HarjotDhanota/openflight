@@ -89,7 +89,9 @@ def test_real_command_remains_normal_free_play_with_native_capture_flags(tmp_pat
 
 
 def test_default_and_invalid_mode_do_not_silently_change_capture():
-    assert capture_mode({}, "free_play", None) == "sound"
+    with pytest.raises(ValueError, match="Choose a trigger architecture"):
+        capture_mode({}, "free_play", Path("sealed"))
+    assert capture_mode({}, "swings", None) == "sound"
     assert (
         capture_mode({"capture_mode": "native_internal"}, "free_play", Path("sealed"))
         == "native_internal"

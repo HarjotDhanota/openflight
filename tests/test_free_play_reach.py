@@ -12,7 +12,12 @@ from flask import Flask
 from openflight import free_play, server, tester_hooks
 from openflight.camera import tester_server as ts
 from tests.test_free_play import Jobs
-from tests.test_tester_server import eligible_app, setup_saw_ball
+from tests.test_tester_server import (
+    FREE_PLAY_ROUTE,
+    eligible_app,
+    reviewed_package,
+    setup_saw_ball,
+)
 from tests.test_tester_target_line_flow import confirm_aim, inputs as _inputs_fixture
 from tests.test_tester_tee_range_flow import app_for, confirm_box
 
@@ -23,7 +28,12 @@ def _free_play_app(tmp_path, monkeypatch, manager=None):
     setup_saw_ball(tmp_path)
     monkeypatch.setattr(ts, "setup_light_warning", lambda _: {"light_index_dn_per_us_gain": 0.25})
     manager = manager or Jobs()
-    return eligible_app(sessions_root=tmp_path, manager=manager), manager
+    app = eligible_app(
+        sessions_root=tmp_path,
+        manager=manager,
+        internal_sync_clock_package=reviewed_package(tmp_path),
+    )
+    return app, manager
 
 
 def _start(app, **extra):
@@ -35,6 +45,7 @@ def _start(app, **extra):
             "arm_id": "arm1",
             "environment": "indoors",
             "resolution": "arm5",
+            **FREE_PLAY_ROUTE,
             **extra,
         },
     )

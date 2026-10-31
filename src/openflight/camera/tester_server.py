@@ -126,6 +126,7 @@ from openflight.iwr6843.tracking import RANGE_SPAN_M
 from openflight.shot_updates import apply_shot_updates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
 TESTER_PAGE = REPO_ROOT / "ui" / "public" / "tester.html"
 TRACK_REVIEW_PAGE = REPO_ROOT / "ui" / "public" / "track-review.html"
 FUSION_DIAGNOSTICS_PAGE = REPO_ROOT / "ui" / "public" / "fusion-diagnostics.html"
@@ -147,6 +148,13 @@ DEFAULT_RADAR_PORT = "/dev/ttyAMA0"
 TEE_RANGE_MM = (500.0, 4000.0)
 MAX_LOG_LINES = 400
 SERVER_LOG_NAME = "tester-server.log"
+
+
+def staged_clock_package(source_root: Path) -> Path | None:
+    """The reviewed RAM clock package a staged packet unpacks beside its checkout."""
+    candidate = source_root.parent / "clock-package"
+    return candidate if (candidate / "MANIFEST.json").is_file() else None
+
 
 logger = logging.getLogger(__name__)
 
@@ -12862,6 +12870,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if not args.no_inclinometer:
         enclosure.start()
+    clock_package = args.internal_sync_clock_package or staged_clock_package(REPO_ROOT)
+    if clock_package is None:
+        logger.warning("No reviewed IWR clock package: free-play trigger routes are unavailable")
+    else:
+        logger.info("Free-play trigger routes use the IWR clock package %s", clock_package)
     try:
         app = create_app(
             sessions_root=sessions_root,
@@ -12888,7 +12901,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_unverified_geometry=True,
             tester_control_port=args.port,
             bind_host=args.host,
-            internal_sync_clock_package=args.internal_sync_clock_package,
+            internal_sync_clock_package=clock_package,
             ball_hint_model=args.ball_hint_model,
             ball_hint_independent=args.ball_hint_independent,
         )

@@ -63,6 +63,17 @@ def eligible_app(**kwargs):
     return ts.create_app(setup_policy=_EligibleSetup(), **kwargs)
 
 
+# Free play runs only a chosen trigger architecture, which needs the reviewed IWR package.
+FREE_PLAY_ROUTE = {"trigger_policy": "ops_led"}
+
+
+def reviewed_package(root):
+    package = root / "sealed-clock-package"
+    package.mkdir(exist_ok=True)
+    (package / "MANIFEST.json").write_text("{}")
+    return package
+
+
 SETUP_BALL_PX = {"x_px": 612.0, "y_px": 505.0, "diameter_px": 34.0}
 
 

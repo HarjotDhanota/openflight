@@ -3,25 +3,28 @@
 from copy import deepcopy
 
 POLICIES = {
-    "sound": ("Sound baseline", "Existing sound capture route.", True),
-    "iwr_led": (
-        "IWR-led (recommended experiment)",
-        "Unavailable: completed IWR notification follows about 1.15 s of post capture; "
-        "OPS retains only 136.5 ms. No verified early IWR trigger line.",
-        False,
-    ),
+    "sound": ("Sound baseline", "Existing sound capture route; not a free-play route.", True),
     "ops_led": (
-        "OPS-led (IWR association only)",
-        "OPS retains OPS/camera; IWR must self-detect. OPS cannot initiate IWR capture.",
+        "OPS master (IWR self-detects)",
+        "OPS detects the shot and retains OPS/camera; the IWR self-triggers and the host "
+        "associates it. OPS cannot start an IWR capture on this rig.",
         True,
     ),
+    "iwr_led": (
+        "IWR master",
+        "Unavailable: not built yet. The IWR's immediate Triggered notice must request the "
+        "OPS capture and camera clip (checklist C1-C3); OPS keeps only 25.6 ms before a "
+        "request, so the notice delay must be measured on the rig (C4).",
+        False,
+    ),
     "independent": (
-        "Independent native detectors",
-        "Each radar retains independently; OPS retains camera. IWR-only evidence is partial.",
+        "Independent triggers",
+        "Each radar self-triggers and retains independently; OPS retains camera; the host "
+        "correlates captures. IWR-only evidence is partial.",
         True,
     ),
     "hybrid": (
-        "Hybrid confirmation (OPS retention)",
+        "Hybrid (OPS retention, IWR confirmation)",
         "Retain OPS/camera promptly; publish only with owned IWR frame-clock/clip overlap. "
         "IWR notification cannot initiate prompt OPS retention on this rig.",
         True,
@@ -33,27 +36,36 @@ POLICIES = {
         False,
     ),
 }
+FREE_PLAY_POLICIES = ("ops_led", "iwr_led", "independent", "hybrid", "common_hardware")
 CONFIRMATION_RULE = "owned_event_valid_gpio_and_iwr_frame_interval_overlaps_actual_camera_coverage"
+NO_PACKAGE = (
+    "Unavailable: the reviewed IWR clock package was not found. Start the tester from the "
+    "staged packet or pass --internal-sync-clock-package."
+)
 
 
 def capabilities(package):
-    """Expose unavailable routes with reasons; configuration is not physical qualification."""
-    return [
-        {
-            "id": key,
-            "label": value[0],
-            "reason": value[1]
-            if key == "sound" or package is not None or not value[2]
-            else "Unavailable: start tester with the reviewed IWR clock package.",
-            "available": value[2] and (key == "sound" or package is not None),
-            "recommended_experiment": key == "iwr_led",
-        }
-        for key, value in POLICIES.items()
-    ]
+    """Free play's trigger architectures, each unavailable one with its reason."""
+    rows = []
+    for key in FREE_PLAY_POLICIES:
+        label, reason, built = POLICIES[key]
+        available = built and package is not None
+        rows.append(
+            {
+                "id": key,
+                "label": label,
+                "reason": reason if available or not built else NO_PACKAGE,
+                "available": available,
+                "recommended_experiment": key == "iwr_led",
+            }
+        )
+    return rows
 
 
 def validate(policy, *, package=True):
     """Fail before arming; never substitute another detector."""
+    if policy == "sound":
+        return policy
     routes = {row["id"]: row for row in capabilities(package)}
     if not isinstance(policy, str) or policy not in routes:
         raise ValueError("Unknown trigger_policy")
@@ -63,18 +75,21 @@ def validate(policy, *, package=True):
 
 
 def selection(payload, action, package):
-    """Map legacy native_internal explicitly and reject conflicting saved selections."""
+    """Free play runs only an explicitly chosen architecture; other actions use sound."""
     mode = payload.get("capture_mode")
     if mode is not None and (not isinstance(mode, str) or mode not in {"sound", "native_internal"}):
         raise ValueError("capture_mode must be sound or native_internal")
-    policy = payload.get("trigger_policy", "independent" if mode == "native_internal" else "sound")
-    validate(policy, package=package)
-    actual_mode = "sound" if policy == "sound" else "native_internal"
-    if mode is not None and mode != actual_mode:
-        raise ValueError("capture_mode conflicts with trigger_policy")
-    if actual_mode != "sound" and action != "free_play":
-        raise ValueError("native trigger policies require tester free play")
-    return policy
+    if action != "free_play":
+        policy = payload.get("trigger_policy", "sound")
+        if policy != "sound" or mode == "native_internal":
+            raise ValueError("native trigger policies require tester free play")
+        return policy
+    if mode == "sound" or payload.get("trigger_policy") == "sound":
+        raise ValueError("Free play does not use the sound trigger; choose an architecture")
+    policy = payload.get("trigger_policy", "independent" if mode == "native_internal" else None)
+    if policy is None:
+        raise ValueError("Choose a trigger architecture for free play")
+    return validate(policy, package=package)
 
 
 def snapshot(policy):

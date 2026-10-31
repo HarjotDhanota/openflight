@@ -89,7 +89,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
           json: {
             configured: true,
             trigger_policies: [
-              { id: 'sound', label: 'Sound baseline', available: true, reason: 'Existing sound capture route.' },
               {
                 id: 'independent',
                 label: 'Independent native detectors',
@@ -139,7 +138,8 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect(page.locator('#native-free-play-choice')).toBeVisible();
       await expect(page.locator('#native-free-play-message')).toContainText('Press RESET once');
       await expect(page.locator('#native-free-play-restored')).toBeHidden();
-      await expect(page.locator('#native-free-play')).toHaveValue('sound');
+      await expect(page.locator('#native-free-play')).toHaveValue('');
+      await expect(page.locator('#native-free-play option[value="sound"]')).toHaveCount(0);
       await expect(page.locator('#native-free-play option[value="iwr_led"]')).toBeDisabled();
       await expect(page.locator('#native-free-play option[value="common_hardware"]')).toBeDisabled();
       await page.locator('#native-free-play').selectOption('ops_led');
@@ -164,7 +164,6 @@ for (const viewport of KIOSK_VIEWPORTS) {
           configured: true,
           enabled: false,
           trigger_policies: [
-            { id: 'sound', label: 'Sound baseline', available: true, reason: 'Sound comparison.' },
             {
               id: 'hybrid',
               label: 'Hybrid confirmation (OPS retention)',
@@ -188,6 +187,33 @@ for (const viewport of KIOSK_VIEWPORTS) {
       await expect.poll(() => starts.length).toBe(1);
       expect(starts[0]).toMatchObject({ action: 'free_play', trigger_policy: 'hybrid' });
       await expect(page.locator('#native-free-play')).toBeDisabled();
+    });
+
+    test('Start without a chosen trigger architecture sends nothing', async ({ page }) => {
+      await useTester(page);
+      const world: { freePlay: object } = { freePlay: { enabled: false } };
+      await mockSetupDone(page, world);
+      await page.route('**/api/tester/free-play/native-sync', (route) =>
+        fulfillJson(route, {
+          configured: true,
+          enabled: false,
+          trigger_policies: [
+            { id: 'ops_led', label: 'OPS master (IWR self-detects)', available: true, reason: 'OPS first.' },
+          ],
+        })
+      );
+      const starts: unknown[] = [];
+      await page.route('**/api/tester/run', async (route) => {
+        starts.push(route.request().postDataJSON());
+        await fulfillJson(route, { free_play: RECORDING, job: { state: 'running', action: 'free_play' } }, 202);
+      });
+      await page.goto('/tester.html');
+      await page.locator('#free-play-resolution button[data-resolution="arm5"]').tap();
+      await page.locator('#first-club button[data-club="7-iron"]').tap();
+      await expect(page.locator('#native-free-play')).toHaveValue('');
+      await page.locator('#step-free-play').tap();
+      await expect(page.locator('#free-play-status')).toContainText('Choose a trigger architecture');
+      expect(starts).toEqual([]);
     });
   });
 }

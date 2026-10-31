@@ -1994,11 +1994,11 @@
           <p id="free-play-range-text"></p>
           <button type="button" id="free-play-range-retry">Try the ball range again</button>
         </div>
-        <label id="native-free-play-choice" for="native-free-play">Capture policy (between stopped runs)</label>
+        <label id="native-free-play-choice" for="native-free-play">Trigger architecture (between stopped runs)</label>
         <select id="native-free-play" aria-describedby="trigger-policy-reason">
-          <option value="sound">Sound baseline</option>
+          <option value="" disabled selected>Choose a trigger architecture</option>
         </select>
-        <p id="trigger-policy-reason" class="note" role="status">Existing sound capture route.</p>
+        <p id="trigger-policy-reason" class="note" role="status">Choose how the radars and camera trigger for this run.</p>
         <details><summary>Unavailable trigger routes</summary><div id="trigger-policy-unavailable"></div></details>
         <div id="native-free-play-controls" class="setup-warning" hidden aria-live="polite">
           <strong id="native-free-play-phase"></strong>
@@ -6711,7 +6711,9 @@
           nativeFreePlay = await response.json();
           if (nativeFreePlay.trigger_policies) {
             const select = el('native-free-play'), selected = select.value;
-            select.replaceChildren(...nativeFreePlay.trigger_policies.map((policy) => {
+            const prompt = document.createElement('option');
+            prompt.value = ''; prompt.textContent = 'Choose a trigger architecture'; prompt.disabled = true;
+            select.replaceChildren(prompt, ...nativeFreePlay.trigger_policies.map((policy) => {
               const option = document.createElement('option');
               option.value = policy.id; option.textContent = policy.label + (policy.available ? '' : ' — unavailable');
               option.disabled = !policy.available;
@@ -6763,6 +6765,7 @@
           liveShown(false);
           if (!freePlayResolution) throw new Error('Tap a resolution for this session first.');
           if (!firstClub) throw new Error('Tap the club you will hit first.');
+          if (!el('native-free-play').value) throw new Error('Choose a trigger architecture first.');
           const result = await post('/api/tester/run', {
             ...payload(),
             action: 'free_play',
