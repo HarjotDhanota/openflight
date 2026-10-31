@@ -138,12 +138,10 @@ def test_unstable_shaft_motion_is_refused():
     assert result["reason"] == "shaft angle changes too much near impact"
 
 
-@pytest.mark.parametrize("hand", ["right", "left"])
-def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, hand):
+def _shaft_job(tmp_path, hand):
+    """A live job whose clip is the shaft render, with its own bound range."""
     from pathlib import Path
 
-    from openflight.camera.impact_live import LiveAnalyser
-    from tests.every_metric import fusion_shot
     from tests.impact_range_fixtures import bind_test_range
     from tests.test_impact_live import Session
 
@@ -155,7 +153,30 @@ def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, ha
         exposure_us=np.full(len(frames), 300.0),
     )
     bind_test_range(job["shot"], Path(job["clip_path"]) / "frames.npz", job["session_uuid"])
-    reading = LiveAnalyser().analyse(job)
+    return job
+
+
+@pytest.mark.parametrize("hand", ["right", "left"])
+def test_live_clip_publishes_lie_with_whatever_route_reads_the_impact(tmp_path, hand):
+    from openflight.camera.impact_live import LiveAnalyser
+    from tests.every_metric import fusion_shot
+
+    reading = LiveAnalyser().analyse(_shaft_job(tmp_path, hand))
+    assert reading["status"] == "ok", reading["resolution"]
+    assert reading["route"] == "placement"
+    metric = fusion_shot(impact_location=reading).to_dict()["metrics"]["dynamic_lie"]
+    assert metric["value"] == pytest.approx(60, abs=1.5), reading
+    assert metric["status"] == "model_geometry"
+
+
+@pytest.mark.parametrize("hand", ["right", "left"])
+def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, hand):
+    from openflight.camera.impact_live import LiveAnalyser
+    from tests.every_metric import fusion_shot
+    from tests.test_impact_live import OUTLINE_ONLY
+
+    # the outline route alone: placement, which needs no outline, would read this shot
+    reading = LiveAnalyser(routes=OUTLINE_ONLY).analyse(_shaft_job(tmp_path, hand))
     assert reading["status"] == "rejected"
     assert reading["reason_code"] == "building_the_head_outline"
     metric = fusion_shot(impact_location=reading).to_dict()["metrics"]["dynamic_lie"]
