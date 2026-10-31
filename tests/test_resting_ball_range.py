@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from openflight.camera import resting_ball_range as rbr
+from openflight.camera.club_motion import ReferenceBall
 from tests.camera_fallback_scene import BALL_DIAMETER_M, render_scene
 
 
@@ -32,6 +33,82 @@ def test_no_ball_where_the_seed_points_is_none():
         rbr.measure_resting_ball_size(
             scene.frames, first_post_index=scene.first_post_index, seed=(200.0, 700.0, 44.0)
         )
+        is None
+    )
+
+
+def test_a_stronger_non_ball_patch_does_not_hide_the_recorded_ball():
+    scene = render_scene(width=640, height=400, focal_px=1000.0)
+    x, y, diameter = scene.rest_px()
+    frames = scene.frames.copy()
+    frames[:, round(y + 15) : round(y + 30), round(x + 35) : round(x + 90)] = 200
+
+    size = rbr.measure_resting_ball_size(
+        frames, first_post_index=scene.first_post_index, seed=(x + 2.0, y - 2.0, diameter)
+    )
+
+    assert size is not None
+    assert size.x == pytest.approx(x, abs=1.0)
+    assert size.y == pytest.approx(y, abs=1.0)
+    assert size.diameter_px == pytest.approx(diameter, rel=0.05)
+
+
+def test_rejected_scene_proposal_does_not_hide_recorded_ball(monkeypatch):
+    scene = render_scene(width=640, height=400, focal_px=1000.0)
+    x, y, diameter = scene.rest_px()
+    # Replay exposed a scene proposal on the floor beside a correctly recorded ball.
+    monkeypatch.setattr(
+        rbr,
+        "detect_reference_ball",
+        lambda *_a, **_k: ReferenceBall(
+            x=x + 65.0,
+            y=y + 30.0,
+            diameter_px=diameter,
+            area_px=100,
+        ),
+    )
+
+    size = rbr.measure_resting_ball_size(
+        scene.frames,
+        first_post_index=scene.first_post_index,
+        seed=(x + 2.0, y - 2.0, diameter),
+    )
+
+    assert size is not None
+    assert size.x == pytest.approx(x, abs=1.0)
+    assert size.y == pytest.approx(y, abs=1.0)
+    assert size.diameter_px == pytest.approx(diameter, rel=0.05)
+
+
+def test_a_moved_ball_is_still_found_away_from_the_seed():
+    scene = render_scene(width=640, height=400, focal_px=1000.0)
+    x, y, diameter = scene.rest_px()
+
+    size = rbr.measure_resting_ball_size(
+        scene.frames,
+        first_post_index=scene.first_post_index,
+        seed=(x - 2 * diameter, y, diameter),
+    )
+
+    assert size is not None
+    assert size.x == pytest.approx(x, abs=1.0)
+    assert size.y == pytest.approx(y, abs=1.0)
+
+
+@pytest.mark.parametrize("pattern", ["noise", "mat_corner", "stripe"])
+def test_recorded_seed_does_not_confirm_empty_background(pattern):
+    frames = np.clip(45.0 + np.random.default_rng(8).normal(0, 1.5, (12, 400, 640)), 0, 255).astype(
+        np.uint8
+    )
+
+    if pattern == "mat_corner":
+        frames[:, 205:215, 230:335] = 100
+        frames[:, 120:210, 325:335] = 100
+    elif pattern == "stripe":
+        frames[:, 205:215, 230:410] = 100
+
+    assert (
+        rbr.measure_resting_ball_size(frames, first_post_index=12, seed=(320.0, 210.0, 24.0))
         is None
     )
 
