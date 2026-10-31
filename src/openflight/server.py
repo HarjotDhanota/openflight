@@ -327,6 +327,9 @@ _ball_at_address_thread: threading.Thread | None = None
 # (setup_range_m, range_prior) the monitor takes, kept for a box set after the range
 _ball_at_address_range: tuple = (None, None)
 BALL_AT_ADDRESS_EVERY_S = 1.0
+# an extension's search of the claimed clip's resting frames waits at most this long
+SHOT_BALL_SEARCH_TIMEOUT_S = 3.0
+SHOT_BALL_SEARCH_FRAMES = 5
 # the looks' search runs in a worker process, started by the look loop's first look
 _ball_look_worker = None
 # The per-unit setup record and the actions on it (setup_service.SetupService), from main()
@@ -1574,16 +1577,81 @@ def _shot_ball_context(shot: Shot) -> dict:
             )
         elif look is None and ball_at_address_monitor is not None:
             rejection = "no fresh pre-trigger address observation"
+        seed = None if rejection else _reference_ball_from_look(look)
         sources = {
             **sources,
             "ball_at_address": {
                 "look": deepcopy(look),
-                "seed": None if rejection else _reference_ball_from_look(look),
+                "seed": seed,
                 "range_prior_rejection": rejection,
+                "ball_source": _ball_source(seed),
             },
         }
         shot.input_sources = sources
     return deepcopy(sources["ball_at_address"])
+
+
+def _ball_source(seed: dict | None) -> str | None:
+    if seed is None:
+        return None
+    return "live_look" if seed["source"] == "ball_at_address" else seed["source"]
+
+
+def _search_shot_frames(camera_archive) -> dict | None:
+    """An extension's answer for the ball in the clip's own resting frames, or None without one."""
+    finder = kiosk_extensions.first("shot_ball_finder")
+    if finder is None or camera_archive is None or "frames" not in camera_archive:
+        return None
+    from .camera.light_judging import resting_frames  # noqa: PLC0415
+
+    count = len(resting_frames(camera_archive["frames"]))
+    window = slice(max(0, count - SHOT_BALL_SEARCH_FRAMES), count)
+    controls = [
+        (float(exposure), float(gain))
+        for exposure, gain in zip(
+            camera_archive["exposure_us"][window], camera_archive["analogue_gain"][window]
+        )
+    ]
+    if len(set(controls)) != 1:
+        return {"status": "mixed_controls", "reason": "the resting frames' controls differ"}
+    try:
+        answer = finder(
+            camera_archive["frames"][window], controls, timeout_s=SHOT_BALL_SEARCH_TIMEOUT_S
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[BALL_AT_ADDRESS] Shot-frame search failed: %s", error, exc_info=True)
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+    if answer is None:
+        return {"status": "no_answer", "reason": "the finder gave no answer"}
+    return dict(answer)
+
+
+def _find_shot_ball(shot: Shot, camera_archive) -> None:
+    """Take the shot's ball from its own clip when an extension selects one; else keep the look."""
+    started = time.monotonic()
+    search = _search_shot_frames(camera_archive)
+    if search is None:
+        return
+    search["ms"] = (time.monotonic() - started) * 1000.0
+    context = _shot_ball_context(shot)
+    context["shot_search"] = search
+    ball = search.get("ball") if search.get("status") == "selected" else None
+    if ball is not None:
+        seed = {
+            "x": float(ball["x"]),
+            "y": float(ball["y"]),
+            "diameter_px": float(ball["diameter_px"]),
+            "source": "shot_frames_search",
+        }
+        look = context["look"] or {}
+        if look.get("state") == "in_box" and look.get("center_px"):
+            apart = math.hypot(look["center_px"][0] - seed["x"], look["center_px"][1] - seed["y"])
+            if apart > 0.5 * seed["diameter_px"] and not context["range_prior_rejection"]:
+                context["range_prior_rejection"] = (
+                    "the live look is a different spot from the shot's own frames"
+                )
+        context.update(seed=seed, ball_source="shot_frames_search")
+    shot.input_sources = {**(shot.input_sources or {}), "ball_at_address": context}
 
 
 def resting_ball_look() -> dict | None:
@@ -5155,6 +5223,7 @@ def _prefetch_camera_capture(shot: Shot) -> _CameraPrefetchResult:
     archive_started = match_finished
     camera_archive = _load_camera_capture_archive(camera_capture)
     archive_finished = time.monotonic()
+    _isolated_stage(shot, "shot_ball_search", _find_shot_ball, shot, camera_archive)
     return _CameraPrefetchResult(
         capture=camera_capture,
         archive=camera_archive,

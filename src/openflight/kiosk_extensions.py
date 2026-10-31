@@ -69,6 +69,15 @@ class KioskExtension:  # pylint: disable=unused-argument
         """A readiness reader the camera stamps on each trigger, or None."""
         return None
 
+    def shot_ball_finder(self) -> Optional[Callable[..., Optional[dict]]]:
+        """A finder for a shot's resting ball in its own clip's resting frames, or None.
+
+        It is called as ``finder(frames, controls, timeout_s=...)`` and answers a dict with
+        ``status`` and ``reason``; only ``status == "selected"`` with a ``ball``
+        (``x``, ``y``, ``diameter_px`` in the clip's pixels) replaces the live look.
+        """
+        return None
+
     def iwr_optional(self) -> Optional[str]:
         """Why the run may continue without a failed IWR6843, or None to exit."""
         return None

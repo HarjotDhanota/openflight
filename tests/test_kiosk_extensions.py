@@ -57,6 +57,7 @@ def test_a_plain_kiosk_has_no_extensions_and_every_answer_is_the_default(isolate
     assert ke.registered() == ()
     assert ke.any_true("diagnostic_camera") is False
     assert ke.first("trigger_evidence_provider") is None
+    assert ke.first("shot_ball_finder") is None
     assert ke.all_admit(object()) is True
     assert ke.adjust_ready_light(("states",)) == ("states",)
     with ke.observing_shot_emit(object(), "shot", {}, final=True, update_kind="first"):
@@ -67,6 +68,7 @@ def test_the_base_extension_does_nothing():
     base = ke.KioskExtension()
     assert base.diagnostic_camera() is False and base.iwr_optional() is None
     assert base.trigger_evidence_provider() is None
+    assert base.shot_ball_finder() is None
     assert base.admit_shot(object()) is True
     assert base.ready_light_states("unchanged") == "unchanged"
     config = {}

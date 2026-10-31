@@ -1250,6 +1250,7 @@
   "tests/test_server_iwr_partial_launch.py": "FUSION",
   "tests/test_server_ready_light.py": "TESTER",
   "tests/test_server_shot_models.py": "FUSION",
+  "tests/test_server_shot_ball_search.py": "FUSION",
   "tests/test_server_swing_exposure.py": "FUSION",
   "tests/test_server_trigger_evidence.py": "TESTER",
   "tests/test_session_bundle.py": "TESTER",
