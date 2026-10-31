@@ -1646,6 +1646,8 @@
   "src/openflight/camera/resting_ball_range.py": "FUSION",
   "tests/test_source_chain.py": "FUSION",
   "tests/test_ball_launch_fallback.py": "FUSION",
+  "tests/test_ball_launch_association.py": "FUSION",
+  "tests/test_ball_launch_track_gaps.py": "FUSION",
   "tests/test_resting_ball_range.py": "FUSION",
   "tests/test_resting_ball_range_field.py": "RESEARCH",
   "tests/camera_fallback_scene.py": "FUSION",

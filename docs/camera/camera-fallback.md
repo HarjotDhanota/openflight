@@ -65,7 +65,15 @@ and the Pi latency impact needs measurement.
 
 After impact the ball is a compact round blob against the median of the frames 75-25 ms
 before the trigger. The longest straight run of blobs that starts from the resting ball
-is its track, at least three points (two fit any pair of highlights, the club's toe
+is its track. A run must also move at least half the resting ball's image diameter
+from its first point: removing a dark part of the resting ball can leave a persistent
+positive difference patch. Its duration alone must not outvote a shorter moving ball.
+This is a displacement test over the run, not a minimum step for each frame; paths
+with less visible displacement are unavailable rather than confirmed as outgoing.
+A run can continue across one missing frame using the existing motion prediction
+and tolerance; two consecutive misses stop it. Missing frames have no interpolated
+point and do not count toward the observation minimum.
+At least three points are needed (two fit any pair of highlights, the club's toe
 included). The track is fitted as one line from the resting ball, at each frame's
 exposure centre:
 
