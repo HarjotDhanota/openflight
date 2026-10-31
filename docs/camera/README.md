@@ -259,7 +259,9 @@ derivation are in `config/swing_exposure.json`.
 - **Locked.** The controls are held still. After each shot (a clip an OPS shot
   claims; a false trigger's clip is not used), the ball in that clip's own resting
   frames is measured at the controls they were taken at, and any change is applied
-  for the next swing, never while a clip is being collected. With no shot for
+  for the next swing, never while a clip is being collected. The change lands when
+  the OPS shot claims the clip, a few seconds after impact and after the camera has
+  re-armed; outdoor shots were 25–46 s apart, so the next swing gets it. With no shot for
   5 minutes, the live ball is measured once. No passing ball, a second change in a
   row, a moved box or a restarted search goes back to measuring once a second.
 - **No ball.** The last setting is kept, with the reason. After about 3 s with no
