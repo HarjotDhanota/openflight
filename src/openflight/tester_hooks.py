@@ -65,6 +65,8 @@ PAUSE_CAUSES = {"photo": "taking a face photo", "aim": "moving the aim"}
 # The red cause the tester page holds the ready light at (the ladder's phase), or None.
 ready_hold: str | None = None
 FACE_PHOTO_DIR = "face-photos"
+# Free play's per-shot ball search (camera.shot_ball_search.ShotBallSearch), while it runs.
+shot_ball_search = None
 
 
 def _study_runtime():
@@ -498,6 +500,37 @@ def load_free_play_plan(path) -> dict:
         raise ValueError(f"{source} is not a {free_play_ladder.PLAN_SCHEMA} exposure plan")
     free_play_plan, free_play_plan_path = plan, source
     return plan
+
+
+def _placement_box_record() -> dict | None:
+    """This tester's confirmed placement record: the folder named for the tester above the run."""
+    from openflight.camera import tester_server  # pylint: disable=import-outside-toplevel
+
+    session = server.get_session_logger()
+    tester_id = free_play_config.get("tester_id")
+    if session is None or not tester_id:
+        return None
+    run_dir = Path(session.log_dir).expanduser().resolve()
+    root = next((path for path in (run_dir, *run_dir.parents) if path.name == tester_id), None)
+    return tester_server.read_last_placement_box(root) if root is not None else None
+
+
+def _start_shot_ball_search() -> None:
+    global shot_ball_search  # pylint: disable=global-statement
+    # pylint: disable-next=import-outside-toplevel
+    from openflight.camera.shot_ball_search import ShotBallSearch
+
+    shot_ball_search = ShotBallSearch(
+        _placement_box_record, lambda: getattr(server.setup_camera_view(), "camera", None)
+    )
+    shot_ball_search.start()
+
+
+def _close_shot_ball_search() -> None:
+    global shot_ball_search  # pylint: disable=global-statement
+    search, shot_ball_search = shot_ball_search, None
+    if search is not None:
+        search.close()
 
 
 def init_free_play_study(*, run_async=None, settle_s: float | None = None):
@@ -1051,6 +1084,17 @@ class TesterKioskExtension(kiosk_extensions.KioskExtension):
         if free_play_plan is not None:
             # after the camera, before any shot: it counts shots and moves the camera
             init_free_play_study()
+        if free_play_config.get("enabled") and server.camera_capture_runtime is not None:
+            _start_shot_ball_search()
+
+    def shot_ball_finder(self):
+        return shot_ball_search.find if shot_ball_search is not None else None
+
+    def before_capture_stop(self) -> None:
+        _close_shot_ball_search()
+
+    def on_shutdown(self) -> None:
+        _close_shot_ball_search()
 
     def diagnostic_camera(self) -> bool:
         return study_mode_enabled
