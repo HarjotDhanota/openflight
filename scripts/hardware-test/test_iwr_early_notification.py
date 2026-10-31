@@ -77,3 +77,65 @@ def test_cancellation_before_latch_never_sends_notification():
     with pytest.raises(InterruptedError):
         collector.wait_result(lambda *_: None, lambda: True, on_trigger=notifications.append)
     assert notifications == [] and collector.trigger_observation is None
+
+
+def deliver_notice_after(port, polls, notice=b"Triggered\n"):
+    """The image writes its Triggered line, unsolicited, after this many stats polls."""
+    original = port.write
+    seen = {"stats": 0}
+
+    def write(data):
+        count = original(data)
+        if data == b"stats\n":
+            seen["stats"] += 1
+            if seen["stats"] == polls:
+                port.unsolicited = notice
+        return count
+
+    def read(n):
+        if not port.pending and getattr(port, "unsolicited", b""):
+            port.pending, port.unsolicited = port.unsolicited, b""
+        size = min(n, port.chunk)
+        result, port.pending = port.pending[:size], port.pending[size:]
+        return result
+
+    port.write, port.read = write, read
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 65536])
+def test_the_triggered_notice_fires_before_any_latched_poll(chunk):
+    collector, port = wire(chunk)
+    capture_sequence(collector, port, [(False, True), (False, True), (True, True), (True, False)])
+    deliver_notice_after(port, 1)
+    notifications = []
+
+    def observed(event):
+        assert not port.held
+        notifications.append(deepcopy(event))
+
+    held = collector.wait_result(lambda *_: None, lambda: False, on_trigger=observed)
+    assert held["record"]["shot_id"] == 1
+    assert len(notifications) == 1
+    event = notifications[0]
+    assert event["notice_source"] == "triggered_line"
+    assert event["host_received_mono_ns"] == collector.notice_rows[-1]["notice_ns"]
+    assert not event["physical_timing_qualified"]
+    assert all(b"Triggered" not in data for data in port.writes)
+
+
+def test_without_a_notice_the_polled_latch_still_notifies():
+    collector, port = wire()
+    capture_sequence(collector, port, [(False, True), (True, True), (True, False)])
+    notifications = []
+    collector.wait_result(lambda *_: None, lambda: False, on_trigger=notifications.append)
+    assert [event["notice_source"] for event in notifications] == ["polled_latch"]
+
+
+def test_unexpected_unsolicited_output_marks_the_connection_uncertain():
+    collector, port = wire()
+    capture_sequence(collector, port, [(False, True), (False, True)])
+    deliver_notice_after(port, 1, notice=b"garbage\n")
+    with pytest.raises(Exception, match="unexpected unsolicited"):
+        collector.wait_result(lambda *_: None, lambda: False, on_trigger=lambda _e: None)
+    assert collector.failed
+    assert collector.notice_rows[-1]["error"] == "ValueError"

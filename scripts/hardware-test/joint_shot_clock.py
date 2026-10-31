@@ -1,5 +1,6 @@
 """One finite self-triggered IWR attempt on a fresh, identified RAM runtime."""
 
+import base64
 import hashlib
 from copy import deepcopy
 from dataclasses import asdict
@@ -11,6 +12,11 @@ from joint_clock_active import (
     ActiveCollector,
     fields_for,
 )
+from usb_collector import ExchangeError
+
+# The reviewed image queues this line the moment it latches (l3_dump.c "Triggered").
+NOTICE = b"Triggered\n"
+NOTICE_COMPLETION_NS = 50_000_000
 
 PROFILE = tuple(
     "frameCfg 0 2 12 20000 3 1 0" if row.startswith("frameCfg ") else row for row in CONFIGURATION
@@ -44,6 +50,7 @@ class ShotCollector(ActiveCollector):
         self.fresh_runtime = False
         self.observed_ball = None
         self.trigger_observation = None
+        self.notice_rows = []
 
     def establish_fresh_runtime(self):
         """Only the RAM loader's fresh startup may initialize generation tracking."""
@@ -127,33 +134,82 @@ class ShotCollector(ActiveCollector):
             raise ValueError("IWR did not arm cleanly")
         return state
 
+    def wait_notice(self, budget_s):
+        """Between exchanges, read only the image's unsolicited Triggered line.
+
+        Returns the host receipt of its first byte, or None if nothing arrived in
+        the budget. Any other byte leaves the connection uncertain: no more writes.
+        """
+        if self.failed:
+            raise ExchangeError("uncertain connection; no recovery writes permitted")
+        row = {"before_ns": self.now(), "reads": [], "notice_ns": None, "error": None}
+        self.notice_rows.append(row)
+        raw = bytearray()
+        deadline = row["before_ns"] + round(budget_s * 1e9)
+        try:
+            while True:
+                line = bytes(raw).replace(b"\r\n", b"\n")
+                if line == NOTICE:
+                    return row["notice_ns"]
+                if not NOTICE.startswith(line):
+                    raise ValueError("unexpected unsolicited IWR output")
+                now = self.now()
+                if not raw and now >= deadline:
+                    return None
+                if raw and now >= row["notice_ns"] + NOTICE_COMPLETION_NS:
+                    raise TimeoutError("incomplete unsolicited IWR line")
+                chunk = self.port.read(max(1, self.port.in_waiting))
+                if chunk:
+                    stamp = self.now()
+                    if not raw:
+                        row["notice_ns"] = stamp
+                    raw.extend(chunk)
+                    row["reads"].append({"received_ns": stamp, "bytes_total": len(raw)})
+        except (OSError, ValueError, TimeoutError) as error:
+            self.failed = True
+            row["error"] = type(error).__name__
+            raise ExchangeError(str(error)) from error
+        finally:
+            row["after_ns"] = self.now()
+            row["received_b64"] = base64.b64encode(raw).decode("ascii")
+
+    def _observe_trigger(self, state, source, received_ns, on_trigger):
+        rows = getattr(self, "rows", ())
+        row = rows[-1] if rows else {}
+        self.trigger_observation = {
+            "schema": "openflight.iwr-trigger-observation.v1",
+            "notice_source": source,
+            "expected_shot_id": self.next_shot,
+            "expected_generation": self.generation,
+            "host_received_mono_ns": received_ns,
+            "exchange_index": len(rows) - 1 if rows else None,
+            "notice_read_index": len(self.notice_rows) - 1 if source == "triggered_line" else None,
+            "stats_exchange": {
+                key: row.get(key) for key in ("before_ns", "write_return_ns", "cli_ready_ns")
+            },
+            "capture_active_in_status": state["capture"]["active"] == "1",
+            "device_timestamp": None,
+            "timestamp_meaning": "host receipt of the IWR notice or polled latch; "
+            "not physical trigger or contact",
+            "physical_timing_qualified": False,
+        }
+        if on_trigger is not None:
+            on_trigger(deepcopy(self.trigger_observation))
+
     def wait_result(self, publish, cancelled, *, on_trigger=None):
-        """Poll within the finite RF budget; fetch a held result without forcing capture."""
+        """Poll within the finite RF budget; fetch a held result without forcing capture.
+
+        Between polls the image's Triggered line is awaited, so the first notice is
+        not held back by the poll interval; a polled latch still notifies without it.
+        """
         deadline = min(self.deadline_ns, self.now() + 30_000_000_000)
+        state = None
         while self.now() < deadline:
             if cancelled():
                 raise InterruptedError("session stopped")
             state = self.snapshot()
             if state["trigger"]["latched"] == "1" and self.trigger_observation is None:
-                rows = getattr(self, "rows", ())
-                row = rows[-1] if rows else {}
-                self.trigger_observation = {
-                    "schema": "openflight.iwr-trigger-observation.v1",
-                    "expected_shot_id": self.next_shot,
-                    "expected_generation": self.generation,
-                    "host_received_mono_ns": self.now(),
-                    "exchange_index": len(rows) - 1 if rows else None,
-                    "stats_exchange": {
-                        key: row.get(key)
-                        for key in ("before_ns", "write_return_ns", "cli_ready_ns")
-                    },
-                    "capture_active_in_status": state["capture"]["active"] == "1",
-                    "device_timestamp": None,
-                    "timestamp_meaning": "host observation of polled latch; not physical trigger or contact",
-                    "physical_timing_qualified": False,
-                }
-                if on_trigger is not None:
-                    on_trigger(deepcopy(self.trigger_observation))
+                self._observe_trigger(state, "polled_latch", self.now(), on_trigger)
             publish("armed", state)
             if state["trigger"]["latched"] == "1" and state["capture"]["active"] == "0":
                 raw, _ = self.exchange("triggerLog result", done_count=2)
@@ -170,7 +226,12 @@ class ShotCollector(ActiveCollector):
                 return held
             if state["capture"]["active"] != "1":
                 raise ValueError("RF ended without a held trigger result")
-            self.sleep(0.05)
+            if self.trigger_observation is None:
+                received = self.wait_notice(0.05)
+                if received is not None:
+                    self._observe_trigger(state, "triggered_line", received, on_trigger)
+            else:
+                self.sleep(0.05)
         raise TimeoutError("no held IWR result during armed interval")
 
     def read_raw_dump(self, radar):
