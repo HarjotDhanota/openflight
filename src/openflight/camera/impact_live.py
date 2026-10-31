@@ -8,11 +8,21 @@ post-session method of ``openflight.camera.impact_location`` and
 - once a shot with a saved camera clip has been shown, its clip goes to a
   worker process at low priority, which never holds up the kiosk, the next shot,
   the ready light or the camera;
-- the worker keeps a running head outline per (club, frame size) from this
-  session's swings so far, built once the club has ``swings_needed`` swings with
-  a head in them and rebuilt from the latest ones while the worker is idle (a new
-  shot interrupts the rebuild). The swings pool their SHAPE only; every reading
-  is the shot's own;
+- each shot is read by ONE ``source_chain`` resolution over ``ROUTES``, in order:
+  ``placement`` (``impact_placement``: the category's club model placed at the
+  shot's orientation, which needs no outline from earlier swings), then
+  ``outline_2d`` (``impact_location``'s 2D outline estimator) when placement
+  refuses. The orientation is ``impact_placement.orientation_for_shot``'s: the
+  shot's capture-bound angles, else its own D-plane outputs, else the category
+  priors, each labelled. Every route's refusal is kept in ``resolution.tried``;
+  the record names the route, the label of its weakest input
+  (``input_label``/``weakest_inputs``), the orientation's origin, and the
+  diagnostics of every route that ran;
+- for the outline route the worker keeps a running head outline per (club, frame
+  size) from this session's swings so far, built once the club has
+  ``swings_needed`` swings with a head in them and rebuilt from the latest ones
+  while the worker is idle (a new shot interrupts the rebuild). The swings pool
+  their SHAPE only; every reading is the shot's own;
 - clips wider than ``analysis_max_width`` are averaged down to it first, which
   keeps a reading to a few seconds on a Pi 5;
 - the reading goes on ``Shot.impact_location`` and out as a shot update. Its two
@@ -46,7 +56,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from openflight import kiosk_extensions
+from openflight import kiosk_extensions, source_chain
+from openflight.source_labels import LABEL_ESTIMATED, LABEL_MEASURED
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +70,19 @@ IDLE_REFRESH_S = 0.5
 STOP_WAIT_S = 3.0
 RECENT_CLIPS = 32
 START_KEYS = ("golfer", "rig_geometry", "target_line", "tee_range_handoff")
+PLACEMENT, OUTLINE_2D = "placement", "outline_2d"
+# The one resolution's routes, strongest first (G3): a route may be left out (research,
+# tests), never reordered or added to.
+ROUTES = (PLACEMENT, OUTLINE_2D)
+RESOLVED_INPUT = "impact_location"
+OPS_CLUB_SPEED = "shot_ops_club_speed"
+OWN_SHOT_RANGE_PREFIX = "shot_"
 
 BUILDING_CODE = "building_the_head_outline"
 DROPPED_CODE = "dropped_the_next_shot_arrived"
 DROPPED_REASON = "dropped: the next shot arrived before this one was read"
 STOPPED_REASON = "the impact analysis stopped before it read this shot"
+OTHER_SHOT_CODE = "analysis_failed_reading_for_another_shot"
 
 PLAIN_REASONS: tuple[tuple[str, str], ...] = (
     (r"^no_ball_range_for_this_shot", "no radar distance to the ball on this shot"),
@@ -90,6 +109,12 @@ PLAIN_REASONS: tuple[tuple[str, str], ...] = (
     (r"^(unreadable_frames_npz|frames_npz_is_not_a_clip)", "the camera clip could not be read"),
     (r"^head_outline_did_not_build", "the head outline did not build from this club's swings"),
     (r"^analysis_failed", "the impact analysis failed on this shot"),
+    (r"^error: ", "the impact analysis failed on this shot"),
+    (r"^no_outline_model_for_category_", "no head model for this club category"),
+    (r"^(toe|sole)_edge_not_found_on_frame_", "the head's edge was not found around contact"),
+    (r"^head_not_found_on_frame_", "the head was not found around contact"),
+    (r"^orientation_.*_not_finite", "the club's orientation is not usable"),
+    (r"^no_frame_after_contact", "the clip ends at contact"),
 )
 
 
@@ -129,9 +154,13 @@ class _Pool:
 
 
 class LiveAnalyser:
-    """Reads one shot at a time against a running per-club outline (EXPERIMENTAL)."""
+    """Reads one shot at a time: placement, else the running per-club outline (EXPERIMENTAL).
 
-    def __init__(
+    ``routes`` is ``ROUTES`` on the kiosk; research and the outline's own tests may keep
+    a part of it, in its order.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         *,
         swings_needed: int = SWINGS_NEEDED,
@@ -139,7 +168,12 @@ class LiveAnalyser:
         analysis_max_width: int | None = ANALYSIS_MAX_WIDTH,
         lens_id: str | None = None,
         club_part_diagnostics: bool = False,
+        routes=ROUTES,
     ):
+        routes = tuple(routes)
+        if not routes or list(routes) != [name for name in ROUTES if name in routes]:
+            raise ValueError(f"routes must be {ROUTES} or a part of it in that order")
+        self.routes = routes
         self.swings_needed = max(1, int(swings_needed))
         self.pool_max_swings = max(self.swings_needed, int(pool_max_swings))
         self.analysis_max_width = analysis_max_width
@@ -194,6 +228,7 @@ class LiveAnalyser:
         stages["prepare_ms"] = (time.perf_counter() - started) * 1000.0
         base = {
             "schema": SCHEMA,
+            "shot_number": job.get("shot_number"),
             "label": il.EXPERIMENTAL_LABEL,
             "club": clip.club,
             "club_category": il.club_category(clip.club),
@@ -239,42 +274,108 @@ class LiveAnalyser:
 
         prepared = clip.prepared
         if prepared is None:
-            return finish(_refused(clip.error or "not_analysed"))
-        if prepared.contact.status != "ok":
-            return finish(_refused(prepared.contact.reason))
-        has_head = bool(prepared.masks and prepared.masks.masks)
+            shared = clip.error or "not_analysed"
+        elif prepared.contact.status != "ok":
+            shared = prepared.contact.reason
+        else:
+            shared = None
+        has_head = shared is None and bool(prepared.masks and prepared.masks.masks)
         if has_head:
             pool.samples = (pool.samples + [replace(prepared, frames=prepared.frames[:0])])[
                 -self.pool_max_swings :
             ]
             pool.version += 1
-        if stop():
+        if shared is None and stop():
             return finish(_dropped())
+        readings: dict[str, dict[str, Any]] = {}
+
+        def placement() -> source_chain.RouteResult:
+            from openflight.camera import impact_placement as ip  # noqa: PLC0415
+
+            if shared is not None:
+                return shared
+            placed = time.perf_counter()
+            try:
+                placed_clip, orientation, _scene = ip.place_clip(
+                    clip, job.get("shot") or {}, run_start
+                )
+            finally:
+                stages["placement_ms"] = (time.perf_counter() - placed) * 1000.0
+            reading = _reading(placed_clip, clip)
+            if reading["status"] == "ok":
+                reading["dynamic_loft_source"] = orientation.dynamic_loft.source
+            reading["diagnostics"] = _plain(placed_clip.diagnostics)
+            readings[PLACEMENT] = _with_inputs(reading, clip, orientation, ip.ANGLES)
+            return _candidate(readings[PLACEMENT], "impact_placement")
+
+        def outline_2d() -> source_chain.RouteResult:
+            from openflight.camera import impact_placement as ip  # noqa: PLC0415
+
+            if shared is not None:
+                return shared
+            reading = self._outline_reading(clip, pool, has_head, stages, stop)
+            readings[OUTLINE_2D] = _with_inputs(
+                reading,
+                clip,
+                ip.orientation_from_face_inputs(clip.face),
+                ("face_angle", "dynamic_loft"),
+            )
+            return _candidate(readings[OUTLINE_2D], "impact_location_2d_outline")
+
+        run_start = {"config": dict(job.get("start") or {})}
+        producers = {PLACEMENT: placement, OUTLINE_2D: outline_2d}
+        resolution = source_chain.resolve(
+            RESOLVED_INPUT, [source_chain.Route(name, producers[name]) for name in self.routes]
+        )
+        record = {
+            "route": resolution.route,
+            "input_label": resolution.label,
+            "resolution": resolution.to_dict(),
+            "routes": readings,
+        }
+        if resolution.present:
+            return finish({**_shown(readings[resolution.route]), **record})
+        if any(why == DROPPED_CODE for _name, why in resolution.tried):
+            return finish({**_dropped(), **record})
+        # Nothing read: the reason shown is the last route's (the fallback's), with
+        # every route's refusal in ``resolution.tried``.
+        last = next((readings[name] for name in reversed(self.routes) if name in readings), None)
+        if last is None:
+            last = _refused(_error_code(resolution.tried[-1][1]))
+        return finish({**_shown(last), "weakest_inputs": [], **record})
+
+    def _outline_reading(self, clip, pool: _Pool, has_head, stages, stop) -> dict[str, Any]:
+        """The 2D outline route: build this club's outline from its swings, then read."""
+        from openflight.camera import impact_location as il  # noqa: PLC0415
+
+        prepared = clip.prepared
         if pool.template is None:
             if len(pool.samples) < self.swings_needed:
                 if not has_head:
-                    return finish(_refused(il.locate_impact(prepared, None, face=clip.face).reason))
+                    return _refused(il.locate_impact(prepared, None, face=clip.face).reason)
                 words = (
                     f"building the head outline: {len(pool.samples)} of {self.swings_needed} "
                     "swings with this club"
                 )
-                return finish({**_refused(BUILDING_CODE), "reason": words, "height_reason": words})
+                return {**_refused(BUILDING_CODE), "reason": words, "height_reason": words}
             built = time.perf_counter()
             template, why = il.build_self_template(pool.samples, club=clip.club)
             stages["template_ms"] = (time.perf_counter() - built) * 1000.0
             if template is None:
-                return finish(_refused(f"head_outline_did_not_build_{why}"))
+                return _refused(f"head_outline_did_not_build_{why}")
             pool.template, pool.built_from, pool.built_version = (
                 template,
                 len(pool.samples),
                 pool.version,
             )
         if stop():
-            return finish(_dropped())
+            return _dropped()
         located = time.perf_counter()
         location = il.locate_impact(prepared, pool.template, face=clip.face)
         stages["locate_ms"] = (time.perf_counter() - located) * 1000.0
-        return finish(_reading(location, clip))
+        reading = _reading(location, clip)
+        reading["diagnostics"] = _plain(location.diagnostics)
+        return reading
 
     def refresh(self, should_stop: Callable[[], bool] | None = None) -> bool:
         """Rebuild one outline that has new swings since it was built; True when one was."""
@@ -340,6 +441,95 @@ def _reading(location, clip) -> dict[str, Any]:
     }
 
 
+def _plain(value: Any) -> Any:
+    """Diagnostics as plain JSON values (numpy scalars and arrays included)."""
+
+    def default(item: Any) -> Any:
+        tolist = getattr(item, "tolist", None)
+        return tolist() if callable(tolist) else str(item)
+
+    return json.loads(json.dumps(value, default=default))
+
+
+def _shown(reading: dict[str, Any]) -> dict[str, Any]:
+    """A route's reading for the record's top level; its diagnostics stay under ``routes``."""
+    return {key: value for key, value in reading.items() if key != "diagnostics"}
+
+
+def _error_code(why: str) -> str:
+    """A route's refusal as a code: a route that raised is ``analysis_failed_<error>``."""
+    if why.startswith("error: "):
+        return "analysis_failed_" + why[len("error: ") :].split(":", 1)[0].strip()
+    return why
+
+
+def _input_labels(clip, orientation, angles: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    """Each input a route reads with its label (source_labels) and source.
+
+    Orientation angles carry their provenance label (a prior is estimated); the ball
+    range is measured only from the shot's own bound IWR evidence; the club speed only
+    from the shot's OPS reading; the lens only with calibrated intrinsics; the face
+    centre is the category's population reference or a given anchor (estimated).
+    """
+    provenance = orientation.provenance()
+    inputs = {
+        name: {"label": provenance[name]["label"], "source": getattr(orientation, name).source}
+        for name in angles
+    }
+    range_source = str(clip.range_source)
+    speed_source = str(clip.extra.get("club_speed_source"))
+    lens_source = str(clip.prepared.camera.source)
+    inputs["ball_range"] = {
+        "label": LABEL_MEASURED
+        if range_source.startswith(OWN_SHOT_RANGE_PREFIX)
+        else LABEL_ESTIMATED,
+        "source": range_source,
+    }
+    inputs["club_speed"] = {
+        "label": LABEL_MEASURED if speed_source == OPS_CLUB_SPEED else LABEL_ESTIMATED,
+        "source": speed_source,
+    }
+    calibrated = "calibrated" in lens_source and "uncalibrated" not in lens_source
+    inputs["lens"] = {
+        "label": LABEL_MEASURED if calibrated else LABEL_ESTIMATED,
+        "source": lens_source,
+    }
+    inputs["face_centre"] = {
+        "label": LABEL_ESTIMATED,
+        "source": clip.face.face_centre_from_toe.source,
+    }
+    return inputs
+
+
+def _with_inputs(reading: dict[str, Any], clip, orientation, angles) -> dict[str, Any]:
+    """A route's reading with its inputs, their weakest label, and the orientation used."""
+    inputs = _input_labels(clip, orientation, angles)
+    weakest = source_chain.weakest_label(*(entry["label"] for entry in inputs.values()))
+    provenance = orientation.provenance()
+    return {
+        **reading,
+        "inputs": inputs,
+        "input_label": weakest,
+        "weakest_inputs": [name for name, entry in inputs.items() if entry["label"] == weakest],
+        "orientation_source": " ".join(f"{n}={provenance[n]['origin']}" for n in angles),
+        "orientation": {
+            name: {**getattr(orientation, name).as_dict(), **provenance[name]} for name in angles
+        },
+    }
+
+
+def _candidate(reading: dict[str, Any], source: str) -> source_chain.RouteResult:
+    """A route's reading as a source_chain candidate (heel-toe offset), or its refusal code."""
+    if reading.get("status") != "ok":
+        return reading.get("reason_code") or "not_read"
+    return source_chain.Candidate(
+        reading.get("impact_offset_mm"),
+        reading["input_label"],
+        source,
+        uncertainty=reading.get("impact_offset_sigma_mm"),
+    )
+
+
 def read_lines(fd: int):
     """Each line of a pipe as it arrives (a buffered reader can wait for a full block)."""
     pending = b""
@@ -365,6 +555,7 @@ def worker_main(argv: list[str]) -> int:
     # Everything the analysis imports is loaded before stdin is read: on Windows an
     # import that looks at stdin waits for a pending pipe read on another thread.
     importlib.import_module("openflight.camera.impact_session")
+    importlib.import_module("openflight.camera.impact_placement")
     importlib.import_module("cv2").setNumThreads(1)
     jobs: queue.Queue = queue.Queue(maxsize=1)
     cancelled = {"through": 0}
@@ -626,6 +817,13 @@ class Dispatcher:
                 job.body_path.unlink(missing_ok=True)
             except OSError as error:
                 logger.warning("[IMPACT] retained job cleanup failed: %s", error)
+        if reading.get("shot_number") not in (None, job.shot.shot_number):
+            logger.warning(
+                "[IMPACT] a reading for shot #%s came back on shot #%s; not shown",
+                reading.get("shot_number"),
+                job.shot.shot_number,
+            )
+            reading = {**_refused(OTHER_SHOT_CODE), "shot_number": job.shot.shot_number}
         reading["latency_ms"] = round((time.monotonic() - job.submitted) * 1000.0, 1)
         try:
             self._publish(job.shot, reading, job.session_uuid)

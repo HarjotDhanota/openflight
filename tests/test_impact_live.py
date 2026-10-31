@@ -51,6 +51,9 @@ START = {
     },
 }
 WIDE = {"width": 1280, "height": 800, "focal": 2.0 * synthetic.FOCAL}
+# The 2D outline route alone: the tests of its running outline (placement, which needs
+# no outline, reads these shots first in the kiosk's resolution).
+OUTLINE_ONLY = (live.OUTLINE_2D,)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +136,7 @@ class Session:
 
 
 def test_the_first_swings_build_the_outline_and_say_how_far_along(tmp_path):
-    analyser, session = live.LiveAnalyser(), Session(tmp_path)
+    analyser, session = live.LiveAnalyser(routes=OUTLINE_ONLY), Session(tmp_path)
     for done in (1, 2):
         reading = analyser.analyse(session.job())
         assert reading["status"] == "rejected"
@@ -145,7 +148,7 @@ def test_the_first_swings_build_the_outline_and_say_how_far_along(tmp_path):
 
 
 def test_once_the_outline_has_its_swings_a_shot_is_read_on_both_axes(tmp_path):
-    analyser, session = live.LiveAnalyser(swings_needed=2), Session(tmp_path)
+    analyser, session = live.LiveAnalyser(swings_needed=2, routes=OUTLINE_ONLY), Session(tmp_path)
     analyser.analyse(session.job())
     reading = analyser.analyse(session.job())
     assert reading["status"] == "ok", reading["reason"]
@@ -168,7 +171,7 @@ def test_a_wide_clip_is_read_at_the_live_analysis_width(tmp_path):
 
 
 def test_a_later_shot_reads_the_running_outline_and_a_refresh_adds_it(tmp_path):
-    analyser, session = live.LiveAnalyser(swings_needed=2), Session(tmp_path)
+    analyser, session = live.LiveAnalyser(swings_needed=2, routes=OUTLINE_ONLY), Session(tmp_path)
     analyser.analyse(session.job())
     analyser.analyse(session.job())
     third = analyser.analyse(session.job(truth_mm=4.0))
@@ -182,7 +185,7 @@ def test_a_later_shot_reads_the_running_outline_and_a_refresh_adds_it(tmp_path):
 
 
 def test_a_refresh_that_cannot_build_does_not_try_the_same_swings_again(tmp_path, monkeypatch):
-    analyser, session = live.LiveAnalyser(swings_needed=1), Session(tmp_path)
+    analyser, session = live.LiveAnalyser(swings_needed=1, routes=OUTLINE_ONLY), Session(tmp_path)
     analyser.analyse(session.job())
     analyser.analyse(session.job())
     calls = []
@@ -470,7 +473,7 @@ def test_a_kiosk_shot_with_a_clip_is_read_and_shown_as_a_shot_update(tmp_path, m
     monkeypatch.setattr(server_module, "get_session_logger", lambda: log)
     extension = live.ImpactLiveExtension(
         runner_factory=lambda on_result: live.ProcessRunner(
-            on_result, settings={"swings_needed": 1}
+            on_result, settings={"swings_needed": 1, "routes": list(OUTLINE_ONLY)}
         )
     )
     extension.configure(SimpleNamespace(no_impact_live=False), parser=None)
@@ -519,3 +522,247 @@ def test_the_extension_is_off_until_the_kiosk_configures_it(kiosk):
     unconfigured.after_shot_published(shot, update_kind="first")
     assert not kiosk.runner.jobs
     assert not live.extension.enabled
+
+
+# --- one resolution: placement first, the 2D outline as its fallback (G3) ----------------
+
+D_PLANE_SOURCE = "D-plane inversion of the fitted launch model"
+ANGLE_NAMES = ("face_angle", "dynamic_loft")
+
+
+def without_capture_angles(job: dict) -> dict:
+    """The shot as the kiosk records it today: no capture-bound face angle or loft."""
+    for name in ANGLE_NAMES:
+        job["shot"]["metrics"].pop(name)
+    return job
+
+
+def with_d_plane(job: dict, *, face_status: str = "calculated", loft: float = 0.0) -> dict:
+    """The shot's collision-model block with a D-plane face angle and loft, as recorded."""
+    without_capture_angles(job)
+    job["shot"]["collision_model"] = {
+        "metrics": {
+            "face_angle": {
+                "value": 0.0,
+                "status": face_status,
+                "source": D_PLANE_SOURCE,
+                "unit": "deg",
+                "frame": "unit_boresight",
+                "reason": None,
+                "note": None,
+            },
+            "dynamic_loft": {
+                "value": loft,
+                "status": "calculated",
+                "source": D_PLANE_SOURCE,
+                "unit": "deg",
+                "frame": None,
+                "reason": None,
+                "note": None,
+            },
+        }
+    }
+    return job
+
+
+def tried(reading: dict) -> list[tuple[str, str]]:
+    return [(entry["route"], entry["reason"]) for entry in reading["resolution"]["tried"]]
+
+
+@pytest.fixture
+def placement_refuses(monkeypatch):
+    """The placement model refuses every shot by a named edge (the 2D route then runs)."""
+    from openflight.camera import impact_placement as ip  # noqa: PLC0415
+
+    def refuse(shot, orientation, **kwargs):
+        return ip.ImpactPlacement(
+            "rejected",
+            "toe_edge_not_found_on_frame_10_2_samples",
+            diagnostics={"orientation": orientation.as_dict()},
+        )
+
+    monkeypatch.setattr(ip, "place_impact", refuse)
+
+
+def test_placement_reads_a_shot_before_any_outline_is_built(tmp_path):
+    analyser, session = live.LiveAnalyser(), Session(tmp_path)
+    reading = analyser.analyse(session.job())
+    assert reading["status"] == "ok", reading["reason"]
+    assert reading["route"] == "placement"
+    assert reading["resolution"]["route"] == "placement"
+    assert tried(reading) == []
+    assert abs(reading["impact_offset_mm"] - 8.0) <= reading["impact_offset_sigma_mm"]
+    assert reading["resolution"]["value"] == reading["impact_offset_mm"]
+    assert reading["template"] == {"swings": 1, "needed": 5, "built_from": None}
+    assert set(reading["routes"]) == {"placement"}
+    assert "orientation" in reading["routes"]["placement"]["diagnostics"]
+    assert reading["label"] == il.EXPERIMENTAL_LABEL
+    assert reading["stages_ms"]["placement_ms"] > 0
+    json.dumps(reading)
+
+
+def test_the_shots_own_d_plane_orientation_is_used_with_its_labels(tmp_path):
+    analyser, session = live.LiveAnalyser(), Session(tmp_path)
+    reading = analyser.analyse(with_d_plane(session.job(), face_status="model_geometry"))
+    assert reading["status"] == "ok", reading["reason"]
+    assert reading["route"] == "placement"
+    assert reading["orientation_source"] == "face_angle=d_plane dynamic_loft=d_plane lie=prior"
+    inputs = reading["inputs"]
+    assert inputs["face_angle"]["label"] == "model_geometry"
+    assert inputs["face_angle"]["source"].startswith("model_geometry")
+    assert inputs["dynamic_loft"]["label"] == "calculated"
+    assert inputs["lie"] == {"label": "estimated", "source": "prior_dynamic_lie_equals_static_lie"}
+    assert inputs["ball_range"]["label"] == "measured"
+    # the weakest input names the label, and an assumed lie is never "measured"
+    assert reading["input_label"] == "estimated"
+    assert reading["resolution"]["label"] == "estimated"
+    assert "lie" in reading["weakest_inputs"]
+    assert "face_angle" not in reading["weakest_inputs"]
+
+
+def test_a_shot_with_no_angles_of_its_own_is_placed_on_priors_labelled_as_priors(tmp_path):
+    analyser, session = live.LiveAnalyser(), Session(tmp_path)
+    reading = analyser.analyse(without_capture_angles(session.job()))
+    assert reading["status"] == "ok", reading["reason"]
+    assert reading["orientation_source"] == "face_angle=prior dynamic_loft=prior lie=prior"
+    for name in (*ANGLE_NAMES, "lie"):
+        assert reading["inputs"][name]["label"] == "estimated"
+        assert reading["inputs"][name]["source"].startswith("prior")
+        assert reading["orientation"][name]["origin"] == "prior"
+    assert {*ANGLE_NAMES, "lie"} <= set(reading["weakest_inputs"])
+    assert reading["input_label"] == "estimated"
+    assert "measured" not in json.dumps(reading["orientation"])
+
+
+def test_when_placement_refuses_the_outline_runs_and_every_refusal_is_kept(
+    tmp_path, placement_refuses
+):
+    analyser, session = live.LiveAnalyser(swings_needed=2), Session(tmp_path)
+    first = analyser.analyse(session.job())
+    assert first["status"] == "rejected"
+    assert first["reason"] == "building the head outline: 1 of 2 swings with this club"
+    assert first["route"] is None and first["input_label"] == "not_measured"
+    assert tried(first) == [
+        ("placement", "toe_edge_not_found_on_frame_10_2_samples"),
+        ("outline_2d", "building_the_head_outline"),
+    ]
+    second = analyser.analyse(session.job())
+    assert second["status"] == "ok", second["reason"]
+    assert second["route"] == "outline_2d"
+    assert tried(second) == [("placement", "toe_edge_not_found_on_frame_10_2_samples")]
+    assert set(second["routes"]) == {"placement", "outline_2d"}
+    assert second["routes"]["placement"]["reason"] == "the head's edge was not found around contact"
+    assert second["routes"]["outline_2d"]["status"] == "ok"
+    assert second["routes"]["outline_2d"]["diagnostics"]
+    assert second["orientation_source"] == "face_angle=capture_angle dynamic_loft=capture_angle"
+    assert second["inputs"]["face_angle"]["label"] == "calculated"
+    assert second["impact_offset_mm"] == second["routes"]["outline_2d"]["impact_offset_mm"]
+
+
+def test_a_wood_has_no_placement_model_and_the_outline_route_runs(tmp_path):
+    analyser, session = live.LiveAnalyser(swings_needed=2), Session(tmp_path)
+    reading = analyser.analyse(session.job(club="driver"))
+    assert tried(reading) == [
+        ("placement", "no_outline_model_for_category_driver"),
+        ("outline_2d", "building_the_head_outline"),
+    ]
+    assert reading["reason"] == "building the head outline: 1 of 2 swings with this club"
+    assert reading["routes"]["placement"]["reason"] == "no head model for this club category"
+
+
+def test_a_shared_input_refusal_is_named_by_every_route(tmp_path):
+    reading = live.LiveAnalyser().analyse(Session(tmp_path).job(range_source="camera_prior"))
+    assert reading["reason_code"] == "no_ball_range_for_this_shot"
+    assert tried(reading) == [
+        ("placement", "no_ball_range_for_this_shot"),
+        ("outline_2d", "no_ball_range_for_this_shot"),
+    ]
+
+
+def test_a_route_that_fails_is_refused_by_name_and_the_next_one_runs(tmp_path, monkeypatch):
+    from openflight.camera import impact_placement as ip  # noqa: PLC0415
+
+    def broken(*args, **kwargs):
+        raise ValueError("bad edge")
+
+    monkeypatch.setattr(ip, "place_impact", broken)
+    analyser, session = live.LiveAnalyser(swings_needed=1), Session(tmp_path)
+    reading = analyser.analyse(session.job())
+    assert reading["status"] == "ok", reading["reason"]
+    assert reading["route"] == "outline_2d"
+    assert tried(reading) == [("placement", "error: ValueError: bad edge")]
+
+
+def test_the_routes_are_the_placement_then_the_outline_and_nothing_else():
+    assert live.ROUTES == ("placement", "outline_2d")
+    assert live.LiveAnalyser().routes == live.ROUTES
+    assert live.LiveAnalyser(routes=["outline_2d"]).routes == ("outline_2d",)
+    with pytest.raises(ValueError):
+        live.LiveAnalyser(routes=("outline_2d", "placement"))
+    with pytest.raises(ValueError):
+        live.LiveAnalyser(routes=("centre_default",))
+
+
+def _shot_with_clip(session_job: dict, number: int) -> Shot:
+    """A kiosk Shot carrying the synthetic clip's own bound range, as the kiosk records it."""
+    from openflight.clubs import ClubType  # noqa: PLC0415
+
+    record = session_job["shot"]
+    shot = Shot(
+        ball_speed_mph=110.0,
+        club_speed_mph=record["club_speed_mph"],
+        club=ClubType.IRON_7,
+        timestamp=datetime(2026, 10, 22, 9, number),
+        shot_number=number,
+        ball_range_m=record["ball_range_m"],
+        ball_range_source="iwr_post_impact",
+        ball_range_uncertainty_m=0.03,
+    )
+    shot.camera_fusion_session_uuid = "session-a"
+    shot.impact_timestamp = 100.0
+    shot.ball_range_label = "measured"
+    shot.impact_range_evidence = record["impact_range_evidence"]
+    return shot
+
+
+def test_each_live_reading_is_published_on_its_own_shot_with_its_route(kiosk, tmp_path):
+    kiosk.extension.session_start_config(START)
+    session = Session(tmp_path)
+    jobs = [session.job(truth_mm=8.0), session.job(truth_mm=-6.0)]
+    shots = [_shot_with_clip(job, number) for number, job in enumerate(jobs, start=1)]
+    for shot, job in zip(shots, jobs):
+        kiosk.extension.on_camera_capture(shot, _capture(job["clip_path"]))
+        kiosk.extension.after_shot_published(shot, update_kind="first")
+    analyser = live.LiveAnalyser()
+    for index in range(2):
+        job = kiosk.runner.jobs[index]
+        assert job["shot_number"] == index + 1
+        kiosk.extension.dispatcher.on_result(
+            {"job_id": job["job_id"], "reading": analyser.analyse(job)}
+        )
+    for shot, truth in zip(shots, (8.0, -6.0)):
+        reading = shot.impact_location
+        assert reading["shot_number"] == shot.shot_number
+        assert reading["status"] == "ok", reading["reason"]
+        assert reading["route"] == "placement"
+        assert reading["orientation_source"] == "face_angle=prior dynamic_loft=prior lie=prior"
+        assert abs(reading["impact_offset_mm"] - truth) <= reading["impact_offset_sigma_mm"]
+        assert reading["routes"]["placement"]["diagnostics"]["orientation"]
+    assert [published.shot_number for published, _u, _s in kiosk.published] == [1, 2]
+    assert [record["shot_number"] for _t, record in kiosk.log.events] == [1, 2]
+    assert [record["route"] for _t, record in kiosk.log.events] == ["placement", "placement"]
+
+
+def test_a_reading_for_another_shot_is_never_put_on_this_one(kiosk):
+    shot = _kiosk_shot(1)
+    kiosk.extension.on_camera_capture(shot, _capture())
+    kiosk.extension.after_shot_published(shot, update_kind="first")
+    kiosk.extension.dispatcher.on_result(
+        {
+            "job_id": kiosk.runner.jobs[0]["job_id"],
+            "reading": {"status": "ok", "shot_number": 2, "impact_offset_mm": 5.0},
+        }
+    )
+    assert shot.impact_location["status"] == "rejected"
+    assert shot.impact_location["reason_code"] == "analysis_failed_reading_for_another_shot"
+    assert "impact_offset_mm" not in shot.impact_location
