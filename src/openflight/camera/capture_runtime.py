@@ -55,6 +55,8 @@ CameraCaptureStream = Literal["raw", "main-y"]
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
 SWING_EXPOSURE_EVERY_S = 1.0
+# Once locked, the live ball is re-metered only after this long without a shot (owner, 30 Oct).
+SWING_EXPOSURE_IDLE_RECHECK_S = 300.0
 SWING_EXPOSURE_FRAMES = 3
 SWING_EXPOSURE_LOOK_MAX_AGE_S = 5.0
 SWING_EXPOSURE_DECISIONS_KEPT = 20
@@ -133,6 +135,16 @@ class CameraCaptureSettings:
     def post_frames(self) -> int:
         """Frames retained after the sound trigger."""
         return math.ceil(self.post_ms * self.fps / 1000.0)
+
+
+@dataclass(frozen=True)
+class _ShotRestingBall:
+    """A clip's resting frames and the ball look in force when it was taken."""
+
+    sequence: int
+    trigger_timestamp: float
+    frames: tuple[CameraFrame, ...]
+    look: Mapping | None
 
 
 @dataclass(frozen=True)
@@ -445,6 +457,12 @@ class CameraCaptureRuntime:
         self._auto_exposure_last_check_epoch: float | None = None
         self._auto_exposure_last_adjustment_epoch: float | None = None
         self._auto_exposure_capture_deferred = False
+        self._metering_state: Literal["searching", "locked"] = "searching"
+        self._metering_trigger: str | None = None
+        self._last_metering_mono: float | None = None
+        self._changed_since_lock = False
+        self._resting_balls: dict[int, _ShotRestingBall] = {}
+        self._after_shot: _ShotRestingBall | None = None
         # Read without a lock by the ready light.
         self._last_frame_ns: int | None = None
         self._clip_started_at: float | None = None
@@ -612,6 +630,8 @@ class CameraCaptureRuntime:
                 {
                     "enabled": settings.auto_exposure,
                     "capture_deferred": self._auto_exposure_capture_deferred,
+                    "metering_state": self._metering_state,
+                    "metering_trigger": self._metering_trigger,
                     "last_check_timestamp": self._auto_exposure_last_check_epoch,
                     "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
                     "sensor_limits": (
@@ -651,7 +671,15 @@ class CameraCaptureRuntime:
                 zone_box=settings.hitting_zone,
             )
             # held controls: the zone (or the setup's ball) judges, not the policy
-            for key in ("analysis_eligibility", "frame_label", "reason", "target", "reading"):
+            for key in (
+                "analysis_eligibility",
+                "frame_label",
+                "reason",
+                "target",
+                "reading",
+                "metering_state",
+                "metering_trigger",
+            ):
                 payload.pop(key, None)
             payload.update(
                 {
@@ -853,6 +881,7 @@ class CameraCaptureRuntime:
         self._trigger_auto_exposure = queue.Queue()
         self._trigger_evidence = queue.Queue()
         self._trigger_clocks = queue.Queue()
+        self._reset_metering()
         if self._swing_policy is not None:
             self._swing_policy.reset()
 
@@ -1054,7 +1083,18 @@ class CameraCaptureRuntime:
         *,
         timeout_s: float = 1.0,
     ) -> SavedCameraCapture | None:
-        """Consume the saved capture nearest the OPS impact/trigger timestamp."""
+        """Consume the saved capture nearest the OPS impact/trigger timestamp.
+
+        A claimed clip is a real shot: its resting ball is metered for the next one.
+        """
+        capture = self._claim_capture(impact_timestamp, timeout_s)
+        if capture is not None:
+            self._queue_after_shot_metering(capture)
+        return capture
+
+    def _claim_capture(
+        self, impact_timestamp: float | None, timeout_s: float
+    ) -> SavedCameraCapture | None:
         deadline = time.monotonic() + timeout_s
         with self._condition:
             while True:
@@ -1065,6 +1105,7 @@ class CameraCaptureRuntime:
                     cutoff = impact_timestamp - self.settings.match_tolerance_s
                     while self._captures and self._captures[0].trigger_timestamp < cutoff:
                         stale = self._captures.pop(0)
+                        self._resting_balls.pop(stale.sequence, None)
                         logger.warning(
                             "[CAMERA] Discarding unmatched capture #%d (edge %.3f, shot %.3f)",
                             stale.sequence,
@@ -1241,12 +1282,13 @@ class CameraCaptureRuntime:
                 self.update_image_controls(
                     exposure_us=decision.target.exposure_us, gain=decision.target.gain
                 )
-        self._record_swing_decision(decision, checked_at=time.time())
+        self._record_swing_decision(decision, checked_at=time.time(), trigger="seed")
         return decision
 
     def _start_auto_exposure(self, seeded: sx.SwingExposureDecision | None = None) -> None:
-        """Seed the controls unless ``seeded`` already was, then keep re-checking."""
+        """Seed the controls unless ``seeded`` already was, then search for a lock."""
         self._auto_exposure_stop.clear()
+        self._reset_metering()
         if seeded is None:
             decision = self._seed_swing_exposure()
             if decision.should_apply:
@@ -1256,25 +1298,158 @@ class CameraCaptureRuntime:
         )
         self._swing_thread.start()
 
+    def _reset_metering(self) -> None:
+        with self._condition:
+            self._resting_balls.clear()
+        with self._auto_exposure_lock:
+            self._metering_state = "searching"
+            self._last_metering_mono = None
+            self._changed_since_lock = False
+            self._after_shot = None
+
     def _auto_exposure_loop(self) -> None:
-        """Re-check the resting ball before every swing: there is no startup lock."""
+        """Meter every second until locked; then only after each shot, or after idle minutes."""
         while self._running and not self._auto_exposure_stop.is_set():
             try:
-                self._run_auto_exposure_cycle()
+                self._swing_exposure_step(time.monotonic())
             except Exception:  # pylint: disable=broad-exception-caught
                 logger.warning("[CAMERA] Swing exposure check failed", exc_info=True)
             if self._auto_exposure_stop.wait(SWING_EXPOSURE_EVERY_S):
                 return
 
+    def _swing_exposure_step(self, now: float) -> sx.SwingExposureDecision | None:
+        """Run the metering due at ``now`` (monotonic s): a claimed shot's, a search, or idle."""
+        with self._auto_exposure_lock:
+            shot, self._after_shot = self._after_shot, None
+        if shot is not None:
+            decision, deferred = self._meter_saved_shot(shot)
+            if deferred:
+                with self._auto_exposure_lock:
+                    self._after_shot = self._after_shot or shot
+                return None
+            if decision is not None:
+                self._advance_metering(decision, now)
+                return decision
+        with self._auto_exposure_lock:
+            state, last = self._metering_state, self._last_metering_mono
+        if state == "searching":
+            decision = self._run_auto_exposure_cycle()
+        elif last is not None and now - last < SWING_EXPOSURE_IDLE_RECHECK_S:
+            return None
+        else:
+            decision = self._run_auto_exposure_cycle(trigger="idle_recheck")
+        if decision is not None:
+            self._advance_metering(decision, now)
+        return decision
+
+    @staticmethod
+    def _settled(decision: sx.SwingExposureDecision) -> bool:
+        """A passing ball whose setting is held, with no change waiting for confirmation."""
+        return (
+            decision.reading is not None
+            and decision.reading.passes
+            and not decision.should_apply
+            and decision.hysteresis.get("pending_direction") is None
+        )
+
+    def _advance_metering(self, decision: sx.SwingExposureDecision, now: float) -> None:
+        """Lock on a settled reading; search again on a lost ball or a second change."""
+        settled = self._settled(decision)
+        why = None
+        with self._auto_exposure_lock:
+            if self._metering_state == "searching":
+                if settled:
+                    self._metering_state, self._changed_since_lock = "locked", False
+                    why = f"locked at {decision.setting.text()}"
+            elif decision.reading is None or not decision.reading.passes:
+                self._metering_state = "searching"
+                why = "searching again: no passing ball reading"
+            elif self._changed_since_lock and not settled:
+                self._metering_state = "searching"
+                why = "searching again: a further change after an applied one"
+            else:
+                self._changed_since_lock = decision.should_apply
+            self._last_metering_mono = now
+        if why is not None:
+            logger.info("[CAMERA] Swing exposure %s", why)
+
     def restart_ball_search(self, why: str) -> None:
         """Search for the ball again at once, past any cool-down: the box or the light changed."""
         if self._swing_policy is not None:
             self._swing_policy.restart_search(why)
+            with self._auto_exposure_lock:
+                self._metering_state = "searching"
             logger.info("[CAMERA] Ball search restarts: %s", why)
 
+    def _note_look_box(self, look: Mapping) -> None:
+        box = tuple(look["box_px"]) if look.get("box_px") else None
+        if box is not None and self._last_look_box is not None and box != self._last_look_box:
+            self.restart_ball_search(f"the box moved to {list(box)}")
+        if box is not None:
+            self._last_look_box = box
+
+    def _keep_resting_ball(self, sequence: int, trigger_epoch: float, capture) -> None:
+        """Keep a clip's resting frames and the ball look until a shot claims the clip."""
+        try:
+            look = self._ball_locator() if self._ball_locator is not None else None
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[CAMERA] Ball look for the clip failed", exc_info=True)
+            look = {"state": "unknown", "reason": "the ball look failed"}
+        kept = _ShotRestingBall(
+            sequence=sequence,
+            trigger_timestamp=trigger_epoch,
+            frames=tuple(light_judging.resting_frames(capture.frames)),
+            look=dict(look) if look is not None else None,
+        )
+        with self._condition:
+            self._resting_balls[sequence] = kept
+            while len(self._resting_balls) > MAX_PENDING_SAVES:
+                self._resting_balls.pop(next(iter(self._resting_balls)))
+
+    def _queue_after_shot_metering(self, capture: SavedCameraCapture) -> None:
+        with self._condition:
+            kept = self._resting_balls.pop(capture.sequence, None)
+        if kept is None or not capture.valid or not self.settings.auto_exposure:
+            return
+        with self._auto_exposure_lock:
+            self._after_shot = kept
+
+    def _meter_saved_shot(
+        self, shot: _ShotRestingBall
+    ) -> tuple[sx.SwingExposureDecision | None, bool]:
+        """Meter a claimed shot's resting ball at the controls its frames were taken at.
+
+        Returns the decision (None when not metered) and whether a clip being
+        collected deferred it.
+        """
+        policy = self._swing_policy
+        if policy is None or not self.settings.auto_exposure or self._metering_held():
+            return None, False
+        taken_at = {(frame.exposure_us, frame.analogue_gain) for frame in shot.frames}
+        requested = (self.settings.exposure_us, self.settings.gain)
+        if len(taken_at) != 1:
+            logger.info(
+                "[CAMERA] Clip #%d's resting frames mix controls: not metered", shot.sequence
+            )
+            return None, False
+        exposure_us, gain = next(iter(taken_at))
+        if not controls_match(requested[0], requested[1], exposure_us, gain):
+            logger.info(
+                "[CAMERA] Clip #%d was taken at %s us x %s; the controls moved since: not metered",
+                shot.sequence,
+                exposure_us,
+                gain,
+            )
+            return None, False
+        if shot.look is not None:
+            self._note_look_box(shot.look)
+        reading, why = self._resting_ball(shot.frames, shot.look, at=shot.trigger_timestamp)
+        return self._decide_and_apply(policy, reading, why, requested, trigger="after_shot")
+
     def _resting_ball(
-        self, frames: tuple[CameraFrame, ...], look: Mapping | None
+        self, frames: tuple[CameraFrame, ...], look: Mapping | None, *, at: float | None = None
     ) -> tuple[sx.BallReading | None, str | None]:
+        """The ball in ``frames``; ``at`` (epoch s, default now) is when the look must be fresh."""
         images = [frame.image for frame in frames]
         last = frames[-1]
         common = {
@@ -1287,7 +1462,8 @@ class CameraCaptureRuntime:
             if state != "in_box" or not look.get("center_px") or not look.get("diameter_px"):
                 return None, str(look.get("reason") or f"the resting ball is {state}")
             observed = look.get("observed_at")
-            age = time.time() - float(observed) if observed is not None else 0.0
+            reference = time.time() if at is None else at
+            age = reference - float(observed) if observed is not None else 0.0
             if age > SWING_EXPOSURE_LOOK_MAX_AGE_S:
                 return None, f"the last look at the ball is {age:.0f} s old"
             x, y = (float(value) for value in look["center_px"])
@@ -1320,8 +1496,10 @@ class CameraCaptureRuntime:
         """True while a caller holds the controls still (a subclass's still photo)."""
         return False
 
-    def _run_auto_exposure_cycle(self) -> sx.SwingExposureDecision | None:
-        """One look at the resting ball; the frame lock covers only the decision and control."""
+    def _run_auto_exposure_cycle(
+        self, *, trigger: str = "searching"
+    ) -> sx.SwingExposureDecision | None:
+        """One look at the live resting ball; the frame lock covers only decision and control."""
         policy = self._swing_policy
         if policy is None or not self.settings.auto_exposure or self._metering_held():
             return None  # held controls are never metered or swept
@@ -1348,42 +1526,53 @@ class CameraCaptureRuntime:
                 and float(observed) < changed + SWING_EXPOSURE_LOOK_SETTLE_S
             ):
                 return None  # that look saw the old controls: wait for one at these
-            box = tuple(look["box_px"]) if look.get("box_px") else None
-            if box is not None and self._last_look_box is not None and box != self._last_look_box:
-                self.restart_ball_search(f"the box moved to {list(box)}")
-            if box is not None:
-                self._last_look_box = box
+            self._note_look_box(look)
         reading, why = self._resting_ball(frames, look)
+        decision, _deferred = self._decide_and_apply(policy, reading, why, requested, trigger)
+        return decision
+
+    def _decide_and_apply(
+        self,
+        policy: sx.SwingExposurePolicy,
+        reading: sx.BallReading | None,
+        why: str | None,
+        requested: tuple[int, float],
+        trigger: str,
+    ) -> tuple[sx.SwingExposureDecision | None, bool]:
+        """Decide and apply, never while a clip is collected; (decision, deferred by a clip)."""
         with self._trigger_exposure_lock:
             if self._ring.capture_busy:
                 with self._auto_exposure_lock:
                     self._auto_exposure_capture_deferred = True
-                return None
+                return None, True
             if (self.settings.exposure_us, self.settings.gain) != requested:
-                return None
+                return None, False
             current = sx.Setting(self.settings.exposure_us, self.settings.gain)
             decision = policy.decide(reading, current, no_ball_reason=why)
             if decision.should_apply:
                 self.update_image_controls(
                     exposure_us=decision.target.exposure_us, gain=decision.target.gain
                 )
-            self._record_swing_decision(decision, checked_at=time.time())
+            self._record_swing_decision(decision, checked_at=time.time(), trigger=trigger)
         if decision.reading is not None and decision.reading.passes:
             self._persist_auto_exposure_controls(decision)
-        return decision
+        return decision, False
 
     def _record_swing_decision(
-        self, decision: sx.SwingExposureDecision, *, checked_at: float
+        self, decision: sx.SwingExposureDecision, *, checked_at: float, trigger: str
     ) -> None:
+        """Keep and log one decision with what triggered it: seed, searching, after_shot,
+        or idle_recheck."""
         payload = decision.to_dict()
         with self._auto_exposure_lock:
             previous = self._auto_exposure_decision
             self._auto_exposure_decision = decision
+            self._metering_trigger = trigger
             self._auto_exposure_capture_deferred = False
             self._auto_exposure_last_check_epoch = checked_at
             if decision.should_apply:
                 self._auto_exposure_last_adjustment_epoch = checked_at
-            self._swing_decisions.append({"checked_at": checked_at, **payload})
+            self._swing_decisions.append({"checked_at": checked_at, "trigger": trigger, **payload})
         repeated = (
             not decision.should_apply
             and previous.status == decision.status
@@ -1391,9 +1580,10 @@ class CameraCaptureRuntime:
         )
         reading = payload["reading"] or {}
         (logger.debug if repeated else logger.info)(
-            "[CAMERA] Swing exposure %s: %s | current %s target %s | ball signal %s peak %s "
+            "[CAMERA] Swing exposure %s (%s): %s | current %s target %s | ball signal %s peak %s "
             "clipped %s%% at %s us x %s | index %s",
             decision.status,
+            trigger,
             decision.message,
             payload["current"],
             payload["target"],
@@ -1529,6 +1719,8 @@ class CameraCaptureRuntime:
             self._sequence += 1
             sequence = self._sequence
             self._saving_since = time.time()
+            if self.settings.auto_exposure:
+                self._keep_resting_ball(sequence, trigger_epoch, capture)
             try:
                 saved = self._save_capture(
                     sequence,
