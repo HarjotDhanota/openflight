@@ -968,6 +968,7 @@
   "tests/test_camera_ball_flight.py": "FUSION",
   "tests/test_camera_ball_model.py": "FUSION",
   "tests/test_camera_club_delivery.py": "FUSION",
+  "tests/test_camera_club_delivery_head.py": "FUSION",
   "tests/test_camera_club_delivery_labels.py": "FUSION",
   "tests/test_camera_club_motion.py": "FUSION",
   "tests/test_camera_club_timing.py": "FUSION",

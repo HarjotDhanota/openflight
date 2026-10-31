@@ -32,11 +32,21 @@ from openflight.camera.geometry import (
     unit_world_rays,
 )
 from openflight.camera.head_track import (
+    FERRULE_GAP_M,
+    HOSEL_NEAR_BALL_M,
+    MOVING_FLOOR_DN,
+    MOVING_SIGMAS,
+    ROI_BELOW_M,
+    SHAFT_BAND_M,
+    SHAFT_MIN_LENGTH_M,
     SOURCE as HEAD_TRACK_SOURCE,
+    WALK_FLOOR_DN,
+    WALK_SIGMAS,
     HeadTrackCamera,
     HeadTrackContext,
     HeadTrackInputs,
     estimate_head_track,
+    observe_shaft_axis,
 )
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
@@ -90,6 +100,30 @@ MIN_MATCH_SCORE = 0.30
 MIN_PAIR_STEP_PX = 2.0
 MIN_PAIRS = 2
 PAIR_OFFSETS = (-2, -1, 0, 1)
+
+# --- clubhead selection -------------------------------------------------------
+# The approach tracker localises the head from the ball side in every frame. Oct 27
+# outdoors the sky set the glint threshold to 217 DN: only the chrome shaft passed
+# it and the thickest moving blob near it was the blurred shaft, 100-150 px above
+# the ball, so attack angle read the line of sight to a shaft point. The head's
+# interior matches the background (44 vs 41 DN); its outline (120-165 DN) moves, and
+# it turns and occludes the ball between frames, so point features slid onto the
+# background. So: the shaft's axis in the moving pixels is walked down to where it
+# leaves the club at the heel's sole (head_track.observe_shaft_axis, the head track's
+# own rule and constants), in each frame, and the points are that heel and the hosel
+# axis just above it, never the shaft's glint.
+# Distances are metres at the resting ball's scale (its diameter in pixels).
+HEAD_ABOVE_BALL_MAX_M = 0.12  # heel end above the ball centre; the approach is lower
+HEAD_RADIUS_M = 0.10  # an iron blade (~75 mm) from its heel, with margin
+# Heel to ball centre, across the image, in the approach window (impact-4 .. impact+1):
+# Oct 27 measured 0.02-0.17 m; the golfer's legs stood 0.45 m and more from the ball.
+HEAD_NEAR_BALL_M = 0.25
+HEAD_HOSEL_POINTS = 3  # heel's sole + points up the hosel; the reconstruction needs 3
+SHAFT_SEARCH_ATTEMPTS = 4  # lines tried per lean before the shaft is declared absent
+# A moving line wider than this many shaft bands (head_track.SHAFT_BAND_M) either side
+# of its axis is a leg or arm edge: 3.6 cm across at the ball's scale, while the lower
+# shaft blurred at the <= 300 us exposures the head track is checked at is narrower.
+SHAFT_MAX_HALF_WIDTH_BANDS = 1.5
 
 # --- fusion constants ---------------------------------------------------------
 # A trace near 0° or ±90° makes tan(path) = tan(AoA)/tan(trace) explode or
@@ -835,6 +869,156 @@ def camera_ops_delivery_from_feature_pair(
     )
 
 
+def _shaft_ends(
+    moving: np.ndarray,
+    walk: np.ndarray,
+    *,
+    px_per_m: float,
+    band: float,
+    ball_xy: tuple[float, float],
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[str]]:
+    """Each lean's shaft (heel end, direction) in ``moving``, and the lines refused.
+
+    ``observe_shaft_axis`` returns the longest steep moving line and walks it down to
+    the heel. A line is refused by name, its corridor cleared and the search repeated
+    when its moving support is wider than ``SHAFT_MAX_HALF_WIDTH_BANDS`` shaft bands
+    either side, or its walked end lies beyond ``HEAD_NEAR_BALL_M`` of the ball: a
+    golfer's leg or arm edge, or background. A line without a walked end is skipped.
+    ``ball_xy`` and the results are in ``moving``'s pixels.
+    """
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    thickness = cv2.distanceTransform(moving.astype(np.uint8), cv2.DIST_L2, 5)
+    yy, xx = np.mgrid[0 : moving.shape[0], 0 : moving.shape[1]]
+    near = HEAD_NEAR_BALL_M * px_per_m
+    ends, refused = [], []
+    for golfer_on_left in (True, False):
+        mask = moving.copy()
+        for _attempt in range(SHAFT_SEARCH_ATTEMPTS):
+            axis = observe_shaft_axis(
+                mask,
+                walk,
+                min_length_px=SHAFT_MIN_LENGTH_M * px_per_m,
+                band_px=band,
+                gap_px=max(3.0, FERRULE_GAP_M * px_per_m),
+                golfer_on_left=golfer_on_left,
+            )
+            if axis is None:
+                break
+            point, direction = np.asarray(axis.point_px), np.asarray(axis.direction_px)
+            support = np.asarray(axis.support_pixels_px, dtype=int).reshape(-1, 2)
+            width = float(thickness[support[:, 1], support[:, 0]].max()) if len(support) else 0.0
+            distance = math.dist(axis.end_px, ball_xy) if axis.end_px is not None else None
+            if width > SHAFT_MAX_HALF_WIDTH_BANDS * band:
+                refused.append(
+                    f"moving line {2 * width:.0f} px wide is not a shaft: golfer or background"
+                )
+            elif distance is not None and distance > near:
+                refused.append(
+                    f"moving line ends {distance:.0f} px from the ball (limit {near:.0f}):"
+                    " golfer or background"
+                )
+            elif distance is not None:
+                ends.append((np.asarray(axis.end_px, dtype=float), direction))
+                break
+            across = (xx - point[0]) * direction[1] - (yy - point[1]) * direction[0]
+            mask &= np.abs(across) > max(3.0 * band, 2.0 * width)
+    return ends, refused
+
+
+@dataclass(frozen=True)
+class _HeadAnchor:
+    """Where the shaft's axis leaves the club at the heel's sole, in one frame."""
+
+    point_px: np.ndarray
+    direction_px: np.ndarray  # shaft axis, unit, pointing down toward the head
+    step_px: float  # the shaft's band half-width: spacing of the hosel points
+    thickness_px: float  # largest inscribed radius of the head's moving pixels
+
+    def hosel_points(self) -> np.ndarray:
+        """The heel's sole and two points up the hosel axis: rigid on the head."""
+        steps = np.arange(HEAD_HOSEL_POINTS, dtype=float)[:, None]
+        return self.point_px[None, :] - steps * self.step_px * self.direction_px[None, :]
+
+
+def _clubhead_anchor(
+    frame: np.ndarray, background: np.ndarray, ball
+) -> tuple[_HeadAnchor | None, str | None]:
+    """The clubhead's heel in one frame, found from the ball side, or the refusal.
+
+    Selection: the shaft is a steep line in the pixels moving against the background,
+    searched within ``HOSEL_NEAR_BALL_M`` of the ball either side and down to
+    ``ROI_BELOW_M`` below it; its axis is walked down to where it leaves the club at
+    the heel's sole (``observe_shaft_axis``, the head track's rule), and lines too wide
+    for a shaft or ending beyond ``HEAD_NEAR_BALL_M`` of the ball are refused
+    (``_shaft_ends``). Of each lean direction's shaft, the end nearest the ball is kept.
+    It must lie within ``HEAD_ABOVE_BALL_MAX_M`` above the ball centre, and moving head
+    pixels must surround it. Thresholds are noise sigmas of this frame's own difference
+    near the ball, never the scene's brightest content.
+    """
+    import cv2  # pylint: disable=import-outside-toplevel
+
+    background = background.astype(np.uint8)
+    px_per_m = float(ball.diameter_px) / GOLF_BALL_DIAMETER_M
+    height, width = frame.shape
+    lane = HOSEL_NEAR_BALL_M * px_per_m
+    x0, x1 = max(0, int(ball.x - lane)), min(width, int(ball.x + lane) + 1)
+    y1 = min(height, int(ball.y + ROI_BELOW_M * px_per_m) + 1)
+    if x1 - x0 < 8 or y1 < 8:
+        return None, "no shaft: the ball's lane is outside the frame"
+    signed = frame[:y1, x0:x1].astype(np.float32) - background[:y1, x0:x1].astype(np.float32)
+    # Median absolute deviation: the club and golfer in this frame do not inflate it.
+    noise = 1.4826 * float(np.median(np.abs(signed - np.median(signed))))
+    moving_dn = max(MOVING_SIGMAS * noise, MOVING_FLOOR_DN)
+    band = max(3.0, SHAFT_BAND_M * px_per_m)
+    ends, refused = _shaft_ends(
+        np.abs(signed) > moving_dn,
+        np.abs(signed) > max(WALK_SIGMAS * noise, WALK_FLOOR_DN),
+        px_per_m=px_per_m,
+        band=band,
+        ball_xy=(ball.x - x0, ball.y),
+    )
+    if not ends:
+        return None, "; ".join(refused or ["no shaft line in the moving pixels"])
+    anchor, direction = min(
+        ((end + (x0, 0), axis) for end, axis in ends),
+        key=lambda item: math.dist(item[0], (ball.x, ball.y)),
+    )
+    above = float(ball.y - anchor[1])
+    if above > HEAD_ABOVE_BALL_MAX_M * px_per_m:
+        return None, (
+            f"shaft end {above:.0f} px above the ball, beyond its height band "
+            f"({HEAD_ABOVE_BALL_MAX_M * px_per_m:.0f} px)"
+        )
+
+    # The head: moving pixels round the heel, outside the shaft's band above it.
+    yy, xx = np.mgrid[0:height, 0:width]
+    along = (xx - anchor[0]) * direction[0] + (yy - anchor[1]) * direction[1]
+    across = (xx - anchor[0]) * direction[1] - (yy - anchor[1]) * direction[0]
+    radius = HEAD_RADIUS_M * px_per_m
+    head = ((xx - anchor[0]) ** 2 + (yy - anchor[1]) ** 2 <= radius**2) & ~(
+        (np.abs(across) <= band) & (along < -2.0 * band)
+    )
+    head_moving = (cv2.absdiff(frame, background) > moving_dn) & head
+    if not head_moving.any():
+        return None, "no moving head pixels at the shaft's end"
+    thickness = cv2.distanceTransform(head_moving.astype(np.uint8), cv2.DIST_L2, 5)
+    return (
+        _HeadAnchor(
+            point_px=np.asarray(anchor, dtype=float),
+            direction_px=np.asarray(direction, dtype=float),
+            step_px=band,
+            thickness_px=float(thickness.max()),
+        ),
+        None,
+    )
+
+
+def _refuse(reasons: list[str] | None, reason: str) -> None:
+    if reasons is not None:
+        reasons.append(reason)
+
+
 def _clubhead_pair_tracks(
     frames: np.ndarray,
     background: np.ndarray,
@@ -844,80 +1028,29 @@ def _clubhead_pair_tracks(
     second_idx: int,
     bright_now: float,
     dark_bg: float,
+    reasons: list[str] | None = None,
 ) -> tuple[np.ndarray | None, float | None]:
-    """Track a consensus of clubhead pixels across one approach interval."""
-    import cv2  # pylint: disable=import-outside-toplevel
+    """The clubhead's hosel points in both frames of one approach interval.
 
+    The head is localised in each frame on its own (``_clubhead_anchor``): its
+    appearance turns and occludes the ball between frames, so it is found, not
+    followed. The points are the heel's sole and points up the hosel axis, one rigid
+    set on the head, ``[point, first/second, xy]``. A refusal's reason is appended to
+    ``reasons``. The glint thresholds ``bright_now``/``dark_bg`` no longer select the
+    club: outdoors the sky sets them and only the shaft passed.
+    """
+    del bright_now, dark_bg
     if first_idx < 0 or second_idx >= len(frames) or first_idx >= second_idx:
         return None, None
-    seed = frames[first_idx]
-    shaft_mask = _club_mask(seed, background, bright_now, dark_bg)
-    head = _head_end(shaft_mask, ball)
-    if head is None:
-        return None, None
-
-    difference = cv2.absdiff(seed, background.astype(np.uint8))
-    moving = (difference > 15).astype(np.uint8)
-    yy, xx = np.mgrid[0 : seed.shape[0], 0 : seed.shape[1]]
-    scale = _image_scale(seed.shape)
-    local_radius = max(24.0, 75.0 * scale)
-    feature_radius = max(14, round(38 * scale))
-    local = (xx - head[0]) ** 2 + (yy - head[1]) ** 2 <= local_radius**2
-    distance = cv2.distanceTransform(moving, cv2.DIST_L2, 5)
-    head_score = np.where(local, distance, 0.0)
-    center_y, center_x = np.unravel_index(np.argmax(head_score), head_score.shape)
-    head_thickness = float(head_score[center_y, center_x])
-    if head_thickness < 2.5:
-        return None, head_thickness
-    feature_mask = np.zeros_like(moving)
-    cv2.circle(feature_mask, (int(center_x), int(center_y)), feature_radius, 255, -1)
-    feature_mask[difference < 8] = 0
-
-    points0 = cv2.goodFeaturesToTrack(
-        seed,
-        maxCorners=200,
-        qualityLevel=0.002,
-        minDistance=1,
-        mask=feature_mask,
-        blockSize=3,
-    )
-    if points0 is None or len(points0) < 3:
-        return None, head_thickness
-    lk = {
-        "winSize": (41, 41),
-        "maxLevel": 3,
-        "criteria": (
-            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
-            50,
-            0.003,
-        ),
-    }
-    first = frames[first_idx]
-    second = frames[second_idx]
-    points1, status01, _error01 = cv2.calcOpticalFlowPyrLK(first, second, points0, None, **lk)
-    if points1 is None:
-        return None, head_thickness
-    back, status10, _error10 = cv2.calcOpticalFlowPyrLK(second, first, points1, None, **lk)
-    if back is None:
-        return None, head_thickness
-
-    flat0 = points0.reshape(-1, 2)
-    flat1 = points1.reshape(-1, 2)
-    valid = status01.reshape(-1).astype(bool) & status10.reshape(-1).astype(bool)
-    valid &= np.linalg.norm(back.reshape(-1, 2) - flat0, axis=1) < 3.0
-    flat0 = flat0[valid]
-    flat1 = flat1[valid]
-    if len(flat0) < 3:
-        return None, head_thickness
-
-    displacement = flat1 - flat0
-    center = np.median(displacement, axis=0)
-    deviation = np.linalg.norm(displacement - center, axis=1)
-    limit = max(2.0, float(np.median(deviation)) * 3.0)
-    consensus = deviation <= limit
-    if int(consensus.sum()) < 3:
-        return None, head_thickness
-    return np.stack((flat0[consensus], flat1[consensus]), axis=1), head_thickness
+    anchors = []
+    for label, index in (("seed", first_idx), ("end", second_idx)):
+        anchor, refusal = _clubhead_anchor(frames[index], background, ball)
+        if anchor is None:
+            _refuse(reasons, f"{label} frame {index}: {refusal}")
+            return None, (anchors[0].thickness_px if anchors else None)
+        anchors.append(anchor)
+    tracks = np.stack([anchor.hosel_points() for anchor in anchors], axis=1)
+    return tracks, anchors[0].thickness_px
 
 
 def _clubhead_feature_tracks(
@@ -929,78 +1062,22 @@ def _clubhead_feature_tracks(
     bright_now: float,
     dark_bg: float,
 ) -> tuple[np.ndarray | None, float | None]:
-    """Track identical clubhead pixels from pre-impact through post-impact."""
-    import cv2  # pylint: disable=import-outside-toplevel
+    """The clubhead's hosel points from pre-impact through post-impact.
 
+    Same localisation as ``_clubhead_pair_tracks``, in each of the three frames.
+    """
+    del bright_now, dark_bg
     indexes = (impact_idx - 1, impact_idx, impact_idx + 1)
     if indexes[0] < 0 or indexes[-1] >= len(frames):
         return None, None
-    seed = frames[indexes[0]]
-    shaft_mask = _club_mask(seed, background, bright_now, dark_bg)
-    head = _head_end(shaft_mask, ball)
-    if head is None:
-        return None, None
-
-    difference = cv2.absdiff(seed, background.astype(np.uint8))
-    moving = (difference > 15).astype(np.uint8)
-    yy, xx = np.mgrid[0 : seed.shape[0], 0 : seed.shape[1]]
-    scale = _image_scale(seed.shape)
-    local_radius = max(24.0, 75.0 * scale)
-    feature_radius = max(14, round(38 * scale))
-    local = (xx - head[0]) ** 2 + (yy - head[1]) ** 2 <= local_radius**2
-    distance = cv2.distanceTransform(moving, cv2.DIST_L2, 5)
-    head_score = np.where(local, distance, 0.0)
-    center_y, center_x = np.unravel_index(np.argmax(head_score), head_score.shape)
-    head_thickness = float(head_score[center_y, center_x])
-    if head_thickness < 2.5:
-        return None, head_thickness
-    feature_mask = np.zeros_like(moving)
-    cv2.circle(feature_mask, (int(center_x), int(center_y)), feature_radius, 255, -1)
-    feature_mask[difference < 8] = 0
-
-    points0 = cv2.goodFeaturesToTrack(
-        seed,
-        maxCorners=100,
-        qualityLevel=0.005,
-        minDistance=2,
-        mask=feature_mask,
-        blockSize=3,
-    )
-    if points0 is None or len(points0) < 3:
-        return None, head_thickness
-
-    lk = {
-        "winSize": (31, 31),
-        "maxLevel": 3,
-        "criteria": (
-            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
-            40,
-            0.005,
-        ),
-    }
-    first, middle, last = (frames[index] for index in indexes)
-    points1, status01, _error01 = cv2.calcOpticalFlowPyrLK(first, middle, points0, None, **lk)
-    if points1 is None:
-        return None, head_thickness
-    points2, status12, _error12 = cv2.calcOpticalFlowPyrLK(middle, last, points1, None, **lk)
-    if points2 is None:
-        return None, head_thickness
-    back, status20, _error20 = cv2.calcOpticalFlowPyrLK(last, first, points2, None, **lk)
-    if back is None:
-        return None, head_thickness
-
-    flat0 = points0.reshape(-1, 2)
-    flat1 = points1.reshape(-1, 2)
-    flat2 = points2.reshape(-1, 2)
-    valid = (
-        status01.reshape(-1).astype(bool)
-        & status12.reshape(-1).astype(bool)
-        & status20.reshape(-1).astype(bool)
-    )
-    valid &= np.linalg.norm(back.reshape(-1, 2) - flat0, axis=1) < 2.0
-    if int(valid.sum()) < 3:
-        return None, head_thickness
-    return np.stack((flat0[valid], flat1[valid], flat2[valid]), axis=1), head_thickness
+    anchors = []
+    for index in indexes:
+        anchor, _refusal = _clubhead_anchor(frames[index], background, ball)
+        if anchor is None:
+            return None, (anchors[0].thickness_px if anchors else None)
+        anchors.append(anchor)
+    tracks = np.stack([anchor.hosel_points() for anchor in anchors], axis=1)
+    return tracks, anchors[0].thickness_px
 
 
 def _head_positions(
@@ -1161,6 +1238,7 @@ def estimate_chained_delivery(
     ops_reference_needed = False
     for offsets in APPROACH_PATH_OFFSETS:
         indexes = np.asarray([impact_idx + offset for offset in offsets])
+        refusals: list[str] = []
         feature_tracks, head_thickness = _clubhead_pair_tracks(
             frames,
             background,
@@ -1169,9 +1247,11 @@ def estimate_chained_delivery(
             second_idx=int(indexes[1]),
             bright_now=bright_now,
             dark_bg=dark_bg,
+            reasons=refusals,
         )
         if head_thickness is not None:
             head_thicknesses.append(head_thickness)
+        notes.extend(f"no clubhead in window {offsets}: {reason}" for reason in refusals)
         if feature_tracks is None:
             continue
         if range_evidence is None and ops_reference is None:
