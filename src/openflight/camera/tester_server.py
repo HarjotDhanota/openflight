@@ -5140,7 +5140,8 @@ class AddressPreviewLocator:  # pylint: disable=too-many-instance-attributes
             "[BOX_BALL] the address preview cannot run (%s): the classic locator finds the ball",
             failure,
         )
-        self._pipeline.close()
+        # a hung worker can hold close() for long: never on a look or a page request
+        threading.Thread(target=self._pipeline.close, name="address-preview-close").start()
 
     def offer(self, pixels: np.ndarray, metadata: Mapping, sequence: int, observed_at: float):
         """A new live frame for the preview (constant work; never waits for a fit)."""
