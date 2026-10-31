@@ -393,3 +393,34 @@ def test_summarize_shots_std_dev_needs_two_finite_ball_speeds():
     assert one_finite["std_dev"] is None
     two_finite = summarize_shots([_summary_shot(ball=140.0), _summary_shot(ball=160.0)], "x")
     assert two_finite["std_dev"] == pytest.approx(14.142135623730951)
+
+
+def test_an_implausible_smash_is_withheld_and_its_club_speed_relabelled():
+    # 24 Oct shot 20: ball 76.0 mph, the OPS's club pick 33.1 mph (smash 2.30)
+    shot = Shot(
+        ball_speed_mph=76.0,
+        club_speed_mph=33.1,
+        timestamp=datetime.now(),
+        smash_factor_status=SMASH_RADIAL_RATIO,
+    )
+
+    assert shot.smash_factor is None
+    data = shot.to_dict()
+    assert data["smash_factor"] is None
+    assert data["smash_factor_status"] is None
+    assert "2.30" in data["smash_factor_reason"]
+    # the ball speed is the validated reading: untouched; the club keeps its value
+    assert data["ball_speed_mph"] == 76.0
+    assert data["club_speed_mph"] == 33.1
+    assert data["club_speed_status"] == "experimental"
+    assert data["club_speed_reason"] == "implausible against the ball speed (smash 2.30)"
+
+
+def test_a_plausible_smash_leaves_the_club_speed_unlabelled():
+    shot = Shot(ball_speed_mph=150.0, club_speed_mph=103.0, timestamp=datetime.now())
+
+    data = shot.to_dict()
+    assert data["smash_factor"] == pytest.approx(150.0 / 103.0)
+    assert data["smash_factor_reason"] is None
+    assert data["club_speed_status"] is None
+    assert data["club_speed_reason"] is None

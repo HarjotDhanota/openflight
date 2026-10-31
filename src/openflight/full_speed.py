@@ -78,6 +78,7 @@ from .ops_speed_track import (  # noqa: F401  (ops_speed_track is re-exported)
     ops_speed_track,
 )
 from .rig_geometry import SPEED_OF_SOUND_M_S, camera_rdf_offset_to_target_lfu
+from .smash import implausible_smash_reason
 from .source_chain import weakest_label
 from .source_labels import (
     EXPERIMENTAL_LAUNCH_SOURCES,
@@ -1309,6 +1310,18 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
     }
 
 
+def club_speed_doubted(club_full: Any, reason: Optional[str]) -> Any:
+    """A full club speed built on a club reading the ball speed makes implausible
+    (``Shot.club_speed_reason``): experimental, with why; anything else unchanged."""
+    if not reason or not isinstance(club_full, dict) or not _finite(club_full.get("value_mph")):
+        return club_full
+    why = f"the OPS club reading is {reason}"
+    note = club_full.get("note")
+    if note and why in note:
+        return club_full
+    return {**club_full, "status": EXPERIMENTAL, "note": f"{note}; {why}" if note else why}
+
+
 # ---------------------------------------------------------------- smash
 
 
@@ -1349,6 +1362,9 @@ def evaluate_full_smash(ball_full: Any, club_full: Any) -> dict:
     value = smash_factor(ball_full["value_mph"], club_full["value_mph"])
     if value is None or not math.isfinite(value):
         return {**base, "reason": "no ratio is defined for these speeds"}
+    implausible = implausible_smash_reason(ball_full["value_mph"], club_full["value_mph"])
+    if implausible:
+        return {**base, "reason": implausible}
     label = weakest_label(ball_full["status"], club_full["status"])
     weak = [
         f"{name} full speed is {speed['status']}"

@@ -28,3 +28,52 @@ class TestSmashFactor:
     def test_a_non_finite_ball_speed_stays_non_finite(self, ball):
         result = smash_factor(ball, 100.0)
         assert result is not None and not math.isfinite(result)
+
+
+class TestPlausibility:
+    """A smash no club can make says the club reading is wrong, not the ball's."""
+
+    def test_the_bracket_is_named(self):
+        from openflight.smash import MAX_PLAUSIBLE_SMASH, MIN_PLAUSIBLE_SMASH
+
+        assert MAX_PLAUSIBLE_SMASH == 1.70
+        assert MIN_PLAUSIBLE_SMASH == 0.5
+
+    @pytest.mark.parametrize(
+        ("ball", "club", "shown"),
+        # 24 Oct shots 20 and 23: the OPS picked a wrong club reading
+        [(76.0, 33.1, "2.30"), (69.3, 27.8, "2.49"), (40.0, 100.0, "0.40")],
+    )
+    def test_an_implausible_smash_is_named_with_its_value(self, ball, club, shown):
+        from openflight.smash import implausible_smash_reason
+
+        reason = implausible_smash_reason(ball, club)
+
+        assert reason is not None and shown in reason
+
+    def test_the_club_speed_s_reason_names_the_smash(self):
+        from openflight.smash import implausible_club_speed_reason
+
+        assert implausible_club_speed_reason(76.0, 33.1) == (
+            "implausible against the ball speed (smash 2.30)"
+        )
+        assert implausible_club_speed_reason(150.0, 103.0) is None
+
+    @pytest.mark.parametrize(
+        ("ball", "club"),
+        [
+            (150.0, 100.0),
+            (170.0, 100.0),  # 1.70 itself is plausible
+            (50.0, 100.0),  # 0.5 itself is plausible
+            (None, 100.0),
+            (100.0, None),
+            (100.0, 0.0),
+            (float("inf"), 100.0),
+            (float("nan"), 100.0),
+        ],
+    )
+    def test_a_plausible_or_undefined_smash_is_not_judged(self, ball, club):
+        from openflight.smash import implausible_club_speed_reason, implausible_smash_reason
+
+        assert implausible_smash_reason(ball, club) is None
+        assert implausible_club_speed_reason(ball, club) is None

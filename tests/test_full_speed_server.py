@@ -232,3 +232,25 @@ def test_a_calibrated_lens_lifts_the_camera_fallback_full_speed_to_estimated(fus
     server_module._attach_ball_speed_contract(shot)
 
     assert shot.ball_speed_full["status"] == "estimated"
+
+
+def test_a_full_club_speed_on_an_implausible_club_reading_carries_why(fusion_geometry, monkeypatch):
+    import openflight.full_speed as full_speed  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        full_speed,
+        "evaluate_full_club_speed_head_track",
+        lambda **_kwargs: {
+            "status": full_speed.EXPERIMENTAL,
+            "value_mph": 35.0,
+            "referred_to": "the reading's time",
+            "note": full_speed.CLUB_HEAD_TRACK_NOTE,
+        },
+    )
+    shot = _shot(club_speed_mph=33.1, ball_speed_mph=76.0)
+
+    server_module._attach_ball_speed_contract(shot)
+
+    assert shot.ball_speed_mph == 76.0
+    assert shot.club_speed_full["status"] == full_speed.EXPERIMENTAL
+    assert "implausible against the ball speed (smash 2.30)" in shot.club_speed_full["note"]

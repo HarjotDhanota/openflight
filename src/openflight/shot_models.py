@@ -440,8 +440,12 @@ def _collision_inputs(shot: Shot) -> dict:
 
 
 def _full_impact_club_speed_input(shot: Shot) -> collision_model.Input:
-    """Only a full clubhead speed referred to impact belongs in the collision."""
+    """Only a full clubhead speed referred to impact belongs in the collision; one on a
+    club reading the ball speed makes implausible enters experimental, with why."""
+    from openflight.full_speed import club_speed_doubted  # noqa: PLC0415
+
     full = shot.club_speed_full if isinstance(shot.club_speed_full, dict) else {}
+    full = club_speed_doubted(full, shot.club_speed_reason)
     value, label = full.get("value_mph"), full.get("status")
     if (
         not _finite(value)
@@ -897,10 +901,16 @@ def _attach_full_speeds(shot: Shot) -> None:
         else None
     )
     delivery = shot.club_delivery if isinstance(shot.club_delivery, dict) else {}
-    shot.club_speed_full = evaluate_full_club_speed_head_track(
-        ops_track=shot.ops_speed_track,
-        head_track=delivery.get("head_track"),
-        rig=server.rig_geometry,
+    # a club reading the ball speed makes implausible: experimental, with why
+    from openflight.full_speed import club_speed_doubted  # noqa: PLC0415
+
+    shot.club_speed_full = club_speed_doubted(
+        evaluate_full_club_speed_head_track(
+            ops_track=shot.ops_speed_track,
+            head_track=delivery.get("head_track"),
+            rig=server.rig_geometry,
+        ),
+        shot.club_speed_reason,
     )
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 

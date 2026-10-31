@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .horizontal_frame import implausible_launch_reason
 from .numeric import finite_float as _finite
+from .smash import implausible_club_speed_reason, implausible_smash_reason
 from .source_chain import weakest_label
 from .source_labels import (
     CAMERA_HEAD_TRACK_SOURCE,
@@ -360,12 +361,15 @@ centre_strike_note = _centre_strike_note
 def _smash(shot):
     radial = shot.get("smash_factor_status") == "radial_ratio"
     club = _finite(shot.get("club_speed_mph"))
+    # judged on the speeds, so an older log's logged smash is withheld too
+    implausible = implausible_smash_reason(_finite(shot.get("ball_speed_mph")), club)
     return _record(
         "smash_factor",
-        shot.get("smash_factor"),
+        None if implausible else shot.get("smash_factor"),
         CALCULATED,
         source=SMASH_RADIAL_SOURCE if radial else SMASH_SOURCE,
-        reason="no club speed: no ratio" if club is None or club <= 0 else "smash undefined",
+        reason=implausible
+        or ("no club speed: no ratio" if club is None or club <= 0 else "smash undefined"),
     )
 
 
@@ -391,12 +395,17 @@ def _carry(shot):
 
 
 def _club_speed(shot):
+    # the ball speed is the validated reading: a smash no club can make doubts the club's
+    doubt = implausible_club_speed_reason(
+        _finite(shot.get("ball_speed_mph")), _finite(shot.get("club_speed_mph"))
+    )
     return _record(
         "club_speed",
         shot.get("club_speed_mph"),
-        MEASURED,
+        EXPERIMENTAL if doubt else MEASURED,
         source=_sensor_source(shot, OPS_RADIAL_SOURCE),
         reason="no OPS243 club speed reading",
+        note=doubt,
     )
 
 

@@ -588,3 +588,25 @@ def test_a_measured_launch_on_the_shot_s_own_range_stays_calculated():
 
     assert result["status"] == CALCULATED
     assert result["weak_inputs"] == []
+
+
+def test_a_full_smash_no_club_can_make_is_withheld():
+    result = evaluate_full_smash(_full(76.0), _full(33.1, club=True))
+
+    assert result["status"] == NOT_MEASURED
+    assert result["value"] is None
+    assert "2.30" in result["reason"]
+
+
+def test_a_full_club_speed_on_an_implausible_club_reading_is_experimental_and_says_why():
+    from openflight.full_speed import EXPERIMENTAL, club_speed_doubted  # noqa: PLC0415
+
+    doubted = club_speed_doubted(
+        _full(85.0, club=True), "implausible against the ball speed (smash 2.30)"
+    )
+
+    assert doubted["status"] == EXPERIMENTAL
+    assert doubted["value_mph"] == 85.0
+    assert "implausible against the ball speed (smash 2.30)" in doubted["note"]
+    assert club_speed_doubted(_full(85.0, club=True), None) == _full(85.0, club=True)
+    assert club_speed_doubted(_not("x"), "why")["status"] == NOT_MEASURED

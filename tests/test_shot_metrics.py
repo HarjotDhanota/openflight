@@ -428,3 +428,60 @@ def test_a_head_track_path_is_an_experimental_record_and_its_face_angle_is_too()
     # it feeds the collision model (owner decision 5): the face inherits experimental
     assert metrics["face_angle"]["value"] is not None
     assert metrics["face_angle"]["status"] == "experimental"
+
+
+def test_an_implausible_radial_smash_is_withheld_and_the_club_speed_is_experimental():
+    # 24 Oct shot 20 as it was logged: smash 2.30, club labelled measured
+    metrics = shot_metrics.from_record(
+        {
+            "ball_speed_mph": 76.0,
+            "club_speed_mph": 33.1,
+            "smash_factor": 76.0 / 33.1,
+            "smash_factor_status": "radial_ratio",
+        }
+    )
+
+    smash = metrics["smash_factor"]
+    assert smash["value"] is None
+    assert smash["status"] == "not_measured"
+    assert "2.30" in smash["reason"] and "1.70" in smash["reason"]
+    club = metrics["club_speed"]
+    assert club["value"] == 33.1
+    assert club["status"] == "experimental"
+    assert club["note"] == "implausible against the ball speed (smash 2.30)"
+    assert metrics["ball_speed"]["value"] == 76.0
+    assert metrics["ball_speed"]["status"] == "measured"
+
+
+def test_a_plausible_radial_smash_keeps_its_labels():
+    metrics = shot_metrics.from_record(
+        {"ball_speed_mph": 150.0, "club_speed_mph": 103.0, "smash_factor": 150.0 / 103.0}
+    )
+
+    assert metrics["smash_factor"]["status"] == "calculated"
+    assert metrics["club_speed"]["status"] == "measured"
+    assert metrics["club_speed"]["note"] is None
+
+
+def test_the_collision_model_sees_an_implausible_club_speed_as_experimental():
+    from openflight import shot_models  # noqa: PLC0415
+
+    shot = fusion_shot()
+    shot.club_speed_mph = shot.ball_speed_mph / 2.3
+    shot.club_speed_full = {
+        "status": "calculated",
+        "value_mph": 85.0,
+        "referred_to": "impact",
+        "reference_point": "clubhead",
+    }
+
+    club = shot_models._full_impact_club_speed_input(shot)  # pylint: disable=protected-access
+
+    assert club.experimental
+    assert "implausible against the ball speed (smash 2.30)" in club.reason
+    shot_models._attach_collision_model(shot)  # pylint: disable=protected-access
+    # the model's outputs carry it as every experimental input (collision_model.Input)
+    inputs = shot.collision_model["inputs"]["club_speed_mph"]
+    assert inputs["experimental"] is True
+    assert "smash 2.30" in inputs["reason"]
+    assert "smash 2.30" in shot.to_dict()["metrics"]["smash_index"]["note"]

@@ -438,9 +438,30 @@ class Shot:
         - Wedges: 1.20-1.25
 
         Returns:
-            Smash factor, or None without a positive finite club speed
+            Smash factor, or None without a positive finite club speed, or when no club
+            could make it (``smash_factor_reason``)
         """
+        if self.smash_factor_reason is not None:
+            return None
         return smash.smash_factor(self.ball_speed_mph, self.club_speed_mph)
+
+    @property
+    def smash_factor_reason(self) -> Optional[str]:
+        """Why the smash is withheld: outside ``smash``'s plausible bracket, or None."""
+        return smash.implausible_smash_reason(self.ball_speed_mph, self.club_speed_mph)
+
+    @property
+    def club_speed_reason(self) -> Optional[str]:
+        """Why the club speed is experimental: its smash against the ball speed, or None.
+
+        The ball speed is the validated reading; the club reading keeps its value.
+        """
+        return smash.implausible_club_speed_reason(self.ball_speed_mph, self.club_speed_mph)
+
+    @property
+    def club_speed_status(self) -> Optional[str]:
+        """``experimental`` for an implausible club reading, else None (the OPS's reading)."""
+        return "experimental" if self.club_speed_reason is not None else None
 
     @property
     def estimated_carry_yards(self) -> float:
@@ -516,6 +537,9 @@ class Shot:
             "smash_factor_status": (
                 self.smash_factor_status if self.smash_factor is not None else None
             ),
+            "smash_factor_reason": self.smash_factor_reason,
+            "club_speed_status": self.club_speed_status,
+            "club_speed_reason": self.club_speed_reason,
             # the upstream schema's table-carry fields (BLE, UI): null on every install,
             # nothing fills a carry in (owner decision 1, 25 Oct 2026)
             "estimated_carry_yards": None,
