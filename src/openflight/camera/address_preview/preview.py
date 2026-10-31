@@ -13,7 +13,7 @@ import multiprocessing
 import threading
 import time
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeout
 from copy import deepcopy
 
 import numpy as np
@@ -36,7 +36,9 @@ from .search import close_fit_pool, configure_cancellation, search, warm_fit_poo
 from .watch import PatchWatch, picture
 
 APPEARANCE_CUE_MAX_AGE_S = 12.0  # Assumed cue lifetime; geometry freshness remains 2s.
-POOL_START_TIMEOUT_S = 30
+# a cold start spawns the broad worker, imports, builds templates and starts its
+# two fit workers (search.FIT_POOL_START_TIMEOUT_S): slow on a cold SD card
+POOL_START_TIMEOUT_S = 180
 
 
 def boot(cancel_event=None) -> bool:
@@ -105,7 +107,13 @@ class Preview:  # pylint: disable=too-many-instance-attributes
                 warm_fast(model_path)
             if pool is None:
                 start = time.monotonic()
-                if self.pool.submit(int).result(timeout=POOL_START_TIMEOUT_S) != 0:
+                try:
+                    started = self.pool.submit(int).result(timeout=POOL_START_TIMEOUT_S)
+                except FutureTimeout as exc:
+                    raise RuntimeError(
+                        f"the broad search worker did not start within {POOL_START_TIMEOUT_S} s"
+                    ) from exc
+                if started != 0:
                     raise RuntimeError("the broad search worker did not start")
                 self.preheat_ms = (time.monotonic() - start) * 1000
         except BaseException:
