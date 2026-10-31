@@ -610,14 +610,14 @@ def pending_tee_range_solution(
     )
 
 
-# The lens height normally comes from the rig file: the unit and the setup ball
-# stand on the same surface. One ball's ray and radar range solve it only to about
-# +-25-65 mm (the ball is 2-3 deg below level, so each degree of tilt error is
-# ~22 mm at 1.25 m): too loose to see a mat or sunk feet, which move the radar's
-# vertical launch less than its own noise, but enough to catch a unit on a box.
-GROSS_LENS_HEIGHT_ERROR_M = 0.060
-# The radar must stay above the surface it reflects from.
-MIN_RADAR_CLEARANCE_M = 0.010
+# The lens height above the hitting surface: the rig file's (the unit and the ball on
+# one surface) unless the radar-solved one is precise or rules the rig's out. One
+# ball's ray and radar range solve it to about +-25-65 mm uncalibrated (each degree
+# of tilt error is ~22 mm at 1.25 m). The rule is surface_height.use_solved: used when
+# its sigma is within SURFACE_HEIGHT_MAX_SIGMA_M (15 mm), or when it lies more than
+# NOMINAL_REJECTION_SIGMAS (2) sigma from the rig's; this replaced a fixed 60 mm
+# gross-error floor (owner, 30 Oct). A raised hitting surface may put the radar below
+# it: that is a scene the IWR models off the base, not a wrong ball.
 # Camera-window outcomes after which the radar's own pick can't be used: it lies
 # outside the camera's window and nothing inside the window replaced it (wiring
 # audit S5).
@@ -710,26 +710,27 @@ def _check_solved_lens_height(
     lens_above_radar: float,
     bounds: tuple[float, float],
 ) -> dict:
-    """Keep the rig's lens height unless the radar-solved one shows a gross error."""
+    """Keep the rig's lens height unless the radar-solved one is precise or rules it out.
+
+    ``lens_above_radar`` is recorded: the radar below the hitting surface is allowed.
+    """
+    from openflight.surface_height import use_solved  # noqa: PLC0415
+
     nominal = solved["nominal_m"]
     solved["radar_solved_m"] = height
     solved["radar_uncertainty_m"] = uncertainty
+    solved["radar_height_above_surface_m"] = height - lens_above_radar
     low, high = bounds
-    lowest = lens_above_radar + MIN_RADAR_CLEARANCE_M
-    if height < lowest:
-        solved["radar_rejected"] = (
-            f"radar range puts the lens at {height * 1000:.0f} mm, which would put the radar "
-            "below the hitting surface; the selected ball may be wrong"
-        )
-        return solved
-    if not low <= height <= high:
+    if not low < height <= high:
         solved["radar_rejected"] = (
             f"radar range puts the lens at {height * 1000:.0f} mm, outside "
             f"{low * 1000:.0f}-{high * 1000:.0f} mm; the selected ball may be wrong"
         )
         return solved
     offset = height - nominal
-    if abs(offset) <= max(GROSS_LENS_HEIGHT_ERROR_M, 2.0 * uncertainty):
+    used, why = use_solved(offset, uncertainty)
+    solved["rule"] = why
+    if not used:
         solved["check"] = "consistent"
     else:
         raised = offset > 0

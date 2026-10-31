@@ -1,9 +1,17 @@
-"""The hitting surface's height above the enclosure's base, solved from one shot.
+"""The hitting surface's height above the enclosure's base, solved on every shot.
 
-Nothing is typed in: the shot's own measured IWR launch-point range and its resting
+Nothing is typed in: each shot's own measured IWR launch-point range and its resting
 ball's pixel give the lens height above the surface the ball rests on (the setup's
 ray-meets-range geometry, ``reference_ball_range.ray_meets_radar_range``), and so the
-surface's height above the base the unit stands on.
+surface's height above the base the unit stands on. The session combines the shots
+(median and MAD outlier rejection, then inverse variance) with the setup's own solve
+when there is one.
+
+Heights handed to every consumer are above the HITTING SURFACE: the lens and the radar
+move down by the solved height (the radar may come out negative, below the surface)
+and the ball's centre stays one radius up. The radar's floor bounce comes from the
+lower of the base and the surface, in front of the unit (``reflecting_plane_depth_m``,
+how far that plane lies below the hitting surface).
 
 Sigma has two parts. The per-shot part (radar range, the LIS3DH reading, the ball's
 centroid) averages down over shots; the camera's shared part (where its optical axis
@@ -21,6 +29,14 @@ from openflight.camera.ground_patch import SIZE_TOLERANCE
 from openflight.constants import BALL_DIAMETER_M
 
 SCHEMA = "openflight.surface_height.v1"
+# A solved height is used whenever its 1-sigma is at most this: a 15 mm surface error
+# moves the radar's vertical launch ~0.5 deg (0.33 deg per 10 mm, Oct 27 replay) and a
+# 1.6 m ball's depression ~0.5 deg, inside both sensors' own noise.
+SURFACE_HEIGHT_MAX_SIGMA_M = 0.015
+# A looser solve is still used when it puts the surface more than this many sigma from
+# the base (the rig's assumption): the rig height is then the worse of the two. This
+# replaces the setup's fixed 60 mm gross-error floor.
+NOMINAL_REJECTION_SIGMAS = 2.0
 # Sanity bounds on the surface above the base: a unit on a 30 cm box, or a mat 30 cm up,
 # is the most any legitimate setup does; beyond it the object or the range is wrong.
 SURFACE_HEIGHT_BOUNDS_M = (-0.30, 0.30)
@@ -33,12 +49,38 @@ UNCALIBRATED_ANGULAR_SIGMA_DEG = 1.0
 DEFAULT_PITCH_READING_SIGMA_DEG = 0.1
 # The resting ball's centroid, per shot.
 CENTROID_SIGMA_PX = 0.5
+# Outlier rejection: a shot further than this many sigma from the median (sigma = the
+# larger of the MAD's and its own per-shot sigma) is not combined.
+OUTLIER_SIGMAS = 3.0
+MAD_TO_SIGMA = 1.4826
 # The only range that may solve the surface: the shot's own IWR launch point, measured
 # (never the camera prior, which would be circular, nor two competing walks).
 RANGE_SOURCE = "iwr_post_impact"
 MEASURED_LABEL = "measured"
 
 PER_SHOT_SOURCE = "per_shot"
+SOLVED_PER_SHOT = "solved_per_shot"
+SOLVED_SESSION = "solved_session"
+RIG_NOMINAL = "rig_nominal"
+REFERENCE = "hitting_surface"
+
+
+def policy() -> dict[str, Any]:
+    """Every constant, for the session record."""
+    return {
+        "schema": SCHEMA,
+        "max_sigma_m": SURFACE_HEIGHT_MAX_SIGMA_M,
+        "nominal_rejection_sigmas": NOMINAL_REJECTION_SIGMAS,
+        "bounds_m": list(SURFACE_HEIGHT_BOUNDS_M),
+        "uncalibrated_angular_sigma_deg": UNCALIBRATED_ANGULAR_SIGMA_DEG,
+        "default_pitch_reading_sigma_deg": DEFAULT_PITCH_READING_SIGMA_DEG,
+        "centroid_sigma_px": CENTROID_SIGMA_PX,
+        "size_tolerance": SIZE_TOLERANCE,
+        "outlier_sigmas": OUTLIER_SIGMAS,
+        "range": f"{RANGE_SOURCE}_{MEASURED_LABEL}_only",
+        "aggregate": "median_mad_outliers_then_inverse_variance_shared_sigma_not_averaged",
+        "reflecting_plane": "lower_of_base_and_hitting_surface",
+    }
 
 
 def _finite(value: Any) -> bool:
@@ -221,12 +263,170 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     }
 
 
+def _label(item: Mapping) -> dict:
+    return {
+        key: item.get(key)
+        for key in (
+            "shot_number",
+            "source",
+            "surface_height_m",
+            "sigma_m",
+            "random_sigma_m",
+            "systematic_sigma_m",
+        )
+    }
+
+
+def aggregate(contributions: Sequence[Mapping]) -> dict:
+    """The session's surface height from every accepted solve, with each one's part."""
+    solved = [item for item in contributions if item.get("status") == "solved"]
+    reasons = [
+        {
+            "shot_number": item.get("shot_number"),
+            "reason_code": item.get("reason_code"),
+            "reason": item.get("reason"),
+        }
+        for item in contributions
+        if item.get("status") != "solved"
+    ]
+    base = {
+        "schema": SCHEMA,
+        "method": "median_mad_outliers_then_inverse_variance",
+        "reasons": reasons,
+    }
+    if not solved:
+        return {
+            **base,
+            "status": "none",
+            "surface_height_m": None,
+            "sigma_m": None,
+            "random_sigma_m": None,
+            "systematic_sigma_m": None,
+            "n": 0,
+            "n_rejected": 0,
+            "contributions": [],
+        }
+    heights = np.array([float(item["surface_height_m"]) for item in solved])
+    random = np.array([max(float(item.get("random_sigma_m") or 0.0), 1e-6) for item in solved])
+    median = float(np.median(heights))
+    spread = MAD_TO_SIGMA * float(np.median(np.abs(heights - median)))
+    keep = np.abs(heights - median) <= OUTLIER_SIGMAS * np.maximum(spread, random)
+    weights = 1.0 / random[keep] ** 2
+    value = float(np.dot(weights, heights[keep]) / weights.sum())
+    random_sigma = float(1.0 / math.sqrt(weights.sum()))
+    shared = [float(item.get("systematic_sigma_m") or 0.0) for item, k in zip(solved, keep) if k]
+    systematic_sigma = float(np.median(shared))
+    return {
+        **base,
+        "status": "solved",
+        "surface_height_m": value,
+        "sigma_m": math.hypot(random_sigma, systematic_sigma),
+        "random_sigma_m": random_sigma,
+        "systematic_sigma_m": systematic_sigma,
+        "n": int(keep.sum()),
+        "n_rejected": int((~keep).sum()),
+        "contributions": [
+            {**_label(item), "state": "used" if k else "outlier"} for item, k in zip(solved, keep)
+        ],
+    }
+
+
+def use_solved(offset_m: float, sigma_m: float) -> tuple[bool, str]:
+    """Whether a solved surface height replaces the rig's (the surface on the base)."""
+    if sigma_m <= SURFACE_HEIGHT_MAX_SIGMA_M:
+        return (
+            True,
+            f"sigma {sigma_m * 1000:.0f} mm is within {SURFACE_HEIGHT_MAX_SIGMA_M * 1000:.0f} mm",
+        )
+    if abs(offset_m) > NOMINAL_REJECTION_SIGMAS * sigma_m:
+        return True, (
+            f"{offset_m * 1000:+.0f} mm is more than {NOMINAL_REJECTION_SIGMAS:g} sigma "
+            f"({sigma_m * 1000:.0f} mm) from the base"
+        )
+    return False, (
+        f"solved {offset_m * 1000:+.0f} +- {sigma_m * 1000:.0f} mm: sigma above "
+        f"{SURFACE_HEIGHT_MAX_SIGMA_M * 1000:.0f} mm and within {NOMINAL_REJECTION_SIGMAS:g} "
+        "sigma of the base, so the rig's heights stand"
+    )
+
+
+def heights_in_force(
+    combined: Mapping,
+    *,
+    rig_lens_height_m: float,
+    rig_radar_height_m: float,
+    ball_radius_m: float,
+    shot_number: int | None = None,
+) -> dict:
+    """The lens, radar and ball heights above the hitting surface every consumer uses.
+
+    Labelled ``solved_per_shot`` when the only solve used is this shot's own,
+    ``solved_session`` for the session's combination, the setup's own source when only
+    the setup solved, else ``rig_nominal`` with the reasons nothing was used.
+    """
+    surface, sigma, source, reason = 0.0, None, RIG_NOMINAL, None
+    if combined.get("status") == "solved":
+        used, why = use_solved(float(combined["surface_height_m"]), float(combined["sigma_m"]))
+        if used:
+            surface, sigma, reason = (
+                float(combined["surface_height_m"]),
+                float(combined["sigma_m"]),
+                why,
+            )
+            parts = [
+                item for item in combined.get("contributions") or () if item["state"] == "used"
+            ]
+            sources = {item.get("source") for item in parts}
+            if sources == {PER_SHOT_SOURCE} and {item.get("shot_number") for item in parts} == {
+                shot_number
+            }:
+                source = SOLVED_PER_SHOT
+            elif PER_SHOT_SOURCE in sources:
+                source = SOLVED_SESSION
+            else:
+                source = str(next(iter(sources)) or SOLVED_SESSION)
+        else:
+            reason = why
+    else:
+        codes = sorted(
+            {item.get("reason_code") or "unknown" for item in combined.get("reasons") or ()}
+        )
+        reason = (
+            "no shot solved the surface (" + ", ".join(codes) + ")"
+            if codes
+            else "no shot has solved the surface yet"
+        )
+    return {
+        "schema": SCHEMA,
+        "reference": REFERENCE,
+        "source": source,
+        "reason": reason,
+        "surface_height_above_base_m": surface,
+        "surface_height_sigma_m": sigma,
+        "lens_height_m": float(rig_lens_height_m) - surface,
+        "radar_height_m": float(rig_radar_height_m) - surface,
+        "ball_height_m": float(ball_radius_m),
+        "ball_height_basis": "one_radius_above_the_hitting_surface",
+        "reflecting_plane_depth_m": max(surface, 0.0),
+        "n": int(combined.get("n") or 0),
+    }
+
+
 __all__ = [
     "MEASURED_LABEL",
+    "NOMINAL_REJECTION_SIGMAS",
     "PER_SHOT_SOURCE",
     "RANGE_SOURCE",
+    "RIG_NOMINAL",
     "SIZE_TOLERANCE",
+    "SOLVED_PER_SHOT",
+    "SOLVED_SESSION",
     "SURFACE_HEIGHT_BOUNDS_M",
+    "SURFACE_HEIGHT_MAX_SIGMA_M",
     "UNCALIBRATED_ANGULAR_SIGMA_DEG",
+    "aggregate",
+    "heights_in_force",
+    "policy",
     "solve_shot",
+    "use_solved",
 ]

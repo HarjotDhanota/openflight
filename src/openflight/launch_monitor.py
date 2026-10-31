@@ -398,6 +398,9 @@ class Shot:
     stage_errors: Optional[dict] = None
     iwr_launch_range: Optional[dict] = None
     camera_tilt_swing_pair: Optional[dict] = None
+    # The heights above the hitting surface this shot used, and its own surface solve
+    # (surface_height): solved per shot, for the session, or the rig's, labelled.
+    scene_heights: Optional[dict] = None
     impact_location: Optional[dict] = None
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
@@ -592,6 +595,7 @@ class Shot:
             "stage_errors": deepcopy(self.stage_errors),
             "iwr_launch_range": deepcopy(self.iwr_launch_range),
             "camera_tilt_swing_pair": deepcopy(self.camera_tilt_swing_pair),
+            "scene_heights": deepcopy(self.scene_heights),
             "experimental_fused_attack_angle_confidence": (
                 self.experimental_fused_attack_angle_confidence
             ),

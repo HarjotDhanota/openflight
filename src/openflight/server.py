@@ -338,8 +338,12 @@ _setup_logged_revision: int | None = None
 SETUP_FRAMES = 5
 MIN_SETUP_FRAMES = 3
 BALL_RADIUS_M = BALL_DIAMETER_MM / 2000.0
-# A solved lens height that puts the radar lower than this is refused (floor-bounce model).
-MIN_RADAR_CLEARANCE_M = 0.010
+# This setup's hitting-surface solves (the setup's and each shot's, surface_height),
+# oldest first; a new setup scene starts them again. Kept to the newest few hundred.
+surface_height_contributions: list[dict] = []
+SURFACE_HEIGHT_MAX_CONTRIBUTIONS = 200
+# the shot's resting ball in its own pre-impact frames, measured once per clip
+SURFACE_RESTING_BALL_KEY = "_swing_resting_ball"
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -1839,6 +1843,8 @@ def _set_iwr_calibration(**changes) -> None:
         "tee_slant_range_m": calibration.tee_range_m,
         "lateral_tee_offset_m": calibration.lateral_tee_offset_m,
         "radar_height_m": calibration.meta.get("radar_height_m"),
+        "ball_height_m": calibration.tee_ball_height_m,
+        "reflecting_plane_depth_m": getattr(calibration, "reflecting_plane_depth_m", 0.0),
         "antenna_layout": layout.as_dict() if layout is not None else None,
     }
     if iwr6843_runtime_config.get("enabled"):
@@ -2364,21 +2370,19 @@ def api_setup_view():
 
 
 def _solved_radar_height(solved: float, enclosure, *, name: str) -> float | None:
-    """The radar height a solved lens height puts the radar at, keeping the rig's offset."""
+    """The radar height a solved lens height puts the radar at, keeping the rig's offset.
+
+    Heights are above the hitting surface: a surface raised above the base the unit
+    stands on puts the radar below it (negative), which the IWR models off the base
+    (surface_height, 30 Oct). Only an impossible lens height is refused.
+    """
     if not 0.0 < solved < 1.0:
         raise ValueError(f"{name} must be between 0 and 1 m")
     nominal = getattr(enclosure, "camera_mount_height_m", None)
     radar = getattr(enclosure, "radar_height_m", None)
     if nominal is None or radar is None:
         return None
-    radar_height = solved - (nominal - radar)
-    if radar_height < MIN_RADAR_CLEARANCE_M:
-        raise ValueError(
-            f"{name} {solved * 1000:.0f} mm puts the radar "
-            f"{radar_height * 1000:.0f} mm above the hitting surface; the radar would be "
-            "below the hitting surface or touching it"
-        )
-    return radar_height
+    return solved - (nominal - radar)
 
 
 def apply_setup_scene(scene: dict | None) -> None:
@@ -2393,19 +2397,78 @@ def apply_setup_scene(scene: dict | None) -> None:
     if solved is not None and nominal is None:
         raise ValueError("a solved lens height needs the rig file's heights to move the radar")
     if solved is not None:
-        radar = _solved_radar_height(solved, enclosure, name="the solved lens height")
-    else:
-        radar = getattr(enclosure, "radar_height_m", None)
-    _when_idle(lambda: _set_scene(scene if solved is not None else None, solved, radar, enclosure))
+        _solved_radar_height(solved, enclosure, name="the solved lens height")
+    _when_idle(lambda: _set_scene(scene if solved is not None else None, solved, enclosure))
 
 
-def _set_scene(scene: dict | None, solved: float | None, radar: float | None, enclosure) -> None:
-    nominal = enclosure.camera_mount_height_m
-    lens = solved if solved is not None else nominal
+def _set_scene(scene: dict | None, solved: float | None, enclosure) -> None:
+    """A new setup scene starts this setup's surface solves: the setup's own, if any."""
+    from . import surface_height  # noqa: PLC0415
+
+    surface_height_contributions.clear()
+    if solved is not None:
+        # the setup's gate (tester_server) already passed it, with its own sigma
+        uncertainty = scene.get("uncertainty_m")
+        sigma = (
+            float(uncertainty)
+            if _finite(uncertainty)
+            else surface_height.SURFACE_HEIGHT_MAX_SIGMA_M
+        )
+        surface_height_contributions.append(
+            {
+                "schema": surface_height.SCHEMA,
+                "status": "solved",
+                "source": scene.get("source") or "range_setup",
+                "shot_number": None,
+                "surface_height_m": enclosure.camera_mount_height_m - solved,
+                "sigma_m": sigma,
+                "random_sigma_m": sigma,
+                "systematic_sigma_m": 0.0,
+                "lens_above_surface_m": solved,
+            }
+        )
+    _apply_surface_heights(enclosure, shot_number=None)
+
+
+def _rig_scene_heights(enclosure) -> tuple[float, float] | None:
+    """The rig file's lens and radar heights above the base the unit stands on."""
+    lens = getattr(enclosure, "camera_mount_height_m", None)
+    radar = getattr(enclosure, "radar_height_m", None)
+    if lens is None or radar is None:
+        return None
+    return float(lens), float(radar)
+
+
+def _apply_surface_heights(enclosure, *, shot_number: int | None) -> tuple[dict, dict] | None:
+    """Combine this setup's surface solves and put the heights in force everywhere.
+
+    Every consumer reads heights above the hitting surface: the camera's mount height
+    (camera fusion, the range chain, the camera fallback), the IWR calibration (LCMF,
+    the OPS cosine geometry, the fusion context) and the scene record (a unit without
+    an IWR runtime, the session record). Returns (aggregate, heights in force).
+    """
+    from . import surface_height  # noqa: PLC0415
+
+    rig = _rig_scene_heights(enclosure)
+    if rig is None:
+        return None
+    del surface_height_contributions[:-SURFACE_HEIGHT_MAX_CONTRIBUTIONS]
+    combined = surface_height.aggregate(surface_height_contributions)
+    scene = setup_handoff_config.get("scene") or {}
+    ball = scene.get("ball_height_m")
+    in_force = surface_height.heights_in_force(
+        combined,
+        rig_lens_height_m=rig[0],
+        rig_radar_height_m=rig[1],
+        ball_radius_m=float(ball) if _finite(ball) else BALL_RADIUS_M,
+        shot_number=shot_number,
+    )
+    lens, radar = in_force["lens_height_m"], in_force["radar_height_m"]
+    nominal = in_force["source"] == surface_height.RIG_NOMINAL
     if camera_capture_config.get("enabled"):
         camera_capture_config["mount_height_m"] = lens
     calibration = getattr(iwr6843_runtime, "calibration", None)
-    if radar is not None and calibration is not None:
+    if calibration is not None:
         _set_iwr_calibration(
             meta={**calibration.meta, "radar_height_m": radar},
             antennas=_antenna_layout(
@@ -2413,29 +2476,55 @@ def _set_scene(scene: dict | None, solved: float | None, radar: float | None, en
                 getattr(enclosure, "iwr_board_rotation_deg", None),
                 math.degrees(calibration.tilt_rad),
             ),
+            tee_ball_height_m=in_force["ball_height_m"],
+            reflecting_plane_depth_m=in_force["reflecting_plane_depth_m"],
         )
     if rig_geometry_config.get("enabled"):
-        if solved is None:
+        if nominal:
             rig_geometry_config.pop("solved_camera_height", None)
         else:
             rig_geometry_config["solved_camera_height"] = {
-                "camera_mount_height_m": solved,
+                "camera_mount_height_m": lens,
                 "radar_height_m": radar,
-                "rig_nominal_camera_mount_height_m": nominal,
+                "rig_nominal_camera_mount_height_m": rig[0],
+                "surface_height_above_base_m": in_force["surface_height_above_base_m"],
                 "reference": "hitting_surface",
-                "source": scene.get("source"),
+                "source": in_force["source"],
             }
+    session = {
+        key: combined[key]
+        for key in (
+            "status",
+            "n",
+            "n_rejected",
+            "surface_height_m",
+            "sigma_m",
+            "random_sigma_m",
+            "systematic_sigma_m",
+            "contributions",
+            "reasons",
+        )
+    }
     setup_handoff_config["scene"] = {
-        **(setup_handoff_config.get("scene") or {}),
+        **scene,
         "reference": "hitting_surface",
         "lens_height_used_m": lens,
-        "lens_height_used_source": scene.get("source") if scene else "rig_nominal",
-        "lens_height_solved_m": solved,
-        "lens_height_solved_uncertainty_m": scene.get("uncertainty_m") if scene else None,
-        "rig_lens_height_m": nominal,
+        "lens_height_used_source": in_force["source"],
+        "lens_height_solved_m": None if nominal else lens,
+        "lens_height_solved_uncertainty_m": in_force["surface_height_sigma_m"],
+        "rig_lens_height_m": rig[0],
         "radar_height_m": radar,
+        "ball_height_m": in_force["ball_height_m"],
+        "surface_height": {**in_force, "session": session, "policy": surface_height.policy()},
     }
-    logger.info("[SERVER] Lens height now %.1f mm (%s)", lens * 1000.0, scene or "rig_nominal")
+    logger.info(
+        "[SERVER] Hitting surface %+.1f mm above the base (%s); lens %.1f mm, radar %.1f mm",
+        in_force["surface_height_above_base_m"] * 1000.0,
+        in_force["source"],
+        lens * 1000.0,
+        radar * 1000.0,
+    )
+    return combined, in_force
 
 
 def init_setup_handoff(args, enclosure) -> None:
@@ -2466,6 +2555,12 @@ def init_setup_handoff(args, enclosure) -> None:
             ),
             "tee_side_offset_m": None,
             "tee_side_offset_source": "assumed_directly_downrange",
+            "surface_height": {
+                "source": "rig_nominal",
+                "reason": "no shot has solved the surface yet",
+                "surface_height_above_base_m": 0.0,
+                "n": 0,
+            },
         },
         "net_range": {
             "net_range_m": DEFAULT_NET_RANGE_M,
@@ -5718,6 +5813,135 @@ def _lis3dh_camera_pitch(inclinometer) -> float | None:
     return float(rig_geometry.boresight_pitch_deg) + (pitch - float(expected))
 
 
+def _shot_resting_ball(camera_archive) -> dict | None:
+    """The resting ball in this clip's own pre-impact frames, in the box; measured once."""
+    from .camera import swing_tilt  # noqa: PLC0415
+    from .camera.triggered_buffer import exposure_trigger_index  # noqa: PLC0415
+
+    if not camera_archive or "frames" not in camera_archive or camera_ball_box_px is None:
+        return None
+    if SURFACE_RESTING_BALL_KEY not in camera_archive:
+        frames = camera_archive["frames"]
+        trigger = exposure_trigger_index(camera_archive, len(frames))
+        if trigger is None and "pre_trigger_count" in camera_archive:
+            trigger = int(camera_archive["pre_trigger_count"]) - 1
+        camera_archive[SURFACE_RESTING_BALL_KEY] = swing_tilt.resting_ball_px(
+            frames, trigger_index=trigger, box_px=camera_ball_box_px
+        )
+    return camera_archive[SURFACE_RESTING_BALL_KEY]
+
+
+def _surface_angular_sigma_deg() -> float:
+    """Where the camera's optical axis points, 1 sigma, for the surface solve: the
+    nominal pinhole's (principal point at the image centre) until the solve uses a
+    checkerboard-calibrated model."""
+    from .surface_height import UNCALIBRATED_ANGULAR_SIGMA_DEG  # noqa: PLC0415
+
+    return UNCALIBRATED_ANGULAR_SIGMA_DEG
+
+
+def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
+    """This shot's hitting-surface height above the base, or why it has none."""
+    from . import surface_height  # noqa: PLC0415
+    from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
+
+    ball = _shot_resting_ball(camera_archive)
+    frames = camera_archive["frames"] if camera_archive and "frames" in camera_archive else None
+    width, height = (
+        (int(np.shape(frames)[-1]), int(np.shape(frames)[-2]))
+        if frames is not None
+        else (
+            int(camera_capture_config.get("width") or 0),
+            int(camera_capture_config.get("height") or 0),
+        )
+    )
+    focal = _mode_focal(width)[0] if width else None
+    inclinometer = getattr(shot, "inclinometer", None)
+    return surface_height.solve_shot(
+        range_m=getattr(shot, "ball_range_m", None),
+        range_sigma_m=getattr(shot, "ball_range_uncertainty_m", None),
+        range_source=getattr(shot, "ball_range_source", None),
+        range_label=getattr(shot, "ball_range_label", None),
+        ball_px=(ball["x_px"], ball["y_px"]) if ball else None,
+        ball_diameter_px=ball.get("diameter_px") if ball else None,
+        focal_px=focal,
+        image_size_px=(width, height),
+        # the LIS3DH and the rig's boresight only: a tilt calibrated from ball pairs
+        # assumed the rig's lens height and would hand the base back as the surface
+        pitch_deg=_lis3dh_camera_pitch(inclinometer),
+        roll_correction_deg=_swing_roll_correction_deg(shot),
+        rig_lens_height_m=float(rig_geometry.lens_height_above_floor_mm) / 1000.0,
+        radar_offset_lfu_m=camera_rdf_offset_to_target_lfu(
+            rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0)
+        ),
+        angular_sigma_deg=_surface_angular_sigma_deg(),
+        pitch_reading_sigma_deg=(inclinometer or {}).get("pitch_std_deg"),
+    )
+
+
+def _scene_heights_now() -> dict:
+    """The heights in force right now (what this shot's IWR fit used)."""
+    calibration = getattr(iwr6843_runtime, "calibration", None)
+    scene = setup_handoff_config.get("scene") or {}
+    return {
+        "source": scene.get("lens_height_used_source"),
+        "lens_height_m": camera_capture_config.get("mount_height_m"),
+        "radar_height_m": (
+            calibration.meta.get("radar_height_m")
+            if calibration is not None
+            else scene.get("radar_height_m")
+        ),
+        "ball_height_m": (
+            calibration.tee_ball_height_m if calibration is not None else scene.get("ball_height_m")
+        ),
+        "reflecting_plane_depth_m": getattr(calibration, "reflecting_plane_depth_m", None),
+    }
+
+
+def _solve_surface_height(shot: Shot, camera_archive) -> None:
+    """Solve the hitting surface from this shot, combine it with the setup's, apply it.
+
+    The camera stages after this one use the new heights; this shot's IWR fit ran on
+    the heights in force before it (``iwr_lcmf_used``), which the next shot's will use.
+    """
+    from . import surface_height  # noqa: PLC0415
+
+    if shot.mode == "mock":
+        return
+    enclosure = rig_geometry.enclosure_setup() if rig_geometry is not None else None
+    if _rig_scene_heights(enclosure) is None or rig_geometry.lens_height_above_floor_mm is None:
+        shot.scene_heights = {
+            "schema": surface_height.SCHEMA,
+            "status": "not_run",
+            "reason": "no rig file with the lens and radar heights",
+        }
+        return
+    used = _scene_heights_now()
+    number = getattr(shot, "shot_number", None)
+    solve = {
+        **_shot_surface_solve(shot, camera_archive),
+        "shot_number": number,
+        "source": surface_height.PER_SHOT_SOURCE,
+    }
+    surface_height_contributions.append(solve)
+    combined, in_force = _apply_surface_heights(enclosure, shot_number=number)
+    shot.scene_heights = {
+        "schema": surface_height.SCHEMA,
+        "status": "run",
+        "shot_solve": solve,
+        "session": combined,
+        "in_force": in_force,
+        "iwr_lcmf_used": used,
+    }
+    logger.info(
+        "[SERVER] Surface solve for shot %s: %s",
+        number,
+        f"{solve['surface_height_m'] * 1000:+.1f} +- {solve['sigma_m'] * 1000:.1f} mm"
+        if solve["status"] == "solved"
+        else solve["reason_code"],
+    )
+
+
 def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
     """Record one swing's camera-tilt pair (IWR launch point, resting-ball image row)."""
     from .camera import swing_tilt  # noqa: PLC0415
@@ -5745,14 +5969,11 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         return
     try:
         from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
-        from .camera.triggered_buffer import exposure_trigger_index  # noqa: PLC0415
         from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
 
         frames = camera_archive["frames"]
-        trigger = exposure_trigger_index(camera_archive, len(frames))
-        if trigger is None and "pre_trigger_count" in camera_archive:
-            trigger = int(camera_archive["pre_trigger_count"]) - 1
-        ball = swing_tilt.resting_ball_px(frames, trigger_index=trigger, box_px=camera_ball_box_px)
+        # the same resting ball the surface solve measured (_shot_resting_ball)
+        ball = _shot_resting_ball(camera_archive)
         height_px, width_px = int(frames.shape[-2]), int(frames.shape[-1])
         lens_m = float(rig_geometry.lens_height_above_floor_mm) / 1000.0
         offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
@@ -6413,6 +6634,9 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     iwr6843_ms = _isolated_stage(shot, "iwr6843", _process_iwr6843_angle, shot)
     if iwr6843_ms is _STAGE_FAILED:
         iwr6843_ms = None
+    # this shot's launch range and resting ball solve the hitting surface's height,
+    # which the camera's geometry below (and every later shot) then uses
+    _isolated_stage(shot, "surface_height", _solve_surface_height, shot, camera_archive)
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
         if shot.mode != "mock":

@@ -2142,15 +2142,49 @@ def test_a_unit_standing_on_a_box_uses_the_radar_solved_lens_height():
     assert "above the hitting surface" in solved["note"]
 
 
-def test_a_lens_height_below_the_radar_is_refused():
-    # the radar sits 44 mm below the lens, so a lens 30 mm up would bury it
-    camera, result, iwr = _setup_ball_seen_from(0.030, distance_m=2.0)
+def test_a_lens_height_below_the_radar_is_used_not_refused():
+    # owner, 30 Oct: a hitting surface raised above the base the unit stands on puts the
+    # radar (44 mm below the lens) below it; that is a scene, not a wrong ball
+    camera, result, iwr = _setup_ball_seen_from(0.030, distance_m=1.2)
 
     solved = ts._solved_camera_height(result, camera, iwr)
 
+    assert "radar_rejected" not in solved
+    assert solved["source"] == "static_iwr_range"
+    assert solved["height_m"] == pytest.approx(0.030, abs=0.003)
+    assert solved["check"] == "unit_lowered"
+    assert solved["radar_height_above_surface_m"] < 0.0
+
+    # the old case, 2 m out: too loose to move the rig's height, but no longer refused
+    camera, result, iwr = _setup_ball_seen_from(0.030, distance_m=2.0)
+    solved = ts._solved_camera_height(result, camera, iwr)
+    assert "radar_rejected" not in solved
+    assert solved["radar_solved_m"] == pytest.approx(0.030, abs=0.003)
     assert solved["source"] == "rig_nominal"
     assert solved["height_m"] == pytest.approx(0.095)
-    assert "below the hitting surface" in solved["radar_rejected"]
+
+
+def test_a_precise_solve_is_used_even_when_it_is_close_to_the_rig():
+    # the old rule kept the rig's height inside 60 mm whatever the sigma; now a solve
+    # inside SURFACE_HEIGHT_MAX_SIGMA_M (15 mm) is used however small the change
+    camera, result, iwr = _setup_ball_seen_from(0.075)
+    precise = replace(camera, angular_uncertainty_deg=0.2)
+
+    solved = ts._solved_camera_height(result, precise, iwr)
+
+    assert solved["radar_uncertainty_m"] < 0.015
+    assert solved["source"] == "static_iwr_range"
+    assert solved["height_m"] == pytest.approx(0.075, abs=0.002)
+
+
+def test_a_loose_solve_within_two_sigma_of_the_rig_keeps_the_rig():
+    camera, result, iwr = _setup_ball_seen_from(0.060, distance_m=2.0)
+
+    solved = ts._solved_camera_height(result, camera, iwr)
+
+    assert solved["radar_uncertainty_m"] > 0.015
+    assert solved["source"] == "rig_nominal"
+    assert solved["check"] == "consistent"
 
 
 def test_only_a_radar_solved_height_is_handed_to_swings():
@@ -2598,7 +2632,9 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     assert arm["tee_range_source"] == handed["tee_range_source"]
     scene = handed["scene"]
     assert scene["lens_height_solved_m"] is not None
-    assert scene["lens_height_used_source"] in {"rig_nominal", "range_setup"}
+    # the drive's radar-solved lens height (~71 mm) is precise enough, or far enough from
+    # the rig's 95 mm, for surface_height.use_solved (30 Oct): the setup uses it
+    assert scene["lens_height_used_source"] == "range_setup"
     assert scene["ball_height_m"] == pytest.approx(0.02135)
     assert scene["ball_height_basis"] == "assumed_on_surface"
     # the kiosk gets the setup record, and only the lens and tilt arguments beside it
@@ -2639,10 +2675,12 @@ def test_every_record_and_session_start_say_what_swings_used(tmp_path, inputs, m
     assert session["net_range"]["net_range_m"] == pytest.approx(kiosk["net"]["value_m"])
     assert session["net_range"]["source"] == kiosk["net"]["source"]
     record = session["setup"]["record"]
+    # the setup's radar-solved lens height is used once it is precise or rules out the
+    # rig's (surface_height.use_solved, 30 Oct), no longer only past a 60 mm floor
     assert {name: record[name]["state"] for name in ("box", "ball_range", "scene")} == {
         "box": "confirmed",
         "ball_range": "set",
-        "scene": "default",
+        "scene": "set",
     }
     for key in ("reference", "lens_height_used_m", "rig_lens_height_m", "ball_height_m"):
         assert session["scene"][key] == pytest.approx(scene[key], abs=1e-6), key

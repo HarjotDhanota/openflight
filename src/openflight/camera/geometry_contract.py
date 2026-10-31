@@ -117,8 +117,10 @@ class EffectiveCameraGeometryInputs:
         object.__setattr__(
             self, "image_height_px", _integer(self.image_height_px, "image_height_px")
         )
-        if self.camera_height_m <= 0 or self.radar_height_m <= 0:
-            raise ValueError("camera and radar heights must be positive")
+        # heights are above the hitting surface; the radar may sit below a raised one
+        # (surface_height), the lens never can: it would not see the ball on it
+        if self.camera_height_m <= 0:
+            raise ValueError("the camera height must be positive")
         if self.ball_height_m < 0:
             raise ValueError("ball height must be non-negative")
         if self.ball_diameter_m <= 0:

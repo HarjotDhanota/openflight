@@ -224,9 +224,21 @@ def test_a_solved_scene_moves_camera_and_radar_and_clearing_returns_to_the_rig(k
     assert server.setup_handoff_config["scene"]["lens_height_used_source"] == "rig_nominal"
 
 
-def test_a_scene_that_would_bury_the_radar_changes_nothing(kiosk):
-    with pytest.raises(ValueError, match="below the hitting surface"):
-        server.apply_setup_scene({"state": "set", "lens_height_m": 0.03, "source": "radar_solved"})
+def test_a_scene_with_the_radar_below_the_hitting_surface_is_applied(kiosk):
+    # owner, 30 Oct: a raised hitting surface puts the radar below it; the IWR models
+    # its floor bounce off the base in front of the unit, 65 mm below the surface
+    server.apply_setup_scene({"state": "set", "lens_height_m": 0.03, "source": "radar_solved"})
+
+    assert server.camera_capture_config["mount_height_m"] == pytest.approx(0.03)
+    assert kiosk.iwr.calibration.radar_height_m == pytest.approx(-0.014)
+    assert kiosk.iwr.calibration.tee_ball_height_m == pytest.approx(server.BALL_RADIUS_M)
+    assert kiosk.iwr.calibration.reflecting_plane_depth_m == pytest.approx(0.065)
+    assert server.setup_handoff_config["scene"]["radar_height_m"] == pytest.approx(-0.014)
+
+
+def test_an_impossible_scene_changes_nothing(kiosk):
+    with pytest.raises(ValueError, match="between 0 and 1 m"):
+        server.apply_setup_scene({"state": "set", "lens_height_m": 1.5, "source": "radar_solved"})
 
     assert server.camera_capture_config["mount_height_m"] == pytest.approx(0.095)
     assert kiosk.iwr.calibration.radar_height_m == pytest.approx(0.051)

@@ -1301,6 +1301,8 @@
   "tests/test_study_ladder_lens_rungs.py": "TESTER",
   "tests/test_study_mode.py": "TESTER",
   "tests/test_surface_height.py": "FUSION",
+  "tests/test_surface_height_aggregate.py": "FUSION",
+  "tests/test_surface_height_wiring.py": "FUSION",
   "tests/test_swing_exposure.py": "FUSION",
   "tests/test_swing_speed.py": "PRODUCT",
   "tests/test_target_line.py": "FUSION",

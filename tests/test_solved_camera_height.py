@@ -14,22 +14,19 @@ ENCLOSURE = SimpleNamespace(
 )
 
 
-@pytest.mark.parametrize(("lens_m", "radar_m"), [(0.081, 0.037), (0.095, 0.051)])
+@pytest.mark.parametrize(
+    ("lens_m", "radar_m"),
+    # a hitting surface raised above the unit's base puts the radar below it (30 Oct)
+    [(0.081, 0.037), (0.095, 0.051), (0.030, -0.014)],
+)
 def test_the_solved_height_moves_the_radar_with_the_camera(lens_m, radar_m):
     assert server._solved_radar_height(lens_m, ENCLOSURE, name="h") == pytest.approx(radar_m)
 
 
-@pytest.mark.parametrize(
-    ("lens_m", "enclosure", "match"),
-    [
-        (1.5, None, "between 0 and 1 m"),
-        # heights are above the hitting surface: the radar 44 mm below the lens cannot be under it
-        (0.030, ENCLOSURE, "below the hitting surface"),
-    ],
-)
-def test_an_impossible_solved_height_is_refused(lens_m, enclosure, match):
-    with pytest.raises(ValueError, match=match):
-        server._solved_radar_height(lens_m, enclosure, name="the solved lens height")
+@pytest.mark.parametrize("lens_m", [1.5, 0.0, -0.01])
+def test_an_impossible_solved_height_is_refused(lens_m):
+    with pytest.raises(ValueError, match="between 0 and 1 m"):
+        server._solved_radar_height(lens_m, None, name="the solved lens height")
 
 
 def test_the_solved_height_is_recorded_apart_from_the_rig_file(monkeypatch):
