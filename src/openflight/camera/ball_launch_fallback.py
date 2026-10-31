@@ -93,6 +93,7 @@ START_REACH_DIAMETERS = (0.5, 10.0)
 # A next point may sit this far from the straight continuation, in resting-ball
 # diameters (25 px of a 43 px ball at 1280x800), or one ball / the first step.
 CONTINUATION_TOLERANCE_DIAMETERS = 0.6
+MAX_CONSECUTIVE_MISSING_FRAMES = 1
 # The background: the frames exposed 75-25 ms before the first post-trigger frame
 # (frames pre-9 .. pre-4 at 120 fps), before the club reaches the ball.
 BACKGROUND_WINDOW_S = (0.075, 0.025)
@@ -321,7 +322,8 @@ def _grow(
         if len(track) == 1:
             first = track[0][1]
             step = (first["x"] - rest[0], first["y"] - rest[1])
-            predicted = (first["x"] + 0.6 * step[0], first["y"] + 0.6 * step[1])
+            gap = frame - track[0][0]
+            predicted = (first["x"] + 0.6 * gap * step[0], first["y"] + 0.6 * gap * step[1])
             tolerance = max(diameter, math.hypot(*step))
         else:
             (frame_a, a), (frame_b, b) = track[-2], track[-1]
@@ -334,6 +336,8 @@ def _grow(
             if math.hypot(candidate["x"] - predicted[0], candidate["y"] - predicted[1]) < tolerance
         ]
         if not pool:
+            if frame - track[-1][0] <= MAX_CONSECUTIVE_MISSING_FRAMES:
+                continue
             break
         track.append(
             (
@@ -365,7 +369,7 @@ def track_launch_ball(  # pylint: disable=too-many-locals
     rest_px: Sequence[float],
     rest_diameter_px: float,
 ) -> list[TrackPoint]:
-    """The ball's blobs after impact: the longest straight run that starts from its rest."""
+    """The longest moving, straight blob run that starts near the resting ball."""
     count, height, width = frames.shape
     interval = float(np.median(np.diff(times_s))) if len(times_s) > 1 else 1.0 / 120.0
     start_bg = first_post_index - int(round(BACKGROUND_WINDOW_S[0] / interval))
@@ -402,6 +406,13 @@ def track_launch_ball(  # pylint: disable=too-many-locals
             track = _grow(
                 (frame, candidate), candidates, (rest_x, rest_y), count - 1, rest_diameter_px
             )
+            # Removing a dark part of the resting ball leaves a positive, stationary
+            # difference blob. Its persistence is not evidence of an outgoing ball.
+            if not any(
+                math.hypot(point["x"] - candidate["x"], point["y"] - candidate["y"]) >= near
+                for _frame, point in track[1:]
+            ):
+                continue
             if len(track) > len(best) or (
                 len(track) == len(best) and _straightness(track) < _straightness(best)
             ):
