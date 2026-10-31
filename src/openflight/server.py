@@ -1628,6 +1628,8 @@ def _search_shot_frames(camera_archive) -> dict | None:
 
 def _find_shot_ball(shot: Shot, camera_archive) -> None:
     """Take the shot's ball from its own clip when an extension selects one; else keep the look."""
+    if "shot_search" in _shot_ball_context(shot):
+        return
     started = time.monotonic()
     search = _search_shot_frames(camera_archive)
     if search is None:

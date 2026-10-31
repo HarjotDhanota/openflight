@@ -224,3 +224,16 @@ def test_the_search_runs_on_the_camera_prefetch_thread_not_the_capture_thread(ki
         pool.submit(server._prefetch_camera_capture, shot).result()  # pylint: disable=protected-access
 
     assert finder.calls[0]["thread"].startswith("camera-prefetch")
+
+
+def test_a_shot_enriched_again_keeps_its_first_search(kiosk):
+    finder = ke.register(Finder({"status": "selected", "ball": dict(FOUND)}))
+    shot = _shot()
+    _prefetch(shot)
+    first = deepcopy(shot.input_sources["ball_at_address"])
+    finder.answer = {"status": "unavailable", "reason": "a second search"}
+
+    server._prefetch_camera_capture(shot)  # pylint: disable=protected-access
+
+    assert len(finder.calls) == 1
+    assert shot.input_sources["ball_at_address"] == first
