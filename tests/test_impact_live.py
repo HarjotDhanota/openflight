@@ -766,3 +766,19 @@ def test_a_reading_for_another_shot_is_never_put_on_this_one(kiosk):
     assert shot.impact_location["status"] == "rejected"
     assert shot.impact_location["reason_code"] == "analysis_failed_reading_for_another_shot"
     assert "impact_offset_mm" not in shot.impact_location
+
+
+@pytest.mark.parametrize("unproven,label", [([], "measured"), (["x unknown"], "estimated")])
+def test_calibrated_optics_on_unproven_capture_evidence_label_the_lens_estimated(unproven, label):
+    clip = SimpleNamespace(
+        range_source="none",
+        extra={
+            "club_speed_source": "shot_ops_club_speed",
+            "optics_input_decision": {"mode_evidence": {"unproven": unproven}},
+        },
+        prepared=SimpleNamespace(camera=SimpleNamespace(source="calibrated_rectified_candidate")),
+        face=SimpleNamespace(face_centre_from_toe=SimpleNamespace(source="reference")),
+    )
+    orientation = SimpleNamespace(provenance=dict)
+    inputs = live._input_labels(clip, orientation, ())
+    assert inputs["lens"]["label"] == label

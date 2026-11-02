@@ -61,8 +61,24 @@ def recorded_model(shot: Mapping, session_uuid: str, capture_sha256: str):
     return calibrated_camera_model_from_snapshot(snapshot)
 
 
+# What every calibrated capture carries (no capture is independently identified yet): these
+# leave the lens measured. Any other unproven fact labels it estimated.
+ALWAYS_UNQUALIFIED = frozenset(
+    {
+        "capture mode identity is not independently established",
+        "calibration remains unqualified",
+        "startup driver parameter does not prove an applied sensor offset",
+    }
+)
+
+
 def check_mode(frames, metadata, artifact, *, research_override=False):
-    """Check actual saved dimensions/orientation and the existing per-frame mode contract."""
+    """Check actual saved dimensions/orientation and the existing per-frame mode contract.
+
+    A contradiction refuses; evidence that is merely unproven is returned as ``unproven``
+    for the lens label (the fusion's rule, ``geometry_contract``). Absent mode evidence
+    refuses unless ``research_override``.
+    """
     candidate = artifact.get("candidate", artifact)
     projection = load_calibration_candidate(artifact, mode_profile=candidate["mode_profile"])
     width, height = projection.image_size
@@ -85,16 +101,16 @@ def check_mode(frames, metadata, artifact, *, research_override=False):
     compatibility = inspect_capture_compatibility(
         metadata.get("capture_mode"), mode_profile=projection.mode_profile, frame_count=len(frames)
     )
-    allowed = {
-        "capture mode identity is not independently established",
-        "calibration remains unqualified",
-        "startup driver parameter does not prove an applied sensor offset",
-    }
     if compatibility.status == "incompatible":
         raise ValueError("incompatible capture_mode: " + "; ".join(compatibility.reasons))
-    if not research_override and any(reason not in allowed for reason in compatibility.reasons):
+    if not research_override and "capture_mode evidence is absent" in compatibility.reasons:
         raise ValueError("incomplete capture_mode: " + "; ".join(compatibility.reasons))
-    return {"status": compatibility.status, "reasons": list(compatibility.reasons)}
+    unproven = [reason for reason in compatibility.reasons if reason not in ALWAYS_UNQUALIFIED]
+    return {
+        "status": compatibility.status,
+        "reasons": list(compatibility.reasons),
+        "unproven": unproven,
+    }
 
 
 @dataclass(frozen=True)

@@ -468,7 +468,8 @@ def _input_labels(clip, orientation, angles: tuple[str, ...]) -> dict[str, dict[
 
     Orientation angles carry their provenance label (a prior is estimated); the ball
     range is measured only from the shot's own bound IWR evidence; the club speed only
-    from the shot's OPS reading; the lens only with calibrated intrinsics; the face
+    from the shot's OPS reading; the lens only with calibrated intrinsics on capture evidence
+    that proves no less than every capture's (``impact_optics.ALWAYS_UNQUALIFIED``); the face
     centre is the category's population reference or a given anchor (estimated).
     """
     provenance = orientation.provenance()
@@ -489,6 +490,9 @@ def _input_labels(clip, orientation, angles: tuple[str, ...]) -> dict[str, dict[
         "source": speed_source,
     }
     calibrated = "calibrated" in lens_source and "uncalibrated" not in lens_source
+    # calibrated optics on unproven capture evidence (impact_optics.check_mode) are estimated
+    mode = (clip.extra.get("optics_input_decision") or {}).get("mode_evidence") or {}
+    calibrated = calibrated and not mode.get("unproven")
     inputs["lens"] = {
         "label": LABEL_MEASURED if calibrated else LABEL_ESTIMATED,
         "source": lens_source,

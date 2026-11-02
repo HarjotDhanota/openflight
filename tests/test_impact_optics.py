@@ -182,3 +182,56 @@ def test_frozen_optics_require_own_shot_archive_session_and_fingerprint():
     ]["pitch"] = 8
     with pytest.raises(ValueError, match="fingerprint"):
         optics.recorded_model(shot, "s", "a" * 64)
+
+
+def _unproven_capture_mode(width, height, count):
+    """A capture's own mode evidence that contradicts nothing but proves little: no requested
+    scaler crop and no driver parameter (the Oct 27 kiosk's record)."""
+    import hashlib  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    startup = {
+        "settings": {
+            "width": width,
+            "height": height,
+            "stream": "raw",
+            "rotate_180": False,
+            "mirror_horizontal": False,
+        },
+        "resolved_config": {
+            "raw": {"size": [1280, 800], "format": "SBGGR10_CSI2P"},
+            "sensor": {"output_size": [1280, 800], "bit_depth": 10},
+        },
+    }
+    encoded = json.dumps(startup, sort_keys=True, separators=(",", ":"))
+    return {
+        "version": 1,
+        "contexts": [{"id": hashlib.sha256(encoded.encode()).hexdigest(), "startup": startup}],
+        "frames": {
+            "context_index": [0] * count,
+            "scaler_crop": [None] * count,
+            "frame_duration_us": [3617] * count,
+            "saved_width": [width] * count,
+            "saved_height": [height] * count,
+        },
+    }
+
+
+def test_unproven_capture_evidence_is_carried_as_a_label_not_a_refusal():
+    """The fusion's rule (geometry_contract): a contradiction refuses, the unproven labels."""
+    artifact = calibration_artifact(mode_profile(width=96, height=64))
+    frames = np.zeros((3, 64, 96), np.uint8)
+    metadata = {
+        "settings": {"mirror_horizontal": False, "rotate_180": False},
+        "capture_mode": _unproven_capture_mode(96, 64, 3),
+    }
+    mode = optics.check_mode(frames, metadata, artifact, research_override=False)
+    assert mode["status"] == "unverified"
+    assert "driver parameter mapping is unknown" in mode["unproven"]
+    assert "calibration scaler-crop mapping is unknown" in mode["unproven"]
+    # the facts every calibrated capture carries are not "unproven" ones
+    assert "calibration remains unqualified" not in mode["unproven"]
+    # a contradiction still refuses
+    metadata["capture_mode"]["frames"]["saved_width"][1] = 95
+    with pytest.raises(ValueError, match="incompatible capture_mode"):
+        optics.check_mode(frames, metadata, artifact, research_override=False)
