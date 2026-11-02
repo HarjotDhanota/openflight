@@ -233,6 +233,8 @@ def test_every_range_consumer_takes_the_located_tee_s_own_label(label, expected)
     assert record_label == expected
     if expected is not None:
         assert "tee the camera located" in note
+        # the IWR may not have measured the shot: the fixed text never says it confirmed
+        assert "confirms" not in note
 
 
 def test_the_published_ball_range_names_the_located_tee():

@@ -286,7 +286,7 @@ BALL_SIZE_RANGE_CALIBRATED_NOTE = (
 # measured when the IWR confirms it, experimental through a nominal one).
 LOCATED_TEE_NOTE = (
     "rests on the tee the camera located (the setup box's resting ball through the camera "
-    "model; the IWR's launch point only confirms it)"
+    "model; the IWR's launch point only cross-checks it)"
 )
 RANGE_SOURCE_LABELS = {
     "camera_prior": (LABEL_ESTIMATED, CAMERA_PRIOR_NOTE),
