@@ -225,7 +225,7 @@ def test_the_located_tee_is_the_iwr_s_per_shot_prior(monkeypatch):
     [("measured", None), ("estimated", "estimated"), ("experimental", "experimental")],
 )
 def test_every_range_consumer_takes_the_located_tee_s_own_label(label, expected):
-    from openflight import full_speed, source_labels  # noqa: PLC0415
+    from openflight import source_labels  # noqa: PLC0415
 
     shot = {"ball_range_source": "camera_resting_ball", "ball_range_label": label}
     record_label, note = source_labels.range_source_label(shot)
@@ -233,13 +233,6 @@ def test_every_range_consumer_takes_the_located_tee_s_own_label(label, expected)
     assert record_label == expected
     if expected is not None:
         assert "tee the camera located" in note
-    weak = full_speed._weak_inputs(  # pylint: disable=protected-access
-        [],
-        tee_range_source="camera_resting_ball",
-        tee_range_label=label,
-        tee_side_offset_source=None,
-    )
-    assert [item[0] for item in weak] == ([] if expected is None else [expected])
 
 
 def test_the_published_ball_range_names_the_located_tee():

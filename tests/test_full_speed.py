@@ -610,3 +610,19 @@ def test_a_full_club_speed_on_an_implausible_club_reading_is_experimental_and_sa
     assert "implausible against the ball speed (smash 2.30)" in doubted["note"]
     assert club_speed_doubted(_full(85.0, club=True), None) == _full(85.0, club=True)
     assert club_speed_doubted(_not("x"), "why")["status"] == NOT_MEASURED
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [("measured", []), ("estimated", ["estimated"]), ("experimental", ["experimental"])],
+)
+def test_the_camera_located_tee_weakens_the_full_speed_by_its_own_label(label, expected):
+    """C8a: the tee range from the camera's located tee carries its own label."""
+    weak = full_speed._weak_inputs(  # pylint: disable=protected-access
+        [],
+        tee_range_source="camera_resting_ball",
+        tee_range_label=label,
+        tee_side_offset_source=None,
+    )
+
+    assert [item[0] for item in weak] == expected
