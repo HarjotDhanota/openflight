@@ -126,9 +126,10 @@ def test_a_calibrated_camera_states_a_smaller_shared_sigma():
     ("overrides", "code"),
     [
         ({"range_source": "camera_prior", "range_label": "estimated"}, "range_not_iwr_measured"),
-        # two IWR walks compete (ambiguous): never a surface height
-        ({"range_label": "estimated"}, "range_label_not_measured"),
+        # an estimated IWR launch point needs its own sigma to be carried
+        ({"range_label": "estimated", "range_sigma_m": None}, "estimated_range_without_sigma"),
         ({"range_label": "iwr_partial"}, "range_label_not_measured"),
+        ({"range_label": "not_measured"}, "range_label_not_measured"),
         ({"range_m": None}, "no_iwr_range"),
         ({"ball_px": None}, "no_resting_ball"),
         ({"ball_diameter_px": None}, "no_resting_ball"),
@@ -291,3 +292,41 @@ def _scene_at(surface_m, forward_m):
         "ball_diameter_px": scene["ball_diameter_px"],
         "range_sigma_m": 0.01,
     }
+
+
+# --- an estimated IWR launch point, carried with its own sigma (C6c) ---------------------
+
+
+def test_an_estimated_iwr_range_solves_carrying_its_own_uncertainty():
+    """Height is range-insensitive: an estimated launch point solves, its sigma widening
+    the per-shot part by about range_sigma x depression."""
+    measured = _solve(0.038, range_sigma_m=0.02)
+    estimated = _solve(0.038, range_label="estimated", range_sigma_m=0.12)
+
+    assert estimated["status"] == "solved"
+    assert estimated["surface_height_m"] == pytest.approx(0.038, abs=0.001)
+    assert estimated["inputs"]["range_label"] == "estimated"
+    depression = (LENS_M - 0.038 - RADIUS) / estimated["ball_distance_m"]
+    widened = math.sqrt(estimated["random_sigma_m"] ** 2 - measured["random_sigma_m"] ** 2)
+    assert widened == pytest.approx(math.sqrt(0.12**2 - 0.02**2) * depression, rel=0.05)
+
+
+def test_an_estimated_range_s_wrong_value_moves_the_height_by_about_its_depression():
+    """0.1 m of range at 1.8 m and ~2 deg of depression is ~4 mm of height."""
+    scene = _scene(0.038, 1.8)
+    inputs = {**_scene_at(0.038, 1.8), "range_label": "estimated", "range_sigma_m": 0.12}
+    right = _solve(0.038, **inputs)
+    off = _solve(0.038, **{**inputs, "range_m": scene["range_m"] + 0.10})
+
+    assert off["status"] == "solved"
+    assert abs(off["surface_height_m"] - right["surface_height_m"]) < 0.006
+
+
+def test_a_camera_prior_range_still_never_solves_the_surface():
+    refused = _solve(0.038, range_source="camera_prior", range_label="estimated", range_sigma_m=0.3)
+
+    assert refused["reason_code"] == "range_not_iwr_measured"
+
+
+def test_the_policy_names_the_ranges_it_takes():
+    assert sh.policy()["range"] == "iwr_post_impact_measured_or_estimated_with_sigma"

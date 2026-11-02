@@ -64,10 +64,13 @@ CENTROID_SIGMA_PX = 0.5
 # larger of the MAD's and its own per-shot sigma) is not combined.
 OUTLIER_SIGMAS = 3.0
 MAD_TO_SIGMA = 1.4826
-# The only range that may solve the surface: the shot's own IWR launch point, measured
-# (never the camera prior, which would be circular, nor two competing walks).
+# The only range that may solve the surface: the shot's own IWR launch point (never the
+# camera prior, which would be circular), measured, or estimated (two walks compete) when
+# it carries its own sigma: the height is range-insensitive (sigma x depression, ~4 mm
+# per 0.1 m at 1.8 m), so the estimate's sigma widens the per-shot part instead.
 RANGE_SOURCE = "iwr_post_impact"
 MEASURED_LABEL = "measured"
+ESTIMATED_LABEL = "estimated"
 
 PER_SHOT_SOURCE = "per_shot"
 SOLVED_PER_SHOT = "solved_per_shot"
@@ -89,7 +92,7 @@ def policy() -> dict[str, Any]:
         "centroid_sigma_px": CENTROID_SIGMA_PX,
         "size_tolerance": SIZE_TOLERANCE,
         "outlier_sigmas": OUTLIER_SIGMAS,
-        "range": f"{RANGE_SOURCE}_{MEASURED_LABEL}_only",
+        "range": f"{RANGE_SOURCE}_{MEASURED_LABEL}_or_{ESTIMATED_LABEL}_with_sigma",
         "aggregate": "median_mad_outliers_then_inverse_variance_shared_sigma_not_averaged",
         "reflecting_plane": "lower_of_base_and_hitting_surface",
     }
@@ -202,10 +205,18 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
             "point; a camera range would solve the surface from itself",
             inputs,
         )
-    if range_label != MEASURED_LABEL:
+    if range_label == ESTIMATED_LABEL:
+        if not _finite(range_sigma_m) or float(range_sigma_m) <= 0.0:
+            return _refused(
+                "estimated_range_without_sigma",
+                "the IWR launch point is estimated and carries no uncertainty to widen the "
+                "solve with",
+                inputs,
+            )
+    elif range_label != MEASURED_LABEL:
         return _refused(
             "range_label_not_measured",
-            f"the IWR launch point is {range_label or 'unlabelled'}, not measured",
+            f"the IWR launch point is {range_label or 'unlabelled'}, not measured or estimated",
             inputs,
         )
     if ball_px is None or not _finite(ball_diameter_px) or float(ball_diameter_px) <= 0.0:
@@ -458,6 +469,7 @@ def heights_in_force(
 
 __all__ = [
     "CALIBRATED_ANGULAR_SIGMA_DEG",
+    "ESTIMATED_LABEL",
     "MEASURED_LABEL",
     "NOMINAL_REJECTION_SIGMAS",
     "PER_SHOT_SOURCE",

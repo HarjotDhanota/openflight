@@ -223,8 +223,21 @@ def test_later_shots_use_the_session_aggregate_and_record_what_the_iwr_used(kios
     assert record["iwr_lcmf_used"]["radar_height_m"] == pytest.approx(RADAR - 0.066, abs=0.001)
 
 
-def test_an_ambiguous_range_never_solves_and_the_rig_stands_labelled(kiosk):
+def test_an_estimated_range_solves_with_its_label_and_sigma(kiosk):
     shot, archive = _shot_seen(0.068, label="estimated")
+    shot.ball_range_uncertainty_m = 0.12
+
+    server._solve_surface_height(shot, archive)
+
+    solve = shot.scene_heights["shot_solve"]
+    assert solve["status"] == "solved"
+    assert solve["surface_height_m"] == pytest.approx(0.068, abs=0.002)
+    assert solve["inputs"]["range_label"] == "estimated"
+    assert solve["inputs"]["range_sigma_m"] == 0.12
+
+
+def test_a_partial_dump_range_never_solves_and_the_rig_stands_labelled(kiosk):
+    shot, archive = _shot_seen(0.068, label="iwr_partial")
 
     server._solve_surface_height(shot, archive)
 
