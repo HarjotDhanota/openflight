@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.sh text eol=lf
 config/camera-calibration/** -text
+*.l3dump binary
+*.npz binary
