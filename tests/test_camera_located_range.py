@@ -250,6 +250,8 @@ def test_the_published_ball_range_names_the_located_tee():
 
     assert "camera" in record["source"] and "tee" in record["source"]
     assert record["value"] == pytest.approx(1.81)
+    # the IWR did not measure this shot: the fixed source text never says it confirmed
+    assert "confirms" not in record["source"]
 
 
 def test_a_look_s_rejection_never_takes_the_located_tee_from_the_iwr(monkeypatch):
