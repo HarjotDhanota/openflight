@@ -545,7 +545,12 @@ def _measured_here(
     )
 
 
-def _select_reference_ball(  # pylint: disable=too-many-locals
+# Where the reference ball came from (``_select_reference_ball``).
+BOX_RESTING_BALL_SOURCE = "resting_ball_in_box"
+SCENE_DETECTOR_SOURCE = "scene_detector"
+
+
+def _select_reference_ball(  # pylint: disable=too-many-locals,too-many-arguments
     frames,
     trigger_frame: int,
     geometry,
@@ -553,11 +558,17 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
     setup_ball: dict | None = None,
     lens_focal_px: float | None = None,
     resting_ball: tuple[float, float, float] | None = None,
+    box_resting_ball: dict | None = None,
 ):
     """Choose between scene and impact evidence, keeping both; detectors that
     disagree withhold the ball, unless they sit on one ball and only one of them
     measured it at its expected size. ``resting_ball`` (x, y, diameter px): this clip's
-    resting ball as the range chain already measured it (the same lit-sphere fit)."""
+    resting ball as the range chain already measured it (the same lit-sphere fit).
+
+    ``box_resting_ball`` (``swing_tilt.resting_ball_px``: the ball the setup box finds in
+    the clip's own pre-impact frames, the surface solve's and swing-tilt pair's) is the
+    reference ball when there is one; the scene-wide detector looks only when the box
+    holds no ball. ``reference_source`` names which."""
     candidates: dict[str, ReferenceBall | None] = {"scene": None, "impact": None}
     reasons: dict[str, str | None] = {"scene": None, "impact": None}
     scale = ball_pixels.pixel_scale(geometry.image_width_px)
@@ -565,6 +576,29 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
         geometry, setup_ball, lens_focal_px=lens_focal_px
     )
     gate = reference_ball_gate(setup_ball, geometry.image_width_px, geometry.image_height_px)
+    if box_resting_ball:
+        diameter = float(box_resting_ball["diameter_px"])
+        selected = ReferenceBall(
+            x=float(box_resting_ball["x_px"]),
+            y=float(box_resting_ball["y_px"]),
+            diameter_px=diameter,
+            area_px=int(round(math.pi * (diameter / 2.0) ** 2)),
+        )
+        not_run = "not run: the setup box holds the resting ball"
+        return selected, {
+            "scene": _reference_candidate(None, not_run),
+            "impact": _reference_candidate(None, not_run),
+            "agreement": None,
+            "distance_px": None,
+            "size_ratio": None,
+            "selected_source": BOX_RESTING_BALL_SOURCE,
+            "reference_source": BOX_RESTING_BALL_SOURCE,
+            "box_resting_ball": dict(box_resting_ball),
+            "selected_candidate": vars(selected).copy(),
+            "disagreement": False,
+            "expected_diameter": {"diameter_px": expected_px, "source": expected_source},
+            "gate": gate,
+        }
     region = tuple(int(round(value)) for value in gate["region_px"]) if setup_ball else None
     # the scene detector and the resting-ball fit both read the still scene: take it once
     background = background_median(frames)
@@ -651,6 +685,7 @@ def _select_reference_ball(  # pylint: disable=too-many-locals
         "distance_px": distance if scene is not None and impact is not None else None,
         "size_ratio": size_ratio if scene is not None and impact is not None else None,
         "selected_source": selected_source,
+        "reference_source": SCENE_DETECTOR_SOURCE,
         "selected_candidate": vars(selected).copy() if selected is not None else None,
         "disagreement": agreement is False,
         "expected_diameter": {"diameter_px": expected_px, "source": expected_source},
@@ -1114,12 +1149,14 @@ def estimate_camera_ball_flight(
     setup_ball: dict | None = None,
     lens_focal_px: float | None = None,
     resting_ball: tuple[float, float, float] | None = None,
+    box_resting_ball: dict | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
     ``trigger_frame_index``: last frame exposed by the trigger, else nearest ``trigger_ns``.
     ``lens_focal_px`` (the lens's focal length) sizes the resting ball from its distance.
     ``resting_ball`` (x, y, diameter px): the range chain's fit of this clip's resting ball.
+    ``box_resting_ball``: the ball the setup box found in this clip (``_select_reference_ball``).
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
@@ -1141,6 +1178,7 @@ def estimate_camera_ball_flight(
         setup_ball=setup_ball,
         lens_focal_px=lens_focal_px,
         resting_ball=resting_ball,
+        box_resting_ball=box_resting_ball,
     )
     if anchor is None:
         return CameraBallEstimate(

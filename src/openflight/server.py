@@ -6561,6 +6561,8 @@ def _fuse_camera_measurements(
                 shot_number=shot_number,
                 notes=camera_notes,
                 setup_ball=_shot_ball_context(shot)["seed"],
+                # the surface solve's and swing-tilt pair's ball: one resting ball a shot
+                box_resting_ball=_shot_resting_ball(camera_archive),
                 camera_pose=_swing_camera_pose(shot),
                 lens_focal_px=lens_record_focal_px(
                     rig_geometry_config.get("lens"), int(np.shape(camera_archive["frames"])[-1])

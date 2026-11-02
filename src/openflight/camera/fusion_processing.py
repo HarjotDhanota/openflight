@@ -147,6 +147,7 @@ def build_context(
     shot_number: int,
     notes: list[str] | None = None,
     setup_ball: Mapping[str, Any] | None = None,
+    box_resting_ball: Mapping[str, Any] | None = None,
     camera_pose: Mapping[str, Any] | None = None,
     lens_focal_px: float | None = None,
     ball_range: Mapping[str, Any] | None = None,
@@ -192,6 +193,9 @@ def build_context(
     if camera_pose is not None:
         # without a pose, replay uses the resting ball's camera model
         payload["camera_pose"] = dict(camera_pose)
+    if box_resting_ball:
+        # the ball the setup box found in this clip's pre-impact frames (C7b)
+        payload["box_resting_ball"] = dict(box_resting_ball)
     if lens_focal_px is not None:
         # sizes the resting ball from its distance; contexts frozen before carry none
         payload["lens_focal_px"] = float(lens_focal_px)
@@ -271,6 +275,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             setup_ball=context.get("setup_ball"),
             lens_focal_px=context.get("lens_focal_px"),
             resting_ball=_measured_resting_ball(context),
+            box_resting_ball=context.get("box_resting_ball"),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")
