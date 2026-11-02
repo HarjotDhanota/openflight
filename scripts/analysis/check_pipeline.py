@@ -353,8 +353,7 @@ def kiosk_chain(  # pylint: disable=too-many-arguments,too-many-locals
             iwr6843_runtime=runtime,
             camera_capture_runtime=None,
             camera_capture_config=camera_config,
-            camera_optical_calibration=None,
-            camera_placement=None,
+            camera_calibration_set=None,
         ),
         _kiosk(tester_hooks, tester_setup_required=tester_required),
     ):

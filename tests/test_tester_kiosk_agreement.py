@@ -204,8 +204,7 @@ def _kiosk_camera(monkeypatch, tmp_path):
 
     for name in ("rig_geometry", "rig_geometry_config", "camera_lens"):
         monkeypatch.setattr(server, name, getattr(server, name))
-    monkeypatch.setattr(server, "camera_optical_calibration", None)
-    monkeypatch.setattr(server, "camera_placement", None)
+    monkeypatch.setattr(server, "camera_calibration_set", None)
     # the unit"s camera-tilt file, as the tester hands it with the offset
     tilt_file = tmp_path / "camera-vertical-offset.json"
     tilt_file.write_text(
@@ -332,7 +331,11 @@ def test_the_kiosk_s_calibrated_setup_camera_is_the_tester_s(
     )
 
 
-def test_a_calibration_for_another_mode_is_refused_by_both(kiosk_camera, tmp_path):
+def test_a_calibration_for_another_mode_leaves_the_kiosk_on_the_nominal_camera(
+    kiosk_camera, tmp_path
+):
+    """The tester refuses an explicit pair for another mode; the kiosk measures that mode
+    on the nominal camera the tester builds without one, and records why."""
     arm = ts.ARMS["arm5"]
     server, lens = kiosk_camera.start(arm, "6mm")
     artifact, placement = tmp_path / "optical.json", tmp_path / "placement.json"
@@ -344,8 +347,13 @@ def test_a_calibration_for_another_mode_is_refused_by_both(kiosk_camera, tmp_pat
         ts._reference_ball_camera(  # pylint: disable=protected-access
             arm, RIG_PATH, kiosk_camera.tilt, artifact, placement, CALIBRATION, lens
         )
-    with pytest.raises(ValueError, match="does not match the active capture mode"):
-        server.setup_camera_view()
+    tester = ts._reference_ball_camera(  # pylint: disable=protected-access
+        arm, RIG_PATH, kiosk_camera.tilt, None, None, CALIBRATION, lens
+    )
+    kiosk = server.setup_camera_view()
+    _same_camera(kiosk.camera, tester)
+    reason = server._calibrated_fusion_record()["fallback_reason"]  # pylint: disable=protected-access
+    assert "no camera calibration for 1280x800" in reason
 
 
 @pytest.mark.parametrize("arm_id", ["arm5", "arm6"])

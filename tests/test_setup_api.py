@@ -237,8 +237,7 @@ def test_a_kiosk_without_the_tilt_sensor_says_setup_cannot_run(kiosk, monkeypatc
     for name in ("rig_geometry", "rig_geometry_config"):
         monkeypatch.setattr(server, name, getattr(server, name))
     server.init_rig_geometry(RIG)
-    monkeypatch.setattr(server, "camera_optical_calibration", None)
-    monkeypatch.setattr(server, "camera_placement", None)
+    monkeypatch.setattr(server, "camera_calibration_set", None)
     monkeypatch.setattr(server, "inclinometer_service", None)
     _start(kiosk)
 
@@ -464,8 +463,7 @@ def test_a_camera_tilt_not_from_the_calibration_file_is_not_the_setup_s(kiosk, s
 def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(monkeypatch):
     for name in ("rig_geometry", "rig_geometry_config"):
         monkeypatch.setattr(server, name, getattr(server, name))
-    monkeypatch.setattr(server, "camera_optical_calibration", None)
-    monkeypatch.setattr(server, "camera_placement", None)
+    monkeypatch.setattr(server, "camera_calibration_set", None)
     monkeypatch.setattr(
         server,
         "camera_capture_runtime",

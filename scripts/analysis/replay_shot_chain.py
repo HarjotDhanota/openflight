@@ -127,7 +127,7 @@ def configure_kiosk(start: dict, *, ignore_iwr: bool, aim_uncertainty_deg: float
     else:
         server.iwr6843_runtime = None
     server.camera_capture_runtime = SimpleNamespace(camera_analysis_eligible=True)
-    server.camera_optical_calibration = None
+    server.camera_calibration_set = None
     server.camera_tilt_calibration_path = None
     server.ball_at_address_monitor = None
     server.ballistics_enabled = True

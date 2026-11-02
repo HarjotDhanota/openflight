@@ -2043,8 +2043,12 @@ class TestShotToDict:
     def test_requested_calibrated_fusion_rejects_missing_mode_evidence_without_stopping_baseline(
         self, monkeypatch
     ):
-        monkeypatch.setattr(server_module, "camera_optical_calibration", {"candidate": {}})
-        monkeypatch.setattr(server_module, "camera_placement", {})
+        from openflight.camera.calibrated_projection import CalibrationPair, CalibrationSet
+
+        # a pair for the clip's own 8x6 frames, whose capture lacks the mode evidence
+        pair = CalibrationPair(mode=(8, 6), optical={"candidate": {}}, placement={})
+        monkeypatch.setattr(server_module, "camera_calibration_set", CalibrationSet(pairs=(pair,)))
+        monkeypatch.setattr(server_module, "camera_lens", None)
         monkeypatch.setattr(
             server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
         )

@@ -1,15 +1,31 @@
-# Live calibrated camera-fusion candidate
+# Live calibrated camera fusion
 
-Calibrated projection is opt-in. Without both flags below, OpenFlight keeps the
-legacy reference-ball focal and pitch model. The calibrated path is an
-experimental candidate and is not accuracy-qualified.
+The kiosk measures each saved-image mode on that mode's own calibrated camera:
+principal point, Brown-five distortion and the placement that puts the camera in
+the rig (including the camera-vs-LIS3DH pitch and roll, through the placement's
+reference pose). `scripts/start-kiosk.sh` passes the 6 mm lens's set by default,
+the same way it passes the rig file:
 
 ```bash
-scripts/start-kiosk.sh \
-  --camera-capture --iwr6843 --inclinometer \
-  --rig-geometry config/enclosure_v3_rig_geometry.json \
-  --camera-optical-calibration calibration/ov9281-mode.json \
-  --camera-placement calibration/v3-placement.json
+scripts/start-kiosk.sh --camera-capture --iwr6843 --inclinometer
+# = ... --rig-geometry config/enclosure_v3_rig_geometry.json #       --camera-calibration-dir config/camera-calibration/6mm
+```
+
+A calibration directory holds one `<W>x<H>.optical.json` + `<W>x<H>.placement.json`
+pair per mode. The server picks the pair whose `mode_profile.saved_image` is the
+live capture's mode at setup and the clip's capture-mode evidence at fusion. A
+mode without a pair, a pair refused at startup (another rig's placement, a missing
+file) or an absent directory measures on the nominal camera (principal point at the
+image centre) and says why: the session record's `camera_calibrated_fusion` names
+every pair (content and file SHA-256s), the active mode's pair `in_use`, or its
+`fallback_reason`; a shot fused nominally carries the reason in
+`calibrated_camera_reason`. `scripts/camera/build_camera_placements.py` rebuilds a
+set's placements for the loaded rig file whenever the rig file changes.
+
+One explicit pair overrides the directory (the tester's opt-in route):
+
+```bash
+scripts/start-kiosk.sh   --camera-capture --iwr6843 --inclinometer   --camera-optical-calibration calibration/ov9281-mode.json   --camera-placement calibration/v3-placement.json
 ```
 
 The tester server accepts the same two calibration paths and forwards them to
@@ -82,13 +98,12 @@ observed pose, capture SHA-256, session UUID, shot number, range evidence, and
 both tracker states. `replay_camera_fusion.py` restores this frozen context and
 does not reread current calibration files.
 
-One optical profile applies only to capture arms whose saved mode matches that
-profile exactly. Other arms continue on the recorded legacy baseline and report
-the calibrated candidate as rejected; run them with their own profile to opt in.
+An explicit pair applies only to its own saved mode; other modes measure on the
+nominal camera, labelled. The tester itself still refuses a pair for another mode.
 
 The lens catalogue's calibration directory chooses the newest matching file
 separately for 1280x800 and 640x400. Its recorded `calibration_by_arm` identifies
 the source for each focal length. When only one mode has a file, the existing
 scaled focal fallback is recorded as `scaled_from_other_mode`. This directory
-lookup supplies focal lengths; use the optical-calibration and placement flags
-above to apply the full principal point, Brown distortion and placement model.
+lookup supplies focal lengths; the calibration set above applies the full
+principal point, Brown distortion and placement model.

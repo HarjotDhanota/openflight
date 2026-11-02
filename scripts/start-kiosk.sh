@@ -157,6 +157,19 @@ if [ "$has_rig_geometry" = false ]; then
     SERVER_ARGS+=(--rig-geometry "$DEFAULT_RIG_GEOMETRY")
 fi
 
+# The 6 mm lens's per-mode calibrated camera; a mode without a pair, or an absent
+# directory, stays on the nominal camera (the server labels it, never refuses).
+DEFAULT_CAMERA_CALIBRATION_DIR="$PROJECT_DIR/config/camera-calibration/6mm"
+has_camera_calibration_dir=false
+for argument in "${SERVER_ARGS[@]}"; do
+    case "$argument" in
+        --camera-calibration-dir|--camera-calibration-dir=*) has_camera_calibration_dir=true ;;
+    esac
+done
+if [ "$has_camera_calibration_dir" = false ]; then
+    SERVER_ARGS+=(--camera-calibration-dir "$DEFAULT_CAMERA_CALIBRATION_DIR")
+fi
+
 if [ "$STARTUP_SPLASH" = true ]; then
     STARTUP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${WEB_PORT}-$$"
     STARTUP_STATUS_FILE="$STARTUP_RUNTIME_DIR/status.json"

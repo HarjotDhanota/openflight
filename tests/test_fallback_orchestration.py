@@ -69,7 +69,7 @@ def kiosk(monkeypatch, scene):
         },
     )
     monkeypatch.setattr(server_module, "ball_at_address_monitor", None)
-    monkeypatch.setattr(server_module, "camera_optical_calibration", None)
+    monkeypatch.setattr(server_module, "camera_calibration_set", None)
     monkeypatch.setattr(
         server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
     )
