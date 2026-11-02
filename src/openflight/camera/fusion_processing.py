@@ -217,6 +217,17 @@ def build_context(
     return payload
 
 
+def _located_tee(context: Mapping[str, Any]) -> dict | None:
+    """The shot's range when the camera located the tee (C8a), for the ball's depth."""
+    ball_range = context.get("ball_range") or {}
+    if ball_range.get("source") != "camera_resting_ball":
+        return None
+    value = ball_range.get("value")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return {"range_m": float(value), "uncertainty_m": ball_range.get("uncertainty")}
+
+
 def _measured_resting_ball(context: Mapping[str, Any]) -> tuple[float, float, float] | None:
     """(x, y, diameter px) of the resting ball when the range chain measured it from its
     size on this clip (``resting_ball_range``), else None."""
@@ -276,6 +287,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             lens_focal_px=context.get("lens_focal_px"),
             resting_ball=_measured_resting_ball(context),
             box_resting_ball=context.get("box_resting_ball"),
+            located_tee=_located_tee(context),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")

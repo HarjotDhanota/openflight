@@ -33,7 +33,7 @@ from openflight.camera.geometry import (
     unit_world_rays,
 )
 from openflight.horizontal_frame import frame_for, to_boresight_deg, to_reported_deg
-from openflight.iwr6843.tracking import accepted_range_evidence
+from openflight.iwr6843.tracking import BallTrack, accepted_range_evidence
 
 MPH_PER_MS = 2.23694
 PARAMETER_SWEEP_SIZE = 27
@@ -236,6 +236,44 @@ class _HorizontalFit:
     median_vertical_residual_px: float
     profile_span_deg: float
     impact_delay_ms: float
+
+
+# The located tee's range against time (C9a): resting range + OPS speed x time since the
+# camera's own contact frame, in the radar's slant range like an IWR walk.
+LOCATED_TEE_DEPTH = "located_tee_plus_ops_speed"
+_LOCATED_TEE_RES_M = 0.01
+
+
+@dataclass(frozen=True)
+class LocatedTeeRangeEvidence:
+    """Range evidence shaped like an IWR walk's (``track.range_at``, ``impact_t_s``,
+    ``geometry.range_res_m``), built from the camera's located tee and the OPS speed."""
+
+    track: BallTrack
+    geometry: Any
+    impact_t_s: float = 0.0
+    status: str = "accepted_located_tee"
+
+
+def located_tee_range_evidence(
+    range_m: float, ops_ball_speed_mph: float
+) -> LocatedTeeRangeEvidence:
+    """The ball's radar range against time from contact: the located tee, then the OPS
+    ball speed (the OPS's radial speed sits beside the radar's line of sight)."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    speed = float(ops_ball_speed_mph) / MPH_PER_MS
+    track = BallTrack(
+        speed_ms=speed,
+        slope_bins=speed / _LOCATED_TEE_RES_M,
+        intercept_bins=float(range_m) / _LOCATED_TEE_RES_M,
+        rms_bins=0.0,
+        n_inliers=0,
+        t_first=0.0,
+        t_last=0.0,
+        low_confidence=False,
+    )
+    return LocatedTeeRangeEvidence(track, SimpleNamespace(range_res_m=_LOCATED_TEE_RES_M))
 
 
 def _camera_model(
@@ -1150,6 +1188,7 @@ def estimate_camera_ball_flight(
     lens_focal_px: float | None = None,
     resting_ball: tuple[float, float, float] | None = None,
     box_resting_ball: dict | None = None,
+    located_tee: dict | None = None,
 ) -> CameraBallEstimate:
     """Estimate horizontal flight with a frozen detector-consensus sweep.
 
@@ -1157,11 +1196,22 @@ def estimate_camera_ball_flight(
     ``lens_focal_px`` (the lens's focal length) sizes the resting ball from its distance.
     ``resting_ball`` (x, y, diameter px): the range chain's fit of this clip's resting ball.
     ``box_resting_ball``: the ball the setup box found in this clip (``_select_reference_ball``).
+    ``located_tee`` (``range_m``): the camera's located tee; without an accepted IWR walk
+    it and the OPS speed give the ball's range against time (``located_tee_range_evidence``).
     """
     range_evidence_status = (
         getattr(range_evidence, "status", "accepted") if range_evidence is not None else None
     )
     range_evidence = accepted_range_evidence(range_evidence)
+    depth_source = "iwr_range"
+    if (
+        range_evidence is None
+        and isinstance(located_tee, dict)
+        and isinstance(located_tee.get("range_m"), (int, float))
+        and ops_ball_speed_mph
+    ):
+        range_evidence = located_tee_range_evidence(located_tee["range_m"], ops_ball_speed_mph)
+        depth_source = LOCATED_TEE_DEPTH
     if frames.ndim != 3 or len(frames) < 4 or len(timestamps_ns) != len(frames):
         return CameraBallEstimate("rejected_invalid_camera_frames")
     if geometry.calibrated_model is not None and range_evidence is None:
@@ -1314,7 +1364,7 @@ def estimate_camera_ball_flight(
         n_points=representative.n_points,
         first_frame=representative.first_frame,
         last_frame=representative.last_frame,
-        depth_source="iwr_range",
+        depth_source=depth_source,
         reference_ball_diagnostics=reference_diagnostics,
         range_evidence_status=range_evidence_status,
         timing_anchor=timing_anchor,
