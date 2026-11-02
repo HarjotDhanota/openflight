@@ -5175,7 +5175,9 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             or _shot_ball_context(shot)["range_prior_rejection"]
         )
         prior_inputs = {"range_prior": own_prior} if own_prior is not None else {}
-        if prior_rejection:
+        located = own_prior is not None and own_prior.source == "camera_resting_ball"
+        # a look's refusal is about the look; the located tee is the clip's own box ball
+        if prior_rejection and not located:
             prior_inputs["range_prior_rejection"] = prior_rejection
         else:
             # the runtime makes the same choice; the shot keeps why a look was refused

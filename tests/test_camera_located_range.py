@@ -257,3 +257,64 @@ def test_the_published_ball_range_names_the_located_tee():
 
     assert "camera" in record["source"] and "tee" in record["source"]
     assert record["value"] == pytest.approx(1.81)
+
+
+def test_a_look_s_rejection_never_takes_the_located_tee_from_the_iwr(monkeypatch):
+    """The address look's refusal (its seed is not the clip's ball) is about the look; the
+    located tee is the clip's own box ball, so it stays the IWR's prior."""
+    seen = {}
+
+    def process_shot(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(
+            capture=None, measurement=None, club_path=None, launch_range=None, ball_range=None
+        )
+
+    monkeypatch.setattr(
+        server,
+        "iwr6843_runtime",
+        SimpleNamespace(process_shot=process_shot, replay_config_snapshot=None, range_prior=None),
+    )
+    monkeypatch.setattr(server, "get_session_logger", lambda: None)
+    shot = Shot(ball_speed_mph=82.0, timestamp=datetime.now(), shot_number=1, impact_timestamp=1.0)
+    shot.input_sources = {
+        "camera_launch_range": dict(CAMERA),
+        "ball_reference": {"range_prior_rejection": "the look's ball is not the clip's"},
+    }
+
+    server._process_iwr6843_angle(shot)  # pylint: disable=protected-access
+
+    assert seen["range_prior"].source == "camera_resting_ball"
+    assert "range_prior_rejection" not in seen
+
+
+def test_the_camera_fallback_takes_the_located_tee_s_ball_and_distance():
+    from openflight.camera import fusion_processing as fp  # noqa: PLC0415
+    from tests.camera_fallback_scene import render_scene  # noqa: PLC0415
+    from tests.test_fallback_chain import _scene_context  # noqa: PLC0415
+
+    scene = render_scene(vertical_deg=17.0, horizontal_deg=-2.0, speed_mph=85.0, pitch_deg=-0.8)
+    x, y, diameter = scene.rest_px()
+    distance = float(np.linalg.norm(scene.ball_lfu - np.asarray(scene.camera.origin_lfu)))
+    located = {
+        **CAMERA,
+        "ball_px": [x, y],
+        "diameter_px": diameter,
+        "lens_distance_m": distance,
+        "uncertainty_m": 0.02,
+    }
+    context, archive = _scene_context(
+        scene,
+        range_record={
+            "source": "camera_resting_ball",
+            "label": "estimated",
+            "uncertainty_m": 0.02,
+            "details": located,
+        },
+    )
+
+    fallback = fp.process_camera_fusion(context, archive)["ball_fallback"]
+
+    assert fallback["status"] == "accepted", fallback["reason"]
+    assert fallback["inputs"]["distance_source"] == "camera_resting_ball"
+    assert fallback["vertical_deg"] == pytest.approx(17.0, abs=0.6)

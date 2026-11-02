@@ -557,7 +557,11 @@ def run_ball_fallback(  # pylint: disable=too-many-locals,too-many-statements
     first_post = first_post_index(archive, len(frames))
     ball_range = context.get("ball_range") or {}
     details = ball_range.get("details") or {}
-    if details.get("status") == "measured_from_size":
+    located = details.get("source") == LOCATED_TEE_SOURCE
+    if details.get("status") == "measured_from_size" and located:
+        # the camera's located tee: the box ball and its distance from the lens (C8a)
+        rest_px, rest_d = tuple(details["ball_px"]), float(details["diameter_px"])
+    elif details.get("status") == "measured_from_size":
         rest_px, rest_d = tuple(details["rest_px"]), float(details["diameter_px"])
     else:
         measure = resting_ball_measure(archive, context.get("setup_ball"))
@@ -617,7 +621,11 @@ def run_ball_fallback(  # pylint: disable=too-many-locals,too-many-statements
             origin_lfu=origin,
         )
     radar_origin = (0.0, 0.0, float(geometry.radar_height_m))
-    if details.get("status") == "measured_from_size":
+    if details.get("status") == "measured_from_size" and located:
+        distance = float(details["lens_distance_m"])
+        distance_sd = float(details["uncertainty_m"])
+        distance_source = LOCATED_TEE_SOURCE
+    elif details.get("status") == "measured_from_size":
         distance = float(details["camera_distance_m"])
         distance_sd = float(details["size_sd_m"])
         distance_source = SIZE_RANGE_SOURCE
