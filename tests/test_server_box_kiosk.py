@@ -294,3 +294,25 @@ def test_a_look_whose_worker_failed_is_skipped_and_logged(kiosk_state, caplog):
     assert monitor.latest()["state"] == "unavailable"
     assert monitor.latest()["range_m"] is None
     assert any("the worker died" in record.getMessage() for record in caplog.records)
+
+
+def test_the_kiosk_s_calibration_set_makes_the_lens_record_calibrated(
+    kiosk_state, monkeypatch, tmp_path
+):
+    """--camera-calibration-dir calibrates the fusion's camera; the lens record every camera
+    label and the fallback's focal length read must say so too, not stay nominal."""
+    from openflight.camera import lens_profiles
+
+    monkeypatch.setattr(lens_profiles, "default_calibration_dir", lambda: tmp_path)
+    server.init_rig_geometry(RIG)
+    set_dir = RIG.parent / "camera-calibration" / "6mm"
+
+    server.init_camera_lens("6mm", calibration_dir=set_dir)
+
+    lens = server.rig_geometry_config["lens"]
+    assert lens["intrinsics"] == "calibrated"
+    assert lens["focal_px_by_arm"]["arm6"] == pytest.approx(1005.705, abs=0.01)
+    assert server._mode_focal(640)[1] == "lens_calibrated"
+
+    server.init_camera_lens("6mm")  # no set: nominal, as before
+    assert server.rig_geometry_config["lens"]["intrinsics"] == "nominal"

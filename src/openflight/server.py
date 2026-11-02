@@ -1418,8 +1418,13 @@ def init_rig_geometry(path) -> None:
         )
 
 
-def init_camera_lens(lens_id: str | None) -> None:
-    """Put the selected lens's focal length under every camera metric, and record it."""
+def init_camera_lens(lens_id: str | None, calibration_dir: str | Path | None = None) -> None:
+    """Put the selected lens's focal length under every camera metric, and record it.
+
+    ``calibration_dir`` (--camera-calibration-dir): the kiosk's calibration set; its
+    candidates calibrate the lens record as the unit's own directory's do, so the labels and
+    the fallback's focal length agree with the camera the fusion measures on.
+    """
     global rig_geometry, camera_lens  # pylint: disable=global-statement
     if rig_geometry is None:
         return
@@ -1428,9 +1433,10 @@ def init_camera_lens(lens_id: str | None) -> None:
     catalogue = lens_profiles.load_catalogue()
     if lens_id is not None:
         catalogue.get(lens_id)
-    lens = lens_profiles.active_lens(
-        rig_geometry, catalogue, lens_id, [lens_profiles.default_calibration_dir()]
-    )
+    sources = [lens_profiles.default_calibration_dir()]
+    if calibration_dir is not None:
+        sources.append(Path(calibration_dir))
+    lens = lens_profiles.active_lens(rig_geometry, catalogue, lens_id, sources)
     if lens_id is not None:
         rig_geometry = lens_profiles.rig_with_lens(rig_geometry, lens)
     rig_geometry_config["lens"] = lens.to_dict()
@@ -9767,7 +9773,7 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"--rig-geometry: {error}")
     try:
-        init_camera_lens(args.camera_lens_id)
+        init_camera_lens(args.camera_lens_id, calibration_dir=args.camera_calibration_dir)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"--camera-lens-id: {error}")
     try:
