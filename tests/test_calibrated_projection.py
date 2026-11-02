@@ -250,13 +250,19 @@ def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_p
     assert pair.mode == (640, 400)
 
 
-def live_calibrated_replay(tmp_path, monkeypatch):
+_KEEP = object()
+
+
+def live_calibrated_replay(tmp_path, monkeypatch, *, crop_readout=None, requested_crop=_KEEP):
+    """One live calibrated shot and its replay; ``crop_readout`` replaces the profile's
+    declared crop/driver mapping, ``requested_crop`` the capture's requested scaler crop."""
     import openflight.camera.ball_flight as ball_module
     import openflight.camera.fusion_processing as fusion_module
 
     profile = _profile()
     profile["crop_readout_mapping"].update(
-        scaler_crop="not_applicable_raw_stream", driver_vertical_offset_px=174
+        crop_readout
+        or {"scaler_crop": "not_applicable_raw_stream", "driver_vertical_offset_px": 174}
     )
     artifact = _artifact(profile=profile, coefficients=ZERO)
     placement = _placement(
@@ -336,6 +342,8 @@ def live_calibrated_replay(tmp_path, monkeypatch):
         pre_trigger_count=np.int32(trigger_index + 1),
     )
     startup = _capture_mode(validate_mode_profile(profile))["contexts"][0]["startup"]
+    if requested_crop is not _KEEP:
+        startup["settings"]["scaler_crop"] = requested_crop
     mode_frames = tuple(
         CameraFrame(
             frames[index],
@@ -388,8 +396,45 @@ def live_calibrated_replay(tmp_path, monkeypatch):
     shot.camera_fusion_session_uuid = "session-a"
     server_module._fuse_camera_measurements(shot, capture)
     archive = server_module._load_camera_capture_archive(capture)
-    replay = fusion_module.process_camera_fusion(shot.camera_fusion_context, archive)
+    replay = (
+        fusion_module.process_camera_fusion(shot.camera_fusion_context, archive)
+        if shot.camera_fusion_context.get("available")
+        else None
+    )
     return shot, archive, replay, trigger_index, capture
+
+
+UNPROVEN_EVIDENCE = (
+    "capture context 0 lacks a requested scaler crop",
+    "driver parameter mapping is unknown",
+)
+DECLARED_CROP = {"scaler_crop": [8, 8, 1280, 800], "driver_vertical_offset_px": None}
+
+
+def test_unproven_capture_evidence_labels_the_calibrated_pair_instead_of_rejecting_it(
+    tmp_path, monkeypatch
+):
+    """The Oct 27 clip's two soft reasons: the pair is used, every reason recorded."""
+    shot, _archive, _replay, _trigger, _capture = live_calibrated_replay(
+        tmp_path, monkeypatch, crop_readout=DECLARED_CROP
+    )
+
+    assert shot.calibrated_camera_status == "experimental_unqualified"
+    for reason in UNPROVEN_EVIDENCE:
+        assert reason in shot.calibrated_camera_reason
+    evidence = shot.camera_fusion_context["geometry"]["parameters"]["calibrated_mode_evidence"]
+    assert evidence["status"] == "unverified"
+    assert evidence["accuracy_qualified"] is False
+    assert set(UNPROVEN_EVIDENCE) <= set(evidence["reasons"])
+
+
+def test_a_contradicted_capture_mode_still_rejects_the_calibrated_pair(tmp_path, monkeypatch):
+    shot, _archive, _replay, _trigger, _capture = live_calibrated_replay(
+        tmp_path, monkeypatch, crop_readout=DECLARED_CROP, requested_crop=[0, 0, 1280, 800]
+    )
+
+    assert shot.calibrated_camera_status == "rejected"
+    assert "scaler crop differs from calibration" in shot.calibrated_camera_reason
 
 
 def test_live_adapter_and_replay_share_successful_calibrated_projection(tmp_path, monkeypatch):

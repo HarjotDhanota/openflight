@@ -145,16 +145,13 @@ class EffectiveCameraGeometryInputs:
             candidate = model.snapshot["artifact"].get("candidate", model.snapshot["artifact"])
             if evidence.get("mode_profile_sha256") != candidate.get("mode_profile_sha256"):
                 raise ValueError("calibrated mode evidence profile fingerprint mismatch")
-            allowed = {
-                "capture mode identity is not independently established",
-                "calibration remains unqualified",
-                "startup driver parameter does not prove an applied sensor offset",
-            }
+            # a contradiction ("incompatible") never reaches a geometry; every unproven
+            # fact is carried as a label (reasons), never a refusal
             reasons = evidence.get("reasons")
             if (
                 evidence.get("status") != "unverified"
                 or not isinstance(reasons, list)
-                or any(reason not in allowed for reason in reasons)
+                or any(not isinstance(reason, str) for reason in reasons)
             ):
                 raise ValueError("calibrated mode evidence is incomplete or incompatible")
 

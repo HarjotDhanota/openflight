@@ -6436,7 +6436,7 @@ def _fuse_camera_measurements(
     fallback_result = None
     shared_error = None
     # the clip's own mode picks its calibrated camera; a mode without one is nominal, labelled
-    pair, nominal_reason = None, None
+    pair, nominal_reason, calibrated_reason = None, None, None
     if camera_calibration_set is not None:
         mode = _capture_saved_mode(camera_capture, camera_archive)
         pair, nominal_reason = (
@@ -6485,19 +6485,11 @@ def _fuse_camera_measurements(
                         "camera capture mode is incompatible with calibration: "
                         + "; ".join(compatibility.reasons)
                     )
-                qualification_only = {
-                    "capture mode identity is not independently established",
-                    "calibration remains unqualified",
-                    "startup driver parameter does not prove an applied sensor offset",
-                }
-                missing_evidence = [
-                    reason for reason in compatibility.reasons if reason not in qualification_only
-                ]
-                if missing_evidence:
-                    raise ValueError(
-                        "camera capture lacks required calibrated-mode evidence: "
-                        + "; ".join(missing_evidence)
-                    )
+                # a contradiction rejects the pair (above); what is merely unproven labels it
+                # (owner: resolve every metric, labelled by its weakest input)
+                calibrated_reason = "calibrated, capture evidence unproven: " + "; ".join(
+                    compatibility.reasons
+                )
                 pose = shot.inclinometer or {}
                 pose_evidence = _calibrated_pose_evidence(pose, pair.placement)
                 model = pair.model(
@@ -6561,7 +6553,9 @@ def _fuse_camera_measurements(
                 if getattr(geometry, "calibrated_model_snapshot", None) is not None
                 else "legacy_inferred_ball_geometry"
             )
-            shot.calibrated_camera_reason = nominal_reason
+            shot.calibrated_camera_reason = (
+                calibrated_reason if pair is not None else nominal_reason
+            )
             decision = result["horizontal_decision"]
             estimate = result["ball_estimate"]
             fused = result["club_delivery"]
