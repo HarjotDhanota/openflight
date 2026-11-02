@@ -4990,6 +4990,50 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     shot.inclinometer = data
 
 
+def _calibrated_observed_roll_deg(pose: dict, placement: dict) -> float:
+    """The LIS3DH roll a calibrated model takes against its placement's reference pose
+    (the roll is applied only on a unit whose tilt check verified and zeroed it)."""
+    from .camera import camera_roll  # noqa: PLC0415
+
+    gravity = (pose.get("x_g"), pose.get("y_g"), pose.get("z_g"))
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        for value in gravity
+    ):
+        raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
+    reference_roll = (placement.get("reference_pose_deg") or {}).get("roll", 0.0)
+    return camera_roll.calibrated_observed_roll_deg(
+        camera_roll.roll_record(
+            camera_roll.lis3dh_roll_deg(*gravity), reference_roll, pose.get("roll_calibration")
+        ),
+        reference_roll,
+    )
+
+
+def _shot_calibrated_camera(shot: Shot, width: int, height: int):
+    """(model, pair, reason): this mode's calibrated camera at the shot's own LIS3DH pitch and
+    roll, composed through its placement; no model and the reason when the mode is nominal."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    pair, reason = _calibration_pair(width, height)
+    if pair is None:
+        return None, None, reason
+    pose = getattr(shot, "inclinometer", None) or {}
+    pitch = camera_tilt._stable_pitch(pose)  # pylint: disable=protected-access
+    if pitch is None:
+        return None, pair, "no stable LIS3DH pitch to place the calibrated camera"
+    try:
+        model = pair.model(
+            observed_pitch_deg=pitch,
+            observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
+        )
+    except ValueError as error:
+        return None, pair, f"the calibrated camera could not be placed: {error}"
+    return model, pair, None
+
+
 def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     """Validate the stable, upright LIS3DH pose used by calibrated projection."""
     if pose.get("status") != "stable" or pose.get("stable") is not True:
@@ -5895,6 +5939,13 @@ def _lis3dh_camera_pitch(inclinometer) -> float | None:
     return float(rig_geometry.boresight_pitch_deg) + (pitch - float(expected))
 
 
+def _calibrated_lis3dh_pitch(inclinometer) -> float | None:
+    """This swing's own stable LIS3DH pitch, the reading a calibrated placement composes."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    return camera_tilt._stable_pitch(inclinometer)  # pylint: disable=protected-access
+
+
 def _shot_resting_ball(camera_archive) -> dict | None:
     """The resting ball in this clip's own pre-impact frames, in the box; measured once."""
     from .camera import swing_tilt  # noqa: PLC0415
@@ -5914,9 +5965,9 @@ def _shot_resting_ball(camera_archive) -> dict | None:
 
 
 def _surface_angular_sigma_deg() -> float:
-    """Where the camera's optical axis points, 1 sigma, for the surface solve: the
-    nominal pinhole's (principal point at the image centre) until the solve uses a
-    checkerboard-calibrated model."""
+    """Where the nominal camera's optical axis points, 1 sigma, for the surface solve
+    (principal point at the image centre); a calibrated model's solve takes
+    ``surface_height.CALIBRATED_ANGULAR_SIGMA_DEG``."""
     from .surface_height import UNCALIBRATED_ANGULAR_SIGMA_DEG  # noqa: PLC0415
 
     return UNCALIBRATED_ANGULAR_SIGMA_DEG
@@ -5939,7 +5990,10 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
     )
     focal = _mode_focal(width)[0] if width else None
     inclinometer = getattr(shot, "inclinometer", None)
-    return surface_height.solve_shot(
+    model, pair, nominal_reason = (
+        _shot_calibrated_camera(shot, width, height) if width else (None, None, None)
+    )
+    solve = surface_height.solve_shot(
         range_m=getattr(shot, "ball_range_m", None),
         range_sigma_m=getattr(shot, "ball_range_uncertainty_m", None),
         range_source=getattr(shot, "ball_range_source", None),
@@ -5948,17 +6002,28 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
         ball_diameter_px=ball.get("diameter_px") if ball else None,
         focal_px=focal,
         image_size_px=(width, height),
-        # the LIS3DH and the rig's boresight only: a tilt calibrated from ball pairs
-        # assumed the rig's lens height and would hand the base back as the surface
-        pitch_deg=_lis3dh_camera_pitch(inclinometer),
+        # never a tilt calibrated from ball pairs (it assumed the rig's lens height and
+        # would hand the base back as the surface): the nominal camera takes the LIS3DH
+        # and the rig's boresight, the calibrated one the LIS3DH reading itself, composed
+        # through its placement (boards, independent of any ball)
+        pitch_deg=(
+            _calibrated_lis3dh_pitch(inclinometer)
+            if model is not None
+            else _lis3dh_camera_pitch(inclinometer)
+        ),
         roll_correction_deg=_swing_roll_correction_deg(shot),
         rig_lens_height_m=float(rig_geometry.lens_height_above_floor_mm) / 1000.0,
         radar_offset_lfu_m=camera_rdf_offset_to_target_lfu(
             rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0)
         ),
-        angular_sigma_deg=_surface_angular_sigma_deg(),
+        # the calibrated model's own boresight sigma (surface_height.CALIBRATED_...)
+        angular_sigma_deg=None if model is not None else _surface_angular_sigma_deg(),
         pitch_reading_sigma_deg=(inclinometer or {}).get("pitch_std_deg"),
+        camera_model=model,
     )
+    solve["inputs"]["calibration_pair"] = pair.record() if pair is not None else None
+    solve["inputs"]["nominal_reason"] = nominal_reason if model is None else None
+    return solve
 
 
 def _scene_heights_now() -> dict:
@@ -6059,14 +6124,30 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         height_px, width_px = int(frames.shape[-2]), int(frames.shape[-1])
         lens_m = float(rig_geometry.lens_height_above_floor_mm) / 1000.0
         offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
-        camera_at_pitch = swing_tilt.nominal_camera_at_pitch(
-            focal_px=mode_focal_px(width_px, rig_geometry),
-            width=width_px,
-            height=height_px,
-            camera_origin_lfu=(0.0, 0.0, lens_m),
-            radar_origin_lfu=(float(offset[0]), float(offset[1]), lens_m + float(offset[2])),
-            roll_correction_deg=_swing_camera_pose(shot)["roll"]["roll_correction_deg"],
-        )
+        lens = (0.0, 0.0, lens_m)
+        radar = (float(offset[0]), float(offset[1]), lens_m + float(offset[2]))
+        inclinometer = getattr(shot, "inclinometer", None)
+        model, calibration, nominal_reason = _shot_calibrated_camera(shot, width_px, height_px)
+        if model is not None:
+            # the trial pitch is the LIS3DH reading composed through the placement: the
+            # pair solves the reading's residual against it, at the calibrated principal point
+            camera_at_pitch = swing_tilt.calibrated_camera_at_pitch(
+                calibration,
+                observed_roll_deg=model.snapshot["observed_pose_deg"]["roll"],
+                camera_origin_lfu=lens,
+                radar_origin_lfu=radar,
+            )
+            lis3dh_pitch = _calibrated_lis3dh_pitch(inclinometer)
+        else:
+            camera_at_pitch = swing_tilt.nominal_camera_at_pitch(
+                focal_px=mode_focal_px(width_px, rig_geometry),
+                width=width_px,
+                height=height_px,
+                camera_origin_lfu=lens,
+                radar_origin_lfu=radar,
+                roll_correction_deg=_swing_camera_pose(shot)["roll"]["roll_correction_deg"],
+            )
+            lis3dh_pitch = _lis3dh_camera_pitch(inclinometer)
         pair = swing_tilt.swing_pair(
             {
                 "ball_range_m": shot.ball_range_m,
@@ -6076,13 +6157,21 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
                 "ball_range_reason": shot.ball_range_reason,
             },
             ball_px=ball,
-            lis3dh_pitch_deg=_lis3dh_camera_pitch(getattr(shot, "inclinometer", None)),
+            lis3dh_pitch_deg=lis3dh_pitch,
             camera_at_pitch=camera_at_pitch,
         )
-        outcome = swing_tilt.record_swing_pair(
-            camera_tilt_calibration_path,
-            pair,
-            facts={"shot_number": shot.shot_number, "ball_px": ball},
+        outcome = (
+            {
+                "action": "not_recorded",
+                "reason": "a calibrated pair is the LIS3DH residual against the placement; "
+                "the unit's tilt file holds nominal (image-centre) pairs only",
+            }
+            if model is not None
+            else swing_tilt.record_swing_pair(
+                camera_tilt_calibration_path,
+                pair,
+                facts={"shot_number": shot.shot_number, "ball_px": ball},
+            )
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Camera tilt swing pair failed: %s", error, exc_info=True)
@@ -6095,6 +6184,9 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         "uncertainty_deg": (pair.get("solved") or {}).get("uncertainty_deg"),
         "ball_px": ball,
         "outcome": outcome,
+        "principal_point": "calibrated" if model is not None else "image_centre",
+        "calibration_pair": calibration.record() if model is not None else None,
+        "nominal_reason": nominal_reason,
     }
     logger.info(
         "[SERVER] Camera tilt swing pair: %s (%s)",
@@ -6408,29 +6500,9 @@ def _fuse_camera_measurements(
                     )
                 pose = shot.inclinometer or {}
                 pose_evidence = _calibrated_pose_evidence(pose, pair.placement)
-                gravity = (pose.get("x_g"), pose.get("y_g"), pose.get("z_g"))
-                if any(
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(float(value))
-                    for value in gravity
-                ):
-                    raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
-                from openflight.camera import camera_roll  # noqa: PLC0415
-
-                # applied only on a unit whose tilt check verified and zeroed the roll
-                reference_roll = (pair.placement.get("reference_pose_deg") or {}).get("roll", 0.0)
-                observed_roll = camera_roll.calibrated_observed_roll_deg(
-                    camera_roll.roll_record(
-                        camera_roll.lis3dh_roll_deg(*gravity),
-                        reference_roll,
-                        pose.get("roll_calibration"),
-                    ),
-                    reference_roll,
-                )
                 model = pair.model(
                     observed_pitch_deg=pose.get("calibrated_pitch_deg"),
-                    observed_roll_deg=observed_roll,
+                    observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
                 )
                 geometry = geometry.with_calibrated_model(
                     model.snapshot,

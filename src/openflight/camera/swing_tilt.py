@@ -91,6 +91,34 @@ def nominal_camera_at_pitch(
     return camera
 
 
+def calibrated_camera_at_pitch(
+    pair: Any,
+    *,
+    observed_roll_deg: float,
+    camera_origin_lfu: Sequence[float],
+    radar_origin_lfu: Sequence[float],
+) -> Callable[[float], Any]:
+    """The mode's calibrated camera (a ``calibrated_projection.CalibrationPair``) at a trial
+    LIS3DH pitch: the reading composed through the placement (its reference pose and the
+    camera-vs-LIS3DH mount), never a nominal camera pitch. The solved offset is then the
+    LIS3DH residual against the placement, with the calibrated principal point."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from openflight.camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
+
+    def camera(lis3dh_pitch_deg: float):
+        model = pair.model(
+            observed_pitch_deg=float(lis3dh_pitch_deg), observed_roll_deg=float(observed_roll_deg)
+        )
+        return replace(
+            BallPlaneCamera.calibrated(model),
+            camera_origin_lfu=tuple(camera_origin_lfu),
+            radar_origin_lfu=tuple(radar_origin_lfu),
+        )
+
+    return camera
+
+
 def swing_pair(
     shot_range: Mapping[str, Any],
     *,
@@ -165,6 +193,7 @@ def record_swing_pair(path, pair: Mapping, *, facts: Mapping | None = None) -> d
 
 __all__ = [
     "METHOD",
+    "calibrated_camera_at_pitch",
     "SCHEMA",
     "nominal_camera_at_pitch",
     "record_swing_pair",

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import math
+from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from openflight import surface_height as sh
-from openflight.camera.reference_ball_range import BallPlaneCamera
+from openflight.camera.calibrated_projection import build_calibrated_camera_model
+from openflight.camera.reference_ball_range import BallPlaneCamera, project_to_pixel
 
 LENS_M = 0.095
 # the IWR phase centre: 30 mm behind and 42.75 mm below the lens (enclosure v3)
@@ -176,3 +180,114 @@ def test_the_radar_below_the_hitting_surface_is_a_valid_solve():
 
     assert solved["status"] == "solved"
     assert RADAR_M - solved["surface_height_m"] < 0.0
+
+
+# --- the calibrated camera (principal point, distortion, placement pose) ------------------
+
+CALIBRATION_DIR = Path(__file__).resolve().parents[1] / "config" / "camera-calibration" / "6mm"
+LIS3DH_PITCH, LIS3DH_ROLL = 2.1, -0.4
+
+
+def _calibrated_model(mode="640x400", pitch=LIS3DH_PITCH, roll=LIS3DH_ROLL):
+    optical = json.loads((CALIBRATION_DIR / f"{mode}.optical.json").read_text(encoding="utf-8"))
+    placement = json.loads((CALIBRATION_DIR / f"{mode}.placement.json").read_text(encoding="utf-8"))
+    return build_calibrated_camera_model(
+        optical, placement, observed_pitch_deg=pitch, observed_roll_deg=roll
+    )
+
+
+def _calibrated_solve(surface_m, model, *, forward_m=1.78, lateral_m=0.06, **overrides):
+    """A ball at a known height seen through the calibrated model, ranged by the radar."""
+    lens = np.array([0.0, 0.0, LENS_M])
+    ball = np.array([lateral_m, forward_m, surface_m + RADIUS])
+    camera = BallPlaneCamera.calibrated(model)
+    pixel = project_to_pixel(
+        replace(camera, camera_origin_lfu=tuple(lens), radar_origin_lfu=tuple(lens)), ball
+    )
+    distance = float(np.linalg.norm(ball - lens))
+    values = {
+        "range_m": float(np.linalg.norm(ball - (lens + np.asarray(RADAR_OFFSET)))),
+        "range_sigma_m": 0.01,
+        "range_source": "iwr_post_impact",
+        "range_label": "measured",
+        "ball_px": pixel,
+        "ball_diameter_px": camera.focal_size_px * 2 * RADIUS / distance,
+        "focal_px": None,
+        "image_size_px": model.projection.image_size,
+        "pitch_deg": LIS3DH_PITCH,
+        "roll_correction_deg": 0.0,
+        "rig_lens_height_m": LENS_M,
+        "radar_offset_lfu_m": RADAR_OFFSET,
+        "camera_model": model,
+    }
+    values.update(overrides)
+    return sh.solve_shot(**values)
+
+
+@pytest.mark.parametrize("mode", ["640x400", "1280x800"])
+@pytest.mark.parametrize("surface_m", [0.0, 0.038, -0.05])
+def test_a_ball_through_the_calibrated_model_solves_its_height_within_a_millimetre(mode, surface_m):
+    model = _calibrated_model(mode)
+    solved = _calibrated_solve(surface_m, model)
+
+    assert solved["status"] == "solved"
+    assert solved["surface_height_m"] == pytest.approx(surface_m, abs=0.001)
+    assert solved["inputs"]["principal_point"] == "calibrated"
+    assert solved["inputs"]["camera_model_sha256"] == model.snapshot["sha256"]
+    # the calibrated model's own focal length and stated pointing uncertainty
+    assert solved["inputs"]["focal_px"] == pytest.approx(
+        BallPlaneCamera.calibrated(model).focal_size_px
+    )
+    assert solved["systematic_sigma_m"] == pytest.approx(
+        solved["ball_distance_m"] * math.sin(math.radians(sh.CALIBRATED_ANGULAR_SIGMA_DEG)),
+        rel=1e-6,
+    )
+    assert solved["inputs"]["pitch_basis"] == "lis3dh_through_the_placement"
+
+
+def test_the_nominal_solve_records_the_image_centre():
+    solved = _solve(0.068)
+
+    assert solved["inputs"]["principal_point"] == "image_centre"
+    assert solved["inputs"]["camera_model_sha256"] is None
+
+
+def test_the_calibrated_camera_sees_another_height_than_the_image_centre_would():
+    """The same pixel on the nominal camera at the LIS3DH pitch: the error item 3 removes."""
+    model = _calibrated_model()
+    calibrated = _calibrated_solve(0.038, model)
+    nominal = _calibrated_solve(0.038, model, camera_model=None, focal_px=1004.2)
+
+    assert nominal["inputs"]["principal_point"] == "image_centre"
+    assert abs(nominal["surface_height_m"] - calibrated["surface_height_m"]) > 0.01
+
+
+def test_a_38_mm_mat_at_1_8_m_is_used_through_the_calibrated_model_and_not_the_nominal():
+    """The calibrated boresight's 0.3 deg puts the solve inside the 15 mm bound; the
+    nominal camera's 1 deg (31 mm at 1.8 m) leaves a 38 mm mat within 2 sigma of the base."""
+    calibrated = _calibrated_solve(0.038, _calibrated_model(), forward_m=1.8)
+    nominal = _solve(0.038, **_scene_at(0.038, 1.8))
+
+    assert calibrated["status"] == nominal["status"] == "solved"
+    assert calibrated["surface_height_m"] == pytest.approx(0.038, abs=0.001)
+    assert nominal["surface_height_m"] == pytest.approx(0.038, abs=0.001)
+    assert sh.use_solved(calibrated["surface_height_m"], calibrated["sigma_m"])[0] is True
+    assert sh.use_solved(nominal["surface_height_m"], nominal["sigma_m"])[0] is False
+    assert nominal["inputs"]["pitch_basis"] == "lis3dh_and_rig_boresight"
+
+
+def test_the_policy_records_both_angular_sigmas():
+    policy = sh.policy()
+
+    assert policy["uncalibrated_angular_sigma_deg"] == sh.UNCALIBRATED_ANGULAR_SIGMA_DEG == 1.0
+    assert policy["calibrated_angular_sigma_deg"] == sh.CALIBRATED_ANGULAR_SIGMA_DEG == 0.3
+
+
+def _scene_at(surface_m, forward_m):
+    scene = _scene(surface_m, forward_m)
+    return {
+        "range_m": scene["range_m"],
+        "ball_px": scene["ball_px"],
+        "ball_diameter_px": scene["ball_diameter_px"],
+        "range_sigma_m": 0.01,
+    }
