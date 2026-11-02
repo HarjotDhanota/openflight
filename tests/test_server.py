@@ -6159,10 +6159,10 @@ def test_ops_speed_geometry_comes_from_the_rig_ops_offsets(monkeypatch):
 
     assert source == "ops_rig_offsets"
     assert lateral_ft == pytest.approx(0.085 * 3.28084)
-    # the OPS is 48 mm up whichever point the IWR's ranges start from
-    assert above_ft == pytest.approx((0.02135 - 0.048) * 3.28084)
+    # the OPS is 46 mm up whichever point the IWR's ranges start from
+    assert above_ft == pytest.approx((0.02135 - 0.046) * 3.28084)
     ball_forward = math.sqrt(1.30**2 - (0.02135 - radar_height) ** 2 - 0.001858**2)
-    assert distance_ft == pytest.approx((ball_forward - 0.011384) * 3.28084, abs=1e-4)
+    assert distance_ft == pytest.approx((ball_forward - 0.003684) * 3.28084, abs=1e-4)
 
 
 def test_ops_speed_geometry_without_a_rig_keeps_the_iwr_proxy(monkeypatch):

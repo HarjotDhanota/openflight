@@ -37,8 +37,8 @@ def _placements(pitch_deg, drop_mm, roll_deg, size_scale=1.0, measured_pitch=Non
             {
                 "placement": number,
                 "arm": {"width": 1280, "height": 800},
-                # the tape runs from the radar window, 30 mm behind the lens
-                "tee_mm": tape + 30.0,
+                # the tape runs from the radar window, 22.3 mm behind the lens
+                "tee_mm": tape + 22.3,
                 "ball": {"found": True, "x": x, "y": y, "diameter_px": diameter},
                 "inclinometer": (
                     {"camera_pitch_deg": measured_pitch} if measured_pitch is not None else {}
@@ -53,7 +53,7 @@ def test_it_recovers_a_pitched_rolled_camera_at_a_different_height(tmp_path):
     log.write_text("\n".join(json.dumps(r) for r in _placements(3.5, 80.0, 1.2)) + "\n")
 
     placements = check.load(log, RIG)
-    floor = check.fit_floor(placements, 73.665)
+    floor = check.fit_floor(placements, 71.665)
 
     assert floor["pitch_up_deg"] == pytest.approx(3.5, abs=0.05)
     assert floor["drop_mm"] == pytest.approx(80.0, abs=1.0)
@@ -63,7 +63,7 @@ def test_it_recovers_a_pitched_rolled_camera_at_a_different_height(tmp_path):
 
 def test_the_report_names_a_ball_read_small(tmp_path):
     log = tmp_path / "placements.json"
-    log.write_text(json.dumps({"placements": _placements(0.0, 73.665, 0.0, size_scale=0.88)}))
+    log.write_text(json.dumps({"placements": _placements(0.0, 71.665, 0.0, size_scale=0.88)}))
 
     lines = check.report(check.load(log, RIG), RIG)
 
@@ -73,7 +73,7 @@ def test_the_report_names_a_ball_read_small(tmp_path):
 
 def test_what_the_inclinometer_leaves_is_named(tmp_path):
     log = tmp_path / "placements.jsonl"
-    rows = _placements(3.4, 73.665, 0.0, measured_pitch=3.3)
+    rows = _placements(3.4, 71.665, 0.0, measured_pitch=3.3)
     log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
     lines = check.report(check.load(log, RIG), RIG)
@@ -90,7 +90,7 @@ def test_a_centreline_walk_fits_pitch_and_height_and_leaves_roll(tmp_path):
     )
 
     placements = check.load(log, RIG)
-    floor = check.fit_floor(placements, 73.665)
+    floor = check.fit_floor(placements, 71.665)
     lines = check.report(placements, RIG)
 
     assert "roll" not in floor["fitted"]

@@ -151,10 +151,10 @@ def test_v3_rig_preserves_camera_ahead_of_radar():
         Path(__file__).resolve().parents[1] / "config/enclosure_v3_rig_geometry.json"
     )
     setup = rig.enclosure_setup()
-    # the lens is 30 mm ahead of the RX row and 1.38 mm more ahead of the phase
+    # the lens is 22.3 mm ahead of the RX row and 1.38 mm more ahead of the phase
     # centre the radar's ranges start from, which the 10 deg aim tips back
-    assert setup.camera_forward_offset_m == pytest.approx(0.03138, abs=1e-5)
-    assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
+    assert setup.camera_forward_offset_m == pytest.approx(0.02368, abs=1e-5)
+    assert setup.as_dict()["camera_forward_offset_m"] == pytest.approx(0.02368, abs=1e-5)
 
 
 @pytest.mark.parametrize("use_rig", [True, False])
@@ -198,7 +198,7 @@ def test_startup_takes_the_camera_offsets_only_from_the_rig_file(
         return
     server.main()
 
-    assert received["forward_offset_m"] == pytest.approx(0.03138, abs=1e-5)
+    assert received["forward_offset_m"] == pytest.approx(0.02368, abs=1e-5)
     setup = server.rig_geometry.enclosure_setup()
     assert received["lateral_offset_m"] == pytest.approx(setup.camera_lateral_offset_m)
     assert received["mount_height_m"] == pytest.approx(setup.camera_mount_height_m)

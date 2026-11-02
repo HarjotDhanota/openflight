@@ -111,7 +111,7 @@ def test_layout_from_the_v3_rig_file_places_the_rx_row_at_its_measured_height():
         board_rotation_deg=setup.iwr_board_rotation_deg,
         boresight_pitch_deg=setup.iwr_tilt_deg,
     )
-    assert layout.rx_row_height_m == pytest.approx(0.0444)
+    assert layout.rx_row_height_m == pytest.approx(0.0424)
     assert layout.board_rotation_deg == 90.0
     assert layout.basis == antennas.RIG_BASIS
     assert layout.phase_centre_height_m(math.radians(PITCH_DEG)) == pytest.approx(

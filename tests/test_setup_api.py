@@ -496,7 +496,7 @@ def test_the_setup_camera_is_the_live_capture_s_with_the_lis3dh_pitch_and_roll(m
     expected = server.rig_geometry.expected_inclinometer_orientation()
     camera_pitch = server.rig_geometry.boresight_pitch_deg + 2.0 - (expected.pitch_deg or 0.0)
     assert (view.camera.image_width_px, view.camera.image_height_px) == (1280, 800)
-    assert view.camera.camera_origin_lfu[2] == pytest.approx(0.095)
+    assert view.camera.camera_origin_lfu[2] == pytest.approx(0.093)
     assert view.camera.vertical_offset["status"] == "calibrated"
     assert view.camera.vertical_offset["pitch_deg"] == pytest.approx(camera_pitch + 1.5)
     assert view.camera.angular_uncertainty_deg == camera_tilt.CALIBRATED_ANGULAR_UNCERTAINTY_DEG
