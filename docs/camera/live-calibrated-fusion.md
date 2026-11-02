@@ -22,6 +22,16 @@ every pair (content and file SHA-256s), the active mode's pair `in_use`, or its
 `calibrated_camera_reason`. `scripts/camera/build_camera_placements.py` rebuilds a
 set's placements for the loaded rig file whenever the rig file changes.
 
+Every consumer of the calibrated camera ranges from one radar origin. The placement's
+`radar_origin_lfu` is the IWR RX row (what its consistency check compares with the rig
+file), but the IWR's ranges start at its phase centre: the shot fusion, the surface
+solve and the swing-tilt solve all place the model at the rig file's lens and IWR
+phase centre (`origins` in the model snapshot, `origin_basis`
+`rig_lens_and_iwr_phase_centre`); a model without them keeps the placement's origins.
+Capture-mode evidence the clip cannot prove (no requested scaler crop, an unknown
+driver mapping) labels the calibrated camera in `calibrated_camera_reason` and the
+model's mode evidence; only a contradiction rejects it.
+
 One explicit pair overrides the directory (the tester's opt-in route):
 
 ```bash

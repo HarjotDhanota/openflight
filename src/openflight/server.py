@@ -5012,6 +5012,47 @@ def _calibrated_observed_roll_deg(pose: dict, placement: dict) -> float:
     )
 
 
+RIG_ORIGIN_BASIS = "rig_lens_and_iwr_phase_centre"
+
+
+def _rig_sensor_origins_lfu() -> tuple[np.ndarray, np.ndarray]:
+    """The lens and the IWR phase centre (where its ranges start), target LFU metres above
+    the base, from the rig file: the one pair of origins every calibrated consumer uses
+    (the placement's radar origin is the RX row its consistency check measures)."""
+    from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
+
+    lens = np.array([0.0, 0.0, float(rig_geometry.lens_height_above_floor_mm) / 1000.0])
+    offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
+    return lens, lens + np.asarray(offset, dtype=float)
+
+
+def _rig_origins() -> dict | None:
+    """``_rig_sensor_origins_lfu`` as a calibrated model's ``origins``; None without a rig
+    that places the lens and the IWR (the placement's own origins then stand)."""
+    if (
+        rig_geometry is None
+        or getattr(rig_geometry, "lens_height_above_floor_mm", None) is None
+        or getattr(rig_geometry, "iwr_origin_mm", None) is None
+    ):
+        return None
+    lens, radar = _rig_sensor_origins_lfu()
+    return {
+        "camera_origin_lfu": lens.tolist(),
+        "radar_origin_lfu": radar.tolist(),
+        "basis": RIG_ORIGIN_BASIS,
+    }
+
+
+def _fusion_calibrated_model(pair, pose: dict):
+    """The shot fusion's calibrated model: the shot's LIS3DH pose through the placement,
+    at the rig's lens and IWR phase centre (the surface and swing-tilt solves' origins)."""
+    return pair.model(
+        observed_pitch_deg=pose.get("calibrated_pitch_deg"),
+        observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
+        origins=_rig_origins(),
+    )
+
+
 def _shot_calibrated_camera(shot: Shot, width: int, height: int):
     """(model, pair, reason): this mode's calibrated camera at the shot's own LIS3DH pitch and
     roll, composed through its placement; no model and the reason when the mode is nominal."""
@@ -5028,6 +5069,7 @@ def _shot_calibrated_camera(shot: Shot, width: int, height: int):
         model = pair.model(
             observed_pitch_deg=pitch,
             observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
+            origins=_rig_origins(),
         )
     except ValueError as error:
         return None, pair, f"the calibrated camera could not be placed: {error}"
@@ -5976,7 +6018,6 @@ def _surface_angular_sigma_deg() -> float:
 def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
     """This shot's hitting-surface height above the base, or why it has none."""
     from . import surface_height  # noqa: PLC0415
-    from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
 
     ball = _shot_resting_ball(camera_archive)
     frames = camera_archive["frames"] if camera_archive and "frames" in camera_archive else None
@@ -5993,6 +6034,7 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
     model, pair, nominal_reason = (
         _shot_calibrated_camera(shot, width, height) if width else (None, None, None)
     )
+    lens, radar = _rig_sensor_origins_lfu()
     solve = surface_height.solve_shot(
         range_m=getattr(shot, "ball_range_m", None),
         range_sigma_m=getattr(shot, "ball_range_uncertainty_m", None),
@@ -6012,10 +6054,8 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
             else _lis3dh_camera_pitch(inclinometer)
         ),
         roll_correction_deg=_swing_roll_correction_deg(shot),
-        rig_lens_height_m=float(rig_geometry.lens_height_above_floor_mm) / 1000.0,
-        radar_offset_lfu_m=camera_rdf_offset_to_target_lfu(
-            rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0)
-        ),
+        rig_lens_height_m=float(lens[2]),
+        radar_offset_lfu_m=(radar - lens).tolist(),
         # the calibrated model's own boresight sigma (surface_height.CALIBRATED_...)
         angular_sigma_deg=None if model is not None else _surface_angular_sigma_deg(),
         pitch_reading_sigma_deg=(inclinometer or {}).get("pitch_std_deg"),
@@ -6116,16 +6156,12 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         return
     try:
         from .camera.ball_pixels import mode_focal_px  # noqa: PLC0415
-        from .rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
 
         frames = camera_archive["frames"]
         # the same resting ball the surface solve measured (_shot_resting_ball)
         ball = _shot_resting_ball(camera_archive)
         height_px, width_px = int(frames.shape[-2]), int(frames.shape[-1])
-        lens_m = float(rig_geometry.lens_height_above_floor_mm) / 1000.0
-        offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
-        lens = (0.0, 0.0, lens_m)
-        radar = (float(offset[0]), float(offset[1]), lens_m + float(offset[2]))
+        lens, radar = (tuple(float(v) for v in point) for point in _rig_sensor_origins_lfu())
         inclinometer = getattr(shot, "inclinometer", None)
         model, calibration, nominal_reason = _shot_calibrated_camera(shot, width_px, height_px)
         if model is not None:
@@ -6492,10 +6528,7 @@ def _fuse_camera_measurements(
                 )
                 pose = shot.inclinometer or {}
                 pose_evidence = _calibrated_pose_evidence(pose, pair.placement)
-                model = pair.model(
-                    observed_pitch_deg=pose.get("calibrated_pitch_deg"),
-                    observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
-                )
+                model = _fusion_calibrated_model(pair, pose)
                 geometry = geometry.with_calibrated_model(
                     model.snapshot,
                     {

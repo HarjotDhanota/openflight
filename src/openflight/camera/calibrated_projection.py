@@ -238,6 +238,9 @@ class CaptureCompatibility:
     reasons: tuple[str, ...]
 
 
+PLACEMENT_ORIGIN_BASIS = "placement_camera_and_rx_row"
+
+
 @dataclass(frozen=True)
 class CalibratedCameraModel:
     """One optical candidate placed explicitly in the target LFU frame."""
@@ -247,6 +250,9 @@ class CalibratedCameraModel:
     camera_origin_lfu: np.ndarray
     radar_origin_lfu: np.ndarray
     snapshot: Mapping[str, Any]
+    # where the two origins come from: the placement's (lens, IWR RX row), or the
+    # ``origins`` the model was built with (``build_calibrated_camera_model``)
+    origin_basis: str = PLACEMENT_ORIGIN_BASIS
 
     def rays(self, pixels_px: Any) -> np.ndarray:
         return self.projection.pixel_rays_lfu(
@@ -328,8 +334,14 @@ def build_calibrated_camera_model(
     *,
     observed_pitch_deg: float | None = None,
     observed_roll_deg: float | None = None,
+    origins: Mapping[str, Any] | None = None,
 ) -> CalibratedCameraModel:
-    """Validate and compose mount, target alignment, origins, and observed pose."""
+    """Validate and compose mount, target alignment, origins, and observed pose.
+
+    ``origins`` (``camera_origin_lfu``, ``radar_origin_lfu``, a named ``basis``) replaces
+    the placement's posed origins, e.g. with the rig's lens and the IWR phase centre its
+    ranges start at; the rays are unchanged and the snapshot keeps them for replay.
+    """
     if placement.get("schema") != "openflight.camera.placement" or placement.get("version") != 1:
         raise ValueError("camera placement must use openflight.camera.placement v1")
     if placement.get("world_frame") != "target_lfu":
@@ -396,8 +408,20 @@ def build_calibrated_camera_model(
         "observed_pose_deg": {"pitch": pitch, "roll": roll},
         "accuracy_qualified": False,
     }
+    basis = PLACEMENT_ORIGIN_BASIS
+    if origins is not None:
+        basis = origins.get("basis")
+        if not isinstance(basis, str) or not basis:
+            raise ValueError("replaced camera origins require a named basis")
+        camera = _vector(origins.get("camera_origin_lfu"), "camera_origin_lfu")
+        radar = _vector(origins.get("radar_origin_lfu"), "radar_origin_lfu")
+        frozen["origins"] = {
+            "camera_origin_lfu": camera.tolist(),
+            "radar_origin_lfu": radar.tolist(),
+            "basis": basis,
+        }
     frozen["sha256"] = geometry_fingerprint(frozen)
-    return CalibratedCameraModel(projection, rotation, camera, radar, frozen)
+    return CalibratedCameraModel(projection, rotation, camera, radar, frozen, basis)
 
 
 def calibrated_camera_model_from_snapshot(snapshot: Mapping[str, Any]) -> CalibratedCameraModel:
@@ -414,6 +438,7 @@ def calibrated_camera_model_from_snapshot(snapshot: Mapping[str, Any]) -> Calibr
         payload["placement"],
         observed_pitch_deg=pose.get("pitch"),
         observed_roll_deg=pose.get("roll"),
+        origins=payload.get("origins"),
     )
 
 
@@ -452,13 +477,20 @@ class CalibrationPair:
         profile = self.optical.get("candidate", self.optical).get("mode_profile") or {}
         return profile.get("lens_id")
 
-    def model(self, *, observed_pitch_deg: Any, observed_roll_deg: Any) -> CalibratedCameraModel:
+    def model(
+        self,
+        *,
+        observed_pitch_deg: Any,
+        observed_roll_deg: Any,
+        origins: Mapping[str, Any] | None = None,
+    ) -> CalibratedCameraModel:
         """The calibrated camera at an observed LIS3DH pose (``build_calibrated_camera_model``)."""
         return build_calibrated_camera_model(
             self.optical,
             self.placement,
             observed_pitch_deg=observed_pitch_deg,
             observed_roll_deg=observed_roll_deg,
+            origins=origins,
         )
 
     def record(self) -> dict[str, Any]:

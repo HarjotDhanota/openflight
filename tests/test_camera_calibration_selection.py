@@ -254,3 +254,90 @@ def test_a_shot_in_a_mode_without_a_pair_fuses_on_the_nominal_camera_labelled(
     server._fuse_camera_measurements(shot, SimpleNamespace(valid=True, metadata={}))
     assert shot.calibrated_camera_status == "legacy_inferred_ball_geometry"
     assert "no camera calibration for 8x6" in shot.calibrated_camera_reason
+
+
+# --- one radar origin for every calibrated consumer --------------------------------------
+
+
+def test_a_model_records_the_origins_it_carries():
+    pair = _load().pair_for(640, 400)
+    reference = pair.placement["reference_pose_deg"]
+    placed = pair.model(observed_pitch_deg=reference["pitch"], observed_roll_deg=reference["roll"])
+    assert placed.origin_basis == "placement_camera_and_rx_row"
+
+    origins = {
+        "camera_origin_lfu": [0.0, 0.0, 0.093],
+        "radar_origin_lfu": [0.0, -0.02, 0.05],
+        "basis": "rig_lens_and_iwr_phase_centre",
+    }
+    moved = pair.model(
+        observed_pitch_deg=reference["pitch"], observed_roll_deg=reference["roll"], origins=origins
+    )
+    assert moved.origin_basis == "rig_lens_and_iwr_phase_centre"
+    np.testing.assert_allclose(moved.radar_origin_lfu, origins["radar_origin_lfu"])
+    np.testing.assert_allclose(moved.camera_origin_lfu, origins["camera_origin_lfu"])
+    # the rays are the placement's; only the origins move, and a replay keeps them
+    np.testing.assert_allclose(moved.optical_to_world_lfu, placed.optical_to_world_lfu)
+    from openflight.camera.calibrated_projection import (  # noqa: PLC0415
+        calibrated_camera_model_from_snapshot,
+    )
+
+    restored = calibrated_camera_model_from_snapshot(moved.snapshot)
+    np.testing.assert_allclose(restored.radar_origin_lfu, origins["radar_origin_lfu"])
+    assert restored.origin_basis == "rig_lens_and_iwr_phase_centre"
+
+
+def test_the_surface_swing_tilt_and_fusion_see_one_radar_origin(monkeypatch):
+    from openflight.camera import swing_tilt  # noqa: PLC0415
+
+    rig, _sha = _rig()
+    loaded = _load()
+    for name, value in (
+        ("rig_geometry", rig),
+        ("rig_geometry_config", {"enabled": True}),
+        ("camera_calibration_set", loaded),
+        ("camera_lens", None),
+        ("camera_ball_box_px", (200, 100, 460, 300)),
+        ("camera_tilt_calibration_path", Path("unused-tilt.json")),
+        ("camera_capture_config", {"width": 640, "height": 400}),
+    ):
+        monkeypatch.setattr(server, name, value)
+    pose = {
+        "applied_to": ["camera"],
+        "status": "stable",
+        "stable": True,
+        "calibrated_pitch_deg": 1.574,
+        "x_g": 0.0,
+        "y_g": 0.0,
+        "z_g": 1.0,
+    }
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), shot_number=3)
+    shot.inclinometer = pose
+    shot.ball_range_m, shot.ball_range_uncertainty_m = 1.8, 0.01
+    shot.ball_range_source, shot.ball_range_label = "iwr_post_impact", "measured"
+    archive = {
+        "frames": np.zeros((1, 400, 640), np.uint8),
+        server.SURFACE_RESTING_BALL_KEY: {"x_px": 330.0, "y_px": 200.0, "diameter_px": 13.0},
+    }
+
+    inputs = server._shot_surface_solve(shot, archive)["inputs"]
+    surface = np.asarray([0.0, 0.0, inputs["rig_lens_height_m"]]) + np.asarray(
+        inputs["radar_offset_lfu_m"]
+    )
+    seen = {}
+
+    def fake_pair(_range, *, ball_px, lis3dh_pitch_deg, camera_at_pitch):
+        seen["camera"] = camera_at_pitch(lis3dh_pitch_deg)
+        return {"status": "skipped", "reason": "test"}
+
+    monkeypatch.setattr(swing_tilt, "swing_pair", fake_pair)
+    server._calibrate_camera_tilt_from_swing(shot, archive)
+    fusion = server._fusion_calibrated_model(loaded.pair_for(640, 400), pose)
+
+    np.testing.assert_allclose(seen["camera"].radar_origin_lfu, surface, atol=1e-12)
+    np.testing.assert_allclose(fusion.radar_origin_lfu, surface, atol=1e-12)
+    np.testing.assert_allclose(fusion.camera_origin_lfu, seen["camera"].camera_origin_lfu)
+    assert fusion.origin_basis == "rig_lens_and_iwr_phase_centre"
+    # the phase centre, not the placement's RX row (about 8 mm apart on this rig)
+    rx_row = loaded.pair_for(640, 400).placement["radar_origin_lfu"]
+    assert np.linalg.norm(np.asarray(rx_row) - surface) > 0.005
