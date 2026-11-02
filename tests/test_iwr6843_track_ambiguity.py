@@ -133,15 +133,20 @@ def test_a_tight_camera_prior_keeps_the_far_walk_out_of_the_search():
     assert estimate.status == "measured", estimate.reason
     assert estimate.range_m == pytest.approx(2.60, abs=0.12)
     assert estimate.competing is None
-    assert estimate.label == "measured"
+    # no club walk anchors the contact (club speed unknown): estimated, not ambiguous
+    assert not estimate.ambiguous
+    assert estimate.anchor["status"] == "unanchored"
+    assert estimate.label == "estimated"
 
 
 def test_competing_walks_that_launch_from_the_same_place_are_one_answer():
     estimate = _estimate(_two_walks(launches_m=(1.60, 1.60)))
 
     assert estimate.status == "measured", estimate.reason
-    assert estimate.label == "measured"
+    assert not estimate.ambiguous
     assert estimate.competing is None or estimate.competing["verdict"] == "agree"
+    # unanchored (no club walk), so estimated rather than measured
+    assert estimate.label == "estimated"
 
 
 def test_a_partial_dump_s_ambiguous_range_is_still_estimated():

@@ -71,7 +71,8 @@ def test_shot_14_keeps_its_range_and_exposes_conflicting_ops_guided_angles(runs)
     shot = runs["shot14"]
 
     assert shot["range_m"] == pytest.approx(1.91, abs=0.02)
-    assert shot["range_label"] == "measured"
+    # no club walk anchors its contact time (C6a', 2 Nov): estimated, the range unchanged
+    assert shot["range_label"] == "estimated"
     assert shot["launch_status"] == "rejected_ops_guided_angle_ambiguous"
     assert shot["launch_deg"] is None
     assert shot["horizontal_deg"] is None
@@ -86,14 +87,19 @@ def test_shot_14_keeps_its_range_and_exposes_conflicting_ops_guided_angles(runs)
 
 
 @pytest.mark.parametrize(
-    ("key", "range_m", "launch_deg"),
-    [("ot1_arm6_002", 1.779, 36.03), ("ot5_003", 1.538, None), ("ot7_001", 1.837, None)],
+    ("key", "range_m", "launch_deg", "label"),
+    [
+        ("ot1_arm6_002", 1.779, 36.03, "measured"),
+        ("ot5_003", 1.538, None, "measured"),
+        # no club walk anchors its contact (C6a'): the same range, estimated
+        ("ot7_001", 1.837, None, "estimated"),
+    ],
 )
-def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg):
+def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg, label):
     shot = runs[key]
 
     assert shot["range_m"] == pytest.approx(range_m, abs=0.005)
-    assert shot["range_label"] == "measured"
+    assert shot["range_label"] == label
     if launch_deg is not None:
         assert shot["launch_deg"] == pytest.approx(launch_deg, abs=0.1)
     # a competing walk, where there is one, either launches from the same place or has
@@ -102,16 +108,17 @@ def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg
         assert shot["competing"]["verdict"] in ("agree", "runner_up_unusable")
 
 
-def test_two_walks_with_different_launch_points_leave_ot7_003_s_range_estimated(runs):
+def test_ot7_003_s_walks_do_not_leave_the_resting_ball_so_its_range_is_not_measured(runs):
+    """Before C6a' (2 Nov): 1.849 m estimated (two walks compete, 1.85 and 0.93 m). The
+    1.85 m walk is club-fast (nearer the OPS club than the ball); with it out the 34.7
+    m/s walk reaches its 1.10 m start ~9 ms after the club walk crossed it: not the ball."""
     shot = runs["ot7_003"]
-    competing = shot["competing"]
 
-    assert shot["range_label"] == "estimated"
-    assert competing["verdict"] == "ambiguous"
-    assert competing["reason"] == "two IWR tracks compete"
-    assert competing["selected"]["launch_range_m"] == pytest.approx(1.849, abs=0.005)
-    assert competing["runner_up"]["launch_range_m"] == pytest.approx(0.93, abs=0.05)
-    assert competing["camera_prior"] is None  # the session saved no per-shot camera prior
+    assert shot["range_status"] == "not_measured"
+    assert shot["range_label"] == "not_measured"
+    assert shot["range_m"] is None
+    assert "does not leave the resting ball" in shot["range_reason"]
+    assert "club walk only" in shot["range_reason"]
 
 
 @pytest.mark.parametrize(
@@ -130,6 +137,7 @@ def test_the_seed_dependent_dumps_have_one_answer(runs, key, range_m, competing)
     shot = runs[key]
 
     assert shot["range_m"] == pytest.approx(range_m, abs=0.005)
-    assert shot["range_label"] == "measured"
+    # no club walk anchors their contact time (C6a', 2 Nov): estimated
+    assert shot["range_label"] == "estimated"
     verdict = shot["competing"]["verdict"] if shot["competing"] else None
     assert verdict == competing

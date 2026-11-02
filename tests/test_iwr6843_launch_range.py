@@ -7,6 +7,7 @@ a club track, where the ball's walk starts. The camera's size estimate is only a
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -57,6 +58,8 @@ def _capture(
     club=True,
     ball=True,
     seed=7,
+    club_through_s=0.0,
+    late_walk=None,
 ):
     """A range-domain capture: static clutter, the club's approach, the ball's flight."""
     rng = np.random.default_rng(seed)
@@ -69,7 +72,11 @@ def _capture(
     for frame in range(N_FRAMES):
         for loop in range(N_LOOPS):
             t = geo.loop_time(frame, loop)
-            if club and impact_s - 0.012 <= t <= impact_s:
+            if late_walk is not None:
+                start_s, start_m, speed = late_walk
+                if t >= start_s and start_m + speed * (t - start_s) < 4.3:
+                    _add_target(cube, frame, loop, start_m + speed * (t - start_s), 45.0, rng)
+            if club and impact_s - 0.012 <= t <= impact_s + club_through_s:
                 _add_target(cube, frame, loop, launch_m - club_ms * (impact_s - t), 60.0, rng)
             if ball and t > impact_s:
                 r = launch_m + ball_ms * (t - impact_s)
@@ -122,6 +129,10 @@ def test_without_a_club_track_the_ball_walk_s_start_is_the_launch_point():
     assert estimate.method == "ball_track_start"
     assert estimate.range_m == pytest.approx(2.10, abs=0.10)
     assert estimate.uncertainty_m >= 45.0 * FRAME_PERIOD_S / 2.0
+    # no club walk anchors its contact time (and none from sound in IWR time): estimated
+    assert estimate.anchor["status"] == "unanchored"
+    assert estimate.label == "estimated"
+    assert "no club walk" in lr.shot_ball_range(estimate, None).reason
 
 
 def test_the_radar_s_range_bias_is_removed():
@@ -300,3 +311,123 @@ def test_choosing_twice_is_choosing_once():
 
     assert again.prior == SETUP
     assert again.rejection is None
+
+
+# --- which walk is the ball's (C6a', 2 Nov) -------------------------------------------------
+#
+# 1. A walk whose radial speed is nearer the OPS club speed than the ball's, or inside the
+#    club window and slower than the ball by more than MIN_SPEED_GAP_MS, is the club's; the
+#    ball's walk is searched above that.
+# 2. The ball's walk must leave the resting ball: back-extrapolated to the prior range it
+#    crosses it within CONTACT_AGREEMENT_FRAMES of the club's walk crossing the same range.
+#    Without a club walk nothing anchors its contact time in IWR time: estimated at best.
+# 3. Without such a walk the launch range is not measured, with the reason.
+
+
+def test_the_ball_walk_floor_states_the_speed_rule():
+    ball, club = 36.6, 30.7
+    floor = lr.ball_walk_speed_floor_ms(ball, club)
+    assert floor == pytest.approx(max(0.85 * ball, (ball + club) / 2.0, ball - lr.MIN_SPEED_GAP_MS))
+    assert lr.is_club_walk_speed(31.3, ball_ms=ball, club_ms=club)
+    assert not lr.is_club_walk_speed(35.7, ball_ms=ball, club_ms=club)
+    assert lr.ball_walk_speed_floor_ms(ball, None) == pytest.approx(0.85 * ball)
+    assert not lr.is_club_walk_speed(31.3, ball_ms=ball, club_ms=None)
+    # OPS speeds closer than the walk-separation gap cannot say which walk is which
+    # (Outdoors-test-5 005: ball 38.2, club 34.8 m/s)
+    assert not lr.speeds_separate(38.2, 34.8)
+    assert not lr.is_club_walk_speed(35.0, ball_ms=38.2, club_ms=34.8)
+    assert lr.ball_walk_speed_floor_ms(38.2, 34.8) == pytest.approx(0.85 * 38.2)
+
+
+def test_a_club_walk_through_impact_without_a_ball_is_not_the_launch_point():
+    """Shot 1's case: the ball's walk is hidden, the club's runs on at 31 m/s, inside
+    0.85-1.10 of the OPS ball's 36.6 m/s."""
+    capture = _capture(ball=False, club_ms=31.3, club_through_s=0.04)
+    estimate = _estimate(capture, ball_speed_mph=_mph(36.6), club_speed_mph=_mph(30.7))
+
+    assert estimate.status == "not_measured"
+    assert estimate.reason.startswith("ball walk not found (hidden by clutter); club walk only")
+    assert estimate.club_track["speed_ms"] == pytest.approx(31.3, abs=1.0)
+    assert lr.shot_ball_range(estimate, _prior()).source == lr.CAMERA_PRIOR_SOURCE
+
+
+def test_a_fast_walk_that_never_left_the_resting_ball_is_not_the_ball():
+    """Shot 1's walk B: ball-fast (35.7 m/s) but first seen 2.24 m out, 18 ms after the
+    club reached the ball; back-extrapolated to the resting ball it gets there ~20 ms late."""
+    capture = _capture(ball=False, club_ms=31.3, club_through_s=0.04, late_walk=(0.048, 2.24, 35.7))
+    estimate = _estimate(capture, ball_speed_mph=_mph(36.6), club_speed_mph=_mph(30.7))
+
+    assert estimate.status == "not_measured"
+    assert "does not leave the resting ball" in estimate.reason
+    assert estimate.anchor["status"] == "disagrees"
+    assert estimate.anchor["t_ball_s"] - estimate.anchor["t_club_s"] > 0.010
+    assert estimate.range_m is None
+
+
+def test_a_ball_walk_that_leaves_the_resting_ball_with_the_club_is_measured_and_anchored():
+    estimate = _estimate()
+
+    assert estimate.measured
+    assert estimate.label == "measured"
+    anchor = estimate.anchor
+    assert anchor["status"] == "agrees"
+    assert anchor["anchor_source"] == "camera_prior"
+    assert abs(anchor["t_ball_s"] - anchor["t_club_s"]) <= anchor["tolerance_s"]
+    assert anchor["tolerance_s"] >= lr.CONTACT_AGREEMENT_FRAMES * FRAME_PERIOD_S
+
+
+def test_a_ball_walk_beside_a_club_walk_through_impact_is_still_measured():
+    estimate = _estimate(_capture(club_through_s=0.04))
+
+    assert estimate.measured
+    assert estimate.range_m == pytest.approx(2.10, abs=0.08)
+    assert estimate.ball_track["speed_ms"] == pytest.approx(45.0, abs=1.5)
+
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "iwr6843_oct27_shot1"
+
+
+def _shot1(prior=None):
+    import json  # noqa: PLC0415
+
+    from openflight.iwr6843.lcmf import prepare_lcmf_capture  # noqa: PLC0415
+
+    inputs = json.loads((FIXTURE / "shot1_inputs.json").read_text(encoding="utf-8"))
+    raw = (FIXTURE / inputs["dump"]).read_bytes()
+    recorded = inputs["range_prior"]
+    return lr.estimate_launch_range(
+        prepare_lcmf_capture(raw).vertical,
+        ball_speed_mph=inputs["ball_speed_mph"],
+        club_speed_mph=inputs["club_speed_mph"],
+        prior=prior
+        or lr.LaunchRangePrior(recorded["range_m"], recorded["uncertainty_m"], recorded["source"]),
+        net_range_m=inputs["net_range_m"],
+        range_bias_m=inputs["range_bias_m"],
+    )
+
+
+def test_oct27_shot1_s_club_walk_is_never_its_launch_range():
+    """The kiosk took the club's walk (31.3 m/s) for the ball: 1.50 m, estimated."""
+    estimate = _shot1()
+
+    assert not (estimate.measured and estimate.range_m == pytest.approx(1.505, abs=0.01))
+    assert estimate.club_track is not None
+    if estimate.anchor is not None:
+        assert estimate.anchor["club_source"] == "club_by_speed"
+        assert estimate.anchor["club_speed_ms"] == pytest.approx(31.3, abs=0.5)
+
+
+def test_oct27_shot1_on_the_calibrated_camera_s_prior_has_no_iwr_launch_range():
+    """With the resting ball where the calibrated camera puts it (1.81 m from the radar;
+    sigma 0.03 m = the focal's 1 % and a 0.3 px diameter fit on 24 px), no walk leaves it
+    when the club gets there: not measured, never a relabelled walk."""
+    estimate = _shot1(lr.LaunchRangePrior(1.81, 0.03, "camera_calibrated_resting_ball"))
+
+    assert estimate.status == "not_measured"
+    assert estimate.range_m is None
+    # the prior check refuses it first; the anchor says why it is not the ball
+    assert estimate.anchor["status"] == "disagrees"
+    assert estimate.anchor["club_source"] == "club_by_speed"
+    assert (
+        estimate.anchor["t_club_s"] - estimate.anchor["t_ball_s"] > estimate.anchor["tolerance_s"]
+    )

@@ -76,7 +76,8 @@ def test_a_late_run_leaves_shot_14_s_range_and_a_labelled_launch(shot):
 
     assert recovery.frames_dropped == (22,)
     assert result["partial_recovery"]["label"] == PARTIAL_LABEL
-    assert result["range_label"] == PARTIAL_LABEL
+    # no club walk anchors shot 14's contact: estimated outranks the partial label (C6a')
+    assert result["range_label"] == "estimated"
     assert result["range_m"] == pytest.approx(1.908, abs=0.05)
     assert result["launch_deg"] is not None
     assert result["launch_status"].endswith(PARTIAL_LABEL)

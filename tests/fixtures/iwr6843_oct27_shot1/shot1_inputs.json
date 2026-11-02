@@ -1,0 +1,23 @@
+{
+ "schema": "openflight.test.iwr_launch_range_fixture.v1",
+ "source": "harjot-outdoor-test-2/arm6/paired/run-01, shot 1 (27 Oct 2026); the kiosk's recorded per-shot inputs to estimate_launch_range",
+ "dump": "iwr6843_20261027_170649_455_001.l3dump",
+ "dump_sha256": "df43d307ed66550f77c740411c333208913d6abcb33360418a9569c202a3d015",
+ "ball_speed_mph": 81.76591864965822,
+ "club_speed_mph": 68.63042237841798,
+ "club": "7-iron",
+ "range_prior": {
+  "range_m": 1.5983,
+  "uncertainty_m": 0.3382,
+  "source": "camera_ball_at_address"
+ },
+ "net_range_m": 4.6,
+ "range_bias_m": 0.06600698211167506,
+ "camera_resting_ball_range_m": 1.81,
+ "camera_resting_ball_basis": "calibrated 6 mm camera, resting ball slant range from the IWR (research/shot1-real-data-2026-11-01/DATA.md)",
+ "recorded_result": {
+  "range_m": 1.504767055587073,
+  "label": "estimated",
+  "note": "the club walk (31.3 m/s; OPS club 30.7, ball 36.6 m/s) taken for the ball"
+ }
+}
