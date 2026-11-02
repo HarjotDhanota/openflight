@@ -5134,6 +5134,10 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
                 shot_range={}, camera_located=located, iwr_launch=shot.iwr_launch_range
             ),
         )
+        from .camera.impact_range_evidence import from_located_tee  # noqa: PLC0415
+
+        # the located tee is the shot's own range for impact location too (C9c)
+        shot.impact_range_evidence = from_located_tee(shot, located, label=shot.ball_range_label)
         return
     if chosen is not None:
         shot.ball_range_m = chosen.range_m

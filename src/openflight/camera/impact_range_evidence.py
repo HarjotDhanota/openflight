@@ -1,5 +1,7 @@
-"""Same-shot IWR launch-range lineage for experimental impact analysis.
+"""Same-shot launch-range lineage for experimental impact analysis.
 
+The shot's own range is the camera's located tee (C8a: its resting ball's angular size
+through the camera model) when the camera located it, else its IWR launch point.
 Capture association is not RF clock calibration or physical accuracy qualification.
 Ball launch-point range never supplies the moving clubhead's range trajectory.
 """
@@ -21,6 +23,11 @@ from openflight.rig_geometry import geometry_fingerprint
 
 SCHEMA = "openflight.impact_range_evidence.v1"
 ACCEPTED = "accepted_for_experimental_impact"
+# The camera's located tee as the shot's own range (C9c, 3 Nov 2026).
+LOCATED_TEE_SOURCE = "camera_resting_ball"
+LOCATED_TEE_QUANTITY = "camera_located_tee_slant_m"
+LOCATED_TEE_KIND = "camera_resting_ball_angular_size"
+LOCATED_TEE_LABELS = ("measured", "estimated", "experimental")
 
 
 def _positive(value: Any) -> float:
@@ -71,6 +78,12 @@ def _checked(record: Mapping[str, Any]) -> dict:  # pylint: disable=too-many-bra
         or not payload["session_uuid"]
     ):
         raise ValueError("range_evidence_shot_identity_missing")
+    if (payload.get("target"), payload.get("quantity"), payload.get("value_kind")) == (
+        "ball",
+        LOCATED_TEE_QUANTITY,
+        LOCATED_TEE_KIND,
+    ):
+        return _checked_located_tee(payload)
     if (payload.get("target"), payload.get("quantity"), payload.get("value_kind")) != (
         "ball",
         "iwr_slant_launch_point_m",
@@ -139,6 +152,81 @@ def _checked(record: Mapping[str, Any]) -> dict:  # pylint: disable=too-many-bra
     if payload.get("radar_clock_domain") != "iwr_capture_relative":
         raise ValueError("range_evidence_clock_domain_unknown")
     return payload
+
+
+def _checked_located_tee(payload: dict) -> dict:
+    """The located tee's record: its own estimate, selected unchanged as the shot's range."""
+    if payload.get("physical_qualified") is not False:
+        raise ValueError("range_evidence_cannot_claim_physical_qualification")
+    estimate, selected = payload.get("estimate"), payload.get("selected")
+    if not isinstance(estimate, Mapping) or not isinstance(selected, Mapping):
+        raise ValueError("range_evidence_estimator_snapshot_missing")
+    if (estimate.get("status"), estimate.get("source")) != (
+        "measured_from_size",
+        LOCATED_TEE_SOURCE,
+    ):
+        raise ValueError("range_evidence_not_a_located_tee")
+    if (
+        selected.get("ball_range_source") != LOCATED_TEE_SOURCE
+        or selected.get("ball_range_label") not in LOCATED_TEE_LABELS
+    ):
+        raise ValueError("range_evidence_selected_source_not_the_located_tee")
+    for key, selected_key in (
+        ("range_m", "ball_range_m"),
+        ("uncertainty_m", "ball_range_uncertainty_m"),
+    ):
+        if not math.isclose(
+            _positive(estimate.get(key)),
+            _positive(selected.get(selected_key)),
+            rel_tol=1e-12,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("range_evidence_selection_disagrees_with_fit")
+    return payload
+
+
+def from_located_tee(shot, located: Mapping[str, Any], *, label: str) -> dict:
+    """Freeze the camera's located tee (``resting_ball_range.located_tee_range``) as the
+    shot's own range for impact analysis, with its sigma and label."""
+    try:
+        estimate = {
+            key: located.get(key)
+            for key in (
+                "status",
+                "source",
+                "range_m",
+                "uncertainty_m",
+                "lens_distance_m",
+                "camera_source",
+                "principal_point",
+                "calibration_pair",
+            )
+        }
+        payload = {
+            "schema": SCHEMA,
+            "status": ACCEPTED,
+            "session_uuid": shot.camera_fusion_session_uuid,
+            "shot_number": shot.shot_number,
+            "shot_timestamp": shot.impact_timestamp,
+            "target": "ball",
+            "quantity": LOCATED_TEE_QUANTITY,
+            "value_kind": LOCATED_TEE_KIND,
+            "physical_qualified": False,
+            "camera_radar_clock_mapping": "not_used",
+            "camera_capture_sha256": None,
+            "estimate": estimate,
+            "selected": {
+                "ball_range_m": located.get("range_m"),
+                "ball_range_uncertainty_m": located.get("uncertainty_m"),
+                "ball_range_source": LOCATED_TEE_SOURCE,
+                "ball_range_label": label,
+            },
+        }
+        record = _seal(payload)
+        _checked(record)
+        return record
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        return unavailable(str(exc))
 
 
 def from_iwr_result(shot, result, *, match_tolerance_s: float | None) -> dict:

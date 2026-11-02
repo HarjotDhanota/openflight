@@ -76,7 +76,7 @@ PLACEMENT, OUTLINE_2D = "placement", "outline_2d"
 ROUTES = (PLACEMENT, OUTLINE_2D)
 RESOLVED_INPUT = "impact_location"
 OPS_CLUB_SPEED = "shot_ops_club_speed"
-OWN_SHOT_RANGE_PREFIX = "shot_"
+OWN_SHOT_IWR_RANGE = "shot_iwr_post_impact"
 
 BUILDING_CODE = "building_the_head_outline"
 DROPPED_CODE = "dropped_the_next_shot_arrived"
@@ -480,9 +480,8 @@ def _input_labels(clip, orientation, angles: tuple[str, ...]) -> dict[str, dict[
     speed_source = str(clip.extra.get("club_speed_source"))
     lens_source = str(clip.prepared.camera.source)
     inputs["ball_range"] = {
-        "label": LABEL_MEASURED
-        if range_source.startswith(OWN_SHOT_RANGE_PREFIX)
-        else LABEL_ESTIMATED,
+        # the shot's own IWR launch point is measured; its located tee (C9c) estimated
+        "label": LABEL_MEASURED if range_source == OWN_SHOT_IWR_RANGE else LABEL_ESTIMATED,
         "source": range_source,
     }
     inputs["club_speed"] = {

@@ -244,3 +244,90 @@ def test_server_binds_camera_archive_even_when_other_camera_analysis_is_unavaila
 def test_invalid_explicit_override_is_never_a_numeric_range(value):
     run = session.RunRecord({}, {}, {}, {}, None)
     assert session.shot_range_m({}, run, value)[0] is None
+
+
+# --- the camera's located tee is the shot's own range for impact (C9c, 3 Nov) --------------
+
+LOCATED = {
+    "status": "measured_from_size",
+    "source": "camera_resting_ball",
+    "range_m": 1.814,
+    "uncertainty_m": 0.029,
+    "camera_source": "calibrated_candidate_unqualified",
+    "principal_point": "calibrated",
+}
+
+
+def located_shot(label="estimated"):
+    record = evidence.from_located_tee(subject(), LOCATED, label=label)
+    assert record["status"] == evidence.ACCEPTED, record
+    record = evidence.bind_camera(record, "a" * 64, session_uuid="session-a", shot_number=1)
+    return {
+        "shot_number": 1,
+        "impact_timestamp": 100.0,
+        "ball_range_m": 1.814,
+        "ball_range_uncertainty_m": 0.029,
+        "ball_range_source": "camera_resting_ball",
+        "ball_range_label": label,
+        "impact_range_evidence": record,
+    }
+
+
+def test_the_located_tee_is_the_shot_s_own_range_for_impact():
+    value, sigma, record = read(located_shot())
+
+    assert (value, sigma) == (1.814, 0.029)
+    assert record["quantity"] == evidence.LOCATED_TEE_QUANTITY
+    assert record["selected"]["ball_range_label"] == "estimated"
+    run = session.RunRecord({"session_uuid": "session-a"}, {}, {}, {}, None)
+    shot = located_shot()
+    assert session.shot_range_m(shot, run, None, capture_npz_sha256="a" * 64) == (
+        1.814,
+        0.029,
+        "shot_camera_resting_ball",
+    )
+
+
+def test_a_located_tee_record_cannot_claim_another_value_or_source():
+    shot = located_shot()
+    shot["ball_range_m"] = 1.9
+    with pytest.raises(ValueError, match="selection_mismatch"):
+        read(shot)
+    shot = located_shot()
+    shot["impact_range_evidence"]["estimate"]["source"] = "camera_prior"
+    reseal(shot["impact_range_evidence"])
+    with pytest.raises(ValueError, match="located_tee"):
+        read(shot)
+
+
+def test_the_kiosk_freezes_the_located_tee_as_impact_evidence(monkeypatch):
+    from openflight import server
+    from openflight.launch_monitor import Shot
+
+    shot = Shot(
+        ball_speed_mph=100,
+        timestamp=datetime(2026, 10, 29),
+        shot_number=1,
+        impact_timestamp=100,
+        camera_fusion_session_uuid="session-a",
+    )
+    shot.input_sources = {"camera_launch_range": dict(LOCATED)}
+    monkeypatch.setattr(server, "iwr6843_runtime", None)
+    launch = SimpleNamespace(to_dict=lambda: {"status": "not_measured", "label": "not_measured"})
+    server._attach_ball_range(
+        shot, SimpleNamespace(launch_range=launch, ball_range=None, capture=None)
+    )
+
+    assert shot.ball_range_source == "camera_resting_ball"
+    assert shot.impact_range_evidence["status"] == evidence.ACCEPTED
+    assert shot.impact_range_evidence["quantity"] == evidence.LOCATED_TEE_QUANTITY
+    shot.impact_range_evidence = evidence.bind_camera(
+        shot.impact_range_evidence, "a" * 64, session_uuid="session-a", shot_number=1
+    )
+    assert read(shot.to_dict())[:2] == pytest.approx((1.814, 0.029))
+
+
+def test_the_impact_record_labels_a_located_tee_estimated_and_an_iwr_range_measured():
+    from openflight.camera import impact_live  # noqa: PLC0415
+
+    assert impact_live.OWN_SHOT_IWR_RANGE == "shot_iwr_post_impact"
