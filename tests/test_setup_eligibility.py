@@ -532,8 +532,9 @@ class TestTheApprovedRigList:
             arm5, rig, {"camera_pitch_deg": 0.0}, None, None
         )
         assert camera.focal_size_px == pytest.approx(960.0)
+        # the tape runs from the radar window, 22.3 mm behind the lens
         assert ts.expected_ball_diameter_px(arm5, 1071.0, rig) == pytest.approx(
-            960.0 * ts.BALL_DIAMETER_MM / 1041.0
+            960.0 * ts.BALL_DIAMETER_MM / 1048.7
         )
 
     def test_an_unapproved_file_is_refused(self, tmp_path):

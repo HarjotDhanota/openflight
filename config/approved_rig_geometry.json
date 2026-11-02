@@ -21,6 +21,11 @@
    "rig_geometry_params_sha256": "78d58064f53c85b0b663bf79aa45ec0eb81666e5b96fcd0ff902fffd5d014e21",
    "file": "config/enclosure_v3_rig_geometry.json",
    "description": "the 2026-09-30 v3 parameters unchanged; the provenance text no longer names the person who measured it (2026-10-23)"
+  },
+  {
+   "rig_geometry_params_sha256": "7151cc5df4fbc94187c6303a6a267ddfabc8d53f6a3556ae1a3e0e6df16b43ec",
+   "file": "config/enclosure_v3_rig_geometry.json",
+   "description": "lens 93 mm above the ground (owner's tape, 2026-11-01) and the IWR RX row 22.3 mm behind the lens front (owner's tape, 2026-11-02); RX row 50.6 mm below the lens unchanged; nominal focal_px pending calibration install"
   }
  ]
 }

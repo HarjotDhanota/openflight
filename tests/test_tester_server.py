@@ -1879,11 +1879,11 @@ class TestStaticExposureRigMoved:
 
 class TestTheTapeGivesTheBallsSize:
     def test_the_tape_runs_from_the_radar_window_behind_the_lens(self):
-        # 1071 mm from the radar window is 1041 mm from the lens in the v3 rig;
-        # the window is a physical face, so the tape keeps the RX row's depth
-        # rather than the phase centre's (audit F11)
+        # 1071 mm from the radar window is 1048.7 mm from the lens in the v3 rig
+        # (RX row 22.3 mm behind the lens front); the window is a physical face,
+        # so the tape keeps the RX row's depth rather than the phase centre's (F11)
         expected = ts.expected_ball_diameter_px(ts.ARMS["arm5"], 1071.0, RIG)
-        assert expected == pytest.approx(933.3333 * ts.BALL_DIAMETER_MM / 1041.0)
+        assert expected == pytest.approx(933.3333 * ts.BALL_DIAMETER_MM / 1048.7)
         assert ts.expected_ball_diameter_px(ts.ARMS["arm5"], None, RIG) is None
 
     def test_the_readout_puts_the_tape_beside_the_picture(self):
@@ -1912,10 +1912,10 @@ class TestTheCameraSaysHowFar:
         assert camera.ray_model.pitch_rad == pytest.approx(math.radians(3.25))
         # roll is recorded, not applied, until its sign is checked against the image
         assert camera.ray_model.roll_correction_deg == 0.0
-        assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.095))
+        assert camera.camera_origin_lfu == pytest.approx((0.0, 0.0, 0.093))
         # the radar's ranges start at the IWR's phase centre, not the RX row:
         # 1.86 mm target-left, 1.38 mm further back and 7.85 mm up (audit F11)
-        assert camera.radar_origin_lfu == pytest.approx((-0.001858, -0.031384, 0.052248), abs=1e-6)
+        assert camera.radar_origin_lfu == pytest.approx((-0.001858, -0.023684, 0.050248), abs=1e-6)
         assert camera.source == "nominal_uncalibrated"
         assert camera.accuracy_qualified is False
 
@@ -1929,19 +1929,19 @@ class TestTheCameraSaysHowFar:
             )
 
     def test_both_routes_agree_with_the_tape_on_a_level_camera(self):
-        # a ball 1041 mm from the lens, on the floor, centred: where a level
-        # 2.8 mm camera 95 mm up would see it
-        focal, drop = 933.3333, 95.0 - ts.BALL_DIAMETER_MM / 2
-        along = (1041.0**2 - drop**2) ** 0.5
+        # a ball 1048.7 mm from the lens, on the floor, centred: where a level
+        # 2.8 mm camera 93 mm up would see it
+        focal, drop = 933.3333, 93.0 - ts.BALL_DIAMETER_MM / 2
+        along = (1048.7**2 - drop**2) ** 0.5
         ball = {
             "x": 640.0,
             "y": 400.0 + focal * drop / along,
-            "diameter_px": focal * ts.BALL_DIAMETER_MM / 1041.0,
+            "diameter_px": focal * ts.BALL_DIAMETER_MM / 1048.7,
         }
         cues = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
-        assert cues["tape_mm"] == 1041
-        assert cues["from_size_mm"] == pytest.approx(1041, abs=2)
-        assert cues["from_floor_mm"] == pytest.approx(1041, abs=2)
+        assert cues["tape_mm"] == 1049
+        assert cues["from_size_mm"] == pytest.approx(1048.7, abs=2)
+        assert cues["from_floor_mm"] == pytest.approx(1048.7, abs=2)
         assert cues["pitch_needed_deg"] == pytest.approx(0.0, abs=0.05)
 
     def test_a_ball_seen_too_low_names_the_pitch_that_explains_it(self):
@@ -2117,15 +2117,15 @@ class TestTheInclinometerRunsBesideThePage:
         assert tilt.reading() == {"status": "off", "error": "OSError: no I2C bus"}
 
     def test_the_floor_agrees_with_the_tape_once_the_measured_pitch_is_applied(self):
-        # where a camera pitched 3.5 deg up, 95 mm high, sees a ball 1041 mm away
-        focal, drop, pitch = 933.3333, 95.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
-        along = (1041.0**2 - drop**2) ** 0.5
+        # where a camera pitched 3.5 deg up, 93 mm high, sees a ball 1048.7 mm away
+        focal, drop, pitch = 933.3333, 93.0 - ts.BALL_DIAMETER_MM / 2, math.radians(3.5)
+        along = (1048.7**2 - drop**2) ** 0.5
         ball = {"x": 640.0, "y": 400.0 + focal * math.tan(pitch + math.atan(drop / along))}
-        ball["diameter_px"] = focal * ts.BALL_DIAMETER_MM / 1041.0
+        ball["diameter_px"] = focal * ts.BALL_DIAMETER_MM / 1048.7
         level = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG)
         measured = ts.distance_cues(ball, ts.ARMS["arm5"], 1071.0, RIG, {"camera_pitch_deg": 3.5})
         assert level["from_floor_off_pct"] < -40
-        assert measured["from_floor_mm"] == pytest.approx(1041, abs=3)
+        assert measured["from_floor_mm"] == pytest.approx(1048.7, abs=3)
         assert measured["pitch_unexplained_deg"] == pytest.approx(0.0, abs=0.05)
         assert measured["camera_pitch_source"] == "inclinometer"
 
@@ -2251,9 +2251,9 @@ class TestEachPlacementKeepsOptionalTapeSeparate:
 
 class TestTheRowTheFloorPredicts:
     def test_it_follows_distance_and_tilt(self):
-        # 2021 mm from the lens, lens 95 mm up, camera pitched 3.4 deg up
+        # 2028.7 mm from the lens, lens 93 mm up, camera pitched 3.4 deg up
         row, band = ts.expected_ball_row_px(ts.ARMS["arm5"], 2051.0, RIG, {"camera_pitch_deg": 3.4})
-        assert row == pytest.approx(489.7, abs=0.5)
+        assert row == pytest.approx(488.6, abs=0.5)
         assert band == pytest.approx(90.0)
 
     def test_without_a_measured_tilt_the_band_is_wider(self):

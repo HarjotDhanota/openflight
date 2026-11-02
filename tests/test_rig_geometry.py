@@ -241,28 +241,28 @@ class TestTheRadarPhaseCentre:
 
     def test_the_v3_file_places_the_radar_at_the_phase_centre(self):
         setup = RigGeometry.from_json(V3).enclosure_setup()
-        assert setup.camera_mount_height_m == pytest.approx(0.095, abs=5e-4)
+        assert setup.camera_mount_height_m == pytest.approx(0.093, abs=5e-4)
         assert setup.camera_lateral_offset_m == pytest.approx(0.0, abs=2.5e-3)
         assert setup.iwr_tilt_deg == pytest.approx(10.0)
-        assert setup.radar_height_m == pytest.approx(0.05225, abs=1e-5)
-        assert setup.radar_rx_row_height_m == pytest.approx(0.0444)
+        assert setup.radar_height_m == pytest.approx(0.05025, abs=1e-5)
+        assert setup.radar_rx_row_height_m == pytest.approx(0.0424)
         assert setup.radar_phase_centre_offset_m == pytest.approx(0.00785, abs=1e-5)
         assert setup.radar_height_m - setup.radar_rx_row_height_m == pytest.approx(
             setup.radar_phase_centre_offset_m
         )
-        assert setup.camera_forward_offset_m == pytest.approx(0.03138, abs=1e-5)
+        assert setup.camera_forward_offset_m == pytest.approx(0.02368, abs=1e-5)
         assert setup.radar_height_reference == "iwr_virtual_array_phase_centre"
         assert setup.radar_phase_centre_status == "derived_from_board_rotation"
         record = setup.as_dict()
         assert record["radar_height_reference"] == "iwr_virtual_array_phase_centre"
-        assert record["radar_rx_row_height_m"] == pytest.approx(0.0444)
+        assert record["radar_rx_row_height_m"] == pytest.approx(0.0424)
         assert record["radar_phase_centre_offset_m"] == pytest.approx(0.00785, abs=1e-5)
         assert setup.missing == ()
 
 
 class TestTheOpsPosition:
     def test_the_v3_ops_sits_85_mm_left_of_the_teed_ball(self):
-        # OPS (-85, 47, -20) and IWR (0, 44, -30) in camera right/down/forward mm
+        # OPS (-85, 47, -20) and IWR (0, 50.6, -22.3) in camera right/down/forward mm, lens 93 up
         rig_v3 = RigGeometry.from_json(V3)
         radar_height = rig_v3.enclosure_setup().radar_height_m
         forward, lateral, above = rig_v3.ops_ball_geometry_m(
@@ -270,8 +270,8 @@ class TestTheOpsPosition:
         )
         ball_forward = math.sqrt(1.30**2 - (0.02135 - radar_height) ** 2 - 0.001858**2)
         assert lateral == pytest.approx(0.085)
-        assert forward == pytest.approx(ball_forward - (0.03138 - 0.020), abs=1e-5)
-        assert above == pytest.approx(0.02135 - (0.051 - 0.003))
+        assert forward == pytest.approx(ball_forward - (0.02368 - 0.020), abs=1e-5)
+        assert above == pytest.approx(0.02135 - (0.093 - 0.047))
 
     def test_the_ops_height_does_not_move_with_the_radar_origin(self):
         heights = []

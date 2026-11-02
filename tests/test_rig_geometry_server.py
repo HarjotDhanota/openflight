@@ -57,8 +57,8 @@ class TestTheGeometryReplacesTheFlags:
         assert block["enabled"] is True
         assert block["path"].endswith("enclosure_v3_rig_geometry.json")
         # first_look reads this block; the phase centre is 7.85 mm above the RX row
-        assert block["derived"]["radar_height_m"] == pytest.approx(0.0522, abs=5e-4)
-        assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.0444, abs=5e-4)
+        assert block["derived"]["radar_height_m"] == pytest.approx(0.0502, abs=5e-4)
+        assert block["derived"]["radar_rx_row_height_m"] == pytest.approx(0.0424, abs=5e-4)
         assert block["derived"]["provenance"]
 
     def test_an_absent_file_is_an_error_not_a_silent_default(self):
@@ -173,7 +173,7 @@ class TestTheSwingServerNeedsTheRigFile:
         self, monkeypatch, tmp_path
     ):
         received = self._main(monkeypatch, tmp_path, ["--iwr6843", "--rig-geometry", V3])
-        assert received["radar_height_m"] == pytest.approx(0.05225, abs=1e-5)
+        assert received["radar_height_m"] == pytest.approx(0.05025, abs=1e-5)
         assert received["tilt_deg"] == pytest.approx(10.0)
         assert received["board_rotation_deg"] == 90.0
 
@@ -272,8 +272,8 @@ class TestTheBoardCalibrationCarriesNoInstallation:
         layout = runtime.calibration.antennas
         assert layout.basis == antennas.RIG_BASIS
         assert layout.board_rotation_deg == 90.0
-        assert layout.rx_row_height_m == pytest.approx(0.0444)
-        assert runtime.calibration.radar_height_m == pytest.approx(0.05225, abs=1e-5)
+        assert layout.rx_row_height_m == pytest.approx(0.0424)
+        assert runtime.calibration.radar_height_m == pytest.approx(0.05025, abs=1e-5)
         effective = runtime.calibration_provenance["effective"]
         assert effective["iwr_board_rotation_deg"] == 90.0
         assert effective["antenna_layout"] == layout.as_dict()
