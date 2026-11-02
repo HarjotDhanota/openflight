@@ -48,10 +48,13 @@ SURFACE_HEIGHT_BOUNDS_M = (-0.30, 0.30)
 UNCALIBRATED_ANGULAR_SIGMA_DEG = 1.0
 # Where the optical axis points through a checkerboard-calibrated model placed by its
 # placement (camera-vs-LIS3DH mount from the 28 Oct boards, composed with the live
-# LIS3DH): the mount offset's 1 sigma, +-0.3 deg. Source: rig-geometry lock, 2 Nov 2026
-# (STATUS B): the 28 Oct boards give +1.20 / +1.00 deg (640x400 / 1280x800) with
-# 0.13 deg board-to-reading scatter, and the Oct 27 resting balls cross-check at
-# +1.59 +- 0.07 deg against the support plane; the 0.3 deg gap between them is the sigma.
+# LIS3DH): +-0.3 deg, deliberately conservative. Evidence (rig-geometry lock, 2 Nov
+# 2026): the 28 Oct boards give the mount offset +1.20 / +1.00 deg (640x400 / 1280x800)
+# with 0.13 deg pitch scatter in the LIS3DH reading paired with them; Oct 27 shot 1 on the
+# 1.0 inch (25.4 mm) mat cross-checks it, the calibrated model putting the resting ball's
+# centre 46.0 mm above the ground against 46.7 mm expected (0.7 mm at 1.79 m, ~0.02 deg).
+# (The earlier five-ball joint fit, +1.59 deg, is withdrawn: its horizon and height were
+# 99 % correlated.)
 CALIBRATED_ANGULAR_SIGMA_DEG = 0.3
 # The LIS3DH pitch reading's own scatter when the shot's record carries none.
 DEFAULT_PITCH_READING_SIGMA_DEG = 0.1
