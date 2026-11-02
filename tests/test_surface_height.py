@@ -329,4 +329,49 @@ def test_a_camera_prior_range_still_never_solves_the_surface():
 
 
 def test_the_policy_names_the_ranges_it_takes():
-    assert sh.policy()["range"] == "iwr_post_impact_measured_or_estimated_with_sigma"
+    assert sh.policy()["range"] == (
+        "camera_resting_ball_with_sigma_or_iwr_post_impact_measured_or_estimated_with_sigma"
+    )
+
+
+# --- the camera's located tee solves the surface (C8b) ------------------------------------
+
+
+@pytest.mark.parametrize("label", ["measured", "estimated", "experimental"])
+def test_the_camera_located_tee_solves_the_surface_carrying_its_sigma(label):
+    """The size range rests on the focal length and the ball's pixel diameter, not on the
+    surface: no circle. Its sigma enters the per-shot part as range sigma x depression."""
+    inputs = {**_scene_at(0.0254, 1.8), "range_sigma_m": 0.03}
+    solved = _solve(0.0254, range_source="camera_resting_ball", range_label=label, **inputs)
+
+    assert solved["status"] == "solved"
+    assert solved["surface_height_m"] == pytest.approx(0.0254, abs=0.001)
+    assert solved["inputs"]["range_source"] == "camera_resting_ball"
+
+
+def test_a_located_tee_without_a_sigma_is_refused():
+    refused = _solve(
+        0.0254, range_source="camera_resting_ball", range_label="estimated", range_sigma_m=None
+    )
+
+    assert refused["reason_code"] == "located_tee_without_sigma"
+
+
+@pytest.mark.parametrize("label", ["not_measured", None])
+def test_a_located_tee_not_measured_never_solves(label):
+    refused = _solve(0.0254, range_source="camera_resting_ball", range_label=label)
+
+    assert refused["reason_code"] == "range_label_not_measured"
+
+
+def test_a_seven_cm_size_range_error_moves_the_surface_about_three_mm():
+    inputs = {**_scene_at(0.0254, 1.8), "range_sigma_m": 0.03}
+    right = _solve(0.0254, range_source="camera_resting_ball", range_label="estimated", **inputs)
+    off = _solve(
+        0.0254,
+        range_source="camera_resting_ball",
+        range_label="estimated",
+        **{**inputs, "range_m": inputs["range_m"] + 0.07},
+    )
+
+    assert abs(off["surface_height_m"] - right["surface_height_m"]) < 0.004

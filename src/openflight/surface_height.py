@@ -1,7 +1,8 @@
 """The hitting surface's height above the enclosure's base, solved on every shot.
 
-Nothing is typed in: each shot's own measured IWR launch-point range and its resting
-ball's pixel give the lens height above the surface the ball rests on (the setup's
+Nothing is typed in: each shot's own range (the camera's located tee, its resting ball's
+angular size through the camera model, or its IWR launch point) and its resting ball's
+pixel give the lens height above the surface the ball rests on (the setup's
 ray-meets-range geometry, ``reference_ball_range.ray_meets_radar_range``), and so the
 surface's height above the base the unit stands on. The session combines the shots
 (median and MAD outlier rejection, then inverse variance) with the setup's own solve
@@ -64,11 +65,19 @@ CENTROID_SIGMA_PX = 0.5
 # larger of the MAD's and its own per-shot sigma) is not combined.
 OUTLIER_SIGMAS = 3.0
 MAD_TO_SIGMA = 1.4826
-# The only range that may solve the surface: the shot's own IWR launch point (never the
-# camera prior, which would be circular), measured, or estimated (two walks compete) when
-# it carries its own sigma: the height is range-insensitive (sigma x depression, ~4 mm
-# per 0.1 m at 1.8 m), so the estimate's sigma widens the per-shot part instead.
+# The ranges that may solve the surface, each carrying its sigma (the height is
+# range-insensitive: sigma x depression, ~0.04 at 1.8 m, so 4 mm per 0.1 m, which widens
+# the per-shot part):
+# - the camera's located tee (C8b, 3 Nov): the setup box's resting ball's angular size
+#   through the camera model. It rests on the focal length and the ball's pixel
+#   diameter, never on the surface, so it is not circular (a 7 cm size-range error is
+#   3 mm of surface); any label but not_measured, with a finite sigma;
+# - the shot's own IWR launch point, measured, or estimated (two walks compete) with its
+#   sigma.
+# Never a typed range or a setup prior (camera_prior: the setup's look at its own lens
+# height, which the surface would hand back), nor anything not measured.
 RANGE_SOURCE = "iwr_post_impact"
+LOCATED_TEE_SOURCE = "camera_resting_ball"
 MEASURED_LABEL = "measured"
 ESTIMATED_LABEL = "estimated"
 
@@ -92,7 +101,10 @@ def policy() -> dict[str, Any]:
         "centroid_sigma_px": CENTROID_SIGMA_PX,
         "size_tolerance": SIZE_TOLERANCE,
         "outlier_sigmas": OUTLIER_SIGMAS,
-        "range": f"{RANGE_SOURCE}_{MEASURED_LABEL}_or_{ESTIMATED_LABEL}_with_sigma",
+        "range": (
+            f"{LOCATED_TEE_SOURCE}_with_sigma_or_{RANGE_SOURCE}_{MEASURED_LABEL}_or_"
+            f"{ESTIMATED_LABEL}_with_sigma"
+        ),
         "aggregate": "median_mad_outliers_then_inverse_variance_shared_sigma_not_averaged",
         "reflecting_plane": "lower_of_base_and_hitting_surface",
     }
@@ -198,14 +210,26 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     }
     if not _finite(range_m):
         return _refused("no_iwr_range", "the shot has no IWR launch-point range", inputs)
-    if range_source != RANGE_SOURCE:
+    if range_source == LOCATED_TEE_SOURCE:
+        if range_label in (None, "not_measured"):
+            return _refused(
+                "range_label_not_measured", "the camera's located tee is not measured", inputs
+            )
+        if not _finite(range_sigma_m) or float(range_sigma_m) <= 0.0:
+            return _refused(
+                "located_tee_without_sigma",
+                "the camera's located tee carries no uncertainty to widen the solve with",
+                inputs,
+            )
+    elif range_source != RANGE_SOURCE:
         return _refused(
             "range_not_iwr_measured",
-            f"the shot's range is from {range_source or 'nowhere'}, not its own IWR launch "
-            "point; a camera range would solve the surface from itself",
+            f"the shot's range is from {range_source or 'nowhere'}, neither the camera's "
+            "located tee nor its own IWR launch point; a setup prior or typed range would "
+            "hand the surface back",
             inputs,
         )
-    if range_label == ESTIMATED_LABEL:
+    elif range_label == ESTIMATED_LABEL:
         if not _finite(range_sigma_m) or float(range_sigma_m) <= 0.0:
             return _refused(
                 "estimated_range_without_sigma",
@@ -470,6 +494,7 @@ def heights_in_force(
 __all__ = [
     "CALIBRATED_ANGULAR_SIGMA_DEG",
     "ESTIMATED_LABEL",
+    "LOCATED_TEE_SOURCE",
     "MEASURED_LABEL",
     "NOMINAL_REJECTION_SIGMAS",
     "PER_SHOT_SOURCE",
