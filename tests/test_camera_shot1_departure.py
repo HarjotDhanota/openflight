@@ -16,6 +16,7 @@ causes, each fixed where it lives:
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -142,3 +143,50 @@ def test_the_fusion_hands_the_located_tee_to_the_ball_estimate():
         fusion_processing._located_tee({"ball_range": {"source": "iwr_post_impact", "value": 2.0}})
         is None
     )  # pylint: disable=protected-access
+
+
+# --- 2. the path's appearance gate against the resting ball's own lit cap -----------------
+
+
+def test_a_saturated_round_rest_ball_keeps_the_old_appearance_gate():
+    gate = ball_flight.appearance_gate(rest_intensity=255.0, rest_shape=0.0)
+
+    assert gate == pytest.approx({"min_intensity": 195.0, "max_shape": 0.55})
+
+
+def test_a_dim_half_lit_rest_ball_sets_a_gate_its_flight_passes():
+    gate = ball_flight.appearance_gate(rest_intensity=119.6, rest_shape=0.85)
+
+    assert gate["min_intensity"] == pytest.approx(119.6 * 195.0 / 255.0)
+    assert gate["max_shape"] == pytest.approx(0.85 + 0.55)
+
+
+def test_oct27_shot1_s_departure_is_found_with_its_launch_angles():
+    estimate = _estimate()
+
+    assert estimate.status in ("accepted", "low_consensus"), estimate.status
+    assert estimate.depth_source == "located_tee_plus_ops_speed"
+    assert estimate.n_points >= 5
+    assert -5.0 <= estimate.vertical_deg <= 55.0
+    assert -30.0 <= estimate.horizontal_deg <= 30.0
+    assert estimate.parameter_mad_deg is not None
+    assert math.isfinite(estimate.speed_mph)
+
+
+def test_the_rest_cap_reads_a_half_lit_ball_and_a_saturated_one():
+    from openflight.camera.club_motion import ReferenceBall  # noqa: PLC0415
+
+    anchor = ReferenceBall(50.0, 50.0, 24.0, 452)
+    yy, xx = np.mgrid[:100, :100]
+    disk = (xx - 50) ** 2 + (yy - 50) ** 2 <= 144
+    half = np.full((100, 100), 40, np.uint8)
+    half[disk & (yy < 50)] = 120  # only the cap facing the light is above the threshold
+    saturated = np.full((100, 100), 40, np.uint8)
+    saturated[disk] = 255
+
+    mean, shape = ball_flight._rest_cap(half, anchor, 100)  # pylint: disable=protected-access
+    assert mean == pytest.approx(120.0)
+    assert shape == pytest.approx(math.log(25 / 12), abs=0.1)
+    assert ball_flight._rest_cap(saturated, anchor, 100) == pytest.approx((255.0, 0.0), abs=0.05)  # pylint: disable=protected-access
+    # no cap above the threshold reads as the original gate
+    assert ball_flight._rest_cap(np.full((100, 100), 40, np.uint8), anchor, 100) == (255.0, 0.0)  # pylint: disable=protected-access

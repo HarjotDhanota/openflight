@@ -276,6 +276,41 @@ def located_tee_range_evidence(
     return LocatedTeeRangeEvidence(track, SimpleNamespace(range_res_m=_LOCATED_TEE_RES_M))
 
 
+# The path's appearance gate: a ball in flight looks like the same ball at rest, so the
+# gate is the resting ball's own lit cap at the candidates' brightness threshold. A
+# saturated round ball (mean 255, shape 0) keeps the original 195 / 0.55: the intensity
+# floor keeps its 195/255 share of the rest's mean, the shape allowance its 0.55 over it.
+ORIGINAL_MIN_INTENSITY = 195.0
+SATURATED_INTENSITY = 255.0
+SHAPE_MARGIN = 0.55
+MIN_REST_CAP_PIXELS = 4
+
+
+def appearance_gate(*, rest_intensity: float, rest_shape: float) -> dict[str, float]:
+    """The flight path's intensity floor and shape ceiling from the resting ball's lit cap
+    (its mean brightness and |log(width/height)| above the same threshold)."""
+    return {
+        "min_intensity": min(
+            ORIGINAL_MIN_INTENSITY,
+            ORIGINAL_MIN_INTENSITY / SATURATED_INTENSITY * float(rest_intensity),
+        ),
+        "max_shape": float(rest_shape) + SHAPE_MARGIN,
+    }
+
+
+def _rest_cap(background: np.ndarray, anchor: ReferenceBall, bright: int) -> tuple[float, float]:
+    """(mean, |log(w/h)|) of the resting ball's pixels above ``bright`` in the still scene;
+    a ball with no cap above it reads as saturated and round (the original gate)."""
+    yy, xx = np.ogrid[: background.shape[0], : background.shape[1]]
+    disk = (xx - anchor.x) ** 2 + (yy - anchor.y) ** 2 <= (anchor.diameter_px / 2.0) ** 2
+    cap = disk & (background > bright)
+    if int(cap.sum()) < MIN_REST_CAP_PIXELS:
+        return SATURATED_INTENSITY, 0.0
+    rows, cols = np.nonzero(cap)
+    width, height = int(np.ptp(cols)) + 1, int(np.ptp(rows)) + 1
+    return float(background[cap].mean()), abs(math.log(width / height))
+
+
 def _camera_model(
     anchor: ReferenceBall,
     geometry: CameraBallGeometry,
@@ -1050,6 +1085,7 @@ def _path_estimate(
     model: tuple[float, float, np.ndarray],
     geometry: CameraBallGeometry,
     thresholds: tuple[int, int, int],  # retained for replay/debug provenance
+    appearance: dict[str, float] | None = None,
 ) -> tuple[float, _PathEstimate] | None:
     del thresholds
     _focal_px, _pitch, _radar_from_camera = model
@@ -1121,14 +1157,15 @@ def _path_estimate(
     else:
         size_ratio_median = 1.0
         size_ratio_mad = 0.0
+    gate = appearance or appearance_gate(rest_intensity=SATURATED_INTENSITY, rest_shape=0.0)
     if not (
         -30.0 <= horizontal <= 30.0
         and -5.0 <= vertical <= 55.0
         and 0.5 * ops_ball_speed_mph <= speed <= 1.5 * ops_ball_speed_mph
-        and shape_median <= 0.55
+        and shape_median <= gate["max_shape"]
         and fill_median >= 0.5
         and circularity_median >= 0.5
-        and intensity_median >= 195.0
+        and intensity_median >= gate["min_intensity"]
         and 0.45 <= size_ratio_median <= 2.5
         and size_ratio_mad <= 0.75
     ):
@@ -1296,6 +1333,8 @@ def estimate_camera_ball_flight(
     def collect() -> list[_PathEstimate]:
         found: list[_PathEstimate] = []
         for bright in (100, 115, 130):
+            rest_intensity, rest_shape = _rest_cap(background, anchor, bright)
+            appearance = appearance_gate(rest_intensity=rest_intensity, rest_shape=rest_shape)
             for difference in (12, 18, 24):
                 for min_area in (5, 10, 20):
                     nodes = [
@@ -1327,6 +1366,7 @@ def estimate_camera_ball_flight(
                                 model=model,
                                 geometry=geometry,
                                 thresholds=(bright, difference, min_area),
+                                appearance=appearance,
                             )
                         )
                         is not None
