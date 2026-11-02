@@ -156,7 +156,10 @@ def test_without_the_iwr_the_camera_fallback_resolves_the_range_and_the_launch(k
         assert metrics[name]["status"] == "experimental", name
     trail = shot.input_sources
     assert trail["launch_vertical"]["route"] == "camera_fallback"
-    assert trail["ball_range"]["tried"][0]["reason"] == "no IWR capture matched this shot"
+    tried = {item["route"]: item["reason"] for item in trail["ball_range"]["tried"]}
+    # the camera tried to locate the tee first (C8a); this kiosk has no setup box
+    assert tried["camera_resting_ball"] == "no resting ball in the setup box"
+    assert tried["iwr_post_impact"] == "no IWR capture matched this shot"
 
 
 def test_every_downstream_metric_the_fallback_reaches_resolves_labelled_by_it(kiosk, scene):

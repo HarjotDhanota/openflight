@@ -974,6 +974,7 @@
   "tests/test_calibrate_camera_intrinsics.py": "RESEARCH",
   "tests/test_calibrated_projection.py": "FUSION",
   "tests/test_camera_box_resting_ball.py": "FUSION",
+  "tests/test_camera_located_range.py": "FUSION",
   "tests/test_camera_calibration_set.py": "FUSION",
   "tests/test_camera_calibration_selection.py": "FUSION",
   "tests/test_camera.py": "PRODUCT",

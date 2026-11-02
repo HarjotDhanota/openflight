@@ -693,6 +693,12 @@ def _weak_inputs(
                 "the tee range is the resting ball's own size through a calibrated lens (estimated)"
             )
         weak.append((label, why))
+    elif tee_range_source == "camera_resting_ball":
+        # the camera's located tee (C8a) carries its own label
+        if tee_range_label in (ESTIMATED, EXPERIMENTAL):
+            weak.append(
+                (tee_range_label, f"the tee range is the camera's located tee ({tee_range_label})")
+            )
     elif tee_range_label in _IWR_RANGE_NOTES:
         weak.append((ESTIMATED, _IWR_RANGE_NOTES[tee_range_label]))
     if tee_side_offset_source == CAMERA_SIDE_OFFSET_SOURCE:

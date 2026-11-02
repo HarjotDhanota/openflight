@@ -509,6 +509,10 @@ def _path_or_attack(metric_id: str):
 
 
 BALL_RANGE_SOURCES = {
+    "camera_resting_ball": (
+        "the tee the camera located: the setup box's resting ball through the camera model "
+        "(the IWR launch point confirms it)"
+    ),
     "iwr_post_impact": "IWR post-impact launch point (this shot's own capture)",
     "camera_prior": "camera prior: the resting ball's size, coarse",
     "camera_ball_size": "this shot's resting ball: its outline size at the lens's focal length",
@@ -540,6 +544,8 @@ def _ball_range(shot):
         "iwr_post_impact": MEASURED,
         "camera_prior": ESTIMATED,
         "camera_ball_size": EXPERIMENTAL,
+        # the located tee's own label (measured when the IWR confirms it)
+        "camera_resting_ball": shot.get("ball_range_label") or ESTIMATED,
         # a fixed range set in code is assumed, not measured (not used by the kiosk)
         "configured_tee": ESTIMATED,
     }.get(source, ESTIMATED)

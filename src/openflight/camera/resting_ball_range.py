@@ -22,6 +22,7 @@ from typing import Any, Optional, Sequence
 import numpy as np
 
 from ..constants import BALL_DIAMETER_M
+from ..iwr6843.launch_range import LOCATED_TEE_SOURCE
 from ..source_labels import LABEL_EXPERIMENTAL
 from . import ball_pixels
 from .ball_launch_fallback import PinholeCamera, resting_ball_pitch_deg
@@ -292,3 +293,79 @@ __all__ = [
     "radar_place",
     "resting_ball_range",
 ]
+
+
+# --- the located tee (C8a, 3 Nov 2026) --------------------------------------------------
+#
+# TrackMan-shaped: the launch position is where the camera sees the tee, the speed is the
+# OPS's, and the IWR's range walk only confirms. The setup box's resting ball (the one the
+# surface solve and the swing-tilt pair use) through the mode's camera model: its angular
+# size gives the distance from the lens, the camera's own rays put it in the target
+# frame, and the rig's IWR phase centre turns that into the radar's slant range.
+# The lit-sphere fit's diameter, 1 sigma (Oct 27 shot 1: 0.3 px on a 24 px ball).
+DIAMETER_FIT_SIGMA_PX = 0.3
+
+
+def located_tee_range(  # pylint: disable=too-many-arguments
+    camera,
+    ball_px,
+    diameter_px: float,
+    *,
+    focal_rel_sigma: float,
+    diameter_sigma_px: float = DIAMETER_FIT_SIGMA_PX,
+    ball_radius_m: float = BALL_DIAMETER_M / 2.0,
+    surface_ball_height_m: float | None = None,
+) -> dict[str, Any]:
+    """The resting ball's slant range from the radar, by its angular size through
+    ``camera`` (a ``BallPlaneCamera``: its rays, its lens and its radar origin).
+
+    The angle between the rays through the ball's two edges on its row is its angular
+    diameter; the distance from the lens is radius / sin(half that). Its sigma is the
+    focal length's and the diameter fit's in quadrature (relative). Where the hitting
+    surface's height is in force, the ray meeting the ball-centre plane gives a second
+    range: kept as a cross-check, never combined, because the surface solve takes this
+    range (a range made from the surface would solve the surface from itself).
+    """
+    x, y = (float(value) for value in ball_px)
+    diameter = float(diameter_px)
+    if not math.isfinite(diameter) or diameter <= 0.0:
+        return {"status": "not_measured", "reason": "the resting ball has no diameter"}
+    edges = np.asarray(
+        camera.ray_model.rays(np.asarray([[x - diameter / 2.0, y], [x + diameter / 2.0, y]])),
+        dtype=float,
+    )
+    angle = math.acos(float(np.clip(np.dot(edges[0], edges[1]), -1.0, 1.0)))
+    if angle <= 0.0:
+        return {"status": "not_measured", "reason": "the resting ball has no angular size"}
+    distance = float(ball_radius_m) / math.sin(angle / 2.0)
+    ray = np.asarray(camera.ray_model.rays(np.asarray([x, y])), dtype=float)
+    lens = np.asarray(camera.camera_origin_lfu, dtype=float)
+    radar = np.asarray(camera.radar_origin_lfu, dtype=float)
+    ball = lens + distance * ray
+    relative = math.hypot(float(focal_rel_sigma), float(diameter_sigma_px) / diameter)
+    record = {
+        "status": "measured_from_size",
+        "source": LOCATED_TEE_SOURCE,
+        "range_m": float(np.linalg.norm(ball - radar)),
+        "uncertainty_m": float(relative * distance),
+        "lens_distance_m": distance,
+        "ball_lfu_m": [float(value) for value in ball],
+        "ball_px": [x, y],
+        "diameter_px": diameter,
+        "focal_rel_sigma": float(focal_rel_sigma),
+        "diameter_sigma_px": float(diameter_sigma_px),
+        "camera_source": camera.source,
+        "radar_origin_lfu_m": [float(value) for value in radar],
+        "surface_crosscheck": None,
+    }
+    if surface_ball_height_m is not None and ray[2] < 0.0:
+        along = (float(surface_ball_height_m) - lens[2]) / ray[2]
+        if along > 0.0:
+            point = lens + along * ray
+            surface_range = float(np.linalg.norm(point - radar))
+            record["surface_crosscheck"] = {
+                "ball_height_m": float(surface_ball_height_m),
+                "range_m": surface_range,
+                "delta_m": record["range_m"] - surface_range,
+            }
+    return record

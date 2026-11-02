@@ -20,6 +20,9 @@ from openflight.iwr6843.shot import PreparedShotDump, near_mti_notch, track_brok
 SCHEMA = "openflight.iwr_launch_range.v1"
 SOURCE = "iwr_post_impact"
 CAMERA_PRIOR_SOURCE = "camera_prior"
+# The tee the camera located (camera.resting_ball_range.located_tee_range, C8a): the
+# shot's own range; the IWR's launch point only confirms it.
+LOCATED_TEE_SOURCE = "camera_resting_ball"
 
 # Radial ball speed as a fraction of the OPS243's; the floor keeps the slower club out.
 BALL_SPEED_FRACTION = (0.85, 1.10)
@@ -155,6 +158,9 @@ def choose_range_prior(
     unchecked; without a look, the setup prior. Every caller (the IWR runtime, the
     kiosk's ball-range chain, the replays) chooses here.
     """
+    if per_shot is not None and per_shot.source == LOCATED_TEE_SOURCE:
+        # the camera located this shot's tee with its own sigma: no setup look outranks it
+        return RangePriorChoice(prior=per_shot, chosen="per_shot", per_shot=per_shot, setup=setup)
     if per_shot is None or setup is None:
         prior = per_shot if per_shot is not None else setup
         chosen = None if prior is None else "per_shot" if per_shot is not None else "setup"
@@ -292,7 +298,21 @@ class ShotBallRange:
 def shot_ball_range(
     estimate: LaunchRangeEstimate | None, prior: LaunchRangePrior | None
 ) -> ShotBallRange:
-    """The shot's own IWR launch point; else the camera prior, labelled; else not measured."""
+    """The camera's located tee (its prior, C8a); else the shot's own IWR launch point;
+    else the camera prior, labelled; else not measured."""
+    if prior is not None and prior.source == LOCATED_TEE_SOURCE:
+        launch = (
+            f"IWR launch point {estimate.range_m:.2f} m ({estimate.label})"
+            if estimate is not None and estimate.measured
+            else f"no IWR launch point ({estimate.reason if estimate is not None else 'none'})"
+        )
+        return ShotBallRange(
+            range_m=prior.range_m,
+            uncertainty_m=prior.uncertainty_m,
+            source=LOCATED_TEE_SOURCE,
+            label="estimated",
+            reason=f"the camera located the tee; {launch}",
+        )
     if estimate is not None and estimate.measured:
         notes = []
         if estimate.ambiguous:
@@ -984,6 +1004,7 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
 __all__ = [
     "AMBIGUOUS_LABEL",
     "CAMERA_PRIOR_SOURCE",
+    "LOCATED_TEE_SOURCE",
     "LaunchRangeEstimate",
     "LaunchRangePrior",
     "SCHEMA",

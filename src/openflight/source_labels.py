@@ -282,6 +282,12 @@ BALL_SIZE_RANGE_CALIBRATED_NOTE = (
     "rests on the resting ball's own size through a calibrated lens (estimated, not "
     "validated against a tape)"
 )
+# The camera's located tee (C8a): its own label (estimated through a calibrated model,
+# measured when the IWR confirms it, experimental through a nominal one).
+LOCATED_TEE_NOTE = (
+    "rests on the tee the camera located (the setup box's resting ball through the camera "
+    "model; the IWR's launch point only confirms it)"
+)
 RANGE_SOURCE_LABELS = {
     "camera_prior": (LABEL_ESTIMATED, CAMERA_PRIOR_NOTE),
     "camera_ball_size": (LABEL_EXPERIMENTAL, BALL_SIZE_RANGE_NOTE),
@@ -305,6 +311,10 @@ def range_source_label(shot: Any) -> tuple[Optional[str], Optional[str]]:
         return LABEL_ESTIMATED, _field(shot, "ball_range_reason") or IWR_COMPETING_NOTE
     if source == "camera_ball_size" and label == LABEL_ESTIMATED:
         return LABEL_ESTIMATED, BALL_SIZE_RANGE_CALIBRATED_NOTE
+    if source == "camera_resting_ball":
+        if label in (LABEL_ESTIMATED, LABEL_EXPERIMENTAL):
+            return label, f"{LOCATED_TEE_NOTE}: {_field(shot, 'ball_range_reason') or label}"
+        return None, None
     return RANGE_SOURCE_LABELS.get(source, (None, None))
 
 

@@ -273,3 +273,31 @@ def test_the_replay_snapshot_records_the_prior_used_and_why_the_look_was_refused
     assert inputs["range_prior"] == PRIOR.to_dict()
     assert inputs["range_prior_choice"]["rejection"] == lr.PER_SHOT_PRIOR_DISAGREES
     assert inputs["range_prior_choice"]["per_shot"] == FAR_LOOK.to_dict()
+
+
+# --- the camera's located tee is the LCMF's tee range (C8a) --------------------------------
+
+LOCATED = lr.LaunchRangePrior(range_m=1.81, uncertainty_m=0.03, source="camera_resting_ball")
+
+
+def test_the_located_tee_is_chosen_over_a_disagreeing_setup_prior():
+    choice = lr.choose_range_prior(LOCATED, lr.LaunchRangePrior(2.6, 0.2, "camera_size_coarse"))
+
+    assert choice.prior == LOCATED
+    assert choice.chosen == "per_shot"
+    assert choice.rejection is None
+
+
+def test_the_lcmf_takes_the_located_tee_even_when_the_iwr_measured_another_range(seen):
+    with patch(
+        "openflight.iwr6843.runtime.estimate_launch_range", return_value=_measured(range_m=2.12)
+    ) as estimate:
+        result = _runtime().process_shot(**SHOT, range_prior=LOCATED)
+
+    # the IWR still searches with the located tee as its anchor, and is recorded
+    assert estimate.call_args.kwargs["prior"] == LOCATED
+    assert result.launch_range.range_m == 2.12
+    # but the range every estimator uses is the camera's
+    assert seen["calibration"].tee_range_m == 1.81
+    assert seen["calibration"].tee_range_uncertainty_m == 0.03
+    assert result.ball_range.source == "camera_resting_ball"

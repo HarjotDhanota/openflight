@@ -44,6 +44,9 @@ from .geometry import intersect_radar_range_sphere
 from .lens_profiles import lens_record_focal_px
 
 IWR_RANGE_SOURCE = "iwr_post_impact"
+LOCATED_TEE_SOURCE = resting_ball_range.LOCATED_TEE_SOURCE
+# The IWR launch point confirms the located tee within this many combined sigma.
+IWR_CONFIRM_SIGMAS = 2.0
 PRIOR_RANGE_SOURCE = "camera_prior"
 SIZE_RANGE_SOURCE = resting_ball_range.SOURCE
 # The resting ball's pitch inference against an uncalibrated principal point: about
@@ -80,20 +83,77 @@ def finite(value: Any) -> bool:
 # ---------------------------------------------------------------- ball range
 
 
-def ball_range_resolution(
+def iwr_cross_check(camera: Mapping[str, Any], iwr_launch: Optional[Mapping[str, Any]]) -> dict:
+    """How the IWR's launch point bears on the located tee: ``iwr_confirmed`` (measured and
+    within IWR_CONFIRM_SIGMAS of it), ``iwr_disagrees`` (measured, further off) or
+    ``iwr_not_measured`` (no measured IWR launch point; an estimated one confirms nothing)."""
+    launch = dict(iwr_launch or {})
+    record = {
+        "iwr_range_m": launch.get("range_m"),
+        "iwr_label": launch.get("label"),
+        "iwr_uncertainty_m": launch.get("uncertainty_m"),
+    }
+    if launch.get("label") != LABEL_MEASURED or not finite(launch.get("range_m")):
+        why = launch.get("reason") or (
+            f"the IWR launch point is {launch.get('label')}" if launch else "no IWR launch point"
+        )
+        return {**record, "status": "iwr_not_measured", "text": f"iwr_not_measured ({why})"}
+    delta = float(launch["range_m"]) - float(camera["range_m"])
+    allowed = IWR_CONFIRM_SIGMAS * math.hypot(
+        float(camera["uncertainty_m"]), float(launch.get("uncertainty_m") or 0.0)
+    )
+    status = "iwr_confirmed" if abs(delta) <= allowed else "iwr_disagrees"
+    return {
+        **record,
+        "status": status,
+        "delta_m": delta,
+        "allowed_m": allowed,
+        "text": f"{status} ({abs(delta):.2f} m)",
+    }
+
+
+def located_tee_label(camera: Mapping[str, Any], check: Mapping[str, Any]) -> str:
+    """A calibrated camera's located tee is estimated, measured when the IWR confirms it
+    (two independent sensors within 2 sigma); a nominal camera's is experimental."""
+    if not str(camera.get("camera_source") or "").startswith("calibrated"):
+        return LABEL_EXPERIMENTAL
+    return LABEL_MEASURED if check.get("status") == "iwr_confirmed" else LABEL_ESTIMATED
+
+
+def ball_range_resolution(  # pylint: disable=too-many-arguments
     *,
     shot_range: Mapping[str, Any],
     prior: Any = None,
     size_route: Optional[Callable[[], Any]] = None,
     range_prior_rejection: Optional[str] = None,
+    camera_located: Optional[Mapping[str, Any]] = None,
+    iwr_launch: Optional[Mapping[str, Any]] = None,
 ) -> Resolution:
-    """The shot's ball range: its IWR launch point, the camera prior, its resting ball.
+    """The shot's ball range: the camera's located tee, confirmed by the IWR; without it
+    the IWR launch point, the camera prior, the resting ball's nominal size range.
 
-    ``shot_range`` holds what the IWR stage left on the shot (``ball_range_m``,
-    ``ball_range_source``, ``ball_range_uncertainty_m``, ``ball_range_reason``);
-    ``prior`` a ``LaunchRangePrior`` the IWR never consulted (its capture failed or
-    there is no IWR); ``size_route`` gives the resting-ball record, or why not.
+    ``camera_located`` is ``resting_ball_range.located_tee_range``'s record (the setup
+    box's resting ball through the mode's camera model); ``iwr_launch`` the IWR's launch
+    point record (``LaunchRangeEstimate.to_dict``), its cross-check. ``shot_range`` holds
+    what the IWR stage left on the shot (``ball_range_m``, ``ball_range_source``,
+    ``ball_range_uncertainty_m``, ``ball_range_reason``); ``prior`` a
+    ``LaunchRangePrior`` the IWR never consulted (its capture failed or there is no IWR);
+    ``size_route`` gives the resting-ball record, or why not.
     """
+
+    def located_tee():
+        record = dict(camera_located or {})
+        if record.get("status") != "measured_from_size":
+            return record.get("reason") or "the camera did not locate the tee"
+        check = iwr_cross_check(record, iwr_launch)
+        return Candidate(
+            float(record["range_m"]),
+            located_tee_label(record, check),
+            LOCATED_TEE_SOURCE,
+            uncertainty=float(record["uncertainty_m"]),
+            note=f"the camera located the tee; {check['text']}",
+            details={**record, "iwr_cross_check": check},
+        )
 
     def iwr():
         if shot_range.get("ball_range_source") == IWR_RANGE_SOURCE and finite(
@@ -154,9 +214,12 @@ def ball_range_resolution(
             details=dict(record),
         )
 
+    # the located tee is tried whenever the camera tried (a clip, a box): its refusal says why
+    located_route = [Route(LOCATED_TEE_SOURCE, located_tee)] if camera_located is not None else []
     return resolve(
         "ball_range",
         [
+            *located_route,
             Route(IWR_RANGE_SOURCE, iwr),
             Route(PRIOR_RANGE_SOURCE, camera_prior),
             Route(SIZE_RANGE_SOURCE, ball_size),
@@ -189,9 +252,11 @@ def apply_ball_range(shot: Any, resolution: Resolution) -> None:
     shot.ball_range_reason = (
         f"{earlier}; {resolution.route} stands in"
         if earlier and resolution.tried
-        # a weaker-than-measured IWR winner keeps why (a partial dump, competing tracks)
+        # the located tee says how the IWR bore on it; a weaker-than-measured IWR winner
+        # keeps why (a partial dump, competing tracks)
         else resolution.note
-        if resolution.route == IWR_RANGE_SOURCE and resolution.label != LABEL_MEASURED
+        if resolution.route == LOCATED_TEE_SOURCE
+        or (resolution.route == IWR_RANGE_SOURCE and resolution.label != LABEL_MEASURED)
         else None
     )
 

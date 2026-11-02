@@ -1458,7 +1458,17 @@ def _look_range_prior(look: dict | None):
 
 
 def _shot_look_prior(shot: Shot):
-    """The shot's own look as its range prior, unless the shot's ball is somewhere else."""
+    """The shot's own range prior: the camera's located tee (C8a), else its own look,
+    unless the shot's ball is somewhere else."""
+    from .iwr6843.launch_range import LaunchRangePrior  # noqa: PLC0415
+
+    located = (shot.input_sources or {}).get("camera_launch_range") or {}
+    if located.get("status") == "measured_from_size":
+        return LaunchRangePrior(
+            range_m=float(located["range_m"]),
+            uncertainty_m=float(located["uncertainty_m"]),
+            source=located["source"],
+        )
     context = _shot_ball_context(shot)
     if context.get("look_prior_refused"):
         return None
@@ -5113,6 +5123,18 @@ def _attach_ball_range(shot: Shot, shot_result) -> None:
         shot, shot_result, match_tolerance_s=getattr(monitor, "match_tolerance_s", None)
     )
     shot.iwr_launch_range = launch.to_dict() if launch is not None else None
+    located = (shot.input_sources or {}).get("camera_launch_range")
+    if isinstance(located, dict) and located.get("status") == "measured_from_size":
+        # the camera located the tee; the IWR's launch point only confirms it (C8a)
+        from .camera.fallback_chain import apply_ball_range, ball_range_resolution  # noqa: PLC0415
+
+        apply_ball_range(
+            shot,
+            ball_range_resolution(
+                shot_range={}, camera_located=located, iwr_launch=shot.iwr_launch_range
+            ),
+        )
+        return
     if chosen is not None:
         shot.ball_range_m = chosen.range_m
         shot.ball_range_source = chosen.source
@@ -5521,7 +5543,89 @@ def _measure_resting_ball_early(shot: Shot, camera_archive) -> float | None:
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Early resting-ball measure failed: %s", error, exc_info=True)
         return None
+    try:
+        # the camera locates the tee before the IWR runs: its prior and its launch range
+        shot.input_sources = {
+            **(shot.input_sources or {}),
+            "camera_launch_range": _camera_launch_range(shot, camera_archive),
+        }
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Camera-located tee failed: %s", error, exc_info=True)
     return (time.monotonic() - started) * 1000.0
+
+
+def _surface_in_force_m() -> float | None:
+    """The hitting surface's height above the base the session has in force, or None
+    while the rig's heights stand (nothing solved)."""
+    from . import surface_height  # noqa: PLC0415
+
+    combined = surface_height.aggregate(surface_height_contributions)
+    if combined.get("status") != "solved":
+        return None
+    used, _why = surface_height.use_solved(
+        float(combined["surface_height_m"]), float(combined["sigma_m"])
+    )
+    return float(combined["surface_height_m"]) if used else None
+
+
+def _camera_launch_range(shot: Shot, camera_archive) -> dict:
+    """The tee as the camera locates it (C8a): the setup box's resting ball through the
+    mode's calibrated model (else the nominal camera, labelled), at the rig's lens and
+    IWR phase centre (``resting_ball_range.located_tee_range``)."""
+    from .camera import resting_ball_range  # noqa: PLC0415
+    from .camera.fallback_chain import CALIBRATED_FOCAL_REL_SD  # noqa: PLC0415
+    from .camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
+
+    if rig_geometry is None or getattr(rig_geometry, "lens_height_above_floor_mm", None) is None:
+        return {"status": "not_measured", "reason": "no rig file with the lens height"}
+    ball = _shot_resting_ball(camera_archive)
+    if not ball:
+        return {"status": "not_measured", "reason": "no resting ball in the setup box"}
+    frames = camera_archive["frames"]
+    height, width = int(np.shape(frames)[-2]), int(np.shape(frames)[-1])
+    lens, radar = _rig_sensor_origins_lfu()
+    model, pair, nominal_reason = _shot_calibrated_camera(shot, width, height)
+    if model is not None:
+        camera = replace(
+            BallPlaneCamera.calibrated(model),
+            camera_origin_lfu=tuple(lens),
+            radar_origin_lfu=tuple(radar),
+        )
+        focal_rel = CALIBRATED_FOCAL_REL_SD
+    else:
+        pitch = _lis3dh_camera_pitch(getattr(shot, "inclinometer", None))
+        focal, _source, focal_rel = _mode_focal(width)
+        if pitch is None or not focal:
+            return {
+                "status": "not_measured",
+                "reason": f"no camera model: {nominal_reason}; and no "
+                + ("LIS3DH pitch" if pitch is None else "focal length")
+                + " for the nominal camera",
+            }
+        camera = BallPlaneCamera.nominal(
+            focal_px=float(focal),
+            image_width_px=width,
+            image_height_px=height,
+            pitch_deg=float(pitch),
+            roll_correction_deg=_swing_roll_correction_deg(shot),
+            mirror_horizontal=False,
+            camera_origin_lfu=lens,
+            radar_origin_lfu=radar,
+            angular_uncertainty_deg=1.0,
+            focal_relative_uncertainty=float(focal_rel),
+        )
+    surface = _surface_in_force_m()
+    record = resting_ball_range.located_tee_range(
+        camera,
+        (ball["x_px"], ball["y_px"]),
+        ball["diameter_px"],
+        focal_rel_sigma=float(focal_rel),
+        surface_ball_height_m=(surface + BALL_RADIUS_M) if surface is not None else None,
+    )
+    record["principal_point"] = "calibrated" if model is not None else "image_centre"
+    record["calibration_pair"] = pair.record() if model is not None else None
+    record["nominal_reason"] = nominal_reason if model is None else None
+    return record
 
 
 def _await_camera_prefetch(camera_future: Future) -> _CameraPrefetchResult:
@@ -6311,6 +6415,9 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
             roll_correction_deg=_swing_roll_correction_deg(shot),
             horizontal_pixel_sign=-1.0 if camera_capture_config.get("mirror_horizontal") else 1.0,
         )
+        located = (shot.input_sources or {}).get("camera_launch_range")
+        if located is None and camera_archive is not None:
+            located = _camera_launch_range(shot, camera_archive)
         resolution = ball_range_resolution(
             shot_range={
                 "ball_range_m": shot.ball_range_m,
@@ -6322,6 +6429,8 @@ def _resolve_shot_ball_range(shot: Shot, camera_archive) -> None:
             prior=prior,
             size_route=size_route,
             range_prior_rejection=prior_rejection,
+            camera_located=located,
+            iwr_launch=getattr(shot, "iwr_launch_range", None),
         )
         apply_ball_range(shot, resolution)
         if resolution.present and resolution.route != "iwr_post_impact":
