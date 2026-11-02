@@ -190,3 +190,42 @@ def test_the_rest_cap_reads_a_half_lit_ball_and_a_saturated_one():
     assert ball_flight._rest_cap(saturated, anchor, 100) == pytest.approx((255.0, 0.0), abs=0.05)  # pylint: disable=protected-access
     # no cap above the threshold reads as the original gate
     assert ball_flight._rest_cap(np.full((100, 100), 40, np.uint8), anchor, 100) == (255.0, 0.0)  # pylint: disable=protected-access
+
+
+# --- C9b: the club stage's depth --------------------------------------------------------
+
+
+def test_without_an_iwr_club_walk_the_club_stage_takes_the_located_tee_and_the_ops_club_speed(
+    monkeypatch,
+):
+    from openflight.camera import fusion_processing as fp  # noqa: PLC0415
+    from openflight.rig_geometry import geometry_fingerprint  # noqa: PLC0415
+    from tests.camera_fallback_scene import render_scene  # noqa: PLC0415
+    from tests.test_fallback_chain import _scene_context  # noqa: PLC0415
+
+    context, archive = _scene_context(
+        render_scene(),
+        range_record={
+            "source": "camera_resting_ball",
+            "value": 1.814,
+            "uncertainty": 0.029,
+            "label": "estimated",
+        },
+    )
+    context = {key: value for key, value in context.items() if key != "sha256"}
+    context["ops_club_speed_mph"] = 68.6
+    context["sha256"] = geometry_fingerprint(context)
+    seen = {}
+
+    def spy(*_args, **kwargs):
+        seen.update(kwargs)
+        raise ValueError("stop after the inputs")
+
+    monkeypatch.setattr(fp, "estimate_chained_delivery", spy)
+    fp.process_camera_fusion(context, archive)
+
+    evidence = seen["range_evidence"]
+    assert evidence.status == "accepted_located_tee"
+    res = evidence.geometry.range_res_m
+    assert evidence.track.range_at(0.0, res) == pytest.approx(1.814)
+    assert evidence.track.speed_ms == pytest.approx(68.6 / ball_flight.MPH_PER_MS)

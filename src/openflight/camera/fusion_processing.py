@@ -217,6 +217,20 @@ def build_context(
     return payload
 
 
+def _club_depth(context: Mapping[str, Any]):
+    """The club's range against time: the IWR's accepted club walk, else the located tee and
+    the OPS club speed (C9b: the club meets the ball at the tee at the camera's contact)."""
+    from openflight.camera.ball_flight import located_tee_range_evidence  # noqa: PLC0415
+    from openflight.iwr6843.tracking import accepted_range_evidence  # noqa: PLC0415
+
+    evidence = _restore_range(context["club_range_evidence"], "club")
+    located = _located_tee(context)
+    club_mph = context.get("ops_club_speed_mph")
+    if accepted_range_evidence(evidence) is None and located is not None and club_mph:
+        return located_tee_range_evidence(located["range_m"], float(club_mph))
+    return evidence
+
+
 def _located_tee(context: Mapping[str, Any]) -> dict | None:
     """The shot's range when the camera located the tee (C8a), for the ball's depth."""
     ball_range = context.get("ball_range") or {}
@@ -308,7 +322,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
             frames,
             timestamps,
             trigger_index=trigger_index,
-            range_evidence=_restore_range(context["club_range_evidence"], "club"),
+            range_evidence=_club_depth(context),
             geometry=with_swing_pose(geometry.delivery_geometry(), context.get("camera_pose")),
             ops_club_speed_mph=context["ops_club_speed_mph"],
             reference_ball=reference_ball,
