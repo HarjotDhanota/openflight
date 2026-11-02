@@ -63,6 +63,10 @@ PER_SHOT_PRIOR_DISAGREES = "per_shot_prior_disagrees_with_setup_prior"
 # confidence the prior is checked with everywhere else (PRIOR_AGREEMENT_SIGMAS).
 CONTACT_AGREEMENT_FRAMES = 1
 CLUB_ONLY_REASON = "ball walk not found (hidden by clutter); club walk only"
+# An agreement the camera prior's own sigma carries is no measurement: when the prior's
+# share of the tolerance is more than the frame's, the range is estimated and its sigma
+# covers the prior's.
+LOOSE_PRIOR_REASON = "anchor agreement rests on a loose prior (sigma {sigma:.2f} m)"
 UNANCHORED_NOTE = (
     "no club walk anchors the ball walk's contact time (and no sound contact time in IWR "
     "time): estimated"
@@ -205,8 +209,12 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
 
     @property
     def unanchored(self) -> bool:
-        """Whether nothing anchors the walk's contact time (no club walk)."""
-        return self.anchor is not None and self.anchor.get("status") == "unanchored"
+        """Whether nothing firmly anchors the walk's contact time: no club walk, or an
+        agreement a loose camera prior carries."""
+        return self.anchor is not None and self.anchor.get("status") in (
+            "unanchored",
+            "agrees_loose_prior",
+        )
 
     @property
     def ambiguous(self) -> bool:
@@ -284,7 +292,8 @@ def shot_ball_range(
         if estimate.ambiguous:
             notes.append(competition_note(estimate.competing))
         if estimate.unanchored:
-            notes.append(UNANCHORED_NOTE)
+            loose = estimate.anchor.get("status") == "agrees_loose_prior"
+            notes.append(estimate.reason if loose and estimate.reason else UNANCHORED_NOTE)
         if estimate.partial is not None:
             notes.append(f"from a partial IWR dump: {estimate.partial.get('missing')}")
         return ShotBallRange(
@@ -811,15 +820,23 @@ def _anchor(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if club is None or club.slope_bins <= 0.0:
         return {**record, "status": "unanchored", "club_source": None}
     t_club = float(_crossing_s(club, anchor_m, res))
-    spread = abs(1.0 / ball.speed_ms - 1.0 / club.speed_ms) * PRIOR_AGREEMENT_SIGMAS * sigma_m
-    tolerance = CONTACT_AGREEMENT_FRAMES * geometry.frame_period_s + spread
-    agrees = abs(record["t_ball_s"] - t_club) <= tolerance
+    prior_term = abs(1.0 / ball.speed_ms - 1.0 / club.speed_ms) * PRIOR_AGREEMENT_SIGMAS * sigma_m
+    frame_term = CONTACT_AGREEMENT_FRAMES * geometry.frame_period_s
+    tolerance = frame_term + prior_term
+    if abs(record["t_ball_s"] - t_club) > tolerance:
+        status = "disagrees"
+    elif source == "camera_prior" and prior_term > frame_term:
+        status = "agrees_loose_prior"
+    else:
+        status = "agrees"
     return {
         **record,
-        "status": "agrees" if agrees else "disagrees",
+        "status": status,
         "club_source": club_source,
         "club_speed_ms": float(club.speed_ms),
         "t_club_s": t_club,
+        "frame_term_s": float(frame_term),
+        "prior_term_s": float(prior_term),
         "tolerance_s": float(tolerance),
     }
 
@@ -941,9 +958,13 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
             candidate_range_m=true_range,
             **common,
         )
+    reason = None
+    if anchor["status"] == "agrees_loose_prior":
+        reason = LOOSE_PRIOR_REASON.format(sigma=anchor["anchor_sigma_m"])
+        uncertainty = math.hypot(uncertainty, anchor["anchor_sigma_m"])
     return LaunchRangeEstimate(
         status="measured",
-        reason=None,
+        reason=reason,
         range_m=true_range,
         apparent_range_m=apparent,
         uncertainty_m=float(uncertainty),

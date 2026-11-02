@@ -104,8 +104,13 @@ def _estimate(capture=None, **overrides):
     return lr.estimate_launch_range(_capture() if capture is None else capture, **kwargs)
 
 
+def _tight_prior():
+    """A resting-ball prior tight enough that the anchor's prior term stays inside a frame."""
+    return _prior(range_m=2.10, uncertainty_m=0.10)
+
+
 def test_the_club_and_ball_walks_meet_at_the_launch_point():
-    estimate = _estimate()
+    estimate = _estimate(prior=_tight_prior())
 
     assert estimate.status == "measured", estimate.reason
     assert estimate.method == "club_ball_intersection"
@@ -119,7 +124,7 @@ def test_the_club_and_ball_walks_meet_at_the_launch_point():
     assert record["validated_against_tape"] is False
     assert record["ball_track"]["speed_ms"] == pytest.approx(45.0, rel=0.05)
     assert record["club_track"]["speed_ms"] == pytest.approx(32.0, rel=0.08)
-    assert record["prior"] == {"range_m": 2.0, "uncertainty_m": 0.3, "source": "camera_size"}
+    assert record["prior"] == {"range_m": 2.1, "uncertainty_m": 0.1, "source": "camera_size"}
 
 
 def test_without_a_club_track_the_ball_walk_s_start_is_the_launch_point():
@@ -365,7 +370,7 @@ def test_a_fast_walk_that_never_left_the_resting_ball_is_not_the_ball():
 
 
 def test_a_ball_walk_that_leaves_the_resting_ball_with_the_club_is_measured_and_anchored():
-    estimate = _estimate()
+    estimate = _estimate(prior=_tight_prior())
 
     assert estimate.measured
     assert estimate.label == "measured"
@@ -373,11 +378,30 @@ def test_a_ball_walk_that_leaves_the_resting_ball_with_the_club_is_measured_and_
     assert anchor["status"] == "agrees"
     assert anchor["anchor_source"] == "camera_prior"
     assert abs(anchor["t_ball_s"] - anchor["t_club_s"]) <= anchor["tolerance_s"]
-    assert anchor["tolerance_s"] >= lr.CONTACT_AGREEMENT_FRAMES * FRAME_PERIOD_S
+    assert anchor["frame_term_s"] == pytest.approx(lr.CONTACT_AGREEMENT_FRAMES * FRAME_PERIOD_S)
+    assert anchor["prior_term_s"] <= anchor["frame_term_s"]
+    assert anchor["tolerance_s"] == pytest.approx(anchor["frame_term_s"] + anchor["prior_term_s"])
+
+
+def test_an_anchor_that_agrees_only_through_a_loose_prior_is_estimated():
+    """The same walks with a 0.30 m prior: the prior's share of the tolerance (3 sigma x
+    |1/v_ball - 1/v_club| ~ 9 ms) is more than a frame, so agreement says little."""
+    estimate = _estimate()
+
+    assert estimate.measured
+    anchor = estimate.anchor
+    assert anchor["status"] == "agrees_loose_prior"
+    assert anchor["prior_term_s"] > anchor["frame_term_s"]
+    assert estimate.label == "estimated"
+    assert estimate.reason == "anchor agreement rests on a loose prior (sigma 0.30 m)"
+    assert estimate.uncertainty_m >= 0.30
+    chosen = lr.shot_ball_range(estimate, _prior())
+    assert chosen.label == "estimated"
+    assert "loose prior" in chosen.reason
 
 
 def test_a_ball_walk_beside_a_club_walk_through_impact_is_still_measured():
-    estimate = _estimate(_capture(club_through_s=0.04))
+    estimate = _estimate(_capture(club_through_s=0.04), prior=_tight_prior())
 
     assert estimate.measured
     assert estimate.range_m == pytest.approx(2.10, abs=0.08)
@@ -406,15 +430,21 @@ def _shot1(prior=None):
     )
 
 
-def test_oct27_shot1_s_club_walk_is_never_its_launch_range():
-    """The kiosk took the club's walk (31.3 m/s) for the ball: 1.50 m, estimated."""
+def test_oct27_shot1_on_its_recorded_loose_prior_is_estimated_never_measured():
+    """The kiosk took the club's walk (31.3 m/s) for the ball: 1.50 m, estimated. The 38.7
+    m/s walk agrees with the club only through the recorded prior's 0.34 m sigma (nominal
+    camera): 2.117 m, estimated, with the reason; never measured."""
     estimate = _shot1()
 
-    assert not (estimate.measured and estimate.range_m == pytest.approx(1.505, abs=0.01))
-    assert estimate.club_track is not None
-    if estimate.anchor is not None:
-        assert estimate.anchor["club_source"] == "club_by_speed"
-        assert estimate.anchor["club_speed_ms"] == pytest.approx(31.3, abs=0.5)
+    assert estimate.range_m == pytest.approx(2.117, abs=0.005)
+    assert estimate.label == "estimated"
+    assert estimate.reason == "anchor agreement rests on a loose prior (sigma 0.34 m)"
+    anchor = estimate.anchor
+    assert anchor["status"] == "agrees_loose_prior"
+    assert anchor["club_source"] == "club_by_speed"
+    assert anchor["club_speed_ms"] == pytest.approx(31.3, abs=0.5)
+    assert anchor["prior_term_s"] > anchor["frame_term_s"]
+    assert estimate.uncertainty_m >= 0.3382
 
 
 def test_oct27_shot1_on_the_calibrated_camera_s_prior_has_no_iwr_launch_range():
