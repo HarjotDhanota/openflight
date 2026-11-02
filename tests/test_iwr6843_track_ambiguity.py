@@ -101,11 +101,22 @@ def test_two_walks_with_different_launch_points_leave_the_range_estimated():
     assert estimate.range_m == pytest.approx(competing["selected"]["launch_range_m"])
     assert competing["camera_prior"] is None
     assert estimate.to_dict()["competing"] == competing
+    # the range's sigma covers the other walk's launch point: half the separation added
+    # in quadrature to the selected walk's own (C6a' 4; the surface solve relies on it)
+    own = competing["selected"]["launch_uncertainty_m"]
+    half = abs(launch_points[1] - launch_points[0]) / 2.0
+    assert estimate.uncertainty_m == pytest.approx(math.hypot(own, half))
+    assert competing["uncertainty_basis"] == "own_and_half_the_separation"
+    assert chosen_sigma(estimate) >= half
 
     chosen = lr.shot_ball_range(estimate, None)
     assert chosen.source == "iwr_post_impact"
     assert chosen.label == "estimated"
     assert "two IWR tracks compete" in chosen.reason
+
+
+def chosen_sigma(estimate):
+    return lr.shot_ball_range(estimate, None).uncertainty_m
 
 
 def test_the_camera_prior_picks_the_walk_it_agrees_with_but_the_label_stays_estimated():
@@ -120,6 +131,11 @@ def test_the_camera_prior_picks_the_walk_it_agrees_with_but_the_label_stays_esti
     assert competing["verdict"] == "ambiguous"
     assert competing["resolved_by"] == "camera_prior"
     assert competing["camera_prior"]["agrees_with"] == ["selected"]
+    # the prior picked the walk, but the IWR could not: the sigma still covers the other
+    separation = abs(
+        competing["selected"]["launch_range_m"] - competing["runner_up"]["launch_range_m"]
+    )
+    assert estimate.uncertainty_m >= separation / 2.0
     chosen = lr.shot_ball_range(estimate, prior)
     assert chosen.label == "estimated"
     assert "camera prior" in chosen.reason

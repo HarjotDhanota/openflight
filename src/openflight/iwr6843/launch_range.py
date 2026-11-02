@@ -734,6 +734,21 @@ def _settle_competition(  # pylint: disable=too-many-arguments,too-many-locals
     return point, record
 
 
+def _honest_ambiguous_sigma(point: dict, competing: dict) -> dict:
+    """An ambiguous launch point's sigma covers the other walk's: half their separation
+    added in quadrature to the selected walk's own (the IWR could not tell them apart)."""
+    if competing.get("verdict") != "ambiguous":
+        return point
+    selected = competing["selected"].get("launch_range_m")
+    other = competing["runner_up"].get("launch_range_m")
+    if selected is None or other is None:
+        return point
+    half = abs(float(selected) - float(other)) / 2.0
+    competing["uncertainty_basis"] = "own_and_half_the_separation"
+    competing["half_separation_m"] = half
+    return {**point, "uncertainty_m": float(math.hypot(point["uncertainty_m"], half))}
+
+
 def _club_by_speed(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     prepared: PreparedShotDump,
     gate: tuple[float, float],
@@ -882,6 +897,7 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
         common["competing"] = competing
         if competing.get("swapped"):
             common["track"] = ball.ambiguity.runner_up_track
+        point = _honest_ambiguous_sigma(point, competing)
     apparent, uncertainty = point["apparent_m"], point["uncertainty_m"]
     true_range = apparent - float(range_bias_m)
     anchor = _anchor(prepared, point, club_candidate, prior, range_bias_m)
