@@ -605,7 +605,10 @@ def evaluate_full_ball_speed(
                 "horizontal",
                 horizontal_source,
                 horizontal_label or launch_label(horizontal_source, horizontal_status),
-                horizontal_note or launch_label_note(horizontal_source, horizontal_status),
+                # the caller's label comes with its own note (None when it has none)
+                horizontal_note
+                if horizontal_label is not None
+                else launch_label_note(horizontal_source, horizontal_status),
             ),
         ),
         tee_range_source=tee_range_source,

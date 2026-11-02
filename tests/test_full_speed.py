@@ -573,6 +573,20 @@ def test_the_caller_s_policy_labels_decide_the_full_speed_label():
     assert "tilt is the configured value" in tilt["note"]
 
 
+def test_a_caller_s_label_with_no_note_gets_no_nominal_lens_note():
+    """The kiosk's calibrated-lens camera fallback horizontal is estimated with no note
+    (source_labels.shot_launch_label): the full speed must not supply the nominal lens's."""
+    result = _evaluate(
+        _track(120.0, 16.0, 2.0),
+        horizontal_source="camera_fallback",
+        horizontal_label="estimated",
+        horizontal_note=None,
+    )
+
+    assert result["status"] == "estimated"
+    assert "nominal lens" not in (result["note"] or "")
+
+
 def test_the_weakest_input_wins_experimental_over_estimated():
     result = _evaluate(
         _track(120.0, 16.0, 2.0),
