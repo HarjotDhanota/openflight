@@ -1,0 +1,68 @@
+{
+  "schema": "openflight.camera.placement_inputs",
+  "version": 1,
+  "lens_id": "6mm",
+  "date": "2026-10-28",
+  "note": "Recorded inputs of the 28 Oct 2026 placements (research/lens-calibration/2026-10-27-01/integration-001). Orientation, reference pose and tolerance are unchanged; the lens height and the IWR RX-row offset come from the rig file each time the placements are built (lens 93 mm and RX row 22.3 mm behind the lens since 2 Nov 2026; the 28 Oct files used 95 mm and 30 mm).",
+  "modes": {
+    "1280x800": {
+      "gravity_up_in_camera_rdf": [
+        [
+          -0.023069662999372863,
+          -0.9987321905252029,
+          0.04474150486768527
+        ],
+        [
+          -0.02723601338582598,
+          -0.9986048654537036,
+          0.04523850425287818
+        ]
+      ],
+      "orientation_capture_ids": [
+        "placement-check-01",
+        "placement-check-02-retry01"
+      ]
+    },
+    "640x400": {
+      "gravity_up_in_camera_rdf": [
+        [
+          -0.02316442049533522,
+          -0.9985715024586442,
+          0.048149393564212016
+        ],
+        [
+          -0.027164508733849076,
+          -0.9984477562050336,
+          0.04862270657195275
+        ]
+      ],
+      "orientation_capture_ids": [
+        "placement-check-01",
+        "placement-check-02-retry01"
+      ]
+    }
+  },
+  "reference_pose_deg": {
+    "pitch": 1.5740274417598705,
+    "roll": -0.7034407043998967
+  },
+  "rig_offset_consistency_tolerance_m": 1e-06,
+  "provenance": {
+    "camera_origin": "World horizontal origin directly below the lens; lens height {lens_height_mm:g} mm above the ground the enclosure stands on, from the rig file.",
+    "radar_origin": "The rig file's IWR RX-row offset {iwr_offset_mm} mm (camera image axes) turned by the reference optical rotation, as the placement consistency check requires. Not an independent measurement.",
+    "pivot": "Define the floor point directly below the reference lens as the computational rotation pivot. Physical support pivot is unmeasured; this is a fixed-setup experimental placement, not a measured mechanical pivot.",
+    "heading": "Define target forward using the horizontal projection of the camera boresight for this owner-aimed initial test. Optical yaw relative to the housing/true shot line remains unmeasured.",
+    "reference_pose_basis": "Current stable LIS3DH pitch and verified roll-zero-corrected roll, paired by owner confirmation of unchanged unit. This reading was taken after image capture, not simultaneously.",
+    "consumer_frame": "Reference optical rotation in the owner-declared LFU frame; subsequent LIS3DH changes use the existing reference-pose delta.",
+    "limitations": [
+      "Fixed-setup candidate; physical mechanical pivot unmeasured",
+      "Optical yaw relative to the housing and the shot line unmeasured",
+      "Phone-level, print/floor and optical-yaw uncertainties unqualified"
+    ]
+  },
+  "source_sha256": {
+    "method_sha256": "d26c46ef2d3ff6e610925d5ed6c76bd813b6b60fc58e46fab89a859efa5df8b6",
+    "optical_candidate_sha256": "39846177f2597d0f8c85ba60ec8a66f0117cc500ebf0be65dadd248ce6bcf8ed",
+    "tilt_reference_sha256": "9c010f7d932611598cb876f935d4cb9d0b3e403c9a00d6bede66065721cd6aef"
+  }
+}

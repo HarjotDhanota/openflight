@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "status": "candidate",
+  "accuracy_qualified": false,
+  "quality_gate": "no_general_accuracy_gate_defined",
+  "camera_matrix": [
+    [
+      2008.2122379151674,
+      0.0,
+      649.0348229365451
+    ],
+    [
+      0.0,
+      2002.4398193719433,
+      319.275279677224
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_model": "opencv_brown_5",
+  "distortion_coefficients": {
+    "k1": -0.39611278621111534,
+    "k2": 0.9260623057349512,
+    "p1": -0.0005556085318561721,
+    "p2": -0.003716817364426183,
+    "k3": -4.629475587996388
+  },
+  "distortion_convention": {
+    "coefficient_order": [
+      "k1",
+      "k2",
+      "p1",
+      "p2",
+      "k3"
+    ],
+    "coordinates": "OpenCV normalized camera coordinates"
+  },
+  "mode_profile": {
+    "camera_id": "ov9281-camera0-local-unit-20261027",
+    "crop_readout_mapping": {
+      "driver_vertical_offset_px": null,
+      "native_sensor_crop": null,
+      "saved_image_mapping": null,
+      "scaler_crop": [
+        8,
+        8,
+        1280,
+        800
+      ],
+      "sensor_output_mapping": null
+    },
+    "focus_id": "owner-confirmed-shot-focus-20261027",
+    "lens_id": "6mm",
+    "saved_image": {
+      "height": 800,
+      "mirror": false,
+      "rotate_180": false,
+      "stream": "raw",
+      "width": 1280
+    },
+    "sensor_output": {
+      "bit_depth": 8,
+      "height": 800,
+      "mode_id": "reported-1280x800-R16-requested-120fps",
+      "raw_format": "R16",
+      "width": 1280
+    },
+    "sha256": "4a3c914ef1ee0ac914b70114e545ff797442672dbef589ca7b6c2763ad50f74e",
+    "version": 1
+  },
+  "mode_profile_sha256": "4a3c914ef1ee0ac914b70114e545ff797442672dbef589ca7b6c2763ad50f74e",
+  "mode_binding": {
+    "reason": "captures do not establish native crop, driver offset, or stable hardware binding",
+    "status": "unverified"
+  },
+  "calibration_evidence": {
+    "method": "Frozen fit-only Brown-5 base with one distance-anchored common fx/fy multiplier; no optical fitting on the fresh third position.",
+    "source_candidate_sha256": "39846177f2597d0f8c85ba60ec8a66f0117cc500ebf0be65dadd248ce6bcf8ed",
+    "physical_grid_pitch_mm": {
+      "horizontal": 25.125,
+      "vertical": 25.0
+    },
+    "physical_calibration_capture_ids": [
+      "placement-check-01",
+      "placement-check-02-retry01"
+    ],
+    "historical_fit_rms_px": 0.33705309107696946,
+    "historical_validation_rms_px": 0.5537470843694403,
+    "fresh_holdout_capture_id": "placement-check-03",
+    "fresh_holdout_report_sha256": "79810bb8ac271f5313fe7334836419daa9e2bb33c1e02641dea672e691f0646d",
+    "fresh_holdout_distance_error_mm": -9.213546340176435,
+    "fresh_holdout_distance_error_percent": -0.644303939872478,
+    "limitation": "One held-out distance check using owner-reported camera height; unknown measurement/level/flatness uncertainty. Does not qualify launch, tracking or impact accuracy."
+  }
+}
