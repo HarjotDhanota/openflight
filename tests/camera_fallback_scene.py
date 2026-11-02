@@ -99,16 +99,24 @@ def render_scene(  # pylint: disable=too-many-arguments,too-many-locals
     contact_before_trigger_ms: float = 2.0,
     exposure_us: float = 150.0,
     seed: int = 7,
+    camera=None,
 ) -> Scene:
-    """Render a clip; frame ``pre_frames`` is the first frame exposed after the trigger."""
-    camera = PinholeCamera(
-        focal_px=focal_px,
-        width=width,
-        height=height,
-        pitch_deg=pitch_deg,
-        roll_correction_deg=roll_correction_deg,
-        origin_lfu=(0.0, 0.0, camera_height_m),
-    )
+    """Render a clip; frame ``pre_frames`` is the first frame exposed after the trigger.
+
+    ``camera`` (anything with ``project``, ``focal_px``, ``width``, ``height`` and
+    ``origin_lfu``, e.g. a calibrated fallback camera) replaces the pinhole built from
+    the other arguments."""
+    if camera is None:
+        camera = PinholeCamera(
+            focal_px=focal_px,
+            width=width,
+            height=height,
+            pitch_deg=pitch_deg,
+            roll_correction_deg=roll_correction_deg,
+            origin_lfu=(0.0, 0.0, camera_height_m),
+        )
+    focal_px, width, height = camera.focal_px, camera.width, camera.height
+    camera_height_m = float(camera.origin_lfu[2])
     drop = ball_height_m - camera_height_m
     forward = math.sqrt(distance_m**2 - drop**2 - ball_side_m**2)
     ball = np.array([ball_side_m, forward, ball_height_m])

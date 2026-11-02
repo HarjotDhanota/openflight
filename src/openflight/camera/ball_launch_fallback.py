@@ -167,6 +167,108 @@ class PinholeCamera:
         )
 
 
+_CALIBRATED_MODELS: dict = {}
+
+
+@dataclass(frozen=True)
+class CalibratedFallbackCamera:
+    """The mode's calibrated model (a frozen ``calibrated_projection`` snapshot) as the
+    fallback's camera: rays and projections through its principal point, Brown
+    distortion and placement pose.
+
+    ``pitch_deg`` is the LIS3DH pitch the placement composes (the model's observed
+    reading) and ``roll_correction_deg`` a shift of its observed roll, so the
+    estimator's pitch and roll sweeps move the reading, not a nominal camera pitch.
+    ``focal_px`` is the model's mean focal length; a focal sweep scales the normalised
+    coordinates. ``origin_lfu`` is the lens in the fallback's own frame (the model's
+    rays are directions; its origins stay in the shot record).
+    """
+
+    snapshot: Any = field(repr=False, compare=False)
+    focal_px: float
+    width: int
+    height: int
+    pitch_deg: float
+    roll_correction_deg: float = 0.0
+    horizontal_pixel_sign: float = 1.0
+    origin_lfu: tuple = (0.0, 0.0, 0.0)
+
+    @classmethod
+    def from_model(cls, model: Any, *, origin_lfu, horizontal_pixel_sign: float = 1.0):
+        """The fallback camera at the model's own observed pose."""
+        matrix = np.asarray(model.projection.camera_matrix, dtype=float)
+        width, height = model.projection.image_size
+        return cls(
+            snapshot=model.snapshot,
+            focal_px=math.sqrt(float(matrix[0, 0]) * float(matrix[1, 1])),
+            width=int(width),
+            height=int(height),
+            pitch_deg=float(model.snapshot["observed_pose_deg"]["pitch"]),
+            horizontal_pixel_sign=float(horizontal_pixel_sign),
+            origin_lfu=tuple(float(value) for value in origin_lfu),
+        )
+
+    def _model(self):
+        from .calibrated_projection import build_calibrated_camera_model  # noqa: PLC0415
+
+        roll = float(self.snapshot["observed_pose_deg"]["roll"]) + float(self.roll_correction_deg)
+        key = (self.snapshot["sha256"], float(self.pitch_deg), roll)
+        model = _CALIBRATED_MODELS.get(key)
+        if model is None:
+            if len(_CALIBRATED_MODELS) > 64:
+                _CALIBRATED_MODELS.clear()
+            model = build_calibrated_camera_model(
+                self.snapshot["artifact"],
+                self.snapshot["placement"],
+                observed_pitch_deg=float(self.pitch_deg),
+                observed_roll_deg=roll,
+                origins=self.snapshot.get("origins"),
+            )
+            _CALIBRATED_MODELS[key] = model
+        return model
+
+    def _scale(self, model) -> float:
+        matrix = np.asarray(model.projection.camera_matrix, dtype=float)
+        return float(self.focal_px) / math.sqrt(float(matrix[0, 0]) * float(matrix[1, 1]))
+
+    def rays(self, points_px) -> np.ndarray:
+        """Unit rays (lateral, forward, up) through pixels."""
+        model = self._model()
+        rays = np.asarray(model.rays(np.asarray(points_px, dtype=float)), dtype=float)
+        scale = self._scale(model)
+        if scale == 1.0:
+            return rays
+        rotation = np.asarray(model.optical_to_world_lfu, dtype=float)
+        optical = rays @ rotation
+        optical = np.concatenate(
+            (optical[..., :2] / optical[..., 2:3] / scale, np.ones_like(optical[..., 2:3])),
+            axis=-1,
+        )
+        world = optical @ rotation.T
+        return world / np.linalg.norm(world, axis=-1, keepdims=True)
+
+    def project(self, points_lfu) -> np.ndarray:
+        """Pixels of world points; the inverse of ``rays``."""
+        from .calibrated_projection import _brown_forward  # noqa: PLC0415
+
+        model = self._model()
+        points = np.asarray(points_lfu, dtype=float)
+        vectors = (points - np.asarray(self.origin_lfu, dtype=float)).reshape(-1, 3)
+        optical = vectors @ np.asarray(model.optical_to_world_lfu, dtype=float)
+        normalized = optical[:, :2] / optical[:, 2:3] * self._scale(model)
+        saved = model.projection.mode_profile["saved_image"]
+        if saved["rotate_180"]:
+            normalized = -normalized
+        if saved["mirror"]:
+            normalized[:, 0] *= -1.0
+        pixels = _brown_forward(
+            normalized,
+            np.asarray(model.projection.camera_matrix, dtype=float),
+            np.asarray(model.projection.distortion_coefficients, dtype=float),
+        )
+        return pixels.reshape(points.shape[:-1] + (2,))
+
+
 @dataclass(frozen=True)
 class FallbackGeometry:  # pylint: disable=too-many-instance-attributes
     """Everything the fallback needs besides the frames, each with its 1-sigma.
@@ -856,5 +958,6 @@ __all__ = [
     "launch_direction",
     "pose",
     "resting_ball_pitch_deg",
+    "CalibratedFallbackCamera",
     "track_launch_ball",
 ]

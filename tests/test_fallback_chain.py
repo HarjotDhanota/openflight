@@ -1,6 +1,7 @@
 """The ball's best-available-source chains, shared by the kiosk and its replays."""
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -171,7 +172,7 @@ def test_a_withheld_fallback_leaves_the_launch_not_measured_with_both_reasons():
     )
 
 
-def _scene_context(scene, *, range_record=None, ops=True):
+def _scene_context(scene, *, range_record=None, ops=True, model=None):
     x, y, _diameter = scene.rest_px()
     geometry = EffectiveCameraGeometryInputs(
         camera_height_m=float(scene.camera.origin_lfu[2]),
@@ -187,6 +188,18 @@ def _scene_context(scene, *, range_record=None, ops=True):
         ball_horizontal_output_offset_deg=None,
         ball_diameter_m=0.0427,
     )
+    if model is not None:
+        candidate = model.snapshot["artifact"].get("candidate", model.snapshot["artifact"])
+        geometry = geometry.with_calibrated_model(
+            model.snapshot,
+            {
+                "status": "unverified",
+                "reasons": ["calibration remains unqualified"],
+                "accuracy_qualified": False,
+                "mode_profile_sha256": candidate["mode_profile_sha256"],
+                "calibration_pair": {"mode": "640x400", "test": True},
+            },
+        )
     archive = {
         "frames": scene.frames,
         "host_timestamp_ns": scene.sensor_timestamp_ns,
@@ -213,7 +226,11 @@ def _scene_context(scene, *, range_record=None, ops=True):
         capture_npz_sha256="scene-hash",
         session_uuid="session-s",
         shot_number=1,
-        setup_ball={"x": x + 4.0, "y": y - 3.0, "diameter_px": 46.0},
+        setup_ball={
+            "x": x + 4.0,
+            "y": y - 3.0,
+            "diameter_px": 46.0 if model is None else round(_diameter + 1.0, 1),
+        },
         ball_range=range_record
         or {"source": "iwr_post_impact", "label": "measured", "uncertainty_m": 0.05},
         camera_fallback={
@@ -427,3 +444,72 @@ def test_a_radar_vertical_within_three_sigma_of_the_camera_stays_measured():
     resolved = chain.launch_resolutions(_radar_vertical(28.50), fallback)["launch_vertical"]
 
     assert (resolved.source, resolved.label, resolved.note) == ("radar", "measured", None)
+
+
+# --- the camera fallback on the mode's calibrated model (C6b) ------------------------------
+
+CALIBRATION = Path(__file__).resolve().parents[1] / "config" / "camera-calibration" / "6mm"
+
+
+def _calibrated_model(pitch_deg=0.4, roll_deg=-0.3):
+    import json  # noqa: PLC0415
+
+    from openflight.camera.calibrated_projection import (  # noqa: PLC0415
+        build_calibrated_camera_model,
+    )
+
+    optical = json.loads((CALIBRATION / "640x400.optical.json").read_text(encoding="utf-8"))
+    placement = json.loads((CALIBRATION / "640x400.placement.json").read_text(encoding="utf-8"))
+    return build_calibrated_camera_model(
+        optical,
+        placement,
+        observed_pitch_deg=pitch_deg,
+        observed_roll_deg=roll_deg,
+        origins={
+            "camera_origin_lfu": [0.0, 0.0, 0.093],
+            "radar_origin_lfu": [0.0, -0.024, 0.050],
+            "basis": "rig_lens_and_iwr_phase_centre",
+        },
+    )
+
+
+@pytest.mark.parametrize(("vertical", "horizontal"), [(17.0, -2.0), (24.0, 3.0)])
+def test_the_fallback_launch_through_the_calibrated_model_comes_back_at_its_angles(
+    vertical, horizontal
+):
+    """A departure rendered through the 640x400 calibrated model (principal point,
+    Brown distortion, placement pose) is measured through the same model."""
+    from openflight.camera.ball_launch_fallback import CalibratedFallbackCamera  # noqa: PLC0415
+
+    model = _calibrated_model()
+    camera = CalibratedFallbackCamera.from_model(model, origin_lfu=(0.0, 0.0, 0.093))
+    scene = render_scene(
+        vertical_deg=vertical,
+        horizontal_deg=horizontal,
+        speed_mph=85.0,
+        camera=camera,
+        distance_m=1.8,
+    )
+
+    context, archive = _scene_context(scene, model=model)
+    fallback = fp.process_camera_fusion(context, archive)["ball_fallback"]
+
+    assert fallback["status"] == "accepted", fallback["reason"]
+    assert fallback["vertical_deg"] == pytest.approx(vertical, abs=0.6)
+    assert fallback["horizontal_deg"] == pytest.approx(horizontal, abs=0.6)
+    assert fallback["inputs"]["principal_point"] == "calibrated"
+    assert fallback["inputs"]["pitch_source"] == "calibrated_model"
+    assert fallback["inputs"]["calibration_pair"] == {"mode": "640x400", "test": True}
+    assert fallback["inputs"]["nominal_reason"] is None
+
+
+def test_the_nominal_fallback_says_image_centre_and_why():
+    scene = render_scene(vertical_deg=17.0, horizontal_deg=-2.0, speed_mph=85.0, pitch_deg=-0.8)
+
+    context, archive = _scene_context(scene)
+    fallback = fp.process_camera_fusion(context, archive)["ball_fallback"]
+
+    assert fallback["status"] == "accepted", fallback["reason"]
+    assert fallback["inputs"]["principal_point"] == "image_centre"
+    assert fallback["inputs"]["calibration_pair"] is None
+    assert "no calibrated model" in fallback["inputs"]["nominal_reason"]

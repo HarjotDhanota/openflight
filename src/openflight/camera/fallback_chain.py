@@ -468,7 +468,13 @@ def _camera_distance_from_slant(
     return distance, camera
 
 
-def run_ball_fallback(  # pylint: disable=too-many-locals
+# The fallback's pitch source on a calibrated model: the LIS3DH through the placement.
+CALIBRATED_MODEL_PITCH_SOURCE = "calibrated_model"
+# A distance-anchored focal length's 1 sigma (rig-geometry lock STATUS A: +-1.0 %).
+CALIBRATED_FOCAL_REL_SD = 0.01
+
+
+def run_ball_fallback(  # pylint: disable=too-many-locals,too-many-statements
     context: Mapping[str, Any],
     archive: Mapping[str, Any],
     *,
@@ -501,26 +507,50 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
         rest_px, rest_d = (size.x, size.y), size.diameter_px
     pose = context.get("camera_pose") or {}
     calibrated = pose.get("status") == "calibrated" and finite(pose.get("pitch_deg"))
-    focal = inputs.get("focal_px")
-    if not finite(focal):
-        return {"status": "withheld_no_focal_length", "reason": "no focal length for this mode"}
-    roll = float(geometry.roll_correction_deg)
-    roll_record = pose.get("roll") or {}
-    if roll_record.get("applied") and finite(roll_record.get("roll_correction_deg")):
-        roll += float(roll_record["roll_correction_deg"])
-    camera = ball_launch_fallback.PinholeCamera(
-        focal_px=float(focal),
-        width=int(geometry.image_width_px),
-        height=int(geometry.image_height_px),
-        pitch_deg=float(pose["pitch_deg"]) if calibrated else 0.0,
-        roll_correction_deg=roll,
-        horizontal_pixel_sign=float(geometry.horizontal_pixel_sign),
-        origin_lfu=(
-            float(geometry.camera_lateral_offset_m),
-            float(geometry.camera_forward_offset_m),
-            float(geometry.camera_height_m),
-        ),
+    origin = (
+        float(geometry.camera_lateral_offset_m),
+        float(geometry.camera_forward_offset_m),
+        float(geometry.camera_height_m),
     )
+    # the shot's frozen calibrated model (its pose already the LIS3DH's through the
+    # placement), else the nominal pinhole with the principal point at the image centre
+    model = (
+        geometry.calibrated_model()
+        if getattr(geometry, "calibrated_model_snapshot", None) is not None
+        else None
+    )
+    evidence = getattr(geometry, "calibrated_mode_evidence", None) or {}
+    optics = {
+        "principal_point": "calibrated" if model is not None else "image_centre",
+        "calibration_pair": evidence.get("calibration_pair") if model is not None else None,
+        "nominal_reason": None
+        if model is not None
+        else "the shot's camera geometry carries no calibrated model",
+    }
+    focal = inputs.get("focal_px")
+    if model is not None:
+        camera = ball_launch_fallback.CalibratedFallbackCamera.from_model(
+            model, origin_lfu=origin, horizontal_pixel_sign=float(geometry.horizontal_pixel_sign)
+        )
+    else:
+        if not finite(focal):
+            return {
+                "status": "withheld_no_focal_length",
+                "reason": "no focal length for this mode",
+            }
+        roll = float(geometry.roll_correction_deg)
+        roll_record = pose.get("roll") or {}
+        if roll_record.get("applied") and finite(roll_record.get("roll_correction_deg")):
+            roll += float(roll_record["roll_correction_deg"])
+        camera = ball_launch_fallback.PinholeCamera(
+            focal_px=float(focal),
+            width=int(geometry.image_width_px),
+            height=int(geometry.image_height_px),
+            pitch_deg=float(pose["pitch_deg"]) if calibrated else 0.0,
+            roll_correction_deg=roll,
+            horizontal_pixel_sign=float(geometry.horizontal_pixel_sign),
+            origin_lfu=origin,
+        )
     radar_origin = (0.0, 0.0, float(geometry.radar_height_m))
     if details.get("status") == "measured_from_size":
         distance = float(details["camera_distance_m"])
@@ -533,11 +563,15 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
             float(geometry.tee_slant_range_m),
             radar_origin,
             float(geometry.ball_height_m),
-            infer_pitch=not calibrated,
+            infer_pitch=not calibrated and model is None,
         )
         distance_sd = float(ball_range.get("uncertainty_m") or 0.05)
         distance_source = str(ball_range.get("source") or "tee_range")
-    if calibrated:
+    if model is not None:
+        from ..surface_height import CALIBRATED_ANGULAR_SIGMA_DEG  # noqa: PLC0415
+
+        pitch_source, pitch_sd = CALIBRATED_MODEL_PITCH_SOURCE, CALIBRATED_ANGULAR_SIGMA_DEG
+    elif calibrated:
         pitch_source, pitch_sd = "calibrated", float(pose.get("uncertainty_deg") or 0.5)
     else:
         pitch_source = ball_launch_fallback.PITCH_FROM_RESTING_BALL
@@ -554,7 +588,11 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
         ball_distance_m=distance,
         ball_distance_sd_m=distance_sd,
         distance_source=distance_source,
-        focal_rel_sd=float(inputs.get("focal_rel_sd") or 0.0),
+        focal_rel_sd=(
+            CALIBRATED_FOCAL_REL_SD
+            if model is not None
+            else float(inputs.get("focal_rel_sd") or 0.0)
+        ),
         pitch_source=pitch_source,
         pitch_sd_deg=pitch_sd,
         ball_height_m=float(geometry.ball_height_m),
@@ -579,6 +617,7 @@ def run_ball_fallback(  # pylint: disable=too-many-locals
         "pitch_source": pitch_source,
         "pitch_sd_deg": pitch_sd,
         "lis3dh_camera_pitch_deg": inputs.get("lis3dh_camera_pitch_deg"),
+        **optics,
     }
     return result
 
