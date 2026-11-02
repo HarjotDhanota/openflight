@@ -16,6 +16,8 @@ from openflight.camera.ball_flight import (
     _project,
 )
 from openflight.camera.calibrated_projection import (
+    CalibrationPair,
+    CalibrationSet,
     build_calibrated_camera_model,
     calibrated_camera_model_from_snapshot,
     inspect_capture_compatibility,
@@ -217,8 +219,7 @@ def test_effective_geometry_freezes_calibrated_model_for_replay():
 
 
 def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_path, monkeypatch):
-    monkeypatch.setattr(server_module, "camera_optical_calibration", None)
-    monkeypatch.setattr(server_module, "camera_placement", None)
+    monkeypatch.setattr(server_module, "camera_calibration_set", None)
     artifact = _artifact()
     placement = _placement(rig_geometry_sha256="loaded-rig")
     mount = np.asarray(placement["optical_to_enclosure_lfu"], dtype=float)
@@ -242,11 +243,11 @@ def test_server_initializes_valid_calibration_and_rig_consistent_placement(tmp_p
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
     placement_path.write_text(json.dumps(placement), encoding="utf-8")
     server_module.init_camera_calibrated_fusion(artifact_path, placement_path)
-    assert (
-        server_module.camera_optical_calibration["mode_profile_sha256"]
-        == artifact["mode_profile_sha256"]
-    )
-    assert server_module.camera_placement["rig_geometry_sha256"] == "loaded-rig"
+    (pair,) = server_module.camera_calibration_set.pairs
+    assert server_module.camera_calibration_set.source == "explicit_pair"
+    assert pair.optical["mode_profile_sha256"] == artifact["mode_profile_sha256"]
+    assert pair.placement["rig_geometry_sha256"] == "loaded-rig"
+    assert pair.mode == (640, 400)
 
 
 def live_calibrated_replay(tmp_path, monkeypatch):
@@ -352,8 +353,12 @@ def live_calibrated_replay(tmp_path, monkeypatch):
         path=capture_dir,
         metadata={"capture_mode": _capture_mode_metadata(mode_frames)},
     )
-    monkeypatch.setattr(server_module, "camera_optical_calibration", artifact)
-    monkeypatch.setattr(server_module, "camera_placement", placement)
+    monkeypatch.setattr(
+        server_module,
+        "camera_calibration_set",
+        CalibrationSet(pairs=(CalibrationPair((640, 400), artifact, placement),)),
+    )
+    monkeypatch.setattr(server_module, "camera_lens", None)
     monkeypatch.setattr(
         server_module, "camera_capture_runtime", SimpleNamespace(camera_analysis_eligible=True)
     )

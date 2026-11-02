@@ -21,6 +21,7 @@ points: an uncalibrated principal point and the camera-to-LIS3DH mount) does not
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -45,6 +46,13 @@ SURFACE_HEIGHT_BOUNDS_M = (-0.30, 0.30)
 # sensor, ~1 deg at 6 mm) and the camera's mount on the LIS3DH's plane. The setup's
 # radar lens-height solve states the same 1 deg (``patch_pair_lens_height``).
 UNCALIBRATED_ANGULAR_SIGMA_DEG = 1.0
+# Where the optical axis points through a checkerboard-calibrated model placed by its
+# placement (camera-vs-LIS3DH mount from the 28 Oct boards, composed with the live
+# LIS3DH): the mount offset's 1 sigma, +-0.3 deg. Source: rig-geometry lock, 2 Nov 2026
+# (STATUS B): the 28 Oct boards give +1.20 / +1.00 deg (640x400 / 1280x800) with
+# 0.13 deg board-to-reading scatter, and the Oct 27 resting balls cross-check at
+# +1.59 +- 0.07 deg against the support plane; the 0.3 deg gap between them is the sigma.
+CALIBRATED_ANGULAR_SIGMA_DEG = 0.3
 # The LIS3DH pitch reading's own scatter when the shot's record carries none.
 DEFAULT_PITCH_READING_SIGMA_DEG = 0.1
 # The resting ball's centroid, per shot.
@@ -73,6 +81,7 @@ def policy() -> dict[str, Any]:
         "nominal_rejection_sigmas": NOMINAL_REJECTION_SIGMAS,
         "bounds_m": list(SURFACE_HEIGHT_BOUNDS_M),
         "uncalibrated_angular_sigma_deg": UNCALIBRATED_ANGULAR_SIGMA_DEG,
+        "calibrated_angular_sigma_deg": CALIBRATED_ANGULAR_SIGMA_DEG,
         "default_pitch_reading_sigma_deg": DEFAULT_PITCH_READING_SIGMA_DEG,
         "centroid_sigma_px": CENTROID_SIGMA_PX,
         "size_tolerance": SIZE_TOLERANCE,
@@ -121,9 +130,10 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     roll_correction_deg: float,
     rig_lens_height_m: float,
     radar_offset_lfu_m: Sequence[float],
-    angular_sigma_deg: float = UNCALIBRATED_ANGULAR_SIGMA_DEG,
+    angular_sigma_deg: float | None = None,
     pitch_reading_sigma_deg: float | None = None,
     size_tolerance: float = SIZE_TOLERANCE,
+    camera_model: Any = None,
 ) -> dict:
     """One shot's hitting-surface height above the base, or why it has none.
 
@@ -131,7 +141,33 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     one composed with a tilt calibrated from ball pairs (those assume the rig's lens
     height, so the surface would come back as the base). ``radar_offset_lfu_m`` is the
     IWR's phase centre from the lens (lateral, forward, up).
+
+    ``camera_model`` (a ``calibrated_projection.CalibratedCameraModel`` built at this
+    shot's LIS3DH pitch and roll through its placement) replaces the nominal camera's
+    rays: its principal point, distortion, focal length and pose; ``pitch_deg`` is then
+    the LIS3DH reading it was built at and ``focal_px``/``roll_correction_deg`` are not
+    used. The lens and radar stay where the rig file puts them. Its pitch is the live
+    LIS3DH composed through the placement's reference pose and camera-vs-LIS3DH mount,
+    measured on checkerboards independently of any ball, so it is not the ball-pair
+    circularity above. ``angular_sigma_deg`` defaults to ``CALIBRATED_ANGULAR_SIGMA_DEG``
+    with the model, else ``UNCALIBRATED_ANGULAR_SIGMA_DEG``.
     """
+    from openflight.camera.reference_ball_range import (  # noqa: PLC0415
+        BallPlaneCamera,
+        ray_meets_radar_range,
+    )
+
+    calibrated = None
+    if camera_model is not None:
+        calibrated = BallPlaneCamera.calibrated(camera_model)
+        focal_px = calibrated.focal_size_px
+        image_size_px = (calibrated.image_width_px, calibrated.image_height_px)
+    if angular_sigma_deg is None:
+        angular_sigma_deg = (
+            CALIBRATED_ANGULAR_SIGMA_DEG
+            if calibrated is not None
+            else UNCALIBRATED_ANGULAR_SIGMA_DEG
+        )
     inputs = {
         "range_m": range_m,
         "range_sigma_m": range_sigma_m,
@@ -141,8 +177,14 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
         "ball_diameter_px": ball_diameter_px,
         "focal_px": focal_px,
         "image_size_px": list(image_size_px),
-        "principal_point": "image_centre",
+        "principal_point": "calibrated" if calibrated is not None else "image_centre",
+        "camera_model_sha256": (
+            camera_model.snapshot.get("sha256") if camera_model is not None else None
+        ),
         "pitch_deg": pitch_deg,
+        "pitch_basis": (
+            "lis3dh_through_the_placement" if calibrated is not None else "lis3dh_and_rig_boresight"
+        ),
         "roll_correction_deg": roll_correction_deg,
         "rig_lens_height_m": rig_lens_height_m,
         "radar_offset_lfu_m": list(radar_offset_lfu_m),
@@ -170,24 +212,23 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     if not _finite(focal_px) or float(focal_px) <= 0.0:
         return _refused("no_focal_length", "no focal length for this camera mode", inputs)
 
-    from openflight.camera.reference_ball_range import (  # noqa: PLC0415
-        BallPlaneCamera,
-        ray_meets_radar_range,
-    )
-
     lens = np.array([0.0, 0.0, float(rig_lens_height_m)])
-    camera = BallPlaneCamera.nominal(
-        focal_px=float(focal_px),
-        image_width_px=int(image_size_px[0]),
-        image_height_px=int(image_size_px[1]),
-        pitch_deg=float(pitch_deg),
-        roll_correction_deg=float(roll_correction_deg),
-        mirror_horizontal=False,
-        camera_origin_lfu=lens,
-        radar_origin_lfu=lens + np.asarray(radar_offset_lfu_m, dtype=float),
-        angular_uncertainty_deg=float(angular_sigma_deg),
-        focal_relative_uncertainty=0.08,
-    )
+    radar = lens + np.asarray(radar_offset_lfu_m, dtype=float)
+    if calibrated is not None:
+        camera = replace(calibrated, camera_origin_lfu=tuple(lens), radar_origin_lfu=tuple(radar))
+    else:
+        camera = BallPlaneCamera.nominal(
+            focal_px=float(focal_px),
+            image_width_px=int(image_size_px[0]),
+            image_height_px=int(image_size_px[1]),
+            pitch_deg=float(pitch_deg),
+            roll_correction_deg=float(roll_correction_deg),
+            mirror_horizontal=False,
+            camera_origin_lfu=lens,
+            radar_origin_lfu=radar,
+            angular_uncertainty_deg=float(angular_sigma_deg),
+            focal_relative_uncertainty=0.08,
+        )
     try:
         ray, distance = ray_meets_radar_range(camera, ball_px, float(range_m))
     except ValueError as error:
@@ -413,6 +454,7 @@ def heights_in_force(
 
 
 __all__ = [
+    "CALIBRATED_ANGULAR_SIGMA_DEG",
     "MEASURED_LABEL",
     "NOMINAL_REJECTION_SIGMAS",
     "PER_SHOT_SOURCE",

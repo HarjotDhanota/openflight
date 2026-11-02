@@ -417,6 +417,188 @@ def calibrated_camera_model_from_snapshot(snapshot: Mapping[str, Any]) -> Calibr
     )
 
 
+OPTICAL_SUFFIX = ".optical.json"
+PLACEMENT_SUFFIX = ".placement.json"
+
+
+def saved_image_mode(artifact: Mapping[str, Any]) -> tuple[int, int]:
+    """The saved-image (width, height) an optical artifact was calibrated for."""
+    profile = artifact.get("candidate", artifact).get("mode_profile")
+    saved = profile.get("saved_image") if isinstance(profile, Mapping) else None
+    if not isinstance(saved, Mapping):
+        raise ValueError("optical calibration lacks a saved-image mode")
+    return int(saved["width"]), int(saved["height"])
+
+
+def _mode_label(width: int, height: int) -> str:
+    return f"{int(width)}x{int(height)}"
+
+
+@dataclass(frozen=True)
+class CalibrationPair:
+    """One saved-image mode's optical artifact and the placement that puts it in the rig."""
+
+    mode: tuple[int, int]
+    optical: Mapping[str, Any]
+    placement: Mapping[str, Any]
+    optical_path: str | None = None
+    placement_path: str | None = None
+    optical_file_sha256: str | None = None
+    placement_file_sha256: str | None = None
+
+    @property
+    def lens_id(self) -> str | None:
+        """The lens the optical artifact was calibrated with."""
+        profile = self.optical.get("candidate", self.optical).get("mode_profile") or {}
+        return profile.get("lens_id")
+
+    def model(self, *, observed_pitch_deg: Any, observed_roll_deg: Any) -> CalibratedCameraModel:
+        """The calibrated camera at an observed LIS3DH pose (``build_calibrated_camera_model``)."""
+        return build_calibrated_camera_model(
+            self.optical,
+            self.placement,
+            observed_pitch_deg=observed_pitch_deg,
+            observed_roll_deg=observed_roll_deg,
+        )
+
+    def record(self) -> dict[str, Any]:
+        """What a session or shot record names: the pair's fingerprints and files."""
+        return {
+            "mode": _mode_label(*self.mode),
+            "lens_id": self.lens_id,
+            "optical_calibration_sha256": geometry_fingerprint(self.optical),
+            "placement_sha256": geometry_fingerprint(self.placement),
+            "optical_file_sha256": self.optical_file_sha256,
+            "placement_file_sha256": self.placement_file_sha256,
+            "optical_path": self.optical_path,
+            "placement_path": self.placement_path,
+            "rig_geometry_params_sha256": self.placement.get("rig_geometry_sha256"),
+        }
+
+
+def calibration_pair(
+    optical: Mapping[str, Any],
+    placement: Mapping[str, Any],
+    *,
+    rig_params_sha256: str | None,
+    iwr_offset_mm: Any,
+    optical_path: str | Path | None = None,
+    placement_path: str | Path | None = None,
+) -> CalibrationPair:
+    """Validate one optical/placement pair against the loaded rig; refuse it otherwise."""
+    if not isinstance(optical, Mapping) or not isinstance(placement, Mapping):
+        raise ValueError("camera calibration and placement files must contain JSON objects")
+    # a placement measures the RX row, not the phase centre derived from it
+    check_placement_against_rig(
+        placement, rig_params_sha256=rig_params_sha256, iwr_offset_mm=iwr_offset_mm
+    )
+    reference = placement.get("reference_pose_deg") or {}
+    build_calibrated_camera_model(
+        optical,
+        placement,
+        observed_pitch_deg=reference.get("pitch"),
+        observed_roll_deg=reference.get("roll"),
+    )
+
+    def digest(path: str | Path | None) -> str | None:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest() if path is not None else None
+
+    return CalibrationPair(
+        mode=saved_image_mode(optical),
+        optical=optical,
+        placement=placement,
+        optical_path=str(optical_path) if optical_path is not None else None,
+        placement_path=str(placement_path) if placement_path is not None else None,
+        optical_file_sha256=digest(optical_path),
+        placement_file_sha256=digest(placement_path),
+    )
+
+
+@dataclass(frozen=True)
+class CalibrationSet:
+    """The calibrated camera per saved-image mode; a mode without a pair is nominal."""
+
+    pairs: tuple[CalibrationPair, ...] = ()
+    source: str = "directory"
+    directory: str | None = None
+    status: str = "loaded"
+    reason: str | None = None
+    # mode label -> why its pair was not loaded
+    rejected: Mapping[str, str] | None = None
+
+    def pair_for(self, width: int, height: int) -> CalibrationPair | None:
+        """The pair calibrated for this saved-image mode, or None."""
+        mode = (int(width), int(height))
+        return next((pair for pair in self.pairs if pair.mode == mode), None)
+
+    def fallback_reason(self, width: int, height: int) -> str:
+        """Why this mode measures on the nominal camera (principal point at the image centre)."""
+        where = self.directory or self.source
+        mode = _mode_label(width, height)
+        if self.status != "loaded":
+            return f"no camera calibration for {mode}: {self.reason or self.status} ({where})"
+        rejected = (self.rejected or {}).get(mode)
+        if rejected:
+            return f"the {mode} camera calibration was refused: {rejected} ({where})"
+        have = ", ".join(_mode_label(*pair.mode) for pair in self.pairs) or "none"
+        return f"no camera calibration for {mode} (calibrated modes: {have}; {where})"
+
+    def record(self) -> dict[str, Any]:
+        """The whole set for the session record."""
+        return {
+            "source": self.source,
+            "directory": self.directory,
+            "status": self.status,
+            "reason": self.reason,
+            "pairs": {_mode_label(*pair.mode): pair.record() for pair in self.pairs},
+            "rejected": dict(self.rejected or {}),
+        }
+
+
+def load_calibration_dir(
+    directory: str | Path, *, rig_params_sha256: str | None, iwr_offset_mm: Any
+) -> CalibrationSet:
+    """Every ``<W>x<H>.optical.json`` with its ``<W>x<H>.placement.json`` in ``directory``.
+
+    An absent directory, or a pair that fails its checks (another rig, a missing
+    placement, a file named for another mode), leaves those modes nominal and says why.
+    """
+    path = Path(directory).expanduser()
+    if not path.is_dir():
+        return CalibrationSet(
+            directory=str(path), status="absent", reason="the calibration directory is absent"
+        )
+    pairs: list[CalibrationPair] = []
+    rejected: dict[str, str] = {}
+    for optical_path in sorted(path.glob(f"*{OPTICAL_SUFFIX}")):
+        stem = optical_path.name[: -len(OPTICAL_SUFFIX)]
+        placement_path = path / f"{stem}{PLACEMENT_SUFFIX}"
+        try:
+            if not placement_path.is_file():
+                raise ValueError(f"{placement_path.name} is missing")
+            pair = calibration_pair(
+                _load_json(optical_path),
+                _load_json(placement_path),
+                rig_params_sha256=rig_params_sha256,
+                iwr_offset_mm=iwr_offset_mm,
+                optical_path=optical_path,
+                placement_path=placement_path,
+            )
+            if _mode_label(*pair.mode) != stem:
+                raise ValueError(f"{optical_path.name} is calibrated for {_mode_label(*pair.mode)}")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            rejected[stem] = str(error)
+            continue
+        pairs.append(pair)
+    return CalibrationSet(
+        pairs=tuple(pairs),
+        directory=str(path),
+        status="loaded" if pairs else "empty",
+        reason=None if pairs else "no usable optical/placement pair in the directory",
+        rejected=rejected,
+    )
+
+
 def inspect_capture_compatibility(
     capture_mode: Mapping[str, Any],
     *,

@@ -112,8 +112,7 @@ def test_a_skipped_pair_is_never_recorded(tmp_path):
     assert not path.exists()
 
 
-def _lit_ball_frames(x, y, radius, count=12):
-    height, width = 800, 1280
+def _lit_ball_frames(x, y, radius, count=12, *, width=1280, height=800):
     yy, xx = np.indices((height, width), dtype=float)
     image = np.full((height, width), 40.0)
     dx, dy = (xx - x) / radius, (yy - y) / radius
@@ -235,3 +234,162 @@ def test_an_iwr_range_weaker_than_measured_is_never_a_pair(label):
     assert pair["status"] == "skipped"
     assert label in pair["reason"]
     assert "two IWR tracks compete" in pair["reason"]
+
+
+# --- with the mode's calibrated camera loaded -------------------------------------------
+
+REPO = Path(__file__).resolve().parents[1]
+CALIBRATION_DIR = REPO / "config" / "camera-calibration" / "6mm"
+RIG_PATH = REPO / "config" / "enclosure_v3_rig_geometry.json"
+CAL_LENS = (0.0, 0.0, 0.093)
+CAL_RADAR = (0.0, -0.0237, 0.0428)
+
+
+def _pair(mode="640x400"):
+    from openflight.camera.calibrated_projection import load_calibration_dir  # noqa: PLC0415
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    rig = RigGeometry.from_json(RIG_PATH)
+    loaded = load_calibration_dir(
+        CALIBRATION_DIR, rig_params_sha256=rig.snapshot()["sha256"], iwr_offset_mm=rig.iwr_offset_mm
+    )
+    width, height = (int(part) for part in mode.split("x"))
+    return loaded.pair_for(width, height)
+
+
+def _calibrated_at(pair=None, roll=-0.7):
+    return swing_tilt.calibrated_camera_at_pitch(
+        pair or _pair(),
+        observed_roll_deg=roll,
+        camera_origin_lfu=CAL_LENS,
+        radar_origin_lfu=CAL_RADAR,
+    )
+
+
+def _elevation_deg(camera):
+    boresight = camera.ray_model.optical_to_world_lfu @ np.array([0.0, 0.0, 1.0])
+    return math.degrees(math.asin(boresight[2]))
+
+
+def test_the_calibrated_trial_pitch_is_the_lis3dh_reading_through_the_placement():
+    at = _calibrated_at()
+
+    # the 28 Oct reference reading: the boards' 2.77 deg; one more degree of LIS3DH, one more up
+    assert _elevation_deg(at(1.574)) == pytest.approx(2.77, abs=0.01)
+    assert _elevation_deg(at(2.574)) == pytest.approx(3.77, abs=0.01)
+    camera = at(1.574)
+    assert camera.source.startswith("calibrated")
+    assert camera.camera_origin_lfu == pytest.approx(CAL_LENS)
+    assert camera.radar_origin_lfu == pytest.approx(CAL_RADAR)
+
+
+@pytest.mark.parametrize(
+    ("true_reading", "reading", "residual"), [(2.0, 2.0, 0.0), (2.4, 2.0, 0.4)]
+)
+def test_a_calibrated_swing_pair_solves_the_lis3dh_residual_against_the_placement(
+    true_reading, reading, residual
+):
+    at = _calibrated_at()
+    ball = (0.05, 1.78, BALL_CENTRE_M)
+    range_m = float(np.linalg.norm(np.asarray(ball) - np.asarray(CAL_RADAR)))
+    pixel = project_to_pixel(at(true_reading), ball)
+
+    pair = swing_tilt.swing_pair(
+        {**MEASURED, "ball_range_m": range_m},
+        ball_px=pixel,
+        lis3dh_pitch_deg=reading,
+        camera_at_pitch=at,
+    )
+
+    assert pair["status"] == "solved"
+    assert pair["solved"]["offset_deg"] == pytest.approx(residual, abs=0.02)
+
+
+def test_the_kiosk_s_swing_pair_uses_the_calibrated_model_and_keeps_it_out_of_the_tilt_file(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime  # noqa: PLC0415
+
+    from openflight import server as server_module  # noqa: PLC0415
+    from openflight.camera.calibrated_projection import CalibrationSet  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from openflight.launch_monitor import Shot  # noqa: PLC0415
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    path = tmp_path / "camera-vertical-offset.json"
+    pair = _pair()
+    monkeypatch.setattr(server_module, "camera_tilt_calibration_path", path)
+    monkeypatch.setattr(server_module, "camera_ball_box_px", (200, 100, 460, 300))
+    monkeypatch.setattr(server_module, "rig_geometry", RigGeometry.from_json(RIG_PATH))
+    monkeypatch.setattr(server_module, "camera_lens", None)
+    monkeypatch.setattr(server_module, "camera_capture_config", {"width": 640, "height": 400})
+    monkeypatch.setattr(server_module, "camera_calibration_set", CalibrationSet(pairs=(pair,)))
+    seen = {}
+
+    def fake_pair(shot_range, *, ball_px, lis3dh_pitch_deg, camera_at_pitch):
+        seen.update(pitch=lis3dh_pitch_deg, camera=camera_at_pitch)
+        return {"status": "solved", "reason": None, "solved": {"offset_deg": 0.3}}
+
+    monkeypatch.setattr(swing_tilt, "swing_pair", fake_pair)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), club=ClubType.IRON_7, shot_number=4)
+    shot.inclinometer = {
+        "applied_to": ["camera"],
+        "calibrated_pitch_deg": 1.9,
+        "x_g": 0.0,
+        "y_g": 0.0,
+        "z_g": 1.0,
+        "status": "stable",
+        "stable": True,
+    }
+    shot.ball_range_m, shot.ball_range_uncertainty_m = 1.8, 0.03
+    shot.ball_range_source = "iwr_post_impact"
+    archive = {
+        "frames": _lit_ball_frames(330.0, 200.0, 12.0, width=640, height=400),
+        "pre_trigger_count": 9,
+    }
+
+    server_module._calibrate_camera_tilt_from_swing(shot, archive)  # pylint: disable=protected-access
+
+    # the trial pitch is the LIS3DH's own reading, composed through the placement
+    assert seen["pitch"] == pytest.approx(1.9)
+    assert seen["camera"](1.574).source.startswith("calibrated")
+    assert _elevation_deg(seen["camera"](1.574)) == pytest.approx(2.77, abs=0.01)
+    record = shot.camera_tilt_swing_pair
+    assert record["principal_point"] == "calibrated"
+    assert record["calibration_pair"]["mode"] == "640x400"
+    # a residual against the placement is not a nominal tilt: the unit's file never takes it
+    assert record["outcome"]["action"] == "not_recorded"
+    assert not path.exists()
+
+
+def test_the_kiosk_s_nominal_swing_pair_says_image_centre(monkeypatch, tmp_path):
+    from datetime import datetime  # noqa: PLC0415
+
+    from openflight import server as server_module  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from openflight.launch_monitor import Shot  # noqa: PLC0415
+    from openflight.rig_geometry import RigGeometry  # noqa: PLC0415
+
+    monkeypatch.setattr(server_module, "camera_tilt_calibration_path", tmp_path / "tilt.json")
+    monkeypatch.setattr(server_module, "camera_ball_box_px", (560, 400, 720, 540))
+    monkeypatch.setattr(server_module, "rig_geometry", RigGeometry.from_json(RIG_PATH))
+    monkeypatch.setattr(server_module, "camera_calibration_set", None)
+    monkeypatch.setattr(
+        swing_tilt,
+        "swing_pair",
+        lambda *_a, **_k: {"status": "solved", "reason": None, "solved": {"offset_deg": -1.4}},
+    )
+    monkeypatch.setattr(
+        swing_tilt, "record_swing_pair", lambda _path, pair, facts: {"action": "pending"}
+    )
+    monkeypatch.setattr(server_module, "_lis3dh_camera_pitch", lambda _inclinometer: -0.4)
+    shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now(), club=ClubType.IRON_7, shot_number=4)
+    shot.inclinometer = {"applied_to": ["camera"], "calibrated_pitch_deg": 0.0}
+    shot.ball_range_m, shot.ball_range_uncertainty_m = 2.1, 0.03
+    shot.ball_range_source = "iwr_post_impact"
+    archive = {"frames": _lit_ball_frames(640.0, 470.0, 20.0), "pre_trigger_count": 9}
+
+    server_module._calibrate_camera_tilt_from_swing(shot, archive)  # pylint: disable=protected-access
+
+    assert shot.camera_tilt_swing_pair["principal_point"] == "image_centre"
+    assert shot.camera_tilt_swing_pair["outcome"] == {"action": "pending"}

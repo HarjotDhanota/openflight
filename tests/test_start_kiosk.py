@@ -19,8 +19,14 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts/start-kiosk.sh"
-# start-kiosk.sh always hands the server a rig file
-RIG = ["--rig-geometry", str(REPO_ROOT / "config/enclosure_v3_rig_geometry.json")]
+# start-kiosk.sh always hands the server a rig file and the lens's calibration set
+RIG = [
+    "--rig-geometry",
+    str(REPO_ROOT / "config/enclosure_v3_rig_geometry.json"),
+    "--camera-calibration-dir",
+    str(REPO_ROOT / "config/camera-calibration/6mm"),
+]
+DEFAULT_TAILS = ("/config/enclosure_v3_rig_geometry.json", "/config/camera-calibration/6mm")
 
 
 def _with_env(env: dict[str, str] | None) -> dict[str, str] | None:
@@ -43,10 +49,11 @@ def _dry_run(*args: str, env: dict[str, str] | None = None, stderr: bool = False
     )
     command = shlex.split(result.stdout)
     # PROJECT_DIR comes from `pwd`, which may spell the checkout differently
-    if "--rig-geometry" in command:
-        index = command.index("--rig-geometry") + 1
-        if command[index].endswith("/config/enclosure_v3_rig_geometry.json"):
-            command[index] = RIG[1]
+    for flag, default, tail in zip(RIG[::2], RIG[1::2], DEFAULT_TAILS):
+        if flag in command:
+            index = command.index(flag) + 1
+            if command[index].endswith(tail):
+                command[index] = default
     return (command, result.stderr) if stderr else command
 
 
@@ -67,7 +74,24 @@ def test_a_named_rig_file_is_kept_and_not_doubled(form):
         else ["--rig-geometry=/tmp/other_rig.json"]
     )
     command = _dry_run("--iwr6843", *arguments)
-    assert command == ["openflight-server", "--web-port", "8080", "--iwr6843", *arguments]
+    assert command == ["openflight-server", "--web-port", "8080", "--iwr6843", *arguments, *RIG[2:]]
+
+
+@pytest.mark.parametrize("form", ["separate", "joined"])
+def test_a_named_calibration_directory_is_kept_and_not_doubled(form):
+    arguments = (
+        ["--camera-calibration-dir", "/tmp/other-lens"]
+        if form == "separate"
+        else ["--camera-calibration-dir=/tmp/other-lens"]
+    )
+    command = _dry_run(*arguments)
+    assert command == ["openflight-server", "--web-port", "8080", *arguments, *RIG[:2]]
+
+
+def test_the_default_calibration_directory_is_the_6mm_set():
+    assert RIG[2:] == ["--camera-calibration-dir", RIG[3]]
+    assert Path(RIG[3], "640x400.optical.json").is_file()
+    assert Path(RIG[3], "1280x800.placement.json").is_file()
 
 
 def test_server_arguments_pass_through_unchanged():

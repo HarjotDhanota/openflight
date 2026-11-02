@@ -176,8 +176,9 @@ camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
 # Mirrors camera.fusion_processing.VERSION without importing the camera stack.
 CAMERA_FUSION_CONTEXT_VERSION = 2
-camera_optical_calibration: dict | None = None
-camera_placement: dict | None = None
+# The calibrated camera per saved-image mode (calibrated_projection.CalibrationSet);
+# None: every mode measures on the nominal camera.
+camera_calibration_set = None
 # The one horizontal offset: -(target yaw), + when the boresight points right of
 # the target line, added to every horizontal angle. None until a flag sets it.
 horizontal_offset_deg: float | None = None
@@ -2053,7 +2054,8 @@ def setup_block():
         return Blocked("no camera")
     if rig_geometry is None:
         return Blocked("the setup needs the rig file (--rig-geometry)")
-    if camera_optical_calibration is not None and camera_placement is not None:
+    width, height = _runtime_mode()
+    if _calibration_pair(width, height)[0] is not None:
         return None
     if rig_geometry.lens_height_above_floor_mm is None:
         return Blocked("the setup needs the rig file's lens height (--rig-geometry)")
@@ -2061,6 +2063,52 @@ def setup_block():
         if inclinometer_runtime_config.get("requested"):
             return Blocked("the tilt sensor did not start", fault=True)
         return Blocked("the setup needs the tilt sensor (LIS3DH, --inclinometer)")
+    return None
+
+
+def _runtime_mode() -> tuple[int, int]:
+    """The live capture's saved-image mode, or (0, 0) without one."""
+    settings = getattr(camera_capture_runtime, "settings", None)
+    if settings is None:
+        return (
+            int(camera_capture_config.get("width") or 0),
+            int(camera_capture_config.get("height") or 0),
+        )
+    return int(settings.width), int(settings.height)
+
+
+def _calibration_pair(width: int, height: int):
+    """This saved-image mode's calibrated pair, or None and why the mode is nominal."""
+    if camera_calibration_set is None:
+        return None, "no camera calibration directory or pair was given"
+    pair = camera_calibration_set.pair_for(width, height)
+    if pair is None:
+        return None, camera_calibration_set.fallback_reason(width, height)
+    selected = getattr(camera_lens, "lens_id", None)
+    if selected is not None and pair.lens_id is not None and selected != pair.lens_id:
+        return None, (
+            f"lens {selected} is selected; the {width}x{height} camera calibration is for "
+            f"lens {pair.lens_id}"
+        )
+    return pair, None
+
+
+def _capture_saved_mode(camera_capture, camera_archive) -> tuple[int, int] | None:
+    """The saved-image mode a clip was captured in: its capture_mode evidence, else its frames."""
+    metadata = getattr(camera_capture, "metadata", None)
+    mode = metadata.get("capture_mode") if isinstance(metadata, dict) else None
+    frames = (mode or {}).get("frames") if isinstance(mode, dict) else None
+    if isinstance(frames, dict):
+        widths = set(frames.get("saved_width") or ())
+        heights = set(frames.get("saved_height") or ())
+        if len(widths) == 1 and len(heights) == 1:
+            width, height = next(iter(widths)), next(iter(heights))
+            if isinstance(width, int) and isinstance(height, int):
+                return width, height
+    if camera_archive is not None and "frames" in camera_archive:
+        shape = np.shape(camera_archive["frames"])
+        if len(shape) >= 2:
+            return int(shape[-1]), int(shape[-2])
     return None
 
 
@@ -2106,9 +2154,11 @@ def setup_camera_view():
         if roll["applied"]
         else (measured_roll - expected_roll if measured_roll is not None else None)
     )
-    if camera_optical_calibration is not None and camera_placement is not None:
-        camera = _calibrated_setup_camera(width, height, pitch, measured_roll, roll)
+    pair, nominal_reason = _calibration_pair(width, height)
+    if pair is not None:
+        camera = _calibrated_setup_camera(pair, pitch, measured_roll, roll)
         return CameraView(camera, unapplied_roll)
+    logger.info("[SERVER] Setup camera is nominal: %s", nominal_reason)
     if pitch is None:
         # the rig's boresight would pass for a measurement and move every floor range
         raise ValueError(
@@ -2153,23 +2203,16 @@ def setup_camera_view():
     return CameraView(camera, unapplied_roll)
 
 
-def _calibrated_setup_camera(width: int, height: int, pitch, measured_roll, roll: dict):
-    """The calibrated optical model at the LIS3DH's pose."""
+def _calibrated_setup_camera(pair, pitch, measured_roll, roll: dict):
+    """The mode's calibrated optical model (its ``CalibrationPair``) at the LIS3DH's pose."""
     from .camera import camera_roll  # noqa: PLC0415
-    from .camera.calibrated_projection import build_calibrated_camera_model  # noqa: PLC0415
     from .camera.reference_ball_range import BallPlaneCamera  # noqa: PLC0415
 
-    artifact = camera_optical_calibration
-    saved = artifact.get("candidate", artifact).get("mode_profile", {}).get("saved_image", {})
-    if (saved.get("width"), saved.get("height")) != (width, height):
-        raise ValueError("calibrated camera mode does not match the active capture mode")
-    reference_roll = (camera_placement.get("reference_pose_deg") or {}).get("roll")
+    reference_roll = (pair.placement.get("reference_pose_deg") or {}).get("roll")
     if isinstance(reference_roll, (int, float)):
         # the calibrated model's expected roll is its placement's reference pose
         roll = camera_roll.roll_record(measured_roll, reference_roll, _roll_calibration())
-    model = build_calibrated_camera_model(
-        artifact,
-        camera_placement,
+    model = pair.model(
         observed_pitch_deg=pitch,
         observed_roll_deg=(
             camera_roll.calibrated_observed_roll_deg(roll, reference_roll)
@@ -2664,23 +2707,36 @@ def _session_start_config() -> dict:
         except (AttributeError, TypeError, ValueError) as error:
             effective_geometry = unavailable_snapshot(str(error))
     config["effective_camera_geometry"] = effective_geometry
-    if camera_optical_calibration is not None and camera_placement is not None:
-        from .rig_geometry import geometry_fingerprint
-
-        config["camera_calibrated_fusion"] = {
-            "enabled": True,
-            "validation": "unvalidated",
-            "optical_calibration_sha256": geometry_fingerprint(camera_optical_calibration),
-            "placement_sha256": geometry_fingerprint(camera_placement),
-            "rig_geometry_params_sha256": camera_placement.get("rig_geometry_sha256"),
-        }
-    else:
-        config["camera_calibrated_fusion"] = {"enabled": False}
+    config["camera_calibrated_fusion"] = _calibrated_fusion_record()
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
     }
     return config
+
+
+def _calibrated_fusion_record() -> dict:
+    """The calibration set for the session record: every pair, and the active mode's in use."""
+    width, height = _runtime_mode()
+    pair, reason = _calibration_pair(width, height)
+    in_use = pair.record() if pair is not None else None
+    record = {
+        "enabled": camera_calibration_set is not None and bool(camera_calibration_set.pairs),
+        "validation": "unvalidated",
+        **(
+            camera_calibration_set.record()
+            if camera_calibration_set is not None
+            else {"source": None, "directory": None, "status": "none", "pairs": {}}
+        ),
+        "active_mode": f"{width}x{height}" if width and height else None,
+        "in_use": in_use,
+        "principal_point": "calibrated" if pair is not None else "image_centre",
+        "fallback_reason": reason,
+    }
+    # the active mode's pair under the keys capture_facts reads
+    for key in ("optical_calibration_sha256", "placement_sha256", "rig_geometry_params_sha256"):
+        record[key] = (in_use or {}).get(key)
+    return record
 
 
 ball_speed_correction_enabled = False
@@ -3052,40 +3108,66 @@ def _log_camera_trigger_rejection(rejection: dict) -> None:
         session_log.log_camera_trigger_rejected(**rejection)
 
 
-def init_camera_calibrated_fusion(calibration_path: str | None, placement_path: str | None) -> None:
-    """Load the opt-in optical candidate and explicit target-frame placement."""
-    global camera_optical_calibration, camera_placement  # pylint: disable=global-statement
-    if calibration_path is None and placement_path is None:
-        camera_optical_calibration = None
-        camera_placement = None
+def init_camera_calibrated_fusion(
+    calibration_path: str | None,
+    placement_path: str | None,
+    *,
+    calibration_dir: str | Path | None = None,
+) -> None:
+    """Load the calibrated camera per saved-image mode.
+
+    ``calibration_dir`` holds ``<W>x<H>.optical.json`` + ``<W>x<H>.placement.json`` pairs;
+    an absent directory or a refused pair leaves those modes nominal, labelled. An explicit
+    ``calibration_path`` + ``placement_path`` overrides the directory with that one pair and
+    must be valid.
+    """
+    global camera_calibration_set  # pylint: disable=global-statement
+    from .camera.calibrated_projection import (  # noqa: PLC0415
+        CalibrationSet,
+        calibration_pair,
+        load_calibration_dir,
+    )
+
+    rig_sha = (rig_geometry_config.get("snapshot") or {}).get("sha256")
+    iwr_offset = getattr(rig_geometry, "iwr_offset_mm", None)
+    if calibration_path is not None or placement_path is not None:
+        if not calibration_path or not placement_path:
+            raise ValueError("calibrated camera fusion requires both calibration and placement")
+        calibration = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
+        placement = json.loads(Path(placement_path).read_text(encoding="utf-8"))
+        pair = calibration_pair(
+            calibration,
+            placement,
+            rig_params_sha256=rig_sha,
+            iwr_offset_mm=iwr_offset,
+            optical_path=calibration_path,
+            placement_path=placement_path,
+        )
+        camera_calibration_set = CalibrationSet(
+            pairs=(pair,),
+            source="explicit_pair",
+            reason=(
+                f"overrides the directory {calibration_dir}"
+                if calibration_dir is not None
+                else None
+            ),
+        )
         return
-    if not calibration_path or not placement_path:
-        raise ValueError("calibrated camera fusion requires both calibration and placement")
-    calibration = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
-    placement = json.loads(Path(placement_path).read_text(encoding="utf-8"))
-    if not isinstance(calibration, dict) or not isinstance(placement, dict):
-        raise ValueError("camera calibration and placement files must contain JSON objects")
-    from .camera.calibrated_projection import (
-        build_calibrated_camera_model,
-        check_placement_against_rig,
+    if calibration_dir is None:
+        camera_calibration_set = None
+        return
+    camera_calibration_set = load_calibration_dir(
+        calibration_dir, rig_params_sha256=rig_sha, iwr_offset_mm=iwr_offset
     )
-
-    # a placement measures the RX row, not the phase centre derived from it
-    check_placement_against_rig(
-        placement,
-        rig_params_sha256=(rig_geometry_config.get("snapshot") or {}).get("sha256"),
-        iwr_offset_mm=getattr(rig_geometry, "iwr_offset_mm", None),
+    for mode, why in (camera_calibration_set.rejected or {}).items():
+        logger.warning("[SERVER] Camera calibration for %s refused: %s", mode, why)
+    logger.info(
+        "[SERVER] Camera calibration %s (%s): %s",
+        camera_calibration_set.status,
+        calibration_dir,
+        ", ".join(f"{w}x{h}" for w, h in (pair.mode for pair in camera_calibration_set.pairs))
+        or "no calibrated mode",
     )
-
-    reference = placement.get("reference_pose_deg") or {}
-    build_calibrated_camera_model(
-        calibration,
-        placement,
-        observed_pitch_deg=reference.get("pitch"),
-        observed_roll_deg=reference.get("roll"),
-    )
-    camera_optical_calibration = calibration
-    camera_placement = placement
 
 
 def _antenna_layout(radar_height_m: float, board_rotation_deg: float | None, tilt_deg: float):
@@ -4908,6 +4990,50 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     shot.inclinometer = data
 
 
+def _calibrated_observed_roll_deg(pose: dict, placement: dict) -> float:
+    """The LIS3DH roll a calibrated model takes against its placement's reference pose
+    (the roll is applied only on a unit whose tilt check verified and zeroed it)."""
+    from .camera import camera_roll  # noqa: PLC0415
+
+    gravity = (pose.get("x_g"), pose.get("y_g"), pose.get("z_g"))
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        for value in gravity
+    ):
+        raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
+    reference_roll = (placement.get("reference_pose_deg") or {}).get("roll", 0.0)
+    return camera_roll.calibrated_observed_roll_deg(
+        camera_roll.roll_record(
+            camera_roll.lis3dh_roll_deg(*gravity), reference_roll, pose.get("roll_calibration")
+        ),
+        reference_roll,
+    )
+
+
+def _shot_calibrated_camera(shot: Shot, width: int, height: int):
+    """(model, pair, reason): this mode's calibrated camera at the shot's own LIS3DH pitch and
+    roll, composed through its placement; no model and the reason when the mode is nominal."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    pair, reason = _calibration_pair(width, height)
+    if pair is None:
+        return None, None, reason
+    pose = getattr(shot, "inclinometer", None) or {}
+    pitch = camera_tilt._stable_pitch(pose)  # pylint: disable=protected-access
+    if pitch is None:
+        return None, pair, "no stable LIS3DH pitch to place the calibrated camera"
+    try:
+        model = pair.model(
+            observed_pitch_deg=pitch,
+            observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
+        )
+    except ValueError as error:
+        return None, pair, f"the calibrated camera could not be placed: {error}"
+    return model, pair, None
+
+
 def _calibrated_pose_evidence(pose: dict, placement: dict) -> dict:
     """Validate the stable, upright LIS3DH pose used by calibrated projection."""
     if pose.get("status") != "stable" or pose.get("stable") is not True:
@@ -5813,6 +5939,13 @@ def _lis3dh_camera_pitch(inclinometer) -> float | None:
     return float(rig_geometry.boresight_pitch_deg) + (pitch - float(expected))
 
 
+def _calibrated_lis3dh_pitch(inclinometer) -> float | None:
+    """This swing's own stable LIS3DH pitch, the reading a calibrated placement composes."""
+    from .camera import camera_tilt  # noqa: PLC0415
+
+    return camera_tilt._stable_pitch(inclinometer)  # pylint: disable=protected-access
+
+
 def _shot_resting_ball(camera_archive) -> dict | None:
     """The resting ball in this clip's own pre-impact frames, in the box; measured once."""
     from .camera import swing_tilt  # noqa: PLC0415
@@ -5832,9 +5965,9 @@ def _shot_resting_ball(camera_archive) -> dict | None:
 
 
 def _surface_angular_sigma_deg() -> float:
-    """Where the camera's optical axis points, 1 sigma, for the surface solve: the
-    nominal pinhole's (principal point at the image centre) until the solve uses a
-    checkerboard-calibrated model."""
+    """Where the nominal camera's optical axis points, 1 sigma, for the surface solve
+    (principal point at the image centre); a calibrated model's solve takes
+    ``surface_height.CALIBRATED_ANGULAR_SIGMA_DEG``."""
     from .surface_height import UNCALIBRATED_ANGULAR_SIGMA_DEG  # noqa: PLC0415
 
     return UNCALIBRATED_ANGULAR_SIGMA_DEG
@@ -5857,7 +5990,10 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
     )
     focal = _mode_focal(width)[0] if width else None
     inclinometer = getattr(shot, "inclinometer", None)
-    return surface_height.solve_shot(
+    model, pair, nominal_reason = (
+        _shot_calibrated_camera(shot, width, height) if width else (None, None, None)
+    )
+    solve = surface_height.solve_shot(
         range_m=getattr(shot, "ball_range_m", None),
         range_sigma_m=getattr(shot, "ball_range_uncertainty_m", None),
         range_source=getattr(shot, "ball_range_source", None),
@@ -5866,17 +6002,28 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
         ball_diameter_px=ball.get("diameter_px") if ball else None,
         focal_px=focal,
         image_size_px=(width, height),
-        # the LIS3DH and the rig's boresight only: a tilt calibrated from ball pairs
-        # assumed the rig's lens height and would hand the base back as the surface
-        pitch_deg=_lis3dh_camera_pitch(inclinometer),
+        # never a tilt calibrated from ball pairs (it assumed the rig's lens height and
+        # would hand the base back as the surface): the nominal camera takes the LIS3DH
+        # and the rig's boresight, the calibrated one the LIS3DH reading itself, composed
+        # through its placement (boards, independent of any ball)
+        pitch_deg=(
+            _calibrated_lis3dh_pitch(inclinometer)
+            if model is not None
+            else _lis3dh_camera_pitch(inclinometer)
+        ),
         roll_correction_deg=_swing_roll_correction_deg(shot),
         rig_lens_height_m=float(rig_geometry.lens_height_above_floor_mm) / 1000.0,
         radar_offset_lfu_m=camera_rdf_offset_to_target_lfu(
             rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0)
         ),
-        angular_sigma_deg=_surface_angular_sigma_deg(),
+        # the calibrated model's own boresight sigma (surface_height.CALIBRATED_...)
+        angular_sigma_deg=None if model is not None else _surface_angular_sigma_deg(),
         pitch_reading_sigma_deg=(inclinometer or {}).get("pitch_std_deg"),
+        camera_model=model,
     )
+    solve["inputs"]["calibration_pair"] = pair.record() if pair is not None else None
+    solve["inputs"]["nominal_reason"] = nominal_reason if model is None else None
+    return solve
 
 
 def _scene_heights_now() -> dict:
@@ -5977,14 +6124,30 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         height_px, width_px = int(frames.shape[-2]), int(frames.shape[-1])
         lens_m = float(rig_geometry.lens_height_above_floor_mm) / 1000.0
         offset = camera_rdf_offset_to_target_lfu(rig_geometry.iwr_origin_mm or (0.0, 0.0, 0.0))
-        camera_at_pitch = swing_tilt.nominal_camera_at_pitch(
-            focal_px=mode_focal_px(width_px, rig_geometry),
-            width=width_px,
-            height=height_px,
-            camera_origin_lfu=(0.0, 0.0, lens_m),
-            radar_origin_lfu=(float(offset[0]), float(offset[1]), lens_m + float(offset[2])),
-            roll_correction_deg=_swing_camera_pose(shot)["roll"]["roll_correction_deg"],
-        )
+        lens = (0.0, 0.0, lens_m)
+        radar = (float(offset[0]), float(offset[1]), lens_m + float(offset[2]))
+        inclinometer = getattr(shot, "inclinometer", None)
+        model, calibration, nominal_reason = _shot_calibrated_camera(shot, width_px, height_px)
+        if model is not None:
+            # the trial pitch is the LIS3DH reading composed through the placement: the
+            # pair solves the reading's residual against it, at the calibrated principal point
+            camera_at_pitch = swing_tilt.calibrated_camera_at_pitch(
+                calibration,
+                observed_roll_deg=model.snapshot["observed_pose_deg"]["roll"],
+                camera_origin_lfu=lens,
+                radar_origin_lfu=radar,
+            )
+            lis3dh_pitch = _calibrated_lis3dh_pitch(inclinometer)
+        else:
+            camera_at_pitch = swing_tilt.nominal_camera_at_pitch(
+                focal_px=mode_focal_px(width_px, rig_geometry),
+                width=width_px,
+                height=height_px,
+                camera_origin_lfu=lens,
+                radar_origin_lfu=radar,
+                roll_correction_deg=_swing_camera_pose(shot)["roll"]["roll_correction_deg"],
+            )
+            lis3dh_pitch = _lis3dh_camera_pitch(inclinometer)
         pair = swing_tilt.swing_pair(
             {
                 "ball_range_m": shot.ball_range_m,
@@ -5994,13 +6157,21 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
                 "ball_range_reason": shot.ball_range_reason,
             },
             ball_px=ball,
-            lis3dh_pitch_deg=_lis3dh_camera_pitch(getattr(shot, "inclinometer", None)),
+            lis3dh_pitch_deg=lis3dh_pitch,
             camera_at_pitch=camera_at_pitch,
         )
-        outcome = swing_tilt.record_swing_pair(
-            camera_tilt_calibration_path,
-            pair,
-            facts={"shot_number": shot.shot_number, "ball_px": ball},
+        outcome = (
+            {
+                "action": "not_recorded",
+                "reason": "a calibrated pair is the LIS3DH residual against the placement; "
+                "the unit's tilt file holds nominal (image-centre) pairs only",
+            }
+            if model is not None
+            else swing_tilt.record_swing_pair(
+                camera_tilt_calibration_path,
+                pair,
+                facts={"shot_number": shot.shot_number, "ball_px": ball},
+            )
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] Camera tilt swing pair failed: %s", error, exc_info=True)
@@ -6013,6 +6184,9 @@ def _calibrate_camera_tilt_from_swing(shot: Shot, camera_archive) -> None:
         "uncertainty_deg": (pair.get("solved") or {}).get("uncertainty_deg"),
         "ball_px": ball,
         "outcome": outcome,
+        "principal_point": "calibrated" if model is not None else "image_centre",
+        "calibration_pair": calibration.record() if model is not None else None,
+        "nominal_reason": nominal_reason,
     }
     logger.info(
         "[SERVER] Camera tilt swing pair: %s (%s)",
@@ -6261,6 +6435,18 @@ def _fuse_camera_measurements(
     _resolve_shot_ball_range(shot, camera_archive)
     fallback_result = None
     shared_error = None
+    # the clip's own mode picks its calibrated camera; a mode without one is nominal, labelled
+    pair, nominal_reason = None, None
+    if camera_calibration_set is not None:
+        mode = _capture_saved_mode(camera_capture, camera_archive)
+        pair, nominal_reason = (
+            _calibration_pair(*mode)
+            if mode is not None
+            else (None, "the clip has no saved-image mode evidence")
+        )
+        if pair is None:
+            shot.calibrated_camera_status = "legacy_inferred_ball_geometry"
+            shot.calibrated_camera_reason = nominal_reason
     if camera_archive is not None:
         try:
             from openflight.camera.fusion_processing import (  # noqa: PLC0415
@@ -6280,16 +6466,15 @@ def _fuse_camera_measurements(
                     f"({shot.ball_range_reason or 'no ball range'})"
                 )
             geometry = EffectiveCameraGeometryInputs.from_live(camera_capture_config, calibration)
-            if camera_optical_calibration is not None:
+            if pair is not None:
                 from openflight.camera.calibrated_projection import (  # noqa: PLC0415
-                    build_calibrated_camera_model,
                     inspect_capture_compatibility,
                 )
 
                 capture_mode = getattr(camera_capture, "metadata", {}).get("capture_mode")
                 if not isinstance(capture_mode, dict):
                     raise ValueError("calibrated camera fusion requires capture_mode evidence")
-                candidate = camera_optical_calibration.get("candidate", camera_optical_calibration)
+                candidate = pair.optical.get("candidate", pair.optical)
                 compatibility = inspect_capture_compatibility(
                     capture_mode,
                     mode_profile=candidate["mode_profile"],
@@ -6314,32 +6499,10 @@ def _fuse_camera_measurements(
                         + "; ".join(missing_evidence)
                     )
                 pose = shot.inclinometer or {}
-                pose_evidence = _calibrated_pose_evidence(pose, camera_placement)
-                gravity = (pose.get("x_g"), pose.get("y_g"), pose.get("z_g"))
-                if any(
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(float(value))
-                    for value in gravity
-                ):
-                    raise ValueError("calibrated camera fusion requires finite LIS3DH gravity")
-                from openflight.camera import camera_roll  # noqa: PLC0415
-
-                # applied only on a unit whose tilt check verified and zeroed the roll
-                reference_roll = (camera_placement.get("reference_pose_deg") or {}).get("roll", 0.0)
-                observed_roll = camera_roll.calibrated_observed_roll_deg(
-                    camera_roll.roll_record(
-                        camera_roll.lis3dh_roll_deg(*gravity),
-                        reference_roll,
-                        pose.get("roll_calibration"),
-                    ),
-                    reference_roll,
-                )
-                model = build_calibrated_camera_model(
-                    camera_optical_calibration,
-                    camera_placement,
+                pose_evidence = _calibrated_pose_evidence(pose, pair.placement)
+                model = pair.model(
                     observed_pitch_deg=pose.get("calibrated_pitch_deg"),
-                    observed_roll_deg=observed_roll,
+                    observed_roll_deg=_calibrated_observed_roll_deg(pose, pair.placement),
                 )
                 geometry = geometry.with_calibrated_model(
                     model.snapshot,
@@ -6349,6 +6512,7 @@ def _fuse_camera_measurements(
                         "accuracy_qualified": False,
                         "mode_profile_sha256": candidate.get("mode_profile_sha256"),
                         "placement_guard": pose_evidence,
+                        "calibration_pair": pair.record(),
                     },
                 )
             session_uuid = shot.camera_fusion_session_uuid
@@ -6397,7 +6561,7 @@ def _fuse_camera_measurements(
                 if getattr(geometry, "calibrated_model_snapshot", None) is not None
                 else "legacy_inferred_ball_geometry"
             )
-            shot.calibrated_camera_reason = None
+            shot.calibrated_camera_reason = nominal_reason
             decision = result["horizontal_decision"]
             estimate = result["ball_estimate"]
             fused = result["club_delivery"]
@@ -6454,7 +6618,7 @@ def _fuse_camera_measurements(
                 "status": "error",
                 "errors": {"adapter": f"{type(error).__name__}: {error}"},
             }
-            if camera_optical_calibration is not None:
+            if pair is not None:
                 shot.calibrated_camera_status = "rejected"
                 shot.calibrated_camera_reason = f"{type(error).__name__}: {error}"
             if "tee_slant_range_m" in str(error):
@@ -9031,14 +9195,26 @@ def build_parser():
         help="Mirror saved frames left-to-right after mount rotation.",
     )
     parser.add_argument(
+        "--camera-calibration-dir",
+        default=None,
+        help=(
+            "The lens's calibration set: one <W>x<H>.optical.json + <W>x<H>.placement.json "
+            "pair per saved-image mode (config/camera-calibration/6mm). Each mode measures on "
+            "its own pair; a mode without one, or an absent directory, stays nominal, labelled."
+        ),
+    )
+    parser.add_argument(
         "--camera-optical-calibration",
         default=None,
-        help="Opt-in optical calibration candidate JSON for shared live/replay fusion.",
+        help=(
+            "One optical calibration candidate JSON; with --camera-placement it overrides "
+            "--camera-calibration-dir for its own mode."
+        ),
     )
     parser.add_argument(
         "--camera-placement",
         default=None,
-        help="Explicit camera/radar target-LFU placement JSON for calibrated fusion.",
+        help="The explicit camera/radar target-LFU placement for --camera-optical-calibration.",
     )
     parser.add_argument(
         "--session-location",
@@ -9454,6 +9630,7 @@ def main():
         init_camera_calibrated_fusion(
             args.camera_optical_calibration,
             args.camera_placement,
+            calibration_dir=args.camera_calibration_dir,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         parser.error(f"calibrated camera fusion: {error}")

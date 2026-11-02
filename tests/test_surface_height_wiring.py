@@ -322,3 +322,51 @@ def test_the_surface_is_solved_after_the_iwr_and_before_the_camera_stages(monkey
     server._enrich_shot_from_optional_hardware(shot)
 
     assert order == ["iwr6843", "surface_height", "camera_fusion"]
+
+
+# --- the calibrated camera for the clip's mode ----------------------------------------
+
+
+def test_with_the_mode_s_calibration_loaded_the_kiosk_solves_on_the_calibrated_camera(
+    kiosk, monkeypatch
+):
+    from pathlib import Path  # noqa: PLC0415
+
+    from openflight.camera.calibrated_projection import load_calibration_dir  # noqa: PLC0415
+
+    directory = Path(__file__).resolve().parents[1] / "config" / "camera-calibration" / "6mm"
+    loaded = load_calibration_dir(
+        directory, rig_params_sha256=RIG.snapshot()["sha256"], iwr_offset_mm=RIG.iwr_offset_mm
+    )
+    monkeypatch.setattr(server, "camera_calibration_set", loaded)
+    monkeypatch.setattr(server, "camera_lens", None)
+    shot, archive = _shot_seen(0.038, forward_m=1.8)
+    shot.inclinometer = {
+        "applied_to": ["camera"],
+        "calibrated_pitch_deg": 1.574,
+        "x_g": 0.0,
+        "y_g": 0.0,
+        "z_g": 1.0,
+    }
+
+    solve = server._shot_surface_solve(shot, archive)  # pylint: disable=protected-access
+
+    assert solve["inputs"]["principal_point"] == "calibrated"
+    assert solve["inputs"]["pitch_basis"] == "lis3dh_through_the_placement"
+    assert solve["inputs"]["pitch_deg"] == pytest.approx(1.574)
+    assert solve["inputs"]["calibration_pair"]["mode"] == "1280x800"
+    assert solve["inputs"]["angular_sigma_deg"] == sh.CALIBRATED_ANGULAR_SIGMA_DEG
+    assert solve["inputs"]["nominal_reason"] is None
+
+
+def test_without_a_calibration_the_kiosk_solve_says_image_centre(kiosk, monkeypatch):
+    monkeypatch.setattr(server, "camera_calibration_set", None)
+    shot, archive = _shot_seen(0.038)
+
+    solve = server._shot_surface_solve(shot, archive)  # pylint: disable=protected-access
+
+    assert solve["status"] == "solved"
+    assert solve["inputs"]["principal_point"] == "image_centre"
+    assert solve["inputs"]["calibration_pair"] is None
+    assert solve["inputs"]["angular_sigma_deg"] == sh.UNCALIBRATED_ANGULAR_SIGMA_DEG
+    assert "no camera calibration" in solve["inputs"]["nominal_reason"]
