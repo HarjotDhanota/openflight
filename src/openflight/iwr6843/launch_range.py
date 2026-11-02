@@ -67,6 +67,12 @@ CLUB_ONLY_REASON = "ball walk not found (hidden by clutter); club walk only"
 # share of the tolerance is more than the frame's, the range is estimated and its sigma
 # covers the prior's.
 LOOSE_PRIOR_REASON = "anchor agreement rests on a loose prior (sigma {sigma:.2f} m)"
+# The same for a walk anchored at its own launch point (no camera prior): that point's
+# sigma is the anchor's, and the range's uncertainty already carries it.
+LOOSE_ANCHOR_REASON = (
+    "anchor agreement rests on a loose anchor (the launch point's own sigma {sigma:.2f} m)"
+)
+LOOSE_ANCHOR_STATUSES = ("agrees_loose_prior", "agrees_loose_anchor")
 UNANCHORED_NOTE = (
     "no club walk anchors the ball walk's contact time (and no sound contact time in IWR "
     "time): estimated"
@@ -213,7 +219,7 @@ class LaunchRangeEstimate:  # pylint: disable=too-many-instance-attributes
         agreement a loose camera prior carries."""
         return self.anchor is not None and self.anchor.get("status") in (
             "unanchored",
-            "agrees_loose_prior",
+            *LOOSE_ANCHOR_STATUSES,
         )
 
     @property
@@ -292,7 +298,7 @@ def shot_ball_range(
         if estimate.ambiguous:
             notes.append(competition_note(estimate.competing))
         if estimate.unanchored:
-            loose = estimate.anchor.get("status") == "agrees_loose_prior"
+            loose = estimate.anchor.get("status") in LOOSE_ANCHOR_STATUSES
             notes.append(estimate.reason if loose and estimate.reason else UNANCHORED_NOTE)
         if estimate.partial is not None:
             notes.append(f"from a partial IWR dump: {estimate.partial.get('missing')}")
@@ -825,8 +831,9 @@ def _anchor(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     tolerance = frame_term + prior_term
     if abs(record["t_ball_s"] - t_club) > tolerance:
         status = "disagrees"
-    elif source == "camera_prior" and prior_term > frame_term:
-        status = "agrees_loose_prior"
+    elif prior_term > frame_term:
+        # the honesty rule is about the tolerance, whatever anchors it (C7a)
+        status = "agrees_loose_prior" if source == "camera_prior" else "agrees_loose_anchor"
     else:
         status = "agrees"
     return {
@@ -962,6 +969,8 @@ def estimate_launch_range(  # pylint: disable=too-many-arguments,too-many-locals
     if anchor["status"] == "agrees_loose_prior":
         reason = LOOSE_PRIOR_REASON.format(sigma=anchor["anchor_sigma_m"])
         uncertainty = math.hypot(uncertainty, anchor["anchor_sigma_m"])
+    elif anchor["status"] == "agrees_loose_anchor":
+        reason = LOOSE_ANCHOR_REASON.format(sigma=anchor["anchor_sigma_m"])
     return LaunchRangeEstimate(
         status="measured",
         reason=reason,

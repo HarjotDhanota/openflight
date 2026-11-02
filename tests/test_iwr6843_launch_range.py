@@ -461,3 +461,46 @@ def test_oct27_shot1_on_the_calibrated_camera_s_prior_has_no_iwr_launch_range():
     assert (
         estimate.anchor["t_club_s"] - estimate.anchor["t_ball_s"] > estimate.anchor["tolerance_s"]
     )
+
+
+def _walk(speed_ms, range_m_at_zero):
+    from openflight.iwr6843.tracking import BallTrack  # noqa: PLC0415
+
+    return BallTrack(
+        speed_ms=speed_ms,
+        slope_bins=speed_ms / RES_M,
+        intercept_bins=range_m_at_zero / RES_M,
+        rms_bins=0.3,
+        n_inliers=30,
+        t_first=0.01,
+        t_last=0.04,
+        low_confidence=False,
+    )
+
+
+@pytest.mark.parametrize(("sigma_m", "status"), [(0.05, "agrees"), (0.12, "agrees_loose_anchor")])
+def test_a_launch_point_anchor_is_loose_when_its_own_sigma_term_passes_a_frame(sigma_m, status):
+    """C7a: the honesty rule is about the tolerance, not the anchor's source. Without a
+    camera prior the launch point anchors the walks; its own sigma term against the frame
+    decides measured or estimated."""
+    capture = _capture()
+    # ball and club both at 2.10 m at 30 ms: they meet at the launch point
+    ball, club = _walk(45.0, 2.10 - 45.0 * 0.030), _walk(32.0, 2.10 - 32.0 * 0.030)
+    point = {
+        "ball_walk": ball,
+        "club_walk": club,
+        "method": "ball_track_start",
+        "apparent_m": 2.10,
+        "uncertainty_m": sigma_m,
+    }
+
+    anchor = lr._anchor(capture, point, None, None, 0.0)  # pylint: disable=protected-access
+
+    assert anchor["anchor_source"] == "launch_point"
+    assert anchor["status"] == status
+    loose = anchor["prior_term_s"] > anchor["frame_term_s"]
+    assert loose == (status == "agrees_loose_anchor")
+    estimate = lr.LaunchRangeEstimate(
+        status="measured", reason=None, range_m=2.10, uncertainty_m=sigma_m, anchor=anchor
+    )
+    assert estimate.label == ("estimated" if loose else "measured")

@@ -89,7 +89,9 @@ def test_shot_14_keeps_its_range_and_exposes_conflicting_ops_guided_angles(runs)
 @pytest.mark.parametrize(
     ("key", "range_m", "launch_deg", "label"),
     [
-        ("ot1_arm6_002", 1.779, 36.03, "measured"),
+        # its own launch point anchors it, but that point's sigma term (5.3 ms) is more
+        # than the 3 ms frame (C7a): estimated
+        ("ot1_arm6_002", 1.779, 36.03, "estimated"),
         ("ot5_003", 1.538, None, "measured"),
         # no club walk anchors its contact (C6a'): the same range, estimated
         ("ot7_001", 1.837, None, "estimated"),
