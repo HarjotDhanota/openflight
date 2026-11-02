@@ -1325,9 +1325,22 @@ def estimate_chained_delivery(
         if ops_reference_needed:
             return fallback(ChainedDelivery(status="rejected_no_ops_reference", **common), ball)
         return fallback(ChainedDelivery(status="rejected_no_stable_clubhead", **common), ball)
+    attack_estimate = pair_estimates.get((-1, 0))
+    if attack_estimate is not None:
+        tangent = attack_angle_at_contact(
+            common["head_positions"],
+            contact_t_s=contact_camera_s,
+            last_rest_t_s=float(camera_s[impact_idx]),
+        )
+        if tangent is not None:
+            notes.append(
+                f"attack angle at contact {tangent:.1f} deg from the pre-contact head "
+                f"positions (the chord a frame before read {attack_estimate.attack_angle_deg:.1f})"
+            )
+            attack_estimate = replace(attack_estimate, attack_angle_deg=tangent)
     result = combine_approach_estimates(
         list(pair_estimates.values()),
-        attack_estimate=pair_estimates.get((-1, 0)),
+        attack_estimate=attack_estimate,
         preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
     )
@@ -1358,6 +1371,32 @@ def estimate_chained_delivery(
     return _in_output_frame(
         ChainedDelivery(**{**vars(result), **common}), geometry.horizontal_offset_deg
     )
+
+
+# The attack angle is read at the ball-defined contact (C10b, 2 Nov 2026): the chord
+# (impact - 1, impact) is centred a frame before it, and a descending head steepens the
+# earlier it is read (Oct 27 shot 1: -13.2 deg as a chord, 3.6 ms before contact).
+CONTACT_TANGENT_MIN_FRAMES = 3
+
+
+def attack_angle_at_contact(
+    head_positions, *, contact_t_s: float, last_rest_t_s: float
+) -> float | None:
+    """The head's attack angle at the contact time: a constant-acceleration fit (each
+    axis quadratic in time) through the head positions up to the last frame the ball
+    rested in, differentiated at ``contact_t_s``. None with fewer than
+    ``CONTACT_TANGENT_MIN_FRAMES`` such frames. A straight approach reads as its chord."""
+    pre = [p for p in head_positions if p.t_s <= last_rest_t_s + 1e-9]
+    if len({p.t_s for p in pre}) < CONTACT_TANGENT_MIN_FRAMES:
+        return None
+    times = np.asarray([p.t_s - contact_t_s for p in pre], dtype=float)
+    xyz = np.asarray([[p.lateral_m, p.up_m, p.forward_m] for p in pre], dtype=float)
+    velocity = np.asarray(
+        [np.polyval(np.polyder(np.polyfit(times, xyz[:, axis], 2)), 0.0) for axis in range(3)]
+    )
+    if not np.all(np.isfinite(velocity)):
+        return None
+    return _velocity_angles(velocity)[1]
 
 
 def _head_track_fallback(

@@ -45,6 +45,11 @@ def _clip():
 
 
 def _geometry(inputs):
+    return _effective_geometry(inputs).ball_geometry()
+
+
+def _effective_geometry(inputs):
+    """The fusion's effective geometry with the calibrated 640x400 model (rig origins)."""
     from openflight.server import _calibrated_observed_roll_deg  # noqa: PLC0415
 
     optical = json.loads((SET_DIR / "640x400.optical.json").read_text(encoding="utf-8"))
@@ -64,7 +69,7 @@ def _geometry(inputs):
         },
     )
     candidate = optical.get("candidate", optical)
-    effective = EffectiveCameraGeometryInputs(
+    return EffectiveCameraGeometryInputs(
         camera_height_m=float(lens[2]),
         radar_height_m=float(radar[2]),
         tee_slant_range_m=inputs["located_tee_range_m"],
@@ -86,7 +91,6 @@ def _geometry(inputs):
             "mode_profile_sha256": candidate["mode_profile_sha256"],
         },
     )
-    return effective.ball_geometry()
 
 
 def _estimate(**overrides):

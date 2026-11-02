@@ -1,0 +1,38 @@
+{
+ "source": "harjot-outdoor-test-2/arm6/paired/run-01, shot 1, clip camera_20261027_170649_455_001",
+ "built_by": "research/rig-geometry-lock-2026-11-02/shot1-club/build_club_fixture.py",
+ "crop": {
+  "rows": [
+   0,
+   280
+  ],
+  "cols": [
+   80,
+   490
+  ],
+  "frames": [
+   36,
+   56
+  ],
+  "full_shape": [
+   59,
+   400,
+   640
+  ]
+ },
+ "trigger_index": 45,
+ "reference_ball": {
+  "x": 283.32824502712697,
+  "y": 202.720415624348,
+  "diameter_px": 24.01428425448051,
+  "area_px": 453,
+  "fit_quality": null
+ },
+ "ops_club_speed_mph": 72.05176094208986,
+ "located_tee_range_m": 1.8140053604682296,
+ "live_result": {
+  "attack_angle_deg": -13.17,
+  "club_path_deg": 10.97,
+  "impact_frame": 43
+ }
+}
