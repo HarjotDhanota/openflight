@@ -119,7 +119,12 @@ def test_each_route_wins_only_when_every_route_before_it_gave_nothing(fields, ro
     assert [name for name, _why in resolution.tried] == ROUTES[: ROUTES.index(route)]
 
 
-def test_the_arc_is_the_last_route():
+def test_the_arc_is_the_last_route(monkeypatch):
+    from openflight import club_arc  # noqa: PLC0415
+
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     shot = _arc(_shot())
 
     resolution = shot_models.attack_angle_resolution(shot)

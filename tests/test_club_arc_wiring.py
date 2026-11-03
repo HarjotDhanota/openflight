@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import openflight.camera.club_delivery as club_delivery_module
+from openflight import club_arc
 from openflight.camera.club_delivery import CameraDeliveryGeometry, estimate_chained_delivery
 from openflight.camera.club_motion import ReferenceBall
 from openflight.club_arc import MEASURED, MODEL_GEOMETRY, club_delivery_payload
@@ -131,6 +132,9 @@ def test_chained_delivery_records_head_positions_on_the_camera_clock(monkeypatch
 
 
 def test_the_arc_reads_the_shot_s_own_positions_and_keeps_the_chained_value(monkeypatch):
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     result = _run(monkeypatch)
     dt = 1e-6
     velocity = _head(dt) - _head(-dt)
@@ -151,6 +155,9 @@ def test_the_arc_reads_the_shot_s_own_positions_and_keeps_the_chained_value(monk
 
 
 def test_the_horizontal_offset_reaches_the_arc(monkeypatch):
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     boresight = club_delivery_payload(
         asdict(_run(monkeypatch)), club=ClubType.IRON_7, handedness="RH"
     )

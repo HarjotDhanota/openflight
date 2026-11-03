@@ -191,6 +191,11 @@ def test_a_missing_arc_path_is_still_not_measured(entry):
 
 def test_the_kiosk_s_own_arc_reaches_the_collision_model(monkeypatch):
     """The kiosk's own arc payload: a rejected chained path, the arc on its prior."""
+    from openflight import club_arc  # noqa: PLC0415
+
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     monkeypatch.setattr(server_module, "golfer_handed", "RH")
     shot = _arc_shot(club_delivery=None)
     shot_models._attach_club_arc(  # pylint: disable=protected-access

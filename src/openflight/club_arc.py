@@ -129,7 +129,7 @@ last few frames; pre-impact frames only.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
@@ -217,6 +217,7 @@ _OUTPUTS = (
     "low_point_height_mm",
     "low_point_side_mm",
 )
+ARC_OUTPUTS = _OUTPUTS
 _N_PARAMS = 8
 _SINGULAR_RATIO_MIN = 1e-10
 # The arc: P(t) = L + R sin(phi) e1 + R (1 - cos(phi)) e2, phi = omega (t - t_L); e1 the
@@ -858,6 +859,35 @@ def _with_low_point_offset(entry: dict, club: Any) -> dict:
     )
 
 
+def _without_prior_values(arc: ClubArc) -> ClubArc:
+    """A model-geometry arc as the shot record keeps it (C11f, owner 3 Nov 2026): no value.
+
+    Its outputs are the published prior's (population) radius and plane read through the
+    shot's points: never shown. The shot's own conditioning is the reason; the prior stays
+    named as the gate it was fitted against."""
+    if arc.status != MODEL_GEOMETRY:
+        return arc
+    own = [text for text in (arc.conditioning or {}).get("reasons", []) if "prior sets" not in text]
+    club = (arc.prior or {}).get("club", "club")
+    reason = (
+        "the shot's own head positions do not fix the arc ("
+        + "; ".join(own or ["no reason recorded"])
+        + f"); the published {club} prior (plane, radius) is a gate here, never a value"
+    )
+    return replace(
+        arc,
+        status=NOT_MEASURED,
+        reason=reason,
+        ranges={},
+        radius_m=None,
+        head_speed_mph=None,
+        low_point_from_ball_mm=None,
+        prior_share={},
+        prior_sensitivity={},
+        **dict.fromkeys(_OUTPUTS),
+    )
+
+
 def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]) -> dict:
     """The shot's club delivery: every arc metric with status, source, frame, range, reason.
 
@@ -891,6 +921,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
                 position_noise_m=noise_m,
                 ball_position=HeadPosition(t_s=0.0, **dict(ball)) if ball else None,
             )
+    arc = _without_prior_values(arc)
     metrics = {name: _arc_metric(arc, name) for name in _OUTPUTS}
     if positions_label is not None:
         metrics = {

@@ -30,6 +30,17 @@ from openflight.rig_geometry import RigGeometry
 REPO = Path(__file__).resolve().parents[1]
 MPH = 0.44704
 
+
+@pytest.fixture(autouse=True)
+def _arc_values_as_fitted(monkeypatch):
+    """The harness's arcs sit on the published prior with 3-5 points, which cannot fix the
+    arc alone; the kiosk shows no value from such a fit (C11f, test_club_arc_no_prior_values).
+    These known-answer checks are of the formulas, so the fit's values pass through here."""
+    from openflight import club_arc  # noqa: PLC0415
+
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
+
+
 # Penner 2001 Sec. II A: ball 45.9 g, 4.27 cm; head 200 g; I = 2/5 m r^2
 PENNER_M, PENNER_D, PENNER_HEAD = 0.0459, 0.0427, 0.200
 

@@ -220,20 +220,30 @@ def test_without_head_track_positions_the_arc_is_not_measured(name):
     assert "no club-head positions" in record["reason"]
 
 
-def test_the_arc_on_head_track_positions_is_the_prior_s_plane_and_experimental_otherwise():
+def test_the_arc_on_head_track_positions_the_prior_would_set_is_not_measured():
+    """Three head-track points cannot fix the arc: the prior is a gate, never a value."""
     records = _records(_head_track_shot(head_positions=_head_track_positions()))
 
-    plane = records["swing_plane"]
-    assert plane["value"] is not None and plane["status"] == "model_geometry"
-    assert "prior sets it" in plane["note"]
-    for name in ("swing_direction", "low_point_distance", "low_point_height", "low_point_side"):
+    for name in (
+        "swing_plane",
+        "swing_direction",
+        "low_point_distance",
+        "low_point_height",
+        "low_point_side",
+    ):
         record = records[name]
-        assert record["value"] is not None, name
-        assert record["status"] == "experimental", name
-        assert "head track" in record["note"], name
+        assert record["value"] is None and record["status"] == "not_measured", name
+        assert "gate here, never a value" in record["reason"], name
 
 
-def test_the_head_track_low_point_reaches_the_contact_note_estimated_with_its_reason():
+def test_the_head_track_low_point_reaches_the_contact_note_estimated_with_its_reason(
+    monkeypatch,
+):
+    from openflight import club_arc  # noqa: PLC0415
+
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     shot = _head_track_shot(head_positions=_head_track_positions())
 
     low_point = shot_models._low_point_input(shot)  # pylint: disable=protected-access

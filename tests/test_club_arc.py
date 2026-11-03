@@ -408,18 +408,20 @@ def test_payload_keeps_the_measured_chained_value_and_records_both():
     assert path["status"] == "measured"
     assert path["source"] == "camera_iwr_chained"
     assert path["frame"] == "unit_boresight"
-    assert payload["cross_check"]["arc"]["club_path_deg"] is not None
+    # four points do not fix the arc: its prior-set values are never shown (C11f)
+    assert payload["cross_check"]["arc"]["club_path_deg"] is None
     assert payload["cross_check"]["chained"]["club_path_deg"] == pytest.approx(2.4)
     plane = payload["metrics"]["swing_plane_deg"]
-    assert plane["status"] == MODEL_GEOMETRY
-    assert plane["source"].startswith("club_arc")
-    assert plane["frame"] is None
-    assert payload["metrics"]["swing_direction_deg"]["frame"] == "unit_boresight"
-    assert payload["metrics"]["low_point_distance_mm"]["frame"] == "unit_boresight"
+    assert plane["status"] == NOT_MEASURED and plane["value"] is None
+    assert plane["source"] is None and plane["frame"] is None
+    assert "gate here, never a value" in plane["reason"]
     assert payload["selection_rule"]
 
 
-def test_payload_uses_the_arc_when_the_chained_value_is_missing():
+def test_payload_uses_the_arc_when_the_chained_value_is_missing(monkeypatch):
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     positions, _truth = _synthetic_swing(n_points=4, noise_m=0.002)
 
     payload = club_delivery_payload(
@@ -463,7 +465,10 @@ def test_label_rank_orders_measured_over_calculated_over_model_geometry():
     ("club", "offset"),
     [(ClubType.IRON_7, 2.3), (ClubType.DRIVER, -28.3), (ClubType.PW, 5.5)],
 )
-def test_the_low_point_distance_adds_the_clubs_fitted_offset_to_the_arc(club, offset):
+def test_the_low_point_distance_adds_the_clubs_fitted_offset_to_the_arc(club, offset, monkeypatch):
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     positions, _truth = _synthetic_swing(n_points=4, noise_m=0.002)
 
     payload = club_delivery_payload(_delivery(positions), club=club, handedness="RH")
@@ -545,8 +550,11 @@ def _head_track_delivery(positions, **overrides):
     return delivery
 
 
-def test_head_track_positions_make_every_arc_output_experimental_or_the_prior_s():
+def test_head_track_positions_make_every_arc_output_experimental_or_the_prior_s(monkeypatch):
     """Labels inherit the positions': experimental, or model geometry where the prior sets it."""
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
 
     payload = club_delivery_payload(
@@ -574,7 +582,10 @@ def test_head_track_positions_make_every_arc_output_experimental_or_the_prior_s(
     assert metrics["attack_angle_deg"]["value"] == pytest.approx(-4.0)
 
 
-def test_head_track_positions_fill_a_withheld_angle_only_experimental():
+def test_head_track_positions_fill_a_withheld_angle_only_experimental(monkeypatch):
+    # plumbing under the fit as it is; the value policy (a prior-set arc shows nothing)
+    # is pinned in test_club_arc_no_prior_values
+    monkeypatch.setattr(club_arc, "_without_prior_values", lambda arc: arc)
     positions, _truth = _synthetic_swing(times=HEAD_TRACK_TIMES, noise_m=0.0)
 
     payload = club_delivery_payload(

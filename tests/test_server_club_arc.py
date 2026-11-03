@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from openflight import server as server_module, shot_models
-from openflight.club_arc import MEASURED, MODEL_GEOMETRY, NOT_MEASURED
+from openflight.club_arc import MEASURED, NOT_MEASURED
 from openflight.clubs import ClubType
 from openflight.launch_monitor import Shot
 from openflight.server import shot_to_dict
@@ -66,12 +66,13 @@ def test_attach_reads_the_fused_delivery_with_the_shot_s_club(monkeypatch):
     metrics = shot.club_delivery["metrics"]
     assert metrics["club_path_deg"]["status"] == MEASURED
     assert metrics["club_path_deg"]["value"] == pytest.approx(2.0)
-    assert metrics["attack_angle_deg"]["status"] == MODEL_GEOMETRY
-    assert metrics["attack_angle_deg"]["value"] < 0.0
-    assert metrics["swing_plane_deg"]["value"] == pytest.approx(57.0, abs=1.0)
+    # the arc's points do not fix it: the 7-iron prior is a gate, never a value (C11f)
+    assert metrics["attack_angle_deg"]["status"] == "not_measured"
+    assert metrics["attack_angle_deg"]["value"] is None
+    assert metrics["swing_plane_deg"]["value"] is None
     assert shot.club_delivery["arc"]["prior"]["club"] == "7-iron"
     payload = shot_to_dict(shot)["club_delivery"]
-    assert payload["metrics"]["swing_plane_deg"]["status"] == MODEL_GEOMETRY
+    assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
     assert payload["handedness"] == "RH"
 
 
