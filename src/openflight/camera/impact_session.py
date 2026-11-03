@@ -657,7 +657,7 @@ def prepare_clip(  # pylint: disable=too-many-locals
     clip.extra["equipment_id"] = shot.get("equipment_id")
     from . import impact_optics  # noqa: PLC0415
 
-    rectified, camera, radar_offset = None, None, None
+    rectified, camera, radar_offset, model = None, None, None, None
     decision = clip.extra["optics_input_decision"] = {
         "applied": False,
         "physical_qualified": False,
@@ -787,13 +787,26 @@ def prepare_clip(  # pylint: disable=too-many-locals
     )
     from openflight.camera.dynamic_lie import estimate_dynamic_lie, unavailable  # noqa: PLC0415
 
-    clip.extra["dynamic_lie"] = (
-        unavailable("rectified optics need a full-placement shaft-plane estimator")
-        if rectified is not None
-        else estimate_dynamic_lie(
-            clip.prepared, pitch_deg=rig.boresight_pitch_deg, geometry_source=rig_source
+    if rectified is not None and model is None:
+        clip.extra["dynamic_lie"] = unavailable(
+            "rectified research optics carry no placement for the shaft plane"
         )
-    )
+    elif rectified is not None:
+        # the recorded calibrated placement: pitch, roll and yaw (C11d)
+        clip.extra["dynamic_lie"] = estimate_dynamic_lie(
+            clip.prepared,
+            pitch_deg=None,
+            geometry_source="recorded_calibrated_placement",
+            optical_to_world_lfu=model.optical_to_world_lfu,
+            club=clip.club,
+        )
+    else:
+        clip.extra["dynamic_lie"] = estimate_dynamic_lie(
+            clip.prepared,
+            pitch_deg=rig.boresight_pitch_deg,
+            geometry_source=rig_source,
+            club=clip.club,
+        )
 
 
 def _blur(location: il.ImpactLocation, edge: str) -> float | None:

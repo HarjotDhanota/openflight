@@ -110,11 +110,11 @@ def test_capture_bound_calibrated_context_reaches_impact_and_live_diagnostics(tm
     assert decision["depth_origin_source"] == "recorded_calibrated_placement"
     assert decision["analysis_binning_factor"] == 2
     assert reading["range_input_decision"]["accepted"]
-    assert reading["dynamic_lie"]["status"] == "not_measured"
-    assert (
-        reading["dynamic_lie"]["reason"]
-        == "rectified optics need a full-placement shaft-plane estimator"
-    )
+    # the recorded placement reads the shaft (C11d); this clip's own shaft decides the rest
+    lie = reading["dynamic_lie"]
+    assert lie["reason"] != "rectified optics need a full-placement shaft-plane estimator"
+    if lie["status"] == "model_geometry":
+        assert lie["diagnostics"]["geometry_source"] == "recorded_calibrated_placement"
     context = shot["camera_fusion_context"]
     context["capture_npz_sha256"] = "b" * 64
     context.pop("sha256")

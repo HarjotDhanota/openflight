@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -55,6 +57,75 @@ def plane_lie_deg(points_px: np.ndarray, camera: il.ImpactCamera, pitch_deg: flo
     if not math.isfinite(dx + dz) or math.hypot(dx, dz) <= 1e-12:
         raise ValueError("shaft endpoints coincide")
     return math.degrees(math.atan2(abs(dz), abs(dx)))
+
+
+def plane_lie_world_deg(
+    points_px: np.ndarray, camera: il.ImpactCamera, optical_to_world_lfu: np.ndarray
+) -> float:
+    """The same constant-forward-plane angle through a full calibrated placement.
+
+    ``points_px`` are in an undistorted pinhole view (rectified optics) of ``camera``;
+    ``optical_to_world_lfu`` turns optical (right, down, forward) rays into the world's
+    (lateral, forward, up). Each ray meets a plane of constant world forward; the angle is
+    the segment's to the world horizontal within that plane (pitch, roll and yaw all in).
+    """
+    pixels = np.asarray(points_px, dtype=float)
+    rotation = np.asarray(optical_to_world_lfu, dtype=float)
+    if pixels.shape != (2, 2) or not np.isfinite(pixels).all():
+        raise ValueError("two finite shaft endpoints are required")
+    if rotation.shape != (3, 3) or not np.isfinite(rotation).all():
+        raise ValueError("a finite 3x3 optical-to-world rotation is required")
+    rays = (
+        np.column_stack(
+            (
+                (pixels - np.asarray(camera.principal_point_px, dtype=float)) / camera.focal_px,
+                np.ones(2),
+            )
+        )
+        @ rotation.T
+    )
+    if np.any(rays[:, 1] <= 0):
+        raise ValueError("shaft rays do not meet the forward plane")
+    plane = rays / rays[:, 1:2]
+    dx, dz = float(plane[1, 0] - plane[0, 0]), float(plane[1, 2] - plane[0, 2])
+    if not math.isfinite(dx + dz) or math.hypot(dx, dz) <= 1e-12:
+        raise ValueError("shaft endpoints coincide")
+    return math.degrees(math.atan2(abs(dz), abs(dx)))
+
+
+_REFERENCE = json.loads(
+    (Path(__file__).with_name("club_outline_reference.json")).read_text(encoding="utf-8")
+)
+
+
+def _saved_view(shot: il.PreparedShot, endpoints: np.ndarray):
+    """Analysis-crop endpoints and camera back in the saved (rectified) frame's pixels: the
+    placement's rotation is the saved frame's, unflipped and uncropped."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    points = np.asarray([shot.to_original(float(x), float(y)) for x, y in endpoints])
+    x, y = shot.camera.principal_point_px
+    x, y = x + shot.roi_origin[0], y + shot.roi_origin[1]
+    if shot.flipped:
+        x = shot.full_size[0] - 1 - x
+    return points, replace(shot.camera, principal_point_px=(float(x), float(y)))
+
+
+def static_lie_reference(club: str | None, shaft_deg: float) -> dict | None:
+    """The shaft's angle against the club category's static lie (official spec aggregate,
+    club_outline_reference): reference data, not a prior; + toe up."""
+    category = il.club_category(club) if club else None
+    entry = _REFERENCE["categories"].get(category or "")
+    if entry is None or entry.get("static_lie_deg") is None:
+        return None
+    static = float(entry["static_lie_deg"])
+    return {
+        "category": category,
+        "static_lie_deg": static,
+        "shaft_minus_static_lie_deg": float(shaft_deg) - static,
+        "label": "reference_data",
+        "source": "club_outline_reference.json static_lie_deg (official spec aggregate)",
+    }
 
 
 def _shaft_line(moving: np.ndarray, head: np.ndarray, scale: float) -> tuple[np.ndarray, dict]:
@@ -111,10 +182,20 @@ def _shaft_line(moving: np.ndarray, head: np.ndarray, scale: float) -> tuple[np.
 
 
 def estimate_dynamic_lie(
-    shot: il.PreparedShot, *, pitch_deg: float | None, geometry_source: str
+    shot: il.PreparedShot,
+    *,
+    pitch_deg: float | None,
+    geometry_source: str,
+    optical_to_world_lfu: np.ndarray | None = None,
+    club: str | None = None,
 ) -> dict:
-    """Estimate this shot's impact lie, independently of the pooled face outline."""
-    if pitch_deg is None or not math.isfinite(pitch_deg):
+    """Estimate this shot's impact lie, independently of the pooled face outline.
+
+    With ``optical_to_world_lfu`` (a calibrated placement over rectified frames) the shaft
+    is read through the full placement (``plane_lie_world_deg``), else through the rig's
+    pitch alone. ``club`` adds the shaft against its category's static lie (reference).
+    """
+    if optical_to_world_lfu is None and (pitch_deg is None or not math.isfinite(pitch_deg)):
         return unavailable("camera pitch is unavailable")
     if shot.contact.status != "ok" or shot.contact_time is None:
         return unavailable("no camera contact time for dynamic lie")
@@ -143,7 +224,11 @@ def estimate_dynamic_lie(
             endpoints, fit = _shaft_line(
                 moving[index], shot.masks.masks[index], shot.mm_per_px(index)
             )
-            angles.append(plane_lie_deg(endpoints, shot.camera, pitch_deg))
+            angles.append(
+                plane_lie_world_deg(*_saved_view(shot, endpoints), optical_to_world_lfu)
+                if optical_to_world_lfu is not None
+                else plane_lie_deg(endpoints, shot.camera, pitch_deg)
+            )
             fits.append({"frame": index, "angle_deg": angles[-1], **fit})
     except ValueError as error:
         return unavailable(str(error))
@@ -158,7 +243,11 @@ def estimate_dynamic_lie(
         "range": None,
         "reason": None,
         "note": NOTE,
+        "static_lie_reference": static_lie_reference(club, value),
         "diagnostics": {
+            "camera_placement": "calibrated_optical_to_world"
+            if optical_to_world_lfu is not None
+            else "rig_pitch_level_housing",
             "frames": frames,
             "fits": fits,
             "contact_frame": shot.contact_time,

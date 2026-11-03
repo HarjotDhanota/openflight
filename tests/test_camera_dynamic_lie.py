@@ -182,3 +182,61 @@ def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, ha
     metric = fusion_shot(impact_location=reading).to_dict()["metrics"]["dynamic_lie"]
     assert metric["value"] == pytest.approx(60, abs=1.5), reading
     assert metric["status"] == "model_geometry"
+
+
+# --- C11d: the full calibrated placement (rectified optics) ---------------------------
+
+LEVEL_OPTICAL_TO_WORLD_LFU = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+
+
+def _rotation(pitch_deg, roll_deg, yaw_deg):
+    """Optical (right, down, forward) to world (lateral, forward, up) for a turned camera."""
+    p, r, y = (math.radians(v) for v in (pitch_deg, roll_deg, yaw_deg))
+    roll = np.array([[math.cos(r), -math.sin(r), 0], [math.sin(r), math.cos(r), 0], [0, 0, 1]])
+    pitch = np.array([[1, 0, 0], [0, math.cos(p), 0 - math.sin(p)], [0, math.sin(p), math.cos(p)]])
+    yaw = np.array([[math.cos(y), -math.sin(y), 0], [math.sin(y), math.cos(y), 0], [0, 0, 1]])
+    return yaw @ LEVEL_OPTICAL_TO_WORLD_LFU @ pitch @ roll
+
+
+@pytest.mark.parametrize("lie", [50.0, 62.0])
+@pytest.mark.parametrize("pose", [(0.0, 0.0, 0.0), (-1.5, 3.0, 2.0), (4.0, -2.0, -5.0)])
+def test_the_full_placement_reads_a_shaft_in_a_constant_forward_plane(lie, pose):
+    camera = il.ImpactCamera(1000.0, (320.0, 200.0))
+    rotation = _rotation(*pose)
+    heel = np.array([-0.15, 1.7, 0.02])  # lateral, forward, up
+    shaft = np.array([-math.cos(math.radians(lie)), 0.0, math.sin(math.radians(lie))])
+    pixels = []
+    for point in (heel, heel + 0.2 * shaft):
+        optical = rotation.T @ (point - np.array([0.0, 0.0, 0.093]))
+        pixels.append(optical[:2] / optical[2] * camera.focal_px + camera.principal_point_px)
+
+    assert dl.plane_lie_world_deg(np.array(pixels), camera, rotation) == pytest.approx(
+        lie, abs=1e-6
+    )
+
+
+def test_a_level_placement_agrees_with_the_pitch_route():
+    shot = shaft_clip(60.0)
+    by_pitch = dl.estimate_dynamic_lie(shot, pitch_deg=0.0, geometry_source="test")
+    by_placement = dl.estimate_dynamic_lie(
+        shot,
+        pitch_deg=None,
+        geometry_source="test",
+        optical_to_world_lfu=LEVEL_OPTICAL_TO_WORLD_LFU,
+    )
+
+    assert by_placement["status"] == "model_geometry"
+    assert by_placement["value"] == pytest.approx(by_pitch["value"], abs=1e-6)
+    assert by_placement["diagnostics"]["camera_placement"] == "calibrated_optical_to_world"
+
+
+def test_the_record_carries_the_shaft_against_the_category_s_static_lie():
+    shot = shaft_clip(60.0)
+    record = dl.estimate_dynamic_lie(shot, pitch_deg=0.0, geometry_source="test", club="7-iron")
+
+    reference = record["static_lie_reference"]
+    assert reference["static_lie_deg"] > 55.0
+    assert reference["shaft_minus_static_lie_deg"] == pytest.approx(
+        record["value"] - reference["static_lie_deg"]
+    )
+    assert reference["label"] == "reference_data"
