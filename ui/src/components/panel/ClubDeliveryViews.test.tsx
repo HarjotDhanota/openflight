@@ -17,7 +17,8 @@ import {
   hoselLayout,
   staticLoftLie,
 } from './clubDelivery';
-import { FACE_SHAPES, USGA, faceCategory, type FaceCategory } from './faceImpact';
+import { FACE_SHAPES, USGA, clubModel, faceCategory, type FaceCategory } from './faceImpact';
+import { createHash } from 'node:crypto';
 import { ALL_CLUBS } from '../../data/clubs';
 
 const clubs = { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid', iron: '7-iron', wedge: 'sw' };
@@ -573,6 +574,76 @@ describe('club delivery drawings', () => {
     const shaft = polygon(element.querySelector('.club-projection__shaft')!.getAttribute('d')!);
     expect(Math.abs(shaft[0][0] + shaft[3][0] - shaft[1][0] - shaft[2][0])).toBeLessThan(1e-6);
   });
+
+  /* The heel view as approved at 1192aac1, every club, both hands, no shot: the sha-256 of its
+   * rendered SVG. Its hosel and neck are painted over the face line, so where they overlap the
+   * lofted face line runs behind the hosel. */
+  const APPROVED_HEEL_VIEWS: Record<string, string> = {
+    '2-iron:right': 'e002399f1cacad6e',
+    '2-iron:left': 'e75c8872107d27a7',
+    '3-iron:right': '0921207e08888bd0',
+    '3-iron:left': 'ad4a3999705279c2',
+    '4-iron:right': 'a9850dc0de737693',
+    '4-iron:left': 'e0012155ae13f9fc',
+    '5-iron:right': '55ae72f8d6e9e5bb',
+    '5-iron:left': '40745c8a0b8e4b64',
+    '6-iron:right': '01db59561765f87a',
+    '6-iron:left': '3156c230c8378ba1',
+    '7-iron:right': '01a5fe8d4cc559db',
+    '7-iron:left': 'e02a6e24a184d23d',
+    '8-iron:right': '4c7520299b3605d3',
+    '8-iron:left': 'fddf8cfd4ac65e37',
+    '9-iron:right': '59de828392381de5',
+    '9-iron:left': '64166d445d38aa1a',
+    'pw:right': '687eb42d31d94011',
+    'pw:left': 'dd57235b38a3a64b',
+    'gw:right': 'a0dedeeb674c8daa',
+    'gw:left': 'a544082c6eecbe36',
+    'sw:right': '936fe98e077219bf',
+    'sw:left': '6121b1f8f4661667',
+    'lw:right': 'aa3f81e7b730e193',
+    'lw:left': '8362ac1ad9813b5c',
+    '3-hybrid:right': '6c2d3192d8c77e88',
+    '3-hybrid:left': '8a8c5bab057578bc',
+    '5-hybrid:right': 'fa44c08287964184',
+    '5-hybrid:left': '2c35eade669bc949',
+    '7-hybrid:right': 'a26cfbf8c4f4812d',
+    '7-hybrid:left': '342ed9445337c65a',
+    '9-hybrid:right': 'b8476ac25ab68294',
+    '9-hybrid:left': 'e2ddbf7f2674b5a6',
+    'driver:right': 'a28d187dc777d223',
+    'driver:left': 'f4a02631a8920580',
+    '3-wood:right': '1a1268e79c944a0e',
+    '3-wood:left': 'b83f198f61d38c2e',
+    '5-wood:right': '5604850e1c3770ea',
+    '5-wood:left': 'aa9bda66becf2b5c',
+    '7-wood:right': '028420ab514a18a4',
+    '7-wood:left': 'c87d1e37d1749708',
+  };
+  it('pins every selectable club in the approved heel views', () => {
+    expect(Object.keys(APPROVED_HEEL_VIEWS).sort()).toEqual(
+      ALL_CLUBS.flatMap((club) => [`${club.id}:left`, `${club.id}:right`]).sort()
+    );
+  });
+  it.each(Object.keys(APPROVED_HEEL_VIEWS))('keeps the %s heel view byte-identical to the approved drawing', (key) => {
+    const [club, handed] = key.split(':') as [string, 'right' | 'left'];
+    const s = { ...clubModel(club), impact_location: { handedness: handed } };
+    const markup = renderToString(<ClubProjection shot={s} view="side" />);
+    expect(createHash('sha256').update(markup).digest('hex').slice(0, 16)).toBe(APPROVED_HEEL_VIEWS[key]);
+  });
+  it.each(ALL_CLUBS.flatMap((club) => (['right', 'left'] as const).map((hand) => [club.id, hand] as const)))(
+    'paints the %s heel view hosel over its face line (%s-handed)',
+    (club, handed) => {
+      const element = svg({ ...clubModel(club), impact_location: { handedness: handed } } as Shot, 'side');
+      const head = element.querySelector('.club-projection__head')!;
+      const faceLine = head.querySelector(':scope > .club-projection__face-edge')!;
+      const hosel = head.querySelector(':scope > .club-projection__hosel')!;
+      // the hosel group is the head's last layer, after the face line
+      expect(head.lastElementChild).toBe(hosel);
+      expect(faceLine.compareDocumentPosition(hosel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(hosel.querySelector('.club-projection__neck')).not.toBeNull();
+    }
+  );
 
   it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {
     for (const club of ALL_CLUBS) expect(staticLoftLie(club.id).source).toBe('club');
