@@ -16,7 +16,7 @@ down. A gap is closed by adding a route, never by a special case.
 | Input | Routes, in order | Labels |
 |---|---|---|
 | Ball range | the shot's IWR launch point; the camera prior; the resting ball's own size in this clip | IWR measured, or estimated for partial/ambiguous evidence; prior estimated; ball size estimated with calibrated intrinsics, otherwise experimental |
-| Vertical launch | the radar (IWR LCMF, K-LD7); the camera fallback | radar estimated when using configured tilt or a weaker IWR range; camera estimated with calibrated intrinsics, otherwise experimental |
+| Vertical launch | the radar (IWR LCMF, K-LD7); the camera fallback. A radar vertical more than 3 combined sigma from the accepted camera fallback's vertical is refused and the camera's stands (owner, 3 Nov 2026) | radar estimated when using configured tilt or a weaker IWR range; camera estimated with calibrated intrinsics, otherwise experimental; a camera vertical that stood over a radar one carries "radar vertical N deg ... disagrees ... by k sigma; camera stands" in its note |
 | Horizontal launch | radar and camera candidates, ranked by their attached uncertainties when both have them; radar wins otherwise | experimental never replaces non-experimental; a failed coherence/consensus gate is experimental |
 | Side offset | the setup's measured offset; the resting ball on its camera bearing | measured; experimental |
 | Spin | an accepted OPS spin; the collision model's spin; the OPS reading below the confidence floor | measured; the model's label (experimental when it rests on the camera head track or an experimental launch); experimental, feeding nothing |

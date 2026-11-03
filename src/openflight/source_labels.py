@@ -352,14 +352,18 @@ def implausible_vertical_reason(vertical_deg: Any) -> Optional[str]:
     )
 
 
-# 30 Oct 2026 (owner): radar is primary for the ball, so a radar vertical stays first even
-# when an accepted camera fallback disagrees with it; beyond this many combined 1-sigmas
-# (the camera's vertical_sd_deg and the radar's own, when its measurement carries one) it
-# reads experimental with both values in its note. Oct 27 on the live chain (3 Nov 2026,
-# calibrated camera): shot 3, 28.86 against 19.34 +- 0.42, is 22.7 sigma; shot 4, 41.15
-# against 26.73 +- 0.64, is 22.5 (on the 31 Oct chain, 28.50 against 21.52 +- 3.13, 2.2,
-# it stood). The label sets the radar vertical's confidence too (server, C21b).
+# The radar is primary for the ball (owner, 30 Oct 2026) while it agrees with the camera:
+# a radar vertical within this many combined 1-sigmas (the camera's vertical_sd_deg and the
+# radar's own, when its measurement carries one) of a MEASURED camera vertical (the accepted
+# camera fallback, a departure fit) stays first. Beyond it the radar reading is bad and the
+# camera's vertical stands with its own label and sigma, the radar's value in its note
+# ("it should fall back to camera if the radar reading is bad", owner, 3 Nov 2026; C22a).
+# Oct 27 on the live chain: shot 3's radar 28.86 against the camera's 19.34 +- 0.42 is 22.7
+# sigma, shot 4's 41.15 against 26.73 +- 0.64 is 22.5: both take the camera's. With no
+# measured camera vertical the radar stands as before.
 VERTICAL_DISAGREEMENT_SIGMAS = 3.0
+# how a note says the camera's vertical stands over a radar beyond the band
+CAMERA_VERTICAL_STANDS = "camera stands"
 
 
 def vertical_disagreement(
@@ -377,24 +381,48 @@ def vertical_disagreement(
     return sigmas if sigmas > VERTICAL_DISAGREEMENT_SIGMAS else None
 
 
+def radar_vertical_disagreement_note(
+    radar_deg: Any, camera_fallback: Any, *, radar_sd_deg: Any = None
+) -> Optional[str]:
+    """Why a radar vertical gives way to the measured camera vertical of an accepted camera
+    fallback (beyond ``VERTICAL_DISAGREEMENT_SIGMAS``), or None. The IWR's LCMF vertical
+    carries no per-shot sigma, so the radar's counts as 0 unless one is given."""
+    if not isinstance(camera_fallback, Mapping) or camera_fallback.get("status") != "accepted":
+        return None
+    camera, camera_sd = camera_fallback.get("vertical_deg"), camera_fallback.get("vertical_sd_deg")
+    sigmas = vertical_disagreement(radar_deg, camera, camera_sd, radar_sd_deg=radar_sd_deg)
+    if sigmas is None:
+        return None
+    radar_sd = _positive(radar_sd_deg)
+    radar_text = f"{float(radar_deg):.2f} deg" + (
+        f" +- {radar_sd:.2f}" if radar_sd is not None else " (no per-shot sigma)"
+    )
+    return (
+        f"radar vertical {radar_text} disagrees with the camera's {float(camera):.2f} +- "
+        f"{float(camera_sd):.2f} deg by {sigmas:.1f} sigma (beyond "
+        f"{VERTICAL_DISAGREEMENT_SIGMAS:g}); {CAMERA_VERTICAL_STANDS}"
+    )
+
+
 def _vertical_disagreement_note(shot: Any, camera_fallback: Any) -> Optional[str]:
-    """Why a radar vertical reads experimental against an accepted camera fallback, or
-    None. The IWR's LCMF vertical carries no per-shot sigma, so the radar's counts as 0."""
+    """``radar_vertical_disagreement_note`` for the shot's own radar vertical, against
+    ``camera_fallback`` or else the shot's own ``camera_fallback_launch``."""
     fallback = camera_fallback
     if fallback is None:
         fallback = _field(shot, "camera_fallback_launch")
-    if not isinstance(fallback, Mapping) or fallback.get("status") != "accepted":
-        return None
-    radar = _field(shot, "launch_angle_vertical")
-    camera, camera_sd = fallback.get("vertical_deg"), fallback.get("vertical_sd_deg")
-    sigmas = vertical_disagreement(radar, camera, camera_sd)
-    if sigmas is None:
-        return None
-    return (
-        f"radar vertical {float(radar):.2f} deg disagrees with the accepted camera fallback "
-        f"{float(camera):.2f} +- {float(camera_sd):.2f} deg by {sigmas:.1f} sigma (beyond "
-        f"{VERTICAL_DISAGREEMENT_SIGMAS:g}): the radar's stands, experimental"
-    )
+    return radar_vertical_disagreement_note(_field(shot, "launch_angle_vertical"), fallback)
+
+
+def _radar_set_aside_note(shot: Any) -> Optional[str]:
+    """The radar vertical's note when the launch chain set it aside for the camera's (its
+    refusal in ``input_sources.launch_vertical.tried``), or None."""
+    sources = _field(shot, "input_sources")
+    record = sources.get("launch_vertical") if isinstance(sources, Mapping) else None
+    for tried in (record or {}).get("tried") or () if isinstance(record, Mapping) else ():
+        reason = tried.get("reason") if isinstance(tried, Mapping) else None
+        if isinstance(reason, str) and reason.endswith(CAMERA_VERTICAL_STANDS):
+            return reason
+    return None
 
 
 def shot_launch_label(
@@ -403,9 +431,11 @@ def shot_launch_label(
     """(label, note) of a shot's vertical or horizontal launch, read from its own fields
     (a ``Shot`` or its record): source, status, the camera tier and the lens. A radar
     launch also takes an ambiguous IWR track (estimated) and the label of the ball range
-    it rests on (``range_source_label``); a radar vertical beyond
+    it rests on (``range_source_label``). A radar vertical beyond
     ``VERTICAL_DISAGREEMENT_SIGMAS`` of an accepted camera fallback (``camera_fallback``,
-    else the shot's own ``camera_fallback_launch``) is experimental."""
+    else the shot's own ``camera_fallback_launch``) gives way to the camera's in the launch
+    chain (C22a); read outside it, it is experimental. A camera vertical that stood over a
+    radar one carries the radar's value in its note."""
     intrinsics = _field(shot, "camera_lens_intrinsics")
     if axis == "vertical":
         source = _field(shot, "launch_angle_vertical_source") or _field(shot, "angle_source")
@@ -437,6 +467,8 @@ def shot_launch_label(
         if disagreement is not None:
             label = _weaker(label, LABEL_EXPERIMENTAL)
             notes.append(disagreement)
+    elif axis == "vertical":
+        notes.append(_radar_set_aside_note(shot))
     return label, "; ".join(dict.fromkeys(note for note in notes if note)) or None
 
 

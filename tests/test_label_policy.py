@@ -502,17 +502,23 @@ def test_a_radar_vertical_on_the_camera_prior_is_estimated_in_all_three_places()
     assert labels.CAMERA_PRIOR_NOTE in reason
 
 
-def test_a_radar_vertical_that_disagrees_with_the_camera_is_experimental_in_all_three_places():
+def test_a_radar_vertical_that_disagrees_with_the_camera_gives_way_in_all_three_places():
+    # owner, 3 Nov 2026: "it should fall back to camera if the radar reading is bad"
     fallback = {**FALLBACK, "vertical_deg": 18.58, "vertical_sd_deg": 2.5}
-    shot = _vertical_shot(29.99, camera_fallback_launch=fallback)
-
-    assert _vertical_everywhere(shot, fallback) == (
-        "experimental",
-        ("estimated", True),
-        "experimental",
+    shot = _vertical_shot(
+        29.99, camera_fallback_launch=fallback, camera_lens_intrinsics="calibrated"
     )
-    assert "4.6 sigma" in shot.collision_model["inputs"]["launch_vertical"]["reason"]
-    assert "launch_vertical" in labels.experimental_collision_inputs(shot.collision_model)
+
+    server_module._apply_camera_fallback_launch(shot, fallback)  # pylint: disable=protected-access
+
+    assert (shot.launch_angle_vertical, shot.launch_angle_vertical_source) == (
+        18.58,
+        "camera_fallback",
+    )
+    assert _vertical_everywhere(shot, fallback) == ("estimated", ("estimated", False), "estimated")
+    note = shot.to_dict()["metrics"]["launch_vertical"]["note"]
+    assert "radar vertical 29.99 deg" in note and "4.6 sigma" in note
+    assert "camera stands" in note
 
 
 def test_an_implausible_radar_vertical_with_no_stand_in_is_withheld_from_the_shot():
@@ -553,25 +559,107 @@ SHOT_4_LIVE_FALLBACK = {
 
 
 def test_a_radar_vertical_labelled_experimental_carries_no_confidence():
+    # experimental through the range it rests on (the resting ball's size, no calibration)
     shot = _vertical_shot(
-        41.15129572720339,
+        22.0,
         launch_angle_vertical_confidence=0.95,
         launch_angle_confidence=0.95,
-        camera_fallback_launch=SHOT_4_LIVE_FALLBACK,
+        ball_range_m=1.9,
+        ball_range_source="camera_ball_size",
+        ball_range_label="experimental",
     )
 
     server_module._apply_camera_fallback_launch(  # pylint: disable=protected-access
-        shot, SHOT_4_LIVE_FALLBACK
+        shot, {"status": "not_run", "reason": "no camera clip for this shot"}
     )
 
-    # the radar's value stands (owner, 30 Oct), experimental; no confidence says otherwise
-    assert shot.launch_angle_vertical == pytest.approx(41.15129572720339)
+    assert shot.launch_angle_vertical == pytest.approx(22.0)
     assert shot.launch_angle_vertical_source == "radar"
     assert shot.input_sources["launch_vertical"]["label"] == "experimental"
     assert shot.launch_angle_vertical_confidence is None
     assert shot.launch_angle_confidence is None
     assert shot.input_sources["launch_vertical"]["radar_confidence"] == pytest.approx(0.95)
     assert shot.to_dict()["metrics"]["launch_vertical"]["status"] == "experimental"
+
+
+# ------------------------- C22a: a radar vertical beyond the camera's band gives way to it
+
+# Oct 27 shot 3 on the live chain: the IWR's accepted_ops_guided_single_channel vertical 28.86
+# deg at confidence 0.69, against the accepted camera fallback 19.34 +- 0.42 (22.6 sigma)
+SHOT_3_LIVE_FALLBACK = {
+    **FALLBACK,
+    "vertical_deg": 19.34285393790834,
+    "vertical_sd_deg": 0.4213131341846669,
+    "n_points": 12,
+}
+
+
+@pytest.mark.parametrize(
+    ("radar", "confidence", "fallback", "camera"),
+    [
+        (28.859073466082037, 0.69, SHOT_3_LIVE_FALLBACK, 19.34285393790834),
+        (41.15129572720339, 0.95, SHOT_4_LIVE_FALLBACK, 26.73141912096174),
+    ],
+    ids=["oct27-shot3", "oct27-shot4"],
+)
+def test_oct27_shots_3_and_4_take_the_camera_s_vertical(radar, confidence, fallback, camera):
+    shot = _vertical_shot(
+        radar,
+        launch_angle_vertical_confidence=confidence,
+        launch_angle_confidence=confidence,
+        camera_fallback_launch=fallback,
+        camera_lens_intrinsics="calibrated",
+    )
+
+    server_module._apply_camera_fallback_launch(shot, fallback)  # pylint: disable=protected-access
+
+    resolved = shot.input_sources["launch_vertical"]
+    assert shot.launch_angle_vertical == pytest.approx(camera)
+    assert shot.launch_angle_vertical_source == "camera_fallback"
+    assert shot.launch_angle_vertical_confidence is None  # the camera's carries none
+    assert resolved["label"] == "estimated"  # the camera's own: a calibrated lens
+    assert resolved["uncertainty"] == pytest.approx(fallback["vertical_sd_deg"])
+    assert f"radar vertical {radar:.2f} deg" in resolved["note"]
+    assert "camera stands" in resolved["note"]
+    assert resolved["tried"][0]["route"] == "radar"
+    record = shot.to_dict()["metrics"]["launch_vertical"]
+    assert record["value"] == pytest.approx(camera)
+    assert record["status"] == "estimated"
+    assert f"radar vertical {radar:.2f} deg" in record["note"]
+
+
+def test_a_radar_vertical_within_the_camera_band_stays_primary():
+    fallback = {**SHOT_4_LIVE_FALLBACK, "vertical_deg": 40.5}  # 1.0 sigma from the radar's
+    shot = _vertical_shot(41.15129572720339, camera_fallback_launch=fallback)
+
+    server_module._apply_camera_fallback_launch(shot, fallback)  # pylint: disable=protected-access
+
+    assert shot.launch_angle_vertical == pytest.approx(41.15129572720339)
+    assert shot.launch_angle_vertical_source == "radar"
+    assert shot.input_sources["launch_vertical"]["label"] == "measured"
+
+
+def test_with_no_camera_vertical_the_radar_stands_as_before():
+    shot = _vertical_shot(41.15129572720339)
+
+    server_module._apply_camera_fallback_launch(  # pylint: disable=protected-access
+        shot, {"status": "withheld_insufficient_track", "reason": "2 post-impact ball point(s)"}
+    )
+
+    assert shot.launch_angle_vertical == pytest.approx(41.15129572720339)
+    assert shot.launch_angle_vertical_source == "radar"
+
+
+def test_a_shot_with_no_radar_vertical_keeps_the_camera_s_as_before():
+    # Oct 27 shots 1 and 2: the IWR measured no vertical, the camera's stands
+    shot = _shot(camera_lens_intrinsics="calibrated")
+    fallback = {**FALLBACK, "vertical_deg": 16.906498244163693, "vertical_sd_deg": 0.38}
+
+    server_module._apply_camera_fallback_launch(shot, fallback)  # pylint: disable=protected-access
+
+    assert shot.launch_angle_vertical == pytest.approx(16.906498244163693)
+    assert shot.launch_angle_vertical_source == "camera_fallback"
+    assert "radar vertical" not in (shot.input_sources["launch_vertical"]["note"] or "")
 
 
 def test_a_radar_vertical_within_the_camera_band_keeps_its_confidence():

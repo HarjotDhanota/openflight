@@ -427,14 +427,17 @@ def test_an_implausible_camera_vertical_is_refused_too():
     assert "camera_fallback: camera_fallback +75.0" in resolved.reason
 
 
-def test_a_radar_vertical_far_from_the_camera_stays_first_but_reads_experimental():
-    # Oct 27 shot 3: radar 29.99 against an accepted 18.58 +- 2.5 (4.6 sigma); radar is
-    # primary for the ball, so it stays, labelled experimental with both values named
+def test_a_radar_vertical_far_from_the_camera_gives_way_to_the_camera_s():
+    # Oct 27 shot 3 on the 31 Oct chain: radar 29.99 against an accepted 18.58 +- 2.5 (4.6
+    # sigma). The radar reading is bad, so the camera's stands with its own label and sigma
+    # and the radar's value goes in its note (owner, 3 Nov 2026; C22a)
     resolved = chain.launch_resolutions(_radar_vertical(29.99), ACCEPTED)["launch_vertical"]
 
-    assert (resolved.source, resolved.value, resolved.label) == ("radar", 29.99, "experimental")
-    assert "29.99" in resolved.note and "18.58" in resolved.note
-    assert "4.6 sigma" in resolved.note
+    assert (resolved.source, resolved.value) == ("camera_fallback", ACCEPTED["vertical_deg"])
+    assert resolved.uncertainty == ACCEPTED["vertical_sd_deg"]
+    assert "radar vertical 29.99 deg" in resolved.note and "4.6 sigma" in resolved.note
+    assert resolved.note.endswith("camera stands")
+    assert resolved.tried[0][0] == "radar" and "camera stands" in resolved.tried[0][1]
 
 
 def test_a_radar_vertical_within_three_sigma_of_the_camera_stays_measured():
