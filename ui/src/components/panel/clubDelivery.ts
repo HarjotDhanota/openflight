@@ -1,4 +1,4 @@
-import { FACE_SHAPES, flatten, type DeliveryShot, type FaceCategory } from './faceImpact';
+import { FACE_SHAPES, faceCategory, flatten, type DeliveryShot, type FaceCategory } from './faceImpact';
 
 export type DeliveryView = 'face' | 'top' | 'side';
 export const VIEW_METRICS = {
@@ -90,6 +90,41 @@ export const CLUB_PROFILES: Record<FaceCategory, ClubProfile> = {
   },
 };
 
+/** Static loft and lie (deg) of each club type the kiosk can select, population averages from the
+ * official spec tables in research/club-models (docs/camera/club-delivery-views.md lists the
+ * source of every row). Irons and PW/GW: the 7-iron category value plus the mean per-club offset
+ * from each model's own 7-iron in 13 saved OEM set tables (Cobra, Mizuno, Srixon, Wilson). SW and
+ * LW: the official wedge tables' 56 deg and 58/60 deg rows. Driver, 3W, 3H: the category values
+ * (themselves those clubs). A club type not listed (2-iron, 5W, 7W, 5H, 7H, 9H, or unknown) takes its
+ * category's. The drawings keep the category's shapes: only the side view's lean and the face
+ * view's tilt use these, and a shot's dynamic loft or lie still wins. */
+export const CLUB_STATIC: Readonly<Record<string, { loft: number; lie: number }>> = {
+  '3-iron': { loft: 18.5, lie: 60.1 },
+  '4-iron': { loft: 21.7, lie: 60.7 },
+  '5-iron': { loft: 24.6, lie: 61.3 },
+  '6-iron': { loft: 27.8, lie: 61.8 },
+  '7-iron': { loft: 31.4, lie: 62.3 },
+  '8-iron': { loft: 35.5, lie: 62.9 },
+  '9-iron': { loft: 39.8, lie: 63.4 },
+  pw: { loft: 44.4, lie: 63.9 },
+  gw: { loft: 49.5, lie: 64.2 },
+  sw: { loft: 56.0, lie: 64.0 },
+  lw: { loft: 59.0, lie: 64.0 },
+  driver: { loft: 10.4, lie: 57.4 },
+  '3-wood': { loft: 14.9, lie: 56.6 },
+  '3-hybrid': { loft: 18.8, lie: 57.7 },
+};
+
+/** The selected club's static loft and lie, else its category's (`source` says which). */
+export function staticLoftLie(
+  club: string | null | undefined,
+  category: FaceCategory = faceCategory(club)
+): { loft: number; lie: number; source: 'club' | 'category' } {
+  const own = CLUB_STATIC[(club ?? '').trim().toLowerCase()];
+  if (own) return { ...own, source: 'club' };
+  return { loft: CLUB_PROFILES[category].loft, lie: CLUB_PROFILES[category].lie, source: 'category' };
+}
+
 export function deliveryValue(shot: DeliveryShot, metric: string): number | null {
   const record = shot.metrics?.[metric];
   return record && record.status !== 'not_measured' && typeof record.value === 'number' && Number.isFinite(record.value)
@@ -102,13 +137,19 @@ export function direction(degrees: number, length = 86): [number, number] {
   return [length * Math.cos(angle), -length * Math.sin(angle)];
 }
 
+/** The face view's tilt: none without a measured dynamic lie (at address every club's face view
+ * sits the same way); with one, its difference from the selected club's own static lie, both seen
+ * along the face normal (the static at the club's static loft, the dynamic at the shot's dynamic
+ * loft, else the club's). The club's static loft and lie are only the reference, never a tilt. */
 export function faceDeliveryRotation(shot: DeliveryShot, category: FaceCategory): number {
   const lie = deliveryValue(shot, 'dynamic_lie');
   if (lie === null) return 0;
-  const loft = deliveryValue(shot, 'dynamic_loft') ?? CLUB_PROFILES[category].loft;
+  const club = staticLoftLie(shot.club, category);
   const radians = Math.PI / 180;
-  const projected = Math.atan2(Math.sin(lie * radians) * Math.cos(loft * radians), Math.cos(lie * radians)) / radians;
-  return FACE_SHAPES[category].hosel.lieDeg - projected;
+  const projected = (lieDeg: number, loftDeg: number) =>
+    Math.atan2(Math.sin(lieDeg * radians) * Math.cos(loftDeg * radians), Math.cos(lieDeg * radians)) / radians;
+  const loft = deliveryValue(shot, 'dynamic_loft') ?? club.loft;
+  return projected(club.lie, club.loft) - projected(lie, loft);
 }
 
 const n = (value: number) => Number(value.toFixed(3));

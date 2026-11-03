@@ -15,8 +15,10 @@ import {
   deliveryValue,
   faceDeliveryRotation,
   hoselLayout,
+  staticLoftLie,
 } from './clubDelivery';
 import { FACE_SHAPES, USGA, type FaceCategory } from './faceImpact';
+import { ALL_CLUBS } from '../../data/clubs';
 
 const clubs = { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid', iron: '7-iron', wedge: 'sw' };
 const categories = Object.keys(clubs) as FaceCategory[];
@@ -465,6 +467,82 @@ describe('club delivery drawings', () => {
     expect(faceDeliveryRotation(s, 'iron')).toBe(0);
   });
 
+  /* With no dynamic loft the side view leans the head to the selected club's own static loft, and with
+   * no dynamic lie the face view tilts to its own static lie; the shapes stay the category's. */
+  it('leans a 4-iron and a 9-iron differently in the side view, each at its own static loft', () => {
+    const lean = (club: string) => {
+      const s = { ...shot(), club };
+      for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+      const element = svg(s, 'side');
+      const rotation = Number(element.querySelector('.club-projection__head')!.getAttribute('transform')!.slice(7, -1));
+      const ball = element.querySelector('.club-projection__ball')!;
+      return { rotation, ball: (Math.atan2(-attr(ball, 'cy'), attr(ball, 'cx')) * 180) / Math.PI, s };
+    };
+    const [four, seven, nine] = [lean('4-iron'), lean('7-iron'), lean('9-iron')];
+    expect(staticLoftLie('4-iron').loft).toBeLessThan(staticLoftLie('7-iron').loft);
+    expect(staticLoftLie('9-iron').loft).toBeGreaterThan(staticLoftLie('7-iron').loft);
+    // the drawn face is the category's 7-iron profile; the lean carries it to the club's loft
+    for (const [club, drawn] of [
+      ['4-iron', four],
+      ['7-iron', seven],
+      ['9-iron', nine],
+    ] as const) {
+      expect(drawn.rotation).toBeCloseTo(CLUB_PROFILES.iron.loft - staticLoftLie(club).loft, 9);
+      expect(drawn.ball).toBeCloseTo(staticLoftLie(club).loft, 6);
+    }
+    expect(seven.rotation).toBe(0);
+    expect(four.rotation).not.toBeCloseTo(nine.rotation, 1);
+    // at address every club's face view sits the same way: a static loft or lie never tilts it
+    for (const drawn of [four, seven, nine]) expect(faceDeliveryRotation(drawn.s, 'iron')).toBe(0);
+    // a measured dynamic lie tilts it by its difference from the club's own static lie, seen along
+    // the face normal: the same 1 deg upright tilts a 4-iron and a 9-iron by about 1 deg each
+    const projected = (lie: number, loft: number) =>
+      (Math.atan2(Math.sin((lie * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180), Math.cos((lie * Math.PI) / 180)) *
+        180) /
+      Math.PI;
+    for (const club of ['4-iron', '9-iron']) {
+      const s = { ...shot(), club };
+      for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+      const { loft, lie } = staticLoftLie(club);
+      s.metrics!.dynamic_lie = metric(lie);
+      expect(faceDeliveryRotation(s, 'iron')).toBeCloseTo(0, 9);
+      s.metrics!.dynamic_lie = metric(lie + 1);
+      expect(faceDeliveryRotation(s, 'iron')).toBeCloseTo(projected(lie, loft) - projected(lie + 1, loft), 9);
+      expect(faceDeliveryRotation(s, 'iron')).toBeLessThan(-0.8);
+    }
+    // shot values still win: a measured dynamic loft sets the lean whatever the club
+    for (const club of ['4-iron', '9-iron']) {
+      const s = { ...shot(), club };
+      const element = svg(s, 'side');
+      expect(element.querySelector('.club-projection__head')!.getAttribute('transform')).toBe(
+        `rotate(${CLUB_PROFILES.iron.loft - 33.34})`
+      );
+    }
+  });
+
+  it('falls back to the category for a club type with no per-club value, and for an unknown one', () => {
+    for (const [club, category] of [
+      ['mystery-club', 'iron'],
+      ['', 'iron'],
+      ['2-iron', 'iron'],
+      ['5-wood', 'fairway'],
+      ['7-hybrid', 'hybrid'],
+    ] as const) {
+      expect(staticLoftLie(club)).toEqual({
+        loft: CLUB_PROFILES[category].loft,
+        lie: CLUB_PROFILES[category].lie,
+        source: 'category',
+      });
+    }
+    const s = { ...shot(), club: 'mystery-club' };
+    for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+    expect(svg(s, 'side').querySelector('.club-projection__head')!.getAttribute('transform')).toBe('rotate(0)');
+    expect(faceDeliveryRotation(s, 'iron')).toBe(0);
+    // every club the kiosk can select has an entry or a stated category fallback
+    for (const club of ALL_CLUBS) expect(['club', 'category']).toContain(staticLoftLie(club.id).source);
+    expect(staticLoftLie('4-iron').source).toBe('club');
+  });
+
   it('rejects a stale numeric record marked not measured, retaining available companion readings', () => {
     const s = shot();
     s.metrics!.face_angle = metric(9, 'not_measured');
@@ -481,8 +559,11 @@ describe('club delivery drawings', () => {
       const before = JSON.stringify(FACE_SHAPES[category]);
       const s = shot(category, hand);
       const rotation = faceDeliveryRotation(s, category);
-      const projected = (Math.atan(Math.tan((65 * Math.PI) / 180) * Math.cos((33.34 * Math.PI) / 180)) * 180) / Math.PI;
-      expect(FACE_SHAPES[category].hosel.lieDeg - rotation).toBeCloseTo(projected, 9);
+      const along = (lie: number, loft: number) =>
+        (Math.atan(Math.tan((lie * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180)) * 180) / Math.PI;
+      // measured against the club's own static lie at its static loft
+      const reference = along(staticLoftLie(s.club).lie, staticLoftLie(s.club).loft);
+      expect(reference - rotation).toBeCloseTo(along(65, 33.34), 9);
       const doc = new DOMParser().parseFromString(
         renderToString(<ClubDeliveryViews shot={s} sessionShots={[s]} />),
         'text/html'
@@ -493,10 +574,9 @@ describe('club delivery drawings', () => {
       expect(doc.querySelector('.face-impact__face')!.getAttribute('d')).toBe(FACE_SHAPES[category].face);
       expect(JSON.stringify(FACE_SHAPES[category])).toBe(before);
       s.metrics!.dynamic_loft = metric(null);
-      const fallback =
-        (Math.atan(Math.tan((65 * Math.PI) / 180) * Math.cos((CLUB_PROFILES[category].loft * Math.PI) / 180)) * 180) /
-        Math.PI;
-      expect(FACE_SHAPES[category].hosel.lieDeg - faceDeliveryRotation(s, category)).toBeCloseTo(fallback, 9);
+      expect(reference - faceDeliveryRotation(s, category)).toBeCloseTo(along(65, staticLoftLie(s.club).loft), 9);
+      s.metrics!.dynamic_lie = metric(null);
+      expect(faceDeliveryRotation(s, category)).toBe(0);
     }
   );
 
