@@ -215,3 +215,38 @@ def test_the_fusion_hands_the_fallback_s_contact_to_the_club_stage(monkeypatch):
     fp.process_camera_fusion(context, archive)
 
     assert seen["measured_contact"] == record
+
+
+# --- C11d (owner-adjusted): the shaft's inclination at contact, TrackMan's dynamic lie ----
+
+
+def test_the_shaft_inclination_is_the_lower_shaft_s_angle_to_the_horizon(monkeypatch):
+    """Two shaft points through the camera at the head's depth; their angle to the horizon,
+    linear between the bracket frames at the contact instant."""
+    bottom, top = (
+        np.array([0.0, 0.02, 1.7]),
+        np.array([-0.10, 0.02 + 0.10 * math.tan(math.radians(58)), 1.7]),
+    )
+
+    def world(points_px, _range, **_kwargs):
+        return np.array([bottom, top])[: len(points_px)]
+
+    monkeypatch.setattr(cd, "_pixels_to_world", world)
+    angle = cd.shaft_inclination_deg(np.zeros((2, 2)), 1.8, ball=None, geometry=None)
+    assert angle == pytest.approx(58.0, abs=1e-9)
+
+
+def test_oct27_shot1_records_its_shaft_inclination_at_contact():
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(
+        case["frames"], case["host"], **case["kwargs"], club="7-iron"
+    )
+
+    shaft = result.shaft
+    assert shaft["status"] == "measured"
+    assert 40.0 < shaft["inclination_deg"] < 80.0
+    assert set(shaft["frames"]) == {43, 44}
+    shaft["per_frame_deg"] = {int(k): v for k, v in shaft["per_frame_deg"].items()}
+    low, high = sorted(shaft["per_frame_deg"].values())
+    assert low - 1e-9 <= shaft["inclination_deg"] <= high + 1e-9
+    assert shaft["minus_static_lie_deg"] == pytest.approx(shaft["inclination_deg"] - 62.3)

@@ -272,6 +272,8 @@ class ChainedDelivery:
     ball_position: dict | None = None
     # the camera head track's record when it ran as the last fallback (head_track.py)
     head_track: dict | None = None
+    # the lower shaft's inclination to the horizon at contact (TrackMan's dynamic lie)
+    shaft: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -923,7 +925,9 @@ def _shaft_ends(
                     " golfer or background"
                 )
             elif distance is not None:
-                ends.append((np.asarray(axis.end_px, dtype=float), direction))
+                along = (support - np.asarray(axis.end_px)) @ np.asarray(direction, dtype=float)
+                top = support[int(np.argmin(along))].astype(float) if len(support) else None
+                ends.append((np.asarray(axis.end_px, dtype=float), direction, top))
                 break
             across = (xx - point[0]) * direction[1] - (yy - point[1]) * direction[0]
             mask &= np.abs(across) > max(3.0 * band, 2.0 * width)
@@ -938,6 +942,7 @@ class _HeadAnchor:
     direction_px: np.ndarray  # shaft axis, unit, pointing down toward the head
     step_px: float  # the shaft's band half-width: spacing of the hosel points
     thickness_px: float  # largest inscribed radius of the head's moving pixels
+    shaft_top_px: np.ndarray | None = None  # the shaft line's far (upper) end, same frame
 
     def hosel_points(self) -> np.ndarray:
         """The heel's sole and two points up the hosel axis: rigid on the head."""
@@ -984,8 +989,8 @@ def _clubhead_anchor(
     )
     if not ends:
         return None, "; ".join(refused or ["no shaft line in the moving pixels"])
-    anchor, direction = min(
-        ((end + (x0, 0), axis) for end, axis in ends),
+    anchor, direction, top = min(
+        ((end + (x0, 0), axis, None if top is None else top + (x0, 0)) for end, axis, top in ends),
         key=lambda item: math.dist(item[0], (ball.x, ball.y)),
     )
     above = float(ball.y - anchor[1])
@@ -1013,6 +1018,7 @@ def _clubhead_anchor(
             direction_px=np.asarray(direction, dtype=float),
             step_px=band,
             thickness_px=float(thickness.max()),
+            shaft_top_px=top,
         ),
         None,
     )
@@ -1122,6 +1128,7 @@ def estimate_chained_delivery(
     head_track: HeadTrackContext | None = None,
     ops_reference: CameraOpsReference | None = None,
     measured_contact: Mapping | None = None,
+    club: str | None = None,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
@@ -1333,6 +1340,25 @@ def estimate_chained_delivery(
             "forward_m": float(geometry.ball_position_lfu[1]),
         },
     }
+    common["shaft"] = _shaft_at_contact(
+        frames,
+        background,
+        ball,
+        camera_s,
+        impact_idx,
+        contact_camera_s,
+        range_at=(
+            (
+                lambda t: float(
+                    track.range_at(impact_t_s + t - contact_camera_s, radar_geo.range_res_m)
+                )
+            )
+            if range_evidence is not None
+            else None
+        ),
+        geometry=geometry,
+        club=club,
+    )
     if not pair_estimates:
         if range_evidence is None and geometry.calibrated_model is not None:
             return ChainedDelivery(status="rejected_calibrated_requires_iwr_range", **common)
@@ -1411,6 +1437,59 @@ def attack_angle_at_contact(
     if not np.all(np.isfinite(velocity)):
         return None
     return _velocity_angles(velocity)[1]
+
+
+def shaft_inclination_deg(points_px: np.ndarray, range_m: float, *, ball, geometry) -> float:
+    """The angle to the horizon of the shaft between two image points (heel end, upper end),
+    both read at the head's range (the shaft's own depth change over a short segment is not
+    modelled)."""
+    world = _pixels_to_world(
+        np.asarray(points_px, dtype=float), range_m, ball=ball, geometry=geometry
+    )
+    lateral, up, forward = (float(v) for v in world[1] - world[0])
+    return math.degrees(math.atan2(abs(up), math.hypot(lateral, forward)))
+
+
+def _shaft_at_contact(
+    frames, background, ball, camera_s, impact_idx, contact_s, *, range_at, geometry, club
+) -> dict:
+    """The lower shaft's inclination at the ball-defined contact: per bracket frame from the
+    shaft line the head anchor walks (heel end, upper end), linear to the contact instant;
+    with the club category's static lie (reference data) as an optional derived field."""
+    if range_at is None:
+        return {"status": "not_measured", "reason": "no head depth (no range evidence)"}
+    frames_used = (impact_idx, impact_idx + 1)
+    if frames_used[1] >= len(frames):
+        return {"status": "not_measured", "reason": "no frame after the last rest frame"}
+    per_frame = {}
+    for index in frames_used:
+        anchor, refusal = _clubhead_anchor(frames[index], background, ball)
+        if anchor is None or anchor.shaft_top_px is None:
+            return {
+                "status": "not_measured",
+                "reason": f"no shaft line at f{index}: {refusal or 'no upper end'}",
+            }
+        points = np.array([anchor.point_px, anchor.shaft_top_px])
+        per_frame[index] = shaft_inclination_deg(
+            points, range_at(float(camera_s[index])), ball=ball, geometry=geometry
+        )
+    t0, t1 = (float(camera_s[i]) for i in frames_used)
+    fraction = min(1.0, max(0.0, (contact_s - t0) / (t1 - t0))) if t1 > t0 else 0.5
+    a0, a1 = (per_frame[i] for i in frames_used)
+    value = a0 + (a1 - a0) * fraction
+    from .dynamic_lie import static_lie_reference  # noqa: PLC0415
+
+    reference = static_lie_reference(club, value)
+    return {
+        "status": "measured",
+        "inclination_deg": value,
+        "frames": list(frames_used),
+        "per_frame_deg": {str(i): per_frame[i] for i in frames_used},
+        "contact_fraction": fraction,
+        "minus_static_lie_deg": reference["shaft_minus_static_lie_deg"] if reference else None,
+        "static_lie_reference": reference,
+        "note": "both shaft points read at the head's range; + minus_static_lie = toe up",
+    }
 
 
 def _head_track_fallback(

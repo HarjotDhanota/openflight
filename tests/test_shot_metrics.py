@@ -191,6 +191,22 @@ def test_dynamic_lie_keeps_its_model_label_and_assumptions_independent_of_impact
     assert record["note"] == entry["note"]
 
 
+def test_dynamic_lie_falls_back_to_the_club_stage_s_shaft_at_contact():
+    """C11d: TrackMan's dynamic lie, the lower shaft's inclination to the horizon at
+    contact, from the camera club stage when the post-shot reader has none."""
+    shaft = {
+        "status": "measured",
+        "inclination_deg": 66.6,
+        "minus_static_lie_deg": 4.3,
+        "note": "both shaft points read at the head's range",
+    }
+    shot = fusion_shot(camera_fusion_processing={"club_delivery": {"shaft": shaft}})
+    record = shot.to_dict()["metrics"]["dynamic_lie"]
+    assert record["value"] == pytest.approx(66.6)
+    assert record["status"] in ("measured", "estimated", "experimental")
+    assert "shaft" in record["source"] and "+4.3" in record["note"]
+
+
 def test_a_model_geometry_spin_and_carry_keep_their_label():
     shot = fusion_shot()
     shot.spin_source = "model_geometry"

@@ -145,18 +145,47 @@ def _impact(metric_id: str):
     return build
 
 
+CLUB_STAGE_SHAFT_SOURCE = (
+    "camera club stage: the lower shaft's inclination to the horizon at contact "
+    "(calibrated camera, both ends at the head's depth)"
+)
+
+
+def _club_stage_shaft(shot) -> dict:
+    processing = sm.as_mapping(shot.get("camera_fusion_processing"))
+    return sm.as_mapping(sm.as_mapping(processing.get("club_delivery")).get("shaft"))
+
+
 def _dynamic_lie(shot):
+    """TrackMan's dynamic lie: the post-shot shaft reader's, else the club stage's (C11d)."""
     reading = sm.as_mapping(shot.get("impact_location"))
     entry = sm.as_mapping(reading.get("dynamic_lie"))
     value = sm.finite_or_none(entry.get("value"))
-    if entry.get("status") != sm.MODEL_GEOMETRY or value is None or not 0 < value <= 90:
+    if entry.get("status") == sm.MODEL_GEOMETRY and value is not None and 0 < value <= 90:
+        return sm.producer_record("dynamic_lie", entry)
+    shaft = _club_stage_shaft(shot)
+    inclination = sm.finite_or_none(shaft.get("inclination_deg"))
+    if shaft.get("status") == "measured" and inclination is not None and 0 < inclination <= 90:
+        derived = sm.finite_or_none(shaft.get("minus_static_lie_deg"))
+        notes = [shaft.get("note")]
+        if derived is not None:
+            notes.append(f"{derived:+.1f} deg against the club category's static lie (reference)")
         return sm.build_record(
             "dynamic_lie",
-            None,
-            None,
-            reason=entry.get("reason") or reading.get("reason") or NO_DYNAMIC_LIE,
+            inclination,
+            sm.MEASURED,
+            source=CLUB_STAGE_SHAFT_SOURCE,
+            note="; ".join(note for note in notes if note) or None,
         )
-    return sm.producer_record("dynamic_lie", entry)
+    return sm.build_record(
+        "dynamic_lie",
+        None,
+        None,
+        reason=entry.get("reason")
+        or shaft.get("reason")
+        or reading.get("reason")
+        or NO_DYNAMIC_LIE,
+    )
 
 
 def _full(metric_id: str, field: str, value_key: str):

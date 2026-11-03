@@ -358,6 +358,7 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
                 ),
             ),
             measured_contact=measured_contact,
+            club=context.get("club"),
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         club = ChainedDelivery(status="error")
