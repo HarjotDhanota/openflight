@@ -17,7 +17,7 @@ import {
   hoselLayout,
   staticLoftLie,
 } from './clubDelivery';
-import { FACE_SHAPES, USGA, type FaceCategory } from './faceImpact';
+import { FACE_SHAPES, USGA, faceCategory, type FaceCategory } from './faceImpact';
 import { ALL_CLUBS } from '../../data/clubs';
 
 const clubs = { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid', iron: '7-iron', wedge: 'sw' };
@@ -424,10 +424,10 @@ describe('club delivery drawings', () => {
     expect(attr(element.querySelector('.club-projection__ball')!, 'r')).toBe(21.35);
     const head = element.querySelector('.club-projection__head')!;
     expect(head.getAttribute('transform')).toBe(
-      `rotate(${view === 'top' ? -1.44 * (hand === 'left' ? 1 : -1) : CLUB_PROFILES[category].loft - 33.34})`
+      `rotate(${view === 'top' ? -1.44 * (hand === 'left' ? 1 : -1) : staticLoftLie(clubs[category]).loft - 33.34})`
     );
     const rotation = (Number(head.getAttribute('transform')!.slice(7, -1)) * Math.PI) / 180;
-    const edge = clubProfilePaths(category);
+    const edge = clubProfilePaths(category, view === 'top' ? undefined : staticLoftLie(clubs[category]).loft);
     const [nx, ny] = view === 'top' ? [1, 0] : [edge.by - edge.ty, edge.tx - edge.bx];
     const normal = [
       nx * Math.cos(rotation) - ny * Math.sin(rotation),
@@ -469,29 +469,39 @@ describe('club delivery drawings', () => {
 
   /* With no dynamic loft the side view leans the head to the selected club's own static loft, and with
    * no dynamic lie the face view tilts to its own static lie; the shapes stay the category's. */
-  it('leans a 4-iron and a 9-iron differently in the side view, each at its own static loft', () => {
+  it('draws a 4-iron and a 9-iron side view at their own static lofts, not a rotated 7-iron', () => {
     const lean = (club: string) => {
       const s = { ...shot(), club };
       for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
       const element = svg(s, 'side');
       const rotation = Number(element.querySelector('.club-projection__head')!.getAttribute('transform')!.slice(7, -1));
       const ball = element.querySelector('.club-projection__ball')!;
-      return { rotation, ball: (Math.atan2(-attr(ball, 'cy'), attr(ball, 'cx')) * 180) / Math.PI, s };
+      const face = element
+        .querySelector('.club-projection__face-edge')!
+        .getAttribute('d')!
+        .match(/-?\d+(?:\.\d+)?/g)!
+        .map(Number);
+      return {
+        rotation,
+        ball: (Math.atan2(-attr(ball, 'cy'), attr(ball, 'cx')) * 180) / Math.PI,
+        face: (Math.atan2(face[2] - face[0], face[3] - face[1]) * 180) / Math.PI,
+        s,
+      };
     };
     const [four, seven, nine] = [lean('4-iron'), lean('7-iron'), lean('9-iron')];
     expect(staticLoftLie('4-iron').loft).toBeLessThan(staticLoftLie('7-iron').loft);
     expect(staticLoftLie('9-iron').loft).toBeGreaterThan(staticLoftLie('7-iron').loft);
-    // the drawn face is the category's 7-iron profile; the lean carries it to the club's loft
+    // the profile is built at the club's loft: no rotation, the face line itself at the loft
     for (const [club, drawn] of [
       ['4-iron', four],
       ['7-iron', seven],
       ['9-iron', nine],
     ] as const) {
-      expect(drawn.rotation).toBeCloseTo(CLUB_PROFILES.iron.loft - staticLoftLie(club).loft, 9);
+      expect(drawn.rotation).toBe(0);
+      expect(drawn.face).toBeCloseTo(staticLoftLie(club).loft, 1);
       expect(drawn.ball).toBeCloseTo(staticLoftLie(club).loft, 6);
     }
-    expect(seven.rotation).toBe(0);
-    expect(four.rotation).not.toBeCloseTo(nine.rotation, 1);
+    expect(four.face).not.toBeCloseTo(nine.face, 0);
     // at address every club's face view sits the same way: a static loft or lie never tilts it
     for (const drawn of [four, seven, nine]) expect(faceDeliveryRotation(drawn.s, 'iron')).toBe(0);
     // a measured dynamic lie tilts it by its difference from the club's own static lie, seen along
@@ -515,9 +525,34 @@ describe('club delivery drawings', () => {
       const s = { ...shot(), club };
       const element = svg(s, 'side');
       expect(element.querySelector('.club-projection__head')!.getAttribute('transform')).toBe(
-        `rotate(${CLUB_PROFILES.iron.loft - 33.34})`
+        `rotate(${staticLoftLie(club).loft - 33.34})`
       );
     }
+  });
+
+  /* The side view is each club at address: its sole on the ground, its face at its own loft, the
+   * shaft upright; nothing tips over (a rotated category profile lifted the sole off the ground). */
+  it.each(ALL_CLUBS.map((club) => club.id))('stands the %s on its sole at its own loft in the side view', (club) => {
+    const category = faceCategory(club);
+    const { loft } = staticLoftLie(club);
+    const s = { ...shot(category), club };
+    for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+    const element = svg(s, 'side');
+    expect(element.querySelector('.club-projection__head')!.getAttribute('transform')).toBe('rotate(0)');
+    const paths = clubProfilePaths(category, loft);
+    expect(element.querySelector('.club-projection__outline')!.getAttribute('d')).toBe(paths.side);
+    // the face line runs at the loft from vertical
+    expect((Math.atan2(paths.bx - paths.tx, paths.by - paths.ty) * 180) / Math.PI).toBeCloseTo(loft, 6);
+    // the lowest point is the sole, behind the leading edge, and the leading edge sits on it
+    const outline = polygon(paths.side);
+    const ground = Math.max(...outline.map(([, y]) => y));
+    const lowest = outline.find(([, y]) => y === ground)!;
+    expect(lowest[0]).toBeLessThan(paths.bx);
+    expect(ground - paths.by).toBeGreaterThanOrEqual(0);
+    expect(ground - paths.by).toBeLessThanOrEqual(6);
+    // the shaft stands upright above the head
+    const shaft = polygon(element.querySelector('.club-projection__shaft')!.getAttribute('d')!);
+    expect(Math.abs(shaft[0][0] + shaft[3][0] - shaft[1][0] - shaft[2][0])).toBeLessThan(1e-6);
   });
 
   it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {

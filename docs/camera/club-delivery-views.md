@@ -107,7 +107,7 @@ its head is turned by the shot's face angle at impact, its arrows are the face
 angle and club path at impact, and its numbers are face to path, face angle and
 club path. Only a shot with no face angle draws the head square.
 Top heads rotate by signed face angle so their normal follows the
-face arrow. Side heads rotate by static loft minus dynamic loft around the
+face arrow. Side heads rotate by the club's static loft minus dynamic loft around the
 impact centre. The ball is 42.7 mm
 in diameter and sits beyond the arrows on the target side; its position is
 illustrative, not a measured ball location. Ball and head share one millimetre
@@ -127,8 +127,11 @@ unchanged centre by the difference between its static hosel projection and
 when available and otherwise the category's static loft.
 
 Each selectable club type has its own static loft and lie (`CLUB_STATIC` in
-`ui/src/components/panel/clubDelivery.ts`). The drawings keep their category's shape; the
-side view leans the head to the club's static loft when the shot has no dynamic loft. The
+`ui/src/components/panel/clubDelivery.ts`). The side view is the category's profile built at
+the club's own static loft (`clubProfilePaths(category, loft)`): the face line runs at that
+loft, the sole stays on the ground and the shaft upright, and only what the profile derives
+from loft (the face's projection, the blade's depth) changes; nothing is rotated to stand in
+for a loft. A shot's dynamic loft turns the head from that static loft as before. The
 face view never tilts for a static value: at address every club's face sits the same way,
 and a shot's measured dynamic lie tilts it by its difference from the club's own static lie
 (both seen along the face normal). A shot's dynamic loft or lie always wins. All values are population averages from the official spec tables
