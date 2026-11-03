@@ -132,12 +132,13 @@ side view leans the head to the club's static loft when the shot has no dynamic 
 face view never tilts for a static value: at address every club's face sits the same way,
 and a shot's measured dynamic lie tilts it by its difference from the club's own static lie
 (both seen along the face normal). A shot's dynamic loft or lie always wins. All values are population averages from the official spec tables
-already saved in research/club-models (no new research); "category" rows have no per-club
-value there and take the category's.
+in research/club-models: the saved OEM set and wedge tables, and for the 2-iron, 5-wood,
+7-wood and 5-, 7- and 9-hybrid official OEM spec pages and sell sheets of 2022+ models (each
+row says how many). Only an unknown club name takes its category's values.
 
 | Club | Loft | Lie | Source |
 |---|---|---|---|
-| 2-iron | 31.4 | 62.3 | category (iron): no 2-iron in the saved tables |
+| 2-iron | 17.6 | 59.7 | mean of 5 utility/driving irons listed as #2: PING iDi, Srixon ZXiU and ZX Mk II Utility, Callaway Apex UT (2024), TaylorMade P·UDI (a modern 2-iron is a utility iron) |
 | 3-iron | 18.5 | 60.1 | 7-iron category + mean offset from each model's 7-iron, 7 OEM set tables (Cobra, Mizuno, Srixon, Wilson pages in club-geometry/irons) |
 | 4-iron | 21.7 | 60.7 | same method, 13 set tables |
 | 5-iron | 24.6 | 61.3 | same method, 13 set tables |
@@ -151,10 +152,19 @@ value there and take the category's.
 | LW | 59.0 | 64.0 | official wedge tables, 58 and 60 deg rows (24 models each) |
 | Driver | 10.4 | 57.4 | the driver category: 13 OEM specs (club-geometry/woods/data/specs_oem.csv) |
 | 3-wood | 14.9 | 56.6 | the fairway category: 8 OEM 3-wood specs (specs_oem.csv) |
-| 5-wood, 7-wood | 14.9 | 56.6 | category (fairway): no 5W or 7W in the saved tables |
+| 5-wood | 18.1 | 57.5 | mean of 7 models: PING G440 Max, Callaway Elyte and Quantum Max, Srixon ZXi RKT, TaylorMade Qi35, Tour Edge Exotics Max, Wilson DynaPWR Max |
+| 7-wood | 21.0 | 58.1 | the same 7 models |
 | 3-hybrid | 18.8 | 57.7 | the hybrid category: 8 OEM 3H specs (specs_oem.csv) |
-| 5-, 7-, 9-hybrid | 18.8 | 57.7 | category (hybrid): no other hybrids in the saved tables |
-| unknown | category | category | the category the club name maps to |
+| 5-hybrid | 25.2 | 59.4 | mean of 14 models: PING G440; Callaway Elyte, Elyte X, Quantum Max, Big Bertha (2023); Cobra DS-ADAPT; TaylorMade Qi35, Qi35 Max, Qi10, Qi10 Max, Stealth 2, Stealth 2 HD, Stealth; Tour Edge Exotics Max |
+| 7-hybrid | 32.2 | 60.6 | mean of 9 models: PING G440; Callaway Elyte X, Quantum Max, Big Bertha; TaylorMade Qi35 Max, Qi10, Qi10 Max, Stealth 2, Stealth |
+| 9-hybrid | 39.1 | 61.6 | only one model lists a 9H (Callaway Big Bertha 2023: 36 / 62), so the 7H mean plus two per-number steps (3.4 deg, 0.5 deg per number, the mean 5H-to-7H gap of the 9 models with both) |
+| unknown name | category | category | the category the club name maps to |
+
+Adjustable heads list either one lie (PING's is the average over its hosel positions) or a
+range; a TaylorMade range is read at its low end, the standard sleeve setting, as the
+existing wood specs read it. Per-model rows, URLs and the aggregation are in
+research/club-models/research/per-club-loft-lie/ (`fallback_rows.csv`,
+`aggregate_fallbacks.py`, `per_club_fallbacks.json`).
 
 The extraction and aggregation scripts and the per-row data are in
 research/club-models/research/per-club-loft-lie/ (local only).
