@@ -15,6 +15,7 @@ import {
   deliveryValue,
   faceDeliveryRotation,
   hoselLayout,
+  hybridHeelNeck,
   staticLoftLie,
 } from './clubDelivery';
 import { FACE_SHAPES, USGA, clubModel, faceCategory, type FaceCategory } from './faceImpact';
@@ -575,9 +576,9 @@ describe('club delivery drawings', () => {
     expect(Math.abs(shaft[0][0] + shaft[3][0] - shaft[1][0] - shaft[2][0])).toBeLessThan(1e-6);
   });
 
-  /* Only the high-loft hybrids' face/neck junction was wrong: their neck flare's front foot stood in
-   * front of the lofted face, so the face line ran into the neck. Every other club's heel view stays
-   * exactly as approved at 1192aac1 (sha-256 of its rendered SVG, both hands, no shot). */
+  /* Only the hybrids' heel-view neck changes (the high-loft ones pinched or cut where the lofted face
+   * met the hosel; the 3-hybrid shares their new neck). Every other club's heel view stays exactly as
+   * approved at 1192aac1 (sha-256 of its rendered SVG, both hands, no shot). */
   const APPROVED_HEEL_VIEWS: Record<string, string> = {
     '2-iron:right': 'e002399f1cacad6e',
     '2-iron:left': 'e75c8872107d27a7',
@@ -603,8 +604,6 @@ describe('club delivery drawings', () => {
     'sw:left': '6121b1f8f4661667',
     'lw:right': 'aa3f81e7b730e193',
     'lw:left': '8362ac1ad9813b5c',
-    '3-hybrid:right': '6c2d3192d8c77e88',
-    '3-hybrid:left': '8a8c5bab057578bc',
     'driver:right': 'a28d187dc777d223',
     'driver:left': 'f4a02631a8920580',
     '3-wood:right': '1a1268e79c944a0e',
@@ -621,29 +620,53 @@ describe('club delivery drawings', () => {
     expect(createHash('sha256').update(markup).digest('hex').slice(0, 16)).toBe(APPROVED_HEEL_VIEWS[key]);
   });
 
-  it.each(['5-hybrid', '7-hybrid', '9-hybrid'])(
-    'ends the %s face line at the face top, where the neck meets it, with no neck in front of the face',
+  /* A hybrid's heel-view neck reads like a real hybrid hosel at every loft: the front edge one smooth
+   * curve from the ferrule, tangent to the tube, down into the face top, turning one way only; the
+   * back edge one smooth curve from the ferrule onto the crown, tangent to both. */
+  const curvatures = (c: Point[]) =>
+    Array.from({ length: 41 }, (_, k) => {
+      const t = k / 40;
+      const u = 1 - t;
+      const d1 = [0, 1].map(
+        (j) => 3 * (u * u * (c[1][j] - c[0][j]) + 2 * u * t * (c[2][j] - c[1][j]) + t * t * (c[3][j] - c[2][j]))
+      );
+      const d2 = [0, 1].map((j) => 6 * (u * (c[2][j] - 2 * c[1][j] + c[0][j]) + t * (c[3][j] - 2 * c[2][j] + c[1][j])));
+      return (d1[0] * d2[1] - d1[1] * d2[0]) / Math.hypot(d1[0], d1[1]) ** 3;
+    });
+  it.each(['3-hybrid', '5-hybrid', '7-hybrid', '9-hybrid'])(
+    'runs the %s hosel smoothly into the face top and the crown',
     (club) => {
       const { loft } = staticLoftLie(club);
       const paths = clubProfilePaths('hybrid', loft);
+      const layout = hoselLayout('hybrid', 'side', loft);
+      const { front, back, d } = hybridHeelNeck(loft);
+      // the front edge: from the tube's front at the ferrule, tangent to the tube, into the face top
+      expect(front[0][0]).toBeCloseTo(layout.shaftX + layout.ferruleRadius, 6);
+      expect(front[0][1]).toBeCloseTo(layout.ferruleBase, 6);
+      expect(Math.abs(front[1][0] - front[0][0])).toBeLessThan(1e-9);
+      expect(Math.hypot(front[3][0] - paths.tx, front[3][1] - paths.ty)).toBeLessThan(0.5);
+      const k = curvatures(front).filter((v) => Math.abs(v) > 1e-6);
+      expect(k.every((v) => Math.sign(v) === Math.sign(k[0]))).toBe(true);
+      // it arrives between straight down and the face line: no pinch at the face top
+      const arrive = [front[3][0] - front[2][0], front[3][1] - front[2][1]];
+      const face = [paths.bx - paths.tx, paths.by - paths.ty];
+      expect(arrive[0]).toBeGreaterThanOrEqual(0);
+      expect(arrive[0] / arrive[1]).toBeLessThanOrEqual(face[0] / face[1] + 1e-9);
+      // the back edge: tangent to the tube at the ferrule, onto the crown, one way only
+      expect(back[0][0]).toBeCloseTo(layout.shaftX - layout.ferruleRadius, 6);
+      expect(Math.abs(back[1][0] - back[0][0])).toBeLessThan(1e-9);
+      const kb = curvatures(back).filter((v) => Math.abs(v) > 1e-6);
+      expect(kb.every((v) => Math.sign(v) === Math.sign(kb[0]))).toBe(true);
+      const head = polygon(paths.side);
+      expect(nearest(back[3], head)[0]).toBeLessThan(0.5);
+      // the kiosk draws that neck, and nothing of it stands in front of the face below the face top
       const s = { ...clubModel(club), impact_location: { handedness: 'right' } };
       const element = svg(s as Shot, 'side');
-      const neck = polygon(element.querySelector('.club-projection__neck')!.getAttribute('d')!);
-      // the face line still runs from the leading edge to the face top
-      const face = element
-        .querySelector('.club-projection__face-edge')!
-        .getAttribute('d')!
-        .match(/-?\d+(?:\.\d+)?/g)!
-        .map(Number);
-      expect(face[0]).toBeCloseTo(paths.tx, 2);
-      expect(face[1]).toBeCloseTo(paths.ty, 2);
-      // the neck meets the face top there
-      expect(Math.min(...neck.map(([x, y]) => Math.hypot(x - paths.tx, y - paths.ty)))).toBeLessThan(0.9);
-      // and none of the neck below the face top stands in front of the face line
+      expect(element.querySelector('.club-projection__neck')!.getAttribute('d')).toBe(d);
+      const neck = polygon(d);
       const faceX = (y: number) => paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
       for (const [x, y] of neck) if (y > paths.ty + 0.05) expect(x).toBeLessThanOrEqual(faceX(y) + 0.05);
-      // nor does the shaft hang below the neck in front of it
-      const head = polygon(element.querySelector('.club-projection__outline')!.getAttribute('d')!);
+      // and the shaft's foot is hidden in the neck or the head
       const shaft = polygon(element.querySelector('.club-projection__shaft')!.getAttribute('d')!);
       for (const q of [shaft[0], shaft[3]]) expect(inside(q, neck) || inside(q, head)).toBe(true);
     }
