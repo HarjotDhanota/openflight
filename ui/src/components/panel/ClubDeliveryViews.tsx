@@ -16,7 +16,6 @@ import {
   direction,
   hoselLayout,
   staticLoftLie,
-  woodHeelNeck,
   type DeliveryView,
 } from './clubDelivery';
 import { formatMetricValue } from './metricFormat';
@@ -162,12 +161,8 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
     view,
     profileLoft
   );
-  const woodNeck = !top
-    ? woodHeelNeck(category, profileLoft)
-    : `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
   const neck = p.depth ? '' : bladeNeck(category, view, profileLoft).d;
-  // a wood's heel-view neck now follows the head's top, so its shaft starts at the ferrule's foot
-  const shaftFoot = p.depth && !top ? ferruleBase + 1 : shaftY;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
   const headYs = coords.filter((_, i) => i % 2 === 1);
@@ -220,7 +215,7 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
     <g className="club-projection__hosel">
       <path
         className="club-projection__shaft"
-        d={`M ${shaftX - 4.6} ${shaftFoot} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftFoot} Z`}
+        d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
         fill={`url(#${id}shaft)`}
       />
       {p.depth ? (
