@@ -1,9 +1,14 @@
 import { renderToString } from 'react-dom/server';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { FaceImpactView } from './FaceImpactView';
 import {
+  BLAST_EDGE_OUTSIDE_MM,
   FACE_SHAPES,
+  blastedField,
+  clubModel,
   faceCategory,
   faceCentre,
   GROOVE_WIDTH_MM,
@@ -13,6 +18,7 @@ import {
   type FaceCategory,
 } from './faceImpact';
 import { MetricGroupPanel } from './MetricGroupPanel';
+import { ALL_CLUBS } from '../../data/clubs';
 
 function record(overrides: Partial<ShotMetric>): ShotMetric {
   return {
@@ -645,9 +651,9 @@ describe('FaceImpactView', () => {
     expect(html.match(/face-impact__centre-line"/g)).toHaveLength(2);
   });
 
-  it('draws the club as a filled silhouette: head, face, hosel, ferrule, shaft and score lines', () => {
+  it('draws the club as a filled silhouette: head, blasted field, hosel, ferrule, shaft and score lines', () => {
     const html = render(shot());
-    for (const part of ['head', 'face', 'hosel', 'ferrule', 'shaft']) expect(html).toContain(`face-impact__${part}"`);
+    for (const part of ['head', 'field', 'hosel', 'ferrule', 'shaft']) expect(html).toContain(`face-impact__${part}"`);
     expect(html.match(/face-impact__groove"/g)).toHaveLength(FACE_SHAPES.iron.grooves.length);
     expect(attr(html, 'face-impact__groove"', 'stroke-width')).toBe(String(GROOVE_WIDTH_MM));
     const fill = attr(html, 'face-impact__head"', 'fill');
@@ -740,6 +746,169 @@ describe('FaceImpactView', () => {
     const html = render(shot(), [...same, other, unread]);
     expect(html.match(/face-impact__earlier"/g)).toHaveLength(2);
     expect(html).toContain('2 earlier with this club');
+  });
+});
+
+/* An iron's or wedge's face: one chrome head, and a sand-blasted groove field (the owner's reference
+ * photo and approved mock-up v3, 2026-11-03) between two vertical edge lines 1.25 mm outside the
+ * longest scorelines, across the whole head from its top edge to its bottom edge. */
+describe('the blasted groove field', () => {
+  const blades = ['iron', 'wedge'] as const;
+  const bladeHands = blades.flatMap((category) =>
+    (['right', 'left'] as const).map((hand) => [category, hand] as const)
+  );
+  const club = { iron: '7-iron', wedge: 'sw' };
+  const html = (category: 'iron' | 'wedge', hand: 'right' | 'left') =>
+    render(shot({ club: club[category], impact_location: { handedness: hand } } as Partial<Shot>));
+  const tags = (markup: string, cls: string) =>
+    [...markup.matchAll(new RegExp(`<[^>]*class="${cls}"[^>]*>`, 'g'))].map((m) => m[0]);
+  const num = (tag: string, name: string) => Number(tag.match(new RegExp(` ${name}="([^"]*)"`))![1]);
+
+  it.each(blades)('puts the %s edge lines 1.25 mm outside the longest scorelines', (category) => {
+    const ends = FACE_SHAPES[category].grooves.flatMap((g) => [g.from, g.to]);
+    expect(BLAST_EDGE_OUTSIDE_MM).toBe(1.25);
+    expect(blastedField(category)).toEqual({
+      x0: Math.min(...ends) - BLAST_EDGE_OUTSIDE_MM,
+      x1: Math.max(...ends) + BLAST_EDGE_OUTSIDE_MM,
+    });
+  });
+
+  it.each(bladeHands)(
+    'draws the %s field between its edge lines, clipped to the head (%s-handed)',
+    (category, hand) => {
+      const markup = html(category, hand);
+      const { x0, x1 } = blastedField(category)!;
+      const edges = tags(markup, 'face-impact__field-edge');
+      expect(edges.map((tag) => [num(tag, 'x1'), num(tag, 'x2')])).toEqual([
+        [x0, x0],
+        [x1, x1],
+      ]);
+      // the full height of the drawing, cut to the head's own outline: top edge to bottom edge
+      const { minY, maxY } = FACE_SHAPES[category].bounds;
+      const [fill] = tags(markup, 'face-impact__field-fill');
+      expect([num(fill, 'x'), num(fill, 'width'), num(fill, 'y'), num(fill, 'height')]).toEqual([
+        x0,
+        x1 - x0,
+        minY,
+        maxY - minY,
+      ]);
+      const [field] = tags(markup, 'face-impact__field');
+      const clip = field.match(/clip-path="url\(#([^)]*)\)"/)![1];
+      const clipPath = markup.match(new RegExp(`<clipPath id="${clip}"><path d="([^"]*)"`))![1];
+      expect(clipPath).toBe(FACE_SHAPES[category].head);
+      // drawn inside the mirrored head drawing, in the face's own frame, before the centre lines
+      expect(markup.indexOf('face-impact__field"')).toBeGreaterThan(markup.indexOf('face-impact__outline-group'));
+      expect(markup.indexOf('face-impact__field"')).toBeLessThan(markup.indexOf('face-impact__centre-lines'));
+      // the grooves are unchanged, on the field
+      expect(markup.match(/face-impact__groove"/g)).toHaveLength(FACE_SHAPES[category].grooves.length);
+      expect(markup).toContain('face-impact__face-marks face-impact__face-marks--blasted');
+    }
+  );
+
+  it.each(bladeHands)('leaves no separate face panel on the %s (%s-handed): one chrome head', (category, hand) => {
+    const markup = html(category, hand);
+    for (const panel of ['face', 'face-reflection', 'grain', 'scoring', 'edge'])
+      expect(markup).not.toContain(`class="face-impact__${panel}"`);
+    // the head, its reflection and its rim highlights stay
+    for (const part of ['head', 'head-reflection', 'leading-radius', 'rim'])
+      expect(markup).toContain(`face-impact__${part}"`);
+  });
+
+  it.each(['driver', 'fairway', 'hybrid'] as const)('keeps the %s face panel and draws no field', (category) => {
+    expect(blastedField(category)).toBeNull();
+    const markup = render(shot({ club: { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid' }[category] }));
+    expect(markup).toContain('class="face-impact__face"');
+    expect(markup).not.toContain('face-impact__field');
+  });
+
+  /** WCAG contrast ratio of two #rrggbb colours. */
+  const contrast = (a: string, b: string) => {
+    const lum = (hex: string) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => {
+        const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+    };
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const css = readFileSync(new URL('./FaceImpactView.css', import.meta.url), 'utf8');
+  const theme = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
+  const block = (text: string, selector: string) => text.slice(text.indexOf(selector)).split('}')[0];
+  const value = (text: string, name: string) => text.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'))![1];
+
+  it.each(['chrome', 'satin'])('reads on the %s finish in the dark and the light theme', (finish) => {
+    const art = block(css, `[data-finish='${finish}']`);
+    const blast = value(art, '--face-art-blast');
+    // the grooves stand out on the matte field, a shade darker than on the polished face
+    expect(contrast(blast, value(art, '--face-art-blast-groove'))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(value(art, '--face-art-blast-groove'), '#ffffff')).toBeGreaterThan(
+      contrast(value(art, '--face-art-groove'), '#ffffff')
+    );
+    // the field reaches the head's edge: on the dark panel it reads by itself, on the light panel
+    // by its rim line
+    const dark = value(block(theme, "[data-theme='dark']"), '--color-surface');
+    const light = value(block(theme, "[data-theme='light']"), '--color-surface');
+    expect(contrast(blast, dark)).toBeGreaterThanOrEqual(3);
+    const rim = value(block(css, "[data-theme='light'] .face-impact"), '--face-art-blast-rim');
+    expect(contrast(rim, light)).toBeGreaterThanOrEqual(3);
+  });
+
+  /* The face view as drawn, every club, both hands, no shot: sha-256 of its markup. Woods and
+   * hybrids as before the blasted field; irons and wedges since it. */
+  const APPROVED_FACE_VIEWS: Record<string, string> = {
+    '2-iron:right': '7b1a335cfe6a84f8',
+    '2-iron:left': '9bd62a8fcf847fd8',
+    '3-iron:right': '7b1a335cfe6a84f8',
+    '3-iron:left': '9bd62a8fcf847fd8',
+    '4-iron:right': '7b1a335cfe6a84f8',
+    '4-iron:left': '9bd62a8fcf847fd8',
+    '5-iron:right': '7b1a335cfe6a84f8',
+    '5-iron:left': '9bd62a8fcf847fd8',
+    '6-iron:right': '7b1a335cfe6a84f8',
+    '6-iron:left': '9bd62a8fcf847fd8',
+    '7-iron:right': '7b1a335cfe6a84f8',
+    '7-iron:left': '9bd62a8fcf847fd8',
+    '8-iron:right': '7b1a335cfe6a84f8',
+    '8-iron:left': '9bd62a8fcf847fd8',
+    '9-iron:right': '7b1a335cfe6a84f8',
+    '9-iron:left': '9bd62a8fcf847fd8',
+    'pw:right': '077684177a27fb38',
+    'pw:left': '41d3da8699d95da5',
+    'gw:right': '077684177a27fb38',
+    'gw:left': '41d3da8699d95da5',
+    'sw:right': '077684177a27fb38',
+    'sw:left': '41d3da8699d95da5',
+    'lw:right': '077684177a27fb38',
+    'lw:left': '41d3da8699d95da5',
+    '3-hybrid:right': '2c47b8c3a51c7d03',
+    '3-hybrid:left': 'ab18ad44899b8a7c',
+    '5-hybrid:right': '2c47b8c3a51c7d03',
+    '5-hybrid:left': 'ab18ad44899b8a7c',
+    '7-hybrid:right': '2c47b8c3a51c7d03',
+    '7-hybrid:left': 'ab18ad44899b8a7c',
+    '9-hybrid:right': '2c47b8c3a51c7d03',
+    '9-hybrid:left': 'ab18ad44899b8a7c',
+    'driver:right': '604308b49492be66',
+    'driver:left': '850929eeb337e6fb',
+    '3-wood:right': '7c8bb63b3765c3a6',
+    '3-wood:left': 'e3dd7ecc2f41ba1e',
+    '5-wood:right': '7c8bb63b3765c3a6',
+    '5-wood:left': 'e3dd7ecc2f41ba1e',
+    '7-wood:right': '7c8bb63b3765c3a6',
+    '7-wood:left': 'e3dd7ecc2f41ba1e',
+  };
+  it('pins every selectable club in the approved face views', () => {
+    expect(Object.keys(APPROVED_FACE_VIEWS).sort()).toEqual(
+      ALL_CLUBS.flatMap((c) => [`${c.id}:left`, `${c.id}:right`]).sort()
+    );
+  });
+  it.each(Object.keys(APPROVED_FACE_VIEWS))('keeps the %s face view byte-identical to the approved drawing', (key) => {
+    const [id, handed] = key.split(':') as [string, 'right' | 'left'];
+    const s = { ...clubModel(id), impact_location: { handedness: handed } } as unknown as Shot;
+    const markup = renderToString(<FaceImpactView shot={s} sessionShots={[s]} />);
+    expect(createHash('sha256').update(markup).digest('hex').slice(0, 16)).toBe(APPROVED_FACE_VIEWS[key]);
   });
 });
 

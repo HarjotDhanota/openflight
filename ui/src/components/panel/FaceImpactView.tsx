@@ -5,6 +5,7 @@ import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
 import {
   FACE_SHAPES,
+  blastedField,
   faceCategory,
   formatLength,
   GROOVE_WIDTH_MM,
@@ -65,6 +66,9 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   const category = faceCategory(shot.club);
   const shape = FACE_SHAPES[category];
   const blade = category === 'iron' || category === 'wedge';
+  // an iron's or wedge's face is the head's own chrome with a sand-blasted groove field on it, not a
+  // separate panel
+  const field = blastedField(category);
   const hosel = hoselParts(shape.hosel);
   const lie = (shape.hosel.lieDeg * Math.PI) / 180;
   const jointStart = blade ? shape.hosel.tube[0][0] : 0;
@@ -158,6 +162,37 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <clipPath id={faceClipId}>
               <path d={shape.face} transform={mirror} />
             </clipPath>
+            {field ? (
+              <>
+                <clipPath id={`${id}field-clip`}>
+                  <path d={shape.head} />
+                </clipPath>
+                <clipPath id={`${id}field-band`}>
+                  <rect x={field.x0} y={minY} width={field.x1 - field.x0} height={maxY - minY} />
+                </clipPath>
+                <filter id={`${id}blast`} x="0" y="0" width="1" height="1" colorInterpolationFilters="sRGB">
+                  <feTurbulence type="fractalNoise" baseFrequency="3.2" numOctaves={2} seed={7} result="noise" />
+                  <feColorMatrix
+                    in="noise"
+                    type="matrix"
+                    values="0 0 0 0 0.5  0 0 0 0 0.52  0 0 0 0 0.55  0 0 0 0.9 -0.3"
+                    result="grain"
+                  />
+                  <feComposite in="grain" in2="SourceGraphic" operator="in" />
+                </filter>
+                {(['in', 'out'] as const).map((side) => (
+                  <linearGradient
+                    key={side}
+                    id={`${id}field-shade-${side}`}
+                    x1={side === 'in' ? 0 : 1}
+                    x2={side === 'in' ? 1 : 0}
+                  >
+                    <stop className="face-impact__field-shade" offset="0" />
+                    <stop className="face-impact__field-shade face-impact__field-shade--end" offset="1" />
+                  </linearGradient>
+                ))}
+              </>
+            ) : null}
             <linearGradient
               id={steelId}
               gradientUnits="userSpaceOnUse"
@@ -329,17 +364,67 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                   <path key={d} className="face-impact__ring" d={d} />
                 ))}
                 <path className="face-impact__ferrule" d={hosel.ferrule} fill={`url(#${id}ferrule)`} />
-                <path
-                  className="face-impact__face"
-                  d={shape.face}
-                  fill={`url(#${faceId})`}
-                  mask={shape.faceFade ? `url(#${fadeId})` : undefined}
-                />
-                <g mask={shape.faceFade ? `url(#${fadeId})` : undefined}>
-                  <path className="face-impact__face-reflection" d={shape.face} fill={`url(#${id}reflection)`} />
-                  <path className="face-impact__grain" d={shape.face} fill={`url(#${id}grain)`} />
-                </g>
-                {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
+                {field ? (
+                  <g className="face-impact__field" clipPath={`url(#${id}field-clip)`}>
+                    {/* sand-blasted between the two edge lines, from the head's top edge to its bottom */}
+                    <rect
+                      className="face-impact__field-fill"
+                      x={field.x0}
+                      y={minY}
+                      width={field.x1 - field.x0}
+                      height={maxY - minY}
+                    />
+                    <rect
+                      className="face-impact__field-grain"
+                      x={field.x0}
+                      y={minY}
+                      width={field.x1 - field.x0}
+                      height={maxY - minY}
+                      filter={`url(#${id}blast)`}
+                    />
+                    {/* the blast sits a touch below the polished head: a soft shadow inside each edge */}
+                    <rect x={field.x0} y={minY} width="0.9" height={maxY - minY} fill={`url(#${id}field-shade-in)`} />
+                    <rect
+                      x={field.x1 - 0.9}
+                      y={minY}
+                      width="0.9"
+                      height={maxY - minY}
+                      fill={`url(#${id}field-shade-out)`}
+                    />
+                    {(
+                      [
+                        [field.x0, -1],
+                        [field.x1, 1],
+                      ] as const
+                    ).map(([x, out]) => (
+                      <g key={x}>
+                        <line className="face-impact__field-edge" x1={x} x2={x} y1={minY} y2={maxY} />
+                        <line
+                          className="face-impact__field-lip"
+                          x1={x + out * 0.3}
+                          x2={x + out * 0.3}
+                          y1={minY}
+                          y2={maxY}
+                        />
+                      </g>
+                    ))}
+                    <path className="face-impact__field-rim" d={shape.head} clipPath={`url(#${id}field-band)`} />
+                  </g>
+                ) : (
+                  <>
+                    <path
+                      className="face-impact__face"
+                      d={shape.face}
+                      fill={`url(#${faceId})`}
+                      mask={shape.faceFade ? `url(#${fadeId})` : undefined}
+                    />
+                    <g mask={shape.faceFade ? `url(#${fadeId})` : undefined}>
+                      <path className="face-impact__face-reflection" d={shape.face} fill={`url(#${id}reflection)`} />
+                      <path className="face-impact__grain" d={shape.face} fill={`url(#${id}grain)`} />
+                    </g>
+                    {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
+                  </>
+                )}
               </g>
               <g className="face-impact__centre-lines" clipPath={`url(#${faceClipId})`}>
                 <line className="face-impact__centre-line" x1={viewMinX} x2={viewMaxX} y1={0} y2={0} />
@@ -356,7 +441,10 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                   </g>
                 </g>
               ) : null}
-              <g className="face-impact__face-marks" transform={mirror}>
+              <g
+                className={`face-impact__face-marks${field ? ' face-impact__face-marks--blasted' : ''}`}
+                transform={mirror}
+              >
                 {shape.grooves.map((groove) => (
                   <line
                     key={`${groove.y}:${groove.from}`}
@@ -368,7 +456,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                     y2={groove.y}
                   />
                 ))}
-                {shape.edges.map(({ d, fade }, k) => (
+                {(field ? [] : shape.edges).map(({ d, fade }, k) => (
                   <path
                     key={d}
                     className="face-impact__edge"

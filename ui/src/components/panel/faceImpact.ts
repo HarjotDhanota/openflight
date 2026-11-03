@@ -786,6 +786,18 @@ export const FACE_SHAPES = Object.fromEntries(
   (Object.keys(DRAWN) as FaceCategory[]).map((category) => [category, framed(DRAWN[category])])
 ) as Record<FaceCategory, FaceShape>;
 
+/** How far the blasted groove field's vertical edge lines stand outside the longest scorelines, mm
+ * (the owner's reference photo of a chrome blade iron, approved mock-up 2026-11-03). */
+export const BLAST_EDGE_OUTSIDE_MM = 1.25;
+
+/** An iron's or wedge's sand-blasted groove field, between its toe and heel edge lines (x, mm, in
+ * the face's own unmirrored frame); it runs the head's whole height. Null for woods and hybrids. */
+export function blastedField(category: FaceCategory): { x0: number; x1: number } | null {
+  if (category !== 'iron' && category !== 'wedge') return null;
+  const ends = FACE_SHAPES[category].grooves.flatMap((groove) => [groove.from, groove.to]);
+  return { x0: Math.min(...ends) - BLAST_EDGE_OUTSIDE_MM, x1: Math.max(...ends) + BLAST_EDGE_OUTSIDE_MM };
+}
+
 export function faceCategory(club: string | null | undefined): FaceCategory {
   const name = (club ?? '').trim().toLowerCase();
   if (name === 'driver') return 'driver';

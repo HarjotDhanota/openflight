@@ -397,6 +397,10 @@ The Club tab opens with a face-impact view:
     joints, the wedge's two hosel joints and the fairway's grey band are kept. The
     driver keeps its 7 + 7 block lines with slanted inner ends and 3 centre bars, scaled
     to the average face, and its centre cross now sits on the computed face centre.
+    An iron's or wedge's face is not a separate panel: the head is one chrome surface,
+    and a sand-blasted groove field (flat, matte, finely grained, slightly recessed) runs
+    the head's whole height between two vertical edge lines 1.25 mm outside the longest
+    score lines, after the owner's reference photo (3 Nov 2026).
   - **Old against new reference values** (the single photographed models of 22 Oct 2026):
 
     | Category | C | H | above the face bottom | band | lowest line: length / above the face bottom |

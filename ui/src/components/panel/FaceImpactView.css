@@ -26,6 +26,8 @@
   --face-art-rim: rgba(255, 255, 255, 0.9);
   --face-art-highlight: rgba(255, 255, 255, 0.85);
   --face-art-groove: #3c424a;
+  --face-art-blast: #c6cacf;
+  --face-art-blast-groove: #2b3036;
   --face-art-shaft: #c9ced4;
   --face-art-centre: rgba(16, 20, 24, 0.55);
 }
@@ -42,6 +44,8 @@
   --face-art-rim: rgba(245, 247, 249, 0.85);
   --face-art-highlight: rgba(250, 251, 252, 0.7);
   --face-art-groove: #454b53;
+  --face-art-blast: #c6cacf;
+  --face-art-blast-groove: #2b3036;
   --face-art-shaft: #c9ced4;
   --face-art-centre: rgba(16, 20, 24, 0.55);
 }
@@ -148,6 +152,57 @@
 
 .face-impact__mark {
   stroke-width: 0.55;
+}
+
+/* The sand-blasted groove field of an iron or wedge: flat and matte, finely grained, slightly
+ * recessed between its two edge lines. */
+.face-impact {
+  --face-art-blast-rim: transparent;
+}
+
+[data-theme='light'] .face-impact {
+  --face-art-blast-rim: #6b727a;
+}
+
+.face-impact__field-fill {
+  fill: var(--face-art-blast);
+}
+
+.face-impact__field-grain {
+  fill: #fff;
+  opacity: 0.35;
+}
+
+.face-impact__field-shade {
+  stop-color: #3a4048;
+  stop-opacity: 0.42;
+}
+
+.face-impact__field-shade--end {
+  stop-opacity: 0;
+}
+
+.face-impact__field-edge {
+  stroke: #4b5259;
+  stroke-opacity: 0.85;
+  stroke-width: 0.28;
+}
+
+.face-impact__field-lip {
+  stroke: #fff;
+  stroke-opacity: 0.55;
+  stroke-width: 0.22;
+}
+
+/* where the field reaches the head's edge: a fine line, so it reads on the light panel too */
+.face-impact__field-rim {
+  fill: none;
+  stroke: var(--face-art-blast-rim);
+  stroke-width: 0.5;
+}
+
+.face-impact__face-marks--blasted .face-impact__groove {
+  stroke: var(--face-art-blast-groove);
 }
 
 .face-impact__edge {
