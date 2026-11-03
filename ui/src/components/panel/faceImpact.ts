@@ -32,6 +32,13 @@ export const USGA = {
 /** Drawn score-line width, inside the USGA groove limit. */
 export const GROOVE_WIDTH_MM = 0.6;
 
+/** The ball the shot models use, mm. */
+export const BALL_DIAMETER_MM = 42.7;
+
+/** The face view's impact cross, mm: arms a quarter of the ball's diameter (it spans the ball's
+ * contact patch, as the illustrative imprint does), a bold core inside a contrasting halo. */
+export const IMPACT_CROSS = { half: BALL_DIAMETER_MM / 4, core: 1.1, halo: 2.7 } as const;
+
 export interface Hosel {
   /** Where the axis meets the sole line, and its angle to the score lines. */
   ground: Point;
