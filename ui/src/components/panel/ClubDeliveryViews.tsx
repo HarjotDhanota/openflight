@@ -15,6 +15,7 @@ import {
   deliveryValue,
   direction,
   hoselLayout,
+  staticLoftLie,
   type DeliveryView,
 } from './clubDelivery';
 import { formatMetricValue } from './metricFormat';
@@ -146,8 +147,10 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
   const top = view === 'top';
   const face = deliveryValue(shot, top ? 'face_angle' : 'dynamic_loft');
   const path = deliveryValue(shot, top ? 'club_path' : 'attack_angle');
-  const rotation = top ? (face ?? 0) * (left ? 1 : -1) : face === null ? 0 : p.loft - face;
-  const [ballX, ballY] = direction(top ? 0 : (face ?? p.loft), 119);
+  // the side view leans the category's drawing to the shot's dynamic loft, else the club's own
+  const loft = top ? 0 : (face ?? staticLoftLie(shot.club, category).loft);
+  const rotation = top ? (face ?? 0) * (left ? 1 : -1) : p.loft - loft;
+  const [ballX, ballY] = direction(loft, 119);
   const head = top ? paths.top : paths.side;
   const { shaftX, shaftY, shaftEnd, ferruleEnd, ferruleBase, ferruleRadius, shaftRadius, crownJoin } = hoselLayout(
     category,

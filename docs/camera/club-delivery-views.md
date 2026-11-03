@@ -126,6 +126,39 @@ unchanged centre by the difference between its static hosel projection and
 `atan2(sin(dynamic lie) × cos(loft), cos(dynamic lie))`, using dynamic loft
 when available and otherwise the category's static loft.
 
+Each selectable club type has its own static loft and lie (`CLUB_STATIC` in
+`ui/src/components/panel/clubDelivery.ts`). The drawings keep their category's shape; the
+side view leans the head to the club's static loft when the shot has no dynamic loft, and
+the face view tilts to the club's static lie when it has no dynamic lie (relative to the
+category's static lie, so a club drawn as its category is not tilted). A shot's dynamic
+loft or lie always wins. All values are population averages from the official spec tables
+already saved in research/club-models (no new research); "category" rows have no per-club
+value there and take the category's.
+
+| Club | Loft | Lie | Source |
+|---|---|---|---|
+| 2-iron | 31.4 | 62.3 | category (iron): no 2-iron in the saved tables |
+| 3-iron | 18.5 | 60.1 | 7-iron category + mean offset from each model's 7-iron, 7 OEM set tables (Cobra, Mizuno, Srixon, Wilson pages in club-geometry/irons) |
+| 4-iron | 21.7 | 60.7 | same method, 13 set tables |
+| 5-iron | 24.6 | 61.3 | same method, 13 set tables |
+| 6-iron | 27.8 | 61.8 | same method, 13 set tables |
+| 7-iron | 31.4 | 62.3 | the iron category: 56 official 7-iron specs (club-geometry/irons-3view/official_specs.csv) |
+| 8-iron | 35.5 | 62.9 | same method as 3-iron, 13 set tables |
+| 9-iron | 39.8 | 63.4 | same method, 13 set tables |
+| PW | 44.4 | 63.9 | same method, 13 set tables |
+| GW | 49.5 | 64.2 | same method, 9 set tables with a GW |
+| SW | 56.0 | 64.0 | official wedge tables, 56 deg rows (24 models; official_specs.csv) |
+| LW | 59.0 | 64.0 | official wedge tables, 58 and 60 deg rows (24 models each) |
+| Driver | 10.4 | 57.4 | the driver category: 13 OEM specs (club-geometry/woods/data/specs_oem.csv) |
+| 3-wood | 14.9 | 56.6 | the fairway category: 8 OEM 3-wood specs (specs_oem.csv) |
+| 5-wood, 7-wood | 14.9 | 56.6 | category (fairway): no 5W or 7W in the saved tables |
+| 3-hybrid | 18.8 | 57.7 | the hybrid category: 8 OEM 3H specs (specs_oem.csv) |
+| 5-, 7-, 9-hybrid | 18.8 | 57.7 | category (hybrid): no other hybrids in the saved tables |
+| unknown | category | category | the category the club name maps to |
+
+The extraction and aggregation scripts and the per-row data are in
+research/club-models/research/per-club-loft-lie/ (local only).
+
 Missing, non-finite and `not_measured` records display a dash and no corresponding
 arrow. Missing face angle gives a square top view; missing dynamic loft or lie
 keeps the club's static address orientation. A missing companion metric does not
