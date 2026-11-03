@@ -380,6 +380,25 @@ describe('club delivery drawings', () => {
     expect(Math.abs(side(neck.join))).toBeLessThan(1e-6);
   });
 
+  /* The fairway and hybrid heel views against the population side outlines of OEM toe-side photos
+   * (research/club-models/research/club-geometry/woods-3view/avg_views.json: 13 3-woods, 10 hybrids,
+   * 2021+): face-to-back depth, ground-to-crown height, face height and the hosel axis behind the
+   * leading edge, each within the research's +-2 mm gate. */
+  it.each([
+    ['fairway', { depth: 86.2, headHeight: 38.2, faceHeight: 30.6, hoselBehindLeadingEdge: 16.0 }],
+    ['hybrid', { depth: 66.9, headHeight: 35.4, faceHeight: 28.8, hoselBehindLeadingEdge: 15.9 }],
+  ] as const)('draws the %s heel view to the OEM side-photo population within 2 mm', (category, ref) => {
+    const paths = clubProfilePaths(category);
+    const outline = polygon(paths.side);
+    const xs = outline.map(([x]) => x);
+    const ys = outline.map(([, y]) => y);
+    const layout = hoselLayout(category, 'side');
+    expect(Math.abs(Math.max(...xs) - Math.min(...xs) - ref.depth)).toBeLessThanOrEqual(2);
+    expect(Math.abs(Math.max(...ys) - Math.min(...ys) - ref.headHeight)).toBeLessThanOrEqual(2);
+    expect(Math.abs(Math.hypot(paths.bx - paths.tx, paths.by - paths.ty) - ref.faceHeight)).toBeLessThanOrEqual(2);
+    expect(Math.abs(paths.bx - layout.shaftX - ref.hoselBehindLeadingEdge)).toBeLessThanOrEqual(2);
+  });
+
   it.each(categories)('uses bounded population dimensions for %s, with distinct projections', (category) => {
     const p = CLUB_PROFILES[category];
     const paths = clubProfilePaths(category);
