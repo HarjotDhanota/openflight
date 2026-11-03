@@ -548,6 +548,7 @@ class _Fit:
     residual_px: float
     ops_misfit_mph: Optional[float]
     stat_sd: tuple  # (vertical deg, horizontal deg, speed m/s)
+    contact_sd_s: Optional[float] = None
 
 
 def _positions(params, times, ball):
@@ -645,6 +646,7 @@ def fit_launch(  # pylint: disable=too-many-locals,too-many-arguments
         residual_px=float(np.sqrt(np.mean(per_point**2))),
         ops_misfit_mph=misfit,
         stat_sd=(math.degrees(sd[0]), math.degrees(sd[1]), float(sd[2])),
+        contact_sd_s=float(sd[3]),
     )
 
 
@@ -670,6 +672,9 @@ class CameraBallLaunch:  # pylint: disable=too-many-instance-attributes
     contact_ms_before_first_point: Optional[float] = None
     uncertainty: dict = field(default_factory=dict)
     camera: dict = field(default_factory=dict)
+    # the ball-defined contact instant (C13a): the departure fit extrapolated back to the
+    # resting ball, on the sensor clock, with its sigma and frame bracket; None if withheld
+    contact: Optional[dict] = None
     label: str = LABEL
     source: str = SOURCE
 
@@ -693,6 +698,160 @@ def _plain(value: Any):
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
+
+
+CONTACT_SOURCE = "ball_departure_extrapolation"
+
+
+def rest_highlight_offset(frames, times_s, first_post_index, rest_px, rest_diameter_px):
+    """Where the resting ball's highlight centroid sits from its outline centre, in ball
+    diameters, or None: the track's points are highlight centroids (the lit cap, above
+    the centre in side light), the departure starts from the outline centre, so the contact
+    instant compares like with like only once each point is moved by this offset (scaled to
+    its own diameter). Read on the swing's background frames (``BACKGROUND_WINDOW_S``)
+    against the ground in a ring round the ball, with the track's own difference weights."""
+    interval = float(np.median(np.diff(times_s))) if len(times_s) > 1 else 1.0 / 120.0
+    start = first_post_index - int(round(BACKGROUND_WINDOW_S[0] / interval))
+    end = first_post_index - int(round(BACKGROUND_WINDOW_S[1] / interval))
+    if start < 0 or end - start < 3:
+        return None
+    x, y = (float(value) for value in rest_px)
+    radius = float(rest_diameter_px) / 2.0
+    half = int(2.2 * radius) + 2
+    x0, y0 = max(0, int(x) - half), max(0, int(y) - half)
+    x1, y1 = min(frames.shape[2], int(x) + half + 1), min(frames.shape[1], int(y) + half + 1)
+    patch = np.median(frames[start:end, y0:y1, x0:x1].astype(np.float32), axis=0)
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    distance = np.hypot(xx - x, yy - y)
+    ring = (distance > 1.3 * radius) & (distance < 2.0 * radius)
+    if ring.sum() < 8:
+        return None
+    ground = float(np.median(patch[ring]))
+    noise = 1.4826 * float(np.median(np.abs(patch[ring] - ground)))
+    threshold = max(NOISE_SIGMAS * noise, MIN_THRESHOLD_DN)
+    difference = patch - ground
+    lit = (distance <= 1.2 * radius) & (difference > threshold)
+    if lit.sum() < 4:
+        return None
+    weights = difference[lit]
+    cx = float((xx[lit] * weights).sum() / weights.sum())
+    cy = float((yy[lit] * weights).sum() / weights.sum())
+    return ((cx - x) / float(rest_diameter_px), (cy - y) / float(rest_diameter_px))
+
+
+def _centre_points(track, offset) -> list:
+    """The track's highlight centroids moved to the ball's centre by the resting ball's
+    measured offset, scaled to each point's own diameter."""
+    from dataclasses import replace as _replace  # noqa: PLC0415
+
+    dx, dy = offset
+    return [
+        _replace(
+            point,
+            x=point.x - dx * point.diameter_px,
+            y=point.y - dy * point.diameter_px,
+            centre_kind="highlight_centroid_moved_by_resting_offset",
+        )
+        for point in track
+    ]
+
+
+def _contact_record(
+    fit: _Fit, times_s: np.ndarray, stamps_ns, exposure_us, offset=None
+) -> Optional[dict]:
+    """The fit's contact instant on the sensor clock, bracketed by the frames around it.
+
+    ``times_s`` are exposure centres from the first frame's exposure start
+    (``frame_times_s``); the fraction is the contact's place between the two bracketing
+    frames' exposure centres (the same between their exposure starts)."""
+    stamps = np.asarray(stamps_ns, dtype=np.int64)
+    if fit.contact_sd_s is None or not math.isfinite(fit.contact_s):
+        return None
+    after = int(np.searchsorted(times_s, fit.contact_s, side="right"))
+    if not 1 <= after < len(times_s):
+        return None
+    rest = after - 1
+    gap = float(times_s[after] - times_s[rest])
+    exposure = float(np.broadcast_to(np.asarray(exposure_us, dtype=float), stamps.shape)[rest])
+    sensor_ns = float(stamps[0]) + fit.contact_s * 1e9
+    return {
+        "status": "measured",
+        "source": CONTACT_SOURCE,
+        "clock": "sensor_timestamp_ns",
+        "sensor_ns": sensor_ns,
+        "sigma_ms": fit.contact_sd_s * 1e3,
+        "last_rest_frame": rest,
+        "first_moved_frame": after,
+        "fraction": (fit.contact_s - float(times_s[rest])) / gap if gap > 0 else None,
+        "exposure_centre_offset_ns": exposure * 500.0,
+        "lit_cap_offset_diameters": list(offset) if offset is not None else None,
+        "note": (
+            "the ball's departure fit (pixels + OPS speed, gravity) extrapolated back to its "
+            "resting position; drag over the first ~15 ms is not modelled"
+        ),
+    }
+
+
+def _first_moved_witness(
+    frames, times_s, track, fit: _Fit, camera, ball, rest_px, rest_diameter_px, stamps_ns
+) -> dict:
+    """The ball in a frame between the contact and the track's first point, read on the
+    fitted path: when along it the ball was at that frame's centroid gives contact again."""
+    first_track = track[0].frame
+    rest = int(np.searchsorted(times_s, fit.contact_s, side="right")) - 1
+    candidates = list(range(rest + 1, first_track))
+    if not candidates:
+        return {"status": "not_measured", "reason": "the track starts on the first moved frame"}
+    count, height, width = frames.shape
+    interval = float(np.median(np.diff(times_s)))
+    start_bg = first_track - int(round(BACKGROUND_WINDOW_S[0] / interval))
+    end_bg = first_track - int(round(BACKGROUND_WINDOW_S[1] / interval))
+    if start_bg < 0 or end_bg - start_bg < 3:
+        return {"status": "not_measured", "reason": "no background before the swing"}
+    rest_x, rest_y = (float(value) for value in rest_px)
+    x0, x1 = max(0, int(rest_x - 0.3 * width)), min(width, int(rest_x + 0.3 * width))
+    y1 = min(height, int(rest_y + 2.0 * rest_diameter_px))
+    stack = frames[:, :y1, x0:x1].astype(np.float32)
+    background = np.median(stack[start_bg:end_bg], axis=0)
+    change = stack[start_bg + 1] - stack[start_bg]
+    noise = 1.4826 * float(np.median(np.abs(change - np.median(change)))) / math.sqrt(2.0)
+    threshold = max(NOISE_SIGMAS * noise, MIN_THRESHOLD_DN)
+    params = np.array([0.0, 0.0, fit.speed_ms, fit.contact_s])
+    params[0], params[1] = math.radians(fit.vertical_deg), math.radians(fit.horizontal_deg)
+    for frame in candidates:
+        predicted = camera.project(_positions(params, np.array([times_s[frame]]), ball)[0])[0]
+        blobs = [
+            blob
+            for blob in _blobs(stack[frame] - background, threshold, rest_diameter_px, (x0, 0))
+            if math.hypot(blob["x"] - predicted[0], blob["y"] - predicted[1]) <= rest_diameter_px
+        ]
+        if not blobs:
+            continue
+        blob = min(blobs, key=lambda b: math.hypot(b["x"] - predicted[0], b["y"] - predicted[1]))
+        offsets = np.linspace(-0.004, 0.004, 801)
+        times = times_s[frame] + offsets
+        pixels = camera.project(_positions(params, times, ball)[0])
+        miss = np.hypot(pixels[:, 0] - blob["x"], pixels[:, 1] - blob["y"])
+        best = int(np.argmin(miss))
+        shift = float(offsets[best])  # the fitted path reaches the blob this much later
+        step = np.hypot(*np.diff(pixels[max(0, best - 1) : best + 2], axis=0).mean(axis=0))
+        px_per_s = step / float(offsets[1] - offsets[0]) if step > 0 else math.inf
+        contact_s = fit.contact_s - shift
+        return {
+            "status": "measured",
+            "frame": int(frame),
+            "centroid_px": [float(blob["x"]), float(blob["y"])],
+            "miss_px": float(miss[best]),
+            "sensor_ns": float(np.asarray(stamps_ns, dtype=np.int64)[0]) + contact_s * 1e9,
+            "sigma_ms": CENTROID_SD_PX / px_per_s * 1e3 if math.isfinite(px_per_s) else None,
+        }
+    return {
+        "status": "not_measured",
+        "reason": (
+            f"no ball separate from the head within a diameter of its fitted path in frames "
+            f"{candidates[0]}-{candidates[-1]} (the head overlaps it)"
+        ),
+    }
 
 
 def _withheld(status: str, reason: str, **facts) -> CameraBallLaunch:
@@ -932,8 +1091,40 @@ def estimate_camera_ball_launch(
         )
     if not (math.isfinite(vertical_sd) and math.isfinite(horizontal_sd)):
         return _withheld("withheld_uncertainty", "a systematic refit failed", **facts)
+    offset = rest_highlight_offset(
+        frames, times, first_post_index, geometry.rest_px, geometry.rest_diameter_px
+    )
+    timed = base
+    if offset is not None:
+        timed = (
+            fit_launch(
+                _centre_points(track, offset),
+                camera=camera,
+                ball_lfu=ball,
+                ops_lfu=geometry.ops_lfu,
+                ops_radial_mph=ops_radial_mph,
+                start=start,
+            )
+            or base
+        )
+    contact = _contact_record(timed, times, sensor_timestamp_ns, exposure_us, offset)
+    if contact is not None and offset is None:
+        contact["note"] += "; the resting ball's lit-cap offset was not measurable: uncorrected"
+    if contact is not None:
+        contact["first_moved_witness"] = _first_moved_witness(
+            frames,
+            times,
+            track,
+            timed,
+            camera,
+            ball,
+            geometry.rest_px,
+            geometry.rest_diameter_px,
+            sensor_timestamp_ns,
+        )
     return CameraBallLaunch(
         status="accepted",
+        contact=contact,
         vertical_deg=base.vertical_deg,
         horizontal_deg=reported,
         horizontal_boresight_deg=base.horizontal_deg,
