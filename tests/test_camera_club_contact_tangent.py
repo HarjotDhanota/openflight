@@ -133,3 +133,85 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
     # this geometry has none)
     live_path = case["inputs"]["live_result"]["club_path_deg"] - 2.0666
     assert result.club_path_deg == pytest.approx(live_path, abs=0.01)
+
+
+# --- C13b: the measured contact instant is the club stage's contact -----------------------
+
+
+def _measured(sensor_ns, sigma_ms=0.1, rest=43):
+    return {
+        "status": "measured",
+        "source": "ball_departure_extrapolation",
+        "clock": "sensor_timestamp_ns",
+        "sensor_ns": sensor_ns,
+        "sigma_ms": sigma_ms,
+        "last_rest_frame": rest,
+        "first_moved_frame": rest + 1,
+        "exposure_centre_offset_ns": 149_000.0,
+    }
+
+
+def test_the_measured_contact_instant_replaces_the_frame_midpoint():
+    case = _shot1_club()
+    stamps = case["kwargs"]["sensor_timestamp_ns"]
+    midpoint = (int(stamps[43]) + int(stamps[44])) / 2.0
+    # an instant 0.7 ms after the midpoint, on the exposure-centre clock
+    record = _measured(midpoint + 0.7e6 + 149_000.0)
+
+    result = cd.estimate_chained_delivery(
+        case["frames"], case["host"], **case["kwargs"], measured_contact=record
+    )
+
+    assert result.contact_t_s == pytest.approx((midpoint + 0.7e6) / 1e9, abs=1e-9)
+    assert result.contact_source == "ball_departure_extrapolation"
+    assert result.contact_sigma_ms == pytest.approx(0.1)
+    by_time = sorted(result.head_positions, key=lambda p: p.t_s)
+    last_rest_t = by_time[3].t_s
+    assert result.attack_angle_deg == pytest.approx(
+        cd.attack_angle_at_contact(
+            by_time, contact_t_s=result.contact_t_s, last_rest_t_s=last_rest_t
+        ),
+        abs=0.01,
+    )
+
+
+def test_without_a_measured_instant_the_midpoint_stands_labelled():
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
+    stamps = case["kwargs"]["sensor_timestamp_ns"]
+    assert result.contact_t_s == pytest.approx((int(stamps[43]) + int(stamps[44])) / 2e9)
+    assert result.contact_source == "frame_midpoint"
+
+
+def test_a_measured_instant_outside_its_own_bracket_is_not_used():
+    case = _shot1_club()
+    stamps = case["kwargs"]["sensor_timestamp_ns"]
+    record = _measured(float(stamps[47]), rest=43)  # says f43|f44 but lands in f47
+    result = cd.estimate_chained_delivery(
+        case["frames"], case["host"], **case["kwargs"], measured_contact=record
+    )
+    assert result.contact_source == "frame_midpoint"
+    assert any("measured contact" in note for note in result.notes)
+
+
+def test_the_fusion_hands_the_fallback_s_contact_to_the_club_stage(monkeypatch):
+    from openflight.camera import fusion_processing as fp  # noqa: PLC0415
+
+    record = _measured(1.0e9)
+    monkeypatch.setattr(
+        fp, "run_ball_fallback", lambda *a, **k: {"status": "accepted", "contact": record}
+    )
+    seen = {}
+
+    def spy(*_args, **kwargs):
+        seen.update(kwargs)
+        raise ValueError("stop after the inputs")
+
+    monkeypatch.setattr(fp, "estimate_chained_delivery", spy)
+    from tests.camera_fallback_scene import render_scene  # noqa: PLC0415
+    from tests.test_fallback_chain import _scene_context  # noqa: PLC0415
+
+    context, archive = _scene_context(render_scene())
+    fp.process_camera_fusion(context, archive)
+
+    assert seen["measured_contact"] == record

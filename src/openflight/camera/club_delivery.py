@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -263,6 +263,10 @@ class ChainedDelivery:
     camera_model: dict | None = None
     head_positions: tuple[HeadPosition, ...] = ()
     contact_t_s: float | None = None
+    # where the contact instant came from (C13b): the ball's departure fit, or the
+    # midpoint of the bracketing frames when there is none (labelled)
+    contact_source: str | None = None
+    contact_sigma_ms: float | None = None
     clock: str | None = None
     horizontal_offset_deg: float | None = None
     ball_position: dict | None = None
@@ -1117,6 +1121,7 @@ def estimate_chained_delivery(
     sensor_timestamp_ns: np.ndarray | None = None,
     head_track: HeadTrackContext | None = None,
     ops_reference: CameraOpsReference | None = None,
+    measured_contact: Mapping | None = None,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
@@ -1198,6 +1203,13 @@ def estimate_chained_delivery(
         trigger_index=trigger_index,
         timestamp_source=timestamp_source,
     )
+    measured = measured_contact_time(
+        measured_contact, timestamps_ns, timestamp_source, trigger_index
+    )
+    if isinstance(measured, CameraContact):
+        contact = measured
+    elif measured:
+        notes.append(f"measured contact not used: {measured}")
     trigger_contact = contact is None
     if trigger_contact:
         if trigger_index is None or not 0 <= trigger_index < len(frames) - 1:
@@ -1307,6 +1319,8 @@ def estimate_chained_delivery(
         "camera_model": camera_check,
         "head_positions": _head_positions(pair_estimates, impact_idx, camera_s),
         "contact_t_s": contact_camera_s,
+        "contact_source": "trigger_frame" if trigger_contact else contact.source,
+        "contact_sigma_ms": contact.sigma_ms,
         "clock": timestamp_source,
         "horizontal_offset_deg": (
             float(geometry.horizontal_offset_deg)
@@ -1768,6 +1782,8 @@ class CameraContact:
     contact_ns: float
     timestamp_source: str
     contact_vs_trigger_frame_ms: float | None = None
+    source: str = "frame_midpoint"
+    sigma_ms: float | None = None
 
 
 def frame_clock(
@@ -1784,6 +1800,47 @@ def frame_clock(
         ):
             return sensor.astype(np.int64), "sensor_timestamp_ns"
     return host, "host_timestamp_ns"
+
+
+def measured_contact_time(
+    record: Mapping | None,
+    timestamps_ns: np.ndarray,
+    timestamp_source: str,
+    trigger_index: int | None,
+) -> "CameraContact | str | None":
+    """The ball-defined contact instant (``ball_launch_fallback`` contact record) on this
+    stage's clock, or why it is not used (a string), or None without one.
+
+    The record is on the exposure-centre clock; this stage's frame times are exposure
+    starts, so the instant moves back by the exposure's half. It must fall inside its own
+    frame bracket on this clock."""
+    if not isinstance(record, Mapping) or record.get("status") != "measured":
+        return None
+    if timestamp_source != "sensor_timestamp_ns" or record.get("clock") != "sensor_timestamp_ns":
+        return "it is on another clock"
+    try:
+        rest = int(record["last_rest_frame"])
+        instant = float(record["sensor_ns"]) - float(record.get("exposure_centre_offset_ns") or 0)
+        sigma = record.get("sigma_ms")
+    except (KeyError, TypeError, ValueError):
+        return "the record is incomplete"
+    stamps = np.asarray(timestamps_ns, dtype=np.int64)
+    if not 0 <= rest < len(stamps) - 1 or not math.isfinite(instant):
+        return "its frame bracket is outside the clip"
+    if not int(stamps[rest]) <= instant <= int(stamps[rest + 1]):
+        return f"the instant lies outside its own bracket f{rest}-f{rest + 1}"
+    return CameraContact(
+        impact_frame=rest,
+        contact_ns=instant,
+        timestamp_source=timestamp_source,
+        contact_vs_trigger_frame_ms=(
+            round((instant - int(stamps[trigger_index])) / 1e6, 3)
+            if trigger_index is not None and 0 <= trigger_index < len(stamps)
+            else None
+        ),
+        source=str(record.get("source") or "ball_departure_extrapolation"),
+        sigma_ms=float(sigma) if isinstance(sigma, (int, float)) else None,
+    )
 
 
 def camera_contact_time(

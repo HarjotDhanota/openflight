@@ -306,6 +306,20 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
     except Exception as error:  # stage isolation is part of the persisted contract
         ball = CameraBallEstimate(status="error")
         errors["ball"] = f"{type(error).__name__}: {error}"
+    # the camera fallback first: its departure fit is the shot's contact instant (C13b)
+    fallback = None
+    if "camera_fallback" in context:
+        # contexts frozen before the fallback replay exactly as they were recorded
+        try:
+            fallback = run_ball_fallback(context, archive, geometry=geometry)
+        except Exception as error:  # stage isolation is part of the persisted contract
+            fallback = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+            errors["ball_fallback"] = fallback["reason"]
+    measured_contact = (
+        fallback.get("contact")
+        if isinstance(fallback, Mapping) and fallback.get("status") == "accepted"
+        else None
+    )
     try:
         pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
         if not 1 <= pre_trigger_count <= len(frames):
@@ -343,18 +357,11 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
                     (context.get("ball_range") or {}).get("uncertainty") or 0.05
                 ),
             ),
+            measured_contact=measured_contact,
         )
     except Exception as error:  # stage isolation is part of the persisted contract
         club = ChainedDelivery(status="error")
         errors["club"] = f"{type(error).__name__}: {error}"
-    fallback = None
-    if "camera_fallback" in context:
-        # contexts frozen before the fallback replay exactly as they were recorded
-        try:
-            fallback = run_ball_fallback(context, archive, geometry=geometry)
-        except Exception as error:  # stage isolation is part of the persisted contract
-            fallback = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
-            errors["ball_fallback"] = fallback["reason"]
     decision = select_camera_assisted_horizontal(
         ball,
         iwr_horizontal_deg=context["iwr_horizontal_deg"],
