@@ -520,13 +520,30 @@ describe('club delivery drawings', () => {
     }
   });
 
-  it('falls back to the category for a club type with no per-club value, and for an unknown one', () => {
+  it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {
+    for (const club of ALL_CLUBS) expect(staticLoftLie(club.id).source).toBe('club');
+    // the types that used to fall back now carry their own population values
+    for (const [club, category] of [
+      ['2-iron', 'iron'],
+      ['5-wood', 'fairway'],
+      ['7-wood', 'fairway'],
+      ['5-hybrid', 'hybrid'],
+      ['7-hybrid', 'hybrid'],
+      ['9-hybrid', 'hybrid'],
+    ] as const)
+      expect(staticLoftLie(club).loft).not.toBe(CLUB_PROFILES[category].loft);
+    // lofts climb through each family's numbers
+    const lofts = (ids: string[]) => ids.map((id) => staticLoftLie(id).loft);
+    for (const family of [
+      ['2-iron', '3-iron', '4-iron', '5-iron', '6-iron', '7-iron', '8-iron', '9-iron', 'pw', 'gw', 'sw', 'lw'],
+      ['driver', '3-wood', '5-wood', '7-wood'],
+      ['3-hybrid', '5-hybrid', '7-hybrid', '9-hybrid'],
+    ])
+      lofts(family).forEach((loft, k, all) => k && expect(loft).toBeGreaterThan(all[k - 1]));
     for (const [club, category] of [
       ['mystery-club', 'iron'],
       ['', 'iron'],
-      ['2-iron', 'iron'],
-      ['5-wood', 'fairway'],
-      ['7-hybrid', 'hybrid'],
+      ['11-wood', 'fairway'],
     ] as const) {
       expect(staticLoftLie(club)).toEqual({
         loft: CLUB_PROFILES[category].loft,
@@ -538,9 +555,6 @@ describe('club delivery drawings', () => {
     for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
     expect(svg(s, 'side').querySelector('.club-projection__head')!.getAttribute('transform')).toBe('rotate(0)');
     expect(faceDeliveryRotation(s, 'iron')).toBe(0);
-    // every club the kiosk can select has an entry or a stated category fallback
-    for (const club of ALL_CLUBS) expect(['club', 'category']).toContain(staticLoftLie(club.id).source);
-    expect(staticLoftLie('4-iron').source).toBe('club');
   });
 
   it('rejects a stale numeric record marked not measured, retaining available companion readings', () => {

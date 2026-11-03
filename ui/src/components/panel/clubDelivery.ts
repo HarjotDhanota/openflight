@@ -95,10 +95,12 @@ export const CLUB_PROFILES: Record<FaceCategory, ClubProfile> = {
  * source of every row). Irons and PW/GW: the 7-iron category value plus the mean per-club offset
  * from each model's own 7-iron in 13 saved OEM set tables (Cobra, Mizuno, Srixon, Wilson). SW and
  * LW: the official wedge tables' 56 deg and 58/60 deg rows. Driver, 3W, 3H: the category values
- * (themselves those clubs). A club type not listed (2-iron, 5W, 7W, 5H, 7H, 9H, or unknown) takes its
- * category's. The drawings keep the category's shapes: only the side view's lean and the face
+ * (themselves those clubs). 2-iron (utility/driving irons), 5W, 7W, 5H, 7H: the mean over official
+ * OEM spec pages and sell sheets of 5 to 14 2022+ models; 9H: the 7H mean plus two per-number
+ * steps (only one model lists a 9H). Only an unknown club name takes its category's. The drawings keep the category's shapes: only the side view's lean and the face
  * view's tilt use these, and a shot's dynamic loft or lie still wins. */
 export const CLUB_STATIC: Readonly<Record<string, { loft: number; lie: number }>> = {
+  '2-iron': { loft: 17.6, lie: 59.7 },
   '3-iron': { loft: 18.5, lie: 60.1 },
   '4-iron': { loft: 21.7, lie: 60.7 },
   '5-iron': { loft: 24.6, lie: 61.3 },
@@ -112,7 +114,12 @@ export const CLUB_STATIC: Readonly<Record<string, { loft: number; lie: number }>
   lw: { loft: 59.0, lie: 64.0 },
   driver: { loft: 10.4, lie: 57.4 },
   '3-wood': { loft: 14.9, lie: 56.6 },
+  '5-wood': { loft: 18.1, lie: 57.5 },
+  '7-wood': { loft: 21.0, lie: 58.1 },
   '3-hybrid': { loft: 18.8, lie: 57.7 },
+  '5-hybrid': { loft: 25.2, lie: 59.4 },
+  '7-hybrid': { loft: 32.2, lie: 60.6 },
+  '9-hybrid': { loft: 39.1, lie: 61.6 },
 };
 
 /** The selected club's static loft and lie, else its category's (`source` says which). */
