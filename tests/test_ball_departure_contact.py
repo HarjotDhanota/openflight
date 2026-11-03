@@ -53,3 +53,45 @@ def test_a_withheld_launch_carries_no_contact():
     launch = estimate(scene)
     assert launch.status != "accepted"
     assert launch.contact is None
+
+
+def test_the_acoustic_cross_check_is_recorded_beside_the_departure_instant():
+    """C14 (C13 gap): the gate's sound edge minus the ball-to-mic flight time, +-1.5 ms, beside
+    the departure fit's instant; a disagreement beyond 3 sigma labels the instant, never
+    refuses it."""
+    from openflight.camera import ball_launch_fallback as fallback  # noqa: PLC0415
+
+    contact = {"status": "measured", "sensor_ns": 1_000_000_000.0, "sigma_ms": 0.14}
+    # ball 1.789 m straight ahead of the mic: 5.216 ms of sound at 343 m/s
+    check = fallback.acoustic_cross_check(
+        contact,
+        trigger_boottime_ns=1_000_000_000 + 5_216_000 + 882_295,
+        gate_latency_ns=882_295,
+        mic_camera_ruf_m=(-0.08, 0.0, 0.0),
+        ball_lfu_m=(-0.08, 1.789, 0.068),
+        origin_lfu_m=(0.0, 0.0, 0.068),
+        speed_of_sound_m_s=343.0,
+    )
+    assert check["status"] == "measured"
+    assert check["sensor_ns"] == pytest.approx(1_000_000_000.0, abs=2_000)
+    assert check["sigma_ms"] == 1.5
+    assert check["agrees_within_3_sigma"] is True
+    late = fallback.acoustic_cross_check(
+        contact,
+        trigger_boottime_ns=1_000_000_000 + 5_216_000 + 882_295 + 6_000_000,
+        gate_latency_ns=882_295,
+        mic_camera_ruf_m=(-0.08, 0.0, 0.0),
+        ball_lfu_m=(-0.08, 1.789, 0.068),
+        origin_lfu_m=(0.0, 0.0, 0.068),
+        speed_of_sound_m_s=343.0,
+    )
+    assert late["agrees_within_3_sigma"] is False
+    missing = fallback.acoustic_cross_check(
+        contact,
+        trigger_boottime_ns=None,
+        gate_latency_ns=None,
+        mic_camera_ruf_m=None,
+        ball_lfu_m=None,
+        origin_lfu_m=None,
+    )
+    assert missing["status"] == "not_measured" and missing["reason"]

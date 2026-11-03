@@ -792,6 +792,50 @@ def _contact_record(
     }
 
 
+ACOUSTIC_SIGMA_MS = 1.5  # the gate's sound-trigger jitter (timing contract, 2026-09)
+ACOUSTIC_SPEED_OF_SOUND_M_S = 343.0
+
+
+def acoustic_cross_check(
+    contact: Optional[dict],
+    *,
+    trigger_boottime_ns,
+    gate_latency_ns,
+    mic_camera_ruf_m,
+    ball_lfu_m,
+    origin_lfu_m,
+    speed_of_sound_m_s: float = ACOUSTIC_SPEED_OF_SOUND_M_S,
+) -> dict:
+    """The sound's own contact estimate beside the departure instant (C14): the gate's edge
+    (the trigger callback on CLOCK_BOOTTIME less its latency) less the ball-to-mic flight
+    time, +-``ACOUSTIC_SIGMA_MS``. A cross-check only: beyond 3 sigma it labels, never
+    refuses."""
+    values = (trigger_boottime_ns, gate_latency_ns, mic_camera_ruf_m, ball_lfu_m, origin_lfu_m)
+    if not isinstance(contact, dict) or contact.get("status") != "measured":
+        return {"status": "not_measured", "reason": "no departure instant to check"}
+    if any(value is None for value in values):
+        return {
+            "status": "not_measured",
+            "reason": "the gate's trigger time, its latency, the mic or the ball is not recorded",
+        }
+    right, up, forward = (float(v) for v in mic_camera_ruf_m)
+    mic = np.asarray(origin_lfu_m, dtype=float) + np.array([right, forward, up])
+    distance = float(np.linalg.norm(np.asarray(ball_lfu_m, dtype=float) - mic))
+    travel_ns = distance / float(speed_of_sound_m_s) * 1e9
+    estimate = float(trigger_boottime_ns) - float(gate_latency_ns) - travel_ns
+    gap_ms = (float(contact["sensor_ns"]) - estimate) / 1e6
+    sigma = math.hypot(float(contact.get("sigma_ms") or 0.0), ACOUSTIC_SIGMA_MS)
+    return {
+        "status": "measured",
+        "sensor_ns": estimate,
+        "sigma_ms": ACOUSTIC_SIGMA_MS,
+        "ball_to_mic_m": distance,
+        "speed_of_sound_m_s": float(speed_of_sound_m_s),
+        "departure_minus_acoustic_ms": gap_ms,
+        "agrees_within_3_sigma": abs(gap_ms) <= 3.0 * sigma,
+    }
+
+
 def _first_moved_witness(
     frames, times_s, track, fit: _Fit, camera, ball, rest_px, rest_diameter_px, stamps_ns
 ) -> dict:

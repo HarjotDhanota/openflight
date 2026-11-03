@@ -13,6 +13,7 @@ from openflight.camera.ball_flight import (
     estimate_camera_ball_flight,
     select_camera_assisted_horizontal,
 )
+from openflight.camera.ball_launch_fallback import acoustic_cross_check
 from openflight.camera.camera_tilt import with_swing_pose
 from openflight.camera.club_delivery import (
     ChainedDelivery,
@@ -320,6 +321,21 @@ def process_camera_fusion(context: Mapping[str, Any], archive: Mapping[str, Any]
         if isinstance(fallback, Mapping) and fallback.get("status") == "accepted"
         else None
     )
+    if isinstance(measured_contact, dict):
+        # the sound's own contact estimate beside it (C14); a disagreement labels it
+        camera_facts = fallback.get("camera") or {}
+        trigger = archive.get("trigger_boottime_ns")
+        check = acoustic_cross_check(
+            measured_contact,
+            trigger_boottime_ns=int(np.asarray(trigger)) if trigger is not None else None,
+            gate_latency_ns=context.get("gate_latency_ns"),
+            mic_camera_ruf_m=(context.get("sound_timing") or {}).get("mic_camera_ruf_m"),
+            ball_lfu_m=camera_facts.get("ball_lfu_m"),
+            origin_lfu_m=camera_facts.get("origin_lfu_m"),
+        )
+        measured_contact["acoustic"] = check
+        if check.get("agrees_within_3_sigma") is False:
+            measured_contact["label"] = "disagrees_with_acoustic"
     try:
         pre_trigger_count = _integer_scalar(archive["pre_trigger_count"], "pre-trigger count")
         if not 1 <= pre_trigger_count <= len(frames):

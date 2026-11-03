@@ -215,6 +215,8 @@ def test_the_fusion_hands_the_fallback_s_contact_to_the_club_stage(monkeypatch):
     fp.process_camera_fusion(context, archive)
 
     assert seen["measured_contact"] == record
+    # the sound's own estimate rides beside the instant (C14)
+    assert record["acoustic"]["status"] in ("measured", "not_measured")
 
 
 # --- C11d (owner-adjusted): the shaft's inclination at contact, TrackMan's dynamic lie ----
