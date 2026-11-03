@@ -810,7 +810,9 @@ describe('club delivery drawings', () => {
       expect(doc.querySelector('.face-impact__delivery')!.getAttribute('transform')).toBe(
         `rotate(${rotation * (hand === 'left' ? -1 : 1)})`
       );
-      expect(doc.querySelector('.face-impact__face')!.getAttribute('d')).toBe(FACE_SHAPES[category].face);
+      // the face outline itself is not turned: it still clips the face's centre lines
+      const faceClip = doc.querySelector('.face-impact__centre-lines')!.getAttribute('clip-path')!.slice(5, -1);
+      expect(doc.getElementById(faceClip)!.querySelector('path')!.getAttribute('d')).toBe(FACE_SHAPES[category].face);
       expect(JSON.stringify(FACE_SHAPES[category])).toBe(before);
       s.metrics!.dynamic_loft = metric(null);
       expect(reference - faceDeliveryRotation(s, category)).toBeCloseTo(along(65, staticLoftLie(s.club).loft), 9);

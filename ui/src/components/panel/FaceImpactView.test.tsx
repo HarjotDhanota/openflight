@@ -1,9 +1,18 @@
 import { renderToString } from 'react-dom/server';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { FaceImpactView } from './FaceImpactView';
 import {
+  BLAST_EDGE_OUTSIDE_MM,
+  BLAST_FIELD_LIFT_MM,
+  BLAST_SOFT_EDGE_MM,
+  BLASTED_GROOVE_WIDTH_MM,
   FACE_SHAPES,
+  bladeCrotch,
+  blastedField,
+  clubModel,
   faceCategory,
   faceCentre,
   GROOVE_WIDTH_MM,
@@ -13,6 +22,7 @@ import {
   type FaceCategory,
 } from './faceImpact';
 import { MetricGroupPanel } from './MetricGroupPanel';
+import { ALL_CLUBS } from '../../data/clubs';
 
 function record(overrides: Partial<ShotMetric>): ShotMetric {
   return {
@@ -645,11 +655,11 @@ describe('FaceImpactView', () => {
     expect(html.match(/face-impact__centre-line"/g)).toHaveLength(2);
   });
 
-  it('draws the club as a filled silhouette: head, face, hosel, ferrule, shaft and score lines', () => {
+  it('draws the club as a filled silhouette: head, blasted field, hosel, ferrule, shaft and score lines', () => {
     const html = render(shot());
-    for (const part of ['head', 'face', 'hosel', 'ferrule', 'shaft']) expect(html).toContain(`face-impact__${part}"`);
+    for (const part of ['head', 'field', 'hosel', 'ferrule', 'shaft']) expect(html).toContain(`face-impact__${part}"`);
     expect(html.match(/face-impact__groove"/g)).toHaveLength(FACE_SHAPES.iron.grooves.length);
-    expect(attr(html, 'face-impact__groove"', 'stroke-width')).toBe(String(GROOVE_WIDTH_MM));
+    expect(attr(html, 'face-impact__groove"', 'stroke-width')).toBe(String(BLASTED_GROOVE_WIDTH_MM));
     const fill = attr(html, 'face-impact__head"', 'fill');
     expect(fill).toMatch(/^url\(#.+\)$/);
     expect(html).toContain(`id="${fill!.slice(5, -1)}"`);
@@ -740,6 +750,265 @@ describe('FaceImpactView', () => {
     const html = render(shot(), [...same, other, unread]);
     expect(html.match(/face-impact__earlier"/g)).toHaveLength(2);
     expect(html).toContain('2 earlier with this club');
+  });
+});
+
+/* An iron's or wedge's face: one chrome head, and a sand-blasted groove field (the owner's reference
+ * photo and approved mock-up v3, 2026-11-03) between two vertical edge lines 1.25 mm outside the
+ * longest scorelines, across the whole head from its top edge to its bottom edge. */
+describe('the blasted groove field', () => {
+  const blades = ['iron', 'wedge'] as const;
+  const bladeHands = blades.flatMap((category) =>
+    (['right', 'left'] as const).map((hand) => [category, hand] as const)
+  );
+  const club = { iron: '7-iron', wedge: 'sw' };
+  const html = (category: 'iron' | 'wedge', hand: 'right' | 'left') =>
+    render(shot({ club: club[category], impact_location: { handedness: hand } } as Partial<Shot>));
+  const tags = (markup: string, cls: string) =>
+    [...markup.matchAll(new RegExp(`<[^>]*class="${cls}"[^>]*>`, 'g'))].map((m) => m[0]);
+  const num = (tag: string, name: string) => Number(tag.match(new RegExp(` ${name}="([^"]*)"`))![1]);
+
+  it.each(blades)('puts the %s edge lines 1.25 mm outside the longest scorelines', (category) => {
+    const ends = FACE_SHAPES[category].grooves.flatMap((g) => [g.from, g.to]);
+    expect(BLAST_EDGE_OUTSIDE_MM).toBe(1.25);
+    expect(blastedField(category)).toEqual({
+      x0: Math.min(...ends) - BLAST_EDGE_OUTSIDE_MM,
+      x1: Math.max(...ends) + BLAST_EDGE_OUTSIDE_MM,
+    });
+  });
+
+  it.each(bladeHands)(
+    'draws the %s field softly between its edge lines, clipped to the head and lifted off its bottom (%s-handed)',
+    (category, hand) => {
+      const markup = html(category, hand);
+      const { x0, x1 } = blastedField(category)!;
+      // no stroke lines at its ends: the matte blends into the chrome over BLAST_SOFT_EDGE_MM
+      expect(markup).not.toContain('face-impact__field-edge');
+      expect(markup).not.toContain('face-impact__field-lip');
+      const soft = BLAST_SOFT_EDGE_MM;
+      expect(soft).toBe(0.8);
+      const { minY, maxY } = FACE_SHAPES[category].bounds;
+      const [fill] = tags(markup, 'face-impact__field-fill');
+      expect([num(fill, 'x'), num(fill, 'width'), num(fill, 'y'), num(fill, 'height')]).toEqual([
+        x0 - soft / 2,
+        x1 - x0 + soft,
+        minY,
+        maxY - minY,
+      ]);
+      const ramp = markup.match(/<linearGradient id="[^"]*field-ramp"[^>]*>(.*?)<\/linearGradient>/)!;
+      expect(num(ramp[0], 'x1')).toBe(x0 - soft / 2);
+      expect(num(ramp[0], 'x2')).toBe(x1 + soft / 2);
+      const span = x1 - x0 + soft;
+      expect([...ramp[1].matchAll(/offset="([^"]*)"/g)].map((m) => Number(m[1]))).toEqual([
+        0,
+        soft / span,
+        1 - soft / span,
+        1,
+      ]);
+      // a faint shadow on the matte side and a faint highlight on the chrome side of each end
+      expect(tags(markup, 'face-impact__field-shadow').map((tag) => [num(tag, 'x'), num(tag, 'width')])).toEqual([
+        [x0, 0.9],
+        [x1 - 0.9, 0.9],
+      ]);
+      expect(tags(markup, 'face-impact__field-shine').map((tag) => [num(tag, 'x'), num(tag, 'width')])).toEqual([
+        [x0 - 1.4, 1],
+        [x1 + 0.4, 1],
+      ]);
+      // cut to the head's own outline: the top edge as before ...
+      const clipOf = (tag: string) => tag.match(/clip-path="url\(#([^)]*)\)"/)![1];
+      const clipPath = (clip: string) => markup.match(new RegExp(`<clipPath id="${clip}"><path ([^>]*)>`))![1];
+      const [field] = tags(markup, 'face-impact__field');
+      expect(clipPath(clipOf(field))).toBe(`d="${FACE_SHAPES[category].head}"`);
+      // ... and the bottom lifted 1.2 mm, so the head's rounded leading edge shows under it
+      expect(BLAST_FIELD_LIFT_MM).toBe(1.2);
+      const [lift] = tags(markup, 'face-impact__field-lift');
+      expect(clipPath(clipOf(lift))).toBe(`d="${FACE_SHAPES[category].head}" transform="translate(0 -1.2)"`);
+      expect(markup.indexOf('face-impact__field-lift"')).toBeLessThan(markup.indexOf('face-impact__field"'));
+      // drawn inside the mirrored head drawing, in the face's own frame, before the centre lines
+      expect(markup.indexOf('face-impact__field"')).toBeGreaterThan(markup.indexOf('face-impact__outline-group'));
+      expect(markup.indexOf('face-impact__field"')).toBeLessThan(markup.indexOf('face-impact__centre-lines'));
+      expect(markup).toContain('face-impact__face-marks face-impact__face-marks--blasted');
+    }
+  );
+
+  it.each(bladeHands)('shades the %s head edge as a radius, lit from the upper left (%s-handed)', (category, hand) => {
+    const markup = html(category, hand);
+    const shape = FACE_SHAPES[category];
+    const [band] = tags(markup, 'face-impact__edge-radius');
+    // along the outer outline of head and hosel together, clipped to it, kept off the round tube
+    expect(band).toContain(`clip-path="url(#`);
+    const clip = band.match(/clip-path="url\(#([^)]*)\)"/)![1];
+    expect(markup).toContain(`<clipPath id="${clip}"><path d="${shape.silhouette}"`);
+    const mask = band.match(/mask="url\(#([^)]*)\)"/)![1];
+    expect(markup.match(new RegExp(`<mask id="${mask}"[^>]*>.*?</mask>`))![0]).toContain('fill="#000"');
+    const strokes = [
+      ...markup.matchAll(/<path class="face-impact__edge-radius-stroke" d="([^"]*)"[^>]*stroke-width="([^"]*)"/g),
+    ];
+    expect(strokes.map((m) => Number(m[2]))).toEqual([4.6, 3.4, 2.2, 1.1]);
+    for (const m of strokes) expect(m[1]).toBe(shape.silhouette);
+    // and a bright rounded leading edge just under the lifted field
+    const [lead] = tags(markup, 'face-impact__leading-edge');
+    expect(lead).toContain(`d="${shape.head}"`);
+    expect(lead).toContain('transform="translate(0 -0.6)"');
+    // the light comes from the screen's upper left whichever hand
+    const lit = markup.match(/<linearGradient id="[^"]*edge-lit"[^>]*>/)![0];
+    const left = hand === 'left';
+    expect(num(lit, 'x1') < num(lit, 'x2')).toBe(!left);
+    expect(num(lit, 'y1')).toBeLessThan(num(lit, 'y2'));
+  });
+
+  it.each(blades)('darkens the %s hosel-to-head crotch with a soft reflection', (category) => {
+    const markup = html(category, 'right');
+    const { x1 } = blastedField(category)!;
+    const [cx, cy] = bladeCrotch(category)!;
+    // on the heel side of the field, the lowest point of the head's top edge between topline and hosel
+    expect(cx).toBeGreaterThan(x1);
+    expect(cx).toBeLessThan(x1 + 25);
+    const head = polygon(FACE_SHAPES[category].head);
+    const topAt = (x: number) =>
+      Math.min(
+        ...head.flatMap(([ax, ay], i) => {
+          const [bx, by] = head[(i + 1) % head.length];
+          if ((ax - x) * (bx - x) > 0 || ax === bx) return [];
+          return [ay + ((x - ax) / (bx - ax)) * (by - ay)];
+        })
+      );
+    expect(cy).toBeCloseTo(topAt(cx), 1);
+    for (let x = x1 + 0.5; x < x1 + 25; x += 0.5) expect(topAt(x)).toBeLessThanOrEqual(cy + 0.05);
+    const [shade] = tags(markup, 'face-impact__neck-shade');
+    expect([num(shade, 'cx'), num(shade, 'cy'), num(shade, 'r')]).toEqual([cx, cy + 2.5, 9]);
+  });
+
+  it.each(blades)('draws the %s scorelines as recessed grooves, in place', (category) => {
+    const markup = html(category, 'right');
+    const grooves = FACE_SHAPES[category].grooves;
+    const dark = tags(markup, 'face-impact__groove');
+    expect(dark).toHaveLength(grooves.length);
+    expect(BLASTED_GROOVE_WIDTH_MM).toBeCloseTo(GROOVE_WIDTH_MM * 0.85, 12);
+    for (const [k, g] of grooves.entries()) {
+      const [a, b] = [Math.min(g.from, g.to), Math.max(g.from, g.to)];
+      expect([num(dark[k], 'x1'), num(dark[k], 'x2'), num(dark[k], 'y1')]).toEqual([g.from, g.to, g.y]);
+      expect(num(dark[k], 'stroke-width')).toBe(BLASTED_GROOVE_WIDTH_MM);
+      // a hairline light lower edge, tapered in at the ends, and a darker core
+      const lip = tags(markup, 'face-impact__groove-lip')[k];
+      expect([num(lip, 'x1'), num(lip, 'x2'), num(lip, 'y1')]).toEqual([
+        a + 0.35,
+        b - 0.35,
+        g.y + GROOVE_WIDTH_MM * 0.62,
+      ]);
+      const core = tags(markup, 'face-impact__groove-core')[k];
+      expect([num(core, 'x1'), num(core, 'x2'), num(core, 'y1')]).toEqual([
+        a + 0.2,
+        b - 0.2,
+        g.y - GROOVE_WIDTH_MM * 0.1,
+      ]);
+    }
+  });
+
+  it.each(bladeHands)('leaves no separate face panel on the %s (%s-handed): one chrome head', (category, hand) => {
+    const markup = html(category, hand);
+    for (const panel of ['face', 'face-reflection', 'grain', 'scoring', 'edge'])
+      expect(markup).not.toContain(`class="face-impact__${panel}"`);
+    // the head, its reflection and its rim highlights stay
+    for (const part of ['head', 'head-reflection', 'leading-radius', 'rim'])
+      expect(markup).toContain(`face-impact__${part}"`);
+  });
+
+  it.each(['driver', 'fairway', 'hybrid'] as const)('keeps the %s face panel and draws no field', (category) => {
+    expect(blastedField(category)).toBeNull();
+    const markup = render(shot({ club: { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid' }[category] }));
+    expect(markup).toContain('class="face-impact__face"');
+    expect(markup).not.toContain('face-impact__field');
+  });
+
+  /** WCAG contrast ratio of two #rrggbb colours. */
+  const contrast = (a: string, b: string) => {
+    const lum = (hex: string) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => {
+        const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+    };
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const css = readFileSync(new URL('./FaceImpactView.css', import.meta.url), 'utf8');
+  const theme = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
+  const block = (text: string, selector: string) => text.slice(text.indexOf(selector)).split('}')[0];
+  const value = (text: string, name: string) => text.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'))![1];
+
+  it.each(['chrome', 'satin'])('reads on the %s finish in the dark and the light theme', (finish) => {
+    const art = block(css, `[data-finish='${finish}']`);
+    const blast = value(art, '--face-art-blast');
+    // the grooves stand out on the matte field, a shade darker than on the polished face
+    expect(contrast(blast, value(art, '--face-art-blast-groove'))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(value(art, '--face-art-blast-groove'), '#ffffff')).toBeGreaterThan(
+      contrast(value(art, '--face-art-groove'), '#ffffff')
+    );
+    // the field reaches the head's edge: on the dark panel it reads by itself, on the light panel
+    // by its rim line
+    const dark = value(block(theme, "[data-theme='dark']"), '--color-surface');
+    const light = value(block(theme, "[data-theme='light']"), '--color-surface');
+    expect(contrast(blast, dark)).toBeGreaterThanOrEqual(3);
+    const rim = value(block(css, "[data-theme='light'] .face-impact"), '--face-art-blast-rim');
+    expect(contrast(rim, light)).toBeGreaterThanOrEqual(3);
+  });
+
+  /* The face view as drawn, every club, both hands, no shot: sha-256 of its markup. Woods and
+   * hybrids as before the blasted field; irons and wedges since it. */
+  const APPROVED_FACE_VIEWS: Record<string, string> = {
+    '2-iron:right': 'e9bd50083ab762df',
+    '2-iron:left': '2d990556c6ba5c8a',
+    '3-iron:right': 'e9bd50083ab762df',
+    '3-iron:left': '2d990556c6ba5c8a',
+    '4-iron:right': 'e9bd50083ab762df',
+    '4-iron:left': '2d990556c6ba5c8a',
+    '5-iron:right': 'e9bd50083ab762df',
+    '5-iron:left': '2d990556c6ba5c8a',
+    '6-iron:right': 'e9bd50083ab762df',
+    '6-iron:left': '2d990556c6ba5c8a',
+    '7-iron:right': 'e9bd50083ab762df',
+    '7-iron:left': '2d990556c6ba5c8a',
+    '8-iron:right': 'e9bd50083ab762df',
+    '8-iron:left': '2d990556c6ba5c8a',
+    '9-iron:right': 'e9bd50083ab762df',
+    '9-iron:left': '2d990556c6ba5c8a',
+    'pw:right': '4c8e0ecf3d4d81e7',
+    'pw:left': '0708f28e61c7154b',
+    'gw:right': '4c8e0ecf3d4d81e7',
+    'gw:left': '0708f28e61c7154b',
+    'sw:right': '4c8e0ecf3d4d81e7',
+    'sw:left': '0708f28e61c7154b',
+    'lw:right': '4c8e0ecf3d4d81e7',
+    'lw:left': '0708f28e61c7154b',
+    '3-hybrid:right': '2c47b8c3a51c7d03',
+    '3-hybrid:left': 'ab18ad44899b8a7c',
+    '5-hybrid:right': '2c47b8c3a51c7d03',
+    '5-hybrid:left': 'ab18ad44899b8a7c',
+    '7-hybrid:right': '2c47b8c3a51c7d03',
+    '7-hybrid:left': 'ab18ad44899b8a7c',
+    '9-hybrid:right': '2c47b8c3a51c7d03',
+    '9-hybrid:left': 'ab18ad44899b8a7c',
+    'driver:right': '604308b49492be66',
+    'driver:left': '850929eeb337e6fb',
+    '3-wood:right': '7c8bb63b3765c3a6',
+    '3-wood:left': 'e3dd7ecc2f41ba1e',
+    '5-wood:right': '7c8bb63b3765c3a6',
+    '5-wood:left': 'e3dd7ecc2f41ba1e',
+    '7-wood:right': '7c8bb63b3765c3a6',
+    '7-wood:left': 'e3dd7ecc2f41ba1e',
+  };
+  it('pins every selectable club in the approved face views', () => {
+    expect(Object.keys(APPROVED_FACE_VIEWS).sort()).toEqual(
+      ALL_CLUBS.flatMap((c) => [`${c.id}:left`, `${c.id}:right`]).sort()
+    );
+  });
+  it.each(Object.keys(APPROVED_FACE_VIEWS))('keeps the %s face view byte-identical to the approved drawing', (key) => {
+    const [id, handed] = key.split(':') as [string, 'right' | 'left'];
+    const s = { ...clubModel(id), impact_location: { handedness: handed } } as unknown as Shot;
+    const markup = renderToString(<FaceImpactView shot={s} sessionShots={[s]} />);
+    expect(createHash('sha256').update(markup).digest('hex').slice(0, 16)).toBe(APPROVED_FACE_VIEWS[key]);
   });
 });
 
