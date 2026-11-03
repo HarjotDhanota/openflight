@@ -168,6 +168,15 @@ describe('club delivery drawings', () => {
       expect(element.querySelector('.club-projection__topline')).not.toBeNull();
     }
   });
+  it('titles the top view at impact: it draws the face angle and club path at impact', () => {
+    const html = renderToString(<ClubDeliveryViews shot={shot()} sessionShots={[]} />);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const titles = [...doc.querySelectorAll('.club-views__nav button')].map((button) => button.textContent);
+    expect(titles[1]).toBe('Top at impact');
+    expect(doc.querySelector('[data-view="top"]')!.getAttribute('aria-label')).toBe('Top at impact');
+    expect(html).not.toMatch(/at address/i);
+  });
+
   it('uses kiosk handedness without camera metadata and keeps a recorded shot’s hand', () => {
     const host = document.createElement('div');
     const root = createRoot(host);

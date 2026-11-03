@@ -96,6 +96,10 @@ ferrule. In the heel view the hosel's back edge comes down into the top of the t
 rounded cap through a fillet, and the neck fills the crotch between the hosel and the lofted
 face line; the tube's cylindrical shading stays on the tube, so the fillet takes the head's
 metal.
+The top view is titled "Top at impact" because it depicts impact, not address:
+its head is turned by the shot's face angle at impact, its arrows are the face
+angle and club path at impact, and its numbers are face to path, face angle and
+club path. Only a shot with no face angle draws the head square.
 Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
 impact centre. The ball is 42.7 mm
