@@ -60,11 +60,12 @@ def test_the_attack_angle_is_the_tangent_at_contact_not_the_last_chord():
 
 
 def test_a_straight_approach_reads_the_same_either_way():
+    # 3 ms frames at 33 m/s (C21a: the fit takes the last 15 ms of free flight)
     positions = tuple(
-        cd.HeadPosition(t_s=t, lateral_m=0.0, up_m=0.05 - 0.07 * t, forward_m=1.0 + t)
-        for t in (0.0, 0.1, 0.2, 0.3)
+        cd.HeadPosition(t_s=t, lateral_m=0.0, up_m=0.20 - 0.07 * 33.0 * t, forward_m=1.0 + 33.0 * t)
+        for t in (0.0, 0.003, 0.006, 0.009)
     )
-    attack = cd.attack_angle_at_contact(positions, contact_t_s=0.35, last_rest_t_s=0.3)
+    attack = cd.attack_angle_at_contact(positions, contact_t_s=0.0105, last_rest_t_s=0.009)
     assert attack == pytest.approx(math.degrees(math.atan(-0.07)), abs=1e-6)
 
 

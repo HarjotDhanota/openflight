@@ -429,8 +429,11 @@ def combine_approach_estimates(
     attack_estimate: ApproachPairEstimate | None,
     preferred_path_estimate: ApproachPairEstimate | None = None,
     timing_plausible: bool,
+    attack_tier_cap: str | None = None,
 ) -> ChainedDelivery:
-    """Combine independent impact windows without coupling path and AoA."""
+    """Combine independent impact windows without coupling path and AoA.
+
+    ``attack_tier_cap`` ("low"): the attack angle's tier goes no higher (a fat contact)."""
     notes: list[str] = []
     path_candidates = [
         estimate
@@ -501,6 +504,8 @@ def combine_approach_estimates(
     elif medium_attack and timing_plausible:
         attack_confidence = "medium"
     elif attack_estimate is not None:
+        attack_confidence = "low"
+    if attack_tier_cap == "low" and attack_confidence in ("high", "medium"):
         attack_confidence = "low"
     if attack_estimate is not None and not medium_attack:
         notes.append(
@@ -1415,23 +1420,40 @@ def estimate_chained_delivery(
             return fallback(ChainedDelivery(status="rejected_no_ops_reference", **common), ball)
         return fallback(ChainedDelivery(status="rejected_no_stable_clubhead", **common), ball)
     attack_estimate = pair_estimates.get((-1, 0))
+    attack_tier_cap = None
     if attack_estimate is not None:
-        tangent = attack_angle_at_contact(
+        # heights are above the hitting surface: the ball's centre sits its radius over it
+        tangent = contact_tangent(
             common["head_positions"],
             contact_t_s=contact_camera_s,
             last_rest_t_s=float(camera_s[impact_idx]),
+            surface_up_m=float(geometry.ball_position_lfu[2]) - GOLF_BALL_DIAMETER_M / 2.0,
         )
-        if tangent is not None:
+        if tangent.datum_note is not None:
+            notes.append(tangent.datum_note)
+        if tangent.attack_angle_deg is not None:
             notes.append(
-                f"attack angle at contact {tangent:.1f} deg from the pre-contact head "
-                f"positions (the chord a frame before read {attack_estimate.attack_angle_deg:.1f})"
+                f"attack angle at contact {tangent.attack_angle_deg:.1f} deg from the "
+                f"pre-contact head positions (the chord a frame before read "
+                f"{attack_estimate.attack_angle_deg:.1f})"
             )
-            attack_estimate = replace(attack_estimate, attack_angle_deg=tangent)
+            attack_estimate = replace(attack_estimate, attack_angle_deg=tangent.attack_angle_deg)
+        elif tangent.fat_contact_mm is not None:
+            notes.append(f"attack angle not measured: {tangent.reason}")
+            attack_estimate = None
+        if tangent.fat_contact_mm is not None:
+            attack_tier_cap = "low"
+            if tangent.attack_angle_deg is not None:
+                notes.append(
+                    f"{tangent.note}: the attack angle is the head's descent where its free "
+                    "flight ended, not its direction at the ball; tier low"
+                )
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=attack_estimate,
         preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
+        attack_tier_cap=attack_tier_cap,
     )
     common["notes"] = (*notes, *result.notes)
     if range_evidence is None and (
@@ -1466,31 +1488,133 @@ def estimate_chained_delivery(
 # (impact - 1, impact) is centred a frame before it, and a descending head steepens the
 # earlier it is read (Oct 27 shot 1: -13.2 deg as a chord, 3.6 ms before contact).
 CONTACT_TANGENT_MIN_FRAMES = 3
-# the fit stays local to contact: the four frames nearest it (C10's window). A longer
-# approach (C18a) bends more than one constant acceleration describes.
-CONTACT_TANGENT_MAX_FRAMES = 4
+# C21a (3 Nov 2026): the tangent is a constant-acceleration fit, and constant acceleration
+# only describes a head in FREE FLIGHT. Two things end it. (1) Time: over a longer approach
+# the head's path bends more than one constant acceleration describes, so the fit takes the
+# last CONTACT_TANGENT_WINDOW_S of free flight; a time, not a frame count, so 120, 288 and
+# 488 fps clips read the same stretch of swing (it replaces C18a's "four frames nearest
+# contact", chosen only so Oct 27 shot 1's f39 would not move it; at 288 fps 15 ms holds
+# the same four frames). (2) The hitting surface: a head whose heel anchor is no higher
+# above the surface than the anchor sits above a grounded sole rides the surface, and a
+# quadratic across that floor bends upward (Oct 27 shot 3: +15.5 deg from a heel at 135,
+# 73, 31, 35 mm). Such frames end free flight; the tangent is read where it ended.
+CONTACT_TANGENT_WINDOW_S = 0.015
+# The heel anchor (where the shaft axis leaves the head) above a grounded sole: the average
+# iron outline's hosel foot is 35.2 mm above its lowest sole point, the wedge's 34.1 mm
+# (the research club-model reference outline, square at its design lie). Oct 27 shots 1, 3
+# and 4 read 32-37 mm at the ball.
+HEEL_ANCHOR_ABOVE_SOLE_M = 0.035
 
 
-def attack_angle_at_contact(
-    head_positions, *, contact_t_s: float, last_rest_t_s: float
-) -> float | None:
-    """The head's attack angle at the contact time: a constant-acceleration fit (each
-    axis quadratic in time) through the head positions up to the last frame the ball
-    rested in, differentiated at ``contact_t_s``. None with fewer than
-    ``CONTACT_TANGENT_MIN_FRAMES`` such frames. A straight approach reads as its chord."""
-    pre = sorted((p for p in head_positions if p.t_s <= last_rest_t_s + 1e-9), key=lambda p: p.t_s)[
-        -CONTACT_TANGENT_MAX_FRAMES:
-    ]
-    if len({p.t_s for p in pre}) < CONTACT_TANGENT_MIN_FRAMES:
-        return None
-    times = np.asarray([p.t_s - contact_t_s for p in pre], dtype=float)
-    xyz = np.asarray([[p.lateral_m, p.up_m, p.forward_m] for p in pre], dtype=float)
+@dataclass(frozen=True)
+class ContactTangent:
+    """The head's attack angle from its free flight, and whether it reached the surface
+    before the ball (a fat contact: ``fat_contact_mm`` along its travel)."""
+
+    attack_angle_deg: float | None
+    free_flight_frames: int
+    fat_contact_mm: float | None = None
+    reason: str | None = None
+    # why the surface did not end free flight though one was given, or None
+    datum_note: str | None = None
+
+    @property
+    def note(self) -> str | None:
+        if self.fat_contact_mm is None:
+            return None
+        return f"fat contact: head reached the surface {self.fat_contact_mm:.0f} mm before the ball"
+
+
+def _head_at(ordered, t_s: float) -> tuple[float, float]:
+    """(lateral, forward) of the head at ``t_s``, linear between its bracketing positions
+    (the nearest one outside them)."""
+    for before, after in zip(ordered, ordered[1:]):
+        if before.t_s <= t_s <= after.t_s and after.t_s > before.t_s:
+            f = (t_s - before.t_s) / (after.t_s - before.t_s)
+            return (
+                before.lateral_m + f * (after.lateral_m - before.lateral_m),
+                before.forward_m + f * (after.forward_m - before.forward_m),
+            )
+    nearest = min(ordered, key=lambda p: abs(p.t_s - t_s))
+    return nearest.lateral_m, nearest.forward_m
+
+
+def contact_tangent(
+    head_positions,
+    *,
+    contact_t_s: float,
+    last_rest_t_s: float,
+    surface_up_m: float | None = None,
+) -> ContactTangent:
+    """The head's attack angle from the free-flight positions up to the last frame the ball
+    rested in: a constant-acceleration fit (each axis quadratic in time) over the last
+    ``CONTACT_TANGENT_WINDOW_S`` of free flight, differentiated where free flight ended (the
+    contact; or the first frame whose heel is within ``HEEL_ANCHOR_ABOVE_SOLE_M`` of
+    ``surface_up_m``). A head that reached the surface more than a ball diameter before the
+    contact point is a fat contact. A heel read below the surface itself shows the heights
+    are not on the surface's datum (the anchor rides ``HEEL_ANCHOR_ABOVE_SOLE_M`` over a
+    grounded sole): the surface then ends nothing and ``datum_note`` says why. None (with
+    the reason) under ``CONTACT_TANGENT_MIN_FRAMES`` free-flight frames; a straight approach
+    reads its chord."""
+    ordered = sorted(head_positions, key=lambda p: p.t_s)
+    pre = [p for p in ordered if p.t_s <= last_rest_t_s + 1e-9]
+    end_t, free, fat_mm, datum_note = contact_t_s, pre, None, None
+    lowest = min((p.up_m for p in pre), default=None)
+    if surface_up_m is not None and lowest is not None and lowest < float(surface_up_m):
+        datum_note = (
+            f"a pre-contact heel reads {1000 * (float(surface_up_m) - lowest):.0f} mm below the "
+            "hitting surface: the heights are not on the surface's datum, so the surface ends "
+            "no free flight"
+        )
+        surface_up_m = None
+    if surface_up_m is not None:
+        floor = float(surface_up_m) + HEEL_ANCHOR_ABOVE_SOLE_M
+        landed = next((p for p in pre if p.up_m <= floor), None)
+        if landed is not None:
+            end_t = landed.t_s
+            free = [p for p in pre if p.t_s < landed.t_s]
+            lateral, forward = _head_at(ordered, contact_t_s)
+            travel = math.hypot(lateral - landed.lateral_m, forward - landed.forward_m)
+            if travel > GOLF_BALL_DIAMETER_M:
+                fat_mm = 1000.0 * travel
+    window = [p for p in free if p.t_s >= end_t - CONTACT_TANGENT_WINDOW_S - 1e-9]
+    count = len({p.t_s for p in window})
+    if count < CONTACT_TANGENT_MIN_FRAMES:
+        ended = "contact" if end_t == contact_t_s else "the head reached the surface"
+        reason = (
+            f"fewer than {CONTACT_TANGENT_MIN_FRAMES} free-flight frames in the last "
+            f"{CONTACT_TANGENT_WINDOW_S * 1e3:.0f} ms before {ended} ({count})"
+        )
+        tangent = ContactTangent(None, count, fat_mm, datum_note=datum_note)
+        if tangent.note:
+            reason = f"{tangent.note}; {reason}"
+        return replace(tangent, reason=reason)
+    times = np.asarray([p.t_s - end_t for p in window], dtype=float)
+    xyz = np.asarray([[p.lateral_m, p.up_m, p.forward_m] for p in window], dtype=float)
     velocity = np.asarray(
         [np.polyval(np.polyder(np.polyfit(times, xyz[:, axis], 2)), 0.0) for axis in range(3)]
     )
     if not np.all(np.isfinite(velocity)):
-        return None
-    return _velocity_angles(velocity)[1]
+        return ContactTangent(
+            None, count, fat_mm, "the free-flight fit is not finite", datum_note=datum_note
+        )
+    return ContactTangent(_velocity_angles(velocity)[1], count, fat_mm, datum_note=datum_note)
+
+
+def attack_angle_at_contact(
+    head_positions,
+    *,
+    contact_t_s: float,
+    last_rest_t_s: float,
+    surface_up_m: float | None = None,
+) -> float | None:
+    """``contact_tangent``'s attack angle alone."""
+    return contact_tangent(
+        head_positions,
+        contact_t_s=contact_t_s,
+        last_rest_t_s=last_rest_t_s,
+        surface_up_m=surface_up_m,
+    ).attack_angle_deg
 
 
 def shaft_inclination_deg(points_px: np.ndarray, range_m: float, *, ball, geometry) -> float:
