@@ -699,7 +699,7 @@ def test_a_target_line_d_plane_face_comes_into_the_analysis_orientation():
 
 def test_a_shaft_lie_becomes_the_faces_roll_against_the_static_lie():
     lie = ip.lie_from_shaft(65.3, 3.0, "7-iron", "camera_lower_shaft")
-    assert lie.value == pytest.approx(3.0)
+    assert lie.value == pytest.approx(-3.0)  # more upright than built: toe down (C17)
     assert lie.sigma == 3.0 and lie.source == "camera_lower_shaft"
 
 
@@ -713,7 +713,7 @@ def test_the_shots_own_shaft_lie_replaces_the_static_lie_prior():
         "diagnostics": {"fits": [{"angle_deg": 64.1}, {"angle_deg": 64.9}]},
     }
     lie = ip.shaft_lie_input(record, "7-iron")
-    assert lie.value == pytest.approx(65.3 - 62.3)
+    assert lie.value == pytest.approx(62.3 - 65.3)
     assert lie.sigma == pytest.approx(ip.LIE_PRIOR_SIGMA_DEG)
     assert lie.source.startswith("camera lower shaft")
     record["diagnostics"]["fits"][1]["angle_deg"] = 70.0
@@ -738,13 +738,40 @@ def test_the_club_stage_s_shaft_at_contact_is_the_lie_when_the_post_shot_reader_
     }
     refused = {"status": "not_measured", "value": None, "reason": "no masks"}
     lie = ip.shot_lie_input(refused, shot, "7-iron")
-    assert lie.value == pytest.approx(66.2 - 62.3)
+    assert lie.value == pytest.approx(62.3 - 66.2)
     assert lie.sigma == pytest.approx(ip.LIE_PRIOR_SIGMA_DEG)
     assert lie.source.startswith("camera club stage")
     # the post-shot reader's own reading stands first
     own = {"value": 60.0, "status": "model_geometry", "source": "camera lower shaft"}
-    assert ip.shot_lie_input(own, shot, "7-iron").value == pytest.approx(60.0 - 62.3)
+    assert ip.shot_lie_input(own, shot, "7-iron").value == pytest.approx(62.3 - 60.0)
     assert ip.shot_lie_input(refused, {}, "7-iron") is None
+
+
+def _shaft_elevation_deg(face, loft, lie, static=62.3):
+    """The world elevation of the category shaft the placement draws from the head axes."""
+    toe, up, normal = ip.head_axes(face, loft, lie)
+    lo, static = math.radians(loft), math.radians(static)
+    vertical = math.cos(lo) * up + math.sin(lo) * normal
+    direction = -math.cos(static) * toe + math.sin(static) * vertical
+    return math.degrees(math.asin(-direction[1] / np.linalg.norm(direction)))
+
+
+def test_a_shaft_more_upright_than_the_static_lie_is_a_toe_down_roll():
+    """C17: Oct 27 shot 1's shaft stood at 66.2 deg against the 7-iron's 62.3 static lie. A
+    shaft more upright than the club was built for is toe DOWN; the roll that turns the head
+    so its own shaft stands at the measured inclination is static - shaft."""
+    lie = ip.lie_from_shaft(66.2, 4.0, "7-iron", "camera")
+    assert lie.value == pytest.approx(-3.9)
+    assert _shaft_elevation_deg(5.2, 23.4, lie.value) == pytest.approx(66.2, abs=0.5)
+
+
+def test_head_axes_toe_up_roll_raises_the_toe_and_flattens_the_shaft():
+    """The roll convention, pinned against a drawn case: a toe-up roll (+) lifts the toe end
+    of the score lines (level frame: y down) and lays the shaft at the heel flatter."""
+    toe, _up, _normal = ip.head_axes(0.0, 0.0, 5.0)
+    assert toe[1] == pytest.approx(-math.sin(math.radians(5.0)))
+    assert _shaft_elevation_deg(0.0, 0.0, 5.0) == pytest.approx(62.3 - 5.0, abs=1e-6)
+    assert _shaft_elevation_deg(0.0, 0.0, -5.0) == pytest.approx(62.3 + 5.0, abs=1e-6)
 
 
 def test_the_lens_height_is_the_one_the_face_inputs_carry():

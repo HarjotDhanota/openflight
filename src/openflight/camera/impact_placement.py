@@ -10,7 +10,7 @@ rule (``orientation_for_shot``, per angle): the shot's capture-bound angle as
 collision model's D-plane inversion the shot record carries (``orientation_from_collision``:
 the metric's status sets its sigma, ``ANGLE_SIGMA_BY_STATUS``), else the category priors
 ``FaceInputs.priors`` keeps; ``Orientation.provenance`` names each angle's origin and
-label. Dynamic lie (the face's roll about its normal, dynamic minus static lie, + toe up)
+label. Dynamic lie (the face's roll about its normal, static minus dynamic lie, + toe up)
 is a labelled prior unless a shaft lie is supplied (``lie_from_shaft``). All of them are
 conditional inputs, never "measured".
 
@@ -156,8 +156,8 @@ class Orientation:
     """The head's orientation at impact, each angle labelled with its 1-sigma.
 
     ``face_angle``: analysis orientation, + open (the toe trailing). ``dynamic_loft``:
-    the face normal's elevation. ``lie``: the face's roll about its normal, dynamic minus
-    static lie, + toe up. ``notes`` say why an angle fell back to its prior.
+    the face normal's elevation. ``lie``: the face's roll about its normal, static minus
+    dynamic (shaft) lie, + toe up. ``notes`` say why an angle fell back to its prior.
     """
 
     face_angle: il.Labelled
@@ -330,14 +330,16 @@ def orientation_for_shot(
 def lie_from_shaft(
     shaft_lie_deg: float, sigma_deg: float, club: str | None, source: str
 ) -> il.Labelled:
-    """A shaft's lie to the ground as the face's roll: minus the category's static lie."""
+    """A shaft's lie to the ground as the face's roll (+ toe up): the category's static lie
+    minus the shaft's. A shaft more upright than the club was built for is toe down (C17:
+    the roll then turns the head so its own shaft stands at the measured inclination)."""
     model = ClubModel.for_club(club)
     static = (
         model.static_lie_deg
         if model is not None
         else OUTLINE_REFERENCE["categories"]["iron"]["static_lie_deg"]
     )
-    return il.Labelled(float(shaft_lie_deg) - float(static), float(sigma_deg), source)
+    return il.Labelled(float(static) - float(shaft_lie_deg), float(sigma_deg), source)
 
 
 def shaft_lie_input(record: Mapping[str, Any] | None, club: str | None) -> il.Labelled | None:

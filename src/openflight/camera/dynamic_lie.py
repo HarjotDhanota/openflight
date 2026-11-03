@@ -113,7 +113,8 @@ def _saved_view(shot: il.PreparedShot, endpoints: np.ndarray):
 
 def static_lie_reference(club: str | None, shaft_deg: float) -> dict | None:
     """The shaft's angle against the club category's static lie (official spec aggregate,
-    club_outline_reference): reference data, not a prior; + toe up."""
+    club_outline_reference): reference data, not a prior; + more upright than built, which
+    is toe DOWN (C17)."""
     category = il.club_category(club) if club else None
     entry = _REFERENCE["categories"].get(category or "")
     if entry is None or entry.get("static_lie_deg") is None:
