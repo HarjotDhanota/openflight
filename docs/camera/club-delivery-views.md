@@ -93,10 +93,13 @@ is unchanged to the bit. Only heel-end nodes moved: the face centre, toe extreme
 point, blade length and face height are unchanged, and so is every part of
 `club_outline_reference.json` that impact placement fits (it never fits the heel end). The
 iron face's rounded top-heel corner now sits under that fillet, so the even-rim check stops
-where the face's straight top line starts. In the top view the neck leaves the
-blade's back edge tangent to it, runs on past the face's top-heel corner and sweeps into the
-ferrule; the tube's cylindrical shading stays on the tube, so that sweep takes the head's
-metal. In the heel view the hosel stands in front of the lofted face and meets the head only
+where the face's straight top line starts. In the top view each neck edge (top-line side
+and leading-edge side) leaves the blade's edge band tangent to it, toe-ward of the face's
+top-heel corner, and sweeps into the ferrule in one cubic with no corner (tightest turn
+about 12 mm on the iron's back edge, 8 mm on the wedge's; the band is the face outline's
+2.4 mm stroke carried through the top view's projection, so it is narrower across the
+blade than along it). The tube's cylindrical shading stays on the tube, so that sweep takes
+the head's metal. In the heel view the hosel stands in front of the lofted face and meets the head only
 at the neck, low on the blade where its back edge crosses the face line: the gap between the
 hosel and the top of the face is open, as on a real club.
 The top view is titled "Top at impact" because it depicts impact, not address:

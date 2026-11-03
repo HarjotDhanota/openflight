@@ -205,16 +205,26 @@ function cubicHead(p: readonly Point[], t: number): Point[] {
   return [p[0], ab, abc, lerp(abc, bcd)];
 }
 
-/** How far toe-ward of the face's top-heel corner the top view's neck leaves the blade, mm. */
-const TOP_NECK_JOIN_MM = 6;
+/** The top view's neck edges, back (top-line side) and front (leading-edge side): [mm toe-ward of
+ * the face's top-heel corner where the edge leaves the blade's band, its handle there, its handle at
+ * the ferrule (both as fractions of the edge's chord)]. One cubic each, tangent to the band and to
+ * the ferrule; chosen for the smallest peak curvature that keeps the blade's band inside the neck
+ * (iron about 12 mm and wedge 8 mm at the tightest on the back edge, nearly straight on the front). */
+const TOP_NECK = {
+  iron: { back: [5, 0.45, 0.45], front: [16, 0.4, 0.35] },
+  wedge: { back: [14, 0.7, 0.3], front: [16, 0.45, 0.2] },
+} as const;
 
 /** A blade's neck in the top or heel view, and where its edge meets the head (`join`, running along
- * `tangent`). Top: the neck leaves the blade's back edge (the shell's band outside the projected top
- * line) toe-ward of the face's top-heel corner, tangent to it, and sweeps into the ferrule. Heel
+ * `tangent`). Top: both neck edges leave the blade's band (outside the projected face) tangent to it,
+ * toe-ward of the face's top-heel corner, and sweep into the ferrule in one smooth curve each. Heel
  * view: the hosel stands in front of the lofted face and meets the head only at the neck, low on the
  * blade where its back edge crosses the face line; above that the gap to the face is open, as on a
  * real club. Svg mm before the hand's mirror. */
-export function bladeNeck(category: FaceCategory, view: 'top' | 'side'): { d: string; join: Point; tangent: Point } {
+export function bladeNeck(
+  category: FaceCategory,
+  view: 'top' | 'side'
+): { d: string; join: Point; tangent: Point; front?: { join: Point; tangent: Point } } {
   const paths = clubProfilePaths(category);
   const { shaftX, shaftY, ferruleBase, ferruleRadius } = hoselLayout(category, view);
   const [left, right] = [shaftX - ferruleRadius, shaftX + ferruleRadius];
@@ -223,33 +233,45 @@ export function bladeNeck(category: FaceCategory, view: 'top' | 'side'): { d: st
       .match(/-?\d+(?:\.\d+)?/g)!
       .slice(0, 2)
       .map(Number) as Point;
-    // the shell's back edge (its least x) where it crosses y = the join's station, and its direction there
-    const at = heelCorner[1] - TOP_NECK_JOIN_MM;
-    const shell = flatten(paths.top);
-    let best: { x: number; along: Point } | null = null;
-    shell.forEach((a, k) => {
-      const b = shell[(k + 1) % shell.length];
-      if ((a[1] - at) * (b[1] - at) > 0 || a[1] === b[1]) return;
-      const x = a[0] + ((at - a[1]) / (b[1] - a[1])) * (b[0] - a[0]);
-      if (!best || x < best.x)
-        best = { x, along: unit(b[1] > a[1] ? [b[0] - a[0], b[1] - a[1]] : [a[0] - b[0], a[1] - b[1]]) };
-    });
-    const { x, along } = best!;
-    const outward: Point = [-along[1], along[0]];
-    const join: Point = [x + outward[0] * BLADE_EDGE_BAND_MM, at + outward[1] * BLADE_EDGE_BAND_MM];
-    // straight on along the back edge past the corner's band, then the fillet into the ferrule
-    const past = (heelCorner[1] + BLADE_EDGE_BAND_MM - join[1]) / along[1];
-    const on: Point = [join[0] + along[0] * past, join[1] + along[1] * past];
-    const reach = ferruleBase - on[1];
+    const lengths = TOP_NECK[category === 'wedge' ? 'wedge' : 'iron'];
+    // The shell is the face outline stroked 4.8 mm wide, projected by (x, y) -> (k y + o, x): its
+    // band is 2.4 mm about the face outline in face coordinates. Where an edge leaves it: the face's
+    // top (back, -1) or bottom (front, +1) edge `station` mm toe-ward of the face's top-heel corner,
+    // carried out by the band, projected, with the edge's direction there (heading heel-ward).
+    const p = CLUB_PROFILES[category];
+    const radians = (p.loft * Math.PI) / 180;
+    const back = p.topline * Math.cos(radians);
+    const [k, o] = [Math.sin(radians) + back / p.faceHeight, -back / 2];
+    const face = flatten(FACE_SHAPES[category].face);
+    const leave = (side: -1 | 1, station: number): [Point, Point] => {
+      const at = heelCorner[1] - station;
+      let best: { y: number; along: Point } | null = null;
+      face.forEach((a, i) => {
+        const b = face[(i + 1) % face.length];
+        if ((a[0] - at) * (b[0] - at) > 0 || a[0] === b[0]) return;
+        const y = a[1] + ((at - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
+        if (!best || side * y > side * best.y)
+          best = { y, along: unit(b[0] > a[0] ? [b[0] - a[0], b[1] - a[1]] : [a[0] - b[0], a[1] - b[1]]) };
+      });
+      const { y, along } = best!;
+      const outward: Point = side < 0 ? [along[1], -along[0]] : [-along[1], along[0]];
+      const [fx, fy] = [at + outward[0] * BLADE_EDGE_BAND_MM, y + outward[1] * BLADE_EDGE_BAND_MM];
+      return [[k * fy + o, fx], unit([k * along[1], along[0]])];
+    };
+    const [join, along] = leave(-1, lengths.back[0]);
+    const [frontJoin, frontAlong] = leave(1, lengths.front[0]);
+    const [backReach, frontReach] = [
+      Math.hypot(left - join[0], ferruleBase - join[1]),
+      Math.hypot(right - frontJoin[0], ferruleBase - frontJoin[1]),
+    ];
     const d = [
       `M ${point(...join)}`,
-      `L ${point(...on)}`,
-      `C ${point(on[0] + along[0] * reach * 0.4, on[1] + along[1] * reach * 0.4)} ${point(left, ferruleBase - reach * 0.45)} ${point(left, ferruleBase)}`,
+      `C ${point(join[0] + along[0] * backReach * lengths.back[1], join[1] + along[1] * backReach * lengths.back[1])} ${point(left, ferruleBase - backReach * lengths.back[2])} ${point(left, ferruleBase)}`,
       `L ${point(right, ferruleBase)}`,
-      `C ${point(right, ferruleBase - 12)} ${point(shaftX + 4, heelCorner[1] + 2)} ${point(shaftX + 4, heelCorner[1] - 9)}`,
-      `L ${point(heelCorner[0] - 5, heelCorner[1] - 9)} Z`,
+      `C ${point(right, ferruleBase - frontReach * lengths.front[2])} ${point(frontJoin[0] + frontAlong[0] * frontReach * lengths.front[1], frontJoin[1] + frontAlong[1] * frontReach * lengths.front[1])} ${point(...frontJoin)}`,
+      'Z',
     ].join(' ');
-    return { d, join, tangent: along };
+    return { d, join, tangent: along, front: { join: frontJoin, tangent: frontAlong } };
   }
   const { tx, ty, bx, by } = paths;
   // the hosel's back edge, from the heel's foot up to the ferrule; it meets the head where it crosses
