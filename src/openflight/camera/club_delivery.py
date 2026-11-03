@@ -1814,34 +1814,33 @@ def _dim_ball_presence(
 
 def _ball_at_rest(frames: np.ndarray, ball) -> tuple[np.ndarray, bool] | None:
     """Per frame, whether the resting ball is positively seen where it rested, or None when
-    the witnesses cannot see it: the impact reader's own (``impact_location``) - its top
+    the witnesses cannot see it: the impact reader's own (``ball_rest``): its top
     cap unchanged from the reference frames and, when its rim has contrast, the rim at its
     resting row. A head covering only the ball's lower part leaves both; a covered or a
     departed ball fails both. Returns (at rest per frame, whether the rim witnessed)."""
-    from . import impact_location as il  # noqa: PLC0415
+    from . import ball_rest as br  # noqa: PLC0415
 
     count = int(frames.shape[0])
     if frames.ndim != 3 or count < 4:
         return None
-    resting = il.RestingBall(float(ball.x), float(ball.y), float(ball.diameter_px))
-    reference_count = min(il.REFERENCE_FRAMES_MAX, max(3, count // 4))
+    reference_count = min(br.REFERENCE_FRAMES_MAX, max(3, count // 4))
     stack = frames[:reference_count].astype(np.float32)
     reference = np.median(stack, axis=0)
-    cap = il._cap_mask(reference.shape, resting)  # pylint: disable=protected-access
+    cap = br.cap_mask(reference.shape, ball)
     if not cap.any():
         return None
     noise = float(np.median(stack.std(axis=0)[cap]))
-    threshold = max(il.CAP_NOISE_SIGMA * noise, il.CAP_FLOOR_DN)
+    threshold = max(br.CAP_NOISE_SIGMA * noise, br.CAP_FLOOR_DN)
     changed = np.array(
         [
             float(np.mean(np.abs(frame.astype(np.float32)[cap] - reference[cap]) > threshold))
             for frame in frames
         ]
     )
-    at_rest = changed < il.CAP_CHANGED_FRACTION
-    available, rises = il._edge_witness(frames, resting, reference_count)  # pylint: disable=protected-access
+    at_rest = changed < br.CAP_CHANGED_FRACTION
+    available, rises = br.edge_witness(frames, ball, reference_count)
     if available:
-        rim = np.array([rise is not None and abs(rise) < il.EDGE_MOVE_PX for rise in rises])
+        rim = np.array([rise is not None and abs(rise) < br.EDGE_MOVE_PX for rise in rises])
         at_rest &= rim
     return at_rest, bool(available)
 

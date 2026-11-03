@@ -672,6 +672,7 @@
   "src/openflight/camera/capture.py": "FUSION",
   "src/openflight/camera/capture_runtime.py": "FUSION",
   "src/openflight/camera/checkerboard_calibration.py": "RESEARCH",
+  "src/openflight/camera/ball_rest.py": "FUSION",
   "src/openflight/camera/club_delivery.py": "FUSION",
   "src/openflight/camera/club_motion.py": "FUSION",
   "src/openflight/camera/club_parts.py": "FUSION",
