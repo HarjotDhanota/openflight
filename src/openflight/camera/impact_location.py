@@ -913,6 +913,9 @@ class PreparedShot:  # pylint: disable=too-many-instance-attributes
     toe_speeds_mm_per_ms: dict[int, float] = field(default_factory=dict)
     name: str = ""
     club: str = ""
+    # a measured contact instant's own sigma (in frames), and why one was not used (C13b)
+    contact_fraction_sigma: float | None = None
+    contact_fraction_note: str | None = None
 
     @property
     def plate_mm_per_px(self) -> float:
@@ -1109,6 +1112,16 @@ def _ball_clock_contact(
     )
 
 
+def contact_fraction_sigma(shot: "PreparedShot") -> float:
+    """The contact fraction's 1 sigma (frames): a measured instant's own, the uniform
+    midpoint's, else a given fraction's."""
+    if shot.contact_fraction_sigma is not None:
+        return float(shot.contact_fraction_sigma)
+    if shot.contact_fraction_source == "uniform_midpoint":
+        return UNIFORM_FRACTION_SIGMA
+    return GIVEN_FRACTION_SIGMA
+
+
 def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
     frames: np.ndarray,
     ball: RestingBall,
@@ -1126,6 +1139,7 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
     ball_clock_frames: float | None = None,
     name: str = "",
     club: str = "",
+    contact_instant: dict | None = None,
 ) -> PreparedShot:
     """Orient, crop, find contact and segment one shot. Never raises on data.
 
@@ -1197,6 +1211,25 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
             contact = clocked
             fraction = float(ball_clock_frames) - contact.last_rest_frame
             fraction_source = "ball_clock"
+    fraction_sigma, fraction_note = None, None
+    if contact_instant is not None and contact_fraction is None:
+        # the ball's measured contact instant (its departure fit): used inside its own bracket
+        bracket = contact_instant.get("last_rest_frame")
+        value = contact_instant.get("fraction")
+        if contact.status != "ok" or contact.last_rest_frame is None:
+            fraction_note = "no camera contact to place the measured instant in"
+        elif bracket != contact.last_rest_frame:
+            fraction_note = (
+                f"the measured instant's bracket f{bracket} is not this contact's "
+                f"f{contact.last_rest_frame}: midpoint kept"
+            )
+        elif not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
+            fraction_note = "the measured instant has no fraction inside its bracket"
+        else:
+            fraction = float(value)
+            fraction_source = str(contact_instant.get("source") or "measured_instant")
+            sigma = contact_instant.get("fraction_sigma")
+            fraction_sigma = float(sigma) if isinstance(sigma, (int, float)) else None
     shot = PreparedShot(
         frames=cropped,
         ball=local_ball,
@@ -1219,6 +1252,8 @@ def prepare_shot(  # pylint: disable=too-many-branches,too-many-locals
         exposure_us=exposure_us,
         name=name,
         club=club,
+        contact_fraction_sigma=fraction_sigma,
+        contact_fraction_note=fraction_note,
     )
     if contact.status != "ok" or contact.last_rest_frame is None:
         return shot
@@ -2430,11 +2465,7 @@ def locate_impact(  # pylint: disable=too-many-return-statements,too-many-locals
         value = None if again is None else again.get(key)
         return reading[key] if value is None else value
 
-    fraction_sigma = (
-        UNIFORM_FRACTION_SIGMA
-        if shot.contact_fraction_source == "uniform_midpoint"
-        else GIVEN_FRACTION_SIGMA
-    )
+    fraction_sigma = contact_fraction_sigma(shot)
     speed_sigma = (
         ASSUMED_CLUB_SPEED_RELATIVE_SIGMA
         if shot.club_speed_source == "assumed_default"

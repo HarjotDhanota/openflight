@@ -1458,11 +1458,7 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
         low = refit(**{name: value - sigma})
         return (abs(high[0] - low[0]) / 2.0, abs(high[1] - low[1]) / 2.0)
 
-    fraction_sigma = (
-        il.UNIFORM_FRACTION_SIGMA
-        if shot.contact_fraction_source == "uniform_midpoint"
-        else il.GIVEN_FRACTION_SIGMA
-    )
+    fraction_sigma = il.contact_fraction_sigma(shot)
     speed_sigma = (
         il.ASSUMED_CLUB_SPEED_RELATIVE_SIGMA
         if shot.club_speed_source == "assumed_default"

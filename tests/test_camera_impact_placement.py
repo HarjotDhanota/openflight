@@ -386,6 +386,32 @@ def test_the_strike_is_recovered_within_its_stated_sigma(strike_u, strike_v, fac
     )
 
 
+def test_a_measured_contact_instant_is_placed_with_its_own_sigma():
+    """C13b: the ball's departure fit gives the instant inside the bracket; its sigma, not
+    the uniform midpoint's, enters the contact-timing budget."""
+    frames, ball = render(strike_u=8.0, strike_v=-11.0)
+    midpoint = prepare(frames, ball)
+    rest = midpoint.contact.last_rest_frame
+    instant = {
+        "last_rest_frame": rest,
+        "fraction": 0.5,
+        "fraction_sigma": 0.02,
+        "source": "ball_departure_extrapolation",
+    }
+    measured = prepare(frames, ball, contact_instant=instant)
+
+    assert midpoint.contact_fraction_source == "uniform_midpoint"
+    assert measured.contact_fraction_source == "ball_departure_extrapolation"
+    assert measured.contact_fraction_sigma == 0.02
+    tight = place(measured).diagnostics["offset_uncertainty_budget_mm"]["contact_timing_mm"]
+    loose = place(midpoint).diagnostics["offset_uncertainty_budget_mm"]["contact_timing_mm"]
+    assert tight < loose
+    # an instant for another bracket is not used, and says so
+    other = prepare(frames, ball, contact_instant={**instant, "last_rest_frame": rest + 2})
+    assert other.contact_fraction_source == "uniform_midpoint"
+    assert "bracket" in other.contact_fraction_note
+
+
 def test_a_hollow_head_is_placed_from_its_rim():
     frames, ball = render(strike_u=8.0, strike_v=-11.0, hollow=True)
     result = place(prepare(frames, ball))

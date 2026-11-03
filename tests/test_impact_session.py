@@ -450,3 +450,25 @@ def test_a_face_angle_comes_into_the_analysis_orientation_through_one_rule():
     assert convert(3.0, "target_line", 2.0, "left") == pytest.approx(-1.0)
     assert convert(3.0, "unit_boresight", 2.0, "left") == -3.0
     assert convert(3.0, "target_line", None, "right") is None
+
+
+def test_the_shot_s_measured_contact_instant_reaches_the_clip():
+    """C13b: the camera fallback's contact record becomes the placement's contact instant."""
+    shot = {
+        "camera_fallback_launch": {
+            "status": "accepted",
+            "contact": {
+                "status": "measured",
+                "source": "ball_departure_extrapolation",
+                "last_rest_frame": 43,
+                "fraction": 0.48,
+                "sigma_ms": 0.09,
+            },
+        }
+    }
+    instant = session.shot_contact_instant(shot, 276.47)
+
+    assert instant["last_rest_frame"] == 43 and instant["fraction"] == 0.48
+    assert instant["fraction_sigma"] == pytest.approx(0.09 / (1000 / 276.47))
+    assert instant["source"] == "ball_departure_extrapolation"
+    assert session.shot_contact_instant({}, 276.47) is None

@@ -643,6 +643,25 @@ def _find_ball(clip: Clip, frames, camera, rig, range_m, ladder) -> il.RestingBa
     return il.RestingBall(found.x, found.y, found.diameter_px)
 
 
+def shot_contact_instant(shot: Mapping[str, Any], fps: float | None) -> dict | None:
+    """The shot's ball-defined contact instant (the camera fallback's departure fit, C13a) as
+    a bracket, a fraction inside it and that fraction's sigma in frames; None without one."""
+    launch = shot.get("camera_fallback_launch") if isinstance(shot, Mapping) else None
+    record = (launch or {}).get("contact") if isinstance(launch, Mapping) else None
+    if not isinstance(record, Mapping) or record.get("status") != "measured":
+        return None
+    sigma_ms = record.get("sigma_ms")
+    frame_ms = 1000.0 / fps if fps else None
+    return {
+        "last_rest_frame": record.get("last_rest_frame"),
+        "fraction": record.get("fraction"),
+        "fraction_sigma": (
+            float(sigma_ms) / frame_ms if isinstance(sigma_ms, (int, float)) and frame_ms else None
+        ),
+        "source": record.get("source") or "ball_departure_extrapolation",
+    }
+
+
 def prepare_clip(  # pylint: disable=too-many-locals
     clip: Clip, runs: dict[Path, RunRecord], ladder: dict[str, dict], options: Options
 ) -> None:
@@ -781,6 +800,7 @@ def prepare_clip(  # pylint: disable=too-many-locals
         ball_range_sigma_mm=clip.range_sigma_mm,
         ball_range_source=clip.range_source,
         contact_fraction=options.contact_fraction,
+        contact_instant=shot_contact_instant(shot, clip.fps),
         exposure_us=clip.exposure_us,
         name=clip.shot_id,
         club=clip.club,
