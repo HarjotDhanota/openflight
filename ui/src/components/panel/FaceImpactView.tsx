@@ -9,7 +9,6 @@ import {
   formatLength,
   GROOVE_WIDTH_MM,
   hoselParts,
-  IMPACT_CROSS,
   impactReading,
   shotHandedness,
   type DeliveryShot,
@@ -34,8 +33,6 @@ const CONTACT_SHAPE =
     const radius = 1 + 0.035 * Math.sin(7 * angle) + 0.025 * Math.cos(17 * angle);
     return `${i ? 'L' : 'M'} ${(10 * radius * Math.cos(angle)).toFixed(3)} ${(11 * radius * Math.sin(angle)).toFixed(3)}`;
   }).join(' ') + ' Z';
-const h = IMPACT_CROSS.half;
-const CROSS = `M -${h} 0 H ${h} M 0 -${h} V ${h}`;
 const CONTACT_DIMPLES = Array.from({ length: 7 }, (_, row) =>
   Array.from({ length: 7 }, (_, col) => {
     const seed = row * 7 + col + 1;
@@ -413,12 +410,6 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                   rx={reading.offsetSigma}
                   ry={reading.heightSigma}
                 />
-              </g>
-            ) : null}
-            {read && reading.height !== null ? (
-              <g className="face-impact__cross" transform={`translate(${cx} ${cy})`}>
-                <path className="face-impact__cross-halo" d={CROSS} strokeWidth={IMPACT_CROSS.halo} />
-                <path className="face-impact__cross-core" d={CROSS} strokeWidth={IMPACT_CROSS.core} />
               </g>
             ) : null}
             {read && reading.height === null && reading.offsetSigma !== null ? (

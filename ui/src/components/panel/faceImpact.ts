@@ -32,13 +32,6 @@ export const USGA = {
 /** Drawn score-line width, inside the USGA groove limit. */
 export const GROOVE_WIDTH_MM = 0.6;
 
-/** The ball the shot models use, mm. */
-export const BALL_DIAMETER_MM = 42.7;
-
-/** The face view's impact cross, mm: arms a quarter of the ball's diameter (it spans the ball's
- * contact patch, as the illustrative imprint does), a bold core inside a contrasting halo. */
-export const IMPACT_CROSS = { half: BALL_DIAMETER_MM / 4, core: 1.1, halo: 2.7 } as const;
-
 export interface Hosel {
   /** Where the axis meets the sole line, and its angle to the score lines. */
   ground: Point;
@@ -92,6 +85,7 @@ export interface FaceShape {
 const fmt = (value: number) => String(Math.round(value * 100) / 100);
 const pt = ([x, y]: Point) => `${fmt(x)} ${fmt(y)}`;
 const add = (a: Point, b: Point, k = 1): Point => [a[0] + k * b[0], a[1] + k * b[1]];
+const unitVector = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
 
 function axes(hosel: Hosel): { up: Point; right: Point } {
   const lie = (hosel.lieDeg * Math.PI) / 180;
@@ -208,8 +202,8 @@ function slopes(p: readonly Point[], start: Point | null, end: Point | null, per
 }
 
 /** The cubic Béziers of a fair closed outline through `nodes`: chord-length C2 splines between
- * breaks (`corners` sharp, `tangents` smooth along a unit direction, `lines` straight pairs);
- * with no breaks, one periodic spline. */
+ * breaks (`corners` sharp, `tangents` smooth with the given slope per mm of chord, `lines`
+ * straight pairs); with no breaks, one periodic spline. */
 function segments(
   nodes: readonly Point[],
   corners: readonly number[] = [],
@@ -219,7 +213,7 @@ function segments(
   const n = nodes.length;
   const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
   const ends = new Map<number, [Point | null, Point | null]>(corners.map((k) => [k, [null, null]]));
-  for (const [k, t] of Object.entries(tangents)) ends.set(Number(k), [unit(t), unit(t)]);
+  for (const [k, t] of Object.entries(tangents)) ends.set(Number(k), [t, t]);
   for (const [i, j] of lines) {
     const d = unit(add(nodes[j % n], nodes[i], -1));
     const [ei, ej] = [ends.get(i) ?? [null, null], ends.get(j % n) ?? [null, null]];
@@ -360,13 +354,40 @@ function centred(shape: FaceShape, [dx, dy]: Point): FaceShape {
   };
 }
 
+/** The head's nodes closed 1.5 mm inside the tube, with its breaks: the arguments of `outline`. */
+function headBreaks(
+  nodes: readonly Point[],
+  hosel: Hosel,
+  lines: Lines = [],
+  tangents: Tangents = {}
+): [readonly Point[], readonly number[], Tangents, Lines] {
+  const n = nodes.length;
+  const foot = hosel.tube[0][0];
+  const under = Math.min(foot + 1.5, hosel.tube.length > 1 ? hosel.tube[1][0] : foot + 1.5);
+  const [footLeft, underLeft, underRight, footRight] = [
+    edge(hosel, foot, -1),
+    edge(hosel, under, -1),
+    edge(hosel, under, 1),
+    edge(hosel, foot, 1),
+  ];
+  const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
+  const [up, down] = [unit(add(underLeft, footLeft, -1)), unit(add(footRight, underRight, -1))];
+  return [
+    [...nodes, footLeft, underLeft, underRight, footRight],
+    [n + 1, n + 2],
+    { ...tangents, [n]: up, [n + 3]: down },
+    lines,
+  ];
+}
+
 /** The head and the club's silhouette: `nodes` run from the neck's heel side round the sole, toe
  * and top line back to the tube's foot (fixed tangent, no step). The head closes 1.5 mm inside the
  * tube so no seam shows; the silhouette carries on up the tube to the ferrule. */
 function headAndSilhouette(
   nodes: readonly Point[],
   hosel: Hosel,
-  lines: Lines = []
+  lines: Lines = [],
+  tangents: Tangents = {}
 ): { head: string; silhouette: string } {
   const n = nodes.length;
   const foot = hosel.tube[0][0];
@@ -383,28 +404,22 @@ function headAndSilhouette(
   const sides = [...stations.map((s) => edge(hosel, s, -1)), ...[...stations].reverse().map((s) => edge(hosel, s, 1))];
   const m = sides.length;
   return {
-    head: outline(
-      [...nodes, footLeft, underLeft, underRight, footRight],
-      [n + 1, n + 2],
-      { [n]: up, [n + 3]: down },
-      lines
-    ),
+    head: outline(...headBreaks(nodes, hosel, lines, tangents)),
     silhouette: outline(
       [...nodes, footLeft, ...sides, footRight],
       sides.map((_, k) => n + 1 + k),
-      { [n]: up, [n + 1 + m]: down },
+      { ...tangents, [n]: up, [n + 1 + m]: down },
       lines
     ),
   };
 }
 
-/** The fillet that runs a straight top line (`from` -> `to`, heading heel-ward) into the hosel:
- * a circular arc tangent to the top line and to the tube's toe-side edge, meeting that edge at the
- * tube's foot. Returns the arc's start on the top line and its midpoint; the head's next node is the
- * tube's foot, where the outline's tangent already runs up the tube. */
-function toplineFillet(from: Point, to: Point, hosel: Hosel): [Point, Point] {
+/** The fillet that runs a straight top line (through `to`, heading heel-ward along `along`) into
+ * the hosel: a circular arc tangent to the top line and to the tube's toe-side edge, meeting that
+ * edge at the tube's foot. Returns the arc's start on the top line and its midpoint; the head's next
+ * node is the tube's foot, where the outline's tangent already runs up the tube. */
+function toplineFillet(to: Point, along: Point, hosel: Hosel): [Point, Point] {
   const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
-  const along = unit(add(to, from, -1));
   const { up } = axes(hosel);
   const foot = edge(hosel, hosel.tube[0][0], -1);
   // where the top line, carried on, meets the tube's edge carried down
@@ -419,6 +434,14 @@ function toplineFillet(from: Point, to: Point, hosel: Hosel): [Point, Point] {
   return [add(corner, back, tangent), add(centre, unit(add(corner, centre, -1)), radius)];
 }
 
+/** The slope (per mm of chord) with which a head outline drawn through `nodes` leaves node `k`, as
+ * headAndSilhouette joins it to the tube. Clamping node `k` to it leaves the outline up to `k`
+ * exactly as it was. */
+function headSlope(nodes: readonly Point[], hosel: Hosel, k: number): Point {
+  const [p0, c1, , p3] = segments(...headBreaks(nodes, hosel))[k];
+  return add(c1, p0, -1).map((v) => (3 * v) / Math.hypot(...add(p3, p0, -1))) as unknown as Point;
+}
+
 function evenRows(top: number, pitch: number, ends: readonly Point[]): Groove[] {
   return ends.map(([from, to], k) => ({ y: top + k * pitch, from, to }));
 }
@@ -428,6 +451,8 @@ interface Drawing {
   head: readonly Point[];
   /** Straight stretches of the head outline, as pairs of consecutive node indices. */
   headLines?: Lines;
+  /** Head nodes clamped to a slope (per mm of chord). */
+  headTangents?: Tangents;
   face: readonly Point[];
   faceLines?: Lines;
   hosel: Hosel;
@@ -440,7 +465,7 @@ interface Drawing {
 function wood(category: FaceCategory, o: Drawing): FaceShape {
   const shape: FaceShape = {
     finish: o.finish,
-    ...headAndSilhouette(o.head, o.hosel, o.headLines),
+    ...headAndSilhouette(o.head, o.hosel, o.headLines, o.headTangents),
     face: outline(o.face, [], {}, o.faceLines),
     faceFade: o.faceFade ?? null,
     scoring: null,
@@ -492,7 +517,7 @@ function blade(category: FaceCategory, o: Omit<Drawing, 'grooves'>, lines: Blade
   const toeMost = o.face.reduce((best, point, k) => (point[0] < o.face[best][0] ? k : best), 0);
   const shape: FaceShape = {
     finish: o.finish,
-    ...headAndSilhouette(o.head, o.hosel, o.headLines),
+    ...headAndSilhouette(o.head, o.hosel, o.headLines, o.headTangents),
     face,
     faceFade: null,
     scoring: `M ${[...top, ...bottom].map(pt).join(' L ')} Z`,
@@ -670,7 +695,7 @@ const IRON = {
   // prettier-ignore
   head: [
     [84.87, -5.65], [79.53, -3.3], [58.06, -0.32], [36.01, -0.05], [16.19, -1.82], [8.2, -4.91], [0, -26],
-    [8.17, -52.37], [12.92, -56.32], [30, -56.07], [74, -35.65], ...toplineFillet([30, -56.07], [74, -35.65], IRON_HOSEL)
+    [8.17, -52.37], [12.92, -56.32], [30, -56.07], [74, -35.65], ...toplineFillet([74, -35.65], unitVector(add([74, -35.65], [30, -56.07], -1)), IRON_HOSEL)
   ],
   headLines: [
     [9, 10],
@@ -687,13 +712,33 @@ const IRON = {
   hosel: IRON_HOSEL,
 } as const satisfies Omit<Drawing, 'grooves'>;
 
+const WEDGE_HOSEL: Hosel = {
+  ground: [81.8, 0],
+  lieDeg: 48.7,
+  // prettier-ignore
+  tube: [[44, 13.6], [73.5, 15.12]],
+  ferruleLength: 6.59,
+  shaftTo: 112,
+  shaftWidth: 9.38,
+  rings: [63.2, 67.5],
+  collar: null,
+};
+
+// prettier-ignore
+const WEDGE_HEAD: readonly Point[] = [
+  [88.19, -6.88], [79.96, -3.61], [58.1, -0.46], [35.99, -0.06], [16.32, -2.51], [7.38, -7.47], [0, -30],
+  [5.51, -51.73], [14.25, -61.5], [30.01, -62.31], [55.91, -50.94], [72.11, -39.32], [84.54, -29.04],
+];
+
+const WEDGE_SLOPE = headSlope(WEDGE_HEAD, WEDGE_HOSEL, 11);
+
 const WEDGE = {
   finish: 'satin',
-  // prettier-ignore
-  head: [
-    [88.19, -6.88], [79.96, -3.61], [58.1, -0.46], [35.99, -0.06], [16.32, -2.51], [7.38, -7.47], [0, -30],
-    [5.51, -51.73], [14.25, -61.5], [30.01, -62.31], [55.91, -50.94], [72.11, -39.32], [84.54, -29.04]
-  ],
+  /* Heel-ward of node 11, where the top line still rims the face evenly, it carries straight on
+   * along its own tangent into one fillet tangent to the hosel at the tube's foot: no bump before
+   * the neck. Node 11 keeps the slope it had, so the outline up to it is unchanged. */
+  head: [...WEDGE_HEAD.slice(0, 12), ...toplineFillet(WEDGE_HEAD[11], unitVector(WEDGE_SLOPE), WEDGE_HOSEL)],
+  headTangents: { 11: WEDGE_SLOPE, 12: WEDGE_SLOPE },
   // prettier-ignore
   face: [
     [77, -30.91], [71.46, -36.57], [66.33, -41.21], [60.51, -45.33], [54.02, -49.27], [47.39, -53.01],
@@ -702,17 +747,7 @@ const WEDGE = {
     [5.26, -14.47], [8.29, -9.95], [12.56, -6.72], [18.29, -4.41], [24.81, -3.08], [31.95, -2.54],
     [39.62, -2.43], [47.37, -2.49], [55.11, -2.72], [62.77, -3.14], [70.1, -3.91], [77, -5.27]
   ],
-  hosel: {
-    ground: [81.8, 0],
-    lieDeg: 48.7,
-    // prettier-ignore
-    tube: [[44, 13.6], [73.5, 15.12]],
-    ferruleLength: 6.59,
-    shaftTo: 112,
-    shaftWidth: 9.38,
-    rings: [63.2, 67.5],
-    collar: null,
-  },
+  hosel: WEDGE_HOSEL,
 } as const satisfies Omit<Drawing, 'grooves'>;
 
 const DRAWN: Record<FaceCategory, FaceShape> = {

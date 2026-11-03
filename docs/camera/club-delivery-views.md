@@ -85,17 +85,23 @@ rounded leading edge, sole/bounce and fuller back profile.
 
 The top line runs into the hosel as on a real iron, with no notch in any view. Face-on, the
 iron's straight top line carries on into one circular fillet tangent to it and to the tube's
-toe-side edge at the tube's foot (about 11 mm radius); the wedge's top line already curves
-into its hosel through a fillet of about the same radius. Only heel-end nodes moved: the face
-centre, toe extreme, lowest sole point, blade length and face height are unchanged, and so is
-every part of `club_outline_reference.json` that impact placement fits (it never fits the
-heel end). The face's rounded top-heel corner now sits under that fillet, so the even-rim
-check stops where the face's straight top line starts. In the top view the neck leaves the
-blade's back edge tangent to it, runs on past the face's top-heel corner and sweeps into the
-ferrule. In the heel view the hosel's back edge comes down into the top of the top line's
-rounded cap through a fillet, and the neck fills the crotch between the hosel and the lofted
-face line; the tube's cylindrical shading stays on the tube, so the fillet takes the head's
-metal.
+toe-side edge at the tube's foot (about 11 mm radius). The wedge does the same from its node
+72 mm heel-ward of the toe, where its curved top line still rims the face evenly: it carries
+straight on along its own tangent into a fillet of about 20 mm, so the old steepening and
+tight turn just before the neck are gone; that node keeps its slope, so the outline up to it
+is unchanged to the bit. Only heel-end nodes moved: the face centre, toe extreme, lowest sole
+point, blade length and face height are unchanged, and so is every part of
+`club_outline_reference.json` that impact placement fits (it never fits the heel end). The
+iron face's rounded top-heel corner now sits under that fillet, so the even-rim check stops
+where the face's straight top line starts. In the top view each neck edge (top-line side
+and leading-edge side) leaves the blade's edge band tangent to it, toe-ward of the face's
+top-heel corner, and sweeps into the ferrule in one cubic with no corner (tightest turn
+about 12 mm on the iron's back edge, 8 mm on the wedge's; the band is the face outline's
+2.4 mm stroke carried through the top view's projection, so it is narrower across the
+blade than along it). The tube's cylindrical shading stays on the tube, so that sweep takes
+the head's metal. In the heel view the hosel stands in front of the lofted face and meets the head only
+at the neck, low on the blade where its back edge crosses the face line: the gap between the
+hosel and the top of the face is open, as on a real club.
 The top view is titled "Top at impact" because it depicts impact, not address:
 its head is turned by the shot's face angle at impact, its arrows are the face
 angle and club path at impact, and its numbers are face to path, face angle and

@@ -452,13 +452,7 @@ The Club tab opens with a face-impact view:
   the reading's uncertainty; its size does not control the imprint. An offset-only
   reading keeps the hollow marker and horizontal uncertainty bar, without an
   invented contact patch at zero height. Earlier shots remain faint dots. The
-  full-reading centre circle remains an unpainted coordinate anchor. A bold
-  impact cross marks the same unrounded reading so it reads at kiosk size: a
-  1.1 mm red core on a 2.7 mm halo (dark on the steel and light faces, light on
-  the dark hybrid face, the same in the dark and light kiosk themes), arms a
-  quarter of the ball's 42.7 mm diameter so it spans the ball's contact patch.
-  It is not clipped to the face, rotates and mirrors with the drawing, and is not
-  drawn for an offset-only reading.
+  full-reading centre circle remains an unpainted coordinate anchor.
 - **The numbers.** Toe/heel and high/low with the EXP badge, or "Not measured:
   reason".
 

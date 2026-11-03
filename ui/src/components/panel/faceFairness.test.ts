@@ -168,25 +168,31 @@ describe('fair outlines', () => {
     }
   });
 
-  it('keeps the iron outline on or above its straight top line until the hosel takes over', () => {
-    const segments = beziers(FACE_SHAPES.iron.head);
+  /* No bump where the top line meets the neck: the head reaches the hosel fillet along a straight
+   * stretch tangent to the top line before it, and from there to the tube's foot never drops below
+   * that stretch's line. */
+  it.each(BLADES)('runs the %s top line straight into its hosel fillet, never dipping below it', (category) => {
+    const segments = beziers(FACE_SHAPES[category].head);
     const length = ([a, , , b]: Bezier) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const straight = segments.filter(([a, c1, c2, b]) => {
+    const straight = ([a, c1, c2, b]: Bezier) => {
       const off = (c: Point) =>
         Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / length([a, c1, c2, b]);
       return Math.max(off(c1), off(c2)) < STRAIGHT_MM;
-    });
-    const topline = straight.reduce((best, segment) => (length(segment) > length(best) ? segment : best));
+    };
+    // the tube's foot: the first short closure in the upper half; before it, the fillet's curves
+    const foot = segments.findIndex(([a, , , b]) => length([a, a, b, b]) < VISIBLE_MM && a[1] < 0);
+    let start = foot - 1;
+    while (start > 0 && !straight(segments[start])) start -= 1;
+    const topline = segments[start];
     const [[x0, y0], , , [x1, y1]] = topline;
+    // a visible straight stretch in the upper half, running heel-ward and down, tangent on both sides
+    expect(length(topline)).toBeGreaterThanOrEqual(VISIBLE_MM);
+    expect(Math.max(y0, y1)).toBeLessThan(0);
+    expect(x1 - x0).toBeGreaterThan(0);
+    expect(y1 - y0).toBeGreaterThan(0);
+    expect(foot - start).toBeGreaterThan(1);
     const slope = (y1 - y0) / (x1 - x0);
-    // from the top line's heel end to the tube's foot (the next stretch shorter than VISIBLE_MM)
-    const after = segments.slice(segments.indexOf(topline) + 1);
-    const junction = after.slice(
-      0,
-      after.findIndex((segment) => length(segment) < VISIBLE_MM)
-    );
-    expect(junction.length).toBeGreaterThan(0);
-    for (const segment of junction) {
+    for (const segment of segments.slice(start + 1, foot)) {
       for (let k = 0; k <= 40; k += 1) {
         const [p0, c1, c2, p3] = segment;
         const t = k / 40;
