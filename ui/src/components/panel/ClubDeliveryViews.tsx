@@ -6,7 +6,7 @@ import type { Shot } from '../../types/shot';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
 import { FaceImpactView } from './FaceImpactView';
-import { BALL_DIAMETER_MM, FACE_SHAPES, faceCategory, shotHandedness, type DeliveryShot } from './faceImpact';
+import { FACE_SHAPES, faceCategory, shotHandedness, type DeliveryShot } from './faceImpact';
 import {
   CLUB_PROFILES,
   VIEW_METRICS,
@@ -20,6 +20,7 @@ import {
 import { formatMetricValue } from './metricFormat';
 import './ClubDeliveryViews.css';
 
+const BALL_DIAMETER_MM = 42.7; // the ball the shot models use
 const BALL_RADIUS_MM = BALL_DIAMETER_MM / 2;
 
 // Original close packing with tetrahedral symmetry; seeds are unit vectors and radii in mm.
