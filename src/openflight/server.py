@@ -95,7 +95,7 @@ from .sim import (
     load_sim_config,
     resolve_shot,
 )
-from .source_labels import MODEL_LABELS, implausible_vertical_reason
+from .source_labels import LABEL_EXPERIMENTAL, MODEL_LABELS, implausible_vertical_reason
 from .speed_correction import evaluate_experimental_total_speed
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
@@ -6508,6 +6508,19 @@ def _apply_camera_fallback_launch(shot: Shot, fallback: dict | None) -> None:
                 shot.launch_angle_vertical_confidence = None
                 shot.launch_angle_confidence = None
             shot.launch_angle_vertical_reason = vertical.reason
+        radar_confidence = None
+        if (
+            vertical.present
+            and vertical.route == "radar"
+            and vertical.label == LABEL_EXPERIMENTAL
+            and shot.launch_angle_vertical_confidence is not None
+        ):
+            # the confidence follows the label (C21b, 3 Nov 2026): an experimental radar
+            # vertical carries none, as an experimental camera one never did; the IWR's own
+            # score stays in its input record (Oct 27 shot 4: 0.95 at 22 sigma from the camera)
+            radar_confidence = shot.launch_angle_vertical_confidence
+            shot.launch_angle_vertical_confidence = None
+            shot.launch_angle_confidence = None
         if horizontal.route == "camera_fallback":
             _apply_camera_horizontal_decision(
                 shot,
@@ -6518,6 +6531,8 @@ def _apply_camera_fallback_launch(shot: Shot, fallback: dict | None) -> None:
             )
         sources = dict(shot.input_sources or {})
         sources["launch_vertical"] = vertical.to_dict()
+        if radar_confidence is not None:
+            sources["launch_vertical"]["radar_confidence"] = radar_confidence
         sources["launch_horizontal"] = horizontal.to_dict()
         shot.input_sources = sources
     except Exception as error:  # pylint: disable=broad-exception-caught

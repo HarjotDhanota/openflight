@@ -539,3 +539,52 @@ def test_an_implausible_radar_vertical_gives_way_to_an_accepted_camera_one():
         15.4,
         "camera_fallback",
     )
+
+
+# ---------------------------------------------------- C21b: the confidence follows the label
+
+# Oct 27 shot 4 on the live chain (generality run, b9705ea7): the IWR's accepted_ops_guided
+# vertical 41.15 deg at confidence 0.95, against the accepted camera fallback 26.73 +- 0.64
+SHOT_4_LIVE_FALLBACK = {
+    **FALLBACK,
+    "vertical_deg": 26.73141912096174,
+    "vertical_sd_deg": 0.644335914981742,
+}
+
+
+def test_a_radar_vertical_labelled_experimental_carries_no_confidence():
+    shot = _vertical_shot(
+        41.15129572720339,
+        launch_angle_vertical_confidence=0.95,
+        launch_angle_confidence=0.95,
+        camera_fallback_launch=SHOT_4_LIVE_FALLBACK,
+    )
+
+    server_module._apply_camera_fallback_launch(  # pylint: disable=protected-access
+        shot, SHOT_4_LIVE_FALLBACK
+    )
+
+    # the radar's value stands (owner, 30 Oct), experimental; no confidence says otherwise
+    assert shot.launch_angle_vertical == pytest.approx(41.15129572720339)
+    assert shot.launch_angle_vertical_source == "radar"
+    assert shot.input_sources["launch_vertical"]["label"] == "experimental"
+    assert shot.launch_angle_vertical_confidence is None
+    assert shot.launch_angle_confidence is None
+    assert shot.input_sources["launch_vertical"]["radar_confidence"] == pytest.approx(0.95)
+    assert shot.to_dict()["metrics"]["launch_vertical"]["status"] == "experimental"
+
+
+def test_a_radar_vertical_within_the_camera_band_keeps_its_confidence():
+    fallback = {**SHOT_4_LIVE_FALLBACK, "vertical_deg": 40.5}  # 1.0 sigma
+    shot = _vertical_shot(
+        41.15129572720339,
+        launch_angle_vertical_confidence=0.95,
+        launch_angle_confidence=0.95,
+        camera_fallback_launch=fallback,
+    )
+
+    server_module._apply_camera_fallback_launch(shot, fallback)  # pylint: disable=protected-access
+
+    assert shot.input_sources["launch_vertical"]["label"] != "experimental"
+    assert shot.launch_angle_vertical_confidence == pytest.approx(0.95)
+    assert shot.launch_angle_confidence == pytest.approx(0.95)
