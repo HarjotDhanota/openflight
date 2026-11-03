@@ -20,8 +20,8 @@ from dimensions, not copied or traced outlines.
 |---|---:|---:|---:|---:|---:|
 | Head/blade length | 117 | 105 | 101 | 79.4 | 80 |
 | Centre heelward from toe | 66.39 | 56.10 | 52.29 | 44.24 | 45.00 |
-| Front-to-back wood depth | 114.5 | 87.9 | 68.5 | — | — |
-| Wood crown height | 62 | 40.6 | 37.5 | — | — |
+| Front-to-back wood depth | 114.5 | 87.1 | 67.0 | — | — |
+| Wood crown height | 62 | 36.9 | 34.3 | — | — |
 | Face height along face normal view | 50.3 | 30 | 28.2 | 44.4 | 51.8 |
 | Static loft, degrees | 10.4 | 14.9 | 18.8 | 31.4 | 56.3 |
 | Static lie, degrees | 57.4 | 56.6 | 57.7 | 62.3 | 64 |
@@ -32,7 +32,18 @@ from dimensions, not copied or traced outlines.
 
 Face dimensions are the shared README §6 population values. Wood depth, crown
 and progression use the §7 draft `woods-3view/avg_views.json` recommended
-aggregates (side samples 16/13/10; plan samples 12/9/7). These remain provisional,
+aggregates (side samples 16/13/10; plan samples 12/9/7). The 3-wood and hybrid heel
+views were checked against those population side outlines (OEM toe-side photos, 2021+)
+and corrected to them within 2 mm: depth is the mean of the plan and side outlines'
+front-to-back extent (3-wood 88.0 and 86.2, hybrid 67.0 and 66.9), measured from the
+leading edge in both views; the crown parameter is set so the drawn ground-to-crown
+height is the side outline's (38.2 and 35.4 mm); face height already agreed (30.0 vs
+30.6, 28.2 vs 28.8); and the heel view's hosel axis now sits the progression behind the
+leading edge (it sat that far behind the face centre, about 4 mm too far back; the
+outlines put it 16.0 and 15.9 mm behind the leading edge). No OEM publishes wood head
+depth or height; Maltby's published hybrid face heights (32.4-34.9 mm, STH2, M890, KE4
+Tour TC, TC Pro IST on golfworks.com) measure the whole face including its band, so they
+bound but do not replace the visible 28.2 mm. These remain provisional,
 not independently verified measurements. The draft driver plan width includes
 the neck and exceeds 127 mm; the head drawing instead uses the established
 117 mm face-round head length. This is not an equipment certification.
@@ -107,7 +118,7 @@ its head is turned by the shot's face angle at impact, its arrows are the face
 angle and club path at impact, and its numbers are face to path, face angle and
 club path. Only a shot with no face angle draws the head square.
 Top heads rotate by signed face angle so their normal follows the
-face arrow. Side heads rotate by static loft minus dynamic loft around the
+face arrow. Side heads rotate by the club's static loft minus dynamic loft around the
 impact centre. The ball is 42.7 mm
 in diameter and sits beyond the arrows on the target side; its position is
 illustrative, not a measured ball location. Ball and head share one millimetre
@@ -127,8 +138,11 @@ unchanged centre by the difference between its static hosel projection and
 when available and otherwise the category's static loft.
 
 Each selectable club type has its own static loft and lie (`CLUB_STATIC` in
-`ui/src/components/panel/clubDelivery.ts`). The drawings keep their category's shape; the
-side view leans the head to the club's static loft when the shot has no dynamic loft. The
+`ui/src/components/panel/clubDelivery.ts`). The side view is the category's profile built at
+the club's own static loft (`clubProfilePaths(category, loft)`): the face line runs at that
+loft, the sole stays on the ground and the shaft upright, and only what the profile derives
+from loft (the face's projection, the blade's depth) changes; nothing is rotated to stand in
+for a loft. A shot's dynamic loft turns the head from that static loft as before. The
 face view never tilts for a static value: at address every club's face sits the same way,
 and a shot's measured dynamic lie tilts it by its difference from the club's own static lie
 (both seen along the face normal). A shot's dynamic loft or lie always wins. All values are population averages from the official spec tables

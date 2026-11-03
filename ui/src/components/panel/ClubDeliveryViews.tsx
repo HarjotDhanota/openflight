@@ -141,23 +141,28 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
   const { t } = useI18n();
   const category = faceCategory(shot.club);
   const p = CLUB_PROFILES[category];
-  const paths = clubProfilePaths(category);
   const handed = useSystemStore((state) => state.handed);
   const left = shotHandedness(shot, handed) === 'left';
   const top = view === 'top';
+  // the side view is the club at its own static loft (its own profile, sole on the ground); the top
+  // view keeps the category's plan
+  const staticLoft = staticLoftLie(shot.club, category).loft;
+  const profileLoft = top ? p.loft : staticLoft;
+  const paths = clubProfilePaths(category, profileLoft);
   const face = deliveryValue(shot, top ? 'face_angle' : 'dynamic_loft');
   const path = deliveryValue(shot, top ? 'club_path' : 'attack_angle');
-  // the side view leans the category's drawing to the shot's dynamic loft, else the club's own
-  const loft = top ? 0 : (face ?? staticLoftLie(shot.club, category).loft);
-  const rotation = top ? (face ?? 0) * (left ? 1 : -1) : p.loft - loft;
+  // a shot's dynamic loft turns the head from the club's static loft; none, it stands at address
+  const loft = top ? 0 : (face ?? staticLoft);
+  const rotation = top ? (face ?? 0) * (left ? 1 : -1) : staticLoft - loft;
   const [ballX, ballY] = direction(loft, 119);
   const head = top ? paths.top : paths.side;
   const { shaftX, shaftY, shaftEnd, ferruleEnd, ferruleBase, ferruleRadius, shaftRadius, crownJoin } = hoselLayout(
     category,
-    view
+    view,
+    profileLoft
   );
   const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
-  const neck = p.depth ? '' : bladeNeck(category, view).d;
+  const neck = p.depth ? '' : bladeNeck(category, view, profileLoft).d;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
   const headYs = coords.filter((_, i) => i % 2 === 1);

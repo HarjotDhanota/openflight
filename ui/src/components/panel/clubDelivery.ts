@@ -39,8 +39,8 @@ export const CLUB_PROFILES: Record<FaceCategory, ClubProfile> = {
   fairway: {
     length: 105,
     toe: 56.1,
-    depth: 87.9,
-    height: 40.6,
+    depth: 87.1,
+    height: 36.9,
     faceHeight: 30,
     loft: 14.9,
     lie: 56.6,
@@ -52,8 +52,8 @@ export const CLUB_PROFILES: Record<FaceCategory, ClubProfile> = {
   hybrid: {
     length: 101,
     toe: 52.29,
-    depth: 68.5,
-    height: 37.5,
+    depth: 67.0,
+    height: 34.3,
     faceHeight: 28.2,
     loft: 18.8,
     lie: 57.7,
@@ -169,12 +169,16 @@ function bladePlan(path: string, scale: number, offset = 0): string {
   );
 }
 
-export function clubProfilePaths(category: FaceCategory) {
+/** The top and heel views' outlines of a category's head, built at `loft` (default the category's):
+ * the face line at that loft from vertical about the face centre, the sole, top line or crown and
+ * depth following it. A club's own static loft gives its own profile (sole on the ground, face at its
+ * loft); nothing is rotated to stand in for a loft. */
+export function clubProfilePaths(category: FaceCategory, loft: number = CLUB_PROFILES[category].loft) {
   const p = CLUB_PROFILES[category];
   const wood = p.depth > 0;
   const toe = p.toe;
   const heel = p.length - toe;
-  const radians = (p.loft * Math.PI) / 180;
+  const radians = (loft * Math.PI) / 180;
   const projection = p.faceHeight * Math.sin(radians);
   const depth = wood ? p.depth : projection + p.topline;
   const back = p.topline * Math.cos(radians);
@@ -190,9 +194,11 @@ export function clubProfilePaths(category: FaceCategory) {
   const [tx, ty] = [(-Math.sin(radians) * p.faceHeight) / 2, (-Math.cos(radians) * p.faceHeight) / 2];
   const [bx, by] = [-tx, -ty];
   const crown = -p.height + p.faceHeight / 2;
+  // the heel view's back: the head's depth measured from the leading edge, as the plan measures it
+  const woodBack = depth - bx;
   const soleY = by + (wood ? 4 : p.sole * Math.tan((p.bounce * Math.PI) / 180));
   const side = wood
-    ? `M ${point(tx, ty)} C ${point(tx - 5, crown)} ${point(-depth * 0.2, crown)} ${point(-depth * 0.4, crown + 3)} C ${point(-depth * 0.7, crown + 7)} ${point(-depth, 0)} ${point(-depth, by - 5)} C ${point(-depth, soleY)} ${point(-depth * 0.3, soleY)} ${point(bx - 4, by + 2)} Q ${point(bx + 1, by + 1)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`
+    ? `M ${point(tx, ty)} C ${point(tx - 5, crown)} ${point(-woodBack * 0.2, crown)} ${point(-woodBack * 0.4, crown + 3)} C ${point(-woodBack * 0.7, crown + 7)} ${point(-woodBack, 0)} ${point(-woodBack, by - 5)} C ${point(-woodBack, soleY)} ${point(-woodBack * 0.3, soleY)} ${point(bx - 4, by + 2)} Q ${point(bx + 1, by + 1)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`
     : `M ${point(tx, ty)} Q ${point(tx - p.topline / 2, ty - 2)} ${point(tx - p.topline, ty)} C ${point(tx - p.topline, ty + p.faceHeight * 0.3)} ${point(bx - p.sole - 3, by - 14)} ${point(bx - p.sole, soleY - 3)} Q ${point(bx - p.sole / 2, soleY + 1)} ${point(bx - 2, by + 1)} Q ${point(bx + 1, by)} ${point(bx, by - 2)} L ${point(tx, ty)} Z`;
   const topShellTransform = `matrix(0 1 ${Math.sin(radians) + back / p.faceHeight} 0 ${-back / 2} 0)`;
   return {
@@ -215,11 +221,13 @@ export function clubProfilePaths(category: FaceCategory) {
 export const BLADE_EDGE_BAND_MM = 2.4;
 
 /** Where the shaft, ferrule and hosel sit in the top or heel view (svg mm, before the hand's mirror). */
-export function hoselLayout(category: FaceCategory, view: 'top' | 'side') {
+export function hoselLayout(category: FaceCategory, view: 'top' | 'side', loft?: number) {
   const p = CLUB_PROFILES[category];
-  const paths = clubProfilePaths(category);
+  const paths = clubProfilePaths(category, loft);
   const top = view === 'top';
-  const shaftX = !p.depth ? paths.bx - p.progression : -p.progression;
+  // the progression is the leading edge's lead on the hosel axis: from the leading edge in the heel
+  // view (the face centre is the origin there), from the front edge in the plan (its origin)
+  const shaftX = !p.depth || !top ? paths.bx - p.progression : -p.progression;
   const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
   const shaftEnd = top ? shaftY + 24 : -64;
   const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
@@ -271,10 +279,11 @@ const TOP_NECK = {
  * real club. Svg mm before the hand's mirror. */
 export function bladeNeck(
   category: FaceCategory,
-  view: 'top' | 'side'
+  view: 'top' | 'side',
+  loft?: number
 ): { d: string; join: Point; tangent: Point; front?: { join: Point; tangent: Point } } {
-  const paths = clubProfilePaths(category);
-  const { shaftX, shaftY, ferruleBase, ferruleRadius } = hoselLayout(category, view);
+  const paths = clubProfilePaths(category, loft);
+  const { shaftX, shaftY, ferruleBase, ferruleRadius } = hoselLayout(category, view, loft);
   const [left, right] = [shaftX - ferruleRadius, shaftX + ferruleRadius];
   if (view === 'top') {
     const heelCorner = paths.top
@@ -287,7 +296,7 @@ export function bladeNeck(
     // top (back, -1) or bottom (front, +1) edge `station` mm toe-ward of the face's top-heel corner,
     // carried out by the band, projected, with the edge's direction there (heading heel-ward).
     const p = CLUB_PROFILES[category];
-    const radians = (p.loft * Math.PI) / 180;
+    const radians = ((loft ?? p.loft) * Math.PI) / 180;
     const back = p.topline * Math.cos(radians);
     const [k, o] = [Math.sin(radians) + back / p.faceHeight, -back / 2];
     const face = flatten(FACE_SHAPES[category].face);
