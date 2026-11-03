@@ -261,6 +261,60 @@ function cubicHead(p: readonly Point[], t: number): Point[] {
   return [p[0], ab, abc, lerp(abc, bcd)];
 }
 
+/** How much of the approved hybrid heel-view flare (by its curve parameter, from the ferrule) the
+ * 5/7/9-hybrid neck keeps before its blend takes over. */
+export const HYBRID_FLARE_KEPT_T = 0.7;
+
+/** At a hybrid's higher lofts (5H, 7H, 9H) the heel view's neck foot would stand in front of the
+ * lofted face line as a ledge. There the neck's front edge keeps the approved flare from the ferrule
+ * down to `HYBRID_FLARE_KEPT_T`, then goes on as one longer, gentler curve, tangent to it and bending
+ * the same way, until it passes behind the face line (`exit`); behind the face it runs straight on
+ * into the head, to `foot`, level with the leading edge's foot. `front` is the path from the neck's
+ * back-bottom corner up that edge to the ferrule. Null where the foot is already behind the face. */
+export function hybridNeckDown(loft?: number): {
+  flare: Point[];
+  blend: Point[];
+  exit: Point;
+  foot: Point;
+  front: string;
+} | null {
+  const { tx, ty, bx, by } = clubProfilePaths('hybrid', loft);
+  const { shaftX, shaftY, ferruleBase, ferruleRadius, crownJoin } = hoselLayout('hybrid', 'side', loft);
+  const face = unit([bx - tx, by - ty]);
+  // which side of the face line a point lies: positive in front of it
+  const ahead = ([x, y]: Point) => (x - tx) * face[1] - (y - ty) * face[0];
+  if (ahead([shaftX + 8, crownJoin]) <= 0) return null;
+  const approved: Point[] = [
+    [shaftX + ferruleRadius, ferruleBase],
+    [shaftX + ferruleRadius, shaftY],
+    [shaftX + 6, crownJoin],
+    [shaftX + 8, crownJoin],
+  ];
+  const flare = cubicHead(approved, HYBRID_FLARE_KEPT_T);
+  const start = flare[3];
+  const along = unit([start[0] - flare[2][0], start[1] - flare[2][1]]);
+  // angles from straight down: the blend turns on from the flare's angle, part of the way to the face
+  // line's, so it stays steeper than the face and passes behind it
+  const from = Math.atan2(along[0], along[1]);
+  const to = from + 0.6 * (Math.atan2(face[0], face[1]) - from);
+  const leave: Point = [Math.sin(to), Math.cos(to)];
+  const meets = (q: Point, dir: Point) => -ahead(q) / (dir[0] * face[1] - dir[1] * face[0]);
+  const reach = 0.5 * meets(start, along);
+  const corner: Point = [start[0] + along[0] * reach, start[1] + along[1] * reach];
+  const onward = meets(corner, leave);
+  const exit: Point = [corner[0] + leave[0] * onward, corner[1] + leave[1] * onward];
+  const toward = (q: Point): Point => [q[0] + (corner[0] - q[0]) * 0.62, q[1] + (corner[1] - q[1]) * 0.62];
+  const blend: Point[] = [start, toward(start), toward(exit), exit];
+  const foot: Point = [exit[0] + (leave[0] * (by - exit[1])) / leave[1], by];
+  const front = [
+    `L ${point(...foot)}`,
+    `L ${point(...exit)}`,
+    `C ${point(...blend[2])} ${point(...blend[1])} ${point(...blend[0])}`,
+    `C ${point(...flare[2])} ${point(...flare[1])} ${point(...flare[0])} Z`,
+  ].join(' ');
+  return { flare, blend, exit, foot, front };
+}
+
 /** The top view's neck edges, back (top-line side) and front (leading-edge side): [mm toe-ward of
  * the face's top-heel corner where the edge leaves the blade's band, its handle there, its handle at
  * the ferrule (both as fractions of the edge's chord)]. One cubic each, tangent to the band and to

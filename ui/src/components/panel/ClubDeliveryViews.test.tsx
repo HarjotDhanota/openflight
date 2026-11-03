@@ -14,7 +14,9 @@ import {
   clubProfilePaths,
   deliveryValue,
   faceDeliveryRotation,
+  HYBRID_FLARE_KEPT_T,
   hoselLayout,
+  hybridNeckDown,
   staticLoftLie,
 } from './clubDelivery';
 import { FACE_SHAPES, USGA, clubModel, faceCategory, type FaceCategory } from './faceImpact';
@@ -86,6 +88,13 @@ type Point = [number, number];
 /** The tightest turn either top-view neck edge may make, mm: below this it reads as a corner. */
 const TOP_NECK_MIN_RADIUS_MM = 7;
 const cross = (a: Point, b: Point) => a[0] * b[1] - a[1] * b[0];
+const sub = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1]];
+const unit2 = ([x, y]: Point): Point => [x / Math.hypot(x, y), y / Math.hypot(x, y)];
+/** The cubic with control points p at t. */
+function bezier(p: readonly Point[], t: number): Point {
+  const [a, b, c, e] = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3];
+  return [a * p[0][0] + b * p[1][0] + c * p[2][0] + e * p[3][0], a * p[0][1] + b * p[1][1] + c * p[2][1] + e * p[3][1]];
+}
 /** Flattens an absolute M/L/Q/C/Z path, 24 points per curve. */
 function polygon(d: string): Point[] {
   const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
@@ -576,7 +585,7 @@ describe('club delivery drawings', () => {
   });
 
   /* The heel view as approved at 1192aac1, every club, both hands, no shot: the sha-256 of its
-   * rendered SVG (5H, 7H and 9H since with their neck taken down past the face line). Its hosel and neck are painted over the face line, so where they overlap the
+   * rendered SVG (5H, 7H and 9H since with their neck flare blended down past the face line). Its hosel and neck are painted over the face line, so where they overlap the
    * lofted face line runs behind the hosel. */
   const APPROVED_HEEL_VIEWS: Record<string, string> = {
     '2-iron:right': 'e002399f1cacad6e',
@@ -605,12 +614,12 @@ describe('club delivery drawings', () => {
     'lw:left': '8362ac1ad9813b5c',
     '3-hybrid:right': '6c2d3192d8c77e88',
     '3-hybrid:left': '8a8c5bab057578bc',
-    '5-hybrid:right': 'a1b98485be944cef',
-    '5-hybrid:left': '60660b15d9717c06',
-    '7-hybrid:right': '28880387bdcf5c5b',
-    '7-hybrid:left': 'de2c1da3d3a0c5ca',
-    '9-hybrid:right': '11241f43cbb145df',
-    '9-hybrid:left': 'c279dd2600ebcdc3',
+    '5-hybrid:right': '5fe8d63791abf4e6',
+    '5-hybrid:left': '26e09d85203ba816',
+    '7-hybrid:right': '87284692910669f5',
+    '7-hybrid:left': '5620fd296572abf8',
+    '9-hybrid:right': '43c647c4ba56ebe5',
+    '9-hybrid:left': '679763073c94875d',
     'driver:right': 'a28d187dc777d223',
     'driver:left': 'f4a02631a8920580',
     '3-wood:right': '1a1268e79c944a0e',
@@ -646,45 +655,73 @@ describe('club delivery drawings', () => {
   );
 
   /* At a hybrid's higher lofts (5H, 7H, 9H) the face lies back so far that the neck's flat foot stood
-   * in front of the face line, a ledge with the face line ending under it. There the neck goes on
-   * straight down from its foot until it is behind the face line, into the head; the tube, the
-   * hosel position and the neck above its foot stay as approved at 1192aac1. */
-  it.each(['5-hybrid', '7-hybrid', '9-hybrid'])('takes the %s neck straight down past the face line', (club) => {
+   * in front of the face line, a ledge with the face line ending under it. There the flare's own
+   * curve goes on down, longer and gentler, tangent to it and bending the same way, until it passes
+   * behind the face line; the tube, the hosel position and the flare above that stay as approved at
+   * 1192aac1. */
+  it.each(['5-hybrid', '7-hybrid', '9-hybrid'])('blends the %s neck flare down past the face line', (club) => {
     const { loft } = staticLoftLie(club);
     const paths = clubProfilePaths('hybrid', loft);
     const { shaftX, shaftY, ferruleBase, ferruleRadius, crownJoin } = hoselLayout('hybrid', 'side', loft);
+    const down = hybridNeckDown(loft)!;
+    expect(down).not.toBeNull();
     const element = svg({ ...clubModel(club), impact_location: { handedness: 'right' } } as Shot, 'side');
     const d = element.querySelector('.club-projection__neck')!.getAttribute('d')!;
-    // the upper neck is the approved one: the same back and front curves from the ferrule to the foot
+    // the back of the neck is the approved one, and the kiosk draws this front edge
     const back = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} `;
-    const front = ` L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
     expect(d.startsWith(back)).toBe(true);
-    expect(d.endsWith(front)).toBe(true);
-    const neck = polygon(d);
-    const head = polygon(paths.side);
+    expect(d.endsWith(down.front)).toBe(true);
+    // the flare kept is the approved flare's own first part, from the ferrule
+    const approved: Point[] = [
+      [shaftX + ferruleRadius, ferruleBase],
+      [shaftX + ferruleRadius, shaftY],
+      [shaftX + 6, crownJoin],
+      [shaftX + 8, crownJoin],
+    ];
+    for (let i = 0; i <= 10; i++) {
+      const u = i / 10;
+      const [x, y] = bezier(down.flare, u);
+      const [ax, ay] = bezier(approved, u * HYBRID_FLARE_KEPT_T);
+      expect(Math.hypot(x - ax, y - ay)).toBeLessThan(1e-9);
+    }
+    // the blend leaves the flare along its tangent: no corner
+    const t0 = unit2([down.flare[3][0] - down.flare[2][0], down.flare[3][1] - down.flare[2][1]]);
+    const t1 = unit2([down.blend[1][0] - down.blend[0][0], down.blend[1][1] - down.blend[0][1]]);
+    expect(down.blend[0]).toEqual(down.flare[3]);
+    expect(Math.abs(cross(t0, t1))).toBeLessThan(1e-9);
+    expect(t0[0] * t1[0] + t0[1] * t1[1]).toBeGreaterThan(0);
+    // one curve from the ferrule to the face line, bending one way only: no reverse
+    const edge = [
+      ...Array.from({ length: 41 }, (_, i) => bezier(down.flare, i / 40)),
+      ...Array.from({ length: 41 }, (_, i) => bezier(down.blend, i / 40)).slice(1),
+    ];
+    const turns = edge.slice(2).map((q, i) => cross(sub(edge[i + 1], edge[i]), sub(q, edge[i + 1])));
+    expect(turns.every((v) => v <= 1e-9)).toBe(true);
+    expect(turns.some((v) => v < -1e-6)).toBe(true);
+    // longer than the approved flare: it ends on the face line below the old foot
     const faceX = (y: number) => paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
-    const foot = shaftX + 8;
-    // no ledge: the foot no longer ends the neck; its front edge runs straight down from it
-    const below = neck.filter(([, y]) => y > crownJoin + 0.01);
-    expect(below.length).toBeGreaterThan(0);
-    expect(Math.max(...below.map(([x]) => x))).toBeCloseTo(foot, 6);
-    // down past the face line, so the face line is behind the neck from the face top to there
-    const crossing = paths.ty + ((foot - paths.tx) / (paths.bx - paths.tx)) * (paths.by - paths.ty);
-    expect(Math.max(...below.map(([, y]) => y))).toBeGreaterThan(crossing + 1);
+    expect(down.exit[1]).toBeGreaterThan(crownJoin + 2);
+    expect(down.exit[1]).toBeLessThan(paths.by);
+    expect(down.exit[0]).toBeCloseTo(faceX(down.exit[1]), 6);
+    // in front of the face line until it gets there, and steeper than it there, so it passes behind
+    for (const q of edge.slice(41, -1)) expect(q[0]).toBeGreaterThan(faceX(q[1]) - 1e-6);
+    const leave = unit2(sub(down.blend[3], down.blend[2]));
+    const face = unit2([paths.bx - paths.tx, paths.by - paths.ty]);
+    expect(cross(face, leave)).toBeGreaterThan(0.02);
+    // so the face line is behind the neck from the face top to there
+    const neck = polygon(d);
     for (let i = 1; i < 20; i++) {
-      const y = paths.ty + ((crossing - paths.ty) * i) / 20;
+      const y = paths.ty + ((down.exit[1] - paths.ty) * i) / 20;
       expect(inside([faceX(y) - 0.01, y], neck)).toBe(true);
     }
-    // and the part below the foot stays inside the head, clear of the sole's outline
-    for (const q of below) if (q[1] > crossing) expect(inside([q[0] - 0.5, q[1] + 0.5], head)).toBe(true);
+    // and below that the neck stays inside the head, clear of the sole's outline
+    const head = polygon(paths.side);
+    expect(inside([down.foot[0] - 0.5, down.foot[1] + 0.5], head)).toBe(true);
+    expect(inside([shaftX - 11 + 0.5, paths.by + 0.5], head)).toBe(true);
   });
 
   it('keeps the 3-hybrid neck, whose foot is already behind the face line, as approved', () => {
-    const { loft } = staticLoftLie('3-hybrid');
-    const paths = clubProfilePaths('hybrid', loft);
-    const { shaftX, crownJoin } = hoselLayout('hybrid', 'side', loft);
-    const faceX = paths.tx + ((crownJoin - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
-    expect(shaftX + 8).toBeLessThan(faceX);
+    expect(hybridNeckDown(staticLoftLie('3-hybrid').loft)).toBeNull();
   });
 
   it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {

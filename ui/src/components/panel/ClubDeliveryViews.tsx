@@ -15,6 +15,7 @@ import {
   deliveryValue,
   direction,
   hoselLayout,
+  hybridNeckDown,
   staticLoftLie,
   type DeliveryView,
 } from './clubDelivery';
@@ -161,15 +162,13 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
     view,
     profileLoft
   );
-  // at a hybrid's higher lofts the neck's foot stands in front of the face line: there the neck goes
-  // on straight down from its foot, behind the face line and into the head, instead of ending on a
-  // ledge; it stops level with the leading edge's foot, clear of the sole's outline
-  const footFaceX = paths.tx + ((crownJoin - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
-  const neckDown =
-    !top && category === 'hybrid' && shaftX + 8 > footFaceX
-      ? `L ${shaftX - 11} ${paths.by} L ${shaftX + 8} ${paths.by} `
-      : '';
-  const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} ${neckDown}L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  // at a hybrid's higher lofts the neck's foot would stand in front of the face line: there the
+  // flare's curve goes on down, behind the face line and into the head, instead of ending on a ledge
+  const neckDown = !top && category === 'hybrid' ? hybridNeckDown(profileLoft) : null;
+  const approvedNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  const woodNeck = neckDown
+    ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX - 11} ${paths.by} ${neckDown.front}`
+    : approvedNeck;
   const neck = p.depth ? '' : bladeNeck(category, view, profileLoft).d;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
