@@ -1323,10 +1323,13 @@ CLUB_CONTACT_SOURCE = (
     "measured projection: OPS radial club speed + the camera club stage's head position "
     "and direction at contact + rig geometry"
 )
-CLUB_CONTACT_NOTE = (
-    "the OPS club reading's own time is not recorded on this shot: it is read as the "
-    "speed at contact"
-)
+CLUB_CONTACT_NOTE = "OPS reading time unrecorded; treated as contact"
+# The full club speed's own error terms beyond the geometry (C15b; research/
+# rig-geometry-lock-2026-11-02/spin-fullspeed-check/REPORT.md, 3 Nov 2026): the OPS club
+# reading's scatter against TrackMan (radial minus TM, sd 2.16 mph on 11 clean Robinante
+# pairs) and the +0.6 mph bias 5 deg of angle noise puts into 1/cos, both in quadrature.
+OPS_CLUB_READING_SD_MPH = 2.2
+ANGLE_NOISE_BIAS_MPH = 0.6
 
 
 def _head_at(positions, t_s: float) -> Optional[np.ndarray]:
@@ -1447,6 +1450,8 @@ def evaluate_full_club_speed_at_contact(
             for axis in range(3)
         )
     )
+    budget["ops_reading_scatter"] = OPS_CLUB_READING_SD_MPH
+    budget["angle_noise_bias"] = ANGLE_NOISE_BIAS_MPH
     half_width = math.sqrt(sum(term**2 for term in budget.values()))
     bounded = math.isfinite(half_width)
     labels = dict(input_labels or {})
@@ -1474,9 +1479,12 @@ def evaluate_full_club_speed_at_contact(
             "ops_position_mm": ops_mm,
         },
         "projection": nominal,
+        "correction_factor": 1.0 / nominal,
         "input_labels": labels,
         "weak_inputs": weak,
-        "note": "; ".join([*weak, CLUB_CONTACT_NOTE]),
+        "note": "; ".join(
+            [*weak, f"radial x {1.0 / nominal:.4f} (1 / LOS . dir)", CLUB_CONTACT_NOTE]
+        ),
         "geometry_m": {
             "frame": "(lateral, forward, up) metres in the club stage's measurement frame",
             "ops": ops.tolist(),

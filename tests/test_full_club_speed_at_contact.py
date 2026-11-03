@@ -136,3 +136,36 @@ def test_the_kiosk_reads_oct27_shot1_s_club_stage_at_contact(monkeypatch):
     path = math.degrees(math.atan2(direction[0], direction[1]))
     assert path == pytest.approx(10.97 - 2.0666, abs=1e-6)  # the measurement frame
     assert result["range_mph"] is not None
+
+
+# --- C15b: the OPS reading's own scatter and the angle-noise bias in the sigma ------------
+
+
+def test_the_sigma_carries_the_ops_reading_scatter_and_the_angle_noise_bias():
+    positions = [
+        {"t_s": 0.0, "lateral_m": 0.0, "up_m": 0.0, "forward_m": 1.0},
+        {"t_s": 0.01, "lateral_m": 0.0, "up_m": 0.0, "forward_m": 2.0},
+    ]
+    path = math.degrees(math.acos(0.9691))
+    result = full_speed.evaluate_full_club_speed_at_contact(
+        radial_mph=72.052,
+        head_positions=positions,
+        contact_t_s=0.005,
+        path_deg=path,
+        attack_deg=0.0,
+        ops_position_lfu_m=(0.0, 0.0, 0.0),
+        path_sigma_deg=5.15,
+        attack_sigma_deg=5.09,
+        depth_sigma_m=0.029,
+        input_labels={"club_path": "measured", "attack_angle": "measured"},
+    )
+
+    assert result["value_mph"] == pytest.approx(74.35, abs=0.005)  # 72.052 / 0.9691
+    assert result["correction_factor"] == pytest.approx(1 / 0.9691, rel=1e-6)
+    budget = result["uncertainty_mph"]
+    assert budget["ops_reading_scatter"] == full_speed.OPS_CLUB_READING_SD_MPH == 2.2
+    assert budget["angle_noise_bias"] == full_speed.ANGLE_NOISE_BIAS_MPH == 0.6
+    half = (result["range_mph"][1] - result["range_mph"][0]) / 2
+    assert half == pytest.approx(math.sqrt(sum(v * v for v in budget.values())), rel=1e-9)
+    assert "OPS reading time unrecorded; treated as contact" in result["note"]
+    assert "radial x 1.0319" in result["note"]
