@@ -574,6 +574,37 @@ describe('club delivery drawings', () => {
     expect(Math.abs(shaft[0][0] + shaft[3][0] - shaft[1][0] - shaft[2][0])).toBeLessThan(1e-6);
   });
 
+  /* The hosel meets the head with one continuous outline at every loft: the neck's foot ends on the
+   * head (the leading edge for a blade, the face top or crown for a wood), nothing of it pokes out
+   * below the sole or past the leading edge, and the face line ends at the leading edge and the
+   * face top without running into the neck. */
+  it.each(ALL_CLUBS.map((club) => club.id))('joins the %s hosel to its head continuously in the heel view', (club) => {
+    const category = faceCategory(club);
+    const s = { ...shot(category), club };
+    for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+    const element = svg(s, 'side');
+    const head = polygon(element.querySelector('.club-projection__outline')!.getAttribute('d')!);
+    const neck = polygon(element.querySelector('.club-projection__neck')!.getAttribute('d')!);
+    const paths = clubProfilePaths(category, staticLoftLie(club).loft);
+    const ground = Math.max(...head.map(([, y]) => y));
+    // nothing of the neck below the sole or ahead of the leading edge near the ground
+    for (const [x, y] of neck) {
+      expect(y).toBeLessThanOrEqual(ground + 0.05);
+      if (y > paths.by - 3) expect(x).toBeLessThanOrEqual(paths.bx + 0.6);
+    }
+    // the neck's lowest points sit on or inside the head
+    const low = [...neck].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    for (const q of low) expect(inside(q, head) || nearest(q, head)[0] < 0.6).toBe(true);
+    // the shaft's foot is hidden in the neck or the head: no strip of it hangs below the neck
+    const shaft = polygon(element.querySelector('.club-projection__shaft')!.getAttribute('d')!);
+    for (const q of [shaft[0], shaft[3]]) expect(inside(q, neck) || inside(q, head)).toBe(true);
+    // the face line is not inside the neck: it ends at the face top and the leading edge
+    for (let k = 1; k < 20; k += 1) {
+      const q: Point = [paths.tx + ((paths.bx - paths.tx) * k) / 20, paths.ty + ((paths.by - paths.ty) * k) / 20];
+      expect(inside(q, neck) && nearest(q, neck)[0] > 0.3).toBe(false);
+    }
+  });
+
   it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {
     for (const club of ALL_CLUBS) expect(staticLoftLie(club.id).source).toBe('club');
     // the types that used to fall back now carry their own population values
