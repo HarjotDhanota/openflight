@@ -355,8 +355,10 @@ def implausible_vertical_reason(vertical_deg: Any) -> Optional[str]:
 # 30 Oct 2026 (owner): radar is primary for the ball, so a radar vertical stays first even
 # when an accepted camera fallback disagrees with it; beyond this many combined 1-sigmas
 # (the camera's vertical_sd_deg and the radar's own, when its measurement carries one) it
-# reads experimental with both values in its note. Oct 27 shot 3: 29.99 against 18.58 +-
-# 2.5 is 4.6 sigma; shot 4: 28.50 against 21.52 +- 3.13 is 2.2 and stands.
+# reads experimental with both values in its note. Oct 27 on the live chain (3 Nov 2026,
+# calibrated camera): shot 3, 28.86 against 19.34 +- 0.42, is 22.7 sigma; shot 4, 41.15
+# against 26.73 +- 0.64, is 22.5 (on the 31 Oct chain, 28.50 against 21.52 +- 3.13, 2.2,
+# it stood). The label sets the radar vertical's confidence too (server, C21b).
 VERTICAL_DISAGREEMENT_SIGMAS = 3.0
 
 

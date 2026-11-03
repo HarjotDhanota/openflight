@@ -286,25 +286,41 @@ def test_a_camera_launch_does_not_take_the_range_label_here():
     assert labels.CAMERA_PRIOR_NOTE not in (labels.shot_launch_label(shot, "vertical")[1] or "")
 
 
-SHOT_3_FALLBACK = {"status": "accepted", "vertical_deg": 18.58, "vertical_sd_deg": 2.5}
-SHOT_4_FALLBACK = {"status": "accepted", "vertical_deg": 21.52, "vertical_sd_deg": 3.13}
+# Oct 27 shots 3 and 4 on the live chain at b9705ea7 (generality run, 3 Nov 2026; the
+# camera fallback's sigma is the calibrated camera's, not the 31 Oct chain's 2.5 / 3.13)
+SHOT_3_FALLBACK = {"status": "accepted", "vertical_deg": 19.34, "vertical_sd_deg": 0.42}
+SHOT_4_FALLBACK = {"status": "accepted", "vertical_deg": 26.73, "vertical_sd_deg": 0.64}
 
 
 def test_a_radar_vertical_beyond_three_sigma_of_the_camera_reads_experimental():
-    # Oct 27 shot 3: radar 29.99 against an accepted camera 18.58 +- 2.5 (4.6 sigma)
-    shot = _shot(launch_angle_vertical=29.99, camera_fallback_launch=SHOT_3_FALLBACK)
+    # Oct 27 shot 3: radar 28.86 against an accepted camera 19.34 +- 0.42 (22.7 sigma)
+    shot = _shot(launch_angle_vertical=28.86, camera_fallback_launch=SHOT_3_FALLBACK)
 
     label, why = labels.shot_launch_label(shot, "vertical")
 
     assert label == "experimental"
-    assert "29.99" in why and "18.58" in why and "4.6 sigma" in why
+    assert "28.86" in why and "19.34" in why and "22.7 sigma" in why
     # the horizontal is not the vertical's business
     assert labels.shot_launch_label(shot, "horizontal")[0] == "measured"
 
 
+def test_oct27_shot4_now_reads_experimental_too():
+    # Oct 27 shot 4: radar 41.15 against an accepted camera 26.73 +- 0.64 (22.5 sigma); on
+    # the 31 Oct chain it was 28.50 against 21.52 +- 3.13, 2.2 sigma, and stood
+    shot = _shot(launch_angle_vertical=41.15, camera_fallback_launch=SHOT_4_FALLBACK)
+
+    label, why = labels.shot_launch_label(shot, "vertical")
+
+    assert label == "experimental"
+    assert "41.15" in why and "26.73" in why and "22.5 sigma" in why
+
+
 def test_a_radar_vertical_within_three_sigma_keeps_its_label():
-    # Oct 27 shot 4: radar 28.50 against an accepted camera 21.52 +- 3.13 (2.2 sigma)
-    shot = _shot(launch_angle_vertical=28.50, camera_fallback_launch=SHOT_4_FALLBACK)
+    # shot 4's radar against a camera 1.0 sigma from it (no Oct 27 shot is within the band)
+    shot = _shot(
+        launch_angle_vertical=41.15,
+        camera_fallback_launch={**SHOT_4_FALLBACK, "vertical_deg": 40.5},
+    )
 
     assert labels.shot_launch_label(shot, "vertical") == ("measured", None)
 
@@ -321,13 +337,13 @@ def test_a_radar_vertical_within_three_sigma_keeps_its_label():
     ids=["not-accepted", "no-sigma", "zero-sigma", "no-value", "no-fallback"],
 )
 def test_without_an_accepted_camera_vertical_and_its_sigma_there_is_no_check(fallback):
-    shot = _shot(launch_angle_vertical=29.99, camera_fallback_launch=fallback)
+    shot = _shot(launch_angle_vertical=28.86, camera_fallback_launch=fallback)
 
     assert labels.shot_launch_label(shot, "vertical") == ("measured", None)
 
 
 def test_the_check_takes_the_fallback_it_is_given_over_the_shot_s():
-    shot = _shot(launch_angle_vertical=29.99)
+    shot = _shot(launch_angle_vertical=28.86)
 
     label, _why = labels.shot_launch_label(shot, "vertical", camera_fallback=SHOT_3_FALLBACK)
 
@@ -337,10 +353,12 @@ def test_the_check_takes_the_fallback_it_is_given_over_the_shot_s():
 @pytest.mark.parametrize(
     ("radar", "radar_sd", "camera", "camera_sd", "sigmas"),
     [
-        (29.99, None, 18.58, 2.5, 4.564),
+        (28.86, None, 19.34, 0.42, 22.667),
+        (41.15, None, 26.73, 0.64, 22.531),
+        # 31 Oct chain's shot 4: 2.2 sigma, within
         (28.50, None, 21.52, 3.13, None),
         # the radar's own sigma, when the measurement carries one, joins the camera's
-        (29.99, 3.0, 18.58, 2.5, None),
+        (28.86, 3.5, 19.34, 0.42, None),
         (10.0, None, 18.0, 2.0, 4.0),
     ],
 )
