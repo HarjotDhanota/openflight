@@ -173,25 +173,17 @@
   opacity: 0.35;
 }
 
-.face-impact__field-shade {
-  stop-color: #3a4048;
-  stop-opacity: 0.42;
-}
-
-.face-impact__field-shade--end {
-  stop-opacity: 0;
-}
-
-.face-impact__field-edge {
-  stroke: #4b5259;
-  stroke-opacity: 0.85;
-  stroke-width: 0.28;
-}
-
-.face-impact__field-lip {
+.face-impact__groove-lip {
   stroke: #fff;
   stroke-opacity: 0.55;
-  stroke-width: 0.22;
+  stroke-width: 0.16;
+  stroke-linecap: round;
+}
+
+.face-impact__groove-core {
+  stroke: #0f1215;
+  stroke-opacity: 0.5;
+  stroke-linecap: round;
 }
 
 /* where the field reaches the head's edge: a fine line, so it reads on the light panel too */

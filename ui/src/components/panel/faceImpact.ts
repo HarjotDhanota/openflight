@@ -790,12 +790,40 @@ export const FACE_SHAPES = Object.fromEntries(
  * (the owner's reference photo of a chrome blade iron, approved mock-up 2026-11-03). */
 export const BLAST_EDGE_OUTSIDE_MM = 1.25;
 
+/** How far the blasted field's bottom stands above the head's bottom edge, mm, so a thin band of the
+ * rounded leading edge shows under it (the owner's reference photo; approved mock-up v4). */
+export const BLAST_FIELD_LIFT_MM = 1.2;
+
+/** Over how far the matte field blends into the polished chrome at each end, mm. */
+export const BLAST_SOFT_EDGE_MM = 0.8;
+
+/** The width of a scoreline's dark line on the blasted field, mm: the groove's width, less the
+ * hairline light lower edge drawn beside it. */
+export const BLASTED_GROOVE_WIDTH_MM = GROOVE_WIDTH_MM * 0.85;
+
 /** An iron's or wedge's sand-blasted groove field, between its toe and heel edge lines (x, mm, in
  * the face's own unmirrored frame); it runs the head's whole height. Null for woods and hybrids. */
 export function blastedField(category: FaceCategory): { x0: number; x1: number } | null {
   if (category !== 'iron' && category !== 'wedge') return null;
   const ends = FACE_SHAPES[category].grooves.flatMap((groove) => [groove.from, groove.to]);
   return { x0: Math.min(...ends) - BLAST_EDGE_OUTSIDE_MM, x1: Math.max(...ends) + BLAST_EDGE_OUTSIDE_MM };
+}
+
+/** An iron's or wedge's hosel-to-head crotch, in the face's own unmirrored frame: the lowest point of
+ * the head's top edge within 25 mm heelward of the blasted field, on a 0.5 mm grid. Null for woods
+ * and hybrids. */
+export function bladeCrotch(category: FaceCategory): Point | null {
+  const field = blastedField(category);
+  if (!field) return null;
+  const head = flatten(FACE_SHAPES[category].head);
+  let best: Point | null = null;
+  for (let x = field.x1 + 0.5; x < field.x1 + 25; x += 0.5) {
+    const hits = cross(head, x, true);
+    if (!hits.length) continue;
+    const top = hits[0];
+    if (!best || top > best[1]) best = [x, top];
+  }
+  return best;
 }
 
 export function faceCategory(club: string | null | undefined): FaceCategory {

@@ -400,7 +400,11 @@ The Club tab opens with a face-impact view:
     An iron's or wedge's face is not a separate panel: the head is one chrome surface,
     and a sand-blasted groove field (flat, matte, finely grained, slightly recessed) runs
     the head's whole height between two vertical edge lines 1.25 mm outside the longest
-    score lines, after the owner's reference photo (3 Nov 2026).
+    score lines, after the owner's reference photo (3 Nov 2026). The field stops 1.2 mm
+    above the head's bottom edge so the rounded leading edge shows, and blends into the
+    chrome over 0.8 mm at each end; the head's edges carry a soft radius band lit from
+    the upper left, the hosel crotch a soft dark reflection, and each score line is a
+    recessed groove with a hairline light lower edge.
   - **Old against new reference values** (the single photographed models of 22 Oct 2026):
 
     | Category | C | H | above the face bottom | band | lowest line: length / above the face bottom |
