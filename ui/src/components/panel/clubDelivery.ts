@@ -137,21 +137,19 @@ export function direction(degrees: number, length = 86): [number, number] {
   return [length * Math.cos(angle), -length * Math.sin(angle)];
 }
 
-/** The face view's tilt: the drawn hosel (the category's static lie, seen along the face normal) to
- * the shot's dynamic lie at its dynamic loft; without a dynamic lie, the category's static lie to the
- * selected club's own (0 for a club drawn as its category). Missing dynamic loft takes the club's. */
+/** The face view's tilt: none without a measured dynamic lie (at address every club's face view
+ * sits the same way); with one, its difference from the selected club's own static lie, both seen
+ * along the face normal (the static at the club's static loft, the dynamic at the shot's dynamic
+ * loft, else the club's). The club's static loft and lie are only the reference, never a tilt. */
 export function faceDeliveryRotation(shot: DeliveryShot, category: FaceCategory): number {
+  const lie = deliveryValue(shot, 'dynamic_lie');
+  if (lie === null) return 0;
   const club = staticLoftLie(shot.club, category);
   const radians = Math.PI / 180;
-  const projected = (lie: number, loft: number) =>
-    Math.atan2(Math.sin(lie * radians) * Math.cos(loft * radians), Math.cos(lie * radians)) / radians;
-  const lie = deliveryValue(shot, 'dynamic_lie');
-  if (lie === null) {
-    const p = CLUB_PROFILES[category];
-    return club.source === 'category' ? 0 : projected(p.lie, p.loft) - projected(club.lie, club.loft);
-  }
+  const projected = (lieDeg: number, loftDeg: number) =>
+    Math.atan2(Math.sin(lieDeg * radians) * Math.cos(loftDeg * radians), Math.cos(lieDeg * radians)) / radians;
   const loft = deliveryValue(shot, 'dynamic_loft') ?? club.loft;
-  return FACE_SHAPES[category].hosel.lieDeg - projected(lie, loft);
+  return projected(club.lie, club.loft) - projected(lie, loft);
 }
 
 const n = (value: number) => Number(value.toFixed(3));

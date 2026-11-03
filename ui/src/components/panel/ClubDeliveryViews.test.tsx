@@ -492,9 +492,24 @@ describe('club delivery drawings', () => {
     }
     expect(seven.rotation).toBe(0);
     expect(four.rotation).not.toBeCloseTo(nine.rotation, 1);
-    // the face view tilts to each club's static lie, the 7-iron (the drawn category) not at all
-    expect(faceDeliveryRotation(seven.s, 'iron')).toBe(0);
-    expect(faceDeliveryRotation(four.s, 'iron')).not.toBeCloseTo(faceDeliveryRotation(nine.s, 'iron'), 1);
+    // at address every club's face view sits the same way: a static loft or lie never tilts it
+    for (const drawn of [four, seven, nine]) expect(faceDeliveryRotation(drawn.s, 'iron')).toBe(0);
+    // a measured dynamic lie tilts it by its difference from the club's own static lie, seen along
+    // the face normal: the same 1 deg upright tilts a 4-iron and a 9-iron by about 1 deg each
+    const projected = (lie: number, loft: number) =>
+      (Math.atan2(Math.sin((lie * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180), Math.cos((lie * Math.PI) / 180)) *
+        180) /
+      Math.PI;
+    for (const club of ['4-iron', '9-iron']) {
+      const s = { ...shot(), club };
+      for (const key of Object.values(VIEW_METRICS).flat()) s.metrics![key] = metric(null);
+      const { loft, lie } = staticLoftLie(club);
+      s.metrics!.dynamic_lie = metric(lie);
+      expect(faceDeliveryRotation(s, 'iron')).toBeCloseTo(0, 9);
+      s.metrics!.dynamic_lie = metric(lie + 1);
+      expect(faceDeliveryRotation(s, 'iron')).toBeCloseTo(projected(lie, loft) - projected(lie + 1, loft), 9);
+      expect(faceDeliveryRotation(s, 'iron')).toBeLessThan(-0.8);
+    }
     // shot values still win: a measured dynamic loft sets the lean whatever the club
     for (const club of ['4-iron', '9-iron']) {
       const s = { ...shot(), club };
@@ -544,8 +559,11 @@ describe('club delivery drawings', () => {
       const before = JSON.stringify(FACE_SHAPES[category]);
       const s = shot(category, hand);
       const rotation = faceDeliveryRotation(s, category);
-      const projected = (Math.atan(Math.tan((65 * Math.PI) / 180) * Math.cos((33.34 * Math.PI) / 180)) * 180) / Math.PI;
-      expect(FACE_SHAPES[category].hosel.lieDeg - rotation).toBeCloseTo(projected, 9);
+      const along = (lie: number, loft: number) =>
+        (Math.atan(Math.tan((lie * Math.PI) / 180) * Math.cos((loft * Math.PI) / 180)) * 180) / Math.PI;
+      // measured against the club's own static lie at its static loft
+      const reference = along(staticLoftLie(s.club).lie, staticLoftLie(s.club).loft);
+      expect(reference - rotation).toBeCloseTo(along(65, 33.34), 9);
       const doc = new DOMParser().parseFromString(
         renderToString(<ClubDeliveryViews shot={s} sessionShots={[s]} />),
         'text/html'
@@ -556,10 +574,9 @@ describe('club delivery drawings', () => {
       expect(doc.querySelector('.face-impact__face')!.getAttribute('d')).toBe(FACE_SHAPES[category].face);
       expect(JSON.stringify(FACE_SHAPES[category])).toBe(before);
       s.metrics!.dynamic_loft = metric(null);
-      const fallback =
-        (Math.atan(Math.tan((65 * Math.PI) / 180) * Math.cos((staticLoftLie(s.club).loft * Math.PI) / 180)) * 180) /
-        Math.PI;
-      expect(FACE_SHAPES[category].hosel.lieDeg - faceDeliveryRotation(s, category)).toBeCloseTo(fallback, 9);
+      expect(reference - faceDeliveryRotation(s, category)).toBeCloseTo(along(65, staticLoftLie(s.club).loft), 9);
+      s.metrics!.dynamic_lie = metric(null);
+      expect(faceDeliveryRotation(s, category)).toBe(0);
     }
   );
 

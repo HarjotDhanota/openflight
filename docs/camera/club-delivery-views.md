@@ -128,10 +128,10 @@ when available and otherwise the category's static loft.
 
 Each selectable club type has its own static loft and lie (`CLUB_STATIC` in
 `ui/src/components/panel/clubDelivery.ts`). The drawings keep their category's shape; the
-side view leans the head to the club's static loft when the shot has no dynamic loft, and
-the face view tilts to the club's static lie when it has no dynamic lie (relative to the
-category's static lie, so a club drawn as its category is not tilted). A shot's dynamic
-loft or lie always wins. All values are population averages from the official spec tables
+side view leans the head to the club's static loft when the shot has no dynamic loft. The
+face view never tilts for a static value: at address every club's face sits the same way,
+and a shot's measured dynamic lie tilts it by its difference from the club's own static lie
+(both seen along the face normal). A shot's dynamic loft or lie always wins. All values are population averages from the official spec tables
 already saved in research/club-models (no new research); "category" rows have no per-club
 value there and take the category's.
 
