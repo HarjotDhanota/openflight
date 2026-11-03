@@ -996,6 +996,7 @@
   "tests/test_camera_ball_flight.py": "FUSION",
   "tests/test_camera_ball_model.py": "FUSION",
   "tests/test_camera_club_delivery.py": "FUSION",
+  "tests/test_club_approach_reach.py": "FUSION",
   "tests/test_club_contact_persistence.py": "FUSION",
   "tests/test_camera_club_delivery_field.py": "RESEARCH",
   "tests/test_camera_club_delivery_head.py": "FUSION",

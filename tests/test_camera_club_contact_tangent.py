@@ -113,8 +113,8 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
 
     assert result.impact_frame == 43  # last rest; the ball moved in f44
     by_time = sorted(result.head_positions, key=lambda p: p.t_s)
-    pre = [p for p in by_time if p.t_s <= by_time[0].t_s + 3 * 0.0037]
-    assert len(pre) == 4  # f40-f43 before contact
+    pre = [p for p in by_time if p.t_s < result.contact_t_s][-4:]
+    assert len(pre) == 4  # f40-f43, the four nearest contact (C18a adds f39 before them)
     f42, f43 = pre[-2], pre[-1]
     chord = math.degrees(
         math.atan2(
@@ -166,7 +166,7 @@ def test_the_measured_contact_instant_replaces_the_frame_midpoint():
     assert result.contact_source == "ball_departure_extrapolation"
     assert result.contact_sigma_ms == pytest.approx(0.1)
     by_time = sorted(result.head_positions, key=lambda p: p.t_s)
-    last_rest_t = by_time[3].t_s
+    last_rest_t = [p for p in by_time if p.t_s < result.contact_t_s][-1].t_s
     assert result.attack_angle_deg == pytest.approx(
         cd.attack_angle_at_contact(
             by_time, contact_t_s=result.contact_t_s, last_rest_t_s=last_rest_t

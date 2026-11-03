@@ -118,6 +118,10 @@ HEAD_RADIUS_M = 0.10  # an iron blade (~75 mm) from its heel, with margin
 # Heel to ball centre, across the image, in the approach window (impact-4 .. impact+1):
 # Oct 27 measured 0.02-0.17 m; the golfer's legs stood 0.45 m and more from the ball.
 HEAD_NEAR_BALL_M = 0.25
+# C18a (club-arc REPORT, 3 Nov 2026): before contact the head may be as far from the ball as
+# its approach covers (the OPS club speed times the time to contact, plus its own radius),
+# never beyond this: past 0.45 m of the ball the walked line is the golfer or background.
+HEAD_APPROACH_MAX_M = 0.45
 HEAD_HOSEL_POINTS = 3  # heel's sole + points up the hosel; the reconstruction needs 3
 SHAFT_SEARCH_ATTEMPTS = 4  # lines tried per lean before the shaft is declared absent
 # A moving line wider than this many shaft bands (head_track.SHAFT_BAND_M) either side
@@ -875,6 +879,23 @@ def camera_ops_delivery_from_feature_pair(
     )
 
 
+def approach_reach_m(before_contact_s: float | None, speed_mps: float | None) -> float:
+    """How far from the ball (m) the head may be in a frame ``before_contact_s`` before the
+    contact: ``speed x time + HEAD_RADIUS_M`` within ``HEAD_NEAR_BALL_M`` ..
+    ``HEAD_APPROACH_MAX_M``; the old radius after contact or without a speed."""
+    if (
+        before_contact_s is None
+        or speed_mps is None
+        or not math.isfinite(float(before_contact_s))
+        or before_contact_s <= 0.0
+        or not math.isfinite(float(speed_mps))
+        or speed_mps <= 0.0
+    ):
+        return HEAD_NEAR_BALL_M
+    reach = float(speed_mps) * float(before_contact_s) + HEAD_RADIUS_M
+    return min(HEAD_APPROACH_MAX_M, max(HEAD_NEAR_BALL_M, reach))
+
+
 def _shaft_ends(
     moving: np.ndarray,
     walk: np.ndarray,
@@ -882,6 +903,7 @@ def _shaft_ends(
     px_per_m: float,
     band: float,
     ball_xy: tuple[float, float],
+    reach_m: float = HEAD_NEAR_BALL_M,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[str]]:
     """Each lean's shaft (heel end, direction) in ``moving``, and the lines refused.
 
@@ -896,7 +918,7 @@ def _shaft_ends(
 
     thickness = cv2.distanceTransform(moving.astype(np.uint8), cv2.DIST_L2, 5)
     yy, xx = np.mgrid[0 : moving.shape[0], 0 : moving.shape[1]]
-    near = HEAD_NEAR_BALL_M * px_per_m
+    near = reach_m * px_per_m
     ends, refused = [], []
     for golfer_on_left in (True, False):
         mask = moving.copy()
@@ -959,7 +981,7 @@ class _HeadAnchor:
 
 
 def _clubhead_anchor(
-    frame: np.ndarray, background: np.ndarray, ball
+    frame: np.ndarray, background: np.ndarray, ball, *, reach_m: float = HEAD_NEAR_BALL_M
 ) -> tuple[_HeadAnchor | None, str | None]:
     """The clubhead's heel in one frame, found from the ball side, or the refusal.
 
@@ -994,6 +1016,7 @@ def _clubhead_anchor(
         px_per_m=px_per_m,
         band=band,
         ball_xy=(ball.x - x0, ball.y),
+        reach_m=reach_m,
     )
     if not ends:
         return None, "; ".join(refused or ["no shaft line in the moving pixels"])
@@ -1005,10 +1028,12 @@ def _clubhead_anchor(
         key=lambda item: math.dist(item[0], (ball.x, ball.y)),
     )
     above = float(ball.y - anchor[1])
-    if above > HEAD_ABOVE_BALL_MAX_M * px_per_m:
+    # a head still on its approach may be higher by as much as it may be farther (C18a)
+    above_max = max(HEAD_ABOVE_BALL_MAX_M, reach_m if reach_m > HEAD_NEAR_BALL_M else 0.0)
+    if above > above_max * px_per_m:
         return None, (
             f"shaft end {above:.0f} px above the ball, beyond its height band "
-            f"({HEAD_ABOVE_BALL_MAX_M * px_per_m:.0f} px)"
+            f"({above_max * px_per_m:.0f} px)"
         )
 
     # The head: moving pixels round the heel, outside the shaft's band above it.
@@ -1051,8 +1076,11 @@ def _clubhead_pair_tracks(
     bright_now: float,
     dark_bg: float,
     reasons: list[str] | None = None,
+    reach_m=None,
 ) -> tuple[np.ndarray | None, float | None]:
     """The clubhead's hosel points in both frames of one approach interval.
+
+    ``reach_m(index)``: how far from the ball the head may be in that frame (C18a).
 
     The head is localised in each frame on its own (``_clubhead_anchor``): its
     appearance turns and occludes the ball between frames, so it is found, not
@@ -1066,7 +1094,12 @@ def _clubhead_pair_tracks(
         return None, None
     anchors = []
     for label, index in (("seed", first_idx), ("end", second_idx)):
-        anchor, refusal = _clubhead_anchor(frames[index], background, ball)
+        anchor, refusal = _clubhead_anchor(
+            frames[index],
+            background,
+            ball,
+            reach_m=reach_m(index) if reach_m is not None else HEAD_NEAR_BALL_M,
+        )
         if anchor is None:
             _refuse(reasons, f"{label} frame {index}: {refusal}")
             return None, (anchors[0].thickness_px if anchors else None)
@@ -1265,6 +1298,11 @@ def estimate_chained_delivery(
     impact_t_s = range_evidence.impact_t_s if range_evidence is not None else None
     pair_estimates: dict[tuple[int, int], ApproachPairEstimate] = {}
     head_thicknesses = []
+    speed_mps = ops_club_speed_mph / 2.23694 if ops_club_speed_mph else None
+
+    def reach_for(index: int) -> float:
+        return approach_reach_m(contact_camera_s - float(timestamps_ns[index]) / 1e9, speed_mps)
+
     ops_reference_needed = False
     for offsets in APPROACH_PATH_OFFSETS:
         indexes = np.asarray([impact_idx + offset for offset in offsets])
@@ -1278,6 +1316,7 @@ def estimate_chained_delivery(
             bright_now=bright_now,
             dark_bg=dark_bg,
             reasons=refusals,
+            reach_m=reach_for,
         )
         if head_thickness is not None:
             head_thicknesses.append(head_thickness)
@@ -1427,6 +1466,9 @@ def estimate_chained_delivery(
 # (impact - 1, impact) is centred a frame before it, and a descending head steepens the
 # earlier it is read (Oct 27 shot 1: -13.2 deg as a chord, 3.6 ms before contact).
 CONTACT_TANGENT_MIN_FRAMES = 3
+# the fit stays local to contact: the four frames nearest it (C10's window). A longer
+# approach (C18a) bends more than one constant acceleration describes.
+CONTACT_TANGENT_MAX_FRAMES = 4
 
 
 def attack_angle_at_contact(
@@ -1436,7 +1478,9 @@ def attack_angle_at_contact(
     axis quadratic in time) through the head positions up to the last frame the ball
     rested in, differentiated at ``contact_t_s``. None with fewer than
     ``CONTACT_TANGENT_MIN_FRAMES`` such frames. A straight approach reads as its chord."""
-    pre = [p for p in head_positions if p.t_s <= last_rest_t_s + 1e-9]
+    pre = sorted((p for p in head_positions if p.t_s <= last_rest_t_s + 1e-9), key=lambda p: p.t_s)[
+        -CONTACT_TANGENT_MAX_FRAMES:
+    ]
     if len({p.t_s for p in pre}) < CONTACT_TANGENT_MIN_FRAMES:
         return None
     times = np.asarray([p.t_s - contact_t_s for p in pre], dtype=float)
