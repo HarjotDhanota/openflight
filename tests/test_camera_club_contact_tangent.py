@@ -238,9 +238,7 @@ def test_the_shaft_inclination_is_the_lower_shaft_s_angle_to_the_horizon(monkeyp
 
 def test_oct27_shot1_records_its_shaft_inclination_at_contact():
     case = _shot1_club()
-    result = cd.estimate_chained_delivery(
-        case["frames"], case["host"], **case["kwargs"], club="7-iron"
-    )
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
 
     shaft = result.shaft
     assert shaft["status"] == "measured"
@@ -249,4 +247,6 @@ def test_oct27_shot1_records_its_shaft_inclination_at_contact():
     shaft["per_frame_deg"] = {int(k): v for k, v in shaft["per_frame_deg"].items()}
     low, high = sorted(shaft["per_frame_deg"].values())
     assert low - 1e-9 <= shaft["inclination_deg"] <= high + 1e-9
-    assert shaft["minus_static_lie_deg"] == pytest.approx(shaft["inclination_deg"] - 62.3)
+    # the static lie (club_outline_reference) is research data: the shipped stage keeps the
+    # absolute inclination only
+    assert "minus_static_lie_deg" not in shaft

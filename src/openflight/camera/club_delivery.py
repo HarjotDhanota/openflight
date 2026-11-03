@@ -1128,7 +1128,6 @@ def estimate_chained_delivery(
     head_track: HeadTrackContext | None = None,
     ops_reference: CameraOpsReference | None = None,
     measured_contact: Mapping | None = None,
-    club: str | None = None,
 ) -> ChainedDelivery:
     """Estimate final-approach club delivery from camera, IWR, and OPS.
 
@@ -1357,7 +1356,6 @@ def estimate_chained_delivery(
             else None
         ),
         geometry=geometry,
-        club=club,
     )
     if not pair_estimates:
         if range_evidence is None and geometry.calibrated_model is not None:
@@ -1451,11 +1449,12 @@ def shaft_inclination_deg(points_px: np.ndarray, range_m: float, *, ball, geomet
 
 
 def _shaft_at_contact(
-    frames, background, ball, camera_s, impact_idx, contact_s, *, range_at, geometry, club
+    frames, background, ball, camera_s, impact_idx, contact_s, *, range_at, geometry
 ) -> dict:
     """The lower shaft's inclination at the ball-defined contact: per bracket frame from the
-    shaft line the head anchor walks (heel end, upper end), linear to the contact instant;
-    with the club category's static lie (reference data) as an optional derived field."""
+    shaft line the head anchor walks (heel end, upper end), linear to the contact instant.
+    Absolute, as TrackMan reports it; the club category's static lie is research data the
+    shipped stage does not read."""
     if range_at is None:
         return {"status": "not_measured", "reason": "no head depth (no range evidence)"}
     frames_used = (impact_idx, impact_idx + 1)
@@ -1477,18 +1476,13 @@ def _shaft_at_contact(
     fraction = min(1.0, max(0.0, (contact_s - t0) / (t1 - t0))) if t1 > t0 else 0.5
     a0, a1 = (per_frame[i] for i in frames_used)
     value = a0 + (a1 - a0) * fraction
-    from .dynamic_lie import static_lie_reference  # noqa: PLC0415
-
-    reference = static_lie_reference(club, value)
     return {
         "status": "measured",
         "inclination_deg": value,
         "frames": list(frames_used),
         "per_frame_deg": {str(i): per_frame[i] for i in frames_used},
         "contact_fraction": fraction,
-        "minus_static_lie_deg": reference["shaft_minus_static_lie_deg"] if reference else None,
-        "static_lie_reference": reference,
-        "note": "both shaft points read at the head's range; + minus_static_lie = toe up",
+        "note": "both shaft points read at the head's range",
     }
 
 
