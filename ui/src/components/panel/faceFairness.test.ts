@@ -114,15 +114,19 @@ function distance(p: Point, polyline: Point[]): number {
 
 /* The head rims the face with a band of one width all the way round, as on a real club, except at
  * the heel end where the band runs into the neck: these polar angles about the face centre (deg,
- * 0 heel-ward, 90 up; the drawings are centred on it). */
+ * 0 heel-ward, 90 up; the drawings are centred on it). The iron's runs up to where the face's
+ * straight top line starts (17 deg): its rounded top-heel corner sits under the top line's fillet
+ * into the hosel, which widens the band there as on a real iron. */
 const NECK_DEG: Record<FaceCategory, [number, number]> = {
   driver: [-8, 45],
   fairway: [-2, 43],
   hybrid: [-6, 39],
-  iron: [-32, 8],
+  iron: [-32, 17],
   wedge: [-42, 12],
 };
 const MAX_BAND_RATIO = 1.25;
+/** The smallest radius the top-line-to-hosel fillet of a blade may turn through, mm. */
+const CROTCH_MIN_RADIUS_MM = 10;
 
 const CATEGORIES = Object.keys(FACE_SHAPES) as FaceCategory[];
 const BLADES: readonly FaceCategory[] = ['iron', 'wedge'];
@@ -149,6 +153,49 @@ describe('fair outlines', () => {
       .map((point) => distance(point, head));
     expect(band.length).toBeGreaterThan(100);
     expect(Math.max(...band) / Math.min(...band)).toBeLessThanOrEqual(MAX_BAND_RATIO);
+  });
+
+  /* Real blades run the top line into the hosel through one fillet tangent to both: no dip
+   * under the top line where it meets the neck, and no tight turn in the crotch. */
+  it.each(BLADES)('runs the %s top line into the hosel through a generous fillet', (category) => {
+    for (const d of [FACE_SHAPES[category].head, FACE_SHAPES[category].silhouette]) {
+      const segments = beziers(d).filter(([a, , , b]) => Math.hypot(b[0] - a[0], b[1] - a[1]) >= VISIBLE_MM);
+      const convex = Math.sign(segments.reduce((sum, segment) => sum + local(segment, 0.5).k, 0));
+      const crotch = segments.flatMap((segment) =>
+        Array.from({ length: 41 }, (_, k) => local(segment, k / 40).k).filter((k) => Math.sign(k) === -convex)
+      );
+      expect(1 / Math.max(...crotch.map(Math.abs))).toBeGreaterThanOrEqual(CROTCH_MIN_RADIUS_MM);
+    }
+  });
+
+  it('keeps the iron outline on or above its straight top line until the hosel takes over', () => {
+    const segments = beziers(FACE_SHAPES.iron.head);
+    const length = ([a, , , b]: Bezier) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const straight = segments.filter(([a, c1, c2, b]) => {
+      const off = (c: Point) =>
+        Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / length([a, c1, c2, b]);
+      return Math.max(off(c1), off(c2)) < STRAIGHT_MM;
+    });
+    const topline = straight.reduce((best, segment) => (length(segment) > length(best) ? segment : best));
+    const [[x0, y0], , , [x1, y1]] = topline;
+    const slope = (y1 - y0) / (x1 - x0);
+    // from the top line's heel end to the tube's foot (the next stretch shorter than VISIBLE_MM)
+    const after = segments.slice(segments.indexOf(topline) + 1);
+    const junction = after.slice(
+      0,
+      after.findIndex((segment) => length(segment) < VISIBLE_MM)
+    );
+    expect(junction.length).toBeGreaterThan(0);
+    for (const segment of junction) {
+      for (let k = 0; k <= 40; k += 1) {
+        const [p0, c1, c2, p3] = segment;
+        const t = k / 40;
+        const [a, b, c, e] = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3];
+        const x = a * p0[0] + b * c1[0] + c * c2[0] + e * p3[0];
+        const y = a * p0[1] + b * c1[1] + c * c2[1] + e * p3[1];
+        expect(y).toBeLessThanOrEqual(y0 + slope * (x - x0) + 0.01);
+      }
+    }
   });
 
   it.each(CATEGORIES)('draws the %s face convex, with corners only where designed', (category) => {

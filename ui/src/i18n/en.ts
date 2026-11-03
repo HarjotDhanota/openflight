@@ -261,7 +261,7 @@ export const en = {
   'metricName.club_path': 'Club path',
   'metricName.attack_angle': 'Attack angle',
   'clubViews.title': 'Club views',
-  'clubViews.top': 'Top at address',
+  'clubViews.top': 'Top at impact',
   'clubViews.side': 'Side from heel',
   'faceImpact.title': 'Face impact',
   'faceImpact.toe': 'Toe',

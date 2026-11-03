@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { FaceImpactView } from './FaceImpactView';
 import {
+  BALL_DIAMETER_MM,
   FACE_SHAPES,
+  IMPACT_CROSS,
   faceCategory,
   faceCentre,
   GROOVE_WIDTH_MM,
@@ -601,6 +603,42 @@ describe('FaceImpactView', () => {
     }
   );
 
+  it.each(['right', 'left'] as const)(
+    'marks the %s-handed reading with a bold cross on a contrasting halo, a ball-contact patch wide',
+    (hand) => {
+      const html = render(
+        shot(
+          { impact_location: { status: 'ok', handedness: hand } },
+          { impact_offset: reading(8.64, 4), impact_height: reading(-0.46, 5) }
+        )
+      );
+      // on the reading itself, where the dot and the 1-sigma ellipse sit
+      const at = `translate(${attr(html, 'face-impact__dot', 'cx')} ${attr(html, 'face-impact__dot', 'cy')})`;
+      expect(attr(html, 'face-impact__cross"', 'transform')).toBe(at);
+      expect(attr(html, 'face-impact__ellipse', 'cx')).toBe(attr(html, 'face-impact__dot', 'cx'));
+      // arms a quarter of the ball's diameter: the cross spans the ball's contact patch
+      expect(IMPACT_CROSS.half).toBeCloseTo(BALL_DIAMETER_MM / 4, 9);
+      const h = String(IMPACT_CROSS.half);
+      for (const part of ['face-impact__cross-halo', 'face-impact__cross-core']) {
+        expect(attr(html, `${part}"`, 'd')).toBe(`M -${h} 0 H ${h} M 0 -${h} V ${h}`);
+      }
+      // a heavier stroke than the old marks, inside a wider contrasting halo
+      const [halo, core] = ['face-impact__cross-halo"', 'face-impact__cross-core"'].map((part) =>
+        Number(attr(html, part, 'stroke-width'))
+      );
+      expect(core).toBeGreaterThanOrEqual(1);
+      expect(halo).toBeGreaterThanOrEqual(core + 1);
+      // the halo is drawn first, under the core
+      expect(html.indexOf('face-impact__cross-halo')).toBeLessThan(html.indexOf('face-impact__cross-core'));
+    }
+  );
+
+  it('draws no cross without a read height: the heel-toe bar stands alone', () => {
+    const html = render(shot({}, { impact_height: record({ reason: 'no sole line at contact' }) }));
+    expect(html).toContain('face-impact__bar');
+    expect(html).not.toContain('face-impact__cross');
+  });
+
   it('keeps the decorative contact shape independent of measurement uncertainty', () => {
     const narrow = render(shot({}, { impact_offset: reading(8, 1), impact_height: reading(3, 2) }));
     const wide = render(shot({}, { impact_offset: reading(8, 7), impact_height: reading(3, 9) }));
@@ -705,6 +743,7 @@ describe('FaceImpactView', () => {
     );
     expect(html).toContain(`Not measured: ${reason}`);
     expect(html).not.toContain('face-impact__dot');
+    expect(html).not.toContain('face-impact__cross');
     expect(html).not.toContain('class="face-impact__contact"');
   });
 
