@@ -6,7 +6,16 @@ import { describe, expect, it } from 'vitest';
 import type { Shot, ShotMetric } from '../../types/shot';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { ClubDeliveryViews, ClubProjection, DeliveryNumbers } from './ClubDeliveryViews';
-import { CLUB_PROFILES, VIEW_METRICS, clubProfilePaths, deliveryValue, faceDeliveryRotation } from './clubDelivery';
+import {
+  BLADE_EDGE_BAND_MM,
+  CLUB_PROFILES,
+  VIEW_METRICS,
+  bladeNeck,
+  clubProfilePaths,
+  deliveryValue,
+  faceDeliveryRotation,
+  hoselLayout,
+} from './clubDelivery';
 import { FACE_SHAPES, USGA, type FaceCategory } from './faceImpact';
 
 const clubs = { driver: 'driver', fairway: '3-wood', hybrid: '5-hybrid', iron: '7-iron', wedge: 'sw' };
@@ -70,6 +79,69 @@ function svg(shot: Shot, view: 'top' | 'side') {
 }
 const attr = (element: Element, name: string) => Number(element.getAttribute(name));
 
+type Point = [number, number];
+const cross = (a: Point, b: Point) => a[0] * b[1] - a[1] * b[0];
+/** Flattens an absolute M/L/Q/C/Z path, 24 points per curve. */
+function polygon(d: string): Point[] {
+  const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
+  const points: Point[] = [];
+  let command = '';
+  for (let i = 0; i < tokens.length;) {
+    if (/[MLQCZ]/.test(tokens[i])) command = tokens[i++];
+    if (command === 'Z') continue;
+    const take = (): Point => [Number(tokens[i++]), Number(tokens[i++])];
+    if (command === 'C' || command === 'Q') {
+      const p0 = points[points.length - 1];
+      const controls = command === 'C' ? [take(), take(), take()] : [take(), take()];
+      for (let k = 1; k <= 24; k += 1) {
+        const t = k / 24;
+        let level: Point[] = [p0, ...controls];
+        while (level.length > 1)
+          level = level
+            .slice(1)
+            .map((q, j): Point => [level[j][0] + (q[0] - level[j][0]) * t, level[j][1] + (q[1] - level[j][1]) * t]);
+        points.push(level[0]);
+      }
+    } else points.push(take());
+  }
+  return points;
+}
+/** Distance from p to the closed polyline, and the unit direction of the nearest edge. */
+function nearest(p: Point, poly: Point[]): [number, Point] {
+  let best: [number, Point] = [Infinity, [1, 0]];
+  poly.forEach((a, i) => {
+    const b = poly[(i + 1) % poly.length];
+    const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) return;
+    const t = Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (len * len)));
+    const distance = Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+    if (distance < best[0]) best = [distance, [dx / len, dy / len]];
+  });
+  return best;
+}
+/** The unit direction in which the path's curve ending (or starting) at `at` meets it. */
+function arrival(d: string, at: Point): Point {
+  const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+(?:e-?\d+)?/g)!;
+  const numbers: Point[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (/[MLQCZ]/.test(tokens[i])) continue;
+    numbers.push([Number(tokens[i]), Number(tokens[++i])]);
+  }
+  const k = numbers.findIndex((q) => Math.hypot(q[0] - at[0], q[1] - at[1]) < 1e-3);
+  const neighbour = numbers.slice(k + 1).find((q) => Math.hypot(q[0] - at[0], q[1] - at[1]) > 1e-3)!;
+  const v: Point = [neighbour[0] - at[0], neighbour[1] - at[1]];
+  return [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
+}
+function inside(p: Point, poly: Point[]): boolean {
+  let hit = false;
+  poly.forEach((a, i) => {
+    const b = poly[(i + 1) % poly.length];
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < a[0] + ((p[1] - a[1]) / (b[1] - a[1])) * (b[0] - a[0])) hit = !hit;
+  });
+  return hit;
+}
+
 describe('club delivery drawings', () => {
   it.each(clubHands)('%s %s heel view puts the near-side hosel in front of the head', (category, hand) => {
     const element = svg(shot(category, hand), 'side');
@@ -96,6 +168,15 @@ describe('club delivery drawings', () => {
       expect(element.querySelector('.club-projection__topline')).not.toBeNull();
     }
   });
+  it('titles the top view at impact: it draws the face angle and club path at impact', () => {
+    const html = renderToString(<ClubDeliveryViews shot={shot()} sessionShots={[]} />);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const titles = [...doc.querySelectorAll('.club-views__nav button')].map((button) => button.textContent);
+    expect(titles[1]).toBe('Top at impact');
+    expect(doc.querySelector('[data-view="top"]')!.getAttribute('aria-label')).toBe('Top at impact');
+    expect(html).not.toMatch(/at address/i);
+  });
+
   it('uses kiosk handedness without camera metadata and keeps a recorded shot’s hand', () => {
     const host = document.createElement('div');
     const root = createRoot(host);
@@ -187,6 +268,57 @@ describe('club delivery drawings', () => {
       }
     }
   });
+  /* As in the face view, the blade's top line runs into the hosel through a fillet tangent to
+   * both: the neck leaves the head along the head's own edge, so no notch shows at the join. */
+  it.each(['iron', 'wedge'] as const)('%s top view: the neck leaves the blade tangent to its back edge', (category) => {
+    const paths = clubProfilePaths(category);
+    const neck = bladeNeck(category, 'top');
+    const shell = polygon(paths.top);
+    const [distance, along] = nearest(neck.join, shell);
+    expect(distance).toBeCloseTo(BLADE_EDGE_BAND_MM, 1);
+    expect(Math.abs(cross(along, neck.tangent))).toBeLessThan(Math.sin((2 * Math.PI) / 180));
+    expect(Math.abs(cross(arrival(neck.d, neck.join), neck.tangent))).toBeLessThan(1e-3);
+    // toe-ward of the face's top-heel corner, and the neck covers the shell's band from there round
+    // that corner: no tooth of the blade pokes out past the fillet
+    const heelCorner = paths.top.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+    expect(neck.join[1]).toBeLessThan(heelCorner[1]);
+    const body = polygon(neck.d);
+    const band = BLADE_EDGE_BAND_MM - 0.05;
+    for (let y = neck.join[1] + 0.5; y < heelCorner[1]; y += 0.5) {
+      const xs = shell.flatMap((a, k) => {
+        const b = shell[(k + 1) % shell.length];
+        return (a[1] - y) * (b[1] - y) <= 0 && a[1] !== b[1]
+          ? [a[0] + ((y - a[1]) / (b[1] - a[1])) * (b[0] - a[0])]
+          : [];
+      });
+      const [, edge] = nearest([Math.min(...xs), y], shell);
+      const outward: Point = edge[1] > 0 ? [-edge[1], edge[0]] : [edge[1], -edge[0]];
+      expect(inside([Math.min(...xs) + outward[0] * band, y + outward[1] * band], body)).toBe(true);
+    }
+    for (let a = 90; a <= 270; a += 10) {
+      const t = (a * Math.PI) / 180;
+      expect(inside([heelCorner[0] + band * Math.cos(t), heelCorner[1] + band * Math.sin(t)], body)).toBe(true);
+    }
+  });
+
+  it.each(['iron', 'wedge'] as const)(
+    '%s heel view: the hosel runs into the top line and fills the crotch',
+    (category) => {
+      const p = CLUB_PROFILES[category];
+      const paths = clubProfilePaths(category);
+      const neck = bladeNeck(category, 'side');
+      const layout = hoselLayout(category, 'side');
+      // the top of the top line's rounded cap, met horizontally
+      expect(neck.join[0]).toBeCloseTo(paths.tx - p.topline / 2, 6);
+      expect(neck.join[1]).toBeCloseTo(paths.ty - 1, 6);
+      expect(Math.abs(neck.tangent[1])).toBeLessThan(1e-9);
+      expect(Math.abs(cross(arrival(neck.d, neck.join), neck.tangent))).toBeLessThan(1e-3);
+      // metal between the face's top and the hosel's back edge at the top line's height
+      const shape = polygon(neck.d);
+      expect(inside([(paths.tx + layout.shaftX - layout.ferruleRadius) / 2, paths.ty - 0.5], shape)).toBe(true);
+    }
+  );
+
   it.each(categories)('uses bounded population dimensions for %s, with distinct projections', (category) => {
     const p = CLUB_PROFILES[category];
     const paths = clubProfilePaths(category);

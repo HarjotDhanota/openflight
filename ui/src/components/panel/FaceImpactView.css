@@ -5,6 +5,9 @@
   --face-art-ferrule: #17181a;
   --face-art-ring: rgba(150, 156, 163, 0.55);
   --face-art-collar: #7b8188;
+  /* the impact cross: a vivid core on a dark halo reads on every steel and light face */
+  --face-art-cross: #ff3b2f;
+  --face-art-cross-halo: rgba(10, 12, 14, 0.82);
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   align-items: center;
@@ -62,12 +65,13 @@
   --face-art-centre: rgba(16, 20, 24, 0.5);
 }
 
-/* The hybrid's face is dark too, with light grey lines. */
+/* The hybrid's face is dark too, with light grey lines: its cross takes a light halo. */
 :is(.face-impact, .club-projection)[data-face='hybrid'] {
   --face-art-face-hi: #3e4247;
   --face-art-face-lo: #2b2e32;
   --face-art-groove: #a9afb5;
   --face-art-centre: rgba(236, 240, 244, 0.5);
+  --face-art-cross-halo: rgba(246, 248, 250, 0.85);
 }
 
 .face-impact__figure {
@@ -211,6 +215,19 @@
   stroke-opacity: 0.35;
   stroke-width: 0.35;
   stroke-dasharray: 1.4 1;
+}
+
+.face-impact__cross path {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.face-impact__cross-halo {
+  stroke: var(--face-art-cross-halo);
+}
+
+.face-impact__cross-core {
+  stroke: var(--face-art-cross);
 }
 
 .face-impact__bar {

@@ -6,19 +6,20 @@ import type { Shot } from '../../types/shot';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { LabelBadge } from '../ui/LabelBadge';
 import { FaceImpactView } from './FaceImpactView';
-import { FACE_SHAPES, faceCategory, shotHandedness, type DeliveryShot } from './faceImpact';
+import { BALL_DIAMETER_MM, FACE_SHAPES, faceCategory, shotHandedness, type DeliveryShot } from './faceImpact';
 import {
   CLUB_PROFILES,
   VIEW_METRICS,
+  bladeNeck,
   clubProfilePaths,
   deliveryValue,
   direction,
+  hoselLayout,
   type DeliveryView,
 } from './clubDelivery';
 import { formatMetricValue } from './metricFormat';
 import './ClubDeliveryViews.css';
 
-const BALL_DIAMETER_MM = 42.7; // the ball the shot models use
 const BALL_RADIUS_MM = BALL_DIAMETER_MM / 2;
 
 // Original close packing with tetrahedral symmetry; seeds are unit vectors and radii in mm.
@@ -147,19 +148,12 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
   const rotation = top ? (face ?? 0) * (left ? 1 : -1) : face === null ? 0 : p.loft - face;
   const [ballX, ballY] = direction(top ? 0 : (face ?? p.loft), 119);
   const head = top ? paths.top : paths.side;
-  const shaftX = !p.depth ? paths.bx - p.progression : -p.progression;
-  const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
-  const shaftEnd = top ? shaftY + 24 : -64;
-  const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
-  const ferruleBase = ferruleEnd + (top ? -8 : 8);
-  const ferruleRadius = 4.8 + (1.6 * 8) / Math.abs(ferruleEnd - shaftY);
-  const shaftRadius = 4.6 - (0.4 * (ferruleEnd - shaftY)) / (shaftEnd - shaftY);
-  const crownJoin = shaftY + (top ? -10 : 10);
+  const { shaftX, shaftY, shaftEnd, ferruleEnd, ferruleBase, ferruleRadius, shaftRadius, crownJoin } = hoselLayout(
+    category,
+    view
+  );
   const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
-  const heelCorner = paths.top.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
-  const neck = top
-    ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${ferruleBase - 12} ${heelCorner[0] + 4} ${heelCorner[1] + 6} ${heelCorner[0] - 2} ${heelCorner[1] - 1} L ${heelCorner[0] - 5} ${heelCorner[1] - 9} L ${shaftX + 4} ${heelCorner[1] - 9} C ${shaftX + 4} ${heelCorner[1] + 2} ${shaftX + ferruleRadius} ${ferruleBase - 12} ${shaftX + ferruleRadius} ${ferruleBase} Z`
-    : `M ${paths.bx - 13} ${paths.by - 3} C ${shaftX - 5} ${paths.by - 8} ${shaftX - ferruleRadius} ${shaftY + 8} ${shaftX - ferruleRadius} ${ferruleBase} L ${shaftX + ferruleRadius} ${ferruleBase} C ${shaftX + ferruleRadius} ${shaftY + 18} ${shaftX + 5} ${paths.by - 1} ${paths.bx - 4} ${paths.by} Z`;
+  const neck = p.depth ? '' : bladeNeck(category, view).d;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
   const headYs = coords.filter((_, i) => i % 2 === 1);
@@ -315,7 +309,15 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
           <stop offset="1" stopColor="#fff" />
         </linearGradient>
         <mask id={`${id}joint`}>
-          <path d={p.depth ? woodNeck : neck} fill={`url(#${id}joint-fade)`} />
+          {/* a blade's tube shading stays on the tube; its fillet into the head takes the head's metal */}
+          <path
+            d={
+              p.depth
+                ? woodNeck
+                : `M ${shaftX - ferruleRadius} ${Math.min(...ys) - 10} H ${shaftX + ferruleRadius} V ${Math.max(...ys) + 10} H ${shaftX - ferruleRadius} Z`
+            }
+            fill={`url(#${id}joint-fade)`}
+          />
         </mask>
         <mask
           id={`${id}body`}
