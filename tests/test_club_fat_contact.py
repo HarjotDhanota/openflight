@@ -4,13 +4,15 @@ The contact tangent was a constant-acceleration fit over the four pre-contact fr
 contact (C10b, C18a). On Oct 27 shot 3 the heel reached the hitting surface at f42, ~180 mm
 before the ball, and rode it into contact: a quadratic through 135, 73, 31, 35 mm bends
 upward and read +15.5 deg (research/rig-geometry-lock-2026-11-02/c20/c20b-shot3-club.txt).
-A head on the surface is not in free flight. The tangent now fits only frames whose heel is
-above the surface by more than the heel anchor's own height over the sole
-(HEEL_ANCHOR_ABOVE_SOLE_M: the average iron's hosel foot is 35.2 mm above its sole), within
-the last CONTACT_TANGENT_WINDOW_S of free flight, read where free flight ended. A head that
-reached the surface more than a ball diameter before the ball is a fat contact: the attack
-angle is labelled with how far before the ball, its tier lowered to low, and withheld when
-fewer than three free-flight frames remain.
+A head on the surface is not in free flight. Free flight ends at the first frame whose heel is
+no higher above the surface than the heel anchor's own height over the sole
+(HEEL_ANCHOR_ABOVE_SOLE_M: the average iron's hosel foot is 35.2 mm above its sole) AND whose
+descent has stopped (the next position no lower, within HEAD_HEIGHT_NOISE_M): a head still
+falling is in flight whatever its height reads (C22c). The tangent fits the last
+CONTACT_TANGENT_WINDOW_S of free flight, read where it ended. A head that
+reached the surface more than a ball diameter before the ball is a fat contact: the club
+stage gives no attack angle, with the reason "fat contact: head reached the surface N mm
+before the ball" and the free-flight descent in its note (C22c).
 """
 
 from __future__ import annotations
@@ -95,14 +97,31 @@ def test_oct27_shot3_is_a_fat_contact_read_from_its_free_flight():
     assert "fat contact: head reached the surface 184 mm before the ball" in tangent.note
 
 
-def test_oct27_shot4_reaches_the_surface_at_the_ball_without_a_fat_label():
-    rows, _live = LIVE[4]
+def test_oct27_shot4_is_still_descending_at_the_ball_and_reads_as_before():
+    rows, live = LIVE[4]
     tangent = _tangent(rows)
-    # its last rest frame is on the surface 22 mm from the contact point (within a diameter):
-    # not free flight, so not fitted, but not a fat contact either
+    # its last rest frame reads 32 mm, under the grounded-heel floor, but the head is still
+    # descending (23.7 mm a frame later): free flight, not the surface (C22c)
     assert tangent.fat_contact_mm is None
     assert tangent.free_flight_frames == 4
-    assert tangent.attack_angle_deg == pytest.approx(0.05, abs=0.1)
+    assert tangent.attack_angle_deg == pytest.approx(live, abs=0.05)
+
+
+def test_a_head_still_descending_below_the_floor_is_in_free_flight():
+    # Oct 27 shot 4 on the field fixture's depth (tests/test_camera_club_delivery_field): heels
+    # 25 mm under the live chain's (59, 33.5, 20.1, then 10.1 after contact), still falling ~13
+    # mm a frame: off the surface's datum, never a fat contact 142 mm early
+    rows = [
+        (-16.27, 0.036, 0.1592, 1.161),
+        (-12.66, 0.074, 0.0993, 1.258),
+        (-9.04, 0.100, 0.0590, 1.352),
+        (-5.42, 0.115, 0.0335, 1.446),
+        (-1.81, 0.125, 0.0201, 1.540),
+        (1.81, 0.143, 0.0101, 1.633),
+    ]
+    tangent = _tangent(rows)
+    assert tangent.fat_contact_mm is None
+    assert tangent.attack_angle_deg is not None
 
 
 def test_fewer_than_three_free_flight_frames_withhold_the_attack_angle():
@@ -136,19 +155,27 @@ def test_the_window_is_time_not_a_frame_count():
     )
 
 
-def test_the_club_stage_labels_a_fat_contact_and_lowers_its_tier(monkeypatch):
+def test_the_club_stage_reports_no_attack_angle_on_a_fat_contact(monkeypatch):
+    # C22c (owner, 3 Nov 2026): a head that reached the surface more than a ball diameter
+    # before the ball gives no attack angle; its free-flight descent goes in the note
     from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
 
     case = _shot1_club()
-    # a sole margin high enough that the fixture's f43 (36 mm) rides the surface ~80 mm
-    # before the ball: the stage's wiring of a fat contact, on real frames
+    # a sole margin and a height noise high enough that the fixture's f43 (36 mm, 31 mm a
+    # frame later) rides the surface ~80 mm before the ball: the stage's wiring of a fat
+    # contact, on real frames
     monkeypatch.setattr(cd, "HEEL_ANCHOR_ABOVE_SOLE_M", 0.05)
+    monkeypatch.setattr(cd, "HEAD_HEIGHT_NOISE_M", 0.01)
     result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
 
-    assert result.attack_angle_deg is not None
-    assert result.attack_confidence_tier == "low"
-    assert result.status == "approach_mixed"
-    assert any(note.startswith("fat contact: head reached the surface") for note in result.notes)
+    assert result.attack_angle_deg is None
+    assert result.attack_confidence_tier == "withheld"
+    assert result.club_path_deg is not None and result.status == "approach_path_only"
+    note = next(n for n in result.notes if n.startswith("attack angle not measured: fat contact"))
+    assert "head reached the surface" in note and "mm before the ball" in note
+    assert "free-flight descent" in note and "deg" in note
+    assert result.attack_reason.startswith("fat contact: head reached the surface")
+    assert result.attack_reason.endswith("mm before the ball")
 
 
 def test_a_heel_below_the_surface_itself_leaves_the_surface_out_of_it():

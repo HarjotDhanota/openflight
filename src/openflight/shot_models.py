@@ -204,6 +204,13 @@ def attack_angle_resolution(shot: Shot) -> Resolution:
 
     def camera_fused():
         if head_track or not _finite(fused):
+            # the club stage's own reason when it withheld the attack on purpose (C22c)
+            delivery = (getattr(shot, "camera_fusion_processing", None) or {}).get(
+                "club_delivery"
+            ) or {}
+            reason = delivery.get("attack_reason") if isinstance(delivery, dict) else None
+            if reason:
+                return str(reason)
             return f"no camera fused attack ({shot.experimental_fused_status or 'not run'})"
         if _fused_rejected(shot):
             return f"camera fusion {shot.experimental_fused_status}"

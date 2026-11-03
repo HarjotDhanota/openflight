@@ -278,6 +278,9 @@ class ChainedDelivery:
     head_track: dict | None = None
     # the lower shaft's inclination to the horizon at contact (TrackMan's dynamic lie)
     shaft: dict | None = None
+    # why the attack angle is not measured when the stage withheld it on purpose (C22c:
+    # "fat contact: head reached the surface N mm before the ball"), else None
+    attack_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -429,11 +432,8 @@ def combine_approach_estimates(
     attack_estimate: ApproachPairEstimate | None,
     preferred_path_estimate: ApproachPairEstimate | None = None,
     timing_plausible: bool,
-    attack_tier_cap: str | None = None,
 ) -> ChainedDelivery:
-    """Combine independent impact windows without coupling path and AoA.
-
-    ``attack_tier_cap`` ("low"): the attack angle's tier goes no higher (a fat contact)."""
+    """Combine independent impact windows without coupling path and AoA."""
     notes: list[str] = []
     path_candidates = [
         estimate
@@ -504,8 +504,6 @@ def combine_approach_estimates(
     elif medium_attack and timing_plausible:
         attack_confidence = "medium"
     elif attack_estimate is not None:
-        attack_confidence = "low"
-    if attack_tier_cap == "low" and attack_confidence in ("high", "medium"):
         attack_confidence = "low"
     if attack_estimate is not None and not medium_attack:
         notes.append(
@@ -1420,7 +1418,6 @@ def estimate_chained_delivery(
             return fallback(ChainedDelivery(status="rejected_no_ops_reference", **common), ball)
         return fallback(ChainedDelivery(status="rejected_no_stable_clubhead", **common), ball)
     attack_estimate = pair_estimates.get((-1, 0))
-    attack_tier_cap = None
     if attack_estimate is not None:
         # heights are above the hitting surface: the ball's centre sits its radius over it
         tangent = contact_tangent(
@@ -1431,29 +1428,30 @@ def estimate_chained_delivery(
         )
         if tangent.datum_note is not None:
             notes.append(tangent.datum_note)
-        if tangent.attack_angle_deg is not None:
+        if tangent.fat_contact_mm is not None:
+            # C22c (owner, 3 Nov 2026): the head met the surface before the ball, so no
+            # direction at the ball is measured; its free-flight descent is only a note
+            descent = (
+                f"; its free-flight descent read {tangent.attack_angle_deg:.1f} deg where it "
+                "reached the surface"
+                if tangent.attack_angle_deg is not None
+                else ""
+            )
+            notes.append(f"attack angle not measured: {tangent.reason or tangent.note}{descent}")
+            common["attack_reason"] = tangent.note
+            attack_estimate = None
+        elif tangent.attack_angle_deg is not None:
             notes.append(
                 f"attack angle at contact {tangent.attack_angle_deg:.1f} deg from the "
                 f"pre-contact head positions (the chord a frame before read "
                 f"{attack_estimate.attack_angle_deg:.1f})"
             )
             attack_estimate = replace(attack_estimate, attack_angle_deg=tangent.attack_angle_deg)
-        elif tangent.fat_contact_mm is not None:
-            notes.append(f"attack angle not measured: {tangent.reason}")
-            attack_estimate = None
-        if tangent.fat_contact_mm is not None:
-            attack_tier_cap = "low"
-            if tangent.attack_angle_deg is not None:
-                notes.append(
-                    f"{tangent.note}: the attack angle is the head's descent where its free "
-                    "flight ended, not its direction at the ball; tier low"
-                )
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=attack_estimate,
         preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
-        attack_tier_cap=attack_tier_cap,
     )
     common["notes"] = (*notes, *result.notes)
     if range_evidence is None and (
@@ -1504,6 +1502,11 @@ CONTACT_TANGENT_WINDOW_S = 0.015
 # (the research club-model reference outline, square at its design lie). Oct 27 shots 1, 3
 # and 4 read 32-37 mm at the ball.
 HEEL_ANCHOR_ABOVE_SOLE_M = 0.035
+# A head that has reached the surface stops descending; one still falling is in free flight
+# whatever its height reads (a depth datum a few cm off reads every heel low). Its next
+# position no lower than this below it is a stopped descent (C22c): the head positions'
+# noise floor (club_arc.POSITION_NOISE_FLOOR_M).
+HEAD_HEIGHT_NOISE_M = 0.005
 
 
 @dataclass(frozen=True)
@@ -1550,7 +1553,8 @@ def contact_tangent(
     rested in: a constant-acceleration fit (each axis quadratic in time) over the last
     ``CONTACT_TANGENT_WINDOW_S`` of free flight, differentiated where free flight ended (the
     contact; or the first frame whose heel is within ``HEEL_ANCHOR_ABOVE_SOLE_M`` of
-    ``surface_up_m``). A head that reached the surface more than a ball diameter before the
+    ``surface_up_m`` and whose descent has stopped: the next position no lower than
+    ``HEAD_HEIGHT_NOISE_M`` below it). A head that reached the surface more than a ball diameter before the
     contact point is a fat contact. A heel read below the surface itself shows the heights
     are not on the surface's datum (the anchor rides ``HEEL_ANCHOR_ABOVE_SOLE_M`` over a
     grounded sole): the surface then ends nothing and ``datum_note`` says why. None (with
@@ -1569,7 +1573,17 @@ def contact_tangent(
         surface_up_m = None
     if surface_up_m is not None:
         floor = float(surface_up_m) + HEEL_ANCHOR_ABOVE_SOLE_M
-        landed = next((p for p in pre if p.up_m <= floor), None)
+
+        def rides_the_surface(index: int) -> bool:
+            position = ordered[index]
+            if position.up_m > floor or index + 1 >= len(ordered):
+                return False
+            return ordered[index + 1].up_m >= position.up_m - HEAD_HEIGHT_NOISE_M
+
+        landed = next(
+            (ordered[i] for i in range(len(pre)) if rides_the_surface(i)),
+            None,
+        )
         if landed is not None:
             end_t = landed.t_s
             free = [p for p in pre if p.t_s < landed.t_s]
