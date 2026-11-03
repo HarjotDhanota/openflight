@@ -209,8 +209,6 @@ export function clubProfilePaths(category: FaceCategory, loft: number = CLUB_PRO
     side,
     sideFace: `M ${point(tx, ty)} L ${point(bx, by)}`,
     depth,
-    crown,
-    woodBack,
     heel,
     tx,
     ty,
@@ -222,9 +220,6 @@ export function clubProfilePaths(category: FaceCategory, loft: number = CLUB_PRO
 /** Half the blade shell's 4.8 mm outline stroke: the metal edge band round the projected face. */
 export const BLADE_EDGE_BAND_MM = 2.4;
 
-/** How far the hybrid heel view's tube front stands behind the face top, mm. */
-const HYBRID_TUBE_BEHIND_FACE_TOP_MM = 1.5;
-
 /** Where the shaft, ferrule and hosel sit in the top or heel view (svg mm, before the hand's mirror). */
 export function hoselLayout(category: FaceCategory, view: 'top' | 'side', loft?: number) {
   const p = CLUB_PROFILES[category];
@@ -232,27 +227,18 @@ export function hoselLayout(category: FaceCategory, view: 'top' | 'side', loft?:
   const top = view === 'top';
   // the progression is the leading edge's lead on the hosel axis: from the leading edge in the heel
   // view (the face centre is the origin there), from the front edge in the plan (its origin)
+  const shaftX = !p.depth || !top ? paths.bx - p.progression : -p.progression;
   const shaftY = top ? paths.heel + (p.depth ? -8 : 7) : p.depth ? -p.height + p.faceHeight / 2 + 5 : -24;
   const shaftEnd = top ? shaftY + 24 : -64;
   const ferruleEnd = top ? shaftY + 17 : shaftY - 20;
   const ferruleBase = ferruleEnd + (top ? -8 : 8);
-  const ferruleRadius = 4.8 + (1.6 * 8) / Math.abs(ferruleEnd - shaftY);
-  // a hybrid's heel view: the tube's front edge stands just behind the face top, as the 10-hybrid
-  // side-photo average has it (sleeve front over the face top), so its neck runs down into the face
-  // top at every loft
-  const shaftX =
-    category === 'hybrid' && !top
-      ? paths.tx - HYBRID_TUBE_BEHIND_FACE_TOP_MM - ferruleRadius
-      : !p.depth || !top
-        ? paths.bx - p.progression
-        : -p.progression;
   return {
     shaftX,
     shaftY,
     shaftEnd,
     ferruleEnd,
     ferruleBase,
-    ferruleRadius,
+    ferruleRadius: 4.8 + (1.6 * 8) / Math.abs(ferruleEnd - shaftY),
     shaftRadius: 4.6 - (0.4 * (ferruleEnd - shaftY)) / (shaftEnd - shaftY),
     crownJoin: shaftY + (top ? -10 : 10),
   };
@@ -273,64 +259,6 @@ function cubicHead(p: readonly Point[], t: number): Point[] {
   const [ab, bc, cd] = [lerp(p[0], p[1]), lerp(p[1], p[2]), lerp(p[2], p[3])];
   const [abc, bcd] = [lerp(ab, bc), lerp(bc, cd)];
   return [p[0], ab, abc, lerp(abc, bcd)];
-}
-
-/** A hybrid's neck in the heel view (svg mm before the hand's mirror), the same family at every loft:
- * the front edge one cubic from the tube's front at the ferrule (tangent to the tube) down into the
- * face top, turning one way only, arriving half-way between the tube's line and the face line; the
- * back edge one cubic from the tube's back onto the crown, tangent to both. The 10-hybrid side-photo
- * average (woods-3view/avg_views.json) puts the sleeve's front over the face top and the hosel's
- * junction with the crown about 4 mm above the face top. */
-export function hybridHeelNeck(loft?: number): { d: string; front: Point[]; back: Point[] } {
-  const paths = clubProfilePaths('hybrid', loft);
-  const { shaftX, ferruleBase, ferruleRadius } = hoselLayout('hybrid', 'side', loft);
-  const { tx, ty, bx, by, crown, woodBack } = paths;
-  const [left, right] = [shaftX - ferruleRadius, shaftX + ferruleRadius];
-  // the crown's top edge (front to back), sampled from the heel view's own curves
-  const crownCurve: Point[] = [
-    [tx, ty],
-    [tx - 5, crown],
-    [-woodBack * 0.2, crown],
-    [-woodBack * 0.4, crown + 3],
-  ];
-  const samples = Array.from({ length: 121 }, (_, k) => cubicAt(crownCurve, k / 120));
-  // the back edge lands on the crown 6 mm behind the tube, along the crown there
-  const landing = samples.reduce((best, q) =>
-    Math.abs(q[0] - (left - 6)) < Math.abs(best[0] - (left - 6)) ? q : best
-  );
-  const k = Math.min(Math.max(samples.indexOf(landing), 1), samples.length - 2);
-  const along = unit([samples[k + 1][0] - samples[k - 1][0], samples[k + 1][1] - samples[k - 1][1]]);
-  // one turn only: both handles point at the corner where the tube's line meets the end's tangent
-  const turning = (start: Point, end: Point, arrive: Point): Point[] => {
-    const s = (end[0] - start[0]) / arrive[0];
-    const corner: Point = [start[0], end[1] - arrive[1] * s];
-    const towards = (from: Point, k: number): Point => [
-      from[0] + (corner[0] - from[0]) * k,
-      from[1] + (corner[1] - from[1]) * k,
-    ];
-    return [start, towards(start, 0.62), towards(end, 0.62), end];
-  };
-  const back = turning([left, ferruleBase], landing, along);
-  // the front edge arrives at the face top half-way between straight down and the face line
-  const faceDown = unit([bx - tx, by - ty]);
-  const arrive = unit([faceDown[0], faceDown[1] + 1]);
-  const front = turning([right, ferruleBase], [tx, ty], arrive);
-  // the neck's foot runs along the crown 1 mm inside it, over the crown's rim stroke, from the
-  // landing forward to the face top, so no seam shows where the neck meets the crown
-  const landingAt = samples.indexOf(landing);
-  const inside: Point[] = samples
-    .slice(1, landingAt)
-    .reverse()
-    .map(([x, y]): Point => [x, y + 1]);
-  const d = [
-    `M ${point(...back[0])}`,
-    `C ${point(...back[1])} ${point(...back[2])} ${point(...back[3])}`,
-    ...inside.map((q) => `L ${point(...q)}`),
-    `L ${point(...front[3])}`,
-    `C ${point(...front[2])} ${point(...front[1])} ${point(...front[0])}`,
-    'Z',
-  ].join(' ');
-  return { d, front, back };
 }
 
 /** The top view's neck edges, back (top-line side) and front (leading-edge side): [mm toe-ward of
