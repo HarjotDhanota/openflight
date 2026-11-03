@@ -301,23 +301,28 @@ describe('club delivery drawings', () => {
     }
   });
 
-  it.each(['iron', 'wedge'] as const)(
-    '%s heel view: the hosel runs into the top line and fills the crotch',
-    (category) => {
-      const p = CLUB_PROFILES[category];
-      const paths = clubProfilePaths(category);
-      const neck = bladeNeck(category, 'side');
-      const layout = hoselLayout(category, 'side');
-      // the top of the top line's rounded cap, met horizontally
-      expect(neck.join[0]).toBeCloseTo(paths.tx - p.topline / 2, 6);
-      expect(neck.join[1]).toBeCloseTo(paths.ty - 1, 6);
-      expect(Math.abs(neck.tangent[1])).toBeLessThan(1e-9);
-      expect(Math.abs(cross(arrival(neck.d, neck.join), neck.tangent))).toBeLessThan(1e-3);
-      // metal between the face's top and the hosel's back edge at the top line's height
-      const shape = polygon(neck.d);
-      expect(inside([(paths.tx + layout.shaftX - layout.ferruleRadius) / 2, paths.ty - 0.5], shape)).toBe(true);
+  /* Seen from the heel the hosel stands in front of the lofted face: the gap between its back edge
+   * and the top of the face is open on a real club. The hosel meets the head only at the neck. */
+  it.each(['iron', 'wedge'] as const)('%s heel view: the hosel meets the head only at the neck', (category) => {
+    const p = CLUB_PROFILES[category];
+    const paths = clubProfilePaths(category);
+    const neck = bladeNeck(category, 'side');
+    const layout = hoselLayout(category, 'side');
+    const shape = polygon(neck.d);
+    const head = polygon(paths.side);
+    // open between the face's top and the hosel's back edge, at and just under the top line's cap
+    for (const drop of [0.5, 3, 6]) {
+      const y = paths.ty + drop;
+      const faceX = paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
+      const gap: Point = [(faceX + layout.shaftX - layout.ferruleRadius) / 2, y];
+      expect(inside(gap, shape)).toBe(false);
+      expect(inside(gap, head)).toBe(false);
     }
-  );
+    // the hosel's back edge reaches the head where it crosses the face line, low on the blade
+    expect(neck.join[1]).toBeGreaterThan(paths.ty + p.faceHeight * 0.25);
+    const side = (q: Point) => (q[0] - paths.tx) * (paths.by - paths.ty) - (q[1] - paths.ty) * (paths.bx - paths.tx);
+    expect(Math.abs(side(neck.join))).toBeLessThan(1e-6);
+  });
 
   it.each(categories)('uses bounded population dimensions for %s, with distinct projections', (category) => {
     const p = CLUB_PROFILES[category];

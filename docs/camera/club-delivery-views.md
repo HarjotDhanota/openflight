@@ -95,10 +95,10 @@ point, blade length and face height are unchanged, and so is every part of
 iron face's rounded top-heel corner now sits under that fillet, so the even-rim check stops
 where the face's straight top line starts. In the top view the neck leaves the
 blade's back edge tangent to it, runs on past the face's top-heel corner and sweeps into the
-ferrule. In the heel view the hosel's back edge comes down into the top of the top line's
-rounded cap through a fillet, and the neck fills the crotch between the hosel and the lofted
-face line; the tube's cylindrical shading stays on the tube, so the fillet takes the head's
-metal.
+ferrule; the tube's cylindrical shading stays on the tube, so that sweep takes the head's
+metal. In the heel view the hosel stands in front of the lofted face and meets the head only
+at the neck, low on the blade where its back edge crosses the face line: the gap between the
+hosel and the top of the face is open, as on a real club.
 The top view is titled "Top at impact" because it depicts impact, not address:
 its head is turned by the shot's face angle at impact, its arrows are the face
 angle and club path at impact, and its numbers are face to path, face angle and

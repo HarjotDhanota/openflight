@@ -310,12 +310,14 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
           <stop offset="1" stopColor="#fff" />
         </linearGradient>
         <mask id={`${id}joint`}>
-          {/* a blade's tube shading stays on the tube; its fillet into the head takes the head's metal */}
+          {/* a blade's top-view tube shading stays on the tube; its fillet into the head takes the head's metal */}
           <path
             d={
               p.depth
                 ? woodNeck
-                : `M ${shaftX - ferruleRadius} ${Math.min(...ys) - 10} H ${shaftX + ferruleRadius} V ${Math.max(...ys) + 10} H ${shaftX - ferruleRadius} Z`
+                : top
+                  ? `M ${shaftX - ferruleRadius} ${Math.min(...ys) - 10} H ${shaftX + ferruleRadius} V ${Math.max(...ys) + 10} H ${shaftX - ferruleRadius} Z`
+                  : neck
             }
             fill={`url(#${id}joint-fade)`}
           />

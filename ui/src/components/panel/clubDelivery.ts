@@ -207,17 +207,14 @@ function cubicHead(p: readonly Point[], t: number): Point[] {
 
 /** How far toe-ward of the face's top-heel corner the top view's neck leaves the blade, mm. */
 const TOP_NECK_JOIN_MM = 6;
-/** How far above the top line's cap the heel view's fillet meets the hosel's back edge, mm. */
-const SIDE_NECK_RISE_MM = 10;
 
-/** A blade's neck in the top or heel view, joined to the head as the face view's top line runs into
- * its hosel: one fillet tangent to the head's own edge (`join`, along `tangent`) and to the hosel.
- * Top: the neck leaves the blade's back edge (the shell's band outside the projected top line)
- * toe-ward of the face's top-heel corner and sweeps into the ferrule. Heel view: the hosel's back
- * edge comes down into the top of the top line's rounded cap, and the neck fills the crotch between
- * the hosel and the lofted face line. Svg mm before the hand's mirror. */
+/** A blade's neck in the top or heel view, and where its edge meets the head (`join`, running along
+ * `tangent`). Top: the neck leaves the blade's back edge (the shell's band outside the projected top
+ * line) toe-ward of the face's top-heel corner, tangent to it, and sweeps into the ferrule. Heel
+ * view: the hosel stands in front of the lofted face and meets the head only at the neck, low on the
+ * blade where its back edge crosses the face line; above that the gap to the face is open, as on a
+ * real club. Svg mm before the hand's mirror. */
 export function bladeNeck(category: FaceCategory, view: 'top' | 'side'): { d: string; join: Point; tangent: Point } {
-  const p = CLUB_PROFILES[category];
   const paths = clubProfilePaths(category);
   const { shaftX, shaftY, ferruleBase, ferruleRadius } = hoselLayout(category, view);
   const [left, right] = [shaftX - ferruleRadius, shaftX + ferruleRadius];
@@ -255,7 +252,8 @@ export function bladeNeck(category: FaceCategory, view: 'top' | 'side'): { d: st
     return { d, join, tangent: along };
   }
   const { tx, ty, bx, by } = paths;
-  // the old back edge from the heel's foot up to the ferrule, kept up to where it crosses the face line
+  // the hosel's back edge, from the heel's foot up to the ferrule; it meets the head where it crosses
+  // the face line
   const back: Point[] = [
     [bx - 13, by - 3],
     [shaftX - 5, by - 8],
@@ -269,19 +267,13 @@ export function bladeNeck(category: FaceCategory, view: 'top' | 'side'): { d: st
     if (Math.sign(side(cubicAt(back, mid))) === Math.sign(side(back[0]))) lo = mid;
     else hi = mid;
   }
-  const [, c1, c2, crossing] = cubicHead(back, (lo + hi) / 2);
-  const join: Point = [tx - p.topline / 2, ty - 1];
-  const rise = join[1] - SIDE_NECK_RISE_MM;
-  const run = left - join[0];
+  const t = (lo + hi) / 2;
+  const [, , c2, crossing] = cubicHead(back, t);
   const d = [
     `M ${point(...back[0])}`,
-    `C ${point(...c1)} ${point(...c2)} ${point(...crossing)}`,
-    `L ${point(tx, ty)}`,
-    `Q ${point(tx - p.topline / 4, ty - 1)} ${point(...join)}`,
-    `C ${point(join[0] + run * 0.55, join[1])} ${point(left, rise + SIDE_NECK_RISE_MM * 0.55)} ${point(left, rise)}`,
-    `L ${point(left, ferruleBase)}`,
+    `C ${point(...back[1])} ${point(...back[2])} ${point(...back[3])}`,
     `L ${point(right, ferruleBase)}`,
     `C ${point(right, shaftY + 18)} ${point(shaftX + 5, by - 1)} ${point(bx - 4, by)} Z`,
   ].join(' ');
-  return { d, join, tangent: [1, 0] };
+  return { d, join: crossing, tangent: unit([crossing[0] - c2[0], crossing[1] - c2[1]]) };
 }
