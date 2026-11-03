@@ -806,6 +806,63 @@ def _full_ball_speed_chain(shot: Shot, measured_projection, total_projection) ->
     return {**first, "route": None, "reason": resolution.reason}
 
 
+def _club_full_at_contact(shot: Shot) -> dict:
+    """C11a: the OPS club reading on the camera club stage's head at contact (full_speed).
+
+    The head positions, contact time and the path/attack at contact are the club stage's
+    (camera_fusion_processing); the path is turned back into their measurement frame. The
+    OPS sits at the rig's offset from the lens (the fusion geometry's camera origin). The
+    path and attack sigmas are the arc fit's own, prior-free (club_delivery conditioning);
+    the head's depth sigma is the shot's range sigma. Labels: the club delivery's path and
+    attack, the range's.
+    """
+    from openflight.full_speed import evaluate_full_club_speed_at_contact  # noqa: PLC0415
+    from openflight.rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
+
+    processing = getattr(shot, "camera_fusion_processing", None) or {}
+    stage = processing.get("club_delivery") if isinstance(processing, dict) else None
+    stage = stage if isinstance(stage, dict) else {}
+    payload = shot.club_delivery if isinstance(shot.club_delivery, dict) else {}
+    metrics = payload.get("metrics") or {}
+    path, attack = metrics.get("club_path_deg") or {}, metrics.get("attack_angle_deg") or {}
+    stage_source = ("camera_iwr_chained", "camera_ops_chained")
+    path_deg = stage.get("club_path_deg") if path.get("source") in stage_source else None
+    if path_deg is not None and stage.get("horizontal_offset_deg") is not None:
+        path_deg = float(path_deg) - float(stage["horizontal_offset_deg"])
+    attack_deg = stage.get("attack_angle_deg") if attack.get("source") in stage_source else None
+    ops = None
+    rig = server.rig_geometry
+    geometry = ((getattr(shot, "camera_fusion_context", None) or {}).get("geometry") or {}).get(
+        "parameters"
+    ) or {}
+    origins = (geometry.get("calibrated_model_snapshot") or {}).get("origins") or {}
+    lens = origins.get("camera_origin_lfu")
+    if lens is None and geometry.get("camera_height_m") is not None:
+        lens = [
+            geometry.get("camera_lateral_offset_m") or 0.0,
+            geometry.get("camera_forward_offset_m") or 0.0,
+            geometry["camera_height_m"],
+        ]
+    if lens is not None and getattr(rig, "ops_offset_mm", None) is not None:
+        ops = [a + b for a, b in zip(lens, camera_rdf_offset_to_target_lfu(rig.ops_offset_mm))]
+    sigmas = ((payload.get("arc") or {}).get("conditioning") or {}).get("data_only_sigma") or {}
+    labels = {"club_path": path.get("status"), "attack_angle": attack.get("status")}
+    if getattr(shot, "ball_range_label", None):
+        labels["head_depth"] = shot.ball_range_label
+    return evaluate_full_club_speed_at_contact(
+        radial_mph=shot.club_speed_mph,
+        head_positions=stage.get("head_positions"),
+        contact_t_s=stage.get("contact_t_s"),
+        path_deg=path_deg,
+        attack_deg=attack_deg,
+        ops_position_lfu_m=ops,
+        path_sigma_deg=sigmas.get("club_path_deg"),
+        attack_sigma_deg=sigmas.get("attack_angle_deg"),
+        depth_sigma_m=getattr(shot, "ball_range_uncertainty_m", None),
+        input_labels={name: label for name, label in labels.items() if label},
+    )
+
+
 def _attach_full_speeds(shot: Shot) -> None:
     """E3: full ball speed by measured projection, full club speed and full smash.
 
@@ -904,14 +961,22 @@ def _attach_full_speeds(shot: Shot) -> None:
     # a club reading the ball speed makes implausible: experimental, with why
     from openflight.full_speed import club_speed_doubted  # noqa: PLC0415
 
-    shot.club_speed_full = club_speed_doubted(
-        evaluate_full_club_speed_head_track(
+    # the club stage's head at contact (estimated or better) first, the head track's
+    # (experimental) when the stage has none (C11a)
+    club_full = _club_full_at_contact(shot)
+    if club_full.get("status") == "not_measured":
+        head_track = evaluate_full_club_speed_head_track(
             ops_track=shot.ops_speed_track,
             head_track=delivery.get("head_track"),
             rig=server.rig_geometry,
-        ),
-        shot.club_speed_reason,
-    )
+        )
+        if head_track.get("status") == "not_measured":
+            head_track = {
+                **head_track,
+                "reason": f"{head_track.get('reason')}; at contact: {club_full.get('reason')}",
+            }
+        club_full = head_track
+    shot.club_speed_full = club_speed_doubted(club_full, shot.club_speed_reason)
     shot.smash_factor_full = evaluate_full_smash(shot.ball_speed_full, shot.club_speed_full)
 
 

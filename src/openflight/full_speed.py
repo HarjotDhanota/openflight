@@ -1319,6 +1319,174 @@ def evaluate_full_club_speed_head_track(*, ops_track: Any, head_track: Any, rig:
     }
 
 
+CLUB_CONTACT_SOURCE = (
+    "measured projection: OPS radial club speed + the camera club stage's head position "
+    "and direction at contact + rig geometry"
+)
+CLUB_CONTACT_NOTE = (
+    "the OPS club reading's own time is not recorded on this shot: it is read as the "
+    "speed at contact"
+)
+
+
+def _head_at(positions, t_s: float) -> Optional[np.ndarray]:
+    """The head's (lateral, forward, up) at ``t_s``, linear between the frames that bracket it."""
+    points = sorted(
+        (
+            (float(p["t_s"]), np.array([p["lateral_m"], p["forward_m"], p["up_m"]], dtype=float))
+            for p in positions or ()
+            if all(_finite(p.get(key)) for key in ("t_s", "lateral_m", "up_m", "forward_m"))
+        ),
+        key=lambda item: item[0],
+    )
+    for (t0, p0), (t1, p1) in zip(points, points[1:]):
+        if t0 <= t_s <= t1 and t1 > t0:
+            return p0 + (p1 - p0) * (t_s - t0) / (t1 - t0)
+    return None
+
+
+def _direction_lfu(path_deg: float, attack_deg: float) -> np.ndarray:
+    a, p = math.radians(attack_deg), math.radians(path_deg)
+    return np.array([math.cos(a) * math.sin(p), math.cos(a) * math.cos(p), math.sin(a)])
+
+
+def evaluate_full_club_speed_at_contact(
+    *,
+    radial_mph: Any,
+    head_positions: Any,
+    contact_t_s: Any,
+    path_deg: Any,
+    attack_deg: Any,
+    ops_position_lfu_m: Any,
+    path_sigma_deg: Any = None,
+    attack_sigma_deg: Any = None,
+    depth_sigma_m: Any = None,
+    input_labels: Optional[dict] = None,
+) -> dict:
+    """Full club speed from the OPS radial reading and the club stage's head at contact (C11a).
+
+    The head's position at the ball-defined contact is the club stage's positions linearly
+    between the frames that bracket it; its direction is the stage's path and attack at
+    contact, both in the positions' (measurement) frame. ``LOS`` runs from the OPS to the
+    head; full = radial / (LOS . dir), refused below cos 30 deg (``MIN_PROJECTION``). The
+    range is the root-sum-square of one-at-a-time changes: path, attack (their own 1
+    sigma), the head's depth along the line of sight, the OPS position; a missing sigma
+    leaves it unbounded. The label is the weakest of calculated and ``input_labels``.
+    """
+    base = {
+        "status": NOT_MEASURED,
+        "value_mph": None,
+        "range_mph": None,
+        "source": CLUB_CONTACT_SOURCE,
+        "method": METHOD,
+        "direction_source": "camera_club_stage_at_contact",
+        "min_projection": MIN_PROJECTION,
+        "referred_to": "impact",
+        "reference_point": "clubhead",
+    }
+
+    def refused(reason: str, **extra) -> dict:
+        return {**base, "reason": reason, **extra}
+
+    if not _finite(radial_mph) or float(radial_mph) <= 0.0:
+        return refused("no OPS club reading")
+    if not _finite(contact_t_s):
+        return refused("no ball-defined contact time on the camera clock")
+    if not (_finite(path_deg) and _finite(attack_deg)):
+        return refused("the club stage's direction at contact (path and attack) is not measured")
+    head = _head_at(head_positions, float(contact_t_s))
+    if head is None:
+        return refused("no two club-stage head positions bracket the contact time")
+    ops = _vector(ops_position_lfu_m)
+    if ops is None:
+        return refused("the OPS position is not measured")
+    radial = float(radial_mph)
+
+    def projection(path=0.0, attack=0.0, depth=0.0, ops_shift=(0.0, 0.0, 0.0)) -> float:
+        shifted = ops + np.asarray(ops_shift) / 1000.0
+        los = head - shifted
+        position = head + depth * los / float(np.linalg.norm(los))
+        return _projection(
+            shifted, position, _direction_lfu(float(path_deg) + path, float(attack_deg) + attack)
+        )
+
+    nominal = projection()
+    if not math.isfinite(nominal) or nominal < MIN_PROJECTION:
+        return refused(
+            f"ill-conditioned: LOS . dir = {nominal:.3f}, below {MIN_PROJECTION:.3f} (cos 30 deg)",
+            projection=nominal if math.isfinite(nominal) else None,
+        )
+    value = radial / nominal
+
+    def change(**kwargs) -> float:
+        values = []
+        for sign in (1.0, -1.0):
+            signed = {
+                key: (tuple(sign * v for v in val) if isinstance(val, tuple) else sign * val)
+                for key, val in kwargs.items()
+            }
+            proj = projection(**signed)
+            values.append(
+                abs(radial / proj - value) if math.isfinite(proj) and proj > 0 else math.inf
+            )
+        return max(values)
+
+    sigmas = {
+        "club_path": path_sigma_deg,
+        "attack_angle": attack_sigma_deg,
+        "head_depth": depth_sigma_m,
+    }
+    budget = {}
+    for name, key in (("club_path", "path"), ("attack_angle", "attack"), ("head_depth", "depth")):
+        sigma = sigmas[name]
+        budget[name] = change(**{key: float(sigma)}) if _finite(sigma) else math.inf
+    ops_mm = TOLERANCES["ops_position_mm"]
+    budget["ops_position"] = math.sqrt(
+        sum(
+            change(ops_shift=tuple(ops_mm * (axis == k) for k in range(3))) ** 2
+            for axis in range(3)
+        )
+    )
+    half_width = math.sqrt(sum(term**2 for term in budget.values()))
+    bounded = math.isfinite(half_width)
+    labels = dict(input_labels or {})
+    status = weakest_label(CALCULATED, *labels.values())
+    weak = [
+        f"{name} is {label}"
+        for name, label in labels.items()
+        if label not in (LABEL_MEASURED, CALCULATED)
+    ]
+    return {
+        **base,
+        "status": status,
+        "value_mph": value,
+        "range_mph": [value - half_width, value + half_width] if bounded else None,
+        "range_basis": "root-sum-square of one-at-a-time changes for the stated tolerances"
+        if bounded
+        else "unbounded: an input tolerance is missing",
+        "uncertainty_mph": {
+            name: (term if math.isfinite(term) else None) for name, term in budget.items()
+        },
+        "tolerances": {
+            "club_path_deg": finite_float(path_sigma_deg),
+            "attack_angle_deg": finite_float(attack_sigma_deg),
+            "head_depth_m": finite_float(depth_sigma_m),
+            "ops_position_mm": ops_mm,
+        },
+        "projection": nominal,
+        "input_labels": labels,
+        "weak_inputs": weak,
+        "note": "; ".join([*weak, CLUB_CONTACT_NOTE]),
+        "geometry_m": {
+            "frame": "(lateral, forward, up) metres in the club stage's measurement frame",
+            "ops": ops.tolist(),
+            "head_at_contact": head.tolist(),
+            "direction_at_contact": _direction_lfu(float(path_deg), float(attack_deg)).tolist(),
+        },
+        "reason": None,
+    }
+
+
 def club_speed_doubted(club_full: Any, reason: Optional[str]) -> Any:
     """A full club speed built on a club reading the ball speed makes implausible
     (``Shot.club_speed_reason``): experimental, with why; anything else unchanged."""
