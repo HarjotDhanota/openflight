@@ -290,12 +290,19 @@ def _spin_rate(shot):
         # an OPS reading below the confidence floor is not a measurement: it feeds nothing
         status, note = EXPERIMENTAL, _experimental_spin_note(shot)
     model_spin = _finite(shot.get("spin_rpm_collision"))
+    range_ = None
     if (
         status != MEASURED
         and model_spin is not None
         and model_spin == _finite(shot.get("spin_rpm"))
     ):
         note = _centre_strike_note(shot, collision.get("note"), collision.get("reason"))
+        sigma = _finite(collision.get("sigma"))
+        if sigma is not None:
+            range_ = [model_spin - sigma, model_spin + sigma]
+        if collision.get("contact_flagged"):
+            # a mishit: the collision spin is unvalidated there (C15a)
+            status = EXPERIMENTAL
     return _record(
         "spin_rate",
         shot.get("spin_rpm"),
@@ -303,6 +310,7 @@ def _spin_rate(shot):
         source=_sensor_source(shot, shot.get("spin_method") or source),
         reason=reason,
         note=note,
+        range_=range_,
     )
 
 
@@ -330,6 +338,8 @@ def _spin_axis(shot):
         status = None
     collision = _collision_metric(shot, "spin_axis")
     computed = status in (CALCULATED, MODEL_GEOMETRY, ESTIMATED) and collision
+    if computed and collision.get("contact_flagged"):
+        status = EXPERIMENTAL  # a mishit: the collision axis is unvalidated there (C15a)
     return _record(
         "spin_axis",
         shot.get("spin_axis_deg"),

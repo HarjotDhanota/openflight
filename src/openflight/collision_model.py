@@ -58,6 +58,15 @@ NOTE_NO_FITTED_INDEX = "no fitted index for this club: expected value from its c
 NOTE_CONTACT = "low confidence: possible flier or heavy contact"
 CONTACT_ATTACK_LIMIT_DEG = -2.0
 CONTACT_HEIGHT_LIMIT_MM = 8.0
+# The collision spin against TrackMan (research/rig-geometry-lock-2026-11-02/
+# spin-fullspeed-check/REPORT.md, 3 Nov 2026): clean irons RMSE 9.8 % (n=53, held out);
+# the smash-index band 0.85-0.92 RMSE 86 % (n=9, mean error +59 %). A flagged contact takes
+# the band's sigma and the experimental label; a clean one keeps its label at 10 %.
+SMASH_INDEX_FLAG_PERCENT = 92.0
+CLEAN_SPIN_RMSE_FRACTION = 0.10
+MISHIT_SPIN_RMSE_FRACTION = 0.86
+CONTACT_FLAG_REASON = "contact flagged: collision spin unvalidated on mishits"
+FLAG_NO_LOW_POINT = "no low point"
 NOTE_VERTICAL_PLANE = "no horizontal launch or path: loft from the vertical plane alone"
 NOTE_HORIZONTAL_RATIO = "no vertical launch or attack: face from the horizontal ratio alone"
 SOURCE_HORIZONTAL_RATIO = "D-plane horizontal launch ratio, Wood et al. 2018 weights"
@@ -202,6 +211,10 @@ class Metric:
     note: Optional[str] = None
     # An assumption the value depends on that no observation supports (e.g. centred contact).
     condition: Optional[str] = None
+    # 1 sigma in the value's unit, when the model states one (the collision spin, C15a)
+    sigma: Optional[float] = None
+    # a flagged contact (flier, heavy, thin): the record is experimental (C15a)
+    contact_flagged: bool = False
 
     @property
     def present(self) -> bool:
@@ -209,8 +222,11 @@ class Metric:
 
     def to_dict(self) -> dict:
         record = asdict(self)
-        if record["condition"] is None:
-            del record["condition"]
+        for name in ("condition", "sigma"):
+            if record[name] is None:
+                del record[name]
+        if not record["contact_flagged"]:
+            del record["contact_flagged"]
         return record
 
 
@@ -847,7 +863,7 @@ def contact_flags(
     if impact_height_mm is not None and impact_height_mm > CONTACT_HEIGHT_LIMIT_MM:
         flags.append(f"impact {impact_height_mm:.0f} mm above the face centre")
     if low_point is not None and not low_point.present:
-        flags.append("no low point")
+        flags.append(FLAG_NO_LOW_POINT)
     return flags
 
 
@@ -1073,9 +1089,26 @@ def evaluate(
     flags = contact_flags(
         club, attack_angle, location.get("impact_height_mm"), low_point_distance_mm
     )
+    early_smash = _smash_index(club, ball_speed, club_speed_mph, spin_loft, face, loft)
+    if (
+        club in _IRON_AXIS_CLUBS
+        and early_smash.present
+        and early_smash.value < SMASH_INDEX_FLAG_PERCENT
+    ):
+        flags.append(f"smash index {early_smash.value:.1f} %, below {SMASH_INDEX_FLAG_PERCENT:g} %")
+    # the strike's own evidence of a mishit labels the spin; a missing low point is only
+    # missing data (the head track rarely fixes the arc, C11f): it stays a note
+    mishit = [flag for flag in flags if flag != FLAG_NO_LOW_POINT]
+    if spin.present and mishit:
+        spin = _with_note(spin, CONTACT_FLAG_REASON)
     if spin.present and flags:
         spin = _with_note(spin, f"{NOTE_CONTACT} ({'; '.join(flags)})")
+    if spin.present:
+        fraction = MISHIT_SPIN_RMSE_FRACTION if mishit else CLEAN_SPIN_RMSE_FRACTION
+        spin = replace(spin, sigma=fraction * abs(spin.value), contact_flagged=bool(mishit))
     axis = _axis_metric(centre, impact, spin, bool(location))
+    if axis.present and mishit:
+        axis = replace(_with_note(axis, CONTACT_FLAG_REASON), contact_flagged=True)
     location_note = None
     if len(location) == 1:
         missing = next(
