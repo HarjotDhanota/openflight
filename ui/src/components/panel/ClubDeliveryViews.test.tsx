@@ -14,7 +14,9 @@ import {
   clubProfilePaths,
   deliveryValue,
   faceDeliveryRotation,
+  HYBRID_FLARE_KEPT_T,
   hoselLayout,
+  hybridNeckDown,
   staticLoftLie,
 } from './clubDelivery';
 import { FACE_SHAPES, USGA, clubModel, faceCategory, type FaceCategory } from './faceImpact';
@@ -86,6 +88,13 @@ type Point = [number, number];
 /** The tightest turn either top-view neck edge may make, mm: below this it reads as a corner. */
 const TOP_NECK_MIN_RADIUS_MM = 7;
 const cross = (a: Point, b: Point) => a[0] * b[1] - a[1] * b[0];
+const sub = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1]];
+const unit2 = ([x, y]: Point): Point => [x / Math.hypot(x, y), y / Math.hypot(x, y)];
+/** The cubic with control points p at t. */
+function bezier(p: readonly Point[], t: number): Point {
+  const [a, b, c, e] = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t ** 2, t ** 3];
+  return [a * p[0][0] + b * p[1][0] + c * p[2][0] + e * p[3][0], a * p[0][1] + b * p[1][1] + c * p[2][1] + e * p[3][1]];
+}
 /** Flattens an absolute M/L/Q/C/Z path, 24 points per curve. */
 function polygon(d: string): Point[] {
   const tokens = d.match(/[MLQCZ]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
@@ -576,49 +585,50 @@ describe('club delivery drawings', () => {
   });
 
   /* The heel view as approved at 1192aac1, every club, both hands, no shot: the sha-256 of its
-   * rendered SVG. Its hosel and neck are painted over the face line, so where they overlap the
+   * rendered SVG (5H, 7H and 9H since with their neck flare blended down past the face line; every club since
+   * without the face-centre dot). Its hosel and neck are painted over the face line, so where they overlap the
    * lofted face line runs behind the hosel. */
   const APPROVED_HEEL_VIEWS: Record<string, string> = {
-    '2-iron:right': 'e002399f1cacad6e',
-    '2-iron:left': 'e75c8872107d27a7',
-    '3-iron:right': '0921207e08888bd0',
-    '3-iron:left': 'ad4a3999705279c2',
-    '4-iron:right': 'a9850dc0de737693',
-    '4-iron:left': 'e0012155ae13f9fc',
-    '5-iron:right': '55ae72f8d6e9e5bb',
-    '5-iron:left': '40745c8a0b8e4b64',
-    '6-iron:right': '01db59561765f87a',
-    '6-iron:left': '3156c230c8378ba1',
-    '7-iron:right': '01a5fe8d4cc559db',
-    '7-iron:left': 'e02a6e24a184d23d',
-    '8-iron:right': '4c7520299b3605d3',
-    '8-iron:left': 'fddf8cfd4ac65e37',
-    '9-iron:right': '59de828392381de5',
-    '9-iron:left': '64166d445d38aa1a',
-    'pw:right': '687eb42d31d94011',
-    'pw:left': 'dd57235b38a3a64b',
-    'gw:right': 'a0dedeeb674c8daa',
-    'gw:left': 'a544082c6eecbe36',
-    'sw:right': '936fe98e077219bf',
-    'sw:left': '6121b1f8f4661667',
-    'lw:right': 'aa3f81e7b730e193',
-    'lw:left': '8362ac1ad9813b5c',
-    '3-hybrid:right': '6c2d3192d8c77e88',
-    '3-hybrid:left': '8a8c5bab057578bc',
-    '5-hybrid:right': 'fa44c08287964184',
-    '5-hybrid:left': '2c35eade669bc949',
-    '7-hybrid:right': 'a26cfbf8c4f4812d',
-    '7-hybrid:left': '342ed9445337c65a',
-    '9-hybrid:right': 'b8476ac25ab68294',
-    '9-hybrid:left': 'e2ddbf7f2674b5a6',
-    'driver:right': 'a28d187dc777d223',
-    'driver:left': 'f4a02631a8920580',
-    '3-wood:right': '1a1268e79c944a0e',
-    '3-wood:left': 'b83f198f61d38c2e',
-    '5-wood:right': '5604850e1c3770ea',
-    '5-wood:left': 'aa9bda66becf2b5c',
-    '7-wood:right': '028420ab514a18a4',
-    '7-wood:left': 'c87d1e37d1749708',
+    '2-iron:right': '0ba40f6b01b7b9f3',
+    '2-iron:left': 'cb32c831eb7356bc',
+    '3-iron:right': '7bd25d7ff482d196',
+    '3-iron:left': '60cf0eb34ace066f',
+    '4-iron:right': 'e19843c32f1764ae',
+    '4-iron:left': '2298d7ee501da15e',
+    '5-iron:right': 'bd59b328a7b6c0ac',
+    '5-iron:left': 'b27a7501ada3d301',
+    '6-iron:right': '36d44347731a8914',
+    '6-iron:left': '0fb5f10bf7346549',
+    '7-iron:right': 'd433b6a4b1ae4716',
+    '7-iron:left': 'ce8517b347aa2cee',
+    '8-iron:right': 'd0c96dc5f300d9ca',
+    '8-iron:left': 'd4621f8646e8ded3',
+    '9-iron:right': '55fe6cd8b729e39e',
+    '9-iron:left': '4f11899b9d8b5073',
+    'pw:right': '76f3bdbb60eabf63',
+    'pw:left': 'e846f1a7c8609c18',
+    'gw:right': 'a5f0f241137e06fe',
+    'gw:left': 'c162b64da5decf8e',
+    'sw:right': '4345fc42504235dd',
+    'sw:left': '88ef893b2f438441',
+    'lw:right': 'e57dfa6fd06cd162',
+    'lw:left': '039329fe1e1b7dc9',
+    '3-hybrid:right': '33e26333161a4103',
+    '3-hybrid:left': '8c28fd71de3f1651',
+    '5-hybrid:right': 'da209f92efaccb97',
+    '5-hybrid:left': '3cb3fa6b1382b586',
+    '7-hybrid:right': 'be1d30d9c70bd884',
+    '7-hybrid:left': '6fce2dfeb9298403',
+    '9-hybrid:right': '1c8eb6d0e5f702d7',
+    '9-hybrid:left': '0eca39ea72fb266f',
+    'driver:right': 'eebec2a5ae3b2e3d',
+    'driver:left': '557b5bf1b3937d34',
+    '3-wood:right': 'aed6b20055d1a067',
+    '3-wood:left': 'ed25fc11af5e678a',
+    '5-wood:right': '6d33c850ebb26b0e',
+    '5-wood:left': 'a8ed6e6d370edc02',
+    '7-wood:right': '3403215d3a48214a',
+    '7-wood:left': '4f06360827263243',
   };
   it('pins every selectable club in the approved heel views', () => {
     expect(Object.keys(APPROVED_HEEL_VIEWS).sort()).toEqual(
@@ -642,6 +652,96 @@ describe('club delivery drawings', () => {
       expect(head.lastElementChild).toBe(hosel);
       expect(faceLine.compareDocumentPosition(hosel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(hosel.querySelector('.club-projection__neck')).not.toBeNull();
+    }
+  );
+
+  /* At a hybrid's higher lofts (5H, 7H, 9H) the face lies back so far that the neck's flat foot stood
+   * in front of the face line, a ledge with the face line ending under it. There the flare's own
+   * curve goes on down, longer and gentler, tangent to it and bending the same way, until it passes
+   * behind the face line; the tube, the hosel position and the flare above that stay as approved at
+   * 1192aac1. */
+  it.each(['5-hybrid', '7-hybrid', '9-hybrid'])('blends the %s neck flare down past the face line', (club) => {
+    const { loft } = staticLoftLie(club);
+    const paths = clubProfilePaths('hybrid', loft);
+    const { shaftX, shaftY, ferruleBase, ferruleRadius, crownJoin } = hoselLayout('hybrid', 'side', loft);
+    const down = hybridNeckDown(loft)!;
+    expect(down).not.toBeNull();
+    const element = svg({ ...clubModel(club), impact_location: { handedness: 'right' } } as Shot, 'side');
+    const d = element.querySelector('.club-projection__neck')!.getAttribute('d')!;
+    // the back of the neck is the approved one, and the kiosk draws this front edge
+    const back = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} `;
+    expect(d.startsWith(back)).toBe(true);
+    expect(d.endsWith(down.front)).toBe(true);
+    // the flare kept is the approved flare's own first part, from the ferrule
+    const approved: Point[] = [
+      [shaftX + ferruleRadius, ferruleBase],
+      [shaftX + ferruleRadius, shaftY],
+      [shaftX + 6, crownJoin],
+      [shaftX + 8, crownJoin],
+    ];
+    for (let i = 0; i <= 10; i++) {
+      const u = i / 10;
+      const [x, y] = bezier(down.flare, u);
+      const [ax, ay] = bezier(approved, u * HYBRID_FLARE_KEPT_T);
+      expect(Math.hypot(x - ax, y - ay)).toBeLessThan(1e-9);
+    }
+    // the blend leaves the flare along its tangent: no corner
+    const t0 = unit2([down.flare[3][0] - down.flare[2][0], down.flare[3][1] - down.flare[2][1]]);
+    const t1 = unit2([down.blend[1][0] - down.blend[0][0], down.blend[1][1] - down.blend[0][1]]);
+    expect(down.blend[0]).toEqual(down.flare[3]);
+    expect(Math.abs(cross(t0, t1))).toBeLessThan(1e-9);
+    expect(t0[0] * t1[0] + t0[1] * t1[1]).toBeGreaterThan(0);
+    // one curve from the ferrule to the face line, bending one way only: no reverse
+    const edge = [
+      ...Array.from({ length: 41 }, (_, i) => bezier(down.flare, i / 40)),
+      ...Array.from({ length: 41 }, (_, i) => bezier(down.blend, i / 40)).slice(1),
+    ];
+    const turns = edge.slice(2).map((q, i) => cross(sub(edge[i + 1], edge[i]), sub(q, edge[i + 1])));
+    expect(turns.every((v) => v <= 1e-9)).toBe(true);
+    expect(turns.some((v) => v < -1e-6)).toBe(true);
+    // longer than the approved flare: it ends on the face line below the old foot
+    const faceX = (y: number) => paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
+    expect(down.exit[1]).toBeGreaterThan(crownJoin + 2);
+    expect(down.exit[1]).toBeLessThan(paths.by);
+    expect(down.exit[0]).toBeCloseTo(faceX(down.exit[1]), 6);
+    // in front of the face line until it gets there, and steeper than it there, so it passes behind
+    for (const q of edge.slice(41, -1)) expect(q[0]).toBeGreaterThan(faceX(q[1]) - 1e-6);
+    const leave = unit2(sub(down.blend[3], down.blend[2]));
+    const face = unit2([paths.bx - paths.tx, paths.by - paths.ty]);
+    expect(cross(face, leave)).toBeGreaterThan(0.02);
+    // so the face line is behind the neck from the face top to there
+    const neck = polygon(d);
+    for (let i = 1; i < 20; i++) {
+      const y = paths.ty + ((down.exit[1] - paths.ty) * i) / 20;
+      expect(inside([faceX(y) - 0.01, y], neck)).toBe(true);
+    }
+    // and below that the neck stays inside the head, clear of the sole's outline
+    const head = polygon(paths.side);
+    expect(inside([down.foot[0] - 0.5, down.foot[1] + 0.5], head)).toBe(true);
+    expect(inside([shaftX - 11 + 0.5, paths.by + 0.5], head)).toBe(true);
+  });
+
+  it('keeps the 3-hybrid neck, whose foot is already behind the face line, as approved', () => {
+    expect(hybridNeckDown(staticLoftLie('3-hybrid').loft)).toBeNull();
+  });
+
+  it.each(clubHands)(
+    'draws no face-centre dot in the %s heel view (%s-handed), shot or none; the top view keeps it',
+    (category, hand) => {
+      const dot = (element: Element) =>
+        [...element.querySelectorAll('.club-projection__hand > circle')].filter(
+          (c) => c.getAttribute('cx') === '0' && c.getAttribute('cy') === '0' && c.getAttribute('r') === '1.5'
+        );
+      const withShot = shot(category, hand);
+      const noShot = { ...clubModel(clubs[category]), impact_location: { handedness: hand } } as Shot;
+      for (const s of [withShot, noShot]) {
+        expect(dot(svg(s, 'side'))).toHaveLength(0);
+        expect(dot(svg(s, 'top'))).toHaveLength(1);
+      }
+      // the heel view's arrows still start at the face centre
+      const arrows = [...svg(withShot, 'side').querySelectorAll('.club-projection__arrow')];
+      expect(arrows.length).toBeGreaterThan(0);
+      for (const a of arrows) expect([a.getAttribute('x1'), a.getAttribute('y1')]).toEqual(['0', '0']);
     }
   );
 
