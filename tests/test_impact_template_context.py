@@ -6,26 +6,21 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from openflight.camera import impact_live, impact_session
+from openflight.camera import impact_session
 
 
 @pytest.mark.parametrize("change", ["hand", "mode", "optics", "equipment", "camera"])
 def test_context_switch_does_not_reuse_previous_template(change):
-    analyser = impact_live.LiveAnalyser()
+    # the offline outline tool's partition (impact_session); the live chain has no
+    # learned outline since C22b
     clip = SimpleNamespace(
         club="7-iron",
         handedness="right",
         frame_size="640x400",
-        extra={"template_capture_context": "mode1"},
-        range_source="test",
-        error=None,
-        prepared=SimpleNamespace(contact=SimpleNamespace(status="bad", reason="test")),
+        extra={"template_capture_context": "mode1", "equipment_id": "club1"},
+        prepared=SimpleNamespace(),
     )
-    analyser._prepare = lambda _: clip
-    job = {"session_uuid": "s", "equipment_id": "club1"}
-    analyser.analyse(job)
-    old = next(iter(analyser._pools.values()))
-    old.template, old.built_from = "old_template", 5
+    old = impact_session.template_context_key(clip)
     if change == "hand":
         clip.handedness = "left"
     elif change == "mode":
@@ -33,15 +28,12 @@ def test_context_switch_does_not_reuse_previous_template(change):
     elif change == "optics":
         clip.extra["optics_template_key"] = "new_optics"
     elif change == "equipment":
-        job["equipment_id"] = "short_hosel_club2"
+        clip.extra["equipment_id"] = "short_hosel_club2"
     else:
         clip.prepared.camera = SimpleNamespace(
             focal_px=1200.0, principal_point_px=(320.0, 200.0), source="different_nominal_lens"
         )
-    result = analyser.analyse(job)
-    assert result["template"]["built_from"] is None
-    assert len(analyser._pools) == 2
-    assert old.template == "old_template"
+    assert impact_session.template_context_key(clip) != old
 
 
 def test_loader_fingerprints_recorded_controls_and_mode_without_claiming_calibration(tmp_path):

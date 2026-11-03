@@ -1026,3 +1026,66 @@ def test_the_cli_flag_writes_the_placement_report_and_overlays(tmp_path):
     overlay = out / "overlays" / f"placement_{CLIP}.png"
     assert overlay.is_file()
     assert not (out / "impact_location.json").exists()
+
+
+# --- C22b: the placement degrades within itself; no hand-off to another route --------------
+
+
+def _hide_toe_on(monkeypatch, hidden_frames):
+    """The toe edge is not found on ``hidden_frames`` (glare, blur, a dark toe)."""
+    fit_frame, silhouette = ip._Placer.fit_frame, ip._Placer.silhouette  # pylint: disable=protected-access
+
+    def fit(self, inputs, record, *args, **kwargs):
+        self._hiding = record.index in hidden_frames  # pylint: disable=protected-access
+        try:
+            return fit_frame(self, inputs, record, *args, **kwargs)
+        finally:
+            self._hiding = False  # pylint: disable=protected-access
+
+    def edge(self, inputs, axes, origin, rotation, part):
+        if part == "toe" and getattr(self, "_hiding", False):
+            return np.zeros((0, 2)), np.zeros((0, 2)), np.zeros((0, 3))
+        return silhouette(self, inputs, axes, origin, rotation, part)
+
+    monkeypatch.setattr(ip._Placer, "fit_frame", fit)  # pylint: disable=protected-access
+    monkeypatch.setattr(ip._Placer, "silhouette", edge)  # pylint: disable=protected-access
+
+
+def test_a_frame_without_its_toe_edge_takes_its_heel_toe_from_the_other_frame(monkeypatch):
+    # Oct 27 shot 4: f45's toe edge had 2 samples (needs 4), its shaft rows all refused. The
+    # carry rides the club's direction, so the swing's own path and attack go in, as the
+    # live chain hands the placement the shot's club delivery
+    frames, ball = render(strike_u=8.0, strike_v=-11.0)
+    shot = prepare(frames, ball)
+    swing = {
+        "club_path": il.Labelled(PATH_DEG, 2.0, "test: the rendered path"),
+        "attack_angle": il.Labelled(ATTACK_DEG, 2.0, "test: the rendered attack"),
+    }
+    clean = place(shot, **swing)
+    after = shot.contact.last_rest_frame + 1
+    _hide_toe_on(monkeypatch, {after})
+    result = place(shot, **swing)
+
+    assert result.status == "ok", result.reason
+    assert result.height_status == "ok", result.height_reason
+    assert abs(result.impact_offset_mm - 8.0) <= result.impact_offset_sigma_mm
+    assert result.impact_offset_sigma_mm > clean.impact_offset_sigma_mm
+    edges = result.diagnostics["frames"][str(after)]["edges"]["toe"]
+    assert edges["accepted"] == 0 and edges["carried_from_frame"] == after - 1
+    assert edges["carried_sigma_mm"] > 0
+    assert any(
+        note.startswith(f"toe edge not found on frame {after}: its heel-toe carried from frame")
+        for note in result.notes
+    )
+    assert "toe_carried_mm" in result.diagnostics["offset_uncertainty_budget_mm"]
+
+
+def test_with_no_toe_edge_on_either_frame_the_placement_refuses_by_name(monkeypatch):
+    frames, ball = render(strike_u=8.0, strike_v=-11.0)
+    shot = prepare(frames, ball)
+    rest = shot.contact.last_rest_frame
+    _hide_toe_on(monkeypatch, {rest, rest + 1})
+    result = place(shot)
+
+    assert result.status == "rejected"
+    assert result.reason.startswith(f"toe_edge_not_found_on_frame_{rest}_0_samples")

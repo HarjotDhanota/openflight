@@ -170,15 +170,20 @@ def test_live_clip_publishes_lie_with_whatever_route_reads_the_impact(tmp_path, 
 
 
 @pytest.mark.parametrize("hand", ["right", "left"])
-def test_live_clip_publishes_lie_before_the_impact_outline_is_ready(tmp_path, hand):
+def test_live_clip_publishes_lie_when_the_placement_refuses(tmp_path, hand, monkeypatch):
+    from openflight.camera import impact_placement as ip
     from openflight.camera.impact_live import LiveAnalyser
     from tests.every_metric import fusion_shot
-    from tests.test_impact_live import OUTLINE_ONLY
 
-    # the outline route alone: placement, which needs no outline, would read this shot
-    reading = LiveAnalyser(routes=OUTLINE_ONLY).analyse(_shaft_job(tmp_path, hand))
+    # the shaft reader's lie stands on its own: an impact the placement cannot read
+    # (C22b: no other route) still carries it
+    def refuse(shot, orientation, **kwargs):
+        return ip.ImpactPlacement("rejected", "toe_edge_not_found_on_frame_10_2_samples")
+
+    monkeypatch.setattr(ip, "place_impact", refuse)
+    reading = LiveAnalyser().analyse(_shaft_job(tmp_path, hand))
     assert reading["status"] == "rejected"
-    assert reading["reason_code"] == "building_the_head_outline"
+    assert reading["reason_code"] == "toe_edge_not_found_on_frame_10_2_samples"
     metric = fusion_shot(impact_location=reading).to_dict()["metrics"]["dynamic_lie"]
     assert metric["value"] == pytest.approx(60, abs=1.5), reading
     assert metric["status"] == "model_geometry"

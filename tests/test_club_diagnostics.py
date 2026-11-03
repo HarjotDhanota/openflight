@@ -133,8 +133,8 @@ def test_opted_in_analysis_preserves_synthetic_legacy_metrics(tmp_path):
     from test_impact_live import Session
 
     job = Session(tmp_path).job()
-    off = impact_live.LiveAnalyser(swings_needed=1).analyse(job)
-    on = impact_live.LiveAnalyser(swings_needed=1, club_part_diagnostics=True).analyse(job)
+    off = impact_live.LiveAnalyser().analyse(job)
+    on = impact_live.LiveAnalyser(club_part_diagnostics=True).analyse(job)
     for key in (
         "status",
         "impact_offset_mm",
@@ -162,7 +162,7 @@ def test_missing_metric_range_does_not_prevent_image_only_club_observations(tmp_
     assert extra["window_selection"]["source"] == "image_departure_only"
     assert extra["window_selection"]["first_touch_interval_ns"] is None
     assert extra["physical_pose"] is extra["strike"] is None
-    assert observed["template"]["swings"] == 0
+    assert "template" not in observed  # no learned outline on the live chain (C22b)
 
 
 def test_image_only_selection_does_not_modify_the_metric_preparation(tmp_path):

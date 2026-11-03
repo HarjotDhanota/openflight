@@ -2,8 +2,8 @@
 """How long the kiosk's live impact reading takes per shot on this machine. EXPERIMENTAL.
 
 Runs ``openflight.camera.impact_live.LiveAnalyser`` the way the kiosk's worker
-does: one shot at a time, in order, with the idle-time outline refresh after
-each. Prints every shot's reading time by stage and a summary.
+does: one shot at a time, in order (the placement, the one impact model). Prints
+every shot's reading time by stage and a summary.
 
     uv run python scripts/analysis/impact_live_benchmark.py --synthetic 10 [--size 1280x800]
     uv run python scripts/analysis/impact_live_benchmark.py SESSION [--range-m 1.6]
@@ -21,7 +21,6 @@ import json
 import statistics
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import numpy as np
@@ -113,23 +112,19 @@ def main(argv: list[str] | None = None) -> int:
             jobs = session_jobs(args.session, args.range_m)
         else:
             parser.error("give a SESSION folder or --synthetic N")
-        totals, refreshes = [], []
+        totals = []
         for job in jobs:
             reading = analyser.analyse(job)
-            started = time.perf_counter()
-            analyser.refresh()
-            refreshes.append((time.perf_counter() - started) * 1000.0)
             totals.append(reading["analysis_ms"])
             stages = " ".join(f"{k}={v:.0f}" for k, v in reading["stages_ms"].items())
             print(
                 f"shot {job['shot_number']}: {reading['analysis_ms']:7.0f} ms ({stages}) "
-                f"refresh after {refreshes[-1]:6.0f} ms  {reading['status']}: "
+                f"{reading['status']}: "
                 f"{reading.get('reason') or reading.get('impact_offset_mm')}"
             )
     print(
         f"{len(totals)} shots at {reading['analysis_frame_size']}: reading median "
-        f"{statistics.median(totals):.0f} ms, max {max(totals):.0f} ms; idle refresh max "
-        f"{max(refreshes):.0f} ms"
+        f"{statistics.median(totals):.0f} ms, max {max(totals):.0f} ms"
     )
     return 0
 

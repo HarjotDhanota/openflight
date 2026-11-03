@@ -8,21 +8,19 @@ post-session method of ``openflight.camera.impact_location`` and
 - once a shot with a saved camera clip has been shown, its clip goes to a
   worker process at low priority, which never holds up the kiosk, the next shot,
   the ready light or the camera;
-- each shot is read by ONE ``source_chain`` resolution over ``ROUTES``, in order:
-  ``placement`` (``impact_placement``: the category's club model placed at the
-  shot's orientation, which needs no outline from earlier swings), then
-  ``outline_2d`` (``impact_location``'s 2D outline estimator) when placement
-  refuses. The orientation is ``impact_placement.orientation_for_shot``'s: the
-  shot's capture-bound angles, else its own D-plane outputs, else the category
-  priors, each labelled. Every route's refusal is kept in ``resolution.tried``;
-  the record names the route, the label of its weakest input
+- each shot is read by ONE impact model, the placement (``impact_placement``: the
+  category's club model, the club-type geometry TrackMan uses too, placed at the
+  shot's orientation), as a one-route ``source_chain`` resolution. The placement
+  degrades within itself (a frame without its toe edge takes its heel-toe from the
+  other bracket frame, carried by the club's motion, labelled) and, when it cannot
+  place, the impact is not measured with the placement's own reason. The 2D outline
+  learned from a session's earlier swings (``impact_location``/``impact_session``)
+  is an offline research tool only, never a live route (owner, 3 Nov 2026; C22b).
+  The orientation is ``impact_placement.orientation_for_shot``'s: the shot's
+  capture-bound angles, else its own D-plane outputs, else the category priors,
+  each labelled. The record names the route, the label of its weakest input
   (``input_label``/``weakest_inputs``), the orientation's origin, and the
-  diagnostics of every route that ran;
-- for the outline route the worker keeps a running head outline per (club, frame
-  size) from this session's swings so far, built once the club has
-  ``swings_needed`` swings with a head in them and rebuilt from the latest ones
-  while the worker is idle (a new shot interrupts the rebuild). The swings pool
-  their SHAPE only; every reading is the shot's own;
+  placement's diagnostics;
 - clips wider than ``analysis_max_width`` are averaged down to it first, which
   keeps a reading to a few seconds on a Pi 5;
 - the reading goes on ``Shot.impact_location`` and out as a shot update. Its two
@@ -52,7 +50,7 @@ import threading
 import time
 from collections import deque
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -62,23 +60,18 @@ from openflight.source_labels import LABEL_ESTIMATED, LABEL_MEASURED
 logger = logging.getLogger(__name__)
 
 SCHEMA = "openflight.impact_location.live.v1"
-SWINGS_NEEDED = 5
-POOL_MAX_SWINGS = 8
 ANALYSIS_MAX_WIDTH = 640
 WORKER_NICE = 10
-IDLE_REFRESH_S = 0.5
 STOP_WAIT_S = 3.0
 RECENT_CLIPS = 32
 START_KEYS = ("golfer", "rig_geometry", "target_line", "tee_range_handoff")
-PLACEMENT, OUTLINE_2D = "placement", "outline_2d"
-# The one resolution's routes, strongest first (G3): a route may be left out (research,
-# tests), never reordered or added to.
-ROUTES = (PLACEMENT, OUTLINE_2D)
+PLACEMENT = "placement"
+# The one impact model (C22b): the placement, degrading within itself; no hand-off.
+ROUTES = (PLACEMENT,)
 RESOLVED_INPUT = "impact_location"
 OPS_CLUB_SPEED = "shot_ops_club_speed"
 OWN_SHOT_IWR_RANGE = "shot_iwr_post_impact"
 
-BUILDING_CODE = "building_the_head_outline"
 DROPPED_CODE = "dropped_the_next_shot_arrived"
 DROPPED_REASON = "dropped: the next shot arrived before this one was read"
 STOPPED_REASON = "the impact analysis stopped before it read this shot"
@@ -142,47 +135,22 @@ def _number(value: Any, digits: int = 2) -> float | None:
     return round(number, digits) if math.isfinite(number) else None
 
 
-@dataclass
-class _Pool:
-    """One (club, frame size)'s swings with a head in them, and the outline built from them."""
-
-    samples: list = field(default_factory=list)
-    template: Any = None
-    built_from: int | None = None
-    version: int = 0
-    built_version: int = -1
-
-
 class LiveAnalyser:
-    """Reads one shot at a time: placement, else the running per-club outline (EXPERIMENTAL).
+    """Reads one shot at a time with the placement, the one impact model (EXPERIMENTAL)."""
 
-    ``routes`` is ``ROUTES`` on the kiosk; research and the outline's own tests may keep
-    a part of it, in its order.
-    """
-
-    def __init__(  # pylint: disable=too-many-arguments
+    def __init__(
         self,
         *,
-        swings_needed: int = SWINGS_NEEDED,
-        pool_max_swings: int = POOL_MAX_SWINGS,
         analysis_max_width: int | None = ANALYSIS_MAX_WIDTH,
         lens_id: str | None = None,
         club_part_diagnostics: bool = False,
-        routes=ROUTES,
     ):
-        routes = tuple(routes)
-        if not routes or list(routes) != [name for name in ROUTES if name in routes]:
-            raise ValueError(f"routes must be {ROUTES} or a part of it in that order")
-        self.routes = routes
-        self.swings_needed = max(1, int(swings_needed))
-        self.pool_max_swings = max(self.swings_needed, int(pool_max_swings))
+        self.routes = ROUTES
         self.analysis_max_width = analysis_max_width
         self.lens_id = lens_id
         if not isinstance(club_part_diagnostics, bool):
             raise ValueError("club_part_diagnostics must be boolean")
         self.club_part_diagnostics = club_part_diagnostics
-        self._pools: dict[str, _Pool] = {}
-        self._session: Any = object()
 
     def _prepare(self, job: Mapping[str, Any]):
         from openflight.camera import impact_session  # noqa: PLC0415
@@ -205,24 +173,14 @@ class LiveAnalyser:
         impact_session.prepare_clip(clip, {path.parent: run}, {}, options)
         return clip
 
-    def _template_note(self, pool: _Pool) -> dict[str, Any]:
-        return {
-            "swings": len(pool.samples),
-            "needed": self.swings_needed,
-            "built_from": pool.built_from,
-        }
-
     def analyse(  # pylint: disable=too-many-return-statements
         self, job: Mapping[str, Any], should_stop: Callable[[], bool] | None = None
     ) -> dict[str, Any]:
         """One shot's reading: ok with both axes, or refused with a named reason."""
-        from openflight.camera import impact_location as il, impact_session  # noqa: PLC0415
+        from openflight.camera import impact_location as il  # noqa: PLC0415
 
         started = time.perf_counter()
         stop = should_stop or (lambda: False)
-        if job.get("session_uuid") != self._session:
-            self._pools.clear()
-            self._session = job.get("session_uuid")
         stages: dict[str, float] = {}
         clip = self._prepare(job)
         stages["prepare_ms"] = (time.perf_counter() - started) * 1000.0
@@ -256,14 +214,8 @@ class LiveAnalyser:
                     "strike": None,
                 }
             stages["club_diagnostics_ms"] = (time.perf_counter() - diagnostic_started) * 1000
-        pool_key = f"{clip.club}_{clip.frame_size}"
-        pool_key += "_" + impact_session.template_context_key(
-            clip, equipment_id=job.get("equipment_id")
-        )
-        pool = self._pools.setdefault(pool_key, _Pool())
 
         def finish(reading: dict[str, Any]) -> dict[str, Any]:
-            reading.setdefault("template", self._template_note(pool))
             reading["analysis_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
             for key, value in stages.items():
                 stages[key] = round(value, 1)
@@ -279,12 +231,6 @@ class LiveAnalyser:
             shared = prepared.contact.reason
         else:
             shared = None
-        has_head = shared is None and bool(prepared.masks and prepared.masks.masks)
-        if has_head:
-            pool.samples = (pool.samples + [replace(prepared, frames=prepared.frames[:0])])[
-                -self.pool_max_swings :
-            ]
-            pool.version += 1
         if shared is None and stop():
             return finish(_dropped())
         readings: dict[str, dict[str, Any]] = {}
@@ -308,24 +254,9 @@ class LiveAnalyser:
             readings[PLACEMENT] = _with_inputs(reading, clip, orientation, ip.ANGLES)
             return _candidate(readings[PLACEMENT], "impact_placement")
 
-        def outline_2d() -> source_chain.RouteResult:
-            from openflight.camera import impact_placement as ip  # noqa: PLC0415
-
-            if shared is not None:
-                return shared
-            reading = self._outline_reading(clip, pool, has_head, stages, stop)
-            readings[OUTLINE_2D] = _with_inputs(
-                reading,
-                clip,
-                ip.orientation_from_face_inputs(clip.face),
-                ("face_angle", "dynamic_loft"),
-            )
-            return _candidate(readings[OUTLINE_2D], "impact_location_2d_outline")
-
         run_start = {"config": dict(job.get("start") or {})}
-        producers = {PLACEMENT: placement, OUTLINE_2D: outline_2d}
         resolution = source_chain.resolve(
-            RESOLVED_INPUT, [source_chain.Route(name, producers[name]) for name in self.routes]
+            RESOLVED_INPUT, [source_chain.Route(PLACEMENT, placement)]
         )
         record = {
             "route": resolution.route,
@@ -337,62 +268,11 @@ class LiveAnalyser:
             return finish({**_shown(readings[resolution.route]), **record})
         if any(why == DROPPED_CODE for _name, why in resolution.tried):
             return finish({**_dropped(), **record})
-        # Nothing read: the reason shown is the last route's (the fallback's), with
-        # every route's refusal in ``resolution.tried``.
-        last = next((readings[name] for name in reversed(self.routes) if name in readings), None)
+        # Nothing read: the placement's own reason, kept in ``resolution.tried`` too.
+        last = readings.get(PLACEMENT)
         if last is None:
             last = _refused(_error_code(resolution.tried[-1][1]))
         return finish({**_shown(last), "weakest_inputs": [], **record})
-
-    def _outline_reading(self, clip, pool: _Pool, has_head, stages, stop) -> dict[str, Any]:
-        """The 2D outline route: build this club's outline from its swings, then read."""
-        from openflight.camera import impact_location as il  # noqa: PLC0415
-
-        prepared = clip.prepared
-        if pool.template is None:
-            if len(pool.samples) < self.swings_needed:
-                if not has_head:
-                    return _refused(il.locate_impact(prepared, None, face=clip.face).reason)
-                words = (
-                    f"building the head outline: {len(pool.samples)} of {self.swings_needed} "
-                    "swings with this club"
-                )
-                return {**_refused(BUILDING_CODE), "reason": words, "height_reason": words}
-            built = time.perf_counter()
-            template, why = il.build_self_template(pool.samples, club=clip.club)
-            stages["template_ms"] = (time.perf_counter() - built) * 1000.0
-            if template is None:
-                return _refused(f"head_outline_did_not_build_{why}")
-            pool.template, pool.built_from, pool.built_version = (
-                template,
-                len(pool.samples),
-                pool.version,
-            )
-        if stop():
-            return _dropped()
-        located = time.perf_counter()
-        location = il.locate_impact(prepared, pool.template, face=clip.face)
-        stages["locate_ms"] = (time.perf_counter() - located) * 1000.0
-        reading = _reading(location, clip)
-        reading["diagnostics"] = _plain(location.diagnostics)
-        return reading
-
-    def refresh(self, should_stop: Callable[[], bool] | None = None) -> bool:
-        """Rebuild one outline that has new swings since it was built; True when one was."""
-        from openflight.camera import impact_location as il  # noqa: PLC0415
-
-        for key, pool in self._pools.items():
-            if pool.template is None or pool.version == pool.built_version:
-                continue
-            version, samples = pool.version, list(pool.samples)
-            template, why = il.build_self_template(samples, club=key, should_stop=should_stop)
-            if template is None:
-                if why != "stopped":
-                    pool.built_version = version
-                return False
-            pool.template, pool.built_from, pool.built_version = template, len(samples), version
-            return True
-        return False
 
 
 def _refused(code: str) -> dict[str, Any]:
@@ -435,6 +315,7 @@ def _reading(location, clip) -> dict[str, Any]:
         "impact_height_mm": _number(location.impact_height_mm) if height_ok else None,
         "impact_height_sigma_mm": _number(location.impact_height_sigma_mm) if height_ok else None,
         "contact_frame": location.contact_frame,
+        "notes": list(getattr(location, "notes", ()) or ()),
         "face_centre_height_source": face.face_centre_height.source if face else None,
         "face_centre_from_toe_source": face.face_centre_from_toe.source if face else None,
         "dynamic_loft_source": face.dynamic_loft.source if face else None,
@@ -581,11 +462,7 @@ def worker_main(argv: list[str]) -> int:
 
     threading.Thread(target=read_commands, name="impact-live-commands", daemon=True).start()
     while True:
-        try:
-            job = jobs.get(timeout=IDLE_REFRESH_S)
-        except queue.Empty:
-            analyser.refresh(should_stop=lambda: not jobs.empty())
-            continue
+        job = jobs.get()
         if job is None:
             return 0
         job_id = int(job["job_id"])

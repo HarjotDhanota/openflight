@@ -770,6 +770,9 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
         self.after_background, self.after_background_source = self._post_departure_background()
         self._frames: dict[int, _Frame] = {}
         self.shaft_enabled = True
+        # the club's direction in the face plane is known to this (path and face sigmas,
+        # rad): it widens a heel-toe carried from one bracket frame to the other (C22b)
+        self.motion_sigma_rad = math.radians(PATH_PRIOR_SIGMA_DEG)
         self._shafts: dict[int, dict[str, Any] | None] = {}
 
     # -- images --
@@ -1366,7 +1369,50 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
             fits[index] = self.fit_frame(
                 inputs, record, start, normal_mm, velocity * factor, coarse=coarse
             )
-        return fits
+        return self._carry_toe(inputs, fits, frames, axes, velocity, contact)
+
+    def _motion_ms(self, index: int, contact: float) -> float:
+        """The frame's time from contact as the head covers it (slowed after contact)."""
+        elapsed = self._time(index) - contact
+        return elapsed * (1.0 if elapsed <= 0.0 else il.POST_IMPACT_SPEED_FRACTION)
+
+    def _carry_toe(self, inputs, fits, frames, axes, velocity, contact):
+        """C22b: a bracket frame whose toe edge was not found takes its heel-toe from the
+        other frame's, carried by the club's motion between them (the start every frame's
+        fit takes), and its sole is refitted there; the carry's sigma is the travel times
+        the club direction's sigma in the face plane. Both frames without a toe edge: the
+        fits stand as they are (the placement refuses by name)."""
+        missing = [
+            f
+            for f in frames
+            if fits[f].edges.get("toe", {}).get("accepted", 0) < MIN_EDGE_SAMPLES["toe"]
+        ]
+        if len(missing) != 1:
+            return fits
+        lost = missing[0]
+        kept = frames[0] if lost == frames[1] else frames[1]
+        moved = self._motion_ms(lost, contact) - self._motion_ms(kept, contact)
+        carried = fits[kept].toe_mm - float(velocity @ axes[0]) * moved
+        sigma = float(np.linalg.norm(velocity)) * abs(moved) * self.motion_sigma_rad
+        record = self.frame(lost)
+        factor = 1.0 if record.time_ms - contact <= 0.0 else il.POST_IMPACT_SPEED_FRACTION
+        refit = self.fit_frame(
+            inputs,
+            record,
+            (carried, fits[lost].up_mm),
+            fits[lost].normal_mm,
+            velocity * factor,
+            coarse=False,
+        )
+        edges = {
+            **refit.edges,
+            "toe": {
+                **refit.edges["toe"],
+                "carried_from_frame": kept,
+                "carried_sigma_mm": round(sigma, 3),
+            },
+        }
+        return {**fits, lost: replace(refit, edges=edges)}
 
     def in_plane_velocity(self, inputs, fits, frames, axes) -> np.ndarray:
         """The head's in-face-plane velocity before contact the two fits imply, mm/ms."""
@@ -1428,6 +1474,8 @@ class ImpactPlacement:  # pylint: disable=too-many-instance-attributes
     face_centre_convention: str = il.FACE_CENTRE_CONVENTION
     diagnostics: dict[str, Any] = field(default_factory=dict)
     frames: dict[int, FramePlacement] = field(default_factory=dict, repr=False)
+    # how the placement degraded within itself, if it did (C22b)
+    notes: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-ready fields (the per-frame pixels stay behind)."""
@@ -1445,6 +1493,7 @@ class ImpactPlacement:  # pylint: disable=too-many-instance-attributes
             "contact_frame": self.contact_frame,
             "last_rest_frame": self.last_rest_frame,
             "face_centre_convention": self.face_centre_convention,
+            "notes": list(self.notes),
             "diagnostics": self.diagnostics,
         }
 
@@ -1534,6 +1583,9 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
     except _Refused as refused:
         return ImpactPlacement("rejected", refused.reason, **common)
     placer.shaft_enabled = shaft_constraint
+    placer.motion_sigma_rad = math.radians(
+        math.hypot(club_path.sigma, orientation.face_angle.sigma)
+    )
     inputs = _Inputs(
         face=orientation.face_angle.value,
         loft=orientation.dynamic_loft.value,
@@ -1583,10 +1635,19 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
     )
     _scene_checks(placer, inputs, scene, axes, strike, diagnostics, model)
 
+    carried = {
+        f: fits[f].edges["toe"] for f in frames if "carried_from_frame" in fits[f].edges["toe"]
+    }
     offset_problems = [
         f"toe_edge_not_found_on_frame_{f}_{fits[f].edges['toe']['accepted']}_samples"
         for f in frames
-        if fits[f].edges["toe"]["accepted"] < MIN_EDGE_SAMPLES["toe"]
+        if fits[f].edges["toe"]["accepted"] < MIN_EDGE_SAMPLES["toe"] and f not in carried
+    ]
+    notes = [
+        f"toe edge not found on frame {f}: its heel-toe carried from frame "
+        f"{edge['carried_from_frame']} by the club's motion (+-{edge['carried_sigma_mm']:.1f} mm), "
+        "its sole fitted there"
+        for f, edge in carried.items()
     ]
     height_problems = [
         f"sole_edge_not_found_on_frame_{f}_{fits[f].edges['sole']['accepted']}_samples"
@@ -1675,6 +1736,15 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
     chord = il.bracket_chord_terms_mm(shot, frames[0], frames[1])
     ball_centre = il.BALL_CENTRE_SIGMA_PX * shot.plate_mm_per_px
     offset_budget = {"placement_fit_mm": fit_sigma[0], "ball_centre_mm": ball_centre}
+    if carried:
+        # the carried frame's share of the strike, times the carry's own sigma (C22b)
+        offset_budget["toe_carried_mm"] = math.hypot(
+            *(
+                (weight_before if f == frames[0] else weight_after) * edge["carried_sigma_mm"]
+                for f, edge in carried.items()
+            ),
+            0.0,
+        )
     offset_budget.update({name: value[0] for name, value in terms.items()})
     offset_budget.update(
         {
@@ -1724,6 +1794,7 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
         impact_offset_mm=reading[0],
         impact_offset_sigma_mm=offset_sigma,
         frames=result_frames,
+        notes=tuple(notes),
         **height,
         **common,
     )
