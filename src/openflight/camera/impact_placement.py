@@ -132,6 +132,13 @@ BALL_CORRIDOR_START_RADII = 0.3
 STEP_MM = 0.5
 NORMAL_SPEED_PASSES = 2
 
+# The shaft line (C14): the shaft axis's foot is the midpoint of the hosel cut the outline's
+# heel end carries (club_outline_reference: "the heel end carries the drawing's hosel foot"),
+# read from the file at run time (``hosel_axis_foot``); the shaft runs up from it at the
+# category's static lie in the plane of the toe and the club's vertical.
+HOSEL_CUT_STRAIGHT_MM = 0.25  # a vertex this close to the cut's line still lies on it
+SHAFT_SAMPLES = 8
+SHAFT_MAX_LENGTH_MM = 150.0
 GEAR_LOOP_MAX_ITERATIONS = 6
 GEAR_LOOP_TOLERANCE_MM = 1.0
 GEAR_NOT_APPLIED = {
@@ -429,6 +436,7 @@ class ClubModel:  # pylint: disable=too-many-instance-attributes
     static_lie_deg: float
     reference_from_toe: float = 0.0
     reference_height: float = 0.0
+    hosel_foot_uv: tuple[float, float] | None = None
     source: str = "club_outline_reference"
 
     def with_centre(
@@ -485,6 +493,7 @@ class ClubModel:  # pylint: disable=too-many-instance-attributes
                 il.REFERENCE_FACE_CENTRE,
             ),
             static_lie_deg=float(entry["static_lie_deg"]),
+            hosel_foot_uv=hosel_axis_foot(outline),
             reference_from_toe=float(centre["centre_from_toe_mm"]),
             reference_height=float(centre["centre_above_leading_edge_mm"]),
         )
@@ -502,6 +511,39 @@ class ClubModel:  # pylint: disable=too-many-instance-attributes
             "centre_height": self.centre_height.as_dict(),
             "static_lie_deg": self.static_lie_deg,
         }
+
+
+def hosel_axis_foot(outline: np.ndarray) -> tuple[float, float] | None:
+    """The midpoint of the hosel cut at the outline's heel end, or None.
+
+    The cut is the straight run of vertices from the heel-most vertex that climbs (v rises):
+    walking the polygon from it either way, vertices stay on the run while within
+    ``HOSEL_CUT_STRAIGHT_MM`` of the line from the heel-most vertex to the run's far end."""
+    points = np.asarray(outline, dtype=float)
+    if points.ndim != 2 or len(points) < 4:
+        return None
+    start = int(np.argmin(points[:, 0]))
+    best = None
+    for step in (1, -1):
+        end = start
+        for count in range(1, len(points)):
+            candidate = (start + step * count) % len(points)
+            run = points[[(start + step * k) % len(points) for k in range(count + 1)]]
+            chord = run[-1] - run[0]
+            length = float(np.hypot(*chord))
+            if length <= 0.0:
+                break
+            across = np.abs((run - run[0]) @ np.array([-chord[1], chord[0]]) / length)
+            if float(across.max()) > HOSEL_CUT_STRAIGHT_MM:
+                break
+            end = candidate
+        climb = points[end, 1] - points[start, 1]
+        if climb > 0.0 and (best is None or climb > best[1]):
+            best = (end, climb)
+    if best is None:
+        return None
+    foot = 0.5 * (points[start] + points[best[0]])
+    return float(foot[0]), float(foot[1])
 
 
 def _edge_samples(
@@ -634,6 +676,7 @@ class _Inputs:  # pylint: disable=too-many-instance-attributes
     sole_width: float
     bounce: float
     fraction: float
+    shaft_shift_px: float = 0.0
 
 
 @dataclass
@@ -724,6 +767,8 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
         self.floor = max(MIN_EDGE_CONTRAST_DN, EDGE_CONTRAST_NOISE * self.noise)
         self.after_background, self.after_background_source = self._post_departure_background()
         self._frames: dict[int, _Frame] = {}
+        self.shaft_enabled = True
+        self._shafts: dict[int, dict[str, Any] | None] = {}
 
     # -- images --
 
@@ -859,6 +904,44 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
         direction /= np.maximum(np.hypot(direction[:, 0], direction[:, 1]), 1e-12)[:, None]
         return start, direction, points
 
+    # -- the shaft --
+
+    def observed_shaft(self, index: int) -> dict[str, Any] | None:
+        """The shaft line in one frame (the club stage's head anchor on these frames: heel
+        end, upper end, its moving pixels' RMS across the line), or None."""
+        if index in self._shafts:
+            return self._shafts[index]
+        from openflight.camera.club_delivery import _clubhead_anchor  # noqa: PLC0415
+
+        anchor, _refusal = _clubhead_anchor(
+            self.shot.frames[index], self.background.astype(np.uint8), self.shot.ball
+        )
+        found = None
+        if anchor is not None and anchor.shaft_top_px is not None:
+            direction = np.asarray(anchor.direction_px, dtype=float)
+            found = {
+                "point_px": np.asarray(anchor.point_px, dtype=float),
+                "top_px": np.asarray(anchor.shaft_top_px, dtype=float),
+                "normal_px": np.array([-direction[1], direction[0]]),
+                "residual_px": max(float(anchor.shaft_residual_px or 0.0), MIN_RESIDUAL_PX),
+            }
+        self._shafts[index] = found
+        return found
+
+    def shaft_points(self, inputs, axes, origin, length_mm: float) -> np.ndarray | None:
+        """The model's shaft axis from the hosel cut up, ``SHAFT_SAMPLES`` points (level mm)."""
+        foot = self.model.hosel_foot_uv
+        if foot is None:
+            return None
+        toe, up, normal = axes
+        loft = math.radians(inputs.loft)
+        vertical = math.cos(loft) * up + math.sin(loft) * normal
+        lie = math.radians(self.model.static_lie_deg)
+        direction = -math.cos(lie) * toe + math.sin(lie) * vertical
+        base = origin + foot[0] * toe + foot[1] * up
+        steps = np.linspace(0.0, length_mm, SHAFT_SAMPLES)
+        return base[None, :] + steps[:, None] * direction[None, :]
+
     # -- edges --
 
     def contrast(
@@ -926,6 +1009,26 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
         accepted = valid & interior & (strength >= self.floor)
         return shift, peak, accepted
 
+    def shaft_rows(self, inputs, axes, origin, rotation, index):
+        """(jacobian rows, residuals px, line residual px) of the shaft constraint, or None."""
+        if not self.shaft_enabled:
+            return None
+        observed = self.observed_shaft(index)
+        if observed is None:
+            return None
+        depth = float((rotation @ origin)[2])
+        length_px = float(np.hypot(*(observed["top_px"] - observed["point_px"])))
+        length_mm = min(SHAFT_MAX_LENGTH_MM, length_px * depth / self.focal)
+        points = self.shaft_points(inputs, axes, origin, length_mm)
+        if points is None or length_mm <= 0.0:
+            return None
+        normal = observed["normal_px"]
+        line = observed["point_px"] + inputs.shaft_shift_px * normal
+        predicted = self.project(points, rotation)
+        residuals = (line - predicted) @ normal
+        normals = np.repeat(normal[None, :], len(points), axis=0)
+        return self._jacobian(axes, rotation, normals, points), residuals, observed["residual_px"]
+
     def predicted_blur(self, inputs, axes, origin, rotation, part, in_plane_velocity) -> np.ndarray:
         """Each sample's image motion across its own edge during the exposure, px."""
         if self.exposure_ms <= 0.0:
@@ -990,6 +1093,34 @@ class _Placer:  # pylint: disable=too-many-instance-attributes
             scale = max(1.4826 * float(np.median(np.abs(res - np.median(res)))), MIN_RESIDUAL_PX)
             cut = TUKEY_C * scale
             weight = np.where(np.abs(res) < cut, (1.0 - (res / cut) ** 2) ** 2, 0.0)
+            shaft = self.shaft_rows(inputs, axes, origin, rotation, record.index)
+            if shaft is not None:
+                shaft_jac, shaft_res, residual_px = shaft
+                # weighted by the line's own position error against the edges' scatter, and
+                # robust on its own scale: a shaft the model's hosel geometry does not match
+                # is rejected row by row, never allowed to drag the head (C14)
+                shaft_cut = TUKEY_C * residual_px
+                shaft_weight = (
+                    np.where(
+                        np.abs(shaft_res) < shaft_cut,
+                        (1.0 - (shaft_res / shaft_cut) ** 2) ** 2,
+                        0.0,
+                    )
+                    * (scale / residual_px) ** 2
+                )
+                jac = np.vstack([jac, shaft_jac])
+                res = np.concatenate([res, shaft_res])
+                weight = np.concatenate([weight, shaft_weight])
+                edges["shaft"] = {
+                    "found": True,
+                    "rows": int(len(shaft_res)),
+                    "line_residual_px": round(residual_px, 3),
+                    "median_residual_px": round(float(np.median(np.abs(shaft_res))), 3),
+                    "rows_kept": int(np.count_nonzero(shaft_weight)),
+                    "weight": round(float(shaft_weight.max()), 3),
+                }
+            elif self.shaft_enabled:
+                edges["shaft"] = {"found": False}
             lock = np.diag(
                 [
                     LOCKED_AXIS if counts.get("toe", 0) < MIN_EDGE_SAMPLES["toe"] else 1e-9,
@@ -1331,6 +1462,7 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
     club_path: il.Labelled | None = None,
     centre_from_toe: il.Labelled | None = None,
     centre_height: il.Labelled | None = None,
+    shaft_constraint: bool = True,
 ) -> ImpactPlacement:
     """Place the club model at the given orientation on the shot's bracket frames; read the strike.
 
@@ -1399,6 +1531,7 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
         placer = _Placer(shot, model)
     except _Refused as refused:
         return ImpactPlacement("rejected", refused.reason, **common)
+    placer.shaft_enabled = shaft_constraint
     inputs = _Inputs(
         face=orientation.face_angle.value,
         loft=orientation.dynamic_loft.value,
@@ -1506,6 +1639,26 @@ def place_impact(  # pylint: disable=too-many-return-statements,too-many-branche
         "camera_pitch_mm": term("pitch", tilt.pitch.sigma, inputs.pitch),
         "camera_roll_mm": term("roll", tilt.roll.sigma, inputs.roll),
     }
+    shafts = [placer.observed_shaft(f) for f in frames] if shaft_constraint else []
+    found = [s for s in shafts if s is not None]
+    if found and model.hosel_foot_uv is not None:
+        line_sigma = float(np.median([s["residual_px"] for s in found]))
+        terms["shaft_line_mm"] = term("shaft_shift_px", line_sigma, 0.0)
+        diagnostics["shaft_constraint"] = {
+            "status": "fitted",
+            "frames": [f for f, s in zip(frames, shafts) if s is not None],
+            "line_residual_px": round(line_sigma, 3),
+            "hosel_axis_uv_mm": [round(v, 2) for v in model.hosel_foot_uv],
+            "static_lie_deg": model.static_lie_deg,
+        }
+    else:
+        diagnostics["shaft_constraint"] = {
+            "status": "off"
+            if not shaft_constraint
+            else "no_hosel_axis_for_the_category"
+            if model.hosel_foot_uv is None
+            else "not_found",
+        }
     width = term("sole_width", model.sole_width.sigma, inputs.sole_width)
     bounce = term("bounce", model.effective_bounce.sigma, inputs.bounce)
     terms["sole_geometry_mm"] = (math.hypot(width[0], bounce[0]), math.hypot(width[1], bounce[1]))

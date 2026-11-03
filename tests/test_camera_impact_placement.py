@@ -131,6 +131,8 @@ def render(  # pylint: disable=too-many-locals,too-many-arguments
     hollow: bool = False,
     show_head: bool = True,
     subframes: int = 4,
+    model_shaft: bool = False,
+    sole_scale: float = 1.0,
 ):
     """Frames of one right-handed swing and the resting ball (saved orientation, unmirrored)."""
     rng = np.random.default_rng(11)
@@ -147,13 +149,20 @@ def render(  # pylint: disable=too-many-locals,too-many-arguments
         [math.sin(f) * math.cos(a), -math.sin(a), math.cos(f) * math.cos(a)]
     )
     back = -np.array([normal[0], 0.0, normal[2]]) / math.hypot(normal[0], normal[2])
-    sole = SOLE_WIDTH_MM * (
-        math.cos(math.radians(BOUNCE_DEG)) * back
-        + math.sin(math.radians(BOUNCE_DEG)) * np.array([0.0, 1.0, 0.0])
+    sole = (
+        sole_scale
+        * SOLE_WIDTH_MM
+        * (
+            math.cos(math.radians(BOUNCE_DEG)) * back
+            + math.sin(math.radians(BOUNCE_DEG)) * np.array([0.0, 1.0, 0.0])
+        )
     )
     shaft_base = np.array([-36.0, -10.0])
     lie_static = math.radians(62.3)
     shaft_dir = np.array([-math.cos(lie_static), math.sin(lie_static)])
+    # the placement's model shaft (C14): from the hosel cut, in the toe/vertical plane
+    vertical = math.cos(math.radians(loft)) * up + math.sin(math.radians(loft)) * normal
+    model_dir = -math.cos(lie_static) * toe + math.sin(lie_static) * vertical
     contact_ms = CONTACT_TIME * 1000.0 / FPS
     clip = np.empty((frames, HEIGHT, WIDTH), dtype=np.uint8)
     offsets = np.linspace(0.0, EXPOSURE_MS, subframes) if subframes > 1 else [EXPOSURE_MS / 2]
@@ -216,8 +225,13 @@ def render(  # pylint: disable=too-many-locals,too-many-arguments
                     rim = 2 * 3 * SUPERSAMPLE + 1
                     inner = cv2.erode(face, np.ones((rim, rim), np.uint8)) & (1 - sole_area)
                     image[inner > 0] = under[inner > 0]
-                base = where + shaft_base[0] * toe + shaft_base[1] * up
-                tip = base + 300.0 * (shaft_dir[0] * toe + shaft_dir[1] * up)
+                if model_shaft:
+                    foot = ip.hosel_axis_foot(OUTLINE)
+                    base = where + foot[0] * toe + foot[1] * up
+                    tip = base + 300.0 * model_dir
+                else:
+                    base = where + shaft_base[0] * toe + shaft_base[1] * up
+                    tip = base + 300.0 * (shaft_dir[0] * toe + shaft_dir[1] * up)
                 p0, p1 = _fine(_project(base)), _fine(_project(tip))
                 cv2.line(
                     image,
@@ -410,6 +424,61 @@ def test_a_measured_contact_instant_is_placed_with_its_own_sigma():
     other = prepare(frames, ball, contact_instant={**instant, "last_rest_frame": rest + 2})
     assert other.contact_fraction_source == "uniform_midpoint"
     assert "bracket" in other.contact_fraction_note
+
+
+def test_the_shaft_line_is_a_third_fitted_constraint_with_its_own_budget_term():
+    """C14: the shaft from the hosel cut at the static lie, found on the bracket frames, is
+    fitted with the toe and sole edges (rows weighted by the line's own position error) and
+    has its own budget term; on a clean head the strike comes back as before."""
+    frames, ball = render(strike_u=8.0, strike_v=-11.0, model_shaft=True)
+    shot = prepare(frames, ball)
+    with_shaft = place(shot)
+    without = place(shot, shaft_constraint=False)
+
+    assert with_shaft.status == "ok" and with_shaft.height_status == "ok", with_shaft.reason
+    assert with_shaft.diagnostics["shaft_constraint"]["status"] == "fitted"
+    assert without.diagnostics["shaft_constraint"]["status"] == "off"
+    for frame in with_shaft.diagnostics["frames"].values():
+        assert frame["edges"]["shaft"]["found"] is True and frame["edges"]["shaft"]["rows"] > 0
+    assert "shaft_line_mm" in with_shaft.diagnostics["height_uncertainty_budget_mm"]
+    assert "shaft_line_mm" in with_shaft.diagnostics["offset_uncertainty_budget_mm"]
+    assert abs(with_shaft.impact_height_mm + 11.0) <= 1.0
+    assert abs(with_shaft.impact_offset_mm - 8.0) <= 1.0
+
+
+def test_the_shaft_s_foot_is_read_from_the_reference_file_s_hosel_cut():
+    """C14: the model shaft's foot is the midpoint of the hosel cut the current outline file
+    draws at the heel end (never a hard-coded point): moved with the outline, it moves."""
+    foot = ip.hosel_axis_foot(OUTLINE)
+    heel = OUTLINE[int(np.argmin(OUTLINE[:, 0]))]
+    assert foot is not None and foot[0] > heel[0] and foot[1] > heel[1]
+    assert ip.ClubModel.for_club("7-iron").hosel_foot_uv == pytest.approx(foot)
+    shifted = ip.hosel_axis_foot(OUTLINE + np.array([3.0, -2.0]))
+    assert shifted == pytest.approx((foot[0] + 3.0, foot[1] - 2.0))
+    # the cut is straight: every vertex between its ends lies on it
+    assert math.hypot(foot[0] - heel[0], foot[1] - heel[1]) > 3.0
+
+
+def test_a_steep_shaft_barely_moves_a_height_the_sole_edge_misreads():
+    """What the shaft can and cannot do (measured, not tuned): the shaft line is steep in
+    this view, so a height error moves it mostly along itself. With a sole 70 % narrower than
+    the model's the height reads ~1.3 mm low with or without the shaft (within 0.1 mm of
+    each other): the brief's 1 mm recovery is not reached by the shaft alone."""
+    frames, ball = render(strike_u=8.0, strike_v=-11.0, model_shaft=True, sole_scale=0.3)
+    shot = prepare(frames, ball)
+    with_shaft, without = place(shot), place(shot, shaft_constraint=False)
+
+    assert with_shaft.diagnostics["shaft_constraint"]["status"] == "fitted"
+    assert abs(with_shaft.impact_height_mm - without.impact_height_mm) < 0.1
+    assert 1.0 < abs(without.impact_height_mm + 11.0) < 2.0
+
+
+def test_a_head_with_no_shaft_found_is_placed_as_before_labelled():
+    frames, ball = render(strike_u=8.0, strike_v=-11.0)
+    shot = prepare(frames, ball)
+    result = place(shot)
+    assert result.status == "ok"
+    assert result.diagnostics["shaft_constraint"]["status"] in ("fitted", "not_found")
 
 
 def test_a_hollow_head_is_placed_from_its_rim():

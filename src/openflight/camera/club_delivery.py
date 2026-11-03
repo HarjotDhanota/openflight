@@ -927,7 +927,14 @@ def _shaft_ends(
             elif distance is not None:
                 along = (support - np.asarray(axis.end_px)) @ np.asarray(direction, dtype=float)
                 top = support[int(np.argmin(along))].astype(float) if len(support) else None
-                ends.append((np.asarray(axis.end_px, dtype=float), direction, top))
+                across_px = (support - point) @ np.array([-direction[1], direction[0]])
+                # the line's own position error: its pixels' spread across it over sqrt(n)
+                residual = (
+                    float(np.sqrt(np.mean(across_px**2)) / math.sqrt(len(support)))
+                    if len(support)
+                    else None
+                )
+                ends.append((np.asarray(axis.end_px, dtype=float), direction, top, residual))
                 break
             across = (xx - point[0]) * direction[1] - (yy - point[1]) * direction[0]
             mask &= np.abs(across) > max(3.0 * band, 2.0 * width)
@@ -943,6 +950,7 @@ class _HeadAnchor:
     step_px: float  # the shaft's band half-width: spacing of the hosel points
     thickness_px: float  # largest inscribed radius of the head's moving pixels
     shaft_top_px: np.ndarray | None = None  # the shaft line's far (upper) end, same frame
+    shaft_residual_px: float | None = None  # the line's position error across it, px
 
     def hosel_points(self) -> np.ndarray:
         """The heel's sole and two points up the hosel axis: rigid on the head."""
@@ -989,8 +997,11 @@ def _clubhead_anchor(
     )
     if not ends:
         return None, "; ".join(refused or ["no shaft line in the moving pixels"])
-    anchor, direction, top = min(
-        ((end + (x0, 0), axis, None if top is None else top + (x0, 0)) for end, axis, top in ends),
+    anchor, direction, top, residual = min(
+        (
+            (end + (x0, 0), axis, None if top is None else top + (x0, 0), residual)
+            for end, axis, top, residual in ends
+        ),
         key=lambda item: math.dist(item[0], (ball.x, ball.y)),
     )
     above = float(ball.y - anchor[1])
@@ -1019,6 +1030,7 @@ def _clubhead_anchor(
             step_px=band,
             thickness_px=float(thickness.max()),
             shaft_top_px=top,
+            shaft_residual_px=residual,
         ),
         None,
     )
