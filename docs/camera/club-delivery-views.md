@@ -82,6 +82,20 @@ size ratio. In the heel-side view the hosel is nearest the golfer and is drawn
 in front of the head for both hands. Drawing it behind the head would instead
 give the overlap cue of a toe-side view. The blade retains its lofted face line,
 rounded leading edge, sole/bounce and fuller back profile.
+
+The top line runs into the hosel as on a real iron, with no notch in any view. Face-on, the
+iron's straight top line carries on into one circular fillet tangent to it and to the tube's
+toe-side edge at the tube's foot (about 11 mm radius); the wedge's top line already curves
+into its hosel through a fillet of about the same radius. Only heel-end nodes moved: the face
+centre, toe extreme, lowest sole point, blade length and face height are unchanged, and so is
+every part of `club_outline_reference.json` that impact placement fits (it never fits the
+heel end). The face's rounded top-heel corner now sits under that fillet, so the even-rim
+check stops where the face's straight top line starts. In the top view the neck leaves the
+blade's back edge tangent to it, runs on past the face's top-heel corner and sweeps into the
+ferrule. In the heel view the hosel's back edge comes down into the top of the top line's
+rounded cap through a fillet, and the neck fills the crotch between the hosel and the lofted
+face line; the tube's cylindrical shading stays on the tube, so the fillet takes the head's
+metal.
 Top heads rotate by signed face angle so their normal follows the
 face arrow. Side heads rotate by static loft minus dynamic loft around the
 impact centre. The ball is 42.7 mm

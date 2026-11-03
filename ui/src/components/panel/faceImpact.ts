@@ -259,7 +259,7 @@ function stretch(nodes: readonly Point[], corners: readonly number[], lines: Lin
 }
 
 /** Flattens an absolute M/L/C/Z path into a polygon. */
-function flatten(d: string): Point[] {
+export function flatten(d: string): Point[] {
   const tokens = d.match(/[MLCZ]|-?\d*\.?\d+/g) ?? [];
   const points: Point[] = [];
   let command = '';
@@ -389,6 +389,27 @@ function headAndSilhouette(
       lines
     ),
   };
+}
+
+/** The fillet that runs a straight top line (`from` -> `to`, heading heel-ward) into the hosel:
+ * a circular arc tangent to the top line and to the tube's toe-side edge, meeting that edge at the
+ * tube's foot. Returns the arc's start on the top line and its midpoint; the head's next node is the
+ * tube's foot, where the outline's tangent already runs up the tube. */
+function toplineFillet(from: Point, to: Point, hosel: Hosel): [Point, Point] {
+  const unit = (v: Point): Point => [v[0] / Math.hypot(...v), v[1] / Math.hypot(...v)];
+  const along = unit(add(to, from, -1));
+  const { up } = axes(hosel);
+  const foot = edge(hosel, hosel.tube[0][0], -1);
+  // where the top line, carried on, meets the tube's edge carried down
+  const det = along[0] * -up[1] + along[1] * up[0];
+  const [dx, dy] = add(foot, to, -1);
+  const corner = add(to, along, (dx * -up[1] + dy * up[0]) / det);
+  const tangent = Math.hypot(...add(foot, corner, -1));
+  const back: Point = [-along[0], -along[1]];
+  const half = Math.acos(back[0] * up[0] + back[1] * up[1]) / 2;
+  const radius = tangent * Math.tan(half);
+  const centre = add(corner, unit(add(back, up)), tangent / Math.cos(half));
+  return [add(corner, back, tangent), add(centre, unit(add(corner, centre, -1)), radius)];
 }
 
 function evenRows(top: number, pitch: number, ends: readonly Point[]): Groove[] {
@@ -623,14 +644,31 @@ const HYBRID: Drawing = {
 /* Iron and wedge faces run from the face's top-heel corner over the top line and toe to its
  * bottom-heel corner; the heel side between them is straight. */
 
+const IRON_HOSEL: Hosel = {
+  ground: [78.2, 0],
+  lieDeg: 58.4,
+  // prettier-ignore
+  tube: [[40, 13.05], [72, 13.05]],
+  ferruleLength: 9.07,
+  shaftTo: 126,
+  shaftWidth: 9.3,
+  rings: [],
+  collar: null,
+};
+
 const IRON = {
   finish: 'chrome',
+  /* The top line runs straight on into the hosel through one fillet tangent to both, as on a real
+   * iron: no dip where it meets the neck. */
   // prettier-ignore
   head: [
     [84.87, -5.65], [79.53, -3.3], [58.06, -0.32], [36.01, -0.05], [16.19, -1.82], [8.2, -4.91], [0, -26],
-    [8.17, -52.37], [12.92, -56.32], [30, -56.07], [74, -35.65], [81.38, -29.63]
+    [8.17, -52.37], [12.92, -56.32], [30, -56.07], [74, -35.65], ...toplineFillet([30, -56.07], [74, -35.65], IRON_HOSEL)
   ],
-  headLines: [[9, 10]],
+  headLines: [
+    [9, 10],
+    [10, 11],
+  ],
   // prettier-ignore
   face: [
     [78, -28.93], [72.99, -33.47], [28.99, -53.9], [23.48, -55.53], [17.94, -55.51], [13.44, -53.85],
@@ -639,17 +677,7 @@ const IRON = {
     [40.5, -2.42], [48.41, -2.48], [56.33, -2.66], [64.09, -3], [71.33, -3.78], [78, -5.32]
   ],
   faceLines: [[1, 2]],
-  hosel: {
-    ground: [78.2, 0],
-    lieDeg: 58.4,
-    // prettier-ignore
-    tube: [[40, 13.05], [72, 13.05]],
-    ferruleLength: 9.07,
-    shaftTo: 126,
-    shaftWidth: 9.3,
-    rings: [],
-    collar: null,
-  },
+  hosel: IRON_HOSEL,
 } as const satisfies Omit<Drawing, 'grooves'>;
 
 const WEDGE = {
