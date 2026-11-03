@@ -139,6 +139,7 @@ from openflight.camera.club_delivery import HeadPosition
 from openflight.camera.head_track import SOURCE as HEAD_TRACK_SOURCE
 from openflight.clubs import ClubType
 from openflight.clubs.physics import get_club_physics
+from openflight.constants import BALL_DIAMETER_M
 from openflight.horizontal_frame import frame_for
 from openflight.shot_metrics import (
     CALCULATED,
@@ -859,6 +860,111 @@ def _with_low_point_offset(entry: dict, club: Any) -> dict:
     )
 
 
+# C18c (club-arc REPORT, 3 Nov 2026): the plane the PRE-contact head track lies in, when the
+# full arc is not fixed. Never through contact: on a mat the heel rides the surface after
+# it and every through-impact fit reads ~90 deg. Sigma: a Monte Carlo of the position noise
+# (MC_DRAWS draws) and the earliest anchor moved by ANCHOR_AMBIGUITY_M (the research hand
+# mark's +-4 px at ~1.75 mm/px), in quadrature.
+PRE_CONTACT_PLANE_SOURCE = "club_arc:pre_contact_plane"
+PRE_CONTACT_MIN_POSITIONS = 4
+MC_DRAWS = 400
+ANCHOR_AMBIGUITY_M = 0.007
+
+
+def _plane_angles(xyz: np.ndarray) -> tuple[float, float]:
+    """(inclination to the horizon, ground-line heading) deg of the TLS plane through
+    (forward, lateral, up) points; heading + toward lateral +."""
+    centred = xyz - xyz.mean(axis=0)
+    normal = np.linalg.svd(centred)[2][2]
+    inclination = math.degrees(math.acos(min(1.0, abs(float(normal[2])))))
+    line = np.cross(normal, np.array([0.0, 0.0, 1.0]))
+    if line[0] < 0:
+        line = -line
+    return inclination, math.degrees(math.atan2(float(line[1]), float(line[0])))
+
+
+def pre_contact_plane(
+    positions,
+    *,
+    impact_t_s: Optional[float],
+    horizontal_offset_deg: Optional[float] = None,
+    noise_m: float = POSITION_NOISE_FLOOR_M,
+) -> Optional[dict]:
+    """The swing plane and direction of the head positions before contact, with their Monte
+    Carlo sigmas, or None with fewer than ``PRE_CONTACT_MIN_POSITIONS`` of them."""
+    if impact_t_s is None:
+        return None
+    points = sorted(
+        (
+            p
+            for p in positions
+            if float(p["t_s"]) < float(impact_t_s)
+            and all(math.isfinite(float(p[k])) for k in ("lateral_m", "up_m", "forward_m"))
+        ),
+        key=lambda p: float(p["t_s"]),
+    )
+    if len(points) < PRE_CONTACT_MIN_POSITIONS:
+        return None
+    xyz = _turn(
+        np.array([[p["forward_m"], p["lateral_m"], p["up_m"]] for p in points], dtype=float),
+        horizontal_offset_deg,
+    )
+    plane, direction = _plane_angles(xyz)
+    rng = np.random.default_rng(0)
+    draws = np.array(
+        [_plane_angles(xyz + rng.normal(0.0, noise_m, xyz.shape)) for _ in range(MC_DRAWS)]
+    )
+    noise_sd = draws.std(axis=0)
+    shifted = []
+    for sign in (1.0, -1.0):
+        moved = xyz.copy()
+        moved[0, 2] += sign * ANCHOR_AMBIGUITY_M
+        shifted.append(_plane_angles(moved))
+    anchor = np.abs(np.array(shifted) - np.array([plane, direction])).max(axis=0)
+    sigma = np.hypot(noise_sd, anchor)
+    return {
+        "swing_plane_deg": plane,
+        "swing_direction_deg": direction,
+        "swing_plane_sigma_deg": float(sigma[0]),
+        "swing_direction_sigma_deg": float(sigma[1]),
+        "sigma_terms": {
+            "position_noise": {
+                "plane_deg": float(noise_sd[0]),
+                "direction_deg": float(noise_sd[1]),
+            },
+            "anchor_ambiguity": {"plane_deg": float(anchor[0]), "direction_deg": float(anchor[1])},
+        },
+        "n_positions": len(points),
+        "span_m": float(np.linalg.norm(xyz[-1] - xyz[0])),
+    }
+
+
+def _low_point_why(positions, impact_t_s, ball: Optional[Mapping]) -> Optional[str]:
+    """Where the pre-contact track's own arc (height a quadratic in forward) turns: beyond
+    the tracked span, under the surface, or both."""
+    points = [
+        p for p in positions if impact_t_s is not None and float(p["t_s"]) < float(impact_t_s)
+    ]
+    if len(points) < 3:
+        return None
+    forward = np.array([float(p["forward_m"]) for p in points])
+    up = np.array([float(p["up_m"]) for p in points])
+    a, b, c = np.polyfit(forward, up, 2)
+    if a <= 0:
+        return "the pre-contact track does not turn upward: no low point on it"
+    turn = -b / (2.0 * a)
+    height = float(np.polyval([a, b, c], turn))
+    reasons = []
+    last = float(max(float(p["forward_m"]) for p in positions))
+    if turn > last:
+        reasons.append(f"its arc turns {1000 * (turn - last):.0f} mm beyond the tracked span")
+    if ball is not None:
+        surface = float(ball.get("up_m", 0.0)) - BALL_DIAMETER_M / 2.0
+        if height < surface:
+            reasons.append(f"{1000 * (surface - height):.0f} mm under the surface")
+    return "; ".join(reasons) or None
+
+
 def _without_prior_values(arc: ClubArc) -> ClubArc:
     """A model-geometry arc as the shot record keeps it (C11f, owner 3 Nov 2026): no value.
 
@@ -923,6 +1029,38 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
             )
     arc = _without_prior_values(arc)
     metrics = {name: _arc_metric(arc, name) for name in _OUTPUTS}
+    if arc.status == NOT_MEASURED and data is not None:
+        raw = [dict(item) for item in data.get("head_positions") or ()]
+        plane = pre_contact_plane(
+            raw,
+            impact_t_s=data.get("contact_t_s"),
+            horizontal_offset_deg=offset,
+            noise_m=noise_m,
+        )
+        if plane is not None:
+            # the pre-contact track's own plane (C18c), experimental; the prior stays a gate
+            for name, sigma_key, frame in (
+                ("swing_plane_deg", "swing_plane_sigma_deg", None),
+                ("swing_direction_deg", "swing_direction_sigma_deg", frame_for(offset)),
+            ):
+                value, sigma = plane[name], plane[sigma_key]
+                metrics[name] = {
+                    "value": round(value, 2),
+                    "status": EXPERIMENTAL,
+                    "source": PRE_CONTACT_PLANE_SOURCE,
+                    "frame": frame,
+                    "range": [round(value - sigma, 2), round(value + sigma, 2)],
+                    "reason": None,
+                    "note": (
+                        f"the plane of {plane['n_positions']} pre-contact head positions over "
+                        f"{plane['span_m']:.2f} m (never through contact); +-1 sigma from the "
+                        "position noise and the earliest anchor's ambiguity"
+                    ),
+                }
+        why = _low_point_why(raw, data.get("contact_t_s"), data.get("ball_position"))
+        if why:
+            for name in ("low_point_distance_mm", "low_point_height_mm", "low_point_side_mm"):
+                metrics[name]["reason"] = f"{metrics[name]['reason']}; the pre-contact track: {why}"
     if positions_label is not None:
         metrics = {
             name: _inherit_positions_label(entry, name, arc, positions_label)
