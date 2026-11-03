@@ -562,7 +562,8 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
             />
           );
         })}
-        <circle cx="0" cy="0" r="1.5" fill="var(--color-text)" />
+        {/* the face-centre dot marks where the arrows start; the heel view draws the arrows alone */}
+        {top ? <circle cx="0" cy="0" r="1.5" fill="var(--color-text)" /> : null}
       </g>
     </svg>
   );
