@@ -605,6 +605,16 @@ UPSTREAM = {
         )
     },
 }
+_FLIGHT_OUTPUTS = (
+    "carry",
+    "carry_side",
+    "total",
+    "total_side",
+    "apex",
+    "landing_angle",
+    "hang_time",
+    "curve",
+)
 ROUTE_UPSTREAM = {("ball_speed_full", "ops_total_projection"): ("launch_vertical",)}
 _ROUTE_FIELDS = {"ball_speed_full": "ball_speed_full"}
 _LOWERABLE = (CALCULATED, MODEL_GEOMETRY, ESTIMATED)
@@ -675,8 +685,13 @@ def with_input_labels(metrics: dict[str, dict[str, Any]], shot) -> dict[str, dic
                 status = upstream.get("status")
                 if status not in (EXPERIMENTAL, *_LOWERABLE) or upstream.get("value") is None:
                     continue
-                if name == "spin_rate" and not _model_spin(shot):
-                    # an OPS spin below the confidence floor feeds no model
+                if (
+                    name == "spin_rate"
+                    and not _model_spin(shot)
+                    and metric_id not in _FLIGHT_OUTPUTS
+                ):
+                    # an OPS spin below the confidence floor feeds no collision model; the
+                    # flight flies it under its experimental label (C11e)
                     continue
                 spec = _specs.get(name)
                 title = spec.label.lower() if spec else name

@@ -214,20 +214,15 @@ def _missing_reason(shot: Shot) -> str:
         reasons.append("vertical launch not measured")
     if not _finite(shot.launch_angle_horizontal):
         reasons.append("horizontal launch not measured")
-    measured = (
+    read = (
         _finite(shot.spin_rpm)
+        and shot.spin_rpm > 0
         and _finite(shot.spin_confidence)
-        and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
+        and shot.spin_confidence > 0
     )
     model = shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm
-    if not (measured or model):
-        if _finite(shot.spin_rpm) and _finite(shot.spin_confidence):
-            reasons.append(
-                f"spin not measured (spin confidence {shot.spin_confidence:.2f} "
-                f"below {SPIN_CONFIDENCE_HIGH})"
-            )
-        else:
-            reasons.append("spin not measured")
+    if not (read or model):
+        reasons.append("spin not measured")
     if not _finite(shot.spin_axis_deg):
         reasons.append("spin axis not measured")
     return "; ".join(reasons) or "flight inputs incomplete"
@@ -266,6 +261,8 @@ def _inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> dict:
 
     if conditions.spin_source == "measured":
         spin_label = f"measured (OPS243, confidence {shot.spin_confidence:.2f})"
+    elif conditions.spin_source == LOW_CONFIDENCE_SPIN:
+        spin_label = f"experimental (OPS243, {_low_confidence_spin_reason(shot)})"
     elif conditions.spin_source == "calculated":
         spin_label = f"calculated ({shot.spin_method or 'model unnamed on the shot'})"
     elif conditions.spin_source == STATUS_MODEL_GEOMETRY:
@@ -337,6 +334,8 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
             reasons.append(f"{name} from the {EXPERIMENTAL_LAUNCH_SOURCES[source]} (experimental)")
     # a collision spin or axis built on an estimated input (C2), with that input's reason
     metrics = (getattr(shot, "collision_model", None) or {}).get("metrics") or {}
+    if conditions.spin_source == LOW_CONFIDENCE_SPIN:
+        reasons.append(_low_confidence_spin_reason(shot))
     estimated_spin = conditions.spin_source == STATUS_ESTIMATED
     estimated_axis = _finite(shot.spin_axis_deg) and is_estimated_source(
         getattr(shot, "spin_axis_source", None)
@@ -348,6 +347,16 @@ def _estimated_inputs(shot: Shot, conditions: Optional[LaunchConditions]) -> lis
         if why not in reasons:
             reasons.append(why)
     return reasons
+
+
+LOW_CONFIDENCE_SPIN = "experimental"
+
+
+def _low_confidence_spin_reason(shot: Shot) -> str:
+    return (
+        f"OPS spin confidence {shot.spin_confidence:.2f} below {SPIN_CONFIDENCE_HIGH}: "
+        "the spin is experimental"
+    )
 
 
 def _flight_status(model_geometry: list[str], estimated: list[str] = ()) -> str:

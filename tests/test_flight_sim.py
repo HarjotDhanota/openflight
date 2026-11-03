@@ -54,9 +54,14 @@ class TestResolveLaunch:
         assert cond.spin_source == "measured"
         assert cond.launch_angle_h == 1.0 and cond.spin_axis_deg == 2.0
 
-    @pytest.mark.parametrize("confidence", [0.3, 0.5, None])
-    def test_no_flight_without_a_confident_or_model_spin(self, confidence):
-        assert resolve_launch(self._measured(spin_confidence=confidence)) is None
+    def test_no_flight_without_a_spin_confidence_or_model_spin(self):
+        assert resolve_launch(self._measured(spin_confidence=None)) is None
+
+    @pytest.mark.parametrize("confidence", [0.3, 0.5])
+    def test_a_low_confidence_ops_spin_flies_experimental(self, confidence):
+        # C11e (owner 3 Nov 2026): labelled by the weakest input, never withheld
+        cond = resolve_launch(self._measured(spin_confidence=confidence))
+        assert cond.spin_source == "experimental" and cond.spin_rpm == 2500
 
     def test_no_flight_without_a_spin(self):
         assert resolve_launch(self._measured(spin_rpm=None, spin_confidence=None)) is None

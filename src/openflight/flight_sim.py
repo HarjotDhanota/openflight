@@ -307,7 +307,7 @@ class LaunchConditions:
     launch_angle_h: float
     spin_rpm: float
     spin_axis_deg: float
-    spin_source: Literal["measured", "calculated", "model_geometry", "estimated"]
+    spin_source: Literal["measured", "calculated", "model_geometry", "estimated", "experimental"]
 
 
 @dataclass
@@ -431,7 +431,7 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
     if ball_speed is None or not _finite(shot.launch_angle_vertical):
         return None
 
-    source: Literal["measured", "calculated", "model_geometry", "estimated"]
+    source: Literal["measured", "calculated", "model_geometry", "estimated", "experimental"]
     if (
         shot.spin_source not in MODEL_SPIN_SOURCES
         and _finite(shot.spin_rpm)
@@ -439,6 +439,16 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
         and shot.spin_confidence >= SPIN_CONFIDENCE_HIGH
     ):
         spin_rpm, source = float(shot.spin_rpm), "measured"
+    elif (
+        shot.spin_source not in MODEL_SPIN_SOURCES
+        and _finite(shot.spin_rpm)
+        and shot.spin_rpm > 0
+        and _finite(shot.spin_confidence)
+        and shot.spin_confidence > 0
+    ):
+        # an OPS reading below the confidence bar flies under its own experimental label
+        # (C11e, owner 3 Nov 2026: resolve every metric, label by the weakest input)
+        spin_rpm, source = float(shot.spin_rpm), "experimental"
     elif shot.spin_source in MODEL_SPIN_SOURCES and _finite(shot.spin_rpm) and shot.spin_rpm:
         spin_rpm, source = float(shot.spin_rpm), shot.spin_source
     else:

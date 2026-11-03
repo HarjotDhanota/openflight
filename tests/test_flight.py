@@ -134,7 +134,7 @@ def test_curve_is_trackmans_definition_on_the_straight_line_carry():
     "overrides, reason",
     [
         ({"spin_rpm": None, "spin_confidence": None, "spin_source": None}, "spin not measured"),
-        ({"spin_confidence": 0.3}, "spin not measured"),
+        ({"spin_confidence": None}, "spin not measured"),
         ({"spin_axis_deg": None}, "spin axis not measured"),
         ({"spin_axis_deg": math.nan}, "spin axis not measured"),
         ({"launch_angle_horizontal": None}, "horizontal launch not measured"),
@@ -150,10 +150,13 @@ def test_a_fusion_shot_missing_an_input_has_no_flight_and_says_why(overrides, re
             assert reason in metric["reason"], (block, name)
 
 
-def test_no_install_flies_the_club_typical_spin():
+def test_a_low_confidence_ops_spin_flies_estimated_with_its_confidence_named():
+    """C11e: below the confidence bar the OPS reading flies, labelled, never withheld."""
     shot = _shot(spin_rpm=1500.0, spin_confidence=0.3)
     result = compute_flight(shot)
-    assert result.conditions is None and result.as_measured is None
+    assert result.conditions.spin_source == "experimental"
+    assert result.status == "estimated"
+    assert "confidence 0.30" in str(result.to_dict())
 
 
 def test_a_calculated_spin_and_axis_flow_through_under_their_labels():
