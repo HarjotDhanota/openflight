@@ -161,7 +161,23 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
     view,
     profileLoft
   );
-  const woodNeck = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  const woodNeckAtAddress = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+  // A high-loft hybrid's face lies back so far that the neck flare's front foot stood in front of
+  // the face (the face line ran into the neck): there the foot stops at the face line and the
+  // front edge rises from the face top along the face's direction. Every other neck is unchanged.
+  // the neck's edge on the face runs just behind the face line (its 1.1 mm stroke stays whole)
+  const FACE_LINE_CLEAR = 0.8;
+  const faceLineX = (y: number) => paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
+  const liesBack = !top && p.depth > 0 && shaftX + 8 - faceLineX(crownJoin) > 1;
+  const faceUp = [paths.tx - paths.bx, paths.ty - paths.by].map(
+    (v) => v / Math.hypot(paths.tx - paths.bx, paths.ty - paths.by)
+  );
+  const woodNeck = liesBack
+    ? `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} L ${faceLineX(crownJoin) - FACE_LINE_CLEAR} ${crownJoin} L ${paths.tx - FACE_LINE_CLEAR} ${paths.ty} C ${paths.tx - FACE_LINE_CLEAR + faceUp[0] * 6} ${paths.ty + faceUp[1] * 6} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`
+    : woodNeckAtAddress;
+  // with its front foot stopped at the face line, that neck no longer hides the shaft below its
+  // ferrule: the shaft starts at the ferrule's foot there
+  const shaftFoot = liesBack ? ferruleBase + 1 : shaftY;
   const neck = p.depth ? '' : bladeNeck(category, view, profileLoft).d;
   const coords = head.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
   const headXs = coords.filter((_, i) => i % 2 === 0);
@@ -215,7 +231,7 @@ export function ClubProjection({ shot, view }: { shot: DeliveryShot; view: 'top'
     <g className="club-projection__hosel">
       <path
         className="club-projection__shaft"
-        d={`M ${shaftX - 4.6} ${shaftY} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftY} Z`}
+        d={`M ${shaftX - 4.6} ${shaftFoot} L ${shaftX - 4.2} ${shaftEnd} L ${shaftX + 4.2} ${shaftEnd} L ${shaftX + 4.6} ${shaftFoot} Z`}
         fill={`url(#${id}shaft)`}
       />
       {p.depth ? (
