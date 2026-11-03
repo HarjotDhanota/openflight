@@ -15,7 +15,12 @@ import json
 
 import pytest
 
-from openflight.club_arc import ARC_OUTPUTS, CALCULATED, club_delivery_payload
+from openflight.club_arc import (
+    ARC_OUTPUTS,
+    CALCULATED,
+    PRE_CONTACT_PLANE_SOURCE,
+    club_delivery_payload,
+)
 from openflight.clubs import ClubType
 from tests.test_club_arc import (
     HEAD_TRACK_TIMES,
@@ -60,6 +65,11 @@ def _assert_no_prior_values(payload: dict) -> None:
         entry = metrics.get(name)
         if entry is None:
             continue
+        if entry.get("source") == PRE_CONTACT_PLANE_SOURCE:
+            # the pre-contact track's own plane (C18c): experimental, never the prior's
+            assert name in ("swing_plane_deg", "swing_direction_deg")
+            assert entry["status"] == "experimental"
+            continue
         assert entry["value"] is None, name
         assert entry["status"] == "not_measured", name
         assert entry["source"] is None, name
@@ -75,7 +85,7 @@ def test_shot1_shows_no_swing_plane_direction_or_low_point_from_the_prior():
     payload = club_delivery_payload(SHOT1, club=ClubType.IRON_7, handedness="RH")
 
     _assert_no_prior_values(payload)
-    reason = payload["metrics"]["swing_plane_deg"]["reason"]
+    reason = payload["metrics"]["low_point_distance_mm"]["reason"]
     assert "swing_plane_deg uncertainty" in reason  # the shot's own conditioning, in numbers
     # the shot's own path and attack stand
     assert payload["metrics"]["attack_angle_deg"]["value"] == pytest.approx(-10.29)

@@ -25,6 +25,7 @@ from openflight.camera.club_delivery import (
     APPROACH_PATH_OFFSETS,
     GOLF_BALL_DIAMETER_M,
     HEAD_ABOVE_BALL_MAX_M,
+    HEAD_APPROACH_MAX_M,
     CameraDeliveryGeometry,
     _clubhead_pair_tracks,
     estimate_chained_delivery,
@@ -132,8 +133,9 @@ def test_shot_4_attack_angle_and_heights_come_from_the_head(archive):
     )
 
     assert result.impact_frame == case["impact"]
-    # impact-4: the club is still high; refused by name, not tracked up the shaft
-    assert any("(-4, -1)" in note and "above the ball" in note for note in result.notes)
+    # impact-4: still on its approach (C18a), the head is taken at its heel - rendered and
+    # checked (research/rig-geometry-lock-2026-11-02/club-arc/c18a-oct27-shot4-impact-4.png)
+    assert not any("(-4, -1)" in note for note in result.notes)
     assert result.attack_angle_deg is not None and result.club_path_deg is not None
     # Owner: below about +5 deg; the low side stays inside the estimator's medium bound.
     assert APPROACH_MEDIUM_AOA_RANGE_DEG[0] <= result.attack_angle_deg < 5.0
@@ -142,7 +144,7 @@ def test_shot_4_attack_angle_and_heights_come_from_the_head(archive):
     times = case["sensor"].astype(float) / 1e9
     late = times[case["impact"] - 2] - 1e-6
     heights = [position.up_m - floor_m for position in result.head_positions]
-    assert heights and max(heights) <= HEAD_ABOVE_BALL_MAX_M
+    assert heights and max(heights) <= HEAD_APPROACH_MAX_M
     assert all(
         abs(position.up_m - floor_m) <= 0.08
         for position in result.head_positions

@@ -412,9 +412,10 @@ def test_payload_keeps_the_measured_chained_value_and_records_both():
     assert payload["cross_check"]["arc"]["club_path_deg"] is None
     assert payload["cross_check"]["chained"]["club_path_deg"] == pytest.approx(2.4)
     plane = payload["metrics"]["swing_plane_deg"]
-    assert plane["status"] == NOT_MEASURED and plane["value"] is None
-    assert plane["source"] is None and plane["frame"] is None
-    assert "gate here, never a value" in plane["reason"]
+    # never the prior's: the pre-contact track's own plane, experimental (C18c)
+    assert plane["status"] == "experimental"
+    assert plane["source"] == club_arc.PRE_CONTACT_PLANE_SOURCE
+    assert "gate here, never a value" in payload["metrics"]["low_point_distance_mm"]["reason"]
     assert payload["selection_rule"]
 
 

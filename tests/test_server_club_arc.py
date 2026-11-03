@@ -69,10 +69,11 @@ def test_attach_reads_the_fused_delivery_with_the_shot_s_club(monkeypatch):
     # the arc's points do not fix it: the 7-iron prior is a gate, never a value (C11f)
     assert metrics["attack_angle_deg"]["status"] == "not_measured"
     assert metrics["attack_angle_deg"]["value"] is None
-    assert metrics["swing_plane_deg"]["value"] is None
+    # the pre-contact track's own plane, experimental, never the prior's value (C18c)
+    assert metrics["swing_plane_deg"]["source"] == "club_arc:pre_contact_plane"
     assert shot.club_delivery["arc"]["prior"]["club"] == "7-iron"
     payload = shot_to_dict(shot)["club_delivery"]
-    assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
+    assert payload["metrics"]["swing_plane_deg"]["status"] == "experimental"
     assert payload["handedness"] == "RH"
 
 
