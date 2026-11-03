@@ -109,7 +109,9 @@ def test_every_model_output_on_a_fallback_launch_is_experimental():
         assert metrics[name]["status"] == status, name
 
 
-def test_an_ops_spin_of_experimental_quality_lowers_nothing_it_does_not_feed():
+def test_an_ops_spin_of_experimental_quality_lowers_only_the_flight_it_feeds():
+    """C11e: the flight now flies an experimental OPS spin, so its outputs take that label;
+    the spin still feeds no collision output (spin axis)."""
     metrics = {
         "launch_vertical": record("measured"),
         "launch_horizontal": record("measured"),
@@ -120,7 +122,8 @@ def test_an_ops_spin_of_experimental_quality_lowers_nothing_it_does_not_feed():
 
     shot_metrics.with_input_labels(metrics, {"spin_source": None, "spin_quality": "experimental"})
 
-    assert metrics["carry"]["status"] == "calculated"
+    assert metrics["carry"]["status"] == "experimental"
+    assert metrics["spin_axis"]["status"] == "calculated"
     assert metrics["spin_rate"]["status"] == "experimental"
 
 
