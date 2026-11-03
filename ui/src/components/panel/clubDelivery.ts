@@ -209,8 +209,6 @@ export function clubProfilePaths(category: FaceCategory, loft: number = CLUB_PRO
     side,
     sideFace: `M ${point(tx, ty)} L ${point(bx, by)}`,
     depth,
-    crown,
-    woodBack,
     heel,
     tx,
     ty,
@@ -261,66 +259,6 @@ function cubicHead(p: readonly Point[], t: number): Point[] {
   const [ab, bc, cd] = [lerp(p[0], p[1]), lerp(p[1], p[2]), lerp(p[2], p[3])];
   const [abc, bcd] = [lerp(ab, bc), lerp(bc, cd)];
   return [p[0], ab, abc, lerp(abc, bcd)];
-}
-
-/** The last part (t to 1) of a cubic, as its four control points. */
-function cubicTail(p: readonly Point[], t: number): Point[] {
-  const lerp = (a: Point, b: Point): Point => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-  const [ab, bc, cd] = [lerp(p[0], p[1]), lerp(p[1], p[2]), lerp(p[2], p[3])];
-  const [abc, bcd] = [lerp(ab, bc), lerp(bc, cd)];
-  return [lerp(abc, bcd), bcd, cd, p[3]];
-}
-
-/** A wood's neck in the heel view (svg mm before the hand's mirror): the hosel tube's flare comes
- * down onto the head and its foot follows the head's top, 1.5 mm inside it, so it meets the head
- * with one outline at every loft. Where the lofted face top lies under the tube, the front edge comes
- * down into the face top along the face line's direction (the face line ends there); otherwise it
- * lands on the crown in front of the tube. */
-export function woodHeelNeck(category: FaceCategory, loft?: number): string {
-  const paths = clubProfilePaths(category, loft);
-  const { shaftX, ferruleBase, ferruleRadius } = hoselLayout(category, 'side', loft);
-  const { tx, ty, bx, by, crown, woodBack } = paths;
-  const crownCurves: Point[][] = [
-    [
-      [tx, ty],
-      [tx - 5, crown],
-      [-woodBack * 0.2, crown],
-      [-woodBack * 0.4, crown + 3],
-    ],
-    [
-      [-woodBack * 0.4, crown + 3],
-      [-woodBack * 0.7, crown + 7],
-      [-woodBack, 0],
-      [-woodBack, by - 5],
-    ],
-  ];
-  const top = crownCurves.flatMap((c) => Array.from({ length: 61 }, (_, k) => cubicAt(c, k / 60)));
-  // the head's top edge at x (front to back), 1.5 mm inside it
-  const under = (x: number): number => {
-    const q = top.reduce((best, p) => (Math.abs(p[0] - x) < Math.abs(best[0] - x) ? p : best));
-    return q[1] + 1.5;
-  };
-  const [left, right] = [shaftX - ferruleRadius, shaftX + ferruleRadius];
-  const backX = shaftX - 11;
-  const backFoot: Point = [backX, under(backX)];
-  const faceTop = tx < right + 2;
-  const frontFoot: Point = faceTop ? [tx, ty] : [shaftX + 8, under(shaftX + 8)];
-  const along = top
-    .filter(([x]) => x < frontFoot[0] && x > backX)
-    .map(([x, y]): Point => [x, y + 1.5])
-    .reverse();
-  const up = unit([tx - bx, ty - by]);
-  const front = faceTop
-    ? `C ${point(tx + up[0] * 6, ty + up[1] * 6)} ${point(right, ferruleBase + 6)} ${point(right, ferruleBase)}`
-    : `C ${point(shaftX + 6, frontFoot[1])} ${point(right, frontFoot[1] - 6)} ${point(right, ferruleBase)}`;
-  return [
-    `M ${point(left, ferruleBase)}`,
-    `C ${point(left, backFoot[1] - 6)} ${point(backX + 4, backFoot[1])} ${point(...backFoot)}`,
-    ...along.map((q) => `L ${point(...q)}`),
-    `L ${point(...frontFoot)}`,
-    front,
-    'Z',
-  ].join(' ');
 }
 
 /** The top view's neck edges, back (top-line side) and front (leading-edge side): [mm toe-ward of
@@ -410,17 +348,11 @@ export function bladeNeck(
   }
   const t = (lo + hi) / 2;
   const [, , c2, crossing] = cubicHead(back, t);
-  const [, upper1, upper2] = cubicTail(back, t);
-  // the front edge comes down into the leading edge along the face line, and the foot closes up the
-  // face line to the crossing: the neck ends on the head at every loft, nothing pokes out
-  const down = unit([bx - tx, by - ty]);
-  const foot: Point = [bx, by - 2];
   const d = [
-    `M ${point(...crossing)}`,
-    `C ${point(...upper1)} ${point(...upper2)} ${point(...back[3])}`,
+    `M ${point(...back[0])}`,
+    `C ${point(...back[1])} ${point(...back[2])} ${point(...back[3])}`,
     `L ${point(right, ferruleBase)}`,
-    `C ${point(right, shaftY + 18)} ${point(foot[0] - down[0] * 9, foot[1] - down[1] * 9)} ${point(...foot)}`,
-    `L ${point(...crossing)} Z`,
+    `C ${point(right, shaftY + 18)} ${point(shaftX + 5, by - 1)} ${point(bx - 4, by)} Z`,
   ].join(' ');
   return { d, join: crossing, tangent: unit([crossing[0] - c2[0], crossing[1] - c2[1]]) };
 }

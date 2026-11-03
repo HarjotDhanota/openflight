@@ -112,12 +112,7 @@ about 12 mm on the iron's back edge, 8 mm on the wedge's; the band is the face o
 blade than along it). The tube's cylindrical shading stays on the tube, so that sweep takes
 the head's metal. In the heel view the hosel stands in front of the lofted face and meets the head only
 at the neck, low on the blade where its back edge crosses the face line: the gap between the
-hosel and the top of the face is open, as on a real club. At every loft the neck meets the head
-with one outline: a blade's hosel front edge comes down into the leading edge along the face
-line, and its foot closes along the face line, so nothing pokes out under the sole or past the
-leading edge; a wood's neck follows the head's top 1.5 mm inside it, coming down into the face
-top where the lofted face top lies under the tube, and its shaft starts at the ferrule. The face
-line ends at the leading edge and the face top.
+hosel and the top of the face is open, as on a real club.
 The top view is titled "Top at impact" because it depicts impact, not address:
 its head is turned by the shot's face angle at impact, its arrows are the face
 angle and club path at impact, and its numbers are face to path, face angle and
