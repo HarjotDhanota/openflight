@@ -639,3 +639,35 @@ def test_the_bracket_chord_terms_are_the_offset_budgets_own():
     assert budget["arc_chord_mm"] == pytest.approx(terms["arc_chord_mm"], abs=0.006)
     assert budget["face_rotation_mm"] == pytest.approx(terms["face_rotation_mm"], abs=0.006)
     assert terms["arc_chord_mm"] > 0.0 and terms["face_rotation_mm"] > 0.0
+
+
+# --- C12: the impact reader agrees with the club stage on the departure frame -----------
+
+
+def _august_shot4():
+    path = Path(__file__).parent / "fixtures" / "club_delivery" / "august-shot4.npz"
+    with np.load(path) as data:
+        frames = data["frames"]
+        ball = json.loads(str(data["ball_json"]))
+    return frames, il.RestingBall(ball["x"], ball["y"], ball["diameter_px"])
+
+
+def test_a_ball_the_head_covers_and_uncovers_has_not_left():
+    """Aug 25 shot 4: the head covers the ball in f68-f70, its cap and rim are back at rest
+    in f71-f73, it flies from f74. The first moved frame is f74, as the club stage reads."""
+    frames, ball = _august_shot4()
+    contact = il.find_contact(frames, ball)
+
+    assert contact.status == "ok", contact.reason
+    assert contact.contact_frame == 74
+    assert contact.last_rest_frame == 73
+
+
+def test_oct27_shot1_s_first_moved_frame_stays_f44():
+    from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
+
+    case = _shot1_club()
+    ball = case["kwargs"]["reference_ball"]
+    contact = il.find_contact(case["frames"], il.RestingBall(ball.x, ball.y, ball.diameter_px))
+    assert contact.status == "ok", contact.reason
+    assert contact.contact_frame == 44

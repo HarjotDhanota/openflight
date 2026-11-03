@@ -120,11 +120,13 @@ from openflight.camera.ball_rest import (  # noqa: F401  (moved, C12; re-exporte
     EDGE_SAMPLE_PX,
     EDGE_SEARCH_ABOVE_FRACTION,
     REFERENCE_FRAMES_MAX,
+    ball_at_rest,
     band_mean as _band_mean,
     cap_mask as _cap_mask,
     column_profile as _column_profile,
     crossing as _crossing,
     edge_witness as _edge_witness,
+    last_rest_before_departure,
 )
 from openflight.camera.impact_angle_evidence import AngleEvidence
 from openflight.constants import BALL_DIAMETER_MM
@@ -706,8 +708,17 @@ def find_contact(  # pylint: disable=too-many-branches
         return ContactEstimate("rejected", unseen, reference_frames=reference_count)
 
     edge_available, rises = _edge_witness(frames, ball, reference_count)
+    # the ball leaves after its last rest (C12): a ball the head covers and uncovers has not
+    # left, so the witnesses' first persistent change is searched only after it
+    search = reference_count
+    witnessed = ball_at_rest(frames, ball)
+    if witnessed is not None:
+        at_rest, rim = witnessed
+        last = last_rest_before_departure(at_rest, reference_count, count - 2, rim=rim)
+        if last is not None:
+            search = max(search, last + 1)
     edge_frame = (
-        _first_persistent([r is None or abs(r) >= EDGE_MOVE_PX for r in rises], reference_count)
+        _first_persistent([r is None or abs(r) >= EDGE_MOVE_PX for r in rises], search)
         if edge_available
         else None
     )
@@ -719,10 +730,10 @@ def find_contact(  # pylint: disable=too-many-branches
     for index in range(count):
         diff = np.abs(frames[index].astype(np.float32)[cap] - reference[cap])
         change[index] = float(np.mean(diff > threshold)) if diff.size else 0.0
-    cap_frame = _first_persistent(list(change >= CAP_CHANGED_FRACTION), reference_count)
+    cap_frame = _first_persistent(list(change >= CAP_CHANGED_FRACTION), search)
 
     flying_frame: int | None = None
-    for index in range(reference_count, count):
+    for index in range(search, count):
         if cap_frame is not None and index < cap_frame:
             continue
         found = flying_ball(frames[index], ball, reference)

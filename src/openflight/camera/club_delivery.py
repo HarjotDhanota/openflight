@@ -22,7 +22,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from openflight.acoustic_timing import sound_contact_record
-from openflight.camera import ball_pixels
+from openflight.camera import ball_pixels, ball_rest
 from openflight.camera.club_motion import ReferenceBall, detect_reference_ball
 from openflight.camera.geometry import (
     deroll_normalized_offsets,
@@ -1812,57 +1812,6 @@ def _dim_ball_presence(
     return (change - baseline) < threshold
 
 
-def _ball_at_rest(frames: np.ndarray, ball) -> tuple[np.ndarray, bool] | None:
-    """Per frame, whether the resting ball is positively seen where it rested, or None when
-    the witnesses cannot see it: the impact reader's own (``ball_rest``): its top
-    cap unchanged from the reference frames and, when its rim has contrast, the rim at its
-    resting row. A head covering only the ball's lower part leaves both; a covered or a
-    departed ball fails both. Returns (at rest per frame, whether the rim witnessed)."""
-    from . import ball_rest as br  # noqa: PLC0415
-
-    count = int(frames.shape[0])
-    if frames.ndim != 3 or count < 4:
-        return None
-    reference_count = min(br.REFERENCE_FRAMES_MAX, max(3, count // 4))
-    stack = frames[:reference_count].astype(np.float32)
-    reference = np.median(stack, axis=0)
-    cap = br.cap_mask(reference.shape, ball)
-    if not cap.any():
-        return None
-    noise = float(np.median(stack.std(axis=0)[cap]))
-    threshold = max(br.CAP_NOISE_SIGMA * noise, br.CAP_FLOOR_DN)
-    changed = np.array(
-        [
-            float(np.mean(np.abs(frame.astype(np.float32)[cap] - reference[cap]) > threshold))
-            for frame in frames
-        ]
-    )
-    at_rest = changed < br.CAP_CHANGED_FRACTION
-    available, rises = br.edge_witness(frames, ball, reference_count)
-    if available:
-        rim = np.array([rise is not None and abs(rise) < br.EDGE_MOVE_PX for rise in rises])
-        at_rest &= rim
-    return at_rest, bool(available)
-
-
-def _last_rest_before_departure(
-    at_rest: np.ndarray, start: int, end: int, *, rim: bool
-) -> int | None:
-    """The last frame the ball rests in, within ``start``..``end``, after which it is never
-    at rest again (C12): a ball the head covered reappears at rest, a departed one never
-    does. With the rim witnessing as well as the cap, one frame of rest is the ball's (a
-    head can uncover it for a single frame just before contact); with the cap alone, rest
-    must persist two frames (the witnesses' rule), so a club glint resembling the ball for
-    one frame is not its return."""
-    seen = np.nonzero(at_rest if rim else (at_rest[:-1] & at_rest[1:]))[0]
-    if len(seen) == 0:
-        return None
-    last = int(seen[-1]) + (0 if rim else 1)
-    if not start <= last <= end or last + 1 >= len(at_rest):
-        return None
-    return last
-
-
 def _detect_impact_index(
     frames: np.ndarray,
     ball,
@@ -1873,17 +1822,17 @@ def _detect_impact_index(
 
     Triggered captures search only the plausible contact window, so a late
     brightness match cannot move impact to the final frame. With the rest witnesses
-    (``_ball_at_rest``) the departure is the frame after which the ball never returns
+    (``ball_rest.ball_at_rest``) the departure is the frame after which the ball never returns
     to rest: a head passing over a ball that stays is not its departure (C12). Without
     them, the last frame the core pixels are undisturbed before two disturbed ones.
     """
     if trigger_index is not None:
-        witnessed = _ball_at_rest(frames, ball)
+        witnessed = ball_rest.ball_at_rest(frames, ball)
         if witnessed is not None:
             at_rest, rim = witnessed
             start = max(0, trigger_index - IMPACT_PRE_TRIGGER_MAX)
             end = min(len(frames) - 2, trigger_index + IMPACT_POST_TRIGGER_MAX)
-            last = _last_rest_before_departure(at_rest, start, end, rim=rim)
+            last = ball_rest.last_rest_before_departure(at_rest, start, end, rim=rim)
             if last is not None:
                 return last
     present = _ball_presence(frames, ball)
