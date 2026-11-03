@@ -353,6 +353,31 @@ def shaft_lie_input(record: Mapping[str, Any] | None, club: str | None) -> il.La
     return lie_from_shaft(float(value), sigma, club, f"{record.get('source')} (C11d)")
 
 
+CLUB_STAGE_SHAFT = "camera club stage: lower shaft at contact (C14)"
+
+
+def shot_lie_input(
+    record: Mapping[str, Any] | None, shot: Mapping[str, Any] | None, club: str | None
+) -> il.Labelled | None:
+    """The face's roll from the shot's own shaft: the post-shot reader's (``shaft_lie_input``),
+    else the club stage's inclination at contact the shot record carries; None leaves the
+    static-lie prior. Sigma: the prior's, or the shaft's frame-to-frame change if larger."""
+    own = shaft_lie_input(record, club)
+    if own is not None:
+        return own
+    processing = (shot or {}).get("camera_fusion_processing") if isinstance(shot, Mapping) else None
+    stage = (processing or {}).get("club_delivery") if isinstance(processing, Mapping) else None
+    shaft = (stage or {}).get("shaft") if isinstance(stage, Mapping) else None
+    if not isinstance(shaft, Mapping) or shaft.get("status") != "measured":
+        return None
+    value = shaft.get("inclination_deg")
+    if not isinstance(value, (int, float)) or not 0.0 < float(value) <= 90.0:
+        return None
+    angles = [v for v in (shaft.get("per_frame_deg") or {}).values() if isinstance(v, (int, float))]
+    change = abs(float(max(angles)) - float(min(angles))) if len(angles) >= 2 else 0.0
+    return lie_from_shaft(float(value), max(LIE_PRIOR_SIGMA_DEG, change), club, CLUB_STAGE_SHAFT)
+
+
 def head_axes(
     face_deg: float, loft_deg: float, lie_deg: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1828,7 +1853,7 @@ def place_clip(
         club=clip.club,
         handedness=clip.handedness,
         target_line_offset_deg=session.target_line_offset_deg(start),
-        lie=shaft_lie_input(clip.extra.get("dynamic_lie"), clip.club),
+        lie=shot_lie_input(clip.extra.get("dynamic_lie"), shot, clip.club),
     )
     placement = place_impact(
         clip.prepared,

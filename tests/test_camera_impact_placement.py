@@ -653,6 +653,31 @@ def test_the_shots_own_shaft_lie_replaces_the_static_lie_prior():
         assert ip.shaft_lie_input(refused, "7-iron") is None
 
 
+def test_the_club_stage_s_shaft_at_contact_is_the_lie_when_the_post_shot_reader_has_none():
+    """C14: the shot record's club-stage shaft inclination (absolute, at contact) becomes the
+    face's roll against the static lie when the post-shot shaft reader refused."""
+    shot = {
+        "camera_fusion_processing": {
+            "club_delivery": {
+                "shaft": {
+                    "status": "measured",
+                    "inclination_deg": 66.2,
+                    "per_frame_deg": {"43": 67.7, "44": 65.6},
+                }
+            }
+        }
+    }
+    refused = {"status": "not_measured", "value": None, "reason": "no masks"}
+    lie = ip.shot_lie_input(refused, shot, "7-iron")
+    assert lie.value == pytest.approx(66.2 - 62.3)
+    assert lie.sigma == pytest.approx(ip.LIE_PRIOR_SIGMA_DEG)
+    assert lie.source.startswith("camera club stage")
+    # the post-shot reader's own reading stands first
+    own = {"value": 60.0, "status": "model_geometry", "source": "camera lower shaft"}
+    assert ip.shot_lie_input(own, shot, "7-iron").value == pytest.approx(60.0 - 62.3)
+    assert ip.shot_lie_input(refused, {}, "7-iron") is None
+
+
 def test_the_lens_height_is_the_one_the_face_inputs_carry():
     from openflight.rig_geometry import RigGeometry
 
