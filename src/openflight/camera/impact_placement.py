@@ -333,6 +333,26 @@ def lie_from_shaft(
     return il.Labelled(float(shaft_lie_deg) - float(static), float(sigma_deg), source)
 
 
+def shaft_lie_input(record: Mapping[str, Any] | None, club: str | None) -> il.Labelled | None:
+    """The shot's own camera shaft lie (``dynamic_lie.estimate_dynamic_lie``) as the face's
+    roll, or None (the static-lie prior then stands, labelled). Its sigma is the prior's
+    (the estimate is unvalidated) or the shaft's frame-to-frame change, the larger."""
+    if not isinstance(record, Mapping) or record.get("status") != "model_geometry":
+        return None
+    value = record.get("value")
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    fits = ((record.get("diagnostics") or {}).get("fits")) or []
+    angles = [fit.get("angle_deg") for fit in fits if isinstance(fit, Mapping)]
+    change = (
+        abs(float(angles[-1]) - float(angles[0]))
+        if len(angles) >= 2 and all(isinstance(a, (int, float)) for a in angles)
+        else 0.0
+    )
+    sigma = max(LIE_PRIOR_SIGMA_DEG, change)
+    return lie_from_shaft(float(value), sigma, club, f"{record.get('source')} (C11d)")
+
+
 def head_axes(
     face_deg: float, loft_deg: float, lie_deg: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1812,6 +1832,7 @@ def place_clip(
         club=clip.club,
         handedness=clip.handedness,
         target_line_offset_deg=session.target_line_offset_deg(start),
+        lie=shaft_lie_input(clip.extra.get("dynamic_lie"), clip.club),
     )
     placement = place_impact(
         clip.prepared,
@@ -1822,7 +1843,7 @@ def place_clip(
         centre_height=face.face_centre_height,
     )
     placement.diagnostics["orientation_provenance"] = orientation.provenance()
-    placement.diagnostics["dynamic_lie_estimate_not_used"] = clip.extra.get("dynamic_lie")
+    placement.diagnostics["dynamic_lie_estimate"] = clip.extra.get("dynamic_lie")
     return placement, orientation, scene
 
 

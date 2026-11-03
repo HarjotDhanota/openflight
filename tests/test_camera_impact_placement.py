@@ -608,6 +608,25 @@ def test_a_shaft_lie_becomes_the_faces_roll_against_the_static_lie():
     assert lie.sigma == 3.0 and lie.source == "camera_lower_shaft"
 
 
+def test_the_shots_own_shaft_lie_replaces_the_static_lie_prior():
+    """C11d: a dynamic-lie record the camera measured becomes the placement's lie; its sigma is
+    never under the prior's (the estimate is unvalidated), its frame-to-frame change if larger."""
+    record = {
+        "value": 65.3,
+        "status": "model_geometry",
+        "source": "camera lower shaft",
+        "diagnostics": {"fits": [{"angle_deg": 64.1}, {"angle_deg": 64.9}]},
+    }
+    lie = ip.shaft_lie_input(record, "7-iron")
+    assert lie.value == pytest.approx(65.3 - 62.3)
+    assert lie.sigma == pytest.approx(ip.LIE_PRIOR_SIGMA_DEG)
+    assert lie.source.startswith("camera lower shaft")
+    record["diagnostics"]["fits"][1]["angle_deg"] = 70.0
+    assert ip.shaft_lie_input(record, "7-iron").sigma == pytest.approx(5.9)
+    for refused in ({"status": "not_measured", "value": None}, None, {"status": "model_geometry"}):
+        assert ip.shaft_lie_input(refused, "7-iron") is None
+
+
 def test_the_lens_height_is_the_one_the_face_inputs_carry():
     from openflight.rig_geometry import RigGeometry
 
@@ -825,7 +844,8 @@ def test_the_session_route_reads_the_shots_own_d_plane_and_scene(tmp_path):
     assert abs(row["impact_offset_mm"] - 7.0) <= row["impact_offset_sigma_mm"]
     assert abs(row["impact_height_mm"] + 11.0) <= row["impact_height_sigma_mm"]
     assert row["dynamic_loft_source"] == "synthetic_independent_angle"
-    assert row["lie_source"] == ip.PRIOR_LIE
+    # the rendered lower shaft is read (C11d): the lie is the shot's own, not the prior
+    assert row["lie_source"].startswith("camera lower shaft")
     assert row["lens_height_source"] == il.RIG_LENS_HEIGHT
 
 
@@ -836,7 +856,7 @@ def test_the_session_route_takes_the_shots_d_plane_when_it_has_no_capture_angles
     assert row["face_angle_source"].startswith("calculated")
     assert row["dynamic_loft_source"].startswith("calculated")
     assert row["dynamic_loft_deg"] == 27.0
-    assert row["orientation_origin"] == "face_angle=d_plane dynamic_loft=d_plane lie=prior"
+    assert row["orientation_origin"] == "face_angle=d_plane dynamic_loft=d_plane lie=given"
     assert row["impact_offset_mm"] == pytest.approx(7.0, abs=3.0)
 
 
