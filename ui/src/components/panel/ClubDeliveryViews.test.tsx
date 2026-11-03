@@ -576,7 +576,7 @@ describe('club delivery drawings', () => {
   });
 
   /* The heel view as approved at 1192aac1, every club, both hands, no shot: the sha-256 of its
-   * rendered SVG. Its hosel and neck are painted over the face line, so where they overlap the
+   * rendered SVG (5H, 7H and 9H since with their neck taken down past the face line). Its hosel and neck are painted over the face line, so where they overlap the
    * lofted face line runs behind the hosel. */
   const APPROVED_HEEL_VIEWS: Record<string, string> = {
     '2-iron:right': 'e002399f1cacad6e',
@@ -605,12 +605,12 @@ describe('club delivery drawings', () => {
     'lw:left': '8362ac1ad9813b5c',
     '3-hybrid:right': '6c2d3192d8c77e88',
     '3-hybrid:left': '8a8c5bab057578bc',
-    '5-hybrid:right': 'fa44c08287964184',
-    '5-hybrid:left': '2c35eade669bc949',
-    '7-hybrid:right': 'a26cfbf8c4f4812d',
-    '7-hybrid:left': '342ed9445337c65a',
-    '9-hybrid:right': 'b8476ac25ab68294',
-    '9-hybrid:left': 'e2ddbf7f2674b5a6',
+    '5-hybrid:right': 'a1b98485be944cef',
+    '5-hybrid:left': '60660b15d9717c06',
+    '7-hybrid:right': '28880387bdcf5c5b',
+    '7-hybrid:left': 'de2c1da3d3a0c5ca',
+    '9-hybrid:right': '11241f43cbb145df',
+    '9-hybrid:left': 'c279dd2600ebcdc3',
     'driver:right': 'a28d187dc777d223',
     'driver:left': 'f4a02631a8920580',
     '3-wood:right': '1a1268e79c944a0e',
@@ -644,6 +644,48 @@ describe('club delivery drawings', () => {
       expect(hosel.querySelector('.club-projection__neck')).not.toBeNull();
     }
   );
+
+  /* At a hybrid's higher lofts (5H, 7H, 9H) the face lies back so far that the neck's flat foot stood
+   * in front of the face line, a ledge with the face line ending under it. There the neck goes on
+   * straight down from its foot until it is behind the face line, into the head; the tube, the
+   * hosel position and the neck above its foot stay as approved at 1192aac1. */
+  it.each(['5-hybrid', '7-hybrid', '9-hybrid'])('takes the %s neck straight down past the face line', (club) => {
+    const { loft } = staticLoftLie(club);
+    const paths = clubProfilePaths('hybrid', loft);
+    const { shaftX, shaftY, ferruleBase, ferruleRadius, crownJoin } = hoselLayout('hybrid', 'side', loft);
+    const element = svg({ ...clubModel(club), impact_location: { handedness: 'right' } } as Shot, 'side');
+    const d = element.querySelector('.club-projection__neck')!.getAttribute('d')!;
+    // the upper neck is the approved one: the same back and front curves from the ferrule to the foot
+    const back = `M ${shaftX - ferruleRadius} ${ferruleBase} C ${shaftX - ferruleRadius} ${shaftY} ${shaftX - 7} ${crownJoin} ${shaftX - 11} ${crownJoin} `;
+    const front = ` L ${shaftX + 8} ${crownJoin} C ${shaftX + 6} ${crownJoin} ${shaftX + ferruleRadius} ${shaftY} ${shaftX + ferruleRadius} ${ferruleBase} Z`;
+    expect(d.startsWith(back)).toBe(true);
+    expect(d.endsWith(front)).toBe(true);
+    const neck = polygon(d);
+    const head = polygon(paths.side);
+    const faceX = (y: number) => paths.tx + ((y - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
+    const foot = shaftX + 8;
+    // no ledge: the foot no longer ends the neck; its front edge runs straight down from it
+    const below = neck.filter(([, y]) => y > crownJoin + 0.01);
+    expect(below.length).toBeGreaterThan(0);
+    expect(Math.max(...below.map(([x]) => x))).toBeCloseTo(foot, 6);
+    // down past the face line, so the face line is behind the neck from the face top to there
+    const crossing = paths.ty + ((foot - paths.tx) / (paths.bx - paths.tx)) * (paths.by - paths.ty);
+    expect(Math.max(...below.map(([, y]) => y))).toBeGreaterThan(crossing + 1);
+    for (let i = 1; i < 20; i++) {
+      const y = paths.ty + ((crossing - paths.ty) * i) / 20;
+      expect(inside([faceX(y) - 0.01, y], neck)).toBe(true);
+    }
+    // and the part below the foot stays inside the head, clear of the sole's outline
+    for (const q of below) if (q[1] > crossing) expect(inside([q[0] - 0.5, q[1] + 0.5], head)).toBe(true);
+  });
+
+  it('keeps the 3-hybrid neck, whose foot is already behind the face line, as approved', () => {
+    const { loft } = staticLoftLie('3-hybrid');
+    const paths = clubProfilePaths('hybrid', loft);
+    const { shaftX, crownJoin } = hoselLayout('hybrid', 'side', loft);
+    const faceX = paths.tx + ((crownJoin - paths.ty) / (paths.by - paths.ty)) * (paths.bx - paths.tx);
+    expect(shaftX + 8).toBeLessThan(faceX);
+  });
 
   it('gives every selectable club type its own row; only an unknown name falls back to its category', () => {
     for (const club of ALL_CLUBS) expect(staticLoftLie(club.id).source).toBe('club');
