@@ -170,10 +170,12 @@ def _dynamic_lie(shot):
         notes = [shaft.get("note")]
         if derived is not None:
             notes.append(f"{derived:+.1f} deg against the club category's static lie (reference)")
+        # both shaft points are read at the head's range: the shaft's own depth is unobserved,
+        # the same assumption the post-shot shaft reader labels model_geometry (C25b)
         return sm.build_record(
             "dynamic_lie",
             inclination,
-            sm.MEASURED,
+            sm.MODEL_GEOMETRY,
             source=CLUB_STAGE_SHAFT_SOURCE,
             note="; ".join(note for note in notes if note) or None,
         )

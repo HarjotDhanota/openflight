@@ -203,7 +203,8 @@ def test_dynamic_lie_falls_back_to_the_club_stage_s_shaft_at_contact():
     shot = fusion_shot(camera_fusion_processing={"club_delivery": {"shaft": shaft}})
     record = shot.to_dict()["metrics"]["dynamic_lie"]
     assert record["value"] == pytest.approx(66.6)
-    assert record["status"] in ("measured", "estimated", "experimental")
+    # the shaft's depth is the head's, unobserved: model_geometry, as the post-shot reader (C25b)
+    assert record["status"] == "model_geometry"
     assert "shaft" in record["source"] and "+4.3" in record["note"]
 
 
