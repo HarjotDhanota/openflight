@@ -9,10 +9,12 @@ no higher above the surface than the heel anchor's own height over the sole
 (HEEL_ANCHOR_ABOVE_SOLE_M: the average iron's hosel foot is 35.2 mm above its sole) AND whose
 descent has stopped (the next position no lower, within HEAD_HEIGHT_NOISE_M): a head still
 falling is in flight whatever its height reads (C22c). The tangent fits the last
-CONTACT_TANGENT_WINDOW_S of free flight, read where it ended. A head that
-reached the surface more than a ball diameter before the ball is a fat contact: the club
-stage gives no attack angle, with the reason "fat contact: head reached the surface N mm
-before the ball" and the free-flight descent in its note (C22c).
+CONTACT_TANGENT_WINDOW_S of free flight, read at its last frame (G2 C2).
+
+G2 C6 (4 Nov 2026) retired the fat-contact rule (C22c withheld the attack angle when the
+head reached the surface a ball diameter before the ball): the attack angle is always
+reported, and fat / thin is a verdict of the low point's MEASURED height only
+(club_arc.low_point_estimate).
 """
 
 from __future__ import annotations
@@ -87,20 +89,19 @@ def test_oct27_shot1_meets_the_surface_at_the_ball_and_is_unchanged():
     rows, _live = LIVE[1]
     tangent = _tangent(rows)
     assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[1], abs=0.05)
-    assert tangent.fat_contact_mm is None and tangent.reason is None
+    assert tangent.reason is None
     assert tangent.free_flight_frames == 4  # f40-f43: f39 is 17 ms out, beyond the window
 
 
-def test_oct27_shot3_is_a_fat_contact_read_from_its_free_flight():
+def test_oct27_shot3_is_read_from_its_free_flight_before_the_surface():
     rows, live = LIVE[3]
     tangent = _tangent(rows)
-    assert tangent.fat_contact_mm == pytest.approx(184.0, abs=5.0)
+    assert not hasattr(tangent, "fat_contact_mm")  # G2 C6: no fat-contact rule
     assert tangent.free_flight_frames == 3  # f39-f41; f42 and f43 ride the surface
     # the descent at the last free-flight frame (f41), no longer the +15.5 a fit across the
     # floor read
     assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[3], abs=0.5)
     assert tangent.attack_angle_deg < live - 40.0
-    assert "fat contact: head reached the surface 184 mm before the ball" in tangent.note
 
 
 def test_oct27_shot4_is_still_descending_at_the_ball_and_reads_as_before():
@@ -108,7 +109,6 @@ def test_oct27_shot4_is_still_descending_at_the_ball_and_reads_as_before():
     tangent = _tangent(rows)
     # its last rest frame reads 32 mm, under the grounded-heel floor, but the head is still
     # descending (23.7 mm a frame later): free flight, not the surface (C22c)
-    assert tangent.fat_contact_mm is None
     assert tangent.free_flight_frames == 4
     assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[4], abs=0.05)
 
@@ -126,7 +126,7 @@ def test_a_head_still_descending_below_the_floor_is_in_free_flight():
         (1.81, 0.143, 0.0101, 1.633),
     ]
     tangent = _tangent(rows)
-    assert tangent.fat_contact_mm is None
+    assert tangent.free_flight_frames == 4
     assert tangent.attack_angle_deg is not None
 
 
@@ -134,8 +134,8 @@ def test_fewer_than_three_free_flight_frames_withhold_the_attack_angle():
     rows, _live = LIVE[3]
     tangent = _tangent(rows[1:])  # f40, f41 free; f42 lands
     assert tangent.attack_angle_deg is None
-    assert tangent.fat_contact_mm == pytest.approx(184.0, abs=5.0)
     assert "fewer than 3 free-flight frames" in tangent.reason
+    assert "fat contact" not in tangent.reason
 
 
 def test_without_a_surface_every_frame_in_the_window_is_free_flight():
@@ -161,27 +161,24 @@ def test_the_window_is_time_not_a_frame_count():
     )
 
 
-def test_the_club_stage_reports_no_attack_angle_on_a_fat_contact(monkeypatch):
-    # C22c (owner, 3 Nov 2026): a head that reached the surface more than a ball diameter
-    # before the ball gives no attack angle; its free-flight descent goes in the note
+def test_the_club_stage_reports_the_attack_angle_where_the_head_reached_the_surface_early(
+    monkeypatch,
+):
+    # G2 C6: C22c's fat-contact rule withheld the attack angle here; it is always reported now
     from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
 
     case = _shot1_club()
     # a sole margin and a height noise high enough that the fixture's f42 (62 mm, 41 mm a
-    # frame later) rides the surface ~200 mm before the ball: the stage's wiring of a fat
-    # contact, on real frames (f44, after contact, is in no window since G2 C3)
+    # frame later) rides the surface ~200 mm before the ball, on real frames
     monkeypatch.setattr(cd, "HEEL_ANCHOR_ABOVE_SOLE_M", 0.07)
     monkeypatch.setattr(cd, "HEAD_HEIGHT_NOISE_M", 0.025)
     result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
 
-    assert result.attack_angle_deg is None
-    assert result.attack_confidence_tier == "withheld"
-    assert result.club_path_deg is not None and result.status == "approach_path_only"
-    note = next(n for n in result.notes if n.startswith("attack angle not measured: fat contact"))
-    assert "head reached the surface" in note and "mm before the ball" in note
-    assert "free-flight descent" in note and "deg" in note
-    assert result.attack_reason.startswith("fat contact: head reached the surface")
-    assert result.attack_reason.endswith("mm before the ball")
+    assert result.attack_angle_deg is not None
+    assert result.attack_confidence_tier != "withheld"
+    assert result.club_path_deg is not None and result.status != "approach_path_only"
+    assert not any("fat contact" in note for note in result.notes)
+    assert not hasattr(result, "attack_reason")
 
 
 def test_a_heel_below_the_surface_itself_leaves_the_surface_out_of_it():
@@ -198,7 +195,6 @@ def test_a_heel_below_the_surface_itself_leaves_the_surface_out_of_it():
         (1.07, 0.0, 0.0004, 1.555),
     ]
     tangent = _tangent(rows, surface=0.04 - 0.02135)
-    assert tangent.fat_contact_mm is None
     assert tangent.free_flight_frames == 5
     assert tangent.attack_angle_deg is not None
     assert "below the hitting surface" in tangent.datum_note

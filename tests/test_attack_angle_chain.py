@@ -238,18 +238,3 @@ def test_simulators_get_no_axis_built_on_the_experimental_candidate():
     with pytest.raises(UnmeasuredShotError) as refused:
         resolve_shot(shot, PlayerState())
     assert "spin axis (experimental)" in refused.value.missing
-
-
-def test_a_fat_contact_is_the_camera_s_refusal_by_name():
-    # C22c: the club stage withheld its attack angle because the head reached the surface
-    # before the ball; the fused route's refusal is that reason (Oct 27 shot 3)
-    reason = "fat contact: head reached the surface 184 mm before the ball"
-    shot = _shot(experimental_fused_status="approach_path_only")
-    shot.camera_fusion_processing = {
-        "club_delivery": {"status": "approach_path_only", "attack_reason": reason}
-    }
-
-    resolution = shot_models.attack_angle_resolution(shot)
-
-    assert dict(resolution.tried)["camera_fused"] == reason
-    assert resolution.value is None

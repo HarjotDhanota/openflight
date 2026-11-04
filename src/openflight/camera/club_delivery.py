@@ -278,9 +278,6 @@ class ChainedDelivery:
     shaft: dict | None = None
     # the frames of the window the path was read on (first, last), None for a median (C3)
     path_window_frames: tuple[int, int] | None = None
-    # why the attack angle is not measured when the stage withheld it on purpose (C22c:
-    # "fat contact: head reached the surface N mm before the ball"), else None
-    attack_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1363,19 +1360,9 @@ def estimate_chained_delivery(
         )
         if tangent.datum_note is not None:
             notes.append(tangent.datum_note)
-        if tangent.fat_contact_mm is not None:
-            # C22c (owner, 3 Nov 2026): the head met the surface before the ball, so no
-            # direction at the ball is measured; its free-flight descent is only a note
-            descent = (
-                f"; its free-flight descent read {tangent.attack_angle_deg:.1f} deg where it "
-                "reached the surface"
-                if tangent.attack_angle_deg is not None
-                else ""
-            )
-            notes.append(f"attack angle not measured: {tangent.reason or tangent.note}{descent}")
-            common["attack_reason"] = tangent.note
-            attack_estimate = None
-        elif tangent.attack_angle_deg is not None:
+        # G2 C6: the attack angle is always reported (C22c's fat-contact rule withheld it);
+        # fat / thin is the low point's verdict on its measured height (club_arc)
+        if tangent.attack_angle_deg is not None:
             notes.append(
                 f"attack angle {tangent.attack_angle_deg:.1f} +- {tangent.sigma_deg:.1f} deg "
                 f"at the last pre-contact frame, {tangent.read_before_contact_ms:.1f} ms before "
@@ -1486,12 +1473,10 @@ HEAD_POSITION_SIGMA_M = 0.003
 
 @dataclass(frozen=True)
 class ContactTangent:
-    """The head's attack angle from its free flight, and whether it reached the surface
-    before the ball (a fat contact: ``fat_contact_mm`` along its travel)."""
+    """The head's attack angle from its free flight."""
 
     attack_angle_deg: float | None
     free_flight_frames: int
-    fat_contact_mm: float | None = None
     reason: str | None = None
     # why the surface did not end free flight though one was given, or None
     datum_note: str | None = None
@@ -1506,26 +1491,6 @@ class ContactTangent:
         if self.read_t_s is None or self.contact_t_s is None:
             return None
         return 1e3 * (self.contact_t_s - self.read_t_s)
-
-    @property
-    def note(self) -> str | None:
-        if self.fat_contact_mm is None:
-            return None
-        return f"fat contact: head reached the surface {self.fat_contact_mm:.0f} mm before the ball"
-
-
-def _head_at(ordered, t_s: float) -> tuple[float, float]:
-    """(lateral, forward) of the head at ``t_s``, linear between its bracketing positions
-    (the nearest one outside them)."""
-    for before, after in zip(ordered, ordered[1:]):
-        if before.t_s <= t_s <= after.t_s and after.t_s > before.t_s:
-            f = (t_s - before.t_s) / (after.t_s - before.t_s)
-            return (
-                before.lateral_m + f * (after.lateral_m - before.lateral_m),
-                before.forward_m + f * (after.forward_m - before.forward_m),
-            )
-    nearest = min(ordered, key=lambda p: abs(p.t_s - t_s))
-    return nearest.lateral_m, nearest.forward_m
 
 
 def slope_with_sigma(
@@ -1566,15 +1531,14 @@ def contact_tangent(
     (C2: never beyond the data), with its propagated sigma. Free flight ends at the contact,
     or at the first frame whose heel is within ``HEEL_ANCHOR_ABOVE_SOLE_M`` of
     ``surface_up_m`` and whose descent has stopped: the next position no lower than
-    ``HEAD_HEIGHT_NOISE_M`` below it). A head that reached the surface more than a ball diameter before the
-    contact point is a fat contact. A heel read below the surface itself shows the heights
+    ``HEAD_HEIGHT_NOISE_M`` below it). A heel read below the surface itself shows the heights
     are not on the surface's datum (the anchor rides ``HEEL_ANCHOR_ABOVE_SOLE_M`` over a
     grounded sole): the surface then ends nothing and ``datum_note`` says why. None (with
     the reason) under ``CONTACT_TANGENT_MIN_FRAMES`` free-flight frames; a straight approach
     reads its chord."""
     ordered = sorted(head_positions, key=lambda p: p.t_s)
     pre = [p for p in ordered if p.t_s <= last_rest_t_s + 1e-9]
-    end_t, free, fat_mm, datum_note = contact_t_s, pre, None, None
+    end_t, free, datum_note = contact_t_s, pre, None
     lowest = min((p.up_m for p in pre), default=None)
     if surface_up_m is not None and lowest is not None and lowest < float(surface_up_m):
         datum_note = (
@@ -1599,10 +1563,6 @@ def contact_tangent(
         if landed is not None:
             end_t = landed.t_s
             free = [p for p in pre if p.t_s < landed.t_s]
-            lateral, forward = _head_at(ordered, contact_t_s)
-            travel = math.hypot(lateral - landed.lateral_m, forward - landed.forward_m)
-            if travel > GOLF_BALL_DIAMETER_M:
-                fat_mm = 1000.0 * travel
     window = [p for p in free if p.t_s >= end_t - CONTACT_TANGENT_WINDOW_S - 1e-9]
     count = len({p.t_s for p in window})
     if count < CONTACT_TANGENT_MIN_FRAMES:
@@ -1611,22 +1571,18 @@ def contact_tangent(
             f"fewer than {CONTACT_TANGENT_MIN_FRAMES} free-flight frames in the last "
             f"{CONTACT_TANGENT_WINDOW_S * 1e3:.0f} ms before {ended} ({count})"
         )
-        tangent = ContactTangent(None, count, fat_mm, datum_note=datum_note)
-        if tangent.note:
-            reason = f"{tangent.note}; {reason}"
-        return replace(tangent, reason=reason)
+        return ContactTangent(None, count, reason, datum_note=datum_note)
     times = np.asarray([p.t_s for p in window], dtype=float)
     xyz = np.asarray([[p.lateral_m, p.up_m, p.forward_m] for p in window], dtype=float)
     read_t = float(times.max())
     read = slope_with_sigma(times, xyz, at_s=read_t, degree=2, position_sigma_m=position_sigma_m)
     if read is None:
         return ContactTangent(
-            None, count, fat_mm, "the free-flight fit is not finite", datum_note=datum_note
+            None, count, "the free-flight fit is not finite", datum_note=datum_note
         )
     return ContactTangent(
         read[0],
         count,
-        fat_mm,
         datum_note=datum_note,
         sigma_deg=read[1],
         read_t_s=read_t,
