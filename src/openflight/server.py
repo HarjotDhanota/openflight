@@ -6170,6 +6170,7 @@ def _shot_surface_solve(shot: Shot, camera_archive) -> dict:
         range_label=getattr(shot, "ball_range_label", None),
         ball_px=(ball["x_px"], ball["y_px"]) if ball else None,
         ball_diameter_px=ball.get("diameter_px") if ball else None,
+        ball_diameter_support=ball.get("diameter_support") if ball else None,
         focal_px=focal,
         image_size_px=(width, height),
         # never a tilt calibrated from ball pairs (it assumed the rig's lens height and

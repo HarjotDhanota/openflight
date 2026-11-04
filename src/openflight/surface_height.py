@@ -152,6 +152,7 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     pitch_reading_sigma_deg: float | None = None,
     size_tolerance: float = SIZE_TOLERANCE,
     camera_model: Any = None,
+    ball_diameter_support: str | None = None,
 ) -> dict:
     """One shot's hitting-surface height above the base, or why it has none.
 
@@ -169,6 +170,10 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
     measured on checkerboards independently of any ball, so it is not the ball-pair
     circularity above. ``angular_sigma_deg`` defaults to ``CALIBRATED_ANGULAR_SIGMA_DEG``
     with the model, else ``UNCALIBRATED_ANGULAR_SIGMA_DEG``.
+
+    ``ball_diameter_support`` (``resting_ball_range.diameter_support``): a ball whose size has
+    no rim support (the lit blob's own, sigma 14 px) solves no surface (C26e); the other
+    classes solve, their range sigma already widened by the diameter's.
     """
     from openflight.camera.reference_ball_range import (  # noqa: PLC0415
         BallPlaneCamera,
@@ -193,6 +198,7 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
         "range_label": range_label,
         "ball_px": list(ball_px) if ball_px is not None else None,
         "ball_diameter_px": ball_diameter_px,
+        "ball_diameter_support": ball_diameter_support,
         "focal_px": focal_px,
         "image_size_px": list(image_size_px),
         "principal_point": "calibrated" if calibrated is not None else "image_centre",
@@ -245,6 +251,12 @@ def solve_shot(  # pylint: disable=too-many-arguments,too-many-locals,too-many-r
         )
     if ball_px is None or not _finite(ball_diameter_px) or float(ball_diameter_px) <= 0.0:
         return _refused("no_resting_ball", "no resting ball in the shot's own frames", inputs)
+    if ball_diameter_support == "no_rim":
+        # Oct 24 shot 03: 29.7 +- 13.2 mm from a 58 px blob whose rim was never fitted (truth
+        # 41 px, ~9 mm): a 21 mm error the in-force rule took; the located tee stays, labelled
+        return _refused(
+            "resting_ball_size_without_rim_support", "resting ball size has no rim support", inputs
+        )
     if not _finite(pitch_deg):
         return _refused("no_camera_pitch", "no stable LIS3DH camera pitch for the shot", inputs)
     if not _finite(focal_px) or float(focal_px) <= 0.0:

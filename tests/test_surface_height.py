@@ -375,3 +375,38 @@ def test_a_seven_cm_size_range_error_moves_the_surface_about_three_mm():
     )
 
     assert abs(off["surface_height_m"] - right["surface_height_m"]) < 0.004
+
+
+# --- C26e: a ball size with no rim support solves no surface ------------------------------
+
+TRUTH = Path(__file__).parent / "fixtures" / "resting_ball_truth"
+
+
+def _finder_support(shot: str) -> str:
+    from openflight.camera.resting_ball_range import diameter_support  # noqa: PLC0415
+
+    finder = json.loads((TRUTH / "finder.json").read_text(encoding="utf-8"))
+    entry = next(v for v in finder.values() if v["shot"] == shot)
+    return diameter_support(entry["rim_support"])[0]
+
+
+@pytest.mark.parametrize("shot", ["oct24-03", "oct24-04", "oct24-15", "oct24-24"])
+def test_a_lit_blob_size_solves_no_surface(shot):
+    # Oct 24 shot 03 read 29.7 +- 13.2 mm on a 58 px blob (truth 41 px; ~9 mm with it), a 21 mm
+    # error the in-force rule still took; the located tee itself stays, labelled
+    support = _finder_support(shot)
+    assert support == "no_rim"
+    solve = _solve(ball_diameter_support=support)
+    assert solve["status"] == "refused"
+    assert solve["reason_code"] == "resting_ball_size_without_rim_support"
+    assert solve["reason"] == "resting ball size has no rim support"
+
+
+@pytest.mark.parametrize("support", ["supported", "disagree", "one_sided", "cap_only", None])
+def test_a_rim_fitted_size_still_solves_with_its_sigma(support):
+    assert _solve(ball_diameter_support=support)["status"] == "solved"
+
+
+def test_oct27_shot1_is_supported_and_solves():
+    assert _finder_support("oct27-01") == "supported"
+    assert _solve(ball_diameter_support="supported")["status"] == "solved"
