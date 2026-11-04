@@ -217,3 +217,26 @@ def test_a_head_track_delivery_is_experimental_and_names_its_source():
     assert "beyond +-15 deg" in attack["reason"]
     # the arc never fits it: no head positions
     assert payload["metrics"]["swing_plane_deg"]["status"] == "not_measured"
+
+
+def test_the_shot_record_carries_the_attack_sigma_as_its_range():
+    from openflight.camera import club_delivery as cd  # noqa: PLC0415
+    from openflight.club_arc import RANGE_SIGMAS, club_delivery_payload  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
+
+    # G2 C2: the shot record's attack angle carries the stage's propagated sigma
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
+    entry = club_delivery_payload(result, club=ClubType.IRON_7, handedness="RH")["metrics"][
+        "attack_angle_deg"
+    ]
+    sigma = result.attack_angle_sigma_deg
+    assert entry["sigma"] == pytest.approx(sigma)
+    assert entry["range"] == pytest.approx(
+        [
+            result.attack_angle_deg - RANGE_SIGMAS * sigma,
+            result.attack_angle_deg + RANGE_SIGMAS * sigma,
+        ],
+        abs=0.01,
+    )

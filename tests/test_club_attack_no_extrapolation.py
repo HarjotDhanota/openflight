@@ -118,22 +118,3 @@ def test_oct27_shot1_reads_the_last_chord_s_descent_with_its_sigma(shot1):
         1e3 * (result.contact_t_s - f43.t_s), abs=1e-3
     )
     assert any("no extrapolation" in note for note in result.notes)
-
-
-def test_the_shot_record_carries_the_attack_sigma_as_its_range(shot1):
-    from openflight.club_arc import RANGE_SIGMAS, club_delivery_payload  # noqa: PLC0415
-    from openflight.clubs import ClubType  # noqa: PLC0415
-
-    _case, result = shot1
-    entry = club_delivery_payload(result, club=ClubType.IRON_7, handedness="RH")["metrics"][
-        "attack_angle_deg"
-    ]
-    sigma = result.attack_angle_sigma_deg
-    assert entry["sigma"] == pytest.approx(sigma)
-    assert entry["range"] == pytest.approx(
-        [
-            result.attack_angle_deg - RANGE_SIGMAS * sigma,
-            result.attack_angle_deg + RANGE_SIGMAS * sigma,
-        ],
-        abs=0.01,
-    )
