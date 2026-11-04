@@ -164,11 +164,15 @@ CHAINED_MIN_IMAGE_MOTION_PX = 1e-6
 CHAINED_FEATURE_SPEED_RANGE_MPH = (25.0, 140.0)
 CHAINED_FEATURE_PATH_RANGE_DEG = (-60.0, 60.0)
 CHAINED_FEATURE_AOA_RANGE_DEG = (-45.0, 30.0)
-APPROACH_AOA_RANGE_DEG = (-12.0, 8.0)
 APPROACH_PATH_WINDOW_MAD_MAX_DEG = 5.0
 APPROACH_MIN_PATH_WINDOWS = 3
 APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH = 12.0
-APPROACH_MEDIUM_AOA_RANGE_DEG = (-18.0, 12.0)
+# G2 C2 (4 Nov 2026): the attack angle's tier is its propagated 1-sigma (HEAD_POSITION_SIGMA_M
+# through the free-flight fit), never the range its value falls in: the old 'high' range
+# (-12..+8) passed an extrapolated -9.8 and failed the measured -13.2 chord on Oct 27 shot 1.
+# High within 1 deg (the gap-closure plan's TrackMan-class target is +-0.75), medium within 2.
+ATTACK_SIGMA_HIGH_DEG = 1.0
+ATTACK_SIGMA_MEDIUM_DEG = 2.0
 APPROACH_MEDIUM_SPEED_RATIO_RANGE = (0.6, 1.4)
 APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
 # G2 C3 (4 Nov 2026): every window ends at or before the last frame the ball rested in
@@ -282,6 +286,10 @@ class ChainedDelivery:
     path_window_mad_deg: float | None = None
     path_confidence_tier: str = "withheld"
     attack_confidence_tier: str = "withheld"
+    # the attack angle's 1-sigma and how long before contact it is read (C2: at the last
+    # pre-contact frame, never extrapolated to the contact)
+    attack_angle_sigma_deg: float | None = None
+    attack_angle_read_before_contact_ms: float | None = None
     # The IWR club track's own status; a rejected track is never camera depth.
     range_evidence_status: str | None = None
     club_path_frame: str = "unit_boresight"
@@ -318,6 +326,8 @@ class ApproachPairEstimate:
     n_features: int
     # Median (lateral, up, forward) per frame; None without IWR depth.
     positions_m: tuple[tuple[float, float, float], ...] | None = None
+    # the attack angle's 1-sigma from the position noise (C2); None when not propagated
+    attack_angle_sigma_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -506,30 +516,21 @@ def combine_approach_estimates(
         )
 
     attack_angle_deg = attack_estimate.attack_angle_deg if attack_estimate else None
+    attack_sigma = attack_estimate.attack_angle_sigma_deg if attack_estimate else None
     attack_confidence = "withheld"
-    strict_attack = (
+    plausible_attack = (
         attack_estimate is not None
-        and _ratio_within(attack_estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
-        and attack_estimate.velocity_mad_mph <= APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH
-        and APPROACH_AOA_RANGE_DEG[0]
-        <= attack_estimate.attack_angle_deg
-        <= APPROACH_AOA_RANGE_DEG[1]
+        and CHAINED_AOA_RANGE_DEG[0] <= attack_estimate.attack_angle_deg <= CHAINED_AOA_RANGE_DEG[1]
     )
-    medium_attack = (
-        attack_estimate is not None
-        and _ratio_within(attack_estimate.speed_ratio_ops, APPROACH_MEDIUM_SPEED_RATIO_RANGE)
-        and attack_estimate.velocity_mad_mph <= APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH
-        and APPROACH_MEDIUM_AOA_RANGE_DEG[0]
-        <= attack_estimate.attack_angle_deg
-        <= APPROACH_MEDIUM_AOA_RANGE_DEG[1]
-    )
-    if strict_attack and timing_plausible:
-        attack_confidence = "high"
-    elif medium_attack and timing_plausible:
-        attack_confidence = "medium"
-    elif attack_estimate is not None:
+    if attack_estimate is not None:
+        # C2: the tier is the propagated sigma; an implausible value or timing caps it low
         attack_confidence = "low"
-    if attack_estimate is not None and not medium_attack:
+        if plausible_attack and timing_plausible and attack_sigma is not None:
+            if attack_sigma <= ATTACK_SIGMA_HIGH_DEG:
+                attack_confidence = "high"
+            elif attack_sigma <= ATTACK_SIGMA_MEDIUM_DEG:
+                attack_confidence = "medium"
+    if attack_estimate is not None and not plausible_attack:
         notes.append(
             "attack angle outside plausible bounds (" + _window_facts(attack_estimate) + ")"
         )
@@ -541,6 +542,7 @@ def combine_approach_estimates(
         "path_window_mad_deg": round(path_mad, 2) if path_mad is not None else None,
         "path_confidence_tier": path_confidence,
         "attack_confidence_tier": attack_confidence,
+        "attack_angle_sigma_deg": (round(attack_sigma, 2) if attack_sigma is not None else None),
         "speed_mph": None,
         "speed_ratio_ops": (
             round(attack_estimate.speed_ratio_ops, 3)
@@ -1573,11 +1575,23 @@ def estimate_chained_delivery(
             attack_estimate = None
         elif tangent.attack_angle_deg is not None:
             notes.append(
-                f"attack angle at contact {tangent.attack_angle_deg:.1f} deg from the "
-                f"pre-contact head positions (the chord a frame before read "
-                f"{attack_estimate.attack_angle_deg:.1f})"
+                f"attack angle {tangent.attack_angle_deg:.1f} +- {tangent.sigma_deg:.1f} deg "
+                f"at the last pre-contact frame, {tangent.read_before_contact_ms:.1f} ms before "
+                "contact (no extrapolation); the chord into it read "
+                f"{attack_estimate.attack_angle_deg:.1f}"
             )
-            attack_estimate = replace(attack_estimate, attack_angle_deg=tangent.attack_angle_deg)
+            attack_estimate = replace(
+                attack_estimate,
+                attack_angle_deg=tangent.attack_angle_deg,
+                attack_angle_sigma_deg=tangent.sigma_deg,
+            )
+            common["attack_angle_read_before_contact_ms"] = round(tangent.read_before_contact_ms, 3)
+        else:
+            attack_estimate = _chord_with_sigma(attack_estimate, impact_idx, camera_s)
+            chord_mid_s = 0.5 * (camera_s[impact_idx - 1] + camera_s[impact_idx])
+            common["attack_angle_read_before_contact_ms"] = round(
+                1e3 * (contact_camera_s - chord_mid_s), 3
+            )
     result = combine_approach_estimates(
         list(pair_estimates.values()),
         attack_estimate=attack_estimate,
@@ -1616,6 +1630,26 @@ def estimate_chained_delivery(
     )
 
 
+def _chord_with_sigma(
+    estimate: ApproachPairEstimate, impact_idx: int, camera_s: np.ndarray
+) -> ApproachPairEstimate:
+    """The (impact - 1, impact) chord with its sigma propagated from its two positions (C2),
+    read at its midpoint; the estimate unchanged without positions."""
+    if not estimate.positions_m or len(estimate.positions_m) != 2:
+        return estimate
+    times = np.asarray([camera_s[impact_idx - 1], camera_s[impact_idx]], dtype=float)
+    read = slope_with_sigma(
+        times,
+        np.asarray(estimate.positions_m, dtype=float),
+        at_s=float(times.mean()),
+        degree=1,
+        position_sigma_m=HEAD_POSITION_SIGMA_M,
+    )
+    if read is None:
+        return estimate
+    return replace(estimate, attack_angle_sigma_deg=read[1])
+
+
 # The attack angle is read at the ball-defined contact (C10b, 2 Nov 2026): the chord
 # (impact - 1, impact) is centred a frame before it, and a descending head steepens the
 # earlier it is read (Oct 27 shot 1: -13.2 deg as a chord, 3.6 ms before contact).
@@ -1641,6 +1675,10 @@ HEEL_ANCHOR_ABOVE_SOLE_M = 0.035
 # position no lower than this below it is a stopped descent (C22c): the head positions'
 # noise floor (club_arc.POSITION_NOISE_FLOOR_M).
 HEAD_HEIGHT_NOISE_M = 0.005
+# G2 C2: the 1-sigma of a head position per axis, propagated into the attack angle: the
+# axis/sole anchor's heights agree with the hand marks to rms ~3 mm on Oct 27 shot 1
+# (research club-path-audit VERDICT 2; ~1.7 px at the tee).
+HEAD_POSITION_SIGMA_M = 0.003
 
 
 @dataclass(frozen=True)
@@ -1654,6 +1692,17 @@ class ContactTangent:
     reason: str | None = None
     # why the surface did not end free flight though one was given, or None
     datum_note: str | None = None
+    # C2: the angle's 1-sigma, where it is read (the last free-flight frame) and the contact
+    sigma_deg: float | None = None
+    read_t_s: float | None = None
+    contact_t_s: float | None = None
+
+    @property
+    def read_before_contact_ms(self) -> float | None:
+        """How long before the contact the angle is read, ms."""
+        if self.read_t_s is None or self.contact_t_s is None:
+            return None
+        return 1e3 * (self.contact_t_s - self.read_t_s)
 
     @property
     def note(self) -> str | None:
@@ -1676,17 +1725,43 @@ def _head_at(ordered, t_s: float) -> tuple[float, float]:
     return nearest.lateral_m, nearest.forward_m
 
 
+def slope_with_sigma(
+    times_s: np.ndarray, xyz: np.ndarray, *, at_s: float, degree: int, position_sigma_m: float
+) -> tuple[float, float] | None:
+    """The attack angle (deg) of a per-axis polynomial fit (``degree`` in time) of ``xyz``
+    (lateral, up, forward m) differentiated at ``at_s``, and its 1-sigma: independent
+    ``position_sigma_m`` noise per axis propagated linearly through the fit and the angle.
+    None when the fit is not determined or not finite."""
+    times = np.asarray(times_s, dtype=float) - float(at_s)
+    if len(times) < degree + 1:
+        return None
+    design = np.vander(times, degree + 1, increasing=True)  # 1, t, t^2
+    weights = np.linalg.pinv(design)[1]  # d/dt at t=0 is the linear coefficient
+    velocity = weights @ np.asarray(xyz, dtype=float)
+    lateral, up, forward = (float(v) for v in velocity)
+    horizontal = math.hypot(lateral, forward)
+    if not np.all(np.isfinite(velocity)) or horizontal <= 0.0:
+        return None
+    gradient = np.array([-up * lateral / horizontal, horizontal, -up * forward / horizontal]) / (
+        horizontal**2 + up**2
+    )
+    sigma = float(position_sigma_m) * float(np.linalg.norm(weights) * np.linalg.norm(gradient))
+    return _velocity_angles(velocity)[1], math.degrees(sigma)
+
+
 def contact_tangent(
     head_positions,
     *,
     contact_t_s: float,
     last_rest_t_s: float,
     surface_up_m: float | None = None,
+    position_sigma_m: float = HEAD_POSITION_SIGMA_M,
 ) -> ContactTangent:
     """The head's attack angle from the free-flight positions up to the last frame the ball
     rested in: a constant-acceleration fit (each axis quadratic in time) over the last
-    ``CONTACT_TANGENT_WINDOW_S`` of free flight, differentiated where free flight ended (the
-    contact; or the first frame whose heel is within ``HEEL_ANCHOR_ABOVE_SOLE_M`` of
+    ``CONTACT_TANGENT_WINDOW_S`` of free flight, differentiated at the LAST free-flight frame
+    (C2: never beyond the data), with its propagated sigma. Free flight ends at the contact,
+    or at the first frame whose heel is within ``HEEL_ANCHOR_ABOVE_SOLE_M`` of
     ``surface_up_m`` and whose descent has stopped: the next position no lower than
     ``HEAD_HEIGHT_NOISE_M`` below it). A head that reached the surface more than a ball diameter before the
     contact point is a fat contact. A heel read below the surface itself shows the heights
@@ -1737,16 +1812,23 @@ def contact_tangent(
         if tangent.note:
             reason = f"{tangent.note}; {reason}"
         return replace(tangent, reason=reason)
-    times = np.asarray([p.t_s - end_t for p in window], dtype=float)
+    times = np.asarray([p.t_s for p in window], dtype=float)
     xyz = np.asarray([[p.lateral_m, p.up_m, p.forward_m] for p in window], dtype=float)
-    velocity = np.asarray(
-        [np.polyval(np.polyder(np.polyfit(times, xyz[:, axis], 2)), 0.0) for axis in range(3)]
-    )
-    if not np.all(np.isfinite(velocity)):
+    read_t = float(times.max())
+    read = slope_with_sigma(times, xyz, at_s=read_t, degree=2, position_sigma_m=position_sigma_m)
+    if read is None:
         return ContactTangent(
             None, count, fat_mm, "the free-flight fit is not finite", datum_note=datum_note
         )
-    return ContactTangent(_velocity_angles(velocity)[1], count, fat_mm, datum_note=datum_note)
+    return ContactTangent(
+        read[0],
+        count,
+        fat_mm,
+        datum_note=datum_note,
+        sigma_deg=read[1],
+        read_t_s=read_t,
+        contact_t_s=float(contact_t_s),
+    )
 
 
 def attack_angle_at_contact(
@@ -1756,7 +1838,7 @@ def attack_angle_at_contact(
     last_rest_t_s: float,
     surface_up_m: float | None = None,
 ) -> float | None:
-    """``contact_tangent``'s attack angle alone."""
+    """``contact_tangent``'s attack angle alone (read at the last free-flight frame, C2)."""
     return contact_tangent(
         head_positions,
         contact_t_s=contact_t_s,

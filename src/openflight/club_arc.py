@@ -1087,13 +1087,23 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
             arc_rank <= LABEL_RANK[EXPERIMENTAL] if head_track else arc_rank < LABEL_RANK[MEASURED]
         )
         if measured is not None and outranks:
+            # G2 C2: the attack angle carries its propagated sigma, its range +- RANGE_SIGMAS
+            sigma = chained.get("attack_angle_sigma_deg") if name == "attack_angle_deg" else None
             metrics[name] = {
                 "value": measured,
                 "status": EXPERIMENTAL if head_track else MEASURED,
                 "source": chained_source,
                 "frame": chained.get("club_path_frame") if name == "club_path_deg" else None,
-                "range": None,
+                "range": (
+                    [
+                        round(measured - RANGE_SIGMAS * sigma, 2),
+                        round(measured + RANGE_SIGMAS * sigma, 2),
+                    ]
+                    if sigma is not None
+                    else None
+                ),
                 "reason": None,
+                "sigma": sigma,
             }
         elif metrics[name]["value"] is None and chained:
             flag = (chained.get("head_track") or {}).get(name.replace("_deg", "_flag"))

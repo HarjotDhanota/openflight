@@ -21,7 +21,6 @@ import pytest
 
 from openflight.camera import fusion_processing as fp
 from openflight.camera.club_delivery import (
-    APPROACH_MEDIUM_AOA_RANGE_DEG,
     APPROACH_PATH_OFFSETS,
     GOLF_BALL_DIAMETER_M,
     HEAD_ABOVE_BALL_MAX_M,
@@ -137,8 +136,9 @@ def test_shot_4_attack_angle_and_heights_come_from_the_head(archive):
     # checked (research/rig-geometry-lock-2026-11-02/club-arc/c18a-oct27-shot4-impact-4.png)
     assert not any("(-4, -1)" in note for note in result.notes)
     assert result.attack_angle_deg is not None and result.club_path_deg is not None
-    # Owner: below about +5 deg; the low side stays inside the estimator's medium bound.
-    assert APPROACH_MEDIUM_AOA_RANGE_DEG[0] <= result.attack_angle_deg < 5.0
+    # Owner: below about +5 deg; the low side inside the old medium bound (-18, retired by
+    # G2 C2: tiers come from the propagated sigma)
+    assert -18.0 <= result.attack_angle_deg < 5.0
     geometry = case["geometry"]
     floor_m = geometry.ball_height_m - geometry.ball_diameter_m / 2.0
     times = case["sensor"].astype(float) / 1e9

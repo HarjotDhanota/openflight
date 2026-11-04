@@ -288,7 +288,7 @@ class TestChainedImpactDelivery:
         path_windows = [
             ApproachPairEstimate(path, -4.0, 1.0, 1.0, 12) for path in (-13.0, 2.5, 5.0, 14.0)
         ]
-        attack = ApproachPairEstimate(3.0, -4.2, 1.0, 1.0, 12)
+        attack = ApproachPairEstimate(3.0, -4.2, 1.0, 1.0, 12, attack_angle_sigma_deg=0.6)
 
         result = combine_approach_estimates(
             path_windows,
@@ -301,9 +301,10 @@ class TestChainedImpactDelivery:
         assert result.path_confidence_tier == "low"
         assert result.attack_confidence_tier == "high"
 
-    def test_approach_consensus_assigns_medium_to_near_miss_aoa(self):
+    def test_approach_consensus_assigns_medium_to_a_wider_attack_sigma(self):
+        # G2 C2: the tier is the propagated sigma (1-2 deg: medium), not a range
         paths = [ApproachPairEstimate(path, -4.0, 1.0, 1.0, 12) for path in (2.5, 3.0, 3.5, 4.0)]
-        near_miss = ApproachPairEstimate(3.0, -16.0, 1.31, 3.0, 12)
+        near_miss = ApproachPairEstimate(3.0, -16.0, 1.31, 3.0, 12, attack_angle_sigma_deg=1.5)
 
         result = combine_approach_estimates(
             paths,

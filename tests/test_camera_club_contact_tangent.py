@@ -48,7 +48,7 @@ def _arc_positions(contact_t: float, *, attack_deg: float, radius_m: float, spee
     return tuple(positions), times
 
 
-def test_the_attack_angle_is_the_tangent_at_contact_not_the_last_chord():
+def test_the_attack_angle_is_the_tangent_at_the_last_frame_not_extrapolated_to_contact():
     positions, times = _arc_positions(10.0, attack_deg=-4.0, radius_m=1.25, speed=33.0)
     last, before = positions[-1], positions[-2]
     chord = math.degrees(math.atan2(last.up_m - before.up_m, last.forward_m - before.forward_m))
@@ -56,7 +56,9 @@ def test_the_attack_angle_is_the_tangent_at_contact_not_the_last_chord():
 
     attack = cd.attack_angle_at_contact(positions, contact_t_s=10.0, last_rest_t_s=times[-1])
 
-    assert attack == pytest.approx(-4.0, abs=0.3)
+    # G2 C2: read at the last frame, 1.8 ms (60 mm of arc) before contact, never beyond it
+    at_last = -4.0 - math.degrees(33.0 * 0.0018085 / 1.25)
+    assert attack == pytest.approx(at_last, abs=0.3)
 
 
 def test_a_straight_approach_reads_the_same_either_way():
@@ -132,7 +134,8 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
         cd.attack_angle_at_contact(by_time, contact_t_s=result.contact_t_s, last_rest_t_s=f43.t_s),
         abs=0.01,
     )
-    assert result.attack_angle_deg > chord + 2.0
+    # G2 C2: no extrapolation past f43; the value sits within its sigma of the last chord
+    assert abs(result.attack_angle_deg - chord) <= result.attack_angle_sigma_deg
     # path is not touched (the live value is turned by the session's +2.07 deg target line;
     # this geometry has none)
     live_path = case["inputs"]["live_result"]["club_path_deg"] - 2.0666

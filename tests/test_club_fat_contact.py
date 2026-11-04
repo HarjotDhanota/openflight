@@ -63,6 +63,11 @@ LIVE = {
 }
 
 
+# G2 C2 (4 Nov 2026): the fit is read at the last free-flight frame, not extrapolated to the
+# contact (or to where free flight ended): the same rows read these (LIVE kept the old values)
+AT_LAST_FRAME = {1: -11.35, 3: -29.12, 4: -2.58}
+
+
 def _positions(rows, contact=100.0):
     return tuple(
         cd.HeadPosition(t_s=contact + t / 1e3, lateral_m=lat, up_m=up, forward_m=fwd)
@@ -79,9 +84,9 @@ def _tangent(rows, contact=100.0, surface=0.0):
 
 
 def test_oct27_shot1_meets_the_surface_at_the_ball_and_is_unchanged():
-    rows, live = LIVE[1]
+    rows, _live = LIVE[1]
     tangent = _tangent(rows)
-    assert tangent.attack_angle_deg == pytest.approx(live, abs=0.05)
+    assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[1], abs=0.05)
     assert tangent.fat_contact_mm is None and tangent.reason is None
     assert tangent.free_flight_frames == 4  # f40-f43: f39 is 17 ms out, beyond the window
 
@@ -91,20 +96,21 @@ def test_oct27_shot3_is_a_fat_contact_read_from_its_free_flight():
     tangent = _tangent(rows)
     assert tangent.fat_contact_mm == pytest.approx(184.0, abs=5.0)
     assert tangent.free_flight_frames == 3  # f39-f41; f42 and f43 ride the surface
-    # the descent where free flight ended (f42), no longer the +15.5 a fit across the floor read
-    assert tangent.attack_angle_deg == pytest.approx(-34.7, abs=0.5)
+    # the descent at the last free-flight frame (f41), no longer the +15.5 a fit across the
+    # floor read
+    assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[3], abs=0.5)
     assert tangent.attack_angle_deg < live - 40.0
     assert "fat contact: head reached the surface 184 mm before the ball" in tangent.note
 
 
 def test_oct27_shot4_is_still_descending_at_the_ball_and_reads_as_before():
-    rows, live = LIVE[4]
+    rows, _live = LIVE[4]
     tangent = _tangent(rows)
     # its last rest frame reads 32 mm, under the grounded-heel floor, but the head is still
     # descending (23.7 mm a frame later): free flight, not the surface (C22c)
     assert tangent.fat_contact_mm is None
     assert tangent.free_flight_frames == 4
-    assert tangent.attack_angle_deg == pytest.approx(live, abs=0.05)
+    assert tangent.attack_angle_deg == pytest.approx(AT_LAST_FRAME[4], abs=0.05)
 
 
 def test_a_head_still_descending_below_the_floor_is_in_free_flight():
@@ -133,12 +139,12 @@ def test_fewer_than_three_free_flight_frames_withhold_the_attack_angle():
 
 
 def test_without_a_surface_every_frame_in_the_window_is_free_flight():
-    rows, live = LIVE[1]
+    rows, _live = LIVE[1]
     positions = _positions(rows)
     last_rest = max(p.t_s for p in positions if p.t_s < 100.0)
     assert cd.attack_angle_at_contact(
         positions, contact_t_s=100.0, last_rest_t_s=last_rest
-    ) == pytest.approx(live, abs=0.05)
+    ) == pytest.approx(AT_LAST_FRAME[1], abs=0.05)
 
 
 def test_the_window_is_time_not_a_frame_count():
