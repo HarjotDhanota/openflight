@@ -1,0 +1,188 @@
+{
+ "crop_05": {
+  "shot": "oct24-13",
+  "class": "dusk",
+  "cap_p99": 180.0,
+  "half": "design"
+ },
+ "crop_15": {
+  "shot": "oct24-15",
+  "class": "dusk",
+  "cap_p99": 173.0,
+  "half": "heldout"
+ },
+ "crop_10": {
+  "shot": "oct24-16",
+  "class": "dusk",
+  "cap_p99": 133.0,
+  "half": "design"
+ },
+ "crop_26": {
+  "shot": "oct24-17",
+  "class": "dusk",
+  "cap_p99": 130.4,
+  "half": "heldout"
+ },
+ "crop_13": {
+  "shot": "oct24-18",
+  "class": "dusk",
+  "cap_p99": 127.2,
+  "half": "design"
+ },
+ "crop_21": {
+  "shot": "oct24-19",
+  "class": "dusk",
+  "cap_p99": 131.0,
+  "half": "heldout"
+ },
+ "crop_19": {
+  "shot": "oct24-20",
+  "class": "dusk",
+  "cap_p99": 118.0,
+  "half": "design"
+ },
+ "crop_24": {
+  "shot": "oct24-21",
+  "class": "dusk",
+  "cap_p99": 95.0,
+  "half": "heldout"
+ },
+ "crop_03": {
+  "shot": "oct24-22",
+  "class": "dusk",
+  "cap_p99": 89.5,
+  "half": "design"
+ },
+ "crop_25": {
+  "shot": "oct24-23",
+  "class": "dusk",
+  "cap_p99": 84.6,
+  "half": "heldout"
+ },
+ "crop_01": {
+  "shot": "oct24-24",
+  "class": "dusk",
+  "cap_p99": 75.0,
+  "half": "design"
+ },
+ "crop_28": {
+  "shot": "oct24-25",
+  "class": "dusk",
+  "cap_p99": 87.0,
+  "half": "heldout"
+ },
+ "crop_20": {
+  "shot": "oct24-26",
+  "class": "dusk",
+  "cap_p99": 69.0,
+  "half": "design"
+ },
+ "crop_31": {
+  "shot": "oct24-27",
+  "class": "dusk",
+  "cap_p99": 63.4,
+  "half": "heldout"
+ },
+ "crop_07": {
+  "shot": "oct24-28",
+  "class": "dusk",
+  "cap_p99": 64.5,
+  "half": "design"
+ },
+ "crop_17": {
+  "shot": "oct24-29",
+  "class": "dusk",
+  "cap_p99": 68.5,
+  "half": "heldout"
+ },
+ "crop_14": {
+  "shot": "oct24-30",
+  "class": "dusk",
+  "cap_p99": 67.5,
+  "half": "design"
+ },
+ "crop_12": {
+  "shot": "oct24-06",
+  "class": "mixed",
+  "cap_p99": 243.0,
+  "half": "design"
+ },
+ "crop_22": {
+  "shot": "oct24-07",
+  "class": "mixed",
+  "cap_p99": 237.7,
+  "half": "heldout"
+ },
+ "crop_18": {
+  "shot": "oct24-09",
+  "class": "mixed",
+  "cap_p99": 232.0,
+  "half": "design"
+ },
+ "crop_29": {
+  "shot": "oct24-10",
+  "class": "mixed",
+  "cap_p99": 234.5,
+  "half": "heldout"
+ },
+ "crop_16": {
+  "shot": "oct24-11",
+  "class": "mixed",
+  "cap_p99": 181.0,
+  "half": "design"
+ },
+ "crop_08": {
+  "shot": "oct24-12",
+  "class": "mixed",
+  "cap_p99": 181.5,
+  "half": "heldout"
+ },
+ "crop_02": {
+  "shot": "oct24-14",
+  "class": "mixed",
+  "cap_p99": 184.0,
+  "half": "design"
+ },
+ "crop_06": {
+  "shot": "oct27-01",
+  "class": "oct27",
+  "cap_p99": 140.5,
+  "half": "design"
+ },
+ "crop_27": {
+  "shot": "oct27-02",
+  "class": "oct27",
+  "cap_p99": 139.6,
+  "half": "heldout"
+ },
+ "crop_30": {
+  "shot": "oct27-03",
+  "class": "oct27",
+  "cap_p99": 144.0,
+  "half": "design"
+ },
+ "crop_04": {
+  "shot": "oct27-04",
+  "class": "oct27",
+  "cap_p99": 140.4,
+  "half": "heldout"
+ },
+ "crop_11": {
+  "shot": "oct24-02",
+  "class": "sun",
+  "cap_p99": 255.0,
+  "half": "design"
+ },
+ "crop_23": {
+  "shot": "oct24-03",
+  "class": "sun",
+  "cap_p99": 255.0,
+  "half": "heldout"
+ },
+ "crop_09": {
+  "shot": "oct24-04",
+  "class": "sun",
+  "cap_p99": 255.0,
+  "half": "design"
+ }
+}

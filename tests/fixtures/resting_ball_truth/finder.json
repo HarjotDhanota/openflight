@@ -1,0 +1,478 @@
+{
+ "crop_01": {
+  "shot": "oct24-24",
+  "d": 47.9,
+  "rim_support": {
+   "mode": "lit_blob",
+   "rays": 0,
+   "kept": 0,
+   "rms_px": null,
+   "quadrants": null
+  }
+ },
+ "crop_02": {
+  "shot": "oct24-14",
+  "d": 36.383,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 42,
+   "rms_px": 0.9235434390566141,
+   "quadrants": [
+    28,
+    7,
+    0,
+    7
+   ]
+  }
+ },
+ "crop_03": {
+  "shot": "oct24-22",
+  "d": 46.387,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 25,
+   "rms_px": 0.9738466168993499,
+   "quadrants": [
+    22,
+    3,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_04": {
+  "shot": "oct27-04",
+  "d": 20.365,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 26,
+   "rms_px": 0.27403559243327313,
+   "quadrants": [
+    20,
+    6,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_05": {
+  "shot": "oct24-13",
+  "d": 38.172,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 40,
+   "rms_px": 0.6687799581233643,
+   "quadrants": [
+    24,
+    7,
+    0,
+    9
+   ]
+  }
+ },
+ "crop_06": {
+  "shot": "oct27-01",
+  "d": 24.014,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 61,
+   "rms_px": 0.27184285312856216,
+   "quadrants": [
+    35,
+    13,
+    0,
+    13
+   ]
+  }
+ },
+ "crop_07": {
+  "shot": "oct24-28",
+  "d": 46.323,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 36,
+   "rms_px": 0.5896244673332811,
+   "quadrants": [
+    29,
+    3,
+    0,
+    4
+   ]
+  }
+ },
+ "crop_08": {
+  "shot": "oct24-12",
+  "d": 36.652,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 26,
+   "rms_px": 0.7814227007718562,
+   "quadrants": [
+    21,
+    0,
+    0,
+    5
+   ]
+  }
+ },
+ "crop_09": {
+  "shot": "oct24-04",
+  "d": 45.64,
+  "rim_support": {
+   "mode": "lit_blob",
+   "rays": 0,
+   "kept": 0,
+   "rms_px": null,
+   "quadrants": null
+  }
+ },
+ "crop_10": {
+  "shot": "oct24-16",
+  "d": 38.161,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 30,
+   "rms_px": 0.6374594424134267,
+   "quadrants": [
+    24,
+    0,
+    0,
+    6
+   ]
+  }
+ },
+ "crop_11": {
+  "shot": "oct24-02",
+  "d": 43.386,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 23,
+   "rms_px": 0.4762541353616395,
+   "quadrants": [
+    17,
+    6,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_12": {
+  "shot": "oct24-06",
+  "d": 40.378,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 42,
+   "rms_px": 0.46494181433181764,
+   "quadrants": [
+    29,
+    8,
+    0,
+    5
+   ]
+  }
+ },
+ "crop_13": {
+  "shot": "oct24-18",
+  "d": 38.438,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 32,
+   "rms_px": 0.46266101394370457,
+   "quadrants": [
+    25,
+    7,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_14": {
+  "shot": "oct24-30",
+  "d": 38.382,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 36,
+   "rms_px": 0.9942007737889773,
+   "quadrants": [
+    22,
+    6,
+    0,
+    8
+   ]
+  }
+ },
+ "crop_15": {
+  "shot": "oct24-15",
+  "d": 49.029,
+  "rim_support": {
+   "mode": "lit_blob",
+   "rays": 0,
+   "kept": 0,
+   "rms_px": null,
+   "quadrants": null
+  }
+ },
+ "crop_16": {
+  "shot": "oct24-11",
+  "d": 40.109,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 26,
+   "rms_px": 0.5490751877014481,
+   "quadrants": [
+    21,
+    5,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_17": {
+  "shot": "oct24-29",
+  "d": 38.796,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 27,
+   "rms_px": 0.7023991165585283,
+   "quadrants": [
+    21,
+    6,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_18": {
+  "shot": "oct24-09",
+  "d": 41.73,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 39,
+   "rms_px": 0.2789275578031525,
+   "quadrants": [
+    29,
+    6,
+    0,
+    4
+   ]
+  }
+ },
+ "crop_19": {
+  "shot": "oct24-20",
+  "d": 40.358,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 28,
+   "rms_px": 0.5031556692465656,
+   "quadrants": [
+    22,
+    6,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_20": {
+  "shot": "oct24-26",
+  "d": 41.605,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 32,
+   "rms_px": 0.45731521723217433,
+   "quadrants": [
+    26,
+    6,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_21": {
+  "shot": "oct24-19",
+  "d": 40.237,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 26,
+   "rms_px": 0.36493434103836014,
+   "quadrants": [
+    23,
+    0,
+    0,
+    3
+   ]
+  }
+ },
+ "crop_22": {
+  "shot": "oct24-07",
+  "d": 38.608,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 38,
+   "rms_px": 0.5057636056067969,
+   "quadrants": [
+    28,
+    6,
+    0,
+    4
+   ]
+  }
+ },
+ "crop_23": {
+  "shot": "oct24-03",
+  "d": 58.076,
+  "rim_support": {
+   "mode": "lit_blob",
+   "rays": 0,
+   "kept": 0,
+   "rms_px": null,
+   "quadrants": null
+  }
+ },
+ "crop_24": {
+  "shot": "oct24-21",
+  "d": 35.527,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 27,
+   "rms_px": 0.8513248059985906,
+   "quadrants": [
+    23,
+    0,
+    0,
+    4
+   ]
+  }
+ },
+ "crop_25": {
+  "shot": "oct24-23",
+  "d": 44.96,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 22,
+   "rms_px": 0.4964509301281102,
+   "quadrants": [
+    19,
+    0,
+    0,
+    3
+   ]
+  }
+ },
+ "crop_26": {
+  "shot": "oct24-17",
+  "d": 44.033,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 29,
+   "rms_px": 0.33420508684559813,
+   "quadrants": [
+    25,
+    0,
+    0,
+    4
+   ]
+  }
+ },
+ "crop_27": {
+  "shot": "oct27-02",
+  "d": 21.728,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 28,
+   "rms_px": 0.3508048585139868,
+   "quadrants": [
+    20,
+    8,
+    0,
+    0
+   ]
+  }
+ },
+ "crop_28": {
+  "shot": "oct24-25",
+  "d": 40.286,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 32,
+   "rms_px": 0.39387640492795534,
+   "quadrants": [
+    26,
+    5,
+    0,
+    1
+   ]
+  }
+ },
+ "crop_29": {
+  "shot": "oct24-10",
+  "d": 36.399,
+  "rim_support": {
+   "mode": "all_round",
+   "rays": 91,
+   "kept": 45,
+   "rms_px": 1.6230901912618423,
+   "quadrants": [
+    27,
+    9,
+    0,
+    9
+   ]
+  }
+ },
+ "crop_30": {
+  "shot": "oct27-03",
+  "d": 19.022,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 38,
+   "rms_px": 0.364557035045056,
+   "quadrants": [
+    28,
+    9,
+    0,
+    1
+   ]
+  }
+ },
+ "crop_31": {
+  "shot": "oct24-27",
+  "d": 43.99,
+  "rim_support": {
+   "mode": "toward_light",
+   "rays": 41,
+   "kept": 26,
+   "rms_px": 0.7375501503561074,
+   "quadrants": [
+    20,
+    6,
+    0,
+    0
+   ]
+  }
+ }
+}

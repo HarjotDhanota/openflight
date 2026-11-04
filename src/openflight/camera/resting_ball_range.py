@@ -304,6 +304,44 @@ __all__ = [
 # frame, and the rig's IWR phase centre turns that into the radar's slant range.
 # The lit-sphere fit's diameter, 1 sigma (Oct 27 shot 1: 0.3 px on a 24 px ball).
 DIAMETER_FIT_SIGMA_PX = 0.3
+# C26b (3 Nov 2026): that sigma holds only for a rim supported all round. The finder's rim circle
+# (club_motion._fit_lit_rim) rests on the lit side of the ball; on the Oct 24 clips it is often
+# one-sided (the sunlit band beside the ball), only the lit cap (dusk: neither side carries the
+# rim), or not fitted at all (the lit blob's size), and the diameter is then 2-17 px wrong against
+# two labellers' truth (tests/fixtures/resting_ball_truth). Support classes, decided on the truth
+# set's design half: a side counts with RIM_SIDE_MIN_POINTS rim points (about a third of the
+# rays an arc sends into a side quadrant); rays disagree beyond RIM_RMS_MAX_PX (the largest
+# residual RMS of the design half's accurate fits, 0.27-0.46 px). Each class's sigma is the RMS
+# of its held-out truth errors (the supported class has none held out: the fit's own 0.3 px,
+# Oct 27 shot 1). The value is unchanged; its sigma and label travel with it.
+RIM_SIDE_MIN_POINTS = 6
+RIM_RMS_MAX_PX = 0.5
+DIAMETER_SIGMA_BY_SUPPORT_PX = {
+    "supported": DIAMETER_FIT_SIGMA_PX,
+    "disagree": 2.35,  # one held-out ball
+    "one_sided": 2.62,  # five
+    "cap_only": 4.13,  # six
+    "no_rim": 14.42,  # two
+}
+
+
+def diameter_support(rim_support) -> tuple[str, float]:
+    """(support class, diameter 1-sigma px) of a resting ball's rim fit (``ReferenceBall.rim_support``);
+    a ball found without a rim fit is ``no_rim``."""
+    if not isinstance(rim_support, dict) or rim_support.get("mode") == "lit_blob":
+        label = "no_rim"
+    else:
+        _top, right, _bottom, left = rim_support.get("quadrants") or (0, 0, 0, 0)
+        rms = rim_support.get("rms_px")
+        if left < RIM_SIDE_MIN_POINTS and right < RIM_SIDE_MIN_POINTS:
+            label = "cap_only"
+        elif left < RIM_SIDE_MIN_POINTS or right < RIM_SIDE_MIN_POINTS:
+            label = "one_sided"
+        elif rms is None or rms > RIM_RMS_MAX_PX:
+            label = "disagree"
+        else:
+            label = "supported"
+    return label, DIAMETER_SIGMA_BY_SUPPORT_PX[label]
 
 
 def located_tee_range(  # pylint: disable=too-many-arguments

@@ -5627,13 +5627,25 @@ def _camera_launch_range(shot: Shot, camera_archive) -> dict:
             focal_relative_uncertainty=float(focal_rel),
         )
     surface = _surface_in_force_m()
+    # the diameter's sigma follows the rim it rests on (C26b): a one-sided, cap-only or unfitted
+    # rim widens the range, never a confident wrong one
+    support = ball.get("diameter_support")
     record = resting_ball_range.located_tee_range(
         camera,
         (ball["x_px"], ball["y_px"]),
         ball["diameter_px"],
         focal_rel_sigma=float(focal_rel),
+        diameter_sigma_px=float(
+            ball.get("diameter_sigma_px") or resting_ball_range.DIAMETER_FIT_SIGMA_PX
+        ),
         surface_ball_height_m=(surface + BALL_RADIUS_M) if surface is not None else None,
     )
+    record["diameter_support"] = support
+    if support not in (None, "supported"):
+        record["diameter_note"] = (
+            f"the resting ball's rim fit is {support}: its diameter +- "
+            f"{record['diameter_sigma_px']:.2f} px (the held-out truth errors of that class)"
+        )
     record["principal_point"] = "calibrated" if model is not None else "image_centre"
     record["calibration_pair"] = pair.record() if model is not None else None
     record["nominal_reason"] = nominal_reason if model is None else None

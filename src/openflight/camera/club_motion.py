@@ -39,6 +39,9 @@ class ReferenceBall:
     area_px: int
     # diffuse brightness over misfit; None without a lit-sphere fit
     fit_quality: float | None = None
+    # what the rim circle rests on (``_fit_lit_rim``): its mode, rays, kept rim points, their
+    # residual RMS and how they spread round the ball; None where no rim was fitted (C26b)
+    rim_support: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -561,9 +564,17 @@ def _measure_ball(image: np.ndarray, x: float, y: float, radius: float) -> Refer
         ]
     )
     fitted = _fit_lit_rim(patch, bx, by, lit_r, toward_light, ball - ground)
-    cx, cy, r = fitted if fitted is not None else (bx, by, lit_r)
+    if fitted is not None:
+        cx, cy, r, support = fitted
+    else:
+        cx, cy, r = bx, by, lit_r
+        support = {"mode": "lit_blob", "rays": 0, "kept": 0, "rms_px": None, "quadrants": None}
     return ReferenceBall(
-        x=cx + left, y=cy + top, diameter_px=2.0 * r, area_px=int(round(math.pi * r * r))
+        x=cx + left,
+        y=cy + top,
+        diameter_px=2.0 * r,
+        area_px=int(round(math.pi * r * r)),
+        rim_support=support,
     )
 
 
@@ -574,15 +585,20 @@ def _fit_lit_rim(
     radius: float,
     toward_light: np.ndarray,
     contrast: float,
-) -> tuple[float, float, float] | None:
-    """A circle through the rim's lit side: the outermost strong fall per ray skips logo edges."""
+) -> tuple[float, float, float, dict] | None:
+    """A circle through the rim's lit side: the outermost strong fall per ray skips logo edges.
+    Also what it rests on: the arc it searched (toward the light or all round), its rays, the
+    rim points it kept, their residual RMS and their count per quadrant round the fitted centre
+    (top, right, bottom, left)."""
     smooth = ndimage.gaussian_filter(patch, 0.7)
     lean = float(np.hypot(*toward_light))
     if lean >= 0.08 * radius:
         facing = math.atan2(float(toward_light[1]), float(toward_light[0]))
         half = math.radians(RIM_HALF_ARC_DEG)
+        mode = "toward_light"
     else:
         facing, half = 0.0, math.pi
+        mode = "all_round"
     angles = facing + np.arange(-half, half + 1e-9, math.radians(RIM_RAY_STEP_DEG))
     steps = np.arange(0.5 * radius, 2.0 * radius, 0.25)
     xs = x + steps[None, :] * np.cos(angles)[:, None]
@@ -622,7 +638,22 @@ def _fit_lit_rim(
         pts = pts[keep]
     if not 0.8 * radius <= r <= 1.8 * radius:
         return None
-    return float(cx), float(cy), float(r)
+    kept_residual = np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r
+    bearing = np.degrees(np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx))  # image y down: +90 is below
+    quadrants = [
+        int(np.sum((bearing >= -135) & (bearing < -45))),  # top
+        int(np.sum((bearing >= -45) & (bearing < 45))),  # right
+        int(np.sum((bearing >= 45) & (bearing < 135))),  # bottom
+        int(np.sum((bearing >= 135) | (bearing < -135))),  # left
+    ]
+    support = {
+        "mode": mode,
+        "rays": int(len(angles)),
+        "kept": int(len(pts)),
+        "rms_px": float(np.sqrt(np.mean(kept_residual**2))),
+        "quadrants": quadrants,
+    }
+    return float(cx), float(cy), float(r), support
 
 
 def background_median(frames: np.ndarray) -> np.ndarray:

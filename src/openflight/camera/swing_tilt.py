@@ -52,10 +52,17 @@ def resting_ball_px(
         return None
     if found is None or not (x0 <= found.x <= x1 and y0 <= found.y <= y1):
         return None
+    from openflight.camera.resting_ball_range import diameter_support  # noqa: PLC0415
+
+    support, sigma = diameter_support(found.rim_support)
     return {
         "x_px": float(found.x),
         "y_px": float(found.y),
         "diameter_px": float(found.diameter_px),
+        "rim_support": found.rim_support,
+        # how far the diameter may be wrong, from the rim it rests on (C26b)
+        "diameter_support": support,
+        "diameter_sigma_px": sigma,
         "frames_used": int(count),
         "box_px": [x0, y0, x1, y1],
     }

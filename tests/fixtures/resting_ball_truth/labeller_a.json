@@ -1,0 +1,157 @@
+{
+ "crop_01": {
+  "left": 20.5,
+  "right": 58.0,
+  "top": 13.5
+ },
+ "crop_02": {
+  "left": 18.5,
+  "right": 52.5,
+  "top": 11.0
+ },
+ "crop_03": {
+  "left": 16.5,
+  "right": 53.5,
+  "top": 8.5
+ },
+ "crop_04": {
+  "left": 11.0,
+  "right": 30.0,
+  "top": 10.0
+ },
+ "crop_05": {
+  "left": 16.0,
+  "right": 51.5,
+  "top": 11.0
+ },
+ "crop_06": {
+  "left": 9.5,
+  "right": 33.0,
+  "top": 8.0
+ },
+ "crop_07": {
+  "left": 17.0,
+  "right": 52.0,
+  "top": 8.0
+ },
+ "crop_08": {
+  "left": 16.5,
+  "right": 52.5,
+  "top": 11.5
+ },
+ "crop_09": {
+  "left": 10.0,
+  "right": 50.0,
+  "top": 19.0
+ },
+ "crop_10": {
+  "left": 16.5,
+  "right": 52.5,
+  "top": 11.0
+ },
+ "crop_11": {
+  "left": 17.0,
+  "right": 53.5,
+  "top": 9.0
+ },
+ "crop_12": {
+  "left": 16.0,
+  "right": 53.0,
+  "top": 10.0
+ },
+ "crop_13": {
+  "left": 15.5,
+  "right": 53.0,
+  "top": 10.0
+ },
+ "crop_14": {
+  "left": 16.0,
+  "right": 51.5,
+  "top": 12.5
+ },
+ "crop_15": {
+  "left": 15.0,
+  "right": 52.0,
+  "top": 18.5
+ },
+ "crop_16": {
+  "left": 15.5,
+  "right": 53.0,
+  "top": 9.5
+ },
+ "crop_17": {
+  "left": 16.0,
+  "right": 52.5,
+  "top": 10.0
+ },
+ "crop_18": {
+  "left": 16.5,
+  "right": 53.0,
+  "top": 8.0
+ },
+ "crop_19": {
+  "left": 16.0,
+  "right": 53.0,
+  "top": 10.0
+ },
+ "crop_20": {
+  "left": 16.0,
+  "right": 53.0,
+  "top": 8.5
+ },
+ "crop_21": {
+  "left": 15.5,
+  "right": 53.5,
+  "top": 9.0
+ },
+ "crop_22": {
+  "left": 16.0,
+  "right": 52.5,
+  "top": 10.0
+ },
+ "crop_23": {
+  "left": 15.0,
+  "right": 56.0,
+  "top": 18.0
+ },
+ "crop_24": {
+  "left": 16.0,
+  "right": 52.5,
+  "top": 11.5
+ },
+ "crop_25": {
+  "left": 15.0,
+  "right": 52.0,
+  "top": 9.0
+ },
+ "crop_26": {
+  "left": 15.0,
+  "right": 53.0,
+  "top": 8.5
+ },
+ "crop_27": {
+  "left": 11.0,
+  "right": 30.5,
+  "top": 10.0
+ },
+ "crop_28": {
+  "left": 16.0,
+  "right": 52.0,
+  "top": 10.0
+ },
+ "crop_29": {
+  "left": 15.0,
+  "right": 53.5,
+  "top": 12.0
+ },
+ "crop_30": {
+  "left": 11.0,
+  "right": 30.0,
+  "top": 10.5
+ },
+ "crop_31": {
+  "left": 15.0,
+  "right": 53.5,
+  "top": 9.5
+ }
+}

@@ -1,0 +1,374 @@
+{
+ "crop_01": {
+  "shot": "oct24-24",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   699,
+   352
+  ],
+  "label_crop_origin_in_frame": [
+   725,
+   382
+  ]
+ },
+ "crop_02": {
+  "shot": "oct24-14",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   734,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   760,
+   388
+  ]
+ },
+ "crop_03": {
+  "shot": "oct24-22",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   689,
+   362
+  ],
+  "label_crop_origin_in_frame": [
+   715,
+   392
+  ]
+ },
+ "crop_04": {
+  "shot": "oct27-04",
+  "mode": "640x400",
+  "origin_in_frame": [
+   362,
+   158
+  ],
+  "label_crop_origin_in_frame": [
+   382,
+   178
+  ]
+ },
+ "crop_05": {
+  "shot": "oct24-13",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   731,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   757,
+   388
+  ]
+ },
+ "crop_06": {
+  "shot": "oct27-01",
+  "mode": "640x400",
+  "origin_in_frame": [
+   243,
+   163
+  ],
+  "label_crop_origin_in_frame": [
+   263,
+   183
+  ]
+ },
+ "crop_07": {
+  "shot": "oct24-28",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   723,
+   362
+  ],
+  "label_crop_origin_in_frame": [
+   749,
+   392
+  ]
+ },
+ "crop_08": {
+  "shot": "oct24-12",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   725,
+   357
+  ],
+  "label_crop_origin_in_frame": [
+   751,
+   387
+  ]
+ },
+ "crop_09": {
+  "shot": "oct24-04",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   792,
+   351
+  ],
+  "label_crop_origin_in_frame": [
+   818,
+   381
+  ]
+ },
+ "crop_10": {
+  "shot": "oct24-16",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   733,
+   357
+  ],
+  "label_crop_origin_in_frame": [
+   759,
+   387
+  ]
+ },
+ "crop_11": {
+  "shot": "oct24-02",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   701,
+   360
+  ],
+  "label_crop_origin_in_frame": [
+   727,
+   390
+  ]
+ },
+ "crop_12": {
+  "shot": "oct24-06",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   795,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   821,
+   388
+  ]
+ },
+ "crop_13": {
+  "shot": "oct24-18",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   737,
+   359
+  ],
+  "label_crop_origin_in_frame": [
+   763,
+   389
+  ]
+ },
+ "crop_14": {
+  "shot": "oct24-30",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   737,
+   355
+  ],
+  "label_crop_origin_in_frame": [
+   763,
+   385
+  ]
+ },
+ "crop_15": {
+  "shot": "oct24-15",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   737,
+   353
+  ],
+  "label_crop_origin_in_frame": [
+   763,
+   383
+  ]
+ },
+ "crop_16": {
+  "shot": "oct24-11",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   707,
+   357
+  ],
+  "label_crop_origin_in_frame": [
+   733,
+   387
+  ]
+ },
+ "crop_17": {
+  "shot": "oct24-29",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   701,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   727,
+   388
+  ]
+ },
+ "crop_18": {
+  "shot": "oct24-09",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   605,
+   357
+  ],
+  "label_crop_origin_in_frame": [
+   631,
+   387
+  ]
+ },
+ "crop_19": {
+  "shot": "oct24-20",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   741,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   767,
+   388
+  ]
+ },
+ "crop_20": {
+  "shot": "oct24-26",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   667,
+   359
+  ],
+  "label_crop_origin_in_frame": [
+   693,
+   389
+  ]
+ },
+ "crop_21": {
+  "shot": "oct24-19",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   650,
+   359
+  ],
+  "label_crop_origin_in_frame": [
+   676,
+   389
+  ]
+ },
+ "crop_22": {
+  "shot": "oct24-07",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   770,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   796,
+   388
+  ]
+ },
+ "crop_23": {
+  "shot": "oct24-03",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   733,
+   353
+  ],
+  "label_crop_origin_in_frame": [
+   759,
+   383
+  ]
+ },
+ "crop_24": {
+  "shot": "oct24-21",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   753,
+   356
+  ],
+  "label_crop_origin_in_frame": [
+   779,
+   386
+  ]
+ },
+ "crop_25": {
+  "shot": "oct24-23",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   763,
+   360
+  ],
+  "label_crop_origin_in_frame": [
+   789,
+   390
+  ]
+ },
+ "crop_26": {
+  "shot": "oct24-17",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   752,
+   361
+  ],
+  "label_crop_origin_in_frame": [
+   778,
+   391
+  ]
+ },
+ "crop_27": {
+  "shot": "oct27-02",
+  "mode": "640x400",
+  "origin_in_frame": [
+   369,
+   158
+  ],
+  "label_crop_origin_in_frame": [
+   389,
+   178
+  ]
+ },
+ "crop_28": {
+  "shot": "oct24-25",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   624,
+   356
+  ],
+  "label_crop_origin_in_frame": [
+   650,
+   386
+  ]
+ },
+ "crop_29": {
+  "shot": "oct24-10",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   774,
+   354
+  ],
+  "label_crop_origin_in_frame": [
+   800,
+   384
+  ]
+ },
+ "crop_30": {
+  "shot": "oct27-03",
+  "mode": "640x400",
+  "origin_in_frame": [
+   385,
+   156
+  ],
+  "label_crop_origin_in_frame": [
+   405,
+   176
+  ]
+ },
+ "crop_31": {
+  "shot": "oct24-27",
+  "mode": "1280x800",
+  "origin_in_frame": [
+   700,
+   358
+  ],
+  "label_crop_origin_in_frame": [
+   726,
+   388
+  ]
+ }
+}

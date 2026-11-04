@@ -1,0 +1,312 @@
+{
+ "crop_01": {
+  "shot": "oct24-24",
+  "width_a": 37.5,
+  "width_b": 36.5,
+  "agree": true,
+  "truth_d": 37.0,
+  "centre_x_crop": 38.75,
+  "top_y_crop": 12.75,
+  "finder_d": 47.9
+ },
+ "crop_02": {
+  "shot": "oct24-14",
+  "width_a": 34.0,
+  "width_b": 34.0,
+  "agree": true,
+  "truth_d": 34.0,
+  "centre_x_crop": 34.75,
+  "top_y_crop": 10.5,
+  "finder_d": 36.4
+ },
+ "crop_03": {
+  "shot": "oct24-22",
+  "width_a": 37.0,
+  "width_b": 36.5,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 34.62,
+  "top_y_crop": 7.75,
+  "finder_d": 46.4
+ },
+ "crop_04": {
+  "shot": "oct27-04",
+  "width_a": 19.0,
+  "width_b": 19.0,
+  "agree": true,
+  "truth_d": 19.0,
+  "centre_x_crop": 20.0,
+  "top_y_crop": 9.5,
+  "finder_d": 20.4
+ },
+ "crop_05": {
+  "shot": "oct24-13",
+  "width_a": 35.5,
+  "width_b": 36.0,
+  "agree": true,
+  "truth_d": 35.75,
+  "centre_x_crop": 33.12,
+  "top_y_crop": 10.25,
+  "finder_d": 38.2
+ },
+ "crop_06": {
+  "shot": "oct27-01",
+  "width_a": 23.5,
+  "width_b": 23.5,
+  "agree": true,
+  "truth_d": 23.5,
+  "centre_x_crop": 20.75,
+  "top_y_crop": 7.5,
+  "finder_d": 24.0
+ },
+ "crop_07": {
+  "shot": "oct24-28",
+  "width_a": 35.0,
+  "width_b": 36.5,
+  "agree": true,
+  "truth_d": 35.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 7.0,
+  "finder_d": 46.3
+ },
+ "crop_08": {
+  "shot": "oct24-12",
+  "width_a": 36.0,
+  "width_b": 37.5,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 11.0,
+  "finder_d": 36.7
+ },
+ "crop_09": {
+  "shot": "oct24-04",
+  "width_a": 40.0,
+  "width_b": 40.0,
+  "agree": true,
+  "truth_d": 40.0,
+  "centre_x_crop": 29.25,
+  "top_y_crop": 18.5,
+  "finder_d": 45.6
+ },
+ "crop_10": {
+  "shot": "oct24-16",
+  "width_a": 36.0,
+  "width_b": 37.0,
+  "agree": true,
+  "truth_d": 36.5,
+  "centre_x_crop": 34.0,
+  "top_y_crop": 10.5,
+  "finder_d": 38.2
+ },
+ "crop_11": {
+  "shot": "oct24-02",
+  "width_a": 36.5,
+  "width_b": 37.5,
+  "agree": true,
+  "truth_d": 37.0,
+  "centre_x_crop": 34.75,
+  "top_y_crop": 8.5,
+  "finder_d": 43.4
+ },
+ "crop_12": {
+  "shot": "oct24-06",
+  "width_a": 37.0,
+  "width_b": 38.0,
+  "agree": true,
+  "truth_d": 37.5,
+  "centre_x_crop": 34.0,
+  "top_y_crop": 9.5,
+  "finder_d": 40.4
+ },
+ "crop_13": {
+  "shot": "oct24-18",
+  "width_a": 37.5,
+  "width_b": 38.5,
+  "agree": true,
+  "truth_d": 38.0,
+  "centre_x_crop": 33.75,
+  "top_y_crop": 9.5,
+  "finder_d": 38.4
+ },
+ "crop_14": {
+  "shot": "oct24-30",
+  "width_a": 35.5,
+  "width_b": 36.5,
+  "agree": true,
+  "truth_d": 36.0,
+  "centre_x_crop": 33.25,
+  "top_y_crop": 12.0,
+  "finder_d": 38.4
+ },
+ "crop_15": {
+  "shot": "oct24-15",
+  "width_a": 37.0,
+  "width_b": 38.0,
+  "agree": true,
+  "truth_d": 37.5,
+  "centre_x_crop": 33.25,
+  "top_y_crop": 18.0,
+  "finder_d": 49.0
+ },
+ "crop_16": {
+  "shot": "oct24-11",
+  "width_a": 37.5,
+  "width_b": 38.5,
+  "agree": true,
+  "truth_d": 38.0,
+  "centre_x_crop": 33.75,
+  "top_y_crop": 9.0,
+  "finder_d": 40.1
+ },
+ "crop_17": {
+  "shot": "oct24-29",
+  "width_a": 36.5,
+  "width_b": 37.0,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 9.5,
+  "finder_d": 38.8
+ },
+ "crop_18": {
+  "shot": "oct24-09",
+  "width_a": 36.5,
+  "width_b": 37.0,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 34.38,
+  "top_y_crop": 7.5,
+  "finder_d": 41.7
+ },
+ "crop_19": {
+  "shot": "oct24-20",
+  "width_a": 37.0,
+  "width_b": 37.5,
+  "agree": true,
+  "truth_d": 37.25,
+  "centre_x_crop": 34.12,
+  "top_y_crop": 9.5,
+  "finder_d": 40.4
+ },
+ "crop_20": {
+  "shot": "oct24-26",
+  "width_a": 37.0,
+  "width_b": 38.0,
+  "agree": true,
+  "truth_d": 37.5,
+  "centre_x_crop": 34.0,
+  "top_y_crop": 8.0,
+  "finder_d": 41.6
+ },
+ "crop_21": {
+  "shot": "oct24-19",
+  "width_a": 38.0,
+  "width_b": 39.5,
+  "agree": true,
+  "truth_d": 38.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 8.5,
+  "finder_d": 40.2
+ },
+ "crop_22": {
+  "shot": "oct24-07",
+  "width_a": 36.5,
+  "width_b": 38.0,
+  "agree": true,
+  "truth_d": 37.25,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 9.5,
+  "finder_d": 38.6
+ },
+ "crop_23": {
+  "shot": "oct24-03",
+  "width_a": 41.0,
+  "width_b": 41.5,
+  "agree": true,
+  "truth_d": 41.25,
+  "centre_x_crop": 34.38,
+  "top_y_crop": 17.5,
+  "finder_d": 58.1
+ },
+ "crop_24": {
+  "shot": "oct24-21",
+  "width_a": 36.5,
+  "width_b": 37.0,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 11.0,
+  "finder_d": 35.5
+ },
+ "crop_25": {
+  "shot": "oct24-23",
+  "width_a": 37.0,
+  "width_b": 38.0,
+  "agree": true,
+  "truth_d": 37.5,
+  "centre_x_crop": 33.0,
+  "top_y_crop": 8.5,
+  "finder_d": 45.0
+ },
+ "crop_26": {
+  "shot": "oct24-17",
+  "width_a": 38.0,
+  "width_b": 39.0,
+  "agree": true,
+  "truth_d": 38.5,
+  "centre_x_crop": 33.5,
+  "top_y_crop": 8.0,
+  "finder_d": 44.0
+ },
+ "crop_27": {
+  "shot": "oct27-02",
+  "width_a": 19.5,
+  "width_b": 20.0,
+  "agree": true,
+  "truth_d": 19.75,
+  "centre_x_crop": 20.12,
+  "top_y_crop": 9.5,
+  "finder_d": 21.7
+ },
+ "crop_28": {
+  "shot": "oct24-25",
+  "width_a": 36.0,
+  "width_b": 37.5,
+  "agree": true,
+  "truth_d": 36.75,
+  "centre_x_crop": 33.38,
+  "top_y_crop": 9.0,
+  "finder_d": 40.3
+ },
+ "crop_29": {
+  "shot": "oct24-10",
+  "width_a": 38.5,
+  "width_b": 39.0,
+  "agree": true,
+  "truth_d": 38.75,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 11.0,
+  "finder_d": 36.4
+ },
+ "crop_30": {
+  "shot": "oct27-03",
+  "width_a": 19.0,
+  "width_b": 19.5,
+  "agree": true,
+  "truth_d": 19.25,
+  "centre_x_crop": 19.88,
+  "top_y_crop": 9.75,
+  "finder_d": 19.0
+ },
+ "crop_31": {
+  "shot": "oct24-27",
+  "width_a": 38.5,
+  "width_b": 40.0,
+  "agree": true,
+  "truth_d": 39.25,
+  "centre_x_crop": 33.88,
+  "top_y_crop": 9.0,
+  "finder_d": 44.0
+ }
+}
