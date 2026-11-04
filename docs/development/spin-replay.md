@@ -109,6 +109,39 @@ The JSONL preserves:
 - OPS clock sync, radar identity/state queries, transport speed, software
   revision, processor constants, and physical setup metadata.
 
+### Bench mode: stationary spinning ball (`--software-trigger`)
+
+A marked ball spinning on a dowel in a drill has no net Doppler, so the OPS
+speed trigger never fires. `--software-trigger` sends the OPS `S!` dump command
+every `--interval` seconds (default 3) for `-n` requests instead of waiting for
+HOST_INT. Records use the same schema, plus `trigger: "software"` and a
+`labels` dict (`--ball-label`, `--rpm-label`, `--notes`); hardware-mode records
+carry `trigger: "hardware"`. Use one run per bench cell and type the tachometer
+reading into `--rpm-label`:
+
+```bash
+uv run --no-sync python scripts/hardware-test/capture_ops_spin.py \
+    --software-trigger --interval 3 -n 10 \
+    --environment other \
+    --ball-label "25 mm foil patch" \
+    --rpm-label "tach 3012" \
+    --notes "2.0 m, axis left-right, 7i-height"
+```
+
+- Every `S!` counts toward `-n`; an unanswered request is logged as
+  `ops_spin_timeout` and the radar is re-armed. If a dump plus re-arm takes
+  longer than the interval, the next request follows a 0.35 s buffer refill.
+- A dump that is not the full 4096-sample ring on both I and Q is kept raw and
+  logged as `iq_length_invalid`, not processed.
+- `S#n` still applies: the board treats `S!` as the trigger instant, samples
+  the remaining `32 - n` segments, then dumps all 4096 samples. The window
+  position does not matter for a stationary ball, so the default is fine.
+- `--timeout` defaults to 10 s in this mode (the `S!` response floor, scaled up
+  for slow UART baud).
+- Disconnect any HOST_INT source (the sound trigger) for the bench. A native
+  dump that races the request is flagged as
+  `markers.trigger_velocity_detected` in the raw record.
+
 Replay the complete session or plot one capture directly:
 
 ```bash

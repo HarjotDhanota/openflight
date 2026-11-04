@@ -9,10 +9,39 @@ fed directly to the replay and spin plotting tools under ``scripts/analysis``.
 The OPS243 must already boot in persisted rolling-buffer mode. This script does
 not write flash or switch modes at runtime.
 
+Two acquisition modes write the same record schema:
+
+* hardware (default): wait for the HOST_INT / speed trigger, one dump per shot.
+* ``--software-trigger``: bench mode for a STATIONARY spinning marked ball (ball
+  on a dowel in a drill). It has no net Doppler, so the speed trigger never
+  fires; instead the host sends the OPS ``S!`` dump command every ``--interval``
+  seconds for ``-n`` captures. Each S! is one attempt: an empty answer is
+  recorded and counted, and the run stops after exactly ``-n`` requests. If a
+  dump plus re-arm outlasts the interval, the next S! follows a 0.35 s refill.
+  Every record carries ``trigger: "software"`` and the ``labels`` dict
+  (``--ball-label``, ``--rpm-label``, ``--notes``); a dump that is not the full
+  4096-sample ring on both I and Q is kept raw and logged as
+  ``iq_length_invalid`` instead of being processed.
+
+  ``S#n`` in software mode: the board treats S! as its trigger instant, keeps
+  sampling the (32 - n) post-trigger segments, then dumps all 4096 samples. So
+  the dump is always the full 136.5 ms ring; n only moves the window relative to
+  the host command and delays the first dump byte by (32 - n) x 4.27 ms. For a
+  stationary spinning ball the window position is irrelevant, so the default
+  ``--pre-trigger`` is fine. ``trigger_time`` in the dump is the device time of
+  the S! receipt, not a physical event, and no first-byte host time is taken.
+
+  Disconnect any HOST_INT source (sound trigger) for the bench: a drill can trip
+  it, and a native dump racing the request is flagged in the raw record
+  (``markers.trigger_velocity_detected``) but not otherwise prevented.
+
 Examples:
     uv run python scripts/hardware-test/capture_ops_spin.py --club driver -n 20
     uv run python scripts/hardware-test/capture_ops_spin.py \
         --port /dev/ttyAMA0 --ops-baud 115200 --club 7-iron -n 30
+    uv run python scripts/hardware-test/capture_ops_spin.py --software-trigger \
+        --interval 3 -n 10 --environment other --ball-label "25 mm foil" \
+        --rpm-label "tach 3012" --notes "2.0 m, axis left-right"
 """
 
 from __future__ import annotations
@@ -52,6 +81,12 @@ from openflight.rolling_buffer.types import (  # noqa: E402
 
 SCHEMA_VERSION = 1
 SAMPLE_RATE_KSPS = 30
+BUFFER_SAMPLES = 32 * 128
+HARDWARE_TIMEOUT_S = 60.0
+SOFTWARE_TIMEOUT_S = 10.0
+DEFAULT_SOFTWARE_INTERVAL_S = 3.0
+# Same floor as ops_sample_clock.py: >= 350 ms after re-arm for the ring to refill.
+SOFTWARE_REFILL_S = 0.35
 
 
 def utc_now() -> str:
@@ -200,6 +235,8 @@ def build_raw_capture_record(
     wait_started_at: float,
     response_received_at: float,
     first_byte_timestamp: Optional[float],
+    trigger: str = "hardware",
+    labels: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build the lossless pre-parse record for one OPS response."""
     encoded = response.encode("utf-8")
@@ -207,6 +244,8 @@ def build_raw_capture_record(
         "type": "ops_spin_raw_capture",
         "capture_number": capture_number,
         "capture_id": f"ops-{capture_number:06d}",
+        "trigger": trigger,
+        "labels": labels,
         "wait_started_at": wait_started_at,
         "response_received_at": response_received_at,
         "wait_elapsed_ms": (response_received_at - wait_started_at) * 1000.0,
@@ -221,6 +260,7 @@ def build_raw_capture_record(
             "i": '"I"' in response,
             "q": '"Q"' in response,
             "q_closed": '"Q"' in response and "]}" in response[response.rfind('"Q"') :],
+            "trigger_velocity_detected": '"trigger_velocity_detected"' in response,
         },
         "raw_response": response,
     }
@@ -235,6 +275,8 @@ def build_capture_record(
     club: ClubType,
     clock_sync: Optional[dict[str, Any]],
     envelope_spin: Optional[SpinResult] = None,
+    trigger: str = "hardware",
+    labels: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a replay-compatible structured record with all diagnostics."""
     processing = _processing_record(processed)
@@ -246,6 +288,8 @@ def build_capture_record(
         "capture_id": f"ops-{capture_number:06d}",
         "shot_number": capture_number,
         "club": club.value,
+        "trigger": trigger,
+        "labels": labels,
         "sample_time": capture.sample_time,
         "trigger_time": capture.trigger_time,
         "trigger_offset_ms": capture.trigger_offset_ms,
@@ -316,6 +360,7 @@ def build_shot_record(capture_record: dict[str, Any]) -> dict[str, Any]:
             "spin_candidate_rpm": peak_hz * 60 if peak_hz is not None else None,
             "spin_rejection_reason": capture_record.get("spin_rejection_reason"),
             "mode": "ops-spin-diagnostic",
+            "trigger": capture_record.get("trigger"),
             "capture_status": capture_record["processing"]["status"],
         },
     }
@@ -356,11 +401,21 @@ def capture_once(
     pre_trigger_segments: int,
     club: ClubType,
     sync_clock: bool = True,
+    software_trigger: bool = False,
+    labels: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Capture, persist, parse, and process one hardware-triggered dump."""
+    """Capture, persist, parse, and process one dump.
+
+    Hardware mode waits for a HOST_INT-triggered dump. Software mode sends one
+    ``S!`` and requires the full ``BUFFER_SAMPLES`` ring on both channels.
+    """
+    trigger = "software" if software_trigger else "hardware"
     wait_started_at = time.time()
     try:
-        response = radar.wait_for_hardware_trigger(timeout=timeout)
+        if software_trigger:
+            response = radar.trigger_capture(timeout=timeout)
+        else:
+            response = radar.wait_for_hardware_trigger(timeout=timeout)
     except Exception as exc:
         writer.write(_error_record(capture_number, "acquisition_failed", exc))
         return "acquisition_failed"
@@ -371,15 +426,26 @@ def capture_once(
             {
                 "type": "ops_spin_timeout",
                 "capture_number": capture_number,
+                "trigger": trigger,
                 "timeout_s": timeout,
                 "wait_started_at": wait_started_at,
                 "wait_ended_at": response_received_at,
             }
         )
         print(f"  #{capture_number}: timeout after {timeout:.0f}s")
+        if software_trigger:
+            # An unanswered S! may leave the board idle; restart sampling.
+            try:
+                radar.rearm_rolling_buffer(pre_trigger_segments=pre_trigger_segments)
+            except Exception as exc:
+                writer.write(_error_record(capture_number, "rearm_failed", exc))
+                raise
         return "timeout"
 
-    first_byte_timestamp = radar.last_hardware_trigger_first_byte_timestamp
+    # trigger_capture() keeps no first-byte host time; S! is a host request.
+    first_byte_timestamp = (
+        None if software_trigger else radar.last_hardware_trigger_first_byte_timestamp
+    )
     writer.write(
         build_raw_capture_record(
             capture_number=capture_number,
@@ -387,6 +453,8 @@ def capture_once(
             wait_started_at=wait_started_at,
             response_received_at=response_received_at,
             first_byte_timestamp=first_byte_timestamp,
+            trigger=trigger,
+            labels=labels,
         )
     )
 
@@ -400,6 +468,24 @@ def capture_once(
             writer.write(_error_record(capture_number, "parse_failed"))
             print(f"  #{capture_number}: parse failed ({len(response)} characters; raw saved)")
             outcome = "parse_failed"
+            return outcome
+        if software_trigger and not (
+            len(capture.i_samples) == len(capture.q_samples) == BUFFER_SAMPLES
+        ):
+            record = _error_record(capture_number, "iq_length_invalid")
+            record.update(
+                {
+                    "i_samples": len(capture.i_samples),
+                    "q_samples": len(capture.q_samples),
+                    "expected_samples": BUFFER_SAMPLES,
+                }
+            )
+            writer.write(record)
+            print(
+                f"  #{capture_number}: short dump I={len(capture.i_samples)} "
+                f"Q={len(capture.q_samples)} of {BUFFER_SAMPLES} (raw saved)"
+            )
+            outcome = "iq_length_invalid"
             return outcome
 
         clock_sync = _read_capture_clock_sync(radar) if sync_clock else None
@@ -425,11 +511,16 @@ def capture_once(
             club=club,
             clock_sync=clock_sync,
             envelope_spin=envelope_spin,
+            trigger=trigger,
+            labels=labels,
         )
         writer.write(capture_record)
         writer.write(build_shot_record(capture_record))
         if processed is None:
-            print(f"  #{capture_number}: no shot found (raw I/Q and timeline saved)")
+            if software_trigger:
+                print(f"  #{capture_number}: S! dump saved ({BUFFER_SAMPLES} I/Q samples)")
+            else:
+                print(f"  #{capture_number}: no shot found (raw I/Q and timeline saved)")
             outcome = "no_shot"
         else:
             spin = processed.spin
@@ -452,6 +543,62 @@ def capture_once(
         except Exception as exc:
             writer.write(_error_record(capture_number, "rearm_failed", exc))
             raise
+
+
+def software_capture_loop(
+    *,
+    radar: OPS243Radar,
+    processor: RollingBufferProcessor,
+    writer: JsonlWriter,
+    max_captures: int,
+    interval_s: float,
+    timeout: float,
+    pre_trigger_segments: int,
+    club: ClubType,
+    sync_clock: bool,
+    labels: Optional[dict[str, Any]],
+    counts: Optional[dict[str, int]] = None,
+    sleep=None,
+    monotonic=None,
+) -> dict[str, int]:
+    """Issue one S! every ``interval_s`` seconds; ``max_captures`` 0 runs until Ctrl+C.
+
+    Requests are scheduled from the start of the previous request, so the
+    period holds when the dump is shorter than the interval; after a longer
+    dump and re-arm the next S! waits only ``SOFTWARE_REFILL_S`` for the ring to
+    refill. Every request counts toward the limit.
+    ``counts`` is updated in place so a Ctrl+C keeps the tally so far.
+    """
+    sleep = time.sleep if sleep is None else sleep
+    monotonic = time.monotonic if monotonic is None else monotonic
+    counts = {} if counts is None else counts
+    capture_number = sum(counts.values()) + 1
+    next_request = monotonic()
+    while max_captures == 0 or capture_number <= max_captures:
+        wait = next_request - monotonic()
+        if wait > 0:
+            sleep(wait)
+        next_request = monotonic() + interval_s
+        outcome = capture_once(
+            radar=radar,
+            processor=processor,
+            writer=writer,
+            capture_number=capture_number,
+            timeout=timeout,
+            pre_trigger_segments=pre_trigger_segments,
+            club=club,
+            sync_clock=sync_clock,
+            software_trigger=True,
+            labels=labels,
+        )
+        counts[outcome] = counts.get(outcome, 0) + 1
+        capture_number += 1
+        if outcome == "acquisition_failed":
+            print("Stopping after radar acquisition failure.", file=sys.stderr)
+            break
+        # The 136.5 ms ring must refill after the re-arm before the next S!.
+        next_request = max(next_request, monotonic() + SOFTWARE_REFILL_S)
+    return counts
 
 
 def _git_output(*args: str) -> Optional[str]:
@@ -553,7 +700,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-o", "--output", type=Path, help="New append-only JSONL output file")
     parser.add_argument("-n", "--max-captures", type=int, default=0, help="0 captures until Ctrl+C")
-    parser.add_argument("--timeout", type=float, default=60.0, help="Seconds per trigger wait")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help=(
+            f"Seconds per trigger wait (default {HARDWARE_TIMEOUT_S:.0f}); with "
+            f"--software-trigger, the S! response floor (default {SOFTWARE_TIMEOUT_S:.0f}, "
+            "scaled up for slow UART baud)"
+        ),
+    )
+    parser.add_argument(
+        "--software-trigger",
+        action="store_true",
+        help="Bench mode: send S! every --interval seconds instead of waiting for HOST_INT",
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_SOFTWARE_INTERVAL_S,
+        help="Seconds between S! requests in --software-trigger mode",
+    )
     parser.add_argument(
         "--pre-trigger",
         type=int,
@@ -568,6 +734,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Club used for transition diagnostics",
     )
     parser.add_argument("--ball-label", help="Ball model or marking used in this session")
+    parser.add_argument(
+        "--rpm-label",
+        help="Free-text reference spin for this run, e.g. the tachometer reading",
+    )
     parser.add_argument(
         "--environment",
         choices=("outdoor-range", "indoor-net", "other"),
@@ -591,18 +761,33 @@ def _default_output() -> Path:
     return Path.home() / "openflight_sessions" / f"ops_spin_capture_{stamp}.jsonl"
 
 
+def resolve_timeout(args: argparse.Namespace) -> float:
+    """Return the per-capture timeout, defaulted for the acquisition mode."""
+    if args.timeout is not None:
+        return args.timeout
+    return SOFTWARE_TIMEOUT_S if args.software_trigger else HARDWARE_TIMEOUT_S
+
+
+def _labels(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the per-record run labels."""
+    return {"ball_label": args.ball_label, "rpm_label": args.rpm_label, "notes": args.notes}
+
+
 def _session_config(args: argparse.Namespace) -> dict[str, Any]:
     """Return physical setup and capture settings for the session header."""
     return {
+        "trigger": "software" if args.software_trigger else "hardware",
+        "software_interval_s": args.interval if args.software_trigger else None,
         "sample_rate_hz": SAMPLE_RATE_KSPS * 1000,
         "sample_rate_ksps": SAMPLE_RATE_KSPS,
         "pre_trigger_segments": args.pre_trigger,
         "pre_trigger_ms": args.pre_trigger * 128 / SAMPLE_RATE_KSPS,
         "post_trigger_ms": (32 - args.pre_trigger) * 128 / SAMPLE_RATE_KSPS,
-        "timeout_s": args.timeout,
+        "timeout_s": resolve_timeout(args),
         "max_captures": args.max_captures,
         "club": args.club,
         "ball_label": args.ball_label,
+        "rpm_label": args.rpm_label,
         "environment": args.environment,
         "radar_to_ball_ft": args.radar_to_ball_ft,
         "ball_to_net_ft": args.ball_to_net_ft,
@@ -621,9 +806,14 @@ def run_session(args: argparse.Namespace) -> int:
     counts: dict[str, int] = {}
     capture_number = 1
 
+    timeout = resolve_timeout(args)
+    labels = _labels(args)
+
     print("OPS spin diagnostic capture")
     print(f"  Output: {output}")
     print(f"  Club: {club.value}")
+    if args.software_trigger:
+        print(f"  Trigger: software S! every {args.interval:g}s")
     print(
         f"  Buffer: S#{args.pre_trigger} "
         f"({args.pre_trigger * 128 / SAMPLE_RATE_KSPS:.1f} ms pre, "
@@ -658,19 +848,39 @@ def run_session(args: argparse.Namespace) -> int:
                     "initial_clock_sync": initial_clock_sync,
                 }
             )
-            print(f"Connected to {radar.port}; waiting for HOST_INT triggers.")
-            print("Hit shots normally. Press Ctrl+C after the final shot.\n")
+            if args.software_trigger:
+                print(f"Connected to {radar.port}; sending S! every {args.interval:g}s.")
+                print("Press Ctrl+C to stop early.\n")
+                counts = software_capture_loop(
+                    radar=radar,
+                    processor=processor,
+                    writer=writer,
+                    max_captures=args.max_captures,
+                    interval_s=args.interval,
+                    timeout=timeout,
+                    pre_trigger_segments=args.pre_trigger,
+                    club=club,
+                    sync_clock=not args.no_clock_sync,
+                    labels=labels,
+                    counts=counts,
+                )
+            else:
+                print(f"Connected to {radar.port}; waiting for HOST_INT triggers.")
+                print("Hit shots normally. Press Ctrl+C after the final shot.\n")
 
-            while args.max_captures == 0 or capture_number <= args.max_captures:
+            while not args.software_trigger and (
+                args.max_captures == 0 or capture_number <= args.max_captures
+            ):
                 outcome = capture_once(
                     radar=radar,
                     processor=processor,
                     writer=writer,
                     capture_number=capture_number,
-                    timeout=args.timeout,
+                    timeout=timeout,
                     pre_trigger_segments=args.pre_trigger,
                     club=club,
                     sync_clock=not args.no_clock_sync,
+                    labels=labels,
                 )
                 counts[outcome] = counts.get(outcome, 0) + 1
                 if outcome != "timeout":
@@ -705,7 +915,9 @@ def run_session(args: argparse.Namespace) -> int:
             writer.write(
                 {
                     "type": "ops_spin_session_end",
-                    "captures_attempted": capture_number - 1,
+                    "captures_attempted": (
+                        sum(counts.values()) if args.software_trigger else capture_number - 1
+                    ),
                     "outcomes": counts,
                 }
             )
@@ -727,8 +939,10 @@ def main() -> int:
     )
     if args.max_captures < 0:
         raise SystemExit("--max-captures must be zero or positive")
-    if args.timeout <= 0:
+    if args.timeout is not None and args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
+    if args.interval <= 0:
+        raise SystemExit("--interval must be positive")
     return run_session(args)
 
 
