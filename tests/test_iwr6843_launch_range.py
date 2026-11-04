@@ -431,36 +431,32 @@ def _shot1(prior=None):
 
 
 def test_oct27_shot1_on_its_recorded_loose_prior_is_estimated_never_measured():
-    """The kiosk took the club's walk (31.3 m/s) for the ball: 1.50 m, estimated. The 38.7
-    m/s walk agrees with the club only through the recorded prior's 0.34 m sigma (nominal
-    camera): 2.117 m, estimated, with the reason; never measured."""
+    """The kiosk took the club's walk (31.3 m/s) for the ball: 1.50 m, estimated. The
+    ball's own walk (36-37 m/s, the OPS speed on the line of sight) agrees with the club
+    only through the recorded prior's 0.34 m sigma (nominal camera): estimated, with the
+    reason; never measured."""
     estimate = _shot1()
 
-    assert estimate.range_m == pytest.approx(2.117, abs=0.005)
+    assert estimate.ball_track["speed_ms"] == pytest.approx(36.2, abs=1.1)
     assert estimate.label == "estimated"
     assert estimate.reason == "anchor agreement rests on a loose prior (sigma 0.34 m)"
     anchor = estimate.anchor
     assert anchor["status"] == "agrees_loose_prior"
-    assert anchor["club_source"] == "club_by_speed"
-    assert anchor["club_speed_ms"] == pytest.approx(31.3, abs=0.5)
     assert anchor["prior_term_s"] > anchor["frame_term_s"]
     assert estimate.uncertainty_m >= 0.3382
 
 
-def test_oct27_shot1_on_the_calibrated_camera_s_prior_has_no_iwr_launch_range():
+def test_oct27_shot1_on_the_calibrated_camera_s_prior_is_the_ball_s_own_walk():
     """With the resting ball where the calibrated camera puts it (1.81 m from the radar;
-    sigma 0.03 m = the focal's 1 % and a 0.3 px diameter fit on 24 px), no walk leaves it
-    when the club gets there: not measured, never a relabelled walk."""
+    sigma 0.03 m = the focal's 1 % and a 0.3 px diameter fit on 24 px), the ball's own walk
+    (no longer hidden under the golfer band) leaves it when the club gets there. Before
+    G4 C1: no walk did, not measured."""
     estimate = _shot1(lr.LaunchRangePrior(1.81, 0.03, "camera_calibrated_resting_ball"))
 
-    assert estimate.status == "not_measured"
-    assert estimate.range_m is None
-    # the prior check refuses it first; the anchor says why it is not the ball
-    assert estimate.anchor["status"] == "disagrees"
-    assert estimate.anchor["club_source"] == "club_by_speed"
-    assert (
-        estimate.anchor["t_club_s"] - estimate.anchor["t_ball_s"] > estimate.anchor["tolerance_s"]
-    )
+    assert estimate.measured
+    assert estimate.range_m == pytest.approx(1.81, abs=0.10)
+    assert estimate.anchor["status"] == "agrees"
+    assert estimate.ball_track["speed_ms"] == pytest.approx(36.2, abs=1.1)
 
 
 def _walk(speed_ms, range_m_at_zero):

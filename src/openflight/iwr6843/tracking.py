@@ -61,6 +61,20 @@ MAX_REFINE_PASSES = 10
 _PAIR_CHUNK = 4096
 # The one m/s-to-mph factor for the IWR package.
 MPH_PER_MS = 2.23694
+# Peaks kept in one loop's gate lie at least this many bins apart: beyond two 1.2-bin
+# inlier bands, so one loop gives one echo one vote.
+PEAK_SEPARATION_BINS = 3.0
+# The golfer (body, arms, shaft) is a band of bins 44-56 (0.56 m at 4.69 cm) present in
+# every frame of the wide range-domain dumps, 11-21 dB above the ball (Oct 27 shot 1,
+# gap-closure/alias-clutter). At PEAK_SEPARATION_BINS it resolves into at most
+# 12 / 3 = 4 peaks per loop.
+GOLFER_BAND_WIDTH_BINS = 12.0
+# A ball search bounded by the OPS ball speed keeps one slot per golfer-band cell, so the
+# ball's walk still gets a vote in loops where the band shows its lobes: with one peak the
+# band is every loop's argmax and the ball never competes; with three the walk stops where
+# the band shows three lobes above it (shot 1: frame 19, bin 74.6). A search without the
+# OPS speed keeps one peak (shot.LCMF_SEARCH_MAX_PEAKS_PER_LOOP).
+BALL_MAX_PEAKS_PER_LOOP = round(GOLFER_BAND_WIDTH_BINS / PEAK_SEPARATION_BINS)
 
 
 def accepted_range_evidence(evidence):
@@ -265,7 +279,7 @@ def _gate_peak_bins(row, lo, hi, snr_min, max_peaks):
             if den < 0 and abs((y_0 - y_2) / (2 * den)) < 1:
                 peak += (y_0 - y_2) / (2 * den)
         # Separate refined peaks beyond two 1.2-bin inlier bands: one loop gets one vote.
-        if any(abs(peak - previous) < 3.0 for previous in peaks):
+        if any(abs(peak - previous) < PEAK_SEPARATION_BINS for previous in peaks):
             continue
         peaks.append(peak)
         if len(peaks) == max_peaks:
@@ -896,8 +910,9 @@ def search_ball(  # pylint: disable=too-many-arguments,too-many-locals
 ) -> TrackSearch:
     """The exhaustive range-walk search on one MTI cube (``search_range_walks``).
 
-    Per-loop detections inside ``gates_m``, restricted to ``time_window_s``; the picked
-    walk gets its quadratic refit (the local radial speed).
+    Per-loop detections inside ``gates_m`` (``max_peaks_per_loop`` each; a search
+    bounded by the OPS ball speed passes BALL_MAX_PEAKS_PER_LOOP), restricted to
+    ``time_window_s``; the picked walk gets its quadratic refit (the local radial speed).
     """
     power = loop_power(mti)
     loops_idx, bins = _detections(

@@ -48,6 +48,11 @@ MIN_BALL_SPAN_S = 0.006
 WALK_START_MIN_SAMPLES = 2
 # the range walk's inlier tolerance, in bins, as tracking.find_ball uses
 _TRACK_TOLERANCE_BINS = 1.2
+# The club's approach walk runs into the same golfer band as the ball's walk leaves it,
+# so it is searched with the ball's slots per loop. Oct 27 shot 1: in the window MTI one
+# peak per loop finds no club walk at the club's speed (23.6 m/s, three frames) where four
+# find the 31.3 m/s approach; in the burst MTI both find it.
+CLUB_WALK_MAX_PEAKS_PER_LOOP = tracking.BALL_MAX_PEAKS_PER_LOOP
 # Two competing walks whose launch points lie within this many standard errors of their
 # combined uncertainty are one answer (two-sided ~95 %); further apart, the range is
 # labelled AMBIGUOUS_LABEL.
@@ -407,13 +412,20 @@ def _track_facts(track: tracking.BallTrack | None, res_m: float) -> dict | None:
 
 
 def _gate_detections(
-    prepared: PreparedShotDump, scope: str, gate: tuple[float, float]
+    prepared: PreparedShotDump,
+    scope: str,
+    gate: tuple[float, float],
+    *,
+    max_peaks_per_loop: int = tracking.BALL_MAX_PEAKS_PER_LOOP,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-loop peaks in the gate: (loop index, time s, fractional bin)."""
+    """Per-loop peaks in the gate: (loop index, time s, fractional bin), as many per loop
+    as the walk they are read against was searched with."""
     geometry = prepared.geometry
     power = tracking.loop_power(prepared.mti(scope))
     # pylint: disable-next=protected-access
-    loops, bins = tracking._detections(power, geometry, gates_m=(gate,))
+    loops, bins = tracking._detections(
+        power, geometry, gates_m=(gate,), max_peaks_per_loop=max_peaks_per_loop
+    )
     n_loops = geometry.n_loops
     times = np.array([geometry.loop_time(i // n_loops, i % n_loops) for i in loops], dtype=float)
     return np.asarray(loops), times, np.asarray(bins, dtype=float)
@@ -545,6 +557,7 @@ def _ball_walk(
             min_ball_ms=bounds[0],
             anchor=anchor,
             ops_speed_ms=speed_ms,
+            max_peaks_per_loop=tracking.BALL_MAX_PEAKS_PER_LOOP,
         )
 
     track, scope = find("burst"), "burst"
@@ -589,6 +602,7 @@ def _club_walk(  # pylint: disable=too-many-arguments
             max(0.0, start_s - CLUB_WINDOW_BEFORE_S),
             start_s + CLUB_WINDOW_AFTER_S,
         ),
+        max_peaks_per_loop=CLUB_WALK_MAX_PEAKS_PER_LOOP,
     )
 
 
@@ -607,7 +621,9 @@ def _meeting(  # pylint: disable=too-many-arguments
         max(0.35, gate[0] - 0.6),
         ball.range_at(start_s + CLUB_WINDOW_AFTER_S, geometry.range_res_m) + 0.10,
     )
-    club_detections = _gate_detections(prepared, scope, club_gate)
+    club_detections = _gate_detections(
+        prepared, scope, club_gate, max_peaks_per_loop=CLUB_WALK_MAX_PEAKS_PER_LOOP
+    )
     earliest = start_s - CLUB_WINDOW_BEFORE_S
     latest = start_s + CLUB_WINDOW_AFTER_S + geometry.frame_period_s
     meet_s = None

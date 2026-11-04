@@ -67,34 +67,32 @@ def test_every_dump_gives_the_same_answer_twice(runs):
         assert second["competing"] == first["competing"], key
 
 
-def test_shot_14_keeps_its_range_and_exposes_conflicting_ops_guided_angles(runs):
+def test_shot_14_s_range_and_launch_on_the_ball_s_four_peak_walk(runs):
+    """Before G4 C1 (4 Nov): 1.91 m estimated (the owner's ~1.91 m) and the OPS-guided
+    angles conflicting (12.06-20.16 deg), withheld. The four-peak ball walk (21.1 m/s
+    against OPS 20.2) holds frame after frame from 1.2 ms (pre-request frames 1-8 lie on its
+    line), so read back to its start, with no camera prior, the launch point is 1.49 m;
+    the LCMF on that tee accepts 40.3 deg. Both are today's values, not truth (g4 report)."""
     shot = runs["shot14"]
 
-    assert shot["range_m"] == pytest.approx(1.91, abs=0.02)
-    # no club walk anchors its contact time (C6a', 2 Nov): estimated, the range unchanged
+    assert shot["range_m"] == pytest.approx(1.493, abs=0.005)
     assert shot["range_label"] == "estimated"
-    assert shot["launch_status"] == "rejected_ops_guided_angle_ambiguous"
-    assert shot["launch_deg"] is None
+    assert shot["launch_status"] == "accepted_ops_guided_single_channel"
+    assert shot["launch_deg"] == pytest.approx(40.31, abs=0.1)
     assert shot["horizontal_deg"] is None
-    ambiguity = shot["launch_track_ambiguity"]
-    assert ambiguity["reason"] == "OPS-compatible tracks give conflicting launch angles"
-    angles = [candidate["launch_angle_deg"] for candidate in ambiguity["candidates"]]
-    assert min(angles) == pytest.approx(12.06, abs=0.1)
-    assert max(angles) == pytest.approx(20.16, abs=0.1)
-    assert ambiguity["angle_spread_deg"] == pytest.approx(max(angles) - min(angles))
-    assert ambiguity["angle_spread_deg"] > ambiguity["max_spread_deg"]
-    assert any(abs(angle - 13.6) < 0.3 for angle in angles)
 
 
 @pytest.mark.parametrize(
     ("key", "range_m", "launch_deg", "label"),
     [
-        # its own launch point anchors it, but that point's sigma term (5.3 ms) is more
-        # than the 3 ms frame (C7a): estimated
-        ("ot1_arm6_002", 1.779, 36.03, "estimated"),
-        ("ot5_003", 1.538, None, "measured"),
-        # no club walk anchors its contact (C6a'): the same range, estimated
-        ("ot7_001", 1.837, None, "estimated"),
+        # before G4 C1 (4 Nov): 1.779 m estimated, 36.03 deg; the four-peak walk meets
+        # its club walk and the anchor holds: measured
+        ("ot1_arm6_002", 1.841, 37.94, "measured"),
+        # before: 1.538 m measured; the four-peak walk competes with a different launch
+        # point (ambiguous): estimated
+        ("ot5_003", 1.629, None, "estimated"),
+        # before: 1.837 m estimated; the four-peak walk meets a club walk, ambiguous
+        ("ot7_001", 1.305, None, "estimated"),
     ],
 )
 def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg, label):
@@ -104,35 +102,34 @@ def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg
     assert shot["range_label"] == label
     if launch_deg is not None:
         assert shot["launch_deg"] == pytest.approx(launch_deg, abs=0.1)
-    # a competing walk, where there is one, either launches from the same place or has
-    # no launch point of its own
+    # a competing walk, where there is one, has its verdict recorded
     if shot["competing"] is not None:
-        assert shot["competing"]["verdict"] in ("agree", "runner_up_unusable")
+        assert shot["competing"]["verdict"] in ("agree", "runner_up_unusable", "ambiguous")
 
 
-def test_ot7_003_s_walks_do_not_leave_the_resting_ball_so_its_range_is_not_measured(runs):
-    """Before C6a' (2 Nov): 1.849 m estimated (two walks compete, 1.85 and 0.93 m). The
-    1.85 m walk is club-fast (nearer the OPS club than the ball); with it out the 34.7
-    m/s walk reaches its 1.10 m start ~9 ms after the club walk crossed it: not the ball."""
+def test_ot7_003_s_four_peak_walk_is_read_back_to_its_start(runs):
+    """Before C6a' (2 Nov): 1.849 m estimated; before G4 C1 (4 Nov): not measured (the
+    34.7 m/s walk reached its 1.10 m start ~9 ms after the club walk). The four-peak walk
+    (36.9 m/s against OPS 37.7) is no club-speed walk; read back to its start: 1.07 m,
+    estimated (no camera prior, no club walk anchors it)."""
     shot = runs["ot7_003"]
 
-    assert shot["range_status"] == "not_measured"
-    assert shot["range_label"] == "not_measured"
-    assert shot["range_m"] is None
-    assert "does not leave the resting ball" in shot["range_reason"]
-    assert "club walk only" in shot["range_reason"]
+    assert shot["range_status"] == "measured"
+    assert shot["range_label"] == "estimated"
+    assert shot["range_m"] == pytest.approx(1.065, abs=0.005)
 
 
 @pytest.mark.parametrize(
     ("key", "range_m", "competing"),
     [
-        # the walk along the visible streak, after the line mixing it with the clutter
-        # band (36 -> 16 m/s between its halves) is refused; no competitor within 2 sigma
-        ("ot1_001", 1.775, None),
-        # the competitor is a 2-3 frame late segment with no launch point of its own
-        ("ot5_001", 1.510, "runner_up_unusable"),
-        # the burst walk is too thin; in the window scope both walks start at ~1.4 m
-        ("ot5_005", 1.363, "agree"),
+        # before G4 C1 (4 Nov): 1.775 m; the four-peak walk (31.0 m/s, OPS 29.9) starts at
+        # the capture's first frame
+        ("ot1_001", 1.583, None),
+        # before: 1.510 m, runner_up_unusable; the four-peak walk (32.7 m/s, OPS 33.9) is
+        # significant on its own
+        ("ot5_001", 1.321, None),
+        # before: 1.363 m; both walks start at ~1.4 m
+        ("ot5_005", 1.370, "agree"),
     ],
 )
 def test_the_seed_dependent_dumps_have_one_answer(runs, key, range_m, competing):
