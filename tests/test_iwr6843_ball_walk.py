@@ -241,3 +241,38 @@ def test_the_snapshot_gate_drops_the_ball_s_own_frames(inputs, vertical):
     assert passing[~clear_of_band].mean() > 0.7
     assert passing[clear_of_band].mean() < 0.05
     assert np.median(10.0 * np.log10(cache["snr"][clear_of_band])) < 9.0
+
+
+def test_the_shot_record_names_the_walk_and_how_its_contact_was_timed(inputs, vertical):
+    record = _shot_1_on_the_located_tee(inputs, vertical).to_dict()
+
+    walk = record["ball_track"]
+    assert walk["speed_ms"] == pytest.approx(36.2, abs=1.1)
+    assert walk["n_frames"] >= 10
+    assert walk["bin_last"] > 80.0
+    assert walk["frames"][1] == 23
+    # the ball runs 2.5-10 dB over its gate's median (REPORT.md); the band-crossing frames more
+    assert 2.0 < walk["snr_db_median"] < 15.0
+    assert record["contact"]["source"] == "club_walk_at_tee"
+    assert record["label"] == "estimated"
+    assert "no camera contact time on the IWR ring clock" in record["reason"]
+
+
+def test_an_estimated_iwr_launch_point_confirms_no_located_tee_and_says_why(inputs, vertical):
+    """The located tee's cross-check (iwr_confirmed / iwr_disagrees / iwr_not_measured)
+    takes only a measured IWR launch point: one read back at the IWR's own contact time
+    is estimated and confirms nothing, with the reason."""
+    from openflight.camera.fallback_chain import iwr_cross_check  # noqa: PLC0415
+
+    launch = _shot_1_on_the_located_tee(inputs, vertical).to_dict()
+    check = iwr_cross_check({"range_m": 1.814, "uncertainty_m": 0.03}, launch)
+
+    assert check["status"] == "iwr_not_measured"
+    assert "club walk reaching the tee bin" in check["text"]
+    assert check["iwr_range_m"] == pytest.approx(1.814, abs=0.10)
+    shot_range = lr.shot_ball_range(
+        _shot_1_on_the_located_tee(inputs, vertical),
+        lr.LaunchRangePrior(1.814, 0.03, lr.LOCATED_TEE_SOURCE),
+    )
+    assert shot_range.source == lr.LOCATED_TEE_SOURCE
+    assert "IWR launch point 1.9" in shot_range.reason and "(estimated)" in shot_range.reason

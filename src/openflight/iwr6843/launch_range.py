@@ -456,6 +456,40 @@ def _track_facts(track: tracking.BallTrack | None, res_m: float) -> dict | None:
         "t_first_s": float(track.t_first),
         "t_last_s": float(track.t_last),
         "range_at_first_m": float(track.range_at(track.t_first, res_m)),
+        "bin_first": float(track.bin_at(track.t_first)),
+        "bin_last": float(track.bin_at(track.t_last)),
+    }
+
+
+def _walk_record(
+    prepared: PreparedShotDump, scope: str, gate: tuple[float, float], track: tracking.BallTrack
+) -> dict:
+    """What the shot record names a walk by, beyond its line: the frames its samples fill and
+    their SNR (each sample's loop power over its gate's median, in dB; median and range)."""
+    geometry = prepared.geometry
+    loops, times, bins = _gate_detections(prepared, scope, gate)
+    tolerance = _TRACK_TOLERANCE_BINS if geometry.n_samples >= 128 else 0.8
+    inliers = np.abs(bins - track.bin_at(times)) < tolerance
+    frames = sorted({int(loop) // geometry.n_loops for loop in loops[inliers]})
+    power = tracking.loop_power(prepared.mti(scope))
+    res = geometry.range_res_m
+    snr_db = []
+    for loop, absolute_bin in zip(loops[inliers], bins[inliers], strict=True):
+        frame = int(loop) // geometry.n_loops
+        start = geometry.frame_bin_start(frame)
+        low = max(int(gate[0] / res) - start, 0)
+        high = min(int(gate[1] / res) - start, geometry.frame_bin_count(frame) - 2)
+        row = power[int(loop)]
+        local = int(round(absolute_bin)) - start
+        if high - low < 3 or not 0 <= local < row.size:
+            continue
+        snr_db.append(10.0 * math.log10(row[local] / (float(np.median(row[low:high])) + 1e-12)))
+    return {
+        "n_frames": len(frames),
+        "frames": [frames[0], frames[-1]] if frames else None,
+        "snr_db_median": float(np.median(snr_db)) if snr_db else None,
+        "snr_db_range": [float(min(snr_db)), float(max(snr_db))] if snr_db else None,
+        "scope": scope,
     }
 
 
@@ -785,7 +819,11 @@ def _launch_point(  # pylint: disable=too-many-arguments,too-many-locals
         "apparent_m": apparent,
         "uncertainty_m": float(math.hypot(*terms)),
         "contact": timing,
-        "ball_track": {**_track_facts(ball, res), "walk_start_s": start_s},
+        "ball_track": {
+            **_track_facts(ball, res),
+            **_walk_record(prepared, scope, gate, ball),
+            "walk_start_s": start_s,
+        },
         "club_track": club_facts,
         "ball_walk": ball,
         "club_walk": club,
