@@ -1,10 +1,7 @@
-"""The TX2 phase helper is shared by the ball's horizontal proxy and club path.
-
-Extracting it must not move the horizontal number: this test pins the helper's
-contract, and test_iwr6843_pipeline.py pins the proxy's output.
-"""
+"""TX2 phase remains lateral through elevation wrapping, gain and motion changes."""
 
 import numpy as np
+import pytest
 
 from openflight.iwr6843 import doa
 
@@ -30,6 +27,51 @@ def test_recovers_a_known_tx2_phase_offset():
 def test_zero_amplitude_returns_none():
     tdm = np.zeros((1, 1, 3, 4, 8), dtype=complex)
     assert doa.tx2_phase_at(tdm, 0, 0, 3, velocity_ms=0.0, tdm_sign=1, n_rx=4) is None
+
+
+def _spatial_tdm(vertical_cosine, *, gains=(1.0, 1.0, 1.0), speed=0.0, sign=1):
+    positions = np.arange(4)[None, :] + np.array([0.0, 2.0, 4.0])[:, None]
+    phases = np.pi * positions * vertical_cosine
+    phases[1] += -np.pi * 0.1 - 0.37
+    phases += sign * 4 * np.pi * speed / doa.LAM * doa.TDM_TAU_S * np.arange(3)[:, None]
+    return (np.asarray(gains)[:, None] * np.exp(1j * phases))[None, None, :, :, None]
+
+
+@pytest.mark.parametrize("vertical_cosine", [-0.45, -0.3, 0.27, 0.35, 0.45])
+def test_vertical_phase_wrap_preserves_the_lateral_phase(vertical_cosine):
+    tdm = _spatial_tdm(vertical_cosine)
+    phase, weight = doa.tx2_phase_at(tdm, 0, 0, 0, velocity_ms=0.0, tdm_sign=1, n_rx=4)
+    error = np.angle(np.exp(1j * (phase - (-np.pi * 0.1 - 0.37))))
+    assert error == pytest.approx(0.0, abs=1e-10)
+    assert weight > 0.0
+
+
+@pytest.mark.parametrize("vertical_cosine", [-0.2, 0.15])
+def test_unequal_transmitter_amplitudes_preserve_the_lateral_phase(vertical_cosine):
+    tdm = _spatial_tdm(vertical_cosine, gains=(1.25, 1.0, 0.8))
+    phase, _weight = doa.tx2_phase_at(tdm, 0, 0, 0, velocity_ms=0.0, tdm_sign=1, n_rx=4)
+    assert phase == pytest.approx(-np.pi * 0.1 - 0.37, abs=1e-10)
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_spatial_reference_keeps_tdm_motion_compensation(sign):
+    tdm = _spatial_tdm(0.35, speed=31.0, sign=sign)
+    phase, _weight = doa.tx2_phase_at(tdm, 0, 0, 0, velocity_ms=31.0, tdm_sign=sign, n_rx=4)
+    assert phase == pytest.approx(-np.pi * 0.1 - 0.37, abs=1e-10)
+
+
+@pytest.mark.parametrize("phase_rotation", [-2.8, 2.7])
+def test_spatial_reference_ignores_common_absolute_phase(phase_rotation):
+    tdm = _spatial_tdm(0.3) * np.exp(1j * phase_rotation)
+    phase, _weight = doa.tx2_phase_at(tdm, 0, 0, 0, velocity_ms=0.0, tdm_sign=1, n_rx=4)
+    assert phase == pytest.approx(-np.pi * 0.1 - 0.37, abs=1e-10)
+
+
+@pytest.mark.parametrize("missing_tx", [0, 2])
+def test_missing_vertical_reference_cannot_define_its_phase_centre(missing_tx):
+    tdm = _spatial_tdm(0.15)
+    tdm[:, :, missing_tx] = 0
+    assert doa.tx2_phase_at(tdm, 0, 0, 0, velocity_ms=0.0, tdm_sign=1, n_rx=4) is None
 
 
 def test_circular_median_wraps():

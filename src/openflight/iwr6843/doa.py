@@ -293,6 +293,20 @@ def circular_median(values: list[float]) -> float:
     return float(array[int(np.argmin(scores))])
 
 
+def _tx1_tx3_phase_center(tx1: np.ndarray, tx3: np.ndarray) -> np.ndarray:
+    """Unwrap the TX separation using the unambiguous adjacent-RX phase step.
+
+    Adapted from SKiener/OpenFlight-by-SaKi, commit 8d9a8ab (AGPL-3.0-or-later).
+    The TX1/TX3 separation is four half-wavelength RX spacings; a voltage
+    midpoint flips by pi when their phase separation crosses pi.
+    """
+    step = np.angle(np.vdot(tx1[:-1], tx1[1:]) + np.vdot(tx3[:-1], tx3[1:]))
+    predicted = len(tx1) * step
+    measured = np.angle(np.conj(tx1) * tx3)
+    unwrapped = predicted + np.angle(np.exp(1j * (measured - predicted)))
+    return np.angle(tx1) + 0.5 * unwrapped
+
+
 def tx2_phase_at(
     tdm: np.ndarray,
     frame: int,
@@ -307,8 +321,8 @@ def tx2_phase_at(
 
     ``tdm`` is the TDM-split cube [frames, loops, n_tx, n_rx, bins]. Returns
     (phase_rad, weight) or None when the bin carries no usable amplitude.
-    Weight is the mean power of the reference and TX2 vectors, for weighted
-    circular averaging by the caller.
+    Weight uses the geometric-mean TX1/TX3 amplitude and TX2 power, without
+    voltage cancellation between the two vertical references.
     """
     tx1 = tdm[frame, loop, 0, :, local_bin]
     tx2 = tdm[frame, loop, 1, :, local_bin] * np.exp(
@@ -317,14 +331,15 @@ def tx2_phase_at(
     tx3 = tdm[frame, loop, 2, :, local_bin] * np.exp(
         -1j * tdm_sign * 4.0 * np.pi * velocity_ms * TX2_VERTICAL_TDM_TAU_S / LAM
     )
-    reference = 0.5 * (tx1 + tx3)
-    weight = float(np.mean(np.abs(reference) ** 2 + np.abs(tx2) ** 2))
+    reference_amplitude = np.sqrt(np.abs(tx1) * np.abs(tx3))
+    weight = float(np.mean(reference_amplitude**2 + np.abs(tx2) ** 2))
     if weight <= 0:
         return None
+    reference_phase = _tx1_tx3_phase_center(tx1, tx3)
     phases = [
-        float(np.angle(np.conj(reference[rx]) * tx2[rx]))
+        float(np.angle(tx2[rx] * np.exp(-1j * reference_phase[rx])))
         for rx in range(n_rx)
-        if abs(reference[rx]) * abs(tx2[rx]) > 0
+        if reference_amplitude[rx] * abs(tx2[rx]) > 0
     ]
     if not phases:
         return None
