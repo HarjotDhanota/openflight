@@ -405,6 +405,11 @@ The Club tab opens with a face-impact view:
     chrome over 0.8 mm at each end; the head's edges carry a soft radius band lit from
     the upper left, the hosel crotch a soft dark reflection, and each score line is a
     recessed groove with a hairline light lower edge.
+    A wood's or hybrid's face is satin brushed titanium (a fine horizontal grain and a
+    soft sheen) in the painted head; its topline and leading edge roll softly into the
+    face, the head carries a radius band lit from the upper left, the hosel tube is
+    shaded round, a soft sheen sits where the hosel meets the head, and the painted
+    score lines have a dark lower lip.
   - **Old against new reference values** (the single photographed models of 22 Oct 2026):
 
     | Category | C | H | above the face bottom | band | lowest line: length / above the face bottom |
