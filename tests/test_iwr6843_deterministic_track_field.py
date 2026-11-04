@@ -85,14 +85,14 @@ def test_shot_14_s_range_and_launch_on_the_ball_s_four_peak_walk(runs):
 @pytest.mark.parametrize(
     ("key", "range_m", "launch_deg", "label"),
     [
-        # before G4 C1 (4 Nov): 1.779 m estimated, 36.03 deg; the four-peak walk meets
-        # its club walk and the anchor holds: measured
-        ("ot1_arm6_002", 1.841, 37.94, "measured"),
-        # before: 1.538 m measured; the four-peak walk competes with a different launch
-        # point (ambiguous): estimated
-        ("ot5_003", 1.629, None, "estimated"),
-        # before: 1.837 m estimated; the four-peak walk meets a club walk, ambiguous
-        ("ot7_001", 1.305, None, "estimated"),
+        # before G4 (4 Nov): 1.779 m estimated, 36.03 deg; C1 (four peaks, the walks'
+        # intersection): 1.841 m measured, 37.94 deg; C2 (no camera prior: read back to
+        # the walk's start): 1.587 m, the OPS-guided angles conflict
+        ("ot1_arm6_002", 1.587, None, "estimated"),
+        # before: 1.538 m measured; C1: 1.629 m (two walks compete); C2: the walk start
+        ("ot5_003", 1.445, None, "estimated"),
+        # before: 1.837 m estimated; C1: 1.305 m (the walks' intersection); C2: the start
+        ("ot7_001", 1.112, None, "estimated"),
     ],
 )
 def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg, label):
@@ -100,6 +100,8 @@ def test_the_seed_stable_dumps_keep_their_answers(runs, key, range_m, launch_deg
 
     assert shot["range_m"] == pytest.approx(range_m, abs=0.005)
     assert shot["range_label"] == label
+    # no camera prior: the walk is read back to its own start, never to an intersection
+    assert shot["range_method"] == "back_extrapolation"
     if launch_deg is not None:
         assert shot["launch_deg"] == pytest.approx(launch_deg, abs=0.1)
     # a competing walk, where there is one, has its verdict recorded

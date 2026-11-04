@@ -118,3 +118,27 @@ def test_the_club_s_approach_walk_at_one_and_at_the_ball_s_peak_count(
 
     assert found == (scope == "burst" or peaks > 1)
     assert lr.CLUB_WALK_MAX_PEAKS_PER_LOOP == tracking.BALL_MAX_PEAKS_PER_LOOP
+
+
+def test_shot_1_s_launch_point_is_the_ball_walk_read_back_to_contact(inputs, vertical):
+    """The located tee (1.814 m): the ball's walk read back at the club walk's arrival at
+    the tee bin lands within 0.10 m of it, labelled estimated with the reason (no camera
+    contact time on the v7 dump's ring clock). Never the club-ball intersection."""
+    estimate = lr.estimate_launch_range(
+        vertical,
+        ball_speed_mph=inputs["ball_speed_mph"],
+        club_speed_mph=inputs["club_speed_mph"],
+        prior=lr.LaunchRangePrior(1.814, 0.03, lr.LOCATED_TEE_SOURCE),
+        net_range_m=inputs["net_range_m"],
+        range_bias_m=inputs["range_bias_m"],
+    )
+
+    assert estimate.method == "back_extrapolation"
+    assert estimate.range_m == pytest.approx(1.814, abs=0.10)
+    assert estimate.label == "estimated"
+    assert estimate.contact["source"] == "club_walk_at_tee"
+    assert estimate.contact["label"] == "estimated"
+    # the contact time lies inside the pre-request frames, as the walks say (~13-16 ms)
+    assert 0.010 <= estimate.impact_t_s <= 0.018
+    # sigma = range rate x contact-time sigma, with the line's own and the model floor
+    assert estimate.uncertainty_m >= estimate.ball_track["speed_ms"] * estimate.contact["sigma_s"]

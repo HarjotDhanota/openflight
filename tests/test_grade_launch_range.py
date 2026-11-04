@@ -79,7 +79,10 @@ def test_each_shot_is_graded_against_the_tape(tmp_path):
     shots = report["sessions"][0]["shots"]
     assert len(shots) == 2
     assert all(shot["status"] == "measured" for shot in shots)
-    assert all(abs(shot["error_m"]) < 0.06 for shot in shots)
+    # no camera prior, no contact time on the IWR clock: each walk is read back to its own
+    # start (G4 C2; the club-ball intersection is no launch point), within its own sigma
+    assert all(abs(shot["error_m"]) <= 2.0 * shot["uncertainty_m"] for shot in shots)
+    assert all(shot["method"] == "back_extrapolation" for shot in shots)
     assert report["sessions"][0]["tape_m"] == 2.10
     assert report["validated_against_tape"] is False
     assert "NOT validated" in report["statement"]
