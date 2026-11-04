@@ -107,6 +107,11 @@ def test_the_kiosk_reads_oct27_shot1_s_club_stage_at_contact(monkeypatch):
         club_speed_mph=72.05,
         ball_range_label="estimated",
         ball_range_uncertainty_m=0.0287,
+        # the fused angles' own tiers through the lens label them (C25a)
+        experimental_fused_status="approach_high",
+        experimental_fused_club_path_confidence=SHOT1["path_confidence_tier"],
+        experimental_fused_attack_angle_confidence=SHOT1["attack_confidence_tier"],
+        camera_lens_intrinsics="calibrated",
         camera_fusion_processing={"club_delivery": SHOT1},
         camera_fusion_context={
             "geometry": {

@@ -821,7 +821,7 @@ def _club_full_at_contact(shot: Shot) -> dict:
     OPS sits at the rig's offset from the lens (the fusion geometry's camera origin). The
     path and attack sigmas are the arc fit's own, prior-free (club_delivery conditioning);
     the head's depth sigma is the shot's range sigma. Labels: the club delivery's path and
-    attack, the range's.
+    attack as the displayed angles label them (C25a), the range's.
     """
     from openflight.full_speed import evaluate_full_club_speed_at_contact  # noqa: PLC0415
     from openflight.rig_geometry import camera_rdf_offset_to_target_lfu  # noqa: PLC0415
@@ -853,7 +853,13 @@ def _club_full_at_contact(shot: Shot) -> dict:
     if lens is not None and getattr(rig, "ops_offset_mm", None) is not None:
         ops = [a + b for a, b in zip(lens, camera_rdf_offset_to_target_lfu(rig.ops_offset_mm))]
     sigmas = ((payload.get("arc") or {}).get("conditioning") or {}).get("data_only_sigma") or {}
-    labels = {"club_path": path.get("status"), "attack_angle": attack.get("status")}
+    # each angle's label is the one the displayed angle takes (its own tier through the lens,
+    # camera_fused_label), never the intermediate record's "measured" (C25a)
+    labels = {
+        name: camera_fused_label(shot, name, _fused_source(shot))[0]
+        for name, value in (("club_path", path_deg), ("attack_angle", attack_deg))
+        if value is not None
+    }
     if getattr(shot, "ball_range_label", None):
         labels["head_depth"] = shot.ball_range_label
     return evaluate_full_club_speed_at_contact(
