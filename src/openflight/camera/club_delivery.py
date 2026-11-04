@@ -128,6 +128,24 @@ SHAFT_SEARCH_ATTEMPTS = 4  # lines tried per lean before the shaft is declared a
 # of its axis is a leg or arm edge: 3.6 cm across at the ball's scale, while the lower
 # shaft blurred at the <= 300 us exposures the head track is checked at is narrower.
 SHAFT_MAX_HALF_WIDTH_BANDS = 1.5
+# G2 C1 (4 Nov 2026): the anchor is the heel-sole CORNER. Where the shaft axis meets the sole
+# depends on the shaft's lean, so on Oct 27 shot 1 it slid 10 px (18 mm) along the sole
+# frame to frame against the hand-marked corner. The corner is read as the hand marks read
+# it (research club-path-audit/hand-marks.md): the sole edge is the half-max fall of a
+# vertical profile (3-column mean) CORNER_SOLE_TOEWARD_M toe-ward of the heel, the heel edge
+# the half-max fall of a horizontal profile (3-row mean) CORNER_HEEL_ABOVE_SOLE_M above the
+# sole; the corner is (heel x, sole y). Distances at the resting ball's scale: the hand marks'
+# 5 px, 4 px, 8 px in / 10 px out at 640x400 (1.78 mm/px at the tee). The sole is searched
+# from CORNER_HEEL_ABOVE_SOLE_M above the axis/sole seed's height (it already sits on the
+# sole: its heights agree with the hand marks to rms ~3 mm) so the hosel's brighter glint
+# above the heel never sets the plateau; CORNER_PASSES re-centre the profiles on the corner.
+CORNER_SOLE_TOEWARD_M = 0.009
+CORNER_HEEL_ABOVE_SOLE_M = 0.007
+CORNER_INSIDE_M = 0.014
+CORNER_OUTSIDE_M = 0.018
+CORNER_PASSES = 2
+# A corner farther than this from the axis/sole seed is another edge: the seed stands.
+CORNER_MAX_SHIFT_M = 0.02
 
 # --- fusion constants ---------------------------------------------------------
 # A trace near 0° or ±90° makes tan(path) = tan(AoA)/tan(trace) explode or
@@ -976,11 +994,88 @@ class _HeadAnchor:
     thickness_px: float  # largest inscribed radius of the head's moving pixels
     shaft_top_px: np.ndarray | None = None  # the shaft line's far (upper) end, same frame
     shaft_residual_px: float | None = None  # the line's position error across it, px
+    # the shaft axis's end on the sole (the seed), and whether the corner replaced it (C1)
+    axis_point_px: np.ndarray | None = None
+    corner_status: str = "axis_sole_point"
 
     def hosel_points(self) -> np.ndarray:
         """The heel's sole and two points up the hosel axis: rigid on the head."""
         steps = np.arange(HEAD_HOSEL_POINTS, dtype=float)[:, None]
         return self.point_px[None, :] - steps * self.step_px * self.direction_px[None, :]
+
+
+def _half_max_fall(profile: np.ndarray, inside: int, min_contrast_dn: float) -> float | None:
+    """Where ``profile`` (inside first, outside last) first falls through halfway between
+    its plateau (the strongest of the first ``inside`` samples) and the outside (the median
+    of its last three), in samples; None without a fall or with less contrast than
+    ``min_contrast_dn``. The plateau's sign sets the polarity: a head darker than the net
+    behind it is a negative difference."""
+    if len(profile) < 4 or inside < 1:
+        return None
+    head = profile[: min(inside, len(profile))]
+    polarity = 1.0 if head[int(np.argmax(np.abs(head)))] >= 0 else -1.0
+    values = np.clip(polarity * profile, 0.0, None)
+    peak = int(np.argmax(values[: len(head)]))
+    outside = float(np.median(values[-3:]))
+    if values[peak] - outside < min_contrast_dn:
+        return None
+    level = 0.5 * (values[peak] + outside)
+    for k in range(peak, len(values) - 1):
+        above, below = values[k] - level, values[k + 1] - level
+        if above >= 0.0 > below:
+            return k + above / (above - below)
+    return None
+
+
+def _heel_sole_corner(
+    signed: np.ndarray,
+    seed_px: np.ndarray,
+    *,
+    toe_sign: float,
+    px_per_m: float,
+    min_contrast_dn: float,
+) -> tuple[float, float] | None:
+    """The heel-sole corner (x, y) px nearest ``seed_px`` (the shaft axis's end on the sole)
+    in ``signed`` (frame minus background), the head's toe toward ``toe_sign`` (+ image
+    right), or None when an edge is missing, off the frame, without contrast, or farther
+    than ``CORNER_MAX_SHIFT_M`` from the seed. See ``CORNER_SOLE_TOEWARD_M``."""
+    height, width = signed.shape
+    sx = 1 if toe_sign >= 0 else -1
+    toeward, rise = CORNER_SOLE_TOEWARD_M * px_per_m, CORNER_HEEL_ABOVE_SOLE_M * px_per_m
+    inside, outside = CORNER_INSIDE_M * px_per_m, CORNER_OUTSIDE_M * px_per_m
+    seed_x, seed_y = (float(v) for v in seed_px)
+    corner_x, corner = seed_x, None
+    for _pass in range(CORNER_PASSES):
+        column = int(round(corner_x + sx * toeward))
+        rows = np.arange(int(round(seed_y - rise)), int(round(seed_y + inside)) + 1)
+        if column < 1 or column > width - 2 or rows[0] < 0 or rows[-1] >= height:
+            return None
+        fall = _half_max_fall(
+            signed[rows][:, column - 1 : column + 2].mean(axis=1),
+            int(round(rise)) + 3,
+            min_contrast_dn,
+        )
+        if fall is None:
+            return None
+        sole_y = float(rows[0] + fall)
+        row = int(round(sole_y - rise))
+        cols = np.arange(
+            int(round(corner_x + sx * inside)), int(round(corner_x - sx * outside)) - sx, -sx
+        )
+        if row < 1 or row > height - 2 or cols.min() < 0 or cols.max() >= width:
+            return None
+        fall = _half_max_fall(
+            signed[row - 1 : row + 2][:, cols].mean(axis=0),
+            int(round(inside)) + 1,
+            min_contrast_dn,
+        )
+        if fall is None:
+            return None
+        corner_x = float(cols[0] - sx * fall)
+        corner = (corner_x, sole_y)
+    if corner is None or math.dist(corner, (seed_x, seed_y)) > CORNER_MAX_SHIFT_M * px_per_m:
+        return None
+    return corner
 
 
 def _clubhead_anchor(
@@ -1051,14 +1146,31 @@ def _clubhead_anchor(
     if not head_moving.any():
         return None, "no moving head pixels at the shaft's end"
     thickness = cv2.distanceTransform(head_moving.astype(np.uint8), cv2.DIST_L2, 5)
+    # C1: the heel-sole corner, seeded from the axis/sole point; the toe lies on the side
+    # of the head's moving pixels
+    axis_point = np.asarray(anchor, dtype=float)
+    toe_side = float(np.mean(xx[head_moving])) - axis_point[0]
+    corner = (
+        _heel_sole_corner(
+            frame.astype(np.float32) - background.astype(np.float32),
+            axis_point,
+            toe_sign=toe_side,
+            px_per_m=px_per_m,
+            min_contrast_dn=max(WALK_SIGMAS * noise, WALK_FLOOR_DN),
+        )
+        if toe_side != 0.0
+        else None
+    )
     return (
         _HeadAnchor(
-            point_px=np.asarray(anchor, dtype=float),
+            point_px=np.asarray(corner if corner is not None else axis_point, dtype=float),
             direction_px=np.asarray(direction, dtype=float),
             step_px=band,
             thickness_px=float(thickness.max()),
             shaft_top_px=top,
             shaft_residual_px=residual,
+            axis_point_px=axis_point,
+            corner_status="heel_sole_corner" if corner is not None else "axis_sole_point",
         ),
         None,
     )

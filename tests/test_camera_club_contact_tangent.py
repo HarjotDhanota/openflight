@@ -123,7 +123,10 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
             math.hypot(f43.forward_m - f42.forward_m, f43.lateral_m - f42.lateral_m),
         )
     )
-    assert chord == pytest.approx(case["inputs"]["live_result"]["attack_angle_deg"], abs=0.5)
+    # the live -13.17 was read on the axis/sole point; the heel-sole corner (G2 C1) reads the
+    # f42->f43 drop as the hand marks do (10.7 px corner, 11.4 hand, 15.0 axis/sole)
+    assert case["inputs"]["live_result"]["attack_angle_deg"] == pytest.approx(-13.17)
+    assert chord == pytest.approx(-10.08, abs=0.5)
     # the tangent at contact of the pre-contact positions, shallower than the chord
     assert result.attack_angle_deg == pytest.approx(
         cd.attack_angle_at_contact(by_time, contact_t_s=result.contact_t_s, last_rest_t_s=f43.t_s),
@@ -133,7 +136,8 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
     # path is not touched (the live value is turned by the session's +2.07 deg target line;
     # this geometry has none)
     live_path = case["inputs"]["live_result"]["club_path_deg"] - 2.0666
-    assert result.club_path_deg == pytest.approx(live_path, abs=0.01)
+    assert live_path == pytest.approx(8.90, abs=0.01)  # on the axis/sole point
+    assert result.club_path_deg == pytest.approx(9.69, abs=0.05)  # on the corner (G2 C1)
 
 
 # --- C13b: the measured contact instant is the club stage's contact -----------------------

@@ -17,13 +17,15 @@ import pytest
 
 from openflight.camera import club_delivery as cd
 
-# Oct 27 shot 1 at d737c51f: the club stage's head positions f40-f44 (lateral, up, forward m)
+# Oct 27 shot 1: the club stage's head positions f40-f44 (lateral, up, forward m) on the
+# heel-sole corner (G2 C1, 4 Nov 2026; d737c51f pinned the axis/sole point, which slid up to
+# 7 px along the sole against the hand-marked corner)
 PINNED = {
-    40: (-0.22584, 0.13377, 1.36219),
-    41: (-0.20519, 0.09478, 1.48487),
-    42: (-0.18607, 0.06456, 1.60515),
-    43: (-0.16582, 0.03627, 1.72434),
-    44: (-0.14914, 0.03119, 1.84267),
+    40: (-0.23446, 0.13478, 1.36071),
+    41: (-0.21002, 0.09524, 1.48419),
+    42: (-0.18116, 0.06203, 1.60572),
+    43: (-0.17397, 0.04104, 1.72359),
+    44: (-0.14883, 0.03418, 1.84273),
 }
 
 
