@@ -137,7 +137,8 @@ def test_oct27_shot1_reads_its_attack_angle_at_the_ball_defined_contact():
     # this geometry has none)
     live_path = case["inputs"]["live_result"]["club_path_deg"] - 2.0666
     assert live_path == pytest.approx(8.90, abs=0.01)  # on the axis/sole point
-    assert result.club_path_deg == pytest.approx(9.69, abs=0.05)  # on the corner (G2 C1)
+    # on the corner (G2 C1) over f40->f43, the window that ends before contact (G2 C3)
+    assert result.club_path_deg == pytest.approx(9.46, abs=0.05)
 
 
 # --- C13b: the measured contact instant is the club stage's contact -----------------------

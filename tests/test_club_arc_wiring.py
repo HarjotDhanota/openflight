@@ -123,7 +123,7 @@ def test_chained_delivery_records_head_positions_on_the_camera_clock(monkeypatch
     assert result.contact_t_s == pytest.approx(CONTACT_S)
     assert result.clock == "host_timestamp_ns"
     frames = sorted(round(p.t_s * 1e9 / FRAME_NS) for p in result.head_positions)
-    assert frames == [36, 37, 38, 39, 40, 41]
+    assert frames == [36, 37, 38, 39, 40]  # G2 C3: the frame after contact is in no window
     for position in result.head_positions:
         truth = _head(position.t_s - CONTACT_S)
         measured = np.array([position.lateral_m, position.forward_m, position.up_m])

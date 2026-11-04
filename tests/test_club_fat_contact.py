@@ -161,11 +161,11 @@ def test_the_club_stage_reports_no_attack_angle_on_a_fat_contact(monkeypatch):
     from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
 
     case = _shot1_club()
-    # a sole margin and a height noise high enough that the fixture's f43 (36 mm, 31 mm a
-    # frame later) rides the surface ~80 mm before the ball: the stage's wiring of a fat
-    # contact, on real frames
-    monkeypatch.setattr(cd, "HEEL_ANCHOR_ABOVE_SOLE_M", 0.05)
-    monkeypatch.setattr(cd, "HEAD_HEIGHT_NOISE_M", 0.01)
+    # a sole margin and a height noise high enough that the fixture's f42 (62 mm, 41 mm a
+    # frame later) rides the surface ~200 mm before the ball: the stage's wiring of a fat
+    # contact, on real frames (f44, after contact, is in no window since G2 C3)
+    monkeypatch.setattr(cd, "HEEL_ANCHOR_ABOVE_SOLE_M", 0.07)
+    monkeypatch.setattr(cd, "HEAD_HEIGHT_NOISE_M", 0.025)
     result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
 
     assert result.attack_angle_deg is None

@@ -268,6 +268,7 @@ class TestChainedImpactDelivery:
         assert result.club_path_deg == pytest.approx(3.0)
 
     def test_path_interval_priority_is_impact_then_final_approach(self):
+        # G2 C3: the impact window ends at the last rest frame, never after contact
         impact = ApproachPairEstimate(3.0, -4.0, 1.0, 1.0, 12)
         final_approach = ApproachPairEstimate(7.0, -4.0, 1.0, 1.0, 12)
 
@@ -276,11 +277,12 @@ class TestChainedImpactDelivery:
             _preferred_path_estimate(
                 {
                     (-4, -1): final_approach,
-                    (-2, 1): impact,
+                    (-3, 0): impact,
                 }
             )
             is impact
         )
+        assert _preferred_path_estimate({(-2, 1): impact}) is None
 
     def test_approach_consensus_keeps_unstable_path_visible_as_low_confidence(self):
         path_windows = [

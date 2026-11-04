@@ -171,8 +171,12 @@ APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH = 12.0
 APPROACH_MEDIUM_AOA_RANGE_DEG = (-18.0, 12.0)
 APPROACH_MEDIUM_SPEED_RATIO_RANGE = (0.6, 1.4)
 APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
-PREFERRED_PATH_OFFSETS = ((-2, 1), (-4, -1))
-APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1), (-3, 0))
+# G2 C3 (4 Nov 2026): every window ends at or before the last frame the ball rested in
+# (offset 0); the contact lies between it and the next. The old preferred (-2, +1) took
+# Oct 27 shot 1's f44, 1.1 ms after contact with the heel on the mat. Its three-frame span
+# now ends at the last rest frame.
+PREFERRED_PATH_OFFSETS = ((-3, 0), (-4, -1))
+APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1))
 
 
 def _image_scale(shape: tuple[int, ...]) -> float:
@@ -296,6 +300,8 @@ class ChainedDelivery:
     head_track: dict | None = None
     # the lower shaft's inclination to the horizon at contact (TrackMan's dynamic lie)
     shaft: dict | None = None
+    # the frames of the window the path was read on (first, last), None for a median (C3)
+    path_window_frames: tuple[int, int] | None = None
     # why the attack angle is not measured when the stage withheld it on purpose (C22c:
     # "fat contact: head reached the surface N mm before the ball"), else None
     attack_reason: str | None = None
@@ -569,15 +575,24 @@ def combine_approach_estimates(
     return ChainedDelivery(status="rejected_no_stable_approach", **common)
 
 
+def _preferred_path_offsets(
+    pair_estimates: dict[tuple[int, int], ApproachPairEstimate],
+) -> tuple[int, int] | None:
+    """The offsets of the interval nearest the impact that ends before it, if estimated."""
+    return next((offsets for offsets in PREFERRED_PATH_OFFSETS if offsets in pair_estimates), None)
+
+
 def _preferred_path_estimate(
     pair_estimates: dict[tuple[int, int], ApproachPairEstimate],
 ) -> ApproachPairEstimate | None:
     """Select the interval nearest TrackMan's instantaneous-impact definition."""
-    for offsets in PREFERRED_PATH_OFFSETS:
-        estimate = pair_estimates.get(offsets)
-        if estimate is not None:
-            return estimate
-    return None
+    offsets = _preferred_path_offsets(pair_estimates)
+    return pair_estimates[offsets] if offsets is not None else None
+
+
+def _window_before_contact(indexes, timestamps_ns: np.ndarray, contact_s: float) -> bool:
+    """Whether every frame of a window was exposed before the contact instant (C3)."""
+    return all(float(timestamps_ns[int(index)]) / 1e9 < contact_s for index in indexes)
 
 
 def delivery_from_feature_tracks(
@@ -1421,6 +1436,10 @@ def estimate_chained_delivery(
     ops_reference_needed = False
     for offsets in APPROACH_PATH_OFFSETS:
         indexes = np.asarray([impact_idx + offset for offset in offsets])
+        if indexes.min() < 0 or not _window_before_contact(
+            indexes, timestamps_ns, contact_camera_s
+        ):
+            continue
         refusals: list[str] = []
         feature_tracks, head_thickness = _clubhead_pair_tracks(
             frames,
@@ -1566,6 +1585,9 @@ def estimate_chained_delivery(
         timing_plausible=timing_plausible,
     )
     common["notes"] = (*notes, *result.notes)
+    preferred = _preferred_path_offsets(pair_estimates)
+    if preferred is not None and result.club_path_deg is not None:
+        common["path_window_frames"] = (impact_idx + preferred[0], impact_idx + preferred[1])
     if range_evidence is None and (
         result.attack_angle_deg is not None or result.club_path_deg is not None
     ):

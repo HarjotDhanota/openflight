@@ -25,7 +25,6 @@ PINNED = {
     41: (-0.21002, 0.09524, 1.48419),
     42: (-0.18116, 0.06203, 1.60572),
     43: (-0.17397, 0.04104, 1.72359),
-    44: (-0.14883, 0.03418, 1.84273),
 }
 
 
@@ -43,7 +42,7 @@ def test_the_reach_is_the_approach_s_own_distance_within_the_bounds(before_s, ex
     assert cd.approach_reach_m(before_s, None) == pytest.approx(cd.HEAD_NEAR_BALL_M)
 
 
-def test_oct27_shot1_takes_f39_and_keeps_f40_to_f44():
+def test_oct27_shot1_takes_f39_and_keeps_f40_to_f43():
     from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
 
     case = _shot1_club()
@@ -55,6 +54,7 @@ def test_oct27_shot1_takes_f39_and_keeps_f40_to_f44():
     }
 
     assert 39 in frames
+    assert 44 not in frames  # after contact: in no window (G2 C3)
     assert not any("seed frame 39" in note for note in result.notes)
     for frame, pinned in PINNED.items():
         assert frames[frame] == pytest.approx(pinned, abs=1e-4), frame
