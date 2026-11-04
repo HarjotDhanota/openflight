@@ -638,7 +638,12 @@ def _upstream_of(metric_id: str, inputs: tuple, shot) -> tuple:
 
 
 def _lower(record: dict[str, Any], label: str, why: str) -> bool:
-    """Take ``label`` when it is weaker than the record's own; True when it changed."""
+    """Take ``label`` when it is weaker than the record's own; True when it changed. A
+    nested output of the record (the flight's ``normalized`` values) takes it too, whatever
+    the outer did: it rests on the same inputs (C25d)."""
+    nested = record.get("normalized")
+    if isinstance(nested, dict):
+        _lower(nested, label, why)
     status = record.get("status")
     if status not in (*_LOWERABLE, MEASURED) or record.get("value") is None:
         return False
