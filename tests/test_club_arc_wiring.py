@@ -240,3 +240,28 @@ def test_the_shot_record_carries_the_attack_sigma_as_its_range():
         ],
         abs=0.01,
     )
+
+
+def test_path_attack_and_plane_on_the_located_tee_depth_say_it_is_assumed():
+    # G2 C4: no IWR club walk on Oct 27 shot 1: the depth is the located tee + OPS club speed
+    from openflight.camera import club_delivery as cd  # noqa: PLC0415
+    from openflight.clubs import ClubType  # noqa: PLC0415
+    from openflight.source_labels import ASSUMED_DEPTH_NOTE  # noqa: PLC0415
+    from tests.test_camera_club_contact_tangent import _shot1_club  # noqa: PLC0415
+
+    case = _shot1_club()
+    result = cd.estimate_chained_delivery(case["frames"], case["host"], **case["kwargs"])
+    assert result.range_evidence_status == "accepted_located_tee"
+    payload = club_arc.club_delivery_payload(result, club=ClubType.IRON_7, handedness="RH")
+    metrics = payload["metrics"]
+    assert result.path_confidence_tier == "high"
+    assert metrics["club_path_deg"]["status"] == "estimated"  # measured on a measured depth
+    # the attack angle's own tier (its sigma) is weaker still: experimental
+    assert metrics["attack_angle_deg"]["status"] == (
+        "estimated" if result.attack_confidence_tier == "high" else "experimental"
+    )
+    for name in ("club_path_deg", "attack_angle_deg"):
+        assert ASSUMED_DEPTH_NOTE in metrics[name]["reason"], name
+    for name in ("swing_plane_deg", "swing_direction_deg"):
+        assert metrics[name]["status"] == "experimental", name  # weaker than estimated
+        assert ASSUMED_DEPTH_NOTE in metrics[name]["note"], name

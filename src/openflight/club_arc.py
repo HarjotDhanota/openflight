@@ -149,6 +149,7 @@ from openflight.shot_metrics import (
     MODEL_GEOMETRY,
     NOT_MEASURED,
 )
+from openflight.source_labels import ASSUMED_DEPTH_NOTE, depth_assumed
 
 LABEL_RANK = {
     MEASURED: 5,
@@ -1071,6 +1072,11 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
     )
     chained = data or {}
     head_track = chained.get("status") == HEAD_TRACK_SOURCE
+    assumed_depth = depth_assumed(chained.get("range_evidence_status"))
+    if assumed_depth:
+        for name in ("swing_plane_deg", "swing_direction_deg"):
+            if metrics[name]["value"] is not None:
+                metrics[name] = _note(metrics[name], ASSUMED_DEPTH_NOTE)
     if head_track:
         chained_source = HEAD_TRACK_SOURCE
     elif chained.get("status") == "camera_ops_fallback":
@@ -1089,9 +1095,15 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
         if measured is not None and outranks:
             # G2 C2: the attack angle carries its propagated sigma, its range +- RANGE_SIGMAS
             sigma = chained.get("attack_angle_sigma_deg") if name == "attack_angle_deg" else None
+            status = EXPERIMENTAL if head_track else MEASURED
+            reason = None
+            if not head_track and assumed_depth:
+                # G2 C4: an assumed depth caps it at estimated (experimental off the high tier)
+                status = ESTIMATED if chained.get(tier_name) == "high" else EXPERIMENTAL
+                reason = ASSUMED_DEPTH_NOTE
             metrics[name] = {
                 "value": measured,
-                "status": EXPERIMENTAL if head_track else MEASURED,
+                "status": status,
                 "source": chained_source,
                 "frame": chained.get("club_path_frame") if name == "club_path_deg" else None,
                 "range": (
@@ -1102,7 +1114,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
                     if sigma is not None
                     else None
                 ),
-                "reason": None,
+                "reason": reason,
                 "sigma": sigma,
             }
         elif metrics[name]["value"] is None and chained:

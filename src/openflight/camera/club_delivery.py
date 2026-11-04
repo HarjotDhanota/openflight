@@ -48,6 +48,7 @@ from openflight.camera.head_track import (
 from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
+from openflight.source_labels import depth_assumed
 
 # pylint: disable=no-member
 
@@ -135,8 +136,11 @@ CORNER_MAX_SHIFT_M = 0.02
 # Impact-centered 3D fusion gates. These were frozen without TrackMan truth
 # after the 2026-08-08 17-shot replay. They decide whether an experimental
 # number is displayed; they do not calibrate or shift either angle.
+# G2 C4: the OPS speed ratio tests a MEASURED depth only (an IWR club walk): over the
+# located tee + OPS speed the forward speed is the OPS speed by construction and the ratio
+# is >= 1 whatever the head did. The velocity MAD over the hosel points (one rigid anchor)
+# tested no identity and no longer gates.
 CHAINED_SPEED_RATIO_RANGE = (0.7, 1.3)
-CHAINED_VELOCITY_MAD_MAX_MPH = 10.0
 CHAINED_PATH_RANGE_DEG = (-25.0, 25.0)
 CHAINED_AOA_RANGE_DEG = (-20.0, 10.0)
 CHAINED_FEATURE_SPEED_RANGE_MPH = (25.0, 140.0)
@@ -144,15 +148,12 @@ CHAINED_FEATURE_PATH_RANGE_DEG = (-60.0, 60.0)
 CHAINED_FEATURE_AOA_RANGE_DEG = (-45.0, 30.0)
 APPROACH_PATH_WINDOW_MAD_MAX_DEG = 5.0
 APPROACH_MIN_PATH_WINDOWS = 3
-APPROACH_ATTACK_VELOCITY_MAD_MAX_MPH = 12.0
 # G2 C2 (4 Nov 2026): the attack angle's tier is its propagated 1-sigma (HEAD_POSITION_SIGMA_M
 # through the free-flight fit), never the range its value falls in: the old 'high' range
 # (-12..+8) passed an extrapolated -9.8 and failed the measured -13.2 chord on Oct 27 shot 1.
 # High within 1 deg (the gap-closure plan's TrackMan-class target is +-0.75), medium within 2.
 ATTACK_SIGMA_HIGH_DEG = 1.0
 ATTACK_SIGMA_MEDIUM_DEG = 2.0
-APPROACH_MEDIUM_SPEED_RATIO_RANGE = (0.6, 1.4)
-APPROACH_MEDIUM_VELOCITY_MAD_MAX_MPH = 18.0
 # G2 C3 (4 Nov 2026): every window ends at or before the last frame the ball rested in
 # (offset 0); the contact lies between it and the next. The old preferred (-2, +1) took
 # Oct 27 shot 1's f44, 1.1 ms after contact with the heel on the mat. Its three-frame span
@@ -426,14 +427,23 @@ def combine_approach_estimates(
     attack_estimate: ApproachPairEstimate | None,
     preferred_path_estimate: ApproachPairEstimate | None = None,
     timing_plausible: bool,
+    speed_ratio_tests_depth: bool = True,
 ) -> ChainedDelivery:
-    """Combine independent impact windows without coupling path and AoA."""
+    """Combine independent impact windows without coupling path and AoA.
+
+    ``speed_ratio_tests_depth``: False when the depth is assumed from the OPS speed itself
+    (the located tee), so the ratio gates nothing (C4)."""
     notes: list[str] = []
+
+    def ratio_ok(estimate: ApproachPairEstimate) -> bool:
+        return not speed_ratio_tests_depth or _ratio_within(
+            estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE
+        )
+
     path_candidates = [
         estimate
         for estimate in path_estimates
-        if _ratio_within(estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
-        and estimate.velocity_mad_mph <= CHAINED_VELOCITY_MAD_MAX_MPH
+        if ratio_ok(estimate)
         and CHAINED_PATH_RANGE_DEG[0] <= estimate.path_deg <= CHAINED_PATH_RANGE_DEG[1]
     ]
     path_deg = None
@@ -444,8 +454,7 @@ def combine_approach_estimates(
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
         path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
-            _ratio_within(preferred_path_estimate.speed_ratio_ops, CHAINED_SPEED_RATIO_RANGE)
-            and preferred_path_estimate.velocity_mad_mph <= CHAINED_VELOCITY_MAD_MAX_MPH
+            ratio_ok(preferred_path_estimate)
             and CHAINED_PATH_RANGE_DEG[0]
             <= preferred_path_estimate.path_deg
             <= CHAINED_PATH_RANGE_DEG[1]
@@ -1390,6 +1399,7 @@ def estimate_chained_delivery(
         attack_estimate=attack_estimate,
         preferred_path_estimate=_preferred_path_estimate(pair_estimates),
         timing_plausible=timing_plausible,
+        speed_ratio_tests_depth=not depth_assumed(range_evidence_status),
     )
     common["notes"] = (*notes, *result.notes)
     preferred = _preferred_path_offsets(pair_estimates)

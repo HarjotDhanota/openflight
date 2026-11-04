@@ -128,7 +128,13 @@ def camera_fused_label(shot: Shot, metric: str, source: str | None) -> tuple[str
         else shot.experimental_fused_attack_angle_confidence
     )
     intrinsics = shot.camera_lens_intrinsics
-    return camera_club_label(tier, intrinsics, source), camera_club_note(tier, intrinsics, source)
+    # G2 C4: the club stage's range evidence says whether the head's depth was measured
+    stage = (shot.camera_fusion_processing or {}).get("club_delivery") or {}
+    depth = stage.get("range_evidence_status") if isinstance(stage, dict) else None
+    return (
+        camera_club_label(tier, intrinsics, source, depth_status=depth),
+        camera_club_note(tier, intrinsics, source, depth_status=depth),
+    )
 
 
 def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:
