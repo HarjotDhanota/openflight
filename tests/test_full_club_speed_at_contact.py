@@ -168,7 +168,9 @@ def test_the_sigma_carries_the_ops_reading_scatter_and_the_angle_noise_bias():
     assert result["value_mph"] == pytest.approx(74.35, abs=0.005)  # 72.052 / 0.9691
     assert result["correction_factor"] == pytest.approx(1 / 0.9691, rel=1e-6)
     budget = result["uncertainty_mph"]
-    assert budget["ops_reading_scatter"] == full_speed.OPS_CLUB_READING_SD_MPH == 2.2
+    # the radial scatter divided by the projection, like the reading (C25c)
+    assert full_speed.OPS_CLUB_READING_SD_MPH == 2.2
+    assert budget["ops_reading_scatter"] == pytest.approx(2.2 / result["projection"], rel=1e-9)
     assert budget["angle_noise_bias"] == full_speed.ANGLE_NOISE_BIAS_MPH == 0.6
     half = (result["range_mph"][1] - result["range_mph"][0]) / 2
     assert half == pytest.approx(math.sqrt(sum(v * v for v in budget.values())), rel=1e-9)

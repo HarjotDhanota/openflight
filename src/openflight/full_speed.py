@@ -1327,7 +1327,8 @@ CLUB_CONTACT_NOTE = "OPS reading time unrecorded; treated as contact"
 # The full club speed's own error terms beyond the geometry (C15b; research/
 # rig-geometry-lock-2026-11-02/spin-fullspeed-check/REPORT.md, 3 Nov 2026): the OPS club
 # reading's scatter against TrackMan (radial minus TM, sd 2.16 mph on 11 clean Robinante
-# pairs) and the +0.6 mph bias 5 deg of angle noise puts into 1/cos, both in quadrature.
+# pairs, divided by the projection like the reading) and the +0.6 mph bias 5 deg of angle
+# noise puts into 1/cos, both in quadrature.
 OPS_CLUB_READING_SD_MPH = 2.2
 ANGLE_NOISE_BIAS_MPH = 0.6
 
@@ -1450,7 +1451,9 @@ def evaluate_full_club_speed_at_contact(
             for axis in range(3)
         )
     )
-    budget["ops_reading_scatter"] = OPS_CLUB_READING_SD_MPH
+    # the reading's scatter is in radial mph; the full speed is the radial over the
+    # projection, so it is too (C25c: at a 29 deg projection 2.52 mph, not 2.20)
+    budget["ops_reading_scatter"] = OPS_CLUB_READING_SD_MPH / nominal
     budget["angle_noise_bias"] = ANGLE_NOISE_BIAS_MPH
     half_width = math.sqrt(sum(term**2 for term in budget.values()))
     bounded = math.isfinite(half_width)
