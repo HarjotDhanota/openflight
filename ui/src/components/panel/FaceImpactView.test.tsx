@@ -12,6 +12,7 @@ import {
   FACE_SHAPES,
   bladeCrotch,
   blastedField,
+  woodCrotch,
   clubModel,
   faceCategory,
   faceCentre,
@@ -955,8 +956,8 @@ describe('the blasted groove field', () => {
     expect(contrast(rim, light)).toBeGreaterThanOrEqual(3);
   });
 
-  /* The face view as drawn, every club, both hands, no shot: sha-256 of its markup. Woods and
-   * hybrids as before the blasted field; irons and wedges since it. */
+  /* The face view as drawn, every club, both hands, no shot: sha-256 of its markup. Irons and
+   * wedges since the blasted field (v4); woods and hybrids since their satin face finish. */
   const APPROVED_FACE_VIEWS: Record<string, string> = {
     '2-iron:right': 'e9bd50083ab762df',
     '2-iron:left': '2d990556c6ba5c8a',
@@ -982,22 +983,22 @@ describe('the blasted groove field', () => {
     'sw:left': '0708f28e61c7154b',
     'lw:right': '4c8e0ecf3d4d81e7',
     'lw:left': '0708f28e61c7154b',
-    '3-hybrid:right': '2c47b8c3a51c7d03',
-    '3-hybrid:left': 'ab18ad44899b8a7c',
-    '5-hybrid:right': '2c47b8c3a51c7d03',
-    '5-hybrid:left': 'ab18ad44899b8a7c',
-    '7-hybrid:right': '2c47b8c3a51c7d03',
-    '7-hybrid:left': 'ab18ad44899b8a7c',
-    '9-hybrid:right': '2c47b8c3a51c7d03',
-    '9-hybrid:left': 'ab18ad44899b8a7c',
-    'driver:right': '604308b49492be66',
-    'driver:left': '850929eeb337e6fb',
-    '3-wood:right': '7c8bb63b3765c3a6',
-    '3-wood:left': 'e3dd7ecc2f41ba1e',
-    '5-wood:right': '7c8bb63b3765c3a6',
-    '5-wood:left': 'e3dd7ecc2f41ba1e',
-    '7-wood:right': '7c8bb63b3765c3a6',
-    '7-wood:left': 'e3dd7ecc2f41ba1e',
+    '3-hybrid:right': 'b32d35fa9048d81d',
+    '3-hybrid:left': 'b1333819c44bec12',
+    '5-hybrid:right': 'b32d35fa9048d81d',
+    '5-hybrid:left': 'b1333819c44bec12',
+    '7-hybrid:right': 'b32d35fa9048d81d',
+    '7-hybrid:left': 'b1333819c44bec12',
+    '9-hybrid:right': 'b32d35fa9048d81d',
+    '9-hybrid:left': 'b1333819c44bec12',
+    'driver:right': '10c65ea8031b0a20',
+    'driver:left': '71560c61ddcf30e6',
+    '3-wood:right': '01b96b407208f6e6',
+    '3-wood:left': 'c6af6260c456da2e',
+    '5-wood:right': '01b96b407208f6e6',
+    '5-wood:left': 'c6af6260c456da2e',
+    '7-wood:right': '01b96b407208f6e6',
+    '7-wood:left': 'c6af6260c456da2e',
   };
   it('pins every selectable club in the approved face views', () => {
     expect(Object.keys(APPROVED_FACE_VIEWS).sort()).toEqual(
@@ -1009,6 +1010,143 @@ describe('the blasted groove field', () => {
     const s = { ...clubModel(id), impact_location: { handedness: handed } } as unknown as Shot;
     const markup = renderToString(<FaceImpactView shot={s} sessionShots={[s]} />);
     expect(createHash('sha256').update(markup).digest('hex').slice(0, 16)).toBe(APPROVED_FACE_VIEWS[key]);
+  });
+});
+
+/* A wood's or hybrid's face (the owner-approved mock-up, 2026-11-03): a satin brushed-titanium face,
+ * a softly rolled topline and leading edge, a radius band on the painted head, a round hosel tube, a
+ * soft sheen where the hosel meets the head, and painted score lines with a dark lower lip. */
+describe('the wood and hybrid face finish', () => {
+  const woods = ['driver', 'fairway', 'hybrid'] as const;
+  const woodHands = woods.flatMap((category) => (['right', 'left'] as const).map((hand) => [category, hand] as const));
+  const club = { driver: 'driver', fairway: '3-wood', hybrid: '3-hybrid' };
+  const html = (category: (typeof woods)[number], hand: 'right' | 'left') =>
+    render(shot({ club: club[category], impact_location: { handedness: hand } } as Partial<Shot>));
+  const tags = (markup: string, cls: string) =>
+    [...markup.matchAll(new RegExp(`<[^>]*class="${cls}"[^>]*>`, 'g'))].map((m) => m[0]);
+  const num = (tag: string, name: string) => Number(tag.match(new RegExp(` ${name}="([^"]*)"`))![1]);
+  const clipOf = (tag: string) => tag.match(/clip-path="url\(#([^)]*)\)"/)![1];
+  const clipD = (markup: string, clip: string) =>
+    markup.match(new RegExp(`<clipPath id="${clip}"><path d="([^"]*)"`))![1];
+  const strokes = (markup: string, group: string) => {
+    const at = markup.indexOf(`class="${group}"`);
+    const body = markup.slice(at, markup.indexOf('</g>', at));
+    return [...body.matchAll(/<path [^>]*d="([^"]*)"[^>]*stroke-width="([^"]*)"/g)].map((m) => [m[1], Number(m[2])]);
+  };
+
+  it.each(woodHands)('gives the %s a satin brushed face with a rolled edge (%s-handed)', (category, hand) => {
+    const markup = html(category, hand);
+    const shape = FACE_SHAPES[category];
+    // the face panel stays, with the satin finish laid on it, clipped to the face
+    expect(markup).toContain('class="face-impact__face"');
+    const [satin] = tags(markup, 'face-impact__satin');
+    expect(clipD(markup, clipOf(satin))).toBe(shape.face);
+    expect(markup.indexOf('face-impact__satin"')).toBeGreaterThan(markup.indexOf('class="face-impact__face"'));
+    expect(markup.indexOf('face-impact__satin"')).toBeLessThan(markup.indexOf('face-impact__face-reflection'));
+    const [brush] = tags(markup, 'face-impact__satin-brush');
+    expect(brush).toMatch(/filter="url\(#[^)]*brush\)"/);
+    expect(markup).toMatch(/<feTurbulence[^>]*base[Ff]requency="0.03 2.2"/);
+    expect(tags(markup, 'face-impact__satin-sheen')).toHaveLength(1);
+    // the topline and leading edge roll into the face instead of hard highlight strokes
+    expect(markup).not.toContain('class="face-impact__edge"');
+    const [roll] = tags(markup, 'face-impact__face-roll');
+    expect(clipD(markup, clipOf(roll))).toBe(shape.face);
+    expect(strokes(markup, 'face-impact__face-roll')).toEqual([
+      [shape.face, 3],
+      [shape.face, 1.9],
+      [shape.face, 0.9],
+    ]);
+  });
+
+  it.each(woodHands)('shades the %s painted head and hosel round (%s-handed)', (category, hand) => {
+    const markup = html(category, hand);
+    const shape = FACE_SHAPES[category];
+    const [band] = tags(markup, 'face-impact__edge-radius');
+    expect(clipD(markup, clipOf(band))).toBe(shape.silhouette);
+    expect(band).toMatch(/mask="url\(#[^)]*off-tube\)"/);
+    expect(strokes(markup, 'face-impact__edge-radius')).toEqual([
+      [shape.silhouette, 4.4],
+      [shape.silhouette, 3],
+      [shape.silhouette, 1.8],
+      [shape.silhouette, 0.9],
+    ]);
+    // lit from the screen's upper left whichever hand
+    const lit = markup.match(/<linearGradient id="[^"]*head-lit"[^>]*>/)![0];
+    expect(num(lit, 'x1') < num(lit, 'x2')).toBe(hand !== 'left');
+    expect(num(lit, 'y1')).toBeLessThan(num(lit, 'y2'));
+    // the hosel tube darkens toward both edges, so it reads round
+    const tube = hoselParts(shape.hosel).tube;
+    const [round] = tags(markup, 'face-impact__tube-round');
+    expect(clipD(markup, clipOf(round))).toBe(tube);
+    expect(strokes(markup, 'face-impact__tube-round').map(([, w]) => w)).toEqual([3.2, 2, 1]);
+    expect(markup.indexOf('face-impact__tube-round"')).toBeGreaterThan(markup.indexOf('face-impact__hosel"'));
+  });
+
+  it.each(woods)('puts a soft sheen where the %s hosel meets the head', (category) => {
+    const markup = html(category, 'right');
+    const [cx, cy] = woodCrotch(category)!;
+    const face = polygon(FACE_SHAPES[category].face);
+    const faceRight = Math.max(...face.map(([x]) => x));
+    // heelward of the face, the lowest point of the head's top edge there
+    expect(cx).toBeGreaterThan(faceRight);
+    expect(cx).toBeLessThan(faceRight + 30);
+    const [sheen] = tags(markup, 'face-impact__neck-sheen');
+    expect([num(sheen, 'cx'), num(sheen, 'cy'), num(sheen, 'r')]).toEqual([cx, cy + 2, 10]);
+  });
+
+  it.each(woods)('gives the %s score lines a dark lower lip, in place', (category) => {
+    const markup = html(category, 'right');
+    const grooves = FACE_SHAPES[category].grooves;
+    const lines = tags(markup, 'face-impact__groove');
+    expect(lines).toHaveLength(grooves.length);
+    expect(num(lines[0], 'stroke-width')).toBe(GROOVE_WIDTH_MM);
+    const lips = tags(markup, 'face-impact__groove-shadow');
+    expect(lips).toHaveLength(grooves.length);
+    for (const [k, g] of grooves.entries())
+      expect([num(lips[k], 'x1'), num(lips[k], 'x2'), num(lips[k], 'y1')]).toEqual([
+        g.from,
+        g.to,
+        g.y + GROOVE_WIDTH_MM * 0.65,
+      ]);
+  });
+
+  /** WCAG contrast ratio of two #rrggbb colours. */
+  const contrast = (a: string, b: string) => {
+    const lum = (hex: string) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => {
+        const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+    };
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const css = readFileSync(new URL('./FaceImpactView.css', import.meta.url), 'utf8');
+  const theme = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
+  const block = (text: string, selector: string) => text.slice(text.indexOf(selector)).split('}')[0];
+  const value = (text: string, name: string) => text.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, 'i'))![1];
+
+  it.each([
+    ['woods', "[data-finish='black']"],
+    ['hybrids', "[data-face='hybrid']"],
+  ])('reads on the %s in the dark and the light theme', (_, selector) => {
+    const art = block(css, selector);
+    const black = block(css, "[data-finish='black']");
+    const get = (name: string) => (art.includes(name) ? value(art, name) : value(black, name));
+    // the score lines stand out on the face, and the face from its painted surround
+    expect(contrast(get('--face-art-groove'), get('--face-art-face-lo'))).toBeGreaterThanOrEqual(3);
+    expect(contrast(get('--face-art-face-hi'), get('--face-art-steel-mid'))).toBeGreaterThanOrEqual(1.5);
+    // the painted head reads on the light panel by itself, on the dark one by its rim highlight
+    const dark = value(block(theme, "[data-theme='dark']"), '--color-surface');
+    const light = value(block(theme, "[data-theme='light']"), '--color-surface');
+    expect(contrast(get('--face-art-steel-mid'), light)).toBeGreaterThanOrEqual(3);
+    const rim = black
+      .match(/--face-art-rim:\s*rgba\((\d+),\s*(\d+),\s*(\d+)/)!
+      .slice(1)
+      .map(Number);
+    const rimHex = `#${rim.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+    expect(contrast(rimHex, dark)).toBeGreaterThanOrEqual(3);
   });
 });
 

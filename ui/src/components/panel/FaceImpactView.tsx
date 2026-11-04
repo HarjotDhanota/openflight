@@ -11,6 +11,7 @@ import {
   bladeCrotch,
   blastedField,
   flatten,
+  woodCrotch,
   faceCategory,
   formatLength,
   GROOVE_WIDTH_MM,
@@ -77,10 +78,17 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
   const soft = BLAST_SOFT_EDGE_MM;
   const crotch = bladeCrotch(category);
   // the head's own extent, for its edge lighting: from the screen's upper left whichever hand
-  const headPoints = field ? flatten(shape.head) : [];
+  const headPoints = flatten(shape.head);
   const [headMinX, headMaxX] = [Math.min(...headPoints.map(([x]) => x)), Math.max(...headPoints.map(([x]) => x))];
   const [headMinY, headMaxY] = [Math.min(...headPoints.map(([, y]) => y)), Math.max(...headPoints.map(([, y]) => y))];
   const litX = (u: number) => (left ? headMaxX - u * (headMaxX - headMinX) : headMinX + u * (headMaxX - headMinX));
+  // a wood's or hybrid's face is satin brushed titanium in a painted head, its edges rolled
+  const painted = !field;
+  const neck = woodCrotch(category);
+  const facePoints = painted ? flatten(shape.face) : [];
+  const [faceMinX, faceMaxX] = [Math.min(...facePoints.map(([x]) => x)), Math.max(...facePoints.map(([x]) => x))];
+  const [faceMinY, faceMaxY] = [Math.min(...facePoints.map(([, y]) => y)), Math.max(...facePoints.map(([, y]) => y))];
+  const faceLitX = (u: number) => (left ? faceMaxX - u * (faceMaxX - faceMinX) : faceMinX + u * (faceMaxX - faceMinX));
   const hosel = hoselParts(shape.hosel);
   const lie = (shape.hosel.lieDeg * Math.PI) / 180;
   const jointStart = blade ? shape.hosel.tube[0][0] : 0;
@@ -174,6 +182,88 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
             <clipPath id={faceClipId}>
               <path d={shape.face} transform={mirror} />
             </clipPath>
+            {painted ? (
+              <>
+                <clipPath id={`${id}face-only`}>
+                  <path d={shape.face} />
+                </clipPath>
+                <clipPath id={`${id}silhouette`}>
+                  <path d={shape.silhouette} />
+                </clipPath>
+                <clipPath id={`${id}tube-clip`}>
+                  <path d={hosel.tube} />
+                </clipPath>
+                <filter id={`${id}brush`} x="0" y="0" width="1" height="1" colorInterpolationFilters="sRGB">
+                  <feTurbulence type="fractalNoise" baseFrequency="0.03 2.2" numOctaves={2} seed={3} result="noise" />
+                  <feColorMatrix
+                    in="noise"
+                    type="matrix"
+                    values="0 0 0 0 0.85  0 0 0 0 0.88  0 0 0 0 0.92  0 0 0 0.7 -0.25"
+                    result="grain"
+                  />
+                  <feComposite in="grain" in2="SourceGraphic" operator="in" />
+                </filter>
+                <linearGradient id={`${id}sheen`} x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stopColor="#fff" stopOpacity="0.14" />
+                  <stop offset="0.45" stopColor="#fff" stopOpacity="0" />
+                  <stop offset="1" stopColor="#000" stopOpacity="0.16" />
+                </linearGradient>
+                <linearGradient
+                  id={`${id}face-lit`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={faceLitX(0.1)}
+                  y1={faceMinY}
+                  x2={faceLitX(0.9)}
+                  y2={faceMaxY}
+                >
+                  <stop offset="0" stopColor="#fff" stopOpacity="0.55" />
+                  <stop offset="0.4" stopColor="#fff" stopOpacity="0.12" />
+                  <stop offset="0.6" stopColor="#000" stopOpacity="0.05" />
+                  <stop offset="1" stopColor="#000" stopOpacity="0.45" />
+                </linearGradient>
+                <linearGradient
+                  id={`${id}head-lit`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={litX(0.1)}
+                  y1={headMinY}
+                  x2={litX(0.9)}
+                  y2={headMaxY}
+                >
+                  <stop offset="0" stopColor="#fff" stopOpacity="0.42" />
+                  <stop offset="0.35" stopColor="#fff" stopOpacity="0.12" />
+                  <stop offset="0.55" stopColor="#7d858e" stopOpacity="0.02" />
+                  <stop offset="0.8" stopColor="#000" stopOpacity="0.35" />
+                  <stop offset="1" stopColor="#000" stopOpacity="0.5" />
+                </linearGradient>
+                <filter id={`${id}tube-feather`} x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="1.6" />
+                </filter>
+                <mask
+                  id={`${id}off-tube`}
+                  maskUnits="userSpaceOnUse"
+                  x={minX - 10}
+                  y={minY - 10}
+                  width={maxX - minX + 20}
+                  height={maxY - minY + 20}
+                >
+                  <rect x={minX - 10} y={minY - 10} width={maxX - minX + 20} height={maxY - minY + 20} fill="#fff" />
+                  <path d={hosel.tube} fill="#000" filter={`url(#${id}tube-feather)`} />
+                </mask>
+                {neck ? (
+                  <radialGradient
+                    id={`${id}neck-sheen`}
+                    gradientUnits="userSpaceOnUse"
+                    cx={neck[0]}
+                    cy={neck[1] + 2}
+                    r="10"
+                  >
+                    <stop offset="0" stopColor="#a9b1ba" stopOpacity="0.22" />
+                    <stop offset="0.5" stopColor="#a9b1ba" stopOpacity="0.08" />
+                    <stop offset="1" stopColor="#a9b1ba" stopOpacity="0" />
+                  </radialGradient>
+                ) : null}
+              </>
+            ) : null}
             {field ? (
               <>
                 <clipPath id={`${id}field-clip`}>
@@ -452,6 +542,26 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                   clipPath={`url(#${id}head-clip)`}
                 />
                 {!blade ? <path className="face-impact__hosel" d={hosel.tube} fill={`url(#${steelId})`} /> : null}
+                {painted ? (
+                  // the hosel tube darkens toward both edges, so it reads round
+                  <g
+                    className="face-impact__tube-round"
+                    clipPath={`url(#${id}tube-clip)`}
+                    fill="none"
+                    stroke="#0b0e11"
+                    strokeLinejoin="round"
+                  >
+                    {(
+                      [
+                        [3.2, 0.12],
+                        [2, 0.18],
+                        [1, 0.25],
+                      ] as const
+                    ).map(([width, opacity]) => (
+                      <path key={width} d={hosel.tube} strokeWidth={width} strokeOpacity={opacity} />
+                    ))}
+                  </g>
+                ) : null}
                 <path d={hosel.tube} fill={`url(#${id}tube)`} mask={`url(#${id}joint)`} />
                 {hosel.collar ? (
                   <path className="face-impact__collar" d={hosel.collar} fill={`url(#${id}tube)`} />
@@ -558,11 +668,81 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                       fill={`url(#${faceId})`}
                       mask={shape.faceFade ? `url(#${fadeId})` : undefined}
                     />
+                    {/* satin brushed titanium: a fine horizontal grain and a soft diagonal sheen */}
+                    <g className="face-impact__satin" clipPath={`url(#${id}face-only)`}>
+                      <rect
+                        className="face-impact__satin-brush"
+                        x={faceMinX}
+                        y={faceMinY}
+                        width={faceMaxX - faceMinX}
+                        height={faceMaxY - faceMinY}
+                        fill="#fff"
+                        filter={`url(#${id}brush)`}
+                        opacity="0.35"
+                      />
+                      <rect
+                        className="face-impact__satin-sheen"
+                        x={faceMinX}
+                        y={faceMinY}
+                        width={faceMaxX - faceMinX}
+                        height={faceMaxY - faceMinY}
+                        fill={`url(#${id}sheen)`}
+                      />
+                    </g>
+                    {/* the topline and leading edge roll softly into the face */}
+                    <g
+                      className="face-impact__face-roll"
+                      clipPath={`url(#${id}face-only)`}
+                      fill="none"
+                      stroke={`url(#${id}face-lit)`}
+                      strokeLinejoin="round"
+                    >
+                      {(
+                        [
+                          [3, 0.2],
+                          [1.9, 0.28],
+                          [0.9, 0.4],
+                        ] as const
+                      ).map(([width, opacity]) => (
+                        <path key={width} d={shape.face} strokeWidth={width} strokeOpacity={opacity} />
+                      ))}
+                    </g>
                     <g mask={shape.faceFade ? `url(#${fadeId})` : undefined}>
                       <path className="face-impact__face-reflection" d={shape.face} fill={`url(#${id}reflection)`} />
                       <path className="face-impact__grain" d={shape.face} fill={`url(#${id}grain)`} />
                     </g>
                     {shape.scoring ? <path className="face-impact__scoring" d={shape.scoring} /> : null}
+                    {/* the painted head's edges are a radius: a soft band lit from the upper left */}
+                    <g
+                      className="face-impact__edge-radius"
+                      clipPath={`url(#${id}silhouette)`}
+                      mask={`url(#${id}off-tube)`}
+                      fill="none"
+                      stroke={`url(#${id}head-lit)`}
+                      strokeLinejoin="round"
+                    >
+                      {(
+                        [
+                          [4.4, 0.16],
+                          [3, 0.2],
+                          [1.8, 0.28],
+                          [0.9, 0.4],
+                        ] as const
+                      ).map(([width, opacity]) => (
+                        <path key={width} d={shape.silhouette} strokeWidth={width} strokeOpacity={opacity} />
+                      ))}
+                    </g>
+                    {neck ? (
+                      // painted black reads by light, not shadow: a soft sheen where the hosel meets the head
+                      <circle
+                        className="face-impact__neck-sheen"
+                        cx={neck[0]}
+                        cy={neck[1] + 2}
+                        r="10"
+                        fill={`url(#${id}neck-sheen)`}
+                        clipPath={`url(#${id}head-clip)`}
+                      />
+                    ) : null}
                   </>
                 )}
               </g>
@@ -582,7 +762,7 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                 </g>
               ) : null}
               <g
-                className={`face-impact__face-marks${field ? ' face-impact__face-marks--blasted' : ''}`}
+                className={`face-impact__face-marks${field ? ' face-impact__face-marks--blasted' : ' face-impact__face-marks--painted'}`}
                 transform={mirror}
               >
                 {shape.grooves.map((groove) => (
@@ -596,15 +776,18 @@ export function FaceImpactView({ shot, sessionShots, metricRow }: FaceImpactView
                     y2={groove.y}
                   />
                 ))}
-                {(field ? [] : shape.edges).map(({ d, fade }, k) => (
-                  <path
-                    key={d}
-                    className="face-impact__edge"
-                    d={d}
-                    style={fade ? { stroke: `url(#${fadeId}-edge${k})` } : undefined}
+                {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
+                {/* a painted score line sits in the face: a dark lower lip */}
+                {(painted ? shape.grooves : []).map((groove) => (
+                  <line
+                    key={`${groove.y}:${groove.from}`}
+                    className="face-impact__groove-shadow"
+                    x1={groove.from}
+                    x2={groove.to}
+                    y1={groove.y + GROOVE_WIDTH_MM * 0.65}
+                    y2={groove.y + GROOVE_WIDTH_MM * 0.65}
                   />
                 ))}
-                {shape.mark ? <path className="face-impact__mark" d={shape.mark} /> : null}
                 {/* on the blasted field each scoreline is a recessed groove: a hairline light lower edge,
                     tapered in at the ends, and a darker core */}
                 {(field ? shape.grooves : []).map((groove) => {

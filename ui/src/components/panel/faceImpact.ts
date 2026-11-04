@@ -826,6 +826,23 @@ export function bladeCrotch(category: FaceCategory): Point | null {
   return best;
 }
 
+/** A wood's or hybrid's hosel-to-head crotch, in the face's own unmirrored frame: the lowest point of
+ * the head's top edge within 30 mm heelward of the face, on a 0.5 mm grid. Null for irons and
+ * wedges. */
+export function woodCrotch(category: FaceCategory): Point | null {
+  if (category === 'iron' || category === 'wedge') return null;
+  const shape = FACE_SHAPES[category];
+  const faceRight = Math.max(...flatten(shape.face).map(([x]) => x));
+  const head = flatten(shape.head);
+  let best: Point | null = null;
+  for (let x = faceRight + 0.5; x < faceRight + 30; x += 0.5) {
+    const hits = cross(head, x, true);
+    if (!hits.length) continue;
+    if (!best || hits[0] > best[1]) best = [x, hits[0]];
+  }
+  return best;
+}
+
 export function faceCategory(club: string | null | undefined): FaceCategory {
   const name = (club ?? '').trim().toLowerCase();
   if (name === 'driver') return 'driver';

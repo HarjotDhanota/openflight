@@ -173,6 +173,17 @@
   opacity: 0.35;
 }
 
+.face-impact__face-marks--painted .face-impact__groove {
+  stroke-opacity: 0.85;
+}
+
+.face-impact__groove-shadow {
+  stroke: #000;
+  stroke-opacity: 0.4;
+  stroke-width: 0.18;
+  stroke-linecap: round;
+}
+
 .face-impact__groove-lip {
   stroke: #fff;
   stroke-opacity: 0.55;
