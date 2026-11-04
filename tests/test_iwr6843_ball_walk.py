@@ -142,3 +142,102 @@ def test_shot_1_s_launch_point_is_the_ball_walk_read_back_to_contact(inputs, ver
     assert 0.010 <= estimate.impact_t_s <= 0.018
     # sigma = range rate x contact-time sigma, with the line's own and the model floor
     assert estimate.uncertainty_m >= estimate.ball_track["speed_ms"] * estimate.contact["sigma_s"]
+
+
+def _shot_1_on_the_located_tee(inputs, vertical):
+    return lr.estimate_launch_range(
+        vertical,
+        ball_speed_mph=inputs["ball_speed_mph"],
+        club_speed_mph=inputs["club_speed_mph"],
+        prior=lr.LaunchRangePrior(1.814, 0.03, lr.LOCATED_TEE_SOURCE),
+        net_range_m=inputs["net_range_m"],
+        range_bias_m=inputs["range_bias_m"],
+    )
+
+
+def _shot_1_calibration(inputs):
+    """The Oct 27 session's recorded LCMF inputs, on the camera's located tee."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from openflight.iwr6843.replay import build_replay_calibration  # noqa: PLC0415
+
+    calibration = build_replay_calibration(
+        Path(__file__).resolve().parents[1] / "config" / "iwr6843_calibration_reference.json",
+        tee_range_m=1.814,
+        tilt_deg=9.946,
+        radar_height_m=0.05224817918569254,
+        ball_height_m=0.02135,
+        board_rotation_deg=90.0,
+        roll_deg=0.149,
+    )
+    return replace(calibration, range_bias_m=inputs["range_bias_m"])
+
+
+def _walk_from_contact(estimate):
+    """The launch range's walk from its contact time on: before it, its line carries the
+    club's approach."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    track = estimate.track
+    return replace(track, t_first=max(track.t_first, estimate.impact_t_s), quad_bins=None)
+
+
+def test_the_recovered_walk_is_good_enough_for_the_angle_stage(inputs, vertical):
+    """What the LCMF needs of a walk (WALK-SELECTION-TRACE.md): the ball's bin within half a
+    bin in frames 12-23 (it reads round(bin_at(t))) and a range rate good to ~1 m/s (13 deg
+    of TDM phase per m/s; the LCMF turns the phase with the OPS speed in any case)."""
+    estimate = _shot_1_on_the_located_tee(inputs, vertical)
+    walk = _walk_from_contact(estimate)
+    # the ball's own line (REPORT.md fit, 12 frames, 0.5 cm rms): 28.51 + 788.6 t bins.
+    # Measured: 0.61 and 0.52 bins off in frames 12-13 (the walk's 35.6 m/s against the
+    # ball's 36.5), within 0.43 from frame 14: the half-bin holds from frame 14 on.
+    geometry = vertical.geometry
+    for frame in range(12, 24):
+        t_s = geometry.loop_time(frame, geometry.n_loops // 2)
+        error = abs(walk.bin_at(t_s) - (28.51 + 788.6 * t_s))
+        assert error <= (0.5 if frame >= 14 else 0.65), frame
+    assert abs(walk.speed_ms - 36.2) <= 1.0
+    assert walk.t_first >= estimate.impact_t_s
+
+
+def test_the_snapshot_gate_drops_the_ball_s_own_frames(inputs, vertical):
+    """Measured, not changed (G4 C3): on the walk from contact on, the LCMF keeps snapshots
+    at MIN_SNR (8x the cube noise, 9 dB). In frames 16-23 (the ball alone, bins 66-83) the
+    walk's snapshots read 3.4-7.0 dB (frame medians) and none pass; the frames that pass are
+    where the walk runs through the golfer band (5-12). Lowering the gate needs the
+    August noise check first."""
+    import numpy as np  # noqa: PLC0415
+
+    from openflight.iwr6843 import lcmf  # noqa: PLC0415
+    from openflight.iwr6843.shot import ShotMeasurement  # noqa: PLC0415
+
+    raw = (FIXTURE / inputs["dump"]).read_bytes()
+    prepared = lcmf.prepare_lcmf_capture(raw)
+    estimate = _shot_1_on_the_located_tee(inputs, vertical)
+    shot_track = ShotMeasurement(
+        geometry=vertical.geometry,
+        ball_found=True,
+        track=_walk_from_contact(estimate),
+        club=inputs["club"],
+        tx_order="normal",
+        tdm_sign_policy="positive",
+        notch_recovered=estimate.scope == "window",
+        tdm_sign_used=1,
+    )
+    cache, _geometry, _cube = lcmf._snapshot_cache(  # pylint: disable=protected-access
+        raw,
+        shot_track,
+        _shot_1_calibration(inputs),
+        "normal",
+        1,
+        prepared.tdm_tau_s,
+        prepared.loop_period_s,
+        phase_velocity_ms=inputs["ball_speed_mph"] / tracking.MPH_PER_MS,
+        prepared=vertical,
+    )
+    passing = cache["snr"] >= lcmf.MIN_SNR
+    clear_of_band = cache["frame"] >= 16
+
+    assert passing[~clear_of_band].mean() > 0.7
+    assert passing[clear_of_band].mean() < 0.05
+    assert np.median(10.0 * np.log10(cache["snr"][clear_of_band])) < 9.0
