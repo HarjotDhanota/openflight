@@ -61,6 +61,11 @@ MIN_BALL_INLIERS = 12
 MIN_BALL_SPAN_S = 0.006
 # The walk starts at the first frame with this many samples whose next frame has them too.
 WALK_START_MIN_SAMPLES = 2
+# ... counted on each loop's strongest peak, the detections the rule was set on: with the
+# ball's four peaks per loop any line through the pre-contact clutter collects two lobes a
+# frame, and the start lands on the club's approach (Oct 24 shot 13: 1.2 ms and 1.49 m at
+# four peaks, 9.8 ms and 1.91 m at one, the owner's ~1.91 m).
+WALK_START_MAX_PEAKS_PER_LOOP = 1
 # the range walk's inlier tolerance, in bins, as tracking.find_ball uses
 _TRACK_TOLERANCE_BINS = 1.2
 # The club's approach walk runs into the same golfer band as the ball's walk leaves it,
@@ -521,7 +526,9 @@ def walk_start_s(
 ) -> float:
     """When the walk's samples start holding frame after frame (``t_first`` can be a noise peak)."""
     geometry = prepared.geometry
-    loops, times, bins = _gate_detections(prepared, scope, gate)
+    loops, times, bins = _gate_detections(
+        prepared, scope, gate, max_peaks_per_loop=WALK_START_MAX_PEAKS_PER_LOOP
+    )
     if loops.size == 0:
         return float(track.t_first)
     n_loops = geometry.n_loops
