@@ -94,12 +94,13 @@ def test_oct27_shot1_reads_a_steep_experimental_plane_and_no_low_point():
     assert direction["frame"] == "target_line"
     low, high = plane["range"]
     assert high - low > 10.0  # an honest +- sigma, not a prior's
+    # G2 C6b: the track's own arc does not fix the low point (its sigma is over the 60 mm
+    # bound), so it is the attack angle's on a bounded radius, estimated, with that reason
     low_point = payload["metrics"]["low_point_distance_mm"]
-    assert low_point["value"] is None
-    assert (
-        "beyond the tracked span" in low_point["reason"]
-        or "under the surface" in low_point["reason"]
-    )
+    assert low_point["source"] == club_arc.LOW_POINT_ATTACK_SOURCE
+    assert low_point["status"] == "estimated"
+    assert "arc radius assumed 1.0-1.6 m" in low_point["note"]
+    assert "over 60" in low_point["reason"]
 
 
 def test_fewer_than_four_pre_contact_positions_give_no_plane():
