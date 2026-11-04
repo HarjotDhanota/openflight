@@ -1,16 +1,13 @@
 """Camera-assisted experimental club delivery (attack angle + club path).
 
-The live estimator tracks clubhead image features across short intervals around
-impact. Its preferred path spans the final approach through the first
-post-impact frame, combining camera transverse motion, IWR6843 depth, and OPS
-club speed. A fully pre-impact interval is the next choice so launched-ball or
-deflected-head pixels cannot silently replace a missing impact track. When IWR
-club range is unavailable, camera flow plus OPS radial speed needs an explicit
-head position, sensor origin and reading-time binding. Both paths remain experimental pending broader
+The live estimator finds the clubhead's heel-sole corner in each frame of short
+intervals before contact. Its preferred path spans the final approach up to the
+last frame the ball rested in (never a frame after contact), combining camera
+transverse motion with a range against time for depth: the IWR6843 club walk, or
+the located tee plus the OPS club speed. When neither is available, camera flow
+plus OPS radial speed needs an explicit head position, sensor origin and
+reading-time binding. All paths remain experimental pending broader
 source-of-truth validation.
-
-The older radar-AoA/camera-trace functions remain below for replay comparisons,
-but the OpenFlight server no longer uses their per-club correction offsets.
 """
 
 from __future__ import annotations
@@ -48,8 +45,6 @@ from openflight.camera.head_track import (
     estimate_head_track,
     observe_shaft_axis,
 )
-from openflight.clubs import ClubType
-from openflight.clubs.physics import get_club_physics
 from openflight.constants import BALL_DIAMETER_M as GOLF_BALL_DIAMETER_M
 from openflight.horizontal_frame import frame_for, to_reported_deg
 from openflight.iwr6843.tracking import accepted_range_evidence
@@ -65,11 +60,9 @@ SCENE_P995_MIN = 105.0
 # scene regions; the reference-ball detector then locks onto arbitrary
 # bright blobs and impact detection never sees a departure. Dappled
 # background saturation is harmless (same day, 250 us: far-field 5%%
-# saturated, trace clean), so the hard gate is LOCAL to the hitting zone;
-# the global fraction only attributes cause when ball detection fails.
+# saturated, trace clean), so the hard gate is LOCAL to the hitting zone.
 BALL_ZONE_RADIUS_PX = 150
 BALL_ZONE_SATURATION_MAX = 0.02
-GLOBAL_SATURATION_HINT = 0.05
 # A real impact must sit near the sound-trigger frame; a far-off "impact"
 # means the ball patch never departed (wrong blob detected).
 IMPACT_PRE_TRIGGER_MAX = 8
@@ -91,15 +84,6 @@ BALL_PRESENT_NOISE_SIGMAS = 6.0
 # Contrast surround (inner, outer radius) and denoise sigma, in ball diameters.
 BALL_SURROUND_RADII_FRAC = (0.65, 0.9)
 BALL_DENOISE_SIGMA_FRAC = 0.07
-MIN_CLUB_COMPONENT_PX = 40
-MAX_COMPONENT_BALL_DIST_PX = 320.0
-TIP_BAND_PX = 12.0
-PATCH_HALF_PX = 45
-SEARCH_HALF_PX = 110
-MIN_MATCH_SCORE = 0.30
-MIN_PAIR_STEP_PX = 2.0
-MIN_PAIRS = 2
-PAIR_OFFSETS = (-2, -1, 0, 1)
 
 # --- clubhead selection -------------------------------------------------------
 # The approach tracker localises the head from the ball side in every frame. Oct 27
@@ -148,10 +132,6 @@ CORNER_PASSES = 2
 CORNER_MAX_SHIFT_M = 0.02
 
 # --- fusion constants ---------------------------------------------------------
-# A trace near 0° or ±90° makes tan(path) = tan(AoA)/tan(trace) explode or
-# collapse; require it in a physically plausible band.
-TRACE_ABS_RANGE_DEG = (15.0, 85.0)
-
 # Impact-centered 3D fusion gates. These were frozen without TrackMan truth
 # after the 2026-08-08 17-shot replay. They decide whether an experimental
 # number is displayed; they do not calibrate or shift either angle.
@@ -159,8 +139,6 @@ CHAINED_SPEED_RATIO_RANGE = (0.7, 1.3)
 CHAINED_VELOCITY_MAD_MAX_MPH = 10.0
 CHAINED_PATH_RANGE_DEG = (-25.0, 25.0)
 CHAINED_AOA_RANGE_DEG = (-20.0, 10.0)
-CHAINED_INTERVAL_AGREEMENT_DEG = 5.0
-CHAINED_MIN_IMAGE_MOTION_PX = 1e-6
 CHAINED_FEATURE_SPEED_RANGE_MPH = (25.0, 140.0)
 CHAINED_FEATURE_PATH_RANGE_DEG = (-60.0, 60.0)
 CHAINED_FEATURE_AOA_RANGE_DEG = (-45.0, 30.0)
@@ -186,17 +164,6 @@ APPROACH_PATH_OFFSETS = (*PREFERRED_PATH_OFFSETS, (-1, 0), (-2, 0), (-3, -1))
 def _image_scale(shape: tuple[int, ...]) -> float:
     """Scale pixel windows tuned at 640x400 to the active mode's focal length."""
     return ball_pixels.pixel_scale(shape[-1])
-
-
-# The DTL trace's 110 px search window cannot fit a 200-row crop, so it scales
-# with the frame size rather than the focal length.
-_TRACE_REFERENCE_FRAME = (640, 400)
-
-
-def _frame_scale(shape: tuple[int, ...]) -> float:
-    """Scale the DTL trace's frame-bound windows to the active frame."""
-    height, width = shape[-2:]
-    return min(width / _TRACE_REFERENCE_FRAME[0], height / _TRACE_REFERENCE_FRAME[1])
 
 
 @dataclass(frozen=True)
@@ -453,13 +420,6 @@ def _in_output_frame(delivery: ChainedDelivery, offset_deg: float) -> ChainedDel
     )
 
 
-def _bounded_angles(path_deg: float, attack_angle_deg: float) -> bool:
-    return (
-        CHAINED_PATH_RANGE_DEG[0] <= path_deg <= CHAINED_PATH_RANGE_DEG[1]
-        and CHAINED_AOA_RANGE_DEG[0] <= attack_angle_deg <= CHAINED_AOA_RANGE_DEG[1]
-    )
-
-
 def combine_approach_estimates(
     path_estimates: list[ApproachPairEstimate],
     *,
@@ -595,146 +555,6 @@ def _preferred_path_estimate(
 def _window_before_contact(indexes, timestamps_ns: np.ndarray, contact_s: float) -> bool:
     """Whether every frame of a window was exposed before the contact instant (C3)."""
     return all(float(timestamps_ns[int(index)]) / 1e9 < contact_s for index in indexes)
-
-
-def delivery_from_feature_tracks(
-    feature_pixels: np.ndarray,
-    timestamps_s: np.ndarray,
-    radar_ranges_m: np.ndarray,
-    *,
-    ball,
-    geometry: CameraDeliveryGeometry,
-    ops_club_speed_mph: float,
-    timing_plausible: bool,
-) -> ChainedDelivery:
-    """Reconstruct impact delivery from identical features in three frames.
-
-    ``feature_pixels`` is ``[feature, pre/impact/post, xy]``. The central
-    estimate spans pre-to-post; the adjacent intervals are independent quality
-    checks. Tracking identity is established before this geometry function so
-    the launched ball cannot silently replace the clubhead after impact.
-    """
-    pixels = np.asarray(feature_pixels, dtype=float)
-    times = np.asarray(timestamps_s, dtype=float)
-    ranges = np.asarray(radar_ranges_m, dtype=float)
-    if pixels.ndim != 3 or pixels.shape[1:] != (3, 2):
-        return ChainedDelivery(status="rejected_invalid_feature_shape")
-    if pixels.shape[0] < 3:
-        return ChainedDelivery(
-            status="rejected_insufficient_features",
-            n_features=int(pixels.shape[0]),
-        )
-    if times.shape != (3,) or ranges.shape != (3,) or np.any(np.diff(times) <= 0.0):
-        return ChainedDelivery(status="rejected_invalid_timing", n_features=len(pixels))
-    ops_known = bool(ops_club_speed_mph) and math.isfinite(ops_club_speed_mph)
-
-    # IWR supplies one depth history for the club candidate. Never project
-    # static camera texture through that changing depth: it would acquire a
-    # physically convincing but entirely artificial forward velocity.
-    image_motion = np.linalg.norm(pixels[:, 2] - pixels[:, 0], axis=1)
-    moving = image_motion >= CHAINED_MIN_IMAGE_MOTION_PX
-    pixels = pixels[moving]
-    if len(pixels) < 3:
-        return ChainedDelivery(
-            status="rejected_insufficient_moving_features",
-            n_features=int(len(pixels)),
-        )
-
-    positions = np.stack(
-        [
-            _pixels_to_world(pixels[:, frame], ranges[frame], ball=ball, geometry=geometry)
-            for frame in range(3)
-        ],
-        axis=1,
-    )
-    pre_velocity = (positions[:, 1] - positions[:, 0]) / (times[1] - times[0])
-    cross_velocity = (positions[:, 2] - positions[:, 1]) / (times[2] - times[1])
-    central_velocity = (positions[:, 2] - positions[:, 0]) / (times[2] - times[0])
-
-    feature_speeds_mph = np.linalg.norm(central_velocity, axis=1) * 2.23694
-    feature_path = np.array([_velocity_angles(value)[0] for value in central_velocity])
-    feature_aoa = np.array([_velocity_angles(value)[1] for value in central_velocity])
-    plausible = (
-        (feature_speeds_mph > CHAINED_FEATURE_SPEED_RANGE_MPH[0])
-        & (feature_speeds_mph < CHAINED_FEATURE_SPEED_RANGE_MPH[1])
-        & (feature_path > CHAINED_FEATURE_PATH_RANGE_DEG[0])
-        & (feature_path < CHAINED_FEATURE_PATH_RANGE_DEG[1])
-        & (feature_aoa > CHAINED_FEATURE_AOA_RANGE_DEG[0])
-        & (feature_aoa < CHAINED_FEATURE_AOA_RANGE_DEG[1])
-    )
-    if int(plausible.sum()) < 3:
-        return ChainedDelivery(
-            status="rejected_insufficient_physical_features",
-            n_features=int(plausible.sum()),
-        )
-    pre_velocity = pre_velocity[plausible]
-    cross_velocity = cross_velocity[plausible]
-    central_velocity = central_velocity[plausible]
-
-    pre_path, pre_aoa = _velocity_angles(np.median(pre_velocity, axis=0))
-    cross_path, cross_aoa = _velocity_angles(np.median(cross_velocity, axis=0))
-    path_deg, attack_angle_deg = _velocity_angles(np.median(central_velocity, axis=0))
-    feature_speeds_mph = np.linalg.norm(central_velocity, axis=1) * 2.23694
-    speed_mph = float(np.median(feature_speeds_mph))
-    velocity_center = np.median(central_velocity, axis=0)
-    speed_mad_mph = float(
-        np.median(np.linalg.norm(central_velocity - velocity_center, axis=1)) * 2.23694
-    )
-    speed_ratio = speed_mph / ops_club_speed_mph if ops_known else None
-
-    diagnostics = {
-        "speed_mph": round(speed_mph, 2),
-        "speed_ratio_ops": round(speed_ratio, 3) if speed_ratio is not None else None,
-        "velocity_mad_mph": round(speed_mad_mph, 2),
-        "n_features": int(plausible.sum()),
-        "pre_path_deg": round(pre_path, 2),
-        "pre_attack_angle_deg": round(pre_aoa, 2),
-        "cross_path_deg": round(cross_path, 2),
-        "cross_attack_angle_deg": round(cross_aoa, 2),
-    }
-    notes = []
-    if speed_ratio is None:
-        notes.append("no OPS club speed: speed ratio unchecked")
-    elif not _ratio_within(speed_ratio, CHAINED_SPEED_RATIO_RANGE):
-        notes.append(f"outside plausible bounds: speed ratio {speed_ratio:.2f}")
-    if speed_mad_mph > CHAINED_VELOCITY_MAD_MAX_MPH:
-        notes.append(f"outside plausible bounds: velocity MAD {speed_mad_mph:.1f} mph")
-    if not _bounded_angles(path_deg, attack_angle_deg):
-        notes.append(
-            f"outside plausible bounds: path {path_deg:.1f} deg, attack {attack_angle_deg:.1f} deg"
-        )
-    if notes:
-        return _in_output_frame(
-            ChainedDelivery(
-                status="chained_outside_bounds",
-                attack_angle_deg=round(attack_angle_deg, 2),
-                club_path_deg=round(path_deg, 2),
-                confidence_tier="low",
-                path_confidence_tier="low",
-                attack_confidence_tier="low",
-                notes=tuple(notes),
-                **diagnostics,
-            ),
-            geometry.horizontal_offset_deg,
-        )
-
-    intervals_agree = (
-        _bounded_angles(pre_path, pre_aoa)
-        and _bounded_angles(cross_path, cross_aoa)
-        and abs(pre_path - cross_path) <= CHAINED_INTERVAL_AGREEMENT_DEG
-        and abs(pre_aoa - cross_aoa) <= CHAINED_INTERVAL_AGREEMENT_DEG
-    )
-    high = timing_plausible and intervals_agree
-    return _in_output_frame(
-        ChainedDelivery(
-            status="chained_high" if high else "chained_experimental",
-            attack_angle_deg=round(attack_angle_deg, 2),
-            club_path_deg=round(path_deg, 2),
-            confidence_tier="high" if high else "experimental",
-            **diagnostics,
-        ),
-        geometry.horizontal_offset_deg,
-    )
 
 
 def _delivery_from_feature_pair(
@@ -1234,33 +1054,6 @@ def _clubhead_pair_tracks(
         )
         if anchor is None:
             _refuse(reasons, f"{label} frame {index}: {refusal}")
-            return None, (anchors[0].thickness_px if anchors else None)
-        anchors.append(anchor)
-    tracks = np.stack([anchor.hosel_points() for anchor in anchors], axis=1)
-    return tracks, anchors[0].thickness_px
-
-
-def _clubhead_feature_tracks(
-    frames: np.ndarray,
-    background: np.ndarray,
-    ball,
-    *,
-    impact_idx: int,
-    bright_now: float,
-    dark_bg: float,
-) -> tuple[np.ndarray | None, float | None]:
-    """The clubhead's hosel points from pre-impact through post-impact.
-
-    Same localisation as ``_clubhead_pair_tracks``, in each of the three frames.
-    """
-    del bright_now, dark_bg
-    indexes = (impact_idx - 1, impact_idx, impact_idx + 1)
-    if indexes[0] < 0 or indexes[-1] >= len(frames):
-        return None, None
-    anchors = []
-    for index in indexes:
-        anchor, _refusal = _clubhead_anchor(frames[index], background, ball)
-        if anchor is None:
             return None, (anchors[0].thickness_px if anchors else None)
         anchors.append(anchor)
     tracks = np.stack([anchor.hosel_points() for anchor in anchors], axis=1)
@@ -2076,89 +1869,6 @@ def _head_track_camera(ball, geometry: CameraDeliveryGeometry, context: HeadTrac
     return camera, (None if ball is None else (float(ball.x), float(ball.y))), range_m
 
 
-# Measured AoA offsets (TrackMan July baseline minus radar candidate median,
-# 2026-08-07 session, impact time corrected -2 ms). Keyed by nominal loft.
-# The iron points are monotone with loft; irons/wedges interpolate along
-# that line. The driver's offset is its own measurement (different head
-# geometry entirely); woods and hybrids borrow it as the nearest club class.
-_IRON_OFFSET_ANCHORS: tuple[tuple[float, float], ...] = (
-    (27.0, 9.1),  # 5-iron
-    (34.0, 10.5),  # 7-iron
-    (42.0, 16.0),  # 9-iron
-)
-_DRIVER_OFFSET_DEG = 21.6
-
-_IRON_LIKE = {
-    ClubType.IRON_2,
-    ClubType.IRON_3,
-    ClubType.IRON_4,
-    ClubType.IRON_5,
-    ClubType.IRON_6,
-    ClubType.IRON_7,
-    ClubType.IRON_8,
-    ClubType.IRON_9,
-    ClubType.PW,
-    ClubType.GW,
-    ClubType.SW,
-    ClubType.LW,
-}
-
-
-@dataclass(frozen=True)
-class TraceResult:
-    """Camera delivery-plane trace for one capture."""
-
-    status: str  # ok | low_light | overexposed | no_ball | no_impact |
-    # impact_implausible | insufficient_pairs | error
-    trace_deg: float | None = None
-    n_pairs: int = 0
-    match_scores: tuple[float, ...] = ()
-    scene_p995: float | None = None
-    impact_frame: int | None = None
-    detail: str | None = None
-
-
-@dataclass(frozen=True)
-class FusedDelivery:
-    """Offset-corrected AoA and trace-derived club path."""
-
-    status: str  # fused | no_radar_aoa | trace_<status> | trace_out_of_range
-    attack_angle_deg: float | None = None
-    club_path_deg: float | None = None
-    aoa_offset_deg: float | None = None
-    offset_source: str | None = None  # measured | loft_interpolated | class_extrapolated
-    trace_deg: float | None = None
-
-
-_MEASURED_OFFSETS: dict[ClubType, float] = {
-    ClubType.IRON_5: 9.1,
-    ClubType.IRON_7: 10.5,
-    ClubType.IRON_9: 16.0,
-    ClubType.DRIVER: _DRIVER_OFFSET_DEG,
-}
-
-
-def aoa_offset_for_club(club: ClubType) -> tuple[float, str]:
-    """Per-club AoA calibration offset and how it was obtained.
-
-    Measured clubs return their measured offsets exactly. Other irons and
-    wedges interpolate/extrapolate the measured iron anchors along nominal
-    loft; woods and hybrids borrow the driver's offset as the nearest
-    head-geometry class. UNKNOWN gets the iron line at a mid-iron loft.
-    """
-    measured = _MEASURED_OFFSETS.get(club)
-    if measured is not None:
-        return measured, "measured"
-    if club in _IRON_LIKE or club is ClubType.UNKNOWN:
-        loft = get_club_physics(club).nominal_loft_deg
-        lofts = np.array([anchor[0] for anchor in _IRON_OFFSET_ANCHORS])
-        offsets = np.array([anchor[1] for anchor in _IRON_OFFSET_ANCHORS])
-        offset = float(np.interp(loft, lofts, offsets))
-        return round(offset, 2), "loft_interpolated"
-    # woods / hybrids: nearest measured class is the driver's hollow head
-    return _DRIVER_OFFSET_DEG, "class_extrapolated"
-
-
 def _adaptive_thresholds(background: np.ndarray) -> tuple[float, float, float, float]:
     """(scene_p995, ball_threshold, bright_now, dark_bg) for one capture."""
     scene_p995 = float(np.percentile(background, 99.5))
@@ -2361,216 +2071,4 @@ def camera_contact_time(
             if trigger_index is not None and 0 <= trigger_index < len(timestamps)
             else None
         ),
-    )
-
-
-def _club_mask(
-    frame: np.ndarray, background: np.ndarray, bright_now: float, dark_bg: float
-) -> np.ndarray:
-    return ((frame > bright_now) & (background < dark_bg)).astype(np.uint8)
-
-
-def _head_end(mask: np.ndarray, ball) -> tuple[float, float] | None:
-    """Ball-side extremal point of the club component nearest the ball."""
-    import cv2  # pylint: disable=import-outside-toplevel
-
-    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    best = None
-    for label in range(1, n_labels):
-        if stats[label, cv2.CC_STAT_AREA] < MIN_CLUB_COMPONENT_PX:
-            continue
-        distance = math.hypot(centroids[label][0] - ball.x, centroids[label][1] - ball.y)
-        if best is None or distance < best[0]:
-            best = (distance, label)
-    if best is None or best[0] > MAX_COMPONENT_BALL_DIST_PX:
-        return None
-    ys, xs = np.nonzero(labels == best[1])
-    points = np.column_stack([xs, ys]).astype(np.float64)
-    centered = points - points.mean(axis=0)
-    _, _, vt = np.linalg.svd(centered, full_matrices=False)
-    projections = centered @ vt[0]
-    low = points[projections <= projections.min() + TIP_BAND_PX].mean(axis=0)
-    high = points[projections >= projections.max() - TIP_BAND_PX].mean(axis=0)
-    head = min((low, high), key=lambda end: math.hypot(end[0] - ball.x, end[1] - ball.y))
-    return float(head[0]), float(head[1])
-
-
-def _crop(image: np.ndarray, cx: float, cy: float, half: int) -> np.ndarray | None:
-    x0, x1 = int(round(cx)) - half, int(round(cx)) + half
-    y0, y1 = int(round(cy)) - half, int(round(cy)) + half
-    if x0 < 0 or y0 < 0 or x1 > image.shape[1] or y1 > image.shape[0]:
-        return None
-    return image[y0:y1, x0:x1]
-
-
-def estimate_delivery_trace(
-    frames: np.ndarray,
-    host_timestamp_ns: np.ndarray,
-    trigger_index: int | None = None,
-) -> TraceResult:
-    """Delivery-plane trace from one DTL capture (frames, per-frame host ns).
-
-    trace = atan2(v_vertical, v_lateral) of the clubhead's transverse motion,
-    measured by binary-mask correlation of the club component across the
-    frame pairs bracketing impact.
-    """
-    import cv2  # pylint: disable=import-outside-toplevel
-
-    if frames.ndim != 3 or len(frames) < 20:
-        return TraceResult(status="error", detail="frames must be (n>=20, h, w)")
-    background = np.median(frames[:15], axis=0)
-    scene_p995, ball_threshold, bright_now, dark_bg = _adaptive_thresholds(background)
-    if scene_p995 < SCENE_P995_MIN:
-        return TraceResult(status="low_light", scene_p995=scene_p995)
-    saturated_global = float(np.mean(background >= 250))
-    try:
-        ball = detect_reference_ball(
-            frames,
-            brightness_threshold=int(ball_threshold),
-            pixel_scale=ball_pixels.pixel_scale(frames.shape[2]),
-        )
-    except ValueError:
-        status = "overexposed" if saturated_global > GLOBAL_SATURATION_HINT else "no_ball"
-        return TraceResult(
-            status=status, scene_p995=scene_p995, detail=f"saturated_frac={saturated_global:.3f}"
-        )
-    yy, xx = np.mgrid[0 : frames.shape[1], 0 : frames.shape[2]]
-    image_scale = _frame_scale(frames.shape)
-    ball_zone_radius = max(50.0, BALL_ZONE_RADIUS_PX * image_scale)
-    ball_zone = (xx - ball.x) ** 2 + (yy - ball.y) ** 2 <= ball_zone_radius**2
-    saturated_zone = float(np.mean(background[ball_zone] >= 250))
-    if saturated_zone > BALL_ZONE_SATURATION_MAX:
-        return TraceResult(
-            status="overexposed",
-            scene_p995=scene_p995,
-            detail=f"ball_zone_saturated_frac={saturated_zone:.3f}",
-        )
-    impact_idx = _detect_impact_index(frames, ball, trigger_index=trigger_index)
-    if impact_idx is None:
-        return TraceResult(status="no_impact", scene_p995=scene_p995)
-    if trigger_index is not None and not (
-        trigger_index - IMPACT_PRE_TRIGGER_MAX
-        <= impact_idx
-        <= trigger_index + IMPACT_POST_TRIGGER_MAX
-    ):
-        return TraceResult(
-            status="impact_implausible",
-            scene_p995=scene_p995,
-            impact_frame=impact_idx,
-            detail=f"trigger_index={trigger_index}",
-        )
-
-    masks: dict[int, np.ndarray] = {}
-    heads: dict[int, tuple[float, float] | None] = {}
-    for offset in range(min(PAIR_OFFSETS), max(PAIR_OFFSETS) + 2):
-        idx = impact_idx + offset
-        if 0 <= idx < len(frames):
-            masks[idx] = _club_mask(frames[idx], background, bright_now, dark_bg)
-            heads[idx] = _head_end(masks[idx], ball)
-
-    velocities: list[tuple[float, float]] = []
-    scores: list[float] = []
-    patch_half = max(16, round(PATCH_HALF_PX * image_scale))
-    search_half = max(patch_half + 12, round(SEARCH_HALF_PX * image_scale))
-    for offset in PAIR_OFFSETS:
-        first, second = impact_idx + offset, impact_idx + offset + 1
-        if first not in masks or second not in masks or heads.get(first) is None:
-            continue
-        head = heads[first]
-        template = _crop(masks[first].astype(np.float32), head[0], head[1], patch_half)
-        window = _crop(masks[second].astype(np.float32), head[0], head[1], search_half)
-        if template is None or window is None or template.sum() < 30:
-            continue
-        response = cv2.matchTemplate(window, template, cv2.TM_CCORR_NORMED)
-        _, score, _, location = cv2.minMaxLoc(response)
-        if score < MIN_MATCH_SCORE:
-            continue
-        dx = location[0] - (search_half - patch_half)
-        dy = location[1] - (search_half - patch_half)
-        if math.hypot(dx, dy) < MIN_PAIR_STEP_PX:
-            continue  # self-match on a static blob, not club motion
-        dt_s = (int(host_timestamp_ns[second]) - int(host_timestamp_ns[first])) / 1e9
-        if dt_s <= 0:
-            continue
-        velocities.append((dx / dt_s, dy / dt_s))
-        scores.append(float(score))
-
-    if len(velocities) < MIN_PAIRS:
-        return TraceResult(
-            status="insufficient_pairs",
-            n_pairs=len(velocities),
-            scene_p995=scene_p995,
-            impact_frame=impact_idx,
-        )
-    v_x = float(np.median([v[0] for v in velocities]))
-    v_y = float(np.median([v[1] for v in velocities]))
-    trace_deg = math.degrees(math.atan2(-v_y, abs(v_x)))
-    return TraceResult(
-        status="ok",
-        trace_deg=round(trace_deg, 2),
-        n_pairs=len(velocities),
-        match_scores=tuple(round(s, 3) for s in scores),
-        scene_p995=round(scene_p995, 1),
-        impact_frame=impact_idx,
-    )
-
-
-def fuse_club_delivery(
-    radar_attack_angle_deg: float | None,
-    trace: TraceResult,
-    club: ClubType,
-) -> FusedDelivery:
-    """Offset-correct the radar AoA candidate and derive club path.
-
-    tan(path) = tan(AoA_corrected) / tan(trace). Both outputs are
-    experimental until the per-club offsets are TrackMan-validated.
-    """
-    offset_deg, offset_source = aoa_offset_for_club(club)
-    if radar_attack_angle_deg is None:
-        return FusedDelivery(
-            status="no_radar_aoa",
-            aoa_offset_deg=offset_deg,
-            offset_source=offset_source,
-            trace_deg=trace.trace_deg,
-        )
-    attack_angle_deg = radar_attack_angle_deg + offset_deg
-    if trace.status != "ok" or trace.trace_deg is None:
-        return FusedDelivery(
-            status=f"trace_{trace.status}",
-            attack_angle_deg=round(attack_angle_deg, 1),
-            aoa_offset_deg=offset_deg,
-            offset_source=offset_source,
-        )
-    lo, hi = TRACE_ABS_RANGE_DEG
-    if not lo <= abs(trace.trace_deg) <= hi:
-        return FusedDelivery(
-            status="trace_out_of_range",
-            attack_angle_deg=round(attack_angle_deg, 1),
-            aoa_offset_deg=offset_deg,
-            offset_source=offset_source,
-            trace_deg=trace.trace_deg,
-        )
-    # trace = atan2(tan AoA, tan path), so its sign IS the AoA's sign. A
-    # mismatch means the camera locked onto the wrong mover (e.g. the flying
-    # ball), so the path would be fabricated.
-    if math.copysign(1.0, trace.trace_deg) != math.copysign(1.0, attack_angle_deg):
-        return FusedDelivery(
-            status="trace_aoa_sign_mismatch",
-            attack_angle_deg=round(attack_angle_deg, 1),
-            aoa_offset_deg=offset_deg,
-            offset_source=offset_source,
-            trace_deg=trace.trace_deg,
-        )
-    path_deg = math.degrees(
-        math.atan(
-            math.tan(math.radians(attack_angle_deg)) / math.tan(math.radians(trace.trace_deg))
-        )
-    )
-    return FusedDelivery(
-        status="fused",
-        attack_angle_deg=round(attack_angle_deg, 1),
-        club_path_deg=round(path_deg, 1),
-        aoa_offset_deg=offset_deg,
-        offset_source=offset_source,
-        trace_deg=trace.trace_deg,
     )

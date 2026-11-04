@@ -1011,6 +1011,7 @@
   "tests/test_camera_club_heel_corner.py": "FUSION",
   "tests/test_club_no_post_contact_window.py": "FUSION",
   "tests/test_club_attack_no_extrapolation.py": "FUSION",
+  "tests/test_club_dead_routes_removed.py": "FUSION",
   "tests/test_club_contact_persistence.py": "FUSION",
   "tests/test_camera_club_delivery_field.py": "RESEARCH",
   "tests/test_camera_club_delivery_head.py": "FUSION",
