@@ -4,7 +4,9 @@ import base64
 import os
 import struct
 import zlib
+from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from run_joint_clock import load_package
@@ -13,6 +15,10 @@ load_package(Path(os.environ["OPENFLIGHT_CLOCK_PACKAGE"]))
 from joint_clock_active import CONFIGURATION  # noqa: E402
 from joint_shot_clock import PROFILE, TRIGGER_COMMANDS, ShotCollector  # noqa: E402
 from test_joint_clock_active import WIRE  # noqa: E402
+from usb_collector import ExchangeError  # noqa: E402
+
+from openflight.iwr6843 import driver  # noqa: E402
+from openflight.iwr6843.dump import HEADER  # noqa: E402
 
 
 class ShotPort(WIRE.Port):
@@ -23,15 +29,36 @@ class ShotPort(WIRE.Port):
         self.ball_bin = 51
         self.active = self.enabled = False
         self.generation, self.shot = 0, 1
+        self.completed_shots = 0
         struct.pack_into("<I", self.result, 4, self.shot)
+        self.dump_payload = HEADER.pack(b"ILD1", 1, 1, 1, 1, 1, 1, 0, 0, 0, 3000) + b"\0" * 4
+        self.dump_reply = self.dump_payload + b"Done\n" + WIRE.PROMPT
+
+    def complete_shot(self):
+        # l3_dump.c builds each result with ++gShotId; rearm never resets that ID.
+        self.completed_shots += 1
+        self.shot = self.completed_shots
+        struct.pack_into("<I", self.result, 4, self.shot)
+        self.active, self.held = False, True
+
+    def reset_input_buffer(self):
+        assert not self.pending
 
     def write(self, data):
         command = data.decode().strip()
+        if command == "l3dump":
+            assert not self.pending
+            self.writes.append(data)
+            self.pending = self.dump_reply
+            # rc_reset runs on dump/release rearm and sensorStart, not sensorStop.
+            self.generation += 1
+            self.active, self.held = True, False
+            return len(data)
         if command in self.allowed or command == "stats":
             assert not self.pending
             self.writes.append(data)
             if command == "sensorStart":
-                self.active, self.enabled = True, False
+                self.active, self.enabled, self.held = True, False, False
                 self.generation += 1
             elif command == "sensorStop":
                 self.active = False
@@ -49,7 +76,9 @@ class ShotPort(WIRE.Port):
             return len(data)
         count = super().write(data)
         if command == "triggerLog result":
-            self.pending = self.pending.replace(b"result shot=7", b"result shot=1")
+            self.pending = self.pending.replace(
+                b"result shot=7", f"result shot={self.shot}".encode()
+            )
         elif command.startswith("triggerLog resultClock"):
             values = list(WIRE.PACKET.unpack(self.pending[: WIRE.PACKET.size]))
             values[1 + WIRE.FIELDS.index("shot_id")] = self.shot
@@ -97,6 +126,145 @@ def test_real_serial_parser_collects_bound_result_before_any_raw_dump(chunk):
     assert all(b"l3dump\n" != value and b"l3release" not in value for value in port.writes)
     collector.finish()
     assert collector.state["stop_verified"]
+
+
+def dump_reader(port, monkeypatch):
+    radar = object.__new__(driver.IWR6843Radar)
+    radar.ser = port
+
+    def seconds():
+        port.clock.ns += 10_000_000
+        return port.clock.ns / 1e9
+
+    monkeypatch.setattr(
+        driver,
+        "time",
+        SimpleNamespace(time=seconds, monotonic=seconds, monotonic_ns=port.clock),
+    )
+    return radar
+
+
+@pytest.mark.parametrize("chunk", [1, 17, 65536])
+def test_successive_parser_results_keep_independent_shot_and_rearm_identities(chunk, monkeypatch):
+    collector, port = wire(chunk)
+    radar = dump_reader(port, monkeypatch)
+    first = None
+    for shot_id, generation in ((1, 1), (2, 3)):
+        collector.begin()
+        index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+        collector.arm(index)
+        port.complete_shot()
+        held = collector.wait_result(lambda *_: None, lambda: False)
+        assert held["record"]["shot_id"] == shot_id
+        assert held["record"]["generation"] == generation
+        assert struct.unpack_from("<I", base64.b64decode(held["result_b64"]), 4)[0] == shot_id
+        assert collector.next_shot == shot_id + 1
+        if first is None:
+            first, saved = held, deepcopy(held)
+        raw, evidence = collector.read_raw_dump(radar)
+        assert raw == port.dump_payload
+        assert evidence["transfer_timing"]["cli_ready_ns"] is not None
+        assert collector.generation == port.generation == generation + 1
+        assert not port.held and port.active and not port.pending
+        collector.finish()
+        assert collector.state["stop_verified"] and not port.active
+        assert first == saved
+    assert port.writes.count(b"l3dump\n") == 2
+    assert b"l3release\n" not in port.writes
+
+
+@pytest.mark.parametrize("stale_field", ["shot_id", "generation"])
+def test_previous_result_identity_is_refused_after_successful_dump_and_rearm(
+    stale_field, monkeypatch
+):
+    collector, port = wire()
+    collector.begin()
+    port.complete_shot()
+    first = collector.wait_result(lambda *_: None, lambda: False)
+    saved = deepcopy(first)
+    collector.read_raw_dump(dump_reader(port, monkeypatch))
+    collector.finish()
+    collector.begin()
+    port.complete_shot()
+    if stale_field == "shot_id":
+        port.shot = 1
+        struct.pack_into("<I", port.result, 4, 1)
+    else:
+        port.generation = 1
+    with pytest.raises(ValueError):
+        collector.wait_result(lambda *_: None, lambda: False)
+    assert collector.failed and collector.next_shot == 2
+    writes = list(port.writes)
+    collector.finish()
+    with pytest.raises(ValueError, match="fresh identified runtime required"):
+        collector.begin()
+    assert port.writes == writes and first == saved
+
+
+@pytest.mark.parametrize("failure", ["partial_payload", "missing_completion", "restart_error"])
+def test_dump_failure_keeps_generation_and_blocks_all_further_writes(failure, monkeypatch):
+    collector, port = wire()
+    collector.begin()
+    port.complete_shot()
+    held = collector.wait_result(lambda *_: None, lambda: False)
+    saved = deepcopy(held)
+    replies = {
+        "partial_payload": port.dump_payload[:-2],
+        "missing_completion": port.dump_payload,
+        "restart_error": port.dump_payload + b"Error: RF restart failed\nError -1\n" + WIRE.PROMPT,
+    }
+    port.dump_reply = replies[failure]
+    with pytest.raises(driver.IWR6843DumpRecoveryError) as raised:
+        collector.read_raw_dump(dump_reader(port, monkeypatch))
+    assert raised.value.raw == replies[failure][: len(port.dump_payload)]
+    assert collector.failed and collector.generation == 1 and collector.next_shot == 2
+    writes = list(port.writes)
+    collector.finish()
+    with pytest.raises(ValueError, match="fresh identified runtime required"):
+        collector.begin()
+    with pytest.raises(ExchangeError, match="uncertain"):
+        collector.snapshot()
+    with pytest.raises(ValueError, match="uncertain UART"):
+        collector.read_raw_dump(dump_reader(port, monkeypatch))
+    assert port.writes == writes and held == saved
+
+
+def test_quiet_timeout_can_stop_and_rearm_without_consuming_a_shot_id():
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    collector.deadline_ns = collector.now() + 200_000_000
+    with pytest.raises(TimeoutError, match="no held IWR result"):
+        collector.wait_result(lambda *_: None, lambda: False)
+    assert collector.trigger_observation is None and collector.next_shot == 1
+    assert not collector.failed
+    collector.finish()
+    collector.begin()
+    port.complete_shot()
+    held = collector.wait_result(lambda *_: None, lambda: False)
+    assert held["record"]["shot_id"] == 1 and held["record"]["generation"] == 2
+    collector.finish()
+
+
+def test_result_lost_after_trigger_does_not_resynchronize_from_later_unbound_result():
+    """Losing a built result requires a fresh runtime to recover the shot counter."""
+    collector, port = wire()
+    collector.begin()
+    index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+    collector.arm(index)
+    port.active, port.held = True, True
+    collector.deadline_ns = collector.now() + 200_000_000
+    with pytest.raises(TimeoutError):
+        collector.wait_result(lambda *_: None, lambda: False)
+    assert collector.trigger_observation is not None and collector.next_shot == 1
+    port.complete_shot()
+    collector.finish()
+    collector.begin()
+    port.complete_shot()
+    with pytest.raises(ValueError):
+        collector.wait_result(lambda *_: None, lambda: False)
+    assert port.shot == 2 and collector.next_shot == 1 and collector.failed
 
 
 @pytest.mark.parametrize("field,value", [("shot", 8), ("generation", 0)])
