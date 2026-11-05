@@ -342,6 +342,8 @@ def replay_full_shot(
             if look is not None and seed_source.startswith("authenticated"):
                 seed["seed"] = server._reference_ball_from_look(look)
             shot = _fresh_ops(entry, start, number, sample_rate, club)
+            server._open_carry_status(shot)
+            server._open_smash_factor_status(shot)
             timestamp = record.get("timestamp") or record.get("ts") or start.get("start_time")
             if timestamp is None:
                 return {

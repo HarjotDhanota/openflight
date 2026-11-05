@@ -2,6 +2,7 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from openflight import full_shot_replay, server, shot_metrics
@@ -87,6 +88,18 @@ def test_raw_benchmark_call_does_not_implicitly_run_full_pipeline(tmp_path):
 
 def test_impact_and_final_metrics_use_production_publication_serialization(tmp_path, monkeypatch):
     root, session = prepared_signals(tmp_path)
+    events = [json.loads(line) for line in session.read_text().splitlines()]
+    entry = next(event for event in events if event["type"] == "rolling_buffer_capture")
+    times = np.arange(4096) / 30000
+    speed = np.where(times < 0.068, 75.0, 100.7) / 2.23694
+    phase = 2 * np.pi * np.cumsum(2 * speed / 0.01243) / 30000
+    entry.update(
+        sample_time=0.0,
+        trigger_time=0.068,
+        i_samples=(2048 + 500 * np.cos(phase)).astype(int).tolist(),
+        q_samples=(2048 + 500 * np.sin(phase)).astype(int).tolist(),
+    )
+    session.write_text("".join(json.dumps(event) + "\n" for event in events))
     shots, jobs = [], []
     produce_ops = full_shot_replay._fresh_ops
 
@@ -107,3 +120,6 @@ def test_impact_and_final_metrics_use_production_publication_serialization(tmp_p
     fresh = replay_raw_fusion.replay(runner._replay_args(session, 1, root))["stages"]["full_shot"]
     assert jobs and "impact" not in fresh["errors"]
     assert fresh["metrics"] == server.shot_to_dict(shots[-1])["metrics"]
+    assert fresh["metrics"]["club_speed"]["value"] > 0
+    assert fresh["metrics"]["smash_factor"]["value"] > 1
+    assert fresh["metrics"]["smash_factor"]["source"] == shot_metrics.SMASH_RADIAL_SOURCE
