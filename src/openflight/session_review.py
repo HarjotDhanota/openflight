@@ -585,6 +585,45 @@ def _kiosk_metric_lines(metrics: list[Mapping[str, Any]]) -> list[str]:
     return lines
 
 
+def _ops_coverage_lines(capture: Mapping[str, Any]) -> list[str]:
+    coverage = mapping(capture.get("ops_buffer_coverage"))
+    if not coverage:
+        status = capture.get("ops_buffer_coverage_status", "missing")
+        return [f"- OPS retained coverage: {status}; ball/club coverage unknown"]
+    shown = {
+        key: f"{_fmt(coverage[key])} ms" if finite(coverage.get(key)) is not None else "unknown"
+        for key in (
+            "planned_history_before_request_ms",
+            "planned_after_request_ms",
+            "buffer_ms",
+            "last_window_centre_ms",
+            "ball_first_ms",
+            "ball_last_ms",
+            "ball_visible_ms",
+            "history_before_ball_ms",
+            "club_first_ms",
+        )
+    }
+    split = coverage.get("ops_pre_trigger_segments")
+    split_label = (
+        f"S#{split}" if isinstance(split, int) and not isinstance(split, bool) else "unknown"
+    )
+    reaches = coverage.get("ball_reaches_buffer_end")
+    reaches_label = "yes" if reaches is True else "no" if reaches is False else "unknown"
+    return [
+        f"- OPS nominal split: {split_label}; "
+        f"before request={shown['planned_history_before_request_ms']}; "
+        f"after request={shown['planned_after_request_ms']}",
+        f"- OPS retained buffer={shown['buffer_ms']}; "
+        f"last window centre={shown['last_window_centre_ms']}; "
+        f"club first={shown['club_first_ms']}",
+        f"- OPS selected ball support: first={shown['ball_first_ms']}; "
+        f"last={shown['ball_last_ms']}; visible={shown['ball_visible_ms']}; "
+        f"history before ball={shown['history_before_ball_ms']}; "
+        f"reaches buffer end={reaches_label}",
+    ]
+
+
 def report_markdown(review: Mapping[str, Any]) -> str:
     """A plain summary that reads without any viewer."""
     lines = [
@@ -628,6 +667,7 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                     f"- {capture['attempt']}: published={capture['published']}; "
                     f"{capture['decision'].get('reason')}; evidence={capture['evidence_directory']}"
                 )
+                lines.extend(_ops_coverage_lines(capture))
             lines.extend(f"- limitation: {reason}" for reason in comparison["limitations"])
         lines.append("")
         for attempt in review.get("attempts") or []:

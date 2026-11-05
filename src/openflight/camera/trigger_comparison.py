@@ -33,6 +33,15 @@ def _relative(path, root):
         return None
 
 
+def _buffer_coverage(path):
+    if not path.exists():
+        return None, "missing"
+    record = _json(path, None)
+    if not isinstance(record, dict) or record.get("schema") != "openflight.ops-buffer-coverage.v1":
+        return None, "malformed"
+    return record, "recorded"
+
+
 def _attempt(folder, run, root):
     result = _json(folder / "RESULT.json", {})
     association = _json(folder / "fusion-association.json", {})
@@ -153,6 +162,7 @@ def _attempt(folder, run, root):
     published = next(
         (row.get("host_mono_ns") for row in publication if row.get("stage") == "published"), None
     )
+    coverage, coverage_status = _buffer_coverage(folder / "ops-coverage.json")
     return {
         "attempt": folder.relative_to(run).as_posix(),
         "settings": settings,
@@ -166,6 +176,8 @@ def _attempt(folder, run, root):
         "routing": routes,
         "controls": controls,
         "ops_sample_coverage": _rows(folder / "ops-camera/ops-summary.jsonl"),
+        "ops_buffer_coverage": coverage,
+        "ops_buffer_coverage_status": coverage_status,
         "iwr_clock": held.get("mapping"),
         "camera_clips": clips,
         "ops_retained": ops,
@@ -312,6 +324,10 @@ def build_comparison(run, root, events=()):
             "absent or invalid traces cannot establish screen latency or physical presentation.",
             "Sound baseline uses existing trigger records and operator tally; "
             "native exposure is unmeasured for sound runs.",
+            "OPS retained coverage uses selected spectral window centres relative to capture start, "
+            "not physical contact. Selected ball support ending early does not prove signal loss. "
+            "Nominal split windows are relative to the request; neither qualifies physical timing "
+            "and they do not qualify accuracy.",
         ],
         "physical_timing_qualified": False,
     }

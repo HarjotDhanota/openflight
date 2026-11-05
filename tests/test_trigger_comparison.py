@@ -7,7 +7,7 @@ import pytest
 
 from openflight.camera.trigger_comparison import build_comparison
 from openflight.camera.trigger_policy import snapshot
-from openflight.session_review import build_session_review
+from openflight.session_review import build_session_review, report_markdown
 
 
 def write(path, data):
@@ -169,6 +169,100 @@ def test_normal_review_includes_native_attempts_without_any_published_shot(tmp_p
     assert native["attempts"][0]["iwr_retained"]
     assert native["attempts"][0]["observed_armed_ns"] == 60_000_000_000
     assert not native["attempts"][0]["published"]
+
+
+def retained_coverage(*, ball=True, reaches=False):
+    return {
+        "schema": "openflight.ops-buffer-coverage.v1",
+        "ops_pre_trigger_segments": 12,
+        "planned_history_before_request_ms": 51.2,
+        "planned_after_request_ms": 85.33333333333333,
+        "buffer_ms": 136.53333333333333,
+        "last_window_centre_ms": 132.26666666666665,
+        "ball_first_ms": 64.0 if ball else None,
+        "ball_last_ms": 112.0 if ball else None,
+        "ball_visible_ms": 48.0 if ball else None,
+        "history_before_ball_ms": 64.0 if ball else None,
+        "ball_reaches_buffer_end": reaches if ball else None,
+        "club_first_ms": 19.2,
+        "physical_contact_time": None,
+    }
+
+
+@pytest.mark.parametrize(("ball", "reaches"), [(True, True), (True, False), (False, None)])
+def test_normal_review_shows_saved_retained_coverage_without_changing_evidence(
+    tmp_path, ball, reaches
+):
+    run = tmp_path / "tester/arm5/paired/run-01"
+    name, folder = attempt(run, 1)
+    coverage = retained_coverage(ball=ball, reaches=reaches)
+    write(folder / "ops-coverage.json", coverage)
+    summary = {"sample_count": 4096, "sample_rate_hz": 30000}
+    (folder / "ops-camera/ops-summary.jsonl").write_text(json.dumps(summary) + "\n")
+    before = {
+        path.relative_to(tmp_path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    review = build_session_review(tmp_path, "tester", analysis={})
+    comparison = review["runs"][0]["trigger_comparison"]
+    item = comparison["attempts"][0]
+    assert item["attempt"] == name
+    assert item["ops_buffer_coverage"] == coverage
+    assert item["ops_buffer_coverage_status"] == "recorded"
+    assert item["ops_sample_coverage"] == [summary]
+    assert not item["physical_timing_qualified"]
+    assert comparison["counts"]["unlabelled_attempts"] == 1
+    assert comparison["counts"]["labelled_false_captures_per_observed_armed_minute"] is None
+    markdown = report_markdown(review)
+    assert "OPS nominal split: S#12; before request=51.2 ms; after request=85.3 ms" in markdown
+    assert "retained buffer=136.5 ms; last window centre=132.3 ms" in markdown
+    assert "club first=19.2 ms" in markdown
+    assert "not physical contact" in markdown
+    assert "do not qualify accuracy" in markdown
+    if ball:
+        assert "selected ball support: first=64.0 ms; last=112.0 ms; visible=48.0 ms" in markdown
+        assert (
+            f"history before ball=64.0 ms; reaches buffer end={'yes' if reaches else 'no'}"
+            in markdown
+        )
+    else:
+        assert "selected ball support: first=unknown; last=unknown; visible=unknown" in markdown
+        assert "history before ball=unknown; reaches buffer end=unknown" in markdown
+    after = {
+        path.relative_to(tmp_path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    ("contents", "status"),
+    [
+        (None, "missing"),
+        ("{partial", "malformed"),
+        ("[]", "malformed"),
+        ("null", "malformed"),
+        ("{}", "malformed"),
+    ],
+)
+def test_normal_review_distinguishes_missing_and_malformed_retained_coverage(
+    tmp_path, contents, status
+):
+    run = tmp_path / "tester/arm5/paired/run-01"
+    _, folder = attempt(run, 1)
+    if contents is not None:
+        (folder / "ops-coverage.json").write_text(contents)
+    review = build_session_review(tmp_path, "tester", analysis={})
+    item = review["runs"][0]["trigger_comparison"]["attempts"][0]
+    assert item["ops_buffer_coverage"] is None
+    assert item["ops_buffer_coverage_status"] == status
+    markdown = report_markdown(review)
+    assert f"OPS retained coverage: {status}; ball/club coverage unknown" in markdown
+    assert "before request=0" not in markdown
+    assert "history before ball=0" not in markdown
 
 
 def test_sound_report_uses_original_baseline_events_and_keeps_unknown_exposure(tmp_path):
