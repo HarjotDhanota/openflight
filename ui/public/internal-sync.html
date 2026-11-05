@@ -5,41 +5,70 @@
 <title>Internal-trigger capture · OpenFlight tester</title>
 <style>
 :root{color-scheme:dark;font-size:clamp(16px,1.8vw,22px)}*{box-sizing:border-box}body{margin:0;background:#0b1521;color:#e2edf8;font:1rem/1.5 system-ui,sans-serif}main{max-width:60rem;margin:auto;padding:1rem}h1{font-size:1.7rem;margin:.6rem 0}h2{font-size:1.2rem}a{color:#87d9ff}section{padding:1rem;background:#142236;border:1px solid #344a62;border-radius:.6rem;margin:1rem 0}.notice{border-left:.25rem solid #ffcc79;padding:.7rem 1rem;background:#29271f}.actions{display:flex;flex-wrap:wrap;gap:.7rem}button{font:inherit;min-height:3rem;padding:.55rem 1rem;color:#e2edf8;background:#254c60;border:1px solid #72cbd5;border-radius:.4rem;touch-action:manipulation;cursor:pointer}button:disabled{opacity:.5;cursor:default}#stop{background:#653035;border-color:#ed9e97}#phase{font-size:1.3rem;color:#70e3cf;font-weight:650}.muted{color:#a9bdd1}#error{color:#ffb2a5;white-space:pre-wrap}#attempts{overflow:auto;max-height:30rem;touch-action:pan-y}.attempt{border-bottom:1px solid #344a62;padding:1rem 0}.attempt a{display:inline-block;margin:.4rem .7rem .4rem 0;min-height:2.3rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}details{margin:.8rem 0}
+main{padding:.65rem 1rem}h1{font-size:1.25rem;margin:0}section{margin:.65rem 0;padding:.75rem}#instruction{font-size:1.45rem;line-height:1.2;margin:.4rem 0}#message{margin:.45rem 0}.actions{gap:.5rem}#connection{margin:.35rem 0;font-size:.8rem}#deadline{margin:.35rem 0;padding:.3rem .55rem;font-size:.8rem}#progress{font-size:.8rem}#phase{font-size:.85rem}#error:empty{display:none}main,#attempts,button,a,summary{touch-action:pan-y}#attempts{max-height:18rem}#stop{margin-left:auto}ol{padding-left:1.3rem}@media(max-height:480px){#instruction{font-size:1.2rem}button{min-height:2.7rem}section[aria-live]>p.muted:last-of-type{font-size:.75rem;margin:.3rem 0}}
 </style>
 <main>
-<a href="/">← Tester</a>
-<h1>Internal-trigger sensor capture</h1>
-<p>Record the IWR self-trigger, OPS self-trigger and camera frames together. Each attempt keeps the original data, including partial captures and dry swings.</p>
-<p class="notice">Timing experiment: physical sub-ms synchronization, impact timing and metric accuracy are not validated. This mode records evidence; it does not publish shot metrics to the kiosk.</p>
+<h1>First trigger test</h1>
 <section aria-live="polite">
+<div id="progress" class="muted"></div>
 <div id="phase">Loading status…</div>
+<h2 id="instruction">Wait for current session status.</h2>
 <p id="message">Checking tester configuration.</p>
-<p id="setup" class="muted"></p>
 <div class="actions">
 <button id="start" type="button">Start capture session</button>
 <button id="confirm" type="button" hidden>Confirm</button>
 <button id="stop" type="button" disabled>Stop session</button>
 </div>
+<p id="connection" class="muted">Connecting…</p>
+<p id="deadline" class="notice"></p>
+<p class="muted">No RESET between normal attempts. Keep power and USB connected while this session is waiting.</p>
 <p id="error" role="alert"></p>
 </section>
+<section><h2>Three planned activities</h2><ol><li>Dry swing: place the ball when asked, swing past it; the ball stays put.</li><li>One real strike.</li><li>One more real strike, then pause for review.</li></ol><p>These slots describe the plan, not verified labels of what happened. Wait for <strong>Armed</strong> before each single swing. Partial files are retained; a dry-swing timeout can be useful evidence.</p><p class="notice">Timing experiment: physical sub-ms synchronization, impact timing and metric accuracy are not validated. Saved files do not prove the sensors captured the same event. No shot metrics are published to the kiosk.</p><details><summary>Capture settings and navigation</summary><p id="setup" class="muted"></p><a href="/">Return to Tester</a></details></section>
 <section id="restore" hidden><h2>Restore normal IWR boot</h2><p id="restore-message"></p><p>Keep the original saved firmware. The experiment used RAM only.</p><button id="restored" type="button">Normal switches restored; IWR USB reconnected</button></section>
 <section><h2>Sensor status</h2><div id="sensors">No attempt armed.</div><details><summary>Recorded state</summary><pre id="raw"></pre></details></section>
 <section><h2>Saved attempts</h2><p>Inspect the first two ball strikes before a larger block. “Captured” means files were saved, not that their metrics are accurate.</p><div id="attempts"></div></section>
 </main>
 <script>
-let state={}, busy=false, attemptsKey='';
+let state={}, busy=false, attemptsKey='', lastStatus=0, connected=false, refreshing=false, pending=null, pendingCommand=null, statusError='', commandError='';
 const byId=id=>document.getElementById(id);
 const phases={idle:'Ready',starting:'Preparing session',switches:'Set RAM boot switches',reset:'Press IWR RESET',loading:'Loading temporary firmware',next:'Prepare next attempt',learning_background:'Learning the empty hitting area',place_ball:'Place the ball',preparing_sensors:'Preparing OPS and camera',armed:'Armed — make one swing',saving:'Saving captures',stopped:'Stopped',failed:'Session stopped with an error',finished:'Finished'};
 const controls={switches:['switches_set','Switches set; RESET not pressed'],reset:['reset_pressed','RESET pressed; waited at least one second'],next:['next','Prepare next attempt']};
-function link(label,name){const a=document.createElement('a');a.textContent=label;a.href='/api/tester/internal-sync/file/'+encodeURIComponent(state.session_id)+'/'+name.split('/').map(encodeURIComponent).join('/');return a;}
+const terminal=['idle','stopped','failed','finished'];
+function stateKey(){return JSON.stringify([state.session_id,state.phase,state.phase_token,Boolean(state.normal_boot_restore_needed)]);}
+function deadline(){const start=Date.parse(state.job?.started_at);return Number.isFinite(start)?start+3600000:null;}
+function phaseNow(){if(state.job?.action==='internal_sync'){if(state.job.state==='error')return 'failed';if(['stopped','complete'].includes(state.job.state)&&!terminal.includes(state.phase))return 'stopped';}return state.phase||'idle';}
+function paused(){return (state.attempts||[]).length>=3||(state.attempts||[]).slice(1).some(item=>item.status!=='captured_unqualified'||item.error);}
+function guide(phase){
+ const count=(state.attempts||[]).length, dry=count===0, activity=dry?'dry swing — ball stays put':'real strike';
+ if(phase==='next'&&paused())return ['Pause here — review the saved files.',count>=3?'Three planned attempts are saved. The first two strikes need review before a larger block. Keep powered and leave this session waiting until its time limit.':'A planned strike has partial/error evidence. Preserve it and pause for review; do not keep retrying.'];
+ if(phase==='next')return ['Remove the ball; leave the lane empty.',(count===1&&state.attempts[0].status!=='captured_unqualified'?'Dry-swing partial/timeout retained; it can be useful. ':'')+'Once assembled, tap Prepare for '+activity+'. Do not put the ball back until asked. Then wait for Armed.'];
+ if(phase==='learning_background')return ['Keep the lane empty. Do not swing.','Ball out; stand clear while the IWR learns the background.'];
+ if(phase==='place_ball')return ['Place the ball, then stay still.','Wait for Armed before the '+activity+'.'];
+ if(phase==='preparing_sensors')return ['Stay still. Do not swing yet.','The ball is locked; OPS and camera are preparing. Wait for Armed.'];
+ if(phase==='armed'&&state.iwr?.trigger?.latched==='1')return ['Hold still — trigger observed.','Do not swing again. Wait while capture completes and the original files are saved.'];
+ if(phase==='armed')return [dry?'One dry swing — do not hit the ball.':'Make one real strike now.',dry?'Within 30 seconds, swing past the ball so it stays put. One swing only; wait for saving or timeout.':'Within 30 seconds, make one strike only. Then wait for saving; do not swing again.'];
+ if(phase==='saving')return ['Hold still — saving original files.','Do not swing or press RESET. Wait for the next instruction.'];
+ if(['stopped','failed','finished'].includes(phase))return ['Session ended — preserve the files.','Do not swing or start a new RAM load unsupervised. Restart needs physical switch/RESET access. Download the records; follow normal-boot restoration only when instructed.'];
+ return [phases[phase]||phase,state.message||'Use only the reviewed session setup.'];
+}
+function link(label,name){const a=document.createElement('a');a.textContent=label;a.href='/api/tester/internal-sync/file/'+encodeURIComponent(state.session_id)+'/'+name.split('/').map(encodeURIComponent).join('/');a.download=name.split('/').at(-1);return a;}
 function render(){
- const phase=state.phase||'idle',action=controls[phase];
- byId('phase').textContent=phases[phase]||phase;
- byId('message').textContent=state.message||'';
+ if(pending&&pending!==stateKey()){pending=null;pendingCommand=null;commandError='';}
+ const phase=phaseNow(),action=controls[phase],fresh=connected&&Date.now()-lastStatus<4000,end=deadline(),expired=end!==null&&Date.now()>=end;
+ const [instruction,message]=guide(phase);
+ byId('phase').textContent=!fresh?'Status unavailable':expired&&!terminal.includes(phase)?'Session time limit reached':phase==='armed'&&state.iwr?.trigger?.latched==='1'?'Trigger observed — waiting for capture':phases[phase]||phase;
+ byId('instruction').textContent=!fresh?'Status unavailable — do not swing.':expired&&!terminal.includes(phase)?'Session time limit reached — do not swing.':instruction;
+ byId('message').textContent=!fresh?'Do not swing or repeat Prepare. Keep files and power; wait for fresh session status.':expired&&!terminal.includes(phase)?'No further attempts. Preserve files and wait for stopped status; restart needs physical switch/RESET access.':message;
+ byId('progress').textContent='Session '+(state.session_id?state.session_id.slice(0,8):'not loaded')+' · '+(state.attempts||[]).length+' saved · '+((state.attempts||[]).length<3?'Planned slot '+((state.attempts||[]).length+1)+' of 3':'Review pause');
+ byId('connection').textContent=!fresh?'Connection unavailable or stale. Controls locked; waiting for fresh status.':pending?'Command sent; waiting for the session to advance.':'Status connected';
+ byId('error').textContent=commandError||statusError;
+ byId('deadline').textContent=end===null?'Session limit: one hour from job start; end time unavailable. Restart needs switch/RESET access.':expired?'One-hour session limit reached. Keep files; wait for stopped status. Restart needs switch/RESET access.':'Session limit: '+Math.ceil((end-Date.now())/60000)+' min left; ends '+new Date(end).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'. Restart needs switch/RESET access.';
  byId('setup').textContent=state.configured?'Camera: 640×400, 300 fps requested, 300 µs exposure requested, gain 4. Sound GPIO is not used.':'Enable this experiment by starting the tester with --internal-sync-clock-package and the reviewed firmware package.';
- byId('start').disabled=busy||!state.configured||!['idle','stopped','failed','finished'].includes(phase)||Boolean(state.normal_boot_restore_needed);
- byId('confirm').hidden=!action;byId('confirm').disabled=busy;byId('confirm').textContent=action?action[1]:'Confirm';
- byId('stop').disabled=busy||['idle','stopped','failed','finished'].includes(phase);
+ byId('start').hidden=Boolean(state.session_id);byId('start').disabled=!fresh||busy||Boolean(pending)||!state.configured||phase!=='idle'||Boolean(state.normal_boot_restore_needed);
+ byId('confirm').hidden=!action;byId('confirm').disabled=!fresh||busy||Boolean(pending)||expired||(phase==='next'&&paused());byId('confirm').textContent=phase==='next'?(paused()?'Paused for review':(state.attempts||[]).length===0?'Prepare dry swing':'Prepare real strike'):action?action[1]:'Confirm';
+ byId('stop').disabled=!fresh||busy||pendingCommand==='stop'||terminal.includes(phase);
+ byId('restored').disabled=!fresh||busy||Boolean(pending);
  byId('restore').hidden=!(state.normal_boot_restore_needed&&state.resources_released);
  byId('restore-message').textContent=state.restore_instructions||'';
  const iwr=state.iwr;
@@ -47,10 +76,10 @@ function render(){
  byId('raw').textContent=JSON.stringify(state,null,2);
  const list=byId('attempts'),key=JSON.stringify([state.session_id,state.attempts]);
  if(key===attemptsKey)return;attemptsKey=key;list.replaceChildren();
- for(const item of state.attempts||[]){const row=document.createElement('div');row.className='attempt';const title=document.createElement('strong');title.textContent=item.name+' · '+(item.status==='captured_unqualified'?'Captured · timing unvalidated':'Partial capture');row.append(title);if(item.error){const p=document.createElement('p');p.textContent=item.error;row.append(p);}row.append(document.createElement('br'),link('Attempt record',item.name+'/RESULT.json'));if(item.iwr_shot_id)row.append(link('IWR held result',item.name+'/iwr-held.json'),link('IWR raw dump',item.name+'/iwr-dump.bin'));for(const clip of item.camera?.clips||[])row.append(link('Camera timing',item.name+'/ops-camera/'+clip.metadata),link('Camera frames',item.name+'/ops-camera/'+clip.metadata.replace(/metadata\.json$/,'frames.npz')));list.append(row);}
+ for(const [index,item] of (state.attempts||[]).entries()){const row=document.createElement('div');row.className='attempt';const title=document.createElement('strong');title.textContent=item.name+' · '+(index===0?'Planned dry swing':index<3?'Planned strike':'Additional attempt')+' · '+(item.status==='captured_unqualified'?'Files captured · unqualified':'Partial capture');row.append(title);if(item.error){const p=document.createElement('p');p.textContent=item.error;row.append(p);}row.append(document.createElement('br'),link('Attempt record',item.name+'/RESULT.json'));if(item.iwr_shot_id)row.append(link('IWR held result',item.name+'/iwr-held.json'),link('IWR raw dump',item.name+'/iwr-dump.bin'));for(const clip of item.camera?.clips||[])row.append(link('Camera timing',item.name+'/ops-camera/'+clip.metadata),link('Camera frames',item.name+'/ops-camera/'+clip.metadata.replace(/metadata\.json$/,'frames.npz')));list.append(row);}
 }
-async function refresh(){try{const response=await fetch('/api/tester/internal-sync',{cache:'no-store'});if(!response.ok)throw Error('Status request failed');state=await response.json();render();}catch(error){byId('error').textContent=error.message;}}
-async function post(path,payload){if(busy)return;busy=true;render();byId('error').textContent='';try{const response=await fetch('/api/tester/internal-sync/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');await refresh();}catch(error){byId('error').textContent=error.message;}finally{busy=false;render();}}
+async function refresh(){if(refreshing)return;refreshing=true;try{const response=await fetch('/api/tester/internal-sync',{cache:'no-store',signal:AbortSignal.timeout(3000)});if(!response.ok)throw Error('Status request failed');state=await response.json();lastStatus=Date.now();connected=true;statusError='';}catch(error){connected=false;statusError=error.message;}finally{refreshing=false;render();}}
+async function post(path,payload){if(busy||!connected||Date.now()-lastStatus>=4000||(pending&&(payload.command!=='stop'||pendingCommand==='stop')))return;busy=true;pending=stateKey();pendingCommand=payload.command||'start';commandError='';render();try{const response=await fetch('/api/tester/internal-sync/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(3000)});const result=await response.json();if(!response.ok){pending=null;pendingCommand=null;throw Error(result.error||'Request failed');}await refresh();}catch(error){commandError=error.message+' — command response uncertain or refused; wait for current status. Do not repeat Prepare.';}finally{busy=false;render();}}
 byId('start').onclick=()=>post('start',{});
 byId('confirm').onclick=()=>post('command',{command:controls[state.phase]?.[0],phase_token:state.phase_token});
 byId('stop').onclick=()=>post('command',{command:'stop',phase_token:state.phase_token});
@@ -59,6 +88,7 @@ let drag=null,suppressClick=false;
 const main=document.querySelector('main');
 main.addEventListener('dragstart',event=>event.preventDefault());
 main.addEventListener('pointerdown',event=>{
+ suppressClick=false;
  if(event.pointerType!=='mouse'||event.button!==0)return;
  const list=event.target.closest('#attempts'),element=list&&list.scrollHeight>list.clientHeight?list:document.scrollingElement;
  drag={pointer:event.pointerId,y:event.clientY,top:element.scrollTop,element,moved:false};suppressClick=false;
@@ -71,6 +101,6 @@ main.addEventListener('pointermove',event=>{
 function endDrag(event){if(!drag||event.pointerId!==drag.pointer)return;suppressClick=drag.moved;drag=null;if(main.hasPointerCapture(event.pointerId))main.releasePointerCapture(event.pointerId);}
 main.addEventListener('pointerup',endDrag);main.addEventListener('pointercancel',endDrag);
 main.addEventListener('click',event=>{if(suppressClick){event.preventDefault();event.stopPropagation();suppressClick=false;}},true);
-refresh();setInterval(refresh,750);
+refresh();setInterval(()=>{render();refresh();},750);
 </script>
 </html>

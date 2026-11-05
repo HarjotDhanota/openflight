@@ -6,7 +6,8 @@ This is an isolated capture mode. It does not publish production shot metrics.
 Physical sub-ms synchronization and contact-time accuracy remain unvalidated.
 
 Start the tester with `--internal-sync-clock-package PATH` pointing to the
-reviewed sealed `usb-result-clock-test-20261027/package-001` package, then open
+reviewed freeze-safe shot-dump package (on the prepared Pi,
+`/home/harjot-openflight/clock-packages/freeze/package-001`), then open
 `/internal-sync.html`. The existing single tester job owner runs the capture
 worker. Other capture jobs must be stopped first. The worker checks ownership
 before asking for physical setup and never writes flash.
@@ -17,7 +18,17 @@ Switch/RESET confirmations are bound to the current session phase. The IWR
 uses this attempt's observed ball bin within the retained profile, not a fixed
 tee-distance assumption. Its RF run is finite (60 nominal seconds); placement
 and arming share a 50-second host budget and the armed wait is at most 30 seconds.
-If preparation times out, remove the ball and start the next attempt.
+The on-screen first-test guide plans one dry swing followed by two real strikes.
+Remove the ball before Prepare, place it only when asked, and wait for Armed
+before one swing within the 30-second armed budget. A dry-swing timeout retains
+useful partial evidence. A partial/error strike pauses for review; after three
+saved attempts Prepare stays disabled until the first two planned strikes are
+reviewed outside this guide. Slots are planned activities, not verified labels.
+The counter comes from the current server session, including after refresh.
+No RESET is needed between normal attempts. The stopped Next wait has no worker
+deadline, but the existing tester job has a one-hour limit from job.started_at;
+the page shows its remaining time. Restart requires physical switch/RESET access.
+Do not start a new RAM load unsupervised after Stop or failure.
 
 OPS v1.3.3 runs native speed triggering at 25 mph, magnitude 25, 30 ksps,
 six pre-trigger segments, with P3 acknowledged. GPIO27 records its sampling
@@ -37,7 +48,7 @@ For a dry swing, place the ball normally and swing without striking it.
 Saved files include `iwr-held.json`, `iwr-result.bin`, `iwr-clock.bin`,
 `iwr-dump.bin`, the original UART journals, OPS capture evidence, GPIO edges,
 camera frame clocks, `frames.npz`, metadata and per-attempt `RESULT.json`.
-The page links these records. “Captured” requires both radar captures and
+The page downloads these records without leaving the guide. “Captured” requires both radar captures and
 one saved camera array with matching event ownership and frame clocks. It
 does not establish that independent triggers selected the same physical event.
 
@@ -62,3 +73,12 @@ runtime/result identity, original-byte retention, Stop and ownership failures,
 saved camera arrays, API phase checks and download boundaries. Browser checks
 cover the wizard, drag versus tap and 1024×600, 800×400 and 800×480 layouts.
 These checks do not constitute physical trigger or timing validation.
+
+Run the standalone mocked browser checks with
+`node --test ui/tests/internal-sync.browser.cjs` (the UI dependencies must be
+available). They do not run a backend or contact devices. Status freshness,
+pending/uncertain commands, the three-slot/partial-strike gates, terminal jobs,
+parent deadline and physical confirmations are included. A command is never
+treated as a phase advance before the server reports it; stale/offline status
+disables controls. Stop remains available while a Next command awaits advance
+and status is current.
