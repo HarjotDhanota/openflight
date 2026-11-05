@@ -13,7 +13,7 @@ source-of-truth validation.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -154,6 +154,13 @@ APPROACH_MIN_PATH_WINDOWS = 3
 # High within 1 deg (the gap-closure plan's TrackMan-class target is +-0.75), medium within 2.
 ATTACK_SIGMA_HIGH_DEG = 1.0
 ATTACK_SIGMA_MEDIUM_DEG = 2.0
+# G2 follow-up (4 Nov 2026): a PHYSICAL plausibility label beside the sigma tiers. A precise
+# track on wrong framing reads a precise impossible value (Oct 24 replay at 1280x800: iron
+# attack angles -17 to -19 deg with a 'high' sigma tier). An attack angle or path outside
+# these bounds is still reported, flagged "implausible" with the bound, its tier capped at
+# low (and what is built on it inherits both). Small positive attack angles are plausible.
+PLAUSIBLE_ATTACK_RANGE_DEG = (-12.0, 8.0)
+PLAUSIBLE_PATH_RANGE_DEG = (-25.0, 25.0)
 # G2 C3 (4 Nov 2026): every window ends at or before the last frame the ball rested in
 # (offset 0); the contact lies between it and the next. The old preferred (-2, +1) took
 # Oct 27 shot 1's f44, 1.1 ms after contact with the heel on the mat. Its three-frame span
@@ -278,6 +285,9 @@ class ChainedDelivery:
     shaft: dict | None = None
     # the frames of the window the path was read on (first, last), None for a median (C3)
     path_window_frames: tuple[int, int] | None = None
+    # per metric ("attack_angle_deg", "club_path_deg"): {"plausibility": "implausible",
+    # "bound_deg": [lo, hi], "note"} when its value lies outside the physical bound
+    plausibility: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1090,7 +1100,44 @@ def _head_positions(
     return tuple(positions)
 
 
-def estimate_chained_delivery(
+def flag_implausible(delivery: ChainedDelivery) -> ChainedDelivery:
+    """``delivery`` with an attack angle or path outside its physical bound
+    (``PLAUSIBLE_ATTACK_RANGE_DEG`` / ``PLAUSIBLE_PATH_RANGE_DEG``) flagged in
+    ``plausibility`` and its tier capped at low; the values are kept."""
+    flags, tiers = {}, {}
+    for name, tier_name, bound, what in (
+        ("attack_angle_deg", "attack_confidence_tier", PLAUSIBLE_ATTACK_RANGE_DEG, "attack angle"),
+        ("club_path_deg", "path_confidence_tier", PLAUSIBLE_PATH_RANGE_DEG, "club path"),
+    ):
+        value = getattr(delivery, name)
+        if value is None or bound[0] <= value <= bound[1]:
+            continue
+        flags[name] = {
+            "plausibility": "implausible",
+            "bound_deg": [bound[0], bound[1]],
+            "note": (
+                f"implausible: {what} {value:+.1f} deg outside the physical bound "
+                f"{bound[0]:+.0f}..{bound[1]:+.0f} deg (reported, confidence capped at low)"
+            ),
+        }
+        if getattr(delivery, tier_name) in ("high", "medium"):
+            tiers[tier_name] = "low"
+    if not flags:
+        return delivery
+    changes = {"plausibility": {**delivery.plausibility, **flags}, **tiers}
+    if delivery.status == "approach_high":
+        changes.update(status="approach_mixed", confidence_tier="experimental")
+    notes = tuple(flag["note"] for flag in flags.values())
+    return replace(delivery, notes=(*delivery.notes, *notes), **changes)
+
+
+def estimate_chained_delivery(*args, **kwargs) -> ChainedDelivery:
+    """Estimate final-approach club delivery from camera, IWR, and OPS
+    (``_estimate_chained_delivery``), its values' physical plausibility flagged."""
+    return flag_implausible(_estimate_chained_delivery(*args, **kwargs))
+
+
+def _estimate_chained_delivery(
     frames: np.ndarray,
     host_timestamp_ns: np.ndarray,
     *,

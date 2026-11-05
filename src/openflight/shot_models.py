@@ -131,10 +131,16 @@ def camera_fused_label(shot: Shot, metric: str, source: str | None) -> tuple[str
     # G2 C4: the club stage's range evidence says whether the head's depth was measured
     stage = (shot.camera_fusion_processing or {}).get("club_delivery") or {}
     depth = stage.get("range_evidence_status") if isinstance(stage, dict) else None
-    return (
-        camera_club_label(tier, intrinsics, source, depth_status=depth),
-        camera_club_note(tier, intrinsics, source, depth_status=depth),
-    )
+    label = camera_club_label(tier, intrinsics, source, depth_status=depth)
+    note = camera_club_note(tier, intrinsics, source, depth_status=depth)
+    # G2 follow-up: a value outside its physical bound is experimental, and says so
+    flags = stage.get("plausibility") if isinstance(stage, dict) else None
+    flag = (flags or {}).get(f"{metric}_deg") if isinstance(flags, dict) else None
+    if isinstance(flag, dict):
+        label = LABEL_EXPERIMENTAL
+        text = str(flag.get("note") or "implausible")
+        note = f"{text}; {note}" if note else text
+    return label, note
 
 
 def _club_path_frame_of(shot: Shot, path_source: str | None) -> str | None:

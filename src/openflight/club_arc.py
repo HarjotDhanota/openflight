@@ -798,6 +798,19 @@ def _arc_metric(arc: ClubArc, name: str) -> dict:
     }
 
 
+def _implausible(entry: dict, flag: Mapping) -> dict:
+    """``entry`` flagged implausible (G2 follow-up) and labelled no better than
+    experimental; a value is kept."""
+    entry = {
+        **entry,
+        "plausibility": "implausible",
+        "plausibility_bound_deg": list(flag.get("bound_deg") or []),
+    }
+    if entry["value"] is not None and LABEL_RANK[entry["status"]] > LABEL_RANK[EXPERIMENTAL]:
+        entry["status"] = EXPERIMENTAL
+    return _note(entry, str(flag.get("note") or "implausible"))
+
+
 def _note(entry: dict, text: str) -> dict:
     note = entry.get("note")
     return {**entry, "note": f"{note}; {text}" if note else text}
@@ -1347,6 +1360,7 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
         chained_source = CHAINED_OPS_SOURCE
     else:
         chained_source = CHAINED_IWR_SOURCE
+    plausibility = chained.get("plausibility") or {}
     for name, tier_name in (
         ("club_path_deg", "path_confidence_tier"),
         ("attack_angle_deg", "attack_confidence_tier"),
@@ -1381,12 +1395,19 @@ def club_delivery_payload(delivery: Any, *, club: Any, handedness: Optional[str]
                 "reason": reason,
                 "sigma": sigma,
             }
+            if name in plausibility:
+                metrics[name] = _implausible(metrics[name], plausibility[name])
         elif metrics[name]["value"] is None and chained:
             flag = (chained.get("head_track") or {}).get(name.replace("_deg", "_flag"))
             metrics[name]["reason"] = (
                 f"{metrics[name]['reason']}; chained club delivery: {chained.get('status')}"
                 + (f" ({flag})" if flag else "")
             )
+
+    if "attack_angle_deg" in plausibility:
+        # the low point is read from that attack angle and that track: it inherits the flag
+        for name in ("low_point_distance_mm", "low_point_height_mm"):
+            metrics[name] = _implausible(metrics[name], plausibility["attack_angle_deg"])
 
     def difference(name):
         arc_value = getattr(arc, name)
