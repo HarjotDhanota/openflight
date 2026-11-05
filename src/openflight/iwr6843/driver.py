@@ -438,13 +438,14 @@ class IWR6843Radar:
                 DumpTransferTiming(**marks),
             )
         # The binary payload can finish just before the CLI handler returns.
-        # Wait for its trailing Done before another command can be consumed
+        # Wait for its trailing Done and prompt before another command can be consumed
         # by the firmware while it is still completing dump/restart work.
         elapsed = time.time() - start
         trailer = self._wait_for_dump_cli_ready(
             buf[expected:], timeout_s=max(0.0, timeout_s - elapsed)
         )
-        if b"Done" in trailer and b"Error" not in trailer:
+        cli_ready = trailer.splitlines()[-2:] == [b"Done", b"l3dump:/>"]
+        if cli_ready and b"Error" not in trailer:
             marks["cli_ready_ns"] = time.monotonic_ns()
         timing = DumpTransferTiming(**marks)
         if b"Error" in trailer:
@@ -454,7 +455,7 @@ class IWR6843Radar:
                 payload,
                 timing,
             )
-        if b"Done" not in trailer:
+        if not cli_ready:
             raise IWR6843DumpRecoveryError(
                 "IWR6843 dump completed but firmware did not return to its CLI before "
                 "the capture timeout; press RESET before retrying",
@@ -467,7 +468,7 @@ class IWR6843Radar:
         """Consume the dump handler's trailing response before reusing the CLI."""
         response = bytearray(initial)
         deadline = time.monotonic() + timeout_s
-        while b"Done" not in response and b"Error" not in response:
+        while response.splitlines()[-2:] != [b"Done", b"l3dump:/>"] and b"Error" not in response:
             if time.monotonic() >= deadline:
                 break
             waiting = self.ser.in_waiting

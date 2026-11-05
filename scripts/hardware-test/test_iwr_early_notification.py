@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 import pytest
-from test_joint_shot_clock import wire
+from test_joint_shot_clock import dump_reader, wire
 
 
 def capture_sequence(collector, port, states):
@@ -129,6 +129,46 @@ def test_without_a_notice_the_polled_latch_still_notifies():
     notifications = []
     collector.wait_result(lambda *_: None, lambda: False, on_trigger=notifications.append)
     assert [event["notice_source"] for event in notifications] == ["polled_latch"]
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 65536])
+def test_each_successive_attempt_delivers_its_own_triggered_notice(chunk, monkeypatch):
+    collector, port = wire(chunk)
+    notifications = []
+    held_results = []
+    radar = dump_reader(port, monkeypatch)
+
+    def observed(event):
+        assert port.active and not port.held
+        notifications.append(deepcopy(event))
+        port.complete_shot()
+
+    for shot_id, generation in ((1, 1), (2, 3)):
+        collector.begin()
+        assert collector.trigger_observation is None
+        index, _ = collector.wait_ball(lambda *_: None, lambda: False)
+        collector.arm(index)
+        deliver_notice_after(port, 1)
+        held_results.append(
+            collector.wait_result(lambda *_: None, lambda: False, on_trigger=observed)
+        )
+        assert len(notifications) == shot_id
+        event = notifications[-1]
+        assert event["notice_source"] == "triggered_line"
+        assert event["expected_shot_id"] == shot_id
+        assert event["expected_generation"] == generation
+        assert event["host_received_mono_ns"] == collector.notice_rows[-1]["notice_ns"]
+        assert not event["physical_timing_qualified"]
+        if shot_id == 1:
+            saved_event, saved_result = deepcopy(event), deepcopy(held_results[0])
+        collector.read_raw_dump(radar)
+        collector.finish()
+
+    assert notifications[0] == saved_event and held_results[0] == saved_result
+    assert notifications[0]["notice_read_index"] < notifications[1]["notice_read_index"]
+    assert notifications[0]["exchange_index"] < notifications[1]["exchange_index"]
+    assert notifications[0]["host_received_mono_ns"] < notifications[1]["host_received_mono_ns"]
+    assert all(b"Triggered" not in data for data in port.writes)
 
 
 def test_unexpected_unsolicited_output_marks_the_connection_uncertain():

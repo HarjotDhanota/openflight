@@ -253,12 +253,18 @@ class FakeSerial:
         return bytes(chunk)
 
 
-def test_read_dump_waits_for_cli_ready_after_binary_payload():
+@pytest.mark.parametrize("split", [0, 4, 6, 8, 14])
+def test_read_dump_waits_for_cli_ready_after_binary_payload(split):
     raw = pack_dump(np.ones((2, 6, 4, 7), dtype=complex), n_tx=3, version=3)
 
     class ChunkedSerial:
         def __init__(self):
-            self.chunks = [bytearray(b"l3dump\r\n" + raw), bytearray(b"Done\r\nl3dump:/>")]
+            trailer = b"Done\r\nl3dump:/>"
+            self.chunks = [
+                bytearray(part)
+                for part in (b"l3dump\r\n" + raw, trailer[:split], trailer[split:])
+                if part
+            ]
             self.writes = []
             self.delay_next_chunk = False
 
@@ -294,6 +300,34 @@ def test_read_dump_waits_for_cli_ready_after_binary_payload():
 
     assert radar.read_dump(timeout_s=0.1) == raw
     assert radar.ser.chunks == []
+    assert radar.ser.writes == [b"l3dump\n"]
+
+
+@pytest.mark.parametrize(
+    "trailer", [b"Done", b"Done\r\n", b"Done\r\nl3dump:/", b"NotDone\r\nl3dump:/>"]
+)
+def test_read_dump_requires_the_complete_prompt_before_recording_cli_ready(trailer, monkeypatch):
+    clock = FakeClock()
+    monkeypatch.setattr(driver, "time", clock.module())
+    raw = _active_dump()
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = FakeSerial(raw + trailer)
+    read = radar.ser.read
+
+    def timed_read(count):
+        chunk = read(count)
+        if not chunk:
+            clock.sleep(0.05)
+        return chunk
+
+    monkeypatch.setattr(radar.ser, "read", timed_read)
+
+    with pytest.raises(IWR6843DumpRecoveryError, match="did not return to its CLI") as raised:
+        radar.read_dump_timed(timeout_s=0.1)
+
+    assert raised.value.raw == raw
+    assert raised.value.timing.last_byte_ns is not None
+    assert raised.value.timing.cli_ready_ns is None
     assert radar.ser.writes == [b"l3dump\n"]
 
 
