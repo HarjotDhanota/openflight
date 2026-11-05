@@ -322,6 +322,7 @@ def _shot_attempt(
         run.tester_dir / ANALYSIS_DIR, run.arm_id, run.path.name, number
     )
     report, report_error = _load_report(report_path)
+    full = mapping(mapping((report or {}).get("stages")).get("full_shot"))
     live = _live_values(shot or {})
     reviewed = review_replay(
         report,
@@ -359,6 +360,21 @@ def _shot_attempt(
         "camera": capture_facts(capture_dir, camera_event, run.start),
         "live": live,
         "kiosk_metrics": kiosk_metrics(shot),
+        "replayed_kiosk_metrics": kiosk_metrics({"metrics": full["metrics"]})
+        if full.get("metrics")
+        else [],
+        "replayed_impact": full.get("impact"),
+        "full_shot_replay": {
+            key: full.get(key)
+            for key in (
+                "status",
+                "session_uuid",
+                "shot_number",
+                "source_published",
+                "errors",
+                "limitations",
+            )
+        },
         "identity": mapping((report or {}).get("source_identity")),
         "identity_evidence": mapping((report or {}).get("source_identity_evidence")),
         **reviewed,
@@ -536,6 +552,18 @@ def attempts_csv(review: Mapping[str, Any]) -> str:
                     "reason": metric["reason"],
                 }
             )
+        for metric in attempt.get("replayed_kiosk_metrics") or []:
+            writer.writerow(
+                {
+                    **base,
+                    "metric": f"replayed.{metric['key']}",
+                    "status": metric["status"],
+                    "value": metric["value"],
+                    "unit": metric["unit"],
+                    "source": metric["source"],
+                    "reason": metric["reason"] or metric.get("note"),
+                }
+            )
         for metric in attempt.get("kiosk_metrics") or []:
             writer.writerow(
                 {
@@ -563,13 +591,15 @@ def _cell(text: Any) -> str:
     return str(text or "").replace("|", "/")
 
 
-def _kiosk_metric_lines(metrics: list[Mapping[str, Any]]) -> list[str]:
+def _kiosk_metric_lines(
+    metrics: list[Mapping[str, Any]], heading="Kiosk metrics (as the kiosk reported them):"
+) -> list[str]:
     """The kiosk's metrics for one shot, each with its label, range, source and reason."""
     if not metrics:
         return []
     lines = [
         "",
-        "Kiosk metrics (as the kiosk reported them):",
+        heading,
         "",
         "| Metric | Label | Value | Range | Source | Reason or note |",
         "|---|---|---|---|---|---|",
@@ -578,9 +608,10 @@ def _kiosk_metric_lines(metrics: list[Mapping[str, Any]]) -> list[str]:
         value = f"{_fmt(metric['value'])} {metric['unit']}".rstrip()
         span = metric.get("range")
         shown_range = f"{_fmt(span[0])} to {_fmt(span[1])}" if span else ""
+        note = _cell(metric.get("reason") or metric.get("note"))
         lines.append(
             f"| {metric['label']} | {metric['status']} | {value} | {shown_range} "
-            f"| {_cell(metric.get('source'))} | {_cell(metric.get('reason') or metric.get('note'))} |"
+            f"| {_cell(metric.get('source'))} | {note} |"
         )
     return lines
 
@@ -736,5 +767,13 @@ def report_markdown(review: Mapping[str, Any]) -> str:
                         f"| {_fmt(metric['confidence'])} | {reason} |"
                     )
             lines += _kiosk_metric_lines(attempt.get("kiosk_metrics") or [])
+            if attempt.get("replayed_kiosk_metrics"):
+                lines.append("Freshly recomputed full shot (separate from saved live metrics):")
+                lines += _kiosk_metric_lines(
+                    attempt["replayed_kiosk_metrics"], "Freshly recomputed metric records:"
+                )
+                impact = attempt.get("replayed_impact") or {}
+                reason = impact.get("reason") or impact.get("route")
+                lines.append(f"Replayed impact: {impact.get('status')} — {reason}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
