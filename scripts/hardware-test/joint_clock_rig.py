@@ -58,6 +58,7 @@ class RigControl:
         self.errors, self.frame_rows = [], []
         self.lock = threading.Lock()
         self.arm_id = None
+        self.requests_closed = False
         self.gpio_thread = self.capture_thread = self.frame_thread = None
         self.router = CaptureTriggerRouter(
             self.capture_source, boot_id, {"camera": camera.notify_capture_request}
@@ -147,6 +148,8 @@ class RigControl:
         try:
             self._prepare()
         except BaseException as error:
+            with self.lock:
+                self.requests_closed = True
             self.errors.append({"component": "prepare", "error": repr(error)})
             raise
 
@@ -232,9 +235,12 @@ class RigControl:
         if self.request_event is None:
             raise ValueError("this rig does not take IWR capture requests")
         with self.lock:
+            arm_id = self.arm_id
             outcome = (
                 "refused_unarmed"
-                if self.arm_id is None
+                if arm_id is None
+                else "refused_late"
+                if self.requests_closed or self.stop.is_set()
                 else "refused_duplicate"
                 if self.request_event.is_set()
                 else "requested"
@@ -247,7 +253,7 @@ class RigControl:
                 "type": "iwr_capture_request",
                 "outcome": outcome,
                 "mono_ns": self.now(),
-                "arm_id": self.arm_id,
+                "arm_id": arm_id,
                 "iwr_notice": notice,
                 "physical_timing_qualified": False,
             },
@@ -260,8 +266,16 @@ class RigControl:
             return "native_speed", None
         if NATIVE_NOTICE in payload:
             return "native_speed", "native speed dump while waiting for the IWR request"
-        if not self.request_event.is_set():
-            return "unrequested", "OPS dump without an IWR request"
+        evidence = getattr(self.radar, "last_hardware_capture_evidence", None)
+        command = evidence.get("software_trigger_command") if isinstance(evidence, dict) else None
+        if (
+            not self.request_event.is_set()
+            or not isinstance(command, dict)
+            or command.get("bytes_written") != 3
+            or command.get("flush_return_mono_ns") is None
+            or command.get("error") is not None
+        ):
+            return "unrequested", "OPS dump without a confirmed IWR-requested S! write"
         return "iwr_request", None
 
     def _capture(self):
@@ -275,6 +289,8 @@ class RigControl:
                 on_first_byte=timer.first_marker_callback,
                 software_trigger_event=self.request_event,
             )
+            with self.lock:
+                self.requests_closed = True
             timer.response_completed()
             accepted = bool(raw)
             if raw:
@@ -300,19 +316,33 @@ class RigControl:
             )
         except BaseException as error:  # pylint: disable=broad-exception-caught
             self.errors.append({"component": "ops", "error": repr(error)})
+        finally:
+            with self.lock:
+                self.requests_closed = True
 
     def start_wait(self):
         """Begin the bounded empty-lane wait when IWR RF activity is observed."""
-        self.capture_thread = threading.Thread(target=self._capture, name="trial-ops")
-        self.capture_thread.start()
+        with self.lock:
+            if self.capture_thread is not None or self.requests_closed or self.stop.is_set():
+                raise RuntimeError("OPS wait already started or closed")
+            self.capture_thread = threading.Thread(target=self._capture, name="trial-ops")
+            self.capture_thread.start()
 
     def close(self):
         """Finish all owned acquisition before closing serial and camera resources."""
+        with self.lock:
+            self.requests_closed = True
         try:
             if self.capture_thread is not None:
                 self.capture_thread.join(self.wait_s + 11)
                 if self.capture_thread.is_alive():
                     self.stop.set()
+                    self.errors.append(
+                        {
+                            "component": "ops",
+                            "error": "OPS collector did not return within its bound",
+                        }
+                    )
                     self.radar.disconnect()
                     raise RuntimeError("OPS collector did not return within its bound")
             if getattr(self.radar, "serial", None) is not None:
